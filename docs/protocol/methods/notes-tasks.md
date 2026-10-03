@@ -749,7 +749,8 @@ across disjoint ranges; overlap boundaries never create synthetic comment IDs.
   `commentRevision`, `snapshotId`, `expiresAt`, `items`, `nextCursor`,
   `totalThreads`, `totalComments`. These exact safe-integer totals refer to the
   filtered range set at that epoch, independent of the page; indexed aggregate
-  queries must not fetch every row. Summary items have `{ threadId, status,
+  queries must not fetch every row. Summary items have `{ threadId, rootCommentId,
+  rootState: "present" | "deleted", status,
   totalComments, latestCommentId, latestCommentPreview, truncated, anchorRef,
   detailRef }`, never nested `comments` or replies. `includeComments: true` with
   `page` is invalid. An optional `anchorState: "anchored" | "orphaned" | "all"`
@@ -759,12 +760,50 @@ across disjoint ranges; overlap boundaries never create synthetic comment IDs.
   then threadId; note-scoped rows by threadId. No unstable timestamp-only cursor.
 - `comment.getThread` page kind `noteReplyPage` binds threadId in addition to the
   epochs and returns bounded comment summaries in `(createdAt,commentId)` order,
-  `totalComments`, `nextCursor`, plus `rootCommentId` (the root is included once as
-  an ordinary item, never a full embedded exception). Each item preserves canonical
+  `totalComments`, `nextCursor`, plus the original `rootCommentId` and
+  `rootState: "present" | "deleted"` on **every** page, including exhaustion.
+  When present, the root is included once across a complete traversal as an ordinary
+  item, never a full embedded exception or necessarily the first item. Each item preserves canonical
   commentId, authorPrincipalId/authorIdentity presence, status and createdAt, with
   `preview`, `truncated`, `bodyRef` and `detailRef`. A huge root, reply, author label,
   suggestion or quoted selection pages through context fragments; no truncation of
   authoritative bodies. Replies do not acquire independent source anchors.
+
+**Root deletion with surviving replies.** Deleting a root does not delete its
+replies or change the original thread/root identity. `rootState: "deleted"` means
+the original root row is absent, not that the thread is missing or the page is
+exhausted. Retain its canonical root ID (the native creation path uses that ID as
+threadId); never substitute the first surviving reply's ID. Items enumerate only
+surviving comments once, in the same deterministic order; totalComments counts
+those survivors, with no deleted-root/tombstone item, body, preview or synthetic
+author. A readable thread has totalComments greater than zero even on an exhausted
+empty page. Each page repeats the same rootState and exact total for its epoch.
+Thread summaries likewise count survivors and derive status/latest preview from
+them. A deleted-root summary has `anchorRef: null`; it is available through the
+note-scoped `anchorState: "orphaned" | "all"` queries, not range-overlap queries.
+Stray source markers do not create a live root or independent reply anchors.
+
+Read a surviving thread by its original threadId or a surviving commentId. A fresh
+paged lookup after the **last** comment is deleted returns the existing typed
+`-32602` / `data.code: "not-found"` category, with `data.entity: "commentThread"`;
+it is not an empty successful thread. A fresh lookup by a deleted commentId uses
+the same category with `entity: "comment"`; use the retained threadId to read its
+surviving replies. These discriminators describe the addressed comment resource,
+not deletion of its containing note. Legacy unpaged lookup errors and its
+first-survivor `rootComment` fallback remain unchanged.
+
+Each successful comment deletion advances commentRevision and shared stateGeneration.
+Any old reply/summary/detail cursor, even one holding a snapshotId, becomes stale;
+an old in-flight response cannot enter a cache guarded by the newer comment epoch.
+Reacquire from the first page to obtain the new rootState/count. A continuation
+after final deletion follows the same stale-epoch rule; a new lookup then reports
+not-found. Ordinary annotation snapshots do not retain deleted root content across
+epochs. Comment-only deletion leaves sourceRevision/attributionGeneration unchanged;
+source pages and explicit frozen source operations retain their existing source
+semantics, but do not pin comment rows or authorize old annotation replies. A later
+source marker scrub advances sourceRevision and invalidates its dependent pages as
+usual. Retain thread/root identity, survivor counts and root-presence state in
+indexed metadata; determining these headers must not load all replies.
 
 Annotation detail/anchor references resolve through `note.get` context pages with
 the same annotation epochs and expiry. Anchor descriptors retain canonical

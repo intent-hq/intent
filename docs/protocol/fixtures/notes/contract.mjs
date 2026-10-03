@@ -68,7 +68,7 @@ export function assertSourcePage(source, frame, limits, request = { direction: '
 
 // Test-only decoded cursor claims, never an on-wire token format.
 export function cursorError(claim, request, current, now) {
-  const keys = ['backendId', 'workspaceId', 'noteId', 'noteInstanceId', 'principalId', 'kind', 'budgets', 'ranges'];
+  const keys = ['backendId', 'workspaceId', 'noteId', 'noteInstanceId', 'principalId', 'kind', 'budgets', 'ranges', 'threadId'];
   if (keys.some(k => canonicalJson(claim[k] ?? null) !== canonicalJson(request[k] ?? null))) {
     return 'note-page-cursor-invalid';
   }
@@ -247,7 +247,7 @@ export function assertMetadataFrame(frame, limits) {
   assert.ok(wireBytes(frame) <= limits.wireBytes);
 }
 
-export function assertReplyFrames(frames, limits) {
+export function assertReplyFrames(frames, limits, { complete = false } = {}) {
   let previous, first;
   const seen = new Set();
   for (const frame of frames) {
@@ -255,12 +255,14 @@ export function assertReplyFrames(frames, limits) {
     const p = frame.result;
     assert.equal(p.kind, 'noteReplyPage'); assertSnapshotResult(p);
     for (const key of ['commentRevision', 'threadId', 'rootCommentId']) token(p[key]);
-    assert.ok(Number.isSafeInteger(p.totalComments) && p.totalComments >= 0);
+    assert.ok(['present', 'deleted'].includes(p.rootState));
+    assert.ok(Number.isSafeInteger(p.totalComments) && p.totalComments > 0);
     const { items, nextCursor, ...identity } = p;
     if (first) assert.deepEqual(identity, first); else first = identity;
     assert.ok(items.length <= limits.annotationItems);
     assert.ok(wireBytes(frame) <= limits.wireBytes);
     for (const row of items) {
+      if (p.rootState === 'deleted') assert.notEqual(row.commentId, p.rootCommentId);
       for (const key of ['commentId', 'bodyRef', 'detailRef']) token(row[key]);
       timestamp(row.createdAt);
       assert.ok(['open', 'resolved', 'pending'].includes(row.status));
@@ -273,6 +275,11 @@ export function assertReplyFrames(frames, limits) {
     }
   }
   assert.ok(seen.size <= first.totalComments);
+  if (complete) {
+    assert.equal(seen.size, first.totalComments);
+    assert.equal(seen.has(first.rootCommentId), first.rootState === 'present');
+    assert.equal(frames.at(-1).result.nextCursor, null);
+  }
 }
 
 export function assertPageStateFrame(frame, limits) {

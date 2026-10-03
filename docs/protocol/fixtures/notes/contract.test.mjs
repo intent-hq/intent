@@ -659,3 +659,100 @@ test('review F1: cleanup history, orphan state and final receipt survive only co
   assert.equal(c.trace.steps[1].clearDraft, false);
   assert.ok(wireBytes({ jsonrpc: '2.0', id: 1, result: first.receipt }) <= f.limits.receiptBytes);
 });
+
+test('deleted root is explicit on every reply page without changing thread identity', () => {
+  for (const page of f.annotationPages.pages) assert.equal(page.result.rootState, 'present');
+  const c = f.deletedRoot;
+  assert.ok(c, 'root deletion with surviving replies requires wire fixtures');
+  assertReplyFrames(c.pages, f.limits, { complete: true });
+  for (const page of c.pages) {
+    assert.equal(page.result.rootCommentId, 'root');
+    assert.equal(page.result.threadId, 'root');
+    assert.equal(page.result.rootState, 'deleted');
+    assert.equal(page.result.totalComments, 2);
+    assert.equal(page.result.commentRevision, 'c:5');
+    assert.deepEqual(page.result.scope, f.scope);
+    assert.ok(!page.result.items.some(row => row.commentId === 'root'));
+  }
+  assert.deepEqual(c.pages.flatMap(page => page.result.items.map(row => row.commentId)), ['reply-1', 'reply-2']);
+  assert.ok(c.pages[0].result.nextCursor);
+  assert.equal(c.pages.at(-1).result.nextCursor, null);
+});
+
+test('root deletion invalidates old annotation snapshots without invalidating unchanged source', () => {
+  const c = f.deletedRoot;
+  assert.ok(c, 'root deletion epoch scenario is required');
+  assert.equal(cursorError(c.oldReplyCursor, c.oldReplyCursor, c.afterRootDelete, 1000), 'note-page-stale');
+  assert.equal(cursorError(f.cursorClaim, f.cursorClaim, c.afterRootDelete, 1000), null);
+  assert.equal(c.cachedBeforeDelete.result.commentRevision, 'c:4');
+  assert.notEqual(c.cachedBeforeDelete.result.commentRevision, c.afterRootDelete.commentRevision);
+  assert.equal(c.cachedBeforeDelete.result.sourceRevision, c.afterRootDelete.sourceRevision);
+  assertPageStateFrame(c.notification, f.limits);
+  const admitted = admitState(f.annotationPages.events[0].params.snapshot, c.notification.params.snapshot);
+  assert.equal(admitted.commentRevision, c.afterRootDelete.commentRevision);
+  assert.equal(admitted.sourceRevision, c.afterRootDelete.sourceRevision);
+  assert.equal(admitted.attributionGeneration, c.afterRootDelete.attributionGeneration);
+  assert.equal(c.acceptLateOldPage, c.cachedBeforeDelete.result.commentRevision === admitted.commentRevision);
+  assert.equal(c.retainedFrozenSource.before, c.retainedFrozenSource.after);
+  assert.equal(c.retainedFrozenSource.commentRevision, undefined);
+});
+
+test('rootless exhaustion, reply deletion and missing thread have distinct outcomes', () => {
+  const c = f.deletedRoot;
+  assert.ok(c, 'rootless lifecycle is required');
+  assertReplyFrames([c.exhausted], f.limits);
+  assert.deepEqual(c.exhausted.result.items, []);
+  assert.equal(c.exhausted.result.totalComments, 2);
+  assert.equal(c.exhausted.result.rootState, 'deleted');
+  assertReplyFrames(c.afterReplyDelete, f.limits, { complete: true });
+  assert.equal(c.afterReplyDelete[0].result.totalComments, 1);
+  assert.equal(c.afterReplyDelete[0].result.items[0].commentId, 'reply-2');
+  assert.equal(cursorError(c.survivorCursor, c.survivorCursor, c.afterFinalDelete, 1000), 'note-page-stale');
+  assert.equal(c.missingThread.result, undefined);
+  assert.equal(c.missingThread.error.code, -32602);
+  assert.equal(c.missingThread.error.data.code, 'not-found');
+  assert.equal(c.missingThread.error.data.entity, 'commentThread');
+  assert.ok(wireBytes(c.missingThread) <= f.limits.receiptBytes);
+  assert.equal(c.summary.result.totalThreads, 1);
+  assert.equal(c.summary.result.totalComments, 2);
+  assert.equal(c.summary.result.items[0].anchorRef, null);
+  assert.equal(c.summary.result.items[0].rootState, 'deleted');
+});
+
+test('deleted-root cursor keeps thread binding and rejects expiry, foreign scope and source changes', () => {
+  const claim = { ...f.deletedRoot.oldReplyCursor, commentRevision: 'c:5' };
+  assert.equal(cursorError(claim, claim, f.deletedRoot.afterRootDelete, 1000), null);
+  assert.equal(cursorError(claim, { ...claim, threadId: 'another-thread' }, f.deletedRoot.afterRootDelete, 1000), 'note-page-cursor-invalid');
+  assert.equal(cursorError(claim, { ...claim, noteId: 'another-note' }, f.deletedRoot.afterRootDelete, 1000), 'note-page-cursor-invalid');
+  assert.equal(cursorError(claim, claim, f.deletedRoot.afterRootDelete, claim.expiresAt), 'note-page-expired');
+  assert.equal(cursorError(claim, claim, { ...f.deletedRoot.afterRootDelete, sourceRevision: 'r:8' }, 1000), 'note-page-stale');
+});
+
+test('deleted-root wire rejects fake roots, mixed headers, missing state and inflated counts', () => {
+  assertReplyFrames(f.annotationPages.pages, f.limits, { complete: true });
+  const survivors = f.annotationPages.pages.flatMap(p => p.result.items).filter(row => row.commentId !== 'root');
+  assert.deepEqual(f.deletedRoot.pages.flatMap(p => p.result.items), survivors);
+  for (const mutate of [
+    p => { delete p[0].result.rootState; },
+    p => { p[0].result.items[0].commentId = 'root'; },
+    p => { p[1].result.rootState = 'present'; },
+    p => { for (const frame of p) frame.result.rootState = 'present'; },
+    p => { for (const frame of p) frame.result.totalComments = 3; },
+    p => { p[1].result.items = []; },
+    p => { p[0].result.totalComments = 0; },
+    p => { p[1].result.rootCommentId = 'reply-1'; },
+  ]) {
+    const bad = structuredClone(f.deletedRoot.pages); mutate(bad);
+    assert.throws(() => assertReplyFrames(bad, f.limits, { complete: true }));
+  }
+  const exhausted = structuredClone(f.deletedRoot.exhausted);
+  exhausted.result.totalComments = 0;
+  assert.throws(() => assertReplyFrames([exhausted], f.limits));
+  const summary = f.deletedRoot.summary;
+  assert.ok(wireBytes(summary) <= f.limits.wireBytes);
+  assert.deepEqual(summary.result.scope, f.scope);
+  assert.equal(summary.result.commentRevision, 'c:5');
+  assert.equal(summary.result.items[0].latestCommentId, survivors.at(-1).commentId);
+  assert.ok(docs.includes('Legacy unpaged lookup errors'));
+  assert.ok(errors.includes('data.entity'));
+});

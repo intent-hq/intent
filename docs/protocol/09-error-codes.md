@@ -106,6 +106,7 @@ Messages are fixed short descriptions; do not echo user payloads into errors.
 
 | Numeric code | data.code | Meaning / client action |
 | --- | --- | --- |
+| -32602 | not-found | Fresh paged comment lookup addresses a missing resource: `data.entity` is `commentThread` after its final comment is deleted, or `comment` for a deleted commentId. A deleted root with surviving replies is a successful `rootState: "deleted"` thread page, not this error. These outcomes do not imply note deletion. Old continuation cursors instead follow the normal stale-epoch rule. Legacy unpaged comment errors remain unchanged. |
 | -32602 | invalid-params | Invalid range, overlap, surrogate boundary, unpaired surrogate, NUL, unknown shape, disallowed filter or malformed digest; no note mutation. |
 | -32602 | note-page-cursor-invalid | Tampered, wrong scope/kind/budget/range-set cursor; reject, never reinterpret it as a first page. |
 | -32602 | note-page-expired | Snapshot expired, evicted or unavailable after restart; preserve drafts and reacquire. Not entity deletion. |

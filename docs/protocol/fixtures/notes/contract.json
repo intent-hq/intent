@@ -837,7 +837,8 @@
               "status": "open"
             }
           ],
-          "nextCursor": "next-replies"
+          "nextCursor": "next-replies",
+          "rootState": "present"
         }
       },
       {
@@ -869,7 +870,8 @@
               "status": "open"
             }
           ],
-          "nextCursor": null
+          "nextCursor": null,
+          "rootState": "present"
         }
       }
     ],
@@ -1033,7 +1035,9 @@
         "latestCommentPreview": "bounded",
         "truncated": true,
         "anchorRef": "anchor-page",
-        "detailRef": "thread-detail"
+        "detailRef": "thread-detail",
+        "rootCommentId": "root",
+        "rootState": "present"
       }
     ],
     "nextCursor": "next-summary"
@@ -2283,7 +2287,14 @@
       "requests",
       "annotationPages.pages",
       "annotationPages.events",
-      "staged.appendFrames"
+      "staged.appendFrames",
+      "deletedRoot.pages",
+      "deletedRoot.exhausted",
+      "deletedRoot.afterReplyDelete",
+      "deletedRoot.summary",
+      "deletedRoot.cachedBeforeDelete",
+      "deletedRoot.missingThread",
+      "deletedRoot.notification"
     ],
     "resultObjects": [
       "metadataPages",
@@ -2297,7 +2308,10 @@
       "conversionFailure",
       "crossedChannels",
       "staged.streams",
-      "searchPages"
+      "searchPages",
+      "deletedRoot.oldReplyCursor",
+      "deletedRoot.survivorCursor",
+      "deletedRoot.retainedFrozenSource"
     ],
     "note": "Result objects are wrapped in JSON-RPC response envelopes before wire validation. Records-only scenarios are not complete RPC examples."
   },
@@ -2506,6 +2520,290 @@
           "clearDraft": true
         }
       ]
+    }
+  },
+  "deletedRoot": {
+    "pages": [
+      {
+        "jsonrpc": "2.0",
+        "id": 30,
+        "result": {
+          "kind": "noteReplyPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:7",
+          "commentRevision": "c:5",
+          "snapshotId": "root-deleted-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "threadId": "root",
+          "rootCommentId": "root",
+          "totalComments": 2,
+          "items": [
+            {
+              "commentId": "reply-1",
+              "createdAt": "2026-10-03T00:00:00.000Z",
+              "preview": "preview",
+              "truncated": true,
+              "bodyRef": "body-reply-1",
+              "detailRef": "detail-reply-1",
+              "status": "open"
+            }
+          ],
+          "nextCursor": "root-deleted-next",
+          "rootState": "deleted"
+        }
+      },
+      {
+        "jsonrpc": "2.0",
+        "id": 31,
+        "result": {
+          "kind": "noteReplyPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:7",
+          "commentRevision": "c:5",
+          "snapshotId": "root-deleted-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "threadId": "root",
+          "rootCommentId": "root",
+          "totalComments": 2,
+          "items": [
+            {
+              "commentId": "reply-2",
+              "createdAt": "2026-10-03T00:00:00.000Z",
+              "preview": "preview",
+              "truncated": true,
+              "bodyRef": "body-reply-2",
+              "detailRef": "detail-reply-2",
+              "status": "open"
+            }
+          ],
+          "nextCursor": null,
+          "rootState": "deleted"
+        }
+      }
+    ],
+    "exhausted": {
+      "jsonrpc": "2.0",
+      "id": 32,
+      "result": {
+        "kind": "noteReplyPage",
+        "scope": {
+          "backendId": "db-a",
+          "workspaceId": "ws-a",
+          "noteId": "spec",
+          "noteInstanceId": "inc-a"
+        },
+        "sourceRevision": "r:7",
+        "commentRevision": "c:5",
+        "snapshotId": "root-deleted-snapshot",
+        "expiresAt": "2026-10-03T00:05:00.000Z",
+        "threadId": "root",
+        "rootCommentId": "root",
+        "totalComments": 2,
+        "items": [],
+        "nextCursor": null,
+        "rootState": "deleted"
+      }
+    },
+    "afterReplyDelete": [
+      {
+        "jsonrpc": "2.0",
+        "id": 31,
+        "result": {
+          "kind": "noteReplyPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:7",
+          "commentRevision": "c:6",
+          "snapshotId": "one-survivor-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "threadId": "root",
+          "rootCommentId": "root",
+          "totalComments": 1,
+          "items": [
+            {
+              "commentId": "reply-2",
+              "createdAt": "2026-10-03T00:00:00.000Z",
+              "preview": "preview",
+              "truncated": true,
+              "bodyRef": "body-reply-2",
+              "detailRef": "detail-reply-2",
+              "status": "open"
+            }
+          ],
+          "nextCursor": null,
+          "rootState": "deleted"
+        }
+      }
+    ],
+    "summary": {
+      "jsonrpc": "2.0",
+      "id": 33,
+      "result": {
+        "kind": "noteCommentPage",
+        "scope": {
+          "backendId": "db-a",
+          "workspaceId": "ws-a",
+          "noteId": "spec",
+          "noteInstanceId": "inc-a"
+        },
+        "sourceRevision": "r:7",
+        "snapshotId": "root-deleted-summary",
+        "expiresAt": "2026-10-03T00:05:00.000Z",
+        "commentRevision": "c:5",
+        "totalThreads": 1,
+        "totalComments": 2,
+        "items": [
+          {
+            "threadId": "root",
+            "status": "open",
+            "totalComments": 2,
+            "latestCommentId": "reply-2",
+            "latestCommentPreview": "bounded",
+            "truncated": true,
+            "anchorRef": null,
+            "detailRef": "thread-detail",
+            "rootCommentId": "root",
+            "rootState": "deleted"
+          }
+        ],
+        "nextCursor": null
+      }
+    },
+    "oldReplyCursor": {
+      "backendId": "db-a",
+      "workspaceId": "ws-a",
+      "noteId": "spec",
+      "noteInstanceId": "inc-a",
+      "principalId": "p-a",
+      "kind": "replies",
+      "budgets": {
+        "sourceBytes": 4096,
+        "wireBytes": 65536
+      },
+      "sourceRevision": "r:7",
+      "expiresAt": 300000,
+      "boot": "boot-a",
+      "threadId": "root",
+      "commentRevision": "c:4"
+    },
+    "afterRootDelete": {
+      "sourceRevision": "r:7",
+      "attributionGeneration": "a:2",
+      "commentRevision": "c:5",
+      "boot": "boot-a"
+    },
+    "cachedBeforeDelete": {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "result": {
+        "kind": "noteReplyPage",
+        "scope": {
+          "backendId": "db-a",
+          "workspaceId": "ws-a",
+          "noteId": "spec",
+          "noteInstanceId": "inc-a"
+        },
+        "sourceRevision": "r:7",
+        "commentRevision": "c:4",
+        "snapshotId": "comment-snapshot",
+        "expiresAt": "2026-10-03T00:05:00.000Z",
+        "threadId": "root",
+        "rootCommentId": "root",
+        "totalComments": 3,
+        "items": [
+          {
+            "commentId": "root",
+            "createdAt": "2026-10-03T00:00:00.000Z",
+            "preview": "preview",
+            "truncated": true,
+            "bodyRef": "body-root",
+            "detailRef": "detail-root",
+            "status": "open"
+          }
+        ],
+        "nextCursor": null,
+        "rootState": "present"
+      }
+    },
+    "acceptLateOldPage": false,
+    "retainedFrozenSource": {
+      "sourceRevision": "r:7",
+      "before": "<!--anchor:root:start-->source<!--anchor:root:end-->",
+      "after": "<!--anchor:root:start-->source<!--anchor:root:end-->"
+    },
+    "survivorCursor": {
+      "backendId": "db-a",
+      "workspaceId": "ws-a",
+      "noteId": "spec",
+      "noteInstanceId": "inc-a",
+      "principalId": "p-a",
+      "kind": "replies",
+      "budgets": {
+        "sourceBytes": 4096,
+        "wireBytes": 65536
+      },
+      "sourceRevision": "r:7",
+      "expiresAt": 300000,
+      "boot": "boot-a",
+      "threadId": "root",
+      "commentRevision": "c:6"
+    },
+    "afterFinalDelete": {
+      "sourceRevision": "r:7",
+      "attributionGeneration": "a:2",
+      "commentRevision": "c:7",
+      "boot": "boot-a"
+    },
+    "missingThread": {
+      "jsonrpc": "2.0",
+      "id": 34,
+      "error": {
+        "code": -32602,
+        "message": "Comment thread not found",
+        "data": {
+          "code": "not-found",
+          "entity": "commentThread"
+        }
+      }
+    },
+    "notification": {
+      "jsonrpc": "2.0",
+      "method": "subscription.push",
+      "params": {
+        "subscriptionId": "sub-a",
+        "seq": 1,
+        "kind": "snapshot",
+        "snapshot": {
+          "kind": "notePageState",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:7",
+          "attributionGeneration": "a:2",
+          "commentRevision": "c:5",
+          "attributionState": "ready",
+          "deleted": false,
+          "invalidation": "all",
+          "stateGeneration": "11"
+        }
+      }
     }
   }
 }
