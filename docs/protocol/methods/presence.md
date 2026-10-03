@@ -138,15 +138,20 @@ The channel attaches invalidation before its first read and recomputes on focus
 moves, disconnects, membership changes and resource deletion, including changes
 outside the source workspace. Raw internal invalidation payloads never travel on
 this channel. A changed target replaces the previous snapshot; loss of source or
-person authorization sends a final null snapshot and ends forwarding. Read failure
-also clears the target and ends forwarding. Writer capacity is reserved before
-reading current authorization; invalidations overtaking a pending read discard it.
+person authorization sends a final snapshot `{ workspaceId, principalId, target: null,
+closed: true }` and ends forwarding. Normal snapshots omit `closed`. Read failure,
+invalidation-bus closure and guarded forwarder panic also emit this terminal snapshot
+before ending while the transport remains writable. Explicit unsubscribe, replacement
+and disconnect abort the channel and are already known locally. Writer capacity is
+reserved before reading current authorization; invalidations overtaking a pending read discard it.
 Bus lag causes a fresh read rather than replaying potentially stale focus.
 
 Unsubscribe, `replaceGroup` replacement and connection close dispose the channel.
 Reconnect starts a fresh subscription; no snapshot survives a backend/principal
-change. Consumers reject old subscription generations and older sequences, clear
-pending navigation on replacement/null/disconnect, and never merge snapshots.
+change. A terminal `closed: true` snapshot, connection loss, failed/malformed response,
+initial-snapshot timeout or replacement clears the target and disables navigation.
+A quiet valid channel needs no idle timeout or polling. Consumers reject old
+subscription generations and older sequences, clear pending navigation on replacement/null/disconnect, and never merge snapshots.
 For a click, use a fresh subscription with the same replacement group to recheck
 the target. If asynchronous workspace/view loading is needed, perform the final
 replacement after loading and compare the target before changing tabs; any newer
