@@ -197,7 +197,7 @@ When the aggregate agent memory budget is on (`agents.memoryBudgetMb` > 0, §5.1
 
 ```jsonc
 {
-  "agentMemoryBudgetBytes": 21474836780, // installed budget (agents.memoryBudgetMb, in bytes)
+  "agentMemoryBudgetBytes": 21474836480, // installed budget (agents.memoryBudgetMb, in bytes)
   "agentMemoryChargedBytes": 3221225472, // what admission actually compares: last tree sample + pending correction
   "queuedSpawns": 1                      // spawns currently queued behind the admission gate
   // ...existing status fields (childMemoryBytes, running, listenMode, ...)
