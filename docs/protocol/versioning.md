@@ -11,6 +11,15 @@ capability; documentation alone does not identify a carrying desktop release.
 **Documented version:** `13.2` — prepared Home backend additions; not a shipped-version claim.
 Prepared extensions below remain independently capability-gated.
 
+**Prepared submission correlation — additive, independently gated.**
+[Submission correlation and optimistic display](./methods/agents.md#submission-correlation-and-optimistic-display-prepared-additive-extension)
+adds optional queue `messageId`, public `submissionIds` on queue/reply/delivery
+surfaces and daemon-computed `mergeEligible` on full queue snapshots. Advertise
+`submissionCorrelation: 1` only for complete trusted, persisted end-to-end support;
+clients accept exactly integer `1`, independently of protocol version. Allocate
+the next minor against daemon main at implementation merge time. No method/event
+names or catalog counts change; these prepared docs make no shipping claim.
+
 **Version 13.2 — Home backend prerequisites (additive, prepared).**
 Adds `github.pulls.checks`, `github.pulls.reviews`, and `github.pulls.files`
 (§5.27): three read-only router methods, for **407 / 352 / 55** implemented

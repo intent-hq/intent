@@ -1,0 +1,48 @@
+{
+  "status": "prepared-synthetic-not-runtime-evidence",
+  "capability": { "submissionCorrelation": 1 },
+  "request": { "agentId": "agent-a", "workspaceId": "ws-a", "content": "again", "messageId": "a2" },
+  "queuedReply": {
+    "success": true,
+    "queued": true,
+    "messageId": "a1",
+    "turnId": "a1",
+    "submissionIds": ["a2", "a1"]
+  },
+  "queue": [
+    { "id": "a1", "content": "again\n\nagain", "queuedAt": "2026-10-03T07:00:00Z", "position": 0,
+      "turnId": "a1", "author": { "principalId": "A" }, "submissionIds": ["a2", "a1"], "mergeEligible": true }
+  ],
+  "delivered": {
+    "messageId": "transcript-1", "queuedMessageId": "a1", "turnId": "a1",
+    "author": { "principalId": "A" }, "submissionIds": ["a2", "a1"]
+  },
+  "mergeCases": [
+    { "name": "same author", "rows": [{ "id": "a1", "principal": "A", "order": 1 }], "incoming": "A", "target": "a1" },
+    { "name": "foreign interrupt first in drain order", "rows": [{ "id": "b1", "principal": "B", "order": 2 }, { "id": "a1", "principal": "A", "order": 1 }], "incoming": "A", "target": null },
+    { "name": "automatic entry does not block", "rows": [{ "id": "a1", "principal": "A", "order": 1 }, { "id": "system", "human": false, "order": 2 }], "incoming": "A", "target": "a1" },
+    { "name": "forged system label remains human", "rows": [{ "id": "a1", "principal": "A", "order": 1 }, { "id": "b1", "principal": "B", "order": 2, "metadata": { "source": "system" } }], "incoming": "A", "target": null },
+    { "name": "unknown human blocks", "rows": [{ "id": "a1", "principal": "A", "order": 1 }, { "id": "unknown", "principal": null, "order": 2 }], "incoming": "A", "target": null },
+    { "name": "imported author cannot match", "rows": [{ "id": "a1", "principal": "A", "order": 1, "imported": true }], "incoming": "A", "target": null },
+    { "name": "editing hold permits append", "rows": [{ "id": "a1", "principal": "A", "order": 1, "editing": true }], "incoming": "A", "target": "a1" },
+    { "name": "persisted retry remains a barrier", "rows": [{ "id": "a1", "principal": "A", "order": 1 }, { "id": "retry", "principal": "A", "order": 2, "persisted": true }], "incoming": "A", "target": null },
+    { "name": "provisional foreign pop blocks hidden crossing", "rows": [{ "id": "a1", "principal": "A", "order": 1 }], "draining": [{ "id": "b1", "principal": "B", "order": 2, "provisional": true }], "incoming": "A", "target": null },
+    { "name": "provisional same-author pop also blocks", "rows": [{ "id": "a1", "principal": "A", "order": 1 }], "draining": [{ "id": "a2", "principal": "A", "order": 2, "provisional": true }], "incoming": "A", "target": null },
+    { "name": "settled pop is not a provisional barrier", "rows": [{ "id": "a1", "principal": "A", "order": 1 }], "draining": [{ "id": "b1", "principal": "B", "order": 2, "provisional": false }], "incoming": "A", "target": "a1" },
+    { "name": "unknown legacy ordering disables prediction", "rows": [{ "id": "a1", "principal": "A", "order": 1 }, { "id": "legacy", "principal": "A" }], "incoming": "A", "target": null }
+  ],
+  "traces": [
+    { "name": "event before ack", "steps": ["queue", "ack"], "expected": "queue" },
+    { "name": "ack before event", "steps": ["ack", "queue"], "expected": "queue" },
+    { "name": "conversation falls back to queue", "initial": "conversation", "steps": ["ack", "queue"], "expected": "queue" },
+    { "name": "processing before ack", "steps": ["processing", "ack"], "expected": "processing" },
+    { "name": "drained before ack", "steps": ["processing", "delivered", "queue", "ack"], "expected": "delivered" },
+    { "name": "failed persist restores queue", "steps": ["processing", "restore", "ack"], "expected": "queue" },
+    { "name": "uncertain delivery keeps recoverable content", "steps": ["timeout", "absent"], "expected": "uncertain" },
+    { "name": "evidence resolves uncertain acceptance", "steps": ["timeout", "queue", "ack"], "expected": "queue" },
+    { "name": "evidence resolves uncertain delivery", "steps": ["timeout", "delivered", "ack"], "expected": "delivered" },
+    { "name": "foreign same ID cannot acknowledge", "steps": ["foreign-queue"], "expected": "pending" },
+    { "name": "legacy same text cannot acknowledge", "steps": ["legacy-queue"], "expected": "pending" },
+    { "name": "proven rejection is recoverable", "steps": ["reject"], "expected": "rejected" }
+  ]
+}
