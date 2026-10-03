@@ -8,18 +8,22 @@ capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `13.3` — prepared GitLab repository additions; not a shipped-version claim.
+**Documented version:** `13.4` — prepared submission correlation; not a shipped-version claim.
 Prepared extensions below remain independently capability-gated.
 
-**Prepared submission correlation — additive, independently gated.**
+**Version 13.4 — submission correlation (additive, prepared).**
 [Submission correlation and optimistic display](./methods/agents.md#submission-correlation-and-optimistic-display-prepared-additive-extension)
 adds optional queue `messageId`, public `submissionIds` on queue/reply/delivery
 surfaces, per-source `recoverySources` for combined retries and daemon-computed
 `mergeEligible` on full queue snapshots (false on draining overlays). Advertise
 `submissionCorrelation: 1` only for complete trusted, persisted end-to-end support;
-clients accept exactly integer `1`, independently of protocol version. Allocate
-the next minor against daemon main at implementation merge time. No method/event
-names or catalog counts change; these prepared docs make no shipping claim.
+clients accept exactly integer `1`, independently of protocol version. This
+allocation follows the prepared Home 13.2 and GitLab 13.3 reservations; advertising
+13.4 does not imply either extension is implemented. Discover each surface under
+its independent capability and permission rules. No method/event names or catalog
+counts change: the documented surface remains **435 / 380 / 55**, while submission
+correlation alone leaves the 13.1 implementation's **404 / 349 / 55** unchanged.
+These prepared docs make no shipping claim.
 
 **Invitation account search (additive, prepared).** `host.invite.searchAccounts`
 (§5.49) adds bounded public suggestions for GitHub and the selected GitLab host.
