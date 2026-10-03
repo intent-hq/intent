@@ -511,3 +511,46 @@ the bare direct-only collection `agent.unsubscribe` alias keep `{ subscriptionId
 These additions prepare metadata, not connection relaying or reconnect ownership.
 
 `note` and `task` entities carry an explicit `rev` (the optimistic-concurrency version, §4); `workspace`, `comment`, `agent`, and `chat` entities deliberately do **not** carry `rev`.
+
+### Prepared note page subscriptions
+
+The [revision-safe note contract](./methods/notes-tasks.md#revision-safe-note-pages-prepared-additive-contract)
+adds opt-in projections, **not new event names**. `notePaging: 1` gates
+`note.subscribe { workspaceId, noteId, projection: "pageState" }`;
+`noteAnnotations: 1` additionally gates
+`comment.subscribe { workspaceId, noteId, projection: "pageState" }`.
+Both require one note and return the existing subscription ID/seq envelope.
+Unknown projection values are invalid on supporting daemons. Omission preserves
+all existing snapshot/delta behavior; `slim` remains its existing list projection.
+
+The pageState seq-0 snapshot and subsequent payloads are the same bounded state:
+`{ kind: "notePageState", scope, sourceRevision, attributionGeneration,
+commentRevision, deleted, invalidation: "all" }`. Scope is the complete NoteScope
+from §5.2. Epochs are opaque strings; pending attribution uses its current generation
+plus `attributionState: "pending"` (otherwise `"ready"`). `deleted: true` retires
+the incarnation and contains its last known epochs, never a recreated note's state.
+No source text, Note, metadata collection, attribution map, anchor list, thread
+summary or replies are included. Each complete push is at most **4,096 escaped
+UTF-8 bytes**. Invalidations deliberately do not enumerate unbounded changed ranges,
+comment IDs or task IDs. Indexed pages/counts are fetched separately on demand.
+
+Publish after the source/receipt or annotation transaction commits. Metadata-only
+updates, every full writer, partial writes, marker rewrites and task conversion all
+advance the appropriate source state. Attribution-only recompute changes only its
+generation; comment-only reply/resolve/delete changes only commentRevision. A
+source-writing comment action changes source and comment state together. Coalesce
+pending state per subscription to the newest complete tuple; do not concatenate
+unbounded deltas. A retry of an already committed operation publishes nothing new.
+Sequence gaps/lag recovery produce another bounded state snapshot, **never** a
+legacy full note/comment refetch. Reconnect reacquires state before any cached page
+is trusted; old request generations cannot repopulate a new subscription.
+
+Page consumers do not subscribe to the legacy annotation firehose or full collection
+channels to populate their page caches. Existing `line-attribution:updated` and
+`comment:*`/`note:*` events feed the server's state projection internally; its
+implementation must obtain epochs without decoding the legacy whole payload.
+Existing legacy subscribers still receive their documented events. An explicitly
+separate legacy subscription is not bounded by the page projection contract and
+must not be silently created by the new path. Unsubscribe, note/workspace switching
+and visibility loss release the scoped subscription and pending state; drafts stay
+session-owned. Permission checks and the existing no-leak not-found policy apply.

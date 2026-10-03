@@ -4,6 +4,32 @@
 
 **Documented version:** `11.1` — registered-root file reads, additive prepared contract; not a shipped-version claim.
 
+**Prepared note paging and partial-write core (additive, not implemented).**
+[§5.2](./methods/notes-tasks.md#revision-safe-note-pages-prepared-additive-contract)
+reserves `note.applySplices` and `note.operationStatus`, taking the combined
+prepared catalog to **423 / 363 / 58** (dispatchable / router / fast path), with no
+new event names. Source/context/mapping pages use opt-in `note.get` shapes;
+annotation paging and bounded subscription projections extend existing methods.
+Allocate the next minor against daemon main at implementation time. Advertise
+`notePaging: 1` only for the complete core including CAS/atomic receipts/status and
+bounded pageState subscriptions; advertise `noteAnnotations: 1` only for the
+independent-epoch annotation extension and only alongside notePaging. Hello also
+provides `notePagingBackendId` for persistent database namespace isolation.
+
+Numeric protocol versions, catalog presence and an ignored unknown option do not
+establish support. Old clients keep the existing complete-note methods and events;
+new clients require capabilities plus page discriminants and keep partial data out
+of full Note types/writers. Loss of capability on reconnect retains drafts and
+surfaces incompatibility, never converts a page cache into a full-note replacement.
+Docs land before additive components; daemon protocol support lands before FE
+opt-in, with human authorization at every merge. Pin advancement remains automated.
+
+This core does not settle whole-operation staging, raw-model memory, default rich
+clipboard MIME, fresh canonical persistence changes or restart/undo policy. Those
+choices remain explicit in §5.2; source paging is not a claim that the complete
+virtual editor is ready or its size guard may be removed. Notes fixtures validate
+prepared examples and arithmetic, not backend storage complexity or shipped support.
+
 **Prepared command-default change — recommended 11.0, not shipped.**
 [Script creation defaults (§5.8)](./methods/scripts.md#command-creation-defaults-prepared-breaking-change)
 change omission on a new command from `saved` to `oneOff`; new services remain
