@@ -1436,3 +1436,221 @@ test('HTML attribute resources page long raw values without confusing them with 
   assert.ok(first.result.items[0].text.length < value.length);
   assert.notEqual(cell.result.items[0].attributesRef, first.result.items[0].nextRef);
 });
+
+
+test('stable owner resolution has no hidden last-window map or continuation state', () => {
+  const x = f.ownerResolution;
+  for (const window of x.windows) summaryContract.assertContextFrame(window, f.limits);
+  for (const order of [x.windows, [...x.windows].reverse()]) {
+    const replies = order.map(() => structuredClone(x.directResponse));
+    for (const reply of replies) summaryContract.assertContextFrame(reply, f.limits, { directOwner: true });
+    assert.deepEqual(replies[0], replies[1]);
+    assert.ok(wireBytes(x.request) <= f.limits.wireBytes);
+    assert.deepEqual(x.windows.map(w => w.result.items[0].sourceMapRef),
+      ['a-htmlTableCell-window-map', 'a-cell-window-two-map']);
+  }
+});
+
+test('stable owner responses reject window-only maps and continuation flags', () => {
+  const x = f.ownerResolution;
+  for (const key of ['sourceMapRef', 'continuationBefore', 'continuationAfter']) {
+    const bad = structuredClone(x.directResponse);
+    bad.result.items[0][key] = x.windows[0].result.items[0][key];
+    assert.throws(() => summaryContract.assertContextFrame(bad, f.limits, { directOwner: true }));
+  }
+  assert.throws(() => summaryContract.assertContextFrame(x.windows[0], f.limits, { directOwner: true }));
+  assert.throws(() => summaryContract.assertContextFrame(x.directResponse, f.limits));
+});
+
+const inlineSource = c => c.source ?? (c.recipe.prefix + c.recipe.delimiter.repeat(c.recipe.delimiterCount)
+  + c.recipe.body + c.recipe.delimiter.repeat(c.recipe.delimiterCount) + c.recipe.suffix);
+
+test('inline code requires indexed delimiter/body addressing and canonical ownership', () => {
+  const x = f.inlineCodeContinuation.canonicalOracleCases[0];
+  for (const field of ['codeSource', 'nativeRef', 'sourceMapRef']) {
+    const bad = structuredClone(x.windowFrame); delete bad.result.items[0][field];
+    assert.throws(() => summaryContract.assertContextFrame(bad, f.limits));
+  }
+});
+
+test('inline code ranges reject gaps, overlapping delimiters and invented profile state', () => {
+  const x = f.inlineCodeContinuation.canonicalOracleCases[0];
+  for (const mutate of [c => { c.codeSource.bodyRange.start++; },
+    c => { c.codeSource.closingRange.start--; }, c => { c.codeSource.openingRange.start--; },
+    c => { c.codeSource.openingRange.end = c.codeSource.openingRange.start; },
+    c => { c.codeSource.profileVersion = 2; }, c => { c.codeSource.bodyRange.end = 0.5; },
+    c => { c.nativeRef = ''; }]) {
+    const bad = structuredClone(x.windowFrame); mutate(bad.result.items[0]);
+    assert.throws(() => summaryContract.assertContextFrame(bad, f.limits));
+  }
+});
+
+test('rendered mapping resource cannot conceal a giant prefix in individually bounded fragments', () => {
+  const base = f.htmlContinuation.frames.a.text;
+  const pages = [structuredClone(base), structuredClone(base)];
+  pages[0].result.items[0].text = 'x'.repeat(f.limits.sourceBytes);
+  pages[0].result.items[0].nextRef = 'next-piece';
+  pages[1].result.items[0].text = 'x'; pages[1].result.items[0].offset = f.limits.sourceBytes;
+  pages[1].result.items[0].nextRef = null;
+  assert.throws(() => summaryContract.assertTextFragments(pages, 'renderedText', f.limits));
+  const map = structuredClone(f.htmlContinuation.frames.a.map);
+  map.result.items[0].sourceRange = { start: 0, end: f.limits.sourceBytes + 1 };
+  map.result.items[0].renderedRange = { start: 0, end: f.limits.sourceBytes + 1 };
+  assert.throws(() => summaryContract.assertContextFrame(map, f.limits));
+});
+
+test('canonical inline-code oracle outputs retain normalization and omitted all-space leaf', () => {
+  const expected = { multilineTrim: 'A ` B C', multipleDelimiters: 'x `` y ` z',
+    noTrimAllSpaces: null, giantOpening: 'TARGET' };
+  for (const c of f.inlineCodeContinuation.canonicalOracleCases) {
+    assert.equal(c.expectedText, expected[c.id]);
+    const source = inlineSource(c), owner = c.directFrame.result.items[0], r = owner.codeSource;
+    assert.equal(source.length, c.sourceLength);
+    summaryContract.assertContextFrame(c.directFrame, f.limits, { directOwner: true });
+    for (const range of [owner.sourceRange, r.openingRange, r.bodyRange, r.closingRange]) {
+      assert.ok(boundary(source, range.start) && boundary(source, range.end));
+    }
+    const opening = source.slice(r.openingRange.start, r.openingRange.end);
+    assert.match(opening, /^`+$/);
+    assert.equal(source.slice(r.closingRange.start, r.closingRange.end), opening);
+    const graph = summaryContract.assertNativeGraph([c.native], c.nativeLinks, f.limits);
+    if (c.expectedText === null) {
+      assert.equal(owner.nativeRef, null);
+      assert.deepEqual(c.expectedProse, ['before after']);
+      assert.ok([...graph.values()].every(n => n.nodeClass !== 'text'));
+      assert.ok(c.maps.result.items.every(m => m.mapping === 'omitted' && m.textNodeId === null));
+    } else {
+      const leaf = graph.get(c.nativeLinks[owner.nativeRef]);
+      assert.equal(leaf.nodeClass, 'text');
+      assert.equal(leaf.marksRef, c.marks.result.items[0].id);
+      assertMetadataFrame(c.marks, f.limits);
+      assert.equal(c.marks.result.items[1].index, 0);
+      assert.equal(summaryContract.assertTextFragments([c.markName], 'value', f.limits), 'code');
+    }
+    if (c.windowFrame) summaryContract.assertContextFrame(c.windowFrame, f.limits);
+    if (c.maps) summaryContract.assertContextFrame(c.maps, f.limits);
+    for (const resource of c.texts) {
+      const text = summaryContract.assertTextFragments([resource.frame], 'renderedText', f.limits);
+      const map = (c.maps?.result.items ?? c.windows.flatMap(w => w.maps.result.items))
+        .find(m => m.id === resource.mapId);
+      assert.equal(text, c.expectedText.slice(map.renderedRange.start, map.renderedRange.end));
+      assert.equal(text.length, map.renderedRange.end - map.renderedRange.start);
+      if (map.mapping === 'identity') assert.equal(text, source.slice(map.sourceRange.start, map.sourceRange.end));
+      assert.equal(map.textNodeRef, owner.nativeRef);
+    }
+  }
+});
+
+test('inline CRLF and trim map exact raw bytes to canonical leaf without copying delimiters', () => {
+  const c = f.inlineCodeContinuation.canonicalOracleCases[0], source = inlineSource(c);
+  const maps = c.maps.result.items;
+  assert.deepEqual(maps.map(m => source.slice(m.sourceRange.start, m.sourceRange.end)),
+    ['`` ', 'A ` B', '\r\n', 'C', ' ``']);
+  assert.deepEqual(maps.map(m => [m.renderedRange.start, m.renderedRange.end]),
+    [[0, 0], [0, 5], [5, 6], [6, 7], [0, 0]]);
+  assert.equal(c.texts.map(r => r.frame.result.items[0].text).join(''), 'A ` B C');
+  assert.equal(source, 'before `` A ` B\r\nC `` after');
+});
+
+test('giant inline delimiters and far body have separate bounded windows with one stable owner', () => {
+  const c = f.inlineCodeContinuation.canonicalOracleCases.find(c => c.id === 'giantOpening');
+  const source = inlineSource(c), owner = c.directFrame.result.items[0];
+  assert.equal(source.length, 200021); assert.equal(source.indexOf('TARGET'), 100008);
+  assert.deepEqual(owner.codeSource.bodyRange, { start: 100008, end: 100014 });
+  for (const w of c.windows) {
+    const r = w.sourceRange;
+    assertSourcePage(source, frame(source.slice(r.start, r.end), r.start, r.end, source.length), f.limits,
+      { direction: 'forward', at: r.start });
+    summaryContract.assertContextFrame(w.occurrence, f.limits);
+    summaryContract.assertContextFrame(w.maps, f.limits);
+    assert.ok(wireBytes(w.occurrence) < 2048); assert.ok(wireBytes(w.maps) < 2048);
+    const { sourceMapRef, ...stable } = w.occurrence.result.items[0];
+    assert.deepEqual(stable, owner);
+    assert.equal(w.maps.result.items[0].ownerRef, 'giantOpening-owner');
+  }
+  assert.equal(c.windows[0].maps.result.items[0].mapping, 'omitted');
+  assert.equal(c.windows[0].maps.result.items[0].textRef, null);
+  assert.deepEqual(c.windows[1].maps.result.items[0].renderedRange, { start: 2, end: 6 });
+  assert.notEqual(c.windows[0].occurrence.result.items[0].sourceMapRef,
+    c.windows[1].occurrence.result.items[0].sourceMapRef);
+});
+
+test('inline direct owner response rejects a window map and all-space owner invents no leaf', () => {
+  for (const c of f.inlineCodeContinuation.canonicalOracleCases) {
+    const bad = structuredClone(c.directFrame);
+    bad.result.items[0].sourceMapRef = 'a-window-map';
+    assert.throws(() => summaryContract.assertContextFrame(bad, f.limits, { directOwner: true }));
+    assert.throws(() => summaryContract.assertContextFrame(c.directFrame, f.limits));
+  }
+});
+
+test('rendered segment total uses UTF8 bytes across fragments while preserving scalar offsets', () => {
+  const base = f.htmlContinuation.frames.a.text;
+  const pages = [structuredClone(base), structuredClone(base)];
+  pages[0].result.items[0].text = '🚀'.repeat(4095); pages[0].result.items[0].nextRef = 'next';
+  pages[1].result.items[0].text = '🚀'; pages[1].result.items[0].offset = 8190;
+  pages[1].result.items[0].nextRef = null;
+  const text = summaryContract.assertTextFragments(pages, 'renderedText', f.limits);
+  assert.equal(utf8(text), 16384); assert.equal(text.length, 8192);
+  pages[1].result.items[0].text += 'x';
+  assert.throws(() => summaryContract.assertTextFragments(pages, 'renderedText', f.limits));
+});
+
+test('far identity checkpoints keep absolute leaf offsets and segment-local fragment offsets', () => {
+  const total = 2_000_000, start = total - 12;
+  const map = structuredClone(f.htmlContinuation.frames.a.map);
+  Object.assign(map.result.items[0], { sourceRange: { start, end: total },
+    renderedRange: { start, end: total }, mapping: 'identity' });
+  const text = structuredClone(f.htmlContinuation.frames.a.text);
+  Object.assign(text.result.items[0], { offset: 0, text: '🚀'.repeat(6), nextRef: null });
+  summaryContract.assertContextFrame(map, f.limits);
+  assert.equal(summaryContract.assertTextFragments([text], 'renderedText', f.limits).length, 12);
+  assert.ok(wireBytes(map) < 2048 && wireBytes(text) < 2048);
+  assert.ok(map.result.items[0].renderedRange.start > f.limits.sourceBytes);
+});
+
+test('stable HTML table and row owners omit maps just like cell owners', () => {
+  for (const kind of ['table', 'row', 'cell']) {
+    const window = structuredClone(f.htmlContinuation.frames.a[kind]);
+    summaryContract.assertContextFrame(window, f.limits);
+    const owner = structuredClone(window);
+    for (const k of ['sourceMapRef', 'continuationBefore', 'continuationAfter']) delete owner.result.items[0][k];
+    summaryContract.assertContextFrame(owner, f.limits, { directOwner: true });
+    assert.throws(() => summaryContract.assertContextFrame(owner, f.limits));
+  }
+});
+
+test('inline mapping cursor cannot switch owner, source window, revision or canonical profile', () => {
+  const claim = { ...f.scope, kind: 'context', contextRef: 'inline-body-window-map',
+    sourceRevision: 'r:inline', boot: 'boot', profileRevision: 'canonical-build-a', expiresAt: 100,
+    budgets: { maxWireBytes: 4096 } };
+  assert.equal(cursorError(claim, claim, claim, 1), null);
+  for (const contextRef of ['inline-opening-window-map', 'inline-owner', 'other-inline-owner-map'])
+    assert.equal(cursorError(claim, { ...claim, contextRef }, claim, 1), 'note-page-cursor-invalid');
+  for (const key of ['backendId', 'workspaceId', 'noteId', 'noteInstanceId'])
+    assert.equal(cursorError(claim, { ...claim, [key]: 'other' }, claim, 1), 'note-page-cursor-invalid');
+  assert.equal(cursorError(claim, claim, { ...claim, sourceRevision: 'changed' }, 1), 'note-page-stale');
+  assert.equal(cursorError(claim, claim, { ...claim, profileRevision: 'changed' }, 1), 'note-page-expired');
+  assert.equal(cursorError(claim, claim, claim, 100), 'note-page-expired');
+});
+
+test('inline descriptors obey exact complete escaped frame budgets with maximum legal scope and id', () => {
+  const wire = structuredClone(f.inlineCodeContinuation.canonicalOracleCases[0].windowFrame);
+  wire.id = 'i'.repeat(64);
+  for (const key of Object.keys(wire.result.scope)) wire.result.scope[key] = 's'.repeat(256);
+  wire.result.items = Array.from({ length: 12 }, (_, i) => ({ ...structuredClone(wire.result.items[0]),
+    id: '\u0001'.repeat(127) + i, parentRef: '\u0001'.repeat(127) + i,
+    nativeRef: '\u0001'.repeat(127) + i, sourceMapRef: '\u0001'.repeat(127) + i }));
+  const slots = wire.result.items.flatMap(item => ['id', 'parentRef', 'nativeRef', 'sourceMapRef'].map(key => [item, key]));
+  for (const [item, key] of slots) {
+    const room = Math.min(256 - utf8(item[key]), Math.floor((65536 - wireBytes(wire)) / 6));
+    if (room > 0) item[key] += '\u0001'.repeat(room);
+  }
+  const remaining = 65536 - wireBytes(wire);
+  assert.ok(remaining >= 0);
+  const [item, key] = slots.find(([item, key]) => utf8(item[key]) + remaining + 1 <= 256);
+  item[key] += 'x'.repeat(remaining);
+  assert.equal(wireBytes(wire), 65536); summaryContract.assertContextFrame(wire, f.limits);
+  item[key] += 'x'; assert.equal(wireBytes(wire), 65537);
+  assert.throws(() => summaryContract.assertContextFrame(wire, f.limits));
+});

@@ -6411,4 +6411,1628 @@
       }
     }
   }
+,
+  "ownerResolution": {
+  "windows": [
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "kind": "noteContextPage",
+        "scope": {
+          "backendId": "db-a",
+          "workspaceId": "ws-a",
+          "noteId": "spec",
+          "noteInstanceId": "inc-a"
+        },
+        "sourceRevision": "r:html-a",
+        "snapshotId": "html-a",
+        "expiresAt": "2026-10-03T00:05:00.000Z",
+        "items": [
+          {
+            "kind": "boundary",
+            "id": "a-htmlTableCell",
+            "construct": "htmlTableCell",
+            "sourceRange": {
+              "start": 2000027,
+              "end": 2000042
+            },
+            "continuationBefore": true,
+            "continuationAfter": true,
+            "parentRef": "a-row",
+            "detailRef": "a-htmlTableCell-raw-details",
+            "htmlPosition": {
+              "profile": "canonicalNote",
+              "tableRef": "a-table",
+              "rowIndex": 0,
+              "columnIndex": 1,
+              "cellRole": "data",
+              "profileVersion": 1
+            },
+            "htmlSource": {
+              "provenance": "explicit",
+              "openingRange": {
+                "start": 2000027,
+                "end": 2000031
+              },
+              "bodyRange": {
+                "start": 2000031,
+                "end": 2000037
+              },
+              "closingRange": {
+                "start": 2000037,
+                "end": 2000042
+              }
+            },
+            "attributesRef": "a-htmlTableCell-attrs",
+            "sourceMapRef": "a-htmlTableCell-window-map",
+            "nativeRef": "a-native-cell"
+          }
+        ],
+        "nextCursor": null
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "kind": "noteContextPage",
+        "scope": {
+          "backendId": "db-a",
+          "workspaceId": "ws-a",
+          "noteId": "spec",
+          "noteInstanceId": "inc-a"
+        },
+        "sourceRevision": "r:html-a",
+        "snapshotId": "html-a",
+        "expiresAt": "2026-10-03T00:05:00.000Z",
+        "items": [
+          {
+            "kind": "boundary",
+            "id": "a-htmlTableCell",
+            "construct": "htmlTableCell",
+            "sourceRange": {
+              "start": 2000027,
+              "end": 2000042
+            },
+            "continuationBefore": false,
+            "continuationAfter": true,
+            "parentRef": "a-row",
+            "detailRef": "a-htmlTableCell-raw-details",
+            "htmlPosition": {
+              "profile": "canonicalNote",
+              "tableRef": "a-table",
+              "rowIndex": 0,
+              "columnIndex": 1,
+              "cellRole": "data",
+              "profileVersion": 1
+            },
+            "htmlSource": {
+              "provenance": "explicit",
+              "openingRange": {
+                "start": 2000027,
+                "end": 2000031
+              },
+              "bodyRange": {
+                "start": 2000031,
+                "end": 2000037
+              },
+              "closingRange": {
+                "start": 2000037,
+                "end": 2000042
+              }
+            },
+            "attributesRef": "a-htmlTableCell-attrs",
+            "sourceMapRef": "a-cell-window-two-map",
+            "nativeRef": "a-native-cell"
+          }
+        ],
+        "nextCursor": null
+      }
+    }
+  ],
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "note.get",
+    "params": {
+      "workspaceId": "ws-a",
+      "noteId": "spec",
+      "page": {
+        "kind": "context",
+        "contextRef": "a-cell-owner",
+        "maxItems": 128,
+        "maxWireBytes": 65536
+      }
+    }
+  },
+  "directResponse": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "kind": "noteContextPage",
+      "scope": {
+        "backendId": "db-a",
+        "workspaceId": "ws-a",
+        "noteId": "spec",
+        "noteInstanceId": "inc-a"
+      },
+      "sourceRevision": "r:html-a",
+      "snapshotId": "html-a",
+      "expiresAt": "2026-10-03T00:05:00.000Z",
+      "items": [
+        {
+          "kind": "boundary",
+          "id": "a-htmlTableCell",
+          "construct": "htmlTableCell",
+          "sourceRange": {
+            "start": 2000027,
+            "end": 2000042
+          },
+          "parentRef": "a-row",
+          "detailRef": "a-htmlTableCell-raw-details",
+          "htmlPosition": {
+            "profile": "canonicalNote",
+            "tableRef": "a-table",
+            "rowIndex": 0,
+            "columnIndex": 1,
+            "cellRole": "data",
+            "profileVersion": 1
+          },
+          "htmlSource": {
+            "provenance": "explicit",
+            "openingRange": {
+              "start": 2000027,
+              "end": 2000031
+            },
+            "bodyRange": {
+              "start": 2000031,
+              "end": 2000037
+            },
+            "closingRange": {
+              "start": 2000037,
+              "end": 2000042
+            }
+          },
+          "attributesRef": "a-htmlTableCell-attrs",
+          "nativeRef": "a-native-cell"
+        }
+      ],
+      "nextCursor": null
+    }
+  }
+}
+,
+  "inlineCodeContinuation": {
+  "canonicalOracleCases": [
+    {
+      "id": "multilineTrim",
+      "expectedText": "A ` B C",
+      "expectedMarks": [
+        "code"
+      ],
+      "expectedProse": [
+        "before ",
+        " after"
+      ],
+      "sourceLength": 27,
+      "windowFrame": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "span",
+              "id": "multilineTrim-code",
+              "role": "code",
+              "sourceRange": {
+                "start": 7,
+                "end": 21
+              },
+              "parentRef": "multilineTrim-paragraph-owner",
+              "codeSource": {
+                "profile": "canonicalNote",
+                "profileVersion": 1,
+                "openingRange": {
+                  "start": 7,
+                  "end": 9
+                },
+                "bodyRange": {
+                  "start": 9,
+                  "end": 19
+                },
+                "closingRange": {
+                  "start": 19,
+                  "end": 21
+                }
+              },
+              "nativeRef": "multilineTrim-leaf-ref",
+              "sourceMapRef": "multilineTrim-window-map"
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "directFrame": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "span",
+              "id": "multilineTrim-code",
+              "role": "code",
+              "sourceRange": {
+                "start": 7,
+                "end": 21
+              },
+              "parentRef": "multilineTrim-paragraph-owner",
+              "codeSource": {
+                "profile": "canonicalNote",
+                "profileVersion": 1,
+                "openingRange": {
+                  "start": 7,
+                  "end": 9
+                },
+                "bodyRange": {
+                  "start": 9,
+                  "end": 19
+                },
+                "closingRange": {
+                  "start": 19,
+                  "end": 21
+                }
+              },
+              "nativeRef": "multilineTrim-leaf-ref"
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "maps": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "sourceMap",
+              "id": "multilineTrim-map-0",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "multilineTrim-owner",
+              "textNodeId": null,
+              "textNodeRef": null,
+              "sourceRange": {
+                "start": 7,
+                "end": 10
+              },
+              "renderedRange": {
+                "start": 0,
+                "end": 0
+              },
+              "mapping": "omitted",
+              "textRef": null
+            },
+            {
+              "kind": "sourceMap",
+              "id": "multilineTrim-map-1",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "multilineTrim-owner",
+              "textNodeId": "multilineTrim-leaf",
+              "textNodeRef": "multilineTrim-leaf-ref",
+              "sourceRange": {
+                "start": 10,
+                "end": 15
+              },
+              "renderedRange": {
+                "start": 0,
+                "end": 5
+              },
+              "mapping": "identity",
+              "textRef": "multilineTrim-text-1"
+            },
+            {
+              "kind": "sourceMap",
+              "id": "multilineTrim-map-2",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "multilineTrim-owner",
+              "textNodeId": "multilineTrim-leaf",
+              "textNodeRef": "multilineTrim-leaf-ref",
+              "sourceRange": {
+                "start": 15,
+                "end": 17
+              },
+              "renderedRange": {
+                "start": 5,
+                "end": 6
+              },
+              "mapping": "normalized",
+              "textRef": "multilineTrim-text-2"
+            },
+            {
+              "kind": "sourceMap",
+              "id": "multilineTrim-map-3",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "multilineTrim-owner",
+              "textNodeId": "multilineTrim-leaf",
+              "textNodeRef": "multilineTrim-leaf-ref",
+              "sourceRange": {
+                "start": 17,
+                "end": 18
+              },
+              "renderedRange": {
+                "start": 6,
+                "end": 7
+              },
+              "mapping": "identity",
+              "textRef": "multilineTrim-text-3"
+            },
+            {
+              "kind": "sourceMap",
+              "id": "multilineTrim-map-4",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "multilineTrim-owner",
+              "textNodeId": null,
+              "textNodeRef": null,
+              "sourceRange": {
+                "start": 18,
+                "end": 21
+              },
+              "renderedRange": {
+                "start": 0,
+                "end": 0
+              },
+              "mapping": "omitted",
+              "textRef": null
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "texts": [
+        {
+          "mapId": "multilineTrim-map-1",
+          "frame": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:inline",
+              "snapshotId": "inline-snapshot",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "multilineTrim-text-1",
+                  "field": "renderedText",
+                  "offset": 0,
+                  "text": "A ` B",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        },
+        {
+          "mapId": "multilineTrim-map-2",
+          "frame": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:inline",
+              "snapshotId": "inline-snapshot",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "multilineTrim-text-2",
+                  "field": "renderedText",
+                  "offset": 0,
+                  "text": " ",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        },
+        {
+          "mapId": "multilineTrim-map-3",
+          "frame": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:inline",
+              "snapshotId": "inline-snapshot",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "multilineTrim-text-3",
+                  "field": "renderedText",
+                  "offset": 0,
+                  "text": "C",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        }
+      ],
+      "native": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "nativeNode",
+              "id": "multilineTrim-doc",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "nodeType": "doc",
+              "nodeClass": "container",
+              "parentRef": null,
+              "childIndex": 0,
+              "sourceRange": {
+                "start": 0,
+                "end": 0
+              },
+              "provenance": "implicit",
+              "attributesRef": "multilineTrim-doc-attrs"
+            },
+            {
+              "kind": "nativeNode",
+              "id": "multilineTrim-paragraph",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "nodeType": "paragraph",
+              "nodeClass": "container",
+              "parentRef": "multilineTrim-doc-ref",
+              "childIndex": 0,
+              "sourceRange": {
+                "start": 0,
+                "end": 27
+              },
+              "provenance": "explicit",
+              "attributesRef": "multilineTrim-paragraph-attrs"
+            },
+            {
+              "kind": "nativeNode",
+              "id": "multilineTrim-leaf",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "nodeType": "text",
+              "nodeClass": "text",
+              "parentRef": "multilineTrim-paragraph-ref",
+              "childIndex": 1,
+              "sourceRange": {
+                "start": 9,
+                "end": 19
+              },
+              "provenance": "explicit",
+              "attributesRef": "multilineTrim-leaf-attrs",
+              "marksRef": "multilineTrim-marks"
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "nativeLinks": {
+        "multilineTrim-doc-ref": "multilineTrim-doc",
+        "multilineTrim-paragraph-ref": "multilineTrim-paragraph",
+        "multilineTrim-leaf-ref": "multilineTrim-leaf"
+      },
+      "source": "before `` A ` B\r\nC `` after",
+      "marks": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteMetadataPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "id": "multilineTrim-marks",
+              "parentId": null,
+              "type": "array",
+              "childrenRef": "multilineTrim-marks-items"
+            },
+            {
+              "id": "multilineTrim-mark-code",
+              "parentId": "multilineTrim-marks",
+              "index": 0,
+              "type": "object",
+              "childrenRef": "multilineTrim-mark-fields"
+            },
+            {
+              "id": "multilineTrim-mark-type",
+              "parentId": "multilineTrim-mark-code",
+              "key": "type",
+              "type": "string",
+              "valueRef": "multilineTrim-mark-name"
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "markName": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "fragment",
+              "id": "multilineTrim-mark-name",
+              "field": "value",
+              "offset": 0,
+              "text": "code",
+              "nextRef": null
+            }
+          ],
+          "nextCursor": null
+        }
+      }
+    },
+    {
+      "id": "noTrimAllSpaces",
+      "expectedText": null,
+      "expectedMarks": [],
+      "expectedProse": [
+        "before after"
+      ],
+      "sourceLength": 18,
+      "windowFrame": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "span",
+              "id": "noTrimAllSpaces-code",
+              "role": "code",
+              "sourceRange": {
+                "start": 7,
+                "end": 12
+              },
+              "parentRef": "noTrimAllSpaces-paragraph-owner",
+              "codeSource": {
+                "profile": "canonicalNote",
+                "profileVersion": 1,
+                "openingRange": {
+                  "start": 7,
+                  "end": 8
+                },
+                "bodyRange": {
+                  "start": 8,
+                  "end": 11
+                },
+                "closingRange": {
+                  "start": 11,
+                  "end": 12
+                }
+              },
+              "nativeRef": null,
+              "sourceMapRef": "noTrimAllSpaces-window-map"
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "directFrame": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "span",
+              "id": "noTrimAllSpaces-code",
+              "role": "code",
+              "sourceRange": {
+                "start": 7,
+                "end": 12
+              },
+              "parentRef": "noTrimAllSpaces-paragraph-owner",
+              "codeSource": {
+                "profile": "canonicalNote",
+                "profileVersion": 1,
+                "openingRange": {
+                  "start": 7,
+                  "end": 8
+                },
+                "bodyRange": {
+                  "start": 8,
+                  "end": 11
+                },
+                "closingRange": {
+                  "start": 11,
+                  "end": 12
+                }
+              },
+              "nativeRef": null
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "maps": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "sourceMap",
+              "id": "noTrimAllSpaces-map-0",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "noTrimAllSpaces-owner",
+              "textNodeId": null,
+              "textNodeRef": null,
+              "sourceRange": {
+                "start": 7,
+                "end": 12
+              },
+              "renderedRange": {
+                "start": 0,
+                "end": 0
+              },
+              "mapping": "omitted",
+              "textRef": null
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "texts": [],
+      "native": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "nativeNode",
+              "id": "noTrimAllSpaces-doc",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "nodeType": "doc",
+              "nodeClass": "container",
+              "parentRef": null,
+              "childIndex": 0,
+              "sourceRange": {
+                "start": 0,
+                "end": 0
+              },
+              "provenance": "implicit",
+              "attributesRef": "noTrimAllSpaces-doc-attrs"
+            },
+            {
+              "kind": "nativeNode",
+              "id": "noTrimAllSpaces-paragraph",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "nodeType": "paragraph",
+              "nodeClass": "container",
+              "parentRef": "noTrimAllSpaces-doc-ref",
+              "childIndex": 0,
+              "sourceRange": {
+                "start": 0,
+                "end": 18
+              },
+              "provenance": "explicit",
+              "attributesRef": "noTrimAllSpaces-paragraph-attrs"
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "nativeLinks": {
+        "noTrimAllSpaces-doc-ref": "noTrimAllSpaces-doc",
+        "noTrimAllSpaces-paragraph-ref": "noTrimAllSpaces-paragraph"
+      },
+      "source": "before `   ` after"
+    },
+    {
+      "id": "multipleDelimiters",
+      "expectedText": "x `` y ` z",
+      "expectedMarks": [
+        "code"
+      ],
+      "expectedProse": [
+        "before ",
+        " after"
+      ],
+      "sourceLength": 29,
+      "windowFrame": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "span",
+              "id": "multipleDelimiters-code",
+              "role": "code",
+              "sourceRange": {
+                "start": 7,
+                "end": 23
+              },
+              "parentRef": "multipleDelimiters-paragraph-owner",
+              "codeSource": {
+                "profile": "canonicalNote",
+                "profileVersion": 1,
+                "openingRange": {
+                  "start": 7,
+                  "end": 10
+                },
+                "bodyRange": {
+                  "start": 10,
+                  "end": 20
+                },
+                "closingRange": {
+                  "start": 20,
+                  "end": 23
+                }
+              },
+              "nativeRef": "multipleDelimiters-leaf-ref",
+              "sourceMapRef": "multipleDelimiters-window-map"
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "directFrame": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "span",
+              "id": "multipleDelimiters-code",
+              "role": "code",
+              "sourceRange": {
+                "start": 7,
+                "end": 23
+              },
+              "parentRef": "multipleDelimiters-paragraph-owner",
+              "codeSource": {
+                "profile": "canonicalNote",
+                "profileVersion": 1,
+                "openingRange": {
+                  "start": 7,
+                  "end": 10
+                },
+                "bodyRange": {
+                  "start": 10,
+                  "end": 20
+                },
+                "closingRange": {
+                  "start": 20,
+                  "end": 23
+                }
+              },
+              "nativeRef": "multipleDelimiters-leaf-ref"
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "maps": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "sourceMap",
+              "id": "multipleDelimiters-map-0",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "multipleDelimiters-owner",
+              "textNodeId": null,
+              "textNodeRef": null,
+              "sourceRange": {
+                "start": 7,
+                "end": 10
+              },
+              "renderedRange": {
+                "start": 0,
+                "end": 0
+              },
+              "mapping": "omitted",
+              "textRef": null
+            },
+            {
+              "kind": "sourceMap",
+              "id": "multipleDelimiters-map-1",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "multipleDelimiters-owner",
+              "textNodeId": "multipleDelimiters-leaf",
+              "textNodeRef": "multipleDelimiters-leaf-ref",
+              "sourceRange": {
+                "start": 10,
+                "end": 20
+              },
+              "renderedRange": {
+                "start": 0,
+                "end": 10
+              },
+              "mapping": "identity",
+              "textRef": "multipleDelimiters-text-1"
+            },
+            {
+              "kind": "sourceMap",
+              "id": "multipleDelimiters-map-2",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "multipleDelimiters-owner",
+              "textNodeId": null,
+              "textNodeRef": null,
+              "sourceRange": {
+                "start": 20,
+                "end": 23
+              },
+              "renderedRange": {
+                "start": 0,
+                "end": 0
+              },
+              "mapping": "omitted",
+              "textRef": null
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "texts": [
+        {
+          "mapId": "multipleDelimiters-map-1",
+          "frame": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:inline",
+              "snapshotId": "inline-snapshot",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "multipleDelimiters-text-1",
+                  "field": "renderedText",
+                  "offset": 0,
+                  "text": "x `` y ` z",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        }
+      ],
+      "native": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "nativeNode",
+              "id": "multipleDelimiters-doc",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "nodeType": "doc",
+              "nodeClass": "container",
+              "parentRef": null,
+              "childIndex": 0,
+              "sourceRange": {
+                "start": 0,
+                "end": 0
+              },
+              "provenance": "implicit",
+              "attributesRef": "multipleDelimiters-doc-attrs"
+            },
+            {
+              "kind": "nativeNode",
+              "id": "multipleDelimiters-paragraph",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "nodeType": "paragraph",
+              "nodeClass": "container",
+              "parentRef": "multipleDelimiters-doc-ref",
+              "childIndex": 0,
+              "sourceRange": {
+                "start": 0,
+                "end": 29
+              },
+              "provenance": "explicit",
+              "attributesRef": "multipleDelimiters-paragraph-attrs"
+            },
+            {
+              "kind": "nativeNode",
+              "id": "multipleDelimiters-leaf",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "nodeType": "text",
+              "nodeClass": "text",
+              "parentRef": "multipleDelimiters-paragraph-ref",
+              "childIndex": 1,
+              "sourceRange": {
+                "start": 10,
+                "end": 20
+              },
+              "provenance": "explicit",
+              "attributesRef": "multipleDelimiters-leaf-attrs",
+              "marksRef": "multipleDelimiters-marks"
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "nativeLinks": {
+        "multipleDelimiters-doc-ref": "multipleDelimiters-doc",
+        "multipleDelimiters-paragraph-ref": "multipleDelimiters-paragraph",
+        "multipleDelimiters-leaf-ref": "multipleDelimiters-leaf"
+      },
+      "source": "before ```x `` y ` z``` after",
+      "marks": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteMetadataPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "id": "multipleDelimiters-marks",
+              "parentId": null,
+              "type": "array",
+              "childrenRef": "multipleDelimiters-marks-items"
+            },
+            {
+              "id": "multipleDelimiters-mark-code",
+              "parentId": "multipleDelimiters-marks",
+              "index": 0,
+              "type": "object",
+              "childrenRef": "multipleDelimiters-mark-fields"
+            },
+            {
+              "id": "multipleDelimiters-mark-type",
+              "parentId": "multipleDelimiters-mark-code",
+              "key": "type",
+              "type": "string",
+              "valueRef": "multipleDelimiters-mark-name"
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "markName": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "fragment",
+              "id": "multipleDelimiters-mark-name",
+              "field": "value",
+              "offset": 0,
+              "text": "code",
+              "nextRef": null
+            }
+          ],
+          "nextCursor": null
+        }
+      }
+    },
+    {
+      "id": "giantOpening",
+      "expectedText": "TARGET",
+      "expectedMarks": [
+        "code"
+      ],
+      "expectedProse": [
+        "before ",
+        " after"
+      ],
+      "sourceLength": 200021,
+      "directFrame": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "span",
+              "id": "giantOpening-code",
+              "role": "code",
+              "sourceRange": {
+                "start": 7,
+                "end": 200015
+              },
+              "parentRef": "giantOpening-paragraph-owner",
+              "codeSource": {
+                "profile": "canonicalNote",
+                "profileVersion": 1,
+                "openingRange": {
+                  "start": 7,
+                  "end": 100008
+                },
+                "bodyRange": {
+                  "start": 100008,
+                  "end": 100014
+                },
+                "closingRange": {
+                  "start": 100014,
+                  "end": 200015
+                }
+              },
+              "nativeRef": "giantOpening-leaf-ref"
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "texts": [
+        {
+          "mapId": "giantOpening-map-1",
+          "frame": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:inline",
+              "snapshotId": "inline-snapshot",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "giantOpening-text-1",
+                  "field": "renderedText",
+                  "offset": 0,
+                  "text": "RGET",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        }
+      ],
+      "native": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "nativeNode",
+              "id": "giantOpening-doc",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "nodeType": "doc",
+              "nodeClass": "container",
+              "parentRef": null,
+              "childIndex": 0,
+              "sourceRange": {
+                "start": 0,
+                "end": 0
+              },
+              "provenance": "implicit",
+              "attributesRef": "giantOpening-doc-attrs"
+            },
+            {
+              "kind": "nativeNode",
+              "id": "giantOpening-paragraph",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "nodeType": "paragraph",
+              "nodeClass": "container",
+              "parentRef": "giantOpening-doc-ref",
+              "childIndex": 0,
+              "sourceRange": {
+                "start": 0,
+                "end": 200021
+              },
+              "provenance": "explicit",
+              "attributesRef": "giantOpening-paragraph-attrs"
+            },
+            {
+              "kind": "nativeNode",
+              "id": "giantOpening-leaf",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "nodeType": "text",
+              "nodeClass": "text",
+              "parentRef": "giantOpening-paragraph-ref",
+              "childIndex": 1,
+              "sourceRange": {
+                "start": 100008,
+                "end": 100014
+              },
+              "provenance": "explicit",
+              "attributesRef": "giantOpening-leaf-attrs",
+              "marksRef": "giantOpening-marks"
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "nativeLinks": {
+        "giantOpening-doc-ref": "giantOpening-doc",
+        "giantOpening-paragraph-ref": "giantOpening-paragraph",
+        "giantOpening-leaf-ref": "giantOpening-leaf"
+      },
+      "recipe": {
+        "prefix": "before ",
+        "delimiter": "`",
+        "delimiterCount": 100001,
+        "body": "TARGET",
+        "suffix": " after"
+      },
+      "marks": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteMetadataPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "id": "giantOpening-marks",
+              "parentId": null,
+              "type": "array",
+              "childrenRef": "giantOpening-marks-items"
+            },
+            {
+              "id": "giantOpening-mark-code",
+              "parentId": "giantOpening-marks",
+              "index": 0,
+              "type": "object",
+              "childrenRef": "giantOpening-mark-fields"
+            },
+            {
+              "id": "giantOpening-mark-type",
+              "parentId": "giantOpening-mark-code",
+              "key": "type",
+              "type": "string",
+              "valueRef": "giantOpening-mark-name"
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "markName": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "fragment",
+              "id": "giantOpening-mark-name",
+              "field": "value",
+              "offset": 0,
+              "text": "code",
+              "nextRef": null
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "windows": [
+        {
+          "sourceRange": {
+            "start": 50000,
+            "end": 50008
+          },
+          "contextRef": "giant-context-0",
+          "occurrence": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:inline",
+              "snapshotId": "inline-snapshot",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "span",
+                  "id": "giantOpening-code",
+                  "role": "code",
+                  "sourceRange": {
+                    "start": 7,
+                    "end": 200015
+                  },
+                  "parentRef": "giantOpening-paragraph-owner",
+                  "codeSource": {
+                    "profile": "canonicalNote",
+                    "profileVersion": 1,
+                    "openingRange": {
+                      "start": 7,
+                      "end": 100008
+                    },
+                    "bodyRange": {
+                      "start": 100008,
+                      "end": 100014
+                    },
+                    "closingRange": {
+                      "start": 100014,
+                      "end": 200015
+                    }
+                  },
+                  "nativeRef": "giantOpening-leaf-ref",
+                  "sourceMapRef": "giant-map-window-0"
+                }
+              ],
+              "nextCursor": null
+            }
+          },
+          "maps": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:inline",
+              "snapshotId": "inline-snapshot",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "sourceMap",
+                  "id": "giantOpening-map-0",
+                  "profile": "canonicalNote",
+                  "profileVersion": 1,
+                  "ownerRef": "giantOpening-owner",
+                  "textNodeId": null,
+                  "textNodeRef": null,
+                  "sourceRange": {
+                    "start": 50000,
+                    "end": 50008
+                  },
+                  "renderedRange": {
+                    "start": 0,
+                    "end": 0
+                  },
+                  "mapping": "omitted",
+                  "textRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        },
+        {
+          "sourceRange": {
+            "start": 100010,
+            "end": 100014
+          },
+          "contextRef": "giant-context-1",
+          "occurrence": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:inline",
+              "snapshotId": "inline-snapshot",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "span",
+                  "id": "giantOpening-code",
+                  "role": "code",
+                  "sourceRange": {
+                    "start": 7,
+                    "end": 200015
+                  },
+                  "parentRef": "giantOpening-paragraph-owner",
+                  "codeSource": {
+                    "profile": "canonicalNote",
+                    "profileVersion": 1,
+                    "openingRange": {
+                      "start": 7,
+                      "end": 100008
+                    },
+                    "bodyRange": {
+                      "start": 100008,
+                      "end": 100014
+                    },
+                    "closingRange": {
+                      "start": 100014,
+                      "end": 200015
+                    }
+                  },
+                  "nativeRef": "giantOpening-leaf-ref",
+                  "sourceMapRef": "giant-map-window-1"
+                }
+              ],
+              "nextCursor": null
+            }
+          },
+          "maps": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:inline",
+              "snapshotId": "inline-snapshot",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "sourceMap",
+                  "id": "giantOpening-map-1",
+                  "profile": "canonicalNote",
+                  "profileVersion": 1,
+                  "ownerRef": "giantOpening-owner",
+                  "textNodeId": "giantOpening-leaf",
+                  "textNodeRef": "giantOpening-leaf-ref",
+                  "sourceRange": {
+                    "start": 100010,
+                    "end": 100014
+                  },
+                  "renderedRange": {
+                    "start": 2,
+                    "end": 6
+                  },
+                  "mapping": "identity",
+                  "textRef": "giantOpening-text-1"
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "segmentPolicy": {
+    "maximumRenderedTextBytes": 16384,
+    "scalarSafe": true,
+    "noPrecedingBodyReads": true
+  }
+}
 }

@@ -376,10 +376,11 @@ export function assertTextFragments(frames, field, limits) {
     }
   }
   assert.ok(ended);
+  if (field === 'renderedText') assert.ok(utf8(text) <= limits.sourceBytes);
   return text;
 }
 
-export function assertContextFrame(frame, limits, { directory = false } = {}) {
+export function assertContextFrame(frame, limits, { directory = false, directOwner = false } = {}) {
   assert.equal(frame.jsonrpc, '2.0'); rpcId(frame.id);
   const p = frame.result;
   assert.equal(p.kind, 'noteContextPage'); assertSnapshotResult(p);
@@ -433,6 +434,7 @@ export function assertContextFrame(frame, limits, { directory = false } = {}) {
       const a = item.sourceRange, b = item.renderedRange;
       for (const r of [a, b]) assert.ok(Number.isSafeInteger(r?.start)
         && Number.isSafeInteger(r?.end) && r.start >= 0 && r.end >= r.start);
+      assert.ok(b.end - b.start <= limits.sourceBytes);
       assert.ok(['identity', 'entity', 'normalized', 'omitted', 'projection'].includes(item.mapping));
       if (item.mapping === 'identity') assert.equal(a.end - a.start, b.end - b.start);
       if (item.mapping === 'projection') assert.equal(a.start, a.end);
@@ -469,7 +471,9 @@ export function assertContextFrame(frame, limits, { directory = false } = {}) {
             assert.ok(['data', 'header'].includes(position.cellRole));
           }
           assert.deepEqual(Object.keys(position).sort(), keys.sort());
-          token(item.attributesRef); token(item.sourceMapRef); token(item.nativeRef);
+          token(item.attributesRef); token(item.nativeRef);
+          if (directOwner) assert.equal(item.sourceMapRef, undefined);
+          else token(item.sourceMapRef);
           assert.ok(['explicit', 'implicit', 'repaired'].includes(source?.provenance));
           for (const key of ['openingRange', 'bodyRange', 'closingRange']) {
             const part = source[key];
@@ -501,8 +505,32 @@ export function assertContextFrame(frame, limits, { directory = false } = {}) {
             assert.equal(position.columnIndex, undefined); assert.equal(position.alignment, undefined);
           }
         } else assert.equal(item.tablePosition, undefined);
-        assert.equal(typeof item.continuationBefore, 'boolean');
-        assert.equal(typeof item.continuationAfter, 'boolean');
+        if (directOwner && item.htmlPosition) {
+          assert.equal(item.continuationBefore, undefined);
+          assert.equal(item.continuationAfter, undefined);
+        } else {
+          assert.equal(typeof item.continuationBefore, 'boolean');
+          assert.equal(typeof item.continuationAfter, 'boolean');
+        }
+      } else if (item.role === 'code') {
+        const c = item.codeSource;
+        assert.equal(c?.profile, 'canonicalNote'); assert.equal(c.profileVersion, 1);
+        const ranges = [c.openingRange, c.bodyRange, c.closingRange];
+        for (const part of ranges) assert.ok(Number.isSafeInteger(part?.start)
+          && Number.isSafeInteger(part?.end) && part.start >= r.start
+          && part.end >= part.start && part.end <= r.end);
+        assert.equal(c.openingRange.start, r.start);
+        assert.equal(c.openingRange.end, c.bodyRange.start);
+        assert.equal(c.bodyRange.end, c.closingRange.start);
+        assert.equal(c.closingRange.end, r.end);
+        assert.ok(c.openingRange.end > c.openingRange.start);
+        assert.equal(c.openingRange.end - c.openingRange.start,
+          c.closingRange.end - c.closingRange.start);
+        if (item.nativeRef !== null) token(item.nativeRef);
+        if (directOwner) assert.equal(item.sourceMapRef, undefined);
+        else token(item.sourceMapRef);
+        assert.equal(item.continuationBefore, undefined);
+        assert.equal(item.continuationAfter, undefined);
       } else if (item.role === 'projection') assert.equal(r.start, r.end);
     }
   }

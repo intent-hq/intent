@@ -286,11 +286,11 @@ hidden inside a source page. Items are discriminated:
 - `boundary`: `{ id, sourceRange, construct, parentRef?, continuationBefore,
   continuationAfter, detailRef?, tablePosition?, htmlPosition?, htmlSource?, attributesRef?, nativeRef?, sourceMapRef? }`. `construct` is a syntax category, not an editor
   node ID; `detailRef` pages large opening syntax, attributes and ancestor chains.
-- `span`: `{ id, sourceRange, role, parentRef?, detailRef? }` for marks, delimiters, literals,
+- `span`: `{ id, sourceRange, role, parentRef?, detailRef?, codeSource?, nativeRef?, sourceMapRef? }` for marks, delimiters, literals,
   comment markers and structural seams. IDs are snapshot-local; identical text at
   another address has another ID. `role` distinguishes source-bearing text from
   zero-width editor projections; it never fabricates source bytes.
-- `sourceMap`: the window-bound canonical HTML raw-to-rendered mapping described
+- `sourceMap`: the window-bound canonical HTML/inline-code raw-to-rendered mapping described
   below; it never replaces canonical source pages.
 - `nativeNode` and `sourcePiece`: the bounded canonical tree and provenance
   descriptors below, distinct from text mappings and session-native editor IDs.
@@ -432,7 +432,8 @@ type HtmlSource = {
   piecesRef?: string; // required for repaired/noncontiguous source provenance
 };
 // Required on each HTML table boundary, alongside parentRef/detailRef:
-// htmlPosition, htmlSource, attributesRef, nativeRef, sourceMapRef.
+// htmlPosition, htmlSource, attributesRef, nativeRef.
+// sourceMapRef and continuation flags are required only on a window occurrence.
 ```
 
 Ordinals are nonnegative safe integers in the **canonical schema output**, with
@@ -490,8 +491,25 @@ and retain map bindings under `(snapshot, window, owner)` even after owner dedup
 Two windows in the same giant cell must neither conflict on owner identity nor
 reuse the other's map binding. This HTML rule does not change GFM reference semantics.
 
+Resolving a snapshot-stable HTML owner reference (tableRef, lexical parentRef or
+an equivalent direct owner reference) returns exactly its immutable boundary
+without `sourceMapRef`, `continuationBefore` or `continuationAfter`. These fields
+are absent, not null or false: a direct owner request admits no source window.
+The same direct request gives the same descriptor regardless of earlier, concurrent
+or reordered source-window requests. It must not use connection-local last-window
+state or attach an arbitrary window's mapping. By contrast the original source
+page's window-bound contextRef returns boundary **occurrences** with all three
+fields required. This distinction is determined by the scoped reference's resource
+kind, not by client guesses from the opaque bytes; scope/revision/snapshot and
+cursor validation apply to both. A consumer stores stable owner descriptors once
+and retains each occurrence's map binding separately. Resolving a stable owner
+cannot acquire a new mapping: seek the desired bounded source window and use its
+contextRef. Direct-owner response cursors never change their resource kind or gain
+a window. No new request parameter, implicit server session state or enlarged
+frame budget is introduced.
+
 ```typescript
-type HtmlSourceMapItem = {
+type CanonicalSourceMapItem = {
   kind: "sourceMap"; id: string; profile: "canonicalNote"; profileVersion: 1;
   ownerRef: string; textNodeId: string | null; textNodeRef: string | null;
   sourceRange: { start: number; end: number };
@@ -501,14 +519,14 @@ type HtmlSourceMapItem = {
 };
 ```
 
-ownerRef identifies the snapshot-stable **source-container boundary** whose
+ownerRef identifies the snapshot-stable **source-container boundary or inline-code span** whose
 window issued the mapping. It is not a claim that the text remains a canonical
 descendant of that source container: HTML repair/foster parenting can move it.
 textNodeRef, parentRef and childIndex supply canonical ownership independently;
 neither raw containment nor the old source table determines that ancestry.
 Rendered offsets are scalar-safe UTF-16 within **one immutable canonical TipTap
-text leaf after schema/whitespace normalization**, identified by textNodeId and
-ownerRef. They are neither raw DOM textContent offsets nor document-wide ProseMirror
+text leaf after schema/whitespace normalization**, identified by textNodeId. ownerRef identifies source ownership independently.
+They are neither raw DOM textContent offsets nor document-wide ProseMirror
 positions. The latter include atoms and wrapper positions and remain session-owned.
 An identity segment preserves text and length; an entity segment is an indivisible
 raw-to-decoded mapping; normalized segments record actual canonical normalization.
@@ -519,8 +537,23 @@ non-omitted segments require a real textNodeId and a direct textNodeRef resolvin
 its `nativeNode` descriptor (the returned id equals textNodeId).
 A source-less projection has an empty source range. Nonempty rendered segments use a bounded context fragment
 resource `field: "renderedText"` whose offset 0 is the start of that segment, not
-the whole leaf. The resolved text length equals renderedRange length. Repeated
-strings have distinct source identities; source-copy/search/edit coordinates always
+the whole leaf. The resolved text length equals renderedRange length.
+Each complete renderedText resource is at most 16,384 decoded UTF-8 bytes, even
+when a smaller requested budget splits it into several fragment frames. This is a
+per-segment resource limit, not only a per-frame limit. Identity and large
+normalized runs must be indexed into scalar-safe bounded segments/checkpoints;
+a far-window map cannot point to an earlier giant segment and make the consumer
+drain preceding rendered text to reach its window. Returned identity/omitted ranges
+are clipped to the admitted window; genuinely non-bijective normalization/entity
+seams retain their exact raw range and endpoint affinities. A long collapsed raw
+whitespace run may have a large raw range and one bounded rendered space; locating
+that seam uses the index, not a read-time scan of that run. Nonempty rendered ranges
+are capped by the resource's actual UTF-8 bound, not merely its UTF-16 length.
+Window intersection and required seams select checkpoints by index. Resolved
+rendered offsets remain absolute within the canonical text leaf, while textRef
+fragment offsets start at zero in the bounded segment. Repeated requests may
+use the same indexed segments when appropriate; none requires prior-window state.
+Repeated strings have distinct source identities; source-copy/search/edit coordinates always
 use raw ranges. Selection affinities choose declared segment endpoints for
 non-bijective mappings, never interpolate an offset inside an entity or invent
 source bytes. Maps enumerate by `(sourceRange.start, sourceRange.end, id)`; browser
@@ -578,6 +611,56 @@ entities, CRLF and sanitizer removals require differential source-map fixtures
 against the actual profile before an adapter claims support. Index construction
 and invalidation cost are measured separately; ordinary reads must use indexed
 owners, interval overlap and checkpoints rather than scanning unloaded prefixes.
+
+**Canonical Markdown inline-code continuation.** General Markdown `span.role:
+"code"` reuses the same canonical profile, native-node, mark, mapping and fragment
+resources; it is not an HTML table or a new rendering grammar. Each code span
+requires these snapshot-stable fields:
+
+```typescript
+type CodeSource = {
+  profile: "canonicalNote"; profileVersion: 1;
+  openingRange: { start: number; end: number };
+  bodyRange: { start: number; end: number };
+  closingRange: { start: number; end: number };
+};
+// On span.role=code: codeSource: CodeSource; nativeRef: string | null.
+// sourceMapRef: string is required on window occurrences, absent on direct owners.
+```
+
+Ranges are scalar-safe absolute UTF-16 addresses in original source. The nonempty
+opening and closing ranges identify the exact matching backtick runs, have equal
+length, and together with the untrimmed body partition sourceRange contiguously.
+No delimiter bytes or entire body are inlined; enormous runs remain constant-size
+addresses. An unmatched run is ordinary source under the existing parser, not a
+fabricated code span. Delimiter/body addresses are computed at indexing time;
+clients never scan a prefix to determine delimiter length or trim state.
+
+nativeRef resolves the canonical text leaf carrying the existing `code` mark;
+its marksRef retains all actual ordered schema marks. If canonical parsing emits
+no code leaf, nativeRef is null and no leaf or code mark is invented. Adjacent
+source constructs may share one canonical leaf after normalization; source owners
+remain distinct and each map uses the actual leaf-local rendered offsets. The
+window's maps identify raw delimiters, trimmed/removed body and normalization
+seams as omitted or normalized segments. The all-space example `before ` followed
+by a single-backtick-delimited three spaces and ` after` canonically becomes the
+unmarked text `before after`, although a Markdown parser alone retains code spaces.
+Repeated delimiters embedded inside the body are content when the canonical parser
+says so; newline/CRLF normalization and surrounding trim follow the complete
+Markdown-to-HTML, sanitizer and native schema pipeline, not a parser event payload.
+
+A far window wholly inside a giant opening delimiter receives the code owner and
+bounded omitted mapping; it must not fetch the whole opening run or fabricate a
+visible code node. A body window receives scalar-safe bounded maps plus direct
+native/mark ownership, including required schema ancestors, with no earlier-body
+reads. sourceMap.ownerRef may resolve the stable code span; that lexical ownership
+is independent of canonical parentRef/childIndex. The stable direct-owner response
+omits sourceMapRef just as HTML direct owners do. Code spans have no continuation
+flags; their exact ranges provide the source relation. Window context cursors and
+map refs bind the admitted window/profile/scope/revision/snapshot; direct code
+owner/native/mark refs bind the source snapshot and expire under the same profile
+or source invalidation rules. This addition changes no source, copy format,
+persistence, canonical parser or session-live editing policy.
 
 Session-native merged ownership remains in the frozen operation `live` stream,
 bound to editorSessionId/localEditSequence/liveGeneration. Its effective grid
