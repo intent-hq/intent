@@ -187,6 +187,15 @@ ws.mcp.listServers() → { servers: [{ id, name, transport, enabled, state, tool
 ws.mcp.listTools(serverId) → { tools: [...] }
 ```
 
+### ws.mr
+
+```text
+ws.mr.monitor(prNumber, { repo? }) → { ok, monitor, requirements, pausedUntil?, adoptedFrom? }
+ws.mr.monitors() → [monitors]
+ws.mr.snapshot(prNumber, { repo? }?) → { repo, prNumber, title, url, state, isDraft, isMerged, isClosed, headSha, updatedAt, mergeable, mergeableState, mergeBlockedReason, checks: { total, passed, failed, pending, failedNames }, reviews: { decision, approvals, changesRequested }, comments: { conversationCount, reviewCommentCount, unresolvedThreadCount?, totalCount }, requirements: { state, isDraft, hasConflicts, isBehind, ancestry, branchUpdateRequired?, mergeable?, checks: { total, passed, failed, pending, items, failingRequired, pendingRequired, requiredKnown }, approvals: { decision, have, needed?, changesRequested }, threads: { unresolved?, resolutionRequired? }, mergeStateStatus?, mergeBlockedReason?, isInMergeQueue?, mergeQueueEjection?, rulesKnown }, pausedUntil? }
+ws.mr.unmonitor(prNumber, { repo? }) → { ok, monitor }
+```
+
 ### ws.note
 
 ```text
