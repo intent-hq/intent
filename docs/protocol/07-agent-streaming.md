@@ -97,7 +97,7 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
 
 - **Methods:** `chat.subscribe` / `chat.unsubscribe`, intercepted on the subscription fast-path
   before the JSON-RPC dispatcher (like `events.subscribe`). `params` is
-  `{ agentId, sinceMessageId?, deltaEncoding?, projection?, replaceGroup?, workspaceId? }` — a missing/empty `agentId` is a
+  `{ agentId, limit?, sinceMessageId?, deltaEncoding?, projection?, replaceGroup?, workspaceId? }` — a missing/empty `agentId` is a
   `-32602` error.
   `chat.subscribe` returns `{ subscriptionId }`, then
   pushes a seq-0 `subscription.push` **snapshot**, then ordered **deltas** (seq 1, 2, …).
@@ -106,6 +106,19 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   for direct callers; workspace clients capture it with the subscription and
   retain it for reconnects and `chat.unsubscribe { subscriptionId, workspaceId? }`.
   It does not change which agent's transcript is returned or connection ownership.
+- **Snapshot message limit (prepared additive contract ahead of backend implementation).**
+  The optional `limit` accepts an integer from **1 through 200**, inclusive.
+  Absent / `null` selects **5**, preserving existing callers. Wrong types (including
+  strings, booleans and fractional numbers), zero, negative values and values above 200
+  return `-32602`; the daemon never coerces or clamps them. The chosen limit is fixed
+  for the subscription's lifetime and applies to initial, resume, transcript-invalidation
+  and lag-recovery snapshots, including any merged live-turn row. It is a message-count
+  upper bound, not a guaranteed page size: shorter histories or the existing slim byte
+  budget can yield fewer messages. For example, `limit: 50` requests the newest 50
+  messages in transcript order when enough history fits the budget. No automatic
+  history backfill is added. Older daemons ignore this unknown parameter and retain
+  their five-message window; sending it alone does not guarantee a larger snapshot
+  until the backend implementation is available.
 - **Slim projection (the wire default since v8.0; introduced opt-in within v7.1 —
   [intent-hq/intentd#1304](https://github.com/intent-hq/intentd/pull/1304)).** Every
   subscription serves the same bounded tool/image block projection as
@@ -124,11 +137,11 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   [intent-hq/intentd#1314](https://github.com/intent-hq/intentd/pull/1314)): the seq-0 and
   lag-recovery snapshots reuse the `agent.getConversation` read, so a snapshot page is bounded
   at `SLIM_PAGE_BUDGET_BYTES` (512 KiB) total serialized message bytes and may carry fewer than
-  five messages, with `nextToken` re-minted at the first excluded row (§5.5) — the client
+  the chosen message limit, with `nextToken` re-minted at the first excluded row (§5.5) — the client
   pages older history exactly as before, just in more round-trips. The budget covers the
   live-turn merge too: after the in-flight message is appended it anchors as the newest row
   (always served, even alone over budget — the §5.5 one-message floor), and oldest persisted
-  rows are evicted until the merged page fits both the five-message count and byte budget,
+  rows are evicted until the merged page fits both the chosen message limit and byte budget,
   with `truncated`/`nextToken` re-minted at the eviction boundary so the evicted rows stay
   reachable via `agent.getConversation`. Since v10.0
   every frame also inherits the `agent.getConversation` legacy-inline-file-block projection
@@ -141,8 +154,8 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   holds the transcript up to a known message id may pass it as the optional `sinceMessageId`
   (string). Absent / `null` / `""` all mean "no resume" — the standard snapshot below, carrying
   **no** `resumed` key on the initial snapshot; a present non-string value is a `-32602` error. When provided,
-  the daemon reads the **same newest page of at most five persisted messages** as the standard
-  snapshot (still exactly one conversation read — resume is a post-filter, never a second
+  the daemon reads the **same newest page bounded by the subscription's chosen limit** as
+  the standard snapshot (still exactly one conversation read — resume is a post-filter, never a second
   fetch; monorepo#958 cost contract)
   and then:
   - **Id found in the page** → the seq-0 snapshot's `messages[]` carries only the messages
@@ -161,8 +174,8 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   Deltas (seq 1, 2, …) are unaffected by resume.
 - **Transcript invalidation.** Editing/regenerating or replacing messages emits
   `agent:updated` with `truncatedCount` or `replacedCount`. Standing chat subscriptions
-  respond with a fresh snapshot of at most five messages (including any live row) at the next
-  subscription sequence number, carrying `resumed: false`, even when registration had no
+  respond with a fresh snapshot bounded by the subscription's chosen limit (including any
+  live row) at the next subscription sequence number, carrying `resumed: false`, even when registration had no
   `sinceMessageId` or its
   initial resume has already completed. Clients must honor this flag on every
   snapshot, not only the initial one. Clients discard their cached transcript (including older
@@ -212,17 +225,17 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   message-row deltas are conflation barriers in both modes, so a conflated fragment run never
   crosses an authoritative frame.
 - **Snapshot granularity = messages; delta granularity = blocks.** Fresh, stale-resume,
-  invalidation and lag-recovery snapshots contain the newest **at most five messages**, including
-  any merged live-turn row. This is a chat-specific default: the daemon requests
-  `agent.getConversation` with `limit: 5`, then counts a merged live row inside that same window.
-  No subscription count parameter is added, and unrelated paginated methods retain their defaults.
+  invalidation and lag-recovery snapshots contain the newest **at most `limit` messages**
+  (default **5**), including any merged live-turn row. The daemon requests
+  `agent.getConversation` with the chosen subscription limit, then counts a merged live row
+  inside that same window. Unrelated paginated methods retain their defaults.
   The response keeps the conversation `messages[]` object shape and transcript-wide
   `totalMessages` (including a newly merged live row). If the live row displaces persisted rows,
   `truncated: true` and `nextToken` point older continuation at the eviction boundary, so every
   displaced row remains reachable. Clients fetch history through `agent.getConversation` with
-  `limit: 5` and the returned cursor; existing directional cursors and inclusive
+  their chosen pagination `limit` and the returned cursor; existing directional cursors and inclusive
   `aroundMessageId` / `aroundIndex` seeks are unchanged. Slim byte budgeting may shorten the
-  window further, retaining the existing one-message floor; five messages is not a strict
+  window further, retaining the existing one-message floor; a message-count limit is not a strict
   wire-byte ceiling. Initial snapshots use one bounded conversation read; recovery retries at
   most once on read failure, without walking history. Each subsequent delta upserts individual
   **content blocks** within a message.
