@@ -15,7 +15,8 @@ never infer the role from this client's capabilities or its saved registry categ
 `server.capabilities.submissionCorrelation: 1` gates the complete
 [optimistic submission contract](./agents.md#submission-correlation-and-optimistic-display-prepared-additive-extension):
 optional queue `messageId`, full submission alias sets across replies/queue/delivery,
-and trustworthy merge eligibility. Enable queue optimism only for exact integer
+per-source `recoverySources` for combined retries, and trustworthy live-row merge
+eligibility with false flags on draining overlays. Enable queue optimism only for exact integer
 `1`; missing, malformed and unknown versions use confirmed queue display.
 The numeric protocol version and a partially present field are not support tests.
 

@@ -1282,10 +1282,11 @@ as uncorrelated. A partial implementation must not advertise the capability.
 | Surface | Additive field | Meaning |
 |---|---|---|
 | `agent.queueMessage` params | `messageId?: string` | Caller-generated, nonempty opaque submission ID, like `agent.sendMessage.messageId`; omission keeps server allocation. Invalid supplied values return `-32602` before mutation. |
-| `QueuedMessage` | `submissionIds?: string[]` | Complete, nonempty set of nonempty opaque strings: this entry's canonical ID and absorbed submission aliases, without duplicates. Array order has no meaning. Reuse internal `submission_ids()` / `merged_submission_ids`; do not derive IDs from text or metadata. |
+| `QueuedMessage` | `submissionIds?: string[]` | For an ordinary single-source row, the complete, nonempty set of nonempty opaque strings: its canonical ID and absorbed submission aliases, without duplicates. Omitted on a combined recovery row; use `recoverySources` below. Array order has no meaning. Reuse internal `submission_ids()` / `merged_submission_ids`; do not derive IDs from text or metadata. |
+| Combined recovery `QueuedMessage`, deduplicated `agent.sendMessage` result, persisted row `metadata`, and `agent:message.data` | `recoverySources?: RecoverySource[]` | Nonempty flat list of original sources, each retaining its own aliases, trusted author and lifecycle origin; mutually exclusive with top-level `submissionIds`. See normalization below. |
 | `QueuedMessage` in `agent.getQueue` and `agent:queue:updated.data.queue` | `mergeEligible?: boolean` | Daemon-computed eligibility for a future submission by this row's trusted author. At most one row is true in a coherent full snapshot; false is explicit, omission means unknown. |
-| `agent.sendMessage` success result | `submissionIds?: string[]` | Direct delivery: singleton submitted/server-allocated message ID. Queued fallback: complete surviving entry alias set, including the submitted ID, even when result `messageId` names an older survivor. Existing `queued`, `messageId`, `turnId` and result arms remain unchanged. |
-| Persisted human transcript row `metadata` | `submissionIds?: string[]` | Direct delivery: singleton ID. Queue delivery: complete consumed entry alias set, captured before removal; each batch row keeps its own set. Round-trips on `agent.getConversation`, `agent.getSession` and `chat.subscribe` reads. |
+| `agent.sendMessage` success result | `submissionIds?: string[]` | Direct delivery: singleton submitted/server-allocated message ID. Ordinary queued fallback: complete surviving entry alias set, including the submitted ID, even when result `messageId` names an older survivor. A combined recovery acknowledgement uses `recoverySources` instead. Existing `queued`, `messageId`, `turnId` and result arms remain unchanged. |
+| Persisted human transcript row `metadata` | `submissionIds?: string[]` | Direct delivery: singleton ID. Ordinary queue delivery: complete consumed entry alias set, captured before removal; each batch row keeps its own set. Combined recovery uses `recoverySources` instead. Round-trips on `agent.getConversation`, `agent.getSession` and `chat.subscribe` reads. |
 | Human `agent:message.data` | `submissionIds?: string[]` | Same alias set as the persisted row, alongside existing `messageId`, `appMessageId?`, `queuedMessageId?`, `turnId?` and resolved author. |
 
 `QueuedMessage.submissionIds` applies uniformly to the existing `queuedMessage`
@@ -1311,29 +1312,98 @@ correlate its own request using that captured authenticated scope despite raw
 `author: null`; shared events/reads require a matching non-null trusted principal.
 Identity changes clear the old scope's optimistic projection.
 
-Caller-supplied `messageMetadata.submissionIds` (also inside
-`mergedMessageMetadata`) cannot create aliases: strip it on ingress and stamp
-only server-owned IDs on persistence. Automatic/agent input cannot acquire human
-correlation or merge authority by supplying these fields. Preserve unknown and
+Caller-supplied `messageMetadata.submissionIds` and `messageMetadata.recoverySources`
+(also inside `mergedMessageMetadata`) cannot create correlation: strip both on
+human and automatic ingress and stamp only daemon-owned data on persistence.
+Top-level caller copies are never used as authority either. Automatic/agent input
+cannot acquire human correlation or merge authority by supplying these fields. Preserve unknown and
 imported historical humans as barriers with `mergeEligible: false`, never infer
 the current principal from null authorship. A supplied ID already owned by a
 *different* principal in the pending/draining alias registry returns `-32602`
 without appending, returning a deduplicated success, or changing that entry.
 Same-principal replay against a retained pending/draining alias returns the
-survivor without a second append or fresh human-arrival time. This scoped pending
-replay protection does not promise deduplication after delivery/removal.
+survivor without a second append or fresh human-arrival time. For a combined
+recovery row, check the matching source principal rather than the head author;
+the reply uses `recoverySources` instead of a flat `submissionIds` on any surface
+that returns this row or its correlation (including a deduplicated send result).
+This acknowledgement grants no right to mutate or send the combined entry.
+This scoped pending replay protection does not promise deduplication after delivery/removal.
 
-**Merge eligibility.** Compute the full snapshot and its flags under the same
-queue/draining synchronization used for selection. Select the latest pending
-human by internal `submission_order`, skipping genuine automatic/agent entries,
-not humans carrying custom/system-looking metadata. Only that human can be true:
-it must have a trusted current principal, not be imported/unbound, and not already
-be persisted to the transcript. A later provisional human pop in the draining
-registry makes it false, even though that barrier is absent from the visible
-queue. Unknown/incomplete legacy ordering is conservative: mark false until
-eligibility is established. This reuses `can_merge_pending()` and the existing
-provisional-barrier rule. An editing hold alone does **not** prevent append;
-existing draft/prefix/suffix protection still applies.
+**Combined failure recovery.** Keep the existing ordinary failed-flush policy:
+one combined retry entry, with the head entry's execution/mutation authority,
+combined prompt, attachments and original turn identity. Do not split execution
+or grant another source's author edit/remove/send rights. The new correlation
+field is presentation evidence only, not an ACL or a replacement for the entry's
+existing metadata/origin. Context-size and partial-persist failures retain their
+existing individual-entry restoration behavior.
+
+```typescript
+type RecoverySource = {
+  messageId: string;             // original source entry ID, not retry wrapper ID
+  submissionIds?: string[];      // complete aliases; absent for unknown legacy data
+  author: MessageAuthor | null;  // existing trusted author projection for THIS source
+  origin: "user" | "automatic"; // stored MessageOrigin / user_origin, not a metadata label
+};
+```
+
+Build `recoverySources` from the consumed `flushed_entries` before discarding
+individual entries. An ordinary source contributes its canonical ID, complete
+aliases, trusted author snapshot and stored lifecycle origin. `author: null`
+means genuine nonhuman input; unknown/imported humans keep the existing author
+object with null principal, never the retry head's principal. Authorship and
+origin are independent: a trusted human-authored wake can have
+`origin: "automatic"`. The origin values mirror existing `MessageOrigin::User/Automatic`
+and do not change wake/archive or access rules. Source author projections retain
+their captured principal/snapshot even in raw mutation replies whose outer
+`author` is null. Imported provenance follows the existing unbound historical
+human rules for each source, never importing a foreign principal as current.
+
+Normalize in source delivery order. If an entry already has `recoverySources`,
+flatten those original leaves instead of wrapping them or adding the retry
+entry ID as a new submission. Preserve distinct leaves even for the same author.
+Repeated occurrences of the same original `messageId`, trusted principal/unknown
+human identity and origin coalesce at their first position with the union of
+known aliases; duplicates never grow on each failure. If any occurrence has an
+unknown alias set, the result stays uncorrelated (omit its `submissionIds`). Never
+combine different principals/origins, restamp sources to the head, or recover
+identity from text. The aliases are those captured by the source, not the new
+retry entry's ID. No nested recovery list, source content copy or per-attempt
+wrapper history is retained. If legacy data cannot establish provenance, retain
+an uncorrelated legacy source rather than claiming complete matching.
+
+Persist the normalized leaves with the retry's existing durable queue payload;
+thread them through turn options, restart, redrive, subsequent batching, failure
+and processing snapshots. Internal requeue copies these captured leaves; it does
+not reconstruct them from caller metadata. Repeated ordinary failure may allocate a new retry
+entry ID but preserves the same leaves. A successful redrive of an already
+persisted entry creates no duplicate transcript row. If existing recovery policy
+requires a new transcript row (for example a context-size recovery marker), stamp
+its `metadata.recoverySources` and echo `data.recoverySources`, omitting inherited
+head `submissionIds`. All ordinary queue/read/reply/processing projections of the
+combined entry expose that same normalized field and omit top-level
+`submissionIds`; never flatten A/B/automatic aliases under A's author. Original
+per-source transcript rows and aliases remain unchanged. This retention is tied
+to owning queue/transcript rows, not a separate global ledger. Match a human
+pending submission against a recovery leaf only via that leaf's non-null trusted
+`author.principalId` and the surrounding daemon/workspace/agent scope. Recovery
+metadata is never client-authored and never changes queue permissions.
+
+**Merge eligibility.** Full `agent.getQueue` / `agent:queue:updated` snapshots
+include draining overlays first, then live entries, as today. Deduplicate an
+overlay already represented by a restored/coalesced live row using the existing
+canonical/absorbed-ID or turn-ID rule; the live row wins. Compute the snapshot and
+flags under the same draining-then-live queue synchronization used for selection.
+Every overlay row has `mergeEligible: false`, even when its provisional flag has
+settled but its guard has not yet been dropped. Select candidates ONLY from LIVE
+human entries by internal `submission_order`, skipping genuine nonhuman entries,
+not humans carrying custom/system-looking metadata. Only that live human can be
+true: it must have a trusted current principal, not be imported/unbound, and not
+already be persisted to the transcript. A later provisional human in the draining
+registry blocks it; a settled draining row does not. Combined persisted retries
+are not merge targets. Unknown/incomplete legacy ordering is conservative: mark
+false until eligibility is established. This reuses `can_merge_pending()` and
+the existing provisional-barrier rule. An editing hold alone does **not** prevent
+append; existing draft/prefix/suffix protection still applies.
 
 Recompute flags after enqueue/append, pop, restore/coalesce, edit and removal,
 including when a provisional barrier settles without changing visible text.
@@ -1357,20 +1427,51 @@ precedence is per submission, not a global ordering of unrelated turns:
 | Reply, then queue event containing alias | Replace provisional content with the canonical aggregate; never duplicate its absorbed contributions. |
 | Conversation placeholder, then `queued: true` or matching queue event | Move the same submission to queue, honoring the confirmed survivor and author; later evidence can split a provisional same-author merge. |
 | Processing snapshot, then late enqueue reply | Retain the consumed snapshot/aliases; do not recreate an ordinary queued entry from that reply. Processing is an attempt, not proof of transcript persistence or provider success. |
-| Persisted transcript echo/read, then late queue snapshot or enqueue reply | Keep the delivered transcript row and suppress its queued/optimistic duplicate. A delayed reply cannot resurrect it. |
+| Persisted transcript echo/read, then late enqueue reply or known-stale read | Keep history; suppress duplicate optimistic content and stale mutation seeds. Do not delete confirmed queue entries just because their aliases occur in history. |
 | Processing, failed persistence, authoritative restoration | Restore the actual queued entry and its aliases; processing alone must not suppress that recovery. |
-| Persisted transcript row, then failure retry queue | Preserve the historical row and existing retry controls; do not create a second optimistic user contribution or merge into already-persisted history. |
+| Persisted transcript row, then a current full queue containing that source | Preserve BOTH history and confirmed queue/retry state, even for the same entry ID with no `requeuedAfterFailure` marker. Remove only the duplicate optimistic contribution. |
+| Mixed-author batch persisted, then ordinary failure | Retain every original history row plus ONE combined retry entry with per-source `recoverySources`; a late original ACK cannot replace that entry. |
 | Transport timeout/disconnect, then matching queue or transcript evidence | Mark delivery uncertain until evidence arrives; reconcile by scoped aliases without resending. |
 
-A queue's absence is not delivery proof: removal, pop and failed persistence are
-also possible. Event timestamps/IDs are not queue revisions. Partial mutation
-replies do not order whole snapshots. Track in-flight request/event observations;
-when an unversioned snapshot's freshness is ambiguous, retain known per-submission
-evidence, disable speculative merge into uncertain rows and refresh queue/history.
-After reconnect obtain current queue and transcript evidence before re-enabling
-speculative merging. Never use a late empty snapshot to declare an uncertain
-submission rejected. Existing persist-before-queue-shrink ordering is unchanged;
-processing still precedes persistence on ordinary drain and follows it on send-now.
+**Observable recovery and freshness.** Keep confirmed transcript rows, confirmed
+queue entries/controls and local optimistic contributions as separate state.
+Correlation removes only the last of these; it does not prove that confirmed
+queue work is obsolete. A `requeuedAfterFailure: true` row positively describes a
+retry, but absence is not proof against restoration: partial flush persistence
+can restore an already-persisted head under its original ID, with no retry flag,
+while a tail remains unpersisted. Both rows must remain queued. A full queue can
+also contain an overlay whose history row just persisted; the existing later
+queue shrink retires that overlay, not alias-based deletion by the renderer.
+
+There is no new restoration event, queue revision or public live/overlay bit.
+Use actual `agent:queue:updated`, `agent:queue:processing`, `agent:message`, existing
+turn failure/end/status signals, and `agent.getQueue` / history reads. A lifecycle
+failure alone neither invents a retry row nor proves restoration complete. After
+processing/persistence, a queue update that might be an old overlay or a restored
+same-ID row triggers a fresh queue read; preserve the last confirmed queue while
+resolving that ambiguity and disable unsafe controls/speculative merges. Capture
+a local observation generation when issuing each read after the triggering event;
+if a relevant queue/processing/history/lifecycle event arrives while that read is
+outstanding, do not let its result replace newer observed state: repeat the read.
+A full read issued after those observations, with no intervening invalidation,
+establishes current queue membership at the read instant, including overlapping
+history and any remaining overlays. Keep every returned row. If an attempt is
+still active or live-versus-overlay remains unknown, retain its processing/checking
+presentation and gate unsafe controls until lifecycle settlement/current refresh;
+`mergeEligible: false` does not itself distinguish an overlay from live retry work.
+This is local request fencing, not a claim of global snapshot/event ordering.
+
+Delayed mutation replies only acknowledge their original submissions once queue,
+processing or history evidence has been seen; they cannot seed or replace the
+confirmed queue. Old read responses whose requests preceded these observations
+are similarly fenced. Event timestamps/IDs are not revisions. Ambiguous event
+arrival order requires refresh, not erasing a row with known history. Queue
+absence alone is not delivery proof: removal, pop and failed persistence also
+cause absence. Never use an empty snapshot to declare an uncertain send rejected.
+After reconnect, get current queue AND history before speculative merging; those
+reads may legitimately contain the same source IDs. Persist-before-queue-shrink
+ordering remains unchanged; processing precedes persistence on ordinary drain
+and follows it on send-now. No globally exactly-once delivery guarantee is added.
 
 **Failure and retention.** A proven pre-acceptance rejection or local preparation
 failure affects only its pending submission and preserves earlier confirmed
@@ -1385,9 +1486,9 @@ that includes every affected contribution; they must not discard unconfirmed tex
 
 Pending daemon alias sets live only with their owning queued/draining entries
 and their existing durable queue payloads. Preserve the complete set through
-append, handback/coalescing, persistence, restart and failure requeue; never trim
-live aliases and then advertise complete correlation. Delivered sets live on
-ordinary transcript rows under existing transcript retention, not in a new
+append, handback/coalescing, persistence, restart and failure requeue (using
+per-source recovery leaves for combined retries); never trim live aliases and
+then advertise complete correlation. Delivered sets live on ordinary transcript rows under existing transcript retention, not in a new
 permanent deduplication ledger. Older delivered/requeued rows may remain
 uncorrelated; do not fabricate historical aliases. The renderer keeps terminal
 correlation tombstones for at most 10 minutes and at most 1024 submissions per

@@ -73,8 +73,13 @@ same aliases and `mergeEligible: false`. Human `agent:message.data.submissionIds
 echoes the persisted row's `metadata.submissionIds`, including all absorbed
 submissions even if delivery precedes the enqueue reply. Batch aliases remain
 per row and per trusted author. Legacy rows may omit the fields. Processing is
-attempt evidence, not confirmed transcript persistence; late replies must not
-resurrect delivered rows, and failed-persist restoration remains visible. See the
+attempt evidence, not confirmed transcript persistence; late replies cannot seed
+duplicate optimistic rows. Full queue snapshots include
+draining overlays with `mergeEligible: false`; only eligible live entries may be
+true. Confirmed retry/restored queue rows coexist with history, even with the same
+ID and no failure marker. Combined recovery snapshots/echoes use per-source
+`recoverySources` instead of a head-attributed alias union. Ambiguous overlay versus
+restoration evidence requires a fresh, locally fenced queue read; see the
 [complete contract and precedence table](./methods/agents.md#submission-correlation-and-optimistic-display-prepared-additive-extension).
 No new event types or event-envelope revision fields are introduced.
 

@@ -14,7 +14,8 @@ Prepared extensions below remain independently capability-gated.
 **Prepared submission correlation — additive, independently gated.**
 [Submission correlation and optimistic display](./methods/agents.md#submission-correlation-and-optimistic-display-prepared-additive-extension)
 adds optional queue `messageId`, public `submissionIds` on queue/reply/delivery
-surfaces and daemon-computed `mergeEligible` on full queue snapshots. Advertise
+surfaces, per-source `recoverySources` for combined retries and daemon-computed
+`mergeEligible` on full queue snapshots (false on draining overlays). Advertise
 `submissionCorrelation: 1` only for complete trusted, persisted end-to-end support;
 clients accept exactly integer `1`, independently of protocol version. Allocate
 the next minor against daemon main at implementation merge time. No method/event
