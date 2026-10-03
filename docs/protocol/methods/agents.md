@@ -1269,9 +1269,11 @@ advertises this complete contract, including every human send/queue ingress,
 mutation reply, resolved queue snapshot, processing snapshot and transcript
 persist/echo path described here (runtime and store-only paths alike). Enable
 queue optimism only for the exact integer `1`; absent, null, malformed, `true`
-and unknown future versions mean unsupported. Allocate the next public protocol
-minor against daemon main at implementation merge time; numeric protocol version
-alone never enables this feature. These docs do not claim a carrying release.
+and unknown future versions mean unsupported. Public protocol **13.4** is allocated
+to this additive extension; numeric protocol version alone never enables this
+feature or the independently prepared Home 13.2 and GitLab 13.3 additions. See
+[version allocation](../versioning.md#protocol-version--compatibility).
+These docs do not claim a carrying release.
 No method/event names, queue scheduling rules or mutation permissions change.
 
 **Wire additions.** Optional fields preserve old payloads. Under the capability,
