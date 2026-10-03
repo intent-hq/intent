@@ -42,7 +42,6 @@ export const PAIRS = [
       lastContentActivity: 'documented optional content timestamp; staged daemon-first adoption before https://github.com/intent-hq/cloudlands-fe/pull/3124; remove once the monorepo frontend pin includes that PR',
       canManage: 'documented optional capability; staged daemon-first adoption before https://github.com/intent-hq/cloudlands-fe/pull/2911; remove once the monorepo frontend pin includes that PR',
       tokenUsage: 'read via workspace.getTokenUsage and the workspace:tokenUsage-changed event into the token-usage slice, not from the row',
-      openInviteCount: 'multiplayer w1 membership summary; not consumed by the FE today',
     },
   },
 ];

@@ -126,6 +126,92 @@ absence means unavailable, not permission to infer support from version numbers.
 The handshake is idempotent: re-sending `client.hello` on the same connection updates `name` /
 `capabilities` / host identification and re-returns the same `server` block.
 
+#### Repository context capability
+
+**Prepared additive contract.** `server.capabilities.repositoryContext: 1`
+announces the complete context-read lifecycle. Feature-detect the capability
+on the physical connection captured for the
+[repository context lifecycle](workspace.md#repository-context).
+It announces support, not workspace membership, provider permission or a portable
+lease. Re-hello on that socket does not renew a lease. A shared stable `clientId`,
+bearer or principal cannot transfer a lifetime to another socket; reconnect needs
+a fresh capture. Install the original connection's
+[private retirement handler](../10-thin-client.md#repository-context-lifecycle)
+before acquiring a lifetime. These are client obligations, not a claim that current
+frontend clients implement the feature.
+
+#### Repository selection capability
+
+**Prepared additive contract.** `server.capabilities.repositorySelection: 1`
+is separate from `repositoryContext: 1`.
+Feature-detect it on the original confirmed physical connection used for the
+[selection editing operation](workspace.md#repository-selection).
+It announces support, not workspace-manager permission or a transferable write
+grant; context read permission is insufficient.
+
+Install that connection's [private selection retirement handler](../06-events.md#private-repository-selection-retirement)
+before capture, and capture the editing snapshot before user confirmation.
+Re-hello, a stable `clientId`, matching principal or bearer cannot renew or move
+the operation to a replacement socket. Keep original receipts independently of
+current UI state; reconnect cannot reconcile an unknown old effect. The
+[client lifecycle](../10-thin-client.md#repository-selection-lifecycle)
+specifies required integration behavior, not an already shipped frontend flow.
+
+#### Native review capability
+
+**Prepared additive contract.** `server.capabilities.nativeReview: 1` announces
+qualified native review preparation, execution and receipts. Feature-detect it on
+the original confirmed physical connection before the
+[qualified native review workflow](change-tracking.md#native-review-preparation-and-receipts).
+It announces the contract, not current host/workspace permission, configured
+provider readiness or unconditional admission. Prepared facts and the public
+capability cannot replace fresh server checks.
+
+Install that connection's [private retirement handler](../06-events.md#private-native-review-retirement)
+before preparation, and retain the same connection through confirmation,
+execution, reconciliation and release. Re-hello, a stable `clientId`, matching
+principal or bearer cannot renew or transfer an operation. Native execution uses
+actual Member permission; administrator-only connection metadata disclosure is a
+separate check. The [client lifecycle](../10-thin-client.md#native-review-lifecycle)
+describes required integration behavior, not a shipped frontend or normal-daemon
+provider guarantee. Capabilities, rather than an older experimental version number, gate support.
+
+#### Commit companion capability
+
+**Prepared additive contract.** `server.capabilities.nativeReviewCompanion: 1`
+is advertised alongside `nativeReview: 1`.
+Check the companion capability on the original confirmed physical connection
+**before** a [marked commit preparation](change-tracking.md#commit-companion-preparation).
+The earlier capability alone does not support the new strict forms. Do not infer
+support from a current host selection, matching identity or account, or retry a
+refused form as an ordinary/GitHub/MCP request.
+
+The capability announces a conditional contract, not provider readiness,
+permission, successful commit completion or child eligibility. Retain the same
+connection and main-process session through the original reply and separately
+confirmed child. Re-hello or reconnect cannot transfer that authority. The
+[client lifecycle](../10-thin-client.md#commit-companion-lifecycle)
+states integration obligations, not an existing frontend or deployed runtime
+guarantee. The companion does not add method or notification names.
+
+#### Resource-read capability
+
+**Prepared additive contract.** The hello response advertises
+`result.server.capabilities.repositoryResourceRead: 1` for the
+[explicit GitLab resource-read contract](repository-resources.md). Documentation alone does not establish availability. Detect support on the original physical connection before
+capture and install that connection's [private retirement handler](../06-events.md#private-resource-read-retirement)
+first. A capability announces a supported contract, not current host/workspace
+permission, configured account readiness or access to the requested project.
+An absent or unsupported capability disables these reads; it does not select a
+generic, legacy or other-provider read fallback.
+
+Keep capture, detail, release and late cleanup on that same connection. A matching
+logical client ID, principal or bearer on a replacement socket cannot move or
+renew the lifetime. Repository inventory, selected-workspace observation and
+native review capabilities do not imply this explicit-resource capability.
+These are client integration obligations, not a shipped frontend guarantee;
+documentation alone does not establish deployed availability.
+
 #### Client identity, capabilities & device identification (REV-2, v9.9)
 
 `client.hello` is where a connection acquires the **logical-client identity** the daemon uses

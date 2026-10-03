@@ -83,6 +83,169 @@ restoration evidence requires a fresh, locally fenced queue read; see the
 [complete contract and precedence table](./methods/agents.md#submission-correlation-and-optimistic-display-prepared-additive-extension).
 No new event types or event-envelope revision fields are introduced.
 
+#### Private repository context retirement
+
+**Prepared additive contract:** the
+[repository context contract](methods/workspace.md#repository-context)
+adds `workspace.repositoryContext.retired` on the original physical connection.
+It is a socket-private JSON-RPC control notification, not an `events.event`
+publication or an `event-types.json` entry. No `events.subscribe` call is involved.
+It has no request `id`, `subscriptionId`, event envelope, root or account payload:
+
+```json
+{"jsonrpc":"2.0","method":"workspace.repositoryContext.retired","params":{"lifetimeIds":["lease-example"],"sequence":"1","allRetired":false,"terminal":false}}
+```
+
+The four parameters shown are the complete shape. The feed begins at original
+connection binding, before acquisition, with cursor `"0"`. Ordinary retirement
+names one original lifetime and advances the checked canonical decimal u64 string
+`sequence`; both flags are false. Terminal feed loss, gap or overflow invalidates
+all its references, with `lifetimeIds: []`, `allRetired: true` and `terminal: true`.
+If the cursor is exhausted, the terminal value remains `"18446744073709551615"`:
+honor `terminal` even without a larger cursor; never wrap or compare through a
+JavaScript `Number`.
+
+The client must invalidate all local references on feed loss even if the terminal
+frame cannot be delivered. A closed original feed never becomes usable again;
+a new physical connection starts a new lifecycle and cannot inherit queued work.
+The [client ordering](10-thin-client.md#repository-context-lifecycle)
+reconciles notices received while capture awaits. Delayed or missing notices do
+not replace the server's entry and consuming-reply checks.
+
+#### Private repository selection retirement
+
+**Prepared additive contract:** the
+[repository selection contract](methods/workspace.md#repository-selection)
+adds `workspace.repositorySelection.retired` on its original physical connection.
+This is a separate private feed from repository context retirement. It is not a
+global `events.event`, an `event-types.json` entry or an MCP surface, and needs no
+`events.subscribe` call. The four parameters below are complete; there is no
+request `id`, subscription ID, root, account or receipt payload:
+
+```json
+{"jsonrpc":"2.0","method":"workspace.repositorySelection.retired","params":{"selectionIds":["selection-example"],"sequence":"1","allRetired":false,"terminal":false}}
+```
+
+The original feed begins at cursor `"0"`. A normal notice names one original
+selection ID and advances its checked canonical decimal u64 string `sequence`.
+It retires **effect admission**, including when an operation completes. It does
+not assert effect failure or erase a known historical receipt. Pending/settled
+reconciliation still uses the original connection's valid disclosure authority.
+
+A terminal/all-retired notice, missing/gapped cursor or receiver loss closes the
+feed and invalidates all its references. On exhaustion, the terminal cursor can
+remain at MAX; process the terminal flag even without a larger cursor:
+
+```json
+{"jsonrpc":"2.0","method":"workspace.repositorySelection.retired","params":{"selectionIds":[],"sequence":"18446744073709551615","allRetired":true,"terminal":true}}
+```
+
+Never wrap or round cursors through a JavaScript `Number`. Feed loss must be handled
+even if its terminal frame cannot arrive; the original feed never silently renews.
+Invalidating references does not change a receipt already known to the client.
+An effect lost before a known receipt remains uncertain, not rolled back. Install
+the handler before capture and reconcile notices across the acquisition gap as
+specified by the [client lifecycle](10-thin-client.md#repository-selection-lifecycle).
+Delayed or missing notices never override server entry/final checks. The queue is
+bounded to 64 notices and each forward has a 5-second timeout.
+
+#### Private native review retirement
+
+**Prepared additive contract:** the [native review contract](methods/change-tracking.md#native-review-preparation-and-receipts)
+adds `accept-changes.retired` on the original physical socket. This is its own
+control feed, separate from context/selection feeds and global `events.event`.
+There is no `events.subscribe` call, `event-types.json` entry, MCP registration,
+request `id`, subscription envelope, root, account or receipt payload. The four
+parameters are complete:
+
+```json
+{"jsonrpc":"2.0","method":"accept-changes.retired","params":{"operationIds":["operation-example"],"sequence":"1","allRetired":false,"terminal":false}}
+```
+
+The original feed starts at cursor `"0"`. Ordinary retirement advances the checked
+canonical decimal u64 string sequence and names one operation, including when it
+settles. It retires stage admission; it does not erase a retained historical
+receipt or establish effect failure. Original-socket reconciliation remains
+subject to its separate disclosure authority and retention limit.
+
+Feed loss, overflow or terminal closure invalidates all original references; a
+client-detected unexplained cursor gap must do the same. A terminal frame has
+empty operation IDs and both flags true. At exhaustion it remains at MAX:
+
+```json
+{"jsonrpc":"2.0","method":"accept-changes.retired","params":{"operationIds":[],"sequence":"18446744073709551615","allRetired":true,"terminal":true}}
+```
+
+Honor terminal even without a larger cursor; never round or wrap it through a
+JavaScript `Number`. Handle feed loss even if its terminal frame cannot arrive.
+Retain known receipts independently; an unknown old effect cannot be reconciled
+by replacing the connection. The feed holds at most 64 notices, with a 5-second
+send budget. Install the handler before preparation and reconcile the await gap
+as specified by the [client lifecycle](10-thin-client.md#native-review-lifecycle).
+Missing or delayed notices never replace server entry/stage/final checks.
+
+#### Commit companion retirement
+
+The [commit companion contract](methods/change-tracking.md#commit-companion-preparation)
+reuses the original socket's `accept-changes.retired` feed and its exact four
+parameters above. It adds no notification, global event, root/account/receipt
+payload, subscription or MCP binding.
+
+Normal parent write retirement closes the parent's write admission and preserves
+its history. It does not itself establish closure of the separate private
+companion intent; that intent still needs actual eligible completion and the
+original guarded reply transfer. Never revive the retired parent write handle or
+use a retained receipt as a child grant. A published child has a distinct operation
+ID and its own lease/notices. Parent expiry alone does not retire that child;
+explicit release or lost context/authority/socket retires linked future admission.
+
+Preserve the existing decimal cursor, terminal MAX, overflow and feed-loss rules.
+A terminal or unexplained gap closes original references, even if a known receipt
+remains in local history. Reconciliation and late cleanup use only the original
+connection and cannot recreate eligibility. The [client lifecycle](10-thin-client.md#commit-companion-lifecycle)
+must distinguish normal write retirement from companion closure without treating
+either as evidence that a committed effect was rolled back.
+
+#### Private resource-read retirement
+
+**Prepared additive contract:** the [explicit resource-read contract](methods/repository-resources.md)
+uses `sourceControl.read.retired` on the physical connection that captured the
+read lifetime. It is a private control feed, separate from repository inventory,
+selection and native review feeds. It has no global subscription, event envelope,
+root/account payload or `event-types.json` entry. Clients do not call
+`events.subscribe` for it. The contract has exactly four parameters,
+with no request `id` or subscription ID:
+
+```json
+{"jsonrpc":"2.0","method":"sourceControl.read.retired","params":{"readLifetimeIds":["original-read-example"],"sequence":"1","allRetired":false,"terminal":false}}
+```
+
+The feed begins at cursor `"0"`. `sequence` is a checked canonical decimal u64
+string; normal retirement names one lifetime and advances the cursor. Capture's
+`retirementSequence` reflects this same original feed. There is one receiver per
+connection and at most 64 queued notices. Overflow, sequence exhaustion or feed
+closure retires all original scopes. The terminal shape uses an empty ID array
+and both flags true; at exhaustion its sequence remains MAX:
+
+```json
+{"jsonrpc":"2.0","method":"sourceControl.read.retired","params":{"readLifetimeIds":[],"sequence":"18446744073709551615","allRetired":true,"terminal":true}}
+```
+
+Honor terminal even without a larger cursor; never round through JavaScript
+`Number` or wrap. Each forward has a 5-second send budget. Timeout, dropped output
+or lost receiver closes the original feed; a client must invalidate references
+even if the terminal frame cannot arrive. These shapes and limits correspond to
+the resource-read contract; an installed daemon must advertise its capability.
+
+Install the original feed handler before capture and reconcile retirement received
+while acquisition awaits using its returned `retirementSequence`. Expiry, release,
+cancellation, authority loss and socket loss make the original reference unusable.
+Overflow, feed loss, an unexplained cursor gap or malformed scope/revision
+information must fail closed. A delayed notice cannot override the
+server's final reply-admission checks. Dispose pending UI consumers on retirement
+and reject late success or error from an old scope; reconnect cannot adopt it.
+See the [client lifecycle](methods/repository-resources.md#client-lifecycle).
+
 ### 6.4 Filter semantics
 
 `eventTypes` is compiled to a type filter (and an optional `workspaceId` equality filter):

@@ -35,6 +35,7 @@ class ScriptTestTargetTests(unittest.TestCase):
         result = self.run_target(True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("test_test_cleanup_prereleases", result.stderr)
+        self.assertIn("test_test_watch_capacity", result.stderr)
 
     def test_cleanup_failure_fails_ci_target(self):
         result = self.run_target(False)

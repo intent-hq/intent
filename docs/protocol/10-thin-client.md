@@ -16,6 +16,182 @@ Never treat streamed deltas as authoritative. `chat:stream:delta` text, `agent:s
 4. Apply incoming `events.event` notifications to your local cache; de-dupe on `event.id`.
 5. On reconnect, **re-subscribe and re-fetch** — subscriptions do not survive disconnects.
 
+#### Repository context lifecycle
+
+The [repository context contract](methods/workspace.md#repository-context)
+requires the following client behavior. This specifies integration obligations;
+it does not claim the frontend already implements them.
+
+1. Capture the actual authenticated connection and feature-detect its
+   [`repositoryContext: 1` capability](methods/client-hello.md#repository-context-capability).
+   Install a handler for its [private retirement feed](06-events.md#private-repository-context-retirement)
+   **before** calling capture. Keep the original connection, workspace and optional
+   root filter together; a logical `clientId` or matching bearer is insufficient.
+2. Call `workspace.repositoryContext.capture` and retain notices arriving while it
+   awaits. Reconcile the returned `lifetimeId`, scope, coverage and
+   `retirementSequence` with that original feed. A retirement of the returned ID,
+   an unexplained cursor gap, terminal notice or feed loss makes the result unusable.
+   Notices at or before the returned cursor do not authorize a retired ID; a larger
+   cursor alone need not retire an unrelated ID. Compare canonical decimal values
+   without rounding, and honor terminal exhaustion even at an unchanged MAX cursor.
+3. Read with `workspace.repositoryContext`, using the exact captured workspace,
+   root filter and `repositoryLifetimeId`, one read at a time. Accept a result only
+   while its original lifecycle is current; check its scope/epoch and reconcile
+   intervening notices. Revision ordering exists only within equal scope/epoch.
+   Never turn a refused read into a refreshed old reference.
+4. Release through `workspace.repositoryContext.release` on that same captured
+   connection when the view is discarded. If capture completes after local
+   cancellation/disposal, discard the result and release its returned ID through
+   the original connection if still usable. A disconnect does not authorize
+   sending this cleanup through a replacement connection.
+5. On terminal loss/gap, discard every original reference and stop queued reads.
+   Reconnection requires a new capture and reconciliation on the new physical
+   connection; do not retarget old work or infer authority from a prior TTL,
+   revision, selection or account identity. Server entry/final validation remains
+   authoritative regardless of notification timing.
+
+#### Repository selection lifecycle
+
+The [repository selection contract](methods/workspace.md#repository-selection)
+requires the following client behavior. It does not claim a frontend implementation
+or grant write permission through the existing context read lifecycle.
+
+1. Capture the actual confirmed physical connection, feature-detect its
+   [`repositorySelection: 1` capability](methods/client-hello.md#repository-selection-capability),
+   and install its [private selection retirement handler](06-events.md#private-repository-selection-retirement)
+   before calling capture. Keep the connection and exact workspace/root together;
+   omitted or null `gitRootId` selects Primary, not an inventory. Keep backend
+   correlation and handles private to the client's main process; reject renderer
+   overrides of caller, scope, snapshot, revision or backend identity.
+2. Call `workspace.repositorySelection.capture` **before user confirmation**.
+   Retain notices received while it awaits, then reconcile the returned selection
+   ID, scope, root and retirement cursor before exposing an editing handle. An
+   unexplained gap, terminal notice, feed loss or retirement of that ID prevents
+   using it for a new command. A larger cursor for another ID does not alone retire
+   this one. Honor terminal MAX without an increment and compare decimals exactly.
+   If capture completes after disposal/cancellation, release only through that
+   original connection if still usable; never retarget cleanup to another host.
+3. Submit one immutable save or reset using that captured handle and snapshot.
+   Never silently recapture between the displayed edit and confirmation. Keep one
+   client operation in flight per handle. Identical repeats only observe the
+   original attempt; they are not a write retry. A changed command is invalid.
+   A conflict requires a new explicit user action based on a fresh editing capture.
+4. Preserve a received historical receipt before deciding whether the current UI
+   may apply it. Keep `result`, `persistence` and current disclosure/application
+   separate: failed projection can coexist with committed persistence, and a
+   historical snapshot is not necessarily today's selection. Normal retirement
+   means no further effect admission, not effect failure or receipt deletion.
+5. Observe pending/settled attempts through `workspace.repositorySelection.reconcile`
+   only on the original connection with valid disclosure authority. It never
+   writes or revives admission. Cancellation/timeout of a waiter does not stop an
+   admitted Store worker or justify replay. Socket/process loss before a known
+   receipt leaves the effect uncertain; reading current selection after reconnect
+   cannot establish whether that old operation committed. Keep known receipts
+   when switching hosts or views, without applying them to a replacement context.
+6. Release through `workspace.repositorySelection.release` on the captured
+   connection when the editing reference is no longer needed. Release does not
+   cancel a worker or erase its retained receipt. Never send late cleanup or
+   reconciliation on a newly selected connection. Terminal/gapped/lost feeds
+   invalidate all original references and stop queued commands; they do not turn
+   known commits into rollback. A fresh explicit action needs its own valid capture.
+
+For these operations, an RPC error or lost connection alone is insufficient to
+classify an unknown outcome as no effect or roll back a known committed result.
+There is no promised durable receipt lookup across connections. Server manager,
+root/credential and final disclosure checks remain authoritative; capability,
+read inventory, counters and prior TTLs cannot replace them.
+
+#### Native review lifecycle
+
+The [native review contract](methods/change-tracking.md#native-review-preparation-and-receipts)
+requires the following client behavior. It does not claim an existing frontend
+implementation or unconditional admission from apparently stable inputs.
+
+1. Capture the original confirmed physical connection and feature-detect its
+   [`nativeReview: 1` capability](methods/client-hello.md#native-review-capability).
+   Install its [private retirement handler](06-events.md#private-native-review-retirement)
+   before preparation. Keep original caller, workspace and explicit root bound
+   together; reject renderer overrides of server-owned scope, account or receipt.
+2. Prepare the intended action/flags/root/choice **before user confirmation**.
+   Reconcile notices received across that await against the returned operation ID
+   and retirement cursor before exposing a confirmation handle. A notice for
+   another ID alone does not retire this one; an unexplained gap, terminal feed
+   or disposal does. Compare decimal cursors exactly, including terminal MAX.
+   Release a late preparation only on that original connection if still usable.
+3. Confirm one immutable execute command against that exact preparation. Do not
+   silently recapture or replace the connection between display and confirmation.
+   Keep one client operation in flight per handle. An identical repeat only
+   observes the original attempt; changing the command is invalid. A refusal
+   before admission may retain a failed outcome and requires a new explicit user
+   action if another attempt is desired. Stable public facts are not a grant.
+4. Retain received completed Git receipts, review outcome and publication facts
+   independently of current UI eligibility. A separate commit and create do not
+   share receipts. Publication is not inferred from push/create success or review
+   HEAD. Preserve known effects if later bookkeeping, provider work or final
+   disclosure fails; neither `success: false` nor an RPC error implies rollback.
+5. Observe pending/settled execution through `accept-changes.reconcile` only on
+   the original connection with valid disclosure authority. Cancellation or an
+   expired timer may retire future stages while the owned worker continues to
+   actual completion. The fixed 15-second first-admission deadline, 120-second
+   entered-stage timer, 360-second execute wait and 600-second post-settlement
+   retention describe different boundaries; none promises worker completion.
+   Do not replay a write because its reply is pending or missing.
+6. Release through `accept-changes.release` on the captured connection. Release
+   does not erase retained receipts or prove an admitted effect stopped. Normal
+   operation retirement closes admission, not historical receipt storage. Feed
+   loss/terminal or socket loss closes original references; never retarget late
+   cleanup or reconciliation to a newly selected host/socket. A missing original
+   receipt remains uncertain, and later matching provider state does not prove
+   which old operation created it. Keep already known receipts as history without
+   applying them to a replacement context.
+
+For this workflow, optimistic UI rollback rules below do not classify unknown
+effects or erase known completed ones. There is no durable cross-socket receipt
+lookup or automatic write retry. Actual Member execution checks and
+administrator-only public connection disclosure remain separate; capability,
+context/selection IDs and prepared observations cannot replace either.
+
+#### Commit companion lifecycle
+
+These are client obligations for the [commit companion contract](methods/change-tracking.md#commit-companion-preparation),
+not a claim that the frontend implements it.
+
+1. Retain the original physical connection, sender/frame/document, main-process
+   session and private feed before the marked parent preparation. Check
+   [`nativeReviewCompanion: 1`](methods/client-hello.md#commit-companion-capability)
+   alongside `nativeReview: 1`. Bind the intended target before confirmation;
+   never replace it from later selection/account state or renderer-supplied IDs.
+2. Confirm the staged-only parent commit separately. Retain its actual receipt
+   independently of current UI eligibility. Only eligible original completion
+   and guarded reply transfer allow a companion; pending, lost, refused or
+   cancelled delivery does not. Reconciliation cannot convert history into a
+   grant, and client receipt observation is not the server's transfer boundary.
+3. Offer at most one optional companion preparation action on that original
+   main-process session. Construct `afterCommit` internally with its parent
+   operation and main-owned capture ID; coalesce local duplicate actions to the
+   same promise. The backend permits one capture, retains failed claims and
+   rejects duplicate/concurrent captures. Never recapture on another socket,
+   retry the claim, or use public account/HEAD data as authority.
+4. Keep parent and child sessions/history separate. Reconcile notices across the
+   child preparation await before exposing its new confirmation handle. Confirm
+   a new immutable text-only create command using the child's returned operation.
+   It has its own receipt and fixed lease; no parent commit receipt is copied and
+   no push is implied. Never chain another companion from that child.
+5. Respect the fixed parent deadline for both child acquisition and publication,
+   then the published child's independent lease. Distinguish
+   [normal parent write retirement from companion closure](06-events.md#commit-companion-retirement).
+   Never revive a retired write handle. Release/dispose on the original connection;
+   release late results there only if it remains usable. Explicit release or
+   context/authority/socket loss retires future linked admission, while an
+   already-admitted worker remains owned until completion. Feed loss/terminal or
+   an unexplained gap closes original references; a new connection cannot resume
+   or replay them. Preserve known effects and uncertainty separately.
+
+Fresh server checks remain authoritative at child capture, publication, stage and
+disclosure. Stable display facts and a previous successful action cannot authorize
+another one. Neither this workflow nor its capability establishes live provider
+readiness or unconditional native admission.
+
 ### 10.3 Optimistic UI
 
 For mutations, optimistically apply locally, send the request, and reconcile when (a) the methodresult returns and (b) the corresponding `events.event` arrives. Roll back on error. Use the stable`messageId` you pass to `agent.sendMessage` (and the echoed `agent:user-message:sent` event) tomatch your optimistic message against the canonical one and avoid duplicates across clients.

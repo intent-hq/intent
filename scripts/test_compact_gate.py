@@ -294,6 +294,7 @@ class CompactMakeTests(unittest.TestCase):
         (self.root / "scripts").mkdir()
         shutil.copy(ROOT / "Makefile", self.root)
         shutil.copy(ROOT / "scripts/resumable_nextest.py", self.root / "scripts")
+        shutil.copy(ROOT / "scripts/check_watch_capacity.py", self.root / "scripts")
         shutil.copytree(ROOT / "scripts/_vendor", self.root / "scripts/_vendor",
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         self.log = self.root / "commands.jsonl"
@@ -351,6 +352,15 @@ sys.exit(int(os.environ.get("STUB_EXIT", "0")))
                 self.assertIn("COMPACT=1", result.stderr)
                 self.assertIn("coverage", result.stderr)
                 self.assertEqual(calls, [])
+
+    def test_gate_preserves_check_dependency_and_skip_semantics(self):
+        for parallel in ([], ["-j2"]):
+            for goals, checks in ((["check", "gate"], 1), (["-o", "check", "gate"], 0)):
+                with self.subTest(parallel=parallel, goals=goals):
+                    result, calls = self.run_make("-n", *goals, *parallel)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(result.stdout.count("cargo clippy"), checks, result.stdout)
+                    self.assertEqual(calls, [])
 
     def test_compiler_failure_remains_failure(self):
         for target in ("check", "gate"):

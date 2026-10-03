@@ -1,6 +1,6 @@
 # Intent Backend — JSON-RPC Protocol
 
-**Documented Protocol Version:** `13.0` (deprecated `git.commit` removed after the protocol-12 retirements; see [compatibility and installed-frontend limits](./versioning.md#protocol-version--compatibility)). The single-node platform launch remains prepared and capability-gated; its earlier 11.2 reservation does not imply implementation (daemon 11.2 carries script lifecycle snapshots). Other prepared extensions retain their own rollout status and capability gates, including the [shared-host capability contract](./methods/shared-host-membership.md#authority-and-discovery).
+**Documented Protocol Version:** `13.3` (prepared GitLab repository additions; the protocol-12 and protocol-13.0 retirements remain in force — see [compatibility and installed-frontend limits](./versioning.md#protocol-version--compatibility)). The single-node platform launch remains prepared and capability-gated; its earlier 11.2 reservation does not imply implementation (daemon 11.2 carries script lifecycle snapshots). Other prepared extensions retain their own rollout status and capability gates, including the [shared-host capability contract](./methods/shared-host-membership.md#authority-and-discovery). The higher minor version does not imply implementation of the separately prepared Home 13.2 methods.
 
 This directory is the canonical wire contract between Intent clients (desktop, iOS, CLI, and agent developers building clients) and the Intent backend daemon (`intentd`): transport, JSON-RPC envelope, the full method catalog, events, agent streaming, the permission flow, error codes, and thin-client guidance. It is a **living specification**: changes land through the compatibility policy (see below), and the method surface is enforced by golden tests in the `intent-transport` crate.
 
@@ -106,6 +106,7 @@ structural integrity only, not executed native capture or durable ACK acceptance
 | §5.49 Shared host membership, scoped invitations, collaboration identity and personal pairing | [methods/shared-host-membership.md](./methods/shared-host-membership.md) |
 | §5.50 Static/local nodes, placement, hub merge/discard/publish and CoW retirement (prepared) | [methods/nodes.md](./methods/nodes.md) |
 | §5.51 Desktop control (prepared) | [methods/desktop.md](./methods/desktop.md) |
+| §5.52 Explicit GitLab resource reads (prepared) | [methods/repository-resources.md](./methods/repository-resources.md) |
 | MCP `ws.*` binding signature index (generated; not wire-routable) | [methods/mcp-bindings.md](./methods/mcp-bindings.md) |
 
 `make check-protocol-catalog` (run by CI's `docs-check` job) enforces that the [05-method-catalog.md](./05-method-catalog.md) tables, the method tables in `methods/*.md`, and intentd's `intent-transport` catalog stay in sync (read from the `packages/intentd` checkout; like `check-event-catalog` and `check-protocol-field-parity`, the run names the checkout and the recorded pin on stdout and warns on stderr when they differ): every method documented in a `methods/*.md` table must appear in the catalog, and every method the pinned intentd catalog dispatches must have a catalog entry. The docs lead the pin: document a new method here first — a `methods/*.md` table row plus its catalog entry in one monorepo change; the checker only warns while the pinned `catalog.rs` does not carry it yet — then merge the intentd PR, and the automatic submodule bump passes once both exist. The reverse order fails: a pinned method with no docs row is a CI error, and once the `CI Gate` check is required it holds the rolling bump PR at the merge queue until the docs row lands. The same checks also run upstream: every intentd and cloudlands-fe PR calls the monorepo's reusable `.github/workflows/consumer-checks.yml` (`monorepo-consumer-checks`) with its own head in place of the pin, so a missing docs row is red on that PR before it merges, not on the bump afterwards.
@@ -302,6 +303,15 @@ initializes the other component at the recorded monorepo pin. Once activated, it
 runs the connected proof for both caller directions on every successful checkout,
 without a changed-path filter. Local runs at two feature heads are useful evidence,
 but do not establish that a not-yet-landed counterpart pin passes.
+
+## Explicit resource reads
+
+The [explicit GitLab resource-read contract](./methods/repository-resources.md)
+covers a specified merge request or issue on an already configured instance,
+independent of the workspace's default review project. These prepared additions
+use the daemon's shared detail caches and require the original connection's
+`repositoryResourceRead: 1` capability. The catalog includes their three methods;
+documentation and version numbers alone do not establish deployed availability.
 
 ## Compatibility policy (summary)
 
