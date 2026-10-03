@@ -605,7 +605,8 @@
           "mappingRef": "opaque-map",
           "effectsRef": "opaque-effects",
           "receiptExpiresAt": "2026-10-11T00:00:00.000Z",
-          "invalidation": "all"
+          "invalidation": "all",
+          "inverseRef": "opaque-inverse"
         },
         "writeCount": 1,
         "historyCount": 1,
@@ -646,7 +647,8 @@
           "mappingRef": "opaque-map",
           "effectsRef": "opaque-effects",
           "receiptExpiresAt": "2026-10-11T00:00:00.000Z",
-          "invalidation": "all"
+          "invalidation": "all",
+          "inverseRef": "opaque-inverse"
         },
         "writeCount": 0,
         "historyCount": 0,
@@ -791,7 +793,7 @@
   "escapedWire": {
     "scalar": "\t",
     "sourceCount": 10000,
-    "end": 1858,
+    "end": 1842,
     "expectedWireBytes": 4095,
     "maxWireBytes": 4096
   },
@@ -901,7 +903,8 @@
             "commentRevision": "c:4",
             "attributionState": "ready",
             "deleted": false,
-            "invalidation": "all"
+            "invalidation": "all",
+            "stateGeneration": "10"
           }
         }
       },
@@ -924,7 +927,8 @@
             "commentRevision": "c:4",
             "attributionState": "ready",
             "deleted": false,
-            "invalidation": "all"
+            "invalidation": "all",
+            "stateGeneration": "11"
           }
         }
       },
@@ -947,7 +951,8 @@
             "commentRevision": "c:5",
             "attributionState": "ready",
             "deleted": false,
-            "invalidation": "all"
+            "invalidation": "all",
+            "stateGeneration": "12"
           }
         }
       }
@@ -1144,7 +1149,7 @@
         "expect": "before"
       },
       {
-        "id": "task-child-failure",
+        "id": "fatal-source-transaction-failure",
         "expect": "before"
       },
       {
@@ -1295,6 +1300,687 @@
           "threadId": "root"
         }
       }
+    }
+  ],
+  "sideEffects": {
+    "base": "title\n\n@@@task\n# Work\nKeep\n@@@\n\n<!--anchor:99999999-9999-4999-8999-999999999999:start-->ghost<!--anchor:99999999-9999-4999-8999-999999999999:end-->\n<!--anchor:11111111-1111-4111-8111-111111111111:start-->live<!--anchor:11111111-1111-4111-8111-111111111111:end-->\n<!--anchor:demo:start-->literal<!--anchor:demo:end-->\nend",
+    "caller": [
+      {
+        "start": 0,
+        "end": 5,
+        "text": "Title!"
+      }
+    ],
+    "callerResult": "Title!\n\n@@@task\n# Work\nKeep\n@@@\n\n<!--anchor:99999999-9999-4999-8999-999999999999:start-->ghost<!--anchor:99999999-9999-4999-8999-999999999999:end-->\n<!--anchor:11111111-1111-4111-8111-111111111111:start-->live<!--anchor:11111111-1111-4111-8111-111111111111:end-->\n<!--anchor:demo:start-->literal<!--anchor:demo:end-->\nend",
+    "phases": [
+      {
+        "reason": "task-conversion",
+        "inputState": "callerResult",
+        "outputState": "converted",
+        "splices": [
+          {
+            "start": 8,
+            "end": 31,
+            "text": "- [ ] [Work](intent://local/task/task-1)"
+          }
+        ],
+        "expect": "Title!\n\n- [ ] [Work](intent://local/task/task-1)\n\n<!--anchor:99999999-9999-4999-8999-999999999999:start-->ghost<!--anchor:99999999-9999-4999-8999-999999999999:end-->\n<!--anchor:11111111-1111-4111-8111-111111111111:start-->live<!--anchor:11111111-1111-4111-8111-111111111111:end-->\n<!--anchor:demo:start-->literal<!--anchor:demo:end-->\nend"
+      },
+      {
+        "reason": "phantom-scrub",
+        "inputState": "converted",
+        "outputState": "final",
+        "splices": [
+          {
+            "start": 50,
+            "end": 106,
+            "text": ""
+          },
+          {
+            "start": 111,
+            "end": 165,
+            "text": ""
+          }
+        ],
+        "expect": "Title!\n\n- [ ] [Work](intent://local/task/task-1)\n\nghost\n<!--anchor:11111111-1111-4111-8111-111111111111:start-->live<!--anchor:11111111-1111-4111-8111-111111111111:end-->\n<!--anchor:demo:start-->literal<!--anchor:demo:end-->\nend"
+      }
+    ],
+    "expect": "Title!\n\n- [ ] [Work](intent://local/task/task-1)\n\nghost\n<!--anchor:11111111-1111-4111-8111-111111111111:start-->live<!--anchor:11111111-1111-4111-8111-111111111111:end-->\n<!--anchor:demo:start-->literal<!--anchor:demo:end-->\nend",
+    "liveMarkerId": "11111111-1111-4111-8111-111111111111",
+    "canonicalChildId": "task-1"
+  },
+  "crossedChannels": {
+    "frames": [
+      {
+        "channel": "note",
+        "seq": 1,
+        "state": {
+          "kind": "notePageState",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "stateGeneration": "10",
+          "sourceRevision": "r:7",
+          "attributionGeneration": "a:2",
+          "commentRevision": "c:4",
+          "attributionState": "ready",
+          "deleted": false,
+          "invalidation": "all"
+        }
+      },
+      {
+        "channel": "comment",
+        "seq": 0,
+        "state": {
+          "kind": "notePageState",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "stateGeneration": "9",
+          "sourceRevision": "r:6",
+          "attributionGeneration": "a:1",
+          "commentRevision": "c:3",
+          "attributionState": "ready",
+          "deleted": false,
+          "invalidation": "all"
+        }
+      },
+      {
+        "channel": "note",
+        "seq": 2,
+        "state": {
+          "kind": "notePageState",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "stateGeneration": "11",
+          "sourceRevision": "r:7",
+          "attributionGeneration": "a:3",
+          "commentRevision": "c:4",
+          "attributionState": "ready",
+          "deleted": false,
+          "invalidation": "all"
+        }
+      },
+      {
+        "channel": "comment",
+        "seq": 2,
+        "state": {
+          "kind": "notePageState",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "stateGeneration": "10",
+          "sourceRevision": "r:7",
+          "attributionGeneration": "a:2",
+          "commentRevision": "c:4",
+          "attributionState": "ready",
+          "deleted": false,
+          "invalidation": "all"
+        }
+      },
+      {
+        "channel": "comment",
+        "seq": 3,
+        "state": {
+          "kind": "notePageState",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "stateGeneration": "12",
+          "sourceRevision": "r:7",
+          "attributionGeneration": "a:3",
+          "commentRevision": "c:5",
+          "attributionState": "ready",
+          "deleted": false,
+          "invalidation": "all"
+        }
+      },
+      {
+        "channel": "note",
+        "seq": 3,
+        "state": {
+          "kind": "notePageState",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "stateGeneration": "11",
+          "sourceRevision": "r:7",
+          "attributionGeneration": "a:3",
+          "commentRevision": "c:4",
+          "attributionState": "ready",
+          "deleted": false,
+          "invalidation": "all"
+        }
+      }
+    ],
+    "expectedGenerations": [
+      "10",
+      "10",
+      "11",
+      "11",
+      "12",
+      "12"
+    ],
+    "expected": {
+      "kind": "notePageState",
+      "scope": {
+        "backendId": "db-a",
+        "workspaceId": "ws-a",
+        "noteId": "spec",
+        "noteInstanceId": "inc-a"
+      },
+      "stateGeneration": "12",
+      "sourceRevision": "r:7",
+      "attributionGeneration": "a:3",
+      "commentRevision": "c:5",
+      "attributionState": "ready",
+      "deleted": false,
+      "invalidation": "all"
+    }
+  },
+  "staged": {
+    "begin": {
+      "method": "note.operation.begin",
+      "backendId": "db-a",
+      "workspaceId": "ws-a",
+      "noteId": "spec",
+      "noteInstanceId": "inc-a",
+      "operationId": "33333333-3333-4333-8333-333333333333",
+      "expiresAt": "2026-10-04T00:00:00.000Z",
+      "header": {
+        "baseRevision": "r:7",
+        "editorSessionId": "editor-a",
+        "localEditSequence": 2,
+        "liveGeneration": "live-3",
+        "selectionGeneration": "selection-4",
+        "action": "mutate",
+        "output": "source",
+        "selection": "all"
+      }
+    },
+    "headerDigest": "453d8d1c44e82b0a071e16d332d999ef6d9a30f7742c39a00a3db1eda075c054",
+    "streams": {
+      "text": [
+        {
+          "stream": "text",
+          "sequence": 0,
+          "previousDigest": null,
+          "records": [
+            {
+              "kind": "text",
+              "id": "prefix",
+              "offset": 0,
+              "text": "ONE"
+            }
+          ],
+          "chunkDigest": "4076ca841e63f74913f251b5858cebce5e033b7a43cfc76da0486319969fdf61"
+        },
+        {
+          "stream": "text",
+          "sequence": 1,
+          "previousDigest": "4076ca841e63f74913f251b5858cebce5e033b7a43cfc76da0486319969fdf61",
+          "records": [
+            {
+              "kind": "text",
+              "id": "second",
+              "offset": 0,
+              "text": "TWO"
+            }
+          ],
+          "chunkDigest": "3bdd2e71645e4d42ce07f0edd4208e08d35cfa718596379bc24585967d0ebd6c"
+        },
+        {
+          "stream": "text",
+          "sequence": 2,
+          "previousDigest": "3bdd2e71645e4d42ce07f0edd4208e08d35cfa718596379bc24585967d0ebd6c",
+          "records": [
+            {
+              "kind": "text",
+              "id": "paste",
+              "offset": 0,
+              "text": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+            }
+          ],
+          "chunkDigest": "fb2288ae3ef03f7ce44a0a36d5e88d8df1621ff5a1497b5847c93b91d3e1217d"
+        },
+        {
+          "stream": "text",
+          "sequence": 3,
+          "previousDigest": "fb2288ae3ef03f7ce44a0a36d5e88d8df1621ff5a1497b5847c93b91d3e1217d",
+          "records": [
+            {
+              "kind": "text",
+              "id": "paste",
+              "offset": 4096,
+              "text": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+            }
+          ],
+          "chunkDigest": "79a5cf60c5c2a40928a94c5400165856cd34a6a240b917eeb616f0d0fedfd56e"
+        },
+        {
+          "stream": "text",
+          "sequence": 4,
+          "previousDigest": "79a5cf60c5c2a40928a94c5400165856cd34a6a240b917eeb616f0d0fedfd56e",
+          "records": [
+            {
+              "kind": "text",
+              "id": "paste",
+              "offset": 8192,
+              "text": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+            }
+          ],
+          "chunkDigest": "0d614cd5ea0a490d2cc622b1d108dc0a03fc95df1e0fb96ff179922da49c5d23"
+        },
+        {
+          "stream": "text",
+          "sequence": 5,
+          "previousDigest": "0d614cd5ea0a490d2cc622b1d108dc0a03fc95df1e0fb96ff179922da49c5d23",
+          "records": [
+            {
+              "kind": "text",
+              "id": "paste",
+              "offset": 12288,
+              "text": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+            }
+          ],
+          "chunkDigest": "9cd453745e5cb2c8969bf60bc685da03cb696413173ad2a44cde27347cb9890f"
+        },
+        {
+          "stream": "text",
+          "sequence": 6,
+          "previousDigest": "9cd453745e5cb2c8969bf60bc685da03cb696413173ad2a44cde27347cb9890f",
+          "records": [
+            {
+              "kind": "text",
+              "id": "paste",
+              "offset": 16384,
+              "text": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+            }
+          ],
+          "chunkDigest": "24a6dff8355037bb61da6efe85e47cca518a4e1c763486bb9be116e13a86f104"
+        }
+      ],
+      "dirty": [
+        {
+          "stream": "dirty",
+          "sequence": 0,
+          "previousDigest": null,
+          "records": [
+            {
+              "kind": "splice",
+              "localSequence": 1,
+              "ordinal": 0,
+              "start": 0,
+              "end": 3,
+              "replacement": {
+                "textId": "prefix",
+                "length": 3,
+                "utf8Bytes": 3,
+                "sha256": "2192e8955d5e1ad1651f2f0c637e6f1ac82855747a5f42f978db28669595dc21"
+              }
+            },
+            {
+              "kind": "splice",
+              "localSequence": 2,
+              "ordinal": 0,
+              "start": 4,
+              "end": 7,
+              "replacement": {
+                "textId": "second",
+                "length": 3,
+                "utf8Bytes": 3,
+                "sha256": "a1a8a8cbbed4eb53ae62ee4fb0787504087232c29aa4d817757d06b68d0501ca"
+              }
+            }
+          ],
+          "chunkDigest": "60892180c1b70ca2982f99c0de64af2707aa2f61687f80b0f2af15dcd35c5014"
+        }
+      ],
+      "selection": [],
+      "mutation": [
+        {
+          "stream": "mutation",
+          "sequence": 0,
+          "previousDigest": null,
+          "records": [
+            {
+              "kind": "splice",
+              "ordinal": 0,
+              "start": 4,
+              "end": 7,
+              "replacement": {
+                "textId": "paste",
+                "length": 20000,
+                "utf8Bytes": 40000,
+                "sha256": "78dfb1e3bf380877eabe3f26f19ec8ddc2e441a1dcdfc3b9d515f1ea6900f7ff"
+              }
+            }
+          ],
+          "chunkDigest": "fb941f606fc516c0ab8ff6a7a95de01d2978083a056ffba3afa8611cd1163cf6"
+        }
+      ],
+      "live": []
+    },
+    "manifest": [
+      {
+        "stream": "text",
+        "chunks": 7,
+        "records": 7,
+        "lastDigest": "24a6dff8355037bb61da6efe85e47cca518a4e1c763486bb9be116e13a86f104"
+      },
+      {
+        "stream": "dirty",
+        "chunks": 1,
+        "records": 2,
+        "lastDigest": "60892180c1b70ca2982f99c0de64af2707aa2f61687f80b0f2af15dcd35c5014"
+      },
+      {
+        "stream": "selection",
+        "chunks": 0,
+        "records": 0,
+        "lastDigest": null
+      },
+      {
+        "stream": "mutation",
+        "chunks": 1,
+        "records": 1,
+        "lastDigest": "fb941f606fc516c0ab8ff6a7a95de01d2978083a056ffba3afa8611cd1163cf6"
+      },
+      {
+        "stream": "live",
+        "chunks": 0,
+        "records": 0,
+        "lastDigest": null
+      }
+    ],
+    "payloadDigest": "ed5674f5752e30aa4d8142bb2fc0616eef9e9b744806685323dba89e8906ef72",
+    "base": "one two",
+    "dirtyGroups": [
+      {
+        "localSequence": 1,
+        "splices": [
+          {
+            "start": 0,
+            "end": 3,
+            "textId": "prefix"
+          }
+        ]
+      },
+      {
+        "localSequence": 2,
+        "splices": [
+          {
+            "start": 4,
+            "end": 7,
+            "textId": "second"
+          }
+        ]
+      }
+    ],
+    "frozen": "ONE TWO",
+    "expectedResultPrefix": "ONE ",
+    "expectedInsertedLength": 20000,
+    "inverse": [
+      {
+        "ordinal": 0,
+        "start": 4,
+        "end": 20004,
+        "replacement": {
+          "textId": "inverse-paste",
+          "length": 3,
+          "utf8Bytes": 3,
+          "sha256": "a1a8a8cbbed4eb53ae62ee4fb0787504087232c29aa4d817757d06b68d0501ca"
+        },
+        "historyGroup": "paste",
+        "inputState": "afterRevision",
+        "outputState": "frozen",
+        "provenanceRef": "inverse-provenance"
+      }
+    ],
+    "inverseText": "TWO"
+  },
+  "stagedOutcomes": [
+    {
+      "id": "cancel-before-admission",
+      "order": [
+        "seal",
+        "cancel",
+        "commit"
+      ],
+      "outcome": "cancelled",
+      "sourceWrites": 0,
+      "historyGroups": 0,
+      "clearDraft": false
+    },
+    {
+      "id": "cancel-after-admission",
+      "order": [
+        "seal",
+        "admit",
+        "cancel"
+      ],
+      "outcome": "pending",
+      "sourceWrites": 0,
+      "historyGroups": 0,
+      "clearDraft": false
+    },
+    {
+      "id": "cancel-after-commit",
+      "order": [
+        "seal",
+        "admit",
+        "commit",
+        "cancel"
+      ],
+      "outcome": "committed",
+      "sourceWrites": 1,
+      "historyGroups": 1,
+      "clearDraft": true
+    },
+    {
+      "id": "lost-commit-ack",
+      "order": [
+        "seal",
+        "admit",
+        "commit",
+        "lostAck"
+      ],
+      "outcome": "unknown",
+      "sourceWrites": 1,
+      "historyGroups": 1,
+      "clearDraft": false
+    },
+    {
+      "id": "status-after-lost-ack",
+      "order": [
+        "seal",
+        "admit",
+        "commit",
+        "lostAck",
+        "status"
+      ],
+      "outcome": "committed",
+      "sourceWrites": 1,
+      "historyGroups": 1,
+      "clearDraft": true
+    },
+    {
+      "id": "retry-after-restart",
+      "order": [
+        "seal",
+        "admit",
+        "commit",
+        "restart",
+        "retry"
+      ],
+      "outcome": "committed",
+      "sourceWrites": 1,
+      "historyGroups": 1,
+      "clearDraft": true
+    },
+    {
+      "id": "expired-staging",
+      "order": [
+        "begin",
+        "expire",
+        "commit"
+      ],
+      "outcome": "expired",
+      "sourceWrites": 0,
+      "historyGroups": 0,
+      "clearDraft": false
+    },
+    {
+      "id": "read-output-complete",
+      "order": [
+        "seal",
+        "read",
+        "publish"
+      ],
+      "outcome": "readComplete",
+      "sourceWrites": 0,
+      "historyGroups": 0,
+      "clearDraft": false
+    },
+    {
+      "id": "source-changed-read-valid",
+      "order": [
+        "seal",
+        "remoteWrite",
+        "read"
+      ],
+      "outcome": "readComplete",
+      "sourceWrites": 0,
+      "historyGroups": 0,
+      "clearDraft": false
+    },
+    {
+      "id": "source-changed-commit-conflict",
+      "order": [
+        "seal",
+        "remoteWrite",
+        "commit"
+      ],
+      "outcome": "conflict",
+      "sourceWrites": 0,
+      "historyGroups": 0,
+      "clearDraft": false
+    },
+    {
+      "id": "capacity-before-publication",
+      "order": [
+        "seal",
+        "read",
+        "capacity"
+      ],
+      "outcome": "rejected",
+      "sourceWrites": 0,
+      "historyGroups": 0,
+      "clearDraft": false
+    }
+  ],
+  "searchPages": [
+    {
+      "scannedThrough": 1000,
+      "count": {
+        "value": 0,
+        "exact": false
+      },
+      "items": [],
+      "nextCursor": "search-2"
+    },
+    {
+      "scannedThrough": 2000,
+      "count": {
+        "value": 1,
+        "exact": false
+      },
+      "items": [
+        {
+          "hitId": "hit-1",
+          "sourceRange": {
+            "start": 1500,
+            "end": 1503
+          },
+          "detailRef": "hit-context"
+        }
+      ],
+      "nextCursor": "search-3"
+    },
+    {
+      "scannedThrough": 5000,
+      "count": {
+        "value": 1,
+        "exact": true
+      },
+      "items": [],
+      "nextCursor": null
+    }
+  ],
+  "metadataPages": [
+    {
+      "kind": "noteMetadataPage",
+      "items": [
+        {
+          "id": "root",
+          "parentId": null,
+          "type": "object",
+          "childrenRef": "root-children"
+        }
+      ],
+      "nextCursor": null
+    },
+    {
+      "kind": "noteMetadataPage",
+      "items": [
+        {
+          "id": "title",
+          "parentId": "root",
+          "key": "title",
+          "type": "string",
+          "valueRef": "large-title"
+        },
+        {
+          "id": "tags",
+          "parentId": "root",
+          "key": "tags",
+          "type": "array",
+          "childrenRef": "tag-page"
+        }
+      ],
+      "nextCursor": null
+    },
+    {
+      "kind": "noteMetadataPage",
+      "items": [
+        {
+          "id": "tag-0",
+          "parentId": "tags",
+          "index": 0,
+          "type": "string",
+          "valueRef": "large-tag"
+        }
+      ],
+      "nextCursor": "tag-page-2"
     }
   ]
 }

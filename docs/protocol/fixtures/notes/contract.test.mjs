@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { createHash } from 'node:crypto';
 import {
   utf8, wireBytes, digest, boundary, spliceError, applySourceSplices, mapPoint,
   assertSourcePage, cursorError, overlapIds, assertRanges, assertOperationTrace,
+  admitState, assertStream, frozenSource, assertUnchangedGaps,
 } from './contract.mjs';
 
 const f = JSON.parse(await readFile(new URL('./contract.json', import.meta.url), 'utf8'));
@@ -15,7 +17,7 @@ const frame = (text, start, end, length) => ({ jsonrpc: '2.0', id: 1, result: {
   kind: 'noteSourcePage', scope: f.scope, sourceRevision: 'r:7', snapshotId: 'snapshot-a',
   expiresAt: '2026-10-03T00:05:00.000Z', sourceLength: length, range: { start, end }, text,
   nextCursor: end === length ? null : 'opaque-next', previousCursor: start === 0 ? null : 'opaque-previous',
-  contextRef: 'opaque-context',
+  contextRef: 'opaque-context', metadataRef: 'opaque-metadata',
 } });
 
 // The functions above operate only on fixture strings. They do not service requests,
@@ -303,4 +305,180 @@ test('page validator detects changed bytes, false exhaustion, excess budget and 
     assert.throws(() => assertSourcePage('same same', { ...p, result: { ...p.result, ...patch } }, f.limits));
   }
   assert.throws(() => assertSourcePage('same same', p, { sourceBytes: 3, wireBytes: 65536 }));
+});
+
+test('distant canonical effects have explicit footprints without widening caller edits', () => {
+  const c = f.sideEffects;
+  assert.equal(applySourceSplices(c.base, c.caller), c.callerResult);
+  assertUnchangedGaps(c.base, c.callerResult, c.caller);
+  let source = c.callerResult, state = 'callerResult';
+  for (const phase of c.phases) {
+    assert.equal(phase.inputState, state);
+    assert.ok(['task-conversion', 'phantom-scrub'].includes(phase.reason));
+    assert.equal(spliceError(source, phase.splices, f.limits), null);
+    assert.equal(applySourceSplices(source, phase.splices), phase.expect);
+    assertUnchangedGaps(source, phase.expect, phase.splices);
+    source = phase.expect; state = phase.outputState;
+  }
+  assert.equal(source, c.expect);
+  assert.ok(source.includes(`anchor:${c.liveMarkerId}:start`));
+  assert.ok(source.includes('<!--anchor:demo:start-->literal'));
+  assert.ok(source.includes(c.canonicalChildId));
+  assert.ok(!source.includes('@@@task'));
+  assert.throws(() => assertUnchangedGaps(c.base, c.expect, c.caller));
+  // Recoverable conversion failure retains the caller edit and creates no child.
+  assert.ok(c.callerResult.includes('@@@task'));
+  assert.ok(!c.callerResult.includes('task-1'));
+});
+
+test('crossed note/comment channels cannot regress shared authoritative epochs', () => {
+  let state;
+  for (const [i, frame] of f.crossedChannels.frames.entries()) {
+    state = admitState(state, frame.state);
+    assert.equal(state.stateGeneration, f.crossedChannels.expectedGenerations[i]);
+  }
+  assert.deepEqual(state, f.crossedChannels.expected);
+  assert.deepEqual(admitState(state, structuredClone(state)), state);
+  assert.throws(() => admitState(state, { ...state, sourceRevision: 'r:wrong' }));
+  assert.equal(admitState(state, { ...state, scope: { ...state.scope, noteId: 'other' }, stateGeneration: '99' }), state);
+  assert.throws(() => admitState(state, { ...state, stateGeneration: '18446744073709551616' }));
+});
+
+test('staged header and sealed manifest bind stable identity and all five streams', () => {
+  const c = f.staged;
+  assert.equal(digest(c.begin), c.headerDigest);
+  assert.equal(digest({ headerDigest: c.headerDigest, manifest: c.manifest }), c.payloadDigest);
+  assert.deepEqual(c.manifest.map(m => m.stream), ['text', 'dirty', 'selection', 'mutation', 'live']);
+  for (const m of c.manifest) assertStream(c.streams[m.stream], m, f.limits);
+  for (const method of ['begin', 'append', 'seal', 'read', 'commit', 'cancel']) assert.ok(docs.includes(`| note.operation.${method} |`));
+  assert.ok(events.includes('stateGeneration'));
+  const reordered = [...c.manifest].reverse();
+  assert.notEqual(digest({ headerDigest: c.headerDigest, manifest: reordered }), c.payloadDigest);
+  for (const key of ['localEditSequence', 'liveGeneration', 'selectionGeneration', 'editorSessionId']) {
+    assert.notEqual(digest({ ...c.begin, header: { ...c.begin.header, [key]: 'other' } }), c.headerDigest);
+  }
+});
+
+test('staged text is contiguous and exact beyond an inline request budget', () => {
+  const c = f.staged;
+  const texts = {};
+  for (const chunk of c.streams.text) for (const r of chunk.records) {
+    assert.equal(r.offset, (texts[r.id] ?? '').length);
+    texts[r.id] = (texts[r.id] ?? '') + r.text;
+  }
+  for (const name of ['dirty', 'mutation']) for (const chunk of c.streams[name]) for (const r of chunk.records) {
+    const ref = r.replacement, value = texts[ref.textId];
+    assert.equal(value.length, ref.length);
+    assert.equal(utf8(value), ref.utf8Bytes);
+    assert.equal(createHash('sha256').update(value, 'utf8').digest('hex'), ref.sha256);
+  }
+  const frozen = frozenSource(c.base, c.dirtyGroups, c.begin.header.localEditSequence, texts, f.limits);
+  assert.equal(frozen, c.frozen);
+  const mutation = c.streams.mutation[0].records.map(r => ({ ...r, text: texts[r.replacement.textId] }));
+  assert.equal(spliceError(frozen, mutation, f.limits), 'note-page-budget');
+  const final = applySourceSplices(frozen, mutation);
+  assert.equal(final, c.expectedResultPrefix + texts.paste);
+  assert.ok(utf8(texts.paste) > f.limits.sourceBytes);
+  // Undo the newest gesture only; earlier dirty history groups remain visible.
+  const inverse = c.inverse.map(r => ({ ...r, text: c.inverseText }));
+  assert.equal(applySourceSplices(final, inverse), c.frozen);
+  assert.equal(applySourceSplices(c.frozen, [{ start: 4, end: 7, text: 'two' }]), 'ONE two');
+  assert.equal(applySourceSplices('ONE two', [{ start: 0, end: 3, text: 'one' }]), c.base);
+});
+
+test('staged gaps, reordered chunks, corrupt hashes and mismatched totals fail closed', () => {
+  const c = f.staged, manifest = c.manifest[0];
+  for (const mutate of [
+    chunks => chunks.splice(1, 1),
+    chunks => chunks.reverse(),
+    chunks => { chunks[1].previousDigest = '0'.repeat(64); },
+    chunks => { chunks[0].records[0].text = 'CORRUPTED'; },
+    chunks => { chunks[0].sequence = 1; },
+  ]) {
+    const chunks = structuredClone(c.streams.text); mutate(chunks);
+    assert.throws(() => assertStream(chunks, manifest, f.limits));
+  }
+  assert.throws(() => assertStream(c.streams.text, { ...manifest, records: manifest.records + 1 }, f.limits));
+  // Exact chunk retransmission matches its ack; a different payload cannot.
+  const first = c.streams.text[0];
+  assert.deepEqual(structuredClone(first), first);
+  assert.notEqual(digest({ ...first, records: [] }), first.chunkDigest);
+});
+
+test('frozen staged input rejects later edits, split scalars and overlapping groups', () => {
+  const c = f.staged, texts = { prefix: 'ONE', second: 'TWO' };
+  assert.throws(() => frozenSource(c.base, [...c.dirtyGroups, { localSequence: 3, splices: [] }], 2, texts, f.limits));
+  assert.throws(() => frozenSource(c.base, [...c.dirtyGroups].reverse(), 2, texts, f.limits));
+  assert.throws(() => frozenSource('A😀B', [{ localSequence: 1, splices: [{ start: 2, end: 3, textId: 'prefix' }] }], 2, texts, f.limits));
+  assert.throws(() => frozenSource(c.base, [{ localSequence: 1, splices: [{ start: 0, end: 5, textId: 'prefix' }, { start: 4, end: 7, textId: 'second' }] }], 2, texts, f.limits));
+});
+
+for (const c of f.stagedOutcomes) test(`staged lifecycle specification: ${c.id}`, () => {
+  const index = name => c.order.indexOf(name);
+  const cancelFirst = index('cancel') >= 0 && (index('admit') < 0 || index('cancel') < index('admit'));
+  const expiredFirst = index('expire') >= 0 && index('admit') < 0;
+  const committed = index('commit') >= 0 && index('admit') >= 0 && !cancelFirst && !expiredFirst && index('remoteWrite') < 0;
+  assert.equal(c.sourceWrites, committed ? 1 : 0);
+  assert.equal(c.historyGroups, committed ? 1 : 0); // final gesture, not captured-prefix groups
+  const unknown = c.order.at(-1) === 'lostAck';
+  assert.equal(c.clearDraft, committed && !unknown);
+  if (cancelFirst) assert.equal(c.outcome, 'cancelled');
+  if (expiredFirst) assert.equal(c.outcome, 'expired');
+  if (unknown) assert.equal(c.outcome, 'unknown');
+  if (index('remoteWrite') >= 0) assert.equal(c.outcome, index('commit') >= 0 ? 'conflict' : 'readComplete');
+  if (c.order.at(-1) === 'cancel' && index('admit') >= 0 && index('commit') < 0) assert.equal(c.outcome, 'pending');
+});
+
+test('work-limited search pages progress without false exact counts or false exhaustion', () => {
+  let scanned = 0, seen = 0;
+  for (const [index, page] of f.searchPages.entries()) {
+    assert.ok(page.scannedThrough > scanned);
+    scanned = page.scannedThrough;
+    seen += page.items.length;
+    assert.equal(page.count.value, seen);
+    assert.equal(page.count.exact, index === f.searchPages.length - 1);
+    assert.equal(page.nextCursor === null, page.count.exact);
+  }
+  assert.equal(scanned, 5000);
+  assert.equal(seen, 1);
+});
+
+test('metadata title/tags and live details use separately paged values and children', () => {
+  for (const page of f.metadataPages) {
+    assert.equal(page.kind, 'noteMetadataPage');
+    assert.ok(page.items.length <= f.limits.items);
+    assert.ok(wireBytes(page) <= f.limits.wireBytes);
+    for (const item of page.items) {
+      assert.equal(item.value, undefined);
+      if (item.type === 'string') assert.ok(item.valueRef);
+      else assert.ok(item.childrenRef);
+    }
+  }
+  assert.ok(docs.includes('metadataRef: string'));
+  assert.ok(docs.includes('parentOrdinal'));
+  assert.ok(docs.includes('delta'));
+});
+
+test('late page replies cannot overwrite newer state admitted from another channel', () => {
+  const state = f.crossedChannels.expected;
+  const claim = { ...f.cursorClaim, commentRevision: 'c:4' };
+  assert.equal(cursorError(claim, claim, { ...state, boot: 'boot-a' }, 1000), 'note-page-stale');
+  const oldSource = { ...f.cursorClaim, sourceRevision: 'r:6' };
+  assert.equal(cursorError(oldSource, oldSource, { ...state, boot: 'boot-a' }, 1000), 'note-page-stale');
+  assert.equal(state.commentRevision, 'c:5');
+});
+
+test('receipt-owned inverse text addressing outlives staging without crossing owners', () => {
+  const receipt = { scope: f.scope, operationId: f.staged.begin.operationId,
+    inverseRef: 'inverse-a', textIds: ['inverse-paste'], stagingExpiresAt: 1000, receiptExpiresAt: 7000 };
+  const read = { ...receipt.scope, operationId: receipt.operationId, kind: 'inverseText', ref: 'inverse-a', textId: 'inverse-paste', offset: 0 };
+  const valid = (r, now) => now < receipt.receiptExpiresAt && r.operationId === receipt.operationId
+    && Object.keys(receipt.scope).every(k => r[k] === receipt.scope[k])
+    && r.kind === 'inverseText' && r.ref === receipt.inverseRef && receipt.textIds.includes(r.textId)
+    && boundary(f.staged.inverseText, r.offset);
+  assert.equal(valid(read, 2000), true);
+  assert.equal(valid(read, 7000), false);
+  for (const patch of [{ operationId: 'another' }, { noteId: 'another' }, { ref: 'another' },
+    { textId: 'another' }, { kind: 'source' }, { offset: 4 }]) assert.equal(valid({ ...read, ...patch }, 2000), false);
+  assert.ok(docs.includes('Receipt-owned reads do not require a still-live staged view'));
 });

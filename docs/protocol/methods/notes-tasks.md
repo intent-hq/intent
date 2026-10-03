@@ -168,12 +168,12 @@ Omitted `page` retains all existing results and behavior, including stale full-d
 merge, version history, task conversion, anchors and author attribution. `null`,
 unknown page kinds and unsupported versions are invalid on supporting daemons.
 
-The prepared additions reserve two router methods:
+The prepared core reserves two router methods, plus six staged-operation methods below:
 
 | Method | Params | Result |
 | --- | --- | --- |
 | note.applySplices | workspaceId, noteId, noteInstanceId, backendId, baseRevision, operationId, expiresAt, payloadDigest, splices (all required; below) | `NoteCommitReceipt`; bounded typed errors, never a full Note |
-| note.operationStatus | workspaceId, noteId, noteInstanceId, backendId, operationId, payloadDigest (all required) | `NoteOperationStatus`; authorized receipt lookup even after note deletion |
+| note.operationStatus | scope fields, operationId, payloadDigest (inline), or headerDigest plus payloadDigest? (staged) | `NoteOperationStatus`; authorized receipt lookup even after note deletion |
 
 #### Identity, addresses and budgets
 
@@ -243,6 +243,7 @@ type NoteSourcePage = {
   range: { start: number; end: number }; text: string;
   nextCursor: string | null; previousCursor: string | null;
   contextRef: string; // bounded reference, NOT expanded structure
+  metadataRef: string; // separately paged title/tags/task metadata
 };
 ```
 
@@ -297,6 +298,21 @@ construct support is an integration obligation, not permission to silently omit 
 Live native table owners/seams are editor-session metadata, not durable global block
 IDs or inferred fresh canonical structure.
 
+`note.get { ..., page: { kind: "metadata", ref: metadataRef, cursor?, maxItems?,
+maxWireBytes? } }` returns `kind: "noteMetadataPage"`, the same scope/revision/snapshot,
+`items` and `nextCursor`. Its projection includes title, tags, parent and task metadata
+(including relation arrays), excluding content and annotation collections. Metadata
+uses indexed tree entries `{ id, parentId, key?, keyRef?, index?, type, value?,
+valueRef?, childrenRef? }`: root parentId is null; exactly key or keyRef addresses an
+object member, index addresses an array member. `type` is object/array/string/number/
+boolean/null. Object/array children page through childrenRef; string values page
+through valueRef using context fragments; numeric/boolean/null values are inline.
+Keys up to 1,024 UTF-8 bytes may be inline; longer keys use keyRef. Node IDs/references
+obey token limits. No title, tag, task relation array or arbitrary metadata object
+is a full-row exception. Children enumerate object keys lexicographically and array
+indices numerically, with immutable snapshot-local IDs. An entry is returned exactly
+once per parent traversal; clients need not hydrate siblings to inspect one branch.
+
 #### Partial mutations and authoritative outcomes
 
 `splices` is a nonempty ascending array of `{ start, end, text }`, all addressed
@@ -305,13 +321,16 @@ range and replacement before writing. Require `0 <= start <= end <= sourceLength
 scalar-safe endpoints, `previous.end <= next.start`, and strictly increasing starts.
 Thus touching replacements are legal; two inserts at the same point or an insert
 at another splice's start are ambiguous and rejected. An insert at its predecessor's
-end is legal. Apply conceptually from right to left. Unchanged source outside these
-ranges must remain byte-for-byte identical. Repeated text is addressed by position,
+end is legal. Apply conceptually from right to left. At the caller-edit stage, source outside these
+ranges remains byte-for-byte identical. The separately identified canonical-effect
+stage below can change other ranges under existing note semantics; the final
+receipt never conceals those changes as caller splices. Repeated text is addressed by position,
 never a first-text-match search. Stale base rejects the entire batch; no automatic
 three-way merge on this method and no partial mutation on overlap/validation failure.
 
-`operationId` is a canonical UUID minted once for a logical save; the stable scope,
-method and principal form its receipt key. `expiresAt` is an RFC3339 UTC millisecond
+`operationId` is a canonical UUID minted once for a logical save; the stable scope and
+principal form its receipt key; method is bound into the stored digest, so cross-method
+reuse of that identity is a mismatch. `expiresAt` is an RFC3339 UTC millisecond
 deadline no more than 24 hours after first admission. `payloadDigest` is lowercase
 SHA-256 of compact canonical JSON of `{ method: "note.applySplices", backendId,
 workspaceId, noteId, noteInstanceId, baseRevision, operationId, expiresAt, splices }`:
@@ -319,7 +338,8 @@ recursively sort object keys lexicographically, retain array order, use JSON str
 escaping and UTF-8 with no trailing newline (same canonical JSON algorithm as the
 transfer-selection fixtures). All numbers here are safe integers. Digest the exact
 replacement text, not normalized Markdown. Verify it server-side. Same key/same
-digest replays the original receipt, before testing the now-stale base; same key
+digest replays the original receipt, before testing the now-stale base; while its
+identity record is retained, the same key
 with any different payload/digest fails `note-operation-mismatch`, even if the
 replacement is identical. In-flight duplicates join or return pending status.
 
@@ -328,7 +348,9 @@ receipt pruning. Keep durable outcome/digest records through at least seven days
 past that deadline. Within that retention, retries/status survive daemon restart
 and unrelated writes. Replays require authorization and return the same historical
 receipt, not the current revision. After pruning, status is `unknown`; a past-deadline
-operation can never be newly executed. Do not invent a fresh operation ID to
+operation cannot be newly executed with that expired payload. IDs are never reused
+by clients with another deadline/payload; after retention the server cannot prove
+a pruned ID’s prior outcome or mismatch and must not claim it can. Do not invent a fresh operation ID to
 resolve an uncertain result or extend its deadline. Recover/reconcile explicitly.
 
 Source, rev, indexes, comment-anchor effects, attribution invalidation, metadata,
@@ -349,12 +371,14 @@ type NoteCommitReceipt = {
   kind: "noteCommitReceipt"; outcome: "committed"; scope: NoteScope;
   operationId: string; payloadDigest: string;
   beforeRevision: string; afterRevision: string; sourceLength: number;
-  mappingRef: string; effectsRef: string; receiptExpiresAt: string;
+  mappingRef: string; effectsRef: string; inverseRef: string; receiptExpiresAt: string;
+  headerDigest?: string; viewId?: string; // present for staged commits
   invalidation: "all"; // clean source/context/annotation caches must revalidate
 };
-type NoteOperationStatus = NoteCommitReceipt | ({
+type NoteOperationStatus = NoteCommitReceipt | NoteStageState | ({
   kind: "noteOperationStatus"; scope: NoteScope;
-  operationId: string; payloadDigest: string;
+  operationId: string; payloadDigest?: string; headerDigest?: string;
+  // inline: payloadDigest required; staged: headerDigest required, sealed payload when known
 } & (
   | { outcome: "pending" | "unknown" }
   | { outcome: "conflict" | "rejected";
@@ -362,7 +386,8 @@ type NoteOperationStatus = NoteCommitReceipt | ({
 ));
 ```
 
-Status results also carry the requested `scope` and `payloadDigest` on every arm.
+Status results carry the requested scope and identity digest on every arm (staged
+headerDigest before sealing; payloadDigest as well once known).
 `pending` means a durable admission exists but is unsettled; recovery must settle
 it after restart. `unknown` means no authoritative retained outcome was found,
 **not** failure and not permission to drop drafts or repeat under another identity.
@@ -407,11 +432,272 @@ source revision to remain equal. Aggregate `convertedCount` is in
 the effects page header, never inferred from one page. Existing convert-with-warning
 behavior is preserved, not replaced with new fatal errors.
 
-Inline writes cover bounded input, not all-document paste/history. Large replacement
-and inverse data need paged staging, digest verification, cancellation before
-admission, one atomic commit and one history group; multiple independent splice
-commits are **not** an acceptable substitute. That staging/session protocol remains
-open below; this prepared core does not claim whole-operation completion.
+**Caller edits versus canonical effects.** Existing `auto_convert_task_blocks_after_write`
+examines the entire post-write source, including a pre-existing distant `@@@task`
+fence; reanchoring can repair orphan/partial anchors and scrub distant phantom UUID
+markers. The partial path preserves these semantics, not a false promise that the
+caller range is the complete authoritative footprint. Define three immutable source
+states: `base`, `callerResult` (only addressed splices), and `final` (existing canonical
+effects). Effects pages enumerate every additional replacement as `{ kind:
+"sourceEffect", reason: "task-conversion" | "anchor-repair" | "phantom-scrub" |
+"task-marker-projection", inputState, outputState, range, insertedLength,
+beforeDigest, afterDigest, detailRef }`. Intermediate state tokens allow multiple
+ordered effect phases; ranges are in that phase's input, never silently in base
+coordinates. Digests cover exact removed/inserted UTF-8 bytes; paged details carry
+source/provenance when requested. Bytes outside the caller ranges are unchanged in
+callerResult; bytes outside each declared effect footprint are unchanged in its
+output. Final mappings compose all phases with preserved source provenance. Effects
+are not permission for formatting normalization or arbitrary rewriting. Live marker
+IDs with valid comments and non-UUID lookalike documentation remain intact.
+
+A task conversion business warning preserves existing convert-with-warning behavior.
+A recoverable conversion failure uses a transaction savepoint, rolls back that
+conversion/children and retains callerResult with the legacy no-conversion outcome;
+no half-created child can commit. Fatal source/index/receipt transaction failure
+rolls back everything. Existing version snapshots (including a distinct conversion
+snapshot where applicable) retain their meaning inside the transaction; **one
+logical editor history operation** does not mean deleting an existing version-history
+snapshot. Replaying a receipt repeats neither snapshots nor canonical effects.
+
+#### Staged frozen operations
+
+Large edits, inverse history and explicit whole-document reads use the same scoped
+operation ownership as inline writes. They never split one gesture into independent
+commits, submit cropped full replacements, or accumulate a large request envelope.
+The following prepared methods are all gated by `notePaging: 1`:
+
+| Method | Params | Result |
+| --- | --- | --- |
+| note.operation.begin | scope fields, operationId, expiresAt, header, headerDigest | `NoteStageState` — reserves identity and immutable base view; no note mutation |
+| note.operation.append | scope fields, operationId, headerDigest, stream, sequence, previousDigest, records, chunkDigest | `NoteStageAck` — durable contiguous chunk receipt; no note mutation |
+| note.operation.seal | scope fields, operationId, headerDigest, manifest, payloadDigest | `NoteStageState` — validated immutable frozen view, or rejected/conflict; no note mutation |
+| note.operation.read | scope fields, operationId, headerDigest (staged) or payloadDigest (inline receipt), kind, ref?, textId?, offset?, cursor?, maxItems?, maxSourceBytes?, maxWireBytes? | `NoteOperationPage` — bounded source, selection, search, inverse, mapping or effects page |
+| note.operation.commit | scope fields, operationId, headerDigest, payloadDigest | `NoteCommitReceipt` — one CAS transaction, same retry/status rules as inline writes |
+| note.operation.cancel | scope fields, operationId, headerDigest | `NoteOperationStatus` — closes uncommitted staging or reports the already committed outcome |
+
+`header` is `{ baseRevision, editorSessionId, localEditSequence, liveGeneration,
+selectionGeneration, action: "read" | "mutate", output: "source" |
+"selectionMarkdown" | "search", selection: "all" | "ranges", query? }`.
+`query` is required only for search: `{ text, caseSensitive: false,
+mode: "source" | "renderedText" }`, literal search, at most 1,024 decoded UTF-8
+bytes. Rendered-text search projects existing canonical text semantics across marks,
+not DOM fragmentation; each hit supplies a source range and paged projection context.
+Both modes include the frozen dirty prefix. `selection: "ranges"` requires the
+selection stream; `all` means the complete frozen extent without enumerating it.
+Native context-first selection is resolved by the client before capturing this header.
+
+The bounded begin request is digested as canonical JSON of `{ method:
+"note.operation.begin", ...scope, operationId, expiresAt, header }`. `headerDigest`
+is its SHA-256. IDs, safe-integer counters, Unicode and frame budgets use the core
+limits; headerDigest/chunkDigest/payloadDigest are lowercase 64-hex SHA-256 strings. Exact replay returns the same operation, even if current source later
+changes; any different header under that identity is rejected. Beginning validates
+baseRevision/current incarnation and pins an immutable revision root with copy-on-write
+storage or equivalent retained pieces; it must not read/copy the entire source or
+hold a database transaction across requests. Unlike ordinary live page cursors,
+this explicit operation's retained source remains readable after a remote update.
+Resource exhaustion fails explicitly without note mutation or replacing the captured
+draft. No source-size cutoff or truncation is inferred from finite page budgets.
+
+Staging expires at `expiresAt` (at most 24 hours after begin); no implicit renewal.
+Streams are independently append-only, with zero-based consecutive `sequence` and
+a hash chain: `previousDigest` is null for chunk zero, otherwise the preceding
+chunkDigest. `chunkDigest` hashes canonical JSON `{ stream, sequence,
+previousDigest, records }`. Chunks contain at most 128 records, at most 16,384 total
+decoded UTF-8 text bytes and at most 65,536 escaped frame bytes. Acknowledgement
+contains only `{ kind: "noteStageAck", scope, operationId, stream, sequence,
+chunkDigest, nextSequence }` and fits 4,096 bytes. One request per stream and at most
+two requests total are outstanding; backpressure is mandatory. Same-sequence/same
+hash retries return the same ack; gaps, different content, wrong chain or writes
+after sealing fail without modifying accepted chunks. Clients need not retain all
+acknowledged chunks in the rendering process. Server staging uses indexed external
+storage; whole-operation disk/source/output costs are disclosed separately from
+bounded resident pages. Out-of-space is a typed failure, never partial publication.
+
+Only these named streams are accepted; records are tagged and validated as follows:
+
+- `text`: `{ kind: "text", id, offset, text }`, contiguous scalar-safe UTF-16 offsets
+  per immutable text ID. Splice/selection strings refer to `{ textId, length,
+  utf8Bytes, sha256 }`; this digest covers raw concatenated UTF-8, not JSON escaping.
+- `dirty`: `{ kind: "splice", localSequence, ordinal, start, end, replacement }`.
+  A localSequence names one native history group; its ordered, nonoverlapping ranges
+  share that group's input source, and groups apply in increasing sequence order
+  through exactly header.localEditSequence. Empty dirty streams are valid. `ordinal`
+  starts at zero per group; groups cannot reopen. Transport batching preserves these
+  original chronological history groups. A dirty record after the captured
+  fence is invalid. Replacement is a text reference. This builds the frozen dirty
+  view from base without saving, converting tasks or repairing source markers.
+- `selection`: `{ kind: "range", ordinal, start, end, anchorAffinity, headAffinity,
+  direction }`, ordered disjoint ranges in the **frozen dirty view**. Direction is
+  `"forward" | "backward"`; affinities are `"before" | "after"`. Point selections
+  are valid for insertion. Equal starts/overlaps are rejected; large table selections
+  page here without replacing disjoint cells with their hull.
+- `mutation`: `{ kind: "splice", ordinal, start, end, replacement }`, ordered,
+  nonoverlapping base ranges against the **frozen dirty view**, using inline splice
+  boundary rules but without an all-operation item limit. This describes an optional
+  large paste/delete/format action after the captured dirty prefix. `action: "read"`
+  forbids this stream; `action: "mutate"` commits the prefix plus these changes.
+  Saving only the dirty prefix uses an empty mutation stream. Ordinals are consecutive.
+- `live`: `{ kind: "projection", ordinal, sourceRange, role, canonicalId?, detail }`,
+  in the frozen dirty view, with text-reference detail. Roles are `"selection-owner"`,
+  `"paragraph-seam"`, `"inline-span"`, `"marker-occurrence"`; detail is a text-reference to a version-1 descriptor with `{ version: 1,
+  nodeType, parentOrdinal, nativeRange, attributesRef? }`. nodeType is the existing
+  editor schema node/mark name (at most 1,024 UTF-8 bytes), parentOrdinal is null or
+  an earlier live-record ordinal (acyclic), nativeRange is `{from,to}` in the frozen
+  native ProseMirror position units (UTF-16 text units, one position per leaf atom,
+  and entry/exit positions for non-leaf nodes), and attributesRef names paged metadata-tree
+  entries using the metadata shape above. Attribute trees are encoded as additional
+  text-ID records, one canonical JSON tree entry per text ID, referenced by their IDs;
+  oversized string values are separate text IDs, not nested complete strings.
+  References cannot escape the sealed operation. SourceRange is always UTF-16 source;
+  nativeRange is never substituted for it. The descriptor may preserve
+  native same-session selection wrappers/aliases, but cannot change canonical source,
+  manufacture persisted marker IDs, or authorize a new syntax/persistence format.
+  The server validates references/ranges and output adapters validate role schema
+  before using it; unknown versions/node types/attributes are rejected, never guessed.
+  Canonical marker occurrence descriptors additionally require canonicalId and
+  preserve start/end marker provenance; source-dependent details are invalid if
+  their range or generation does not match the frozen view.
+
+`manifest` has one fixed entry for each named stream (including empty streams):
+`{ stream, chunks, records, lastDigest }`, in the order above. Empty streams use
+zero counts/null digest. `payloadDigest` hashes canonical JSON `{ headerDigest,
+manifest }`. Seal verifies all chains/counts/text-reference lengths and digests,
+Unicode endpoints, operation order and the completed view, then atomically freezes
+that manifest. Missing chunks, mismatched digest, malformed projection context and
+extra streams reject without sealing or note mutation; the client may finish missing
+chunks then seal the same valid manifest. Replaying a successful seal with a different
+manifest is an operation mismatch. Sealed data never changes. All validation must
+operate through indexed pages; a full reconstructed string in the renderer or a
+full scan before each append is not licensed by this protocol.
+
+```typescript
+type NoteStageState = {
+  kind: "noteStageState"; scope: NoteScope; operationId: string;
+  headerDigest: string; payloadDigest?: string;
+  phase: "staging" | "sealed" | "cancelled" | "expired";
+  baseRevision: string; expiresAt: string; viewLength?: number;
+  streams: { stream: "text" | "dirty" | "selection" | "mutation" | "live";
+    nextSequence: number; lastDigest: string | null }[];
+};
+```
+
+This state has exactly the five stream summaries, never chunk/text/history arrays,
+and fits 4,096 escaped bytes. `note.operationStatus` accepts exactly one of inline
+`payloadDigest`, or staged `headerDigest` plus optional sealed `payloadDigest`.
+For staged operations it returns NoteStageState before commit admission, the typed
+pending/unknown/rejected/conflict outcome after admission, or NoteCommitReceipt.
+Every staged result includes headerDigest; committed receipts also include the final
+payloadDigest. The receipt key is shared with inline operations: the same ID cannot
+be reused through a different method. Begin/append/seal receipts and retained base
+references survive daemon restart until their deadline; process restart does not
+rebuild client selection/undo state or turn staging into an automatic save.
+
+`note.operation.read` requires a sealed manifest for staged view output. Inline
+receipts also permit `inverse`, `inverseText`, `mapping` and `effects` reads by
+payloadDigest without a staged header. Output is `{ kind:
+"noteOperationPage", scope, operationId, headerDigest, payloadDigest, viewId,
+outputKind, sourceLength, items, nextCursor, expiresAt }`. Inline receipt reads omit
+headerDigest/viewId and carry beforeRevision/afterRevision instead. sourceLength is
+the frozen input extent (or final extent for inverse reads); emitted text offsets
+address the output stream, not necessarily that source. `viewId` binds baseRevision,
+all header generations and sealed manifest; cursors additionally bind kind/budgets
+and continuation. No cursor can be reused across operations or output kinds. Source
+and selection output items are `{ offset, text }`, scalar-safe UTF-16 output offsets
+starting at zero and contiguous; selectionMarkdown uses the existing wrapper handling,
+anchor stripping and edge trimming, with only Markdown text/plain output. Large source
+or selections stream through bounded parser context and external output staging;
+source output is exact frozen source without selection trimming. All items use the
+page bounds above. A `nextCursor: null` frame is terminal output, never a partial
+success caused by resource error. Cancellation/error discards unpublished sink output.
+
+First-read addressing is explicit (all selectors are included in cursor ownership):
+
+| kind | Required first-read selector | Items / resource lifetime |
+| --- | --- | --- |
+| source, selectionMarkdown, search | No ref/textId; starts at output offset or search scan zero | Sealed frozen view until staging expiresAt; remote writes do not replace it |
+| inverse, mapping, effects | `ref` equal to this receipt's inverseRef, mappingRef or effectsRef | Ordered records until receiptExpiresAt, even after staging expiry or a later source revision |
+| inverseText | `ref: inverseRef`, `textId` from one of its replacement references, `offset?` (default zero) | Exact scalar-safe text fragments `{textId,offset,text}` until receiptExpiresAt |
+| detail | `ref` from a search detailRef, inverse provenanceRef, or an already returned detail/children reference | Paged typed detail records or text fragments; inherits the issuing view's expiresAt or receipt's receiptExpiresAt |
+
+For inverseText, offset is UTF-16 within that named text value and must be a scalar
+boundary; length, UTF-8 bytes and raw SHA-256 match the inverse replacement reference.
+A text ID not reachable through the given inverseRef is invalid, even if another
+operation owns the same ID. Detail records use the bounded context/metadata-tree
+shapes above; text-value references can be resolved with `kind: "detail", ref` and
+optional scalar-safe offset, without hydrating the parent tree. Selection/source
+output only accepts cursor continuation (use ordinary source seek for live browsing).
+Every continuation repeats kind and the same ref/textId/budgets, omits offset, and
+sends the issued cursor. A ref/cursor mismatch or a foreign scope/operation/kind is
+`note-page-cursor-invalid`; expired view-owned data is `note-page-expired`, not an
+empty successful page. Receipt-owned reads do not require a still-live staged view;
+they validate the retained receipt/digest and inherit its expiry. Pending/cancelled
+operations never expose a fabricated inverse. Readonly operations have no receipt
+extension: their search/details expire with their pinned view.
+
+Search items are `{ hitId, sourceRange, detailRef }`, ordered by source start then
+hitId. Search pages additionally carry `scannedThrough` (UTF-16 source extent),
+`count: { value, exact }`; false means matches observed so far, true only after the
+entire frozen view is examined. A work-limited page may have no hits but must advance
+scannedThrough or its cursor; only terminal exhaustion reports an exact total.
+Target navigation uses that frozen view's source range/context. If live revisions or
+dirty generations have moved, map the target through verified maps or restart search;
+never install an old hit's offsets on current content. An explicit search can run
+against the old frozen view and label it as such; late results cannot change a new query.
+
+Commit is valid only for `action: "mutate"`, a sealed manifest and an unexpired
+admission. It checks that current sourceRevision still equals header.baseRevision,
+then composes the dirty prefix and mutation into authoritative base-addressed edits,
+applies existing canonical effects and publishes source/index/metadata/history/
+receipt atomically. A batched save does not merge captured native history groups;
+the optional mutation stream is one additional logical gesture after that prefix.
+An unrelated or conflicting remote write still returns strict
+conflict; the client can create a **new** operation after explicit rebase, retaining
+this draft and history. Do not relabel an uncertain old operation as that rebase.
+The commit acknowledgement has the same bounded receipt as inline applySplices,
+plus headerDigest and `viewId` (all receipts carry inverseRef). Mappings span original base to final,
+not merely frozen dirty view to final. A frozen local prefix already committed by
+another local save likewise conflicts: reconcile its receipt and rebase; never save
+it twice. Pending/cancel and lost acknowledgements use the existing durable status.
+
+`note.operation.read kind: "inverse"` (after either inline or staged commit) returns receipt-owned paged inverse
+records `{ historyGroup, inputState, outputState, ordinal, start, end, replacement,
+provenanceRef }`, newest history group first. The first inputState is afterRevision;
+each group’s ranges share its input state, and its outputState is the next group’s
+input. This preserves dirty-prefix history groups separately from the final gesture;
+undoing only the newest gesture does not discard earlier typing. Large removed text
+is streamed by `kind: "inverseText"` using the same
+text-ID offset contract. Inverse references/digests are verified just like staged
+input. Undo is a new operation, never an operation-ID replay. Transform its targets
+through verified later mappings; overlapping remote changes retain the journal and
+surface conflict instead of reverting unrelated work. Canonical marker and alias
+provenance restores original identities where valid; task-conversion side effects
+follow existing task semantics (undoing a link does not silently delete a child task).
+Viewport eviction/remount never deletes chronological history, selection or inverse
+data. Receipt resources last at least through receiptExpiresAt; session history owners
+must transfer any still-needed inverse into their indexed session journal before
+that resource expires, never silently shorten undo to a page-cache/receipt horizon.
+This is a session resource obligation, not a promise to restore undo after app restart.
+
+Cancellation is serialized with commit admission. If cancellation wins, persist a
+cancelled tombstone/digests through the receipt-retention period, release base/staged
+resources, reject later appends/seals/commits and perform no note/history mutation.
+If commit admission wins, cancellation returns pending or the committed receipt;
+closing the transport is not rollback. Retrying cancel is idempotent. Cancelling a
+committed operation returns its receipt and may release unneeded output staging,
+never source/history or required inverse records. Expired uncommitted operations
+release leases and retain an expired identity tombstone through retention; even
+after tombstone pruning the deadline prevents re-execution. Lost chunk acks use the
+same sequence/hash; lost begin/seal/commit acks use the same stable identity/digests.
+`unknown` after retention or transient unavailability is never a failure receipt.
+
+Only matching authoritative commit receipts clear the captured dirty prefix.
+Read/clipboard/export completion clears **no** draft. Later edits remain dirty.
+Output publication to clipboard/file has a separate sink receipt; the note protocol
+cannot claim OS or file success. Cut waits for complete publication before submitting
+its staged deletion. Source conflict after publication leaves the copied value and
+source intact; publication failure must never trigger commit. Explicit raw-source
+materialization uses source output and reports progress/cancellation/complete status.
+
 
 #### Annotation pages and independent epochs
 
@@ -507,26 +793,39 @@ after successful copy retains source and the copied value. Do not restore an old
 clipboard over a newer user's copy. Real OS publication and note transactions are
 not atomic together. These are ordering requirements, not proof of an OS bridge.
 
-The full contract task remains open for product review of:
+**Preserved operation and lifetime policy.** These are compatibility defaults from
+the existing editor and the approved Spec, not new product decisions:
 
-1. Selected-copy MIME precedence: retain Markdown text/plain (recommended compatible
-   default), or deliberately add native rich HTML/plain interoperability with a
-   documented precedence change and platform proof.
-2. Raw-mode source memory: permit a named, measured, explicit whole Monaco model
-   exception, or require a paged raw adapter. Neither exception nor changed mode
-   behavior is authorized here; raw DOM must remain virtual in either case.
-3. Live metadata and restart/history: keep source authoritative with session-only
-   live metadata/current recovery semantics, or persist the seam/owner/history
-   journal across restart. No new cross-restart undo promise or eviction-driven
-   history reset is introduced by this core.
-4. Fresh canonical persistence: retain current parser/serializer behavior with its
-   disclosed live/fresh span, paragraph, strike/underline differences, or separately
-   authorize a format/serializer change. Never label native-live parity as fresh
-   persistence parity.
+- Selected copy remains trimmed Markdown `text/plain`, using the current
+  `src/lib/utils/selected-note-markdown-copy.ts` wrapper/anchor behavior. No default
+  rich HTML MIME is added. Full-source copy/export does not inherit selection trim.
+- Explicit raw-mode entry may materialize the full frozen source into Monaco, with
+  separately measured source/model/temporary memory and cancellation/progress. Its
+  DOM remains virtual; ordinary rich entry/editing remains paged. The current
+  `RawNoteCodeEditor.svelte` holds full draft/baseline and `CodeEditor.svelte` calls
+  `getValue()` on every model change. The paged integration must use Monaco change
+  deltas through the shared session, not repeat full-source extraction/replacement
+  per key. Raw/rich transitions retain the session's draft, source selection and
+  chronological history while their views are disposable.
+- Current rich cleanup in `NoteWithComments.svelte` flushes pending saves then
+  destroys its editor; raw `onDestroy` also flushes. The write service keeps pending
+  content/queues/draft sequences in module Maps, and Monaco disposes its models.
+  These paths provide no persisted native undo stack across process restart. The
+  new session must survive viewport eviction/view remount within an open note;
+  intentional session close follows the existing save/flush path with **typed**
+  failure/conflict handling and retains unresolved drafts. Restart starts from
+  acknowledged canonical source plus whatever existing draft recovery actually
+  restores; no newly promised durable undo or new recovery format. Daemon receipt
+  durability resolves unknown saves independently of the editor's undo lifetime.
+- Fresh canonical reload continues through the existing Markdown parser/serializer.
+  Native-live seams/owners/paragraph metadata stay session projections; a fresh parse
+  is a separate oracle. Existing live/fresh span/paragraph/strike/underline differences
+  are not normalized away or silently turned into persistent fields by this contract.
 
-Resolve those choices and the staged/frozen operation protocol in the existing
-architecture/editing tasks before calling the **full** contract accepted. They do
-not block review of these source-page and inline-CAS definitions.
+The staged read/commit protocol fixes ownership and failure semantics; implementations
+must still prove the selected-copy serializer, raw transitions, general grammar and
+native clipboard on their real paths. This is not a new prerequisite to generic
+source paging, nor a waiver for enabling incomplete paged editing.
 
 Implementation locations and required evidence (not implemented by these docs):
 

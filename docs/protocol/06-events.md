@@ -524,7 +524,7 @@ Unknown projection values are invalid on supporting daemons. Omission preserves
 all existing snapshot/delta behavior; `slim` remains its existing list projection.
 
 The pageState seq-0 snapshot and subsequent payloads are the same bounded state:
-`{ kind: "notePageState", scope, sourceRevision, attributionGeneration,
+`{ kind: "notePageState", scope, stateGeneration, sourceRevision, attributionGeneration,
 commentRevision, deleted, invalidation: "all" }`. Scope is the complete NoteScope
 from §5.2. Epochs are opaque strings; pending attribution uses its current generation
 plus `attributionState: "pending"` (otherwise `"ready"`). `deleted: true` retires
@@ -541,6 +541,25 @@ generation; comment-only reply/resolve/delete changes only commentRevision. A
 source-writing comment action changes source and comment state together. Coalesce
 pending state per subscription to the newest complete tuple; do not concatenate
 unbounded deltas. A retry of an already committed operation publishes nothing new.
+`stateGeneration` is a persisted monotonic unsigned 64-bit counter serialized as a
+canonical decimal string, shared by **both** channels for one NoteScope. Increment
+it in the same transaction as any tuple change (including metadata, annotation
+readiness and deletion); equal generations must have byte-equivalent epoch/state
+fields. Counter exhaustion fails before a mutation, never wraps. It is distinct from
+opaque source/annotation revisions and per-subscription `seq`. Restart keeps it;
+recreated notes have a different incarnation.
+
+The shared cache reducer accepts a tuple only when its stateGeneration exceeds the
+last admitted generation for that scope; equality is an idempotent duplicate,
+smaller generations are discarded even when the other channel's seq is newer.
+An equal-generation/different-tuple frame is a protocol error: retain drafts,
+invalidate clean data and reacquire an authoritative snapshot. Page responses never
+advance this shared tuple; they populate only their matching epoch/generation-owned
+request cache. Thus a delayed comment-channel snapshot cannot restore an old source
+revision after a newer note-channel delta, and an attribution-only update cannot
+roll comments backward. After reconnect, subscribe/snapshot and compare this same
+persisted generation before admitting cached responses.
+
 Sequence gaps/lag recovery produce another bounded state snapshot, **never** a
 legacy full note/comment refetch. Reconnect reacquires state before any cached page
 is trusted; old request generations cannot repopulate a new subscription.

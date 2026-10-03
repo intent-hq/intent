@@ -129,3 +129,59 @@ export function assertOperationTrace(trace) {
   }
   assert.equal(commits, trace.expectedCommits);
 }
+
+export function admitState(current, incoming) {
+  if (JSON.stringify(incoming.scope) !== JSON.stringify(current?.scope ?? incoming.scope)) return current;
+  assert.match(incoming.stateGeneration, /^(0|[1-9][0-9]*)$/);
+  const generation = BigInt(incoming.stateGeneration);
+  assert.ok(generation <= 18446744073709551615n);
+  if (!current || generation > BigInt(current.stateGeneration)) return incoming;
+  if (generation === BigInt(current.stateGeneration)) assert.deepEqual(incoming, current);
+  return current;
+}
+
+// Validate finite staged fixtures, not a durable staging server.
+export function assertStream(chunks, expected, limits) {
+  let previousDigest = null, records = 0;
+  for (const [sequence, chunk] of chunks.entries()) {
+    assert.equal(chunk.sequence, sequence);
+    assert.equal(chunk.stream, expected.stream);
+    assert.equal(chunk.previousDigest, previousDigest);
+    const { chunkDigest, ...payload } = chunk;
+    assert.equal(digest(payload), chunkDigest);
+    assert.ok(chunk.records.length <= limits.items);
+    assert.ok(chunk.records.reduce((n, r) => n + utf8(r.text ?? ''), 0) <= limits.sourceBytes);
+    assert.ok(wireBytes(chunk) <= limits.wireBytes);
+    previousDigest = chunkDigest;
+    records += chunk.records.length;
+  }
+  assert.equal(expected.chunks, chunks.length);
+  assert.equal(expected.records, records);
+  assert.equal(expected.lastDigest, previousDigest);
+}
+
+export function frozenSource(base, groups, fence, textById, limits) {
+  let lastSequence = -1;
+  return groups.reduce((source, group) => {
+    assert.ok(group.localSequence > lastSequence && group.localSequence <= fence);
+    lastSequence = group.localSequence;
+    const splices = group.splices.map(s => ({ ...s, text: textById[s.textId] }));
+    // Group/item streaming removes the inline total-input cap, not scalar/range rules.
+    assert.equal(spliceError(source, splices, { ...limits, splices: Number.MAX_SAFE_INTEGER,
+      sourceBytes: Number.MAX_SAFE_INTEGER }), null);
+    return applySourceSplices(source, splices);
+  }, base);
+}
+
+export function assertUnchangedGaps(before, after, splices) {
+  let input = 0, output = 0;
+  for (const s of splices) {
+    const gap = before.slice(input, s.start);
+    assert.equal(after.slice(output, output + gap.length), gap);
+    output += gap.length;
+    assert.equal(after.slice(output, output + s.text.length), s.text);
+    output += s.text.length;
+    input = s.end;
+  }
+  assert.equal(after.slice(output), before.slice(input));
+}

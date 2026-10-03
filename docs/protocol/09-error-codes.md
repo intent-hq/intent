@@ -126,3 +126,20 @@ cannot clear dirty state. A lost reply after a successful commit is recovered fr
 the same durable receipt. An internal error with an uncertain commit must never be
 translated into an authoritative rejected status. Authorization is checked before
 receipt/cursor details are disclosed, and again on replay.
+
+Staged `note.operation.*` calls additionally use these bounded discriminators:
+
+| Numeric code | data.code | Meaning / client action |
+| --- | --- | --- |
+| -32602 | note-operation-chunk | Chunk sequence/hash-chain gap or mismatch; accepted prefix is unchanged; query status and retry the exact missing chunk. |
+| -32602 | note-operation-incomplete | Seal has missing chunks/text, wrong counts/digests or invalid final addresses; nothing sealed or committed. |
+| -32602 | note-operation-state | Append after seal, read before seal, commit of a read-only operation, or unknown stream/context version; no mutation. |
+| -32602 | note-operation-cancelled | Cancellation won before commit admission; no note/history mutation and no later commit under this ID. |
+| -32603 | note-operation-capacity | Snapshot/staging/output storage cannot admit work; preserve drafts, report failure and release unpublished output; no truncation or partial commit. |
+
+Staged status uses headerDigest to resolve lost begin/append/seal acknowledgements,
+then also binds payloadDigest after sealing. Cancellation that loses to commit
+admission returns pending or the committed receipt, never a false cancelled outcome.
+Remote source changes can invalidate commit while the retained read view remains
+valid until expiry. A shared pageState equal-generation/different-epochs payload is
+a client-detected protocol inconsistency, not permission to overwrite cache state.

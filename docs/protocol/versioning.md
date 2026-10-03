@@ -4,10 +4,10 @@
 
 **Documented version:** `11.1` — registered-root file reads, additive prepared contract; not a shipped-version claim.
 
-**Prepared note paging and partial-write core (additive, not implemented).**
+**Prepared note paging and operation contract (additive, not implemented).**
 [§5.2](./methods/notes-tasks.md#revision-safe-note-pages-prepared-additive-contract)
-reserves `note.applySplices` and `note.operationStatus`, taking the combined
-prepared catalog to **423 / 363 / 58** (dispatchable / router / fast path), with no
+reserves `note.applySplices`, `note.operationStatus` and six `note.operation.*`
+staging/read/commit methods, taking the combined prepared catalog to **429 / 369 / 58** (dispatchable / router / fast path), with no
 new event names. Source/context/mapping pages use opt-in `note.get` shapes;
 annotation paging and bounded subscription projections extend existing methods.
 Allocate the next minor against daemon main at implementation time. Advertise
@@ -24,11 +24,14 @@ surfaces incompatibility, never converts a page cache into a full-note replaceme
 Docs land before additive components; daemon protocol support lands before FE
 opt-in, with human authorization at every merge. Pin advancement remains automated.
 
-This core does not settle whole-operation staging, raw-model memory, default rich
-clipboard MIME, fresh canonical persistence changes or restart/undo policy. Those
-choices remain explicit in §5.2; source paging is not a claim that the complete
-virtual editor is ready or its size guard may be removed. Notes fixtures validate
-prepared examples and arithmetic, not backend storage complexity or shipped support.
+The operation contract includes staged large input/inverse paging, frozen dirty-view
+reads, cancellation races and receipts. It preserves selected-copy Markdown text/plain,
+allows explicitly requested raw-source materialization with virtual DOM and delta-based
+editing, and preserves current fresh canonical/restart behavior without a new durable
+undo promise. Shared subscription stateGeneration orders crossed channel deliveries.
+Source paging is not a claim that the complete virtual editor is ready or its size
+guard may be removed. Notes fixtures validate prepared examples and arithmetic,
+not backend storage complexity or shipped support.
 
 **Prepared command-default change — recommended 11.0, not shipped.**
 [Script creation defaults (§5.8)](./methods/scripts.md#command-creation-defaults-prepared-breaking-change)
