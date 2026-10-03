@@ -82,6 +82,7 @@ export GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@example.invalid
 mk="$temp_dir/reviewer's checkout"
 mkdir -p "$mk/scripts" "$mk/packages/intentd/scripts" "$mk/packages/intentd/.git"
 cp "$repo_root/Makefile" "$mk/Makefile"
+cp "$repo_root/scripts/check_watch_capacity.py" "$mk/scripts/"
 cat >"$mk/packages/intentd/scripts/changed-tests.sh" <<'SH'
 #!/usr/bin/env bash
 {
@@ -245,6 +246,7 @@ else
   g checkout -q -b feature
   cp "$repo_root/Makefile" "$mono/Makefile"
   cp "$repo_root/scripts/resumable_nextest.py" "$mono/scripts/resumable_nextest.py"
+  cp "$repo_root/scripts/check_watch_capacity.py" "$mono/scripts/"
   cp -R "$repo_root/scripts/_vendor" "$mono/scripts/_vendor"
   printf '[submodule "packages/intentd"]\n\tpath = packages/intentd\n\turl = https://example.invalid/intentd.git\n' >"$mono/.gitmodules"
   git -C "$mono" init -q

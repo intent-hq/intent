@@ -294,6 +294,7 @@ class CompactMakeTests(unittest.TestCase):
         (self.root / "scripts").mkdir()
         shutil.copy(ROOT / "Makefile", self.root)
         shutil.copy(ROOT / "scripts/resumable_nextest.py", self.root / "scripts")
+        shutil.copy(ROOT / "scripts/check_watch_capacity.py", self.root / "scripts")
         shutil.copytree(ROOT / "scripts/_vendor", self.root / "scripts/_vendor",
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         self.log = self.root / "commands.jsonl"
@@ -316,12 +317,16 @@ sys.exit(int(os.environ.get("STUB_EXIT", "0")))
         # real check prerequisites and real clippy/lint-sources recipes.
         self.skips = ["-o", "check-makefile-targets", "-o", "check-protocol-field-parity",
                       "-o", "lint-shell-sleeps", "-o", "fmt"]
+        # gate runs check only after its watcher preflight. GNU make does not
+        # propagate -o to that recursive invocation, so retain the same fixture
+        # exclusions in the recursive command; clippy/lint-sources stay real.
+        self.make = "make " + " ".join(self.skips)
 
     def run_make(self, *args, env=None, cwd=None):
         self.log.unlink(missing_ok=True)
         result = subprocess.run(
             ["make", "--no-print-directory", *self.skips, *args,
-             f"CARGO_BIN_DIR={self.bin}", "RUSTUP_CARGO="],
+             f"CARGO_BIN_DIR={self.bin}", "RUSTUP_CARGO=", f"MAKE={self.make}"],
             cwd=cwd or self.root, env={**self.env, **(env or {})},
             capture_output=True, text=True, timeout=20,
         )
