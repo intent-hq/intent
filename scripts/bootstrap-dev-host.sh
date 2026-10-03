@@ -664,6 +664,11 @@ check_all() {
 
   if python_ready; then
     ok "Python: $(python3 --version 2>&1)"
+    # One allocation, immediately closed: detect an already exhausted host
+    # without changing sysctls or claiming headroom for a parallel test suite.
+    if ! python3 "$SCRIPT_DIR/check_watch_capacity.py" 2>&1; then
+      FAILURES=$((FAILURES + 1))
+    fi
   else
     local python_found
     if python_found=$(python_version); then
