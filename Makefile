@@ -503,9 +503,7 @@ lint-shell: ## Run shellcheck over scripts/*.sh (needs shellcheck; make bootstra
 
 check: check-makefile-targets check-protocol-field-parity lint-shell-sleeps fmt clippy lint-sources ## Makefile target check + protocol field parity + shell sleep lint + fmt + clippy + source lints
 
-gate: ## Run all local Rust gates (fmt, clippy, source lints, then nextest)
-	@python3 scripts/check_watch_capacity.py --quiet
-	@$(MAKE) --no-print-directory check
+gate: check ## Run all local Rust gates (fmt, clippy, source lints, then nextest)
 	@$(MAKE) --no-print-directory test
 
 test: test-intentd ## Run Rust tests; after interruption use RESUME=1 (GATE_FORCE=1 runs all, NO_FAIL_FAST=1 continues past failures)

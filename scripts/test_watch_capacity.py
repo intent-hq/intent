@@ -188,7 +188,8 @@ else:
                        "coverage-changed", "coverage-all", "coverage-e2e"):
             with self.subTest(target=target):
                 self.started.unlink(missing_ok=True)
-                result = self.run_make(target, "-j2")
+                # gate retains its check prerequisite; isolate the Rust test entry.
+                result = self.run_make(target, "-j2", *(["-o", "check"] if target == "gate" else []))
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse(self.started.exists(), result.stdout + result.stderr)
                 self.assertIn("EMFILE", result.stdout + result.stderr)

@@ -317,16 +317,12 @@ sys.exit(int(os.environ.get("STUB_EXIT", "0")))
         # real check prerequisites and real clippy/lint-sources recipes.
         self.skips = ["-o", "check-makefile-targets", "-o", "check-protocol-field-parity",
                       "-o", "lint-shell-sleeps", "-o", "fmt"]
-        # gate runs check only after its watcher preflight. GNU make does not
-        # propagate -o to that recursive invocation, so retain the same fixture
-        # exclusions in the recursive command; clippy/lint-sources stay real.
-        self.make = "make " + " ".join(self.skips)
 
     def run_make(self, *args, env=None, cwd=None):
         self.log.unlink(missing_ok=True)
         result = subprocess.run(
             ["make", "--no-print-directory", *self.skips, *args,
-             f"CARGO_BIN_DIR={self.bin}", "RUSTUP_CARGO=", f"MAKE={self.make}"],
+             f"CARGO_BIN_DIR={self.bin}", "RUSTUP_CARGO="],
             cwd=cwd or self.root, env={**self.env, **(env or {})},
             capture_output=True, text=True, timeout=20,
         )
@@ -356,6 +352,15 @@ sys.exit(int(os.environ.get("STUB_EXIT", "0")))
                 self.assertIn("COMPACT=1", result.stderr)
                 self.assertIn("coverage", result.stderr)
                 self.assertEqual(calls, [])
+
+    def test_gate_preserves_check_dependency_and_skip_semantics(self):
+        for parallel in ([], ["-j2"]):
+            for goals, checks in ((["check", "gate"], 1), (["-o", "check", "gate"], 0)):
+                with self.subTest(parallel=parallel, goals=goals):
+                    result, calls = self.run_make("-n", *goals, *parallel)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(result.stdout.count("cargo clippy"), checks, result.stdout)
+                    self.assertEqual(calls, [])
 
     def test_compiler_failure_remains_failure(self):
         for target in ("check", "gate"):
