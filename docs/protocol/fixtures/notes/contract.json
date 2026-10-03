@@ -3462,6 +3462,618 @@
       "delimiter",
       "projection"
     ],
-    "source": "[label](https://example.test/a%20b \"\")"
+    "source": "[label](https://example.test/a%20b \"\")",
+    "wikiLinks": [
+      {
+        "source": "[[target]]",
+        "body": "target",
+        "directory": {
+          "jsonrpc": "2.0",
+          "id": "context",
+          "result": {
+            "kind": "noteContextPage",
+            "scope": {
+              "backendId": "db-a",
+              "workspaceId": "ws-a",
+              "noteId": "spec",
+              "noteInstanceId": "inc-a"
+            },
+            "sourceRevision": "r:7",
+            "snapshotId": "context-snapshot",
+            "expiresAt": "2026-10-03T00:05:00.000Z",
+            "items": [
+              {
+                "kind": "fragment",
+                "id": "wiki-false-d-0",
+                "field": "openingSource",
+                "offset": 0,
+                "text": "",
+                "nextRef": "wiki-false-field-0"
+              },
+              {
+                "kind": "fragment",
+                "id": "wiki-false-d-1",
+                "field": "closingSource",
+                "offset": 0,
+                "text": "",
+                "nextRef": "wiki-false-field-1"
+              },
+              {
+                "kind": "fragment",
+                "id": "wiki-false-d-2",
+                "field": "linkType",
+                "offset": 0,
+                "text": "",
+                "nextRef": "wiki-false-field-2"
+              },
+              {
+                "kind": "fragment",
+                "id": "wiki-false-d-3",
+                "field": "destination",
+                "offset": 0,
+                "text": "",
+                "nextRef": "wiki-false-field-3"
+              },
+              {
+                "kind": "fragment",
+                "id": "wiki-false-d-4",
+                "field": "title",
+                "offset": 0,
+                "text": "",
+                "nextRef": "wiki-false-field-4"
+              },
+              {
+                "kind": "fragment",
+                "id": "wiki-false-d-5",
+                "field": "referenceId",
+                "offset": 0,
+                "text": "",
+                "nextRef": "wiki-false-field-5"
+              },
+              {
+                "kind": "fragment",
+                "id": "wiki-false-d-6",
+                "field": "hasPothole",
+                "offset": 0,
+                "text": "",
+                "nextRef": "wiki-false-field-6"
+              }
+            ],
+            "nextCursor": null
+          }
+        },
+        "fields": {
+          "openingSource": {
+            "expected": "[[",
+            "pages": [
+              {
+                "jsonrpc": "2.0",
+                "id": "context",
+                "result": {
+                  "kind": "noteContextPage",
+                  "scope": {
+                    "backendId": "db-a",
+                    "workspaceId": "ws-a",
+                    "noteId": "spec",
+                    "noteInstanceId": "inc-a"
+                  },
+                  "sourceRevision": "r:7",
+                  "snapshotId": "context-snapshot",
+                  "expiresAt": "2026-10-03T00:05:00.000Z",
+                  "items": [
+                    {
+                      "kind": "fragment",
+                      "id": "wiki-false-v-0",
+                      "field": "openingSource",
+                      "offset": 0,
+                      "text": "[[",
+                      "nextRef": null
+                    }
+                  ],
+                  "nextCursor": null
+                }
+              }
+            ]
+          },
+          "closingSource": {
+            "expected": "]]",
+            "pages": [
+              {
+                "jsonrpc": "2.0",
+                "id": "context",
+                "result": {
+                  "kind": "noteContextPage",
+                  "scope": {
+                    "backendId": "db-a",
+                    "workspaceId": "ws-a",
+                    "noteId": "spec",
+                    "noteInstanceId": "inc-a"
+                  },
+                  "sourceRevision": "r:7",
+                  "snapshotId": "context-snapshot",
+                  "expiresAt": "2026-10-03T00:05:00.000Z",
+                  "items": [
+                    {
+                      "kind": "fragment",
+                      "id": "wiki-false-v-1",
+                      "field": "closingSource",
+                      "offset": 0,
+                      "text": "]]",
+                      "nextRef": null
+                    }
+                  ],
+                  "nextCursor": null
+                }
+              }
+            ]
+          },
+          "linkType": {
+            "expected": "WikiLink",
+            "pages": [
+              {
+                "jsonrpc": "2.0",
+                "id": "context",
+                "result": {
+                  "kind": "noteContextPage",
+                  "scope": {
+                    "backendId": "db-a",
+                    "workspaceId": "ws-a",
+                    "noteId": "spec",
+                    "noteInstanceId": "inc-a"
+                  },
+                  "sourceRevision": "r:7",
+                  "snapshotId": "context-snapshot",
+                  "expiresAt": "2026-10-03T00:05:00.000Z",
+                  "items": [
+                    {
+                      "kind": "fragment",
+                      "id": "wiki-false-v-2",
+                      "field": "linkType",
+                      "offset": 0,
+                      "text": "WikiLink",
+                      "nextRef": null
+                    }
+                  ],
+                  "nextCursor": null
+                }
+              }
+            ]
+          },
+          "destination": {
+            "expected": "target",
+            "pages": [
+              {
+                "jsonrpc": "2.0",
+                "id": "context",
+                "result": {
+                  "kind": "noteContextPage",
+                  "scope": {
+                    "backendId": "db-a",
+                    "workspaceId": "ws-a",
+                    "noteId": "spec",
+                    "noteInstanceId": "inc-a"
+                  },
+                  "sourceRevision": "r:7",
+                  "snapshotId": "context-snapshot",
+                  "expiresAt": "2026-10-03T00:05:00.000Z",
+                  "items": [
+                    {
+                      "kind": "fragment",
+                      "id": "wiki-false-v-3",
+                      "field": "destination",
+                      "offset": 0,
+                      "text": "target",
+                      "nextRef": null
+                    }
+                  ],
+                  "nextCursor": null
+                }
+              }
+            ]
+          },
+          "title": {
+            "expected": "",
+            "pages": [
+              {
+                "jsonrpc": "2.0",
+                "id": "context",
+                "result": {
+                  "kind": "noteContextPage",
+                  "scope": {
+                    "backendId": "db-a",
+                    "workspaceId": "ws-a",
+                    "noteId": "spec",
+                    "noteInstanceId": "inc-a"
+                  },
+                  "sourceRevision": "r:7",
+                  "snapshotId": "context-snapshot",
+                  "expiresAt": "2026-10-03T00:05:00.000Z",
+                  "items": [
+                    {
+                      "kind": "fragment",
+                      "id": "wiki-false-v-4",
+                      "field": "title",
+                      "offset": 0,
+                      "text": "",
+                      "nextRef": null
+                    }
+                  ],
+                  "nextCursor": null
+                }
+              }
+            ]
+          },
+          "referenceId": {
+            "expected": "",
+            "pages": [
+              {
+                "jsonrpc": "2.0",
+                "id": "context",
+                "result": {
+                  "kind": "noteContextPage",
+                  "scope": {
+                    "backendId": "db-a",
+                    "workspaceId": "ws-a",
+                    "noteId": "spec",
+                    "noteInstanceId": "inc-a"
+                  },
+                  "sourceRevision": "r:7",
+                  "snapshotId": "context-snapshot",
+                  "expiresAt": "2026-10-03T00:05:00.000Z",
+                  "items": [
+                    {
+                      "kind": "fragment",
+                      "id": "wiki-false-v-5",
+                      "field": "referenceId",
+                      "offset": 0,
+                      "text": "",
+                      "nextRef": null
+                    }
+                  ],
+                  "nextCursor": null
+                }
+              }
+            ]
+          },
+          "hasPothole": {
+            "expected": "false",
+            "pages": [
+              {
+                "jsonrpc": "2.0",
+                "id": "context",
+                "result": {
+                  "kind": "noteContextPage",
+                  "scope": {
+                    "backendId": "db-a",
+                    "workspaceId": "ws-a",
+                    "noteId": "spec",
+                    "noteInstanceId": "inc-a"
+                  },
+                  "sourceRevision": "r:7",
+                  "snapshotId": "context-snapshot",
+                  "expiresAt": "2026-10-03T00:05:00.000Z",
+                  "items": [
+                    {
+                      "kind": "fragment",
+                      "id": "wiki-false-v-6",
+                      "field": "hasPothole",
+                      "offset": 0,
+                      "text": "false",
+                      "nextRef": null
+                    }
+                  ],
+                  "nextCursor": null
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "source": "[[target|label]]",
+        "body": "label",
+        "directory": {
+          "jsonrpc": "2.0",
+          "id": "context",
+          "result": {
+            "kind": "noteContextPage",
+            "scope": {
+              "backendId": "db-a",
+              "workspaceId": "ws-a",
+              "noteId": "spec",
+              "noteInstanceId": "inc-a"
+            },
+            "sourceRevision": "r:7",
+            "snapshotId": "context-snapshot",
+            "expiresAt": "2026-10-03T00:05:00.000Z",
+            "items": [
+              {
+                "kind": "fragment",
+                "id": "wiki-true-d-0",
+                "field": "openingSource",
+                "offset": 0,
+                "text": "",
+                "nextRef": "wiki-true-field-0"
+              },
+              {
+                "kind": "fragment",
+                "id": "wiki-true-d-1",
+                "field": "closingSource",
+                "offset": 0,
+                "text": "",
+                "nextRef": "wiki-true-field-1"
+              },
+              {
+                "kind": "fragment",
+                "id": "wiki-true-d-2",
+                "field": "linkType",
+                "offset": 0,
+                "text": "",
+                "nextRef": "wiki-true-field-2"
+              },
+              {
+                "kind": "fragment",
+                "id": "wiki-true-d-3",
+                "field": "destination",
+                "offset": 0,
+                "text": "",
+                "nextRef": "wiki-true-field-3"
+              },
+              {
+                "kind": "fragment",
+                "id": "wiki-true-d-4",
+                "field": "title",
+                "offset": 0,
+                "text": "",
+                "nextRef": "wiki-true-field-4"
+              },
+              {
+                "kind": "fragment",
+                "id": "wiki-true-d-5",
+                "field": "referenceId",
+                "offset": 0,
+                "text": "",
+                "nextRef": "wiki-true-field-5"
+              },
+              {
+                "kind": "fragment",
+                "id": "wiki-true-d-6",
+                "field": "hasPothole",
+                "offset": 0,
+                "text": "",
+                "nextRef": "wiki-true-field-6"
+              }
+            ],
+            "nextCursor": null
+          }
+        },
+        "fields": {
+          "openingSource": {
+            "expected": "[[target|",
+            "pages": [
+              {
+                "jsonrpc": "2.0",
+                "id": "context",
+                "result": {
+                  "kind": "noteContextPage",
+                  "scope": {
+                    "backendId": "db-a",
+                    "workspaceId": "ws-a",
+                    "noteId": "spec",
+                    "noteInstanceId": "inc-a"
+                  },
+                  "sourceRevision": "r:7",
+                  "snapshotId": "context-snapshot",
+                  "expiresAt": "2026-10-03T00:05:00.000Z",
+                  "items": [
+                    {
+                      "kind": "fragment",
+                      "id": "wiki-true-v-0",
+                      "field": "openingSource",
+                      "offset": 0,
+                      "text": "[[target|",
+                      "nextRef": null
+                    }
+                  ],
+                  "nextCursor": null
+                }
+              }
+            ]
+          },
+          "closingSource": {
+            "expected": "]]",
+            "pages": [
+              {
+                "jsonrpc": "2.0",
+                "id": "context",
+                "result": {
+                  "kind": "noteContextPage",
+                  "scope": {
+                    "backendId": "db-a",
+                    "workspaceId": "ws-a",
+                    "noteId": "spec",
+                    "noteInstanceId": "inc-a"
+                  },
+                  "sourceRevision": "r:7",
+                  "snapshotId": "context-snapshot",
+                  "expiresAt": "2026-10-03T00:05:00.000Z",
+                  "items": [
+                    {
+                      "kind": "fragment",
+                      "id": "wiki-true-v-1",
+                      "field": "closingSource",
+                      "offset": 0,
+                      "text": "]]",
+                      "nextRef": null
+                    }
+                  ],
+                  "nextCursor": null
+                }
+              }
+            ]
+          },
+          "linkType": {
+            "expected": "WikiLink",
+            "pages": [
+              {
+                "jsonrpc": "2.0",
+                "id": "context",
+                "result": {
+                  "kind": "noteContextPage",
+                  "scope": {
+                    "backendId": "db-a",
+                    "workspaceId": "ws-a",
+                    "noteId": "spec",
+                    "noteInstanceId": "inc-a"
+                  },
+                  "sourceRevision": "r:7",
+                  "snapshotId": "context-snapshot",
+                  "expiresAt": "2026-10-03T00:05:00.000Z",
+                  "items": [
+                    {
+                      "kind": "fragment",
+                      "id": "wiki-true-v-2",
+                      "field": "linkType",
+                      "offset": 0,
+                      "text": "WikiLink",
+                      "nextRef": null
+                    }
+                  ],
+                  "nextCursor": null
+                }
+              }
+            ]
+          },
+          "destination": {
+            "expected": "target",
+            "pages": [
+              {
+                "jsonrpc": "2.0",
+                "id": "context",
+                "result": {
+                  "kind": "noteContextPage",
+                  "scope": {
+                    "backendId": "db-a",
+                    "workspaceId": "ws-a",
+                    "noteId": "spec",
+                    "noteInstanceId": "inc-a"
+                  },
+                  "sourceRevision": "r:7",
+                  "snapshotId": "context-snapshot",
+                  "expiresAt": "2026-10-03T00:05:00.000Z",
+                  "items": [
+                    {
+                      "kind": "fragment",
+                      "id": "wiki-true-v-3",
+                      "field": "destination",
+                      "offset": 0,
+                      "text": "target",
+                      "nextRef": null
+                    }
+                  ],
+                  "nextCursor": null
+                }
+              }
+            ]
+          },
+          "title": {
+            "expected": "",
+            "pages": [
+              {
+                "jsonrpc": "2.0",
+                "id": "context",
+                "result": {
+                  "kind": "noteContextPage",
+                  "scope": {
+                    "backendId": "db-a",
+                    "workspaceId": "ws-a",
+                    "noteId": "spec",
+                    "noteInstanceId": "inc-a"
+                  },
+                  "sourceRevision": "r:7",
+                  "snapshotId": "context-snapshot",
+                  "expiresAt": "2026-10-03T00:05:00.000Z",
+                  "items": [
+                    {
+                      "kind": "fragment",
+                      "id": "wiki-true-v-4",
+                      "field": "title",
+                      "offset": 0,
+                      "text": "",
+                      "nextRef": null
+                    }
+                  ],
+                  "nextCursor": null
+                }
+              }
+            ]
+          },
+          "referenceId": {
+            "expected": "",
+            "pages": [
+              {
+                "jsonrpc": "2.0",
+                "id": "context",
+                "result": {
+                  "kind": "noteContextPage",
+                  "scope": {
+                    "backendId": "db-a",
+                    "workspaceId": "ws-a",
+                    "noteId": "spec",
+                    "noteInstanceId": "inc-a"
+                  },
+                  "sourceRevision": "r:7",
+                  "snapshotId": "context-snapshot",
+                  "expiresAt": "2026-10-03T00:05:00.000Z",
+                  "items": [
+                    {
+                      "kind": "fragment",
+                      "id": "wiki-true-v-5",
+                      "field": "referenceId",
+                      "offset": 0,
+                      "text": "",
+                      "nextRef": null
+                    }
+                  ],
+                  "nextCursor": null
+                }
+              }
+            ]
+          },
+          "hasPothole": {
+            "expected": "true",
+            "pages": [
+              {
+                "jsonrpc": "2.0",
+                "id": "context",
+                "result": {
+                  "kind": "noteContextPage",
+                  "scope": {
+                    "backendId": "db-a",
+                    "workspaceId": "ws-a",
+                    "noteId": "spec",
+                    "noteInstanceId": "inc-a"
+                  },
+                  "sourceRevision": "r:7",
+                  "snapshotId": "context-snapshot",
+                  "expiresAt": "2026-10-03T00:05:00.000Z",
+                  "items": [
+                    {
+                      "kind": "fragment",
+                      "id": "wiki-true-v-6",
+                      "field": "hasPothole",
+                      "offset": 0,
+                      "text": "true",
+                      "nextRef": null
+                    }
+                  ],
+                  "nextCursor": null
+                }
+              }
+            ]
+          }
+        }
+      }
+    ]
   }
 }

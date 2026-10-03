@@ -413,3 +413,11 @@ export function assertContextFrame(frame, limits, { directory = false } = {}) {
   }
   assert.ok(textBytes <= limits.sourceBytes);
 }
+
+export function assertLinkFields(fields) {
+  assert.ok(['Inline', 'Reference', 'ReferenceUnknown', 'Collapsed', 'CollapsedUnknown',
+    'Shortcut', 'ShortcutUnknown', 'Autolink', 'Email', 'WikiLink'].includes(fields.linkType));
+  for (const key of ['destination', 'title', 'referenceId']) assert.ok(validText(fields[key]));
+  if (fields.linkType === 'WikiLink') assert.ok(['true', 'false'].includes(fields.hasPothole));
+  else assert.equal(fields.hasPothole, undefined);
+}

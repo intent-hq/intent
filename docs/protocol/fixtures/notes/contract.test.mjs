@@ -967,3 +967,30 @@ test('context frames reject malformed directory, range, projection, oversized fi
   assert.throws(() => summaryContract.assertContextFrame(f.contextWire.directory,
     { ...f.limits, wireBytes: wireBytes(f.contextWire.directory) - 1 }));
 });
+
+test('WikiLink details preserve explicit true and false hasPothole wire strings', () => {
+  assert.ok(docs.includes('`WikiLink`'));
+  assert.ok(docs.includes('`hasPothole`'));
+  for (const x of f.contextWire.wikiLinks) {
+    summaryContract.assertContextFrame(x.directory, f.limits, { directory: true });
+    assert.deepEqual(x.directory.result.items.map(row => row.field),
+      ['openingSource', 'closingSource', 'linkType', 'destination', 'title', 'referenceId', 'hasPothole']);
+    const values = Object.fromEntries(Object.entries(x.fields).map(([key, resource]) => {
+      for (const frame of resource.pages) summaryContract.assertContextFrame(frame, f.limits);
+      const value = summaryContract.assertTextFragments(resource.pages, key, f.limits);
+      assert.equal(value, resource.expected);
+      return [key, value];
+    }));
+    summaryContract.assertLinkFields(values);
+    assert.equal(values.openingSource + x.body + values.closingSource, x.source);
+  }
+});
+test('link detail validator rejects Debug enum strings and misplaced or malformed WikiLink flags', () => {
+  const base = { linkType: 'Inline', destination: '/target', title: '', referenceId: '' };
+  assert.doesNotThrow(() => summaryContract.assertLinkFields(base));
+  for (const patch of [{ linkType: 'WikiLink' }, { hasPothole: 'true' },
+    { linkType: 'WikiLink', hasPothole: true }, { linkType: 'WikiLink', hasPothole: 'TRUE' },
+    { linkType: 'WikiLink { has_pothole: true }' }]) {
+    assert.throws(() => summaryContract.assertLinkFields({ ...base, ...patch }));
+  }
+});

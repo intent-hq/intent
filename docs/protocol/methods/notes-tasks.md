@@ -348,7 +348,7 @@ and item budgets still apply, including directories and escaped fragment bodies.
 | codeBlock: `codeStyle`, `info` (info only if fenced) | `fenced` or `indented`; info is parsed fence info text, not JSON |
 | list: `listStart` | `unordered` or unsigned decimal initial ordinal |
 | table: `alignment:N` | Zero-based column; `none`, `left`, `center`, `right` |
-| link/image: `linkType`, `destination`, `title`, `referenceId` | linkType is `Inline`, `Reference`, `ReferenceUnknown`, `Collapsed`, `CollapsedUnknown`, `Shortcut`, `ShortcutUnknown`, `Autolink` or `Email`; remaining fields are parsed strings, possibly empty, never quoted JSON strings |
+| link/image: `linkType`, `destination`, `title`, `referenceId`, `hasPothole?` | linkType is `Inline`, `Reference`, `ReferenceUnknown`, `Collapsed`, `CollapsedUnknown`, `Shortcut`, `ShortcutUnknown`, `Autolink`, `Email` or `WikiLink`; destination/title/referenceId are parsed strings, possibly empty, never quoted JSON strings. Only WikiLink includes required `hasPothole`, after referenceId: the string `"true"` when an explicit pipe separates destination and label, otherwise `"false"`. Other link types omit it; never emit library Debug enum text. |
 | heading: `level`, `headingId?`, `class:N`, `attributeKey:N`, `attributeValue:N?` | level `h1`–`h6`; zero-based class/attribute order, optional absent value remains absent (not empty); each attribute key precedes its optional value |
 | footnoteDefinition: `label` | Parsed label string |
 | blockquote: `quoteKind?` | Optional `Note`, `Tip`, `Important`, `Warning`, `Caution` |
