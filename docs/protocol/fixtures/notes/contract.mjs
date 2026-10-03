@@ -265,7 +265,7 @@ export function assertReplyFrames(frames, limits, { complete = false } = {}) {
       if (p.rootState === 'deleted') assert.notEqual(row.commentId, p.rootCommentId);
       for (const key of ['commentId', 'bodyRef', 'detailRef']) token(row[key]);
       timestamp(row.createdAt);
-      assert.ok(['open', 'resolved', 'pending'].includes(row.status));
+      assert.ok(['open', 'resolved', 'pending', 'accepted', 'rejected'].includes(row.status));
       assert.ok(typeof row.preview === 'string' && utf8(row.preview) <= 512);
       assert.equal(typeof row.truncated, 'boolean');
       assert.equal(row.comments, undefined); assert.equal(row.replies, undefined);
@@ -299,4 +299,117 @@ export function assertPageStateFrame(frame, limits) {
   assert.deepEqual(Object.keys(s).sort(), ['kind', 'scope', 'stateGeneration', 'sourceRevision',
     'attributionGeneration', 'attributionState', 'commentRevision', 'deleted', 'invalidation'].sort());
   assert.ok(wireBytes(frame) <= limits.receiptBytes);
+}
+
+export function pagingBackendId(frame) {
+  const caps = frame?.result?.server?.capabilities;
+  return caps?.notePaging === 1 && typeof caps.notePagingBackendId === 'string'
+    && caps.notePagingBackendId.length > 0 && utf8(caps.notePagingBackendId) <= 256
+    ? caps.notePagingBackendId : null;
+}
+
+// Fixture-only lexical oracle; a production reader must use indexed membership.
+export function assertTaskIdFrames(source, frames, limits, { startIndex = 0, complete = true } = {}) {
+  const expected = [], seen = new Set();
+  for (const m of source.matchAll(/\[([^\]]+)\]\(intent:\/\/local\/task\/([^)]+)\)/g)) {
+    if (seen.has(m[2])) continue;
+    seen.add(m[2]);
+    const start = m.index + m[0].length - m[2].length - 1;
+    expected.push({ text: m[2], start, end: start + m[2].length });
+  }
+  let index = startIndex, identity;
+  const result = [];
+  assert.ok(frames.length > 0);
+  for (const frame of frames) {
+    assert.equal(frame.jsonrpc, '2.0'); rpcId(frame.id);
+    const p = frame.result;
+    assert.equal(p.kind, 'noteTaskIdsPage'); assertSnapshotResult(p);
+    const current = { scope: p.scope, sourceRevision: p.sourceRevision,
+      snapshotId: p.snapshotId, expiresAt: p.expiresAt, totalItems: p.totalItems };
+    if (identity) assert.deepEqual(current, identity); else identity = current;
+    assert.equal(p.note, undefined); assert.equal(p.content, undefined);
+    assert.equal(p.totalItems, expected.length);
+    assert.equal(p.startIndex, index);
+    assert.ok(index >= 0 && index <= p.totalItems);
+    assert.ok(p.items.length <= limits.items);
+    assert.ok(p.items.length > 0 || index === p.totalItems);
+    assert.ok(wireBytes(frame) <= limits.wireBytes, 'complete task summary frame exceeds wire budget');
+    for (const row of p.items) {
+      const e = expected[index]; assert.ok(e);
+      assert.equal(row.index, index++);
+      assert.deepEqual(row.sourceRange, { start: e.start, end: e.end });
+      assert.ok(boundary(source, e.start) && boundary(source, e.end));
+      assert.equal(row.taskNoteIdLength, e.text.length);
+      if (utf8(e.text) <= limits.tokenBytes) {
+        assert.equal(row.taskNoteId, e.text); assert.equal(row.taskNoteIdRef, undefined);
+      } else {
+        assert.equal(row.taskNoteId, undefined); token(row.taskNoteIdRef);
+      }
+      result.push(e.text);
+    }
+    assert.equal(p.nextCursor === null, index === p.totalItems);
+  }
+  if (complete) assert.equal(index, expected.length);
+  return result;
+}
+
+// Full wire frames for a single field resource, not descriptor-directory entries.
+export function assertTextFragments(frames, field, limits) {
+  let text = '', identity, ended = false;
+  assert.ok(frames.length > 0);
+  for (const frame of frames) {
+    assert.equal(frame.jsonrpc, '2.0'); rpcId(frame.id);
+    const p = frame.result;
+    assert.equal(p.kind, 'noteContextPage'); assertSnapshotResult(p);
+    const { items, nextCursor, ...current } = p;
+    if (identity) assert.deepEqual(current, identity); else identity = current;
+    assert.ok(items.length > 0 && items.length <= limits.items);
+    assert.ok(wireBytes(frame) <= limits.wireBytes);
+    assert.ok(items.reduce((sum, r) => sum + utf8(r.text), 0) <= limits.sourceBytes);
+    for (const row of items) {
+      assert.ok(!ended); assert.equal(row.kind, 'fragment'); token(row.id);
+      assert.equal(row.field, field); assert.equal(row.offset, text.length);
+      assert.ok(validText(row.text)); cursor(row.nextRef);
+      assert.ok(row.text.length > 0 || (text.length === 0 && row.nextRef === null));
+      text += row.text; ended = row.nextRef === null;
+    }
+  }
+  assert.ok(ended);
+  return text;
+}
+
+export function assertContextFrame(frame, limits, { directory = false } = {}) {
+  assert.equal(frame.jsonrpc, '2.0'); rpcId(frame.id);
+  const p = frame.result;
+  assert.equal(p.kind, 'noteContextPage'); assertSnapshotResult(p);
+  assert.ok(p.items.length <= limits.items);
+  assert.ok(wireBytes(frame) <= limits.wireBytes);
+  let textBytes = 0;
+  for (const item of p.items) {
+    token(item.id);
+    for (const key of ['parentRef', 'detailRef']) if (item[key] !== undefined) token(item[key]);
+    assert.equal(item.content, undefined);
+    if (item.kind === 'fragment') {
+      assert.ok(typeof item.field === 'string' && item.field.length > 0 && utf8(item.field) <= 1024);
+      assert.ok(Number.isSafeInteger(item.offset) && item.offset >= 0);
+      assert.ok(validText(item.text)); cursor(item.nextRef); textBytes += utf8(item.text);
+      if (directory) {
+        assert.equal(item.offset, 0); assert.equal(item.text, ''); token(item.nextRef);
+      }
+    } else {
+      assert.ok(!directory);
+      assert.ok(['boundary', 'span'].includes(item.kind));
+      const r = item.sourceRange;
+      assert.ok(Number.isSafeInteger(r?.start) && Number.isSafeInteger(r?.end)
+        && r.start >= 0 && r.end >= r.start);
+      const vocabulary = item.kind === 'boundary' ? item.construct : item.role;
+      assert.ok(typeof vocabulary === 'string' && vocabulary.length > 0 && utf8(vocabulary) <= 1024);
+      assert.equal(item.text, undefined);
+      if (item.kind === 'boundary') {
+        assert.equal(typeof item.continuationBefore, 'boolean');
+        assert.equal(typeof item.continuationAfter, 'boolean');
+      } else if (item.role === 'projection') assert.equal(r.start, r.end);
+    }
+  }
+  assert.ok(textBytes <= limits.sourceBytes);
 }

@@ -178,11 +178,19 @@ The prepared core reserves two router methods, plus six staged-operation methods
 #### Identity, addresses and budgets
 
 `NoteScope = { backendId, workspaceId, noteId, noteInstanceId }`. Capability hello
-also supplies `notePagingBackendId`, a stable opaque database namespace (survives
+also supplies `server.capabilities.notePagingBackendId` in the `client.hello` result,
+a stable opaque database namespace (survives
 ordinary restart; changes on database replacement). `noteInstanceId` is a persistent
 incarnation token: deleting/recreating the same note ID cannot reuse it. Tokens and
 receipts are scoped to this tuple and the authenticated principal; they confer no
 access. Recheck current authorization for every read, retry and status lookup.
+For example, the capability subtree is `{ "notePaging": 1, "noteAnnotations": 1,
+"notePagingBackendId": "db-a" }`; it is not a top-level hello field or a client
+capability. Require exact integer 1 and a nonempty backend ID within the token limit;
+a missing/malformed ID or unsupported version disables paging. This ID must equal
+`scope.backendId` on every admitted page. Reconnect invalidates in-flight requests;
+a changed backend ID invalidates clean caches and retains drafts for reconciliation.
+A read-only implementation must omit `notePaging` until its entire contract is ready.
 `sourceRevision` is an opaque nonempty string identifying the note's current `rev`
 within that incarnation, including metadata-only revision changes. The daemon must
 map it losslessly to its existing integer rev; clients compare equality only and
@@ -208,7 +216,7 @@ Version 1 limits (transport limits, not renderer heap or total-note-size limits)
 | Error or commit/status receipt envelope | 4,096 escaped UTF-8 bytes |
 | Source/context/mapping page items | 128 items (a source page has one segment) |
 | Annotation page items / requested disjoint ranges / inline splices | 64 / 32 / 32 |
-| Opaque token, ID or revision | 256 decoded UTF-8 bytes each |
+| Opaque token, ID or revision | 256 decoded UTF-8 bytes each (raw task-link captures below use fragments when longer) |
 | Preview text / context scalar string | 512 / 1,024 decoded UTF-8 bytes each |
 | Source-page snapshot lifetime | 300 seconds, fixed from first page; no sliding renewal |
 
@@ -278,7 +286,7 @@ hidden inside a source page. Items are discriminated:
 - `boundary`: `{ id, sourceRange, construct, parentRef?, continuationBefore,
   continuationAfter, detailRef? }`. `construct` is a syntax category, not an editor
   node ID; `detailRef` pages large opening syntax, attributes and ancestor chains.
-- `span`: `{ id, sourceRange, role, detailRef? }` for marks, delimiters, literals,
+- `span`: `{ id, sourceRange, role, parentRef?, detailRef? }` for marks, delimiters, literals,
   comment markers and structural seams. IDs are snapshot-local; identical text at
   another address has another ID. `role` distinguishes source-bearing text from
   zero-width editor projections; it never fabricates source bytes.
@@ -298,6 +306,61 @@ construct support is an integration obligation, not permission to silently omit 
 Live native table owners/seams are editor-session metadata, not durable global block
 IDs or inferred fresh canonical structure.
 
+Context version 1 uses these wire spellings (not library enum/debug strings):
+
+| Field | Vocabulary / meaning |
+| --- | --- |
+| boundary.construct | `paragraph`, `heading`, `blockquote`, `codeBlock`, `list`, `listItem`, `table`, `tableHead`, `tableRow`, `tableCell`, `emphasis`, `strong`, `strikethrough`, `link`, `image`, `htmlBlock`, `footnoteDefinition`, `definitionList`, `definitionListTitle`, `definitionListDefinition`, `superscript`, `subscript`, `metadataBlock` |
+| span.role | `text` (source text), `code` (inline code), `literal` (raw HTML/literal syntax), `commentMarker` (canonical anchor marker syntax), `lineBreak` (soft/hard break syntax), `rule`, `taskMarker` (checkbox syntax), `delimiter` (explicit syntax delimiter), `projection` (zero-width editor seam) |
+
+Every item has its `kind` discriminator. Ranges address original source even when
+parsed semantic attributes decode escapes; `projection` must have an empty range.
+`continuationBefore`/`continuationAfter` mean the full construct starts before/ends
+after the source range associated with contextRef. A parentRef resolves with the
+same context request shape to its parent descriptor; detailRef resolves to a
+**directory of field fragments**, not a JSON-serialized parser object. Parent and
+detail references share scope/revision/snapshot/expiry and never cross an incarnation.
+The transport preserves unknown future construct/role values opaquely; a renderer
+that cannot interpret one must declare it unsupported, never silently drop it or
+claim that arbitrary parser grammar has been implemented. Notes primitives require
+an explicit renderer mapping; this vocabulary alone is not that mapping.
+
+Each detail directory item is `{ kind: "fragment", id, field, offset: 0, text:
+"", nextRef }`; it is an indirection descriptor (empty text is not the value).
+Follow its nextRef through `page.kind: "context", contextRef: nextRef` to the
+field resource. A field resource emits fragment items with increasing scalar-safe
+UTF-16 offsets, a stable `field` name and exact string slices; concatenate only
+within that field/resource. Empty values have one offset-0 empty fragment and
+null nextRef. A nonempty value fragment advances; nextRef points to the next field
+offset or is null exactly at exhaustion. No indirection cycles or zero-progress
+field continuations. The item's `id` identifies that snapshot-local item, not the
+field value or a durable document node. `nextCursor` enumerates the current
+collection only; it is independent of the per-field `nextRef`. Never infer that a
+field ended from a collection cursor being null. Directory entries order as below,
+then each repeated indexed family by numeric suffix; no map-key iteration ambiguity.
+All context responses retain the existing scope/revision/snapshot/expiry header.
+Sum of decoded fragment text on one frame is at most 16,384 bytes; complete wire
+and item budgets still apply, including directories and escaped fragment bodies.
+
+| Detail field(s), in directory order | Encoding |
+| --- | --- |
+| `openingSource`, `closingSource` (every boundary, first) | Exact raw prefix before the first direct child event and suffix after the last direct child event, within the full boundary range. Without children, openingSource is the full range and closingSource is empty. Not rendered text and not an entire child/body serialization. Large prefixes still page. |
+| codeBlock: `codeStyle`, `info` (info only if fenced) | `fenced` or `indented`; info is parsed fence info text, not JSON |
+| list: `listStart` | `unordered` or unsigned decimal initial ordinal |
+| table: `alignment:N` | Zero-based column; `none`, `left`, `center`, `right` |
+| link/image: `linkType`, `destination`, `title`, `referenceId` | linkType is `Inline`, `Reference`, `ReferenceUnknown`, `Collapsed`, `CollapsedUnknown`, `Shortcut`, `ShortcutUnknown`, `Autolink` or `Email`; remaining fields are parsed strings, possibly empty, never quoted JSON strings |
+| heading: `level`, `headingId?`, `class:N`, `attributeKey:N`, `attributeValue:N?` | level `h1`–`h6`; zero-based class/attribute order, optional absent value remains absent (not empty); each attribute key precedes its optional value |
+| footnoteDefinition: `label` | Parsed label string |
+| blockquote: `quoteKind?` | Optional `Note`, `Tip`, `Important`, `Warning`, `Caution` |
+| metadataBlock: `metadataStyle` | `YamlStyle` or `PlusesStyle` |
+
+Metadata keys/values below use fragment fields `key`/`value`; ordered task-link
+captures use `taskNoteId`. Those field resources have the same offset/budget rules
+without a boundary directory. Details are a lexical parsing aid, not replacement
+source: exact copy and source maps use canonical source ranges, never reconstructed
+Markdown from decoded attributes. The fixture file includes full context RPC
+frames with a descriptor directory, a multi-fragment destination and empty values.
+
 `note.get { ..., page: { kind: "metadata", ref: metadataRef, cursor?, maxItems?,
 maxWireBytes? } }` returns `kind: "noteMetadataPage"`, the same scope/revision/snapshot,
 `items` and `nextCursor`. Its projection includes title, tags, parent and task metadata
@@ -312,6 +375,81 @@ obey token limits. No title, tag, task relation array or arbitrary metadata obje
 is a full-row exception. Children enumerate object keys lexicographically and array
 indices numerically, with immutable snapshot-local IDs. An entry is returned exactly
 once per parent traversal; clients need not hydrate siblings to inspect one branch.
+
+#### Ordered task-link summary
+
+`notePaging: 1` also gates `note.get { workspaceId, noteId, page: { kind:
+"taskIds", sourceRevision?, noteInstanceId?, snapshotId?, maxItems?, maxWireBytes?
+} }`. This is a canonical-source summary for any note, especially the spec. It
+replaces full-spec hydration for sidebar ordering, not the distinct checkbox/task
+rows of legacy `note.listTasks` or the workspace membership of `task.list`.
+A first request without snapshotId acquires its own live source snapshot. With
+snapshotId it must supply sourceRevision and noteInstanceId from that snapshot;
+there is no requirement to fetch a source body first. Continuations send only
+`kind: "taskIds"`, `cursor` and the identical budgets. Source lifetime, scope,
+principal, sourceRevision and incarnation checks are the same as source pages.
+
+```typescript
+type NoteTaskIdsPage = {
+  kind: "noteTaskIdsPage"; scope: NoteScope; sourceRevision: string;
+  snapshotId: string; expiresAt: string; totalItems: number; startIndex: number;
+  items: Array<{
+    index: number; sourceRange: { start: number; end: number };
+    taskNoteIdLength: number; // UTF-16 length of the entire raw capture
+  } & ({ taskNoteId: string; taskNoteIdRef?: never }
+    | { taskNoteId?: never; taskNoteIdRef: string })>;
+  nextCursor: string | null;
+};
+```
+
+The summary is the exact lexical result of the existing frontend
+`extractOrderedSpecTaskIds` / `TASK_LINK_REGEX_FLEXIBLE`, not a Markdown AST query:
+
+```javascript
+/\[([^\]]+)\]\(intent:\/\/local\/task\/([^)]+)\)/g
+```
+
+Scan the whole raw source left to right with this ECMAScript global expression
+(no extra flags); take the second capture, keep its first occurrence, and deduplicate
+by exact string equality. Labels and IDs are nonempty. Include prose, every match
+on one line, link-shaped code/image text, and any whitespace/newlines or escapes
+accepted by that expression. Do not trim, URI-decode, case-fold, normalize, require
+UUIDs, validate existence, or include workspace-qualified URLs that do not match.
+Encoded IDs and decoded IDs are different; a duplicate on another source page does
+not reappear. Splitting a link across source pieces cannot change membership.
+`sourceRange` addresses the **second capture only**, at its first occurrence, in
+UTF-16 canonical-source offsets; it is neither the label nor the whole link range.
+
+`totalItems` is the exact deduplicated count, a safe integer maintained in the
+revision's index. `startIndex` is the first ordinal on this page, from zero;
+item indices are contiguous. `nextCursor` is null iff
+`startIndex + items.length === totalItems`. A non-exhausted page must advance.
+An empty summary returns startIndex/totalItems 0, empty items and null cursor.
+A valid exhausted traversal returns startIndex equal to totalItems. No arrays of
+all IDs or source content are hidden in headers. Item and complete escaped wire
+budgets apply independently; the request may lower either. Indexed membership,
+first-position, deduplication and totals are daemon obligations, not permission
+to read/regex-scan the whole source on each page request.
+
+Raw captures up to 256 decoded UTF-8 bytes use `taskNoteId`. Longer captures use
+only `taskNoteIdRef`, a bounded opaque reference, and `taskNoteIdLength`; the raw
+capture is not an opaque ID subject to truncation/rejection at 256 bytes. Read it
+with `note.get { ..., page: { kind: "context", contextRef: taskNoteIdRef, ... } }`:
+fragment field `taskNoteId`, offsets starting at zero, exact decoded text, and
+scalar-safe continuation until length/exhaustion. It retains the same live
+snapshot/scope/revision/expiry. Long IDs may require many fragments; they never
+increase the frame bound. Reference identity alone is not task-ID equality.
+
+A source or metadata revision change invalidates summary pages and ID fragments
+(including after task conversion/marker projection); a comment-only epoch advance
+does not. Reacquire after stale/expired and replace the old sequence only from the
+new revision, never append it. FE cache ownership also includes request generation:
+late pages after reconnect, note/workspace switch or cancellation cannot reorder the
+current sidebar. Exhaustion distinguishes a complete empty result from not loaded;
+never use partial page length as the total. Dirty local edits/history stay separate;
+this endpoint promises canonical-source order, not an uncommitted session overlay.
+Old daemons keep the existing full-spec compatibility path. `note.listTasks` and
+`task.list` results remain unchanged; they are not substitutes for this summary.
 
 #### Partial mutations and authoritative outcomes
 
@@ -747,7 +885,9 @@ across disjoint ranges; overlap boundaries never create synthetic comment IDs.
   by source extent; do not decode the legacy attribution JSON then discard it.
 - Comment list page kind `noteCommentPage`: `scope`, `sourceRevision`,
   `commentRevision`, `snapshotId`, `expiresAt`, `items`, `nextCursor`,
-  `totalThreads`, `totalComments`. These exact safe-integer totals refer to the
+  `totalThreads`, `totalComments`. Comment status values retain all five existing
+  spellings: `open`, `resolved`, `pending`, `accepted`, `rejected`; this also applies
+  to reply items. These exact safe-integer totals refer to the
   filtered range set at that epoch, independent of the page; indexed aggregate
   queries must not fetch every row. Summary items have `{ threadId, rootCommentId,
   rootState: "present" | "deleted", status,
@@ -880,7 +1020,7 @@ Implementation locations and required evidence (not implemented by these docs):
 | Owner / seam | Required implementation and proof |
 | --- | --- |
 | Daemon `intent-core` types; `intent-transport/src/router.rs`; note services | Add discriminated page/receipt types and capability gates. Test old requests byte-equivalent, new request rejection on unsupported shapes, WSS escaped budgets, authorization, concurrent mutation/reconnect and every writer's invalidation. |
-| `intent-store/src/note_repo.rs`, `note_version_repo.rs` | Indexed source pieces/chunks plus subtree byte/UTF-16/scalar/LF totals, revision/incarnation and bounded lexical checkpoints. Seek must locate/decode only relevant pieces; SQL `substr` on whole TEXT or `get_note` then slice is not a complexity proof. Persist incremental context/mapping/receipt records transactionally. Keep legacy complete reads and retained history semantics; existing full snapshots/FTS/task conversion may still impose document-sized write work and require explicit measured redesign in persistence work. |
+| `intent-store/src/note_repo.rs`, `note_version_repo.rs` | Indexed source pieces/chunks plus subtree byte/UTF-16/scalar/LF totals, revision/incarnation and bounded lexical checkpoints. Persist exact raw task-link capture membership, dedup/first-position ordinals, count and long-value fragments with the same revision; do not substitute checkbox rows. Seek must locate/decode only relevant pieces; SQL `substr` on whole TEXT or `get_note` then slice is not a complexity proof. Persist incremental context/mapping/receipt records transactionally. Keep legacy complete reads and retained history semantics; existing full snapshots/FTS/task conversion may still impose document-sized write work and require explicit measured redesign in persistence work. |
 | Store attribution/comment repositories | Replace paged-path JSON/map scans with queryable source-interval/line and canonical marker occurrence indexes; independent generation tables, `(threadId,createdAt,commentId)` reply index and maintained counts. Test query plans/rows/bytes touched and stale computation publication. |
 | FE `src/lib/client/app-client.ts`, `live/live-notes-client.ts`, notes-read-service and workspace-notes state | Distinct CompleteNote/NoteSourcePage types, scoped cache/requests, no partial-to-full assignability, bounded annotation ownership and invalidation. No eager spec/full-event refetch bypass. |
 | FE `features/notes/notes-write-service.ts` and document session | Typed outcomes, frozen dirty sequence, atomic inverse/history ownership and live-context lifetimes; do not extend the retired saga or treat queue settlement as success. |

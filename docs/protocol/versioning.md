@@ -163,13 +163,17 @@ qualify a listener, fresh-workspace source, provider or ready/ACK behavior.
 reserves `note.applySplices`, `note.operationStatus` and six `note.operation.*`
 staging/read/commit methods, adding eight router methods with no new event names.
 The [method catalog](./05-method-catalog.md) maintains the combined totals.
-Source/context/mapping pages use opt-in `note.get` shapes;
+Source/context/metadata/mapping and ordered raw task-link ID pages use opt-in `note.get` shapes;
 annotation paging and bounded subscription projections extend existing methods.
 Allocate the next minor against daemon main at implementation time. Advertise
 `notePaging: 1` only for the complete core including CAS/atomic receipts/status and
 bounded pageState subscriptions; advertise `noteAnnotations: 1` only for the
 independent-epoch annotation extension and only alongside notePaging. Hello also
-provides `notePagingBackendId` for persistent database namespace isolation.
+provides `server.capabilities.notePagingBackendId` for persistent database namespace
+isolation; the exact integer capability and valid identity are both required. The
+ordered task-link summary preserves lexical first-occurrence ordering and exact
+deduplication, including long raw IDs through bounded fragments. It does not change
+legacy `note.listTasks` checkbox rows or `task.list` membership.
 
 Numeric protocol versions, catalog presence and an ignored unknown option do not
 establish support. Old clients keep the existing complete-note methods and events;

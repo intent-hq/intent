@@ -756,3 +756,214 @@ test('deleted-root wire rejects fake roots, mixed headers, missing state and inf
   assert.ok(docs.includes('Legacy unpaged lookup errors'));
   assert.ok(errors.includes('data.entity'));
 });
+
+
+// Review regressions: accepted/rejected are existing CommentStatus values.
+for (const status of ['open', 'resolved', 'pending', 'accepted', 'rejected']) {
+  test(`reply pages preserve existing ${status} status`, () => {
+    const frames = structuredClone(f.deletedRoot.pages);
+    for (const page of frames) for (const item of page.result.items) item.status = status;
+    assertReplyFrames(frames, f.limits, { complete: true });
+  });
+}
+test('reply pages reject an unknown status', () => {
+  const frames = structuredClone(f.deletedRoot.pages);
+  frames[0].result.items[0].status = 'approved';
+  assert.throws(() => assertReplyFrames(frames, f.limits));
+});
+
+const summaryContract = await import('./contract.mjs');
+test('ordered summary wire contract exists without full Note hydration', () => {
+  assert.equal(typeof summaryContract.assertTaskIdFrames, 'function');
+  assert.equal(typeof summaryContract.assertTextFragments, 'function');
+  assert.equal(typeof summaryContract.pagingBackendId, 'function');
+});
+test('ordered summary retains the existing lexical first-occurrence oracle', () => {
+  const x = f.orderedTaskIds;
+  // Intentionally the literal existing FE oracle, independent of fixture validator.
+  const matches = [...x.source.matchAll(/\[([^\]]+)\]\(intent:\/\/local\/task\/([^)]+)\)/g)];
+  assert.deepEqual([...new Set(matches.map(m => m[2]))], x.expected);
+  assert.deepEqual(summaryContract.assertTaskIdFrames(x.source, x.pages, f.limits), x.expected);
+  assert.equal(x.pages.flatMap(p => p.result.items).length, 8);
+  assert.ok(x.source.includes('\r\n'));
+  assert.equal(x.pages.at(-1).result.items.at(-1).taskNoteId, undefined);
+  const text = summaryContract.assertTextFragments(x.longIdFragments, 'taskNoteId', f.limits);
+  assert.equal(text, x.expected.at(-1));
+  assert.ok(utf8(text) > 256);
+});
+test('ordered summary is independent of arbitrary source-page splits', () => {
+  const x = f.orderedTaskIds;
+  for (let i = 0; i <= x.source.length; i++) {
+    if (!boundary(x.source, i)) continue;
+    // Reassembly oracle includes a match crossing every legal split; a producer
+    // needs an index, not independent regex matches over each transported page.
+    assert.deepEqual(summaryContract.assertTaskIdFrames(x.source.slice(0, i) + x.source.slice(i),
+      x.pages, f.limits), x.expected);
+  }
+});
+test('task summary validator rejects order, dedup, range, identity and count corruption', () => {
+  const x = f.orderedTaskIds;
+  for (const corrupt of [
+    p => { p[0].result.items.reverse(); },
+    p => { p[1].result.items[0] = p[0].result.items[0]; },
+    p => { p[0].result.items[0].sourceRange.start++; },
+    p => { p[1].result.sourceRevision = 'r:8'; },
+    p => { p[1].result.scope.noteId = 'other'; },
+    p => { p[1].result.startIndex++; },
+    p => { p[1].result.totalItems++; },
+    p => { p[0].result.nextCursor = null; },
+    p => { p[0].result.items[0].taskNoteId = 'FIRST'; },
+    p => { p[0].result.items[0].taskNoteIdRef = 'duplicate-arm'; },
+    p => { const r = p.at(-1).result.items.at(-1); r.taskNoteId = x.expected.at(-1); delete r.taskNoteIdRef; },
+    p => { p.at(-1).result.items.at(-1).taskNoteIdLength--; },
+  ]) {
+    const pages = structuredClone(x.pages); corrupt(pages);
+    assert.throws(() => summaryContract.assertTaskIdFrames(x.source, pages, f.limits));
+  }
+});
+test('ordered summary supports empty and exhausted pages and rejects nonadvancing traversal', () => {
+  const x = f.orderedTaskIds;
+  assert.deepEqual(summaryContract.assertTaskIdFrames('', [x.empty], f.limits), []);
+  assert.deepEqual(summaryContract.assertTaskIdFrames(x.source, [x.exhausted], f.limits,
+    { startIndex: 8 }), []);
+  const invalid = structuredClone(x.exhausted); invalid.result.startIndex = 7;
+  assert.throws(() => summaryContract.assertTaskIdFrames(x.source, [invalid], f.limits, { startIndex: 7 }));
+});
+test('summary fragments retain exact UTF16 offsets and reject mixed revisions/gaps/oversize', () => {
+  const x = f.orderedTaskIds;
+  for (const corrupt of [
+    p => { p[1].result.items[0].offset--; },
+    p => { p[1].result.sourceRevision = 'r:8'; },
+    p => { p[1].result.items[0].field = 'title'; },
+    p => { p[0].result.items[0].nextRef = null; },
+    p => { p[0].result.items[0].text = 'x'.repeat(16385); },
+  ]) {
+    const pages = structuredClone(x.longIdFragments); corrupt(pages);
+    assert.throws(() => summaryContract.assertTextFragments(pages, 'taskNoteId', f.limits));
+  }
+});
+test('summary cursor binds kind, scope, budgets, live revision and expiration', () => {
+  const base = { ...f.scope, principalId: 'p', kind: 'taskIds', budgets: { maxItems: 2 },
+    sourceRevision: 'r:7', boot: 'boot-a', expiresAt: 100 };
+  assert.equal(cursorError(base, base, base, 1), null);
+  for (const changed of [{ kind: 'source' }, { noteId: 'other' }, { workspaceId: 'other' },
+    { principalId: 'other' }, { budgets: { maxItems: 3 } }]) {
+    assert.equal(cursorError(base, { ...base, ...changed }, base, 1), 'note-page-cursor-invalid');
+  }
+  assert.equal(cursorError(base, base, { ...base, sourceRevision: 'r:8' }, 1), 'note-page-stale');
+  assert.equal(cursorError(base, base, { ...base, commentRevision: 'c:2' }, 1), null);
+  assert.equal(cursorError(base, base, base, 100), 'note-page-expired');
+});
+test('summary frame budget measures full escaping at exact fit and one-byte overflow', () => {
+  const source = `[x](intent://local/task/${'\u0001'.repeat(220)})`;
+  const row = { index: 0, sourceRange: { start: 24, end: 244 }, taskNoteIdLength: 220,
+    taskNoteId: '\u0001'.repeat(220) };
+  const page = structuredClone(f.orderedTaskIds.empty);
+  page.result.totalItems = 1; page.result.items = [row];
+  row.sourceRange.start = source.indexOf('\u0001'); row.sourceRange.end = source.lastIndexOf('\u0001') + 1;
+  const size = wireBytes(page);
+  assert.ok(size > utf8(source));
+  assert.doesNotThrow(() => summaryContract.assertTaskIdFrames(source, [page], { ...f.limits, wireBytes: size }));
+  assert.throws(() => summaryContract.assertTaskIdFrames(source, [page], { ...f.limits, wireBytes: size - 1 }));
+});
+test('hello requires the exact capability path, version and valid backend identity', () => {
+  assert.equal(summaryContract.pagingBackendId(f.helloPaging), 'db-a');
+  for (const caps of [{}, { notePaging: true, notePagingBackendId: 'db-a' },
+    { notePaging: '1', notePagingBackendId: 'db-a' }, { notePaging: 2, notePagingBackendId: 'db-a' },
+    { notePaging: 1 }, { notePaging: 1, notePagingBackendId: '' },
+    { notePaging: 1, notePagingBackendId: 'x'.repeat(257) }]) {
+    const hello = structuredClone(f.helloPaging); hello.result.server.capabilities = caps;
+    hello.result.notePagingBackendId = 'wrong-place';
+    assert.equal(summaryContract.pagingBackendId(hello), null);
+  }
+});
+
+test('context uses explicit vocabulary and separately addressed field directories', () => {
+  const x = f.contextWire;
+  for (const value of [...x.constructs, ...x.roles]) assert.ok(docs.includes('`' + value + '`'));
+  const descriptor = x.descriptor.result.items[0];
+  assert.ok(x.constructs.includes(descriptor.construct));
+  assert.equal(descriptor.detailRef, 'details-link');
+  const fields = x.directory.result.items;
+  assert.deepEqual(fields.map(f => f.field), Object.keys(x.fields));
+  assert.ok(fields.every(f => f.kind === 'fragment' && f.offset === 0 && f.text === '' && f.nextRef));
+  assert.ok(wireBytes(x.directory) <= f.limits.wireBytes);
+  assert.ok(fields.length <= f.limits.items);
+  for (const [field, resource] of Object.entries(x.fields)) {
+    assert.equal(summaryContract.assertTextFragments(resource.pages, field, f.limits), resource.expected);
+  }
+  assert.equal(x.fields.title.pages[0].result.items[0].nextRef, null);
+  assert.equal(x.fields.destination.pages[0].result.nextCursor, null);
+  assert.notEqual(x.fields.destination.pages[0].result.items[0].nextRef, null);
+});
+test('nonempty field resource cannot use a zero-progress directory item as text', () => {
+  assert.throws(() => summaryContract.assertTextFragments([f.contextWire.directory], 'openingSource', f.limits));
+  const p = structuredClone(f.orderedTaskIds.longIdFragments);
+  p[0].result.items[0].text = '\ud800';
+  assert.throws(() => summaryContract.assertTextFragments(p, 'taskNoteId', f.limits));
+});
+test('task summary exact 65536-byte full frame and one-byte overflow with legal maximum identities', () => {
+  const values = Array.from({ length: 90 }, (_, i) => '\u0001'.repeat(80) + i);
+  const make = () => {
+    let source = '';
+    const items = values.map((value, index) => {
+      const prefix = '[x](intent://local/task/';
+      const start = source.length + prefix.length;
+      source += prefix + value + ')\n';
+      return { index, sourceRange: { start, end: start + value.length },
+        taskNoteIdLength: value.length, taskNoteId: value };
+    });
+    const p = structuredClone(f.orderedTaskIds.empty);
+    p.id = 'i'.repeat(64);
+    for (const k of Object.keys(p.result.scope)) p.result.scope[k] = 's'.repeat(256);
+    p.result.sourceRevision = 'r'.repeat(256); p.result.snapshotId = 'v'.repeat(256);
+    p.result.totalItems = items.length; p.result.items = items;
+    return { source, p };
+  };
+  let candidate = make();
+  // Legal raw IDs remain <=256 decoded bytes. Fill one ASCII byte at a time;
+  // this independent JSON.stringify oracle includes all header/address growth.
+  for (let i = 0; wireBytes(candidate.p) < 65536 && i < 100000; i++) {
+    const index = values.findIndex(v => utf8(v) < 256);
+    assert.ok(index >= 0); values[index] += 'x'; candidate = make();
+  }
+  assert.equal(wireBytes(candidate.p), 65536);
+  assert.doesNotThrow(() => summaryContract.assertTaskIdFrames(candidate.source, [candidate.p], f.limits));
+  values[89] += 'x'; candidate = make();
+  assert.equal(wireBytes(candidate.p), 65537);
+  assert.throws(() => summaryContract.assertTaskIdFrames(candidate.source, [candidate.p], f.limits), /wire budget/);
+});
+test('full context frames validate identities, directories, fragments and opaque future grammar', () => {
+  for (const page of f.contextPages) summaryContract.assertContextFrame({ jsonrpc: '2.0', id: 1, result: page }, f.limits);
+  summaryContract.assertContextFrame(f.contextWire.descriptor, f.limits);
+  summaryContract.assertContextFrame(f.contextWire.directory, f.limits, { directory: true });
+  for (const resource of Object.values(f.contextWire.fields)) for (const page of resource.pages) {
+    summaryContract.assertContextFrame(page, f.limits);
+  }
+  const future = structuredClone(f.contextWire.descriptor);
+  future.result.items[0].construct = 'futureSyntax';
+  assert.doesNotThrow(() => summaryContract.assertContextFrame(future, f.limits));
+  assert.equal(f.contextWire.fields.openingSource.expected + 'label' + f.contextWire.fields.closingSource.expected,
+    f.contextWire.source);
+  assert.equal(f.contextWire.descriptor.result.items[0].sourceRange.end, f.contextWire.source.length);
+});
+test('context frames reject malformed directory, range, projection, oversized field and wire', () => {
+  for (const corrupt of [
+    p => { p.result.items[0].sourceRange.end = -1; },
+    p => { p.result.items[0].kind = 'parserObject'; },
+    p => { delete p.result.scope; },
+    p => { p.result.items[0].continuationAfter = 1; },
+    p => { Object.assign(p.result.items[0], { kind: 'span', role: 'projection' }); },
+  ]) {
+    const page = structuredClone(f.contextWire.descriptor); corrupt(page);
+    assert.throws(() => summaryContract.assertContextFrame(page, f.limits));
+  }
+  const directory = structuredClone(f.contextWire.directory);
+  directory.result.items[0].nextRef = null;
+  assert.throws(() => summaryContract.assertContextFrame(directory, f.limits, { directory: true }));
+  const field = structuredClone(f.contextWire.fields.destination.pages[0]);
+  field.result.items[0].field = 'x'.repeat(1025);
+  assert.throws(() => summaryContract.assertContextFrame(field, f.limits));
+  assert.throws(() => summaryContract.assertContextFrame(f.contextWire.directory,
+    { ...f.limits, wireBytes: wireBytes(f.contextWire.directory) - 1 }));
+});

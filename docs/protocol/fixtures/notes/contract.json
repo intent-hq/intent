@@ -1062,7 +1062,7 @@
             "start": 0,
             "end": 2000000
           },
-          "construct": "fenced-code",
+          "construct": "codeBlock",
           "continuationBefore": false,
           "continuationAfter": true,
           "detailRef": "syntax-1"
@@ -1089,7 +1089,7 @@
             "start": 8,
             "end": 45
           },
-          "role": "comment-marker",
+          "role": "commentMarker",
           "detailRef": "anchor-page"
         }
       ],
@@ -2805,5 +2805,663 @@
         }
       }
     }
+  },
+  "orderedTaskIds": {
+    "source": "😀 Prose [one](intent://local/task/first) and [two](intent://local/task/second)\r\n- [ ] [again](intent://local/task/first)\n`[code](intent://local/task/code-id)` ![image](intent://local/task/image-id)\n[fq](intent://local/ws-a/task/excluded) [](intent://local/task/no-label) [empty](intent://local/task/)\n[encoded](intent://local/task/a%2Fb) [decoded](intent://local/task/a/b)\n[raw](intent://local/task/ spaced\\id\r\nnext)\n[long](intent://local/task/長😀LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL)\n[repeat](intent://local/task/second)",
+    "expected": [
+      "first",
+      "second",
+      "code-id",
+      "image-id",
+      "a%2Fb",
+      "a/b",
+      " spaced\\id\r\nnext",
+      "長😀LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL"
+    ],
+    "request": {
+      "jsonrpc": "2.0",
+      "id": "task-summary",
+      "method": "note.get",
+      "params": {
+        "workspaceId": "ws-a",
+        "noteId": "spec",
+        "page": {
+          "kind": "taskIds",
+          "maxItems": 2
+        }
+      }
+    },
+    "pages": [
+      {
+        "jsonrpc": "2.0",
+        "id": "task-summary",
+        "result": {
+          "kind": "noteTaskIdsPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:7",
+          "snapshotId": "task-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "totalItems": 8,
+          "startIndex": 0,
+          "items": [
+            {
+              "index": 0,
+              "sourceRange": {
+                "start": 35,
+                "end": 40
+              },
+              "taskNoteIdLength": 5,
+              "taskNoteId": "first"
+            },
+            {
+              "index": 1,
+              "sourceRange": {
+                "start": 72,
+                "end": 78
+              },
+              "taskNoteIdLength": 6,
+              "taskNoteId": "second"
+            }
+          ],
+          "nextCursor": "task-cursor-2"
+        }
+      },
+      {
+        "jsonrpc": "2.0",
+        "id": "task-summary",
+        "result": {
+          "kind": "noteTaskIdsPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:7",
+          "snapshotId": "task-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "totalItems": 8,
+          "startIndex": 2,
+          "items": [
+            {
+              "index": 2,
+              "sourceRange": {
+                "start": 150,
+                "end": 157
+              },
+              "taskNoteIdLength": 7,
+              "taskNoteId": "code-id"
+            },
+            {
+              "index": 3,
+              "sourceRange": {
+                "start": 189,
+                "end": 197
+              },
+              "taskNoteIdLength": 8,
+              "taskNoteId": "image-id"
+            }
+          ],
+          "nextCursor": "task-cursor-4"
+        }
+      },
+      {
+        "jsonrpc": "2.0",
+        "id": "task-summary",
+        "result": {
+          "kind": "noteTaskIdsPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:7",
+          "snapshotId": "task-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "totalItems": 8,
+          "startIndex": 4,
+          "items": [
+            {
+              "index": 4,
+              "sourceRange": {
+                "start": 332,
+                "end": 337
+              },
+              "taskNoteIdLength": 5,
+              "taskNoteId": "a%2Fb"
+            },
+            {
+              "index": 5,
+              "sourceRange": {
+                "start": 369,
+                "end": 372
+              },
+              "taskNoteIdLength": 3,
+              "taskNoteId": "a/b"
+            }
+          ],
+          "nextCursor": "task-cursor-6"
+        }
+      },
+      {
+        "jsonrpc": "2.0",
+        "id": "task-summary",
+        "result": {
+          "kind": "noteTaskIdsPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:7",
+          "snapshotId": "task-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "totalItems": 8,
+          "startIndex": 6,
+          "items": [
+            {
+              "index": 6,
+              "sourceRange": {
+                "start": 400,
+                "end": 416
+              },
+              "taskNoteIdLength": 16,
+              "taskNoteId": " spaced\\id\r\nnext"
+            },
+            {
+              "index": 7,
+              "sourceRange": {
+                "start": 445,
+                "end": 748
+              },
+              "taskNoteIdLength": 303,
+              "taskNoteIdRef": "task-id-7"
+            }
+          ],
+          "nextCursor": null
+        }
+      }
+    ],
+    "longIdFragments": [
+      {
+        "jsonrpc": "2.0",
+        "id": "task-summary",
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:7",
+          "snapshotId": "task-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "fragment",
+              "id": "task-fragment-0",
+              "field": "taskNoteId",
+              "offset": 0,
+              "text": "長😀LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
+              "nextRef": "long-tail"
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      {
+        "jsonrpc": "2.0",
+        "id": "task-summary",
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:7",
+          "snapshotId": "task-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "fragment",
+              "id": "task-fragment-1",
+              "field": "taskNoteId",
+              "offset": 101,
+              "text": "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
+              "nextRef": null
+            }
+          ],
+          "nextCursor": null
+        }
+      }
+    ],
+    "empty": {
+      "jsonrpc": "2.0",
+      "id": "task-summary",
+      "result": {
+        "kind": "noteTaskIdsPage",
+        "scope": {
+          "backendId": "db-a",
+          "workspaceId": "ws-a",
+          "noteId": "spec",
+          "noteInstanceId": "inc-a"
+        },
+        "sourceRevision": "r:7",
+        "snapshotId": "task-snapshot",
+        "expiresAt": "2026-10-03T00:05:00.000Z",
+        "totalItems": 0,
+        "startIndex": 0,
+        "items": [],
+        "nextCursor": null
+      }
+    },
+    "exhausted": {
+      "jsonrpc": "2.0",
+      "id": "task-summary",
+      "result": {
+        "kind": "noteTaskIdsPage",
+        "scope": {
+          "backendId": "db-a",
+          "workspaceId": "ws-a",
+          "noteId": "spec",
+          "noteInstanceId": "inc-a"
+        },
+        "sourceRevision": "r:7",
+        "snapshotId": "task-snapshot",
+        "expiresAt": "2026-10-03T00:05:00.000Z",
+        "totalItems": 8,
+        "startIndex": 8,
+        "items": [],
+        "nextCursor": null
+      }
+    }
+  },
+  "helloPaging": {
+    "jsonrpc": "2.0",
+    "id": "hello",
+    "result": {
+      "clientId": "client-a",
+      "protocolVersion": "11.0",
+      "server": {
+        "locality": "local",
+        "hasDisplay": false,
+        "osArch": "linux/x86_64",
+        "version": "prepared-example",
+        "protocolVersion": "11.0",
+        "capabilities": {
+          "notePaging": 1,
+          "noteAnnotations": 1,
+          "notePagingBackendId": "db-a"
+        }
+      }
+    }
+  },
+  "contextWire": {
+    "directory": {
+      "jsonrpc": "2.0",
+      "id": "context",
+      "result": {
+        "kind": "noteContextPage",
+        "scope": {
+          "backendId": "db-a",
+          "workspaceId": "ws-a",
+          "noteId": "spec",
+          "noteInstanceId": "inc-a"
+        },
+        "sourceRevision": "r:7",
+        "snapshotId": "context-snapshot",
+        "expiresAt": "2026-10-03T00:05:00.000Z",
+        "items": [
+          {
+            "kind": "fragment",
+            "id": "d-0",
+            "field": "openingSource",
+            "offset": 0,
+            "text": "",
+            "nextRef": "field-0"
+          },
+          {
+            "kind": "fragment",
+            "id": "d-1",
+            "field": "closingSource",
+            "offset": 0,
+            "text": "",
+            "nextRef": "field-1"
+          },
+          {
+            "kind": "fragment",
+            "id": "d-2",
+            "field": "linkType",
+            "offset": 0,
+            "text": "",
+            "nextRef": "field-2"
+          },
+          {
+            "kind": "fragment",
+            "id": "d-3",
+            "field": "destination",
+            "offset": 0,
+            "text": "",
+            "nextRef": "field-3"
+          },
+          {
+            "kind": "fragment",
+            "id": "d-4",
+            "field": "title",
+            "offset": 0,
+            "text": "",
+            "nextRef": "field-4"
+          },
+          {
+            "kind": "fragment",
+            "id": "d-5",
+            "field": "referenceId",
+            "offset": 0,
+            "text": "",
+            "nextRef": "field-5"
+          }
+        ],
+        "nextCursor": null
+      }
+    },
+    "fields": {
+      "openingSource": {
+        "expected": "[",
+        "pages": [
+          {
+            "jsonrpc": "2.0",
+            "id": "context",
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:7",
+              "snapshotId": "context-snapshot",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "v-0-0",
+                  "field": "openingSource",
+                  "offset": 0,
+                  "text": "[",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        ]
+      },
+      "closingSource": {
+        "expected": "](https://example.test/a%20b \"\")",
+        "pages": [
+          {
+            "jsonrpc": "2.0",
+            "id": "context",
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:7",
+              "snapshotId": "context-snapshot",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "v-1-0",
+                  "field": "closingSource",
+                  "offset": 0,
+                  "text": "](https://example.test/a%20b \"\")",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        ]
+      },
+      "linkType": {
+        "expected": "Inline",
+        "pages": [
+          {
+            "jsonrpc": "2.0",
+            "id": "context",
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:7",
+              "snapshotId": "context-snapshot",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "v-2-0",
+                  "field": "linkType",
+                  "offset": 0,
+                  "text": "Inline",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        ]
+      },
+      "destination": {
+        "expected": "https://example.test/a%20b",
+        "pages": [
+          {
+            "jsonrpc": "2.0",
+            "id": "context",
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:7",
+              "snapshotId": "context-snapshot",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "v-3-0",
+                  "field": "destination",
+                  "offset": 0,
+                  "text": "https://example.",
+                  "nextRef": "field-3-tail"
+                }
+              ],
+              "nextCursor": null
+            }
+          },
+          {
+            "jsonrpc": "2.0",
+            "id": "context",
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:7",
+              "snapshotId": "context-snapshot",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "v-3-1",
+                  "field": "destination",
+                  "offset": 16,
+                  "text": "test/a%20b",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        ]
+      },
+      "title": {
+        "expected": "",
+        "pages": [
+          {
+            "jsonrpc": "2.0",
+            "id": "context",
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:7",
+              "snapshotId": "context-snapshot",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "v-4-0",
+                  "field": "title",
+                  "offset": 0,
+                  "text": "",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        ]
+      },
+      "referenceId": {
+        "expected": "",
+        "pages": [
+          {
+            "jsonrpc": "2.0",
+            "id": "context",
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:7",
+              "snapshotId": "context-snapshot",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "v-5-0",
+                  "field": "referenceId",
+                  "offset": 0,
+                  "text": "",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        ]
+      }
+    },
+    "descriptor": {
+      "jsonrpc": "2.0",
+      "id": "context",
+      "result": {
+        "kind": "noteContextPage",
+        "scope": {
+          "backendId": "db-a",
+          "workspaceId": "ws-a",
+          "noteId": "spec",
+          "noteInstanceId": "inc-a"
+        },
+        "sourceRevision": "r:7",
+        "snapshotId": "context-snapshot",
+        "expiresAt": "2026-10-03T00:05:00.000Z",
+        "items": [
+          {
+            "kind": "boundary",
+            "id": "link-1",
+            "sourceRange": {
+              "start": 0,
+              "end": 38
+            },
+            "construct": "link",
+            "continuationBefore": false,
+            "continuationAfter": true,
+            "detailRef": "details-link"
+          }
+        ],
+        "nextCursor": null
+      }
+    },
+    "constructs": [
+      "paragraph",
+      "heading",
+      "blockquote",
+      "codeBlock",
+      "list",
+      "listItem",
+      "table",
+      "tableHead",
+      "tableRow",
+      "tableCell",
+      "emphasis",
+      "strong",
+      "strikethrough",
+      "link",
+      "image",
+      "htmlBlock",
+      "footnoteDefinition",
+      "definitionList",
+      "definitionListTitle",
+      "definitionListDefinition",
+      "superscript",
+      "subscript",
+      "metadataBlock"
+    ],
+    "roles": [
+      "text",
+      "code",
+      "literal",
+      "commentMarker",
+      "lineBreak",
+      "rule",
+      "taskMarker",
+      "delimiter",
+      "projection"
+    ],
+    "source": "[label](https://example.test/a%20b \"\")"
   }
 }

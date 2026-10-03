@@ -780,6 +780,10 @@ revision after a newer note-channel state snapshot, and an attribution-only upda
 roll comments backward. After reconnect, subscribe/snapshot and compare this same
 persisted generation before admitting cached responses.
 
+A sourceRevision invalidation also invalidates ordered task-ID summary pages and
+their long-ID fragments; this state frame never embeds the full ordered-ID array.
+A comment-only revision change leaves that canonical-source summary intact.
+
 Sequence gaps/lag recovery produce another bounded state snapshot, **never** a
 legacy full note/comment refetch. Reconnect reacquires state before any cached page
 is trusted; old request generations cannot repopulate a new subscription.
