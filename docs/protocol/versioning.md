@@ -158,6 +158,40 @@ These additive docs precede consumer merges/contract acceptance; authorized loca
 development and draft preparation may proceed in parallel. Static fixtures do not
 qualify a listener, fresh-workspace source, provider or ready/ACK behavior.
 
+**Prepared note paging and operation contract (additive, not implemented).**
+[§5.2](./methods/notes-tasks.md#revision-safe-note-pages-prepared-additive-contract)
+reserves `note.applySplices`, `note.operationStatus` and six `note.operation.*`
+staging/read/commit methods, adding eight router methods with no new event names.
+The [method catalog](./05-method-catalog.md) maintains the combined totals.
+Source/context/metadata/mapping and ordered raw task-link ID pages use opt-in `note.get` shapes;
+annotation paging and bounded subscription projections extend existing methods.
+Allocate the next minor against daemon main at implementation time. Advertise
+`notePaging: 1` only for the complete core including CAS/atomic receipts/status and
+bounded pageState subscriptions; advertise `noteAnnotations: 1` only for the
+independent-epoch annotation extension and only alongside notePaging. Hello also
+provides `server.capabilities.notePagingBackendId` for persistent database namespace
+isolation; the exact integer capability and valid identity are both required. The
+ordered task-link summary preserves lexical first-occurrence ordering and exact
+deduplication, including long raw IDs through bounded fragments. It does not change
+legacy `note.listTasks` checkbox rows or `task.list` membership.
+
+Numeric protocol versions, catalog presence and an ignored unknown option do not
+establish support. Old clients keep the existing complete-note methods and events;
+new clients require capabilities plus page discriminants and keep partial data out
+of full Note types/writers. Loss of capability on reconnect retains drafts and
+surfaces incompatibility, never converts a page cache into a full-note replacement.
+Docs land before additive components; daemon protocol support lands before FE
+opt-in, with human authorization at every merge. Pin advancement remains automated.
+
+The operation contract includes staged large input/inverse paging, frozen dirty-view
+reads, cancellation races and receipts. It preserves selected-copy Markdown text/plain,
+allows explicitly requested raw-source materialization with virtual DOM and delta-based
+editing, and preserves current fresh canonical/restart behavior without a new durable
+undo promise. Shared subscription stateGeneration orders crossed channel deliveries.
+Source paging is not a claim that the complete virtual editor is ready or its size
+guard may be removed. Notes fixtures validate prepared examples and arithmetic,
+not backend storage complexity or shipped support.
+
 **Prepared command-default change — recommended 11.0, not shipped.**
 [Script creation defaults (§5.8)](./methods/scripts.md#command-creation-defaults-prepared-breaking-change)
 change omission on a new command from `saved` to `oneOff`; new services remain

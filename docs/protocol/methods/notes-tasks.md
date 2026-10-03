@@ -155,6 +155,1238 @@ since v6.14 (intentd#1162, monorepo#2129) — earlier daemons converted and retu
 convert-with-warnings semantics — grammar, resolution order, and warning contract are
 documented on the `task.convertBlocks` row (§5.4).
 
+### Revision-safe note pages (prepared additive contract)
+
+**Prepared, not implemented at the pin.** This consistency core is independent of
+editor enablement. `notePaging: 1` in `client.hello.server.capabilities` gates the
+complete source/context/read, splice/status and bounded subscription contract below;
+`noteAnnotations: 1` additionally gates annotation pages. Absence means unsupported:
+an old daemon can ignore `page` and return a full Note. Require the expected result
+discriminant before admitting a response. Never put a page in `Note.content`, treat
+missing content as empty, or pass partial content to a legacy full-content writer.
+Omitted `page` retains all existing results and behavior, including stale full-draft
+merge, version history, task conversion, anchors and author attribution. `null`,
+unknown page kinds and unsupported versions are invalid on supporting daemons.
+
+The prepared core reserves two router methods, plus six staged-operation methods below:
+
+| Method | Params | Result |
+| --- | --- | --- |
+| note.applySplices | workspaceId, noteId, noteInstanceId, backendId, baseRevision, operationId, expiresAt, payloadDigest, splices (all required; below) | `NoteCommitReceipt`; bounded typed errors, never a full Note |
+| note.operationStatus | scope fields, operationId, payloadDigest (inline), or headerDigest plus payloadDigest? (staged) | `NoteOperationStatus`; authorized receipt lookup even after note deletion |
+
+#### Identity, addresses and budgets
+
+`NoteScope = { backendId, workspaceId, noteId, noteInstanceId }`. Capability hello
+also supplies `server.capabilities.notePagingBackendId` in the `client.hello` result,
+a stable opaque database namespace (survives
+ordinary restart; changes on database replacement). `noteInstanceId` is a persistent
+incarnation token: deleting/recreating the same note ID cannot reuse it. Tokens and
+receipts are scoped to this tuple and the authenticated principal; they confer no
+access. Recheck current authorization for every read, retry and status lookup.
+For example, the capability subtree is `{ "notePaging": 1, "noteAnnotations": 1,
+"notePagingBackendId": "db-a" }`; it is not a top-level hello field or a client
+capability. Require exact integer 1 and a nonempty backend ID within the token limit;
+a missing/malformed ID or unsupported version disables paging. This ID must equal
+`scope.backendId` on every admitted page. Reconnect invalidates in-flight requests;
+a changed backend ID invalidates clean caches and retains drafts for reconciliation.
+A read-only implementation must omit `notePaging` until its entire contract is ready.
+`sourceRevision` is an opaque nonempty string identifying the note's current `rev`
+within that incarnation, including metadata-only revision changes. The daemon must
+map it losslessly to its existing integer rev; clients compare equality only and
+never compute `rev + 1`. It is not the version-history sequence `v`.
+
+All addresses are nonnegative safe integers counting **UTF-16 code units** from
+zero in exact canonical Markdown, with half-open `[start,end)` ranges. Unicode
+scalars outside the BMP consume two units. Endpoints must not split a surrogate
+pair; unpaired surrogates and U+0000 in new source are rejected, never normalized.
+CRLF remains two units/two UTF-8 bytes; paging may split CR from LF and reassembly
+must retain both. No NFC, line-ending, whitespace, Markdown or entity normalization.
+Combining sequences may cross pages. `sourceLength` is UTF-16; the legacy summary
+`contentLength` counts Unicode scalars and is **not** an address. Line numbers are
+1-based, with LF ending a line; a CR in CRLF is not another line. Rendered-text and
+ProseMirror offsets require an explicit source map, never arithmetic substitution.
+
+Version 1 limits (transport limits, not renderer heap or total-note-size limits):
+
+| Quantity | Hard maximum / default |
+| --- | --- |
+| Source text per page, or total inserted text per inline splice request | 16,384 decoded UTF-8 bytes |
+| Complete JSON-RPC request/response or subscription push | 65,536 UTF-8 bytes after JSON escaping, including envelope and ID |
+| Error or commit/status receipt envelope | 4,096 escaped UTF-8 bytes |
+| Source/context/mapping page items | 128 items (a source page has one segment) |
+| Annotation page items / requested disjoint ranges / inline splices | 64 / 32 / 32 |
+| Opaque token, ID or revision | 256 decoded UTF-8 bytes each (raw task-link captures below use fragments when longer) |
+| Preview text / context scalar string | 512 / 1,024 decoded UTF-8 bytes each |
+| Source-page snapshot lifetime | 300 seconds, fixed from first page; no sliding renewal |
+
+Source requests may lower `maxSourceBytes` to an integer in `[4,16384]`; all page
+requests may lower `maxWireBytes` to `[4096,65536]` and `maxItems` to `[1,128]`
+(annotation maximum 64). Defaults are the maxima. Count the **actual serialized
+frame**, not source bytes or a pre-escape estimate. RPC IDs on this opt-in path
+are safe integers or strings of at most 64 UTF-8 bytes. Reject oversized requests
+before admission. Shrink a response page until every limit holds. A nonempty source
+page must advance by at least one scalar; an empty page is valid only at exhaustion.
+Variable-size context, mapping or annotation fields are separate paged text/range
+references; an oversized item never bypasses a limit or loses data by truncation.
+Previews are explicitly `preview` with `truncated: boolean`, not authoritative text.
+No operation's total length is limited to a page budget.
+
+#### Source, seek and structural context
+
+Opt in with `note.get { workspaceId, noteId, page: { kind: "source", ... } }`.
+A first read has `at?: UTF16Offset` (default 0), `direction?: "forward" | "backward"`
+(default forward), and optional `sourceRevision`/`noteInstanceId` expectation.
+Forward returns a segment beginning at `at`; backward returns one ending at `at`
+(default `sourceLength` when backward and `at` omitted). `at=sourceLength` is valid.
+Seek at a split-surrogate offset or beyond the extent is invalid; no silent rounding.
+Subsequent requests send `cursor` only, plus identical budgets; first-read addressing
+fields with a cursor are invalid. A fresh revision-bound seek may use
+`{ snapshotId, sourceRevision, noteInstanceId, at, direction }` instead of a cursor.
+
+```typescript
+type NoteSourcePage = {
+  kind: "noteSourcePage"; scope: NoteScope; sourceRevision: string;
+  snapshotId: string; expiresAt: string; sourceLength: number;
+  range: { start: number; end: number }; text: string;
+  nextCursor: string | null; previousCursor: string | null;
+  contextRef: string; // bounded reference, NOT expanded structure
+  metadataRef: string; // separately paged title/tags/task metadata
+};
+```
+
+There is no `note` or `content` field. `nextCursor === null` iff `range.end ===
+sourceLength`; `previousCursor === null` iff `range.start === 0`. Empty source is
+`[0,0)`, empty text and both cursors null. Following next concatenates exact source
+without overlap/gaps; following previous prepends it. Page sizes need not match in
+each direction. Cursors authenticate the scope, principal, sourceRevision,
+snapshotId, expiry, index generation, kind, continuation offset/direction and
+budgets. They are opaque, not encoded offsets the client may modify. Cross-note,
+cross-kind, cross-principal or changed-budget reuse is invalid. Cursors from an old
+revision fail `note-page-stale`; expired/restarted/evicted snapshot handles fail
+`note-page-expired`. A revision is checked in the same read snapshot as the bytes.
+This live paging mode invalidates on any revision advance; it does not retain old
+source for arbitrary user delays. Expiry can precede the advertised time on restart
+or resource eviction and is always explicit. No long SQLite transaction spans RPCs.
+
+The client cache key includes scope, revision, snapshot and request generation.
+Discard late pages after a switch, new revision or cancelled request even if their
+text coincidentally matches. On stale/expired, retain dirty state, invalidate clean
+pages, acquire a new snapshot and reconcile; never concatenate old/new revisions.
+Metadata-only writes conservatively invalidate source pages even if bytes match.
+Every legacy content writer, restore, task-marker materialization and comment-anchor
+rewrite participates in this invalidation; deletion retires the incarnation.
+
+`note.get { ..., page: { kind: "context", contextRef, cursor?, maxItems?,
+maxWireBytes? } }` returns `kind: "noteContextPage"`, the same scope/revision/snapshot,
+`items`, `nextCursor` (null at end). Reference and cursor must agree; source-byte
+budgets are inapplicable. Context has separate item and wire budgets and is never
+hidden inside a source page. Items are discriminated:
+
+- `boundary`: `{ id, sourceRange, construct, parentRef?, continuationBefore,
+  continuationAfter, detailRef?, tablePosition?, htmlPosition?, htmlSource?, attributesRef?, nativeRef?, sourceMapRef? }`. `construct` is a syntax category, not an editor
+  node ID; `detailRef` pages large opening syntax, attributes and ancestor chains.
+- `span`: `{ id, sourceRange, role, parentRef?, detailRef?, codeSource?, nativeRef?, sourceMapRef? }` for marks, delimiters, literals,
+  comment markers and structural seams. IDs are snapshot-local; identical text at
+  another address has another ID. `role` distinguishes source-bearing text from
+  zero-width editor projections; it never fabricates source bytes.
+- `sourceMap`: the window-bound canonical HTML/inline-code raw-to-rendered mapping described
+  below; it never replaces canonical source pages.
+- `nativeNode` and `sourcePiece`: the bounded canonical tree and provenance
+  descriptors below, distinct from text mappings and session-native editor IDs.
+- `fragment`: `{ id, field, offset, text, nextRef }` pages descriptor strings,
+  including huge URLs/languages/attributes, with scalar-safe UTF-16 field offsets.
+  `nextRef` is null at field exhaustion. Fragment text obeys the source-text limit.
+
+Context enumeration is deterministic `(sourceRange.start, sourceRange.end, id)`
+for boundaries/spans; fragments follow increasing offsets. A descriptor's range
+may exceed the source page; its content must not be inlined. Ancestor references
+and traversal are bounded per request, not recursive expansion. Context can cover
+fences, nested lists, tables, inline marks and note primitives across any transport
+seam. Consumers reconstruct source exactly and obtain the required bounded lexical
+context before parsing a window; they must not parse each page as a standalone
+Markdown document or fetch a whole giant construct to repair a boundary. Unknown
+construct support is an integration obligation, not permission to silently omit it.
+Live native table owners/seams are editor-session metadata, not durable global block
+IDs or inferred fresh canonical structure.
+
+Context version 1 uses these wire spellings (not library enum/debug strings):
+
+| Field | Vocabulary / meaning |
+| --- | --- |
+| boundary.construct | `paragraph`, `heading`, `blockquote`, `codeBlock`, `list`, `listItem`, `table`, `tableHead`, `tableRow`, `tableCell`, `emphasis`, `strong`, `strikethrough`, `link`, `image`, `htmlBlock`, `footnoteDefinition`, `definitionList`, `definitionListTitle`, `definitionListDefinition`, `superscript`, `subscript`, `metadataBlock`, `htmlTable`, `htmlTableRow`, `htmlTableCell` |
+| span.role | `text` (source text), `code` (inline code), `literal` (raw HTML/literal syntax), `commentMarker` (canonical anchor marker syntax), `lineBreak` (soft/hard break syntax), `rule`, `taskMarker` (checkbox syntax), `delimiter` (explicit syntax delimiter), `projection` (zero-width editor seam) |
+
+Every item has its `kind` discriminator. Ranges address original source even when
+parsed semantic attributes decode escapes; `projection` must have an empty range.
+`continuationBefore`/`continuationAfter` mean the full construct starts before/ends
+after the source range associated with contextRef. A parentRef resolves with the
+same context request shape to its parent descriptor; detailRef resolves to a
+**directory of field fragments**, not a JSON-serialized parser object. Parent and
+detail references share scope/revision/snapshot/expiry and never cross an incarnation.
+The transport preserves unknown future construct/role values opaquely; a renderer
+that cannot interpret one must declare it unsupported, never silently drop it or
+claim that arbitrary parser grammar has been implemented. Notes primitives require
+an explicit renderer mapping; this vocabulary alone is not that mapping.
+
+**Absolute table addresses.** Version-1 `tableHead`, `tableRow` and `tableCell`
+boundaries also require an inline `tablePosition`; other constructs omit it:
+
+```typescript
+type TableRowPosition = { tableRef: string; rowIndex: number };
+type TableCellPosition = TableRowPosition & {
+  columnIndex: number; alignment: "none" | "left" | "center" | "right";
+};
+// tableHead/tableRow use TableRowPosition; tableCell uses TableCellPosition.
+```
+
+All ordinals are nonnegative safe-integer JSON numbers (not decimal strings).
+`rowIndex` is absolute within the owning canonical table: its one `tableHead` is
+row 0, the first body `tableRow` is row 1, and later body rows increment by one.
+The Markdown delimiter/alignment line is not a row. `columnIndex` is zero-based
+within that row, resets on each new row, and counts canonical parser cell events,
+including empty cells that the existing GFM parser projects for short rows.
+A cell in the header has rowIndex 0. Independent tables reset row/column ordinals;
+nested/outer owners, where represented, never share counters. Repeated cell text,
+source-piece boundaries, viewport seeks and continuation flags do not change an
+address. Scalar-safe sourceRange still identifies this cell's source extent; it
+may be empty for an empty cell and cannot be used to infer an ordinal.
+
+`tableRef` is a bounded opaque **context reference to the owning table boundary**,
+not its item ID, a source offset, a mutable global block ID or a preceding-row
+cursor. Read it with `note.get { ..., page: { kind: "context", contextRef:
+tableRef, ... } }`. Every address of that table in the same snapshot/window uses
+the same tableRef; all refer to the same boundary identity. Reference bytes may
+differ between windows; resolve the table boundary id within the same scope and
+snapshot to compare those owners, never compare against a live editor node ID. A reference cannot
+cross scope, sourceRevision, snapshot, principal or expiry; any continuation cursor
+must agree with the supplied reference. ParentRef remains the direct structural
+parent (a cell's row/header), with its existing semantics. A tableRef may resolve a
+huge table range, but does not include the table's children, row sources, alignment
+array or body. Revision advance invalidates both position and reference, even if
+source happens to look identical. Reacquire the context; do not patch ordinals
+from another snapshot or renumber only the currently loaded rows.
+
+Cell-local `alignment` is the owning table's canonical column alignment, equal to
+its `alignment:N` detail for N=columnIndex. `none` means no explicit alignment;
+clients must not relabel it as explicit left alignment. This fixed-size value is
+inline so a far column never requires enumerating earlier alignment fields.
+Together, tableRef/rowIndex/columnIndex/alignment identify a far cell without
+loading its earlier siblings, preceding row source, header source, whole table or
+full alignment directory. The producer maintains this metadata when indexing the
+revision, not by scanning a prefix on each read. TablePosition and its enclosing
+frame still count toward item/token/complete escaped-wire budgets. It cannot grow
+with the unloaded prefix, and page construction must shrink items if necessary.
+
+This address contract describes the existing canonical GFM **unit-cell** table
+representation. It introduces no rowSpan/colSpan fields, merged-cell grammar or
+synthetic covered cells. HTML uses the separate canonical profile below; never
+reuse GFM header/body ordinals for HTML or infer canonical spans from raw
+HTML attributes or live editor geometry.
+A reader missing a required position or unable to handle the represented grammar
+must report the unsupported projection,
+not fetch a preceding/full source fallback or silently guess column zero. Legacy
+complete Note reads and writer/canonical-reload behavior are unchanged. Native
+session seams/owners remain separate from these revision-local source addresses.
+
+**Canonical HTML continuation.** The separate `canonicalNote` profile describes
+the existing `NoteWithComments` load path: `processMarkdownToHTML` with anchor
+preservation and workspace identity, `sanitizeMarkdownHTML`, then the registered
+`createEditorConfig` schema. It is not unsanitized DOM parsing or a new Markdown
+dialect. Version 1 is explicit as `profileVersion: 1` on HTML positions and maps; it
+preserves the entry-path outcomes in these fixtures. Unknown versions are not
+interpreted as version 1. The index also records the concrete parser/sanitizer/schema
+build identity and relevant options in its internal profile revision; changing the
+parser, sanitizer, schema or their relevant options invalidates that index and its
+references before serving the new profile (`note-page-expired` for retired profile
+resources, even if raw sourceRevision is unchanged). A change to the normative
+projection behavior requires a new profileVersion, not silent reuse of version 1.
+Producer/consumer implementations must pin and differentially test this profile,
+including the existing conditional note
+primitive extensions. Naming the profile does not establish implementation parity.
+
+The current canonical sanitizer removes `colspan`/`rowspan`; canonical cells are
+unit cells. Native `mergeCells` may produce spans in the live editor, while the
+existing HTML-to-Markdown serializer emits GFM and fresh reload loses those spans.
+This contract preserves those distinct outcomes. It never promotes a raw HTML span
+attribute to canonical geometry or promises new durable merged-table persistence.
+Even unit cells need indexed context: an extra earlier cell can change a far cell's
+column while its source offset, source length and visible literal text are identical.
+
+HTML table boundaries use `htmlTable`, `htmlTableRow`, and `htmlTableCell` rather
+than GFM constructs. They require these bounded fields:
+
+```typescript
+type HtmlPosition = {
+  profile: "canonicalNote"; profileVersion: 1;
+  tableRef: string; // direct context reference, including on the table itself
+  rowIndex?: number; // required on row/cell, absent on table
+  columnIndex?: number; // required only on cell
+  cellRole?: "data" | "header"; // required only on cell: native td / th role
+};
+type HtmlSource = {
+  provenance: "explicit" | "implicit" | "repaired";
+  openingRange: { start: number; end: number } | null;
+  bodyRange: { start: number; end: number } | null;
+  closingRange: { start: number; end: number } | null;
+  piecesRef?: string; // required for repaired/noncontiguous source provenance
+};
+// Required on each HTML table boundary, alongside parentRef/detailRef:
+// htmlPosition, htmlSource, attributesRef, nativeRef.
+// sourceMapRef and continuation flags are required only on a window occurrence.
+```
+
+Ordinals are nonnegative safe integers in the **canonical schema output**, with
+every row starting at 0 regardless of header/data role. `thead`/`tbody`/`tfoot`
+wrappers are not rows; a header cell need not be in row 0. Column ordinals reset
+per row and table owners reset for independent or nested tables. Direct tableRef
+resolves exactly that table boundary; a cell's parentRef resolves its row. No raw
+tag count, preceding-row scan, whole-grid enumeration or range-order inference is
+a substitute for these indexed addresses. The canonical address has no span fields.
+
+`sourceRange` is the exact raw envelope of an explicit source construct. An
+implicit source-less node instead has an explicitly identified empty projection
+anchor, not fabricated markup. Its anchor is the least source start among mapped
+canonical descendants; if none exists, the end of the nearest source-bearing
+ancestor's opening syntax, or 0 if no such ancestor exists. This rule is resolved
+at indexing time, not by descendant traversal during reads. `htmlSource` ranges address original scalar-safe
+UTF-16 source and are contained in that envelope. `bodyRange` excludes opening and
+closing syntax, but includes original child markup; it is not decoded text. Null
+means no corresponding contiguous literal range exists. Missing end tags and
+reparented/implicit schema nodes must carry their actual provenance; a repaired
+envelope never licenses rewriting that source. For repaired/noncontiguous nodes,
+sourceRange is only the hull of mapped source pieces, not ownership of every byte
+in that hull. Required piecesRef pages `sourcePiece` records with `{ id, nodeRef,
+sourceRange, role }`, where role is `opening`, `body`, `closing`, `attribute` or
+`omitted`. Ranges are exact, scalar-safe, nonempty source pieces, ordered by
+`(sourceRange.start, sourceRange.end, id)`; parent/child provenance may overlap but
+one node's traversal never duplicates a piece. Missing literal syntax has no piece.
+When no piece exists, the repaired node uses the same empty-anchor rule as an
+implicit node. Explicit/implicit nodes omit piecesRef. Attribute source ranges and values
+page through detail references separately from effective attributes. Unknown or
+unsupported projections must be reported explicitly, never silently represented
+as successfully rendered literal text. This diagnostic does not satisfy native
+rendering acceptance; supported malformed-input behavior follows the same existing
+pipeline, not a new coercion or rejection policy invented by this transport.
+
+`attributesRef` resolves with `page: { kind: "metadata", ref: attributesRef, ... }`
+to the existing bounded metadata-tree shape. It has the distinct resource namespace
+`context.attributes`, never the note metadata root. It contains effective schema
+attributes after sanitization, not raw opening tags. Large primitive payloads,
+column-width arrays, URLs and strings remain separately pageable tree branches;
+clients may not drain the entire tree to admit a window. These resources share
+source snapshot lifetime; the existing conservative metadata-write invalidation
+still applies. Raw attribute spelling, quotes and stripped values remain exact
+source provenance and must not be reconstructed from these effective values.
+
+`sourceMapRef` resolves through `page.kind: "context"` to source-map items for the
+**original admitted source window**, including necessary seam segments. Its opaque
+identity binds window, owner, profile and source snapshot. Resolving it does not
+enumerate a whole giant body or its preceding text. A subsequent seek obtains a
+new window-bound reference; an owner identity alone is not a map-page selector.
+The HTML boundary id, table/parent/native/attribute/detail references and provenance
+are immutable and reusable within the snapshot. Only sourceMapRef and continuation
+flags vary by admitted window. Consumers compare immutable owner fields separately
+and retain map bindings under `(snapshot, window, owner)` even after owner deduplication.
+Two windows in the same giant cell must neither conflict on owner identity nor
+reuse the other's map binding. This HTML rule does not change GFM reference semantics.
+
+Resolving a snapshot-stable HTML owner reference (tableRef, lexical parentRef or
+an equivalent direct owner reference) returns exactly its immutable boundary
+without `sourceMapRef`, `continuationBefore` or `continuationAfter`. These fields
+are absent, not null or false: a direct owner request admits no source window.
+The same direct request gives the same descriptor regardless of earlier, concurrent
+or reordered source-window requests. It must not use connection-local last-window
+state or attach an arbitrary window's mapping. By contrast the original source
+page's window-bound contextRef returns boundary **occurrences** with all three
+fields required. This distinction is determined by the scoped reference's resource
+kind, not by client guesses from the opaque bytes; scope/revision/snapshot and
+cursor validation apply to both. A consumer stores stable owner descriptors once
+and retains each occurrence's map binding separately. Resolving a stable owner
+cannot acquire a new mapping: seek the desired bounded source window and use its
+contextRef. Direct-owner response cursors never change their resource kind or gain
+a window. No new request parameter, implicit server session state or enlarged
+frame budget is introduced.
+
+```typescript
+type CanonicalSourceMapItem = {
+  kind: "sourceMap"; id: string; profile: "canonicalNote"; profileVersion: 1;
+  ownerRef: string; textNodeId: string | null; textNodeRef: string | null;
+  sourceRange: { start: number; end: number };
+  renderedRange: { start: number; end: number };
+  mapping: "identity" | "entity" | "normalized" | "omitted" | "projection";
+  textRef: string | null;
+};
+```
+
+ownerRef identifies the snapshot-stable **source-container boundary or inline-code span** whose
+window issued the mapping. It is not a claim that the text remains a canonical
+descendant of that source container: HTML repair/foster parenting can move it.
+textNodeRef, parentRef and childIndex supply canonical ownership independently;
+neither raw containment nor the old source table determines that ancestry.
+Rendered offsets are scalar-safe UTF-16 within **one immutable canonical TipTap
+text leaf after schema/whitespace normalization**, identified by textNodeId. ownerRef identifies source ownership independently.
+They are neither raw DOM textContent offsets nor document-wide ProseMirror
+positions. The latter include atoms and wrapper positions and remain session-owned.
+An identity segment preserves text and length; an entity segment is an indivisible
+raw-to-decoded mapping; normalized segments record actual canonical normalization.
+Omitted source has an empty rendered range and null textRef; when there is no
+corresponding text leaf, textNodeId is null and renderedRange is `[0,0)` rather
+than naming a fabricated leaf; textNodeRef is also null in that case. All
+non-omitted segments require a real textNodeId and a direct textNodeRef resolving
+its `nativeNode` descriptor (the returned id equals textNodeId).
+A source-less projection has an empty source range. Nonempty rendered segments use a bounded context fragment
+resource `field: "renderedText"` whose offset 0 is the start of that segment, not
+the whole leaf. The resolved text length equals renderedRange length.
+Each complete renderedText resource is at most 16,384 decoded UTF-8 bytes, even
+when a smaller requested budget splits it into several fragment frames. This is a
+per-segment resource limit, not only a per-frame limit. Identity and large
+normalized runs must be indexed into scalar-safe bounded segments/checkpoints;
+a far-window map cannot point to an earlier giant segment and make the consumer
+drain preceding rendered text to reach its window. Returned identity/omitted ranges
+are clipped to the admitted window; genuinely non-bijective normalization/entity
+seams retain their exact raw range and endpoint affinities. A long collapsed raw
+whitespace run may have a large raw range and one bounded rendered space; locating
+that seam uses the index, not a read-time scan of that run. Nonempty rendered ranges
+are capped by the resource's actual UTF-8 bound, not merely its UTF-16 length.
+Window intersection and required seams select checkpoints by index. Resolved
+rendered offsets remain absolute within the canonical text leaf, while textRef
+fragment offsets start at zero in the bounded segment. Repeated requests may
+use the same indexed segments when appropriate; none requires prior-window state.
+Repeated strings have distinct source identities; source-copy/search/edit coordinates always
+use raw ranges. Selection affinities choose declared segment endpoints for
+non-bijective mappings, never interpolate an offset inside an entity or invent
+source bytes. Maps enumerate by `(sourceRange.start, sourceRange.end, id)`; browser
+repair may reorder rendered leaves, so rendered order must not be inferred from it.
+Map references reject other owners/windows/profiles/snapshots and stale revisions;
+stable node, attribute and provenance references remain reusable in that snapshot.
+item, token, decoded-fragment and complete escaped-wire limits are unchanged.
+
+`nativeRef` resolves through `page.kind: "context"` to exactly the associated
+canonical node descriptor, without expanding its children:
+
+```typescript
+type CanonicalNativeNode = {
+  kind: "nativeNode"; id: string; profile: "canonicalNote"; profileVersion: 1;
+  nodeType: string; nodeClass: "container" | "text" | "atom";
+  parentRef: string | null; childIndex: number;
+  sourceRange: { start: number; end: number };
+  provenance: "explicit" | "implicit" | "repaired"; sourcePiecesRef?: string;
+  attributesRef: string; marksRef?: string;
+};
+```
+
+nodeType is the existing schema name (at most 1,024 UTF-8 bytes); nodeClass follows
+that schema. parentRef is another direct native-node reference, null only on the
+canonical `doc` root (childIndex 0). childIndex is a nonnegative safe integer in
+the parent's **rendered schema children**, including text and atomic nodes. It is
+not a raw-source ordinal or an offset into only loaded children. Together with
+parentRef it establishes rendered ancestry/order without scanning siblings, even
+when repairs reorder source. id is snapshot-local, never an editor-session node ID.
+Canonical parent references are acyclic, and each `(parent node id, childIndex)`
+has one child. They are distinct from lexical boundary.parentRef (for example,
+HTML cell to table row versus text leaf to schema paragraph). Empty-anchor
+fallback walks strictly toward a source-bearing ancestor/root at index build time;
+it cannot cycle through projected children.
+Provenance/envelope/anchor/sourcePiecesRef obey the same rules as HTML boundaries.
+attributesRef and optional marksRef use `context.attributes` metadata trees; marks
+are the ordered schema mark array, including each mark's type and attributes.
+Atoms carry their real nodeType and paged attributes and have no fabricated text
+leaf, rendered-text map or recursive inline payload. Text nodes resolve their
+admitted text through window maps rather than a complete-leaf text property.
+
+The original source-context query includes canonical owners of intersecting mapped
+pieces, text/atomic descendants admitted by that window, and the necessary ancestor
+closure. Membership is indexed by projection ownership, **not** solely by overlap
+with descriptor sourceRange. Thus an implicit row/paragraph outside the far window,
+or a reparented ancestor with no overlapping literal range, remains discoverable.
+All descriptors still paginate under the same item/wire bounds; direct refs permit
+targeted resolution without loading sibling directories or a whole subtree.
+
+Native descendants, marks, ancestors and atomic note primitives retain their
+existing typed schema ownership and paged detail/attribute resources. A cell body
+range alone is not permission to flatten block content or drain a large primitive
+attribute. Incomplete tags, implicit nodes, nested tables, empty/repaired cells,
+entities, CRLF and sanitizer removals require differential source-map fixtures
+against the actual profile before an adapter claims support. Index construction
+and invalidation cost are measured separately; ordinary reads must use indexed
+owners, interval overlap and checkpoints rather than scanning unloaded prefixes.
+
+**Canonical Markdown inline-code continuation.** General Markdown `span.role:
+"code"` reuses the same canonical profile, native-node, mark, mapping and fragment
+resources; it is not an HTML table or a new rendering grammar. Each code span
+requires these snapshot-stable fields:
+
+```typescript
+type CodeSource = {
+  profile: "canonicalNote"; profileVersion: 1;
+  openingRange: { start: number; end: number };
+  bodyRange: { start: number; end: number };
+  closingRange: { start: number; end: number };
+};
+// On span.role=code: codeSource: CodeSource; nativeRef: string | null.
+// sourceMapRef: string is required on window occurrences, absent on direct owners.
+```
+
+Ranges are scalar-safe absolute UTF-16 addresses in original source. The nonempty
+opening and closing ranges identify the exact matching backtick runs, have equal
+length, and together with the untrimmed body partition sourceRange contiguously.
+No delimiter bytes or entire body are inlined; enormous runs remain constant-size
+addresses. An unmatched run is ordinary source under the existing parser, not a
+fabricated code span. Delimiter/body addresses are computed at indexing time;
+clients never scan a prefix to determine delimiter length or trim state.
+
+nativeRef resolves the canonical text leaf carrying the existing `code` mark;
+its marksRef retains all actual ordered schema marks. If canonical parsing emits
+no code leaf, nativeRef is null and no leaf or code mark is invented. Adjacent
+source constructs may share one canonical leaf after normalization; source owners
+remain distinct and each map uses the actual leaf-local rendered offsets. The
+window's maps identify raw delimiters, trimmed/removed body and normalization
+seams as omitted or normalized segments. The all-space example `before ` followed
+by a single-backtick-delimited three spaces and ` after` canonically becomes the
+unmarked text `before after`, although a Markdown parser alone retains code spaces.
+Repeated delimiters embedded inside the body are content when the canonical parser
+says so; newline/CRLF normalization and surrounding trim follow the complete
+Markdown-to-HTML, sanitizer and native schema pipeline, not a parser event payload.
+
+A far window wholly inside a giant opening delimiter receives the code owner and
+bounded omitted mapping; it must not fetch the whole opening run or fabricate a
+visible code node. A body window receives scalar-safe bounded maps plus direct
+native/mark ownership, including required schema ancestors, with no earlier-body
+reads. sourceMap.ownerRef may resolve the stable code span; that lexical ownership
+is independent of canonical parentRef/childIndex. The stable direct-owner response
+omits sourceMapRef just as HTML direct owners do. Code spans have no continuation
+flags; their exact ranges provide the source relation. Window context cursors and
+map refs bind the admitted window/profile/scope/revision/snapshot; direct code
+owner/native/mark refs bind the source snapshot and expire under the same profile
+or source invalidation rules. This addition changes no source, copy format,
+persistence, canonical parser or session-live editing policy.
+
+Session-native merged ownership remains in the frozen operation `live` stream,
+bound to editorSessionId/localEditSequence/liveGeneration. Its effective grid
+origin, covered-cell ownership and span attributes must come from that frozen
+native state, never canonical HTML attribute guesses. Covered positions identify
+the real owner, including spans originating above a window; bounded intersecting
+owner queries must not expand rows times columns or fabricate covered source cells.
+Existing session history/eviction guarantees and fresh reload differences remain
+unchanged. Canonical context cannot be silently relabelled as live context.
+
+Each detail directory item is `{ kind: "fragment", id, field, offset: 0, text:
+"", nextRef }`; it is an indirection descriptor (empty text is not the value).
+Follow its nextRef through `page.kind: "context", contextRef: nextRef` to the
+field resource. A field resource emits fragment items with increasing scalar-safe
+UTF-16 offsets, a stable `field` name and exact string slices; concatenate only
+within that field/resource. Empty values have one offset-0 empty fragment and
+null nextRef. A nonempty value fragment advances; nextRef points to the next field
+offset or is null exactly at exhaustion. No indirection cycles or zero-progress
+field continuations. The item's `id` identifies that snapshot-local item, not the
+field value or a durable document node. `nextCursor` enumerates the current
+collection only; it is independent of the per-field `nextRef`. Never infer that a
+field ended from a collection cursor being null. Directory entries order as below,
+then each repeated indexed family by numeric suffix; no map-key iteration ambiguity.
+All context responses retain the existing scope/revision/snapshot/expiry header.
+Sum of decoded fragment text on one frame is at most 16,384 bytes; complete wire
+and item budgets still apply, including directories and escaped fragment bodies.
+
+| Detail field(s), in directory order | Encoding |
+| --- | --- |
+| `openingSource`, `closingSource` (every boundary, first) | Exact raw prefix before the first direct child event and suffix after the last direct child event, within the full boundary range. Without children, openingSource is the full range and closingSource is empty. Not rendered text and not an entire child/body serialization. Large prefixes still page. |
+| HTML boundary: `rawAttributeStart:N`, `rawAttributeEnd:N`, `rawAttributeName:N`, `rawAttributeValue:N?` | Zero-based lexical attribute order. Start/end are unsigned decimal UTF-16 offsets of the complete original attribute spelling, excluding surrounding inter-attribute whitespace. Names/values are raw slices, not entity-decoded effective schema attributes; value excludes its quotes and is omitted when absent, including boolean attributes. Each family is ordered as listed, then by N. Large values page normally; consumers do not drain unrelated fields. |
+| codeBlock: `codeStyle`, `info` (info only if fenced) | `fenced` or `indented`; info is parsed fence info text, not JSON |
+| list: `listStart` | `unordered` or unsigned decimal initial ordinal |
+| table: `alignment:N` | Zero-based column; `none`, `left`, `center`, `right` |
+| link/image: `linkType`, `destination`, `title`, `referenceId`, `hasPothole?` | linkType is `Inline`, `Reference`, `ReferenceUnknown`, `Collapsed`, `CollapsedUnknown`, `Shortcut`, `ShortcutUnknown`, `Autolink`, `Email` or `WikiLink`; destination/title/referenceId are parsed strings, possibly empty, never quoted JSON strings. Only WikiLink includes required `hasPothole`, after referenceId: the string `"true"` when an explicit pipe separates destination and label, otherwise `"false"`. Other link types omit it; never emit library Debug enum text. |
+| heading: `level`, `headingId?`, `class:N`, `attributeKey:N`, `attributeValue:N?` | level `h1`–`h6`; zero-based class/attribute order, optional absent value remains absent (not empty); each attribute key precedes its optional value |
+| footnoteDefinition: `label` | Parsed label string |
+| blockquote: `quoteKind?` | Optional `Note`, `Tip`, `Important`, `Warning`, `Caution` |
+| metadataBlock: `metadataStyle` | `YamlStyle` or `PlusesStyle` |
+
+Metadata keys/values below use fragment fields `key`/`value`; ordered task-link
+captures use `taskNoteId`. Those field resources have the same offset/budget rules
+without a boundary directory. Details are a lexical parsing aid, not replacement
+source: exact copy and source maps use canonical source ranges, never reconstructed
+Markdown from decoded attributes. The fixture file includes full context RPC
+frames with a descriptor directory, a multi-fragment destination and empty values.
+
+`note.get { ..., page: { kind: "metadata", ref: metadataRef, cursor?, maxItems?,
+maxWireBytes? } }` returns `kind: "noteMetadataPage"`, the same scope/revision/snapshot,
+`items` and `nextCursor`. Its projection includes title, tags, parent and task metadata
+(including relation arrays), excluding content and annotation collections. Metadata
+uses indexed tree entries `{ id, parentId, key?, keyRef?, index?, type, value?,
+valueRef?, childrenRef? }`: root parentId is null; exactly key or keyRef addresses an
+object member, index addresses an array member. `type` is object/array/string/number/
+boolean/null. Object/array children page through childrenRef; string values page
+through valueRef using context fragments; numeric/boolean/null values are inline.
+Keys up to 1,024 UTF-8 bytes may be inline; longer keys use keyRef. Node IDs/references
+obey token limits. No title, tag, task relation array or arbitrary metadata object
+is a full-row exception. Children enumerate object keys lexicographically and array
+indices numerically, with immutable snapshot-local IDs. An entry is returned exactly
+once per parent traversal; clients need not hydrate siblings to inspect one branch.
+
+#### Ordered task-link summary
+
+`notePaging: 1` also gates `note.get { workspaceId, noteId, page: { kind:
+"taskIds", sourceRevision?, noteInstanceId?, snapshotId?, maxItems?, maxWireBytes?
+} }`. This is a canonical-source summary for any note, especially the spec. It
+replaces full-spec hydration for sidebar ordering, not the distinct checkbox/task
+rows of legacy `note.listTasks` or the workspace membership of `task.list`.
+A first request without snapshotId acquires its own live source snapshot. With
+snapshotId it must supply sourceRevision and noteInstanceId from that snapshot;
+there is no requirement to fetch a source body first. Continuations send only
+`kind: "taskIds"`, `cursor` and the identical budgets. Source lifetime, scope,
+principal, sourceRevision and incarnation checks are the same as source pages.
+
+```typescript
+type NoteTaskIdsPage = {
+  kind: "noteTaskIdsPage"; scope: NoteScope; sourceRevision: string;
+  snapshotId: string; expiresAt: string; totalItems: number; startIndex: number;
+  items: Array<{
+    index: number; sourceRange: { start: number; end: number };
+    taskNoteIdLength: number; // UTF-16 length of the entire raw capture
+  } & ({ taskNoteId: string; taskNoteIdRef?: never }
+    | { taskNoteId?: never; taskNoteIdRef: string })>;
+  nextCursor: string | null;
+};
+```
+
+The summary is the exact lexical result of the existing frontend
+`extractOrderedSpecTaskIds` / `TASK_LINK_REGEX_FLEXIBLE`, not a Markdown AST query:
+
+```javascript
+/\[([^\]]+)\]\(intent:\/\/local\/task\/([^)]+)\)/g
+```
+
+Scan the whole raw source left to right with this ECMAScript global expression
+(no extra flags); take the second capture, keep its first occurrence, and deduplicate
+by exact string equality. Labels and IDs are nonempty. Include prose, every match
+on one line, link-shaped code/image text, and any whitespace/newlines or escapes
+accepted by that expression. Do not trim, URI-decode, case-fold, normalize, require
+UUIDs, validate existence, or include workspace-qualified URLs that do not match.
+Encoded IDs and decoded IDs are different; a duplicate on another source page does
+not reappear. Splitting a link across source pieces cannot change membership.
+`sourceRange` addresses the **second capture only**, at its first occurrence, in
+UTF-16 canonical-source offsets; it is neither the label nor the whole link range.
+
+`totalItems` is the exact deduplicated count, a safe integer maintained in the
+revision's index. `startIndex` is the first ordinal on this page, from zero;
+item indices are contiguous. `nextCursor` is null iff
+`startIndex + items.length === totalItems`. A non-exhausted page must advance.
+An empty summary returns startIndex/totalItems 0, empty items and null cursor.
+A valid exhausted traversal returns startIndex equal to totalItems. No arrays of
+all IDs or source content are hidden in headers. Item and complete escaped wire
+budgets apply independently; the request may lower either. Indexed membership,
+first-position, deduplication and totals are daemon obligations, not permission
+to read/regex-scan the whole source on each page request.
+
+Raw captures up to 256 decoded UTF-8 bytes use `taskNoteId`. Longer captures use
+only `taskNoteIdRef`, a bounded opaque reference, and `taskNoteIdLength`; the raw
+capture is not an opaque ID subject to truncation/rejection at 256 bytes. Read it
+with `note.get { ..., page: { kind: "context", contextRef: taskNoteIdRef, ... } }`:
+fragment field `taskNoteId`, offsets starting at zero, exact decoded text, and
+scalar-safe continuation until length/exhaustion. It retains the same live
+snapshot/scope/revision/expiry. Long IDs may require many fragments; they never
+increase the frame bound. Reference identity alone is not task-ID equality.
+
+A source or metadata revision change invalidates summary pages and ID fragments
+(including after task conversion/marker projection); a comment-only epoch advance
+does not. Reacquire after stale/expired and replace the old sequence only from the
+new revision, never append it. FE cache ownership also includes request generation:
+late pages after reconnect, note/workspace switch or cancellation cannot reorder the
+current sidebar. Exhaustion distinguishes a complete empty result from not loaded;
+never use partial page length as the total. Dirty local edits/history stay separate;
+this endpoint promises canonical-source order, not an uncommitted session overlay.
+Old daemons keep the existing full-spec compatibility path. `note.listTasks` and
+`task.list` results remain unchanged; they are not substitutes for this summary.
+
+#### Partial mutations and authoritative outcomes
+
+`splices` is a nonempty ascending array of `{ start, end, text }`, all addressed
+against **one baseRevision**, not sequential intermediate source. Validate every
+range and replacement before writing. Require `0 <= start <= end <= sourceLength`,
+scalar-safe endpoints, `previous.end <= next.start`, and strictly increasing starts.
+Thus touching replacements are legal; two inserts at the same point or an insert
+at another splice's start are ambiguous and rejected. An insert at its predecessor's
+end is legal. Apply conceptually from right to left. At the caller-edit stage, source outside these
+ranges remains byte-for-byte identical. The separately identified canonical-effect
+stage below can change other ranges under existing note semantics; the final
+receipt never conceals those changes as caller splices. Repeated text is addressed by position,
+never a first-text-match search. Stale base rejects the entire batch; no automatic
+three-way merge on this method and no partial mutation on overlap/validation failure.
+
+`operationId` is a canonical UUID minted once for a logical save; the stable scope and
+principal form its receipt key; method is bound into the stored digest, so cross-method
+reuse of that identity is a mismatch. `expiresAt` is an RFC3339 UTC millisecond
+deadline no more than 24 hours after first admission. `payloadDigest` is lowercase
+SHA-256 of compact canonical JSON of `{ method: "note.applySplices", backendId,
+workspaceId, noteId, noteInstanceId, baseRevision, operationId, expiresAt, splices }`:
+recursively sort object keys lexicographically, retain array order, use JSON string
+escaping and UTF-8 with no trailing newline (same canonical JSON algorithm as the
+transfer-selection fixtures). All numbers here are safe integers. Digest the exact
+replacement text, not normalized Markdown. Verify it server-side. Same key/same
+digest replays the original receipt, before testing the now-stale base; while its
+identity record is retained, the same key
+with any different payload/digest fails `note-operation-mismatch`, even if the
+replacement is identical. In-flight duplicates join or return pending status.
+
+Admission expires at the deadline; reject a new execution after it, even after
+receipt pruning. Keep durable outcome/digest records through at least seven days
+past that deadline. Within that retention, retries/status survive daemon restart
+and unrelated writes. Replays require authorization and return the same historical
+receipt, not the current revision. After pruning, status is `unknown`; a past-deadline
+operation cannot be newly executed with that expired payload. IDs are never reused
+by clients with another deadline/payload; after retention the server cannot prove
+a pruned ID’s prior outcome or mismatch and must not claim it can. Do not invent a fresh operation ID to
+resolve an uncertain result or extend its deadline. Recover/reconcile explicitly.
+
+Source, rev, indexes, comment-anchor effects, attribution invalidation, metadata,
+version snapshot, task conversion children/relations and **receipt** commit in one
+transaction. Reuse existing author/50-version history and task conversion semantics,
+including warnings and final converted source; existing best-effort projections into
+other parent notes keep their documented semantics and are not silently made part
+of this note transaction. The receipt identifies the final
+post-conversion revision. Deterministic validation/conflict receipts may be stored
+without any note/history/index mutation. Publish notifications only after commit;
+retries emit no second history entry, child task or event. The generic helper that
+writes a receipt after a callback is insufficient for crash atomicity. Transaction
+failure before commit has no source/history effects; an uncertain commit must be
+resolved by the durable operation record, not guessed from a network exception.
+
+```typescript
+type NoteCommitReceipt = {
+  kind: "noteCommitReceipt"; outcome: "committed"; scope: NoteScope;
+  operationId: string; payloadDigest: string;
+  beforeRevision: string; afterRevision: string; sourceLength: number;
+  mappingRef: string; effectsRef: string; inverseRef: string; receiptExpiresAt: string;
+  headerDigest?: string; viewId?: string; // present for staged commits
+  invalidation: "all"; // clean source/context/annotation caches must revalidate
+};
+type NoteOperationStatus = NoteCommitReceipt | NoteStageState | ({
+  kind: "noteOperationStatus"; scope: NoteScope;
+  operationId: string; payloadDigest?: string; headerDigest?: string;
+  // inline: payloadDigest required; staged: headerDigest required, sealed payload when known
+} & (
+  | { outcome: "pending" | "unknown" }
+  | { outcome: "conflict" | "rejected";
+      error: { code: string; currentRevision?: string } }
+));
+```
+
+Status results carry the requested scope and identity digest on every arm (staged
+headerDigest before sealing; payloadDigest as well once known).
+`pending` means a durable admission exists but is unsettled; recovery must settle
+it after restart. `unknown` means no authoritative retained outcome was found,
+**not** failure and not permission to drop drafts or repeat under another identity.
+An ack lost after commit is resolved through `note.operationStatus` or exact retry.
+FE outcomes distinguish committed, conflict, rejected and transport-unknown/pending;
+a drained save queue, cancelled request or legacy generic `ok` is not a save receipt.
+Only a matching receipt clears the acknowledged local sequence prefix. Later typing
+stays dirty. Rejection/conflict retains the full draft, selection and undo journal.
+
+`note.get { ..., page: { kind: "mapping" | "effects", operationId, ref, cursor?,
+maxItems?, maxWireBytes? } }` pages immutable receipt-owned data until
+`receiptExpiresAt`, independent of current live page revision. It includes scope,
+operationId, beforeRevision, afterRevision, `items`, `nextCursor` and kind
+`"noteMappingPage"` / `"noteEffectsPage"`. Recheck visibility even after deletion;
+receipt access does not grant read access to a recreated note. For a deleted
+incarnation, only its original operation principal with current workspace read
+authority can read retained receipts/mappings; invisible existing incarnations
+follow the ordinary not-found rule. Large deleted text
+and complete post-write text never appear in acknowledgements or errors.
+
+Mapping items `{ start, end, insertedLength }` describe the **final authoritative**
+base-to-result change, including task conversion and marker projection, sorted and
+nonoverlapping under the same range rule as splices. Derive them from actual edits/conversion
+provenance, never ambiguous matching of repeated text. `insertedLength` counts UTF-16.
+For a point before a change, add prior length deltas. At/inside a replaced range,
+`affinity: "before"` maps to the new start, `"after"` to the new end; report
+`deleted: true` for points strictly inside removed source. At an insertion boundary,
+affinity chooses before/after inserted text. At the old nonempty end, map to the new
+end then apply any next touching change using affinity. Every mapping page has
+bounded items; no one-entry-per-character mapping requirement. A consumer does not
+apply a prefix as a complete map. Exhaust all relevant mapping pages or invalidate
+and reacquire the target. Selection direction and both endpoint affinities belong
+to the session. Source position mapping alone does not restore a deleted canonical
+anchor; preserved marker IDs and inverse history provenance are required.
+
+Effects items are `{ kind: "createdTask", taskNoteId }`, `{ kind: "warning",
+code, messagePreview, truncated, detailRef? }`, or `{ kind: "annotationInvalidation",
+sourceRevision, attributionGeneration, commentRevision }`; large detail text uses
+the context fragment form scoped to the receipt: these context pages use `sourceRevision: afterRevision`, a receipt-owned
+`snapshotId` and `expiresAt: receiptExpiresAt`; they do not require the current
+source revision to remain equal. Aggregate `convertedCount` is in
+the effects page header, never inferred from one page. Existing convert-with-warning
+behavior is preserved, not replaced with new fatal errors.
+
+**Caller edits versus canonical effects.** Existing `auto_convert_task_blocks_after_write`
+examines the entire post-write source, including a pre-existing distant `@@@task`
+fence; reanchoring can repair orphan/partial anchors and scrub distant phantom UUID
+markers. The partial path preserves these semantics, not a false promise that the
+caller range is the complete authoritative footprint. Define immutable source states:
+`base`, `callerResult` (only addressed splices), `preConversionCanonical` (completed
+initial anchor repair/phantom scrub), and `final` (all existing canonical effects).
+Effects pages enumerate every additional replacement as `{ kind:
+"sourceEffect", reason: "task-conversion" | "anchor-repair" | "phantom-scrub" |
+"task-marker-projection", inputState, outputState, range, insertedLength,
+beforeDigest, afterDigest, detailRef }`. Intermediate state tokens allow multiple
+ordered effect phases; ranges are in that phase's input, never silently in base
+coordinates. Digests cover exact removed/inserted UTF-8 bytes; paged details carry
+source/provenance when requested. Bytes outside the caller ranges are unchanged in
+callerResult; bytes outside each declared effect footprint are unchanged in its
+output. Final mappings compose all phases with preserved source provenance. Effects
+are not permission for formatting normalization or arbitrary rewriting. Live marker
+IDs with valid comments and non-UUID lookalike documentation remain intact.
+
+A task conversion business warning preserves existing convert-with-warning behavior.
+A recoverable conversion failure uses a transaction savepoint **after** initial
+reanchoring/phantom scrub and its canonical write, version snapshot and comment
+orphan-state updates. It rolls back only conversion/children and any subsequent
+conversion-specific repair, effects and version snapshots. The final source is
+`preConversionCanonical`, never the uncleaned callerResult; completed initial repair
+effects, annotation invalidations and history remain. This matches the existing
+write path's cleaned-content fallback when auto-conversion returns no refetched note.
+No half-created child can commit. The receipt's mapping/effects/inverse references
+describe this actual final source, and epochs describe only committed changes;
+no transient conversion revision or child ID escapes the savepoint. Publication
+and receipt remain atomic with the outer write. Fatal source/index/receipt transaction failure
+rolls back everything. Existing version snapshots (including a distinct conversion
+snapshot where applicable) retain their meaning inside the transaction; **one
+logical editor history operation** does not mean deleting an existing version-history
+snapshot. Replaying a receipt repeats neither snapshots nor canonical effects.
+
+#### Staged frozen operations
+
+Large edits, inverse history and explicit whole-document reads use the same scoped
+operation ownership as inline writes. They never split one gesture into independent
+commits, submit cropped full replacements, or accumulate a large request envelope.
+The following prepared methods are all gated by `notePaging: 1`:
+
+| Method | Params | Result |
+| --- | --- | --- |
+| note.operation.begin | scope fields, operationId, expiresAt, header, headerDigest | `NoteStageState` — reserves identity and immutable base view; no note mutation |
+| note.operation.append | scope fields, operationId, headerDigest, stream, sequence, previousDigest, records, chunkDigest | `NoteStageAck` — durable contiguous chunk receipt; no note mutation |
+| note.operation.seal | scope fields, operationId, headerDigest, manifest, payloadDigest | `NoteStageState` — validated immutable frozen view, or rejected/conflict; no note mutation |
+| note.operation.read | scope fields, operationId, headerDigest (staged) or payloadDigest (inline receipt), kind, ref?, textId?, offset?, cursor?, maxItems?, maxSourceBytes?, maxWireBytes? | `NoteOperationPage` — bounded source, selection, search, inverse, mapping or effects page |
+| note.operation.commit | scope fields, operationId, headerDigest, payloadDigest | `NoteCommitReceipt` — one CAS transaction, same retry/status rules as inline writes |
+| note.operation.cancel | scope fields, operationId, headerDigest | `NoteOperationStatus` — closes uncommitted staging or reports the already committed outcome |
+
+`header` is `{ baseRevision, editorSessionId, localEditSequence, liveGeneration,
+selectionGeneration, action: "read" | "mutate", output: "source" |
+"selectionMarkdown" | "search", selection: "all" | "ranges", query? }`.
+`query` is required only for search: `{ text, caseSensitive: false,
+mode: "source" | "renderedText" }`, literal search, at most 1,024 decoded UTF-8
+bytes. Rendered-text search projects existing canonical text semantics across marks,
+not DOM fragmentation; each hit supplies a source range and paged projection context.
+Both modes include the frozen dirty prefix. `selection: "ranges"` requires the
+selection stream; `all` means the complete frozen extent without enumerating it.
+Native context-first selection is resolved by the client before capturing this header.
+
+The bounded begin request is digested as canonical JSON of `{ method:
+"note.operation.begin", ...scope, operationId, expiresAt, header }`. `headerDigest`
+is its SHA-256. IDs, safe-integer counters, Unicode and frame budgets use the core
+limits; headerDigest/chunkDigest/payloadDigest are lowercase 64-hex SHA-256 strings. Exact replay returns the same operation, even if current source later
+changes; any different header under that identity is rejected. Beginning validates
+baseRevision/current incarnation and pins an immutable revision root with copy-on-write
+storage or equivalent retained pieces; it must not read/copy the entire source or
+hold a database transaction across requests. Unlike ordinary live page cursors,
+this explicit operation's retained source remains readable after a remote update.
+Resource exhaustion fails explicitly without note mutation or replacing the captured
+draft. No source-size cutoff or truncation is inferred from finite page budgets.
+
+Staging expires at `expiresAt` (at most 24 hours after begin); no implicit renewal.
+Streams are independently append-only, with zero-based consecutive `sequence` and
+a hash chain: `previousDigest` is null for chunk zero, otherwise the preceding
+chunkDigest. `chunkDigest` hashes canonical JSON `{ stream, sequence,
+previousDigest, records }`. Chunks contain at most 128 records, at most 16,384 total
+decoded UTF-8 text bytes and at most 65,536 escaped frame bytes. Acknowledgement
+contains only `{ kind: "noteStageAck", scope, operationId, stream, sequence,
+chunkDigest, nextSequence }` and fits 4,096 bytes. One request per stream and at most
+two requests total are outstanding; backpressure is mandatory. Same-sequence/same
+hash retries return the same ack; gaps, different content, wrong chain or writes
+after sealing fail without modifying accepted chunks. Clients need not retain all
+acknowledged chunks in the rendering process. Server staging uses indexed external
+storage; whole-operation disk/source/output costs are disclosed separately from
+bounded resident pages. Out-of-space is a typed failure, never partial publication.
+
+Only these named streams are accepted; records are tagged and validated as follows:
+
+- `text`: `{ kind: "text", id, offset, text }`, contiguous scalar-safe UTF-16 offsets
+  per immutable text ID. Splice/selection strings refer to `{ textId, length,
+  utf8Bytes, sha256 }`; this digest covers raw concatenated UTF-8, not JSON escaping.
+- `dirty`: `{ kind: "splice", localSequence, ordinal, start, end, replacement }`.
+  A localSequence names one native history group; its ordered, nonoverlapping ranges
+  share that group's input source, and groups apply in increasing sequence order
+  through exactly header.localEditSequence. Empty dirty streams are valid. `ordinal`
+  starts at zero per group; groups cannot reopen. Transport batching preserves these
+  original chronological history groups. A dirty record after the captured
+  fence is invalid. Replacement is a text reference. This builds the frozen dirty
+  view from base without saving, converting tasks or repairing source markers.
+- `selection`: `{ kind: "range", ordinal, start, end, anchorAffinity, headAffinity,
+  direction }`, ordered disjoint ranges in the **frozen dirty view**. Direction is
+  `"forward" | "backward"`; affinities are `"before" | "after"`. Point selections
+  are valid for insertion. Equal starts/overlaps are rejected; large table selections
+  page here without replacing disjoint cells with their hull.
+- `mutation`: `{ kind: "splice", ordinal, start, end, replacement }`, ordered,
+  nonoverlapping base ranges against the **frozen dirty view**, using inline splice
+  boundary rules but without an all-operation item limit. This describes an optional
+  large paste/delete/format action after the captured dirty prefix. `action: "read"`
+  forbids this stream; `action: "mutate"` commits the prefix plus these changes.
+  Saving only the dirty prefix uses an empty mutation stream. Ordinals are consecutive.
+- `live`: `{ kind: "projection", ordinal, sourceRange, role, canonicalId?, detail }`,
+  in the frozen dirty view, with text-reference detail. Roles are `"selection-owner"`,
+  `"paragraph-seam"`, `"inline-span"`, `"marker-occurrence"`; detail is a text-reference to a version-1 descriptor with `{ version: 1,
+  nodeType, parentOrdinal, nativeRange, attributesRef? }`. nodeType is the existing
+  editor schema node/mark name (at most 1,024 UTF-8 bytes), parentOrdinal is null or
+  an earlier live-record ordinal (acyclic), nativeRange is `{from,to}` in the frozen
+  native ProseMirror position units (UTF-16 text units, one position per leaf atom,
+  and entry/exit positions for non-leaf nodes), and attributesRef names paged metadata-tree
+  entries using the metadata shape above. Attribute trees are encoded as additional
+  text-ID records, one canonical JSON tree entry per text ID, referenced by their IDs;
+  oversized string values are separate text IDs, not nested complete strings.
+  References cannot escape the sealed operation. SourceRange is always UTF-16 source;
+  nativeRange is never substituted for it. The descriptor may preserve
+  native same-session selection wrappers/aliases, but cannot change canonical source,
+  manufacture persisted marker IDs, or authorize a new syntax/persistence format.
+  The server validates references/ranges and output adapters validate role schema
+  before using it; unknown versions/node types/attributes are rejected, never guessed.
+  Canonical marker occurrence descriptors additionally require canonicalId and
+  preserve start/end marker provenance; source-dependent details are invalid if
+  their range or generation does not match the frozen view.
+
+`manifest` has one fixed entry for each named stream (including empty streams):
+`{ stream, chunks, records, lastDigest }`, in the order above. Empty streams use
+zero counts/null digest. `payloadDigest` hashes canonical JSON `{ headerDigest,
+manifest }`. Seal verifies all chains/counts/text-reference lengths and digests,
+Unicode endpoints, operation order and the completed view, then atomically freezes
+that manifest. Missing chunks, mismatched digest, malformed projection context and
+extra streams reject without sealing or note mutation; the client may finish missing
+chunks then seal the same valid manifest. Replaying a successful seal with a different
+manifest is an operation mismatch. Sealed data never changes. All validation must
+operate through indexed pages; a full reconstructed string in the renderer or a
+full scan before each append is not licensed by this protocol.
+
+```typescript
+type NoteStageState = {
+  kind: "noteStageState"; scope: NoteScope; operationId: string;
+  headerDigest: string; payloadDigest?: string;
+  phase: "staging" | "sealed" | "cancelled" | "expired";
+  baseRevision: string; expiresAt: string; viewLength?: number;
+  streams: { stream: "text" | "dirty" | "selection" | "mutation" | "live";
+    nextSequence: number; lastDigest: string | null }[];
+};
+```
+
+This state has exactly the five stream summaries, never chunk/text/history arrays,
+and fits 4,096 escaped bytes. `note.operationStatus` accepts exactly one of inline
+`payloadDigest`, or staged `headerDigest` plus optional sealed `payloadDigest`.
+For staged operations it returns NoteStageState before commit admission, the typed
+pending/unknown/rejected/conflict outcome after admission, or NoteCommitReceipt.
+Every staged result includes headerDigest; committed receipts also include the final
+payloadDigest. The receipt key is shared with inline operations: the same ID cannot
+be reused through a different method. Begin/append/seal receipts and retained base
+references survive daemon restart until their deadline; process restart does not
+rebuild client selection/undo state or turn staging into an automatic save.
+
+`note.operation.read` requires a sealed manifest for staged view output. Inline
+receipts also permit `inverse`, `inverseText`, `mapping` and `effects` reads by
+payloadDigest without a staged header. Output is `{ kind:
+"noteOperationPage", scope, operationId, headerDigest, payloadDigest, viewId,
+outputKind, sourceLength, items, nextCursor, expiresAt }`. Inline receipt reads omit
+headerDigest/viewId and carry beforeRevision/afterRevision instead. sourceLength is
+the frozen input extent (or final extent for inverse reads); emitted text offsets
+address the output stream, not necessarily that source. `viewId` binds baseRevision,
+all header generations and sealed manifest; cursors additionally bind kind/budgets
+and continuation. No cursor can be reused across operations or output kinds. Source
+and selection output items are `{ offset, text }`, scalar-safe UTF-16 output offsets
+starting at zero and contiguous; selectionMarkdown uses the existing wrapper handling,
+anchor stripping and edge trimming, with only Markdown text/plain output. Large source
+or selections stream through bounded parser context and external output staging;
+source output is exact frozen source without selection trimming. All items use the
+page bounds above. A `nextCursor: null` frame is terminal output, never a partial
+success caused by resource error. Cancellation/error discards unpublished sink output.
+
+First-read addressing is explicit (all selectors are included in cursor ownership):
+
+| kind | Required first-read selector | Items / resource lifetime |
+| --- | --- | --- |
+| source, selectionMarkdown, search | No ref/textId; starts at output offset or search scan zero | Sealed frozen view until staging expiresAt; remote writes do not replace it |
+| inverse, mapping, effects | `ref` equal to this receipt's inverseRef, mappingRef or effectsRef | Ordered records until receiptExpiresAt, even after staging expiry or a later source revision |
+| inverseText | `ref: inverseRef`, `textId` from one of its replacement references, `offset?` (default zero) | Exact scalar-safe text fragments `{textId,offset,text}` until receiptExpiresAt |
+| detail | `ref` from a search detailRef, inverse provenanceRef, or an already returned detail/children reference | Paged typed detail records or text fragments; inherits the issuing view's expiresAt or receipt's receiptExpiresAt |
+
+For inverseText, offset is UTF-16 within that named text value and must be a scalar
+boundary; length, UTF-8 bytes and raw SHA-256 match the inverse replacement reference.
+A text ID not reachable through the given inverseRef is invalid, even if another
+operation owns the same ID. Detail records use the bounded context/metadata-tree
+shapes above; text-value references can be resolved with `kind: "detail", ref` and
+optional scalar-safe offset, without hydrating the parent tree. Selection/source
+output only accepts cursor continuation (use ordinary source seek for live browsing).
+Every continuation repeats kind and the same ref/textId/budgets, omits offset, and
+sends the issued cursor. A ref/cursor mismatch or a foreign scope/operation/kind is
+`note-page-cursor-invalid`; expired view-owned data is `note-page-expired`, not an
+empty successful page. Receipt-owned reads do not require a still-live staged view;
+they validate the retained receipt/digest and inherit its expiry. Pending/cancelled
+operations never expose a fabricated inverse. Readonly operations have no receipt
+extension: their search/details expire with their pinned view.
+
+Search items are `{ hitId, sourceRange, detailRef }`, ordered by source start then
+hitId. Search pages additionally carry `scannedThrough` (UTF-16 source extent),
+`count: { value, exact }`; false means matches observed so far, true only after the
+entire frozen view is examined. A work-limited page may have no hits but must advance
+scannedThrough or its cursor; only terminal exhaustion reports an exact total.
+Target navigation uses that frozen view's source range/context. If live revisions or
+dirty generations have moved, map the target through verified maps or restart search;
+never install an old hit's offsets on current content. An explicit search can run
+against the old frozen view and label it as such; late results cannot change a new query.
+
+Commit is valid only for `action: "mutate"`, a sealed manifest and an unexpired
+admission. It checks that current sourceRevision still equals header.baseRevision,
+then composes the dirty prefix and mutation into authoritative base-addressed edits,
+applies existing canonical effects and publishes source/index/metadata/history/
+receipt atomically. A batched save does not merge captured native history groups;
+the optional mutation stream is one additional logical gesture after that prefix.
+An unrelated or conflicting remote write still returns strict
+conflict; the client can create a **new** operation after explicit rebase, retaining
+this draft and history. Do not relabel an uncertain old operation as that rebase.
+The commit acknowledgement has the same bounded receipt as inline applySplices,
+plus headerDigest and `viewId` (all receipts carry inverseRef). Mappings span original base to final,
+not merely frozen dirty view to final. A frozen local prefix already committed by
+another local save likewise conflicts: reconcile its receipt and rebase; never save
+it twice. Pending/cancel and lost acknowledgements use the existing durable status.
+
+`note.operation.read kind: "inverse"` (after either inline or staged commit) returns receipt-owned paged inverse
+records `{ historyGroup, inputState, outputState, ordinal, start, end, replacement,
+provenanceRef }`, newest history group first. The first inputState is afterRevision;
+each group’s ranges share its input state, and its outputState is the next group’s
+input. This preserves dirty-prefix history groups separately from the final gesture;
+undoing only the newest gesture does not discard earlier typing. Large removed text
+is streamed by `kind: "inverseText"` using the same
+text-ID offset contract. Inverse references/digests are verified just like staged
+input. Undo is a new operation, never an operation-ID replay. Transform its targets
+through verified later mappings; overlapping remote changes retain the journal and
+surface conflict instead of reverting unrelated work. Canonical marker and alias
+provenance restores original identities where valid; task-conversion side effects
+follow existing task semantics (undoing a link does not silently delete a child task).
+Viewport eviction/remount never deletes chronological history, selection or inverse
+data. Receipt resources last at least through receiptExpiresAt; session history owners
+must transfer any still-needed inverse into their indexed session journal before
+that resource expires, never silently shorten undo to a page-cache/receipt horizon.
+This is a session resource obligation, not a promise to restore undo after app restart.
+
+Cancellation is serialized with commit admission. If cancellation wins, persist a
+cancelled tombstone/digests through the receipt-retention period, release base/staged
+resources, reject later appends/seals/commits and perform no note/history mutation.
+If commit admission wins, cancellation returns pending or the committed receipt;
+closing the transport is not rollback. Retrying cancel is idempotent. Cancelling a
+committed operation returns its receipt and may release unneeded output staging,
+never source/history or required inverse records. Expired uncommitted operations
+release leases and retain an expired identity tombstone through retention; even
+after tombstone pruning the deadline prevents re-execution. Lost chunk acks use the
+same sequence/hash; lost begin/seal/commit acks use the same stable identity/digests.
+`unknown` after retention or transient unavailability is never a failure receipt.
+
+Only matching authoritative commit receipts clear the captured dirty prefix.
+Read/clipboard/export completion clears **no** draft. Later edits remain dirty.
+Output publication to clipboard/file has a separate sink receipt; the note protocol
+cannot claim OS or file success. Cut waits for complete publication before submitting
+its staged deletion. Source conflict after publication leaves the copied value and
+source intact; publication failure must never trigger commit. Explicit raw-source
+materialization uses source output and reports progress/cancellation/complete status.
+
+
+#### Annotation pages and independent epochs
+
+With `noteAnnotations: 1`, existing `note.lineAttribution.load`, `comment.list` and
+`comment.getThread` accept an opt-in `page` object; omission preserves their exact
+legacy payloads, including full maps/replies where currently returned. Page kinds are respectively `"attribution"`, `"comments"` and `"replies"`. Their
+first request carries ranges/filters (or threadId for replies), `maxItems?` and
+`maxWireBytes?`; continuation carries cursor plus identical query/epoch/budget
+fields. Each snapshot has the same 300-second fixed lifetime and explicit
+stale/expired behavior as source paging. All paged
+requests require the four scope fields and `sourceRevision` at the top level;
+query/budget fields are nested in `page`. Attribution requests additionally
+carry top-level `attributionGeneration` after the first response; comment requests carry
+top-level `commentRevision` after the first response. Epoch strings are opaque. Source edits
+invalidate all projections; recomputation can advance attributionGeneration without
+source changes; reply/resolve/delete can advance commentRevision without either
+source or attribution changes. A source-writing comment action advances both source
+and comment epochs. Persist these epochs atomically with their respective changes.
+
+Range methods take `ranges: [{start,end}]`, sorted, nonempty, pairwise disjoint and
+nonadjacent (client coalesces touching ranges); up to 32 intervals. An empty set is
+valid and produces empty items, not a whole-note query. Cursor identity binds the
+**exact admitted interval set**, filters, scope, relevant epochs, snapshot, budgets
+and continuation. Do not replace a table's admitted disjoint cell ranges with their
+bounding hull. An anchor/attribution interval overlaps if `start < query.end &&
+end > query.start`; point anchors use `query.start <= point < query.end`. Include
+anchors that start outside the viewport. Canonical IDs deduplicate repeated matches
+across disjoint ranges; overlap boundaries never create synthetic comment IDs.
+
+- Attribution page kind `noteAttributionPage`: `scope`, `sourceRevision`,
+  `attributionGeneration`, `snapshotId`, `expiresAt`, `items`, `nextCursor`,
+  `state: "ready" | "pending"`. Pending has no items/cursor and cannot reuse an
+  old map as current. Items contain `{ id, sourceRange, startLine, endLine,
+  authorRef, timestamp, turnNumber? }` with existing author semantics. Authors and
+  optional scale statistics use paged `detailRef` context, never a note-wide legend.
+  Publishing a computation checks its source revision transactionally; an old job
+  must not overwrite a newer generation. Ranges include entire intersecting lines
+  by source extent; do not decode the legacy attribution JSON then discard it.
+- Comment list page kind `noteCommentPage`: `scope`, `sourceRevision`,
+  `commentRevision`, `snapshotId`, `expiresAt`, `items`, `nextCursor`,
+  `totalThreads`, `totalComments`. Comment status values retain all five existing
+  spellings: `open`, `resolved`, `pending`, `accepted`, `rejected`; this also applies
+  to reply items. These exact safe-integer totals refer to the
+  filtered range set at that epoch, independent of the page; indexed aggregate
+  queries must not fetch every row. Summary items have `{ threadId, rootCommentId,
+  rootState: "present" | "deleted", status,
+  totalComments, latestCommentId, latestCommentPreview, truncated, anchorRef,
+  detailRef }`, never nested `comments` or replies. `includeComments: true` with
+  `page` is invalid. An optional `anchorState: "anchored" | "orphaned" | "all"`
+  filter defaults to anchored; orphaned mode is note-scoped and requires `ranges: []`.
+  `all` is also explicitly note-scoped with empty ranges. An ordinary anchored
+  empty-range query stays empty. Anchored rows order by first overlapping position,
+  then threadId; note-scoped rows by threadId. No unstable timestamp-only cursor.
+- `comment.getThread` page kind `noteReplyPage` binds threadId in addition to the
+  epochs and returns bounded comment summaries in `(createdAt,commentId)` order,
+  `totalComments`, `nextCursor`, plus the original `rootCommentId` and
+  `rootState: "present" | "deleted"` on **every** page, including exhaustion.
+  When present, the root is included once across a complete traversal as an ordinary
+  item, never a full embedded exception or necessarily the first item. Each item preserves canonical
+  commentId, authorPrincipalId/authorIdentity presence, status and createdAt, with
+  `preview`, `truncated`, `bodyRef` and `detailRef`. A huge root, reply, author label,
+  suggestion or quoted selection pages through context fragments; no truncation of
+  authoritative bodies. Replies do not acquire independent source anchors.
+
+**Root deletion with surviving replies.** Deleting a root does not delete its
+replies or change the original thread/root identity. `rootState: "deleted"` means
+the original root row is absent, not that the thread is missing or the page is
+exhausted. Retain its canonical root ID (the native creation path uses that ID as
+threadId); never substitute the first surviving reply's ID. Items enumerate only
+surviving comments once, in the same deterministic order; totalComments counts
+those survivors, with no deleted-root/tombstone item, body, preview or synthetic
+author. A readable thread has totalComments greater than zero even on an exhausted
+empty page. Each page repeats the same rootState and exact total for its epoch.
+Thread summaries likewise count survivors and derive status/latest preview from
+them. A deleted-root summary has `anchorRef: null`; it is available through the
+note-scoped `anchorState: "orphaned" | "all"` queries, not range-overlap queries.
+Stray source markers do not create a live root or independent reply anchors.
+
+Read a surviving thread by its original threadId or a surviving commentId. A fresh
+paged lookup after the **last** comment is deleted returns the existing typed
+`-32602` / `data.code: "not-found"` category, with `data.entity: "commentThread"`;
+it is not an empty successful thread. A fresh lookup by a deleted commentId uses
+the same category with `entity: "comment"`; use the retained threadId to read its
+surviving replies. These discriminators describe the addressed comment resource,
+not deletion of its containing note. Legacy unpaged lookup errors and its
+first-survivor `rootComment` fallback remain unchanged.
+
+Each successful comment deletion advances commentRevision and shared stateGeneration.
+Any old reply/summary/detail cursor, even one holding a snapshotId, becomes stale;
+an old in-flight response cannot enter a cache guarded by the newer comment epoch.
+Reacquire from the first page to obtain the new rootState/count. A continuation
+after final deletion follows the same stale-epoch rule; a new lookup then reports
+not-found. Ordinary annotation snapshots do not retain deleted root content across
+epochs. Comment-only deletion leaves sourceRevision/attributionGeneration unchanged;
+source pages and explicit frozen source operations retain their existing source
+semantics, but do not pin comment rows or authorize old annotation replies. A later
+source marker scrub advances sourceRevision and invalidates its dependent pages as
+usual. Retain thread/root identity, survivor counts and root-presence state in
+indexed metadata; determining these headers must not load all replies.
+
+Annotation detail/anchor references resolve through `note.get` context pages with
+the same annotation epochs and expiry. Anchor descriptors retain canonical
+`commentId`, `startId`/`endId` and source marker provenance, with independently paged
+occurrences `{ occurrenceId, sourceRange, canonicalId }`. Occurrence IDs are
+snapshot-local; canonical IDs remain the existing embedded marker UUIDs. Native
+aliases or multiple projections of one marker must not mint new persisted IDs.
+An orphan is explicit, not an empty-success deletion of the comment. Undo restores
+original marker identity; dirty comment drafts remain keyed by canonical IDs and
+are not replaced by a stale summary. An attribution-only change does not expire a
+comment cursor and vice versa. Source change expires both. Each page echoes its
+relevant epochs; clients validate them AND the local request generation before use.
+Bounded subscriptions and reconnect rules are in [§6](../06-events.md#prepared-note-page-subscriptions).
+
+#### Frozen operations and implementation handoff
+
+All-document operations capture `{ scope, sourceRevision, editorSessionId,
+localEditSequence, liveGeneration, selectionGeneration, ranges, direction,
+affinities }` at the gesture, including debounce-held edits. Their input is canonical
+source plus exactly that dirty prefix and matching live context. Later typing does
+not enter an in-flight copy/search/export. They must not silently save to obtain a
+server-visible view. A logical select-all covers unloaded source without hydration;
+its painting is only a viewport projection. Preserve native context-first selection
+inside tables/code before document-wide expansion. Search covers unloaded and dirty
+text and returns revision/view-bound source ranges, not DOM-node offsets or cross-note
+FTS ranks. Hits, count completion and context are bounded/paged; a partial scan must
+not claim an exact total. Source versus rendered-text mode must be explicit.
+
+Full-source copy/export retains exact Markdown; existing selected-note copy retains
+its Markdown `text/plain` behavior. No implicit rich HTML MIME addition. Streaming
+output has explicit ordered pages, terminal success/error, backpressure and cancellation;
+only complete publication is success. Cut publishes first, then conditionally commits
+the frozen deletion: a failed clipboard write changes no source, and a source conflict
+after successful copy retains source and the copied value. Do not restore an old
+clipboard over a newer user's copy. Real OS publication and note transactions are
+not atomic together. These are ordering requirements, not proof of an OS bridge.
+
+**Preserved operation and lifetime policy.** These are compatibility defaults from
+the existing editor and the approved Spec, not new product decisions:
+
+- Selected copy remains trimmed Markdown `text/plain`, using the current
+  `src/lib/utils/selected-note-markdown-copy.ts` wrapper/anchor behavior. No default
+  rich HTML MIME is added. Full-source copy/export does not inherit selection trim.
+- Explicit raw-mode entry may materialize the full frozen source into Monaco, with
+  separately measured source/model/temporary memory and cancellation/progress. Its
+  DOM remains virtual; ordinary rich entry/editing remains paged. The current
+  `RawNoteCodeEditor.svelte` holds full draft/baseline and `CodeEditor.svelte` calls
+  `getValue()` on every model change. The paged integration must use Monaco change
+  deltas through the shared session, not repeat full-source extraction/replacement
+  per key. Raw/rich transitions retain the session's draft, source selection and
+  chronological history while their views are disposable.
+- Current rich cleanup in `NoteWithComments.svelte` flushes pending saves then
+  destroys its editor; raw `onDestroy` also flushes. The write service keeps pending
+  content/queues/draft sequences in module Maps, and Monaco disposes its models.
+  These paths provide no persisted native undo stack across process restart. The
+  new session must survive viewport eviction/view remount within an open note;
+  intentional session close follows the existing save/flush path with **typed**
+  failure/conflict handling and retains unresolved drafts. Restart starts from
+  acknowledged canonical source plus whatever existing draft recovery actually
+  restores; no newly promised durable undo or new recovery format. Daemon receipt
+  durability resolves unknown saves independently of the editor's undo lifetime.
+- Fresh canonical reload continues through the existing Markdown parser/serializer.
+  Native-live seams/owners/paragraph metadata stay session projections; a fresh parse
+  is a separate oracle. Existing live/fresh span/paragraph/strike/underline differences
+  are not normalized away or silently turned into persistent fields by this contract.
+
+The staged read/commit protocol fixes ownership and failure semantics; implementations
+must still prove the selected-copy serializer, raw transitions, general grammar and
+native clipboard on their real paths. This is not a new prerequisite to generic
+source paging, nor a waiver for enabling incomplete paged editing.
+
+Implementation locations and required evidence (not implemented by these docs):
+
+| Owner / seam | Required implementation and proof |
+| --- | --- |
+| Daemon `intent-core` types; `intent-transport/src/router.rs`; note services | Add discriminated page/receipt types and capability gates. Test old requests byte-equivalent, new request rejection on unsupported shapes, WSS escaped budgets, authorization, concurrent mutation/reconnect and every writer's invalidation. |
+| `intent-store/src/note_repo.rs`, `note_version_repo.rs` | Indexed source pieces/chunks plus subtree byte/UTF-16/scalar/LF totals, revision/incarnation and bounded lexical checkpoints. Persist exact raw task-link capture membership, dedup/first-position ordinals, count and long-value fragments with the same revision; do not substitute checkbox rows. Seek must locate/decode only relevant pieces; SQL `substr` on whole TEXT or `get_note` then slice is not a complexity proof. Persist incremental context/mapping/receipt records transactionally. Keep legacy complete reads and retained history semantics; existing full snapshots/FTS/task conversion may still impose document-sized write work and require explicit measured redesign in persistence work. |
+| Store attribution/comment repositories | Replace paged-path JSON/map scans with queryable source-interval/line and canonical marker occurrence indexes; independent generation tables, `(threadId,createdAt,commentId)` reply index and maintained counts. Test query plans/rows/bytes touched and stale computation publication. |
+| FE `src/lib/client/app-client.ts`, `live/live-notes-client.ts`, notes-read-service and workspace-notes state | Distinct CompleteNote/NoteSourcePage types, scoped cache/requests, no partial-to-full assignability, bounded annotation ownership and invalidation. No eager spec/full-event refetch bypass. |
+| FE `features/notes/notes-write-service.ts` and document session | Typed outcomes, frozen dirty sequence, atomic inverse/history ownership and live-context lifetimes; do not extend the retired saga or treat queue settlement as success. |
+
+Measure backend query work and renderer transient/resident allocations separately.
+The machine-readable [notes fixtures](../fixtures/notes/contract.json) and
+`make check-note-pagination-contract` (also in `make consumer-checks`) validate this
+prepared contract. `fixtureRepresentations` distinguishes full JSON-RPC frames from
+result objects and record-only scenarios. Result objects are wrapped in complete
+response frames before wire-budget checks; staged `appendFrames` are mandatory
+inputs to stream validation, so payload hash checks cannot bypass envelope budgets.
+Reply validation includes required fields and ordering across page boundaries;
+subscription fixtures use the exact pageState frame in §6.
+Component tests must execute the same cases against actual RPCs,
+storage fault injection and FE reducers before capability advertisement.
+Fixture arithmetic, encoded JSON sizes and same-process models are
+**specification validation**, not proof of database isolation, heap limits, bounded
+storage complexity, production editor behavior or released support.
+
 ### 5.2.1 `note.lineAttribution.*`
 
 Per-line attribution over the daemon's full-snapshot version history (§5.2). Ports the FE
@@ -591,4 +1823,3 @@ clients can ask "who is working on this task?".
   "agentId":"agent-alpha","createdAt":1750000000000
 } } }
 ```
-
