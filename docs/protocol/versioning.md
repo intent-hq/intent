@@ -161,8 +161,9 @@ qualify a listener, fresh-workspace source, provider or ready/ACK behavior.
 **Prepared note paging and operation contract (additive, not implemented).**
 [§5.2](./methods/notes-tasks.md#revision-safe-note-pages-prepared-additive-contract)
 reserves `note.applySplices`, `note.operationStatus` and six `note.operation.*`
-staging/read/commit methods, taking the combined prepared catalog to **429 / 369 / 58** (dispatchable / router / fast path), with no
-new event names. Source/context/mapping pages use opt-in `note.get` shapes;
+staging/read/commit methods, adding eight router methods with no new event names.
+The [method catalog](./05-method-catalog.md) maintains the combined totals.
+Source/context/mapping pages use opt-in `note.get` shapes;
 annotation paging and bounded subscription projections extend existing methods.
 Allocate the next minor against daemon main at implementation time. Advertise
 `notePaging: 1` only for the complete core including CAS/atomic receipts/status and

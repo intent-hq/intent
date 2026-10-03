@@ -228,7 +228,7 @@ The `system.status` result additionally reports the disk space of the **volume c
 
 ```jsonc
 {
-  "workspacesDiskAvailableBytes": 250790444864, // available bytes on the workspaces-root volume
+  "workspacesDiskAvailableBytes": 250790436864, // available bytes on the workspaces-root volume
   "workspacesDiskTotalBytes": 994662584320      // total bytes of that volume
   // ...existing status fields (running, listenMode, transports, port, ...)
 }
