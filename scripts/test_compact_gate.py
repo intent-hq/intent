@@ -270,6 +270,17 @@ for mode in ("0", "1"):
             before = gate.tree_key(self.root, self.repo)
             os.environ["CARGO_INCREMENTAL"] = "1"
             self.assertNotEqual(before, gate.tree_key(self.root, self.repo))
+            for name in ("CARGO_TARGET_DIR", "CARGO_BUILD_TARGET_DIR", "CARGO_BUILD_BUILD_DIR"):
+                before = gate.tree_key(self.root, self.repo)
+                os.environ[name] = "../other-output"
+                self.assertNotEqual(before, gate.tree_key(self.root, self.repo))
+            alias = self.root / "source-alias"
+            alias.symlink_to(self.repo, target_is_directory=True)
+            self.assertEqual(gate.tree_key(self.root, self.repo), gate.tree_key(self.root, alias))
+            other = self.root / "other-source"
+            other.mkdir()
+            shutil.copy(self.repo / "Cargo.toml", other / "Cargo.toml")
+            self.assertNotEqual(gate.tree_key(self.root, self.repo), gate.tree_key(self.root, other))
 
 
 class CompactMakeTests(unittest.TestCase):
@@ -283,6 +294,7 @@ class CompactMakeTests(unittest.TestCase):
         (self.root / "scripts").mkdir()
         shutil.copy(ROOT / "Makefile", self.root)
         shutil.copy(ROOT / "scripts/resumable_nextest.py", self.root / "scripts")
+        shutil.copy(ROOT / "scripts/check_watch_capacity.py", self.root / "scripts")
         shutil.copytree(ROOT / "scripts/_vendor", self.root / "scripts/_vendor",
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         self.log = self.root / "commands.jsonl"
@@ -340,6 +352,15 @@ sys.exit(int(os.environ.get("STUB_EXIT", "0")))
                 self.assertIn("COMPACT=1", result.stderr)
                 self.assertIn("coverage", result.stderr)
                 self.assertEqual(calls, [])
+
+    def test_gate_preserves_check_dependency_and_skip_semantics(self):
+        for parallel in ([], ["-j2"]):
+            for goals, checks in ((["check", "gate"], 1), (["-o", "check", "gate"], 0)):
+                with self.subTest(parallel=parallel, goals=goals):
+                    result, calls = self.run_make("-n", *goals, *parallel)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(result.stdout.count("cargo clippy"), checks, result.stdout)
+                    self.assertEqual(calls, [])
 
     def test_compiler_failure_remains_failure(self):
         for target in ("check", "gate"):

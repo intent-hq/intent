@@ -1,8 +1,13 @@
 # Intent Backend — JSON-RPC Protocol
 
-**Documented Protocol Version:** `11.1` (registered-root file reads: additive prepared contract over daemon `11.0`; not a shipped-version claim). Other prepared extensions retain their own rollout status and capability gates, including the [shared-host capability contract](./methods/shared-host-membership.md#authority-and-discovery).
+**Documented Protocol Version:** `13.4` (prepared submission correlation; not a shipped-version claim; the protocol-12 and protocol-13.0 retirements remain in force — see [compatibility and installed-frontend limits](./versioning.md#protocol-version--compatibility)). Submission correlation requires exactly integer `submissionCorrelation: 1`, independently of the numeric version. The single-node platform launch remains prepared and capability-gated; its earlier 11.2 reservation does not imply implementation (daemon 11.2 carries script lifecycle snapshots). Other prepared extensions retain their own rollout status and capability gates, including the [shared-host capability contract](./methods/shared-host-membership.md#authority-and-discovery). The higher minor version does not imply implementation of the separately prepared Home 13.2 or GitLab 13.3 additions.
 
 This directory is the canonical wire contract between Intent clients (desktop, iOS, CLI, and agent developers building clients) and the Intent backend daemon (`intentd`): transport, JSON-RPC envelope, the full method catalog, events, agent streaming, the permission flow, error codes, and thin-client guidance. It is a **living specification**: changes land through the compatibility policy (see below), and the method surface is enforced by golden tests in the `intent-transport` crate.
+
+The [model-directed platform extension](./model-platform-routing.md) defines optional
+OS/architecture constraints, one named multi-agent node, durable capacity/launch identity
+and safe model discovery. Its [static fixtures](./fixtures/nodes/platform-routing.test.mjs)
+do not qualify runtime scheduling. Private lifecycle/capture formats are unchanged.
 
 ## Section → file map
 
@@ -32,6 +37,15 @@ capabilities. Its [JSON lifecycle scenarios](./fixtures/nodes/lifecycle.json) ar
 prepared request/result/error and state assertions, not an executed adapter,
 native test result or listener qualification. Runtime acceptance requires separate
 component implementation and verification.
+The [private capture agreement](./node-link.md#private-checkpoint-capture) adds
+nodeProtocol 3 registration/Stage/commit semantics with bounded current Store
+attachment reuse. Lifecycle/read supports exactly `{2,3,4}` and capture supports exactly `{3,4}`;
+[assignment enrollment](./node-link.md#trusted-assignment-enrollment) requires
+exactly `4`. Each requires its installed feature policy and actual authority.
+Public protocol and checkpoint/journal formats stay unchanged. [Capture fixtures](./fixtures/nodes/checkpoint-capture.json)
+and [their static tests](./fixtures/nodes/checkpoint-capture.test.mjs) establish
+structural integrity only, not executed native capture or durable ACK acceptance. Run the standalone prepared-data checks with
+`node --test docs/protocol/fixtures/nodes/checkpoint-capture.test.mjs`.
 
 ### §5.x subsections (`methods/`)
 
@@ -48,6 +62,7 @@ component implementation and verification.
 | §5.6 `git.*` | [methods/git.md](./methods/git.md) |
 | §5.7 `pr.*` | [methods/pr.md](./methods/pr.md) |
 | §5.8 `script.*` | [methods/scripts.md](./methods/scripts.md) |
+| §5.8a Script run monitors (prepared) | [methods/script-monitors.md](./methods/script-monitors.md) |
 | §5.9 `browser.*`, `terminal.*`, `file.*` | [methods/files-terminal-browser.md](./methods/files-terminal-browser.md) |
 | §5.10 `event.*` (query/aggregation) | [methods/events-query.md](./methods/events-query.md) |
 | §5.11 `crossWorkspace.*`, `primitive.*`, `specialist.*`, `repo.*` | [methods/misc-namespaces.md](./methods/misc-namespaces.md) |
@@ -90,6 +105,8 @@ component implementation and verification.
 | §5.48 Multiplayer — `principal.*` / `workspace.invite.*` / `invite.*` / `workspace.members.*` (principals, invite links, the `/invite` proof join, membership, the collaborator allowlists) | [methods/multiplayer.md](./methods/multiplayer.md) |
 | §5.49 Shared host membership, scoped invitations, collaboration identity and personal pairing | [methods/shared-host-membership.md](./methods/shared-host-membership.md) |
 | §5.50 Static/local nodes, placement, hub merge/discard/publish and CoW retirement (prepared) | [methods/nodes.md](./methods/nodes.md) |
+| §5.51 Desktop control (prepared) | [methods/desktop.md](./methods/desktop.md) |
+| §5.52 Explicit GitLab resource reads (prepared) | [methods/repository-resources.md](./methods/repository-resources.md) |
 | MCP `ws.*` binding signature index (generated; not wire-routable) | [methods/mcp-bindings.md](./methods/mcp-bindings.md) |
 
 `make check-protocol-catalog` (run by CI's `docs-check` job) enforces that the [05-method-catalog.md](./05-method-catalog.md) tables, the method tables in `methods/*.md`, and intentd's `intent-transport` catalog stay in sync (read from the `packages/intentd` checkout; like `check-event-catalog` and `check-protocol-field-parity`, the run names the checkout and the recorded pin on stdout and warns on stderr when they differ): every method documented in a `methods/*.md` table must appear in the catalog, and every method the pinned intentd catalog dispatches must have a catalog entry. The docs lead the pin: document a new method here first — a `methods/*.md` table row plus its catalog entry in one monorepo change; the checker only warns while the pinned `catalog.rs` does not carry it yet — then merge the intentd PR, and the automatic submodule bump passes once both exist. The reverse order fails: a pinned method with no docs row is a CI error, and once the `CI Gate` check is required it holds the rolling bump PR at the merge queue until the docs row lands. The same checks also run upstream: every intentd and cloudlands-fe PR calls the monorepo's reusable `.github/workflows/consumer-checks.yml` (`monorepo-consumer-checks`) with its own head in place of the pin, so a missing docs row is red on that PR before it merges, not on the bump afterwards.
@@ -242,6 +259,30 @@ model` tooltip), with no warning, fallback action, model mutation or toast.
 
 ### Gate rollout
 
+During the desktop-control rollout, retain the original `public-sessions.json`
+byte-for-byte for daemon harnesses without a version declaration. The feature
+harness commits `scripts/transfer-selection-expectation.json` containing exactly
+`{"version":"desktop-control-v1"}` and uses the shared validator's
+`resolveGoldenPath({ fixtureRoot, intentdRoot })` to select
+`public-sessions.desktop-control-v1.json`. The declaration selects a fixed known
+filename; malformed or unknown versions fail. There is no environment/path
+override, payload-based selection, or fallback when a selected artifact is missing.
+Both artifacts must be real clean-source generator output; neither may be edited
+by hand. Regenerate the selected artifact using the daemon harness's
+`scripts/test-transfer-selection-contract.sh --regenerate`, then export again
+with `--output <absolute-separate-path>` to verify repeatability and provenance.
+
+The connected runner independently resolves the expectation from the checked-out
+daemon, compares every fresh case against that exact golden, and checks that
+neither golden changed during the run. The default compilation-free CLI validates
+both maintained artifacts. The four-field normalizer and complete-payload
+freshness checks are unchanged. Old daemon heads/pins keep using the legacy
+artifact with either renderer; new daemon heads/pins use the desktop artifact
+with either renderer. Standalone renderer tests retain the legacy golden, while
+connected tests always consume the actual freshly generated response. Land these
+shared fixtures and selection helpers before the declaring daemon harness; let
+the normal automated workflow advance pins afterward.
+
 `make check-transfer-selection-contract` validates the complete matrix, golden and
 provenance envelope without compiling Rust or installing the frontend. It is a
 required row of `make consumer-checks`. Integrity alone does not prove freshness;
@@ -263,6 +304,15 @@ runs the connected proof for both caller directions on every successful checkout
 without a changed-path filter. Local runs at two feature heads are useful evidence,
 but do not establish that a not-yet-landed counterpart pin passes.
 
+## Explicit resource reads
+
+The [explicit GitLab resource-read contract](./methods/repository-resources.md)
+covers a specified merge request or issue on an already configured instance,
+independent of the workspace's default review project. These prepared additions
+use the daemon's shared detail caches and require the original connection's
+`repositoryResourceRead: 1` capability. The catalog includes their three methods;
+documentation and version numbers alone do not establish deployed availability.
+
 ## Compatibility policy (summary)
 
 The protocol version is a `major.minor` pair: **additive** changes (new methods, new optional params, new presence-detected response fields) bump the minor version; **breaking** changes (removed methods, changed shapes) bump the major version. Additive response fields on an existing method do not change the golden-test-enforced catalog and ship within the current version — clients must detect them by **presence**, not by protocol version. The full policy and the complete version-by-version history live in [versioning.md](./versioning.md).
@@ -276,3 +326,10 @@ The protocol version is a `major.minor` pair: **additive** changes (new methods,
 - **Browser-tab action-result contract** (§5.9) is mirrored on three surfaces: the `errorCode` bullet list in [methods/files-terminal-browser.md](./methods/files-terminal-browser.md) (canonical), the cloudlands-fe executor's `errorCode` union (`browser-action-executor.ts` / `embedded-browser-cdp-service.ts`), and intentd's `ws.browser.docs("overview")` text (`bindings/browser_docs/overview.md`). `make docs-check` cross-checks the tokens and the `displayed` field across all three. The docs lead the pin for additions: add the canonical bullet first — the check only warns while a pinned component does not carry the token yet — then land the component PRs; an FE union/alias token absent from the canonical documentation is an error; the intentd overview is checked only for documented tokens it lacks. For a removal the order reverses: drop the token from the components first (the check warns about the now-extra bullet) and remove the bullet after the bump. A rename is an addition: document the new token first (keep the old bullet), rename in the components, then drop the old bullet after the bump.
 
 The shared-host extension is [§5.49 Shared host membership](./methods/shared-host-membership.md): roles, scoped invitations, collaboration credential purpose, personal pairing, authenticated devices and client compatibility. Its behavioral conformance table is the implementation test contract for desktop, daemon and iOS consumers.
+
+### Prepared desktop control
+
+[§5.51 Desktop control](./methods/desktop.md) defines capability-gated macOS and
+Windows sessions, agent startControl/endControl, local Stop, consent and native
+execution. Its [static fixtures](./fixtures/desktop-control/contract.test.mjs)
+are contract checks, not proof of packaged native support.

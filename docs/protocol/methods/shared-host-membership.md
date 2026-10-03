@@ -23,6 +23,7 @@ continue to grant `collaborator`, not `owner`.
 
 | Flag | Value | Complete contract advertised |
 | --- | --- | --- |
+| `invitationAccountSearch` | `1` | Bounded owner-authorized `host.invite.searchAccounts` for GitHub and the selected GitLab instance, independent of repository connection |
 | `hostMembership` | `1` | Host roles, effective workspace management, scoped host invitations, removal and live invalidation in this section |
 | `collaborationIdentity` | `1` | The separate `identity.*` auth surface and purpose-aware proof calls below |
 | `personalPairing` | `1` | Persistent current-principal `pairing.getSelfInfo`, including live credential revocation |
@@ -151,12 +152,19 @@ execution read documented later. No host method takes a `workspaceId`.
 | host.members.list | — | `{ members: HostMember[], revision }` — primary first, then active members by `addedAt`, tie-break `principalId`; no workspace-only guests |
 | host.members.remove | principalId (req) | `{ removed: boolean }` — idempotent when not an active host member; the primary is `-32602 { code: "invalid-params" }`. A real removal performs the revocation transaction below |
 | host.invite.create *(fast path)* | pinLogin (req), pinProvider (req, `"github"` or `"gitlab"`), pinHost? | `{ invite: HostInvite, secret, url, hosts: [], port, fingerprint, version: 1, tcAddress }` — a pinned, single-use invitation to be a host member, expiring exactly seven days after creation |
+| host.invite.searchAccounts | provider (req, `"github"` or `"gitlab"`), host?, query (req), limit? | `{ users: InvitationAccountSuggestion[] }` — bounded public account suggestions, never identity proof or invitation admission |
 | host.invite.list | — | `{ invites: HostInvite[] }` — open host invites, ordered by `createdAt`, tie-break `id`; optional `url` follows the existing stored-secret/envelope availability rule |
 | host.invite.revoke | inviteId (req) | `{ revoked: boolean }` — false if already closed; unknown/wrong-scope ID is `-32602 { code: "not-found" }` |
 
 ```ts
 type HostRole = "owner" | "member" | "guest";
 type Identity = { provider: "github" | "gitlab"; host: string; externalUserId: string };
+type InvitationAccountSuggestion = {
+  identity: Identity;
+  login: string;
+  name: string | null;
+  avatarUrl: string | null;
+};
 type HostMember = {
   principalId: string;
   hostRole: "owner" | "member";
@@ -173,6 +181,60 @@ type HostInvite = {
   url?: string; // always present on create; never serialize secret/hash as row fields
 };
 ```
+
+##### Invitation account search (additive, prepared)
+
+`host.invite.searchAccounts` is a daemon-global read. It uses the same
+administrator authorization as `host.invite.create`: owner wire callers and
+trusted internal daemon/agent callers are allowed; wire members, workspace guests
+and unbound callers are refused before provider lookup (`-32003`). It requires
+neither repository authentication nor a linked collaboration identity. It emits
+no event, creates no invitation and writes or refreshes no credential.
+
+Clients enable autocomplete only when the `client.hello` result advertises
+`server.capabilities.invitationAccountSearch: 1`. Missing/unknown support or an
+unexpected `-32601` keeps manual account entry. Debounce typing (about 250 ms),
+request only after two characters, and discard replies when provider, canonical
+host, query or connection changes. A selected result is only a suggestion:
+`host.invite.create` still definitively resolves and pins the entered account.
+
+`provider` is explicit. Omitted `host` defaults to `github.com` or `gitlab.com`,
+independently of repository settings. GitHub accepts only `github.com`; GitLab
+accepts the existing bare `host[:port]` spelling (trimmed and lowercased), not a
+URL, path, query, fragment or userinfo. Only the selected provider/host is searched;
+no cross-provider fallback occurs. Daemon-configured API origin overrides keep
+existing invite semantics and are never accepted as a search request parameter.
+
+`query` is trimmed and one leading `@` removed. GitHub allows up to 39 ASCII
+letters, digits or hyphens; GitLab up to 255 ASCII letters, digits, dots,
+underscores or hyphens. Empty/single-character queries return `{ users: [] }`
+without provider I/O. Invalid characters, overlong queries, malformed hosts or
+unsupported providers are `-32602`. `limit` is an integer from 1 to 10, default 8;
+a supplied null, non-integer or out-of-range value is `-32602`.
+
+GitHub uses public `GET /search/users` restricted to `in:login type:user`.
+GitLab uses `GET /api/v4/users?search=…&per_page=…&page=1`, whose username/name
+matching is fuzzy. Requests encode the query, fetch one page, cap returned rows
+at `limit`, bound the upstream body to 256 KiB and retain the existing 10-second
+connect / 30-second request timeout. Redirects are refused. Rows contain only the
+qualified stable positive numeric ID (as `externalUserId` string), canonical
+host, login and nullable name/avatar. Duplicate IDs and invalid usernames/IDs
+are omitted; emails, credentials and provider response bodies are never returned.
+
+GitHub search is anonymous. GitLab searches publicly first; only a 401/403 may
+retry once with the daemon's existing credential for the same bound canonical
+instance, under the existing invite credential-origin policy. No credential is
+sent to a different selected host or redirect target. A restricted directory
+that still refuses access yields `-32603` with
+`data: { code: "identity-unverifiable", host }`. Rate limiting yields `-32603`
+with `data: { code: "rate-limited" }`. Disabled/absent directories, network errors,
+oversized or malformed replies remain `-32603` errors, never successful empty
+results. Clients show a localized search error and keep manual entry available;
+search failure does not instruct the user to connect a repository account.
+
+Provider references: [GitLab Users API](https://docs.gitlab.com/api/users/),
+[GitLab REST authentication](https://docs.gitlab.com/api/rest/authentication/),
+and [GitHub user search](https://docs.github.com/en/rest/search/search#search-users).
 
 The creator's **Intent authority** suffices. Neither host nor workspace invitation
 issuance requires a repository connection, working repository token, or external
@@ -332,8 +394,9 @@ MCP enable/disable follows workspace management; the global toggle stays owner-o
 `agent.replaceMessages` remains owner-only because it accepts historical user rows;
 ordinary member send/edit/queue paths always derive human attribution from the
 bound principal. Messages, comments and sender preambles use that actual person;
-the host’s shared execution account is never substituted as the human author. Existing per-user queue privacy and search-cancellation ownership
-are retained. Payload principal/author fields cannot impersonate another human.
+the host’s shared execution account is never substituted as the human author. The
+[shared queue contract](./agents.md#shared-pending-human-queue) separates reads
+from per-entry mutation rights; search-cancellation ownership is retained. Payload principal/author fields cannot impersonate another human.
 
 Qualified human attribution uses the safe `Identity` triple above, independent of
 execution accounts. [§5.3](./notes-tasks.md#qualified-human-comment-attribution-109-additive-docs-lead-implementation)
@@ -980,14 +1043,16 @@ concurrent workspace creation and no per-member persisted grant fan-out.
 Existing workspace events now reach effective members, including permission,
 terminal, script, browser and preview events needed for management. Filter at
 delivery and durable-query time, including aggregate queries. Guests retain the
-existing event allowlist and workspace narrowing, apart from the explicit own-
-device events above. Own-principal identity changes may be delivered to that
+existing event allowlist and workspace narrowing, with the explicit own-device
+events above and scoped permission events described below. Own-principal identity changes may be delivered to that
 principal; unrelated global identity/settings/auth events remain hidden.
 Permission snapshots and answers use the prompt's current workspace management
 grant, including retained explicit guest ownership. Permission request/resolved
-events additionally require host owner/member admission at live delivery and
-durable-query time; a guest owner receives neither. See [§8](../08-permission-flow.md)
-for these separate checks. `canManage` does not broaden the guest event allowlist.
+events use that same grant at live delivery and durable-query time, including
+aggregate reads. Recheck current authority for each prompt delivery; demotion or
+removal ends access without waiting for a cached visibility verdict. See
+[§8](../08-permission-flow.md). This does not admit other guest-denied management
+events or RPCs.
 
 #### Multiplayer lab rollout (client policy)
 
@@ -1029,14 +1094,14 @@ the assertions; passing documentation gates is not runtime evidence.
 | Managed GitHub helper enabled/disabled, each with and without an alternative owner helper | Member reads the exact effective switch and setting name from the connected host; disabled never supplies the daemon credential to children. Git still succeeds with an authorized alternative helper; disabled/no helper explains owner recovery without member auth fallback |
 | Configured but expired/revoked/under-scoped Git or AI authorization; missing authorization | Classified operation failure carries `ExecutionAuthorizationFailure` (including asynchronous AI failure); asks that host's owner to repair authorization. Configured/readiness cache is not proof of validity; unrelated operations and invitations remain usable |
 | Owner toggles helper policy, changes repository/AI authorization, or a probe/operation discovers revocation | Sanitized execution-context invalidation refreshes member policy/readiness without exposing settings or auth flows. Reconnect/host switch discards old responses and reads the selected host, including when local setup differs |
-| Filtered/aggregate permission snapshots, answers and separate live/durable event reads | Owner/member can act in manageable workspaces; a retained guest owner can read/answer only its owned workspace's prompts through already-admitted RPCs. Ordinary collaborators/unrelated guests see no unauthorized request or ID and cannot answer. Permission events remain owner/member-only, including for guest owners; script RPCs remain guest-refused |
+| Filtered/aggregate permission snapshots, answers and separate live/durable event reads | Owner/member can act in manageable workspaces; a retained guest owner can read/answer only its owned workspace's prompts through already-admitted RPCs. Ordinary collaborators/unrelated guests see no unauthorized request or ID and cannot answer. Permission events use the same current management scope, including guest owners, across live and durable/aggregate reads; demotion removes access. Script RPCs remain guest-refused |
 | Two humans sharing a handle on GitHub/GitLab, and on two canonical GitLab instances (including equal external IDs) | New user comments keep the same existing label spelling but distinct daemon-bound principal IDs and complete identity triples; latest-author summaries copy the same selected comment. Transcript authors and presence people expose their resolved optional triple; no handle-based merging |
 | Bound owner without a forge, plus linked owner/member/guest add and respond | Resulting user comments persist the admitted principal ID; only linked humans get an identity snapshot. Unlinked-primary compatibility preserves its supplied label/type; a non-user result omits both metadata fields |
 | Agent/daemon add/respond and spoofed attribution fields over existing RPC/MCP entry points | Agent/daemon label/type semantics remain, without fabricated human metadata, even for a supplied user type. Supplied principal/identity output keys of any value/type are ignored; bound-human attribution comes only from trusted caller state |
 | Comment edit, resolve/reopen, anchor repair, restart, profile/identity change and member removal | Creation stamp and safe snapshot survive unchanged in reads and subscriptions, including after the principal becomes unresolvable; no current-editor or execution-account substitution, no new access. Principal-only comments remain without an identity snapshot |
 | Legacy comments, same-handle replacement principal, and latest comment lacking metadata in a mixed thread | Preserve labels; unknown creation attribution stays omitted in full comments and the latest-author summary. No owner/provider/handle inference or imported-extra-field backfill; ordinary local transcript fallback remains unchanged, with transfer-scoped source tagging defined separately in §5.1 |
 | Comment result/read/event/subscription parity and old/new clients/hosts | Respond, getThread roots/replies, list with/without included comments, and subscription snapshots/deltas agree on stored attribution; ID-only durable events and add acknowledgement remain unchanged. Unknown keys are ignored, absent metadata stays unknown; existing filters, guest visibility and event durability remain |
-| Transcript page/queue/live echoes and workspace/note presence | Optional identity comes from the same resolved principal as principalId for ordinary local authors; unlinked/missing profiles omit it. Preserved transfer authors use their historical attribution without destination fallback. Transcript batched serve-time lookup and queue privacy remain; presence refreshes its existing cache and stays ephemeral, with membership-gated delivery |
+| Transcript page/queue/live echoes and workspace/note presence | Optional identity comes from the same resolved principal as principalId for ordinary local authors; unlinked/missing profiles omit it. Preserved transfer authors use their historical attribution without destination fallback. Transcript batched serve-time lookup and workspace-scoped queue reads remain; presence refreshes its existing cache and stays ephemeral, with membership-gated delivery |
 | Real export/import/re-export A(@panghy) → B(@shared-instance-github-handle) → A, with B and third-party messages added between transfers | A's original human messages remain A's; every later contributor retains their own authorship. Full/slim reads, session projections, subscriptions and message echoes agree after restart and repeated transfer |
 | Untagged human history in an ordinary source-owned legacy workspace; another authorized member initiates export | Before export, tag from trustworthy source legacy-author/owner provenance, not the exporting member, shared execution account or receiving owner. Preserve already recorded authors before applying source fallback |
 | Same handle or source principal string across hosts, equal external IDs across providers or GitLab instances, and an unlinked source author | Preserve distinct qualified identities and source-scoped provenance without destination principal lookup or handle matching. Unlinked source history gains no fabricated forge identity or local account binding |
@@ -1044,7 +1109,7 @@ the assertions; passing documentation gates is not runtime evidence.
 | Supported human string/number/boolean/array/JSON-null metadata, including nested values, across A → B → A | Normalize to an object with trusted/unknown root humanAuthor and the exact original JSON value in inert humanAuthorOriginalMetadata. Preserve every contributor and value through restart/re-export without repeated wrapping; SQL NULL/absence needs no original-payload member |
 | Original object already contains humanAuthorOriginalMetadata, nested forged attribution keys, or raw live/legacy/v1 preservation data | Preserve unrelated object keys and the same-named member unchanged; never unpack/merge it or infer wrapper/trust status. Only validated/server-produced root humanAuthor controls attribution; nested keys grant no local identity, sender status, readiness, queue ownership or permissions |
 | Valid non-object human metadata from v1; malformed v2 author envelope | New v1 import preserves the original JSON value plus explicit unknown when source provenance is unavailable. Supported legacy values transfer without data loss; malformed v2 author envelopes still fail atomically |
-| Imported human queue with preserved legacy metadata is explicitly sent, fails, retries and is re-exported; nonhuman control | Existing owner authorization and UnknownHuman/privacy rules remain. The original value and humanAuthor survive send/restoration/re-export without rewrapping, owner restamping or new readiness/authority; nonhuman behavior is unchanged |
+| Imported human queue with preserved legacy metadata is explicitly sent, fails, retries and is re-exported; nonhuman control | Existing owner delivery authorization and UnknownHuman authorship rules remain; queue reads follow the shared workspace policy. The original value and humanAuthor survive send/restoration/re-export without rewrapping, owner restamping or new readiness/authority; nonhuman behavior is unchanged |
 | Version-2 export to an old version-1 reader at the same daemon package version; version-1 archive into a new reader | Old reader rejects the unsupported format before staging. New reader preserves the exact daemon-version gate and marks irrecoverable source-human provenance unknown; a future reserved key planted in v1 metadata is not trusted |
 | Trusted humanAuthor, pre-upgrade/live spoofed humanAuthor, and stamped but unresolvable source contributor | Preserve only the trusted snapshot; live inputs cannot establish or override historical attribution. Batch source stamps and durable legacy-author/owner fallback in the same WAL snapshot; unresolved stamped authors do not become the owner |
 | Pre-upgrade reserved-key planting in stored messages/queued payloads, then upgrade; live/history/queue/v1 ingress after upgrade | The data-only migration removes only the formerly unreserved humanAuthor key, preserving text/IDs/timestamps/unrelated metadata. All ingress sanitizes or authoritatively overwrites it; only server-produced/validated-v2 snapshots enter the trusted path. No new table/column or recovery of already-lost identity |
@@ -1052,8 +1117,8 @@ the assertions; passing documentation gates is not runtime evidence.
 | Historical MessageAuthor with principalId null, with/without safe identity, including an all-null snapshot | Render the snapshot or unknown-human label without current roster/local-principal lookup. No receiving-owner/own-user/preamble/presence/queue-ID match; current-local string principal IDs keep their meaning |
 | Transferred comments and latest-author summaries with a source principal ID that equals a destination principal | Preserve original labels and safe identity snapshots, omit foreign authorPrincipalId, and never create/link a local principal or guess an unknown legacy comment author |
 | Assistant/tool/system and agent/automatic-origin history mixed with historical human messages | Preserve message roles/content and existing non-human meaning; source-human tagging applies only to historical human messages |
-| Imported history or copied historical metadata on live sends/queued rows; profile changes, identity unlinking and member removal after import | Historical attribution survives without granting caller/queue authority or access and cannot spoof live authorship. No principal/account, membership, invitation, sharing configuration or credential is carried or created; existing per-user queue privacy remains |
-| Imported unbound human queue at drain/idle/startup/restart/recovery, including automatic/agent/daemon callers with no per-entry gate | Entry stays durable and not auto-ready; UnknownHuman classification preserves Member/Guest privacy despite any safe profile. Foreign stamps never become local-owner fallback; a None gate cannot authorize delivery. Local/nonhuman queue controls behave normally |
+| Imported history or copied historical metadata on live sends/queued rows; profile changes, identity unlinking and member removal after import | Historical attribution survives without granting caller/queue authority or access and cannot spoof live authorship. No principal/account, membership, invitation, sharing configuration or credential is carried or created; shared queue reads remain scoped to authorized workspace participants |
+| Imported unbound human queue at drain/idle/startup/restart/recovery, including automatic/agent/daemon callers with no per-entry gate | Entry stays durable and not auto-ready; UnknownHuman classification preserves the delivery hold and denies author edit/merge authority despite any safe profile; authorized workspace participants may read the entry. Foreign stamps never become local-owner fallback; a None gate cannot authorize delivery. Local/nonhuman queue controls behave normally |
 | Current destination owner explicitly sends/removes imported unbound entry; Member/Guest/unbound caller tries the same, or owner tries author-only edit | Existing explicit send/remove works only within the caller's existing authority. Send verifies affirmative current host-owner role/credential inside atomic pop in runtime-manager and store-only paths. Member/Guest/unbound cannot send it, and existing author-only edit restrictions still refuse unbound history |
 | Explicit owner send races revocation, a queue drain or persistence failure; then retry/restart/re-export | Revalidate admission/current role/credential at the atomic pop; no duplicate or unauthorized send. Failed delivery restores the complete entry and original humanAuthor with no loss or owner restamp; retry preserves the original human history |
 | Repository disconnect/swap during identity proof/selection | Existing Intent identity/session survives; generations reject stale/mismatched proof; repository and collaboration secrets stay isolated |

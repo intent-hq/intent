@@ -153,17 +153,11 @@ in the bullet under this table).
   reuse keeps the daemon a **thin process host** and avoids duplicating spawn / reap / stdin
   plumbing behind a purpose-built RPC.
 
-**`forward.*` — port-forwarding (remote only):**
-
-When a script/terminal URL-detection hook (§5.8) finds a dev-server URL/port on a **remote**
-daemon, the client tunnels the remote port to `localhost` so the web UI is viewable locally. On
-a **local** (UDS) connection forwarding is unnecessary and these are no-ops.
-
-| Method | Params | Result |
-| --- | --- | --- |
-| forward.create | remotePort (req,int), localPort? | { forwardId, localPort, remotePort } — opens a tunnel |
-| forward.list | — | { forwards: [{ forwardId, localPort, remotePort, url? }] } |
-| forward.close | forwardId (req) | { ok: true } |
+**Remote port forwarding.** The authenticated binary `/tunnel` transport and the
+client's local relay carry remote dev-server traffic. Embedded browser tabs use
+`http://daemon.localhost:<port>` through that relay. The retired JSON-RPC forwarding
+methods are not part of this path; browser reverse RPC and local-daemon behavior
+remain unchanged in protocol 12.0.
 
 ```json
 // → probe host capabilities (gate GUI / forwarding UI)

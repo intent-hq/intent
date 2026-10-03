@@ -43,18 +43,23 @@ version number by hand.
    that bumps `package.json` and regenerates `CHANGELOG.md` from the
    conventional commits since the last `v*` tag.
 2. The Release PR is auto-merged by `auto-cut-alpha.yml` when it is green —
-   that is the release timing gate. The workflow is event-chained with an
-   hourly cron backstop: a sidecar pin-bump squash merge (a push to `main`
-   touching `intentd.version`) chains straight into a cut run that polls
-   (30s interval, up to 15 min) for release-please to refresh the Release PR
-   and for CI Gate to go green, then merges — so a new intentd ships in the
-   same fe alpha cycle. The hourly cron at :30 is the backstop and the normal
-   path for fe-only changes (check-once-and-exit, no polling); every run type
-   defers the cut while an intentd release build is in flight (a semver tag on
+   that is the release timing gate. Any push to `main` starts an attempt
+   (except the cut's own release merge), and a ten-minute cron retries.
+   Push, cron, and manual runs check readiness once and exit without sleeps
+   or polling. No open Release PR means no cut. All automated attempts,
+   including sidecar-pin updates, defer while the latest frontend release
+   tag is less than 60 minutes old; manual `workflow_dispatch` retains its
+   throttle override. Existing tag/date lookup fail-open behavior is unchanged.
+   Scheduled retries also require the Release PR to carry main's current pin
+   and a head no older than the newest unshipped releasable commit. Release PR
+   freshness, pin checks, CI Gate, and other readiness guards must still pass.
+   Every run type defers the cut while an intentd release
+   build is in flight (a semver tag on
    `intent-hq/intentd` newer than the published alpha manifest and younger
    than 90 minutes; fails open on any lookup error). The `hold-release`
    label on the Release PR pauses the auto-cut; a human can still merge
-   early.
+   early. See the canonical [frontend release guards](../RELEASING.md#cloudlands-fe)
+   for the full eligibility checks and manual overrides.
 3. On the merge, release-please creates the `v{version}` tag and a GitHub
    Release on `cloudlands-fe`. The workflow authenticates with `RELEASE_PAT`
    (not the default `GITHUB_TOKEN`) so the pushed tag triggers downstream
@@ -265,18 +270,45 @@ Installers are uploaded as short-lived workflow artifacts (7-day retention),
 version-suffixed `-manual.<run_number>`; nothing is published to
 `intent-hq/cloudlands-releases` and no auto-updater feed is uploaded.
 
-`build_macos=true` starts **both** native Mac jobs; there is no Intel-only
-dispatch input. Download `manual-macos-dmg-x64` for Intel or
-`manual-macos-dmg-arm64` for Apple Silicon from the run's artifacts. Each
-contains only its DMG; ZIPs are built and checked but not uploaded by this
-manual workflow. The summary reports success/downloads only after build,
+`build_macos=true` enables Mac builds. The optional `macos_arch` choice selects
+`both` (default), `arm64` (Apple Silicon only), or `x64` (Intel only). Omitting
+`macos_arch` keeps both native Mac jobs; selecting one architecture starts only
+that architecture's build job. `macos_arch` has no effect when `build_macos=false`.
+
+Download the selected architecture's artifact from the run:
+
+| `macos_arch` | Mac artifacts |
+| --- | --- |
+| `both` (default) | `manual-macos-dmg-arm64` and `manual-macos-dmg-x64` |
+| `arm64` | `manual-macos-dmg-arm64` |
+| `x64` | `manual-macos-dmg-x64` |
+
+Each artifact contains only its DMG; ZIPs are built and checked but not uploaded
+by this manual workflow. The summary reports success/downloads only after build,
 verification and upload succeed. `sign=false` keeps architecture checks but
 skips signature, Gatekeeper and stapled-ticket checks.
 
 ```bash
+# Both architectures (default; equivalent to -f macos_arch=both)
 gh workflow run manual-signed-build.yml --repo intent-hq/cloudlands-fe \
   --ref <feature-branch> -f build_macos=true -f sign=true
+
+# Apple Silicon only
+gh workflow run manual-signed-build.yml --repo intent-hq/cloudlands-fe \
+  --ref <feature-branch> -f build_macos=true -f macos_arch=arm64 -f sign=true
+
+# Intel only
+gh workflow run manual-signed-build.yml --repo intent-hq/cloudlands-fe \
+  --ref <feature-branch> -f build_macos=true -f macos_arch=x64 -f sign=true
 ```
+
+Add `-f smoke_macos=true` to run packaged fixture journeys on a separate
+disposable Mac runner; this requires `build_macos=true` and `sign=true`. Smoke
+runs once on Apple Silicon using `manual-macos-dmg-arm64` for `both` or `arm64`,
+or on Intel using `manual-macos-dmg-x64` for `x64`. `smoke_macos_scope` defaults
+to `full`; `fixture-correction` runs only the mock-provider/worktree-capture
+follow-up. Results and process receipts are uploaded as `packaged-macos-smoke`
+with 7-day retention.
 
 Leave Windows and Linux inputs false for a Mac-only run. This dispatch creates
 test installers, not a public release or an end-to-end updater test. See the

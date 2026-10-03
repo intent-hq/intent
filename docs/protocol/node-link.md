@@ -41,7 +41,7 @@ After authentication both endpoints exchange:
 ```json
 {
   "kind": "hello",
-  "nodeProtocol": 2,
+  "nodeProtocol": 4,
   "intentdVersion": "<exact installed version>",
   "buildRevision": "<exact build revision>",
   "headId": "head-1",
@@ -59,6 +59,24 @@ All values must match the persisted lease and exact installed release/build on
 both ends, including protocol/format versions, before replay or spawn. A mismatch
 marks node incompatible and fails closed; phase 1 never downloads/upgrades a binary
 or halts agents for an automatic upgrade. Operators install matching versions.
+Version 4 adds [trusted assignment enrollment](#trusted-assignment-enrollment).
+Version 3 adds the [private checkpoint capture agreement](#private-checkpoint-capture);
+version 2 retains lifecycle/read behavior without capture writes. Dispatch gates
+must use explicit supported sets:
+
+| Private operation family | Supported nodeProtocol values |
+| --- | --- |
+| Preparation, status, Prompt/Stop, selected checkpoint reads | 2, 3, 4 |
+| Checkpoint registration and commit | 3, 4 |
+| Trusted assignment enrollment | 4 only |
+
+Both peers agree on the exact installed version/build. Never use an open-ended
+`>=` gate or silently downgrade. Version 1 remains denied for these families.
+Versions 3 and 4 preserve prior family semantics; method grants, installed feature
+policies and current authority are still required. A version-4 Hello does not
+qualify an unimplemented capture/provider profile, listener or readiness. Public
+protocol, checkpointFormat 1 and journalFormat 1 are unchanged.
+
 The local node receives a bound identity/capability from the composition root over
 an in-memory link; it uses no TLS listener, token or extra daemon. It keeps the
 same ordering, scope, persistence and cancellation semantics.
@@ -103,8 +121,10 @@ node nor head automatically resends it as a new operation. Read retries get new
 IDs; keyed mutations retain theirs. RPC results do not use journal ack as proof
 that a mutation committed. Reconnect drops stale responses/stream handles.
 
-Head validates lease ownership and current agent/workspace/repo assignment on
-**every** request, including after await/admission boundaries. A node carries an
+Ordinary agent operations validate lease ownership and current agent/workspace/repo
+assignment on **every** request, including after await/admission boundaries.
+[Trusted enrollment](#trusted-assignment-enrollment) has a separate head/lease
+admission before an agent grant exists; it does not weaken ordinary authorization. A node carries an
 execution envelope around the existing agent caller authority; it cannot set
 `Caller::Daemon`, choose a principal, claim UDS origin or become administrator.
 Only bound agents may forward control-plane operations, restricted to the
@@ -114,10 +134,288 @@ not expose their credential to the node. Hooks retain their scheduling ownership
 on head, but forwarded effects run under the owning agent's restricted capability,
 not today's unrestricted daemon caller. Missing/stale scope is forbidden.
 
+## Trusted assignment enrollment
+
+**nodeProtocol 4**, prepared contract. `node.assignment.enroll` installs a fresh
+assignment before Prepare; Prepare cannot create its own authority. This is a
+private head-to-node operation, absent from public/MCP method and workspace-routing
+tables. Enrollment never starts a provider or delivers a prompt. The [prepared
+examples and static validator](./fixtures/nodes/enrollment.json) describe wire
+integrity and required scenarios, not an implemented listener or runtime proof.
+
+### Enrollment carrier and closed data
+
+Use head → node `rpc/request` and node → head `rpc/response`, with
+RequestScope.method `node.assignment.enroll`. The authenticated endpoint has
+peer=Head; `agentId` and `workspaceId` select the TARGET, not the acting principal.
+`streamId = requestId`; `idempotencyKey = preparationId`; `operationCapability`
+MUST be absent. A new requestId is transport correlation, never new enrollment.
+Existing 16 KiB header, 64 KiB frame, 8 MiB assembled RPC and finite inflight limits
+apply; timeoutMs is 1..120000. Unknown/duplicate decoded keys (including escaped
+aliases), missing fields, explicit null, invalid UTF-8/shapes and excessive bounds
+fail before effects. The nested Prepare retains its own closed schemas.
+
+Install has exactly these members (optional members are marked `?`):
+
+```text
+{
+  action: "install",
+  intentSha256: <lowercase SHA-256>,
+  originGeneration: <positive canonical u64 decimal string>,
+  expiresAt: <UTC RFC3339 instant>,
+  assignment: {
+    repoKeys: [<opaque key>],
+    inheritedCheckpointId?: <UUID>,
+    mergeTargetAgentId?: <canonical AgentId>
+  },
+  memoryBytes: <positive safe integer, at most 2^50>,
+  prepare: <existing closed PrepareRequest>
+}
+```
+
+Target agent/workspace come from RequestScope; full LeaseOwner comes from the
+actual authenticated binding; preparationId/runId/assignmentEpoch come from
+Prepare. Do not serialize NodeAssignment wholesale: no nodePath, active,
+tombstoned or owner flags. repoKeys are unique, sorted by their UTF-8 byte order,
+1..64 entries, each 1..128 UTF-8 bytes without control characters. They equal the
+complete selected manifest repository closure, including required inherited and
+submodule roots. Inherited checkpoint/merge selectors must exactly match the
+persisted head assignment; parent source identity need not equal the target run.
+Here canonical mergeTargetAgentId means the existing AgentId::is_canonical
+predicate: `agent-` followed by a 36-character hyphenated UUID accepted by the
+UUID parser. This restriction applies to that optional cross-agent selector only.
+RequestScope agentId/workspaceId retain their existing typed-string validation;
+AgentId::new()'s bare UUID does not imply a new scope prefix requirement. Do not
+normalize or invent another agent identity to satisfy source equality.
+
+Memory comes from the trusted admitted head profile, not a model override, and
+must fit actual local per-agent and aggregate capacity.
+
+Prepare carries the existing inline configuration and sourceMetadata, exact raw
+manifest hash and complete retained attachment descriptors. All existing bounds
+and typed byte encoding remain. The trusted head derives it from its retained
+selection, including its persisted actual effective permission policy. Node checks
+its installed contained provider/profile and permission ceiling, rejecting
+mismatch rather than silently clamping or elevating policy. No grants list,
+Workspace/root, binary, socket, command, environment, credential, arbitrary tool
+extension or path is accepted. Unsupported resume fails explicitly; enrollment
+does not make portable session import supported.
+
+Compute intentSha256 as SHA-256 of RFC 8785 canonical JSON:
+`{ bindingOwner, agentId, workspaceId, install }`, where install is the complete
+body with only intentSha256 removed. The full authenticated LeaseOwner and both
+target selectors participate. Keep the exact decoded manifestJson string bytes;
+never parse/re-serialize the inner manifest when calculating its existing digest.
+Configuration and manifest digests retain their earlier definitions. Full intent
+includes descriptors, memory, source, configuration and original deadline. Hashes
+and serialized data confer no authority.
+
+Close has exactly:
+
+```text
+{ action: "close", preparationId, runId, assignmentEpoch,
+  originGeneration, intentSha256 }
+```
+
+The UUID/counter/hash fields name the exact retained install. Close is irreversible;
+there is no replace/reopen action. It handles cancellation before OwnedPreparation
+exists. Once Prepare begins, head also retains its existing durable Stop intent
+and uses the same typed Stop/cleanup owner. Enrollment close fences plan/Prepare
+acquisition; it is neither a second execution owner nor proof that Stop finished.
+
+The response is exactly `{ result: <receipt> }` or `{ error: <JSON-RPC error> }`.
+A receipt is at most 4 KiB and contains exactly:
+
+```text
+{ preparationId, runId, assignmentEpoch, originGeneration, intentSha256,
+  revision, state, ownership }
+```
+
+States: `pending | installed | closing | closed | failed_retained`.
+Ownership: `held | released`. Revision is a durable canonical u64 decimal string;
+each observable state/ownership transition increments it atomically. Identity is
+immutable. Ignore numerically older observations; a conflicting equal revision
+is invalid. installed requires held plus a fully published grant/plan gate, not
+provider readiness. released is legal only with closed after actual disposal;
+pending/failure/uncertainty retain held ownership. Known pending/closing/failure
+normally returns its retained receipt. No response grants install/read/prompt,
+execution, ready or checkpoint-ACK authority.
+
+Use the existing JSON-RPC error envelope, sanitized message and data.code:
+
+| data.code | JSON-RPC code | Meaning |
+| --- | --- | --- |
+| invalid-params | -32602 | Invalid closed shape, bounds or digest |
+| forbidden | -32003 | Wrong direction, head/lease policy or operation authority |
+| stale-assignment | -32003 | Wrong/stopped/replaced target, owner or generation |
+| enrollment-conflict | -32005 | Retained key or occupied assignment has different intent |
+| enrollment-unavailable | -32603 | Finite storage/capacity cannot admit work |
+| unsupported-configuration | -32602 | Uninstalled provider/tool/resume/profile policy |
+| enrollment-outcome-unknown | -32603 | Lost/uncertain result requires exact reconciliation |
+
+No paths, credentials or raw stderr are returned. An error/timeout does not
+permit a new identity, release charges or prove absence of effects. Known owned
+pending/failure remains observable as the retained receipt above.
+
+### Head authority before an agent grant
+
+Operator installation explicitly enables enrollment for one exact enrolled
+head/lease/incarnation, matching version-4 build/profile and finite capacity.
+Pinned TLS, the enrolled 256-bit lease token, immutable endpoint direction and
+current accepted generation authenticate the head. Public WSS, node-originated
+RPC, model workspace calls, generic operation capabilities and copied frames deny.
+
+A new typed, nonserializable enrollment admission comes only from the retained
+NodeLeaseAuthority, installed operator policy and authenticated physical endpoint.
+It is default-denied and distinct from generic per-agent authorization; no fake
+Caller::Agent or caller-supplied grant mints it. Check before accepting fragments,
+after closed raw decode, before each durable/file effect and under the actual
+response StartedWrite permission. Generation/lease replacement still waits for
+issued native/write permissions. Receipt, parser or endpoint observation is not
+such a permission.
+
+Head consumes its actual Store assignment, retained launch/capacity claim and
+HeadPreparationReservation with selected source/configuration/credentials.
+Retain the ORIGINAL complete Prepare/sourceMetadata/resume plus install identity,
+preparation/launch correlation, memory and deadlines before the first write.
+A stored Prepare hash alone is insufficient; never reconstruct from current
+defaults. An already-backed source reservation can be produced without a node
+grant. A fresh ordinary workspace lacking a selected checkpoint and retained
+inventory needs a separate trusted source initializer; fixture rows, raw paths
+or fabricated journal lineage cannot supply it.
+
+The SAME retained HeadWorkspaceAuthority needs an additive exact-entry inventory:
+
+1. Reserve a bounded durable entry from the actual Store assignment, original
+   binding/generation, preparation/full intent, retained preparation and launch
+   owners, and installed method/repository profile before enrollment issuance.
+   An enrolling entry permits only scoped enrollment/close/observation; ordinary
+   execution stays denied.
+2. A correlated installed receipt satisfies sequencing only. Recheck live Store
+   assignment/run/epoch/lease, source/config deadlines, capacity and close fence
+   before admitting Prepare. Before its first write can trigger callbacks,
+   publish the preparation-issued phase required by existing source registration,
+   metadata and credential authorizers. Each callback still needs its actual
+   current Store/source/repository/credential and write permissions.
+3. Authorization, frame writes, selected Git writes and responses share that same
+   inventory/close fence. Preserve unrelated agents and reject conflicts; never
+   replace the complete authority/map or derive it from the node receipt.
+4. Stop/revocation/generation replacement close issuance before waits and retain
+   callback/cleanup correlation and charges. Node closed is not proof that head
+   effects settled. No map/database lock spans network or task joins.
+
+### Node publication and owned storage
+
+Register retained task/result/resource slots BEFORE spawn/await. Pre-grant
+reservation is a new typed companion under the SAME PreparationRegistry
+Inner/Storage/NodeBootstrap; ordinary reserve requires AssignedPreparation and
+cannot mint its own missing grant. Do not introduce a fresh registry or synthetic
+assignment. Transfer to ordinary ownership only after a durable, currently live
+installed gate.
+
+Durably reserve memory, preparation slot, full intent and backing before object
+writes, root/plan provisioning or grant publication. Transfer one actual shared
+capacity claim into NodeRuntime; a second scalar charge or sampled capacity is
+not admission. Bounds include pending/temp/orphan and uncertain storage:
+
+| Owned resource | Bound |
+| --- | --- |
+| Compact enrollment companion | 16 KiB per record; no expansion of the 36,864-byte preparation record |
+| Companion records and replay tombstones | 4096; 64 MiB aggregate |
+| Active/uncertain enrollments | min(installed maxAgents, actual registry capacity, 256) |
+| Existing metadata aggregate | 64 MiB, all pending/uncertain bytes charged |
+| Complete enrollment backing object | 1,232,896 bytes: existing 1,183,744 metadata + 32 KiB config + 16 KiB selectors |
+| Install assembly | One active per connection; existing 8 MiB RPC cap |
+| Install transient storage | 16 MiB pre-reserved budget, not per waiting retry |
+
+Head extends its existing per-preparation bookkeeping reservation, not a second
+unbounded ledger. Reuse metadata through owned transfer/shared accounting; count
+all bytes and do not discard uncertainty to make capacity appear free.
+
+Persist installing intent/reservation, then write/fsync/rename/fsync-parent bounded
+objects and construct the node-local plan. Publish one durable installed gate
+binding grant, plan, full intent, generation and ownership. If stores are separate,
+inactive grant and plan authorize nothing until that gate and the matching live
+owner are atomically visible. Ordinary Prepare/execution checks this gate.
+Intermediate crash leaves quarantine/held charges. Reopen validates indexed and
+orphan data and restores NO authority automatically, even for an installed row.
+
+Use conditional single-entry publication under a stable receiver and once-installed
+cleanup lookup with bounded growing inventory. Whole-list replace_grants and a
+read-copy-replace race are invalid; concurrent agents retain their owners.
+NodeStorage alone derives the Workspace projection, local root/repo mapping and
+runtime layout. No head paths, setup scripts or injected defaults enter that
+projection; workspace.details remains the separately authorized head metadata.
+Use the SAME accepted RpcSession source-registration client and physical lane.
+Operator-local credential (host,path)→repoKey mapping must intersect actual head
+credential/source authorization: opaque manifest keys do not supply this mapping.
+Unknown tuples fail. Local provider/helper installations and all existing
+initialization, attachment, external-writer and provider barriers remain required.
+
+### Enrollment lifetime, replay and reconciliation
+
+Key enrollment by preparationId within lease incarnation and target
+agent/workspace/run/epoch. Exact full-intent retries join the retained owner;
+changed data conflicts. Head supplies expiresAt from its original admission,
+never model input. Effective expiry is the earliest ORIGINAL enrollment window,
+actual SOURCE policy deadline, actual TARGET policy deadline, lease expiry and
+node first receipt + 120 seconds. The existing source producer's policy is
+started + **300 seconds**, despite an outer 600-second reservation/dispatch
+window; the latter cannot extend it. Persist the first deadline; retries never
+renew it. This bounds enrollment/Prepare entry, not transferred provider lifetime.
+
+Normal Replied retirement is distinct from Cancelled, exactly once including
+transport errors. Replied does not cancel installed execution. Attached explicit
+cancellation, Stop, revocation, pre-handoff expiry or disconnect fences new effects
+immediately; retain SAME task/result/native/IO/cleanup and charges through actual
+settlement. No waiter-owned detach, finished-flag pruning or asynchronous Drop
+counts as disposal. Local producer cancellation is not a remotely correlated
+negative fence; persist and retain the exact enrollment close owner.
+
+Close persists its sticky fence before joins. A reordered close may reserve a
+bounded negative fence before install; delayed install cannot undo it. A
+closing/held response need not wait for execution settlement. After Prepare,
+close joins its existing Stop/cleanup ownership. Never force-drop permissions or
+infer reclamation from expiry, cancellation or a closed socket.
+
+originGeneration is immutable. Install requires that original current generation.
+A genuinely admitted newer connection may only observe/close a KNOWN old record
+using trusted retained original correlation and fresh current lease authority;
+it cannot reinstall, activate or turn the result into installer/read admission.
+The close carrier returns its correlated current receipt; there is no new status
+method. Retained correlation selects expected original receipt identity, not
+untrusted payload data. Current outer frames and original receipt generation
+remain distinct; older revisions never overwrite newer observations. If old native
+permissions prevent newer generation admission, this route remains unavailable.
+Missing retention/restart quarantine requires head-local/operator reconciliation.
+
+Keep close/replay tombstones until durable lease-incarnation retirement AND all
+associated owners settle. Expiry never makes a key reusable; bounded exhaustion
+rejects new effects. New run/epoch needs actual prior ownership settlement and
+fresh authority. Close/install/Stop/link failure serialize on the same owner gate.
+
+### Enrollment implementation and verification boundary
+
+Internal owner adapters are required on both sides: a retained head enrollment
+attempt/authority entry consuming real launch/preparation claims, and a NodeStorage
+factory consuming typed enrollment admission, the same accepted session, local
+profile and capacity owner. Current immutable maps and post-grant constructors
+are not an implemented composition. A serializable PreparedCheckpoint is data;
+source-reader provenance remains separate from target grant installation.
+
+The [standalone static validator](./fixtures/nodes/enrollment.test.mjs) checks
+prepared closed envelopes, hashes, numeric bounds, identity and version examples.
+Its modeled admission/state decisions are not execution of Rust authorization,
+SQLite durability, TLS, native writes, provider startup or cleanup. Runtime
+scenarios remain unexecuted. Required later evidence includes pre-grant denial,
+valid install then Prepare, concurrent-agent preservation, every crash/publication
+boundary, dropped waiters/SAME task joins, guarded replies, deadlines, close-first
+reordering, lost correlation and actual node-local factory/provider behavior.
+
 ## Private preparation lifecycle
 
-This section prepares **nodeProtocol 2**, replacing private version 1 for lifecycle
-dispatch. It does not change the public client protocol, checkpointFormat 1 or
+This section defines the **nodeProtocol 2** lifecycle, carried forward unchanged
+in **nodeProtocol 3 and 4**; it replaces private version 1 for lifecycle dispatch. It does not change the public client protocol, checkpointFormat 1 or
 journalFormat 1, and does not advertise an implemented listener. Version 1 must
 not accept these operations or downgrade to raw startup. The local in-process
 node implements the same semantics without a token/listener.
@@ -1086,3 +1384,276 @@ A five-minute checkpoint timer is **not** a five-minute loss bound: an outage or
 failed capture can leave a much older successful checkpoint. Unacked journal on a
 lost disk is unavailable; acknowledged transcript remains on head independently
 of the filesystem checkpoint. The recovery notice explicitly distinguishes them.
+
+
+## Private checkpoint capture
+
+**nodeProtocol 3 and 4**, prepared contract: register captured metadata, upload repository
+objects using existing Stage framing, then request a durable checkpoint decision.
+This defines required behavior, not implemented handlers or listener qualification.
+It is private node-to-head traffic, excluded from public workspace routing and
+method catalogs. No public capability, checkpointFormat 1 or journalFormat 1 bump
+is introduced. Version 2 does not admit these capture-write RPCs. Ordinary Git,
+selected checkpoint reads, Stop and StartedWrite rules are not weakened.
+
+### Capture requests, responses and grants
+
+| Operation | Channel/kind and direction | Scope and correlation |
+| --- | --- | --- |
+| `checkpoint.prepare` | `rpc/request` node to head; `rpc/response` back | Exact live agent/workspace; `requestId = streamId`; `idempotencyKey = manifest.checkpointId` |
+| Repository Stage | `git` first `Data` with existing `metadata.gitOpen`; smart-Git bytes and End | `service: checkpoint-stage`, `method: git.receivePack`, fresh `requestId = streamId`, exact `checkpoint: StageBinding`; capability/idempotency fields absent |
+| `checkpoint.commit` | `rpc/request` node to head; `rpc/response` back | Exact live agent/workspace; `requestId = streamId`; `idempotencyKey = checkpointId` |
+
+RPC method grants are installed for the exact current execution owner, agent,
+workspace, run and assignment epoch, under an authenticated version-3 or version-4 connection.
+The head independently resolves persisted assignment/lease/incarnation and repo
+grants. Manifest fields are assertions, not serialized authority. Captured output
+uses current target ownership; inherited baseline provenance does not authorize
+another agent's output. A method name alone cannot authorize a Git service. Stage
+does not grant ordinary Receive, Upload, forge/ref writes or arbitrary roots.
+
+`timeoutMs` is 1..120000. Every physical request uses a fresh transport UUID;
+logical retries retain the original checkpoint UUID/hash and complete intent.
+Idempotency namespace is method + trusted owner/agent/run/epoch + checkpoint UUID;
+the shared registration also binds that UUID across prepare/commit. Identical
+concurrent requests join one owned operation; conflicting intent fails. Generic
+RPC cancel uses `control/cancel` and the original request scope/ID. No cancel is
+rollback. No caller principal, filesystem path, lease token, expiry, native grant
+or serialized assignment is accepted.
+
+Prepare params have exactly these fields (placeholders illustrate types):
+
+```json
+{
+  "manifestSha256": "<lowercase SHA-256>",
+  "manifestJson": "<exact typed checkpointFormat1 UTF-8 JSON bytes as a string>",
+  "repositories": [{"repoKey": "<granted key>", "objectBytes": "<decimal upper bound>"}],
+  "attachments": [{"id": "<attachment id>", "sha256": "<SHA-256>", "bytes": "<decimal length>"}]
+}
+```
+
+Repositories match the complete manifest graph in parent-before-child order.
+`objectBytes` bounds verified retained object-storage bytes, not compressed pack
+length; it cannot grow on retry. Attachments are required even when empty, sorted
+by id, and match the complete manifest id/hash set with independently checked
+lengths. Full vectors and exact manifest bytes/hash are immutable intent.
+
+Prepare result has exactly `checkpointId`, `manifestSha256`, `expiresAtMs`.
+The first two match the submitted manifest; expiry is the head-selected original
+unsigned decimal epoch-millisecond string. Success proves durable metadata
+reservation and complete supported head attachment retention, not repository
+closure, commit, readiness or authority. Same-intent reconciliation returns the
+original values, never a refreshed expiry. Only a trusted correlated capture owner
+with live admission may install a local helper capability restricted to that
+registration, repository URL and Stage service.
+
+Commit params have exactly `checkpointId`, `manifestSha256`, `runId`,
+`assignmentEpoch`, `captureRevision`. The latter two are canonical decimal u64
+strings; epoch and revision are positive. All assertions must equal the registered
+manifest and current execution. Result remains exactly:
+
+```json
+{
+  "checkpointId": "<submitted UUID>",
+  "outcome": "advanced",
+  "currentCheckpointId": "<UUID at the durable decision>"
+}
+```
+
+`outcome` is `advanced` or `historical`. Persist and replay the original three-field
+decision even if a newer capture advances the pointer. `currentCheckpointId` is
+not a new status read. Trusted pending request state supplies hash/run/epoch/revision
+correlation; adding unreviewed receipt fields is forbidden. A retry needs fresh
+scope, not a new logical checkpoint to conceal an unknown result.
+
+### Exact bytes and closed schemas
+
+Decode original bytes before any lossy map/Value conversion. Reject unknown keys,
+duplicate decoded keys (including escaped aliases), positional structures, invalid
+UTF-8 and type coercions at every object depth, including flattened repositories.
+Reject missing required members and schema-disallowed nulls. New DTO counters,
+byte counts and expiry are canonical unsigned decimal strings (checked u64, no
+signs or leading zeros). UUID fields are nonnil canonical lowercase hyphenated
+UUIDs; SHA-256 is 64 lowercase hex characters. Existing non-UUID identity strings
+and all unchanged inner/Stage types retain their defined encodings.
+
+The manifest retains **checkpointFormat 1**: numeric u32 `formatVersion: 1`, RFC3339
+`capturedAt`, omitted `wip`/`branch`/`inherited` when absent, not required nulls.
+Inner attachments use `attachmentId`/`sha256`, distinct from outer `id`/hash/length
+descriptors. Parse the pinned typed manifest, reserialize with that exact typed
+encoding and require equality with the original UTF-8 bytes and SHA-256. No JCS,
+whitespace normalization, Value roundtrip or object-equivalent rehash. Preserve
+field order/omission through the existing typed encoding. New outer rules never
+rewrite inner numeric fields or optional omissions.
+
+Validate unique granted repos, root first, complete initialized submodule graph,
+exact HEAD/index/WIP/gitlinks/fork/inherited bases, safe relative paths and object
+format. Missing dirty submodules fail. History-only capture requires session
+`mode: history`, `files: []`, `throughSeq = journalSeq`; there is no portable session
+import, credential payload or session-file upload in this agreement.
+
+### Durable reservations and finite capacity
+
+Both head and node need independently enforced finite capture owners across runs
+and connections. Limits below are maxima, not promises that every combination fits.
+Trusted operators/component limits may lower them; exhaustion fails/defer captures
+without omission or loss of the previous successful checkpoint.
+
+| Bound | Maximum |
+| --- | --- |
+| Whole RPC / decoded manifest | 8 MiB / 1 MiB (escaped string also counts toward RPC limit) |
+| Repositories / attachments per capture | 64 / 128 |
+| Repository key / attachment id / relative path | 128 / 128 / 4096 UTF-8 bytes |
+| Per repository retained objects / per attachment | 256 MiB / 256 MiB |
+| Capture records per owner / per agent-run | 64 / 4, including pending/failed/uncertain/tombstones |
+| Active native publication or capture/upload/verification workers per owner | 8 |
+| Control metadata per record / manifest+control metadata per owner | 64 KiB / 68 MiB |
+| Total charged backing storage per head owner and per node owner separately | 1 GiB, including metadata, spool/retained objects, attachment copies, scratch and uncertainty |
+| Repo slots / active physical stream per existing lane | 64 per capture / 1 |
+| Physical Stage attempts per repository | 3 total, including initial attempt |
+| Original head registration lifetime / physical RPC or Stage deadline | At most 600000 ms and current lease expiry / at most 120000 ms and original deadline |
+
+Before any upload advertisement, process, copy or temporary write, durably reserve
+complete intent, record/count capacity and enforceable maximum bytes. Include
+revision/dedup/operation state and temporary publication metadata, not just the
+manifest. All repository upper bounds plus exact attachment lengths and metadata
+must fit head backing capacity. Reserve conservative scratch/quarantine/verification
+allowance in addition to retained data before each attempt; measure and enforce
+actual allocation and reachable closure, including compressed-pack expansion.
+Retries and uncertain files are charged, not a free second copy. Do not reset
+budgets on new links or multiply physical capacity with independent registries;
+other owners sharing backing storage must participate in its trusted total budget.
+
+The node likewise reserves durable capture identity, revision and spool/scratch
+capacity before effects. A fixed revision maps to one UUID/hash; retries cannot
+raise an immutable object bound. If reservation fails, defer before effects. Restore
+all pending/temp/uncertain accounting on restart or quarantine the owner. Intact
+files/expiry do not restore authority, free charge or remove replay fences.
+Compaction keeps charged durable identities until retired epoch/lease admission
+rejects all old requests and issuance paths before lookup; it never proves cleanup.
+
+### Stage upload and lost-receipt replay
+
+Derive the existing StageBinding from the registered captured manifest: checkpoint
+UUID/hash, run, epoch, revision and exact per-repo snapshot. Head verifies equality
+against its immutable registered binding and granted URL. Reserve one durable
+per-capture/repo owner before advertisement. A fresh transport ID is not source
+selection; no current-preparation singleton, ordinary Git fallback or new Open
+field is needed. Head's original expiry is enforced at admission/effects; nodes
+may shorten it, never refresh it.
+
+Existing `admit_stage` returns `Result<()>`: it cannot send an early stored receipt
+to an unchanged client that still expects advertisement/upload/receipt framing.
+A completed upload with a lost receipt therefore uses **full bounded framed
+retransmission**, only after the prior physical attempt truly settles. Durably
+claim/count the next attempt and reserve its separate quarantine, verification,
+process scratch and uncertain output before advertisement; original retained data
+stays charged. Active/uncertain attempts return busy. No capacity or remaining
+attempt/deadline budget means admission failure before upload.
+
+Receive and verify the full normal exchange under the original binding and current
+admission. At `stage_receive`, serialize against the durable repo slot and compare
+verified closure/full binding. For an exact completed upload return its original
+persisted StageReceipt: no second durable import, ref publication, event, new stage
+identity or retained-destination replacement. Changed intent/closure fails. Never
+skip verification because a receipt exists. New temporary writes are permitted only
+within the charged attempt; this is not a wire shortcut or mutation-free replay.
+
+Retain the SAME actual Stage task handle, helper/process group, verification,
+native authority, spool, scratch and terminal result across cancelled/dropped
+waiters. Before treating physical retry as settled, join its actual work and prove
+scratch disposal; cleanup failure retains ownership/charge. `Processes.finish`
+inside a detached task, a finished flag or dropping a JoinHandle is insufficient.
+Keep current link/assignment/method/effect guards through reads, writes, validation
+and fsync. End/reply loss cannot free an owner or admit another importer. Queued
+and started-write fatal rules and existing shared-link/Stop retention still apply;
+this agreement grants no routing reclamation or cancelled-authority terminal send.
+
+### Current Store attachment reuse
+
+Prepare supports only independently selected current-workspace Store attachment
+bytes matching every declared id/hash/length. Head's trusted producer resolves
+actual live ownership/tombstone/ACL and safe descriptors, hashes/copies or pins the
+complete retained inventory before prepare success, and revalidates at decision.
+Retained typed data is not authority; a supplied path/receipt/row/hash cannot select
+it. Node descriptors cannot omit unavailable entries or reset lengths on retry.
+
+Bytes available only through a prior/inherited checkpoint are unsupported here:
+that path needs distinct reviewed source-reader and current-target owners, not a
+forged target assignment or relabelled retained receipt. Historically inherited
+content independently available through the supported current Store producer may
+be selected there. Otherwise fail `checkpoint-data-unavailable` and retain the
+previous successful checkpoint. Newly created/local-only attachment bytes likewise
+need a separate upload agreement. No fallback through blob reads, sourceMetadata,
+filesystem APIs or portable-session files; this is bounded attachment coverage.
+
+### Commit task, cancellation and durable acknowledgement
+
+Head registration order is reserved complete intent/quota → immutable metadata and
+revision relation → supported attachment retention → durable prepared state →
+guarded reply. Durable uniqueness binds UUID to full intent and
+`(agentId, assignmentEpoch, captureRevision)` to UUID/hash, including historical
+uploads. No success before required fsync/publication work settles. Object transfer
+alone never advances successful state.
+
+Reserve one typed retained commit/reconciliation task/result before effects.
+Retain and await the SAME task, its terminal Result and its owner; pruning finished
+flags or shutdown polling is not join/error proof. Under the existing checkpoint
+lock, revalidate complete repository/attachment closure, current assignment and
+journal ACK at least journalSeq; then follow the [durable decision](./node-checkpoints.md#durable-commit-visibility-and-recovery)
+sequence, numeric epoch/revision freshness CAS, immutable anchors and current-DB
+alias repair. Persist the exact original receipt with the decision. Older valid
+uploads may be historical, never regress aliases/pointers or re-emit an event.
+
+Stop/revocation denies new capture/upload/commit issuance. Already admitted effects
+retain their actual authority through completion or safe abort. Do not wait for
+native drains while holding locks needed for control dispatch. Request cancellation,
+deadline or lost response retains uncertain work and quota; it cannot roll back a
+DB decision. Reconcile the same original UUID/hash. Expiry closes new upload effects,
+not durable decision reconciliation under fresh exact authorization; inaccessible
+old-run decisions remain for trusted head-local reconciliation, never stale-node
+bypass. Restart restores data/dedup only, not replay/execution authority.
+
+Retain guarded reply policy, typed owner and permit through queued AND actual socket
+write. Suppressed/lost delivery does not erase/repeat a committed decision. The
+node's trusted pending capture supervisor validates original response bytes, exact
+request/current authenticated binding and the three-field receipt against its
+retained UUID/hash/run/epoch/revision before calling scheduler acceptance. A raw
+decoded receipt, Stage End, ready/provider-idle or journal ACK is not acceptance.
+An older historical receipt cannot suppress a newer capture; duplicates do not
+free spools twice. Source/native/route settlement remains distinct from storage,
+checkout/assignment reuse and reclamation.
+
+Errors use the existing JSON-RPC `error.code` and sanitized `error.data.code`,
+with optional retryable boolean, never a new `errorCode` member or raw paths/stderr:
+
+| data.code | JSON-RPC code | Condition |
+| --- | --- | --- |
+| invalid-params / request-id-reused | -32602 | Closed shape/bounds or changed immutable intent |
+| stale-checkpoint-owner | -32003 | Wrong/currently invalid target owner/run/epoch/lease |
+| checkpoint-invalid | -32602 | Hash/graph/closure or revision conflict |
+| checkpoint-data-unavailable | -32603 | Missing supported authorized attachment bytes/producer |
+| checkpoint-incomplete | -32005 | Missing repo stages or journal ACK; retry exact intent when safe |
+| checkpoint-busy | -32005 | Owned physical/native uncertainty |
+| checkpoint-unavailable | -32603 | Capacity, expiry or recovery restriction |
+| rpc-outcome-unknown | -32603 | Retain and reconcile original identity/decision |
+
+### Capture qualification and rollout
+
+The [capture corpus](./fixtures/nodes/checkpoint-capture.json) and its
+[static validator](./fixtures/nodes/checkpoint-capture.test.mjs) are prepared data
+and structural checks, not native runtime qualification. Required future tests
+include actual multi-repository closure, full replay/no-second-import, process/task
+joins, pre-effect reservation/recovery, changed revisions, guarded reply failure
+and scheduler acceptance. Fixtures must own teardown and retain uncertain failures.
+
+The [shared capture barrier](./node-checkpoints.md#capture-quiescence-and-spool-ownership)
+includes all writes and cleanup, not only asynchronous Disk workers. Never release
+an outer attachment permit before the complete handoff is proven. A timer, new
+barrier or forced permit drop cannot make capture stable. Version gates, grants,
+source adapters, durable quotas and retained task supervisors need implementation
+and independent verification before acceptance; merely negotiating version 3 or 4 is
+insufficient. Additive docs land before consumer merges/contract acceptance;
+authorized local development and draft preparation may proceed in parallel.
+Backend behavior lands before dependent frontend changes. No default listener,
+provider execution, public placement or release acceptance follows from these docs.

@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { inspectSources, preflight, runContract } from './test-transfer-selection-contract.mjs';
+import { hashJson } from './check-transfer-selection-contract.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const GENERATOR = 'crates/intent-services/src/transfer_selection_contract.rs';
@@ -36,6 +37,11 @@ function fixture(t) {
     git(dir, 'init', '--quiet');
   }
   cpSync(path.join(ROOT, 'docs/protocol/fixtures/transfer-selection'), path.join(root, 'docs/protocol/fixtures/transfer-selection'), { recursive: true });
+  // Synthetic orchestration data only: never write this into the maintained golden.
+  const desktop = JSON.parse(readFileSync(path.join(root, 'docs/protocol/fixtures/transfer-selection/public-sessions.json'), 'utf8'));
+  for (const row of desktop.cases) row.session.harnessFeatures.desktopControl = true;
+  desktop.provenance.payloadSha256 = hashJson(desktop.cases);
+  write(root, 'docs/protocol/fixtures/transfer-selection/public-sessions.desktop-control-v1.json', JSON.stringify(desktop));
   mkdirSync(path.join(root, 'scripts'));
   for (const file of ['check-transfer-selection-contract.mjs', 'test-transfer-selection-contract.mjs']) cpSync(path.join(ROOT, 'scripts', file), path.join(root, 'scripts', file));
   write(dirs.intentd, GENERATOR, '// synthetic orchestration fixture, never a public golden\n');
@@ -55,8 +61,9 @@ if (env.FIXTURE_MODE === 'wait') { console.log('fixture exporter ready'); await 
 if (env.FIXTURE_MODE === 'export-fail') process.exit(23);
 if (env.FIXTURE_MODE === 'no-output') process.exit(0);
 const root = env.TRANSFER_SELECTION_FIXTURE_ROOT;
-const artifact = JSON.parse(readFileSync(root + '/public-sessions.json', 'utf8'));
-const { hashJson } = createRequire(import.meta.url)(root + '/../../../../scripts/check-transfer-selection-contract.mjs');
+const { hashJson, resolveGoldenPath } = createRequire(import.meta.url)(root + '/../../../../scripts/check-transfer-selection-contract.mjs');
+const selected = await resolveGoldenPath({fixtureRoot: root, intentdRoot: process.cwd()});
+const artifact = JSON.parse(readFileSync(env.FIXTURE_MODE === 'wrong-schema' ? root + '/public-sessions.json' : selected, 'utf8'));
 if (env.FIXTURE_MODE !== 'stale') artifact.provenance.intentdRevision = execFileSync('git', ['rev-parse', 'HEAD'], {encoding:'utf8'}).trim();
 artifact.provenance.generatorSha256 = createHash('sha256').update(readFileSync('${GENERATOR}')).digest('hex');
 if (env.FIXTURE_MODE === 'wrong-generator') artifact.provenance.generatorSha256 = 'f'.repeat(64);
@@ -70,6 +77,7 @@ const file = process.env.TRANSFER_SELECTION_GENERATED;
 fs.writeFileSync(process.env.FIXTURE_RENDER_LOG, JSON.stringify({argv:process.argv.slice(2),file,artifact:JSON.parse(fs.readFileSync(file,'utf8'))}));
 if (process.env.FIXTURE_MODE === 'render-fail') process.exit(31);
 if (process.env.FIXTURE_MODE === 'render-mutation') fs.appendFileSync(file, ' ');
+if (process.env.FIXTURE_MODE === 'golden-mutation') fs.appendFileSync(process.env.TRANSFER_SELECTION_FIXTURE_ROOT + '/public-sessions.json', ' ');
 `, 0o755);
   mkdirSync(path.join(top, 'tmp'));
   const env = { ...process.env, PATH: `${top}/bin:${process.env.PATH}`, TMPDIR: path.join(top, 'tmp'), FIXTURE_EMITTER: path.join(top, 'emit.mjs'), FIXTURE_RENDER_LOG: path.join(top, 'render.json') };
@@ -91,6 +99,37 @@ test('local gate generates twice, routes exact fresh input, reports provenance a
   assert.deepEqual(readdirSync(f.env.TMPDIR), []);
   assert.equal(hash(path.join(f.root, 'docs/protocol/fixtures/transfer-selection/public-sessions.json')), golden);
   assert.equal(git(f.root, 'status', '--porcelain'), before);
+});
+
+for (const daemon of ['legacy', 'desktop-control-v1']) for (const frontend of ['pin', 'feature']) {
+  test(`${daemon} daemon with ${frontend} renderer selects a fixed complete expected payload`, async (t) => {
+    const f = fixture(t);
+    if (daemon !== 'legacy') {
+      write(f.dirs.intentd, 'scripts/transfer-selection-expectation.json', JSON.stringify({ version: daemon }));
+      commit(f.dirs.intentd);
+    }
+    if (frontend === 'feature') { write(f.dirs['cloudlands-fe'], 'feature', 'new frontend\n'); commit(f.dirs['cloudlands-fe']); }
+    const result = await runContract({ root: f.root, env: f.env, log: () => {} });
+    assert.equal(result.sources.golden, daemon === 'legacy' ? 'public-sessions.json' : 'public-sessions.desktop-control-v1.json');
+    const rendered = JSON.parse(readFileSync(f.env.FIXTURE_RENDER_LOG, 'utf8'));
+    assert.equal(rendered.artifact.cases[0].session.harnessFeatures.desktopControl, daemon === 'legacy' ? undefined : true);
+    if (daemon !== 'legacy') {
+      await assert.rejects(runContract({ root: f.root, env: { ...f.env, FIXTURE_MODE: 'wrong-schema' }, log: () => {} }), /stale/);
+      await assert.rejects(runContract({ root: f.root, env: { ...f.env, FIXTURE_MODE: 'golden-mutation' }, log: () => {} }), /must not rewrite either golden/);
+    }
+  });
+}
+
+test('unknown declaration and missing selected artifact fail before export without legacy fallback', async (t) => {
+  const f = fixture(t);
+  write(f.dirs.intentd, 'scripts/transfer-selection-expectation.json', '{"version":"unknown"}');
+  commit(f.dirs.intentd);
+  await assert.rejects(preflight(f.root, f.env), /expectation version/);
+  write(f.dirs.intentd, 'scripts/transfer-selection-expectation.json', '{"version":"desktop-control-v1"}');
+  commit(f.dirs.intentd);
+  rmSync(path.join(f.root, 'docs/protocol/fixtures/transfer-selection/public-sessions.desktop-control-v1.json'));
+  await assert.rejects(runContract({ root: f.root, env: f.env }), /required fixture.*desktop-control-v1/);
+  assert.deepEqual(readdirSync(f.env.TMPDIR), []);
 });
 
 for (const component of ['intentd', 'cloudlands-fe']) {

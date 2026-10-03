@@ -19,6 +19,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { parseArgs } from 'node:util';
 
 import { describeCheckout, formatBanner, formatOffPinWarning, submoduleOf } from './submodule-ref.mjs';
 
@@ -38,9 +39,9 @@ export const PAIRS = [
     rust: { file: MODEL_RS, struct: 'Workspace' },
     ts: { file: 'packages/cloudlands-fe/src/shared/types.ts', type: 'Workspace' },
     ignore: {
+      lastContentActivity: 'documented optional content timestamp; staged daemon-first adoption before https://github.com/intent-hq/cloudlands-fe/pull/3124; remove once the monorepo frontend pin includes that PR',
       canManage: 'documented optional capability; staged daemon-first adoption before https://github.com/intent-hq/cloudlands-fe/pull/2911; remove once the monorepo frontend pin includes that PR',
       tokenUsage: 'read via workspace.getTokenUsage and the workspace:tokenUsage-changed event into the token-usage slice, not from the row',
-      openInviteCount: 'multiplayer w1 membership summary; not consumed by the FE today',
     },
   },
 ];
@@ -539,35 +540,62 @@ export function formatRefBanner(ref) {
 
 /** The stderr warning for a submodule checkout that is off the recorded pin, or null. */
 export function formatRefOffPinWarning(ref) {
-  return formatOffPinWarning(ref);
+  const remedy = ref?.pinDir
+    ? `Run git submodule update --checkout ${ref.pinDir} and rerun without component overrides to compare against the pin.`
+    : undefined;
+  return formatOffPinWarning(ref, { remedy });
+}
+
+// Keep the manifest's canonical component identity separate from the selected
+// path: source reads/diagnostics follow the latter, recorded gitlinks the former.
+function selectFile(file, dirs) {
+  const sub = submoduleOf(file);
+  const explicit = sub !== null && dirs[sub] !== undefined;
+  const dir = explicit ? dirs[sub] : sub;
+  return { sub, dir, explicit, file: explicit ? path.join(dir, path.relative(sub, file)) : file };
 }
 
 // `{ source }` when readable, `{ skipped: true }` when the file's submodule is
 // not initialized, `{ error }` when the path is stale inside an initialized
 // submodule (or outside any submodule).
-async function readManifestFile(root, file) {
-  const sub = submoduleOf(file);
-  if (sub && !(await exists(path.join(root, sub, '.git')))) return { skipped: true };
-  if (!(await exists(path.join(root, file)))) {
-    const where = sub ? `submodule ${sub} is initialized` : 'not inside a submodule';
+async function readManifestFile(root, { file, sub, dir, explicit }) {
+  if (explicit && !dir) return { error: { file, line: 1, message: `selected ${sub} root must not be empty` } };
+  if (sub && !(await exists(path.resolve(root, dir, '.git')))) {
+    if (!explicit) return { skipped: true };
+    return { error: { file, line: 1, message: `selected ${sub} root ${dir} is missing or not initialized (.git not found)` } };
+  }
+  if (explicit && !describeCheckout(root, dir, { pinDir: sub }).checkout) {
+    return { error: { file, line: 1, message: `selected ${sub} root ${dir} is not a repository root with a readable HEAD` } };
+  }
+  if (!(await exists(path.resolve(root, file)))) {
+    const where = sub ? `submodule ${dir} is initialized` : 'not inside a submodule';
     return { error: { file, line: 1, message: `manifest path ${file} does not exist (${where}); update PAIRS in scripts/check-protocol-field-parity.mjs` } };
   }
-  return { source: await fs.readFile(path.join(root, file), 'utf8') };
+  try {
+    return { source: await fs.readFile(path.resolve(root, file), 'utf8') };
+  } catch (error) {
+    return { error: { file, line: 1, message: `cannot read manifest path ${file}: ${error.code}` } };
+  }
 }
 
 /**
  * Run every manifest pair against `root`; returns `{ errors, warnings, checked, skipped, refs }`.
  * `warnings` are the stale ignore entries; only `errors` fail the check. `refs` holds one submodule
- * ref per distinct `packages/<name>` a compared file was read from, in first-read order.
+ * ref per distinct component a compared file was read from, in first-read order.
+ * Optional `intentdDir` / `feDir` select roots relative to `root` (or absolute);
+ * unlike absent default submodules, explicitly selected missing roots fail.
  */
-export async function runChecks(root, pairs = PAIRS) {
+export async function runChecks(root, pairs = PAIRS, { intentdDir, feDir } = {}) {
   const errors = [];
   const warnings = [];
   const checked = [];
   const skipped = [];
   const refs = new Map();
+  const dirs = { 'packages/intentd': intentdDir, 'packages/cloudlands-fe': feDir };
   for (const pair of pairs) {
-    const [rust, ts] = await Promise.all([readManifestFile(root, pair.rust.file), readManifestFile(root, pair.ts.file)]);
+    const sources = [selectFile(pair.rust.file, dirs), selectFile(pair.ts.file, dirs)];
+    const selectedPair = { ...pair, rust: { ...pair.rust, file: sources[0].file }, ts: { ...pair.ts, file: sources[1].file } };
+    const [rust, ts] = await Promise.all(sources.map((source) => readManifestFile(root, source)));
     for (const r of [rust, ts]) if (r.error) errors.push(r.error);
     const missing = [rust.skipped && pair.rust.file, ts.skipped && pair.ts.file].filter(Boolean);
     if (missing.length > 0) {
@@ -575,18 +603,25 @@ export async function runChecks(root, pairs = PAIRS) {
       continue;
     }
     if (rust.error || ts.error) continue;
-    for (const dir of [submoduleOf(pair.rust.file), submoduleOf(pair.ts.file)]) {
-      if (dir && !refs.has(dir)) refs.set(dir, describeCheckout(root, dir));
+    for (const { sub, dir } of sources) {
+      if (sub && !refs.has(sub)) refs.set(sub, describeCheckout(root, dir, { pinDir: sub }));
     }
-    for (const d of comparePair(pair, rust.source, ts.source)) (d.severity === 'warning' ? warnings : errors).push(d);
+    for (const d of comparePair(selectedPair, rust.source, ts.source)) (d.severity === 'warning' ? warnings : errors).push(d);
     checked.push(pairLabel(pair));
   }
   return { errors, warnings, checked, skipped, refs: [...refs.values()] };
 }
 
 async function main() {
-  const root = process.argv[2] ? path.resolve(process.argv[2]) : process.cwd();
-  const { errors, warnings, checked, skipped, refs } = await runChecks(root);
+  const { values, positionals } = parseArgs({
+    options: { 'intentd-dir': { type: 'string' }, 'fe-dir': { type: 'string' } },
+    allowPositionals: true,
+  });
+  if (positionals.length > 1) throw new Error('Usage: check-protocol-field-parity.mjs [root] [--intentd-dir DIR] [--fe-dir DIR]');
+  const root = positionals[0] ? path.resolve(positionals[0]) : process.cwd();
+  const { errors, warnings, checked, skipped, refs } = await runChecks(root, PAIRS, {
+    intentdDir: values['intentd-dir'], feDir: values['fe-dir'],
+  });
   for (const ref of refs) {
     const banner = formatRefBanner(ref);
     const offPin = formatRefOffPinWarning(ref);

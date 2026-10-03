@@ -48,13 +48,14 @@ function checkoutHead(dir) {
  * cannot tell. A known checkout also carries `dirty`: true when its tracked files have uncommitted changes, so
  * a result read from the working tree is not attributed to the commit HEAD names. `root` may be relative to the
  * process cwd (`runChecks('.')`); it is resolved once here so git is never handed a relative path as both cwd
- * and target.
+ * and target. `pinDir` identifies the canonical gitlink when `dir` selects another checkout.
  */
-export function describeCheckout(root, dir) {
+export function describeCheckout(root, dir, { pinDir = dir } = {}) {
   const absRoot = path.resolve(root);
   const absDir = path.resolve(absRoot, dir);
   const checkout = checkoutHead(absDir);
-  const ref = { source: 'checkout', dir, checkout, pin: gitOrNull(['rev-parse', `HEAD:${dir}`], absRoot) };
+  const ref = { source: 'checkout', dir, checkout, pin: gitOrNull(['rev-parse', `HEAD:${pinDir}`], absRoot) };
+  if (pinDir !== dir) ref.pinDir = pinDir;
   if (checkout) ref.dirty = (gitOrNull(['status', '--porcelain', '--untracked-files=no'], absDir) ?? '') !== '';
   return ref;
 }
@@ -66,7 +67,7 @@ export function describeCheckout(root, dir) {
  */
 export function formatBanner(ref, { check, what }) {
   if (!ref) return null;
-  const component = path.basename(ref.dir);
+  const component = path.basename(ref.pinDir ?? ref.dir);
   if (ref.source === 'pin') return `${check}: ${component} ${what} from recorded pin ${short(ref.pin)}`;
   if (!ref.checkout) return null;
   const pin = ref.pin ? short(ref.pin) : 'unreadable';

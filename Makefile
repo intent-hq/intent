@@ -168,6 +168,8 @@ check-backend-keychain-contract: ## Validate canonical backend Keychain fixtures
 
 docs-check: event-catalog-check check-mcp-bindings ## Check documented development targets, knobs, and remote-host guidance
 	@scripts/docs-check.sh
+	@node --test docs/protocol/fixtures/scripts/monitors.test.mjs
+	@node --test docs/protocol/fixtures/submission-correlation/contract.test.mjs
 
 check-protocol-catalog: ## Check docs/protocol method catalog against methods/*.md and intentd's catalog.rs
 	@node scripts/check-protocol-catalog.mjs
@@ -198,7 +200,7 @@ check-makefile-targets: ensure-intentd-submodule ## Check Makefile-referenced in
 # present in the cloudlands-fe type that consumes it, or listed in the script's
 # ignore manifest with a reason; a stale ignore entry is a warning, not a failure.
 check-protocol-field-parity: ensure-intentd-submodule ensure-fe-submodule ## Check intentd row struct fields against the cloudlands-fe types that consume them
-	@node scripts/check-protocol-field-parity.mjs
+	@node scripts/check-protocol-field-parity.mjs --intentd-dir "$(INTENTD_DIR)" --fe-dir "$(FE_DIR)"
 
 # The live main-branch rulesets of intent, intentd and cloudlands-fe (required
 # CI Gate check, thread resolution, merge queue) are snapshotted under
@@ -511,7 +513,7 @@ gate: check ## Run all local Rust gates (fmt, clippy, source lints, then nextest
 test: test-intentd ## Run Rust tests; after interruption use RESUME=1 (GATE_FORCE=1 runs all, NO_FAIL_FAST=1 continues past failures)
 
 test-scripts: ## Run the Python script unit tests (Python 3.11+, no submodules needed)
-	python3 -S -B -m unittest -v scripts.test_resumable_nextest scripts.test_compact_gate scripts.test_seed_dev_providers scripts.test_seed_dev_workspaces scripts.test_cleanup_prereleases scripts.test_script_test_target
+	python3 -S -B -m unittest -v scripts.test_resumable_nextest scripts.test_compact_gate scripts.test_seed_dev_providers scripts.test_seed_dev_workspaces scripts.test_cleanup_prereleases scripts.test_script_test_target scripts.test_watch_capacity
 
 # Runs under nextest so local full-suite runs pick up the same
 # .config/nextest.toml protections CI uses (timing-serial test group,
@@ -523,6 +525,7 @@ test-scripts: ## Run the Python script unit tests (Python 3.11+, no submodules n
 # are off by default (see NEXTEST_SHOW_PROGRESS / CARGO_TERM_PROGRESS_WHEN
 # above); `make test NEXTEST_SHOW_PROGRESS=bar` restores nextest's.
 test-intentd: ensure-intentd-submodule
+	@python3 scripts/check_watch_capacity.py --quiet
 	@cargo nextest --version >/dev/null 2>&1 || { \
 		echo "[test-intentd] ERROR: cargo-nextest is not installed — run 'cargo install cargo-nextest --locked'"; \
 		exit 1; \
@@ -554,6 +557,7 @@ test-intentd: ensure-intentd-submodule
 # nested quote; the script execs the runner from this directory, so the
 # relative scripts/ path resolves against the monorepo root.
 test-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd branch changed vs BASE, recording the run (RESUME=1 resumes, NO_FAIL_FAST=1 continues past failures, DRY_RUN=1 prints the plan)
+	@if [ -z "$(DRY_RUN)" ] || [ "$(DRY_RUN)" = 0 ]; then python3 scripts/check_watch_capacity.py --quiet; fi
 	@cargo nextest --version >/dev/null 2>&1 || { \
 		echo "[test-changed] ERROR: cargo-nextest is not installed — run 'cargo install cargo-nextest --locked'"; \
 		exit 1; \
@@ -586,6 +590,7 @@ test-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd br
 # DRY_RUN=1, which only prints the plan).
 coverage-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd branch changed vs BASE under llvm-cov, as intentd's PR coverage-changed job does (DRY_RUN=1 prints the plan)
 	@if [ -z "$(DRY_RUN)" ] || [ "$(DRY_RUN)" = 0 ]; then \
+		python3 scripts/check_watch_capacity.py --quiet || exit $$?; \
 		cargo nextest --version >/dev/null 2>&1 || { \
 			echo "[coverage-changed] ERROR: cargo-nextest is not installed — run 'cargo install cargo-nextest --locked'"; \
 			exit 1; \
@@ -619,10 +624,12 @@ list-tests: ensure-intentd-submodule ## List nextest tests without a pager (ARGS
 # floor (CI uses 40), e.g. `make coverage-e2e COVERAGE_FLOOR=40`; when unset
 # it expands to nothing and no floor is enforced locally.
 coverage-e2e: ensure-intentd-submodule ## Reproduce CI e2e coverage locally (slow, instrumented; not part of make test)
+	@python3 scripts/check_watch_capacity.py --quiet
 	cd $(INTENTD_DIR) && NEXTEST_TEST_THREADS=$(TEST_THREADS) CARGO_BUILD_JOBS=$(BUILD_JOBS) \
 		./scripts/coverage-e2e.sh $(COVERAGE_FLOOR)
 
 coverage-all: ensure-intentd-submodule ## Reproduce CI full-workspace coverage locally (slow, instrumented; not part of make test)
+	@python3 scripts/check_watch_capacity.py --quiet
 	cd $(INTENTD_DIR) && NEXTEST_TEST_THREADS=$(TEST_THREADS) CARGO_BUILD_JOBS=$(BUILD_JOBS) \
 		./scripts/coverage-all.sh $(COVERAGE_FLOOR)
 

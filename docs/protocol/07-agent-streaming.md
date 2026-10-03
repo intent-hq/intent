@@ -97,7 +97,7 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
 
 - **Methods:** `chat.subscribe` / `chat.unsubscribe`, intercepted on the subscription fast-path
   before the JSON-RPC dispatcher (like `events.subscribe`). `params` is
-  `{ agentId, sinceMessageId?, deltaEncoding?, projection?, replaceGroup?, workspaceId? }` — a missing/empty `agentId` is a
+  `{ agentId, limit?, sinceMessageId?, deltaEncoding?, projection?, replaceGroup?, workspaceId? }` — a missing/empty `agentId` is a
   `-32602` error.
   `chat.subscribe` returns `{ subscriptionId }`, then
   pushes a seq-0 `subscription.push` **snapshot**, then ordered **deltas** (seq 1, 2, …).
@@ -106,6 +106,19 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   for direct callers; workspace clients capture it with the subscription and
   retain it for reconnects and `chat.unsubscribe { subscriptionId, workspaceId? }`.
   It does not change which agent's transcript is returned or connection ownership.
+- **Snapshot message limit.**
+  The optional `limit` accepts an integer from **1 through 200**, inclusive.
+  Absent / `null` selects **20**. Wrong types (including
+  strings, booleans and fractional numbers), zero, negative values and values above 200
+  return `-32602`; the daemon never coerces or clamps them. The chosen limit is fixed
+  for the subscription's lifetime and applies to initial, resume, transcript-invalidation
+  and lag-recovery snapshots, including any merged live-turn row. It is a message-count
+  upper bound, not a guaranteed page size: shorter histories or the existing slim byte
+  budget can yield fewer messages. For example, `limit: 50` requests the newest 50
+  messages in transcript order when enough history fits the budget. No automatic
+  history backfill is added. Daemons predating configurable limits ignore this parameter and retain
+  their five-message window; daemons with configurable limits predating the default
+  increase also default to five, but honor an explicit `limit`.
 - **Slim projection (the wire default since v8.0; introduced opt-in within v7.1 —
   [intent-hq/intentd#1304](https://github.com/intent-hq/intentd/pull/1304)).** Every
   subscription serves the same bounded tool/image block projection as
@@ -124,12 +137,13 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   [intent-hq/intentd#1314](https://github.com/intent-hq/intentd/pull/1314)): the seq-0 and
   lag-recovery snapshots reuse the `agent.getConversation` read, so a snapshot page is bounded
   at `SLIM_PAGE_BUDGET_BYTES` (512 KiB) total serialized message bytes and may carry fewer than
-  `limit` messages, with `nextToken` re-minted at the first excluded row (§5.5) — the client
+  the chosen message limit, with `nextToken` re-minted at the first excluded row (§5.5) — the client
   pages older history exactly as before, just in more round-trips. The budget covers the
   live-turn merge too: after the in-flight message is appended it anchors as the newest row
   (always served, even alone over budget — the §5.5 one-message floor), and oldest persisted
-  rows are evicted until the merged page fits, with `truncated`/`nextToken` re-minted at the
-  eviction boundary so the evicted rows stay reachable via `agent.getConversation`. Since v10.0
+  rows are evicted until the merged page fits both the chosen message limit and byte budget,
+  with `truncated`/`nextToken` re-minted at the eviction boundary so the evicted rows stay
+  reachable via `agent.getConversation`. Since v10.0
   every frame also inherits the `agent.getConversation` legacy-inline-file-block projection
   (§5.5): a persisted pre-10.0 `{ type: "file", data, … }` block with no non-empty
   `attachmentId` is served as `{ type: "text", text: "Attached file: <fileName>" }` (`"Attached
@@ -139,9 +153,10 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
 - **Resume via `sinceMessageId` (additive within v6.4).** A reconnecting client that already
   holds the transcript up to a known message id may pass it as the optional `sinceMessageId`
   (string). Absent / `null` / `""` all mean "no resume" — the standard snapshot below, carrying
-  **no** `resumed` key at all; a present non-string value is a `-32602` error. When provided,
-  the daemon reads the **same bounded newest page** as the standard snapshot (still exactly one
-  conversation read — resume is a post-filter, never a second fetch; monorepo#958 cost contract)
+  **no** `resumed` key on the initial snapshot; a present non-string value is a `-32602` error. When provided,
+  the daemon reads the **same newest page bounded by the subscription's chosen limit** as
+  the standard snapshot (still exactly one conversation read — resume is a post-filter, never a second
+  fetch; monorepo#958 cost contract)
   and then:
   - **Id found in the page** → the seq-0 snapshot's `messages[]` carries only the messages
     **after** that id (possibly empty when the id is the newest row), with `resumed: true`,
@@ -157,6 +172,18 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   The live-turn slot merge (in-flight or orphaned, below) and the activity-flags overlay apply
   identically in both cases, **after** the filter — a merged partial is never trimmed away.
   Deltas (seq 1, 2, …) are unaffected by resume.
+- **Transcript invalidation.** Editing/regenerating or replacing messages emits
+  `agent:updated` with `truncatedCount` or `replacedCount`. Standing chat subscriptions
+  respond with a fresh snapshot bounded by the subscription's chosen limit (including any
+  live row) at the next subscription sequence number, carrying `resumed: false`, even when registration had no
+  `sinceMessageId` or its
+  initial resume has already completed. Clients must honor this flag on every
+  snapshot, not only the initial one. Clients discard their cached transcript (including older
+  paged history) and rehydrate from that snapshot using the same reset semantics as
+  a missing resume anchor. The subscription remains open and replacement-turn deltas
+  continue after the snapshot. Lag-recovery snapshots also carry `resumed: false`,
+  since the lost events may have included a transcript invalidation. Ordinary agent
+  metadata updates do not trigger transcript reads or resets.
 - **Incremental delta encoding via `deltaEncoding` (opt-in, within v7.0;
   [intent-hq/intentd#1289](https://github.com/intent-hq/intentd/pull/1289),
   [monorepo#2675](https://github.com/intent-hq/monorepo/issues/2675)).** The optional
@@ -197,9 +224,21 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   preserved — the client simply applies more appends). Tool calls, terminal reconciles, and
   message-row deltas are conflation barriers in both modes, so a conflated fragment run never
   crosses an authoritative frame.
-- **Snapshot granularity = messages; delta granularity = blocks.** The seq-0 snapshot is the newest
-  `agent.getConversation` page as the `messages[]` object (the same read shape, reused verbatim).
-  Each subsequent delta upserts individual **content blocks** within a message.
+- **Snapshot granularity = messages; delta granularity = blocks.** Fresh, stale-resume,
+  invalidation and lag-recovery snapshots contain the newest **at most `limit` messages**
+  (default **20**), including any merged live-turn row. The daemon requests
+  `agent.getConversation` with the chosen subscription limit, then counts a merged live row
+  inside that same window. Unrelated paginated methods retain their defaults.
+  The response keeps the conversation `messages[]` object shape and transcript-wide
+  `totalMessages` (including a newly merged live row). If the live row displaces persisted rows,
+  `truncated: true` and `nextToken` point older continuation at the eviction boundary, so every
+  displaced row remains reachable. Clients fetch history through `agent.getConversation` with
+  their chosen pagination `limit` and the returned cursor; existing directional cursors and inclusive
+  `aroundMessageId` / `aroundIndex` seeks are unchanged. Slim byte budgeting may shorten the
+  window further, retaining the existing one-message floor; a message-count limit is not a strict
+  wire-byte ceiling. Initial snapshots use one bounded conversation read; recovery retries at
+  most once on read failure, without walking history. Each subsequent delta upserts individual
+  **content blocks** within a message.
 - **`thinking` blocks (streamed reasoning; additive within v6.0,
   [intent-hq/intentd#973](https://github.com/intent-hq/intentd/pull/973)).** ACP
   `agent_thought_chunk` updates accumulate into `{ type: "thinking", id, text }` content blocks —
@@ -458,9 +497,13 @@ delta stream (`tool_delta`, which pairs each lifted item positionally with the i
 (`crates/intent-services/src/tool_block.rs::lift_proposal_resource` /
 `build_proposal_resource_block`), preserving the byte-for-byte snapshot/delta invariant.
 Malformed items (wrong MIME, missing or non-string `text`) are ignored —
-no standalone block is emitted. The lift is gated on `status: "completed"` only: a tool that
-ends in `error` never surfaces a standalone proposal block, even if its output still carries the
-resource item.
+no standalone block is emitted. Lifting resources from tool output is gated on
+`status: "completed"`: an `error` outcome does not lift a proposal merely because its
+output carries a resource item. Binding-registered `AtToolResult` attachments are
+different: a terminal `completed` or `error` outcome claims those already-created cards,
+even when the script threw after creating them. The persisted transcript and live delta
+use the same registered blocks and IDs. See the binding-time
+[attach semantics](./methods/workspace.md#51-workspace) for their provenance and matching.
 
 *Collapsed-output fallback.* Some providers (e.g. auggie) do not echo the MCP content-item
 array in `rawOutput`: they flatten the daemon's dual text+resource items into a single
@@ -495,6 +538,31 @@ together; a re-proposed id replaces its older entry, newest wins), is reconciled
 delivers a `proposal_resolved` system notice to the model on BOTH outcomes (applied and
 dismissed). Full contract: §5.5 ([methods/agents.md](./methods/agents.md) — the
 `agent.resolveProposal` row and the "Pending proposals" section).
+
+**Assistant project transfers.** The chief-only project-transfer tool accepts a workspace
+`id` and optional `destination` hint, and returns a `workspace-transfer` proposal using
+this same resource and pending-proposal lifecycle. The installed tool signature is listed
+in the [app workspace bindings](./methods/mcp-bindings.md#wsappworkspaces).
+It reads the source
+workspace and `workspace.transfer.plan`; it never starts an export or stops agents.
+`destination`, when present, is a saved desktop connection ID or device-name hint.
+There is no new JSON-RPC method.
+
+The proposal has a unique `applyToolCallId` and payload
+`{ operation: "workspace.transfer", workspaceId, sourceWorkspacePath, destination? }`.
+Its preview names the workspace and carries the source path and transfer-plan warnings.
+The desktop resolves the hint against its saved connections, excludes its own backend,
+and lets the user select a destination before approval. Missing or ambiguous hints must
+not silently select another device. The source is the backend serving the assistant
+conversation; the desktop validates the source workspace path again before executing.
+
+The inline card discloses that approval stops source agents and archives the source
+after a successful transfer. Approval uses the existing desktop transfer relay,
+then finalizes with `archiveSource: true` and `restartAgents: false`. Only successful
+finalization resolves the proposal as `applied`; failures remain visible and retryable.
+Cancellation before approval resolves it as `dismissed` without starting an export.
+The transfer controls require the desktop transfer bridge. See
+[workspace transfer](./methods/workspace.md) for export/import and plan semantics.
 
 
 **Standalone question-resource blocks (`AtTurnEnd`, [monorepo#732](https://github.com/intent-hq/monorepo/issues/732)).**

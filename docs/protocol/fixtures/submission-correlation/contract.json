@@ -1,0 +1,242 @@
+{
+  "status": "prepared-synthetic-not-runtime-evidence",
+  "capability": {"submissionCorrelation": 1},
+  "request": {"agentId": "agent-a", "workspaceId": "ws-a", "content": "again", "messageId": "a2"},
+  "queuedReply": {"success": true, "queued": true, "messageId": "a1", "turnId": "a1", "submissionIds": ["a2", "a1"]},
+  "queue": [{"id": "a1", "content": "again\n\nagain", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "turnId": "a1", "author": {"principalId": "A"}, "submissionIds": ["a2", "a1"], "mergeEligible": true}],
+  "delivered": {"messageId": "transcript-1", "queuedMessageId": "a1", "turnId": "a1", "author": {"principalId": "A"}, "submissionIds": ["a2", "a1"]},
+  "mergeCases": [
+    {"name": "same author", "rows": [{"id": "a1", "principal": "A", "order": 1}], "incoming": "A", "target": "a1"},
+    {"name": "foreign interrupt first in drain order", "rows": [{"id": "b1", "principal": "B", "order": 2}, {"id": "a1", "principal": "A", "order": 1}], "incoming": "A", "target": null},
+    {"name": "automatic entry does not block", "rows": [{"id": "a1", "principal": "A", "order": 1}, {"id": "system", "human": false, "order": 2}], "incoming": "A", "target": "a1"},
+    {"name": "forged system label remains human", "rows": [{"id": "a1", "principal": "A", "order": 1}, {"id": "b1", "principal": "B", "order": 2, "metadata": {"source": "system"}}], "incoming": "A", "target": null},
+    {"name": "unknown human blocks", "rows": [{"id": "a1", "principal": "A", "order": 1}, {"id": "unknown", "principal": null, "order": 2}], "incoming": "A", "target": null},
+    {"name": "imported author cannot match", "rows": [{"id": "a1", "principal": "A", "order": 1, "imported": true}], "incoming": "A", "target": null},
+    {"name": "editing hold permits append", "rows": [{"id": "a1", "principal": "A", "order": 1, "editing": true}], "incoming": "A", "target": "a1"},
+    {"name": "persisted retry remains a barrier", "rows": [{"id": "a1", "principal": "A", "order": 1}, {"id": "retry", "principal": "A", "order": 2, "persisted": true}], "incoming": "A", "target": null},
+    {"name": "provisional foreign pop blocks hidden crossing", "rows": [{"id": "a1", "principal": "A", "order": 1}], "draining": [{"id": "b1", "principal": "B", "order": 2, "provisional": true}], "incoming": "A", "target": null},
+    {"name": "provisional same-author pop also blocks", "rows": [{"id": "a1", "principal": "A", "order": 1}], "draining": [{"id": "a2", "principal": "A", "order": 2, "provisional": true}], "incoming": "A", "target": null},
+    {"name": "settled pop is not a provisional barrier", "rows": [{"id": "a1", "principal": "A", "order": 1}], "draining": [{"id": "b1", "principal": "B", "order": 2, "provisional": false}], "incoming": "A", "target": "a1"},
+    {"name": "unknown legacy ordering disables prediction", "rows": [{"id": "a1", "principal": "A", "order": 1}, {"id": "legacy", "principal": "A"}], "incoming": "A", "target": null}
+  ],
+  "recovery": {"originalEntries": [{"id": "a1", "turnId": "a1", "content": "a1", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "A"}, "submissionIds": ["a1"], "mergeEligible": false, "origin": "user"}, {"id": "b1", "turnId": "b1", "content": "b1", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "B"}, "submissionIds": ["b1"], "mergeEligible": false, "origin": "user"}, {"id": "z1", "turnId": "z1", "content": "z1", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": null, "submissionIds": ["z1"], "mergeEligible": false, "origin": "automatic"}], "expectedSources": [{"messageId": "a1", "submissionIds": ["a1"], "author": {"principalId": "A"}, "origin": "user"}, {"messageId": "b1", "submissionIds": ["b1"], "author": {"principalId": "B"}, "origin": "user"}, {"messageId": "z1", "submissionIds": ["z1"], "author": null, "origin": "automatic"}], "firstRetry": {"id": "retry-1", "turnId": "a1", "content": "retry-1", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "A"}, "mergeEligible": false, "recoverySources": [{"messageId": "a1", "submissionIds": ["a1"], "author": {"principalId": "A"}, "origin": "user"}, {"messageId": "b1", "submissionIds": ["b1"], "author": {"principalId": "B"}, "origin": "user"}, {"messageId": "z1", "submissionIds": ["z1"], "author": null, "origin": "automatic"}], "requeuedAfterFailure": true}, "secondRetry": {"id": "retry-2", "turnId": "a1", "content": "retry-1", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "A"}, "mergeEligible": false, "recoverySources": [{"messageId": "a1", "submissionIds": ["a1"], "author": {"principalId": "A"}, "origin": "user"}, {"messageId": "b1", "submissionIds": ["b1"], "author": {"principalId": "B"}, "origin": "user"}, {"messageId": "z1", "submissionIds": ["z1"], "author": null, "origin": "automatic"}], "requeuedAfterFailure": true}},
+  "snapshotCases": [
+    {"name": "provisional draining overlay blocks live candidate", "live": [{"id": "a1", "turnId": "a1", "principal": "A", "order": 1, "submissionIds": ["a1"]}], "draining": [{"id": "b1", "turnId": "b1", "principal": "B", "order": 2, "provisional": true, "submissionIds": ["b1"]}], "expected": [{"id": "b1", "mergeEligible": false, "submissionIds": ["b1"]}, {"id": "a1", "mergeEligible": false, "submissionIds": ["a1"]}]},
+    {"name": "settled overlay stays false while live candidate becomes true", "live": [{"id": "a1", "turnId": "a1", "principal": "A", "order": 1, "submissionIds": ["a1"]}], "draining": [{"id": "b1", "turnId": "b1", "principal": "B", "order": 2, "provisional": false, "submissionIds": ["b1"]}], "expected": [{"id": "b1", "mergeEligible": false, "submissionIds": ["b1"]}, {"id": "a1", "mergeEligible": true, "submissionIds": ["a1"]}]},
+    {"name": "restored coalesced live row wins once over absorbed overlay", "live": [{"id": "a1", "turnId": "a1", "principal": "A", "order": 2, "submissionIds": ["a1", "a2"]}], "draining": [{"id": "a2", "turnId": "a2", "principal": "A", "order": 2, "provisional": true, "submissionIds": ["a2"]}], "expected": [{"id": "a1", "mergeEligible": true, "submissionIds": ["a1", "a2"]}]},
+    {"name": "live retry replaces overlay by existing turn identity", "live": [{"id": "retry-1", "turnId": "a1", "principal": "A", "order": 1, "submissionIds": ["retry-1", "a1"], "persisted": true}], "draining": [{"id": "a1", "turnId": "a1", "principal": "A", "order": 1, "provisional": false, "submissionIds": ["a1"]}], "expected": [{"id": "retry-1", "mergeEligible": false, "submissionIds": ["retry-1", "a1"]}]}
+  ],
+  "wireTraces": [
+    {
+      "name": "queue event before acknowledgement",
+      "pending": [{"id": "a2", "principalId": "A", "destination": "conversation"}],
+      "steps": [
+        {"event": {"type": "agent:queue:updated", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "queue": [{"id": "a1", "turnId": "a1", "content": "a1", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "A"}, "submissionIds": ["a1", "a2"], "mergeEligible": true}]}}},
+        {"mutationReply": {"requestMessageId": "a2", "principalId": "A", "result": {"success": true, "queued": true, "messageId": "a1", "submissionIds": ["a1", "a2"]}}}
+      ],
+      "expected": {"historyIds": [], "queueIds": ["a1"], "pendingIds": [], "retryWorkIds": [], "needsRefresh": false}
+    },
+    {
+      "name": "acknowledgement before queue event",
+      "pending": [{"id": "a2", "principalId": "A", "destination": "conversation"}],
+      "steps": [
+        {"mutationReply": {"requestMessageId": "a2", "principalId": "A", "result": {"success": true, "queued": true, "messageId": "a1", "submissionIds": ["a1", "a2"]}}},
+        {"event": {"type": "agent:queue:updated", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "queue": [{"id": "a1", "turnId": "a1", "content": "a1", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "A"}, "submissionIds": ["a1", "a2"], "mergeEligible": true}]}}}
+      ],
+      "expected": {"historyIds": [], "queueIds": ["a1"], "pendingIds": [], "retryWorkIds": [], "needsRefresh": false}
+    },
+    {
+      "name": "conversation placeholder falls back to queue",
+      "pending": [{"id": "a2", "principalId": "A", "destination": "conversation"}],
+      "steps": [
+        {"mutationReply": {"requestMessageId": "a2", "principalId": "A", "result": {"success": true, "queued": true, "messageId": "a1", "submissionIds": ["a1", "a2"]}}},
+        {"event": {"type": "agent:queue:updated", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "queue": [{"id": "a1", "turnId": "a1", "content": "a1", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "A"}, "submissionIds": ["a1", "a2"], "mergeEligible": true}]}}}
+      ],
+      "expected": {"historyIds": [], "queueIds": ["a1"], "pendingIds": [], "retryWorkIds": [], "needsRefresh": false}
+    },
+    {
+      "name": "processing before acknowledgement",
+      "pending": [{"id": "a1", "principalId": "A", "destination": "conversation"}],
+      "steps": [
+        {"event": {"type": "agent:queue:processing", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "turnId": "a1", "messageId": "a1", "queuedMessages": [{"id": "a1", "turnId": "a1", "content": "a1", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "A"}, "submissionIds": ["a1"], "mergeEligible": false}]}}},
+        {"mutationReply": {"requestMessageId": "a1", "principalId": "A", "result": {"success": true, "queued": true, "messageId": "a1", "submissionIds": ["a1"]}}}
+      ],
+      "expected": {"historyIds": [], "queueIds": [], "pendingIds": [], "retryWorkIds": [], "needsRefresh": false}
+    },
+    {
+      "name": "drained before old read and acknowledgement",
+      "pending": [{"id": "a1", "principalId": "A", "destination": "conversation"}],
+      "steps": [
+        {"request": {"jsonrpc": "2.0", "id": "old", "method": "agent.getQueue", "params": {"workspaceId": "ws-a", "agentId": "agent-a"}}},
+        {"event": {"type": "agent:queue:processing", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "turnId": "a1", "messageId": "a1", "queuedMessages": [{"id": "a1", "turnId": "a1", "content": "a1", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "A"}, "submissionIds": ["a1"], "mergeEligible": false}]}}},
+        {"event": {"type": "agent:message", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "messageId": "history-a1", "queuedMessageId": "a1", "turnId": "a1", "author": {"principalId": "A"}, "submissionIds": ["a1"]}}},
+        {"event": {"type": "agent:queue:updated", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "queue": []}}},
+        {"response": {"jsonrpc": "2.0", "id": "old", "result": {"success": true, "queue": [{"id": "a1", "turnId": "a1", "content": "a1", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "A"}, "submissionIds": ["a1"], "mergeEligible": false}]}}},
+        {"mutationReply": {"requestMessageId": "a1", "principalId": "A", "result": {"success": true, "queued": true, "messageId": "a1", "submissionIds": ["a1"]}}},
+        {"request": {"jsonrpc": "2.0", "id": "read-current", "method": "agent.getQueue", "params": {"workspaceId": "ws-a", "agentId": "agent-a"}}},
+        {"response": {"jsonrpc": "2.0", "id": "read-current", "result": {"success": true, "queue": []}}}
+      ],
+      "expected": {"historyIds": ["history-a1"], "queueIds": [], "pendingIds": [], "retryWorkIds": [], "needsRefresh": false}
+    },
+    {
+      "name": "partial persist keeps historical head and unpersisted tail",
+      "pending": [{"id": "a1", "principalId": "A", "destination": "conversation"}, {"id": "b1", "principalId": "B", "destination": "conversation"}],
+      "steps": [
+        {"event": {"type": "agent:queue:processing", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "turnId": "a1", "messageId": "a1", "queuedMessages": [{"id": "a1", "turnId": "a1", "content": "a1", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "A"}, "submissionIds": ["a1"], "mergeEligible": false}, {"id": "b1", "turnId": "b1", "content": "b1", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "B"}, "submissionIds": ["b1"], "mergeEligible": false}]}}},
+        {"event": {"type": "agent:message", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "messageId": "history-a1", "queuedMessageId": "a1", "turnId": "a1", "author": {"principalId": "A"}, "submissionIds": ["a1"]}}},
+        {"event": {"type": "agent:failed", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "turnId": "a1"}}},
+        {"event": {"type": "agent:queue:updated", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "queue": [{"id": "a1", "turnId": "a1", "content": "a1", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "A"}, "submissionIds": ["a1"], "mergeEligible": false}, {"id": "b1", "turnId": "b1", "content": "b1", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "B"}, "submissionIds": ["b1"], "mergeEligible": false, "requeuedAfterFailure": true}]}}},
+        {"request": {"jsonrpc": "2.0", "id": "read-current", "method": "agent.getQueue", "params": {"workspaceId": "ws-a", "agentId": "agent-a"}}},
+        {"response": {"jsonrpc": "2.0", "id": "read-current", "result": {"success": true, "queue": [{"id": "a1", "turnId": "a1", "content": "a1", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "A"}, "submissionIds": ["a1"], "mergeEligible": false}, {"id": "b1", "turnId": "b1", "content": "b1", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "B"}, "submissionIds": ["b1"], "mergeEligible": false, "requeuedAfterFailure": true}]}}},
+        {"mutationReply": {"requestMessageId": "a1", "principalId": "A", "result": {"success": true, "queued": true, "messageId": "a1", "submissionIds": ["a1"]}}},
+        {"mutationReply": {"requestMessageId": "b1", "principalId": "B", "result": {"success": true, "queued": true, "messageId": "b1", "submissionIds": ["b1"]}}}
+      ],
+      "expected": {"historyIds": ["history-a1"], "queueIds": ["a1", "b1"], "pendingIds": [], "retryWorkIds": ["a1", "b1"], "needsRefresh": false}
+    },
+    {
+      "name": "same-ID restoration without failure marker",
+      "pending": [{"id": "a1", "principalId": "A", "destination": "conversation"}],
+      "steps": [
+        {"event": {"type": "agent:queue:processing", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "turnId": "a1", "messageId": "a1", "queuedMessages": [{"id": "a1", "turnId": "a1", "content": "a1", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "A"}, "submissionIds": ["a1"], "mergeEligible": false}]}}},
+        {"event": {"type": "agent:message", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "messageId": "history-a1", "queuedMessageId": "a1", "turnId": "a1", "author": {"principalId": "A"}, "submissionIds": ["a1"]}}},
+        {"event": {"type": "agent:failed", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "turnId": "a1"}}},
+        {"event": {"type": "agent:queue:updated", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "queue": [{"id": "a1", "turnId": "a1", "content": "a1", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "A"}, "submissionIds": ["a1"], "mergeEligible": false}]}}},
+        {"request": {"jsonrpc": "2.0", "id": "read-current", "method": "agent.getQueue", "params": {"workspaceId": "ws-a", "agentId": "agent-a"}}},
+        {"response": {"jsonrpc": "2.0", "id": "read-current", "result": {"success": true, "queue": [{"id": "a1", "turnId": "a1", "content": "a1", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "A"}, "submissionIds": ["a1"], "mergeEligible": false}]}}},
+        {"mutationReply": {"requestMessageId": "a1", "principalId": "A", "result": {"success": true, "queued": true, "messageId": "a1", "submissionIds": ["a1"]}}}
+      ],
+      "expected": {"historyIds": ["history-a1"], "queueIds": ["a1"], "pendingIds": [], "retryWorkIds": ["a1"], "needsRefresh": false}
+    },
+    {
+      "name": "single persisted failure retains retry alongside history",
+      "pending": [{"id": "a1", "principalId": "A", "destination": "conversation"}],
+      "steps": [
+        {"event": {"type": "agent:queue:processing", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "turnId": "a1", "messageId": "a1", "queuedMessages": [{"id": "a1", "turnId": "a1", "content": "a1", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "A"}, "submissionIds": ["a1"], "mergeEligible": false}]}}},
+        {"event": {"type": "agent:message", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "messageId": "history-a1", "queuedMessageId": "a1", "turnId": "a1", "author": {"principalId": "A"}, "submissionIds": ["a1"]}}},
+        {"event": {"type": "agent:failed", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "turnId": "a1"}}},
+        {"event": {"type": "agent:queue:updated", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "queue": [{"id": "retry-single", "turnId": "a1", "content": "retry-single", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "A"}, "submissionIds": ["retry-single", "a1"], "mergeEligible": false, "requeuedAfterFailure": true}]}}},
+        {"request": {"jsonrpc": "2.0", "id": "read-current", "method": "agent.getQueue", "params": {"workspaceId": "ws-a", "agentId": "agent-a"}}},
+        {"response": {"jsonrpc": "2.0", "id": "read-current", "result": {"success": true, "queue": [{"id": "retry-single", "turnId": "a1", "content": "retry-single", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "A"}, "submissionIds": ["retry-single", "a1"], "mergeEligible": false, "requeuedAfterFailure": true}]}}},
+        {"mutationReply": {"requestMessageId": "a1", "principalId": "A", "result": {"success": true, "queued": true, "messageId": "a1", "submissionIds": ["a1"]}}}
+      ],
+      "expected": {"historyIds": ["history-a1"], "queueIds": ["retry-single"], "pendingIds": [], "retryWorkIds": ["retry-single"], "needsRefresh": false}
+    },
+    {
+      "name": "ordinary mixed-author and mixed-origin failure stays one retry",
+      "pending": [{"id": "a1", "principalId": "A", "destination": "conversation"}, {"id": "b1", "principalId": "B", "destination": "conversation"}],
+      "steps": [
+        {"event": {"type": "agent:queue:processing", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "turnId": "a1", "messageId": "a1", "queuedMessages": [{"id": "a1", "turnId": "a1", "content": "a1", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "A"}, "submissionIds": ["a1"], "mergeEligible": false}, {"id": "b1", "turnId": "b1", "content": "b1", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "B"}, "submissionIds": ["b1"], "mergeEligible": false}, {"id": "z1", "turnId": "z1", "content": "z1", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": null, "submissionIds": ["z1"], "mergeEligible": false}]}}},
+        {"event": {"type": "agent:message", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "messageId": "history-a1", "queuedMessageId": "a1", "turnId": "a1", "author": {"principalId": "A"}, "submissionIds": ["a1"]}}},
+        {"event": {"type": "agent:message", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "messageId": "history-b1", "queuedMessageId": "b1", "turnId": "a1", "author": {"principalId": "B"}, "submissionIds": ["b1"]}}},
+        {"event": {"type": "agent:message", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "messageId": "history-z1", "queuedMessageId": "z1", "turnId": "a1", "author": null, "submissionIds": ["z1"]}}},
+        {"event": {"type": "agent:failed", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "turnId": "a1"}}},
+        {"event": {"type": "agent:queue:updated", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "queue": [{"id": "retry-1", "turnId": "a1", "content": "retry-1", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "A"}, "mergeEligible": false, "recoverySources": [{"messageId": "a1", "submissionIds": ["a1"], "author": {"principalId": "A"}, "origin": "user"}, {"messageId": "b1", "submissionIds": ["b1"], "author": {"principalId": "B"}, "origin": "user"}, {"messageId": "z1", "submissionIds": ["z1"], "author": null, "origin": "automatic"}], "requeuedAfterFailure": true}]}}},
+        {"request": {"jsonrpc": "2.0", "id": "read-current", "method": "agent.getQueue", "params": {"workspaceId": "ws-a", "agentId": "agent-a"}}},
+        {"response": {"jsonrpc": "2.0", "id": "read-current", "result": {"success": true, "queue": [{"id": "retry-1", "turnId": "a1", "content": "retry-1", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "A"}, "mergeEligible": false, "recoverySources": [{"messageId": "a1", "submissionIds": ["a1"], "author": {"principalId": "A"}, "origin": "user"}, {"messageId": "b1", "submissionIds": ["b1"], "author": {"principalId": "B"}, "origin": "user"}, {"messageId": "z1", "submissionIds": ["z1"], "author": null, "origin": "automatic"}], "requeuedAfterFailure": true}]}}},
+        {"mutationReply": {"requestMessageId": "a1", "principalId": "A", "result": {"success": true, "queued": true, "messageId": "a1", "submissionIds": ["a1"]}}},
+        {"mutationReply": {"requestMessageId": "b1", "principalId": "B", "result": {"success": true, "queued": true, "messageId": "b1", "submissionIds": ["b1"]}}}
+      ],
+      "expected": {"historyIds": ["history-a1", "history-b1", "history-z1"], "queueIds": ["retry-1"], "pendingIds": [], "retryWorkIds": ["retry-1"], "needsRefresh": false}
+    },
+    {
+      "name": "restart read and repeated failure retain original source leaves",
+      "pending": [{"id": "a1", "principalId": "A", "destination": "conversation"}, {"id": "b1", "principalId": "B", "destination": "conversation"}],
+      "steps": [
+        {"event": {"type": "agent:message", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "messageId": "history-a1", "queuedMessageId": "a1", "turnId": "a1", "author": {"principalId": "A"}, "submissionIds": ["a1"]}}},
+        {"event": {"type": "agent:message", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "messageId": "history-b1", "queuedMessageId": "b1", "turnId": "a1", "author": {"principalId": "B"}, "submissionIds": ["b1"]}}},
+        {"event": {"type": "agent:message", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "messageId": "history-z1", "queuedMessageId": "z1", "turnId": "a1", "author": null, "submissionIds": ["z1"]}}},
+        {"disconnect": true},
+        {"request": {"jsonrpc": "2.0", "id": "read-current", "method": "agent.getQueue", "params": {"workspaceId": "ws-a", "agentId": "agent-a"}}},
+        {"response": {"jsonrpc": "2.0", "id": "read-current", "result": {"success": true, "queue": [{"id": "retry-1", "turnId": "a1", "content": "retry-1", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "A"}, "mergeEligible": false, "recoverySources": [{"messageId": "a1", "submissionIds": ["a1"], "author": {"principalId": "A"}, "origin": "user"}, {"messageId": "b1", "submissionIds": ["b1"], "author": {"principalId": "B"}, "origin": "user"}, {"messageId": "z1", "submissionIds": ["z1"], "author": null, "origin": "automatic"}], "requeuedAfterFailure": true}]}}},
+        {"event": {"type": "agent:queue:processing", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "turnId": "a1", "messageId": "retry-1", "queuedMessages": [{"id": "retry-1", "turnId": "a1", "content": "retry-1", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "A"}, "mergeEligible": false, "recoverySources": [{"messageId": "a1", "submissionIds": ["a1"], "author": {"principalId": "A"}, "origin": "user"}, {"messageId": "b1", "submissionIds": ["b1"], "author": {"principalId": "B"}, "origin": "user"}, {"messageId": "z1", "submissionIds": ["z1"], "author": null, "origin": "automatic"}], "requeuedAfterFailure": true}]}}},
+        {"event": {"type": "agent:failed", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "turnId": "a1"}}},
+        {"event": {"type": "agent:queue:updated", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "queue": [{"id": "retry-2", "turnId": "a1", "content": "retry-1", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "A"}, "mergeEligible": false, "recoverySources": [{"messageId": "a1", "submissionIds": ["a1"], "author": {"principalId": "A"}, "origin": "user"}, {"messageId": "b1", "submissionIds": ["b1"], "author": {"principalId": "B"}, "origin": "user"}, {"messageId": "z1", "submissionIds": ["z1"], "author": null, "origin": "automatic"}], "requeuedAfterFailure": true}]}}},
+        {"request": {"jsonrpc": "2.0", "id": "redrive", "method": "agent.getQueue", "params": {"workspaceId": "ws-a", "agentId": "agent-a"}}},
+        {"response": {"jsonrpc": "2.0", "id": "redrive", "result": {"success": true, "queue": [{"id": "retry-2", "turnId": "a1", "content": "retry-1", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "A"}, "mergeEligible": false, "recoverySources": [{"messageId": "a1", "submissionIds": ["a1"], "author": {"principalId": "A"}, "origin": "user"}, {"messageId": "b1", "submissionIds": ["b1"], "author": {"principalId": "B"}, "origin": "user"}, {"messageId": "z1", "submissionIds": ["z1"], "author": null, "origin": "automatic"}], "requeuedAfterFailure": true}]}}},
+        {"mutationReply": {"requestMessageId": "b1", "principalId": "B", "result": {"success": true, "queued": true, "messageId": "b1", "submissionIds": ["b1"]}}}
+      ],
+      "expected": {"historyIds": ["history-a1", "history-b1", "history-z1"], "queueIds": ["retry-2"], "pendingIds": [], "retryWorkIds": ["retry-2"], "needsRefresh": false}
+    },
+    {
+      "name": "successful redrive shrinks queue without another transcript row",
+      "pending": [{"id": "a1", "principalId": "A", "destination": "conversation"}, {"id": "b1", "principalId": "B", "destination": "conversation"}],
+      "steps": [
+        {"event": {"type": "agent:message", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "messageId": "history-a1", "queuedMessageId": "a1", "turnId": "a1", "author": {"principalId": "A"}, "submissionIds": ["a1"]}}},
+        {"event": {"type": "agent:message", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "messageId": "history-b1", "queuedMessageId": "b1", "turnId": "a1", "author": {"principalId": "B"}, "submissionIds": ["b1"]}}},
+        {"event": {"type": "agent:message", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "messageId": "history-z1", "queuedMessageId": "z1", "turnId": "a1", "author": null, "submissionIds": ["z1"]}}},
+        {"request": {"jsonrpc": "2.0", "id": "read-current", "method": "agent.getQueue", "params": {"workspaceId": "ws-a", "agentId": "agent-a"}}},
+        {"response": {"jsonrpc": "2.0", "id": "read-current", "result": {"success": true, "queue": [{"id": "retry-1", "turnId": "a1", "content": "retry-1", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "A"}, "mergeEligible": false, "recoverySources": [{"messageId": "a1", "submissionIds": ["a1"], "author": {"principalId": "A"}, "origin": "user"}, {"messageId": "b1", "submissionIds": ["b1"], "author": {"principalId": "B"}, "origin": "user"}, {"messageId": "z1", "submissionIds": ["z1"], "author": null, "origin": "automatic"}], "requeuedAfterFailure": true}]}}},
+        {"event": {"type": "agent:queue:processing", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "turnId": "a1", "messageId": "retry-1", "queuedMessages": [{"id": "retry-1", "turnId": "a1", "content": "retry-1", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "A"}, "mergeEligible": false, "recoverySources": [{"messageId": "a1", "submissionIds": ["a1"], "author": {"principalId": "A"}, "origin": "user"}, {"messageId": "b1", "submissionIds": ["b1"], "author": {"principalId": "B"}, "origin": "user"}, {"messageId": "z1", "submissionIds": ["z1"], "author": null, "origin": "automatic"}], "requeuedAfterFailure": true}]}}},
+        {"event": {"type": "agent:stream:end", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "turnId": "a1"}}},
+        {"event": {"type": "agent:queue:updated", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "queue": []}}},
+        {"request": {"jsonrpc": "2.0", "id": "settled", "method": "agent.getQueue", "params": {"workspaceId": "ws-a", "agentId": "agent-a"}}},
+        {"response": {"jsonrpc": "2.0", "id": "settled", "result": {"success": true, "queue": []}}},
+        {"mutationReply": {"requestMessageId": "b1", "principalId": "B", "result": {"success": true, "queued": true, "messageId": "b1", "submissionIds": ["b1"]}}}
+      ],
+      "expected": {"historyIds": ["history-a1", "history-b1", "history-z1"], "queueIds": [], "pendingIds": [], "retryWorkIds": [], "needsRefresh": false}
+    },
+    {
+      "name": "intervening update fences a stale read without erasing retry",
+      "pending": [{"id": "a1", "principalId": "A", "destination": "conversation"}],
+      "steps": [
+        {"event": {"type": "agent:message", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "messageId": "history-a1", "queuedMessageId": "a1", "turnId": "a1", "author": {"principalId": "A"}, "submissionIds": ["a1"]}}},
+        {"request": {"jsonrpc": "2.0", "id": "old", "method": "agent.getQueue", "params": {"workspaceId": "ws-a", "agentId": "agent-a"}}},
+        {"event": {"type": "agent:queue:updated", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "queue": [{"id": "retry-single", "turnId": "a1", "content": "retry-single", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "A"}, "submissionIds": ["retry-single", "a1"], "mergeEligible": false, "requeuedAfterFailure": true}]}}},
+        {"response": {"jsonrpc": "2.0", "id": "old", "result": {"success": true, "queue": []}}},
+        {"request": {"jsonrpc": "2.0", "id": "read-current", "method": "agent.getQueue", "params": {"workspaceId": "ws-a", "agentId": "agent-a"}}},
+        {"response": {"jsonrpc": "2.0", "id": "read-current", "result": {"success": true, "queue": [{"id": "retry-single", "turnId": "a1", "content": "retry-single", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "A"}, "submissionIds": ["retry-single", "a1"], "mergeEligible": false, "requeuedAfterFailure": true}]}}},
+        {"mutationReply": {"requestMessageId": "a1", "principalId": "A", "result": {"success": true, "queued": true, "messageId": "a1", "submissionIds": ["a1"]}}}
+      ],
+      "expected": {"historyIds": ["history-a1"], "queueIds": ["retry-single"], "pendingIds": [], "retryWorkIds": ["retry-single"], "needsRefresh": false}
+    },
+    {
+      "name": "active overlay stays visible with history pending refresh",
+      "pending": [{"id": "a1", "principalId": "A", "destination": "conversation"}],
+      "steps": [
+        {"event": {"type": "agent:queue:processing", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "turnId": "a1", "messageId": "a1", "queuedMessages": [{"id": "a1", "turnId": "a1", "content": "a1", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "A"}, "submissionIds": ["a1"], "mergeEligible": false}]}}},
+        {"event": {"type": "agent:message", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "messageId": "history-a1", "queuedMessageId": "a1", "turnId": "a1", "author": {"principalId": "A"}, "submissionIds": ["a1"]}}},
+        {"event": {"type": "agent:queue:updated", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "queue": [{"id": "a1", "turnId": "a1", "content": "a1", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "A"}, "submissionIds": ["a1"], "mergeEligible": false}]}}},
+        {"request": {"jsonrpc": "2.0", "id": "read-current", "method": "agent.getQueue", "params": {"workspaceId": "ws-a", "agentId": "agent-a"}}},
+        {"response": {"jsonrpc": "2.0", "id": "read-current", "result": {"success": true, "queue": [{"id": "a1", "turnId": "a1", "content": "a1", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "A"}, "submissionIds": ["a1"], "mergeEligible": false}]}}},
+        {"mutationReply": {"requestMessageId": "a1", "principalId": "A", "result": {"success": true, "queued": true, "messageId": "a1", "submissionIds": ["a1"]}}}
+      ],
+      "expected": {"historyIds": ["history-a1"], "queueIds": ["a1"], "pendingIds": [], "retryWorkIds": [], "needsRefresh": true}
+    },
+    {
+      "name": "uncertain absence cannot reject or resend",
+      "pending": [{"id": "a1", "principalId": "A", "destination": "conversation"}],
+      "steps": [
+        {"timeout": "a1"},
+        {"request": {"jsonrpc": "2.0", "id": "read-current", "method": "agent.getQueue", "params": {"workspaceId": "ws-a", "agentId": "agent-a"}}},
+        {"response": {"jsonrpc": "2.0", "id": "read-current", "result": {"success": true, "queue": []}}}
+      ],
+      "expected": {"historyIds": [], "queueIds": [], "pendingIds": ["a1"], "retryWorkIds": [], "needsRefresh": false}
+    },
+    {
+      "name": "matching evidence resolves uncertainty",
+      "pending": [{"id": "a1", "principalId": "A", "destination": "conversation"}],
+      "steps": [
+        {"timeout": "a1"},
+        {"event": {"type": "agent:queue:updated", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "queue": [{"id": "a1", "turnId": "a1", "content": "a1", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "A"}, "submissionIds": ["a1"], "mergeEligible": false}]}}},
+        {"mutationReply": {"requestMessageId": "a1", "principalId": "A", "result": {"success": true, "queued": true, "messageId": "a1", "submissionIds": ["a1"]}}}
+      ],
+      "expected": {"historyIds": [], "queueIds": ["a1"], "pendingIds": [], "retryWorkIds": [], "needsRefresh": false}
+    },
+    {
+      "name": "foreign alias cannot acknowledge local principal",
+      "pending": [{"id": "a1", "principalId": "A", "destination": "conversation"}],
+      "steps": [
+        {"event": {"type": "agent:queue:updated", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "queue": [{"id": "foreign", "turnId": "foreign", "content": "foreign", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "B"}, "submissionIds": ["a1"], "mergeEligible": false}]}}}
+      ],
+      "expected": {"historyIds": [], "queueIds": ["foreign"], "pendingIds": ["a1"], "retryWorkIds": [], "needsRefresh": false}
+    },
+    {
+      "name": "legacy text cannot acknowledge without aliases",
+      "pending": [{"id": "a1", "principalId": "A", "destination": "conversation"}],
+      "steps": [
+        {"event": {"type": "agent:queue:updated", "workspaceId": "ws-a", "data": {"agentId": "agent-a", "queue": [{"id": "legacy", "turnId": "legacy", "content": "a1", "queuedAt": "2026-10-03T07:00:00Z", "position": 0, "author": {"principalId": "A"}, "mergeEligible": false}]}}}
+      ],
+      "expected": {"historyIds": [], "queueIds": ["legacy"], "pendingIds": ["a1"], "retryWorkIds": [], "needsRefresh": false}
+    }
+  ]
+}

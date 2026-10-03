@@ -24,6 +24,12 @@ Releases are built and published by the **Release Alpha** workflow in GitHub Act
 
 The workflow is triggered by a `v*.*.*` tag push (created by release-please when its Release PR is merged) — it does not bump versions, create tags, or open version-bump PRs itself.
 
+`auto-cut-alpha.yml` directly merges verified release metadata PRs after their
+existing CI and release guards pass, using the CI account's ruleset exemption.
+Other PRs retain the merge queue. See
+[Guarded direct release merges](../RELEASING.md#guarded-direct-release-merges)
+for metadata eligibility, tested-head matching and the required token identity.
+
 No tags are pushed to `intent-hq/intentd`. To ship a newer intentd, update the `intentd.version` pin on `main` via a normal PR before cutting the release.
 
 ## Prerequisites

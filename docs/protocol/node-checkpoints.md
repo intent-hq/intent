@@ -108,6 +108,176 @@ that is absent from that committed history, return `inherited-baseline-required`
 without a push. Settle the parent work and merge the child into that parent, then
 publish the resulting parent checkpoint; never silently publish inherited dirt.
 
+## Retained head-local source lineage
+
+This prepared contract permits an ordinary local parent's source to seed a fresh
+isolated child. It requires new head-owned source admission, retained storage and
+history adapters; it does not assert that an initializer or live model launch is
+implemented. It changes no remote journalFormat 1, checkpointFormat 1, private
+node-link version, public request or provider-resume semantics. The internal
+storage encoding and migrations belong to the implementation, not this document.
+
+### Real parent, immutable source and committed history
+
+The source parent is the actual authenticated running caller of model create or
+delegate, in the same workspace and under current read/spawn permission. Retain
+that parent's exact identity as the child's merge target. Do not insert a hidden
+parent, replace its identity, borrow the child's remote run/epoch, or wait for the
+initiating tool turn to finish. Parentless creation is outside this initial
+inherited-source path.
+
+The initial supported source is a verified clean committed isolated repository
+with its exact initialized submodule closure. Resolve repository keys and roots
+from persisted workspace state and actual source admission. Reject unsupported
+dirty/index/untracked state, unborn or unresolved repositories and unbacked
+attachments explicitly; never silently omit them. This restriction is an initial
+implementation boundary, not a weakening of the general WIP inheritance contract
+above. Snapshot immutable committed objects into retained owned storage without
+changing the parent's HEAD/index/worktree. A clean flag, bare path, new registry
+or fresh barrier does not prove that a mutable source has no concurrent writers.
+Every writer to the newly owned copy must use its real common barrier.
+
+At invocation take one bounded, agent-scoped Store read snapshot of the committed
+message prefix and adopted payload/attribution rows. Retain the actual highest
+committed sequence and row identity, ordered rows, counts, exact byte digests and
+caller/turn/tool-call correlation. Include already committed user and assistant
+messages. Explicitly exclude the current uncommitted assistant envelope and its
+unadopted prestaged blocks; a tool call must not wait for its own turn-end commit.
+Later messages cannot change the frozen cut or be substituted on a retry.
+
+Preserve complete bounded semantic message and adopted payload bytes independently
+of later Store pruning. A checksum, mutable row pointer, lossy replay preview or
+provider-session watermark is not retained history. Page and bound materialization
+inside the same snapshot; reject missing required full payload, unsupported
+attachment content or overflow rather than truncating it. Provider-native session
+files remain nonportable. Do not invent output events or reinsert the imported
+history into the parent's ordinary transcript.
+
+The retained history is **head-side source provenance, not fresh-child provider
+replay**. A fresh child receives its separately requested instruction through the
+existing fresh Prompt: Prepare.resume, Prompt.history and resumeAttemptId are all
+absent. Session.mode=history, throughSeq and files=[] carry a source watermark,
+not transcript bytes. Check the entire resolved request, inherited defaults and
+ordinary method semantics; an actual unsupported resume/history requirement must
+fail explicitly, never be stripped or relabelled as a fresh run. In particular,
+an ordinary model create with a new name and a self-contained first message can
+use this path without pretending that it resumes the parent's provider session.
+
+### Capture-only identity and ordinary parent routing
+
+Use the real built-in Local node identity and its durably owned source lease,
+a fresh capture-only run and Store-allocated positive assignmentEpoch. Allocate
+a positive captureRevision durably before capture; failed attempts burn revisions.
+This source is not another selectable execution target and supplies no ACP,
+Prepare, credential or network grant. Do not replace a conflicting execution
+assignment or live local lease to create it. The parent continues under its own
+existing local execution authority.
+
+Persist capture-only purpose atomically with the source assignment. Every relevant
+assignment consumer, including hooks, local/node dispatch, Stop/deletion, startup
+and recovery, must consult this purpose before routing. Missing or partial purpose
+fails closed for the capture owner; it cannot default to execution. Merely making
+an ordinary assignment inactive is insufficient. Closing source capture preserves
+the parent's ordinary local routing and the retained source identity/checkpoint;
+it neither retires the parent nor makes it an offline remote agent.
+
+Only a manager-minted, nonserializable LOCAL admission may create or operate this
+source. Bind the real parent/workspace/lease/run/epoch, caller/launch correlation,
+immutable OIDs, history cutoff/digest, original deadline, checkpoint UUID and
+backing reservation in the durable intent. Register the same task/resource/result
+owner before spawning work. Raw arguments, LocalCapture data, serialized receipts
+or a fresh authority registry cannot mint this admission.
+
+### Sealed local prefix and retention-only acknowledgement
+
+The LOCAL retained log imports actual committed history in order, preserving each
+original row ID/role/sequence, adopted payload and attribution. Allocate its local
+sequence by actual durable append; retain the exact mapping from local sequence
+to Store row identity/hash and the selected source cut. Do not equate Store and
+journal counters or route this import into ordinary remote Transcript ingestion,
+which would duplicate or relabel existing history.
+
+Seal the completed contiguous append prefix durably, binding the exact source
+identity, import/checkpoint identity, original Store cutoff, last local sequence,
+complete byte/hash inventory, counts/charges and original deadline. No later
+append enters that sealed cut. Under the same LOCAL admission, a FULL durable
+head transaction verifies the purpose, owner, contiguous prefix and fsynced full
+inventory before recording the exact source acknowledgement decision. Then fsync
+confirmation of that same decision and cut locally. Only the correlated confirmed
+cut permits checkpoint admission. An actually empty prefix still requires real
+durable genesis/provenance and confirmation; never assign a constant zero cut as
+a shortcut.
+
+This acknowledgement **does not reclaim**. The typed LOCAL owner must make ordinary
+remote Journal acknowledge, begin_replay, complete_replay and reclaiming open paths
+unreachable. Share encoding/durable append primitives only if retention policy is
+enforced through construction, confirmation, Drop and reopen; otherwise use a
+distinct internal retained-log type. Ordinary remote journal consumers are
+unchanged. A reconnect barrier or read-only confirmation cannot substitute for
+this durable local seal/decision/confirmation sequence.
+
+Retain full history bytes, payloads, mapping, source pins and their charges through
+Store pruning, cancellation, expiry, failed native disposal and wrapper Drop.
+Reopen reconciles the same cut/decision or quarantines missing, mismatched or
+rolled-back state; it cannot reset genesis, delete bytes or refund capacity.
+Confirmation and retention lifetime are separate: even a durable ACK is not
+permission to unlink, reuse a root or reclaim backing. Dependencies and actual
+joined disposal must settle under the real owner before any later release.
+
+### Enforced backing and commit ordering
+
+All initializer effects require a verified pre-provisioned byte **and inode**
+limited allocation in the same retained head backing domain. Coverage includes
+immutable source copies, native capture scratch/spool/temp packs, Stage pending
+and final copies, promoted hub objects/refs, the LOCAL log/provenance/metadata and
+database/WAL destinations, including uncertain partials. Deny symlink, alternate
+object directory, temporary-directory or shared-hub escapes. If any destination
+lacks enforcement, return unavailable before the first initializer write, pin or
+assignment publication. Logical Stage limits, a scan, sampled free space or scalar
+accounting are not enforcement for native writers. This contract neither assumes
+host support nor provisions storage.
+
+Reserve logical capacity under that actual enforced owner, counting simultaneous
+copies and uncertain outcomes. Apply these upper bounds and every stricter existing
+component or installed-allocation limit; no limit enlarges another component cap:
+
+| Resource | Initial LOCAL source limit |
+| --- | --- |
+| Active work | One initializer per head and parent; no queue |
+| History | 4096 messages, 16384 blocks, 1 MiB decoded semantic bytes |
+| Repository closure | 64 repositories; 1 MiB manifest |
+| Stage objects | 256 MiB per repository; 1 GiB aggregate |
+| All backing, including temporary/uncertain copies | 4 GiB; 262144 inodes |
+
+The required order is bounded read-only selection, current admission plus enforced
+backing reservation and registered job, durable exact intent/purpose, immutable
+copy/pins and LOCAL log import, sealed-prefix acknowledgement, then capture,
+stage, promotion, durable checkpoint commit and alias repair. Do not hold a Store
+transaction, map lock or exclusive capture barrier across unrelated remote waits.
+Revalidate actual authority after waits and before effects. Preserve the original
+deadline and exact intent on retries; timeout is not settlement or quota release.
+
+Typed LOCAL authority must cover native promotion and alias repair as well as the
+initial Store check. Never fabricate a LinkBinding or physical connection generation
+to call remote-only APIs. Keep UUID/hash idempotence, capture-revision freshness
+CAS and alias ordering. Only the actual unchanged three-field durable commit
+receipt permits selecting inheritedCheckpointId for the distinct remote target,
+whose mergeTargetAgentId is the real source parent. Target source-read authority
+is separate from the closed source-capture owner; it need not keep the source run
+executable.
+
+Retain the same task, sticky work/JoinError/disposal/commit results, native policies,
+spool and charges through dropped waiters. Fence close/deadline independently of
+joins and join outside worker-needed locks. Finished flags are not settlement.
+Unknown commit results reconcile the original UUID/hash and retain uncertainty;
+they must not create a second source or child. Required bounded readers, LOCAL
+log/schema and purpose-aware routing, typed native admission and enforced backing
+are implementation prerequisites, not claims established by the prepared
+[local-source examples](./fixtures/nodes/local-source.json) or their
+[static validator](./fixtures/nodes/local-source.test.mjs). Runtime scenarios remain
+unexecuted until separately qualified. Additive canonical docs precede consumer
+merges; local development and draft review may proceed in parallel.
+
 ## Manifest v1 and consistent capture
 
 A successful checkpoint has a UUID `checkpointId`, a manifest in head's durable
@@ -233,11 +403,49 @@ When that cut cannot be proven, emit `mode: "history"`, `throughSeq: journalSeq`
 session. Do not replay acknowledged tool effects as executable calls. Session
 credentials/caches are never included; static credentials are reissued on resume.
 
+## Capture quiescence and spool ownership
+
+The [private version-3 capture agreement](./node-link.md#private-checkpoint-capture)
+registers exact manifest bytes, complete repository upper bounds and attachment
+lengths before existing Stage uploads, then uses the durable commit below. It
+preserves checkpointFormat 1's numeric formatVersion, RFC3339 capture time and
+optional-field omission. The three-field receipt and freshness rules are unchanged.
+Only supported current Store attachment reuse is included; local-only and
+prior-checkpoint-only bytes fail explicitly, without loss of the prior checkpoint.
+
+Every ACP/tool/script/Git mutation, attachment adapter/delivery/retirement disk
+write and synchronous mkdir/unlink/Drop path must participate in the SAME checkout
+barrier. A retained outer initialization MutationPermit cannot be released just
+because some Disk tasks finished. Prove actual initialization workers settled and
+all later mutating APIs have barrier admission and bounded owned retirement before
+atomic handoff; failed/uncertain writes retain their permit and defer capture.
+A new registry/barrier, provider idle or forced guard drop cannot prove quiescence.
+Provider mutation guards remain effective; immutable data/ledger ownership is
+separate from outstanding mutating work.
+
+Reserve finite local record/spool/temporary capacity and persist the next revision
+before capture. Under the common barrier record the serialized journal cut and
+validate stable HEAD/index/files without changing their real state. Retain the
+immutable spool and its owner before releasing capture ownership. Upload reads
+that spool under separate retained ownership; never hold the exclusive checkout
+barrier across remote waits. A changed tree/cut fails or defers; counters are not
+reused. Head/node budgets cover pending, retained and uncertain data across runs,
+not just successful captures. Restart quarantines uncertain ownership and never
+infers cleanup or authority from expiry/intact files.
+
+Existing Stage framing requires a full bounded retransmission for lost-receipt
+replay, after actual prior settlement and reserved scratch; at most three physical
+attempts total per repo, with no second durable import. Retain/join the SAME Stage
+and commit task/result, process, native policy and spool through dropped waiters.
+The [capture protocol](./node-link.md#stage-upload-and-lost-receipt-replay) defines
+this requirement; current local helper APIs alone do not establish it.
+
 ## Durable commit, visibility and recovery
 
 Capture freshness is independent of journal acknowledgement and wall-clock time.
 Head persists a monotonically increasing per-agent `assignmentEpoch` (u64 decimal
-string) at each new execution admission/reassignment and binds it to the exact
+string) at each new execution admission/reassignment or authorized capture-only
+LOCAL source admission and binds it to the exact
 lease/incarnation/run. Reconnecting the same surviving run retains its epoch;
 spawning a new run requires a new epoch. The node persists a per-agent, per-epoch
 `captureRevision` counter before each capture, under the capture barrier. Captures

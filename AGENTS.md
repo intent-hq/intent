@@ -236,14 +236,15 @@ with no rollback.
   merge queue — in this repo or any submodule repo — without explicit permission from
   a human**. Approved + green checks is not enough. Repo-owned automation is exempt
   (auto-bump-submodules, auto-pin-intentd, auto-cut-alpha, and the release PR
-  workflows merge their own rolling PRs). All three repos (monorepo, intentd,
-  cloudlands-fe) route `main` merges through a **merge queue**: once a human has
-  given permission, `gh pr merge --squash` adds the PR to the queue, and the PR lands
-  when the queue's gate passes — no update-branch/re-check treadmill. The expected
-  `main` rules of all three repos (required `CI Gate` check, thread resolution,
-  merge-queue settings) are the committed contract in `.github/rulesets/*.main.json`,
-  and their allowed bypass actors (none by default) in `.github/rulesets/*.bypass.json`,
-  compared with the live rules by the `ruleset-check` CI job and daily by
+  workflows merge their own rolling PRs). Ordinary `main` PRs in all three repos
+  use a **merge queue**: after human permission, `gh pr merge --squash` enqueues
+  them until the queue's gate passes. Component auto-cut may directly merge
+  validated release metadata under the approved CI exemption and existing
+  readiness guards ([details](docs/RELEASING.md#guarded-direct-release-merges)).
+  Main rules are committed in `.github/rulesets/*.main.json`; the bypass contract
+  in `.github/rulesets/*.bypass.json` allows `intent-hq-ci` on the two component
+  Default rulesets only (none for the monorepo or organization). Rules are
+  compared with the live configuration by `ruleset-check` CI and daily by
   `ruleset-drift.yml`; after an intended ruleset change, run
   `make check-rulesets UPDATE=1` and commit the result in the same PR. The bypass
   half needs the `RULESET_ADMIN_TOKEN` secret (a fine-grained PAT with administration
@@ -318,9 +319,9 @@ guardrails) lives in [docs/RELEASING.md](./docs/RELEASING.md). The agent-facing 
 - Releases are per-component and channel-based: merging a release PR publishes to the
   rolling **alpha** channel automatically; **beta** and **stable** are manual
   promotions of existing releases (no new build).
-- The pipeline is fully automated and event-chained (intentd alpha publish →
-  cloudlands-fe pin bump → chained fe alpha cut), with hourly crons as fail-soft
-  backstops when an event link is missed.
+- The pipeline is event-chained (intentd alpha publish → cloudlands-fe pin bump →
+  fe alpha cut), with cron backstops: hourly pin bumps and ten-minute frontend
+  cut attempts, subject to the automated hourly release floor.
 - **Never file routine pin-bump PRs** — the workflows own pin advancement (the monorepo
   `submodule-pins` check enforces this; see Phase 2 above). The one sanctioned exception
   is the cloudlands-fe `intentd.version` pin under the emergency-release procedure

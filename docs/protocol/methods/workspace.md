@@ -753,11 +753,22 @@ workspace provisioning; the resolved effort is persisted before any prompt or at
 starts the first turn and echoed in the response's `initialAgent.reasoningEffort`.
 An unset effort is omitted from that `AgentLite` response. No post-create `agent.update`
 is needed to apply the initial effort.
+Manual workspace initial agents accept optional `initialAgent.rememberSpecialist`
+and `initialAgent.nameExplicitlySet` booleans. Omitted/null values preserve the
+existing defaults: no specialist memory opt-in, and a supplied name is explicit.
+The manual UI sends `rememberSpecialist: true` and `nameExplicitlySet: false` for
+its generated specialist name. A successful initial-agent insertion atomically
+remembers the canonical specialist (null for General) for the new workspace;
+failed preflight validation creates neither a workspace nor preference. Existing
+background/agent-created exclusions apply. An explicit custom name stays protected
+when `nameExplicitlySet` is omitted or true. Non-boolean non-null values are
+rejected before provisioning. See [manual specialist memory](./agents.md#manual-specialist-memory).
+
 When `initialAgent.name` is omitted but a `specialist` is supplied, the agent's name
 defaults to the specialist's resolved display name (frontmatter `name`, 3-tier
-project > user > bundled — e.g. "Coordinator" for `spec-writer`) and counts as
-explicitly set (it survives the agent's guarded opening-turn self-rename, same
-rename-guard semantics as `agent.create` §5.5); an UNKNOWN `specialist` — one that
+project > user > bundled — e.g. "Coordinator" for `spec-writer`) and remains a
+generated name eligible for the opening-turn self-rename (same rename-guard
+semantics as `agent.create` §5.5); an UNKNOWN `specialist` — one that
 resolves to no known id or alias — is rejected with `-32602` naming the id and the
 known catalog ids (monorepo#3497; same strict validation as `agent.create` §5.5),
 while a known specialist whose display-name resolution fails still never fails the
@@ -848,8 +859,8 @@ workspace's guests and open invites, which archive removes:
   an agent is an explicit resurrection signal; automatic machinery is not. Since
   [intent-hq/intentd#1587](https://github.com/intent-hq/intentd/pull/1587) (behavior
   only, no wire-shape change; fixes intent-hq/intent#3883) the exemption has two
-  refinements. **Combined flush of parked archive notices**: under the `"all"` flush
-  mode (§5.5 Queued-message flush), a user `agent.sendMessage` into an archived
+  refinements. **Combined flush of parked archive notices**: with automatic batching
+  (§5.5 Queued-message flush), a user `agent.sendMessage` into an archived
   workspace whose queue holds parked ready-to-send entries (the consolidated
   `workspace_archive_wake` notice for cancelled hooks / PR monitors — see the two
   teardown bullets below — parked automatic sends) no longer runs a DIRECT turn
@@ -860,19 +871,29 @@ workspace's guests and open invites, which archive removes:
   turn as the user message, with the one-shot unarchive prompt notice trailing —
   so the model learns its hooks were cancelled in the same turn it is resumed,
   not in confusing later turns. The conversion is skipped when nothing is parked
-  (the common empty-queue direct send is untouched), under `"systemOnly"`/`"off"`
-  (no combined turn exists to carry the parked entries), and for a session parked
+  (the common empty-queue direct send is untouched) and for a session parked
   in `Error` (whose documented recovery is the direct fresh send). **The drain-gate
-  exemption is time-tightened**: only a ready user-origin entry queued at or after
-  the archive (`queuedAt >= archivedAt`) releases the archived gate — a user entry
-  parked by a busy race BEFORE archival is not a post-archive user action and stays
-  parked with everything else (without the cut, the interrupted worker's end-of-turn
-  re-kick would find that older entry and immediately unarchive a freshly archived
-  workspace); pre-archive parked entries flush only on manual `workspace.unarchive`
-  or by riding the combined turn of a NEW post-archive user message. An entry with
-  an unparseable `queuedAt` never matches; a row missing or with an unparseable
-  `archivedAt` (legacy data) fails open to the untimed user-origin check. The parked
-  send's internal result carries the additive `archivedParked: true` marker alongside
+  exemption is time-tightened**: only a ready user-origin entry carrying a trusted
+  human submission at or after the archive releases the archived gate. The daemon
+  compares the entry's durable **latest human-submission time** against `archivedAt`;
+  it uses original `queuedAt` when the optional separate timestamp is absent,
+  including on fresh unmerged and legacy entries. A present malformed timestamp
+  never falls back. The signal is server-assigned on fresh human enqueue, advances
+  on human append, and
+  survives coalescing, failure/interrupt handback and restart without being refreshed
+  by automatic recovery. Edits and duplicate pending-message retries preserve it;
+  automatic input cannot supply or advance it. See
+  [§5.5 shared pending human queue](./agents.md#shared-pending-human-queue).
+  A1 queued before archival and same-author A2 appended afterward remain one entry
+  with A1's original identity and `queuedAt`; A2's durable human-submission time lets
+  that entry release the archive gate once ready. An entry with only pre-archive
+  human input stays parked even after automatic activity or recovery (without that
+  cut, the interrupted worker's end-of-turn re-kick could immediately unarchive a
+  freshly archived workspace). Such entries flush on manual `workspace.unarchive`
+  or ride the combined turn of fresh post-archive human input. An unparseable
+  effective human-submission timestamp never matches; a row missing or with an
+  unparseable `archivedAt` (legacy data) fails open to the untimed user-origin check.
+  The parked send's internal result carries the additive `archivedParked: true` marker alongside
   `queued: true` (surfaced through the MCP send bindings, so an agent can tell an
   archived park from an ordinary busy-queue fallback). The virtual chief workspace
   skips the row read (never archived), and a row-lookup error fails open so a transient
@@ -1246,28 +1267,24 @@ wins** (deliberate tie-break: the FE puts the primary link first). Semantics, in
   the PR's **base branch** — so ahead/behind and diffs reflect the merge target — and
   `prStatus` + the `activePullRequest` snapshot (+ `pullRequests`) fill from the lookup.
   **Explicit `branch`/`baseRef` params always win** over the PR-derived values.
-- **Graceful fallback.** A failed or timed-out lookup — or no source-control provider —
-  is **non-fatal** (warn log only): the create proceeds without the PR-derived git setup,
-  keeping the `prNumber`/`prUrl` linkage from the link (the PR-refresh sweep heals status
-  later). Non-PR creates (no links, or issue-kind only) are byte-for-byte unchanged.
-- **Checkout.** The PR-derived head branch is treated as an EXISTING branch (no slug
-  generation, no uniquification — see Branch naming above); a head existing only as a
-  remote-tracking ref is materialized at the remote tip with upstream tracking (see
-  Worktree provisioning above — the materialization applies across worktree / CoW /
-  direct modes).
-- **`baseCommitSha` = merge-base boundary.** A PR-derived branch checks out at the PR
-  head, not the base, so the row records the **merge-base** of the checked-out HEAD with
-  `baseRef` — preserving the contract that `baseCommitSha` is the base boundary — falling
-  back to the checked-out tip when the boundary cannot be resolved (e.g. the head
-  degraded to a fresh branch at the base commit, where tip = boundary anyway).
-- **Fork-hosted heads degrade loudly.** `PullRequest` carries no head-repo info, so a
-  head living in a fork has no `refs/remotes/<remote>/<branch>` in the base-repo clone —
-  the checkout falls back to a **fresh branch at the base commit** (named like the head,
-  without its commits) while `prNumber`/`prUrl` keep the linkage. The same applies to a
-  never-fetched branch on a local-repo create (provisioning does no network fetch;
-  cache-hydrated creates are fine — the cache refresh fetches). The daemon WARNs before
-  provisioning when a PR-derived head has no local or remote-tracking ref, so the
-  degradation is visible.
+- **Lookup failure.** Registry-only rows retain best-effort linkage. A real checkout
+  requires a resolved head branch (from the lookup or an explicit caller prefill);
+  otherwise creation fails instead of generating a branch at the base commit.
+- **Canonical PR checkout.** For a derived head or an explicit branch matching the PR
+  head, the daemon fetches `refs/pull/<number>/head` from the selected base-repository
+  remote (default `origin`). This supports fork heads without fetching a fork remote.
+  Fetch failure is fatal; there is no fallback to base commits. When the forge supplies
+  a head SHA, a moved head is rejected with a refresh-and-retry error.
+- **Local work is preserved.** The requested head branch name is retained. An existing
+  local branch at a different commit causes an explicit error, including a fork head
+  named `main` that conflicts with local `main`; local branches are never overwritten.
+  Preparation and provisioning share the repository lock. Skipped isolation or supplied
+  checkout paths are refused for PR starts. An explicit branch differing from a
+  successfully resolved PR head retains the existing caller-override semantics.
+- **`baseCommitSha` = merge-base boundary.** The checkout uses the PR head while
+  `baseRef` remains the diff target. `baseCommitSha` records the merge-base boundary,
+  falling back to the checked-out tip only when that boundary cannot be resolved.
+  Non-PR and issue-only creates are unchanged.
 
 **`statusImageAssetId` (new in intentd, migration `0062`).** An agent-authored workspace
 status screenshot reference (intent-hq/monorepo#997). The value is a content-addressed
@@ -1318,8 +1335,8 @@ to, written by `workspace.setBrowserClient` and cleared by passing `clientId: nu
 **Omitted** (never `null`) from `Workspace` payloads (`workspace.list` / `workspace.get` / the
 `workspace` subscription snapshot, §6.9) while the workspace is unpinned — the driving client
 is then resolved live (§5.9: the host of the workspace's claimed tabs, else the
-first-connected eligible client). The pin is a persisted row column that only
-`workspace.setBrowserClient` writes: a general `workspace.update` never touches it, and the
+first-connected eligible client). The pin is a persisted row column written by
+`workspace.setBrowserClient`: a general `workspace.update` never touches it, and the
 `workspace:updated { changes }` delta the setter emits carries `browserClientId` as the
 committed string or an explicit `null` for a clear (§6.5). The pin is **daemon-local**: a
 `workspace.duplicate` copy starts unpinned, and although the transfer export carries the
@@ -1328,6 +1345,46 @@ daemon (the `client` table never transfers), so an imported workspace starts unp
 Reading the pin **together with** the live resolution is `workspace.getBrowserClient`; the
 candidates a picker offers are `client.list` (§5.17). The virtual Chief workspace cannot be
 pinned (-32602) and never carries the field.
+
+**Prepared desktop-consent addition:** [desktop control](./desktop.md#unassigned-workspace-consent-claims-the-primary)
+uses the same `browserClientId` column, setter authorization boundaries and committed
+workspace delta. First authenticated same-owner Allow atomically claims it only
+when there is no saved pin, active desktop or agent-owned browser host; the
+first-connected browser fallback alone does not count as assigned. Explicit setter
+and agent-tab ownership changes serialize against the claim and invalidate stale
+candidate requests. A saved/offline pin is never replaced by candidate consent.
+The sidebar always offers Set primary client; its machine label appears only for
+active desktop control or agent-owned tabs (including hidden tabs), not an idle pin
+or user-only tabs. See the desktop contract for exact targeting, consent races and
+activity-label rules. This is a prepared addition, not shipped behavior at the pins.
+
+**`lastContentActivity` (optional, read-only).** `Workspace.lastContentActivity` is
+the latest **recorded content activity**: the maximum valid timestamp from
+user/assistant message `timestamp` (stored `created_at`) and note `updatedAt` values, compared as instants
+(including timezone offsets and fractional seconds). System/tool messages,
+workspace/session metadata edits, PR refreshes, and token-usage scans do not advance
+it. Notes include agent-authored and automatically created notes; this is not a
+claim that a human edited the workspace. It is absent, never `null`, when no valid
+content timestamp is known, on older daemons, and on the virtual Assistant workspace.
+
+The daemon materializes this field transactionally when content is written and
+reads the stored column on list/get and the lite subscription snapshot: no transcript
+hydration or history scan on these hot reads. It is a high-water mark; deleting or
+replacing content does not move it backwards. Schema upgrade seeds it from retained
+messages/notes only, excluding the possibly polluted workspace `updatedAt`, stored
+`lastActivity`, and session `updatedAt`. It does **not** reconstruct historical
+metadata edits or deleted pre-upgrade content, and does not repair those older
+columns. Archive transfers preserve the recorded mark; imported retained content
+can advance it. Ordinary `workspace.update` cannot set it.
+
+Clients may use it for a **conversation/note activity** label or sort. They must not
+present it as the exact last workspace edit. If absent, use `createdAt` with a
+**Created** label or show content activity as unavailable. An explicitly separate
+**Workspace metadata activity** fallback may use legacy `lastActivity`, but must
+explain that it includes automated maintenance and is not evidence of recent work;
+it must not stand in for content activity in filters or recency claims. Absence
+alone does not distinguish older daemons from an upgraded workspace without content.
+Existing content events can prompt a fresh list/get; no new push cadence is added.
 
 **`lastActivity` (BE-derived, always populated).** `Workspace.lastActivity` is the
 authoritative "most recent thing that happened in this workspace" timestamp. The daemon
@@ -2217,15 +2274,17 @@ import guarantees.
 **Imported human queues.** Actual-human queued records with a trusted snapshot
 and no current-local binding remain durable but are **not automatically ready**.
 Drain, idle, startup, restart and recovery paths cannot deliver them automatically.
-Their privacy/authorization classification is `UnknownHuman`, independently of
+Their authorship/authorization classification is `UnknownHuman`, independently of
 the preserved safe author profile. Strip or quarantine foreign `fromPrincipalId`
-stamps; never resolve them locally or fall back to the receiving owner. Existing
-Member/Guest visibility and per-entry mutation restrictions remain; unknown human
-entries do not become public or editable because they lack a local principal.
+stamps; never resolve them locally or fall back to the receiving owner. The
+[shared queue read policy](./agents.md#shared-pending-human-queue) makes these
+entries visible to authorized workspace participants. Missing local authorship
+grants no edit or merge authority and does not release their delivery hold.
 
 The current destination host owner may explicitly send the unchanged captured
-content with `agent.sendQueuedMessageNow`, or remove it with
-`agent.removeQueuedMessage`. Existing author-only editing restrictions remain.
+content with `agent.sendQueuedMessageNow`. Removal with
+`agent.removeQueuedMessage` follows the shared queue's workspace-owner or
+host-owner moderation rule. Existing author-only editing restrictions remain.
 An explicit send requires affirmative current destination-owner authorization
 **inside the existing atomic queue pop**, alongside normal admission and current
 role/credential revalidation. Absence of a per-entry gate is not authorization:
@@ -2241,6 +2300,351 @@ assistant, tool or system rows, or agent/automatic-origin messages, as human.
 Message content and other recorded authors remain unchanged. This transfer-scoped
 source tagging does not authorize guessing or mass-backfilling unknown legacy
 [comment authors (§5.3)](./notes-tasks.md#qualified-human-comment-attribution-109-additive-docs-lead-implementation).
+
+#### Repository context
+
+| Method | Params | Result |
+| --- | --- | --- |
+| workspace.repositoryContext.capture | workspaceId, gitRootId? | Original connection's read lifetime, scope, coverage and retirement cursor |
+| workspace.repositoryContext | workspaceId, gitRootId?, repositoryLifetimeId | RepositoryContext |
+| workspace.repositoryContext.release | workspaceId, gitRootId?, repositoryLifetimeId | {released: true} |
+
+**Prepared additive contract.** Detect
+[`server.capabilities.repositoryContext: 1`](client-hello.md#repository-context-capability)
+on the original physical connection before using it.
+
+These three operations read authorized local repository facts without an Agent,
+MCP session, selected forge or provider login. They do not create a workspace,
+persist a selection, authorize provider calls, or prepare/execute writes.
+
+- **Capture:** `workspace.repositoryContext.capture` takes
+  `{workspaceId, gitRootId?}` and returns
+  `{lifetimeId, scope, coverage, retirementSequence, expiresAfterMs}`.
+- **Read:** `workspace.repositoryContext` takes
+  `{workspaceId, gitRootId?, repositoryLifetimeId}` and returns the existing
+  `RepositoryContext` shape below, with no response wrapper.
+- **Release:** `workspace.repositoryContext.release` takes the same bound
+  parameters as read and returns `{released: true}`.
+
+`workspaceId`, `gitRootId` and `repositoryLifetimeId` are strings; the first and
+last are required for read/release. All three parameter objects reject unknown
+fields. Omitted or `null` `gitRootId` means workspace inventory; a present string
+selects one stored registered root belonging to that workspace. Read/release must
+keep the captured workspace and root filter. IDs identify lookups and invalidation;
+they are not caller-supplied authority, filesystem paths, or transferable grants.
+
+The lifetime belongs only to the physical connection on which capture ran.
+Matching bearer, principal, logical `clientId`, workspace/root IDs or daemon name
+on another connection cannot reuse it. Release of a missing/expired reference is
+idempotent on a usable original feed and never releases another connection's
+reference. An unavailable original feed still refuses the call.
+
+For example, a capture and its response on one connection:
+
+```json
+{"jsonrpc":"2.0","id":101,"method":"workspace.repositoryContext.capture","params":{"workspaceId":"ws-example"}}
+```
+
+```json
+{"jsonrpc":"2.0","id":101,"result":{"lifetimeId":"lease-example","scope":{"daemonId":"daemon-example","authorityScopeId":"scope-example","authorityGeneration":"1"},"coverage":{"kind":"workspaceInventory","workspaceId":"ws-example"},"retirementSequence":"0","expiresAfterMs":300000}}
+```
+
+Coverage is exactly one of `{kind: "workspaceInventory", workspaceId}` (the
+primary root plus the actual registered-root inventory) or
+`{kind: "registeredRoot", workspaceId, gitRootId}` (one exact stored root).
+Submitted and returned IDs must agree. Coverage permits only this local context
+read; it grants neither provider access nor writes. It is distinct from a response
+root's identity, whose `kind` is `"primary"` or `"registered"`.
+
+**Unchanged response types.** The notation below describes JSON objects; `?`
+means an optional field is omitted when unavailable, never replaced with `null`.
+Arrays remain arrays, including when empty. `decimal` means a canonical unsigned
+64-bit decimal **string** (`"0"` through `"18446744073709551615"`), not a JSON
+number, signed value or zero-padded spelling.
+
+```text
+RepositoryContext = {revision: Revision, scope: ExecutionScope, roots: RootContext[]}
+Revision = {epoch: string, sequence: decimal}
+ExecutionScope = {daemonId: string, authorityScopeId: string, authorityGeneration: decimal}
+RootContext = {root: RootId, branch?: string, headSha?: string,
+               remotes: Remote[], targets: TargetContext[], reviewSelection: Selection}
+RootId = {workspaceId: string, kind: "primary"}
+       | {workspaceId: string, kind: "registered", gitRootId: string}
+Remote = {name: string, fetch: Endpoint[], push: Endpoint[]}
+Endpoint = {url: string, resolution: EndpointResolution}
+EndpointResolution = {state: "resolved", target: Target}
+                   | {state: "unresolved", reason: "unknown-instance" | "unsupported-transport"
+                                                | "ambiguous-mapping" | "invalid-remote"}
+Target = {provider: "github" | "gitlab", instanceBaseUrl: string, projectPath: string}
+TargetContext = {target: Target, providerProjectId?: string, connection?: ConnectionScope,
+                 availability: "connected" | "disconnected" | "disabled" | "unsupported" | "unknown",
+                 capabilities: Capability[]}
+ConnectionScope = {connectionId: string, accountId: string, connectionGeneration: decimal}
+Capability = {operation: "read-review" | "read-issue" | "create-review" | "clone" | "fetch" | "push",
+              state: "available" | "unavailable" | "unknown"}
+Selection = {saved: SavedSelection, noRemotes: boolean, outcome: SelectionOutcome}
+SavedSelection = {mode: "automatic"}
+               | {mode: "explicit-remote", remoteName: string}
+               | {mode: "migrated-canonical", target: Target, provenance: HistoricalProvenance}
+               | {mode: "unresolved-historical", source?: HistoricalSource, recordId?: string}
+HistoricalSource = "workspace-metadata" | "registered-root-metadata"
+HistoricalProvenance = {source: HistoricalSource, recordId: string,
+                       resolverVersion: string, evidenceId: string}
+SelectionOutcome = {state: "resolved", target: Target,
+                    source: "automatic" | "explicit-call" | "explicit-remote" | "migrated-canonical"}
+                 | {state: "selection-required", reason: "ambiguous-targets" | "unresolved-candidates"
+                                                       | "missing-selected-remote" | "unresolved-historical-choice"}
+                 | {state: "repository-unavailable", reason: "no-remote", selectionRequired: boolean}
+```
+
+Target identity includes provider, logical instance base URL (including effective
+port and installation prefix), and the provider's canonical project path, without
+client case folding or namespace truncation. `providerProjectId` is optional
+corroboration, not a replacement identity. Remote URLs are sanitized. Unresolved
+endpoints remain visible; only fetch destinations participate in implicit target
+selection. Neither push destinations nor a remote named `origin` establish intent.
+`unresolved-historical` retains only the source/record facts actually known; missing
+facts remain omitted. A new, renamed or uniquely matching remote does not repair
+that history. `unknown` availability/capability is not evidence of absence or denial.
+The full DTO permits the variants above; an individual context need not populate
+every optional field or establish any operation as available.
+
+The epoch in a native context revision is its captured `lifetimeId`. The first
+observation has sequence `"1"`; identical observations retain it. Changed original
+observations retire that lease rather than refreshing its authority. Compare
+revision sequences only within equal execution scopes and epochs. Scope generations,
+connection generations, revisions and retirement cursors preserve all integer bits;
+IDs, counters and the numeric `expiresAfterMs: 300000` are not permission.
+
+A read of a local repository with no remotes can return:
+
+```json
+{"jsonrpc":"2.0","id":102,"method":"workspace.repositoryContext","params":{"workspaceId":"ws-example","repositoryLifetimeId":"lease-example"}}
+```
+
+```json
+{"jsonrpc":"2.0","id":102,"result":{"revision":{"epoch":"lease-example","sequence":"1"},"scope":{"daemonId":"daemon-example","authorityScopeId":"scope-example","authorityGeneration":"1"},"roots":[{"root":{"workspaceId":"ws-example","kind":"primary"},"branch":"main","remotes":[],"targets":[],"reviewSelection":{"saved":{"mode":"automatic"},"noRemotes":true,"outcome":{"state":"repository-unavailable","reason":"no-remote","selectionRequired":false}}}]}}
+```
+
+**Permissions and final validation.** Local facts use the durable workspace member
+check: a host Owner is admitted; a host Member can read an existing ordinary
+workspace but not the Chief workspace; a Guest needs an existing workspace grant.
+Host account/connection metadata additionally requires the original native
+administrator role. Non-administrators receive authorized local facts with that
+identity omitted and availability/capabilities `"unknown"` where no separately
+authorized fact exists. This path does not call `sourceControl.authStatus` or make
+provider requests. Capturing no account metadata cannot acquire it later.
+
+The server validates the original caller/credential, durable membership, stored
+root/selection, local Git, settings and captured connection facts at entry and at
+the consuming reply. Stale or busy captured facts refuse delivery; a delayed
+notification does not bypass those checks. Unavailable, retired, foreign or final
+refusals use the sanitized error below. Strict malformed parameters use `-32602`;
+other transport/error handling remains as described in [Errors](../09-error-codes.md).
+
+```json
+{"jsonrpc":"2.0","id":102,"error":{"code":-32003,"message":"Forbidden","data":{"code":"forbidden","detail":"Repository context unavailable"}}}
+```
+
+**Finite limits.** Per original connection: 64 outstanding leases, 128 inventory
+roots including primary, 64 queued retirement notices, and two owned local blocking
+jobs. Each lease permits 64 sequential reads; concurrent reads are refused. Lease
+expiry is 300 seconds; acquisition has a 5-second deadline; read and final validation
+have 10-second deadlines each; a queued frame expires after 15 seconds before
+service execution; control-notice send has a 5-second deadline. These are resource
+and rejection bounds. Canceled acquisition does not publish a late lease, and
+cancellation does not mean a running blocking Git worker has stopped or released
+its locks.
+
+Follow the [original-connection client ordering](../10-thin-client.md#repository-context-lifecycle)
+and [private retirement notice](../06-events.md#private-repository-context-retirement),
+including reconciliation while capture awaits. Release uses that same connection:
+
+```json
+{"jsonrpc":"2.0","id":103,"method":"workspace.repositoryContext.release","params":{"workspaceId":"ws-example","repositoryLifetimeId":"lease-example"}}
+```
+
+```json
+{"jsonrpc":"2.0","id":103,"result":{"released":true}}
+```
+
+#### Repository selection
+
+| Method | Params | Result |
+| --- | --- | --- |
+| workspace.repositorySelection.capture | workspaceId, gitRootId? | SelectionCapture |
+| workspace.repositorySelection.save | workspaceId, gitRootId?, selectionId, choice | SelectionAttempt |
+| workspace.repositorySelection.reset | workspaceId, gitRootId?, selectionId | SelectionAttempt |
+| workspace.repositorySelection.reconcile | workspaceId, gitRootId?, selectionId | Original SelectionAttempt, without another write |
+| workspace.repositorySelection.release | workspaceId, gitRootId?, selectionId | {released: true} |
+
+**Prepared additive contract.** Detect
+[`server.capabilities.repositorySelection: 1`](client-hello.md#repository-selection-capability)
+on the original confirmed physical connection before use. Availability and permission must be checked on that connection.
+
+These operations persist local Intent selection intent. They do not edit Git,
+authorize provider calls or repository reads, or prepare/create a review. A
+repository context read lease or inventory result is not selection write authority.
+The native Wire connection owns the editing operation; Agent, MCP and Daemon
+callers cannot enter it.
+
+- **Capture:** `workspace.repositorySelection.capture` takes
+  `{workspaceId, gitRootId?}` and returns `SelectionCapture` below.
+- **Save:** `workspace.repositorySelection.save` takes
+  `{workspaceId, gitRootId?, selectionId, choice}` and returns `SelectionAttempt`.
+- **Reset:** `workspace.repositorySelection.reset` takes
+  `{workspaceId, gitRootId?, selectionId}` and returns `SelectionAttempt`.
+- **Reconcile:** `workspace.repositorySelection.reconcile` takes the same bound
+  parameters as reset and returns the original `SelectionAttempt` without writing.
+- **Release:** `workspace.repositorySelection.release` takes the same bound
+  parameters and returns `{released: true}`.
+
+All parameter objects reject unknown fields. `workspaceId`, `gitRootId` and
+`selectionId` are strings; workspace and selection IDs are required except that
+capture has no selection ID. Omitted or `null` `gitRootId` means **exactly Primary**,
+not the workspace inventory used by context capture. A present string selects the
+registered root in that workspace. Later calls must keep the captured workspace,
+root and selection ID. Paths, caller/scope fields, revisions and client-created
+snapshots are not accepted as authority parameters. A matching bearer, logical
+`clientId` or root on another socket cannot adopt the operation.
+
+Save accepts only `{mode: "automatic"}` or
+`{mode: "explicit-remote", remoteName: string}`. The remote name must be nonempty,
+at most 1024 UTF-8 bytes, already trimmed and contain no control characters. It need
+not currently exist in Git; this operation neither executes Git nor infers a target
+from a remote name. Reset has its own method. Historical/migrated saved forms are
+read observations, not new write choices.
+
+**Response shapes.** The following notation describes JSON. `decimal` is a
+canonical unsigned 64-bit decimal **string**, preserving values through
+`"18446744073709551615"`; compare without JavaScript `Number` rounding. The expiry
+is instead the JSON number `300000`. `ExecutionScope`, `RootId` and `SavedSelection`
+are the unchanged types defined in the repository context section above.
+
+```text
+SelectionCapture = {selectionId: string, scope: ExecutionScope, root: RootId,
+                    snapshot: SelectionSnapshot, retirementSequence: decimal,
+                    expiresAfterMs: 300000}
+SelectionSnapshot = {root: RootId, rootIncarnation: decimal,
+                     selectionRevision: decimal, selection: StoredSelection}
+StoredSelection = {kind: "neverSaved"}
+                | {kind: "reset"}
+                | {kind: "saved", value: SavedSelection}
+SelectionAttempt = {selectionId: string, root: RootId, attempt: AttemptState}
+AttemptState = {status: "notStarted"}
+             | {status: "pending"}
+             | {status: "settled", receipt: SelectionReceipt}
+SelectionReceipt = {result: SelectionResult, persistence: SelectionPersistence}
+SelectionResult = {kind: "applied" | "unchanged" | "conflict", snapshot: SelectionSnapshot}
+                | {kind: "missingRoot"}
+                | {kind: "failed", code: SelectionFailure}
+SelectionFailure = "admission-retired" | "authority-unavailable"
+                 | "storage-failed" | "completion-unobserved"
+SelectionPersistence = {kind: "notAttempted"}
+                     | {kind: "noEffect"}
+                     | {kind: "committed", selectionRevision: decimal}
+                     | {kind: "unknown"}
+```
+
+Never saved, explicit reset and saved Automatic are distinct states. This Store
+projects saved Automatic, explicit remote or unresolved historical intent; it does
+not manufacture the existing DTO's `migrated-canonical` variant. Unresolved history
+retains only known `source` and `recordId`; unknown fields are omitted, not `null`.
+The source tags remain `workspace-metadata` and `registered-root-metadata`. No
+remote discovery, rename or unique match repairs historical intent automatically.
+
+Core's public `RepositorySelectionSnapshot` is a serializable observation. Store's
+same-named type is a separate private, nonclone, nonserializable owner of the
+original compare-and-set snapshot. Clients cannot reconstruct it from the public
+fields. The public Rust connection carrier `capture_selection` returns
+`Option<Arc<dyn RepositoryReadRequestScope>>`, defaulting to `None`; unsupported
+owners cannot supply admission. Boxing a settled receipt adds no JSON wrapper.
+
+A capture of Primary on one original connection:
+
+```json
+{"jsonrpc":"2.0","id":201,"method":"workspace.repositorySelection.capture","params":{"workspaceId":"ws-example"}}
+```
+
+```json
+{"jsonrpc":"2.0","id":201,"result":{"selectionId":"selection-example","scope":{"daemonId":"daemon-example","authorityScopeId":"scope-example","authorityGeneration":"1"},"root":{"workspaceId":"ws-example","kind":"primary"},"snapshot":{"root":{"workspaceId":"ws-example","kind":"primary"},"rootIncarnation":"1","selectionRevision":"1","selection":{"kind":"neverSaved"}},"retirementSequence":"0","expiresAfterMs":300000}}
+```
+
+For a registered root, capture includes `gitRootId: "root-example"`; both returned
+root objects then have this shape, and later calls retain that same `gitRootId`:
+
+```json
+{"workspaceId":"ws-example","kind":"registered","gitRootId":"root-example"}
+```
+
+**One original command and its receipt.** Capture the server editing snapshot
+**before user confirmation**, on the connection/root used for later calls. Never
+silently replace an older edit with a fresh capture. Save or reset claims one
+immutable command synchronously before queueing. Identical repeats only observe
+its original pending/settled attempt and consume the observation budget; a changed
+command is invalid. A conflict consumes that operation and requires a fresh
+explicit user action, not automatic recapture or replay.
+
+`result` and `persistence` describe independent facts. Applied, unchanged and
+conflict carry the snapshot from that historical attempt, not a promise about the
+current saved selection. `noEffect` requires an observed no-write/rollback
+completion. Failed projection or settlement may coexist with committed persistence,
+and unknown persistence is never proof of rollback. For example, a retained receipt
+can truthfully report:
+
+```json
+{"jsonrpc":"2.0","id":202,"result":{"selectionId":"selection-example","root":{"workspaceId":"ws-example","kind":"primary"},"attempt":{"status":"settled","receipt":{"result":{"kind":"failed","code":"completion-unobserved"},"persistence":{"kind":"committed","selectionRevision":"9007199254740993"}}}}}
+```
+
+Reconcile observes only the original socket's retained operation under its current
+disclosure checks. It never writes, revives admission or discovers a receipt on a
+replacement connection. Preserve known receipts independently of whether current
+UI state may apply them. Loss of the original socket/process before a known receipt
+remains uncertain: reading current selection after reconnect is not reconciliation.
+No durable cross-connection receipt lookup is promised.
+
+Release is idempotent original-reference retirement on a usable original feed.
+It does not cancel an admitted Store worker or erase its pending/retained receipt.
+An unavailable original feed still refuses. A canceled or timed-out waiter cannot
+replace the admitted worker; its capacity stays charged until actual completion,
+including after socket loss. Release late capture results only through their
+original connection, never through the client's newly selected host.
+
+**Permissions and final disclosure.** The unchanged workspace-manager policy
+admits a host Owner; a host Member on ordinary non-chief workspaces; or a Guest
+with the actual workspace Owner role, not Collaborator. Durable original Wire,
+caller/credential and root authority checks also apply. Read/inventory permission
+does not authorize this write. Authority is compared before acquisition/mutation
+and inside both Store comparison transactions. Selection invalidation does not
+retire the operation's own write authority; unrelated root, permission, database
+or credential retirement does.
+
+Final reply disclosure separately rechecks original authority and root incarnation
+at the consuming output slot. A committed effect does not guarantee that the
+receipt may still be disclosed. An RPC error, timeout or later retirement cannot
+rewrite a known commit as rollback. Follow the
+[client ordering and uncertainty rules](../10-thin-client.md#repository-selection-lifecycle)
+and the [private retirement feed](../06-events.md#private-repository-selection-retirement).
+
+Malformed strict parameters or a changed command use `-32602` with
+`data.code: "invalid-params"`. Existing workspace non-disclosure uses `-32602`
+with `data.code: "not-found"`. Unavailable, retired, foreign-ownership or capacity
+refusals use the sanitized envelope below; sanitized receipt failure codes remain
+result data and contain no raw Store/SQL/provider diagnostics.
+
+```json
+{"jsonrpc":"2.0","id":203,"error":{"code":-32003,"message":"Forbidden","data":{"code":"forbidden","detail":"Repository selection unavailable"}}}
+```
+
+**Finite limits.** There are 64 retained records per original connection, 256 per
+Services instance and two actual Store workers per Services instance. Each handle
+permits one client operation in flight and at most 64 reconcile/identical-repeat
+observations. Capture has a 5-second deadline, queued frames a 15-second lifetime,
+and admission/final checks 10-second deadlines. An unclaimed handle lasts 300
+seconds; a settled receipt is retained for 300 seconds from original settlement,
+without renewal. The private notice queue holds 64 notices and forwarding has a
+5-second timeout. Incomplete workers retain charged capacity beyond ordinary
+expiry; the server refuses new work instead of forgetting an unfinished effect.
 
 ### 5.23 Usage metrics — `workspace.getTokenUsage`
 
@@ -2503,3 +2907,21 @@ script's exit code (§5.1).
 (null clears), and `workspace.create.initialAgent.placement`. It does not change
 workspace `checkoutMode`, its CoW/reflink implementation, or current creation
 behavior before the node capabilities are advertised.
+
+The [11.2 platform extension](../model-platform-routing.md) widens that whole
+object with optional os/arch under agentPlatformRouting 1. An initial agent uses
+the outer workspace idempotency key and a derived initial-agent identity; no
+second independent workspace retry is created. Omission retains legacy behavior unless
+an existing specialist/workspace default applies; no manual dialog is required.
+
+For an effective placed initial agent under agentPlatformRouting 1, the
+[per-method launch response contract](../model-platform-routing.md#per-method-launch-responses)
+is the precise extension to initial-agent orchestration above: successful replies
+still require the real initialAgent and add a sibling initialAgentLaunch.
+If initial-agent admission is pending, uncertain or fails after workspace commit,
+return -32603 with the real workspaceId, outer idempotencyKey and derived child
+launch in error.data; never a post-effect -32602 or a fabricated AgentLite.
+The existing global workspace-create idempotency scope remains: parent retries
+reconcile the same workspace/initial-agent owner and never re-provision or resend.
+Terminal responses replay unchanged. All -32602 workspace rejections remain
+pre-side-effect; later capacity failure is diagnostic data inside the -32603.
