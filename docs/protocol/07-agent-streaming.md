@@ -484,9 +484,13 @@ delta stream (`tool_delta`, which pairs each lifted item positionally with the i
 (`crates/intent-services/src/tool_block.rs::lift_proposal_resource` /
 `build_proposal_resource_block`), preserving the byte-for-byte snapshot/delta invariant.
 Malformed items (wrong MIME, missing or non-string `text`) are ignored —
-no standalone block is emitted. The lift is gated on `status: "completed"` only: a tool that
-ends in `error` never surfaces a standalone proposal block, even if its output still carries the
-resource item.
+no standalone block is emitted. Lifting resources from tool output is gated on
+`status: "completed"`: an `error` outcome does not lift a proposal merely because its
+output carries a resource item. Binding-registered `AtToolResult` attachments are
+different: a terminal `completed` or `error` outcome claims those already-created cards,
+even when the script threw after creating them. The persisted transcript and live delta
+use the same registered blocks and IDs. See the binding-time
+[attach semantics](./methods/workspace.md#51-workspace) for their provenance and matching.
 
 *Collapsed-output fallback.* Some providers (e.g. auggie) do not echo the MCP content-item
 array in `rawOutput`: they flatten the daemon's dual text+resource items into a single
@@ -521,6 +525,31 @@ together; a re-proposed id replaces its older entry, newest wins), is reconciled
 delivers a `proposal_resolved` system notice to the model on BOTH outcomes (applied and
 dismissed). Full contract: §5.5 ([methods/agents.md](./methods/agents.md) — the
 `agent.resolveProposal` row and the "Pending proposals" section).
+
+**Assistant project transfers.** The chief-only project-transfer tool accepts a workspace
+`id` and optional `destination` hint, and returns a `workspace-transfer` proposal using
+this same resource and pending-proposal lifecycle. The installed tool signature is listed
+in the [app workspace bindings](./methods/mcp-bindings.md#wsappworkspaces).
+It reads the source
+workspace and `workspace.transfer.plan`; it never starts an export or stops agents.
+`destination`, when present, is a saved desktop connection ID or device-name hint.
+There is no new JSON-RPC method.
+
+The proposal has a unique `applyToolCallId` and payload
+`{ operation: "workspace.transfer", workspaceId, sourceWorkspacePath, destination? }`.
+Its preview names the workspace and carries the source path and transfer-plan warnings.
+The desktop resolves the hint against its saved connections, excludes its own backend,
+and lets the user select a destination before approval. Missing or ambiguous hints must
+not silently select another device. The source is the backend serving the assistant
+conversation; the desktop validates the source workspace path again before executing.
+
+The inline card discloses that approval stops source agents and archives the source
+after a successful transfer. Approval uses the existing desktop transfer relay,
+then finalizes with `archiveSource: true` and `restartAgents: false`. Only successful
+finalization resolves the proposal as `applied`; failures remain visible and retryable.
+Cancellation before approval resolves it as `dismissed` without starting an export.
+The transfer controls require the desktop transfer bridge. See
+[workspace transfer](./methods/workspace.md) for export/import and plan semantics.
 
 
 **Standalone question-resource blocks (`AtTurnEnd`, [monorepo#732](https://github.com/intent-hq/monorepo/issues/732)).**
