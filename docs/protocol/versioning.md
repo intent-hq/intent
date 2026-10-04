@@ -21,12 +21,15 @@ version, experiment state, host membership and project access. Original host,
 socket, settings and credential continuity remain required; no placeholder
 workspace, generic GitHub fallback or new global event is introduced.
 
-The documented surface becomes **442 / 387 / 55** (dispatchable / router / fast
-path), including other prepared additions. Relative to the current 13.4 backend's
-**418 / 363 / 55**, these six methods alone yield **424 / 369 / 55**. The existing
-eighteen-method difference remains separately prepared; neither count establishes
-support or a carrying desktop release. Earlier version snapshots below remain
-historical rather than live count assertions.
+The documented surface remains **442 / 387 / 55** (dispatchable / router / fast
+path), including other prepared additions. The recorded daemon pin `51859b41` has
+a 13.4 surface of **418 / 363 / 55**. The 13.4 composition baseline `c2988dc8` also
+contains `github.pulls.reviews`, `github.pulls.files` and `github.pulls.checks`,
+giving **421 / 366 / 55**. Adding these six checkout methods to that baseline
+yields **427 / 372 / 55** at protocol 13.5; the remaining fifteen documented
+methods are separately prepared. Neither count establishes support or a carrying
+desktop release. Earlier version snapshots below remain historical rather than
+live count assertions.
 
 **Version 13.4 — submission correlation (additive, prepared).**
 [Submission correlation and optimistic display](./methods/agents.md#submission-correlation-and-optimistic-display-prepared-additive-extension)
