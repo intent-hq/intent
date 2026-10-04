@@ -36,8 +36,9 @@ else:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from _vendor import tomli as cargo_toml
 
-# Earlier records could credit executables replaced by another checkout (#6496).
-SCHEMA_VERSION = 2
+# Schema 2 isolated executables across checkouts (#6496); schema 3 also separates
+# effective test policy. Earlier unarmed passes cannot verify canonical gates.
+SCHEMA_VERSION = 3
 MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 KEY_RE = re.compile(r"^[0-9a-f]{64}$")
 RUST_FLAG_ENV = {"RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_RUSTFLAGS"}
@@ -203,6 +204,10 @@ def tree_key(repo_root: Path, intentd_dir: Path, output_args: list[str] | None =
         "nextest": run(["cargo", "nextest", "--version"], intentd_dir),
         "rustflags": rust_flags(),
         "build-settings": build_settings(intentd_dir),
+        # Canonical launchers arm the shared component wrapper before invoking
+        # us. Direct runner callers keep their own environment: record that
+        # exact value (including unset vs empty), never assume canonical policy.
+        "test-policy": {"INTENTD_ASSERT_BOUND_CALLER": os.environ.get("INTENTD_ASSERT_BOUND_CALLER")},
     }
     encoded = json.dumps(inputs, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()

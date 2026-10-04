@@ -278,6 +278,7 @@ case "$2" in
     [[ "${NEXTEST_STUB_LIST_EXIT:-0}" == 0 ]] || exit "$NEXTEST_STUB_LIST_EXIT"
     while IFS= read -r line; do printf '%s\n' "$line"; done <"$NEXTEST_STUB_LISTING" ;;
   run)
+    [[ "${INTENTD_ASSERT_BOUND_CALLER-}" == 1 ]] || { echo "cargo stub: caller policy is not armed" >&2; exit 97; }
     config=""
     for arg in "$@"; do
       case "$arg" in intent-gate:*) config=${arg#intent-gate:} ;; esac

@@ -232,6 +232,7 @@ jobs:
           bash scripts/docs-check.test.sh
           bash scripts/lint-fixed-sleeps.test.sh
           bash scripts/rust-changed-tests.test.sh
+          python3 -S -B scripts/test_rust_test_policy.py
           bash scripts/shipped-in.test.sh
           bash scripts/lint-fixed-sleeps.sh
 

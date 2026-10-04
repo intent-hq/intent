@@ -291,6 +291,10 @@ class CompactMakeTests(unittest.TestCase):
         self.component = self.root / "packages/intentd"
         (self.component / ".git").mkdir(parents=True)
         (self.component / "Cargo.toml").write_text('[profile.dev.package.alpha]\ndebug=2\n')
+        (self.component / "scripts").mkdir()
+        # This submodule-free fixture tests compact Cargo, not policy. Real
+        # wrapper/child environments are covered by test_rust_test_policy.py.
+        (self.component / "scripts/with-test-policy.sh").write_text('exec "$@"\n')
         (self.root / "scripts").mkdir()
         shutil.copy(ROOT / "Makefile", self.root)
         shutil.copy(ROOT / "scripts/resumable_nextest.py", self.root / "scripts")
