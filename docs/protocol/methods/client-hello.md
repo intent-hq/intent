@@ -126,6 +126,28 @@ absence means unavailable, not permission to infer support from version numbers.
 The handshake is idempotent: re-sending `client.hello` on the same connection updates `name` /
 `capabilities` / host identification and re-returns the same `server` block.
 
+#### GitLab checkout capability
+
+**Prepared additive contract, protocol 13.5.**
+`server.capabilities.gitlabCheckout: 1` announces the complete
+[pre-workspace project checkout contract](repository-checkout.md). Accept exactly
+integer `1` on the selected destination's original physical connection. The
+capability does not enable the GitLab experiment, grant host membership or prove
+that a configured account can access a project. A higher protocol version, the
+existing repository resource/context capabilities, or a guest's collaboration
+identity cannot substitute for it.
+
+Require this same capability before sending `instanceBaseUrl` to the
+[prepared full-instance auth operations](integrations.md#full-instance-gitlab-authentication-prepared-v135),
+including auth-status reads. An older parser may ignore an unknown field;
+request success alone cannot establish full-root support. Its historical
+bare-host behavior does not authorize a prefix-bearing instance.
+
+Capture before browsing and retain the original destination through pagination,
+warming, creation and release. Reconnect, host/auth/settings changes or
+retirement require a new capture; a stable client ID cannot transfer the old
+reference. See the [client lifecycle](../10-thin-client.md#gitlab-checkout-lifecycle-prepared).
+
 #### Repository context capability
 
 **Prepared additive contract.** `server.capabilities.repositoryContext: 1`
