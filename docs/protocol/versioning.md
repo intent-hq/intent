@@ -9,7 +9,7 @@ capability; documentation alone does not identify a carrying desktop release.
 ## Protocol Version & Compatibility
 
 **Documented version:** `13.6` — prepared onboarding adapter preparation; not a shipped-version claim.
-Prepared extensions below remain independently capability-gated.
+Other prepared extensions retain their independent support gates.
 
 **Version 13.6 — onboarding adapter preparation (additive, prepared).**
 [`host.prepareProviderAdapters`](./05-method-catalog.md#hostprepareprovideradapters-136-prepared)

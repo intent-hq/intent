@@ -662,11 +662,11 @@ does not establish a shipped release or change `host.providerDiscovery`.
    adapter. For Pi, retain the launch gate: missing/confirmed-too-old CLI is
    ineligible; an inconclusive version probe alone does not disqualify a detected
    CLI. Do not require or initiate authentication to prepare packages.
-2. Honor launch override precedence. Skip a valid direct adapter override where
-   the provider supports one (currently Claude); an invalid override contributes
-   nothing. Do not treat an adapter path override as proof of a real provider CLI.
-   Codex/Pi retain their registry's pinned route. Require the same usable npm/npx
-   toolchain as launch; never install or upgrade provider CLIs or the toolchain.
+2. Honor the current launch resolver: Claude, Codex and Pi all retain their
+   registry-pinned npm route. Legacy adapter path overrides are ignored and must
+   neither suppress preparation nor count as proof of a real provider CLI.
+   Require the same usable npm/npx toolchain as launch; never install or upgrade
+   provider CLIs or the toolchain.
 3. Select the exact package/version from the daemon registry and populate the
    same npm/npx cache and execution environment used by real launches. Isolate
    preparation from repository-local packages/configuration using launch's
@@ -674,8 +674,10 @@ does not establish a shipped release or change `host.providerDiscovery`.
    session, prompt for login, or make a model request.
 4. Run eligible providers concurrently under a bounded daemon-owned limit;
    coalesce repeated requests by effective adapter package/version and cache
-   context. Bound pending work and suppress repeated successful preparation in
-   the same daemon lifetime. Failed attempts may retry after bounded backoff;
+   context. Bound pending work and suppress repeated successful preparation while
+   the prepared cache remains usable; cache deletion or invalidation must allow
+   a later request to prepare again, even in the same daemon lifetime. Failed
+   attempts may retry after bounded backoff;
    repeated discovery must not create a download storm. The acknowledgement
    does not promise durable work across a daemon restart.
 5. Bound attempt duration and clean up preparation subprocesses on timeout or
