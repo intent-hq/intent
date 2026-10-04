@@ -2307,14 +2307,24 @@ source tagging does not authorize guessing or mass-backfilling unknown legacy
 `repositoryCheckout` under the
 [`gitlabCheckout: 1` contract](repository-checkout.md#warming-and-exact-checkout).
 It contains the original `checkoutId` and `revision`, full `projectPath`, exact
-selected `branch` and `commitSha`, and `mode: "direct" | "cached"`. The selection
-is mutually exclusive with the existing GitHub URL, local/new-repository,
-remote and worktree source inputs. It is not a caller-provided clone URL or a
-workspace authorization placeholder.
+selected `branch` and `commitSha`, and `mode: "direct" | "cached"`. It is mutually
+exclusive with `clonePath`, `githubUrl`, `repositoryPath`, `repositoryOwner`,
+`repositoryName`, `worktreePath`, `baseRef`, `baseCommitSha`, `remote` and `path`.
+Setting `isRemote`, `isNewRepo` or `skipIsolation` to `true` is also refused;
+`skipWorktree` remains the alias for `skipIsolation`. The selection is not a
+caller-provided clone URL or a workspace authorization placeholder.
 
-Both modes must produce the selected branch and commit or refuse. An unavailable
-default never becomes an assumed `main`/`master`; a merge-request URL selects its
-target project and chosen or actual default branch, not the source fork/head.
+`scope` remains permitted workspace metadata. Optional top-level `branch` names
+the new **local workspace branch** and must be a valid Git branch name. It does
+not override `repositoryCheckout.branch` or `repositoryCheckout.commitSha`:
+the local branch starts at that exact selected commit. Omit it to use the
+existing workspace branch-naming behavior. `environmentConfig` is not a field
+of this create contract.
+
+Both modes must check out the commit selected from the source branch or refuse.
+An unavailable default never becomes an assumed `main`/`master`; a merge-request
+URL selects its target project and chosen or actual default branch, not the
+source fork/head.
 The daemon revalidates original host/caller/socket and repository-connection
 authority before native creation. A warmed cache is not an authorization grant;
 known denial or retired credentials prevent using private cached branches and

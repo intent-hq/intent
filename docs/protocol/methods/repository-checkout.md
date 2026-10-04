@@ -159,6 +159,18 @@ original reference and selection before admission.
 {"jsonrpc":"2.0","id":304,"method":"workspace.create","params":{"title":"Customer release","repositoryCheckout":{"checkoutId":"checkout-example","revision":"revision-example","projectPath":"team/subgroup/app","branch":"release/customer-a","commitSha":"0123456789abcdef0123456789abcdef01234567","mode":"cached"}}}
 ```
 
+Top-level `workspace.create.branch` has a separate purpose: it optionally names
+the new local workspace branch at the selected commit. It never changes the
+source branch or SHA inside `repositoryCheckout`. For example, this creates the
+local branch `work/customer-fix` from the observed `release/customer-a` commit:
+
+```json
+{"jsonrpc":"2.0","id":305,"method":"workspace.create","params":{"title":"Customer fix","branch":"work/customer-fix","repositoryCheckout":{"checkoutId":"checkout-example","revision":"revision-example","projectPath":"team/subgroup/app","branch":"release/customer-a","commitSha":"0123456789abcdef0123456789abcdef01234567","mode":"direct"}}}
+```
+
+The [create composition rules](workspace.md#gitlab-project-checkout) retain
+`scope` as metadata and list the incompatible source/path fields and true flags.
+
 The cache distinguishes forge, full instance and full project. Matching origin
 and freshness never override known credential/project denial, revocation or
 replacement; stale in-flight work cannot install private results after that
