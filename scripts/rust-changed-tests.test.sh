@@ -12,6 +12,7 @@ set -euo pipefail
 # BASE=HEAD or DRY_RUN=1 exported would change every expected argv).
 unset BASE DRY_RUN INTENTD_DIR BUILD_JOBS TEST_THREADS NEXTEST_SHOW_PROGRESS CARGO_TERM_PROGRESS_WHEN
 unset NEXTEST_RUNNER RESUME GATE_FORCE NO_FAIL_FAST GATE_CACHE_DIR NEXTEST_HIDE_PROGRESS_BAR MAKEFLAGS MFLAGS
+unset TRANSFER_SELECTION_FIXTURE_ROOT
 unset COMPACT CARGO_INCREMENTAL CARGO_PROFILE_DEV_DEBUG CARGO_PROFILE_TEST_DEBUG
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -42,6 +43,7 @@ done
 python3=$(command -v python3 2>/dev/null) || python3=""
 [[ -z "$python3" ]] || ln -s "$python3" "$bin_dir/python3"
 ln -s "$(command -v git)" "$bin_dir/git"
+ln -s "$(command -v node)" "$bin_dir/node"
 
 # Stub cargo: every invocation is appended to CARGO_TEST_LOG as "<cwd>: <argv>";
 # the subcommand named by CARGO_STUB_MISSING fails like an uninstalled cargo
@@ -248,6 +250,9 @@ else
   cp "$repo_root/Makefile" "$mono/Makefile"
   cp "$repo_root/scripts/resumable_nextest.py" "$mono/scripts/resumable_nextest.py"
   cp "$repo_root/scripts/check_watch_capacity.py" "$mono/scripts/"
+  cp "$repo_root/scripts/check-transfer-selection-contract.mjs" "$mono/scripts/"
+  mkdir -p "$mono/docs/protocol/fixtures"
+  cp -R "$repo_root/docs/protocol/fixtures/transfer-selection" "$mono/docs/protocol/fixtures/"
   cp -R "$repo_root/scripts/_vendor" "$mono/scripts/_vendor"
   printf '[submodule "packages/intentd"]\n\tpath = packages/intentd\n\turl = https://example.invalid/intentd.git\n' >"$mono/.gitmodules"
   git -C "$mono" init -q

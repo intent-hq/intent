@@ -503,9 +503,22 @@ lint-shell: ## Run shellcheck over scripts/*.sh (needs shellcheck; make bootstra
 		echo "[missing]  shellcheck: required by make lint-shell; run make bootstrap-dev-host" >&2; exit 1; }
 	@shellcheck -x scripts/*.sh
 
-check: check-makefile-targets check-protocol-field-parity lint-shell-sleeps fmt clippy lint-sources ## Makefile target check + protocol field parity + shell sleep lint + fmt + clippy + source lints
+RUST_CHECK_TARGETS := check-makefile-targets check-protocol-field-parity lint-shell-sleeps fmt clippy lint-sources
 
-gate: check ## Run all local Rust gates (fmt, clippy, source lints, then nextest)
+.PHONY: check-transfer-fixture
+check-transfer-fixture: ## Preflight canonical transfer fixtures before Rust gates
+	@python3 scripts/check_watch_capacity.py --quiet
+	@python3 scripts/resumable_nextest.py --check-transfer-fixture "$(CURDIR)"
+
+# Order every check leaf so parallel and mixed gate goals cannot compile first.
+# Standalone check, changed dry runs and unrelated selections need no fixtures.
+ifneq ($(filter gate,$(MAKECMDGOALS)),)
+$(RUST_CHECK_TARGETS): | check-transfer-fixture
+endif
+
+check: $(RUST_CHECK_TARGETS) ## Makefile target check + protocol field parity + shell sleep lint + fmt + clippy + source lints
+
+gate: check | check-transfer-fixture ## Run all local Rust gates (fmt, clippy, source lints, then nextest)
 	@$(MAKE) --no-print-directory test
 
 test: test-intentd ## Run Rust tests; after interruption use RESUME=1 (GATE_FORCE=1 runs all, NO_FAIL_FAST=1 continues past failures)
@@ -524,7 +537,7 @@ test-scripts: ## Run the Python script unit tests (Python 3.11+, no submodules n
 # above); `make test NEXTEST_SHOW_PROGRESS=bar` restores nextest's.
 # Apply the shared caller policy before the runner fingerprints resume evidence.
 # Changed/coverage scripts apply this same wrapper at their test boundaries.
-test-intentd: ensure-intentd-submodule
+test-intentd: ensure-intentd-submodule | check-transfer-fixture
 	@python3 scripts/check_watch_capacity.py --quiet
 	@cargo nextest --version >/dev/null 2>&1 || { \
 		echo "[test-intentd] ERROR: cargo-nextest is not installed — run 'cargo install cargo-nextest --locked'"; \
@@ -570,7 +583,7 @@ test-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd br
 		GATE_REPO_ROOT="$(CURDIR)" GATE_CACHE_DIR="$(GATE_CACHE_DIR)" \
 		RESUME="$(RESUME)" GATE_FORCE="$(GATE_FORCE)" NO_FAIL_FAST="$(NO_FAIL_FAST)" \
 		NEXTEST_RUNNER='python3 scripts/resumable_nextest.py --repo-root "$$GATE_REPO_ROOT" --intentd-dir "$$INTENTD_DIR" --cache-dir "$$GATE_CACHE_DIR" --resume "$$RESUME" --force "$$GATE_FORCE" --no-fail-fast "$$NO_FAIL_FAST"' \
-		$(INTENTD_DIR)/scripts/changed-tests.sh; status=$$?; \
+		"$(INTENTD_DIR)/scripts/changed-tests.sh"; status=$$?; \
 	if [ "$$status" -ne 3 ]; then exit "$$status"; fi; \
 	if [ -n "$(DRY_RUN)" ] && [ "$(DRY_RUN)" != 0 ]; then \
 		echo "[test-changed] DRY_RUN: would fall back to the full 'make test'"; exit 0; \

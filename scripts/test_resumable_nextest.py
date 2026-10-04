@@ -118,6 +118,13 @@ class PlannedRunHarness:
 
 
 class ResumableNextestTests(unittest.TestCase):
+    def setUp(self):
+        # These synthetic suites isolate recording/output policy. The real
+        # fixture boundary is exercised in test_rust_test_policy.py.
+        fixture = mock.patch.object(gate, "transfer_fixture_identity", return_value=None)
+        fixture.start()
+        self.addCleanup(fixture.stop)
+
     def test_pass_events_and_exact_filter(self):
         binary_ids = {
             ("intentd::e2e", "module::passes"): "intentd::e2e",
@@ -1291,6 +1298,13 @@ class IsolatedOutputTests(unittest.TestCase):
 
 
 class EffectiveOutputResumeTests(unittest.TestCase):
+    def setUp(self):
+        # These synthetic suites isolate recording/output policy. The real
+        # fixture boundary is exercised in test_rust_test_policy.py.
+        fixture = mock.patch.object(gate, "transfer_fixture_identity", return_value=None)
+        fixture.start()
+        self.addCleanup(fixture.stop)
+
     def test_metadata_failure_cannot_accept_complete_record(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -1415,7 +1429,7 @@ class SharedTargetInventoryTests(unittest.TestCase):
                 "os.execv(sys.argv[1], sys.argv[1:])\n")
             env['CARGO_TARGET_' + host.upper().replace('-', '_') + '_RUNNER'] = (
                 gate.shlex.join([sys.executable, str(runner)]))
-            args = make_args(root, intentd_dir=first, plan=["--lib"], build_jobs="1")
+            args = make_args(root, intentd_dir=first, plan=["-p inventory-probe --lib"], build_jobs="1")
             with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(
                 gate, "tree_key", return_value=KEY
             ):
@@ -1431,7 +1445,7 @@ class SharedTargetInventoryTests(unittest.TestCase):
                 self.assertEqual(passed, ['inventory-probe::inventory_probe$second_only'])
             outcomes = gate.load_outcomes(root / "cache" / KEY / "passed.jsonl")
             self.assertEqual({name for (_, name) in outcomes}, {"first_only"})
-            record = root / "cache" / KEY / "changed" / gate.plan_key([["--lib"]])
+            record = root / "cache" / KEY / "changed" / gate.plan_key([["-p", "inventory-probe", "--lib"]])
             result = json.loads((record / "run.json").read_text())
             self.assertEqual(result["passed"], 1)
             self.assertEqual(result["cargo_output_args"][0], "--target-dir")
@@ -1442,6 +1456,13 @@ class SharedTargetInventoryTests(unittest.TestCase):
 
 
 class CallerPolicyResumeTests(unittest.TestCase):
+    def setUp(self):
+        # These synthetic suites isolate recording/output policy. The real
+        # fixture boundary is exercised in test_rust_test_policy.py.
+        fixture = mock.patch.object(gate, "transfer_fixture_identity", return_value=None)
+        fixture.start()
+        self.addCleanup(fixture.stop)
+
     def test_direct_runner_policy_is_honest_and_incompatible_records_do_not_resume(self):
         # Keep all source/config/output inputs identical: only effective child
         # policy may separate these records. Direct runner use does not arm it.
@@ -1513,6 +1534,43 @@ class CallerPolicyResumeTests(unittest.TestCase):
                     self.assertEqual(seen_env[before:], ["1"], "legacy evidence skipped armed verification")
                     self.assertEqual(gate.run_nextest(args), 0)
                     self.assertEqual(len(seen_env), before + 1)
+
+
+class TransferFixtureSelectionTests(unittest.TestCase):
+    def test_affected_and_unknown_selectors_require_preflight(self):
+        for plans in ([], [["--workspace"]], [["-p", "intent-services"]],
+                      [["--package=intent-services", "--lib"]],
+                      [["-p", "intent-services", "--tests"]],
+                      [["-p", "intent-services", "--lib", "--bins", "--tests"]],
+                      [["-p", "intent-*"]], [["--lib"]], [["-E", "all()"]],
+                      [["-p", "alpha", "--test"]], [["-p", "alpha"], ["-p", "intent-services"]]):
+            with self.subTest(plans=plans):
+                self.assertTrue(gate.needs_transfer_fixture(plans))
+
+    def test_unrelated_targets_do_not_require_preflight(self):
+        for plan in (["-p", "alpha", "--lib", "--bins", "--tests"],
+                     ["-p", "intent-acp", "--lib"],
+                     ["-p", "intent-services", "--test", "one"],
+                     ["--package=intent-services", "--bins"],
+                     ["--package", "intent-services", "--bin", "one"]):
+            with self.subTest(plan=plan):
+                self.assertFalse(gate.needs_transfer_fixture([plan]))
+
+    def test_fixture_identity_separates_resume_credit(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            gate, "worktree_tree", return_value="tree"
+        ), mock.patch.object(gate, "submodule_heads", return_value=[]), mock.patch.object(
+            gate, "required_hash", return_value="hash"
+        ), mock.patch.object(gate, "run", return_value="version"), mock.patch.object(
+            gate, "build_settings", return_value={}
+        ):
+            root = Path(directory)
+            identities = (None, {"root": "/canonical", "contract.json": "one"},
+                          {"root": "/canonical", "contract.json": "two"},
+                          {"root": "/alias", "contract.json": "two"})
+            keys = [gate.tree_key(root, root, transfer_identity=value) for value in identities]
+            self.assertEqual(len(set(keys)), len(keys))
+            self.assertEqual(keys[-1], gate.tree_key(root, root, transfer_identity=identities[-1]))
 
 
 if __name__ == "__main__":
