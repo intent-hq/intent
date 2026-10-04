@@ -151,10 +151,10 @@ type RepositoryCheckoutSelection = {
 
 Use the branch and full commit from the selected branch result. Direct and cached
 creation must produce that exact checkout or fail; neither mode substitutes the
-default branch. Refresh the observed selection before retrying a failed
-exact-checkout operation. Warming exposes no
-cache path and does not grant later create permission. Creation revalidates the
-original reference and selection before admission.
+default branch. Any retry requires explicit refresh and user reconfirmation of
+the selection. Warming exposes no cache path and does not grant later create
+permission. Creation revalidates the original reference and selection before
+admission.
 
 ```json
 {"jsonrpc":"2.0","id":304,"method":"workspace.create","params":{"title":"Customer release","repositoryCheckout":{"checkoutId":"checkout-example","revision":"revision-example","projectPath":"team/subgroup/app","branch":"release/customer-a","commitSha":"0123456789abcdef0123456789abcdef01234567","mode":"cached"}}}
@@ -213,13 +213,16 @@ replace credentials. Invalid request DTOs are `-32602`. An unauthenticated
 caller, guest or foreign original-socket reference is Forbidden under the
 existing [error contract](../09-error-codes.md).
 
-`workspace.create` uses JSON-RPC errors rather than the checkout-read outcome
-above. A native selected-SHA mismatch returns `-32603`, message `Internal error`,
-and the data string `Qualified native HTTPS checkout unavailable`. Other native
-transport failures share this error, so it does not identify a branch move.
-An invalid observed selection is `-32602` with `data.code: "invalid-params"`;
-an authority refusal is `-32003` with `data.code: "forbidden"`. Clients must not
-infer a branch-specific recovery signal from the generic native error.
+A service failure from qualified `workspace.create`, including a native
+selected-SHA mismatch, is refused at final response delivery with `-32003`,
+message `Forbidden`, and data
+`{code: "forbidden", detail: "Repository checkout unavailable"}`. The upstream
+native internal-error envelope is not the public qualified-create response.
+This refusal is separate from the checkout-read outcome above. Denial,
+retirement and expiry can yield the same refusal; it establishes neither a
+branch-specific cause nor the absence of prior effects. Offer explicit refresh
+and user reconfirmation; never automatically repeat creation, reselect a branch
+or advance the selected SHA.
 
 Release takes the original `checkoutId` and `revision` on the original connection
 and returns `{released: boolean}`. Explicit release is not needed for socket,
