@@ -8,8 +8,25 @@ capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `13.4` — prepared submission correlation; not a shipped-version claim.
+**Documented version:** `13.5` — prepared GitLab project checkout; not a shipped-version claim.
 Prepared extensions below remain independently capability-gated.
+
+**Version 13.5 — GitLab project checkout (additive, prepared).**
+[Pre-workspace checkout](./methods/repository-checkout.md) adds six router methods:
+`sourceControl.checkout.capture`, `projects`, `project`, `branches`, `warm` and
+`release`. `workspace.create.repositoryCheckout` carries the original checkout
+reference and exact selected branch/commit for direct or cached creation.
+`gitlabCheckout: 1` advertises the complete contract independently of numeric
+version, experiment state, host membership and project access. Original host,
+socket, settings and credential continuity remain required; no placeholder
+workspace, generic GitHub fallback or new global event is introduced.
+
+The documented surface becomes **442 / 387 / 55** (dispatchable / router / fast
+path), including other prepared additions. Relative to the current 13.4 backend's
+**418 / 363 / 55**, these six methods alone yield **424 / 369 / 55**. The existing
+eighteen-method difference remains separately prepared; neither count establishes
+support or a carrying desktop release. Earlier version snapshots below remain
+historical rather than live count assertions.
 
 **Version 13.4 — submission correlation (additive, prepared).**
 [Submission correlation and optimistic display](./methods/agents.md#submission-correlation-and-optimistic-display-prepared-additive-extension)

@@ -194,9 +194,12 @@ readiness or unconditional native admission.
 
 #### GitLab checkout lifecycle (prepared)
 
-This describes client obligations for project and branch selection before a
-workspace exists. It does not establish support on an older daemon, enable the
-GitLab experiment, or grant access through a guest's collaboration identity.
+The [pre-workspace checkout contract](methods/repository-checkout.md) requires
+exactly integer [`gitlabCheckout: 1`](methods/client-hello.md#gitlab-checkout-capability)
+on the selected connection before capture. This describes client obligations for
+project and branch selection before a workspace exists. It does not establish
+support on an older daemon, enable the GitLab experiment, or grant access through
+a guest's collaboration identity.
 Keep the destination daemon and its authorized repository connection bound to
 the whole flow; a forge URL is not a daemon routing address. Do not invent a
 workspace ID to authorize browsing or silently move a pending action to the

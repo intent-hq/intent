@@ -128,6 +128,13 @@ forwarded with `provider: "github"`; the result projected to the documented `git
 
 #### Provider-generic auth — `sourceControl.*` *(v10.5)*
 
+The [prepared GitLab checkout surface (§5.53)](repository-checkout.md) uses the
+selected destination's repository connection before a workspace exists. Its
+full instance identity, original host/caller/socket authority and cache rules
+are distinct from the `github.*` browse contracts and collaboration identity
+proof. It does not add another simultaneously connected GitLab account or infer
+repository access from a guest's identity.
+
 > **Auth model.** One connection model for every forge: an **OAuth device grant** run by the daemon
 > (GitHub's device flow; GitLab's device authorization grant — introduced in GitLab 17.2 behind a
 > feature flag, enabled by default from 17.3, GA in 17.9 — scope `api`) and, where the grant is
