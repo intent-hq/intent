@@ -1441,5 +1441,79 @@ class SharedTargetInventoryTests(unittest.TestCase):
             self.assertEqual(outputs["args"], result["cargo_output_args"])
 
 
+class CallerPolicyResumeTests(unittest.TestCase):
+    def test_direct_runner_policy_is_honest_and_incompatible_records_do_not_resume(self):
+        # Keep all source/config/output inputs identical: only effective child
+        # policy may separate these records. Direct runner use does not arm it.
+        for plans in ([], ["-p alpha --test one"]):
+            with self.subTest(plans=plans), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                harness = PlannedRunHarness(root, [])
+                seen_env = []
+                inputs = []
+                dumps = json.dumps
+
+                def capture_inputs(value, **kwargs):
+                    if isinstance(value, dict) and "root-tree" in value:
+                        inputs.append(value.copy())
+                    return dumps(value, **kwargs)
+
+                def run(command, cwd, env=None):
+                    if command in (["rustc", "-vV"], ["cargo", "-V"], ["cargo", "nextest", "--version"]):
+                        return "version"
+                    return harness.fake_run(command, cwd, env)
+
+                def popen(command, **kwargs):
+                    seen_env.append(kwargs["env"].get("INTENTD_ASSERT_BOUND_CALLER"))
+                    harness.run_commands.append(command)
+                    return FakeProcess([event("ok", "alpha::one$passes")], 0)
+
+                with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(
+                    gate, "worktree_tree", return_value="tree"
+                ), mock.patch.object(gate, "submodule_heads", return_value=[]), mock.patch.object(
+                    gate, "required_hash", return_value="hash"
+                ), mock.patch.object(gate, "build_settings", return_value={}), mock.patch.object(
+                    gate, "run", side_effect=run
+                ), mock.patch.object(gate.subprocess, "Popen", side_effect=popen), mock.patch.object(
+                    gate.json, "dumps", side_effect=capture_inputs
+                ), contextlib.redirect_stdout(harness.stdout):
+                    args = make_args(root, plan=plans, resume="1")
+                    for value in (None, "", "0", "false", "1"):
+                        if value is None:
+                            os.environ.pop("INTENTD_ASSERT_BOUND_CALLER", None)
+                        else:
+                            os.environ["INTENTD_ASSERT_BOUND_CALLER"] = value
+                        before = len(seen_env)
+                        self.assertEqual(gate.run_nextest(args), 0)
+                        self.assertEqual(seen_env[before:], [value], "different policy reused passing credit")
+                        self.assertEqual(gate.run_nextest(args), 0)
+                        self.assertEqual(len(seen_env), before + 1, "same policy failed to resume")
+                    self.assertEqual(len(list(args.cache_dir.glob("*/passed.jsonl"))), 5)
+                    for value in inputs:
+                        self.assertIn("test-policy", value)
+                    self.assertEqual(inputs[-1]["test-policy"], {"INTENTD_ASSERT_BOUND_CALLER": "1"})
+
+                    # Seed a genuine schema-2 input hash (no policy field), with
+                    # complete evidence for both full and planned scopes.
+                    legacy = inputs[-1].copy()
+                    legacy.pop("test-policy")
+                    legacy["schema"] = 2
+                    key = gate.hashlib.sha256(dumps(legacy, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+                    shutil.rmtree(args.cache_dir)
+                    record = args.cache_dir / key
+                    record.mkdir(parents=True)
+                    (record / "passed.jsonl").write_text(gate.record_line("alpha::one", "passes", "ok"))
+                    (record / "complete").touch()
+                    planned = record / "changed" / gate.plan_key(gate.split_plans(plans))
+                    planned.mkdir(parents=True)
+                    (planned / "complete").touch()
+                    before = len(seen_env)
+                    self.assertGreater(gate.SCHEMA_VERSION, 2)
+                    self.assertEqual(gate.run_nextest(args), 0)
+                    self.assertEqual(seen_env[before:], ["1"], "legacy evidence skipped armed verification")
+                    self.assertEqual(gate.run_nextest(args), 0)
+                    self.assertEqual(len(seen_env), before + 1)
+
+
 if __name__ == "__main__":
     unittest.main()
