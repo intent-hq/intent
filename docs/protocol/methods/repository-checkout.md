@@ -150,8 +150,9 @@ type RepositoryCheckoutSelection = {
 ```
 
 Use the branch and full commit from the selected branch result. Direct and cached
-creation must produce that exact checkout or refuse with a refreshed-selection
-requirement; neither mode substitutes the default branch. Warming exposes no
+creation must produce that exact checkout or fail; neither mode substitutes the
+default branch. Refresh the observed selection before retrying a failed
+exact-checkout operation. Warming exposes no
 cache path and does not grant later create permission. Creation revalidates the
 original reference and selection before admission.
 
@@ -211,6 +212,14 @@ An unavailable result is not an empty successful page. Honor an observed
 replace credentials. Invalid request DTOs are `-32602`. An unauthenticated
 caller, guest or foreign original-socket reference is Forbidden under the
 existing [error contract](../09-error-codes.md).
+
+`workspace.create` uses JSON-RPC errors rather than the checkout-read outcome
+above. A native selected-SHA mismatch returns `-32603`, message `Internal error`,
+and the data string `Qualified native HTTPS checkout unavailable`. Other native
+transport failures share this error, so it does not identify a branch move.
+An invalid observed selection is `-32602` with `data.code: "invalid-params"`;
+an authority refusal is `-32003` with `data.code: "forbidden"`. Clients must not
+infer a branch-specific recovery signal from the generic native error.
 
 Release takes the original `checkoutId` and `revision` on the original connection
 and returns `{released: boolean}`. Explicit release is not needed for socket,
