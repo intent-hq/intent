@@ -151,6 +151,21 @@ fallback. Credentials cannot follow a redirect outside their origin or
 installation prefix. Existing GitHub, local-Git, SSH and ordinary helper paths
 retain their separate contracts.
 
+After creation, existing `git.fetch` and `git.push` calls for workspaces whose
+HTTPS remote belongs to the configured GitLab instance use each call's original
+socket and native host credential binding. The daemon rechecks workspace access
+and lifecycle around the owned worktree operation. These calls do not take a
+checkout reference: their request/result shapes and push `force` behavior remain
+unchanged. This native credential path is independent of child-helper opt-in;
+agent/user-helper, GitHub, local and SSH routes retain their separate behavior.
+
+Creation with `progressId` uses the existing [workspace provisioning progress](workspace.md)
+reporter and `git:clone:progress` / `git:clone:done` frames. It reports `starting`,
+clone/cache preparation through `receiving`, selected-branch `checkout`, and
+`finalizing`; these are provisioning milestones, not per-object transfer
+measurements. Keep the original `progressId` and terminal result together. This
+adds no event type or checkout-specific progress payload.
+
 ### Outcomes, retirement and recovery
 
 Capture, project/branch reads and warming return either
