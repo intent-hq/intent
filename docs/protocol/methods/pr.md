@@ -24,7 +24,7 @@ The namespace holds the workspace-scoped `pr.refresh` method, which establishes 
 > clients retain their cached data. Omitted or `false` preserves explicit refresh semantics.
 > `force` in frontend hydration is not user intent; callers must send `automatic: true`
 > even when bypassing a local freshness cache. User refresh and post-mutation reconciliation
-> omit the flag or send `false`. This additive contract lands before daemon/frontend consumers.
+> omit the flag or send `false`.
 >
 > **`pr.refresh` semantics.** `pr.refresh` does **not** require an
 > active PR — it exists to establish/repair the link. It runs the shared refresh path
