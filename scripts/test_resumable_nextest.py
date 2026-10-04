@@ -1721,7 +1721,10 @@ class CallerPolicyResumeTests(unittest.TestCase):
                     harness.run_commands.append(command)
                     return FakeProcess([event("ok", "alpha::one$passes")], 0)
 
+                fixture_identity = {"root": str(root / "fixture"), "manifest": "verified"}
                 with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(
+                    gate, "callback_fixture_identity", return_value=fixture_identity
+                ), mock.patch.object(
                     gate, "worktree_tree", return_value="tree"
                 ), mock.patch.object(gate, "submodule_heads", return_value=[]), mock.patch.object(
                     gate, "required_hash", return_value="hash"
@@ -1744,12 +1747,14 @@ class CallerPolicyResumeTests(unittest.TestCase):
                     self.assertEqual(len(list(args.cache_dir.glob("*/passed.jsonl"))), 5)
                     for value in inputs:
                         self.assertIn("test-policy", value)
+                        self.assertEqual(value["callback-fixture"], None if plans else fixture_identity)
                     self.assertEqual(inputs[-1]["test-policy"], {"INTENTD_ASSERT_BOUND_CALLER": "1"})
 
                     # Seed a genuine schema-2 input hash (no policy field), with
                     # complete evidence for both full and planned scopes.
                     legacy = inputs[-1].copy()
                     legacy.pop("test-policy")
+                    legacy.pop("callback-fixture")
                     legacy["schema"] = 2
                     key = gate.hashlib.sha256(dumps(legacy, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
                     shutil.rmtree(args.cache_dir)
