@@ -68,7 +68,7 @@ the first page is not a complete branch inventory.
 | `Project.defaultBranch` | Optional actual default branch; omitted when unavailable. Never synthesize `main` or `master`. |
 | `Branch.name` | Exact selectable branch name. |
 | `Branch.commitSha` | Full commit selected with that branch. |
-| `Branch.protected` | Boolean branch protection observation, not a grant to push. |
+| `Branch.protected` | Optional boolean from provider-observed metadata, not a grant to push. Omitted when only the exact cached name and SHA are known; absence means unknown, never `false`. |
 
 For example, search branches of an already selected project:
 
@@ -81,6 +81,16 @@ A ready branch page can be:
 ```json
 {"jsonrpc":"2.0","id":302,"result":{"status":"ready","value":{"items":[{"name":"release/customer-a","commitSha":"0123456789abcdef0123456789abcdef01234567","protected":false}],"nextCursor":"opaque-next-page","defaultBranch":"trunk","cached":false}}}
 ```
+
+A qualified cached page may omit protection metadata while retaining the required
+exact branch name and commit SHA:
+
+```json
+{"jsonrpc":"2.0","id":302,"result":{"status":"ready","value":{"items":[{"name":"release/customer-a","commitSha":"0123456789abcdef0123456789abcdef01234567"}],"cached":true}}}
+```
+
+Omitting this observation does not bypass original connection, project or denial
+checks on cache hits or final output.
 
 An empty result does not prove that the project has no default branch or that the
 caller has access. Preserve explicit unavailable outcomes and missing values.
