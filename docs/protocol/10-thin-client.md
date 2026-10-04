@@ -192,6 +192,47 @@ disclosure. Stable display facts and a previous successful action cannot authori
 another one. Neither this workflow nor its capability establishes live provider
 readiness or unconditional native admission.
 
+#### GitLab checkout lifecycle (prepared)
+
+This describes client obligations for project and branch selection before a
+workspace exists. It does not establish support on an older daemon, enable the
+GitLab experiment, or grant access through a guest's collaboration identity.
+Keep the destination daemon and its authorized repository connection bound to
+the whole flow; a forge URL is not a daemon routing address. Do not invent a
+workspace ID to authorize browsing or silently move a pending action to the
+currently focused host.
+
+Keep the full HTTPS instance identity, including its port and installation
+prefix, together with the full project path and selected branch. A different
+prefix on the same host is a different instance. Preserve the project and branch
+when navigating back or restoring a draft, but revalidate their authority before
+warming a cache or creating a workspace. A stored draft is selection intent,
+not a credential or permission grant.
+
+Project and branch pagination must expose choices beyond the first page.
+Keep each cursor with its original connection, project and query; switching any
+of them starts a new listing. Discard late responses after a connection,
+credential, project or query change. Do not substitute the default branch when
+the user selected a different branch, or infer a default from an empty list.
+Distinguish an empty project, no default, no branches, denied access, disconnected
+account, disabled feature and rate limit so recovery does not select a different
+repository or account.
+
+A fresh cache and a matching remote origin do not override known denial or a
+retired credential. Cached branches and contents must remain unavailable after
+revocation or replacement, and late work under the old authority cannot publish
+into the new flow. This does not require a network permission probe on every
+cache hit. Direct and cached creation must both check out the selected branch;
+show clone progress and errors without presenting an incomplete checkout as
+ready.
+
+For a project, merge-request or issue URL, display the resolved target project
+and preserve the original link context, including query and fragment. A
+merge-request URL selects its target project and the user's selected branch or
+the project's real default; it does not request the source fork or merge-request
+head. An unknown instance must not fall back to GitHub or another configured
+account. Preserve the existing GitHub and local-Git paths independently.
+
 ### 10.3 Optimistic UI
 
 For mutations, optimistically apply locally, send the request, and reconcile when (a) the methodresult returns and (b) the corresponding `events.event` arrives. Roll back on error. Use the stable`messageId` you pass to `agent.sendMessage` (and the echoed `agent:user-message:sent` event) tomatch your optimistic message against the canonical one and avoid duplicates across clients.
