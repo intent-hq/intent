@@ -226,11 +226,13 @@ def transfer_fixture_identity(repo_root: Path) -> dict[str, str]:
     try:
         if not value.strip() or not Path(value).is_absolute():
             raise RuntimeError(f"{TRANSFER_FIXTURE_ENV} must be a non-empty absolute path")
-        root = Path(value)
-        if root.resolve(strict=True) != canonical.resolve(strict=True):
+        root = Path(value).resolve(strict=True)
+        if root != canonical.resolve(strict=True):
             raise RuntimeError("fixtures and validator must belong to this monorepo checkout")
         checker = repo_root / "scripts/check-transfer-selection-contract.mjs"
-        result = subprocess.run(["node", str(checker), "--fixture-root", value],
+        # Node resolves '..' lexically; validate the physical directory Rust
+        # will read, while retaining the caller's spelling for child forwarding.
+        result = subprocess.run(["node", str(checker), "--fixture-root", str(root)],
                                 cwd=repo_root, text=True, capture_output=True, check=False)
         if result.returncode:
             raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "validator failed")

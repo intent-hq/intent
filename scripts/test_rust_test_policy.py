@@ -322,6 +322,54 @@ class RustTransferFixtureTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual([c["transfer_fixture"] for c in calls if c["test"]], [value])
 
+    def parent_traversal_override(self):
+        exterior = self.root.parent / "override exterior"
+        exterior.mkdir()
+        alias = exterior / "alias"
+        alias.symlink_to(self.fixtures, target_is_directory=True)
+        lexical = exterior / self.fixtures.name
+        shutil.copytree(self.fixtures, lexical)
+        value = str(alias / ".." / self.fixtures.name)
+        self.assertEqual(Path(value).resolve(), self.fixtures.resolve())
+        self.assertNotEqual(Path(os.path.normpath(value)), self.fixtures)
+        return value, lexical
+
+    def test_parent_traversal_valid_canonical_ignores_corrupt_lexical_sibling(self):
+        value, lexical = self.parent_traversal_override()
+        (lexical / "contract.json").write_text("{}")
+        for target in ("test", "test-changed"):
+            (self.component / "crates/intent-services/src/lib.rs").write_text(target)
+            for attempt in ("cold", "resumed"):
+                with self.subTest(target=target, attempt=attempt):
+                    result, calls = self.launch(target, extra=("RESUME=1",),
+                                                env={"TRANSFER_SELECTION_FIXTURE_ROOT": value})
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    if attempt == "cold":
+                        self.assertEqual([c["transfer_fixture"] for c in calls if c["test"]], [value])
+                    else:
+                        self.assertIn("resumed: skipped", result.stdout)
+                        self.assertFalse(any(c["test"] for c in calls))
+
+    def test_parent_traversal_corrupt_canonical_rejects_valid_lexical_sibling(self):
+        value, _ = self.parent_traversal_override()
+        contract = self.fixtures / "contract.json"
+        original = contract.read_bytes()
+        for target in ("test", "test-changed"):
+            contract.write_bytes(original)
+            (self.component / "crates/intent-services/src/lib.rs").write_text(target)
+            result, calls = self.launch(target, extra=("RESUME=1",),
+                                        env={"TRANSFER_SELECTION_FIXTURE_ROOT": value})
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual([c["transfer_fixture"] for c in calls if c["test"]], [value])
+            contract.write_text("{}")
+            # A broken checker records a pass for corrupt content on the first
+            # attempt, then credits it on the second. Both must reject pre-Cargo.
+            for attempt in ("cold corrupt", "resumed corrupt"):
+                with self.subTest(target=target, attempt=attempt):
+                    result, calls = self.launch(target, extra=("RESUME=1",),
+                                                env={"TRANSFER_SELECTION_FIXTURE_ROOT": value})
+                    self.assert_rejected(result, calls)
+
     def test_invalid_overrides_reject_before_cargo(self):
         foreign = self.root.parent / "another checkout fixtures"
         shutil.copytree(self.fixtures, foreign)
