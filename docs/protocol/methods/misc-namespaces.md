@@ -48,6 +48,15 @@ missing or unknown workspace for `includeProject: true`. `create`/`edit`
 take a full `spec` body. Malformed params → `-32602`; deleting a
 non-existent or `bundled` definition → `-32602`.
 
+For a guest, a project path passed to `specialist.get` (or directly to the list
+service) must match a checkout or registered git root of a currently admitted
+workspace; unrelated paths are refused with `-32003` before loading definitions.
+The check uses the existing repository-path membership rules, including canonical
+path comparison. Host members retain their existing host execution authority.
+Omitting the path preserves the global user/bundled catalog. Specialist mutations
+remain administrator-only at both the transport and direct service boundaries.
+
+
 **Base-tier replacement mode (`INTENTD_SPECIALISTS_DIR` / `intentd serve --specialists-dir`).**
 The effective `specialists.dir` setting (§5.12 — the `INTENTD_SPECIALISTS_DIR` startup pin, else
 a hand-written `[specialists] dir` in config.toml; the `--specialists-dir` serve flag folds into
@@ -166,7 +175,7 @@ never resurrects shipped bundles the operator excluded.
   [intent-hq/monorepo#1729](https://github.com/intent-hq/monorepo/issues/1729)). Over the WSS router,
   `specialist.list` previews the global catalog unless `includeProject: true` selects
   the stored workspace root as above; `specialist.get` passes its `workspacePath?`
-  through to the resolver.
+  through the project-path permission check to the resolver.
 - **`hidden?`** — optional boolean sourced from `hidden:` in the specialist file's
   frontmatter and **inherited across tiers**: a definition resolves `hidden: true` when any
   lower tier (down to the embedded bundled floor) sets `hidden: true`, unless a higher tier
@@ -370,6 +379,26 @@ origin (e.g. `"AGENTS.md"`, `".augment/guidelines.md"`, a specialist id, or `"us
 `path?` is the backing file when one exists; `enabled` toggles whether the override is applied and
 `updatedAt` is its last-write epoch-ms; only `user-override` entries are `editable` (the target of
 `rules.update`). File-sourced entries are read-only over the wire — edit the files directly.
+
+**Shared global instructions.** The existing settings request
+`rules.get { workspaceId: "global", ruleType: "base-system-prompt" }` returns only
+that global user override, with the same `{ enabled, content, updatedAt }` shape.
+The owner, current host members, and guests with a current workspace membership
+may read it. Services recheck durable admission on every read; an unknown principal
+or a guest with no remaining workspace grant is refused. The `"global"` value is
+an exact settings placeholder, not a workspace membership or filesystem path.
+This exception does not admit other override keys, `rules.list`, or arbitrary
+workspace reads for guests. Existing member workspace reads still require access
+to the named workspace. Global settings calls remain direct to the connected
+instance, excluded from workspace proxy routing.
+
+**Writes remain administration.** Every `rules.update` changes instance-wide
+`endUserRules` storage, even when its `workspaceId` names a real workspace. Only
+the daemon administrator (or trusted internal agent/daemon callers) may update
+it; host membership or workspace ownership never grants this write. Both the
+transport gate and direct service boundary enforce this restriction. Specialist
+create/edit/delete retain the same administrator-only restriction.
+
 
 ```json
 // → request — set the user-rule override for a workspace
