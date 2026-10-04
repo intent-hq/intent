@@ -151,8 +151,9 @@ type RepositoryCheckoutSelection = {
 
 Use the branch and full commit from the selected branch result. Direct and cached
 creation must produce that exact checkout or fail; neither mode substitutes the
-default branch. Any retry requires explicit refresh and user reconfirmation of
-the selection. Warming exposes no cache path and does not grant later create
+default branch. Retries are explicit. Refresh and reconfirm the selection before
+adopting a newly observed branch or commit; creation never advances the selected
+SHA automatically. Warming exposes no cache path and does not grant later create
 permission. Creation revalidates the original reference and selection before
 admission.
 
