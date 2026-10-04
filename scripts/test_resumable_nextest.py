@@ -90,6 +90,7 @@ class PlannedRunHarness:
         self.runs = list(runs)
         self.list_commands = []
         self.run_commands = []
+        self.run_environments = []
         self.stdout = io.StringIO()
 
     def fake_run(self, command, cwd, env=None):
@@ -101,6 +102,7 @@ class PlannedRunHarness:
 
     def fake_popen(self, command, **kwargs):
         self.run_commands.append(command)
+        self.run_environments.append(kwargs.get("env"))
         lines, status = self.runs.pop(0)
         return FakeProcess(lines, status)
 
@@ -117,7 +119,258 @@ class PlannedRunHarness:
         return self.stdout.getvalue().splitlines()
 
 
+class CallbackPreflightTests(unittest.TestCase):
+    def test_missing_fixture_fails_before_cargo_or_resume_credit(self):
+        for plans in (None, ["-p intent-acp"], ["-p intent-services --lib --bins --tests"],
+                      ["-p alpha --test one", "-p intent-acp --lib"]):
+            with self.subTest(plans=plans), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                record = root / "cache" / KEY
+                record.mkdir(parents=True)
+                (record / "complete").write_text("complete\n")
+                (record / "passed.jsonl").write_text(gate.record_line("alpha::one", "passes", "ok"))
+                with mock.patch.dict(os.environ, {"INTENT_ACP_CALLBACK_ADAPTER_FIXTURE": ""}), mock.patch.object(
+                    gate, "isolated_output_args", return_value=[]
+                ) as cargo, mock.patch.object(gate, "tree_key", return_value=KEY) as key:
+                    with self.assertRaisesRegex(RuntimeError, "INTENT_ACP_CALLBACK_ADAPTER_FIXTURE"):
+                        gate.run_nextest(make_args(root, plan=plans, resume="1"))
+                    cargo.assert_not_called()
+                    key.assert_not_called()
+
+    def test_selection_is_conservative_but_skips_unrelated_targets(self):
+        affected = [[], [["--workspace"]], [["-p", "intent-acp"]],
+                    [["-p", "intent-services", "--tests"]], [["--package=intent-acp", "--lib"]],
+                    [["-p", "intent-*", "--lib"]], [["-E", "test(callback)"]],
+                    [["-p", "alpha", "--unknown-selector"]]]
+        unrelated = [[["-p", "alpha", "--lib", "--bins", "--tests"]],
+                     [["-p", "intent-acp", "--test", "wire_contract"]],
+                     [["-p", "intent-services", "--bins"]],
+                     [["-p", "intent-services", "--bin", "helper"]]]
+        for plans in affected:
+            with self.subTest(plans=plans):
+                self.assertTrue(gate.needs_callback_fixture(plans))
+        for plans in unrelated:
+            with self.subTest(plans=plans):
+                self.assertFalse(gate.needs_callback_fixture(plans))
+
+
+class CallbackValidatorTests(unittest.TestCase):
+    """Exercise the component verifier with its own synthetic fixture builder."""
+
+    def setUp(self):
+        path = SCRIPT.parents[1] / "packages/intentd/scripts/test-prepare-acp-callback-fixture.py"
+        if not path.is_file() or sys.platform != "linux":
+            self.skipTest("canonical fixture integration needs intentd and Linux")
+        spec = importlib.util.spec_from_file_location("fixture_tests", path)
+        fixture_tests = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(fixture_tests)
+        self.validator = fixture_tests.PREP
+        self.temp = tempfile.TemporaryDirectory(prefix="callback gate's ")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.fixture = fixture_tests.Fixture(self.root)
+        self.node = self.root / "node"
+        self.node.write_text("synthetic node identity")
+        self.component = self.root / "intentd"
+        self.component.mkdir()
+        self.patch(mock.patch.object(gate, "load_callback_validator", return_value=self.validator))
+        self.patch(mock.patch.object(self.validator, "DEFAULT_DESCRIPTOR", self.fixture.descriptor_path))
+        self.node_patch = mock.patch.object(self.validator, "node_tool", return_value=self.node)
+        self.patch(self.node_patch)
+        self.patch(mock.patch.dict(os.environ, {
+            gate.CALLBACK_FIXTURE_ENV: str(self.fixture.payload), "NODE_OPTIONS": "", "COMPACT": "0",
+        }))
+        self.patch(mock.patch.object(self.validator.urllib.request, "urlopen",
+                                     side_effect=AssertionError("preflight attempted network")))
+        self.patch(mock.patch.object(self.validator, "prepare",
+                                     side_effect=AssertionError("preflight attempted provisioning")))
+
+    def patch(self, patch):
+        result = patch.start()
+        self.addCleanup(patch.stop)
+        return result
+
+    def identity(self):
+        return gate.callback_fixture_identity(self.component)
+
+    def test_offline_valid_fixture_and_relative_quoted_path(self):
+        absolute = self.identity()
+        os.environ[gate.CALLBACK_FIXTURE_ENV] = "../original"
+        self.assertEqual(self.identity(), absolute)
+        self.assertEqual(absolute["manifest"], self.fixture.descriptor["manifest"]["sha256"])
+        self.assertEqual(absolute["root"], str(self.fixture.payload))
+        self.assertEqual(absolute["node-sha256"], self.validator.digest(self.node))
+
+    def test_cli_loads_canonical_verifier_and_checks_real_node_version_offline(self):
+        scripts = self.component / "scripts"
+        scripts.mkdir()
+        shutil.copy(SCRIPT.parents[1] / "packages/intentd/scripts/prepare-acp-callback-fixture.py", scripts)
+        config = self.component / "crates/intent-acp/tests/fixtures"
+        config.mkdir(parents=True)
+        shutil.copy(self.fixture.descriptor_path, config / "claude-callback-adapter.json")
+        for name in ("delta.patch", "files.json"):
+            shutil.copy(self.root / name, config)
+        self.node.write_text(f"#!{sys.executable}\nprint('v24.21.0')\n")
+        self.node.chmod(0o755)
+        env = {**os.environ, "PATH": str(self.root) + os.pathsep + os.environ["PATH"]}
+        command = [sys.executable, "-S", "-B", str(SCRIPT),
+                   "--check-callback-fixture", str(self.component)]
+        valid = subprocess.run(command, env=env, capture_output=True, text=True, timeout=10)
+        self.assertEqual(valid.returncode, 0, valid.stderr)
+        self.assertIn('"event": "node-tool"', valid.stderr)
+        self.node.write_text(f"#!{sys.executable}\nprint('v0.0.0')\n")
+        invalid = subprocess.run(command, env=env, capture_output=True, text=True, timeout=10)
+        self.assertEqual(invalid.returncode, 2, invalid.stderr)
+        self.assertIn("Node version mismatch", invalid.stderr)
+        self.assertIn("No downloads or repairs were attempted", invalid.stderr)
+
+    def test_relative_fixture_reaches_test_children_as_absolute_path(self):
+        os.environ[gate.CALLBACK_FIXTURE_ENV] = "../original"
+        harness = PlannedRunHarness(self.root, [([event("ok", "alpha::one$passes")], 0)])
+        self.assertEqual(harness.execute(make_args(self.root, plan=["-p intent-acp --lib"])), 0)
+        self.assertEqual(harness.run_environments[0][gate.CALLBACK_FIXTURE_ENV],
+                         str(self.fixture.payload))
+        self.assertEqual(os.environ[gate.CALLBACK_FIXTURE_ENV], "../original")
+
+    def test_corrupt_missing_linked_extra_and_wrong_manifest_are_rejected(self):
+        target = self.fixture.payload / "dist/index.js"
+        original = target.read_bytes()
+        target.write_bytes(b"bad fixture")
+        with self.assertRaisesRegex(RuntimeError, "mismatch"):
+            self.identity()
+        target.write_bytes(original)
+        target.unlink()
+        with self.assertRaisesRegex(RuntimeError, "missing payload"):
+            self.identity()
+        target.symlink_to(self.node)
+        with self.assertRaisesRegex(RuntimeError, "not a regular file"):
+            self.identity()
+        target.unlink()
+        target.write_bytes(original)
+        target.chmod(0o755)
+        extra = self.fixture.payload / "extra"
+        extra.write_text("extra")
+        with self.assertRaisesRegex(RuntimeError, "extra payload"):
+            self.identity()
+        extra.unlink()
+        (self.fixture.payload / "FIXTURE-MANIFEST.json").write_text("{}")
+        with self.assertRaisesRegex(RuntimeError, "mismatch"):
+            self.identity()
+
+    def test_descriptor_lock_and_runtime_identity_use_canonical_checks(self):
+        self.fixture.descriptor["lock_sha256"] = "0" * 64
+        self.fixture.descriptor_path.write_text(json.dumps(self.fixture.descriptor))
+        with self.assertRaisesRegex(RuntimeError, "manifest lock mismatch"):
+            self.identity()
+        self.fixture.descriptor["lock_sha256"] = self.fixture.manifest["lock_sha256"]
+        self.fixture.manifest["runtime_dependencies"] = {"unexpected": {}}
+        self.fixture.descriptor["expected_runtime_packages"] = 1
+        self.fixture.seal()
+        with self.assertRaisesRegex(RuntimeError, "installed package set mismatch"):
+            self.identity()
+
+    def test_platform_node_options_and_node_version_constraints(self):
+        with mock.patch.object(self.validator.platform, "machine", return_value="aarch64"):
+            with self.assertRaisesRegex(RuntimeError, "Linux x64"):
+                self.identity()
+        with mock.patch.dict(os.environ, {"NODE_OPTIONS": "--require unexpected"}):
+            with self.assertRaisesRegex(RuntimeError, "NODE_OPTIONS"):
+                self.identity()
+        self.node_patch.stop()
+        with mock.patch.object(self.validator.shutil, "which", return_value=str(self.node)), mock.patch.object(
+            self.validator, "command", return_value="v0.0.0"
+        ):
+            with self.assertRaisesRegex(RuntimeError, "Node version mismatch"):
+                self.identity()
+
+    def test_corruption_after_success_cannot_get_complete_resume_credit(self):
+        harness = PlannedRunHarness(self.root, [([event("ok", "alpha::one$passes")], 0)])
+        for plans in (None, ["-p intent-acp --lib"]):
+            with self.subTest(plans=plans):
+                harness.runs = [([event("ok", "alpha::one$passes")], 0)]
+                args = make_args(self.root, plan=plans)
+                self.assertEqual(harness.execute(args), 0)
+                self.assertEqual(harness.execute(make_args(self.root, plan=plans, resume="1")), 0)
+                target = self.fixture.payload / "dist/index.js"
+                original = target.read_bytes()
+                target.write_bytes(b"tampered")
+                with mock.patch.object(gate, "isolated_output_args") as cargo:
+                    with self.assertRaisesRegex(RuntimeError, "mismatch"):
+                        harness.execute(make_args(self.root, plan=plans, resume="1"))
+                    cargo.assert_not_called()
+                target.write_bytes(original)
+
+    def test_verified_identity_changes_resume_key_without_weakening_other_inputs(self):
+        with mock.patch.object(gate, "worktree_tree", return_value="tree"), mock.patch.object(
+            gate, "submodule_heads", return_value=[]
+        ), mock.patch.object(gate, "required_hash", return_value="hash"), mock.patch.object(
+            gate, "run", return_value="version"
+        ):
+            identity = self.identity()
+            key = gate.tree_key(self.root, self.component, [], identity)
+            self.assertNotEqual(key, gate.tree_key(self.root, self.component, [], None))
+            for field in ("root", "descriptor", "manifest", "node", "node-sha256"):
+                changed = {**identity, field: "changed"}
+                self.assertNotEqual(key, gate.tree_key(self.root, self.component, [], changed), field)
+            self.node.write_text("replacement node, same path")
+            self.assertNotEqual(identity, self.identity())
+            self.assertNotEqual(key, gate.tree_key(self.root, self.component, [], self.identity()))
+
+    def test_replacing_verified_node_cannot_resume_previous_passes(self):
+        harness = PlannedRunHarness(self.root, [([event("ok", "alpha::one$passes")], 0)] * 2)
+        original_key = gate.tree_key
+
+        def key(*args):
+            with mock.patch.object(gate, "worktree_tree", return_value="tree"), mock.patch.object(
+                gate, "submodule_heads", return_value=[]
+            ), mock.patch.object(gate, "required_hash", return_value="hash"), mock.patch.object(
+                gate, "run", return_value="version"
+            ):
+                return original_key(*args)
+
+        with mock.patch.object(gate, "tree_key", side_effect=key), mock.patch.object(
+            gate, "run", side_effect=harness.fake_run
+        ), mock.patch.object(gate.subprocess, "Popen", side_effect=harness.fake_popen), contextlib.redirect_stdout(
+            harness.stdout
+        ):
+            args = make_args(self.root, plan=["-p intent-services --lib"], resume="1")
+            self.assertEqual(gate.run_nextest(args), 0)
+            self.assertEqual(gate.run_nextest(args), 0)
+            self.assertEqual(len(harness.run_commands), 1)
+            self.node.write_text("different verified Node bytes")
+            self.assertEqual(gate.run_nextest(args), 0)
+        self.assertEqual(len(harness.run_commands), 2)
+        self.assertNotIn("--no-tests", harness.run_commands[1], "stale passes were credited")
+        self.assertEqual(len(list((self.root / "cache").iterdir())), 2)
+
+    def test_setup_commands_quote_paths_and_preserve_provisioner_failure(self):
+        component = self.root / "repo's component"
+        script = component / "scripts/prepare-acp-callback-fixture.py"
+        script.parent.mkdir(parents=True)
+        log = self.root / "argv.json"
+        script.write_text("import json, sys\n"
+                          f"open({str(log)!r}, 'w').write(json.dumps(sys.argv[1:]))\n"
+                          "sys.exit(7)\n")
+        with mock.patch.dict(os.environ, {"HOME": str(self.root / "user's home")}):
+            commands = [line.strip() for line in gate.callback_setup_help(component).splitlines()
+                        if line.startswith("    ")]
+        self.assertEqual(len(commands), 3)
+        for command, route in zip(commands, ("--offline", "--bundle", "--build-from-source")):
+            result = subprocess.run(["sh", "-c", command], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 7, result.stderr)
+            argv = json.loads(log.read_text())
+            self.assertEqual(argv[:2], ["--cache-dir", str(self.root / "user's home/.cache/intent/acp-callback-fixture")])
+            self.assertEqual(argv[2], route)
+
+
 class ResumableNextestTests(unittest.TestCase):
+    def setUp(self):
+        # These tests isolate journaling/selection; canonical fixture coverage
+        # lives in CallbackPreflightTests and CallbackValidatorTests.
+        patch = mock.patch.object(gate, "callback_fixture_identity", return_value=None)
+        patch.start()
+        self.addCleanup(patch.stop)
+
     def test_pass_events_and_exact_filter(self):
         binary_ids = {
             ("intentd::e2e", "module::passes"): "intentd::e2e",
@@ -1415,7 +1668,7 @@ class SharedTargetInventoryTests(unittest.TestCase):
                 "os.execv(sys.argv[1], sys.argv[1:])\n")
             env['CARGO_TARGET_' + host.upper().replace('-', '_') + '_RUNNER'] = (
                 gate.shlex.join([sys.executable, str(runner)]))
-            args = make_args(root, intentd_dir=first, plan=["--lib"], build_jobs="1")
+            args = make_args(root, intentd_dir=first, plan=["-p inventory-probe --lib"], build_jobs="1")
             with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(
                 gate, "tree_key", return_value=KEY
             ):
@@ -1431,7 +1684,7 @@ class SharedTargetInventoryTests(unittest.TestCase):
                 self.assertEqual(passed, ['inventory-probe::inventory_probe$second_only'])
             outcomes = gate.load_outcomes(root / "cache" / KEY / "passed.jsonl")
             self.assertEqual({name for (_, name) in outcomes}, {"first_only"})
-            record = root / "cache" / KEY / "changed" / gate.plan_key([["--lib"]])
+            record = root / "cache" / KEY / "changed" / gate.plan_key([["-p", "inventory-probe", "--lib"]])
             result = json.loads((record / "run.json").read_text())
             self.assertEqual(result["passed"], 1)
             self.assertEqual(result["cargo_output_args"][0], "--target-dir")
