@@ -6,6 +6,7 @@ import io
 from itertools import product
 import json
 import os
+import platform
 import shutil
 from pathlib import Path
 import subprocess
@@ -165,6 +166,10 @@ class CallbackValidatorTests(unittest.TestCase):
         fixture_tests = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(fixture_tests)
         self.validator = fixture_tests.PREP
+        self.host_machine = platform.machine().lower()
+        # Synthetic payloads and mocked Node do not execute architecture-specific
+        # code. Keep the real check, with controlled input for these tests.
+        self.patch(mock.patch.object(self.validator.platform, "machine", return_value="x86_64"))
         self.temp = tempfile.TemporaryDirectory(prefix="callback gate's ")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -202,6 +207,9 @@ class CallbackValidatorTests(unittest.TestCase):
         self.assertEqual(absolute["node-sha256"], self.validator.digest(self.node))
 
     def test_cli_loads_canonical_verifier_and_checks_real_node_version_offline(self):
+        # The child interpreter does not inherit the in-process platform mock.
+        if self.host_machine not in ("x86_64", "amd64"):
+            self.skipTest("canonical fixture CLI needs a Linux x64 host")
         scripts = self.component / "scripts"
         scripts.mkdir()
         shutil.copy(SCRIPT.parents[1] / "packages/intentd/scripts/prepare-acp-callback-fixture.py", scripts)
@@ -361,6 +369,25 @@ class CallbackValidatorTests(unittest.TestCase):
             argv = json.loads(log.read_text())
             self.assertEqual(argv[:2], ["--cache-dir", str(self.root / "user's home/.cache/intent/acp-callback-fixture")])
             self.assertEqual(argv[2], route)
+
+
+class CallbackValidatorPortabilityTests(unittest.TestCase):
+    def test_synthetic_suite_on_arm64_keeps_checks_and_skips_only_native_cli(self):
+        path = SCRIPT.parents[1] / "packages/intentd/scripts/test-prepare-acp-callback-fixture.py"
+        if not path.is_file() or sys.platform != "linux":
+            self.skipTest("canonical fixture integration needs intentd and Linux")
+        suite = unittest.defaultTestLoader.loadTestsFromTestCase(CallbackValidatorTests)
+        expected_count = suite.countTestCases()
+        result = unittest.TestResult()
+        with mock.patch.object(platform, "machine", return_value="aarch64"):
+            suite.run(result)
+        self.assertTrue(result.wasSuccessful(), result.errors + result.failures)
+        self.assertEqual(result.testsRun, expected_count)
+        self.assertEqual(
+            [(test._testMethodName, reason) for test, reason in result.skipped],
+            [("test_cli_loads_canonical_verifier_and_checks_real_node_version_offline",
+              "canonical fixture CLI needs a Linux x64 host")],
+        )
 
 
 class ResumableNextestTests(unittest.TestCase):
