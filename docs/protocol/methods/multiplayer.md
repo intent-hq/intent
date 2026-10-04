@@ -173,6 +173,15 @@ A connection bound to a **non-administrator** principal may only *attempt* the m
 Owner-only by design — the **203** refused dispatchable names in the same baseline, frozen alongside the list: every `host.*` method but the two display probes (19), `browser.*` (7), `terminal.*` (7), `script.*` (9); `github.*` (29, `github.identityProof.*` included — a guest proves its identity from its *own* daemon) / `linear.*` (11) / `sentry.*` (8) / `voice.*` (2) — they act with the primary user's third-party credentials; `settings.*` (4), `repo.*` (3), `repoConfig.*` (4), `rules.*` (3), `mcp.*` (12), `providers.setup.*` (4), `server.*` (2) / `pairing.getInfo` / `system.*` except `system.capabilities` and `system.status` (4), `client.list`, `debug.sampleStacks`, `unsloth.*` (2), `sandbox.*` (2), `accept-changes.*` (5), `file-tracking.*` (5); `principal.list`; `workspace.*` outside the 16 listed (32: `create`, `archive` / `unarchive`, `delete` / `cancelDelete` / `restore` / `cleanup`, `duplicate`, `diskUsage`, `findRepositories`, `initializeRepository`, `detectProjectType`, the setup-script four, `setAutoCommit`, `getBrowserClient` / `setBrowserClient`, `export.*` / `import.*` / `transfer.plan`, `members.add` / `members.remove`, `invite.create` / `invite.list` / `invite.revoke`); `git.clone` / `git.agentCommit`; `agent.create` / `delegate` / `wakeOrCreate` (decided 2026-09-19, [intent-hq/intentd#1998](https://github.com/intent-hq/intentd/pull/1998): guests steer existing agents only), `agent.delete` / `cancelDelete` / `completeOnce` / `diagnostics` / `enhancePrompt` / `memoryUsage` / `reportToParent` / `resolveProposal` and `agent.replaceMessages` (it persists client-supplied user rows verbatim, so a non-owner could forge attribution; collaborators keep `agent.editAndRegenerate` for the edit flow); `hook.cancel` / `hook.runNow`; `prMonitor.cancel` / `prMonitor.flush`; `specialist.create` / `edit` / `delete`; and the four `invite.*` methods, which are served only on `/invite`. The reverse RPCs are never issued to a collaborator connection.
 
 
+**Shared global instruction read:** `rules.get` joins the guest allowlist only for
+`workspaceId: "global", ruleType: "base-system-prompt"`, with current durable host
+membership or a guest workspace grant required by the service. The baseline
+`rules.*` refusal above therefore retains `rules.list` and `rules.update` for
+guests. Other settings reads are unchanged. Rule writes and specialist mutations
+remain daemon administration, including direct service calls; a workspace grant
+cannot authorize a global override write. See [§5.21](misc-namespaces.md#521-rules).
+
+
 **Additive direct retirement:** `agent.retire` joins the allowed agent steering methods
 above, with the same workspace membership checks as `agent.restore` and `agent.stop`.
 The baseline counts/list above predate this addition. It permits user-initiated retirement
