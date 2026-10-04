@@ -10,8 +10,22 @@ The namespace holds the workspace-scoped `pr.refresh` method, which establishes 
 
 | Method | Params | Result |
 | --- | --- | --- |
-| pr.refresh | — | { outcome: "skipped" \| "unchanged" \| "linked" \| "updated" \| "unlinked", prNumber: number \| null, prUrl: string \| null, prStatus: string \| null, pullRequests: PullRequestInfo[] } — the post-refresh linkage state. Forces the same PR discovery/refresh the daemon's background sweep runs for one workspace, on demand |
+| pr.refresh | automatic?: boolean | { outcome: "skipped" \| "unchanged" \| "linked" \| "updated" \| "unlinked", prNumber: number \| null, prUrl: string \| null, prStatus: string \| null, pullRequests: PullRequestInfo[] } — the post-refresh linkage state. Forces the same PR discovery/refresh the daemon's background sweep runs for one workspace, on demand |
 
+> **Automatic refresh admission.** `automatic: true` marks hydration, reconnect,
+> observer and background refreshes. The daemon admits these with the shared workspace
+> idle cadence: 60 seconds below 15 minutes idle, 120 seconds from 15 minutes,
+> 300 seconds from one hour, 600 seconds from six hours, and 900 seconds from 24 hours.
+> Meaningful conversation/note activity or ongoing agent work restores active cadence;
+> merely opening a workspace or refreshing metadata does not. Existing quota protections
+> and slower configured cadence still apply. Admission is shared across frontend windows
+> and the background linkage sweep, and failed attempts also consume their interval.
+> A deferred call returns `outcome: "skipped"` with the persisted linkage and PR list;
+> clients retain their cached data. Omitted or `false` preserves explicit refresh semantics.
+> `force` in frontend hydration is not user intent; callers must send `automatic: true`
+> even when bypassing a local freshness cache. User refresh and post-mutation reconciliation
+> omit the flag or send `false`. This additive contract lands before daemon/frontend consumers.
+>
 > **`pr.refresh` semantics.** `pr.refresh` does **not** require an
 > active PR — it exists to establish/repair the link. It runs the shared refresh path
 > (discovery, status update, stale-link clearing, relink-after-merge), so any
