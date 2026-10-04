@@ -212,6 +212,12 @@ when navigating back or restoring a draft, but revalidate their authority before
 warming a cache or creating a workspace. A stored draft is selection intent,
 not a credential or permission grant.
 
+Connection setup, status, cancellation and reconnection retain that same full
+root through the [prepared public auth contract](methods/integrations.md#full-instance-gitlab-authentication-prepared-v135).
+Honor the actual `cancelled` result: `false` does not undo a begun or settled PAT
+write, and closing the form does not prove cancellation. Preserve the connect
+result and current status before starting a new checkout capture.
+
 Project and branch pagination must expose choices beyond the first page.
 Keep each cursor with its original connection, project and query; switching any
 of them starts a new listing. Discard late responses after a connection,

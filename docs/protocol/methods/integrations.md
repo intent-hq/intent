@@ -191,6 +191,57 @@ interface SourceControlUser {  // derived identity — never carries a token
 `SourceControlUser` is deliberately narrower than `GithubUser` (no `htmlUrl`); `github.getUser` keeps
 returning `GithubUser`.
 
+#### Full-instance GitLab authentication (prepared v13.5)
+
+This prepared extension accompanies [GitLab checkout](repository-checkout.md);
+it is not a claim that older or published daemons accept the new field. It keeps
+the existing host-only request forms above and adds optional `instanceBaseUrl`
+to `sourceControl.authStatus`, `sourceControl.connect`, `sourceControl.cancelAuth`,
+`sourceControl.revoke` and `sourceControl.getUser` for `provider: "gitlab"`.
+These public auth operations require administrator permission; checkout browsing
+by a host member does not grant credential-management permission.
+
+`instanceBaseUrl` is the canonical HTTPS logical root, including any port and
+case-sensitive installation prefix. `host` remains an optional bare authority;
+when both fields are supplied, their authorities must agree. The root rejects
+userinfo, query strings, fragments, traversal and non-HTTPS schemes. Invalid
+roots, mismatched authorities or the new field with `provider: "github"` are
+invalid params (`-32602`). Omitting the new field preserves existing host
+resolution, including the configured full root when the requested host is the
+configured authority. `sourceControl.gitlab.apiBaseUrl` remains a transport
+override and cannot change logical identity.
+
+```json
+{"jsonrpc":"2.0","id":311,"method":"sourceControl.authStatus","params":{"provider":"gitlab","host":"gitlab.example:8443","instanceBaseUrl":"https://gitlab.example:8443/Forge"}}
+```
+
+The GitLab auth-status result adds `instanceBaseUrl` for the resolved full root;
+`host` still reports only its authority. Successful PAT or device connection
+publishes the selected `sourceControl.gitlab.host` and
+`sourceControl.gitlab.instanceBaseUrl` together through the original connection
+operation. A client must not split this transition into independent settings
+writes or replace a prefix-bearing identity with a bare host.
+
+Cancellation uses the same full root as connection setup. Its result remains
+`{ok: true, cancelled: boolean}`. `cancelled: true` includes an original pending
+PAT reservation retired before its first credential effect, as well as pending
+device startup or polling. If PAT validation is still awaiting HTTP when its
+reservation is cancelled, a late validation response cannot install that PAT.
+Once PAT persistence has begun or settled, that PAT is no longer cancellable:
+with no other pending auth work, the result is `cancelled: false`. A false result
+also covers nothing pending; it does not identify success, failure or rollback.
+Keep the actual connect result and connection status visible instead of treating
+closing a dialog or a successful cancel RPC as proof that no credential changed.
+
+```json
+{"jsonrpc":"2.0","id":312,"method":"sourceControl.cancelAuth","params":{"provider":"gitlab","instanceBaseUrl":"https://gitlab.example:8443/Forge"}}
+```
+
+Cancellation for another prefix on the same authority does not retire this
+operation. Revoke and identity reads also resolve the selected full root; they
+must not borrow a different instance's credential. Reconnection requires a fresh
+checkout capture; it cannot revive a reference held by an earlier auth flow.
+
 #### Identity proof — `sourceControl.identityProof.*` *(v10.8)*
 
 The **guest half** of the invite identity proof (§5.48 "The identity proof"), generalized over the
