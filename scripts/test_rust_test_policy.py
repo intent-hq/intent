@@ -435,6 +435,33 @@ class RustTransferFixtureTests(unittest.TestCase):
         self.assertTrue(any(c["test"] for c in calls), calls)
         self.assertNotIn("resumed: skipped", result.stdout)
 
+    def test_spaced_detached_checkout_supports_gate_check_and_clippy(self):
+        for target in ("gate", "check", "clippy", "lint-sources"):
+            with self.subTest(target=target):
+                result, calls = self.launch(target)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertTrue(calls, "the requested Cargo children never ran")
+                if target == "gate":
+                    tests = [c for c in calls if c["args"][:2] == ["nextest", "run"]]
+                    self.assertEqual([c["transfer_fixture"] for c in tests], [str(self.fixtures)])
+
+    def test_explicit_full_tests_order_parallel_check_before_any_cargo(self):
+        (self.fixtures / "contract.json").unlink()
+        for target in ("test", "test-intentd", "gate"):
+            for goals in ((target, "check", "clippy"), ("check", "clippy", target)):
+                with self.subTest(goals=goals):
+                    # Use the ordinary source path so an unrelated quoting
+                    # failure cannot conceal an early Cargo launch.
+                    result, calls = self.make(goals[0], extra=("-j8", *goals[1:]))
+                    self.assert_rejected(result, calls)
+                    self.assertEqual(calls, [])
+
+    def test_standalone_check_remains_fixture_free_with_spaced_checkout(self):
+        shutil.rmtree(self.fixtures)
+        result, calls = self.launch("check", extra=("-j8", "clippy"))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(any(c["args"][0] == "clippy" for c in calls), calls)
+
     def test_gate_orders_parallel_check_before_any_cargo(self):
         (self.fixtures / "contract.json").unlink()
         result, calls = self.launch("gate", extra=("-j8", "check", "clippy"))

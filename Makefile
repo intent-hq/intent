@@ -466,10 +466,10 @@ build-intentd: ensure-intentd-submodule
 	cd $(INTENTD_DIR) && cargo build --workspace --jobs $(BUILD_JOBS)
 
 fmt: ensure-intentd-submodule ## cargo fmt --check
-	cd $(INTENTD_DIR) && cargo fmt --check
+	cd "$(INTENTD_DIR)" && cargo fmt --check
 
 clippy: ensure-intentd-submodule ## cargo clippy --all-targets -- -D warnings
-	cd $(INTENTD_DIR) && $(COMPACT_CARGO) cargo clippy --workspace --all-targets --jobs $(BUILD_JOBS) -- -D warnings
+	cd "$(INTENTD_DIR)" && $(COMPACT_CARGO) cargo clippy --workspace --all-targets --jobs $(BUILD_JOBS) -- -D warnings
 
 # Source lints are discovered by convention: every `tests/*_lint.rs` in any
 # intentd crate is a cargo test target whose name ends in `_lint`, and cargo's
@@ -478,7 +478,7 @@ clippy: ensure-intentd-submodule ## cargo clippy --all-targets -- -D warnings
 # job so local gates match CI. Arm the shared test-only caller policy at the
 # child boundary, including compact mode; do not export it to build/dev targets.
 lint-sources: ensure-intentd-submodule ## Run every intentd source lint (tests/*_lint.rs in any intentd crate)
-	cd $(INTENTD_DIR) && bash scripts/with-test-policy.sh $(COMPACT_CARGO) cargo test --workspace --test '*_lint' --jobs $(BUILD_JOBS)
+	cd "$(INTENTD_DIR)" && bash scripts/with-test-policy.sh $(COMPACT_CARGO) cargo test --workspace --test '*_lint' --jobs $(BUILD_JOBS)
 
 # Deprecated aliases of lint-sources, kept for one release so existing local
 # scripts keep working; each now runs the full source-lint set.
@@ -510,9 +510,9 @@ check-transfer-fixture: ## Preflight canonical transfer fixtures before Rust gat
 	@python3 scripts/check_watch_capacity.py --quiet
 	@python3 scripts/resumable_nextest.py --check-transfer-fixture "$(CURDIR)"
 
-# Order every check leaf so parallel and mixed gate goals cannot compile first.
+# Order every check leaf so parallel explicit full-test goals cannot compile first.
 # Standalone check, changed dry runs and unrelated selections need no fixtures.
-ifneq ($(filter gate,$(MAKECMDGOALS)),)
+ifneq ($(filter test test-intentd gate,$(MAKECMDGOALS)),)
 $(RUST_CHECK_TARGETS): | check-transfer-fixture
 endif
 
