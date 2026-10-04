@@ -160,12 +160,12 @@ if is_test:
         calls = [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
         return result, calls
 
-    def assert_policy(self, calls, *, inherited=None, compact=False):
+    def assert_policy(self, calls, *, inherited=None, compact=False, fixture=None):
         tests = [call for call in calls if call['test']]
         self.assertTrue(tests, calls)
         for call in tests:
             self.assertEqual(call['policy'], '1', call)
-            self.assertEqual(call['fixture'], str(self.fixture), call)
+            self.assertEqual(call['fixture'], str(self.fixture) if fixture is None else fixture, call)
             self.assertEqual(call['rustflags'], '--cfg caller', call)
             coverage = call['args'][0] == 'llvm-cov'
             self.assertEqual(call['timeout'], '3' if coverage else '7', call)
@@ -305,6 +305,44 @@ if is_test:
         self.assertIn('invalid synthetic fixture', result.stderr)
         self.assertEqual([c['args'] for c in calls], [['nextest', '--version']])
         self.assertNotIn('resumed: skipped', result.stdout)
+
+    def test_mixed_gate_goals_preflight_before_cargo(self):
+        for fixture in ('missing', 'invalid'):
+            if fixture == 'invalid':
+                (self.fixture / 'valid').unlink()
+            env = {'INTENT_ACP_CALLBACK_ADAPTER_FIXTURE':
+                   '' if fixture == 'missing' else str(self.fixture)}
+            for forwarded in (False, True):
+                for goals in (('gate', 'check'), ('check', 'gate')):
+                    for parallel in ((), ('-j4',)):
+                        with self.subTest(fixture=fixture, forwarded=forwarded,
+                                          goals=goals, parallel=parallel):
+                            result, calls = self.make(
+                                goals[0], forwarded=forwarded, override='0',
+                                extra=(goals[1], *parallel), env=env)
+                            self.assertNotEqual(result.returncode, 0)
+                            self.assertIn('callback fixture:', result.stderr)
+                            self.assertEqual(calls, [], result.stdout + result.stderr)
+
+    def test_standalone_check_remains_fixture_free(self):
+        for forwarded in (False, True):
+            with self.subTest(forwarded=forwarded):
+                result, calls = self.make(
+                    'check', forwarded=forwarded, override='0', extra=('-j4',),
+                    env={'INTENT_ACP_CALLBACK_ADAPTER_FIXTURE': ''})
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assert_policy(calls, inherited='0', fixture='')
+
+    def test_valid_mixed_gate_goals_preserve_policy_without_duplicate_checks(self):
+        for forwarded in (False, True):
+            for goals in (('gate', 'check'), ('check', 'gate')):
+                with self.subTest(forwarded=forwarded, goals=goals):
+                    result, calls = self.make(goals[0], forwarded=forwarded,
+                                              override='0', extra=(goals[1], '-j4'))
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assert_policy(calls, inherited='0')
+                    for command in ('fmt', 'clippy', 'test'):
+                        self.assertEqual(sum(c['args'][0] == command for c in calls), 1, calls)
 
 
 if __name__ == '__main__':
