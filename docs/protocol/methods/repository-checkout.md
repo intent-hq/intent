@@ -36,6 +36,11 @@ credential continuity. Socket loss, authority loss, auth/settings replacement
 or release prevents stale requests and late private replies. Recapture after
 those changes; never repair an old reference with newly available credentials.
 
+The lease has a fixed server lifetime of 600,000 ms, starting when capture
+allocates it. `expiresAfterMs: 600000` is an upper bound, not a fresh ten minutes
+from response receipt. Browsing and warming do not renew it; earlier server
+retirement or connection loss always wins over a client timer.
+
 For example, on the selected destination connection:
 
 ```json
@@ -57,6 +62,18 @@ reference, query, page limit and, for branches, project. Do not reuse it after a
 project or connection switch, or append late results to a different search.
 Continue pagination or server search until the intended branch is reachable;
 the first page is not a complete branch inventory.
+
+Project and branch page limits are integers from 1 through 100, defaulting to
+50. Search text is trimmed first; the remaining UTF-8 text must be at most 256
+bytes and contain no control characters. Cursors are opaque UUID strings bound
+to the original lease's connection, account and settings plus the project,
+normalized query, limit and cache lane. Do not construct cursors or move one
+between cached and provider pages. A stale cursor is refused rather than
+reinterpreted for another page.
+
+`projectPath` is at most 1,024 ASCII bytes and must include a namespace. Each
+slash-separated segment is nonempty and uses only letters, digits, `.`, `_` or
+`-`; `.` and `..` segments are rejected. Preserve the exact returned path.
 
 | Field | Type and meaning |
 | --- | --- |
@@ -112,6 +129,10 @@ project, or use its actual default when the user has not chosen another branch.
 ```
 
 ### Warming and exact checkout
+
+The explicit branch and full 40-hex commit SHA must match a branch observed for
+that project on the original lease. A syntactically valid name or SHA from a
+different capture cannot supply this evidence.
 
 The selection shared by `sourceControl.checkout.warm` and
 [`workspace.create.repositoryCheckout`](workspace.md#gitlab-project-checkout)

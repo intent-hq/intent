@@ -218,6 +218,13 @@ Honor the actual `cancelled` result: `false` does not undo a begun or settled PA
 write, and closing the form does not prove cancellation. Preserve the connect
 result and current status before starting a new checkout capture.
 
+Require `gitlabCheckout: 1` on that original connection before sending any
+explicit `instanceBaseUrl` auth field, even for status reads. The unchanged
+`sourceControl:auth-changed` event carries only provider, bare host and status:
+invalidate affected state, but never infer which case-sensitive instance prefix
+is authorized. An authorized auth view re-reads status for its original full
+root; a checkout view must obtain a new valid capture.
+
 Project and branch pagination must expose choices beyond the first page.
 Keep each cursor with its original connection, project and query; switching any
 of them starts a new listing. Discard late responses after a connection,

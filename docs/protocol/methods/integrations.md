@@ -201,6 +201,13 @@ to `sourceControl.authStatus`, `sourceControl.connect`, `sourceControl.cancelAut
 These public auth operations require administrator permission; checkout browsing
 by a host member does not grant credential-management permission.
 
+Before sending `instanceBaseUrl`, require exactly integer
+`server.capabilities.gitlabCheckout: 1` in the original connection's
+`client.hello` result. This includes auth-status reads and connection setup.
+Without that capability, retain only the daemon's historical bare-host behavior;
+do not send the new field to an older parser or strip a requested prefix and
+treat success as full-instance authorization.
+
 `instanceBaseUrl` is the canonical HTTPS logical root, including any port and
 case-sensitive installation prefix. `host` remains an optional bare authority;
 when both fields are supplied, their authorities must agree. The root rejects
@@ -241,6 +248,15 @@ Cancellation for another prefix on the same authority does not retire this
 operation. Revoke and identity reads also resolve the selected full root; they
 must not borrow a different instance's credential. Reconnection requires a fresh
 checkout capture; it cannot revive a reference held by an earlier auth flow.
+
+The existing `sourceControl:auth-changed` event data remains
+`{provider, host, status}`. `host` is only the bare authority; there is no
+`instanceBaseUrl` in this event. Treat a matching event as invalidation, not
+authorization for `/Forge`, `/forge` or any other prefix. In an authorized auth
+view, re-read `sourceControl.authStatus` for the originally selected full
+`instanceBaseUrl` on its original connection, and discard the result if that
+context changed while awaiting it. The event cannot choose a new instance or
+revive a checkout reference.
 
 #### Identity proof — `sourceControl.identityProof.*` *(v10.8)*
 

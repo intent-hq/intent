@@ -137,6 +137,12 @@ that a configured account can access a project. A higher protocol version, the
 existing repository resource/context capabilities, or a guest's collaboration
 identity cannot substitute for it.
 
+Require this same capability before sending `instanceBaseUrl` to the
+[prepared full-instance auth operations](integrations.md#full-instance-gitlab-authentication-prepared-v135),
+including auth-status reads. An older parser may ignore an unknown field;
+request success alone cannot establish full-root support. Its historical
+bare-host behavior does not authorize a prefix-bearing instance.
+
 Capture before browsing and retain the original destination through pagination,
 warming, creation and release. Reconnect, host/auth/settings changes or
 retirement require a new capture; a stable client ID cannot transfer the old
