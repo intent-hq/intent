@@ -284,7 +284,7 @@ if is_test:
                 self.assertIn('resumed: skipped 1 tests', result.stdout)
                 self.assertFalse(any(c['test'] for c in calls))
 
-    def test_fixture_preflight_blocks_armed_resume_before_any_cargo(self):
+    def test_fixture_preflight_blocks_armed_resume_before_compilation(self):
         result, calls = self.make('test', policy='0')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assert_policy(calls, inherited='0')
@@ -294,13 +294,16 @@ if is_test:
                                           env={'INTENT_ACP_CALLBACK_ADAPTER_FIXTURE': ''})
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn('callback fixture:', result.stderr)
-                self.assertEqual(calls, [])
+                # make test checks tool availability before entering the runner;
+                # no metadata, listing, compilation or test invocation may run.
+                self.assertEqual([c['args'] for c in calls],
+                                 [['nextest', '--version']] if target == 'test' else [])
                 self.assertNotIn('resumed: skipped', result.stdout)
         (self.fixture / 'valid').unlink()
         result, calls = self.make('test', override='0', extra=('RESUME=1',))
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('invalid synthetic fixture', result.stderr)
-        self.assertEqual(calls, [])
+        self.assertEqual([c['args'] for c in calls], [['nextest', '--version']])
         self.assertNotIn('resumed: skipped', result.stdout)
 
 
