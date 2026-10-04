@@ -235,6 +235,7 @@ else
     printf '%s\n' "$file" >"$repo/$file"
   done
   ln -s "$intentd_script" "$repo/scripts/changed-tests.sh"
+  ln -s "$repo_root/packages/intentd/scripts/with-test-policy.sh" "$repo/scripts/with-test-policy.sh"
   cp "$repo_root/packages/intentd/Makefile" "$repo/Makefile"
   g() {
     git -C "$repo" "$@"
