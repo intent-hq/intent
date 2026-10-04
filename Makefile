@@ -478,9 +478,10 @@ clippy: ensure-intentd-submodule ## cargo clippy --all-targets -- -D warnings
 # intentd crate is a cargo test target whose name ends in `_lint`, and cargo's
 # native --test glob selects all of them across the workspace. Adding a lint
 # in intentd therefore needs no change here. Mirrors the intentd `check` CI
-# job so local gates match CI.
+# job so local gates match CI. Arm the shared test-only caller policy at the
+# child boundary, including compact mode; do not export it to build/dev targets.
 lint-sources: ensure-intentd-submodule ## Run every intentd source lint (tests/*_lint.rs in any intentd crate)
-	cd $(INTENTD_DIR) && $(COMPACT_CARGO) cargo test --workspace --test '*_lint' --jobs $(BUILD_JOBS)
+	cd $(INTENTD_DIR) && bash scripts/with-test-policy.sh $(COMPACT_CARGO) cargo test --workspace --test '*_lint' --jobs $(BUILD_JOBS)
 
 # Deprecated aliases of lint-sources, kept for one release so existing local
 # scripts keep working; each now runs the full source-lint set.
@@ -513,7 +514,7 @@ gate: check ## Run all local Rust gates (fmt, clippy, source lints, then nextest
 test: test-intentd ## Run Rust tests; after interruption use RESUME=1 (GATE_FORCE=1 runs all, NO_FAIL_FAST=1 continues past failures)
 
 test-scripts: ## Run the Python script unit tests (Python 3.11+, no submodules needed)
-	python3 -S -B -m unittest -v scripts.test_resumable_nextest scripts.test_compact_gate scripts.test_seed_dev_providers scripts.test_seed_dev_workspaces scripts.test_cleanup_prereleases scripts.test_script_test_target scripts.test_watch_capacity
+	python3 -S -B -m unittest -v scripts.test_resumable_nextest scripts.test_compact_gate scripts.test_rust_test_policy scripts.test_seed_dev_providers scripts.test_seed_dev_workspaces scripts.test_cleanup_prereleases scripts.test_script_test_target scripts.test_watch_capacity
 
 # Runs under nextest so local full-suite runs pick up the same
 # .config/nextest.toml protections CI uses (timing-serial test group,
@@ -524,13 +525,15 @@ test-scripts: ## Run the Python script unit tests (Python 3.11+, no submodules n
 # e.g. `make test TEST_THREADS=num-cpus BUILD_JOBS=default`. Progress bars
 # are off by default (see NEXTEST_SHOW_PROGRESS / CARGO_TERM_PROGRESS_WHEN
 # above); `make test NEXTEST_SHOW_PROGRESS=bar` restores nextest's.
+# Apply the shared caller policy before the runner fingerprints resume evidence.
+# Changed/coverage scripts apply this same wrapper at their test boundaries.
 test-intentd: ensure-intentd-submodule
 	@python3 scripts/check_watch_capacity.py --quiet
 	@cargo nextest --version >/dev/null 2>&1 || { \
 		echo "[test-intentd] ERROR: cargo-nextest is not installed — run 'cargo install cargo-nextest --locked'"; \
 		exit 1; \
 	}
-	@python3 scripts/resumable_nextest.py \
+	@bash "$(INTENTD_DIR)/scripts/with-test-policy.sh" python3 scripts/resumable_nextest.py \
 		--repo-root "$(CURDIR)" \
 		--intentd-dir "$(INTENTD_DIR)" \
 		--cache-dir "$(GATE_CACHE_DIR)" \
