@@ -8,8 +8,22 @@ capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `13.5` — prepared GitLab project checkout; not a shipped-version claim.
-Prepared extensions below remain independently capability-gated.
+**Documented version:** `13.6` — prepared onboarding adapter preparation; not a shipped-version claim.
+Other prepared extensions retain their independent support gates.
+
+**Version 13.6 — onboarding adapter preparation (additive, prepared).**
+[`host.prepareProviderAdapters`](./05-method-catalog.md#hostprepareprovideradapters-136-prepared)
+adds one owner-only fast-path method accepting provider IDs and immediately
+acknowledging best-effort preparation of registry-pinned npm adapters on Unix.
+Windows and other non-Unix hosts silently skip background preparation; their
+ordinary on-demand download/launch remains unchanged. `accepted: true` does not
+establish platform support or readiness. It adds no
+events, settings, arbitrary execution inputs or readiness guarantee. Clients may
+attempt this optional optimization directly and tolerate `-32601` from older
+daemons; no new capability flag is required. Existing prepared extensions retain
+their independent gates, and discovery remains unchanged. The documented surface
+is now **443 / 387 / 56** (dispatchable / router / fast path). This reservation
+does not advertise runtime implementation or change the pinned daemon version.
 
 **Version 13.5 — GitLab project checkout (additive, prepared).**
 [Pre-workspace checkout](./methods/repository-checkout.md) adds six router methods:
@@ -21,7 +35,7 @@ version, experiment state, host membership and project access. Original host,
 socket, settings and credential continuity remain required; no placeholder
 workspace, generic GitHub fallback or new global event is introduced.
 
-The documented surface remains **442 / 387 / 55** (dispatchable / router / fast
+The 13.5 documented surface was **442 / 387 / 55** (dispatchable / router / fast
 path), including other prepared additions. The recorded daemon pin `51859b41` has
 a 13.4 surface of **418 / 363 / 55**. The 13.4 composition baseline `c2988dc8` also
 contains `github.pulls.reviews`, `github.pulls.files` and `github.pulls.checks`,
