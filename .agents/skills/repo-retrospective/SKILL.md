@@ -3,11 +3,6 @@ name: repo-retrospective
 description: >-
   Reflect on a completed workspace, identify evidence-backed repository friction,
   and turn accepted findings into deduplicated, enforceable follow-up work.
-triggers:
-  - close workspace
-  - run repository retrospective
-  - reflect on agent workflow
-  - propose repository improvements
 ---
 
 # Repository Retrospective
@@ -56,28 +51,34 @@ an existing weaker rule over adding another instruction agents must remember.
 ## Output template
 
 Use this block once per finding. Replace every placeholder. It must stand alone as a
-workspace `initialPrompt`, without relying on the retrospective transcript.
+workspace `initialPrompt`, without relying on the retrospective transcript. Write the
+goal and benefit for a user who has not read the original conversation. Prefer a title
+such as "Keep database upgrade tests reliable" over "Stabilize historical migration
+fixtures". Keep paragraphs short and list separate evidence items. Put hashes, paths,
+and implementation terminology in the evidence and change sections.
 
 ```markdown
-# Finding: <short outcome-oriented title>
+# <short outcome-oriented title>
 
-## Finding
-<Observed repository friction and the desired outcome.>
+## Goal
+<One or two plain English sentences describing what will improve.>
 
-## Evidence (file/PR/commit)
-<Exact paths, PRs, commits, failures, or corrections that demonstrate the incident.>
+## Why this helps
+<The observed problem, its practical cost, and why this is useful separate follow-up work.>
 
-## Cost (time or bug)
-<Measured or bounded time, repeated work, escaped bug, flake, or release risk.>
+## What to change
+- <Concrete change and the enforcement rung it uses.>
+- <Why stronger rungs are infeasible; for rung 1, say it is the strongest rung.>
 
-## Proposed rung + concrete change
-<Rung 1-4 and the exact repository change. Explain why every stronger rung is infeasible.>
+## Evidence
+- <Linked file, PR, or commit and the observation it supports.>
+- <Measured or bounded time, repeated work, escaped bug, flake, or release risk.>
 
-## Verification steps
+## How to check
 - <Command or scenario and its expected result.>
 
-## Dedup check performed
-<Sibling workspaces and open issues searched, including queries and any related results.>
+## Related work checked
+- <Sibling workspaces and open issues searched, queries, and related results.>
 ```
 
 ## Where it goes
@@ -87,9 +88,12 @@ Before accepting a finding, deduplicate it against sibling workspaces with
 in the template, including related work that narrows or supersedes the proposal.
 
 For each accepted, non-duplicate finding, a foreground top-level agent proposes one
-follow-up workspace with `ws.workspace.proposeSibling({ title, initialPrompt })`. Use a
-short outcome-oriented `title` and the completed template verbatim as the self-contained
-`initialPrompt`. The user must approve the proposal; do not claim the workspace exists.
+follow-up workspace with `ws.workspace.proposeSibling({ title, initialPrompt, reason })`.
+Use a short outcome-oriented `title`, a one- or two-sentence plain English `reason`
+explaining the benefit of this work now, and the completed template as the self-contained
+`initialPrompt`. The reason is shown above the task in the proposal card. If the installed
+binding's help does not yet list `reason`, omit that field and keep the explanation in
+"Why this helps". The user must approve the proposal; do not claim the workspace exists.
 
 Delegated or background agents must instead send the completed finding to their parent
 with `ws.agent.reportToParent`; the parent decides whether to propose it. Outside

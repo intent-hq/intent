@@ -278,7 +278,7 @@ ws.workspace.applyProposal(proposalIdOrIdempotencyKey, { userRequested: true, ti
 ws.workspace.archive() → { ok, status, archivedAt }
 ws.workspace.details() → { id, title, hasTitle, status, statusMessage, statusImageAssetId, branch, repositoryName, tags, setupStatus }
 ws.workspace.info() → { id, path }
-ws.workspace.proposeSibling({ title, initialPrompt, specialist?, baseRef? }) → { ok, proposalId, proposal, ... }
+ws.workspace.proposeSibling({ title, initialPrompt, reason?, specialist?, baseRef? }) → { ok, proposalId, proposal, ... }
 ws.workspace.setAgentName(name) → { ok, name }
 ws.workspace.setStatusImage({ data, mimeType, originalName? } | null) → { ok, statusImageAssetId, url? }
 ws.workspace.setStatusMessage(message) → { ok, statusMessage }

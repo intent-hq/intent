@@ -184,8 +184,12 @@ Already-imported workspaces that lost their remotes are not repaired automatical
 reconnecting/fetching such a workspace is a separate, explicitly authorized action.
 
 **Agent-authored sibling workspace proposals (MCP-only).** A foreground top-level
-agent can call `ws.workspace.proposeSibling({ title, initialPrompt, specialist?,
-baseRef? })`. `title` and `initialPrompt` are required non-empty strings. Unknown fields,
+agent can call `ws.workspace.proposeSibling({ title, initialPrompt, reason?, specialist?,
+baseRef? })`. `title` and `initialPrompt` are required non-empty strings. An optional
+`reason` must be a non-empty string when supplied and is trimmed into `preview.summary`.
+It explains the practical benefit of the follow-up in plain English. It is display-only:
+it is not added to the `workspace.create` parameters or the initial agent prompt. Existing
+callers that omit `reason` retain the generic review summary. Unknown fields,
 including repository-selection fields, are rejected; repository identity and path come
 from the caller workspace. An omitted `baseRef` uses the repository default. A named ref
 must exist; an unresolved ref is warned before Apply and fails through the existing
