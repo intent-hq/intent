@@ -284,7 +284,7 @@ budgets are inapplicable. Context has separate item and wire budgets and is neve
 hidden inside a source page. Items are discriminated:
 
 - `boundary`: `{ id, sourceRange, construct, parentRef?, continuationBefore,
-  continuationAfter, detailRef?, tablePosition?, htmlPosition?, htmlSource?, attributesRef?, nativeRef?, sourceMapRef? }`. `construct` is a syntax category, not an editor
+  continuationAfter, detailRef?, entryPath?, tablePosition?, htmlPosition?, htmlSource?, attributesRef?, nativeRef?, sourceMapRef? }`. `construct` is a syntax category, not an editor
   node ID; `detailRef` pages large opening syntax, attributes and ancestor chains.
 - `span`: `{ id, sourceRange, role, parentRef?, detailRef?, codeSource?, nativeRef?, sourceMapRef? }` for marks, delimiters, literals,
   comment markers and structural seams. IDs are snapshot-local; identical text at
@@ -328,6 +328,36 @@ The transport preserves unknown future construct/role values opaquely; a rendere
 that cannot interpret one must declare it unsupported, never silently drop it or
 claim that arbitrary parser grammar has been implemented. Notes primitives require
 an explicit renderer mapping; this vocabulary alone is not that mapping.
+
+**Paragraph document entry path (additive, presence-detected).** An ordinary
+lexical `boundary` with `construct: "paragraph"` may include
+`entryPath: "markdown" | "html"`. This classifies the **whole document's parser
+entry**, not the paragraph's syntax or its `contentType` metadata. The source index
+computes it from the complete source under the canonical entry policy: after
+applying ECMAScript `String.prototype.trim()` (including U+FEFF, excluding U+0085),
+a leading `<` selects HTML unless it starts `<!--anchor:` or the complete source
+contains the literal, case-sensitive substring ```` ```ws-block ```` anywhere
+(not only at a parsed fence boundary); otherwise entry is Markdown. The existing empty-document
+special cases remain unchanged. Consumers must use the indexed decision rather
+than scanning a loaded prefix or interpreting `construct: "paragraph"` as Markdown.
+A later fenced primitive opener can change the decision even outside the window.
+
+The field shares the descriptor's scope, source revision, snapshot, incarnation
+and original expiry. A source change or entry-policy/profile change invalidates
+the derived projection through the existing revision/profile rules; reading the
+field never renews its lifetime. It is available with bounded paragraph context
+at a far source offset without hydrating the document. Absence means **unknown**
+(for example an older producer), never an implicit `"markdown"`; `null`, arbitrary
+strings and non-string values are invalid when the field is present.
+
+This addition preserves `construct: "paragraph"`, `sourceRange`, `detailRef`, and
+the exact raw `openingSource`/`closingSource` field fragments. It does not alias a
+paragraph to a canonical native owner, introduce `markdownBlock`, or grant a
+native tree, source map, profile or safe-edit proof. A consumer still needs its
+own validated source/native projection and complete required lexical context
+before serializing an edit. An absolute-zero loaded-source fallback does not
+establish support for far paragraphs. No method or capability is added, and the
+existing full `notePaging: 1` activation gate remains unchanged.
 
 **Absolute table addresses.** Version-1 `tableHead`, `tableRow` and `tableCell`
 boundaries also require an inline `tablePosition`; other constructs omit it:

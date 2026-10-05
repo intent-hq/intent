@@ -535,6 +535,9 @@ export function assertContextFrame(frame, limits, { directory = false, directOwn
       assert.ok(typeof vocabulary === 'string' && vocabulary.length > 0 && utf8(vocabulary) <= 1024);
       assert.equal(item.text, undefined);
       if (item.kind === 'boundary') {
+        if (item.construct === 'paragraph' && Object.hasOwn(item, 'entryPath')) {
+          assert.ok(['markdown', 'html'].includes(item.entryPath));
+        }
         if (['htmlTable', 'htmlTableRow', 'htmlTableCell'].includes(item.construct)) {
           const position = item.htmlPosition, source = item.htmlSource;
           assert.equal(position?.profile, 'canonicalNote'); assert.equal(position.profileVersion, 1); token(position.tableRef);

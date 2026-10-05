@@ -8040,5 +8040,24 @@
     "scalarSafe": true,
     "noPrecedingBodyReads": true
   }
-}
+},
+  "paragraphEntryPath": {
+    "status": "controlled-shape-fixture-not-store-capture",
+    "paragraph": {
+      "kind": "boundary",
+      "id": "paragraph-far",
+      "construct": "paragraph",
+      "sourceRange": {
+        "start": 20000,
+        "end": 20003
+      },
+      "continuationBefore": false,
+      "continuationAfter": false,
+      "detailRef": "paragraph-detail"
+    },
+    "entryPaths": [
+      "markdown",
+      "html"
+    ]
+  }
 }

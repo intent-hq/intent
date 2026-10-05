@@ -1794,3 +1794,72 @@ test('note protocol 13.7 reservation does not advertise partial implementation',
   assert.match(section, /`noteAnnotations: 1` separately requires/);
   assert.ok(!versioning.includes('Allocate the next minor against daemon main at implementation time.'));
 });
+
+
+function paragraphEntryFrame() {
+  return { jsonrpc: '2.0', id: 'paragraph\u0000id', result: {
+    kind: 'noteContextPage', scope: f.scope, sourceRevision: 'r:7', snapshotId: 'snapshot-a',
+    expiresAt: '2026-10-03T00:05:00.000Z',
+    items: [structuredClone(f.paragraphEntryPath.paragraph)], nextCursor: null,
+  } };
+}
+test('paragraph entry path: both modes preserve ordinary far lexical identity and details', () => {
+  assert.equal(f.paragraphEntryPath.status, 'controlled-shape-fixture-not-store-capture');
+  for (const entryPath of f.paragraphEntryPath.entryPaths) {
+    const frame = paragraphEntryFrame();
+    frame.result.items[0].entryPath = entryPath;
+    summaryContract.assertContextFrame(frame, f.limits);
+    const { entryPath: mode, ...ordinary } = frame.result.items[0];
+    assert.equal(mode, entryPath);
+    assert.deepEqual(ordinary, f.paragraphEntryPath.paragraph);
+    for (const key of ['nativeRef', 'sourceMapRef', 'profile', 'profileVersion'])
+      assert.equal(frame.result.items[0][key], undefined);
+  }
+});
+test('paragraph entry path: absence remains valid without manufacturing a mode', () => {
+  const frame = paragraphEntryFrame();
+  summaryContract.assertContextFrame(frame, f.limits);
+  assert.equal(Object.hasOwn(frame.result.items[0], 'entryPath'), false);
+  assert.match(docs, /Absence means \*\*unknown\*\*/);
+});
+test('paragraph entry path: present null, non-string and unsupported values reject', () => {
+  for (const value of [null, false, 1, {}, [], '', 'Markdown', 'plain_text', 'markdownBlock']) {
+    const frame = paragraphEntryFrame(); frame.result.items[0].entryPath = value;
+    assert.throws(() => summaryContract.assertContextFrame(frame, f.limits));
+  }
+});
+test('paragraph entry path: complete escaped frame accounting includes the added field', () => {
+  for (const entryPath of f.paragraphEntryPath.entryPaths) {
+    const frame = paragraphEntryFrame(); frame.result.items[0].entryPath = entryPath;
+    const bytes = wireBytes(frame);
+    summaryContract.assertContextFrame(frame, { ...f.limits, wireBytes: bytes });
+    assert.throws(() => summaryContract.assertContextFrame(frame, { ...f.limits, wireBytes: bytes - 1 }));
+  }
+});
+test('paragraph entry path: documented authority remains document-wide and snapshot-bound', () => {
+  const section = docs.split('**Paragraph document entry path')[1]?.split('**Absolute table addresses.**')[0];
+  assert.ok(section);
+  for (const text of ['complete source', '<!--anchor:', 'ws-block', 'original expiry',
+    'source revision', 'snapshot', 'incarnation', 'without hydrating', 'safe-edit proof',
+    'full `notePaging: 1` activation gate remains unchanged']) assert.ok(section.includes(text), text);
+});
+
+
+test('paragraph entry policy: explicit renderer predicate includes trim and whole-source edge cases', () => {
+  // Reference expectations for cross-language producer captures, not Store execution.
+  const classify = source => source.trim().startsWith('<')
+    && !source.trim().startsWith('<!--anchor:') && !source.includes('```ws-block')
+    ? 'html' : 'markdown';
+  for (const [source, expected] of [
+    ['abc', 'markdown'], ['abc\n\ndef', 'markdown'], ['<p>abc</p>\n\ndef', 'html'],
+    ['\uFEFF<p>abc</p>', 'html'], ['\u0085<p>abc</p>', 'markdown'],
+    [' '.repeat(20000) + '<p>abc</p>', 'html'],
+    ['<!--anchor:x--><p>abc</p>', 'markdown'],
+    ['<p>abc</p>' + 'x'.repeat(20000) + '```ws-block', 'markdown'],
+    ['<p>inline ```ws-block text</p>', 'markdown'],
+    ['<p>inline ```WS-BLOCK text</p>', 'html'],
+  ]) assert.equal(classify(source), expected);
+  assert.ok(docs.includes('ECMAScript `String.prototype.trim()`'));
+  assert.ok(docs.includes('including U+FEFF, excluding U+0085'));
+  assert.ok(docs.includes('not only at a parsed fence boundary'));
+});
