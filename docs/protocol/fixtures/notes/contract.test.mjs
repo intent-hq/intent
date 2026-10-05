@@ -1,3 +1,4 @@
+import { canonicalJson } from '../../../../scripts/check-transfer-selection-contract.mjs';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
@@ -1962,4 +1963,145 @@ test('logical replacement guard preserves historical replay and exact bytes by c
   for (const text of ['existing unchanged', 'each `splices[].text`', 'reject the whole batch',
     'complete logical', 'Do not strip prefixes', 'combine independent splices',
     'Retained historical receipt replay', 'existing ordering']) assert.ok(section.includes(text), text);
+});
+
+
+const stagedMetadataFixture = JSON.parse(await readFile(new URL('./staged-metadata.json', import.meta.url), 'utf8'));
+const { assertStagedMetadataUpload } = await import('./staged-metadata.mjs');
+const metadataClone = () => structuredClone(stagedMetadataFixture);
+const resource = (f, id) => f.texts.find(r => r.id === id);
+const rewriteMetadata = (f, id, change) => {
+  const r = resource(f, id), v = JSON.parse(r.text); change(v);
+  r.text = canonicalJson(v);
+};
+test('staged metadata upload resolves distinct entry/text identities, nested and empty containers', () => {
+  const f = metadataClone(), result = assertStagedMetadataUpload(f);
+  assert.equal(f.status, 'controlled-upload-graph-not-runtime-proof');
+  assert.deepEqual([...result.entryIds].sort(), [...f.expectedEntryIds].sort());
+  assert.ok(result.readTextIds.includes('scalar-shared'));
+  assert.ok(!result.parsedTextIds.includes('scalar-shared'));
+  assert.ok(!result.readTextIds.includes('unreachable-upload'));
+  assert.equal(result.parsedTextIds.filter(id => id === 'text-root').length, 1);
+});
+test('staged metadata upload follows only owned explicit references including empty directories', () => {
+  for (const id of ['text-root', 'dir-root-b', 'dir-empty-array', 'scalar-long-key', 'scalar-shared']) {
+    const missing = metadataClone(); missing.texts = missing.texts.filter(r => r.id !== id);
+    assert.throws(() => assertStagedMetadataUpload(missing));
+    const foreign = metadataClone(); resource(foreign, id).operationId = 'another-operation';
+    assert.throws(() => assertStagedMetadataUpload(foreign));
+  }
+  const unused = metadataClone(); resource(unused, 'unreachable-upload').text = '{invalid';
+  assertStagedMetadataUpload(unused);
+});
+test('staged metadata upload rejects aliases, duplicate identities, cycles and multiple owners', () => {
+  const mutations = [
+    f => rewriteMetadata(f, 'text-root', e => { e.childrenRef = 'text-array'; }),
+    f => rewriteMetadata(f, 'text-array', e => { e.parentId = 'text-root'; }),
+    f => rewriteMetadata(f, 'text-title', e => { e.id = 'entry-array'; }),
+    f => rewriteMetadata(f, 'dir-root-b', d => { d.items.push('text-title'); }),
+    f => rewriteMetadata(f, 'dir-root-b', d => { d.nextRef = 'dir-root-a'; }),
+    f => rewriteMetadata(f, 'dir-array', d => { d.items[0] = 'text-root'; }),
+    f => rewriteMetadata(f, 'text-empty-object', e => { e.childrenRef = 'dir-empty-array'; }),
+    f => rewriteMetadata(f, 'dir-array', d => { d.items[0] = 'text-title'; }),
+  ];
+  for (const mutate of mutations) { const f = metadataClone(); mutate(f); assert.throws(() => assertStagedMetadataUpload(f)); }
+});
+test('staged metadata upload rejects malformed entries/directories and non-progressing empty continuations', () => {
+  const mutations = [
+    f => rewriteMetadata(f, 'text-root', e => { e.key = 'root-is-not-member'; }),
+    f => rewriteMetadata(f, 'text-title', e => { e.keyRef = 'scalar-long-key'; }),
+    f => rewriteMetadata(f, 'text-title', e => { e.value = 'not-inline'; }),
+    f => rewriteMetadata(f, 'text-null', e => { delete e.value; }),
+    f => rewriteMetadata(f, 'text-null', e => { e.value = ''; }),
+    f => rewriteMetadata(f, 'dir-root-a', d => { d.kind = 'children'; }),
+    f => rewriteMetadata(f, 'dir-root-a', d => { d.extra = true; }),
+    f => rewriteMetadata(f, 'dir-root-b', d => { delete d.nextRef; }),
+    f => rewriteMetadata(f, 'dir-root-a', d => { d.items = []; }),
+    f => rewriteMetadata(f, 'dir-root-b', d => { d.items = []; }),
+    f => rewriteMetadata(f, 'dir-empty-array', d => { d.nextRef = 'dir-array'; }),
+    f => { resource(f, 'dir-root-a').text += '\n'; },
+    f => { const r = resource(f, 'text-root'); r.text = r.text.replace('{', '{"id":"discarded",'); },
+  ];
+  for (const mutate of mutations) { const f = metadataClone(); mutate(f); assert.throws(() => assertStagedMetadataUpload(f)); }
+});
+test('staged metadata sibling order spans directory pages and uses decoded scalar keys, not text IDs', () => {
+  for (const mutate of [
+    f => rewriteMetadata(f, 'dir-root-b', d => { d.items.reverse(); }),
+    f => rewriteMetadata(f, 'text-long-key', e => { delete e.keyRef; e.key = 'title'; }),
+    f => { resource(f, 'scalar-long-key').text = 'title'; },
+    f => rewriteMetadata(f, 'text-null', e => { e.index = 2; }),
+  ]) { const f = metadataClone(); mutate(f); assert.throws(() => assertStagedMetadataUpload(f)); }
+  const f = metadataClone();
+  rewriteMetadata(f, 'dir-root-a', d => { d.items = ['text-title']; });
+  rewriteMetadata(f, 'dir-root-b', d => { d.items = ['text-long-key']; });
+  rewriteMetadata(f, 'text-title', e => { e.key = '\uE000'; });
+  resource(f, 'scalar-long-key').text = '\u{10000}';
+  // Unicode scalar/UTF8 order differs from JS UTF16 .sort() for this pair.
+  assert.deepEqual(['\uE000', '\u{10000}'].sort(), ['\u{10000}', '\uE000']);
+  assertStagedMetadataUpload(f);
+  rewriteMetadata(f, 'text-title', e => { e.key = '\u{10000}'; });
+  resource(f, 'scalar-long-key').text = '\uE000';
+  assert.throws(() => assertStagedMetadataUpload(f));
+});
+function metadataDirectoryFixture(count) {
+  const owner = 'operation', items = Array.from({ length: count }, (_, i) => `child-${i}`);
+  const texts = [{ id: 'root', operationId: owner, text: canonicalJson({ id: 'root-entry', parentId: null, type: 'array', childrenRef: 'children' }) },
+    { id: 'children', operationId: owner, text: '' },
+    ...items.map((id, index) => ({ id, operationId: owner, text: canonicalJson({ id: `entry-${index}`, parentId: 'root-entry', index, type: 'null', value: null }) }))];
+  const f = { operationId: owner, roots: ['root'], texts };
+  const update = () => { resource(f, 'children').text = canonicalJson({ kind: 'metadataChildren', items, nextRef: null }); };
+  update(); return { f, items, update };
+}
+test('staged metadata directory item and exact escaped logical-byte ceilings are independent', () => {
+  assertStagedMetadataUpload(metadataDirectoryFixture(64).f);
+  assert.throws(() => assertStagedMetadataUpload(metadataDirectoryFixture(65).f));
+  const { f, items, update } = metadataDirectoryFixture(64);
+  // Escaped control bytes stress encoded JSON; text IDs remain valid and <=256 raw UTF8 bytes.
+  for (let i = 0; i < items.length; i++) { items[i] = `child-${i}-` + '\u0001'.repeat(30); f.texts[i + 2].id = items[i]; }
+  update();
+  while (utf8(resource(f, 'children').text) < 16384) {
+    const i = items.findIndex(id => utf8(id) < 256); assert.ok(i >= 0);
+    items[i] += 'x'; f.texts[i + 2].id = items[i]; update();
+  }
+  assert.equal(utf8(resource(f, 'children').text), 16384); assertStagedMetadataUpload(f);
+  const i = items.findIndex(id => utf8(id) < 256); assert.ok(i >= 0);
+  items[i] += 'x'; f.texts[i + 2].id = items[i]; update();
+  assert.equal(utf8(resource(f, 'children').text), 16385);
+  assert.throws(() => assertStagedMetadataUpload(f));
+});
+test('staged metadata logical resources are chunk-independent and large scalar values remain separate', () => {
+  const f = metadataClone(); resource(f, 'scalar-shared').text = '😀'.repeat(5000);
+  const expected = assertStagedMetadataUpload(f);
+  for (const id of ['text-root', 'dir-root-a', 'scalar-shared']) {
+    const r = resource(f, id), whole = r.text;
+    for (const at of [0, 1, Math.floor(whole.length / 2), whole.length]) {
+      if (!boundary(whole, at)) continue;
+      r.chunks = [whole.slice(0, at), whole.slice(at)]; delete r.text;
+      assert.deepEqual(assertStagedMetadataUpload(f), expected);
+      delete r.chunks; r.text = whole;
+    }
+  }
+});
+
+test('staged metadata keys preserve empty and prefix order and reject invalid Unicode scalars', () => {
+  const f = metadataClone();
+  rewriteMetadata(f, 'dir-root-a', d => { d.items = ['text-title']; });
+  rewriteMetadata(f, 'dir-root-b', d => { d.items = ['text-long-key']; });
+  for (const [first, second] of [['', 'a'], ['a', 'aa']]) {
+    rewriteMetadata(f, 'text-title', e => { e.key = first; });
+    resource(f, 'scalar-long-key').text = second;
+    assertStagedMetadataUpload(f);
+    rewriteMetadata(f, 'text-title', e => { e.key = second; });
+    resource(f, 'scalar-long-key').text = first;
+    assert.throws(() => assertStagedMetadataUpload(f));
+  }
+  for (const bad of ['\0', '\uD800', '\uDC00']) {
+    const inline = metadataClone();
+    rewriteMetadata(inline, 'text-title', e => { e.key = bad; });
+    assert.throws(() => assertStagedMetadataUpload(inline));
+    const referenced = metadataClone(); resource(referenced, 'scalar-long-key').text = bad;
+    assert.throws(() => assertStagedMetadataUpload(referenced));
+    const value = metadataClone(); resource(value, 'scalar-shared').text = bad;
+    assert.throws(() => assertStagedMetadataUpload(value));
+  }
 });

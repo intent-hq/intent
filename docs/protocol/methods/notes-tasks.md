@@ -1105,6 +1105,78 @@ Only these named streams are accepted; records are tagged and validated as follo
   preserve start/end marker provenance; source-dependent details are invalid if
   their range or generation does not match the frozen view.
 
+**Staged attribute-tree upload encoding.** This section defines upload resources
+inside the existing `text` stream; it does not change server-issued metadata read
+collections or introduce another stream/method/capability. A live descriptor's
+`attributesRef` names an operation-owned text ID containing one canonical JSON
+metadata entry of the shape above. That text ID and the entry's `id` are distinct
+identities; neither is inferred from the other. The root has `parentId: null` and
+no `key`, `keyRef` or `index`. Entry IDs and text references are nonempty, NUL-free,
+scalar-valid strings of at most 256 UTF-8 bytes. Every reference resolves within
+the same sealed operation, with the existing text-stream ownership and integrity
+checks; a matching spelling in another operation is not a resource.
+
+For uploaded object/array entries, `childrenRef` names a text ID containing exactly:
+
+```typescript
+{ kind: "metadataChildren", items: string[], nextRef: string | null }
+```
+
+Each item is a **child entry text ID**, not an entry ID, inline child object or
+server-issued page cursor. `nextRef` names the next directory text ID under the
+same containing entry, or is null at exhaustion. Every reconstructed entry or
+directory JSON resource is at most 16,384 UTF-8 bytes, including its JSON escaping;
+a directory additionally has at most 64 child IDs. These are logical resource
+bounds, independent of upload chunk/escaped RPC frame limits. A resource may cross
+chunks without changing its bytes, identity or validation. Canonical JSON uses the
+existing `canonicalJson` encoding (recursive UTF-16 field-name sorting and compact
+JSON number/string encoding) with no trailing newline. The original logical bytes
+must equal that encoding; do not normalize bytes and then accept or hash the
+rewritten value. Original chunk/text digests still bind the uploaded bytes;
+duplicate/extra/missing fields and noncanonical encodings are invalid. Check the
+logical byte bound before decoding the entry/directory. Large scalar keys/values
+remain separate text resources and are not subject to that JSON-container bound.
+
+An empty container owns one explicit directory with `items: []` and `nextRef: null`.
+Every directory in a nonempty chain has at least one child; empty forward or later
+terminal directories are invalid. There is no implicit empty/missing reference.
+Each directory belongs to one containing entry resource. It cannot be reused as
+another container's child collection. Entries retain the exact metadata fields
+above: objects/arrays require `childrenRef`, strings require `valueRef`, and
+number/boolean/null require the correctly typed inline `value`, without mixing
+those forms. Uploaded decoded keys (inline or referenced) and raw scalar text
+values are NUL-free and Unicode scalar-valid, including empty strings.
+`keyRef` and `valueRef` name owned raw scalar text, not a JSON-quoted
+string or a directory. An empty string remains a present empty text value; it is
+not absent/null.
+
+Children's `parentId` equals the containing **entry ID**. An object member has
+exactly one of `key`/`keyRef` and no index; an array member has exactly one
+nonnegative safe-integer index and no key fields. Object children are strictly
+ordered by their decoded keys in Unicode scalar-value order (equivalently UTF-8
+byte lexicographic order for valid strings), with shorter prefixes first, no
+normalization or locale folding, and invalid Unicode scalars rejected. Array
+indices are consecutive from zero. Ordering and uniqueness span every directory in the chain. This sibling-key
+order is distinct from canonical JSON's ordering of the fixed entry/directory
+field names; do not substitute JavaScript UTF-16 sorting or reference spelling.
+Long keys must be compared through bounded storage/streaming, not hydrated as a
+complete sibling set. There is no total-child count limit implied by the 64-item
+directory limit.
+
+The resolver follows explicit reachable edges only. It rejects cycles, duplicate
+children or decoded keys/indices, entry IDs claimed by different entry text IDs,
+multiple parents, repeated/reassigned directories, missing/foreign references and
+unowned empty collections. Repeated use of the same valid root by several live
+descriptors and sharing scalar text are allowed; they do not create a cycle or a
+second entry identity. Use indexed external validation state for ownership,
+ordering and traversal rather than scanning arbitrary uploaded text blobs for
+JSON or retaining an unbounded graph in memory. Unreferenced text can belong to
+other streams/replacements; its existence does not make it a metadata entry.
+
+Graph validation is structural and does not validate a native node/mark attribute
+policy or grant marker/alias authority. The existing server reference/range checks
+and actual output-adapter role/schema validation remain separate requirements.
+
 `manifest` has one fixed entry for each named stream (including empty streams):
 `{ stream, chunks, records, lastDigest }`, in the order above. Empty streams use
 zero counts/null digest. `payloadDigest` hashes canonical JSON `{ headerDigest,
