@@ -148,6 +148,17 @@ warming, creation and release. Reconnect, host/auth/settings changes or
 retirement require a new capture; a stable client ID cannot transfer the old
 reference. See the [client lifecycle](../10-thin-client.md#gitlab-checkout-lifecycle-prepared).
 
+#### GitLab checkout owner-avatar capability
+
+**Prepared additive extension, protocol 13.7.**
+`server.capabilities.gitlabCheckoutOwnerAvatar: 1` allows an explicit
+`includeOwnerAvatar: true` on checkout capture. Require exactly integer `1` on
+the same original socket, in addition to `gitlabCheckout: 1`. Only opted-in
+captures may receive optional `ownerAvatarUrl` on project page/detail rows.
+Legacy captures keep their original shape, including on a newer daemon.
+Clients connected to older daemons omit the request member and retain image
+fallbacks. See the [owner-avatar contract](repository-checkout.md#owner-avatar-extension-prepared-protocol-137).
+
 #### Repository context capability
 
 **Prepared additive contract.** `server.capabilities.repositoryContext: 1`

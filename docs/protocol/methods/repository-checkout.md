@@ -11,7 +11,7 @@ before a workspace exists; they do not create a hosted project.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| sourceControl.checkout.capture | provider: "gitlab", instanceBaseUrl? | Checkout outcome containing the original connection reference |
+| sourceControl.checkout.capture | provider: "gitlab", instanceBaseUrl?, includeOwnerAvatar? | Checkout outcome containing the original connection reference |
 | sourceControl.checkout.projects | checkoutId, revision, query?, cursor?, limit? | Checkout outcome containing {items: Project[], nextCursor?} |
 | sourceControl.checkout.project | checkoutId, revision, exactly one of projectPath or url | Checkout outcome containing {project: Project, contextUrl?} |
 | sourceControl.checkout.branches | checkoutId, revision, projectPath, query?, cursor?, limit?, cached? | Checkout outcome containing {items: Branch[], nextCursor?, defaultBranch?, cached: boolean} |
@@ -83,9 +83,40 @@ slash-separated segment is nonempty and uses only letters, digits, `.`, `_` or
 | `Project.webUrl` | Project web URL under the admitted instance. |
 | `Project.cloneUrl` | Sanitized HTTPS clone identity; not caller-supplied credential or checkout authority. |
 | `Project.defaultBranch` | Optional actual default branch; omitted when unavailable. Never synthesize `main` or `master`. |
+| `Project.ownerAvatarUrl` | Optional HTTPS image of the owning namespace, only for an opted-in capture. See the negotiated extension below. |
 | `Branch.name` | Exact selectable branch name. |
 | `Branch.commitSha` | Full commit selected with that branch. |
 | `Branch.protected` | Optional boolean from provider-observed metadata, not a grant to push. Omitted when only the exact cached name and SHA are known; absence means unknown, never `false`. |
+
+#### Owner-avatar extension (prepared, protocol 13.7)
+
+Require exactly integer `server.capabilities.gitlabCheckoutOwnerAvatar: 1` on
+the original destination connection before sending `includeOwnerAvatar: true`
+in `sourceControl.checkout.capture`. This flag supplements `gitlabCheckout: 1`;
+neither a version string nor a successful unrelated call establishes support.
+With an older daemon, omit the request member entirely and use the ordinary
+image fallback. Do not retry a refused capture with guessed compatibility.
+
+The capture response is unchanged. Its requested projection is fixed for that
+capture: omission or `false` keeps the original project shape with no
+`ownerAvatarUrl`; `true` allows the optional field on both project pages and
+project detail, including cached detail. Separate captures on the same socket
+do not share this preference. Existing authority and lifetime checks still apply.
+
+The producer uses only `namespace.avatar_url` from the existing project response,
+and only when `namespace.full_path` exactly matches the project's full owning
+namespace. It performs no additional provider request or image fetch. Project
+images and the signed-in user's avatar are not owner images. Missing, null,
+malformed or mismatched metadata is omitted without making the project unusable.
+
+Image URLs must be at most 8,192 UTF-8 bytes before and after resolution, contain
+no whitespace, controls, backslashes or URL user information, and resolve to
+HTTPS with a host. Relative locations resolve against the original logical
+instance as a directory, retaining its port and installation prefix; a leading
+slash uses that origin's root. Explicit HTTPS CDN locations are permitted.
+Transport overrides do not supply the image origin. Clients use their ordinary
+fallback when an image is absent or fails to load. This display metadata is not
+repository identity, authorization, or a credential-bearing download request.
 
 For example, search branches of an already selected project:
 
