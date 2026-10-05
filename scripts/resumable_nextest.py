@@ -12,11 +12,13 @@ builds; coverage and custom bare-Cargo scripts still manage their own output own
 Resume identity includes the exact child RUST_MIN_STACK setting, also saved in
 test-stack.json: null means unset, distinct from an empty string or explicit value.
 
-Receipt schema 1 (independent of the tree-key schema): full runs live under
+Receipt schemas (independent of the tree-key schema): full runs live under
 TREE/attempts/UUID; planned runs under TREE/changed/PLAN/attempts/UUID. The shared
 TREE/passed.jsonl and scope-level complete markers remain mutable coordination
 state. New complete markers contain the successful execution's UUID; legacy
-receipts are never upgraded into synthetic historical attempts.
+receipts are never upgraded into synthetic historical attempts. Schema 3 keeps
+resume identities in a tool-owned test group (nextest >= 0.9.133), with only a
+constant-size exclusion on the CLI; schemas 1/2 retain their original validation.
 
 run.json is created before journal reads/listing and updated only by its owner.
 Its null finished_at/exit_code means the runner never observed its own finish.
@@ -77,6 +79,9 @@ else:
 # effective test policy. Schema 4 binds passes to the child's stack setting;
 # earlier records cannot establish that the requested stack was tested.
 SCHEMA_VERSION = 4
+RESUME_GROUP = "@tool:intent-gate:resumed"
+RESUME_GROUP_FILTER = f"not group(={RESUME_GROUP})"
+RESUME_NEXTEST_VERSION = "0.9.133"
 MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 KEY_RE = re.compile(r"^[0-9a-f]{64}$")
 RUST_FLAG_ENV = {"RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_RUSTFLAGS"}
@@ -488,7 +493,8 @@ def remaining_filter(passed: set[tuple[str, str]]) -> str:
     return "not (" + " | ".join(terms) + ")"
 
 
-def resume_selection(selection: list[str], passed: set[tuple[str, str]]) -> list[str]:
+def resume_selection(selection: list[str], passed: set[tuple[str, str]],
+                     *, expression: str | None = None) -> list[str]:
     """Intersect each user filterset with resume exclusions, preserving defaults.
 
     Nextest unions repeated -E arguments, so appending an exclusion expression
@@ -497,7 +503,7 @@ def resume_selection(selection: list[str], passed: set[tuple[str, str]]) -> list
     """
     if not passed:
         return list(selection)
-    remaining = remaining_filter(passed)
+    remaining = remaining_filter(passed) if expression is None else expression
     result = []
     found = False
     args = iter(selection)
@@ -617,11 +623,17 @@ def validate_result_config(directory: Path, receipt: dict, result: dict, resumed
         expected_profile["default-filter"] = remaining_filter(resumed)
     expected = {"store": {"dir": str(directory.parent)},
                 "profile": {receipt["attempt_id"]: expected_profile}}
+    if resumed and receipt["receipt_schema"] == 3:
+        expected["nextest-version"] = RESUME_NEXTEST_VERSION
+        expected["test-groups"] = {RESUME_GROUP: {"max-threads": 1}}
+        expected_profile["overrides"] = [{"filter": f"not ({remaining_filter(resumed)})",
+                                           "test-group": RESUME_GROUP}]
     if cargo_toml.loads((directory / config).read_text()) != expected:
         raise ValueError("saved nextest config disagrees with receipt")
     selection = receipt["selections"][index - 1]
-    if receipt["receipt_schema"] == 2:
-        selection = resume_selection(selection, resumed)
+    if receipt["receipt_schema"] in (2, 3):
+        selection = resume_selection(selection, resumed, expression=(
+            RESUME_GROUP_FILTER if receipt["receipt_schema"] == 3 else None))
     command = ["cargo", "nextest", "run", *selection,
                "--build-jobs", receipt["build_jobs"], "--test-threads", receipt["test_threads"],
                "--tool-config-file", f"intent-gate:{directory / config}",
@@ -803,7 +815,7 @@ class Evidence:
         if directory.resolve() != directory.absolute():
             raise ValueError("attempt reference follows a symlink")
         receipt = strict_json((directory / "run.json").read_text())
-        if type(receipt.get("receipt_schema")) is not int or receipt["receipt_schema"] not in (1, 2) or receipt.get("attempt_id") != directory.name:
+        if type(receipt.get("receipt_schema")) is not int or receipt["receipt_schema"] not in (1, 2, 3) or receipt.get("attempt_id") != directory.name:
             raise ValueError("unsupported or mismatched receipt")
         if receipt.get("exit_code") is not None and type(receipt["exit_code"]) is not int:
             raise ValueError("invalid receipt exit status")
@@ -1062,6 +1074,7 @@ def write_tool_config(
     cache_dir: Path,
     profile: str,
     junit: str = "junit.xml",
+    *, passed: set[tuple[str, str]] | None = None,
 ) -> None:
     lines = [
         "[store]",
@@ -1070,6 +1083,15 @@ def write_tool_config(
         'inherits = "default"',
     ]
     lines.extend([f"[profile.{profile}.junit]", f"path = {json.dumps(junit)}", ""])
+    if passed:
+        # Profile-specific group assignment precedes inherited project groups.
+        # Only resumed tests are reassigned, and none of those will execute.
+        # Default filters and all settings for executed tests remain inherited.
+        lines[0:0] = [f"nextest-version = {json.dumps(RESUME_NEXTEST_VERSION)}"]
+        lines.extend([f"[test-groups.{json.dumps(RESUME_GROUP)}]", "max-threads = 1",
+                      f"[[profile.{profile}.overrides]]",
+                      f"filter = {json.dumps(f'not ({remaining_filter(passed)})')}",
+                      f"test-group = {json.dumps(RESUME_GROUP)}", ""])
     write_atomic(path, "\n".join(lines))
 
 
@@ -1262,8 +1284,8 @@ def run_nextest(args: argparse.Namespace) -> int:
         scope = "the complete suite"
     # Receipt schema is independent of the resume fingerprint. Never migrate or
     # alias old per-plan files: they remain evidence of exactly what was saved.
-    # Schema 2 moves resume exclusions from the default profile to CLI filters;
-    # schema 1 sources keep their original command/config validation.
+    # Schema 3 stores exclusion identities in a tool group, keeping argv bounded.
+    # Schemas 1/2 keep their original command/config validation.
     # Only this invocation writes its attempt; pruning still expires whole trees.
     profile = uuid.uuid4().hex
     store_dir = scope_dir / "attempts"
@@ -1273,7 +1295,7 @@ def run_nextest(args: argparse.Namespace) -> int:
     results: list[dict[str, object]] = []
     resumed: set[tuple[str, str]] = set()
     run_record = {
-        "receipt_schema": 2, "attempt_id": profile, "kind": "execution",
+        "receipt_schema": 3, "attempt_id": profile, "kind": "execution",
         "label": label, "base": args.base, "plans": [" ".join(plan) for plan in plans],
         "tree_key": key, "plan_key": plan_identity,
         "started_at": utc_now(), "finished_at": None, "exit_code": None,
@@ -1433,11 +1455,11 @@ def run_nextest(args: argparse.Namespace) -> int:
                 if plans:
                     config = record_dir / f"nextest-{index}.toml"
                     write_tool_config(
-                        config, store_dir, profile, f"junit-{index}.xml"
+                        config, store_dir, profile, f"junit-{index}.xml", passed=resumed
                     )
                 else:
                     config = record_dir / "nextest.toml"
-                    write_tool_config(config, store_dir, profile)
+                    write_tool_config(config, store_dir, profile, passed=resumed)
                 configs.append(config)
 
             if not resumed and not plans:
@@ -1461,7 +1483,8 @@ def run_nextest(args: argparse.Namespace) -> int:
             try:
                 for index, (selection, config) in enumerate(zip(selections, configs), start=1):
                     command = [
-                        "cargo", "nextest", "run", *resume_selection(selection, resumed),
+                        "cargo", "nextest", "run",
+                        *resume_selection(selection, resumed, expression=RESUME_GROUP_FILTER),
                         "--build-jobs", args.build_jobs,
                         "--test-threads", args.test_threads,
                         "--tool-config-file", f"intent-gate:{config}",

@@ -206,7 +206,7 @@ class AttemptReceiptTests(unittest.TestCase):
                     new = next(p for p in attempts if p not in frozen)
                     receipt = json.loads((new / "run.json").read_text())
                     self.assertEqual(receipt["attempt_id"], new.name)
-                    self.assertEqual(receipt["receipt_schema"], 2)
+                    self.assertEqual(receipt["receipt_schema"], 3)
                     self.assertEqual(receipt["exit_code"], status)
                     self.assertIsNotNone(receipt["finished_at"])
                     self.assertEqual(receipt["kind"], "completed-resume" if index == 3 else "execution")
@@ -327,7 +327,8 @@ if payload['mode'] != 'resume':
     while True:
         time.sleep(.05)
 assert 'default-filter' not in settings, settings
-assert command[command.index('-E') + 1] == r'not ((binary_id(/^coverage\-probe$/) and (test(/^a_pass$/))))', settings
+assert command[command.index('-E') + 1] == 'not group(=@tool:intent-gate:resumed)', command
+assert settings['overrides'][0]['filter'] == r'not (not ((binary_id(/^coverage\-probe$/) and (test(/^a_pass$/)))))', settings
 name = 'coverage-probe::coverage_probe$b_wait'
 print(json.dumps({'type': 'test', 'event': 'started', 'name': name}), flush=True)
 print(json.dumps({'type': 'test', 'event': 'ok', 'name': name}), flush=True)
@@ -1329,7 +1330,7 @@ class ResumableNextestTests(unittest.TestCase):
             self.assertNotIn("default-filter", profile)
             self.assertEqual(
                 harness.run_commands[0][harness.run_commands[0].index("-E") + 1],
-                "not ((binary_id(/^alpha::one$/) and (test(/^passes$/))))",
+                gate.RESUME_GROUP_FILTER,
             )
             self.assertEqual(json.loads((latest_attempt(record_dir) / "run.json").read_text())["skipped_resumed"], 1)
             self.assertIn("1 resumed", harness.output_lines[-2])
@@ -1821,7 +1822,7 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             self.assertNotIn("default-filter", profile)
             self.assertEqual(
                 resumed.run_commands[0][resumed.run_commands[0].index("-E") + 1],
-                "not ((binary_id(/^alpha::one$/) and (test(/^passes$/))))",
+                gate.RESUME_GROUP_FILTER,
             )
             self.assertFalse((record_dir / "complete").exists())
             run_record = json.loads((latest_attempt(record_dir) / "run.json").read_text())
@@ -1859,7 +1860,7 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             self.assertNotIn("default-filter", config["profile"][latest_attempt(run_dir).name])
             self.assertEqual(
                 resumed.run_commands[0][resumed.run_commands[0].index("-E") + 1],
-                "not ((binary_id(/^alpha::one$/) and (test(/^passes$/))))",
+                gate.RESUME_GROUP_FILTER,
             )
             self.assertFalse((run_dir / "complete").exists())
             self.assertIn("1 failed", resumed.output_lines[-2])
@@ -1886,7 +1887,7 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             self.assertNotIn("default-filter", profile)
             self.assertEqual(
                 rerun.run_commands[0][rerun.run_commands[0].index("-E") + 1],
-                "not ((binary_id(/^alpha::one$/) and (test(/^passes$/))))",
+                gate.RESUME_GROUP_FILTER,
             )
             self.assertNotIn("resumed: skipped 2 tests already passed for this tree", rerun.output_lines)
             self.assertTrue((record_b / "complete").is_file())
@@ -2010,7 +2011,7 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             self.assertNotIn("default-filter", profile)
             self.assertEqual(
                 resumed.run_commands[0][resumed.run_commands[0].index("-E") + 1],
-                "not ((binary_id(/^alpha::one$/) and (test(/^passes$/))))",
+                gate.RESUME_GROUP_FILTER,
             )
             self.assertNotIn("resumed: skipped 2 tests already passed for this tree", resumed.output_lines)
             self.assertFalse((record_b / "complete").exists())
@@ -2126,6 +2127,79 @@ class EffectiveOutputResumeTests(unittest.TestCase):
                 self.assertEqual(len(harness.run_commands), 2, "changed effective outputs reused a completed record")
 
 
+class LargeResumeTransportTests(unittest.TestCase):
+    setUp = AttemptReceiptTests.setUp
+
+    def test_large_partial_resume_starts_real_child_with_bounded_arguments(self):
+        real_popen = subprocess.Popen
+        # A single old exclusion exceeds Linux MAX_ARG_STRLEN at 2500 names;
+        # 30000 names with repeated filters also exceeds aggregate exec limits.
+        for count, plans in product((2500, 30000), ([], [
+                '-p alpha --test one -E all() -E default() -E test(unfinished)'])):
+            with self.subTest(count=count, plans=plans), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                names = [f'test_{n:05d}_preserves_expected_identity_after_interrupted_operation'
+                         for n in range(count)]
+                listing = json.loads(LISTING)
+                listing['rust-suites']['alpha::one']['testcases'] = {
+                    name: {'ignored': False, 'filter-match': {'status': 'matches'}}
+                    for name in [*names, 'unfinished']}
+                seed = PlannedRunHarness(root, [([event('ok', 'alpha::one$' + n) for n in names], 101)])
+                seed.listing = json.dumps(listing)
+                self.assertEqual(seed.execute(make_args(root, plan=plans)), 101)
+                source = latest_attempt(AttemptReceiptTests.scope(root, plans))
+                frozen = AttemptReceiptTests.snapshot(source)
+                current = PlannedRunHarness(root, [])
+                current.listing = json.dumps(listing)
+                launches = []
+
+                def spawn(command, **kwargs):
+                    # Pass the entire real command through OS exec, not a mock.
+                    # The child verifies the disk transport before emitting a pass.
+                    code = r'''
+import json, pathlib, sys, tomllib
+command = sys.argv[1:]
+config = pathlib.Path(command[command.index('--tool-config-file') + 1].split(':', 1)[1])
+settings = tomllib.loads(config.read_text())
+profile = settings['profile'][command[command.index('--profile') + 1]]
+assert 'default-filter' not in profile
+assert settings['nextest-version'] == '0.9.133'
+assert profile['overrides'][0]['test-group'] == '@tool:intent-gate:resumed'
+assert len(profile['overrides'][0]['filter']) > 131072
+assert 'test_00000_' in profile['overrides'][0]['filter']
+print(json.dumps({'type':'test', 'event':'ok', 'name':'alpha::one$unfinished'}), flush=True)
+'''
+                    child = real_popen([sys.executable, '-S', '-B', '-c', code, *command], **kwargs)
+                    self.addCleanup(child.stdout.close)
+                    launches.append(command)
+                    return child
+
+                current.fake_popen = spawn
+                self.assertEqual(current.execute(make_args(root, plan=plans, resume='1')), 0)
+                self.assertEqual(len(launches), 1)
+                self.assertLess(max(len(a.encode()) for a in launches[0]), 4096)
+                self.assertLess(sum(len(a.encode()) + 1 for a in launches[0]), 8192)
+                attempt = latest_attempt(AttemptReceiptTests.scope(root, plans))
+                receipt = json.loads((attempt / 'run.json').read_text())
+                proof = json.loads((attempt / 'coverage.json').read_text())
+                self.assertTrue(proof['complete'], proof['errors'])
+                self.assertEqual(receipt['results'][0]['native_exit_code'], 0)
+                self.assertEqual(proof['categories']['executed-passed'], [['alpha::one', 'unfinished']])
+                self.assertEqual(proof['categories']['resumed-passed'], [['alpha::one', n] for n in names])
+                self.assertEqual(len(proof['resume_sources']), count)
+                for index, ref in enumerate(proof['resume_sources'], 1):
+                    self.assertEqual(ref['attempt'], str(source.relative_to(root / 'cache' / KEY)))
+                    self.assertEqual(ref['event_line'], index)
+                    self.assertEqual(ref['test'], names[index - 1])
+                self.assertEqual(AttemptReceiptTests.snapshot(source), frozen)
+                frozen_current = AttemptReceiptTests.snapshot(attempt)
+                shortcut = PlannedRunHarness(root, [])
+                self.assertEqual(shortcut.execute(make_args(root, plan=plans, resume='1')), 0)
+                self.assertEqual(shortcut.run_commands, [])
+                self.assertEqual(AttemptReceiptTests.snapshot(source), frozen)
+                self.assertEqual(AttemptReceiptTests.snapshot(attempt), frozen_current)
+
+
 class ResumeSelectionTests(unittest.TestCase):
     setUp = AttemptReceiptTests.setUp
 
@@ -2151,12 +2225,41 @@ class ResumeSelectionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'missing filterset'):
             gate.resume_selection(['-E'], passed)
 
-    def test_schema_one_partial_receipts_remain_eligible_without_rewriting(self):
-        for plans in ([], ['-p alpha']):
-            with self.subTest(plans=plans), tempfile.TemporaryDirectory() as temporary:
+    def test_group_transport_tampering_cannot_grant_credit(self):
+        for damage in ('identities', 'group', 'minimum-version', 'command', 'schema'):
+            with self.subTest(damage=damage), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
-                # Model two authentic schema-1 attempts, including its old
-                # generated default-filter and unmodified selection command.
+                args = make_args(root, resume='1')
+                seed = PlannedRunHarness(root, [([event('ok', 'alpha::one$passes')], 101)])
+                self.assertEqual(seed.execute(args), 101)
+                source = PlannedRunHarness(root, [([event('ok', 'alpha::one$fails')], 0)])
+                self.assertEqual(source.execute(args), 0)
+                attempt = latest_attempt(AttemptReceiptTests.scope(root, args.plan))
+                receipt = json.loads((attempt / 'run.json').read_text())
+                result = receipt['results'][0]
+                config = attempt / result['config']
+                if damage == 'identities':
+                    config.write_text(config.read_text().replace('test(/^passes$/)', 'test(/^fails$/)'))
+                elif damage == 'group':
+                    config.write_text(config.read_text().replace('@tool:intent-gate:resumed', '@tool:intent-gate:other'))
+                elif damage == 'minimum-version':
+                    config.write_text(config.read_text().replace('0.9.133', '0.9.99'))
+                elif damage == 'command':
+                    result['command'][result['command'].index('-E') + 1] = 'all()'
+                else:
+                    receipt['receipt_schema'] = 2
+                (attempt / 'run.json').write_text(json.dumps(receipt))
+                credits, rejected = gate.eligible_credits(root / 'cache' / KEY / 'passed.jsonl',
+                                                          gate.Evidence(root / 'cache' / KEY, receipt))
+                self.assertEqual(set(credits), {('alpha::one', 'passes')})
+                self.assertTrue(rejected)
+
+    def test_prior_schema_partial_receipts_remain_eligible_without_rewriting(self):
+        for schema, plans in product((1, 2), ([], ['-p alpha'])):
+            with self.subTest(schema=schema, plans=plans), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                # Model both prior receipt formats with their original saved
+                # command/config pairs; do not weaken validation for either.
                 seed = PlannedRunHarness(root, [([event('ok', 'alpha::one$passes')], 101)])
                 self.assertEqual(seed.execute(make_args(root, plan=plans, resume='1')), 101)
                 prior = latest_attempt(AttemptReceiptTests.scope(root, plans))
@@ -2165,17 +2268,20 @@ class ResumeSelectionTests(unittest.TestCase):
                 completed = latest_attempt(AttemptReceiptTests.scope(root, plans))
                 for attempt in (prior, completed):
                     receipt = json.loads((attempt / 'run.json').read_text())
-                    receipt['receipt_schema'] = 1
+                    receipt['receipt_schema'] = schema
                     for result in receipt['results']:
+                        config = attempt / result['config']
+                        gate.write_tool_config(config, attempt.parent, attempt.name, result['junit'])
                         if receipt['resumed_tests']:
+                            exclusion = gate.remaining_filter(set(map(tuple, receipt['resumed_tests'])))
                             command = result['command']
                             position = command.index('-E')
-                            del command[position:position + 2]
-                            config = attempt / result['config']
-                            text = config.read_text().replace('inherits = "default"',
-                                'inherits = "default"\ndefault-filter = ' +
-                                json.dumps(gate.remaining_filter(set(map(tuple, receipt['resumed_tests'])))))
-                            config.write_text(text)
+                            if schema == 1:
+                                del command[position:position + 2]
+                                config.write_text(config.read_text().replace('inherits = "default"',
+                                    'inherits = "default"\ndefault-filter = ' + json.dumps(exclusion)))
+                            else:
+                                command[position + 1] = exclusion
                     (attempt / 'run.json').write_text(json.dumps(receipt))
                 frozen = {p: AttemptReceiptTests.snapshot(p) for p in (prior, completed)}
                 shortcut = PlannedRunHarness(root, [])
@@ -2187,10 +2293,10 @@ class ResumeSelectionTests(unittest.TestCase):
                 # Neither schema may silently accept the other's command/config.
                 receipt = json.loads((completed / 'run.json').read_text())
                 resumed = set(map(tuple, receipt['resumed_tests']))
-                receipt['receipt_schema'] = 2
+                receipt['receipt_schema'] = 3
                 with self.assertRaisesRegex(ValueError, 'config disagrees'):
                     gate.validate_result_config(completed, receipt, receipt['results'][0], resumed)
-                receipt['receipt_schema'] = 1
+                receipt['receipt_schema'] = schema
                 receipt['results'][0]['command'].extend(['-E', gate.remaining_filter(resumed)])
                 with self.assertRaisesRegex(ValueError, 'command disagrees'):
                     gate.validate_result_config(completed, receipt, receipt['results'][0], resumed)
@@ -2214,11 +2320,15 @@ class ProjectDefaultFilterTests(unittest.TestCase):
                 '[package]\nname="default-probe"\nversion="0.0.0"\nedition="2021"\n')
             marker = root / 'filtered-ran'
             (crate / 'src/lib.rs').write_text(
-                '#[test] fn a_pass() {}\n#[test] fn b_pass() {}\n'
-                '#[test] fn c_filtered() { std::fs::write('
+                '#[test] fn a_pass() {}\n'
+                '#[test] fn b_pass() { assert_eq!(std::env::var("NEXTEST_TEST_GROUP").unwrap(), "project-serial"); }\n'
+                '#[test] fn c_filtered() { assert_eq!(std::env::var("NEXTEST_TEST_GROUP").unwrap(), "@global"); std::fs::write('
                 'std::env::var("FILTER_SENTINEL").unwrap(), "ran").unwrap(); }\n')
             (crate / '.config/nextest.toml').write_text(
-                '[profile.default]\ndefault-filter = "not test(=c_filtered)"\n')
+                '[profile.default]\ndefault-filter = "not test(=c_filtered)"\n'
+                '[test-groups.project-serial]\nmax-threads = 1\n'
+                '[[profile.default.overrides]]\nfilter = "default()"\n'
+                'test-group = "project-serial"\n')
             env = {k: v for k, v in os.environ.items()
                    if not k.startswith(('CARGO_', 'RUST', 'NEXTEST_')) and k != 'COMPACT'}
             env.update(RUSTUP_AUTO_INSTALL='0', FILTER_SENTINEL=str(marker))
@@ -2294,6 +2404,7 @@ class ProjectDefaultFilterTests(unittest.TestCase):
             ('--ignore-default-filter', ('b_pass', 'c_filtered')),
             ('--ignore-default-filter -E default()', ('b_pass',)),
             ('--filter-expr=default()', ('b_pass',)),
+            ('--ignore-default-filter -E group(=project-serial)', ('b_pass',)),
             ('--ignore-default-filter -Etest(=a_pass) -E=test(=b_pass)', ('b_pass',)),
         ):
             with self.subTest(filters=filters):
@@ -2512,9 +2623,10 @@ class StackSettingResumeTests(unittest.TestCase):
             # generated resume filter. No Rust build or user cache is involved.
             code = r'''
 import json, os, pathlib, sys, tomllib
-config, receipt, interrupted, expression = sys.argv[1:]
+config, receipt, interrupted = sys.argv[1:]
 profile = next(iter(tomllib.loads(pathlib.Path(config).read_text())["profile"].values()))
 assert "default-filter" not in profile
+expression = profile.get("overrides", [{"filter": ""}])[0]["filter"]
 tests = [name for name in ("passes", "fails") if "test(/^" + name + "$/)" not in expression]
 if interrupted == "1":
     tests = tests[:1]
@@ -2528,8 +2640,7 @@ sys.exit(101 if interrupted == "1" else 0)
 '''
             process = real_popen(
                 [sys.executable, "-S", "-c", code, config, str(harness.children),
-                 "1" if harness.interrupt else "0",
-                 command[command.index("-E") + 1] if "-E" in command else ""], **kwargs
+                 "1" if harness.interrupt else "0"], **kwargs
             )
             self.addCleanup(process.stdout.close)
             return process

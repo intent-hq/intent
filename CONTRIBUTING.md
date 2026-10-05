@@ -201,6 +201,16 @@ credit or raw event references. Missing JUnit does not erase reliable streamed
 passes, but cannot supply unobserved completion. The generated tool config routes
 JUnit to this attempt's `junit.xml` (full) or `junit-N.xml` (planned).
 
+Partial resume requires cargo-nextest 0.9.133 or newer. Receipt schema 3 stores
+resumed identities in a tool-owned test group in the attempt's TOML, so large
+histories do not exceed OS command-line limits. Only resumed tests change groups;
+project default filters, user filter unions and pending tests' settings remain
+in effect. The generated config and `make doctor` enforce the minimum version;
+`make bootstrap-dev-host` upgrades older installations (or run
+`cargo install cargo-nextest --locked`). Receipt schemas 1 and 2
+remain readable under their original command/config validation, without rewriting
+their files or weakening the tree fingerprint.
+
 The tree's `passed.jsonl` and scope-level `complete` pointers are mutable
 coordination state. Resume checks compatibility and raw evidence again;
 a later failure invalidates earlier credit and completion. Legacy journal rows

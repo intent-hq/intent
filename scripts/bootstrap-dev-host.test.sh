@@ -553,6 +553,71 @@ bootstrap_funcs="$temp_dir/bootstrap-funcs.sh"
 sed '/^if \[\[ "\$MODE" == check \]\]; then$/,$d' "$script" >"$bootstrap_funcs"
 grep -q '^install_coverage_tooling() {' "$bootstrap_funcs" || fail "could not extract bootstrap functions for the install_coverage_tooling fixture"
 tool_log="$temp_dir/tool.log"
+# Resume's bounded group transport needs group() (nextest >= 0.9.133).
+# Probe the Cargo-visible version, reject stale/broken launchers, and upgrade
+# an already-installed old binary rather than reporting "nothing to do".
+nextest_version_file="$temp_dir/nextest-version"
+export NEXTEST_VERSION_FILE="$nextest_version_file"
+write_launcher cargo '[ "$1" = nextest ] && { [ -s "$NEXTEST_VERSION_FILE" ] || exit 101; cat "$NEXTEST_VERSION_FILE"; exit 0; }; echo "cargo 1.96.0 (stub)"'
+run_nextest_gap() {
+  PATH="$bin_dir" HOME="$temp_dir/home" INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
+    CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT='' MAKELEVEL='' \
+    bash -c 'funcs=$1; set --; source "$funcs"
+      for name in required_submodules_ready load_versions python_ready openssl_dev_ready rust_toolchain_ready active_toolchain_ready node_ready pnpm_ready frontend_dependencies_ready gh_ready jq_ready shellcheck_ready; do
+        eval "$name() { return 0; }"
+      done
+      installable_gap_exists' bash "$bootstrap_funcs" >"$output" 2>&1
+}
+write_launcher rustup 'exit 0'
+for version in 0.9.132 0.9.133-rc.1 0.9.133 0.9.143 1.0.0 broken; do
+  printf 'cargo-nextest %s\n' "$version" >"$nextest_version_file"
+  run_doctor
+  case "$version" in
+    0.9.133|0.9.143|1.0.0)
+      expect_line "[ok]       cargo-nextest: cargo-nextest $version"
+      ! run_nextest_gap || fail "nextest $version was incorrectly an installable gap"
+      ;;
+    *)
+      expect_line "[missing]  cargo-nextest >= 0.9.133"
+      expect_line "run make bootstrap-dev-host"
+      run_nextest_gap || fail "unsupported nextest $version was not an installable gap"
+      ;;
+  esac
+done
+: >"$nextest_version_file"
+run_doctor
+expect_line "[missing]  cargo-nextest >= 0.9.133"
+run_nextest_gap || fail "missing nextest was not an installable gap"
+
+ln -s "$(command -v mkdir)" "$bin_dir/mkdir"
+write_launcher curl 'echo "curl $*" >>"$TOOL_LOG"'
+write_launcher tar 'echo "tar $*" >>"$TOOL_LOG"; printf "cargo-nextest %s\n" "${NEXTEST_INSTALLED_VERSION:-0.9.143}" >"$NEXTEST_VERSION_FILE"'
+run_install_nextest() {
+  : >"$tool_log"
+  PATH="$bin_dir" HOME="$temp_dir/home" INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
+    CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT='' MAKELEVEL='' TOOL_LOG="$tool_log" \
+    bash -c 'funcs=$1; set --; source "$funcs"; load_versions
+      rust_toolchain_ready() { return 0; }
+      active_toolchain_ready() { return 0; }
+      install_rust' bash "$bootstrap_funcs" >"$output" 2>&1
+}
+for version in 0.9.132 0.9.133-rc.1 broken ''; do
+  if [[ -n "$version" ]]; then printf 'cargo-nextest %s\n' "$version" >"$nextest_version_file"; else : >"$nextest_version_file"; fi
+  run_install_nextest || fail "nextest upgrade failed for $version"
+  expect_line "[install] cargo-nextest"
+  grep -q 'https://get.nexte.st/0.9/' "$tool_log" || fail "nextest upgrade did not download official archive"
+  grep -q '^tar -xzf ' "$tool_log" || fail "nextest upgrade did not extract archive"
+  grep -qx 'cargo-nextest 0.9.143' "$nextest_version_file" || fail "old nextest was not upgraded"
+done
+run_install_nextest || fail "supported nextest was rejected"
+expect_line "[skip] cargo-nextest"
+[[ ! -s "$tool_log" ]] || fail "supported nextest was reinstalled"
+printf 'cargo-nextest 0.9.132\n' >"$nextest_version_file"
+! NEXTEST_INSTALLED_VERSION=0.9.132 run_install_nextest || fail "installer accepted an archive that still provides old nextest"
+expect_line "ERROR: cargo-nextest >= 0.9.133"
+rm -f "$bin_dir/cargo" "$bin_dir/rustup" "$bin_dir/curl" "$bin_dir/tar" "$bin_dir/mkdir"
+unset NEXTEST_VERSION_FILE
+
 run_install_coverage() {
   : >"$tool_log"
   PATH="$bin_dir" HOME="$temp_dir/home" INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
