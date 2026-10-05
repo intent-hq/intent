@@ -292,13 +292,80 @@ def callback_fixture_identity(intentd_dir: Path) -> dict[str, str]:
         raise RuntimeError(f"callback fixture: {error}\n{callback_setup_help(intentd_dir)}") from error
 
 
+TRANSFER_FIXTURE_ENV = "TRANSFER_SELECTION_FIXTURE_ROOT"
+TRANSFER_FIXTURE_PATH = "docs/protocol/fixtures/transfer-selection"
+
+
+def needs_transfer_fixture(plans: list[list[str]]) -> bool:
+    """Recognize planner targets; unknown Cargo selectors fail conservatively."""
+    if not plans:
+        return True
+    for plan in plans:
+        packages, targets = set(), set()
+        args = iter(plan)
+        for arg in args:
+            if arg.startswith("--package="):
+                packages.add(arg.partition("=")[2])
+            elif arg in ("-p", "--package"):
+                packages.add(next(args, ""))
+            elif arg in ("--test", "--bin"):
+                if not next(args, ""):
+                    return True
+                targets.add(arg)
+            elif arg in ("--lib", "--bins", "--tests"):
+                targets.add(arg)
+            else:
+                return True
+        if not packages or any(not re.fullmatch(r"[A-Za-z0-9_-]+", p) for p in packages):
+            return True
+        # Cargo --tests includes lib tests; a named integration test does not.
+        if "intent-services" in packages and (not targets or targets & {"--lib", "--tests"}):
+            return True
+    return False
+
+
+def transfer_fixture_identity(repo_root: Path) -> dict[str, str]:
+    """Validate canonical inputs before Cargo or resume; this proves integrity only."""
+    canonical = repo_root / TRANSFER_FIXTURE_PATH
+    value = os.environ.get(TRANSFER_FIXTURE_ENV, str(canonical))
+    try:
+        if not value.strip() or not Path(value).is_absolute():
+            raise RuntimeError(f"{TRANSFER_FIXTURE_ENV} must be a non-empty absolute path")
+        root = Path(value).resolve(strict=True)
+        if root != canonical.resolve(strict=True):
+            raise RuntimeError("fixtures and validator must belong to this monorepo checkout")
+        checker = repo_root / "scripts/check-transfer-selection-contract.mjs"
+        # Node resolves '..' lexically; validate the physical directory Rust
+        # will read, while retaining the caller's spelling for child forwarding.
+        result = subprocess.run(["node", str(checker), "--fixture-root", str(root)],
+                                cwd=repo_root, text=True, capture_output=True, check=False)
+        if result.returncode:
+            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "validator failed")
+        # Include content even when the canonical directory contains symlinks,
+        # whose targets are not represented by the monorepo Git tree.
+        return {"root": value, "validator": required_hash(checker), **{
+            name: required_hash(root / name) for name in (
+                "contract.json", "public-sessions.json", "public-sessions.desktop-control-v1.json")}}
+    except (OSError, RuntimeError, ValueError) as error:
+        command = (f"{TRANSFER_FIXTURE_ENV}={shlex.quote(str(canonical))} "
+                   + shlex.join(["make", "-C", str(repo_root), "check-transfer-selection-contract"]))
+        raise RuntimeError(
+            f"transfer-selection fixture: {error}\n"
+            "Restore the canonical fixtures from this monorepo checkout, then validate:\n"
+            f"  {command}\n"
+            f"Unset {TRANSFER_FIXTURE_ENV} to use that default, or set it to the same absolute directory."
+        ) from error
+
+
 def tree_key(repo_root: Path, intentd_dir: Path, output_args: list[str] | None = None,
-             fixture_identity: dict[str, str] | None = None) -> str:
+             fixture_identity: dict[str, str] | None = None,
+             transfer_identity: dict[str, str] | None = None) -> str:
     intentd_dir = intentd_dir.resolve()
     inputs = {
         "source-root": str(intentd_dir),
         "cargo-outputs": output_args,
         "callback-fixture": fixture_identity,
+        "transfer-fixture": transfer_identity,
         "schema": SCHEMA_VERSION,
         "root-tree": worktree_tree(repo_root),
         "intentd-tree": worktree_tree(intentd_dir),
@@ -657,12 +724,15 @@ def run_nextest(args: argparse.Namespace) -> int:
     cache_dir = Path(args.cache_dir).expanduser().resolve()
     plans = split_plans(args.plan)
     fixture_identity = callback_fixture_identity(intentd_dir) if needs_callback_fixture(plans) else None
+    transfer_identity = transfer_fixture_identity(repo_root) if needs_transfer_fixture(plans) else None
     cargo_config = compact_config(intentd_dir)
     announce_compact()
     prune(cache_dir)
     env = nextest_env()
     if fixture_identity is not None:
         env[CALLBACK_FIXTURE_ENV] = fixture_identity["root"]
+    if transfer_identity is not None:
+        env[TRANSFER_FIXTURE_ENV] = transfer_identity["root"]
     if cargo_config:
         env["CARGO_INCREMENTAL"] = "0"
     # Resolve before accepting resume evidence: unchanged config text can expand
@@ -674,7 +744,8 @@ def run_nextest(args: argparse.Namespace) -> int:
             KeyboardInterrupt, Terminated) as error:
         print(f"[{label}] ERROR: resolving Cargo outputs: {error}", file=sys.stderr, flush=True)
         return failure_exit_code(error)
-    key = tree_key(repo_root, intentd_dir, output_args, fixture_identity)
+    key = tree_key(repo_root, intentd_dir, output_args, fixture_identity,
+                   transfer_identity=transfer_identity)
     run_dir = cache_dir / key
     run_dir.mkdir(parents=True, exist_ok=True)
     os.utime(run_dir)
@@ -874,6 +945,15 @@ def main() -> int:
             callback_fixture_identity(args.check_callback_fixture.resolve())
             return 0
         except RuntimeError as error:
+            print(f"[gate] ERROR: {error}", file=sys.stderr)
+            return HANDLED_ERROR_EXIT
+    if sys.argv[1:2] == ["--check-transfer-fixture"]:
+        try:
+            if len(sys.argv) != 3:
+                raise RuntimeError("usage: --check-transfer-fixture REPO_ROOT")
+            transfer_fixture_identity(Path(sys.argv[2]).resolve())
+            return 0
+        except (OSError, RuntimeError, ValueError) as error:
             print(f"[gate] ERROR: {error}", file=sys.stderr)
             return HANDLED_ERROR_EXIT
     if sys.argv[1:2] == ["--compact-cargo"]:

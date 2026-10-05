@@ -178,6 +178,9 @@ class CallbackValidatorTests(unittest.TestCase):
         self.node.write_text("synthetic node identity")
         self.component = self.root / "intentd"
         self.component.mkdir()
+        # Keep callback inventory tests independent of transfer fixtures.
+        # Real combined launch coverage lives in RustTransferFixtureTests.
+        self.patch(mock.patch.object(gate, "transfer_fixture_identity", return_value=None))
         self.patch(mock.patch.object(gate, "load_callback_validator", return_value=self.validator))
         self.patch(mock.patch.object(self.validator, "DEFAULT_DESCRIPTOR", self.fixture.descriptor_path))
         self.node_patch = mock.patch.object(self.validator, "node_tool", return_value=self.node)
@@ -328,13 +331,13 @@ class CallbackValidatorTests(unittest.TestCase):
         harness = PlannedRunHarness(self.root, [([event("ok", "alpha::one$passes")], 0)] * 2)
         original_key = gate.tree_key
 
-        def key(*args):
+        def key(*args, **kwargs):
             with mock.patch.object(gate, "worktree_tree", return_value="tree"), mock.patch.object(
                 gate, "submodule_heads", return_value=[]
             ), mock.patch.object(gate, "required_hash", return_value="hash"), mock.patch.object(
                 gate, "run", return_value="version"
             ):
-                return original_key(*args)
+                return original_key(*args, **kwargs)
 
         with mock.patch.object(gate, "tree_key", side_effect=key), mock.patch.object(
             gate, "run", side_effect=harness.fake_run
@@ -392,6 +395,11 @@ class CallbackValidatorPortabilityTests(unittest.TestCase):
 
 class ResumableNextestTests(unittest.TestCase):
     def setUp(self):
+        # These synthetic suites isolate recording/output policy. The real
+        # fixture boundary is exercised in test_rust_test_policy.py.
+        fixture = mock.patch.object(gate, "transfer_fixture_identity", return_value=None)
+        fixture.start()
+        self.addCleanup(fixture.stop)
         # These tests isolate journaling/selection; canonical fixture coverage
         # lives in CallbackPreflightTests and CallbackValidatorTests.
         patch = mock.patch.object(gate, "callback_fixture_identity", return_value=None)
@@ -1571,6 +1579,13 @@ class IsolatedOutputTests(unittest.TestCase):
 
 
 class EffectiveOutputResumeTests(unittest.TestCase):
+    def setUp(self):
+        # These synthetic suites isolate recording/output policy. The real
+        # fixture boundary is exercised in test_rust_test_policy.py.
+        fixture = mock.patch.object(gate, "transfer_fixture_identity", return_value=None)
+        fixture.start()
+        self.addCleanup(fixture.stop)
+
     def test_metadata_failure_cannot_accept_complete_record(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -1722,6 +1737,13 @@ class SharedTargetInventoryTests(unittest.TestCase):
 
 
 class CallerPolicyResumeTests(unittest.TestCase):
+    def setUp(self):
+        # These synthetic suites isolate recording/output policy. The real
+        # fixture boundary is exercised in test_rust_test_policy.py.
+        fixture = mock.patch.object(gate, "transfer_fixture_identity", return_value=None)
+        fixture.start()
+        self.addCleanup(fixture.stop)
+
     def test_direct_runner_policy_is_honest_and_incompatible_records_do_not_resume(self):
         # Keep all source/config/output inputs identical: only effective child
         # policy may separate these records. Direct runner use does not arm it.
@@ -1798,6 +1820,46 @@ class CallerPolicyResumeTests(unittest.TestCase):
                     self.assertEqual(seen_env[before:], ["1"], "legacy evidence skipped armed verification")
                     self.assertEqual(gate.run_nextest(args), 0)
                     self.assertEqual(len(seen_env), before + 1)
+
+
+class TransferFixtureSelectionTests(unittest.TestCase):
+    def test_affected_and_unknown_selectors_require_preflight(self):
+        for plans in ([], [["--workspace"]], [["-p", "intent-services"]],
+                      [["--package=intent-services", "--lib"]],
+                      [["-p", "intent-services", "--tests"]],
+                      [["-p", "intent-services", "--lib", "--bins", "--tests"]],
+                      [["-p", "intent-*"]], [["--lib"]], [["-E", "all()"]],
+                      [["-p", "alpha", "--test"]], [["-p", "alpha"], ["-p", "intent-services"]]):
+            with self.subTest(plans=plans):
+                self.assertTrue(gate.needs_transfer_fixture(plans))
+
+    def test_unrelated_targets_do_not_require_preflight(self):
+        for plan in (["-p", "alpha", "--lib", "--bins", "--tests"],
+                     ["-p", "intent-acp", "--lib"],
+                     ["-p", "intent-services", "--test", "one"],
+                     ["--package=intent-services", "--bins"],
+                     ["--package", "intent-services", "--bin", "one"]):
+            with self.subTest(plan=plan):
+                self.assertFalse(gate.needs_transfer_fixture([plan]))
+
+    def test_fixture_identity_separates_resume_credit(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            gate, "worktree_tree", return_value="tree"
+        ), mock.patch.object(gate, "submodule_heads", return_value=[]), mock.patch.object(
+            gate, "required_hash", return_value="hash"
+        ), mock.patch.object(gate, "run", return_value="version"), mock.patch.object(
+            gate, "build_settings", return_value={}
+        ):
+            root = Path(directory)
+            identities = (None, {"root": "/canonical", "contract.json": "one"},
+                          {"root": "/canonical", "contract.json": "two"},
+                          {"root": "/alias", "contract.json": "two"})
+            callbacks = (None, {"manifest": "callback-one"}, {"manifest": "callback-two"})
+            keys = [gate.tree_key(root, root, fixture_identity=callback, transfer_identity=value)
+                    for callback, value in product(callbacks, identities)]
+            self.assertEqual(len(set(keys)), len(keys))
+            self.assertEqual(keys[-1], gate.tree_key(
+                root, root, fixture_identity=callbacks[-1], transfer_identity=identities[-1]))
 
 
 if __name__ == "__main__":

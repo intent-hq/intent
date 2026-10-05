@@ -320,7 +320,7 @@ sys.exit(int(os.environ.get("STUB_EXIT", "0")))
         # Contract/formatting tools are unrelated to this fixture; retain the
         # real check prerequisites and real clippy/lint-sources recipes.
         self.skips = ["-o", "check-makefile-targets", "-o", "check-protocol-field-parity",
-                      "-o", "lint-shell-sleeps", "-o", "fmt"]
+                      "-o", "lint-shell-sleeps", "-o", "fmt", "-o", "check-transfer-fixture"]
 
     def run_make(self, *args, env=None, cwd=None):
         self.log.unlink(missing_ok=True)
