@@ -518,10 +518,10 @@ def inventory(text: str):
             if match not in ("matches", "mismatch") or type(metadata.get("ignored", False)) is not bool:
                 raise ValueError("unknown inventory activation metadata")
             ignored_filter = match == "mismatch" and filtering.get("reason") == "ignored"
-            if ignored_filter and not metadata.get("ignored", False):
-                raise ValueError("ignored filter disagrees with test metadata")
             identities[identity] = {"active": match == "matches" or ignored_filter,
-                                    "ignored": metadata.get("ignored", False), "alias": alias}
+                "ignored": metadata.get("ignored", False), "annotation_known": "ignored" in metadata,
+                "skipped": ignored_filter or ("filter-match" not in metadata and metadata.get("ignored", False)),
+                "filter_known": "filter-match" in metadata, "alias": alias}
             aliases[alias, test] = binary
     return identities, aliases
 
@@ -649,7 +649,8 @@ def selection_evidence(directory: Path, result: dict, members: dict, resumed: se
             retry = RETRY_SUFFIX_RE.search(test)
             test = RETRY_SUFFIX_RE.sub("", test)
             identity = aliases.get((alias, test))
-            if not sep or identity is None or not members[identity]["active"] or identity in resumed:
+            if (not sep or identity is None or not members[identity]["active"] or
+                    identity in resumed and not members[identity]["skipped"]):
                 raise ValueError(f"unselected or resumed terminal event: {name}")
             frame = frames.setdefault(alias, {"closed": False, "outcomes": {}})
             if frame["closed"]:
@@ -657,6 +658,9 @@ def selection_evidence(directory: Path, result: dict, members: dict, resumed: se
             if event["event"] == "started":
                 started.add(identity)
                 continue
+            if ((members[identity]["skipped"] and event["event"] != "ignored") or
+                    (members[identity]["filter_known"] and not members[identity]["skipped"] and event["event"] == "ignored")):
+                raise ValueError("terminal outcome disagrees with selection metadata")
             ordinal = int(retry.group()[1:]) if retry else 1
             previous = history.get(identity, [])
             if ordinal < 1 or (previous and (ordinal != previous[-1]["retry"] + 1 or previous[-1]["outcome"] != "failed")):
@@ -673,12 +677,15 @@ def selection_evidence(directory: Path, result: dict, members: dict, resumed: se
                                      for identity, value in frame_outcomes.items())
                 if type(summary[field]) is not int or summary[field] != observed_count:
                     raise ValueError(f"{field} suite total disagrees with raw outcomes")
-        ignored = {identity for identity, meta in members.items()
-                   if meta["alias"] == alias and meta["active"] and meta["ignored"] and identity not in resumed}
-        observed = {identity for identity, outcome in outcomes.items()
-                    if outcome == "ignored" and members[identity]["alias"] == alias}
-        if count != len(ignored | observed):
+        # Native suite totals count annotations, even with --run-ignored all or
+        # expression filters. Only selection metadata identifies skipped tests.
+        annotated = {identity for identity, meta in members.items() if meta["alias"] == alias and meta["ignored"]}
+        legacy_observed = {identity for identity, outcome in outcomes.items()
+                          if outcome == "ignored" and members[identity]["alias"] == alias and not members[identity]["annotation_known"]}
+        if count != len(annotated | legacy_observed):
             raise ValueError("ignored summary cannot be reconciled to exact identities")
+        ignored = {identity for identity, meta in members.items()
+                   if meta["alias"] == alias and meta["active"] and meta["skipped"]}
         for identity in ignored:
             if identity in outcomes and outcomes[identity] != "ignored":
                 raise ValueError("ignored inventory disagrees with execution")
@@ -710,7 +717,7 @@ def selection_evidence(directory: Path, result: dict, members: dict, resumed: se
         if extra:
             if (result["native_exit_code"] in (None, 0) or result["exit_code"] == 0 or
                     not extra <= aborted & started or any(
-                        not members[i]["active"] or i in resumed for i in extra)):
+                        not members[i]["active"] or members[i]["skipped"] or i in resumed for i in extra)):
                 raise ValueError("unexplained JUnit outcomes absent from raw events")
             outcomes.update({identity: "failed" for identity in extra})
         # Nextest omits ignored cases in JUnit; either omission or explicit skipped is valid.
@@ -786,7 +793,8 @@ class Evidence:
         if type(row["selection_index"]) is not int or type(row["event_line"]) is not int:
             raise ValueError("invalid event reference")
         outcomes, history, _ = results[row["selection_index"]]
-        last_index = max(index for index, (outcomes, _, _) in results.items() if identity in outcomes)
+        last_index = max(index for index, (outcomes, _, _) in results.items()
+                         if identity in outcomes and outcomes[identity] != "ignored")
         if row["selection_index"] != last_index:
             raise ValueError("pass reference was superseded in this attempt")
         if outcomes.get(identity) != "ok" or history[identity][-1]["event_line"] != row["event_line"]:
@@ -1374,7 +1382,7 @@ def run_nextest(args: argparse.Namespace) -> int:
                         raise RuntimeError("ambiguous nextest identity across selections")
                     binary_ids[identity] = binary
             known_tests = set().union(*({i for i, meta in inventory((record_dir / f"listing-{n}.json").read_text())[0].items()
-                                        if meta["active"]} for n in range(1, len(selections) + 1)))
+                                        if meta["active"] and not meta["skipped"]} for n in range(1, len(selections) + 1)))
             # Shared credit applies only to this invocation's active selection.
             resumed &= known_tests
             run_record["resumed_tests"] = sorted(resumed)

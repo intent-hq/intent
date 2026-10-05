@@ -2678,24 +2678,415 @@ running 1 test
 }
 
 
+CAPTURED_IGNORED_MODES = {
+    'all': {
+        'listing': '''{
+  "rust-suites": {
+    "coverage-probe": {
+      "package-name": "coverage-probe",
+      "binary-id": "coverage-probe",
+      "binary-name": "coverage_probe",
+      "testcases": {
+        "opt_in": {
+          "kind": "test",
+          "ignored": true,
+          "filter-match": {
+            "status": "matches"
+          }
+        },
+        "ordinary": {
+          "kind": "test",
+          "ignored": false,
+          "filter-match": {
+            "status": "matches"
+          }
+        }
+      }
+    }
+  }
+}''',
+        'events': '''{"type":"suite","event":"started","test_count":2,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$opt_in"}
+{"type":"test","event":"ok","name":"coverage-probe::coverage_probe$opt_in","exec_time":0.02726781}
+{"type":"suite","event":"ok","passed":1,"failed":0,"ignored":1,"measured":0,"filtered_out":0,"exec_time":0.02726781,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"suite","event":"started","test_count":2,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$ordinary"}
+{"type":"test","event":"ok","name":"coverage-probe::coverage_probe$ordinary","exec_time":0.024622307}
+{"type":"suite","event":"ok","passed":1,"failed":0,"ignored":1,"measured":0,"filtered_out":0,"exec_time":0.024622307,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+''',
+        'junit': '''<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="2" skipped="0" failures="0" errors="0" uuid="24918fef-65f0-4ed1-956f-7d06bfb2ccde" timestamp="2026-10-05T15:55:14.097+00:00" time="0.070">
+    <testsuite name="coverage-probe" tests="2" skipped="0" errors="0" failures="0">
+        <testcase name="opt_in" classname="coverage-probe" timestamp="2026-10-05T15:55:14.098+00:00" time="0.027"/>
+        <testcase name="ordinary" classname="coverage-probe" timestamp="2026-10-05T15:55:14.125+00:00" time="0.025"/>
+    </testsuite>
+</testsuites>
+''',
+    },
+    'only': {
+        'listing': '''{
+  "rust-suites": {
+    "coverage-probe": {
+      "package-name": "coverage-probe",
+      "binary-id": "coverage-probe",
+      "binary-name": "coverage_probe",
+      "testcases": {
+        "opt_in": {
+          "kind": "test",
+          "ignored": true,
+          "filter-match": {
+            "status": "matches"
+          }
+        },
+        "ordinary": {
+          "kind": "test",
+          "ignored": false,
+          "filter-match": {
+            "status": "mismatch",
+            "reason": "ignored"
+          }
+        }
+      }
+    }
+  }
+}''',
+        'events': '''{"type":"suite","event":"started","test_count":1,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$ordinary"}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$opt_in"}
+{"type":"test","event":"ignored","name":"coverage-probe::coverage_probe$ordinary"}
+{"type":"test","event":"ok","name":"coverage-probe::coverage_probe$opt_in","exec_time":0.053474325}
+{"type":"suite","event":"ok","passed":1,"failed":0,"ignored":1,"measured":0,"filtered_out":18446744073709551615,"exec_time":0.053474325,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+''',
+        'junit': '''<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="1" skipped="0" failures="0" errors="0" uuid="c44657f5-5ae5-4f35-b74a-443083b1f700" timestamp="2026-10-05T15:55:14.906+00:00" time="0.056">
+    <testsuite name="coverage-probe" tests="1" skipped="0" errors="0" failures="0">
+        <testcase name="opt_in" classname="coverage-probe" timestamp="2026-10-05T15:55:14.909+00:00" time="0.053"/>
+    </testsuite>
+</testsuites>
+''',
+    },
+    'all-filtered': {
+        'listing': '''{
+  "rust-suites": {
+    "coverage-probe": {
+      "package-name": "coverage-probe",
+      "binary-id": "coverage-probe",
+      "binary-name": "coverage_probe",
+      "testcases": {
+        "normal1": {
+          "kind": "test",
+          "ignored": false,
+          "filter-match": {
+            "status": "matches"
+          }
+        },
+        "normal2": {
+          "kind": "test",
+          "ignored": false,
+          "filter-match": {
+            "status": "mismatch",
+            "reason": "expression"
+          }
+        },
+        "normal3": {
+          "kind": "test",
+          "ignored": false,
+          "filter-match": {
+            "status": "mismatch",
+            "reason": "expression"
+          }
+        },
+        "opt1": {
+          "kind": "test",
+          "ignored": true,
+          "filter-match": {
+            "status": "mismatch",
+            "reason": "expression"
+          }
+        },
+        "opt2": {
+          "kind": "test",
+          "ignored": true,
+          "filter-match": {
+            "status": "mismatch",
+            "reason": "expression"
+          }
+        }
+      }
+    }
+  }
+}''',
+        'events': '''{"type":"suite","event":"started","test_count":3,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$normal1"}
+{"type":"test","event":"ok","name":"coverage-probe::coverage_probe$normal1","exec_time":0.004047634}
+{"type":"suite","event":"ok","passed":1,"failed":0,"ignored":2,"measured":0,"filtered_out":2,"exec_time":0.004047634,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+''',
+        'junit': '''<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="1" skipped="0" failures="0" errors="0" uuid="3b69eb06-e877-4a77-99cb-421ad2bb2b38" timestamp="2026-10-05T16:01:03.355+00:00" time="0.004">
+    <testsuite name="coverage-probe" tests="1" skipped="0" errors="0" failures="0">
+        <testcase name="normal1" classname="coverage-probe" timestamp="2026-10-05T16:01:03.355+00:00" time="0.004"/>
+    </testsuite>
+</testsuites>
+''',
+    },
+    'only-filtered': {
+        'listing': '''{
+  "rust-suites": {
+    "coverage-probe": {
+      "package-name": "coverage-probe",
+      "binary-id": "coverage-probe",
+      "binary-name": "coverage_probe",
+      "testcases": {
+        "normal1": {
+          "kind": "test",
+          "ignored": false,
+          "filter-match": {
+            "status": "mismatch",
+            "reason": "ignored"
+          }
+        },
+        "normal2": {
+          "kind": "test",
+          "ignored": false,
+          "filter-match": {
+            "status": "mismatch",
+            "reason": "ignored"
+          }
+        },
+        "normal3": {
+          "kind": "test",
+          "ignored": false,
+          "filter-match": {
+            "status": "mismatch",
+            "reason": "ignored"
+          }
+        },
+        "opt1": {
+          "kind": "test",
+          "ignored": true,
+          "filter-match": {
+            "status": "matches"
+          }
+        },
+        "opt2": {
+          "kind": "test",
+          "ignored": true,
+          "filter-match": {
+            "status": "mismatch",
+            "reason": "expression"
+          }
+        }
+      }
+    }
+  }
+}''',
+        'events': '''{"type":"suite","event":"started","test_count":2,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$normal1"}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$normal2"}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$normal3"}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$opt1"}
+{"type":"test","event":"ignored","name":"coverage-probe::coverage_probe$normal1"}
+{"type":"test","event":"ignored","name":"coverage-probe::coverage_probe$normal2"}
+{"type":"test","event":"ignored","name":"coverage-probe::coverage_probe$normal3"}
+{"type":"test","event":"ok","name":"coverage-probe::coverage_probe$opt1","exec_time":0.005019092}
+{"type":"suite","event":"ok","passed":1,"failed":0,"ignored":2,"measured":0,"filtered_out":18446744073709551615,"exec_time":0.005019092,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+''',
+        'junit': '''<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="1" skipped="0" failures="0" errors="0" uuid="7552f528-dcdf-4ce3-b4b1-99fdc3879661" timestamp="2026-10-05T16:01:03.999+00:00" time="0.005">
+    <testsuite name="coverage-probe" tests="1" skipped="0" errors="0" failures="0">
+        <testcase name="opt1" classname="coverage-probe" timestamp="2026-10-05T16:01:03.999+00:00" time="0.005"/>
+    </testsuite>
+</testsuites>
+''',
+    },
+}
+
+# Native tool-filtered stdout/JUnit; replay uses the pre-resume inventory.
+CAPTURED_MODE_RESUME = {
+    ('default', 'fresh'): {
+        'events': '''{"type":"suite","event":"started","test_count":2,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$opt_in"}
+{"type":"suite","event":"ok","passed":0,"failed":0,"ignored":1,"measured":0,"filtered_out":0,"exec_time":0,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"suite","event":"started","test_count":2,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$ordinary"}
+{"type":"test","event":"ok","name":"coverage-probe::coverage_probe$ordinary","exec_time":0.003753527}
+{"type":"suite","event":"ok","passed":1,"failed":0,"ignored":1,"measured":0,"filtered_out":0,"exec_time":0.003753527,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+''',
+        'junit': '''<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="1" skipped="0" failures="0" errors="0" uuid="8b37de6f-7f9c-46ba-8065-eccc709c1c3b" timestamp="2026-10-05T16:02:58.130+00:00" time="0.004">
+    <testsuite name="coverage-probe" tests="1" skipped="0" errors="0" failures="0">
+        <testcase name="ordinary" classname="coverage-probe" timestamp="2026-10-05T16:02:58.130+00:00" time="0.004"/>
+    </testsuite>
+</testsuites>
+''',
+        'listing': '''{
+  "rust-suites": {
+    "coverage-probe": {
+      "package-name": "coverage-probe",
+      "binary-id": "coverage-probe",
+      "binary-name": "coverage_probe",
+      "testcases": {
+        "opt_in": {
+          "kind": "test",
+          "ignored": true,
+          "filter-match": {
+            "status": "mismatch",
+            "reason": "ignored"
+          }
+        },
+        "ordinary": {
+          "kind": "test",
+          "ignored": false,
+          "filter-match": {
+            "status": "matches"
+          }
+        }
+      }
+    }
+  }
+}''',
+    },
+    ('default', 'resume_ordinary'): {
+        'events': '''{"type":"suite","event":"started","test_count":1,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$opt_in"}
+{"type":"suite","event":"ok","passed":0,"failed":0,"ignored":1,"measured":0,"filtered_out":0,"exec_time":0,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+''',
+        'junit': '''<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="0" skipped="0" failures="0" errors="0" uuid="25bdcee1-7db8-4ed8-999c-fbe784cff121" timestamp="2026-10-05T16:02:58.313+00:00" time="0.000">
+</testsuites>
+''',
+    },
+    ('default', 'resume_opt_in'): {
+        'events': '''{"type":"suite","event":"started","test_count":2,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$opt_in"}
+{"type":"suite","event":"ok","passed":0,"failed":0,"ignored":1,"measured":0,"filtered_out":0,"exec_time":0,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"suite","event":"started","test_count":2,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$ordinary"}
+{"type":"test","event":"ok","name":"coverage-probe::coverage_probe$ordinary","exec_time":0.00424383}
+{"type":"suite","event":"ok","passed":1,"failed":0,"ignored":1,"measured":0,"filtered_out":0,"exec_time":0.00424383,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+''',
+        'junit': '''<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="1" skipped="0" failures="0" errors="0" uuid="bd3a3e27-495f-4a11-baae-9b0242b7d092" timestamp="2026-10-05T16:02:58.487+00:00" time="0.005">
+    <testsuite name="coverage-probe" tests="1" skipped="0" errors="0" failures="0">
+        <testcase name="ordinary" classname="coverage-probe" timestamp="2026-10-05T16:02:58.487+00:00" time="0.004"/>
+    </testsuite>
+</testsuites>
+''',
+    },
+    ('default', 'resume_both'): {
+        'events': '''{"type":"suite","event":"started","test_count":1,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$opt_in"}
+{"type":"suite","event":"ok","passed":0,"failed":0,"ignored":1,"measured":0,"filtered_out":0,"exec_time":0,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+''',
+        'junit': '''<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="0" skipped="0" failures="0" errors="0" uuid="d647ceff-9ab8-4947-8cb8-a4673b30d8d0" timestamp="2026-10-05T16:02:58.660+00:00" time="0.000">
+</testsuites>
+''',
+    },
+    ('all', 'resume_ordinary'): {
+        'events': '''{"type":"suite","event":"started","test_count":1,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$opt_in"}
+{"type":"suite","event":"ok","passed":0,"failed":0,"ignored":1,"measured":0,"filtered_out":1,"exec_time":0,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"suite","event":"started","test_count":1,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"ok","name":"coverage-probe::coverage_probe$opt_in","exec_time":0.004719626}
+{"type":"suite","event":"ok","passed":1,"failed":0,"ignored":1,"measured":0,"filtered_out":0,"exec_time":0.004719626,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+''',
+        'junit': '''<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="1" skipped="0" failures="0" errors="0" uuid="ccdd9726-8bc9-4f0a-907b-7779e4b40256" timestamp="2026-10-05T16:02:59.200+00:00" time="0.005">
+    <testsuite name="coverage-probe" tests="1" skipped="0" errors="0" failures="0">
+        <testcase name="opt_in" classname="coverage-probe" timestamp="2026-10-05T16:02:59.201+00:00" time="0.005"/>
+    </testsuite>
+</testsuites>
+''',
+    },
+    ('all', 'resume_opt_in'): {
+        'events': '''{"type":"suite","event":"started","test_count":2,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$ordinary"}
+{"type":"test","event":"ok","name":"coverage-probe::coverage_probe$ordinary","exec_time":0.005466696}
+{"type":"suite","event":"ok","passed":1,"failed":0,"ignored":1,"measured":0,"filtered_out":0,"exec_time":0.005466696,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+''',
+        'junit': '''<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="1" skipped="0" failures="0" errors="0" uuid="a96b452d-4009-4527-be94-b82a39287b59" timestamp="2026-10-05T16:02:59.384+00:00" time="0.006">
+    <testsuite name="coverage-probe" tests="1" skipped="0" errors="0" failures="0">
+        <testcase name="ordinary" classname="coverage-probe" timestamp="2026-10-05T16:02:59.384+00:00" time="0.005"/>
+    </testsuite>
+</testsuites>
+''',
+    },
+    ('all', 'resume_both'): {
+        'events': '''''',
+        'junit': '''<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="0" skipped="0" failures="0" errors="0" uuid="e783c4c8-608b-4551-b0dc-783c1f1f4e72" timestamp="2026-10-05T16:02:59.573+00:00" time="0.000">
+</testsuites>
+''',
+    },
+    ('only', 'resume_ordinary'): {
+        'events': '''{"type":"suite","event":"started","test_count":1,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$ordinary"}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$opt_in"}
+{"type":"test","event":"ignored","name":"coverage-probe::coverage_probe$ordinary"}
+{"type":"test","event":"ok","name":"coverage-probe::coverage_probe$opt_in","exec_time":0.004094281}
+{"type":"suite","event":"ok","passed":1,"failed":0,"ignored":1,"measured":0,"filtered_out":18446744073709551615,"exec_time":0.004094281,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+''',
+        'junit': '''<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="1" skipped="0" failures="0" errors="0" uuid="a15979ba-f8d3-4740-8908-c4791446d938" timestamp="2026-10-05T16:03:00.240+00:00" time="0.004">
+    <testsuite name="coverage-probe" tests="1" skipped="0" errors="0" failures="0">
+        <testcase name="opt_in" classname="coverage-probe" timestamp="2026-10-05T16:03:00.240+00:00" time="0.004"/>
+    </testsuite>
+</testsuites>
+''',
+    },
+    ('only', 'resume_opt_in'): {
+        'events': '''{"type":"suite","event":"started","test_count":1,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$ordinary"}
+{"type":"suite","event":"ok","passed":0,"failed":0,"ignored":1,"measured":0,"filtered_out":0,"exec_time":0,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+''',
+        'junit': '''<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="0" skipped="0" failures="0" errors="0" uuid="e1bb1fce-8d5a-42c2-b0e1-d7723bc7215e" timestamp="2026-10-05T16:03:00.381+00:00" time="0.000">
+</testsuites>
+''',
+    },
+    ('only', 'resume_both'): {
+        'events': '''{"type":"suite","event":"started","test_count":1,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$ordinary"}
+{"type":"suite","event":"ok","passed":0,"failed":0,"ignored":1,"measured":0,"filtered_out":0,"exec_time":0,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+''',
+        'junit': '''<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="0" skipped="0" failures="0" errors="0" uuid="4167a3cb-7b19-4eec-9af7-9f40778b55ef" timestamp="2026-10-05T16:03:00.533+00:00" time="0.000">
+</testsuites>
+''',
+    },
+}
+
 class CapturedNextestTests(unittest.TestCase):
     setUp = AttemptReceiptTests.setUp
     scope = staticmethod(AttemptReceiptTests.scope)
     snapshot = staticmethod(AttemptReceiptTests.snapshot)
 
     def harness(self, root, fixture, count=1, interrupted=False):
-        def lines():
-            yield from fixture['events'].splitlines(keepends=True)
+        fixtures = fixture if isinstance(fixture, list) else [fixture] * count
+        def lines(item):
+            yield from item['events'].splitlines(keepends=True)
             if interrupted:
                 raise gate.Terminated(gate.signal.SIGTERM)
-        harness = PlannedRunHarness(root, [(lines(), 100 if interrupted else 0) for _ in range(count)])
-        harness.listing = fixture['listing']
+        harness = PlannedRunHarness(root, [(lines(item), 100 if interrupted else 0) for item in fixtures])
+        if isinstance(fixture, list):
+            listings = iter(fixtures)
+            original_run = harness.fake_run
+            def run(command, cwd, env=None):
+                if command[:3] == ['cargo', 'nextest', 'list']:
+                    harness.listing = next(listings)['listing']
+                return original_run(command, cwd, env)
+            harness.fake_run = run
+        else:
+            harness.listing = fixture['listing']
+        children = iter(fixtures)
         original = harness.fake_popen
         def popen(command, **kwargs):
             config = Path(command[command.index('--tool-config-file') + 1].split(':', 1)[1])
             profile = command[command.index('--profile') + 1]
             junit = tomllib.loads(config.read_text())['profile'][profile]['junit']['path']
-            (config.parent / junit).write_text(fixture['junit'])
+            (config.parent / junit).write_text(next(children)['junit'])
             return original(command, **kwargs)
         harness.fake_popen = popen
         return harness
@@ -2726,7 +3117,7 @@ class CapturedNextestTests(unittest.TestCase):
                 self.assertTrue(proof['errors'])
                 self.assertFalse((directory.parent.parent / 'complete').exists())
 
-    def test_ignored_filter_reason_must_agree_with_metadata(self):
+    def test_ignored_filter_reason_is_independent_of_annotation(self):
         listing = json.loads(CAPTURED_NEXTEST['filtered']['listing'])
         tests = listing['rust-suites']['coverage-probe']['testcases']
         tests['ignored']['filter-match']['reason'] = 'expression'
@@ -2734,8 +3125,8 @@ class CapturedNextestTests(unittest.TestCase):
         self.assertFalse(members['coverage-probe', 'ignored']['active'])
         tests['ignored']['filter-match']['reason'] = 'ignored'
         tests['ignored']['ignored'] = False
-        with self.assertRaises(ValueError):
-            gate.inventory(json.dumps(listing))
+        members, _ = gate.inventory(json.dumps(listing))
+        self.assertTrue(members['coverage-probe', 'ignored']['active'])
 
     def test_cancellation_exception_rejects_missing_or_conflicting_proof(self):
         fixture = CAPTURED_NEXTEST['interrupted']
@@ -2787,6 +3178,141 @@ class CapturedNextestTests(unittest.TestCase):
             self.assertEqual(row['failure_evidence']['source'], 'junit')
             self.assertNotIn('event_line', row)
             self.assertEqual(self.snapshot(old), frozen)
+
+    def test_explicit_ignored_modes_execute_shortcut_force_and_overlap(self):
+        for mode, overlap in product(('all', 'only'), (False, True)):
+            with self.subTest(mode=mode, overlap=overlap), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                plans = [f'-p coverage-probe --lib --run-ignored {mode}'] * (2 if overlap else 1)
+                fixture = CAPTURED_IGNORED_MODES[mode]
+                passed = [['coverage-probe', name] for name in (['opt_in', 'ordinary'] if mode == 'all' else ['opt_in'])]
+                ignored = [] if mode == 'all' else [['coverage-probe', 'ordinary']]
+                frozen = {}
+                for step in ('execution', 'shortcut', 'force'):
+                    child = self.harness(root, fixture, count=0 if step == 'shortcut' else len(plans))
+                    self.assertEqual(child.execute(make_args(root, plan=plans,
+                        resume='0' if step == 'execution' else '1', force='1' if step == 'force' else '0')), 0)
+                    directory, proof = self.proof(root, plans)
+                    self.assertTrue(proof['complete'])
+                    self.assertEqual(proof['categories']['resumed-passed' if step == 'shortcut' else 'executed-passed'], passed)
+                    self.assertEqual(proof['categories']['ignored'], ignored)
+                    self.assertEqual(proof['inactive_filtered'], [])
+                    for old, snapshot in frozen.items():
+                        self.assertEqual(self.snapshot(old), snapshot)
+                    frozen[directory] = self.snapshot(directory)
+
+    def test_ignored_modes_combine_with_expression_filters(self):
+        for mode in ('all', 'only'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                name = 'normal1' if mode == 'all' else 'opt1'
+                plans = [f'-p coverage-probe --lib --run-ignored {mode} -E test(={name})']
+                fixture = CAPTURED_IGNORED_MODES[mode + '-filtered']
+                for step in ('execution', 'shortcut', 'force'):
+                    child = self.harness(root, fixture, count=0 if step == 'shortcut' else 1)
+                    self.assertEqual(child.execute(make_args(root, plan=plans,
+                        resume='0' if step == 'execution' else '1', force='1' if step == 'force' else '0')), 0)
+                    _, proof = self.proof(root, plans)
+                    self.assertTrue(proof['complete'])
+                    self.assertEqual(proof['categories']['resumed-passed' if step == 'shortcut' else 'executed-passed'], [['coverage-probe', name]])
+                    self.assertEqual(proof['categories']['ignored'], [] if mode == 'all' else
+                        [['coverage-probe', n] for n in ('normal1', 'normal2', 'normal3')])
+                    self.assertEqual(proof['inactive_filtered'], [['coverage-probe', n] for n in
+                        (('normal2', 'normal3', 'opt1', 'opt2') if mode == 'all' else ('opt2',))])
+
+    def test_ignored_mode_overlap_does_not_supersede_executed_passes(self):
+        for modes in (('all', 'only'), ('only', 'all')):
+            with self.subTest(modes=modes), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                plans = [f'-p coverage-probe --lib --run-ignored {m}' for m in modes]
+                fixtures = [CAPTURED_IGNORED_MODES[m] for m in modes]
+                frozen = {}
+                for step in ('execution', 'shortcut', 'force'):
+                    child = self.harness(root, [] if step == 'shortcut' else fixtures)
+                    self.assertEqual(child.execute(make_args(root, plan=plans,
+                        resume='0' if step == 'execution' else '1', force='1' if step == 'force' else '0')), 0)
+                    directory, proof = self.proof(root, plans)
+                    self.assertTrue(proof['complete'])
+                    self.assertEqual(proof['categories']['ignored'], [])
+                    self.assertEqual(proof['categories']['resumed-passed' if step == 'shortcut' else 'executed-passed'],
+                                     [['coverage-probe', 'opt_in'], ['coverage-probe', 'ordinary']])
+                    for old, snapshot in frozen.items():
+                        self.assertEqual(self.snapshot(old), snapshot)
+                    frozen[directory] = self.snapshot(directory)
+
+    def test_prior_pass_is_not_resume_credit_for_currently_skipped_test(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            all_plans = ['-p coverage-probe --lib --run-ignored all']
+            only_plans = ['-p coverage-probe --lib --run-ignored only']
+            self.assertEqual(self.harness(root, CAPTURED_IGNORED_MODES['all']).execute(make_args(root, plan=all_plans)), 0)
+            source, _ = self.proof(root, all_plans)
+            frozen = self.snapshot(source)
+            fixture = dict(CAPTURED_IGNORED_MODES['only'],
+                events=event('ignored', 'coverage-probe::coverage_probe$ordinary') +
+                    suite_event(crate='coverage-probe', binary='coverage_probe', passed=0, failed=0, ignored=1),
+                junit='<testsuites/>')
+            self.assertEqual(self.harness(root, fixture).execute(make_args(root, plan=only_plans, resume='1')), 0)
+            _, proof = self.proof(root, only_plans)
+            self.assertEqual(proof['categories']['resumed-passed'], [['coverage-probe', 'opt_in']])
+            self.assertEqual(proof['categories']['ignored'], [['coverage-probe', 'ordinary']])
+            self.assertEqual(self.snapshot(source), frozen)
+
+    def test_ignored_annotation_cannot_hide_missing_or_contradictory_execution(self):
+        original = CAPTURED_IGNORED_MODES['all']
+        junit = '\n'.join(line for line in original['junit'].splitlines() if 'name="opt_in"' not in line)
+        ignored = original['events'].replace('"event":"ok","name":"coverage-probe::coverage_probe$opt_in"',
+                                            '"event":"ignored","name":"coverage-probe::coverage_probe$opt_in"')
+        ignored = ignored.replace('"passed":1', '"passed":0', 1)
+        missing = '\n'.join(line for line in ignored.splitlines() if '$opt_in"' not in line) + '\n'
+        for name, raw in (('contradictory', ignored), ('missing', missing)):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                plans = ['-p coverage-probe --lib --run-ignored all']
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(self.harness(root, dict(original, events=raw, junit=junit)).execute(
+                        make_args(root, plan=plans)), 2)
+                _, proof = self.proof(root, plans)
+                self.assertFalse(proof['complete'])
+                self.assertEqual(proof['categories']['ignored'], [])
+
+    def test_native_ignored_modes_with_each_partial_resume_filter(self):
+        credit_cases = {'fresh': [], 'resume_ordinary': ['ordinary'], 'resume_opt_in': ['opt_in'],
+                        'resume_both': ['opt_in', 'ordinary'], 'force': ['opt_in', 'ordinary']}
+        for mode, case in product(('default', 'all', 'only'), credit_cases):
+            with self.subTest(mode=mode, case=case), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                credit = credit_cases[case]
+                frozen = {}
+                if credit:
+                    seed = dict(CAPTURED_IGNORED_MODES['all'],
+                        events=''.join(event('ok', 'coverage-probe::coverage_probe$' + name) for name in credit),
+                        junit='<testsuites><testsuite name="coverage-probe">' +
+                            ''.join(f'<testcase name="{name}"/>' for name in credit) + '</testsuite></testsuites>')
+                    child = self.harness(root, seed)
+                    child.runs = [(lines, 101) for lines, _ in child.runs]
+                    seed_plans = ['-p coverage-probe --run-ignored all']
+                    self.assertEqual(child.execute(make_args(root, plan=seed_plans)), 101)
+                    source, _ = self.proof(root, seed_plans)
+                    frozen[source] = self.snapshot(source)
+                base = CAPTURED_MODE_RESUME['default', 'fresh'] if mode == 'default' else CAPTURED_IGNORED_MODES[mode]
+                fixture = base if case in ('fresh', 'force') else dict(base, **CAPTURED_MODE_RESUME[mode, case])
+                plans = [f'-p coverage-probe --lib --run-ignored {mode}']
+                self.assertEqual(self.harness(root, fixture).execute(make_args(root, plan=plans,
+                    resume='1', force='1' if case == 'force' else '0')), 0)
+                directory, proof = self.proof(root, plans)
+                executable = {'ordinary'} if mode == 'default' else {'opt_in'} if mode == 'only' else {'opt_in', 'ordinary'}
+                resumed = executable & set(credit) if case != 'force' else set()
+                for category, names in (('executed-passed', executable - resumed), ('resumed-passed', resumed),
+                                        ('ignored', {'opt_in', 'ordinary'} - executable)):
+                    self.assertEqual(proof['categories'][category], [['coverage-probe', name] for name in sorted(names)])
+                self.assertTrue(proof['complete'])
+                frozen[directory] = self.snapshot(directory)
+                shortcut = self.harness(root, base, count=0)
+                self.assertEqual(shortcut.execute(make_args(root, plan=plans, resume='1')), 0)
+                self.assertEqual(shortcut.run_commands, [])
+                for old, snapshot in frozen.items():
+                    self.assertEqual(self.snapshot(old), snapshot)
 
     def test_actual_ignored_metadata_and_frames_complete_and_shortcut(self):
         for case, plans in product(('full', 'filtered'), ([], ['-p coverage-probe --lib'],
