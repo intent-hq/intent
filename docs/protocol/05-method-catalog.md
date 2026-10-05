@@ -29,20 +29,28 @@ The prepared [desktop control contract (§5.51)](./methods/desktop.md) adds four
 user/executor router methods and one daemon-only reverse RPC. Agent lifecycle
 and actions are MCP-only; `desktopControl: 1` gates support independently at both ends.
 
-The documented surface reserves **436 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
+The prepared [GitLab checkout contract (§5.53)](./methods/repository-checkout.md)
+adds six pre-workspace router methods. `gitlabCheckout: 1` gates the complete
+contract on the selected destination; it does not confer host or project access.
 
-- **Router methods:** 381 methods dispatched via the main router (`router::dispatch`)
-- **Fast-path methods:** 55 methods intercepted before the router for performance or per-connection state
+The prepared onboarding request `host.prepareProviderAdapters` (§5.14 below)
+adds one owner-only fast-path method. Its acknowledgement is not a readiness claim;
+older daemons may reject it without blocking onboarding.
+
+The documented surface reserves **443 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
+
+- **Router methods:** 387 methods dispatched via the main router (`router::dispatch`)
+- **Fast-path methods:** 56 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 0; use canonical Git read names
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 5 notifications: `events.event` (§6.3) and the socket-private `workspace.repositoryContext.retired`, `workspace.repositorySelection.retired`, `accept-changes.retired`, `sourceControl.read.retired` controls (§6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 6 methods total — 2 are **dual-role** and counted within the 436 dispatchable names (`browser.exec`, `host.openInEditor`), and 4 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) — see §5.9, §5.14 and the reverse-RPC list below
+- **Client-served reverse RPCs:** 6 methods total — 2 are **dual-role** and counted within the 443 dispatchable names (`browser.exec`, `host.openInEditor`), and 4 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) — see §5.9, §5.14 and the reverse-RPC list below
 
-**Total:** 436 dispatchable names + 5 notifications. Of the 6 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 4 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) are daemon→client-only reverse RPCs, never dispatched client→server.
+**Total:** 443 dispatchable names + 5 notifications. Of the 6 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 4 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
-The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.52) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
+The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.53) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
 
 **Prepared GitLab repository additions:** the [repository context and selection
 contracts](methods/workspace.md#repository-context), [native review and commit
@@ -53,7 +61,7 @@ capabilities gate support; catalog entries do not grant permission or establish
 which desktop release contains the feature. The methods below lead the component
 pin, while all existing methods and prepared extensions remain present.
 
-### Router methods by namespace (381 total)
+### Router methods by namespace (387 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
@@ -97,7 +105,7 @@ pin, while all existing methods and prepared extensions remain present.
 | sentry | 8 | assignIssue, authStatus, getIssue, ignoreIssue, listIssues, listProjects, resolveIssue, searchIssues |
 | settings | 4 | get, list, reset, update |
 | skill | 1 | list |
-| sourceControl | 10 | authStatus, cancelAuth, connect, getUser, identityProof.create, identityProof.delete, read.capture, read.detail, read.release, revoke — the provider-generic forge auth surface (§5.27 "Provider-generic auth — `sourceControl.*`"; v10.5, daemon-global; optional routing-only `workspaceId` on `authStatus` / `getUser` only) plus, in v10.8, the provider-generic guest half of the invite identity proof (`identityProof.create` / `identityProof.delete`, §5.27 "Identity proof"; `github.identityProof.*` are their `provider: "github"` aliases, separate dispatchable names like the auth rows). The `github.authStatus` / `connect` / `cancelAuth` / `revoke` / `getUser` rows of the `github` namespace are aliases of these with `provider: "github"` pinned; they remain separate dispatchable names (not `METHOD_ALIASES` entries) because their result shapes are the byte-identical pre-v10.5 projections |
+| sourceControl | 16 | authStatus, cancelAuth, checkout.branches, checkout.capture, checkout.project, checkout.projects, checkout.release, checkout.warm, connect, getUser, identityProof.create, identityProof.delete, read.capture, read.detail, read.release, revoke — the provider-generic forge auth surface (§5.27 "Provider-generic auth — `sourceControl.*`"; v10.5, daemon-global; optional routing-only `workspaceId` on `authStatus` / `getUser` only) plus, in v10.8, the provider-generic guest half of the invite identity proof (`identityProof.create` / `identityProof.delete`, §5.27 "Identity proof"; `github.identityProof.*` are their `provider: "github"` aliases, separate dispatchable names like the auth rows). The `github.authStatus` / `connect` / `cancelAuth` / `revoke` / `getUser` rows of the `github` namespace are aliases of these with `provider: "github"` pinned; they remain separate dispatchable names (not `METHOD_ALIASES` entries) because their result shapes are the byte-identical pre-v10.5 projections. The six prepared `checkout.*` methods (§5.53) require an explicit destination and original connection, without workspace routing |
 | specialist | 5 | create, delete, edit, get, list |
 | stats | 2 | getRateHistory, getUsage — `getRateHistory` is daemon-global (§5.39; v2.9, no `workspaceId`) |
 | system (router) | 1 | capabilities — machine-level capabilities, optional routing-only workspaceId; distinct from the `system.*` fast-path controls below (v2.3, see the note after the fast-path catalog) |
@@ -109,11 +117,11 @@ pin, while all existing methods and prepared extensions remain present.
 
 Namespaces without their own numbered subsection below (`accept-changes.*`, `file-tracking.*`, `drafts.*`, `host.*`) are covered in §5.14–§5.20; `browser.exec` is in §5.9 and the `browser.*` tab-registry methods are in §5.45.
 
-### Fast-path methods (55 total)
+### Fast-path methods (56 total)
 
-The following 55 methods are intercepted **before** the main router for performance or to access per-connection state. They share the same JSON-RPC envelope validation but are dispatched earlier in the connection task. The retired `invite.redeem` is not dispatchable at the current pin; `/invite` serves only inspect, accept, challenge and prove.
+The following 56 methods are intercepted **before** the main router for performance or to access per-connection state. They share the same JSON-RPC envelope validation but are dispatched earlier in the connection task. The retired `invite.redeem` is not dispatchable at the current pin; `/invite` serves only inspect, accept, challenge and prove.
 
-browser.closeTab, browser.exec, browser.listTabs, browser.navigateTab, browser.removeTab, browser.syncTabs, browser.upsertTab, client.hello, drafts.clear, drafts.get, drafts.set, events.subscribe, events.unsubscribe, host.checkAuggie, host.checkGh, host.checkGit, host.checkNode, host.createDirectory, host.directoryStatus, host.env, host.exec, host.execStream, host.execStream.cancel, host.execStream.write, host.findApp, host.findBinary, host.invite.create, host.listDirectory, host.listInstalledEditors, host.openInEditor, host.providerAuthStatus, host.providerDiscovery, host.providerTestPrompt, host.status, host.toolAvailability, invite.accept, invite.challenge, invite.inspect, invite.prove, note.presence.update, pairing.getInfo, pairing.getSelfInfo, presence.update, providers.setup.cancel, providers.setup.login, providers.setup.start, providers.setup.status, server.pairingInfo, server.rotateToken, system.gitCredential, system.importLegacy, system.requestUpdate, system.shutdown, system.status, workspace.invite.create
+browser.closeTab, browser.exec, browser.listTabs, browser.navigateTab, browser.removeTab, browser.syncTabs, browser.upsertTab, client.hello, drafts.clear, drafts.get, drafts.set, events.subscribe, events.unsubscribe, host.checkAuggie, host.checkGh, host.checkGit, host.checkNode, host.createDirectory, host.directoryStatus, host.env, host.exec, host.execStream, host.execStream.cancel, host.execStream.write, host.findApp, host.findBinary, host.invite.create, host.listDirectory, host.listInstalledEditors, host.openInEditor, host.prepareProviderAdapters, host.providerAuthStatus, host.providerDiscovery, host.providerTestPrompt, host.status, host.toolAvailability, invite.accept, invite.challenge, invite.inspect, invite.prove, note.presence.update, pairing.getInfo, pairing.getSelfInfo, presence.update, providers.setup.cancel, providers.setup.login, providers.setup.start, providers.setup.status, server.pairingInfo, server.rotateToken, system.gitCredential, system.importLegacy, system.requestUpdate, system.shutdown, system.status, workspace.invite.create
 
 The multiplayer methods (presence §5.47, invites §5.48) are fast-path because they act on per-connection state: `presence.update` sets the connection's **own** focus set and typing target (member workspaces only; transient, never persisted; returns the connection's opaque typing source handle) and `note.presence.update` the caller's own caret on a note it holds a `note.presence.subscribe` lease for (coalesced daemon-side, never persisted) — both feed the `presence:changed` / `note:presence` events (§6.5); `workspace.invite.create` (owner/member under §5.49; no linked-forge prerequisite with `hostMembership: 1`; otherwise the legacy owner-only policy; optional `pinLogin` with its v10.8 `pinProvider` / `pinHost`, `expiresInSecs` default 7 days) mints an invite the transport wraps into the `intent://invite?…` link, and the four `invite.*` methods are the unauthenticated join served on the `/invite` endpoint only: `invite.inspect` previews an open `(inviteId, secret)` → `{ workspaceId, workspaceTitle, hostname, prettyHostname, pinIdentity }`, with the required `pinIdentity` triple or explicit `null` (10.8; see [Selecting the guest identity](./methods/multiplayer.md#selecting-the-guest-identity) for the triple shape, legacy pins, and older-daemon omission rules); `invite.challenge` returns the same preview plus the single-use `nonce` and `nonceExpiresAt`, and the guest publishes the nonce under its forge account (`sourceControl.identityProof.create`); `invite.prove { …, nonce, login, proofId, provider?, host? }` verifies that proof and commits the join → `{ status: "authorized", token, principalId, login, workspaceId }` exactly once, and `invite.accept { …, credential }` is the returning guest's proof-less join with a credential this host minted earlier ([intent-hq/intentd#1963](https://github.com/intent-hq/intentd/pull/1963), [#1965](https://github.com/intent-hq/intentd/pull/1965)). `invite.redeem` — the earlier two-phase, host-run GitHub device-flow join — was removed from intentd by [#1969](https://github.com/intent-hq/intentd/pull/1969); its name stays listed above only until the pinned intentd advances past that removal, then this entry is dropped.
 
@@ -243,6 +251,7 @@ The `system.status` result also includes **additive** routing fields so an authe
   "localIps": ["192.168.1.10", "10.0.0.5"], // addresses the WSS listener actually answers on (bind-aware; empty when the listener is down)
   "hostname": "studio.local",               // local OS hostname
   "prettyHostname": "Clement's Mac Studio", // OS "pretty" device name (falls back to hostname)
+  "collaborationName": null, // owner-chosen sharing.machineName, null when unset/reset
   "tcAddress": "tcoWFwWCAAAQIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHw", // tailcat address — present only while the sidecar is running
   "host": {
     "deviceKind": "macStudio",
@@ -255,6 +264,12 @@ The `system.status` result also includes **additive** routing fields so an authe
 
 - `localIps` is **bind-aware** ([intent-hq/intentd#1656](https://github.com/intent-hq/intentd/pull/1656)): it names only addresses the running WSS listener actually answers on, not a blanket interface enumeration. A listener bound to specific addresses advertises exactly those — **loopback included** when bound (this is the diagnostic surface; the pairing surfaces below filter loopback out), and since `127.0.0.1` is always bound alongside a specific `server.bindAddress` set ([intent-hq/intentd#1695](https://github.com/intent-hq/intentd/pull/1695); §1.1) it always appears here next to the configured addresses — while an unspecified bind falls back to enumerating the machine's local addresses (virtual/container interfaces skipped): non-loopback IPv4 for `0.0.0.0`, plus non-link-local IPv6 for `::` — link-local (`fe80::/10`) is skipped as unusable without a zone index, while ULA (`fd00::/8`) addresses are advertised (the `::` listener is bound explicitly dual-stack, so the advertised IPv4 routes are reachable on every OS). With **no live TCP listener** (UDS-only daemon, stopped/failed WSS) it is **empty** — every entry would be a dead route — instead of the historical full enumeration. Always an array, never `null`. The interface enumerations come from a background-refreshed cache (~15s TTL) but the bind-set filter runs on the read path, so a runtime `server.bindAddress` change is reflected immediately while a changed interface list may take one refresh interval to appear.
 - `hostname` is the local OS hostname (falls back to `intent` when unresolvable), matching `server.pairingInfo` / `host.status`.
+- `collaborationName` (additive, presence-detected) is the owner-chosen
+  `sharing.machineName` override or explicit `null` when unset/reset. It appears in
+  both administrator and collaborator status projections. Use it only for
+  collaboration labels, preserving OS identity and personal device aliases; refresh
+  on normal status polling/reconnect and clear cached overrides on `null`. Older
+  daemons omit the field. See [the setting contract](./methods/settings.md#collaborator-facing-machine-name).
 - `prettyHostname` ([intent-hq/intentd#1466](https://github.com/intent-hq/intentd/pull/1466)) is the OS "pretty" device name (macOS Computer Name, e.g. "Clement's Mac Studio"), falling back to `hostname` when no pretty name is available — matching `server.pairingInfo` / `host.status`. Served from the same background-refreshed cache as `localIps`/`hostname`.
 - `host.deviceKind` / `host.hardwareModel` are optional, additive host-identity fields shared with `host.status` and `server.pairingInfo`. `deviceKind`, when known, is `"macMini" | "macStudio" | "laptop" | "desktop" | "server" | "cloudVm"`; `hardwareModel` is the raw OS product/model name. Both fields are omitted (never `null`) when unknown and must be detected by presence. Detection runs in the background-refreshed host cache, never on the RPC path.
 - **Tailcat address format:** literal `tc` followed by case-sensitive, unpadded base64url-encoded CBOR. This is an opaque endpoint, not a DNS hostname. Preserve its case through parsing, storage, and dialing. Only trim surrounding whitespace. The examples use a dummy public key; they do not identify a live server.
@@ -608,6 +623,91 @@ Live end-to-end provider test: spawns the provider's ACP adapter through the sam
 - **Auth-verdict cache coupling:** a passed test **promotes** the provider's cached `host.providerAuthStatus` verdict to a hard `true`; an `auth-required` failure **demotes** it to a hard `false` (the same demotion seam as the runtime spawn/prompt auth mapping) — in both directions the live result supersedes any probe already in flight. Other failure reasons leave the cache untouched.
 - `providers.catalog` rows (§5.38) always include `supportsTestPrompt`, which tells clients whether a provider supports this probe. It is `false` for `unsloth` because its first prompt can trigger a long model download or load. It is also `false` for `antigravity`, which requires a private guarded profile.
 
+#### `host.prepareProviderAdapters` (13.6, prepared)
+
+Best-effort background preparation of detected providers' pinned npm ACP adapters
+during first-time onboarding. This additive contract leads implementation; it
+does not establish a shipped release or change `host.providerDiscovery`.
+
+**Request and immediate response:**
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"host.prepareProviderAdapters","params":{"providerIds":["claude-code","codex","pi"]}}
+```
+
+```json
+{"jsonrpc":"2.0","id":1,"result":{"accepted":true}}
+```
+
+- `providerIds` is required: an array of at most 32 non-empty strings, each at most
+  64 UTF-8 bytes. Validate the entire array before scheduling any work; malformed
+  params yield `-32602` (Invalid params). An empty array is a successful no-op;
+  duplicates are collapsed. Unknown IDs and known but ineligible providers are
+  silently skipped, including when mixed with eligible IDs.
+- The only accepted parameter is `providerIds`; reject extra keys with `-32602`.
+  Clients cannot supply packages, versions, commands, arguments, environment,
+  paths, a working directory, or a workspace destination.
+- Authorize before scheduling: owner/administrator only, using the existing
+  host-mutation policy on authenticated UDS/WSS connections. Host members and
+  workspace guests receive `-32003` (Forbidden) with no work scheduled. Their
+  permission to read provider discovery does not grant preparation authority.
+- This is a direct daemon-host operation before workspace creation. Use the
+  captured onboarding connection to the host that will launch agents; no routing
+  through a focused workspace, remote node, or implicit default host.
+- `accepted: true` means the daemon accepted the bounded request for best-effort
+  consideration, including deduplicated/no-op requests. It does **not** mean any
+  adapter is installed, ready, authenticated or even eligible, nor that background
+  preparation is supported on this host's platform. Return before
+  eligibility probes or package downloads finish. There is no job ID, progress
+  subscription, completion event or status polling contract.
+
+**Eligibility and effects (daemon-owned):**
+
+Background preparation is currently supported on **Unix hosts only**. On Windows
+and other non-Unix hosts, an authorized, valid request returns `accepted: true`
+as a silent no-op; no preparation subprocess is started. Ordinary on-demand
+adapter download and agent launch on those hosts are unchanged.
+
+1. Re-evaluate on the daemon using its provider registry, current settings and
+   discovery/launch gates; client detection is only a hint. On Unix this supports
+   `claude-code`, `codex` and `pi` when their real provider CLI is detected, the
+   provider is not gated off, and the effective launch route uses its pinned npm
+   adapter. For Pi, retain the launch gate: missing/confirmed-too-old CLI is
+   ineligible; an inconclusive version probe alone does not disqualify a detected
+   CLI. Do not require or initiate authentication to prepare packages.
+2. Honor the current launch resolver: Claude, Codex and Pi all retain their
+   registry-pinned npm route. Legacy adapter path overrides are ignored and must
+   neither suppress preparation nor count as proof of a real provider CLI.
+   Require the same usable npm/npx toolchain as launch; never install or upgrade
+   provider CLIs or the toolchain.
+3. Select the exact package/version from the daemon registry and populate the
+   same npm/npx cache and execution environment used by real launches. Isolate
+   preparation from repository-local packages/configuration using launch's
+   existing isolation rules. Do not run the adapter entrypoint, create an ACP
+   session, prompt for login, or make a model request.
+4. Run eligible providers concurrently under a bounded daemon-owned limit;
+   coalesce repeated requests by effective adapter package/version and cache
+   context. Bound pending work and suppress repeated successful preparation while
+   the prepared cache remains usable; cache deletion or invalidation must allow
+   a later request to prepare again, even in the same daemon lifetime. Failed
+   attempts may retry after bounded backoff;
+   repeated discovery must not create a download storm. The acknowledgement
+   does not promise durable work across a daemon restart.
+5. Bound attempt duration and clean up preparation subprocesses on timeout or
+   shutdown. Offline, download or probe failure never blocks onboarding or marks
+   a provider unusable. A concurrent first agent launch retains its normal cache
+   resolution/install fallback and must not depend on preparation completing;
+   concurrent cache access must remain safe.
+
+**Client compatibility:** trigger after first-time onboarding detection, for all
+detected candidate IDs, without awaiting preparation to advance onboarding or
+refresh discovery. Consume rejections so there is no unhandled promise or error
+dialog. An older daemon may return `-32601` (Method not found); skip preparation
+for that connection, with no shell-execution fallback. Forbidden, transport and
+other failures are also non-blocking, without tight retries. No capability flag
+is added: this optional optimization is attempted directly and gracefully
+skipped when unsupported; a numeric protocol version is not a support probe.
+
 #### `host.providerDiscovery`
 
 Daemon-owned provider discovery: reports which CLI-backed agent providers are installed on the daemon host (binary resolution + npx fallback status, honoring valid `providers.paths` overrides), so clients render install state without probing `PATH` themselves.
@@ -701,4 +801,4 @@ Conventions used below: parameters marked **(req)** are required (a missing/`nul
 
 ### §5.x subsection index
 
-The per-namespace subsections (§5.1–§5.52) live in the [methods/](./methods/) directory; the canonical § → file map is the [§5.x subsections table in the README](./README.md#5x-subsections-methods).
+The per-namespace subsections (§5.1–§5.53) live in the [methods/](./methods/) directory; the canonical § → file map is the [§5.x subsections table in the README](./README.md#5x-subsections-methods).

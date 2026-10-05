@@ -44,5 +44,24 @@ These are **historical/aggregate read** helpers — distinct from live streaming
 | event.workspaceSummary | minutesAgo? | aggregated activity summary |
 | event.query | workspaceId (req), filter opts (eventType?, actorType?, actorId?, path?, minutesAgo?, limit?), paginate?: boolean, nextToken?: string | matching events — **legacy shape** (bare array, newest→oldest) when pagination is not engaged; **paginated envelope** `{ items, nextToken }` when either `paginate: true` or a `nextToken` is supplied (opt-in). `nextToken` is an opaque cursor for the next older page (`null` on the last page); pass it back as `nextToken` to fetch the next page. `limit` is clamped by the pagination policy when engaged. `eventType` accepts the **same glob syntax as `event.subscribe`** ([intentd#938](https://github.com/intent-hq/intentd/pull/938)): bare `*` = no type filter, `prefix:*` = category prefix match (e.g. `note:*` matches `note:created` / `note:updated` / `note:deleted`), anything else = exact match; matching is **case-sensitive** (`NOTE:*` matches nothing), mirroring subscribe's `starts_with` semantics — a `prefix:*` compiles to an index-served half-open range scan, not a `LIKE`, so `%` / `_` in a pattern are literal bytes. **Responses are size-bounded** ([monorepo#3347](https://github.com/intent-hq/monorepo/issues/3347)): when the row set would serialize past a ~700 KiB budget (sized so a full response stays below the daemon's internal 1 MiB large-frame warn threshold — a log-only diagnostic, far under the 40 MiB hard cap of §1.3), rows are walked in wire order (newest→oldest) with a running fair-share budget, and over-share rows have their unbounded fields (`data`, `metadata`, `actor`, session/correlation/parent ids) replaced by bounded structure-preserving previews — escaping-aware, so the bound holds on serialized bytes — plus **additive row-level markers** `truncated: true` and `originalBytes` (the row's full serialized size). The bounded scalar identity fields (`id`, `workspaceId`, `type`, `timestamp`, `actor.type`), row shape, and row count are always preserved (no silent row loss), and under-budget responses are byte-identical to the uncapped form. Applies to both response shapes; `nextToken` is unaffected by trimming. The **legacy (non-paginated) `limit` is clamped to [1, 500]** (default 50; previously unclamped — a negative value meant "no limit" in SQL); the paginated path keeps its [1, 200] clamp. |
 
+#### Recipient queue history
+
+For an agent caller, `event.query` and `event.agentActivity` (including their MCP
+bindings) remove payload copies from `agent:queue:*` events targeting that caller.
+Each matching row keeps `data.agentId` and, when present or derivable from the
+event's queue array, `data.queueLength`; all other `data` fields and the row's
+`metadata` are removed. This covers content, attachments, message metadata, and
+processing-event copies as well as queue snapshots. The count describes that
+historical event, not the current backlog.
+
+Event rows, their order, and pagination tokens are retained. Filtering applies to
+old snapshots too, without changing stored events or consuming queued messages;
+reading an earlier snapshot cannot reveal contents still pending now. Hooks use
+the owner agent's identity for the same filtering. Human history reads and
+other-agent queue history retain their existing behavior. Delivered messages
+remain readable through conversation history. See the
+[agent queue visibility contract](agents.md) for self-read counts, notices, and
+normal delivery.
+
 The singular `event.subscribe` / `event.unsubscribe` spellings are **no longer routable** on the wire (`-32601`); for live event streaming use the `events.subscribe` / `events.unsubscribe` fast-path (§6). The MCP bindings `ws.event.subscribe` / `ws.event.unsubscribe` share the one real subscription implementation with the `agent.subscribe` / `agent.unsubscribe` methods of §5.5 (matching, batching, subscriber wakes, restart persistence, and the [monorepo#1229](https://github.com/intent-hq/monorepo/issues/1229) agent-subscriber restriction); over the MCP seam the subscriber is the calling agent, so `ws.event.subscribe` callers are directed to `ws.agent.watch(agentId)` for agent monitoring.
 

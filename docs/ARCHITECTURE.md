@@ -708,10 +708,12 @@ via the MCP `ws.pr.monitor` binding (registration is MCP-only, like
 `ws.hook.schedule`; the FE wire surface is `prMonitor.list` / `cancel` /
 `flush`), and **one shared daemon loop** (`spawn_pr_monitor_loop`, wired in
 `main.rs` beside the PR-refresh sweep) ticks on the live
-`prMonitor.pollSeconds` cadence and polls the due monitors — each distinct PR
+`prMonitor.pollSeconds` cadence (default 60 seconds) and polls the due monitors —
+each distinct PR
 becomes due after an effective interval (the minimum time between two polls of
 one PR; the actual revisit lands on the first tick at or after it, i.e. rounds
-up to the next `pollSeconds` tick) planned as the larger of two cadences
+up to the next `pollSeconds` tick). The workspace idle policy is a floor on
+the global interval planned as the larger of two cadences
 (`effective_pr_monitor_interval_secs` / `plan_quota_cadence`): the
 hourly-budget cadence, stretched so the loop is modelled to spend at most the
 live `prMonitor.hourlyRequestBudget` forge calls per hour (default 1500,
@@ -720,8 +722,9 @@ minimum 60, maximum 5000; each PR poll costed at `PR_MONITOR_REQUESTS_PER_POLL`
 or blocked against it, and actual spend can differ — the 3-call unit is a
 single-page planning constant, so the folded observation spends less and
 paginated review lists / degraded-path REST fallbacks more), and the quota
-cadence (intentd#1948): each due-sweep tick spends one quota-free
-`rate_limit` probe and stretches the interval so the projected spend to the
+cadence (intentd#1948): due-sweep ticks consult the shared authoritative
+quota probe (at most once per 60 seconds, including failed probes) and stretch
+the interval so the projected spend to the
 window's reset (capped at 2h) stays within the live
 `prMonitor.quotaSharePercent` (default 50, minimum 1, maximum 100) of the
 forge's REMAINING quota — `allowed = floor(remaining × share / 100)` in
@@ -736,8 +739,29 @@ apart than one tick, the cap is zero until that spacing has elapsed since the
 newest `lastPolledAt`, so a stale backlog (restart, outage, quota stretch)
 drains within the planned budget — a hold measured from the persisted stamps,
 needing no spend counter, and keyed on the final interval alone, so a
-budget-derived stretch holds even with unknown or plentiful quota. On GitHub
-one poll is a single GraphQL `pr_observation` (PR record,
+budget-derived stretch holds even with unknown or plentiful quota.
+
+`workspace_check_cadence` adds a workspace floor of 120/300/600/900 seconds
+from 15 minutes/1 hour/6 hours/24 hours without meaningful content work.
+The default active interval is 60 seconds; explicit `pollSeconds` remains the
+active interval and floor. A bounded store projection reads `last_content_activity`
+(or creation time without content history), while live agent work restores active
+cadence. Note/conversation activity counts; polling, metadata and merely opening
+views do not. Missing, malformed or future clocks use active cadence. For a shared
+PR the fastest interested workspace wins, and the existing shared fetch updates
+all siblings. Idle delay never shortens global budget/quota limits or bypasses a
+pause. Registration, restart catch-up, explicit checks, debounce and terminal
+notification behavior remain unchanged.
+
+The same policy gates automatic `pr.refresh` calls and background linkage/root
+forge checks. `automatic_pr_refresh` reserves a workspace/root attempt before I/O,
+retaining failed and in-flight attempts across repeated callers and connections;
+deferred commands return persisted linkage. Provider-scoped discovery caches reuse
+results for the admitted interval, including suitable monitor observations.
+Explicit refreshes bypass idle admission but retain quota protection. Local git
+maintenance retains its independent 180-second active / 1800-second idle cadence.
+
+On GitHub one poll is a single GraphQL `pr_observation` (PR record,
 merge-requirement signals, reviews and review
 threads within bounded windows, conversation-comment count; `rateLimit.cost`
 1) plus a REST `branch_rules` read — 2 reads where the per-signal sequence
