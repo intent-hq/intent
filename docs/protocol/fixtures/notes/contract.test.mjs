@@ -5,6 +5,8 @@ import test from 'node:test';
 import { createHash } from 'node:crypto';
 import { caseFoldTable, sourceSearch, assertSourceSearchTrace } from './source-search.mjs';
 import { assertSourceHitDetail } from './source-hit-detail.mjs';
+import { assertRenderedIdentityCapture } from './rendered-search.mjs';
+import { assertRenderedHitDetail } from './rendered-hit-detail.mjs';
 import {
   utf8, wireBytes, digest, boundary, spliceError, applySourceSplices, mapPoint,
   assertSourcePage, cursorError, overlapIds, assertRanges, assertOperationTrace,
@@ -20,6 +22,89 @@ const versioning = await readFile(new URL('../../versioning.md', import.meta.url
 const searchFixtures = JSON.parse(await readFile(new URL('./source-search.json', import.meta.url), 'utf8'));
 const foldBytes = await readFile(new URL('./CaseFolding-17.0.0.txt', import.meta.url));
 const foldTable = caseFoldTable(foldBytes.toString('utf8'));
+const renderedSearchFixtures = JSON.parse(await readFile(new URL('./rendered-search.json', import.meta.url), 'utf8'));
+const renderedDetail = JSON.parse(await readFile(new URL('./rendered-hit-detail.json', import.meta.url), 'utf8'));
+test('rendered hit context resolves a typed metadata tree and whole-leaf scalar fragments', () => {
+  assertRenderedHitDetail(renderedDetail, renderedSearchFixtures.identityCapture, foldTable);
+  assert.equal(renderedDetail.expected.kind, 'stagedRenderedHit');
+  assert.equal(renderedDetail.expected.leaf.renderedText, 'Straße😀');
+  assert.equal(renderedDetail.expected.renderedRange.end, 6); // Detail includes the following emoji.
+  assert.ok(renderedDetail.exchanges.some(x => x.response.result.nextCursor !== null));
+  assert.ok(renderedDetail.exchanges.some(x => x.response.result.items.length === 0));
+});
+test('rendered detail refuses foreign or widened claims, missing context and malformed text continuation', () => {
+  for (const mutate of [
+    f => { f.claims['hit-detail'].leafOrdinal = 2; },
+    f => { f.claims['hit-detail'].sourceRange.end++; },
+    f => { f.claims['hit-detail'].principalId = 'foreign'; },
+    f => { f.claims['hit-detail'].query.mode = 'source'; },
+    f => { f.claims['hit-detail'].expiresAt = '2026-10-07T18:00:00.000Z'; },
+    f => { f.exchanges[0].response.result.sourceLength = 8; },
+    f => { f.exchanges[0].request.params.payloadDigest = f.owner.payloadDigest; },
+    f => { f.exchanges = f.exchanges.filter(x => !x.response.result.items.some(i => i.key === 'parent')); },
+    f => { f.exchanges = f.exchanges.filter(x => x.response.result.items.length !== 0); },
+    f => { f.exchanges.find(x => x.request.params.ref === 'rendered-text-4').response.result.items[0].offset = 5; },
+    f => { f.exchanges.find(x => x.request.params.ref === 'rendered-text-6').response.result.items[0].text = '\ud83d'; },
+    f => { f.exchanges.find(x => x.request.params.ref === 'rendered-text-0').response.result.items[0].field = 'source'; },
+    f => { f.exchanges.find(x => x.request.params.ref === 'rendered-text-4').response.result.items[0].nextRef = 'rendered-text-0'; },
+    f => { f.exchanges.find(x => x.request.params.ref === 'rendered-text-6').response.result.items[0].text = ''; },
+    f => { f.now = f.owner.expiresAt; },
+  ]) {
+    const bad = structuredClone(renderedDetail); mutate(bad);
+    assert.throws(() => assertRenderedHitDetail(bad, renderedSearchFixtures.identityCapture, foldTable));
+  }
+});
+test('rendered v2 capture names owned full-leaf text separately from v1 parent and selected range', () => {
+  const capture = structuredClone(renderedSearchFixtures.identityCapture);
+  assert.deepEqual(assertRenderedIdentityCapture(capture, foldTable), [
+    { renderedRange: [0, 6], sourceRange: [12, 18] },
+  ]);
+  capture.selection[0].start = 18;
+  capture.selection[0].end = 18;
+  assert.deepEqual(assertRenderedIdentityCapture(capture, foldTable), []);
+});
+test('rendered upload rejects foreign, missing, mismatched and unsupported descriptor resources', () => {
+  for (const mutate of [
+    c => { c.leaf.descriptor.version = 1; },
+    c => { delete c.leaf.descriptor.renderedText; },
+    c => { c.leaf.descriptor.extra = true; },
+    c => { c.leaf.descriptor.nodeType = 'image'; },
+    c => { c.leaf.descriptor.parentOrdinal = 1; },
+    c => { delete c.leaf.descriptor.attributesRef; },
+    c => { c.resources['leaf-attrs'].attributes = { text: c.source }; },
+    c => { c.resources['captured-text'].operationId = 'foreign'; },
+    c => { delete c.resources['captured-text']; },
+    c => { c.leaf.descriptor.renderedText.length++; },
+    c => { c.leaf.descriptor.renderedText.utf8Bytes++; },
+    c => { c.leaf.descriptor.renderedText.sha256 = '0'.repeat(64); },
+    c => { c.source = 'different'; },
+    c => { c.leaf.record.sourceRange.start++; },
+    c => { c.leaf.descriptor.nativeRange.to++; },
+    c => { c.selection[0].end = 19; }, // Inside the emoji surrogate pair.
+    c => { c.selection.push({ ...c.selection[0], ordinal: 1 }); },
+    c => { c.header.selection = 'all'; },
+  ]) {
+    const capture = structuredClone(renderedSearchFixtures.identityCapture); mutate(capture);
+    assert.throws(() => assertRenderedIdentityCapture(capture, foldTable));
+  }
+});
+test('rendered matching uses fullfold across canonical mark splits with original scalar endpoints', () => {
+  // Reuse only the whole-string folding oracle on a controlled rendered run.
+  // These artificial leaves neither authenticate native capture nor map to source.
+  for (const item of renderedSearchFixtures.cases) {
+    const rendered = item.leaves.map(leaf => leaf.text).join('');
+    assert.deepEqual(sourceSearch(rendered, item.query, foldTable), item.expected, item.name);
+  }
+  for (const query of ['', '\u0000', '\ud800', 'a'.repeat(1025)])
+    assert.throws(() => sourceSearch('rendered', query, foldTable));
+});
+test('rendered policy remains distinct from DOM find, source fallback and projection authority', () => {
+  assert.match(docs, /Rendered-search matching policy \(additive\)/u);
+  assert.match(docs, /Marks do not split a canonical\ntext run/u);
+  assert.match(docs, /source coordinates under the frozen operation's scope, generations and expiry/u);
+  assert.match(docs, /equal lengths, caller-uploaded bytes or an empty live stream are not that proof/u);
+  assert.match(docs, /never source-search or selectionMarkdown fallbacks/u);
+});
 const hitDetail = JSON.parse(await readFile(new URL('./source-hit-detail.json', import.meta.url), 'utf8'));
 test('source-hit details resolve exact raw Unicode text with relative offsets and original view identity', () => {
   assertSourceHitDetail(hitDetail, foldTable);

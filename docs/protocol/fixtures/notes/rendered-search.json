@@ -1,0 +1,255 @@
+{
+  "attribution": "Controlled canonical rendered runs only, not uploaded wire records, configured schema capture, source projection, streaming scanner or runtime authority. Marks identify artificial run splits for policy checks.",
+  "cases": [
+    {
+      "name": "across-mark-boundary",
+      "leaves": [
+        {
+          "text": "Stra",
+          "marks": []
+        },
+        {
+          "text": "ße",
+          "marks": [
+            "bold"
+          ]
+        }
+      ],
+      "query": "STRASSE",
+      "expected": [
+        [
+          0,
+          6
+        ]
+      ]
+    },
+    {
+      "name": "whole-expansion",
+      "leaves": [
+        {
+          "text": "ß",
+          "marks": []
+        }
+      ],
+      "query": "ss",
+      "expected": [
+        [
+          0,
+          1
+        ]
+      ]
+    },
+    {
+      "name": "half-expansion",
+      "leaves": [
+        {
+          "text": "ß",
+          "marks": []
+        }
+      ],
+      "query": "s",
+      "expected": []
+    },
+    {
+      "name": "overlapping",
+      "leaves": [
+        {
+          "text": "ban",
+          "marks": []
+        },
+        {
+          "text": "ana",
+          "marks": [
+            "italic"
+          ]
+        }
+      ],
+      "query": "ana",
+      "expected": [
+        [
+          1,
+          4
+        ],
+        [
+          3,
+          6
+        ]
+      ]
+    },
+    {
+      "name": "supplementary-offsets",
+      "leaves": [
+        {
+          "text": "😀Straße😀",
+          "marks": []
+        }
+      ],
+      "query": "STRASSE😀",
+      "expected": [
+        [
+          2,
+          10
+        ]
+      ]
+    },
+    {
+      "name": "whitespace-literal",
+      "leaves": [
+        {
+          "text": " a  ",
+          "marks": []
+        }
+      ],
+      "query": " ",
+      "expected": [
+        [
+          0,
+          1
+        ],
+        [
+          2,
+          3
+        ],
+        [
+          3,
+          4
+        ]
+      ]
+    },
+    {
+      "name": "sigma-fullfold",
+      "leaves": [
+        {
+          "text": "Σςσ",
+          "marks": []
+        }
+      ],
+      "query": "σ",
+      "expected": [
+        [
+          0,
+          1
+        ],
+        [
+          1,
+          2
+        ],
+        [
+          2,
+          3
+        ]
+      ]
+    },
+    {
+      "name": "no-normalization",
+      "leaves": [
+        {
+          "text": "é",
+          "marks": []
+        }
+      ],
+      "query": "é",
+      "expected": []
+    },
+    {
+      "name": "dotted-i-half-expansion",
+      "leaves": [
+        {
+          "text": "İ",
+          "marks": []
+        }
+      ],
+      "query": "i",
+      "expected": []
+    },
+    {
+      "name": "empty-rendered-run",
+      "leaves": [],
+      "query": "x",
+      "expected": []
+    }
+  ],
+  "identityCapture": {
+    "operationId": "rendered-operation",
+    "source": "Straße😀",
+    "header": {
+      "output": "search",
+      "selection": "ranges",
+      "query": {
+        "text": "STRASSE",
+        "caseSensitive": false,
+        "mode": "renderedText"
+      }
+    },
+    "parent": {
+      "record": {
+        "ordinal": 0,
+        "role": "selection-owner",
+        "sourceRange": {
+          "start": 12,
+          "end": 20
+        }
+      },
+      "descriptor": {
+        "version": 1,
+        "nodeType": "paragraph",
+        "parentOrdinal": null,
+        "nativeRange": {
+          "from": 100,
+          "to": 110
+        },
+        "attributesRef": "parent-attrs"
+      }
+    },
+    "leaf": {
+      "record": {
+        "ordinal": 1,
+        "role": "inline-span",
+        "sourceRange": {
+          "start": 12,
+          "end": 20
+        }
+      },
+      "descriptor": {
+        "version": 2,
+        "nodeType": "text",
+        "parentOrdinal": 0,
+        "nativeRange": {
+          "from": 101,
+          "to": 109
+        },
+        "attributesRef": "leaf-attrs",
+        "renderedText": {
+          "textId": "captured-text",
+          "length": 8,
+          "utf8Bytes": 11,
+          "sha256": "7b28e3f7ff73155f7a69aa9ba70668936810a798c4c617dd0f5bd7537163a99c"
+        }
+      }
+    },
+    "resources": {
+      "captured-text": {
+        "operationId": "rendered-operation",
+        "text": "Straße😀"
+      },
+      "parent-attrs": {
+        "operationId": "rendered-operation",
+        "attributes": {}
+      },
+      "leaf-attrs": {
+        "operationId": "rendered-operation",
+        "attributes": {}
+      }
+    },
+    "selection": [
+      {
+        "ordinal": 0,
+        "start": 12,
+        "end": 20,
+        "anchorAffinity": "after",
+        "headAffinity": "before",
+        "direction": "forward"
+      }
+    ]
+  }
+}

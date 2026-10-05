@@ -1057,6 +1057,29 @@ separate rule or authorize `renderedText` to use source matching as a fallback.
 Rendered-text search remains unsupported until its canonical projection adapter
 implements the required source correspondence.
 
+**Rendered-search matching policy (additive).** For `mode: "renderedText"`, apply
+the same pinned Unicode 17.0.0 `C` and `F` mappings, without Turkic mappings,
+normalization or locale tailoring, to the validated canonical **rendered** scalar
+stream and query. Match endpoints must be original rendered-scalar boundaries,
+not offsets into folded text. Emit overlapping matches; empty queries are
+InvalidParams and whitespace is literal, with the same original-query byte limit
+and separately admitted folded-query/carry budgets. Marks do not split a canonical
+text run. This intentionally differs from the old DOM-node `toLowerCase` search,
+which could not match across DOM text nodes and suppressed whitespace-only queries.
+This policy does not equate canonical rendered text with visible CSS text, raw
+source, or trimmed selection Markdown.
+
+Matching policy alone does not supply source correspondence or projection context.
+An initial adapter may explicitly support only an actual configured, unmarked,
+identity-mapped paragraph capture, rejecting unsupported mappings, atoms, wrappers
+and incomplete captures. It must prove the captured native text and its original
+source coordinates under the frozen operation's scope, generations and expiry;
+equal lengths, caller-uploaded bytes or an empty live stream are not that proof.
+Such a bounded subset is not full rendered-search support. The source-only
+selection-union exception and source-hit `field: "source"` detail resource do not
+automatically extend to rendered mode. Unsupported projection/domain boundaries
+remain explicit errors, never source-search or selectionMarkdown fallbacks.
+
 Both modes include the frozen dirty prefix. `selection: "ranges"` requires the
 selection stream; `all` means the complete frozen extent without enumerating it.
 Native context-first selection is resolved by the client before capturing this header.
@@ -1122,7 +1145,8 @@ Only these named streams are accepted; records are tagged and validated as follo
   Saving only the dirty prefix uses an empty mutation stream. Ordinals are consecutive.
 - `live`: `{ kind: "projection", ordinal, sourceRange, role, canonicalId?, detail }`,
   in the frozen dirty view, with text-reference detail. Roles are `"selection-owner"`,
-  `"paragraph-seam"`, `"inline-span"`, `"marker-occurrence"`; detail is a text-reference to a version-1 descriptor with `{ version: 1,
+  `"paragraph-seam"`, `"inline-span"`, `"marker-occurrence"`; except for the explicit
+  rendered-text version-2 addition below, detail is a text-reference to a version-1 descriptor with `{ version: 1,
   nodeType, parentOrdinal, nativeRange, attributesRef? }`. nodeType is the existing
   editor schema node/mark name (at most 1,024 UTF-8 bytes), parentOrdinal is null or
   an earlier live-record ordinal (acyclic), nativeRange is `{from,to}` in the frozen
@@ -1140,6 +1164,50 @@ Only these named streams are accepted; records are tagged and validated as follo
   Canonical marker occurrence descriptors additionally require canonicalId and
   preserve start/end marker provenance; source-dependent details are invalid if
   their range or generation does not match the frozen view.
+
+**Staged rendered-text capture (additive version 2).** A rendered-search text
+occurrence uses the existing `inline-span` live role, with a descriptor of exactly
+`{ version: 2, nodeType: "text", parentOrdinal, nativeRange, attributesRef,
+renderedText: { textId, length, utf8Bytes, sha256 } }`. The new renderedText field
+references raw captured text in this operation's immutable `text` stream, not
+descriptor JSON, a read-side context reference, or an attribute. Version 1 retains
+its existing fields and validation; this addition does not change selectionMarkdown
+descriptors. Unknown versions and fields fail explicitly. The descriptor itself
+remains canonical JSON in its digest-verified `detail` text resource.
+
+The initial supported capture has exactly one complete configured unmarked
+paragraph owner (ordinal 0, `selection-owner`, version 1, nodeType `paragraph`,
+parentOrdinal null) and its one actual nonempty text child (ordinal 1,
+`inline-span`, version 2, parentOrdinal 0). Both required attributesRef resources
+resolve to explicit empty attribute objects; no missing attributes/default inference
+is allowed. The parent includes its native entry/exit positions; the child has
+nativeRange `[parent.from + 1, parent.to - 1)`. Each sourceRange covers the whole
+captured paragraph text, not merely the selected substring. The child source
+extent and native width equal renderedText.length, but admission also verifies the
+exact source scalars against the captured native text and bidirectional scalar-safe
+native/source boundary correspondence. Actual configured-schema capture must prove
+the complete parent/child closure and absence of omitted marks, atoms or wrappers;
+the reference, digest and equal lengths alone do not establish that authority.
+Preserve raw spaces and Unicode without selection-Markdown trimming or serialization.
+
+Seal verifies operation ownership, exact UTF-16 length, UTF-8 byte count and raw
+SHA-256 of the referenced text, then retains the reference with the frozen live
+ledger. Existing chunk, text and frame budgets still apply. References cannot
+escape the operation or renew its original expiry. A missing/foreign resource,
+invalid scalar boundary, mismatched generation or unknown shape is not an empty
+successful capture. This extension adds no method or capability flag.
+
+The initial rendered adapter accepts `selection: "ranges"` with exactly one
+captured range wholly inside that text leaf; original affinities, direction and
+selection generation remain bound. A collapsed range has an empty search domain
+and terminal count zero, without synthesizing an empty native text leaf. `all`,
+multiple ranges/parents, nonidentity mappings and richer native shapes remain
+explicitly unsupported by this subset. No paragraph separator or disjoint-range
+concatenation is inferred. Matching uses leaf-relative rendered offsets and maps
+an admitted hit `[a,b)` to `[leaf.sourceRange.start+a, leaf.sourceRange.start+b)`.
+Hit identity binds the frozen view/query/selected domain, leaf ordinal and original rendered span,
+not transport/page ordinals; ordering remains source start then hitId. Projection
+context must remain reachable from each hit under the same view and expiry.
 
 **Staged marker-occurrence binding.** For this staged role, `canonicalId` is the
 exact embedded `commentId`, not the renderer atom's `id`. One record describes
@@ -1347,6 +1415,53 @@ rendered-text search authority. Parsing or edit navigation still requires its
 separately validated actual context. The rendered-text projection requirement is
 not a requirement to construct lexical ancestors merely to return this raw source
 hit field, and this convention does not enable the renderedText adapter.
+
+**Rendered identity-hit detail (additive).** For the version-2 identity capture
+above, a hit's detailRef resolves through the existing operation `detail` selector
+and bounded metadata-tree entries. The logical root object has exactly these keys:
+
+```typescript
+{
+  kind: "stagedRenderedHit", mapping: "identity",
+  sourceRange: { start: number, end: number },
+  renderedRange: { start: number, end: number },
+  parent: { ordinal: 0, sourceRange, descriptor, attributes: {} },
+  leaf: { ordinal: 1, sourceRange, descriptor, attributes: {}, renderedText: string }
+}
+```
+
+Here `kind` is an ordinary metadata string value, not a new page item discriminator.
+Object members/children use the existing indexed metadata entry and childrenRef
+grammar, including explicit empty attribute objects. `descriptor` is the exact
+retained version-1 parent or version-2 text descriptor, respectively; attributes
+are the actually resolved validated attribute trees. Uploaded attributesRef/textId
+spellings inside a descriptor remain data, not authority to read arbitrary resources.
+The parent/leaf source ranges cover the whole capture. Root sourceRange is the
+absolute matched source span; renderedRange is the exact leaf-relative matched
+UTF-16 span. Both retain scalar boundaries and the admitted identity mapping.
+
+The leaf's renderedText string entry always uses a server-issued valueRef, even
+when small. It resolves to existing `field: "renderedText"` scalar fragments with
+field-relative offsets and nextRef until the **whole captured leaf** is exhausted,
+without trimming or folding. renderedRange identifies the match within that value;
+this is not the source-mode raw matched-span resource. Object directories paginate
+with their existing nextCursor; scalar fragments advance with nextRef. An empty
+attribute directory is explicit; a nonempty native text leaf is never represented
+by an empty successful fragment. This root is traversed through bounded entries,
+directories and fragments, never nested as an unbounded object in page.items.
+Optional scalar-safe offset reads retain the generic detail text-value seek
+semantics; the source-hit resource's ref-bound-position restriction is not imported.
+
+Requests repeat the staged headerDigest only and the reached ref/cursor. Responses
+retain the operation headerDigest/payloadDigest/viewId, full frozen-view sourceLength
+and original staging expiresAt. All issued detail/children/value/continuation refs
+bind principal/scope/operation, query mode and selected domain, parent and leaf
+identity, both matched spans, frozen generations and original expiry. A foreign,
+unreachable, widened or mismatched ref fails; reads do not renew the view or acquire
+a receipt lifetime. These snapshot-local metadata identities do not impersonate
+canonicalNote nativeNode IDs, canonical marker identity or a configured renderer.
+Actual native capture and adapter validation remain prerequisites for producing
+this context; the typed root alone does not prove them.
 
 For inverseText, offset is UTF-16 within that named text value and must be a scalar
 boundary; length, UTF-8 bytes and raw SHA-256 match the inverse replacement reference.

@@ -1,0 +1,2324 @@
+{
+  "attribution": "Controlled decoded reference claims and complete resolved metadata tree; not signed-reference, configured-schema, Store, bounded traversal or producer evidence.",
+  "owner": {
+    "principalId": "principal-1",
+    "scope": {
+      "backendId": "backend-1",
+      "workspaceId": "workspace-1",
+      "noteId": "note-1",
+      "noteInstanceId": "incarnation-1"
+    },
+    "operationId": "rendered-operation",
+    "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "viewId": "frozen-view-1",
+    "expiresAt": "2026-10-06T18:00:00.000Z",
+    "sourceLength": 50,
+    "query": {
+      "text": "STRASSE",
+      "caseSensitive": false,
+      "mode": "renderedText"
+    },
+    "selection": [
+      {
+        "ordinal": 0,
+        "start": 12,
+        "end": 20,
+        "anchorAffinity": "after",
+        "headAffinity": "before",
+        "direction": "forward"
+      }
+    ],
+    "liveGeneration": 7,
+    "selectionGeneration": 9,
+    "parentOrdinal": 0,
+    "leafOrdinal": 1,
+    "sourceRange": {
+      "start": 12,
+      "end": 18
+    },
+    "renderedRange": {
+      "start": 0,
+      "end": 6
+    }
+  },
+  "now": "2026-10-05T18:00:00.000Z",
+  "rootRef": "hit-detail",
+  "claims": {
+    "children-metadata-4": {
+      "principalId": "principal-1",
+      "scope": {
+        "backendId": "backend-1",
+        "workspaceId": "workspace-1",
+        "noteId": "note-1",
+        "noteInstanceId": "incarnation-1"
+      },
+      "operationId": "rendered-operation",
+      "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "viewId": "frozen-view-1",
+      "expiresAt": "2026-10-06T18:00:00.000Z",
+      "sourceLength": 50,
+      "query": {
+        "text": "STRASSE",
+        "caseSensitive": false,
+        "mode": "renderedText"
+      },
+      "selection": [
+        {
+          "ordinal": 0,
+          "start": 12,
+          "end": 20,
+          "anchorAffinity": "after",
+          "headAffinity": "before",
+          "direction": "forward"
+        }
+      ],
+      "liveGeneration": 7,
+      "selectionGeneration": 9,
+      "parentOrdinal": 0,
+      "leafOrdinal": 1,
+      "sourceRange": {
+        "start": 12,
+        "end": 18
+      },
+      "renderedRange": {
+        "start": 0,
+        "end": 6
+      },
+      "resourceRef": "children-metadata-4",
+      "pageIndex": 0
+    },
+    "children-metadata-7": {
+      "principalId": "principal-1",
+      "scope": {
+        "backendId": "backend-1",
+        "workspaceId": "workspace-1",
+        "noteId": "note-1",
+        "noteInstanceId": "incarnation-1"
+      },
+      "operationId": "rendered-operation",
+      "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "viewId": "frozen-view-1",
+      "expiresAt": "2026-10-06T18:00:00.000Z",
+      "sourceLength": 50,
+      "query": {
+        "text": "STRASSE",
+        "caseSensitive": false,
+        "mode": "renderedText"
+      },
+      "selection": [
+        {
+          "ordinal": 0,
+          "start": 12,
+          "end": 20,
+          "anchorAffinity": "after",
+          "headAffinity": "before",
+          "direction": "forward"
+        }
+      ],
+      "liveGeneration": 7,
+      "selectionGeneration": 9,
+      "parentOrdinal": 0,
+      "leafOrdinal": 1,
+      "sourceRange": {
+        "start": 12,
+        "end": 18
+      },
+      "renderedRange": {
+        "start": 0,
+        "end": 6
+      },
+      "resourceRef": "children-metadata-7",
+      "pageIndex": 0
+    },
+    "children-metadata-12": {
+      "principalId": "principal-1",
+      "scope": {
+        "backendId": "backend-1",
+        "workspaceId": "workspace-1",
+        "noteId": "note-1",
+        "noteInstanceId": "incarnation-1"
+      },
+      "operationId": "rendered-operation",
+      "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "viewId": "frozen-view-1",
+      "expiresAt": "2026-10-06T18:00:00.000Z",
+      "sourceLength": 50,
+      "query": {
+        "text": "STRASSE",
+        "caseSensitive": false,
+        "mode": "renderedText"
+      },
+      "selection": [
+        {
+          "ordinal": 0,
+          "start": 12,
+          "end": 20,
+          "anchorAffinity": "after",
+          "headAffinity": "before",
+          "direction": "forward"
+        }
+      ],
+      "liveGeneration": 7,
+      "selectionGeneration": 9,
+      "parentOrdinal": 0,
+      "leafOrdinal": 1,
+      "sourceRange": {
+        "start": 12,
+        "end": 18
+      },
+      "renderedRange": {
+        "start": 0,
+        "end": 6
+      },
+      "resourceRef": "children-metadata-12",
+      "pageIndex": 0
+    },
+    "children-metadata-5": {
+      "principalId": "principal-1",
+      "scope": {
+        "backendId": "backend-1",
+        "workspaceId": "workspace-1",
+        "noteId": "note-1",
+        "noteInstanceId": "incarnation-1"
+      },
+      "operationId": "rendered-operation",
+      "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "viewId": "frozen-view-1",
+      "expiresAt": "2026-10-06T18:00:00.000Z",
+      "sourceLength": 50,
+      "query": {
+        "text": "STRASSE",
+        "caseSensitive": false,
+        "mode": "renderedText"
+      },
+      "selection": [
+        {
+          "ordinal": 0,
+          "start": 12,
+          "end": 20,
+          "anchorAffinity": "after",
+          "headAffinity": "before",
+          "direction": "forward"
+        }
+      ],
+      "liveGeneration": 7,
+      "selectionGeneration": 9,
+      "parentOrdinal": 0,
+      "leafOrdinal": 1,
+      "sourceRange": {
+        "start": 12,
+        "end": 18
+      },
+      "renderedRange": {
+        "start": 0,
+        "end": 6
+      },
+      "resourceRef": "children-metadata-5",
+      "pageIndex": 0
+    },
+    "children-metadata-5-cursor-1": {
+      "principalId": "principal-1",
+      "scope": {
+        "backendId": "backend-1",
+        "workspaceId": "workspace-1",
+        "noteId": "note-1",
+        "noteInstanceId": "incarnation-1"
+      },
+      "operationId": "rendered-operation",
+      "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "viewId": "frozen-view-1",
+      "expiresAt": "2026-10-06T18:00:00.000Z",
+      "sourceLength": 50,
+      "query": {
+        "text": "STRASSE",
+        "caseSensitive": false,
+        "mode": "renderedText"
+      },
+      "selection": [
+        {
+          "ordinal": 0,
+          "start": 12,
+          "end": 20,
+          "anchorAffinity": "after",
+          "headAffinity": "before",
+          "direction": "forward"
+        }
+      ],
+      "liveGeneration": 7,
+      "selectionGeneration": 9,
+      "parentOrdinal": 0,
+      "leafOrdinal": 1,
+      "sourceRange": {
+        "start": 12,
+        "end": 18
+      },
+      "renderedRange": {
+        "start": 0,
+        "end": 6
+      },
+      "resourceRef": "children-metadata-5",
+      "pageIndex": 1
+    },
+    "children-metadata-20": {
+      "principalId": "principal-1",
+      "scope": {
+        "backendId": "backend-1",
+        "workspaceId": "workspace-1",
+        "noteId": "note-1",
+        "noteInstanceId": "incarnation-1"
+      },
+      "operationId": "rendered-operation",
+      "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "viewId": "frozen-view-1",
+      "expiresAt": "2026-10-06T18:00:00.000Z",
+      "sourceLength": 50,
+      "query": {
+        "text": "STRASSE",
+        "caseSensitive": false,
+        "mode": "renderedText"
+      },
+      "selection": [
+        {
+          "ordinal": 0,
+          "start": 12,
+          "end": 20,
+          "anchorAffinity": "after",
+          "headAffinity": "before",
+          "direction": "forward"
+        }
+      ],
+      "liveGeneration": 7,
+      "selectionGeneration": 9,
+      "parentOrdinal": 0,
+      "leafOrdinal": 1,
+      "sourceRange": {
+        "start": 12,
+        "end": 18
+      },
+      "renderedRange": {
+        "start": 0,
+        "end": 6
+      },
+      "resourceRef": "children-metadata-20",
+      "pageIndex": 0
+    },
+    "children-metadata-3": {
+      "principalId": "principal-1",
+      "scope": {
+        "backendId": "backend-1",
+        "workspaceId": "workspace-1",
+        "noteId": "note-1",
+        "noteInstanceId": "incarnation-1"
+      },
+      "operationId": "rendered-operation",
+      "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "viewId": "frozen-view-1",
+      "expiresAt": "2026-10-06T18:00:00.000Z",
+      "sourceLength": 50,
+      "query": {
+        "text": "STRASSE",
+        "caseSensitive": false,
+        "mode": "renderedText"
+      },
+      "selection": [
+        {
+          "ordinal": 0,
+          "start": 12,
+          "end": 20,
+          "anchorAffinity": "after",
+          "headAffinity": "before",
+          "direction": "forward"
+        }
+      ],
+      "liveGeneration": 7,
+      "selectionGeneration": 9,
+      "parentOrdinal": 0,
+      "leafOrdinal": 1,
+      "sourceRange": {
+        "start": 12,
+        "end": 18
+      },
+      "renderedRange": {
+        "start": 0,
+        "end": 6
+      },
+      "resourceRef": "children-metadata-3",
+      "pageIndex": 0
+    },
+    "children-metadata-3-cursor-1": {
+      "principalId": "principal-1",
+      "scope": {
+        "backendId": "backend-1",
+        "workspaceId": "workspace-1",
+        "noteId": "note-1",
+        "noteInstanceId": "incarnation-1"
+      },
+      "operationId": "rendered-operation",
+      "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "viewId": "frozen-view-1",
+      "expiresAt": "2026-10-06T18:00:00.000Z",
+      "sourceLength": 50,
+      "query": {
+        "text": "STRASSE",
+        "caseSensitive": false,
+        "mode": "renderedText"
+      },
+      "selection": [
+        {
+          "ordinal": 0,
+          "start": 12,
+          "end": 20,
+          "anchorAffinity": "after",
+          "headAffinity": "before",
+          "direction": "forward"
+        }
+      ],
+      "liveGeneration": 7,
+      "selectionGeneration": 9,
+      "parentOrdinal": 0,
+      "leafOrdinal": 1,
+      "sourceRange": {
+        "start": 12,
+        "end": 18
+      },
+      "renderedRange": {
+        "start": 0,
+        "end": 6
+      },
+      "resourceRef": "children-metadata-3",
+      "pageIndex": 1
+    },
+    "children-metadata-25": {
+      "principalId": "principal-1",
+      "scope": {
+        "backendId": "backend-1",
+        "workspaceId": "workspace-1",
+        "noteId": "note-1",
+        "noteInstanceId": "incarnation-1"
+      },
+      "operationId": "rendered-operation",
+      "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "viewId": "frozen-view-1",
+      "expiresAt": "2026-10-06T18:00:00.000Z",
+      "sourceLength": 50,
+      "query": {
+        "text": "STRASSE",
+        "caseSensitive": false,
+        "mode": "renderedText"
+      },
+      "selection": [
+        {
+          "ordinal": 0,
+          "start": 12,
+          "end": 20,
+          "anchorAffinity": "after",
+          "headAffinity": "before",
+          "direction": "forward"
+        }
+      ],
+      "liveGeneration": 7,
+      "selectionGeneration": 9,
+      "parentOrdinal": 0,
+      "leafOrdinal": 1,
+      "sourceRange": {
+        "start": 12,
+        "end": 18
+      },
+      "renderedRange": {
+        "start": 0,
+        "end": 6
+      },
+      "resourceRef": "children-metadata-25",
+      "pageIndex": 0
+    },
+    "children-metadata-28": {
+      "principalId": "principal-1",
+      "scope": {
+        "backendId": "backend-1",
+        "workspaceId": "workspace-1",
+        "noteId": "note-1",
+        "noteInstanceId": "incarnation-1"
+      },
+      "operationId": "rendered-operation",
+      "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "viewId": "frozen-view-1",
+      "expiresAt": "2026-10-06T18:00:00.000Z",
+      "sourceLength": 50,
+      "query": {
+        "text": "STRASSE",
+        "caseSensitive": false,
+        "mode": "renderedText"
+      },
+      "selection": [
+        {
+          "ordinal": 0,
+          "start": 12,
+          "end": 20,
+          "anchorAffinity": "after",
+          "headAffinity": "before",
+          "direction": "forward"
+        }
+      ],
+      "liveGeneration": 7,
+      "selectionGeneration": 9,
+      "parentOrdinal": 0,
+      "leafOrdinal": 1,
+      "sourceRange": {
+        "start": 12,
+        "end": 18
+      },
+      "renderedRange": {
+        "start": 0,
+        "end": 6
+      },
+      "resourceRef": "children-metadata-28",
+      "pageIndex": 0
+    },
+    "children-metadata-26": {
+      "principalId": "principal-1",
+      "scope": {
+        "backendId": "backend-1",
+        "workspaceId": "workspace-1",
+        "noteId": "note-1",
+        "noteInstanceId": "incarnation-1"
+      },
+      "operationId": "rendered-operation",
+      "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "viewId": "frozen-view-1",
+      "expiresAt": "2026-10-06T18:00:00.000Z",
+      "sourceLength": 50,
+      "query": {
+        "text": "STRASSE",
+        "caseSensitive": false,
+        "mode": "renderedText"
+      },
+      "selection": [
+        {
+          "ordinal": 0,
+          "start": 12,
+          "end": 20,
+          "anchorAffinity": "after",
+          "headAffinity": "before",
+          "direction": "forward"
+        }
+      ],
+      "liveGeneration": 7,
+      "selectionGeneration": 9,
+      "parentOrdinal": 0,
+      "leafOrdinal": 1,
+      "sourceRange": {
+        "start": 12,
+        "end": 18
+      },
+      "renderedRange": {
+        "start": 0,
+        "end": 6
+      },
+      "resourceRef": "children-metadata-26",
+      "pageIndex": 0
+    },
+    "children-metadata-26-cursor-1": {
+      "principalId": "principal-1",
+      "scope": {
+        "backendId": "backend-1",
+        "workspaceId": "workspace-1",
+        "noteId": "note-1",
+        "noteInstanceId": "incarnation-1"
+      },
+      "operationId": "rendered-operation",
+      "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "viewId": "frozen-view-1",
+      "expiresAt": "2026-10-06T18:00:00.000Z",
+      "sourceLength": 50,
+      "query": {
+        "text": "STRASSE",
+        "caseSensitive": false,
+        "mode": "renderedText"
+      },
+      "selection": [
+        {
+          "ordinal": 0,
+          "start": 12,
+          "end": 20,
+          "anchorAffinity": "after",
+          "headAffinity": "before",
+          "direction": "forward"
+        }
+      ],
+      "liveGeneration": 7,
+      "selectionGeneration": 9,
+      "parentOrdinal": 0,
+      "leafOrdinal": 1,
+      "sourceRange": {
+        "start": 12,
+        "end": 18
+      },
+      "renderedRange": {
+        "start": 0,
+        "end": 6
+      },
+      "resourceRef": "children-metadata-26",
+      "pageIndex": 1
+    },
+    "children-metadata-35": {
+      "principalId": "principal-1",
+      "scope": {
+        "backendId": "backend-1",
+        "workspaceId": "workspace-1",
+        "noteId": "note-1",
+        "noteInstanceId": "incarnation-1"
+      },
+      "operationId": "rendered-operation",
+      "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "viewId": "frozen-view-1",
+      "expiresAt": "2026-10-06T18:00:00.000Z",
+      "sourceLength": 50,
+      "query": {
+        "text": "STRASSE",
+        "caseSensitive": false,
+        "mode": "renderedText"
+      },
+      "selection": [
+        {
+          "ordinal": 0,
+          "start": 12,
+          "end": 20,
+          "anchorAffinity": "after",
+          "headAffinity": "before",
+          "direction": "forward"
+        }
+      ],
+      "liveGeneration": 7,
+      "selectionGeneration": 9,
+      "parentOrdinal": 0,
+      "leafOrdinal": 1,
+      "sourceRange": {
+        "start": 12,
+        "end": 18
+      },
+      "renderedRange": {
+        "start": 0,
+        "end": 6
+      },
+      "resourceRef": "children-metadata-35",
+      "pageIndex": 0
+    },
+    "children-metadata-24": {
+      "principalId": "principal-1",
+      "scope": {
+        "backendId": "backend-1",
+        "workspaceId": "workspace-1",
+        "noteId": "note-1",
+        "noteInstanceId": "incarnation-1"
+      },
+      "operationId": "rendered-operation",
+      "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "viewId": "frozen-view-1",
+      "expiresAt": "2026-10-06T18:00:00.000Z",
+      "sourceLength": 50,
+      "query": {
+        "text": "STRASSE",
+        "caseSensitive": false,
+        "mode": "renderedText"
+      },
+      "selection": [
+        {
+          "ordinal": 0,
+          "start": 12,
+          "end": 20,
+          "anchorAffinity": "after",
+          "headAffinity": "before",
+          "direction": "forward"
+        }
+      ],
+      "liveGeneration": 7,
+      "selectionGeneration": 9,
+      "parentOrdinal": 0,
+      "leafOrdinal": 1,
+      "sourceRange": {
+        "start": 12,
+        "end": 18
+      },
+      "renderedRange": {
+        "start": 0,
+        "end": 6
+      },
+      "resourceRef": "children-metadata-24",
+      "pageIndex": 0
+    },
+    "children-metadata-38": {
+      "principalId": "principal-1",
+      "scope": {
+        "backendId": "backend-1",
+        "workspaceId": "workspace-1",
+        "noteId": "note-1",
+        "noteInstanceId": "incarnation-1"
+      },
+      "operationId": "rendered-operation",
+      "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "viewId": "frozen-view-1",
+      "expiresAt": "2026-10-06T18:00:00.000Z",
+      "sourceLength": 50,
+      "query": {
+        "text": "STRASSE",
+        "caseSensitive": false,
+        "mode": "renderedText"
+      },
+      "selection": [
+        {
+          "ordinal": 0,
+          "start": 12,
+          "end": 20,
+          "anchorAffinity": "after",
+          "headAffinity": "before",
+          "direction": "forward"
+        }
+      ],
+      "liveGeneration": 7,
+      "selectionGeneration": 9,
+      "parentOrdinal": 0,
+      "leafOrdinal": 1,
+      "sourceRange": {
+        "start": 12,
+        "end": 18
+      },
+      "renderedRange": {
+        "start": 0,
+        "end": 6
+      },
+      "resourceRef": "children-metadata-38",
+      "pageIndex": 0
+    },
+    "children-metadata-41": {
+      "principalId": "principal-1",
+      "scope": {
+        "backendId": "backend-1",
+        "workspaceId": "workspace-1",
+        "noteId": "note-1",
+        "noteInstanceId": "incarnation-1"
+      },
+      "operationId": "rendered-operation",
+      "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "viewId": "frozen-view-1",
+      "expiresAt": "2026-10-06T18:00:00.000Z",
+      "sourceLength": 50,
+      "query": {
+        "text": "STRASSE",
+        "caseSensitive": false,
+        "mode": "renderedText"
+      },
+      "selection": [
+        {
+          "ordinal": 0,
+          "start": 12,
+          "end": 20,
+          "anchorAffinity": "after",
+          "headAffinity": "before",
+          "direction": "forward"
+        }
+      ],
+      "liveGeneration": 7,
+      "selectionGeneration": 9,
+      "parentOrdinal": 0,
+      "leafOrdinal": 1,
+      "sourceRange": {
+        "start": 12,
+        "end": 18
+      },
+      "renderedRange": {
+        "start": 0,
+        "end": 6
+      },
+      "resourceRef": "children-metadata-41",
+      "pageIndex": 0
+    },
+    "children-metadata-1": {
+      "principalId": "principal-1",
+      "scope": {
+        "backendId": "backend-1",
+        "workspaceId": "workspace-1",
+        "noteId": "note-1",
+        "noteInstanceId": "incarnation-1"
+      },
+      "operationId": "rendered-operation",
+      "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "viewId": "frozen-view-1",
+      "expiresAt": "2026-10-06T18:00:00.000Z",
+      "sourceLength": 50,
+      "query": {
+        "text": "STRASSE",
+        "caseSensitive": false,
+        "mode": "renderedText"
+      },
+      "selection": [
+        {
+          "ordinal": 0,
+          "start": 12,
+          "end": 20,
+          "anchorAffinity": "after",
+          "headAffinity": "before",
+          "direction": "forward"
+        }
+      ],
+      "liveGeneration": 7,
+      "selectionGeneration": 9,
+      "parentOrdinal": 0,
+      "leafOrdinal": 1,
+      "sourceRange": {
+        "start": 12,
+        "end": 18
+      },
+      "renderedRange": {
+        "start": 0,
+        "end": 6
+      },
+      "resourceRef": "children-metadata-1",
+      "pageIndex": 0
+    },
+    "children-metadata-1-cursor-1": {
+      "principalId": "principal-1",
+      "scope": {
+        "backendId": "backend-1",
+        "workspaceId": "workspace-1",
+        "noteId": "note-1",
+        "noteInstanceId": "incarnation-1"
+      },
+      "operationId": "rendered-operation",
+      "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "viewId": "frozen-view-1",
+      "expiresAt": "2026-10-06T18:00:00.000Z",
+      "sourceLength": 50,
+      "query": {
+        "text": "STRASSE",
+        "caseSensitive": false,
+        "mode": "renderedText"
+      },
+      "selection": [
+        {
+          "ordinal": 0,
+          "start": 12,
+          "end": 20,
+          "anchorAffinity": "after",
+          "headAffinity": "before",
+          "direction": "forward"
+        }
+      ],
+      "liveGeneration": 7,
+      "selectionGeneration": 9,
+      "parentOrdinal": 0,
+      "leafOrdinal": 1,
+      "sourceRange": {
+        "start": 12,
+        "end": 18
+      },
+      "renderedRange": {
+        "start": 0,
+        "end": 6
+      },
+      "resourceRef": "children-metadata-1",
+      "pageIndex": 1
+    },
+    "hit-detail": {
+      "principalId": "principal-1",
+      "scope": {
+        "backendId": "backend-1",
+        "workspaceId": "workspace-1",
+        "noteId": "note-1",
+        "noteInstanceId": "incarnation-1"
+      },
+      "operationId": "rendered-operation",
+      "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "viewId": "frozen-view-1",
+      "expiresAt": "2026-10-06T18:00:00.000Z",
+      "sourceLength": 50,
+      "query": {
+        "text": "STRASSE",
+        "caseSensitive": false,
+        "mode": "renderedText"
+      },
+      "selection": [
+        {
+          "ordinal": 0,
+          "start": 12,
+          "end": 20,
+          "anchorAffinity": "after",
+          "headAffinity": "before",
+          "direction": "forward"
+        }
+      ],
+      "liveGeneration": 7,
+      "selectionGeneration": 9,
+      "parentOrdinal": 0,
+      "leafOrdinal": 1,
+      "sourceRange": {
+        "start": 12,
+        "end": 18
+      },
+      "renderedRange": {
+        "start": 0,
+        "end": 6
+      },
+      "resourceRef": "hit-detail",
+      "pageIndex": 0
+    },
+    "rendered-text-0": {
+      "principalId": "principal-1",
+      "scope": {
+        "backendId": "backend-1",
+        "workspaceId": "workspace-1",
+        "noteId": "note-1",
+        "noteInstanceId": "incarnation-1"
+      },
+      "operationId": "rendered-operation",
+      "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "viewId": "frozen-view-1",
+      "expiresAt": "2026-10-06T18:00:00.000Z",
+      "sourceLength": 50,
+      "query": {
+        "text": "STRASSE",
+        "caseSensitive": false,
+        "mode": "renderedText"
+      },
+      "selection": [
+        {
+          "ordinal": 0,
+          "start": 12,
+          "end": 20,
+          "anchorAffinity": "after",
+          "headAffinity": "before",
+          "direction": "forward"
+        }
+      ],
+      "liveGeneration": 7,
+      "selectionGeneration": 9,
+      "parentOrdinal": 0,
+      "leafOrdinal": 1,
+      "sourceRange": {
+        "start": 12,
+        "end": 18
+      },
+      "renderedRange": {
+        "start": 0,
+        "end": 6
+      },
+      "resourceRef": "rendered-text-0",
+      "pageIndex": 0
+    },
+    "rendered-text-4": {
+      "principalId": "principal-1",
+      "scope": {
+        "backendId": "backend-1",
+        "workspaceId": "workspace-1",
+        "noteId": "note-1",
+        "noteInstanceId": "incarnation-1"
+      },
+      "operationId": "rendered-operation",
+      "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "viewId": "frozen-view-1",
+      "expiresAt": "2026-10-06T18:00:00.000Z",
+      "sourceLength": 50,
+      "query": {
+        "text": "STRASSE",
+        "caseSensitive": false,
+        "mode": "renderedText"
+      },
+      "selection": [
+        {
+          "ordinal": 0,
+          "start": 12,
+          "end": 20,
+          "anchorAffinity": "after",
+          "headAffinity": "before",
+          "direction": "forward"
+        }
+      ],
+      "liveGeneration": 7,
+      "selectionGeneration": 9,
+      "parentOrdinal": 0,
+      "leafOrdinal": 1,
+      "sourceRange": {
+        "start": 12,
+        "end": 18
+      },
+      "renderedRange": {
+        "start": 0,
+        "end": 6
+      },
+      "resourceRef": "rendered-text-4",
+      "pageIndex": 0
+    },
+    "rendered-text-6": {
+      "principalId": "principal-1",
+      "scope": {
+        "backendId": "backend-1",
+        "workspaceId": "workspace-1",
+        "noteId": "note-1",
+        "noteInstanceId": "incarnation-1"
+      },
+      "operationId": "rendered-operation",
+      "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "viewId": "frozen-view-1",
+      "expiresAt": "2026-10-06T18:00:00.000Z",
+      "sourceLength": 50,
+      "query": {
+        "text": "STRASSE",
+        "caseSensitive": false,
+        "mode": "renderedText"
+      },
+      "selection": [
+        {
+          "ordinal": 0,
+          "start": 12,
+          "end": 20,
+          "anchorAffinity": "after",
+          "headAffinity": "before",
+          "direction": "forward"
+        }
+      ],
+      "liveGeneration": 7,
+      "selectionGeneration": 9,
+      "parentOrdinal": 0,
+      "leafOrdinal": 1,
+      "sourceRange": {
+        "start": 12,
+        "end": 18
+      },
+      "renderedRange": {
+        "start": 0,
+        "end": 6
+      },
+      "resourceRef": "rendered-text-6",
+      "pageIndex": 0
+    }
+  },
+  "exchanges": [
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "note.operation.read",
+        "params": {
+          "backendId": "backend-1",
+          "workspaceId": "workspace-1",
+          "noteId": "note-1",
+          "noteInstanceId": "incarnation-1",
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "kind": "detail",
+          "ref": "children-metadata-4",
+          "maxItems": 4,
+          "maxWireBytes": 4096
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "scope": {
+            "backendId": "backend-1",
+            "workspaceId": "workspace-1",
+            "noteId": "note-1",
+            "noteInstanceId": "incarnation-1"
+          },
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "viewId": "frozen-view-1",
+          "expiresAt": "2026-10-06T18:00:00.000Z",
+          "sourceLength": 50,
+          "kind": "noteOperationPage",
+          "outputKind": "detail",
+          "items": [],
+          "nextCursor": null
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "note.operation.read",
+        "params": {
+          "backendId": "backend-1",
+          "workspaceId": "workspace-1",
+          "noteId": "note-1",
+          "noteInstanceId": "incarnation-1",
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "kind": "detail",
+          "ref": "children-metadata-7",
+          "maxItems": 4,
+          "maxWireBytes": 4096
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "scope": {
+            "backendId": "backend-1",
+            "workspaceId": "workspace-1",
+            "noteId": "note-1",
+            "noteInstanceId": "incarnation-1"
+          },
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "viewId": "frozen-view-1",
+          "expiresAt": "2026-10-06T18:00:00.000Z",
+          "sourceLength": 50,
+          "kind": "noteOperationPage",
+          "outputKind": "detail",
+          "items": [
+            {
+              "id": "metadata-8",
+              "parentId": "metadata-7",
+              "key": "from",
+              "type": "number",
+              "value": 101
+            },
+            {
+              "id": "metadata-9",
+              "parentId": "metadata-7",
+              "key": "to",
+              "type": "number",
+              "value": 109
+            }
+          ],
+          "nextCursor": null
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "note.operation.read",
+        "params": {
+          "backendId": "backend-1",
+          "workspaceId": "workspace-1",
+          "noteId": "note-1",
+          "noteInstanceId": "incarnation-1",
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "kind": "detail",
+          "ref": "children-metadata-12",
+          "maxItems": 4,
+          "maxWireBytes": 4096
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "scope": {
+            "backendId": "backend-1",
+            "workspaceId": "workspace-1",
+            "noteId": "note-1",
+            "noteInstanceId": "incarnation-1"
+          },
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "viewId": "frozen-view-1",
+          "expiresAt": "2026-10-06T18:00:00.000Z",
+          "sourceLength": 50,
+          "kind": "noteOperationPage",
+          "outputKind": "detail",
+          "items": [
+            {
+              "id": "metadata-13",
+              "parentId": "metadata-12",
+              "key": "length",
+              "type": "number",
+              "value": 8
+            },
+            {
+              "id": "metadata-14",
+              "parentId": "metadata-12",
+              "key": "sha256",
+              "type": "string",
+              "value": "7b28e3f7ff73155f7a69aa9ba70668936810a798c4c617dd0f5bd7537163a99c"
+            },
+            {
+              "id": "metadata-15",
+              "parentId": "metadata-12",
+              "key": "textId",
+              "type": "string",
+              "value": "captured-text"
+            },
+            {
+              "id": "metadata-16",
+              "parentId": "metadata-12",
+              "key": "utf8Bytes",
+              "type": "number",
+              "value": 11
+            }
+          ],
+          "nextCursor": null
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "note.operation.read",
+        "params": {
+          "backendId": "backend-1",
+          "workspaceId": "workspace-1",
+          "noteId": "note-1",
+          "noteInstanceId": "incarnation-1",
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "kind": "detail",
+          "ref": "children-metadata-5",
+          "maxItems": 4,
+          "maxWireBytes": 4096
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": {
+          "scope": {
+            "backendId": "backend-1",
+            "workspaceId": "workspace-1",
+            "noteId": "note-1",
+            "noteInstanceId": "incarnation-1"
+          },
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "viewId": "frozen-view-1",
+          "expiresAt": "2026-10-06T18:00:00.000Z",
+          "sourceLength": 50,
+          "kind": "noteOperationPage",
+          "outputKind": "detail",
+          "items": [
+            {
+              "id": "metadata-6",
+              "parentId": "metadata-5",
+              "key": "attributesRef",
+              "type": "string",
+              "value": "leaf-attrs"
+            },
+            {
+              "id": "metadata-7",
+              "parentId": "metadata-5",
+              "key": "nativeRange",
+              "type": "object",
+              "childrenRef": "children-metadata-7"
+            },
+            {
+              "id": "metadata-10",
+              "parentId": "metadata-5",
+              "key": "nodeType",
+              "type": "string",
+              "value": "text"
+            },
+            {
+              "id": "metadata-11",
+              "parentId": "metadata-5",
+              "key": "parentOrdinal",
+              "type": "number",
+              "value": 0
+            }
+          ],
+          "nextCursor": "children-metadata-5-cursor-1"
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "note.operation.read",
+        "params": {
+          "backendId": "backend-1",
+          "workspaceId": "workspace-1",
+          "noteId": "note-1",
+          "noteInstanceId": "incarnation-1",
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "kind": "detail",
+          "ref": "children-metadata-5",
+          "maxItems": 4,
+          "maxWireBytes": 4096,
+          "cursor": "children-metadata-5-cursor-1"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "result": {
+          "scope": {
+            "backendId": "backend-1",
+            "workspaceId": "workspace-1",
+            "noteId": "note-1",
+            "noteInstanceId": "incarnation-1"
+          },
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "viewId": "frozen-view-1",
+          "expiresAt": "2026-10-06T18:00:00.000Z",
+          "sourceLength": 50,
+          "kind": "noteOperationPage",
+          "outputKind": "detail",
+          "items": [
+            {
+              "id": "metadata-12",
+              "parentId": "metadata-5",
+              "key": "renderedText",
+              "type": "object",
+              "childrenRef": "children-metadata-12"
+            },
+            {
+              "id": "metadata-17",
+              "parentId": "metadata-5",
+              "key": "version",
+              "type": "number",
+              "value": 2
+            }
+          ],
+          "nextCursor": null
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "note.operation.read",
+        "params": {
+          "backendId": "backend-1",
+          "workspaceId": "workspace-1",
+          "noteId": "note-1",
+          "noteInstanceId": "incarnation-1",
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "kind": "detail",
+          "ref": "children-metadata-20",
+          "maxItems": 4,
+          "maxWireBytes": 4096
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "result": {
+          "scope": {
+            "backendId": "backend-1",
+            "workspaceId": "workspace-1",
+            "noteId": "note-1",
+            "noteInstanceId": "incarnation-1"
+          },
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "viewId": "frozen-view-1",
+          "expiresAt": "2026-10-06T18:00:00.000Z",
+          "sourceLength": 50,
+          "kind": "noteOperationPage",
+          "outputKind": "detail",
+          "items": [
+            {
+              "id": "metadata-21",
+              "parentId": "metadata-20",
+              "key": "end",
+              "type": "number",
+              "value": 20
+            },
+            {
+              "id": "metadata-22",
+              "parentId": "metadata-20",
+              "key": "start",
+              "type": "number",
+              "value": 12
+            }
+          ],
+          "nextCursor": null
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "note.operation.read",
+        "params": {
+          "backendId": "backend-1",
+          "workspaceId": "workspace-1",
+          "noteId": "note-1",
+          "noteInstanceId": "incarnation-1",
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "kind": "detail",
+          "ref": "children-metadata-3",
+          "maxItems": 4,
+          "maxWireBytes": 4096
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "result": {
+          "scope": {
+            "backendId": "backend-1",
+            "workspaceId": "workspace-1",
+            "noteId": "note-1",
+            "noteInstanceId": "incarnation-1"
+          },
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "viewId": "frozen-view-1",
+          "expiresAt": "2026-10-06T18:00:00.000Z",
+          "sourceLength": 50,
+          "kind": "noteOperationPage",
+          "outputKind": "detail",
+          "items": [
+            {
+              "id": "metadata-4",
+              "parentId": "metadata-3",
+              "key": "attributes",
+              "type": "object",
+              "childrenRef": "children-metadata-4"
+            },
+            {
+              "id": "metadata-5",
+              "parentId": "metadata-3",
+              "key": "descriptor",
+              "type": "object",
+              "childrenRef": "children-metadata-5"
+            },
+            {
+              "id": "metadata-18",
+              "parentId": "metadata-3",
+              "key": "ordinal",
+              "type": "number",
+              "value": 1
+            },
+            {
+              "id": "metadata-19",
+              "parentId": "metadata-3",
+              "key": "renderedText",
+              "type": "string",
+              "valueRef": "rendered-text-0"
+            }
+          ],
+          "nextCursor": "children-metadata-3-cursor-1"
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 8,
+        "method": "note.operation.read",
+        "params": {
+          "backendId": "backend-1",
+          "workspaceId": "workspace-1",
+          "noteId": "note-1",
+          "noteInstanceId": "incarnation-1",
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "kind": "detail",
+          "ref": "children-metadata-3",
+          "maxItems": 4,
+          "maxWireBytes": 4096,
+          "cursor": "children-metadata-3-cursor-1"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 8,
+        "result": {
+          "scope": {
+            "backendId": "backend-1",
+            "workspaceId": "workspace-1",
+            "noteId": "note-1",
+            "noteInstanceId": "incarnation-1"
+          },
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "viewId": "frozen-view-1",
+          "expiresAt": "2026-10-06T18:00:00.000Z",
+          "sourceLength": 50,
+          "kind": "noteOperationPage",
+          "outputKind": "detail",
+          "items": [
+            {
+              "id": "metadata-20",
+              "parentId": "metadata-3",
+              "key": "sourceRange",
+              "type": "object",
+              "childrenRef": "children-metadata-20"
+            }
+          ],
+          "nextCursor": null
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 9,
+        "method": "note.operation.read",
+        "params": {
+          "backendId": "backend-1",
+          "workspaceId": "workspace-1",
+          "noteId": "note-1",
+          "noteInstanceId": "incarnation-1",
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "kind": "detail",
+          "ref": "children-metadata-25",
+          "maxItems": 4,
+          "maxWireBytes": 4096
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 9,
+        "result": {
+          "scope": {
+            "backendId": "backend-1",
+            "workspaceId": "workspace-1",
+            "noteId": "note-1",
+            "noteInstanceId": "incarnation-1"
+          },
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "viewId": "frozen-view-1",
+          "expiresAt": "2026-10-06T18:00:00.000Z",
+          "sourceLength": 50,
+          "kind": "noteOperationPage",
+          "outputKind": "detail",
+          "items": [],
+          "nextCursor": null
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 10,
+        "method": "note.operation.read",
+        "params": {
+          "backendId": "backend-1",
+          "workspaceId": "workspace-1",
+          "noteId": "note-1",
+          "noteInstanceId": "incarnation-1",
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "kind": "detail",
+          "ref": "children-metadata-28",
+          "maxItems": 4,
+          "maxWireBytes": 4096
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 10,
+        "result": {
+          "scope": {
+            "backendId": "backend-1",
+            "workspaceId": "workspace-1",
+            "noteId": "note-1",
+            "noteInstanceId": "incarnation-1"
+          },
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "viewId": "frozen-view-1",
+          "expiresAt": "2026-10-06T18:00:00.000Z",
+          "sourceLength": 50,
+          "kind": "noteOperationPage",
+          "outputKind": "detail",
+          "items": [
+            {
+              "id": "metadata-29",
+              "parentId": "metadata-28",
+              "key": "from",
+              "type": "number",
+              "value": 100
+            },
+            {
+              "id": "metadata-30",
+              "parentId": "metadata-28",
+              "key": "to",
+              "type": "number",
+              "value": 110
+            }
+          ],
+          "nextCursor": null
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 11,
+        "method": "note.operation.read",
+        "params": {
+          "backendId": "backend-1",
+          "workspaceId": "workspace-1",
+          "noteId": "note-1",
+          "noteInstanceId": "incarnation-1",
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "kind": "detail",
+          "ref": "children-metadata-26",
+          "maxItems": 4,
+          "maxWireBytes": 4096
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 11,
+        "result": {
+          "scope": {
+            "backendId": "backend-1",
+            "workspaceId": "workspace-1",
+            "noteId": "note-1",
+            "noteInstanceId": "incarnation-1"
+          },
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "viewId": "frozen-view-1",
+          "expiresAt": "2026-10-06T18:00:00.000Z",
+          "sourceLength": 50,
+          "kind": "noteOperationPage",
+          "outputKind": "detail",
+          "items": [
+            {
+              "id": "metadata-27",
+              "parentId": "metadata-26",
+              "key": "attributesRef",
+              "type": "string",
+              "value": "parent-attrs"
+            },
+            {
+              "id": "metadata-28",
+              "parentId": "metadata-26",
+              "key": "nativeRange",
+              "type": "object",
+              "childrenRef": "children-metadata-28"
+            },
+            {
+              "id": "metadata-31",
+              "parentId": "metadata-26",
+              "key": "nodeType",
+              "type": "string",
+              "value": "paragraph"
+            },
+            {
+              "id": "metadata-32",
+              "parentId": "metadata-26",
+              "key": "parentOrdinal",
+              "type": "null",
+              "value": null
+            }
+          ],
+          "nextCursor": "children-metadata-26-cursor-1"
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 12,
+        "method": "note.operation.read",
+        "params": {
+          "backendId": "backend-1",
+          "workspaceId": "workspace-1",
+          "noteId": "note-1",
+          "noteInstanceId": "incarnation-1",
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "kind": "detail",
+          "ref": "children-metadata-26",
+          "maxItems": 4,
+          "maxWireBytes": 4096,
+          "cursor": "children-metadata-26-cursor-1"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 12,
+        "result": {
+          "scope": {
+            "backendId": "backend-1",
+            "workspaceId": "workspace-1",
+            "noteId": "note-1",
+            "noteInstanceId": "incarnation-1"
+          },
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "viewId": "frozen-view-1",
+          "expiresAt": "2026-10-06T18:00:00.000Z",
+          "sourceLength": 50,
+          "kind": "noteOperationPage",
+          "outputKind": "detail",
+          "items": [
+            {
+              "id": "metadata-33",
+              "parentId": "metadata-26",
+              "key": "version",
+              "type": "number",
+              "value": 1
+            }
+          ],
+          "nextCursor": null
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 13,
+        "method": "note.operation.read",
+        "params": {
+          "backendId": "backend-1",
+          "workspaceId": "workspace-1",
+          "noteId": "note-1",
+          "noteInstanceId": "incarnation-1",
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "kind": "detail",
+          "ref": "children-metadata-35",
+          "maxItems": 4,
+          "maxWireBytes": 4096
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 13,
+        "result": {
+          "scope": {
+            "backendId": "backend-1",
+            "workspaceId": "workspace-1",
+            "noteId": "note-1",
+            "noteInstanceId": "incarnation-1"
+          },
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "viewId": "frozen-view-1",
+          "expiresAt": "2026-10-06T18:00:00.000Z",
+          "sourceLength": 50,
+          "kind": "noteOperationPage",
+          "outputKind": "detail",
+          "items": [
+            {
+              "id": "metadata-36",
+              "parentId": "metadata-35",
+              "key": "end",
+              "type": "number",
+              "value": 20
+            },
+            {
+              "id": "metadata-37",
+              "parentId": "metadata-35",
+              "key": "start",
+              "type": "number",
+              "value": 12
+            }
+          ],
+          "nextCursor": null
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 14,
+        "method": "note.operation.read",
+        "params": {
+          "backendId": "backend-1",
+          "workspaceId": "workspace-1",
+          "noteId": "note-1",
+          "noteInstanceId": "incarnation-1",
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "kind": "detail",
+          "ref": "children-metadata-24",
+          "maxItems": 4,
+          "maxWireBytes": 4096
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 14,
+        "result": {
+          "scope": {
+            "backendId": "backend-1",
+            "workspaceId": "workspace-1",
+            "noteId": "note-1",
+            "noteInstanceId": "incarnation-1"
+          },
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "viewId": "frozen-view-1",
+          "expiresAt": "2026-10-06T18:00:00.000Z",
+          "sourceLength": 50,
+          "kind": "noteOperationPage",
+          "outputKind": "detail",
+          "items": [
+            {
+              "id": "metadata-25",
+              "parentId": "metadata-24",
+              "key": "attributes",
+              "type": "object",
+              "childrenRef": "children-metadata-25"
+            },
+            {
+              "id": "metadata-26",
+              "parentId": "metadata-24",
+              "key": "descriptor",
+              "type": "object",
+              "childrenRef": "children-metadata-26"
+            },
+            {
+              "id": "metadata-34",
+              "parentId": "metadata-24",
+              "key": "ordinal",
+              "type": "number",
+              "value": 0
+            },
+            {
+              "id": "metadata-35",
+              "parentId": "metadata-24",
+              "key": "sourceRange",
+              "type": "object",
+              "childrenRef": "children-metadata-35"
+            }
+          ],
+          "nextCursor": null
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 15,
+        "method": "note.operation.read",
+        "params": {
+          "backendId": "backend-1",
+          "workspaceId": "workspace-1",
+          "noteId": "note-1",
+          "noteInstanceId": "incarnation-1",
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "kind": "detail",
+          "ref": "children-metadata-38",
+          "maxItems": 4,
+          "maxWireBytes": 4096
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 15,
+        "result": {
+          "scope": {
+            "backendId": "backend-1",
+            "workspaceId": "workspace-1",
+            "noteId": "note-1",
+            "noteInstanceId": "incarnation-1"
+          },
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "viewId": "frozen-view-1",
+          "expiresAt": "2026-10-06T18:00:00.000Z",
+          "sourceLength": 50,
+          "kind": "noteOperationPage",
+          "outputKind": "detail",
+          "items": [
+            {
+              "id": "metadata-39",
+              "parentId": "metadata-38",
+              "key": "end",
+              "type": "number",
+              "value": 6
+            },
+            {
+              "id": "metadata-40",
+              "parentId": "metadata-38",
+              "key": "start",
+              "type": "number",
+              "value": 0
+            }
+          ],
+          "nextCursor": null
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 16,
+        "method": "note.operation.read",
+        "params": {
+          "backendId": "backend-1",
+          "workspaceId": "workspace-1",
+          "noteId": "note-1",
+          "noteInstanceId": "incarnation-1",
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "kind": "detail",
+          "ref": "children-metadata-41",
+          "maxItems": 4,
+          "maxWireBytes": 4096
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 16,
+        "result": {
+          "scope": {
+            "backendId": "backend-1",
+            "workspaceId": "workspace-1",
+            "noteId": "note-1",
+            "noteInstanceId": "incarnation-1"
+          },
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "viewId": "frozen-view-1",
+          "expiresAt": "2026-10-06T18:00:00.000Z",
+          "sourceLength": 50,
+          "kind": "noteOperationPage",
+          "outputKind": "detail",
+          "items": [
+            {
+              "id": "metadata-42",
+              "parentId": "metadata-41",
+              "key": "end",
+              "type": "number",
+              "value": 18
+            },
+            {
+              "id": "metadata-43",
+              "parentId": "metadata-41",
+              "key": "start",
+              "type": "number",
+              "value": 12
+            }
+          ],
+          "nextCursor": null
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 17,
+        "method": "note.operation.read",
+        "params": {
+          "backendId": "backend-1",
+          "workspaceId": "workspace-1",
+          "noteId": "note-1",
+          "noteInstanceId": "incarnation-1",
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "kind": "detail",
+          "ref": "children-metadata-1",
+          "maxItems": 4,
+          "maxWireBytes": 4096
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 17,
+        "result": {
+          "scope": {
+            "backendId": "backend-1",
+            "workspaceId": "workspace-1",
+            "noteId": "note-1",
+            "noteInstanceId": "incarnation-1"
+          },
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "viewId": "frozen-view-1",
+          "expiresAt": "2026-10-06T18:00:00.000Z",
+          "sourceLength": 50,
+          "kind": "noteOperationPage",
+          "outputKind": "detail",
+          "items": [
+            {
+              "id": "metadata-2",
+              "parentId": "metadata-1",
+              "key": "kind",
+              "type": "string",
+              "value": "stagedRenderedHit"
+            },
+            {
+              "id": "metadata-3",
+              "parentId": "metadata-1",
+              "key": "leaf",
+              "type": "object",
+              "childrenRef": "children-metadata-3"
+            },
+            {
+              "id": "metadata-23",
+              "parentId": "metadata-1",
+              "key": "mapping",
+              "type": "string",
+              "value": "identity"
+            },
+            {
+              "id": "metadata-24",
+              "parentId": "metadata-1",
+              "key": "parent",
+              "type": "object",
+              "childrenRef": "children-metadata-24"
+            }
+          ],
+          "nextCursor": "children-metadata-1-cursor-1"
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 18,
+        "method": "note.operation.read",
+        "params": {
+          "backendId": "backend-1",
+          "workspaceId": "workspace-1",
+          "noteId": "note-1",
+          "noteInstanceId": "incarnation-1",
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "kind": "detail",
+          "ref": "children-metadata-1",
+          "maxItems": 4,
+          "maxWireBytes": 4096,
+          "cursor": "children-metadata-1-cursor-1"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 18,
+        "result": {
+          "scope": {
+            "backendId": "backend-1",
+            "workspaceId": "workspace-1",
+            "noteId": "note-1",
+            "noteInstanceId": "incarnation-1"
+          },
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "viewId": "frozen-view-1",
+          "expiresAt": "2026-10-06T18:00:00.000Z",
+          "sourceLength": 50,
+          "kind": "noteOperationPage",
+          "outputKind": "detail",
+          "items": [
+            {
+              "id": "metadata-38",
+              "parentId": "metadata-1",
+              "key": "renderedRange",
+              "type": "object",
+              "childrenRef": "children-metadata-38"
+            },
+            {
+              "id": "metadata-41",
+              "parentId": "metadata-1",
+              "key": "sourceRange",
+              "type": "object",
+              "childrenRef": "children-metadata-41"
+            }
+          ],
+          "nextCursor": null
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 19,
+        "method": "note.operation.read",
+        "params": {
+          "backendId": "backend-1",
+          "workspaceId": "workspace-1",
+          "noteId": "note-1",
+          "noteInstanceId": "incarnation-1",
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "kind": "detail",
+          "ref": "hit-detail",
+          "maxItems": 4,
+          "maxWireBytes": 4096
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 19,
+        "result": {
+          "scope": {
+            "backendId": "backend-1",
+            "workspaceId": "workspace-1",
+            "noteId": "note-1",
+            "noteInstanceId": "incarnation-1"
+          },
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "viewId": "frozen-view-1",
+          "expiresAt": "2026-10-06T18:00:00.000Z",
+          "sourceLength": 50,
+          "kind": "noteOperationPage",
+          "outputKind": "detail",
+          "items": [
+            {
+              "id": "metadata-1",
+              "parentId": null,
+              "type": "object",
+              "childrenRef": "children-metadata-1"
+            }
+          ],
+          "nextCursor": null
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 20,
+        "method": "note.operation.read",
+        "params": {
+          "backendId": "backend-1",
+          "workspaceId": "workspace-1",
+          "noteId": "note-1",
+          "noteInstanceId": "incarnation-1",
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "kind": "detail",
+          "ref": "rendered-text-0",
+          "maxItems": 4,
+          "maxWireBytes": 4096
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 20,
+        "result": {
+          "scope": {
+            "backendId": "backend-1",
+            "workspaceId": "workspace-1",
+            "noteId": "note-1",
+            "noteInstanceId": "incarnation-1"
+          },
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "viewId": "frozen-view-1",
+          "expiresAt": "2026-10-06T18:00:00.000Z",
+          "sourceLength": 50,
+          "kind": "noteOperationPage",
+          "outputKind": "detail",
+          "items": [
+            {
+              "kind": "fragment",
+              "id": "rendered-value",
+              "field": "renderedText",
+              "offset": 0,
+              "text": "Stra",
+              "nextRef": "rendered-text-4"
+            }
+          ],
+          "nextCursor": null
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 21,
+        "method": "note.operation.read",
+        "params": {
+          "backendId": "backend-1",
+          "workspaceId": "workspace-1",
+          "noteId": "note-1",
+          "noteInstanceId": "incarnation-1",
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "kind": "detail",
+          "ref": "rendered-text-4",
+          "maxItems": 4,
+          "maxWireBytes": 4096
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 21,
+        "result": {
+          "scope": {
+            "backendId": "backend-1",
+            "workspaceId": "workspace-1",
+            "noteId": "note-1",
+            "noteInstanceId": "incarnation-1"
+          },
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "viewId": "frozen-view-1",
+          "expiresAt": "2026-10-06T18:00:00.000Z",
+          "sourceLength": 50,
+          "kind": "noteOperationPage",
+          "outputKind": "detail",
+          "items": [
+            {
+              "kind": "fragment",
+              "id": "rendered-value",
+              "field": "renderedText",
+              "offset": 4,
+              "text": "ße",
+              "nextRef": "rendered-text-6"
+            }
+          ],
+          "nextCursor": null
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 22,
+        "method": "note.operation.read",
+        "params": {
+          "backendId": "backend-1",
+          "workspaceId": "workspace-1",
+          "noteId": "note-1",
+          "noteInstanceId": "incarnation-1",
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "kind": "detail",
+          "ref": "rendered-text-6",
+          "maxItems": 4,
+          "maxWireBytes": 4096
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 22,
+        "result": {
+          "scope": {
+            "backendId": "backend-1",
+            "workspaceId": "workspace-1",
+            "noteId": "note-1",
+            "noteInstanceId": "incarnation-1"
+          },
+          "operationId": "rendered-operation",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "viewId": "frozen-view-1",
+          "expiresAt": "2026-10-06T18:00:00.000Z",
+          "sourceLength": 50,
+          "kind": "noteOperationPage",
+          "outputKind": "detail",
+          "items": [
+            {
+              "kind": "fragment",
+              "id": "rendered-value",
+              "field": "renderedText",
+              "offset": 6,
+              "text": "😀",
+              "nextRef": null
+            }
+          ],
+          "nextCursor": null
+        }
+      }
+    }
+  ],
+  "expected": {
+    "kind": "stagedRenderedHit",
+    "mapping": "identity",
+    "sourceRange": {
+      "start": 12,
+      "end": 18
+    },
+    "renderedRange": {
+      "start": 0,
+      "end": 6
+    },
+    "parent": {
+      "ordinal": 0,
+      "sourceRange": {
+        "start": 12,
+        "end": 20
+      },
+      "descriptor": {
+        "version": 1,
+        "nodeType": "paragraph",
+        "parentOrdinal": null,
+        "nativeRange": {
+          "from": 100,
+          "to": 110
+        },
+        "attributesRef": "parent-attrs"
+      },
+      "attributes": {}
+    },
+    "leaf": {
+      "ordinal": 1,
+      "sourceRange": {
+        "start": 12,
+        "end": 20
+      },
+      "descriptor": {
+        "version": 2,
+        "nodeType": "text",
+        "parentOrdinal": 0,
+        "nativeRange": {
+          "from": 101,
+          "to": 109
+        },
+        "attributesRef": "leaf-attrs",
+        "renderedText": {
+          "textId": "captured-text",
+          "length": 8,
+          "utf8Bytes": 11,
+          "sha256": "7b28e3f7ff73155f7a69aa9ba70668936810a798c4c617dd0f5bd7537163a99c"
+        }
+      },
+      "attributes": {},
+      "renderedText": "Straße😀"
+    }
+  }
+}
