@@ -1907,3 +1907,59 @@ test('inline details reject foreign receipt identity, unreachable refs and exact
   for (const now of [Date.parse(x.receipt.receiptExpiresAt), Date.parse(x.receipt.receiptExpiresAt) + 1])
     assert.throws(() => summaryContract.assertInlineReceiptDetail(x.request, x.receipt, x.refs, now));
 });
+
+
+test('logical replacement guard preserves existing leading-run and trailer recognition', () => {
+  for (const text of ['   1 | first\n   2 | second', '  12 | first\n  13 |',
+    '9999 | first\n10000 | next', '   1 | first\n   2 | second\nordinary tail',
+    '\n\n--- Task Metadata ---\nstatus: open']) {
+    assert.equal(summaryContract.isNumberedReadPresentation(text), true);
+    assert.equal(spliceError('base', [{ start: 0, end: 4, text }], f.limits), 'invalid-params');
+  }
+  for (const text of ['1. first\n2. second', '1 | Alice\n2 | Bob', '| 1 | a |\n| 2 | b |',
+    '    1 | code\n    2 | code', '   1 | single', '1|a\n2|b',
+    'prose\n   1 | a\n   2 | b', '```\n   1 | a\n   2 | b\n```', '']) {
+    assert.equal(summaryContract.isNumberedReadPresentation(text), false);
+    assert.equal(spliceError('base', [{ start: 0, end: 4, text }], f.limits), null);
+  }
+});
+test('logical replacement guard rejects a later bad splice before applying any batch', () => {
+  const base = 'first second';
+  const splices = [{ start: 0, end: 5, text: 'changed' },
+    { start: 6, end: 12, text: '   1 | a\n   2 | b' }];
+  const before = structuredClone(splices), payloadHash = digest(splices);
+  const error = spliceError(base, splices, f.limits);
+  const result = error ? base : applySourceSplices(base, splices);
+  assert.equal(error, 'invalid-params'); assert.equal(result, base);
+  assert.deepEqual(splices, before); assert.equal(digest(splices), payloadHash);
+});
+test('logical replacement guard neither scans untouched base nor combines independent splices', () => {
+  const base = '   1 | first\n   2 | second';
+  const repair = [{ start: base.length, end: base.length, text: ' repaired' }];
+  assert.equal(spliceError(base, repair, f.limits), null);
+  assert.equal(applySourceSplices(base, repair), base + ' repaired');
+  const splices = [{ start: 0, end: 1, text: '   1 | a\n' },
+    { start: 1, end: 2, text: '   2 | b' }];
+  assert.equal(spliceError('ab', splices, f.limits), null);
+  assert.equal(summaryContract.isNumberedReadPresentation(applySourceSplices('ab', splices)), true);
+});
+test('staged logical replacement guard is independent of every scalar-safe chunk seam', () => {
+  for (const text of ['   1 | a😀\n   2 | b', '```\n   1 | a\n   2 | b\n```',
+    '\n\n--- Task Metadata ---\nstatus: open']) {
+    const expected = summaryContract.isNumberedReadPresentation(text);
+    for (let at = 0; at <= text.length; at++) {
+      if (!boundary(text, at)) continue;
+      // Fixture reassembly only, not permission for full production hydration.
+      const chunks = [text.slice(0, at), text.slice(at)];
+      assert.equal(summaryContract.isNumberedReadPresentation(chunks.join('')), expected);
+      assert.equal(digest(chunks.join('')), digest(text));
+    }
+  }
+});
+test('logical replacement guard preserves historical replay and exact bytes by contract', () => {
+  const section = docs.split('**Numbered-read guard on logical replacements.**')[1]?.split('`operationId` is')[0];
+  assert.ok(section);
+  for (const text of ['existing unchanged', 'each `splices[].text`', 'reject the whole batch',
+    'complete logical', 'Do not strip prefixes', 'combine independent splices',
+    'Retained historical receipt replay', 'existing ordering']) assert.ok(section.includes(text), text);
+});

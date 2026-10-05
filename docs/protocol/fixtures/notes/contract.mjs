@@ -12,13 +12,33 @@ export const boundary = (text, offset) => Number.isSafeInteger(offset) && offset
 export const validText = text => typeof text === 'string' && !text.includes('\0')
   && !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(text);
 
+// Fixture oracle for the EXISTING service guard, not a streaming implementation.
+export function isNumberedReadPresentation(text) {
+  const trailer = text.indexOf('\n\n--- Task Metadata ---\n');
+  if (trailer === 0) return true;
+  const body = trailer < 0 ? text : text.slice(0, trailer);
+  const number = line => {
+    if (line === undefined) return undefined;
+    const rest = line.replace(/^ +/u, '');
+    const pad = line.length - rest.length;
+    const digits = rest.match(/^[0-9]+/u)?.[0];
+    if (!digits || pad + digits.length !== Math.max(4, digits.length)) return undefined;
+    const after = rest.slice(digits.length);
+    if (!after.startsWith(' | ') && after !== ' |') return undefined;
+    const n = BigInt(digits);
+    return n <= 18446744073709551615n ? n : undefined;
+  };
+  const [first, second] = body.split('\n', 2).map(number);
+  return first !== undefined && second !== undefined && second === first + 1n;
+}
+
 export function spliceError(source, splices, limits) {
   if (!Array.isArray(splices) || !splices.length) return 'invalid-params';
   if (splices.length > limits.splices) return 'note-page-budget';
   let previous;
   for (const s of splices) {
     if (!boundary(source, s.start) || !boundary(source, s.end) || s.start > s.end
-      || !validText(s.text) || (previous && (previous.end > s.start || previous.start >= s.start))) {
+      || !validText(s.text) || isNumberedReadPresentation(s.text) || (previous && (previous.end > s.start || previous.start >= s.start))) {
       return 'invalid-params';
     }
     previous = s;

@@ -843,6 +843,29 @@ receipt never conceals those changes as caller splices. Repeated text is address
 never a first-text-match search. Stale base rejects the entire batch; no automatic
 three-way merge on this method and no partial mutation on overlap/validation failure.
 
+**Numbered-read guard on logical replacements.** For a newly executed
+`note.applySplices` batch, apply the existing unchanged numbered `note.read`
+presentation detector above to each `splices[].text`, just as `note.edit` guards
+its `new` parameter. If any replacement matches, reject the whole batch with
+`-32602` InvalidParams before source, history, indexes or canonical effects mutate.
+Do not strip prefixes, rewrite replacement bytes or change the payload digest.
+Do not scan the assembled callerResult as an additional guard, inspect untouched
+base text, or combine independent splices to detect a new leading run. A surgical
+edit of existing numbered-looking source is not rejected solely because that base
+already has the display shape. The detector's existing leading-run/trailer behavior
+and false-positive policy remain unchanged; this is not a ban on ordinary ordered
+lists, tables or single numbered lines.
+
+Staged dirty/mutation replacements use the same detector on each complete logical
+text-ID value, independent of append chunk, scalar-fragment or page boundaries.
+A text value split across chunks has exactly the same validation outcome as the
+same unchunked value. Validation must finish before note mutation; transport chunks
+are not independently accepted or rejected as note-write replacements. This does
+not require hydrating the entire text in memory or inspecting selection/live detail
+text as if it were a replacement. Retained historical receipt replay and operation
+mismatch handling keep their existing ordering; this guard does not turn an exact
+retry into a new execution or revalidate a historical receipt against current text.
+
 `operationId` is a canonical UUID minted once for a logical save; the stable scope and
 principal form its receipt key; method is bound into the stored digest, so cross-method
 reuse of that identity is a mismatch. `expiresAt` is an RFC3339 UTC millisecond
