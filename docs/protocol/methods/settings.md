@@ -478,3 +478,28 @@ Keep generation fencing against an earlier pending refresh/selection.
 The desktop `labs:multiplayerEnabled` preference is not a daemon setting or
 permission. It gates the experimental collaboration UI, including the tab and
 direct routes, and cannot grant access or revoke saved memberships when toggled.
+
+### Collaborator-facing machine name
+
+`sharing.machineName` is a host-scoped string setting (category `sharing`, default
+`""`), persisted under `[sharing]` in `config.toml`. The host owner edits it with
+`settings.update` and reads it with `settings.get` / `settings.list`; the existing
+administrator service and transport gates apply. Host members and workspace guests
+cannot read the settings catalog or update/reset this setting.
+
+Updates trim surrounding Unicode whitespace, reject control characters (including
+surrounding tabs/newlines), and reject more than 100 Unicode scalar values after
+trimming with `-32602`. An empty/whitespace-only value or
+`settings.reset { path: "sharing.machineName" }` clears the override. Changes take
+effect without restart and survive daemon restart. This setting changes display
+naming only: OS `hostname` / `prettyHostname`, personal paired-device aliases, stable
+host IDs, routing metadata and credentials keep their existing meanings.
+
+Collaborators receive only the `collaborationName` projection through
+`system.status` and open-invite `invite.inspect` / `invite.challenge` (both host
+and workspace scopes). The field is always a string or explicit `null` on supporting
+daemons: non-empty saved override or `null` when unset/reset. Older daemons omit it.
+Clients use the override only for collaboration labels, otherwise retain their
+existing pretty-hostname/hostname fallback. Connected clients refresh through their
+existing status polling and reconnect path; `null` must clear a cached override.
+There is no new RPC, event or broader guest settings access.
