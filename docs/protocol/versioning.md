@@ -8,8 +8,18 @@ capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `13.6` — prepared onboarding adapter preparation; not a shipped-version claim.
+**Documented version:** `13.7` — prepared checkout owner-avatar extension; not a shipped-version claim.
 Other prepared extensions retain their independent support gates.
+
+**Version 13.7 — checkout owner avatars (additive, prepared).**
+The [owner-avatar extension](./methods/repository-checkout.md#owner-avatar-extension-prepared-protocol-137)
+adds optional `includeOwnerAvatar` to checkout capture and optional
+`ownerAvatarUrl` to its project page/detail projection. Exactly integer
+`gitlabCheckoutOwnerAvatar: 1` on the original connection permits the opt-in;
+legacy captures retain the previous shape, and new clients omit the input on
+older daemons. Metadata comes from the matching owning namespace in the existing
+project response, with no additional provider read. No method, event, authority,
+or catalog count changes: the documented surface remains **443 / 387 / 56**.
 
 **Version 13.6 — onboarding adapter preparation (additive, prepared).**
 [`host.prepareProviderAdapters`](./05-method-catalog.md#hostprepareprovideradapters-136-prepared)
