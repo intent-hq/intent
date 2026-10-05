@@ -2193,3 +2193,43 @@ test('unavailable staged adapters do not create a source fallback or constrain r
   assert.match(docs, /This equality does not change the separately addressed receipt reads or reachable/);
   assert.match(docs, /A captured `source` output remains the exact frozen source without selection/);
 });
+
+test('staged inverse composes canonical outside-range changes into the newest original group', () => {
+  // Controlled source algebra, not a canonical writer, native history owner or provenance proof.
+  const base = 'ab', first = 'aXb', second = 'aXYb', canonical = '[aXYb]';
+  const originalGroups = ['typed-first', 'typed-second'];
+  const inverse = [
+    { historyGroup: originalGroups[1], input: canonical, output: first, splices: [
+      { start: 0, end: 1, text: '' }, { start: 3, end: 4, text: '' }, { start: 5, end: 6, text: '' },
+    ] },
+    { historyGroup: originalGroups[0], input: first, output: base, splices: [{ start: 1, end: 2, text: '' }] },
+  ];
+  assert.equal(applySourceSplices(base, [{ start: 1, end: 1, text: 'X' }]), first);
+  assert.equal(applySourceSplices(first, [{ start: 2, end: 2, text: 'Y' }]), second);
+  assert.deepEqual(inverse.map(g => g.historyGroup), [...originalGroups].reverse());
+  let current = canonical;
+  for (const group of inverse) {
+    summaryContract.assertInverseHistoryGroup(group.historyGroup);
+    assert.equal(current, group.input);
+    current = applySourceSplices(current, group.splices);
+    assert.equal(current, group.output);
+  }
+  assert.equal(current, base);
+  assert.notEqual(applySourceSplices(canonical, [{ start: 3, end: 4, text: '' }]), first);
+  assert.match(docs, /do not drop them, flatten earlier groups, or invent a\nseparate native gesture/);
+});
+test('zero-user-group commits retain an empty inverse or one receipt-owned canonical-source inverse', () => {
+  const capturedNativeGroups = [], base = 'ab';
+  const unchanged = { source: base, inverseRef: 'owned-empty-inverse', groups: [] };
+  assert.equal(unchanged.source, base); assert.equal(unchanged.groups.length, 0);
+  const changed = { source: '[ab]', inverseRef: 'owned-operation-inverse', groups: [{
+    historyGroup: 'operation-only', input: '[ab]', output: base,
+    splices: [{ start: 0, end: 1, text: '' }, { start: 3, end: 4, text: '' }],
+  }] };
+  const group = changed.groups[0]; summaryContract.assertInverseHistoryGroup(group.historyGroup);
+  assert.equal(applySourceSplices(group.input, group.splices), group.output);
+  assert.equal(group.output, base); assert.equal(capturedNativeGroups.length, 0);
+  assert.match(docs, /receipt owns an explicitly empty inverse collection/);
+  assert.match(docs, /That group represents\nthis committed operation, not an invented captured native gesture/);
+  assert.match(docs, /No reserved group spelling or new wire discriminator is introduced/);
+});

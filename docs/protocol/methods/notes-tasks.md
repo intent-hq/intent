@@ -1340,7 +1340,28 @@ sequence and the original staged groups. It neither grants provenance nor permit
 merging separate gestures. The first inputState is afterRevision;
 each group’s ranges share its input state, and its outputState is the next group’s
 input. This preserves dirty-prefix history groups separately from the final gesture;
-undoing only the newest gesture does not discard earlier typing. Large removed text
+undoing only the newest gesture does not discard earlier typing. When canonical
+source effects follow the caller's result, compose their exact source inverse with
+the newest user group's inverse: that group starts at final `afterRevision` and
+ends at the original input of that group. Include canonical source changes outside
+the caller's splice ranges; do not drop them, flatten earlier groups, or invent a
+separate native gesture for canonicalization. Earlier groups then invert in their
+original reverse order against their retained input/output states. This source
+composition does not reverse non-source effects contrary to existing task semantics.
+
+For the additive zero-user-group case (no dirty groups and no mutation records),
+empty staging alone is not invalid admission. If final source bytes equal the
+captured base, the receipt owns an explicitly empty inverse collection. If
+canonicalization changes source, the receipt owns one operation inverse group from
+`afterRevision` to `beforeRevision`, with exact retained source/provenance and a
+receipt-local opaque `historyGroup` under the rules above. That group represents
+this committed operation, not an invented captured native gesture or frontend
+history ID. No reserved group spelling or new wire discriminator is introduced.
+An implementation without this branch must report it as unsupported before
+publication, not fabricate a native group or silently omit the source inverse.
+These rules do not grant marker restoration/alias authority or delete child tasks.
+
+Large removed text
 is streamed by `kind: "inverseText"` using the same
 text-ID offset contract. Inverse references/digests are verified just like staged
 input. Undo is a new operation, never an operation-ID replay. Transform its targets
