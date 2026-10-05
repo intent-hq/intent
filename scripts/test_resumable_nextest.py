@@ -328,13 +328,13 @@ class CallbackValidatorTests(unittest.TestCase):
         harness = PlannedRunHarness(self.root, [([event("ok", "alpha::one$passes")], 0)] * 2)
         original_key = gate.tree_key
 
-        def key(*args):
+        def key(*args, **kwargs):
             with mock.patch.object(gate, "worktree_tree", return_value="tree"), mock.patch.object(
                 gate, "submodule_heads", return_value=[]
             ), mock.patch.object(gate, "required_hash", return_value="hash"), mock.patch.object(
                 gate, "run", return_value="version"
             ):
-                return original_key(*args)
+                return original_key(*args, **kwargs)
 
         with mock.patch.object(gate, "tree_key", side_effect=key), mock.patch.object(
             gate, "run", side_effect=harness.fake_run
@@ -1782,6 +1782,7 @@ class CallerPolicyResumeTests(unittest.TestCase):
                     legacy = inputs[-1].copy()
                     legacy.pop("test-policy")
                     legacy.pop("callback-fixture")
+                    legacy.pop("test-stack")
                     legacy["schema"] = 2
                     key = gate.hashlib.sha256(dumps(legacy, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
                     shutil.rmtree(args.cache_dir)
@@ -1851,6 +1852,9 @@ sys.exit(101 if interrupted == "1" else 0)
             return process
 
         with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(
+            gate, "callback_fixture_identity",
+            return_value={"root": str(root / "fixture"), "manifest": "verified"}
+        ), mock.patch.object(
             gate, "worktree_tree", return_value="tree"
         ), mock.patch.object(gate, "submodule_heads", return_value=[]), mock.patch.object(
             gate, "required_hash", return_value="hash"

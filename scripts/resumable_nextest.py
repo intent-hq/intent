@@ -8,6 +8,9 @@ status is then the first non-zero plan status.
 Build outputs use stable per-checkout children under Cargo's configured target
 and build directories. This isolates make test/test-changed from other checkout
 builds; coverage and custom bare-Cargo scripts still manage their own output ownership.
+
+Resume identity includes the exact child RUST_MIN_STACK setting, also saved in
+test-stack.json: null means unset, distinct from an empty string or explicit value.
 """
 
 from __future__ import annotations
@@ -38,8 +41,9 @@ else:
     from _vendor import tomli as cargo_toml
 
 # Schema 2 isolated executables across checkouts (#6496); schema 3 also separates
-# effective test policy. Earlier unarmed passes cannot verify canonical gates.
-SCHEMA_VERSION = 3
+# effective test policy. Schema 4 binds passes to the child's stack setting;
+# earlier records cannot establish that the requested stack was tested.
+SCHEMA_VERSION = 4
 MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 KEY_RE = re.compile(r"^[0-9a-f]{64}$")
 RUST_FLAG_ENV = {"RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_RUSTFLAGS"}
@@ -292,8 +296,15 @@ def callback_fixture_identity(intentd_dir: Path) -> dict[str, str]:
         raise RuntimeError(f"callback fixture: {error}\n{callback_setup_help(intentd_dir)}") from error
 
 
+def test_stack_identity(env: dict[str, str]) -> dict[str, object]:
+    # Preserve unset (null), empty and explicit values without assuming a Rust
+    # default or changing the child's setting. Version the evidence contract.
+    return {"version": 1, "RUST_MIN_STACK": env.get("RUST_MIN_STACK")}
+
+
 def tree_key(repo_root: Path, intentd_dir: Path, output_args: list[str] | None = None,
-             fixture_identity: dict[str, str] | None = None) -> str:
+             fixture_identity: dict[str, str] | None = None,
+             *, child_env: dict[str, str] | None = None) -> str:
     intentd_dir = intentd_dir.resolve()
     inputs = {
         "source-root": str(intentd_dir),
@@ -315,6 +326,7 @@ def tree_key(repo_root: Path, intentd_dir: Path, output_args: list[str] | None =
         # us. Direct runner callers keep their own environment: record that
         # exact value (including unset vs empty), never assume canonical policy.
         "test-policy": {"INTENTD_ASSERT_BOUND_CALLER": os.environ.get("INTENTD_ASSERT_BOUND_CALLER")},
+        "test-stack": test_stack_identity(nextest_env() if child_env is None else child_env),
     }
     encoded = json.dumps(inputs, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
@@ -674,10 +686,11 @@ def run_nextest(args: argparse.Namespace) -> int:
             KeyboardInterrupt, Terminated) as error:
         print(f"[{label}] ERROR: resolving Cargo outputs: {error}", file=sys.stderr, flush=True)
         return failure_exit_code(error)
-    key = tree_key(repo_root, intentd_dir, output_args, fixture_identity)
+    key = tree_key(repo_root, intentd_dir, output_args, fixture_identity, child_env=env)
     run_dir = cache_dir / key
     run_dir.mkdir(parents=True, exist_ok=True)
     os.utime(run_dir)
+    write_atomic(run_dir / "test-stack.json", json.dumps(test_stack_identity(env), indent=2) + "\n")
     record = run_dir / "passed.jsonl"
     outcomes_by_test = load_outcomes(record)
     recorded = {test for test, outcome in outcomes_by_test.items() if outcome == "ok"}
