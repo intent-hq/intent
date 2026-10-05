@@ -221,8 +221,8 @@ fi
 # packages/intentd as a symlink to the fixture checkout so the runner's
 # --intentd-dir resolves as the Makefile passes it. A fake cargo answers
 # `nextest list` with a canned suite listing and `nextest run` with libtest
-# `test ok` events for those tests (after checking the --tool-config-file the
-# runner wrote exists); rustc/cargo version stubs feed the tree key.
+# events and JUnit for those tests (using the runner's tool config and profile
+# to resolve the native JUnit destination); rustc/cargo stubs feed the tree key.
 if [[ -z "$python3" || -z "$make_bin" ]]; then
   echo "rust-changed-tests tests: python3 or make not found; record/resume end-to-end cases skipped"
 else
@@ -259,17 +259,19 @@ else
   git -C "$mono" init -q
   git -c advice.addEmbeddedRepo=false -C "$mono" add -A
   git -C "$mono" commit -q -m mono
-  printf '%s\n' '{"rust-suites":{"alpha::one":{"package-name":"alpha","binary-name":"one","binary-id":"alpha::one","testcases":{"passes":{},"also_passes":{}}}}}' >"$temp_dir/listing.json"
-  printf '%s\n' '{"type":"suite","event":"started","test_count":2}' \
+  printf '%s\n' '{"rust-suites":{"alpha::one":{"package-name":"alpha","binary-name":"one","binary-id":"alpha::one","testcases":{"passes":{"ignored":false,"filter-match":{"status":"matches"}},"also_passes":{"ignored":false,"filter-match":{"status":"matches"}}}}}}' >"$temp_dir/listing.json"
+  printf '%s\n' '{"type":"suite","event":"started","test_count":2,"nextest":{"crate":"alpha","test_binary":"one","kind":"test"}}' \
     '{"type":"test","event":"started","name":"alpha::one$passes"}' \
     '{"type":"test","event":"ok","name":"alpha::one$passes"}' \
+    '{"type":"test","event":"started","name":"alpha::one$also_passes"}' \
     '{"type":"test","event":"ok","name":"alpha::one$also_passes"}' \
-    '{"type":"suite","event":"ok","passed":2,"failed":0,"ignored":0}' >"$temp_dir/events.jsonl"
+    '{"type":"suite","event":"ok","passed":2,"failed":0,"ignored":0,"nextest":{"crate":"alpha","test_binary":"one","kind":"test"}}' >"$temp_dir/events.jsonl"
   export NEXTEST_STUB_LISTING="$temp_dir/listing.json" NEXTEST_STUB_EVENTS="$temp_dir/events.jsonl"
   export CARGO_COMPACT_LOG="$temp_dir/compact.log"
   printf '#!/usr/bin/env bash\necho "rustc 1.99.0 (stub)"\n' >"$e2e_bin/rustc"
   cat >"$e2e_bin/cargo" <<'SH'
 #!/usr/bin/env bash
+set -euo pipefail
 printf '%s: %s\n' "$PWD" "$*" >>"$CARGO_TEST_LOG"
 printf '%s: incremental=%s flags=%s encoded=%s\n' "$*" "${CARGO_INCREMENTAL-}" "${RUSTFLAGS-}" "${CARGO_ENCODED_RUSTFLAGS-}" >>"$CARGO_COMPACT_LOG"
 if [[ "$1" == -V ]]; then echo "cargo 1.99.0 (stub)"; exit 0; fi
@@ -290,13 +292,128 @@ case "$2" in
       case "$arg" in intent-gate:*) config=${arg#intent-gate:} ;; esac
     done
     [[ -n "$config" && -f "$config" ]] || { echo "cargo stub: --tool-config-file is missing: '$config'" >&2; exit 98; }
-    while IFS= read -r line; do printf '%s\n' "$line"; done <"$NEXTEST_STUB_EVENTS"
+    python3 - "$config" "$@" <<'PY'
+import json, os, sys, tomllib
+from pathlib import Path
+from xml.etree import ElementTree as ET
+
+config = tomllib.loads(Path(sys.argv[1]).read_text())
+profile = sys.argv[sys.argv.index('--profile') + 1]
+settings = config['profile'][profile]
+# These cases execute the entire selection or take the completed shortcut.
+assert 'default-filter' not in settings, settings
+junit = Path(config['store']['dir']) / profile / settings['junit']['path']
+failed = os.environ.get('NEXTEST_STUB_EXIT', '0') != '0'
+root = ET.Element('testsuites')
+suite = ET.SubElement(root, 'testsuite', name='alpha::one', tests='2', failures=str(int(failed)))
+for line in Path(os.environ['NEXTEST_STUB_EVENTS']).read_text().splitlines():
+    event = json.loads(line)
+    if failed and event.get('name') == 'alpha::one$also_passes' and event['event'] == 'ok':
+        event['event'] = 'failed'
+    if failed and event['type'] == 'suite' and event['event'] == 'ok':
+        event.update(event='failed', passed=1, failed=1)
+    if event['type'] == 'test' and event['event'] in ('ok', 'failed'):
+        case = ET.SubElement(suite, 'testcase', name=event['name'].split('$', 1)[1])
+        if event['event'] == 'failed':
+            ET.SubElement(case, 'failure', message='controlled test failure')
+    print(json.dumps(event), flush=True)
+ET.ElementTree(root).write(junit, encoding='utf-8', xml_declaration=True)
+PY
     exit "${NEXTEST_STUB_EXIT:-0}"
     ;;
   *) echo "cargo stub: unexpected argv: $*" >&2; exit 99 ;;
 esac
 SH
   chmod +x "$e2e_bin/rustc" "$e2e_bin/cargo"
+
+  # Snapshot every historical attempt before each invocation. A later resume,
+  # force, failure or full run must not rewrite, replace or add receipt files.
+  cat >"$temp_dir/check-immutable.py" <<'PY'
+import hashlib, json, sys
+from pathlib import Path
+
+def snapshot(directory):
+    return {str(path.relative_to(directory)): [path.stat().st_ino,
+            hashlib.sha256(path.read_bytes()).hexdigest()]
+            for path in directory.rglob('*') if path.is_file()}
+
+cache, saved = map(Path, sys.argv[2:])
+if sys.argv[1] == 'save':
+    directories = (path for path in cache.rglob('*')
+                   if path.is_dir() and path.parent.name == 'attempts')
+    saved.write_text(json.dumps({str(path): snapshot(path) for path in directories}))
+else:
+    for path, before in json.loads(saved.read_text()).items():
+        assert snapshot(Path(path)) == before, f'historical receipt changed: {path}'
+PY
+
+  cat >"$temp_dir/check-receipt.py" <<'PY'
+import json, re, sys
+from pathlib import Path
+
+directory, cache, saved = map(Path, sys.argv[1:])
+assert str(directory) not in json.loads(saved.read_text()), 'invocation reused an attempt'
+receipt = json.loads((directory / 'run.json').read_text())
+proof = json.loads((directory / 'coverage.json').read_text())
+identities = [['alpha::one', 'also_passes'], ['alpha::one', 'passes']]
+assert re.fullmatch(r'[0-9a-f]{32}', directory.name), directory
+scope = directory.parent.parent
+tree = cache / receipt['tree_key']
+expected_scope = tree / 'changed' / receipt['plan_key'] if receipt['plan_key'] else tree
+assert scope == expected_scope and directory.parent.name == 'attempts', directory
+assert receipt['attempt_id'] == proof['attempt_id'] == directory.name
+assert proof['tree_key'] == receipt['tree_key'] and proof['plan_key'] == receipt['plan_key']
+assert receipt['exit_code'] == 0 and receipt['started_at'] and receipt['finished_at']
+assert proof['complete'] and proof['membership_complete'] and not proof['errors'], proof
+assert proof['active'] == identities and proof['inactive_filtered'] == []
+assert receipt['selection_membership'] == [identities]
+assert proof['kind'] == receipt['kind']
+assert not (directory / 'complete').exists()
+shortcut = receipt['kind'] == 'completed-resume'
+category = 'resumed-passed' if shortcut else 'executed-passed'
+assert proof['categories'] == {key: identities if key == category else [] for key in
+    ('executed-passed', 'resumed-passed', 'ignored', 'failed', 'unfinished')}, proof
+if shortcut:
+    source = scope / 'attempts' / receipt['resume_source_attempt']
+    assert source != directory and str(source) in json.loads(saved.read_text())
+    assert proof['source_attempt'] == str(source.relative_to(tree))
+    assert receipt['results'] == [] and receipt['passed'] == receipt['failed'] == receipt['ignored'] == 0
+    assert receipt['skipped_resumed'] == 2 and receipt['resumed_tests'] == identities
+    assert receipt['resume_requested'] and not receipt['force']
+    assert (directory / 'listing-1.json').read_bytes() == (source / 'listing-1.json').read_bytes()
+    assert not list(directory.glob('events-*')) and not list(directory.glob('junit*'))
+    original = json.loads((source / 'coverage.json').read_text())
+    assert proof['selections'] == original['selections'], 'shortcut must retain source evidence provenance'
+    refs = proof['resume_sources']
+    assert sorted([[row['binary_id'], row['test']] for row in refs]) == identities
+    journal = [json.loads(line) for line in (tree / 'passed.jsonl').read_text().splitlines()]
+    events = (source / 'events-1.jsonl').read_text().splitlines()
+    for row in refs:
+        assert row in journal and row['attempt'] == proof['source_attempt'] and row['selection_index'] == 1
+        event = json.loads(events[row['event_line'] - 1])
+        assert event['event'] == 'ok' and event['name'] == row['binary_id'] + '$' + row['test']
+else:
+    source = directory
+    assert receipt['kind'] == 'execution' and receipt['resume_source_attempt'] is None
+    assert receipt['passed'] == 2 and receipt['failed'] == receipt['ignored'] == receipt['skipped_resumed'] == 0
+    assert receipt['resumed_tests'] == proof['resume_sources'] == []
+    assert len(receipt['results']) == 1
+    result = receipt['results'][0]
+    assert result['exit_code'] == result['native_exit_code'] == 0
+    assert result['started_at'] and result['finished_at'] and result['selection_index'] == 1
+    assert result['junit'] == ('junit-1.xml' if receipt['plan_key'] else 'junit.xml')
+    assert (directory / result['junit']).is_file()
+assert (scope / 'complete').read_text().strip() == source.name, 'shortcut must not replace execution pointer'
+assert len(proof['selections']) == 1
+selection = proof['selections'][0]
+assert selection['evidence_attempt'] == source.name and selection['selection_index'] == 1
+assert selection['junit'] == 'validated' and selection['native_exit_code'] == 0
+assert selection['active'] == identities and selection['unfinished'] == []
+assert [row['identity'] for row in selection['outcomes']] == identities
+for row in selection['outcomes']:
+    assert row['outcome'] == 'ok' and row['source'] == 'raw'
+    assert len(row['events']) == 1 and row['events'][0]['outcome'] == 'ok'
+PY
 
   # $1 = RESUME, $2 = GATE_FORCE. CARGO_BIN_DIR puts the e2e stubs ahead of the
   # plain ones on the recipe's PATH.
@@ -305,6 +422,7 @@ SH
     shift 2
     : >"$temp_dir/cargo.log"
     : >"$temp_dir/compact.log"
+    "$python3" "$temp_dir/check-immutable.py" save "$cache" "$temp_dir/receipts.json"
     set +e
     PATH="$bin_dir" CARGO_TEST_LOG="$temp_dir/cargo.log" \
       "$make_bin" -C "${E2E_CWD:-$mono}" --no-print-directory "${E2E_GOAL:-test-changed}" CARGO_BIN_DIR="$e2e_bin" RUSTUP_CARGO= \
@@ -315,6 +433,12 @@ SH
     stdout=$(<"$temp_dir/stdout")
     stderr=$(<"$temp_dir/stderr")
     cargo_log=$(<"$temp_dir/cargo.log")
+    "$python3" "$temp_dir/check-immutable.py" check "$cache" "$temp_dir/receipts.json" \
+      || fail "$case_name: historical receipt bytes or inodes changed"
+    if [[ "$status" -eq 0 && "$stdout" == *"] record: "* ]]; then
+      "$python3" "$temp_dir/check-receipt.py" "${stdout##*"] record: "}" "$cache" "$temp_dir/receipts.json" \
+        || fail "$case_name: receipt/coverage contract mismatch"
+    fi
   }
   expect_ok() {
     [[ "$status" -eq 0 ]] || fail "$case_name: exited $status: $stderr"
@@ -326,7 +450,7 @@ SH
     [[ "$stdout" == *"[test-changed] cargo nextest run -p alpha --test one --build-jobs 2 --test-threads 1"$'\n'* ]] || fail "$case_name: plan line missing: $stdout"
     [[ "$stdout" == *$'\n'"$summary_line"$'\n'"[test-changed] record: $cache/"* ]] || fail "$case_name: summary/record lines missing: $stdout"
     record_dir=${stdout##*"[test-changed] record: "}
-    [[ "$record_dir" == "$cache"/*/changed/* && -d "$record_dir" ]] || fail "$case_name: record dir '$record_dir' is not <cache>/<tree-key>/changed/<plan-key>"
+    [[ "$record_dir" == "$cache"/*/changed/*/attempts/* && -d "$record_dir" ]] || fail "$case_name: record dir '$record_dir' is not <cache>/<tree-key>/changed/<plan-key>/attempts/<attempt-id>"
     cargo_output_args=$("$python3" -c 'import json, sys; print(" ".join(json.load(open(sys.argv[1]))["args"]))' "$record_dir/cargo-outputs.json")
     [[ "$cargo_output_args" == "--target-dir $repo/target/intent-gates/"* ]] || fail "$case_name: missing isolated Cargo output: $cargo_output_args"
     [[ "$cargo_log" == *"$repo: metadata --no-deps --format-version 1"* ]] || fail "$case_name: Cargo metadata was not queried"
@@ -337,7 +461,7 @@ SH
   echo "// changed" >>"$repo/crates/alpha/tests/one.rs"
   e2e_make 0 0
   expect_recorded_run
-  for file in run.json summary.txt complete nextest-1.toml; do
+  for file in run.json summary.txt coverage.json listing-1.json events-1.jsonl nextest-1.toml junit-1.xml; do
     [[ -f "$record_dir/$file" ]] || fail "$case_name: $record_dir/$file is missing"
   done
   grep -q '^path = "junit-1.xml"$' "$record_dir/nextest-1.toml" || fail "$case_name: junit-1.xml is not configured: $(<"$record_dir/nextest-1.toml")"
@@ -346,6 +470,8 @@ SH
     grep -qF "$field" "$record_dir/run.json" || fail "$case_name: run.json lacks $field: $(<"$record_dir/run.json")"
   done
   tree_dir=${record_dir%/changed/*}
+  scope_dir=${record_dir%/attempts/*}
+  [[ "$(<"$scope_dir/complete")" == "${record_dir##*/}" && ! -e "$record_dir/complete" ]] || fail "$case_name: completion marker must point to the execution attempt from its scope"
   [[ ! -e "$tree_dir/complete" ]] || fail "$case_name: a planned run wrote the full-suite complete marker"
   [[ "$(grep -c . "$tree_dir/passed.jsonl")" -eq 2 ]] || fail "$case_name: passed.jsonl: $(<"$tree_dir/passed.jsonl")"
   first_record=$record_dir
@@ -353,7 +479,7 @@ SH
   case_name="end to end: RESUME=1 on the unchanged tree skips the run"
   e2e_make 1 0
   expect_ok
-  [[ "$stdout" == *"[test-changed] cargo nextest run -p alpha --test one"*$'\n'"resumed: skipped 2 tests already passed for this tree" ]] || fail "$case_name: stdout: $stdout"
+  [[ "$stdout" == *"[test-changed] cargo nextest run -p alpha --test one"*$'\n'"resumed: skipped 2 tests already passed for this tree"$'\n'"[test-changed] record: $scope_dir/attempts/"* ]] || fail "$case_name: stdout: $stdout"
   [[ "$cargo_log" != *"nextest list"* && "$cargo_log" != *"nextest run"* ]] || fail "$case_name: cargo was invoked: $cargo_log"
 
   case_name="end to end: RESUME=1 after a tracked edit runs the plan again"
@@ -361,14 +487,14 @@ SH
   e2e_make 1 0
   expect_recorded_run
   [[ "$stdout" == *"[test-changed] no passed-test record for this tree; running every planned test"* ]] || fail "$case_name: stdout: $stdout"
-  [[ "$record_dir" != "$first_record" ]] || fail "$case_name: the record dir did not change with the tree"
+  [[ "${record_dir%/changed/*}" != "${first_record%/changed/*}" ]] || fail "$case_name: the tree identity did not change after a tracked edit"
   changed_record=$record_dir
 
   case_name="end to end: GATE_FORCE=1 ignores the matching record"
   e2e_make 1 1
   expect_recorded_run
   [[ "$stdout" == *"[test-changed] GATE_FORCE=1: running every planned test"* ]] || fail "$case_name: stdout: $stdout"
-  [[ "$record_dir" == "$changed_record" ]] || fail "$case_name: record dir moved on an unchanged tree: $record_dir"
+  [[ "$record_dir" != "$changed_record" && "${record_dir%/attempts/*}" == "${changed_record%/attempts/*}" ]] || fail "$case_name: force must create a new attempt in the same scope: $record_dir"
 
   case_name="compact changed run never resumes a default record"
   e2e_make 1 0 COMPACT=1
@@ -378,7 +504,7 @@ SH
   [[ "$(grep -c -- '^nextest .*--config profile.dev.debug=0' "$temp_dir/compact.log")" -eq 2 ]] || fail "$case_name: list/run missing profile overrides"
   [[ "$(grep -c '^nextest .*incremental=0' "$temp_dir/compact.log")" -eq 2 ]] || fail "$case_name: list/run missing incremental override"
   compact_record=${stdout##*"[test-changed] record: "}
-  [[ "$compact_record" != "$changed_record" ]] || fail "$case_name: default/compact records collide"
+  [[ "${compact_record%/changed/*}" != "${changed_record%/changed/*}" ]] || fail "$case_name: default/compact tree identities collide"
 
   case_name="compact changed resume skips matching record through the real component forwarder"
   E2E_CWD="$mono/packages/intentd" e2e_make 1 0 COMPACT=1
@@ -397,6 +523,19 @@ SH
   case_name="compact test failure is preserved"
   NEXTEST_STUB_EXIT=100 e2e_make 1 1 COMPACT=1
   [[ "$status" -ne 0 && "$stderr" == *"Error 100"* ]] || fail "$case_name: $stdout $stderr"
+  "$python3" - "${stdout##*"[test-changed] record: "}" <<'PY'
+import json, sys
+from pathlib import Path
+directory = Path(sys.argv[1])
+receipt = json.loads((directory / 'run.json').read_text())
+proof = json.loads((directory / 'coverage.json').read_text())
+assert receipt['exit_code'] == receipt['results'][0]['native_exit_code'] == 100
+assert not proof['complete'] and proof['errors'] == []
+assert proof['categories'] == {'executed-passed': [['alpha::one', 'passes']],
+    'failed': [['alpha::one', 'also_passes']], 'unfinished': [], 'ignored': [], 'resumed-passed': []}
+assert proof['selections'][0]['junit'] == 'validated'
+assert not (directory.parent.parent / 'complete').exists()
+PY
 
   case_name="COMPACT=0 still resumes the default record"
   e2e_make 1 0 COMPACT=0
