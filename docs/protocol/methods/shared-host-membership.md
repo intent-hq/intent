@@ -297,6 +297,7 @@ accept broader host access. An unknown URL scope is rejected by new clients.
 ```ts
 type InvitePreview = {
   hostname: string; prettyHostname: string; pinIdentity: Identity | null;
+  collaborationName?: string | null; // saved override; null clears; older daemons omit
 } & (
   { scope: "host"; role: "member"; pinIdentity: Identity }
   | { scope: "workspace"; role: "collaborator"; workspaceId: string; workspaceTitle: string }
