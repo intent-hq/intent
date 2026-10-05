@@ -24,6 +24,17 @@ adds optional `healthUrl` / `readyPattern` definition inputs and `ready` /
 | script.status | workspaceId (req), scriptId (req) | { status, restartCount, pid?, exitCode?, startedAt?, stoppedAt?, error?, detectedUrl?, previouslyRunning?, ready?, readiness? } — the `ScriptRuntimeState` snapshot; `status` and `restartCount` are always present, every other field is **omitted when unset** (never `null` — a cleared `exitCode` is absent, so hooks test `exitCode !== undefined`); `status` is one of `idle \| starting \| running \| restarting \| exited`. `exited` **always** carries `exitCode` (new in intentd, unreleased): when the real status was not observable it is the sentinel `-1` together with an `error` naming the cause — see the total exit contract note below. `starting` (new in intentd, within v9.12 — intent-hq/intent#4858) is the `script.start` launch window: set synchronously before `script.start` replies, with the previous run's terminal fields cleared, and held until the spawn's `running` (or `exited` on a launch failure), so a poll issued right after `start` never reads the pre-launch `idle` or a stale `exitCode`. `restarting` (new in intentd, monorepo#1318) is the transient restart-in-flight state between an exit and the next spawn attempt — the service auto-restart backoff window and the `script.restart` stop→start gap — so a poll taken mid-restart never reads as a final `exited`/`idle`; the respawn flips it back to `running`. `previouslyRunning?: true` (new in intentd, within v5.1) marks a **service** script that was running when the daemon last stopped; a command script in the same situation hydrates as `exited` / `exitCode: -1` / `error` instead — see the was-running marker note below |
 | script.run | workspaceId (req), scriptId (req), maxLines?, timeoutSeconds? (alias timeout?) | { exitCode?, output, timedOut?, warning? } — `exitCode` follows the same total exit contract as the runtime state (new in intentd, unreleased): `-1` when the exit was unobservable — see the total exit contract note below |
 
+**Working directory.** `cwd` is relative to the workspace root. Omit it, pass an
+empty string, or use `.` to run at that root; a relative subdirectory such as
+`packages/web` runs beneath it. Absolute paths are unsupported, including an
+absolute path equal to the workspace root. Any `..` path component is rejected,
+even in a path such as `child/../sibling`. `script.create` rejects these invalid
+values with `InvalidParams` (`-32602`) before persisting the definition, replacing
+an existing definition, or stopping its process. The error suggests `.` or
+omitting `cwd` for the workspace root. This validation checks path syntax, not
+directory existence, and does not normalize paths. Launch-time validation is
+retained for previously stored definitions.
+
 > **Implemented lifecycle candidate (10.11).** The additive purpose/archive fields, filters and
 > archive/restore methods above are gated by `scriptLifecycle: 1`, as specified
 > below. Archive preserves the existing runtime and manual-stop semantics;
