@@ -488,6 +488,42 @@ def remaining_filter(passed: set[tuple[str, str]]) -> str:
     return "not (" + " | ".join(terms) + ")"
 
 
+def resume_selection(selection: list[str], passed: set[tuple[str, str]]) -> list[str]:
+    """Intersect each user filterset with resume exclusions, preserving defaults.
+
+    Nextest unions repeated -E arguments, so appending an exclusion expression
+    would broaden selection. Leave project profiles (and default()) to nextest;
+    --ignore-default-filter then still overrides only the project's default.
+    """
+    if not passed:
+        return list(selection)
+    remaining = remaining_filter(passed)
+    result = []
+    found = False
+    args = iter(selection)
+    for arg in args:
+        if arg == "--":
+            if not found:
+                result.extend(["-E", remaining])
+            return [*result, arg, *args]
+        if arg in ("-E", "--filterset", "--filter-expr"):
+            expression = next(args, None)
+            if expression is None:
+                raise ValueError("missing filterset expression")
+        elif arg.startswith(("--filterset=", "--filter-expr=")):
+            expression = arg.split("=", 1)[1]
+        elif arg.startswith("-E"):
+            expression = arg[2:].removeprefix("=")
+        else:
+            result.append(arg)
+            continue
+        result.extend(["-E", f"({expression}) and ({remaining})"])
+        found = True
+    if not found:
+        result.extend(["-E", remaining])
+    return result
+
+
 def test_binary_ids(list_output: str) -> dict[tuple[str, str], str]:
     return inventory(list_output)[1]
 
@@ -577,13 +613,16 @@ def validate_result_config(directory: Path, receipt: dict, result: dict, resumed
     if result["config"] != config or result["junit"] != junit:
         raise ValueError("result paths disagree with selection")
     expected_profile = {"inherits": "default", "junit": {"path": junit}}
-    if resumed:
+    if resumed and receipt["receipt_schema"] == 1:
         expected_profile["default-filter"] = remaining_filter(resumed)
     expected = {"store": {"dir": str(directory.parent)},
                 "profile": {receipt["attempt_id"]: expected_profile}}
     if cargo_toml.loads((directory / config).read_text()) != expected:
         raise ValueError("saved nextest config disagrees with receipt")
-    command = ["cargo", "nextest", "run", *receipt["selections"][index - 1],
+    selection = receipt["selections"][index - 1]
+    if receipt["receipt_schema"] == 2:
+        selection = resume_selection(selection, resumed)
+    command = ["cargo", "nextest", "run", *selection,
                "--build-jobs", receipt["build_jobs"], "--test-threads", receipt["test_threads"],
                "--tool-config-file", f"intent-gate:{directory / config}",
                "--profile", receipt["attempt_id"], "--message-format", "libtest-json-plus",
@@ -764,7 +803,7 @@ class Evidence:
         if directory.resolve() != directory.absolute():
             raise ValueError("attempt reference follows a symlink")
         receipt = strict_json((directory / "run.json").read_text())
-        if type(receipt.get("receipt_schema")) is not int or receipt["receipt_schema"] != 1 or receipt.get("attempt_id") != directory.name:
+        if type(receipt.get("receipt_schema")) is not int or receipt["receipt_schema"] not in (1, 2) or receipt.get("attempt_id") != directory.name:
             raise ValueError("unsupported or mismatched receipt")
         if receipt.get("exit_code") is not None and type(receipt["exit_code"]) is not int:
             raise ValueError("invalid receipt exit status")
@@ -1022,7 +1061,6 @@ def write_tool_config(
     path: Path,
     cache_dir: Path,
     profile: str,
-    passed: set[tuple[str, str]],
     junit: str = "junit.xml",
 ) -> None:
     lines = [
@@ -1031,8 +1069,6 @@ def write_tool_config(
         f"[profile.{profile}]",
         'inherits = "default"',
     ]
-    if passed:
-        lines.append(f"default-filter = {json.dumps(remaining_filter(passed))}")
     lines.extend([f"[profile.{profile}.junit]", f"path = {json.dumps(junit)}", ""])
     write_atomic(path, "\n".join(lines))
 
@@ -1226,6 +1262,8 @@ def run_nextest(args: argparse.Namespace) -> int:
         scope = "the complete suite"
     # Receipt schema is independent of the resume fingerprint. Never migrate or
     # alias old per-plan files: they remain evidence of exactly what was saved.
+    # Schema 2 moves resume exclusions from the default profile to CLI filters;
+    # schema 1 sources keep their original command/config validation.
     # Only this invocation writes its attempt; pruning still expires whole trees.
     profile = uuid.uuid4().hex
     store_dir = scope_dir / "attempts"
@@ -1235,7 +1273,7 @@ def run_nextest(args: argparse.Namespace) -> int:
     results: list[dict[str, object]] = []
     resumed: set[tuple[str, str]] = set()
     run_record = {
-        "receipt_schema": 1, "attempt_id": profile, "kind": "execution",
+        "receipt_schema": 2, "attempt_id": profile, "kind": "execution",
         "label": label, "base": args.base, "plans": [" ".join(plan) for plan in plans],
         "tree_key": key, "plan_key": plan_identity,
         "started_at": utc_now(), "finished_at": None, "exit_code": None,
@@ -1395,11 +1433,11 @@ def run_nextest(args: argparse.Namespace) -> int:
                 if plans:
                     config = record_dir / f"nextest-{index}.toml"
                     write_tool_config(
-                        config, store_dir, profile, resumed, f"junit-{index}.xml"
+                        config, store_dir, profile, f"junit-{index}.xml"
                     )
                 else:
                     config = record_dir / "nextest.toml"
-                    write_tool_config(config, store_dir, profile, resumed)
+                    write_tool_config(config, store_dir, profile)
                 configs.append(config)
 
             if not resumed and not plans:
@@ -1423,7 +1461,7 @@ def run_nextest(args: argparse.Namespace) -> int:
             try:
                 for index, (selection, config) in enumerate(zip(selections, configs), start=1):
                     command = [
-                        "cargo", "nextest", "run", *selection,
+                        "cargo", "nextest", "run", *resume_selection(selection, resumed),
                         "--build-jobs", args.build_jobs,
                         "--test-threads", args.test_threads,
                         "--tool-config-file", f"intent-gate:{config}",

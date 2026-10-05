@@ -206,7 +206,7 @@ class AttemptReceiptTests(unittest.TestCase):
                     new = next(p for p in attempts if p not in frozen)
                     receipt = json.loads((new / "run.json").read_text())
                     self.assertEqual(receipt["attempt_id"], new.name)
-                    self.assertEqual(receipt["receipt_schema"], 1)
+                    self.assertEqual(receipt["receipt_schema"], 2)
                     self.assertEqual(receipt["exit_code"], status)
                     self.assertIsNotNone(receipt["finished_at"])
                     self.assertEqual(receipt["kind"], "completed-resume" if index == 3 else "execution")
@@ -326,7 +326,8 @@ if payload['mode'] != 'resume':
     print(payload['fixture']['events'], end='', flush=True)
     while True:
         time.sleep(.05)
-assert settings['default-filter'] == r'not ((binary_id(/^coverage\-probe$/) and (test(/^a_pass$/))))', settings
+assert 'default-filter' not in settings, settings
+assert command[command.index('-E') + 1] == r'not ((binary_id(/^coverage\-probe$/) and (test(/^a_pass$/))))', settings
 name = 'coverage-probe::coverage_probe$b_wait'
 print(json.dumps({'type': 'test', 'event': 'started', 'name': name}), flush=True)
 print(json.dumps({'type': 'test', 'event': 'ok', 'name': name}), flush=True)
@@ -1084,16 +1085,16 @@ class ResumableNextestTests(unittest.TestCase):
             )
             self.assertEqual(staged.returncode, 0)
 
-    def test_tool_config_writes_junit_and_remaining_filter(self):
+    def test_tool_config_inherits_default_filter_and_writes_junit(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             config = root / "tree" / "nextest.toml"
             config.parent.mkdir()
-            gate.write_tool_config(config, root, "a" * 64, {("binary", "test")})
+            gate.write_tool_config(config, root, "a" * 64)
             parsed = tomllib.loads(config.read_text(encoding="utf-8"))
             profile = parsed["profile"]["a" * 64]
             self.assertEqual(profile["inherits"], "default")
-            self.assertIn("binary_id(/^binary$/)", profile["default-filter"])
+            self.assertNotIn("default-filter", profile)
             self.assertEqual(profile["junit"]["path"], "junit.xml")
 
     def test_complete_marker_fast_path_does_not_invoke_nextest(self):
@@ -1325,8 +1326,9 @@ class ResumableNextestTests(unittest.TestCase):
             self.assertEqual(harness.run_commands[0][-2:], ["--no-tests", "pass"])
             record_dir = run_dir / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
             profile = tomllib.loads((latest_attempt(record_dir) / "nextest-1.toml").read_text())["profile"][latest_attempt(record_dir).name]
+            self.assertNotIn("default-filter", profile)
             self.assertEqual(
-                profile["default-filter"],
+                harness.run_commands[0][harness.run_commands[0].index("-E") + 1],
                 "not ((binary_id(/^alpha::one$/) and (test(/^passes$/))))",
             )
             self.assertEqual(json.loads((latest_attempt(record_dir) / "run.json").read_text())["skipped_resumed"], 1)
@@ -1816,8 +1818,9 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             self.assertEqual(len(resumed.list_commands), 1)
             self.assertEqual(len(resumed.run_commands), 1)
             profile = tomllib.loads((latest_attempt(record_dir) / "nextest-1.toml").read_text())["profile"][latest_attempt(record_dir).name]
+            self.assertNotIn("default-filter", profile)
             self.assertEqual(
-                profile["default-filter"],
+                resumed.run_commands[0][resumed.run_commands[0].index("-E") + 1],
                 "not ((binary_id(/^alpha::one$/) and (test(/^passes$/))))",
             )
             self.assertFalse((record_dir / "complete").exists())
@@ -1853,8 +1856,9 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             self.assertEqual(len(resumed.run_commands), 1)
             self.assertEqual(resumed.run_commands[0][3], "--workspace")
             config = tomllib.loads((latest_attempt(run_dir) / "nextest.toml").read_text())
+            self.assertNotIn("default-filter", config["profile"][latest_attempt(run_dir).name])
             self.assertEqual(
-                config["profile"][latest_attempt(run_dir).name]["default-filter"],
+                resumed.run_commands[0][resumed.run_commands[0].index("-E") + 1],
                 "not ((binary_id(/^alpha::one$/) and (test(/^passes$/))))",
             )
             self.assertFalse((run_dir / "complete").exists())
@@ -1879,8 +1883,9 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             self.assertEqual(len(rerun.list_commands), 1)
             self.assertEqual(len(rerun.run_commands), 1)
             profile = tomllib.loads((latest_attempt(record_b) / "nextest-1.toml").read_text())["profile"][latest_attempt(record_b).name]
+            self.assertNotIn("default-filter", profile)
             self.assertEqual(
-                profile["default-filter"],
+                rerun.run_commands[0][rerun.run_commands[0].index("-E") + 1],
                 "not ((binary_id(/^alpha::one$/) and (test(/^passes$/))))",
             )
             self.assertNotIn("resumed: skipped 2 tests already passed for this tree", rerun.output_lines)
@@ -2002,8 +2007,9 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             self.assertEqual(len(resumed.list_commands), 1)
             self.assertEqual(len(resumed.run_commands), 1)
             profile = tomllib.loads((latest_attempt(record_b) / "nextest-1.toml").read_text())["profile"][latest_attempt(record_b).name]
+            self.assertNotIn("default-filter", profile)
             self.assertEqual(
-                profile["default-filter"],
+                resumed.run_commands[0][resumed.run_commands[0].index("-E") + 1],
                 "not ((binary_id(/^alpha::one$/) and (test(/^passes$/))))",
             )
             self.assertNotIn("resumed: skipped 2 tests already passed for this tree", resumed.output_lines)
@@ -2118,6 +2124,180 @@ class EffectiveOutputResumeTests(unittest.TestCase):
                             alias.symlink_to(second, target_is_directory=True)
                         self.assertEqual(gate.run_nextest(make_args(root, resume="1")), 0)
                 self.assertEqual(len(harness.run_commands), 2, "changed effective outputs reused a completed record")
+
+
+class ResumeSelectionTests(unittest.TestCase):
+    setUp = AttemptReceiptTests.setUp
+
+    def test_intersection_preserves_each_union_term_and_argument_forms(self):
+        passed = {('binary', 'passed')}
+        remaining = 'not ((binary_id(/^binary$/) and (test(/^passed$/))))'
+        for args in (['-E', 'default()'], ['--filterset', 'default()'],
+                     ['--filterset=default()'], ['--filter-expr', 'default()'],
+                     ['--filter-expr=default()'], ['-Edefault()'], ['-E=default()']):
+            selection = ['-p', 'binary', '--ignore-default-filter', *args,
+                         '-E', 'test(=pending)', '--', 'substring']
+            original = selection.copy()
+            self.assertEqual(gate.resume_selection(selection, passed), [
+                '-p', 'binary', '--ignore-default-filter',
+                '-E', f'(default()) and ({remaining})',
+                '-E', f'(test(=pending)) and ({remaining})', '--', 'substring'])
+            self.assertEqual(selection, original)
+        self.assertEqual(gate.resume_selection(['--workspace', '--', '-Ename'], passed),
+                         ['--workspace', '-E', remaining, '--', '-Ename'])
+        self.assertEqual(gate.resume_selection(['--workspace'], passed),
+                         ['--workspace', '-E', remaining])
+        self.assertEqual(gate.resume_selection(['-E', 'default()'], set()), ['-E', 'default()'])
+        with self.assertRaisesRegex(ValueError, 'missing filterset'):
+            gate.resume_selection(['-E'], passed)
+
+    def test_schema_one_partial_receipts_remain_eligible_without_rewriting(self):
+        for plans in ([], ['-p alpha']):
+            with self.subTest(plans=plans), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                # Model two authentic schema-1 attempts, including its old
+                # generated default-filter and unmodified selection command.
+                seed = PlannedRunHarness(root, [([event('ok', 'alpha::one$passes')], 101)])
+                self.assertEqual(seed.execute(make_args(root, plan=plans, resume='1')), 101)
+                prior = latest_attempt(AttemptReceiptTests.scope(root, plans))
+                source = PlannedRunHarness(root, [([event('ok', 'alpha::one$fails')], 0)])
+                self.assertEqual(source.execute(make_args(root, plan=plans, resume='1')), 0)
+                completed = latest_attempt(AttemptReceiptTests.scope(root, plans))
+                for attempt in (prior, completed):
+                    receipt = json.loads((attempt / 'run.json').read_text())
+                    receipt['receipt_schema'] = 1
+                    for result in receipt['results']:
+                        if receipt['resumed_tests']:
+                            command = result['command']
+                            position = command.index('-E')
+                            del command[position:position + 2]
+                            config = attempt / result['config']
+                            text = config.read_text().replace('inherits = "default"',
+                                'inherits = "default"\ndefault-filter = ' +
+                                json.dumps(gate.remaining_filter(set(map(tuple, receipt['resumed_tests'])))))
+                            config.write_text(text)
+                    (attempt / 'run.json').write_text(json.dumps(receipt))
+                frozen = {p: AttemptReceiptTests.snapshot(p) for p in (prior, completed)}
+                shortcut = PlannedRunHarness(root, [])
+                self.assertEqual(shortcut.execute(make_args(root, plan=plans, resume='1')), 0)
+                self.assertEqual(shortcut.run_commands, [])
+                self.assertEqual(shortcut.list_commands, [])
+                for p, snapshot in frozen.items():
+                    self.assertEqual(AttemptReceiptTests.snapshot(p), snapshot)
+                # Neither schema may silently accept the other's command/config.
+                receipt = json.loads((completed / 'run.json').read_text())
+                resumed = set(map(tuple, receipt['resumed_tests']))
+                receipt['receipt_schema'] = 2
+                with self.assertRaisesRegex(ValueError, 'config disagrees'):
+                    gate.validate_result_config(completed, receipt, receipt['results'][0], resumed)
+                receipt['receipt_schema'] = 1
+                receipt['results'][0]['command'].extend(['-E', gate.remaining_filter(resumed)])
+                with self.assertRaisesRegex(ValueError, 'command disagrees'):
+                    gate.validate_result_config(completed, receipt, receipt['results'][0], resumed)
+
+
+class ProjectDefaultFilterTests(unittest.TestCase):
+    """Real nextest selects independently of the runner's saved evidence."""
+
+    setUp = AttemptReceiptTests.setUp
+
+    def check_resume(self, plans, expected=('b_pass',)):
+        if not shutil.which('cargo') or subprocess.run(
+                ['cargo', 'nextest', '--version'], capture_output=True).returncode:
+            self.skipTest('project filter regression requires installed cargo-nextest')
+        with tempfile.TemporaryDirectory(prefix='intent-default-filter-') as temporary:
+            root = Path(temporary)
+            crate = root / 'intentd'
+            (crate / 'src').mkdir(parents=True)
+            (crate / '.config').mkdir()
+            (crate / 'Cargo.toml').write_text(
+                '[package]\nname="default-probe"\nversion="0.0.0"\nedition="2021"\n')
+            marker = root / 'filtered-ran'
+            (crate / 'src/lib.rs').write_text(
+                '#[test] fn a_pass() {}\n#[test] fn b_pass() {}\n'
+                '#[test] fn c_filtered() { std::fs::write('
+                'std::env::var("FILTER_SENTINEL").unwrap(), "ran").unwrap(); }\n')
+            (crate / '.config/nextest.toml').write_text(
+                '[profile.default]\ndefault-filter = "not test(=c_filtered)"\n')
+            env = {k: v for k, v in os.environ.items()
+                   if not k.startswith(('CARGO_', 'RUST', 'NEXTEST_')) and k != 'COMPACT'}
+            env.update(RUSTUP_AUTO_INSTALL='0', FILTER_SENTINEL=str(marker))
+            frozen = {}
+
+            def invoke(selection):
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    status = gate.run_nextest(make_args(root, plan=selection, resume='1'))
+                attempt = Path(next(line.split('record: ', 1)[1]
+                    for line in output.getvalue().splitlines() if 'record: ' in line))
+                receipt = json.loads((attempt / 'run.json').read_text())
+                proof = json.loads((attempt / 'coverage.json').read_text())
+                for prior, snapshot in frozen.items():
+                    self.assertEqual(AttemptReceiptTests.snapshot(prior), snapshot)
+                frozen[attempt] = AttemptReceiptTests.snapshot(attempt)
+                self.assertEqual(status, 0, proof)
+                self.assertTrue(proof['complete'], proof)
+                return attempt, receipt, proof
+
+            with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(
+                    gate, 'tree_key', return_value=KEY):
+                seed, _, _ = invoke(['-p default-probe --lib -E test(=a_pass)'])
+                attempt, receipt, proof = invoke(plans)
+                identities = lambda names: [['default-probe', name] for name in names]
+                self.assertEqual(proof['categories']['executed-passed'], identities(expected))
+                self.assertEqual(proof['categories']['resumed-passed'], identities(['a_pass']))
+                self.assertEqual(proof['inactive_filtered'], identities(
+                    [] if 'c_filtered' in expected else ['c_filtered']))
+                self.assertEqual(proof['categories']['unfinished'], [])
+                self.assertEqual(proof['categories']['failed'], [])
+                self.assertEqual(len(proof['resume_sources']), 1)
+                source = proof['resume_sources'][0]
+                self.assertEqual(source['attempt'], str(seed.relative_to(root / 'cache' / KEY)))
+                raw_seed = json.loads((seed / 'events-1.jsonl').read_text().splitlines()[source['event_line'] - 1])
+                self.assertEqual(raw_seed['name'], 'default-probe::default_probe$a_pass')
+                self.assertEqual(raw_seed['event'], 'ok')
+                result = receipt['results'][0]
+                self.assertEqual(result['native_exit_code'], 0)
+                raw = [json.loads(line) for line in (attempt / result['events']).read_text().splitlines()]
+                self.assertEqual({r['name'].split('$')[1] for r in raw if r['type'] == 'test'}, set(expected))
+                junit = gate.ET.parse(attempt / result['junit'])
+                self.assertEqual({c.attrib['name'] for c in junit.iter('testcase')}, set(expected))
+                self.assertEqual(marker.exists(), 'c_filtered' in expected)
+                # Compare real discovery with the effective execution selection.
+                command = result['command'].copy()
+                command[2] = 'list'
+                for option in ('--test-threads', '--message-format-version', '--no-tests'):
+                    if option in command:
+                        index = command.index(option)
+                        del command[index:index + 2]
+                command[command.index('--message-format') + 1] = 'json'
+                members, _ = gate.inventory(gate.run(command, crate, gate.nextest_env()))
+                self.assertEqual({name for (_, name), meta in members.items() if meta['active']}, set(expected))
+                shortcut, shortcut_receipt, shortcut_proof = invoke(plans)
+                self.assertNotEqual(shortcut, attempt)
+                self.assertEqual(shortcut_receipt['kind'], 'completed-resume')
+                self.assertEqual(shortcut_receipt['results'], [])
+                self.assertEqual(shortcut_proof['categories']['executed-passed'], [])
+                self.assertEqual(shortcut_proof['categories']['resumed-passed'], identities(['a_pass', *expected]))
+                self.assertEqual((attempt.parent.parent / 'complete').read_text().strip(), attempt.name)
+                self.assertEqual(marker.exists(), 'c_filtered' in expected)
+
+    def test_full_partial_resume_preserves_project_default_filter(self):
+        self.check_resume([])
+
+    def test_planned_partial_resume_preserves_project_default_filter(self):
+        self.check_resume(['-p default-probe --lib'])
+
+    def test_user_filter_union_and_explicit_default_override(self):
+        for filters, expected in (
+            ('-E test(=a_pass) --filterset=test(=b_pass)', ('b_pass',)),
+            ('--ignore-default-filter', ('b_pass', 'c_filtered')),
+            ('--ignore-default-filter -E default()', ('b_pass',)),
+            ('--filter-expr=default()', ('b_pass',)),
+            ('--ignore-default-filter -Etest(=a_pass) -E=test(=b_pass)', ('b_pass',)),
+        ):
+            with self.subTest(filters=filters):
+                self.check_resume(['-p default-probe --lib ' + filters], expected)
 
 
 class SharedTargetInventoryTests(unittest.TestCase):
@@ -2332,9 +2512,9 @@ class StackSettingResumeTests(unittest.TestCase):
             # generated resume filter. No Rust build or user cache is involved.
             code = r'''
 import json, os, pathlib, sys, tomllib
-config, receipt, interrupted = sys.argv[1:]
+config, receipt, interrupted, expression = sys.argv[1:]
 profile = next(iter(tomllib.loads(pathlib.Path(config).read_text())["profile"].values()))
-expression = profile.get("default-filter", "")
+assert "default-filter" not in profile
 tests = [name for name in ("passes", "fails") if "test(/^" + name + "$/)" not in expression]
 if interrupted == "1":
     tests = tests[:1]
@@ -2348,7 +2528,8 @@ sys.exit(101 if interrupted == "1" else 0)
 '''
             process = real_popen(
                 [sys.executable, "-S", "-c", code, config, str(harness.children),
-                 "1" if harness.interrupt else "0"], **kwargs
+                 "1" if harness.interrupt else "0",
+                 command[command.index("-E") + 1] if "-E" in command else ""], **kwargs
             )
             self.addCleanup(process.stdout.close)
             return process
