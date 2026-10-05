@@ -42,3 +42,39 @@ export function sourceSearch(source, query, table, ranges = [[0, source.length]]
   }
   return hits;
 }
+
+// Controlled page trace validation, with fixture cursors. No real cursor authority
+// or streaming matcher is implemented here; expected hits use the oracle above.
+export function assertSourceSearchTrace(source, query, table, ranges, pages, maxItems) {
+  const expected = sourceSearch(source, query, table, ranges);
+  const domainEnd = Math.max(0, ...(ranges ?? [[0, source.length]])
+    .filter(([start, end]) => start < end).map(([, end]) => end));
+  assert.ok(Number.isSafeInteger(maxItems) && maxItems > 0 && pages.length > 0);
+  const emitted = [], cursors = new Set();
+  let frontier = 0, observed = 0;
+  for (const [index, page] of pages.entries()) {
+    assert.ok(boundary(source, page.scannedThrough) && page.scannedThrough >= frontier);
+    assert.ok(Array.isArray(page.items) && page.items.length <= maxItems);
+    for (const hit of page.items) {
+      assert.ok(hit[1] <= page.scannedThrough);
+      emitted.push(hit);
+    }
+    assert.deepEqual(emitted, expected.slice(0, emitted.length));
+    assert.ok(Number.isSafeInteger(page.count.value) && page.count.value >= observed
+      && page.count.value >= emitted.length
+      && page.count.value <= expected.filter(([, end]) => end <= page.scannedThrough).length);
+    const terminal = page.nextCursor === null;
+    assert.equal(page.count.exact, terminal);
+    assert.equal(terminal, index === pages.length - 1);
+    if (terminal) {
+      assert.ok(page.scannedThrough >= domainEnd);
+      assert.deepEqual(emitted, expected);
+      assert.equal(page.count.value, expected.length);
+    } else {
+      assert.ok(typeof page.nextCursor === 'string' && page.nextCursor.length > 0
+        && !cursors.has(page.nextCursor));
+      cursors.add(page.nextCursor);
+    }
+    frontier = page.scannedThrough; observed = page.count.value;
+  }
+}

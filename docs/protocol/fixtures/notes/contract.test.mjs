@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { createHash } from 'node:crypto';
-import { caseFoldTable, sourceSearch } from './source-search.mjs';
+import { caseFoldTable, sourceSearch, assertSourceSearchTrace } from './source-search.mjs';
 import {
   utf8, wireBytes, digest, boundary, spliceError, applySourceSplices, mapPoint,
   assertSourcePage, cursorError, overlapIds, assertRanges, assertOperationTrace,
@@ -46,6 +46,41 @@ test('source-search semantic oracle preserves overlaps and expansion across reas
     assert.deepEqual(sourceSearch(chunks.join(''), 'ana', foldTable), [[1, 4], [3, 6]]);
   }
   assert.deepEqual(sourceSearch(['😀Stra', 'ß', 'e'].join(''), 'STRASSE', foldTable), [[2, 8]]);
+});
+test('controlled search trace resumes overlaps across scan seams and maxItems cuts', () => {
+  const pages = [
+    { items: [], scannedThrough: 3, count: { value: 0, exact: false }, nextCursor: 'carry-an' },
+    { items: [[1, 4]], scannedThrough: 6, count: { value: 2, exact: false }, nextCursor: 'pending-second-hit' },
+    { items: [[3, 6]], scannedThrough: 6, count: { value: 2, exact: true }, nextCursor: null },
+  ];
+  assertSourceSearchTrace('banana', 'ana', foldTable, undefined, pages, 1);
+  for (const mutate of [
+    p => { p[2].items = []; },
+    p => { p[2].items = [[1, 4]]; },
+    p => { p[1].count.exact = true; },
+    p => { p[1].items.push([3, 6]); },
+    p => { p[2].scannedThrough = 5; },
+    p => { p[0].count.value = 2; },
+  ]) {
+    const bad = structuredClone(pages); mutate(bad);
+    assert.throws(() => assertSourceSearchTrace('banana', 'ana', foldTable, undefined, bad, 1));
+  }
+});
+test('controlled search trace retains expansion offsets and exact selected-domain count', () => {
+  assertSourceSearchTrace('😀ßss', 'ss', foldTable, [[2, 3], [3, 5]], [
+    { items: [[2, 3]], scannedThrough: 5, count: { value: 2, exact: false }, nextCursor: 'pending-ascii' },
+    { items: [[3, 5]], scannedThrough: 5, count: { value: 2, exact: true }, nextCursor: null },
+  ], 1);
+  assertSourceSearchTrace('banana', 'ana', foldTable, [[1, 3], [4, 6]], [
+    { items: [], scannedThrough: 3, count: { value: 0, exact: false }, nextCursor: 'skip-gap' },
+    { items: [], scannedThrough: 6, count: { value: 0, exact: true }, nextCursor: null },
+  ], 1);
+  const terminalEmpty = frontier => [{ items: [], scannedThrough: frontier,
+    count: { value: 0, exact: true }, nextCursor: null }];
+  assert.throws(() => assertSourceSearchTrace('zzz', 'a', foldTable, undefined, terminalEmpty(0), 1));
+  assert.throws(() => assertSourceSearchTrace('zzzz', 'a', foldTable, [[1, 3]], terminalEmpty(2), 1));
+  assertSourceSearchTrace('zzzz', 'a', foldTable, [[1, 3]], terminalEmpty(3), 1);
+  assertSourceSearchTrace('zzzz', 'a', foldTable, [], terminalEmpty(0), 1);
 });
 const frame = (text, start, end, length) => ({ jsonrpc: '2.0', id: 1, result: {
   kind: 'noteSourcePage', scope: f.scope, sourceRevision: 'r:7', snapshotId: 'snapshot-a',
