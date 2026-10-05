@@ -111,9 +111,11 @@ malformed or mismatched metadata is omitted without making the project unusable.
 
 Image URLs must be at most 8,192 UTF-8 bytes before and after resolution, contain
 no whitespace, controls, backslashes or URL user information, and resolve to
-HTTPS with a host. Relative locations resolve against the original logical
-instance as a directory, retaining its port and installation prefix; a leading
-slash uses that origin's root. Explicit HTTPS CDN locations are permitted.
+HTTPS with a host. Path-relative locations resolve against the original logical
+instance as a directory, retaining its port and installation prefix; a single
+leading slash uses that origin's root. Explicit HTTPS CDN locations are permitted;
+a scheme-relative `//host/path` uses its supplied host and the instance's HTTPS
+scheme.
 Transport overrides do not supply the image origin. Clients use their ordinary
 fallback when an image is absent or fails to load. This display metadata is not
 repository identity, authorization, or a credential-bearing download request.
