@@ -417,10 +417,17 @@ SH
     [[ "$cargo_log" == *"nextest run --workspace"* && "$cargo_log" == *"--config profile.test.debug=0"* ]] || fail "$case_name: $cargo_log"
   done
 
+  case_name="root mixed goals reject compact coverage before any Cargo, even in parallel"
+  E2E_GOAL="test" e2e_make 0 0 COMPACT=1 coverage-changed -j4
+  [[ "$status" -ne 0 && "$stderr" == *"COMPACT=1 is incompatible with coverage"* ]] || fail "$case_name: $stdout $stderr"
+  [[ -z "$cargo_log" ]] || fail "$case_name: $cargo_log"
+
+  # Older component forwarders may run test before forwarding coverage-changed;
+  # combined-goal forwarders reject both at root parse time, before any Cargo.
   case_name="forwarded coverage rejects before instrumentation (earlier forwarded goals may run)"
   E2E_CWD="$mono/packages/intentd" E2E_GOAL=test e2e_make 0 0 COMPACT=1 coverage-changed
   [[ "$status" -ne 0 && "$stderr" == *"COMPACT=1 is incompatible with coverage"* ]] || fail "$case_name: $stdout $stderr"
-  [[ "$cargo_log" == *"nextest run --workspace"* && "$cargo_log" != *"llvm-cov"* ]] || fail "$case_name: $cargo_log"
+  [[ "$cargo_log" != *"llvm-cov"* ]] || fail "$case_name: $cargo_log"
 fi
 
 echo "rust-changed-tests tests passed under $("$script_bash" -c 'echo "bash $BASH_VERSION"')"
