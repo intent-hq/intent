@@ -747,6 +747,15 @@ valueRef?, childrenRef? }`: root parentId is null; exactly key or keyRef address
 object member, index addresses an array member. `type` is object/array/string/number/
 boolean/null. Object/array children page through childrenRef; string values page
 through valueRef using context fragments; numeric/boolean/null values are inline.
+The following bounded inline-string additions apply only to server-produced
+canonical receipt-detail output and the `stagedRenderedHit` output defined below.
+In canonical receipt details, a string entry has exactly one of `value` or
+`valueRef`: inline `value` is a Unicode scalar-valid string of at most 1024 decoded
+UTF-8 bytes (including the present empty string); longer strings require valueRef.
+A receipt producer may use valueRef for a shorter string as well. Null, absence and
+an empty string remain distinct. Both forms remain subject to the complete response
+frame budget; inline eligibility never permits an oversized frame. This does not
+change ordinary note metadata or staged attribute-upload string encoding.
 Keys up to 1,024 UTF-8 bytes may be inline; longer keys use keyRef. Node IDs/references
 obey token limits. No title, tag, task relation array or arbitrary metadata object
 is a full-row exception. Children enumerate object keys lexicographically and array
@@ -1279,7 +1288,8 @@ Every directory in a nonempty chain has at least one child; empty forward or lat
 terminal directories are invalid. There is no implicit empty/missing reference.
 Each directory belongs to one containing entry resource. It cannot be reused as
 another container's child collection. Entries retain the exact metadata fields
-above: objects/arrays require `childrenRef`, strings require `valueRef`, and
+above, with no output inline-string exception: objects/arrays require `childrenRef`,
+strings require `valueRef` even when empty or short, and
 number/boolean/null require the correctly typed inline `value`, without mixing
 those forms. Uploaded decoded keys (inline or referenced) and raw scalar text
 values are NUL-free and Unicode scalar-valid, including empty strings.
@@ -1439,6 +1449,15 @@ spellings inside a descriptor remain data, not authority to read arbitrary resou
 The parent/leaf source ranges cover the whole capture. Root sourceRange is the
 absolute matched source span; renderedRange is the exact leaf-relative matched
 UTF-16 span. Both retain scalar boundaries and the admitted identity mapping.
+
+For this rendered-hit output, ordinary string entries use inline `value` when
+at most 1024 decoded UTF-8 bytes and `valueRef` when longer, never both. This
+explicit bounded output exception includes the root kind/mapping and descriptor
+string data; it does not change uploaded attributes or grant reference authority
+to descriptor data. Inline strings are Unicode scalar-valid, preserve exact bytes
+and remain within the complete frame budget. Empty strings are present values,
+not missing entries or null. Referenced strings use the existing scalar-fragment
+transport with offsets relative to that entire field and exact terminal traversal.
 
 The leaf's renderedText string entry always uses a server-issued valueRef, even
 when small. It resolves to existing `field: "renderedText"` scalar fragments with

@@ -4,6 +4,24 @@ import assert from 'node:assert/strict';
 import { boundary, validText, utf8, wireBytes } from './contract.mjs';
 import { assertRenderedIdentityCapture } from './rendered-search.mjs';
 
+// Encoding-only oracle for the two explicit server-output exceptions. Expected
+// values are supplied by the fixture, not established by authentication here.
+export function assertOutputStringEncoding(entry, expected, domain, wholeLeaf = false) {
+  assert.ok(['receiptDetail', 'renderedHit'].includes(domain));
+  assert.equal(entry.type, 'string');
+  assert.ok(validText(expected));
+  const inline = Object.hasOwn(entry, 'value'), referenced = Object.hasOwn(entry, 'valueRef');
+  assert.notEqual(inline, referenced);
+  assert.ok(!Object.hasOwn(entry, 'childrenRef'));
+  if (domain === 'renderedHit') assert.equal(referenced, wholeLeaf || utf8(expected) > 1024);
+  if (inline) {
+    assert.equal(entry.value, expected);
+    assert.ok(utf8(entry.value) <= 1024);
+  } else {
+    assert.ok(validText(entry.valueRef) && entry.valueRef.length > 0 && utf8(entry.valueRef) <= 256);
+  }
+}
+
 export function assertRenderedHitDetail(fixture, capture, table) {
   const { owner, claims, exchanges } = fixture;
   assert.equal(owner.operationId, capture.operationId);
@@ -50,26 +68,26 @@ export function assertRenderedHitDetail(fixture, capture, table) {
     } while (cursor !== null);
     return items;
   }
-  function text(ref) {
+  function text(ref, field, expected) {
     let value = '', id;
     do {
       const r = page(ref, undefined, 0); assert.equal(r.nextCursor, null);
       assert.equal(r.items.length, 1);
       const item = r.items[0];
       assert.deepEqual(Object.keys(item).sort(), ['kind', 'id', 'field', 'offset', 'text', 'nextRef'].sort());
-      assert.equal(item.kind, 'fragment'); assert.equal(item.field, 'renderedText');
+      assert.equal(item.kind, 'fragment'); assert.equal(item.field, field);
       id ??= item.id; assert.equal(item.id, id);
-      assert.ok(validText(item.text) && item.text.length > 0 && utf8(item.text) <= 16384);
+      assert.ok(validText(item.text) && (item.text.length > 0 || expected.length === 0) && utf8(item.text) <= 16384);
       assert.equal(item.offset, value.length);
-      assert.ok(boundary(capture.source, item.offset) && boundary(capture.source, item.offset + item.text.length));
-      assert.equal(item.text, capture.source.slice(item.offset, item.offset + item.text.length));
+      assert.ok(boundary(expected, item.offset) && boundary(expected, item.offset + item.text.length));
+      assert.equal(item.text, expected.slice(item.offset, item.offset + item.text.length));
       value += item.text;
-      assert.equal(item.nextRef === null, value.length === capture.source.length);
+      assert.equal(item.nextRef === null, value.length === expected.length);
       ref = item.nextRef;
     } while (ref !== null);
     return value;
   }
-  function resolve(entry, parentId, key) {
+  function resolve(entry, parentId, key, expected, path = []) {
     assert.ok(!ids.has(entry.id)); ids.add(entry.id);
     assert.equal(entry.parentId, parentId);
     const base = ['id', 'parentId', 'type', ...(key === undefined ? [] : ['key'])];
@@ -80,25 +98,28 @@ export function assertRenderedHitDetail(fixture, capture, table) {
       assert.deepEqual(names, [...new Set(names)].sort());
       const value = {};
       for (const child of children)
-        Object.defineProperty(value, child.key, { value: resolve(child, entry.id, child.key), enumerable: true });
+        Object.defineProperty(value, child.key, { value: resolve(child, entry.id, child.key, expected?.[child.key], [...path, child.key]), enumerable: true });
       return value;
     }
-    if (key === 'renderedText' && entry.type === 'string') {
-      assert.deepEqual(Object.keys(entry).sort(), [...base, 'valueRef'].sort());
-      return text(entry.valueRef);
+    if (entry.type === 'string') {
+      const wholeLeaf = path.length === 2 && path[0] === 'leaf' && path[1] === 'renderedText';
+      assertOutputStringEncoding(entry, expected, 'renderedHit', wholeLeaf);
+      const field = Object.hasOwn(entry, 'valueRef') ? 'valueRef' : 'value';
+      assert.deepEqual(Object.keys(entry).sort(), [...base, field].sort());
+      return field === 'valueRef' ? text(entry.valueRef, key, expected) : entry.value;
     }
     assert.deepEqual(Object.keys(entry).sort(), [...base, 'value'].sort());
-    assert.ok(['string', 'number', 'null'].includes(entry.type));
+    assert.ok(['number', 'null'].includes(entry.type));
     assert.equal(entry.value === null ? 'null' : typeof entry.value, entry.type);
     return entry.value;
   }
   const roots = collection(fixture.rootRef); assert.equal(roots.length, 1);
-  const actual = resolve(roots[0], null);
   const node = item => ({ ordinal: item.record.ordinal, sourceRange: item.record.sourceRange,
     descriptor: item.descriptor, attributes: {} });
   const expected = { kind: 'stagedRenderedHit', mapping: 'identity', sourceRange: owner.sourceRange,
     renderedRange: owner.renderedRange, parent: node(capture.parent),
     leaf: { ...node(capture.leaf), renderedText: capture.source } };
+  const actual = resolve(roots[0], null, undefined, expected);
   assert.deepEqual(actual, expected); assert.deepEqual(actual, fixture.expected);
   assert.equal(used.size, available.size, 'fixture has unreachable pages');
 }

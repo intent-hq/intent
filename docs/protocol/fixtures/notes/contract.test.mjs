@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { caseFoldTable, sourceSearch, assertSourceSearchTrace } from './source-search.mjs';
 import { assertSourceHitDetail } from './source-hit-detail.mjs';
 import { assertRenderedIdentityCapture } from './rendered-search.mjs';
-import { assertRenderedHitDetail } from './rendered-hit-detail.mjs';
+import { assertRenderedHitDetail, assertOutputStringEncoding } from './rendered-hit-detail.mjs';
 import {
   utf8, wireBytes, digest, boundary, spliceError, applySourceSplices, mapPoint,
   assertSourcePage, cursorError, overlapIds, assertRanges, assertOperationTrace,
@@ -24,6 +24,49 @@ const foldBytes = await readFile(new URL('./CaseFolding-17.0.0.txt', import.meta
 const foldTable = caseFoldTable(foldBytes.toString('utf8'));
 const renderedSearchFixtures = JSON.parse(await readFile(new URL('./rendered-search.json', import.meta.url), 'utf8'));
 const renderedDetail = JSON.parse(await readFile(new URL('./rendered-hit-detail.json', import.meta.url), 'utf8'));
+test('server output string exceptions preserve decoded UTF8 thresholds and reference ownership forms', () => {
+  for (const value of ['', 'ordinary', 'é'.repeat(512), '😀'.repeat(256)]) {
+    for (const domain of ['receiptDetail', 'renderedHit'])
+      assertOutputStringEncoding({ type: 'string', value }, value, domain);
+    assertOutputStringEncoding({ type: 'string', valueRef: 'owned-value' }, value, 'receiptDetail');
+  }
+  for (const value of ['é'.repeat(512) + 'a', '😀'.repeat(257)]) {
+    for (const domain of ['receiptDetail', 'renderedHit']) {
+      assert.throws(() => assertOutputStringEncoding({ type: 'string', value }, value, domain));
+      assertOutputStringEncoding({ type: 'string', valueRef: 'owned-value' }, value, domain);
+    }
+  }
+  // Rendered ordinary short strings are deterministic inline output; the whole
+  // leaf is the separate mandatory-reference exception even when just one byte.
+  assert.throws(() => assertOutputStringEncoding({ type: 'string', valueRef: 'r' }, 'x', 'renderedHit'));
+  assertOutputStringEncoding({ type: 'string', valueRef: 'r' }, 'x', 'renderedHit', true);
+  assert.throws(() => assertOutputStringEncoding({ type: 'string', value: 'x' }, 'x', 'renderedHit', true));
+});
+test('server output string exceptions reject both, missing, null, malformed and oversized encodings', () => {
+  for (const entry of [
+    { type: 'string', value: 'x', valueRef: 'r' }, { type: 'string' },
+    { type: 'string', value: null }, { type: 'string', value: '' },
+    { type: 'null', value: 'x' }, { type: 'string', valueRef: '' },
+    { type: 'string', valueRef: 'é'.repeat(129) },
+    { type: 'string', valueRef: 'r', childrenRef: 'children' },
+  ]) assert.throws(() => assertOutputStringEncoding(entry, 'x', 'receiptDetail'));
+  for (const value of ['\ud800', '\udc00'])
+    assert.throws(() => assertOutputStringEncoding({ type: 'string', value }, value, 'receiptDetail'));
+  const bad = structuredClone(renderedDetail);
+  const entries = bad.exchanges.flatMap(x => x.response.result.items);
+  const wholeLeaf = entries.find(x => x.key === 'renderedText');
+  delete wholeLeaf.valueRef; wholeLeaf.value = bad.expected.leaf.renderedText;
+  assert.throws(() => assertRenderedHitDetail(bad, renderedSearchFixtures.identityCapture, foldTable));
+  const oversized = structuredClone(renderedDetail);
+  oversized.exchanges[0].response.id = oversized.exchanges[0].request.id = 'x'.repeat(4096);
+  assert.throws(() => assertRenderedHitDetail(oversized, renderedSearchFixtures.identityCapture, foldTable));
+});
+test('output inline exceptions do not broaden staged attribute uploads or ordinary note metadata', () => {
+  assert.match(docs, /only to server-produced\s+canonical receipt-detail output and the `stagedRenderedHit` output/);
+  assert.match(docs, /may use valueRef for a shorter string/);
+  assert.match(docs, /no output inline-string exception[\s\S]*?strings require `valueRef` even when empty or short/);
+  assert.match(docs, /ordinary string entries use inline `value` when\s+at most 1024 decoded UTF-8 bytes and `valueRef` when longer, never both/);
+});
 test('rendered hit context resolves a typed metadata tree and whole-leaf scalar fragments', () => {
   assertRenderedHitDetail(renderedDetail, renderedSearchFixtures.identityCapture, foldTable);
   assert.equal(renderedDetail.expected.kind, 'stagedRenderedHit');
