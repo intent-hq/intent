@@ -266,8 +266,8 @@ run_real_make env MAKE="$make_bin" "$script_bash" scripts/consumer-checks.sh --c
   fail "a caller-controlled toolchain executable ran under consumer-checks:"$'\n'"$(cat "$marker_log")"$'\n'"$real_output"
 grep -q '^trusted node scripts/check-protocol-catalog.mjs$' "$trusted_log" ||
   fail "the trusted node did not run check-protocol-catalog:"$'\n'"$(cat "$trusted_log")"
-[ "$(grep -c '^trusted node ' "$trusted_log")" -eq 11 ] ||
-  fail "expected the 11 node invocations to run the trusted node:"$'\n'"$(cat "$trusted_log")"
+[ "$(grep -c '^trusted node ' "$trusted_log")" -eq 12 ] ||
+  fail "expected the 12 node invocations to run the trusted node:"$'\n'"$(cat "$trusted_log")"
 grep -q '^trusted node --test docs/protocol/fixtures/scripts/monitors.test.mjs$' "$trusted_log" ||
   fail "script monitor contract tests did not run with the trusted node:"$'\n'"$(cat "$trusted_log")"
 grep -q '^trusted node --test docs/protocol/fixtures/submission-correlation/contract.test.mjs$' "$trusted_log" ||

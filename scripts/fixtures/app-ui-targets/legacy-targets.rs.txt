@@ -56,4 +56,3 @@ fn targets() -> Value {
         },
     ])
 }
-
