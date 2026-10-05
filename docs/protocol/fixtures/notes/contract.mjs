@@ -719,3 +719,10 @@ export function assertStagedMarkerOccurrence(record, descriptor, attributes, sou
   assert.ok(boundary(source, start) && boundary(source, end) && start < end);
   assert.equal(source.slice(start, end), `<!--anchor:${record.canonicalId}:${attributes.type}-->`);
 }
+
+// Controlled primary-view selector check, not a persisted-header or runtime auth proof.
+export function assertCapturedViewOutput(header, requestKind, responseKind) {
+  assert.ok(['source', 'selectionMarkdown', 'search'].includes(header.output));
+  assert.equal(requestKind, header.output);
+  assert.equal(responseKind, header.output);
+}

@@ -2165,3 +2165,31 @@ test('staged marker shape preserves renderer identifier spelling without claimin
   assert.match(docs, /Matching literal text, `canonicalId`, and attributes is necessary but does not/);
   assert.match(docs, /Non-UUID lookalikes\nremain ordinary source unless independent retained provenance establishes a marker/);
 });
+
+const { assertCapturedViewOutput } = await import('./contract.mjs');
+test('staged primary output kind stays bound to the captured header across first and continued reads', () => {
+  const kinds = ['source', 'selectionMarkdown', 'search'];
+  for (const output of kinds) for (const action of ['read', 'mutate'])
+    for (const selection of ['all', 'ranges']) {
+      const header = { ...f.staged.header, output, action, selection };
+      for (const continuation of [false, true]) {
+        // Cursor ownership and persisted header lookup remain separate runtime requirements.
+        const request = { kind: output, ...(continuation ? { cursor: 'owned-cursor' } : {}) };
+        assertCapturedViewOutput(header, request.kind, output);
+        for (const wrong of kinds.filter(k => k !== output)) {
+          assert.throws(() => assertCapturedViewOutput(header, wrong, output));
+          assert.throws(() => assertCapturedViewOutput(header, output, wrong));
+          assert.throws(() => assertCapturedViewOutput(header, wrong, wrong));
+        }
+      }
+    }
+});
+test('unavailable staged adapters do not create a source fallback or constrain receipt selectors', () => {
+  for (const output of ['selectionMarkdown', 'search'])
+    assert.throws(() => assertCapturedViewOutput({ output }, 'source', 'source'));
+  for (const output of [undefined, 'inverse', 'detail', 'SOURCE'])
+    assert.throws(() => assertCapturedViewOutput({ output }, 'source', 'source'));
+  assert.match(docs, /unavailable selected adapter must not fall back to `source`/);
+  assert.match(docs, /This equality does not change the separately addressed receipt reads or reachable/);
+  assert.match(docs, /A captured `source` output remains the exact frozen source without selection/);
+});

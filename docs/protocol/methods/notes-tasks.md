@@ -1244,7 +1244,16 @@ be reused through a different method. Begin/append/seal receipts and retained ba
 references survive daemon restart until their deadline; process restart does not
 rebuild client selection/undo state or turn staging into an automatic save.
 
-`note.operation.read` requires a sealed manifest for staged view output. Inline
+`note.operation.read` requires a sealed manifest for staged view output. For a
+primary view read (`source`, `selectionMarkdown` or `search`), request `kind` and
+response `outputKind` must equal the immutable captured `header.output`, on both
+first read and continuation. A mismatched kind is rejected before reading or
+publishing output; an unavailable selected adapter must not fall back to `source`.
+There is no arbitrary source-inspection exception for a selection/search header.
+This equality does not change the separately addressed receipt reads or reachable
+`detail` reads below, which retain their own identity, reference and expiry rules.
+A captured `source` output remains the exact frozen source without selection
+trimming, including when the header also captures ranges. Inline
 receipts also permit `inverse`, `inverseText`, `mapping`, `effects` and `detail` reads by
 payloadDigest without a staged header. Output is `{ kind:
 "noteOperationPage", scope, operationId, headerDigest, payloadDigest, viewId,
