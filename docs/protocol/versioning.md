@@ -8,8 +8,29 @@ capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `13.6` — prepared onboarding adapter preparation; not a shipped-version claim.
+**Documented version:** `13.7` — prepared note paging and operations; not a shipped-version claim.
 Other prepared extensions retain their independent support gates.
+
+**Version 13.7 — note paging and operations (additive, prepared).**
+[Revision-safe note pages](./methods/notes-tasks.md#revision-safe-note-pages-prepared-additive-contract)
+reserve this minor for the eight already documented router methods:
+`note.applySplices`, `note.operationStatus`, and `note.operation.begin`, `append`,
+`seal`, `read`, `commit`, `cancel`. Implementation may proceed incrementally, but
+advertising protocol 13.7 does not establish support for any of these methods,
+paging, annotations or editing integration. The combined documented catalog stays
+**451 / 395 / 56** (dispatchable / router / fast path); these eight methods are
+already included, not counted again. No new event names are introduced.
+
+`notePaging: 1` remains absent until the complete core contract is implemented:
+source/context/metadata/mapping and ordered task-link pages, inline CAS edits with
+atomic receipts and retry status, all six staged operation methods with their
+mapping/effects/inverse paging, and bounded pageState subscriptions. Clients also
+require a valid `server.capabilities.notePagingBackendId`; numeric version or a
+working subset is not a substitute. `noteAnnotations: 1` separately requires the
+complete annotation extension alongside notePaging. Existing legacy methods keep
+their compatibility behavior. This reservation follows daemon main's 13.6; check
+for competing minor allocations again before merging the implementation. It makes
+no shipped-version, complete-feature or component-test claim.
 
 **Version 13.6 — onboarding adapter preparation (additive, prepared).**
 [`host.prepareProviderAdapters`](./05-method-catalog.md#hostprepareprovideradapters-136-prepared)
@@ -194,16 +215,17 @@ These additive docs precede consumer merges/contract acceptance; authorized loca
 development and draft preparation may proceed in parallel. Static fixtures do not
 qualify a listener, fresh-workspace source, provider or ready/ACK behavior.
 
-**Prepared note paging and operation contract (additive, not implemented).**
+**Prepared note paging and operation contract (additive, reserved in 13.7).**
 [§5.2](./methods/notes-tasks.md#revision-safe-note-pages-prepared-additive-contract)
 reserves `note.applySplices`, `note.operationStatus` and six `note.operation.*`
 staging/read/commit methods, adding eight router methods with no new event names.
 The [method catalog](./05-method-catalog.md) maintains the combined totals.
 Source/context/metadata/mapping and ordered raw task-link ID pages use opt-in `note.get` shapes;
 annotation paging and bounded subscription projections extend existing methods.
-Allocate the next minor against daemon main at implementation time. Advertise
-`notePaging: 1` only for the complete core including CAS/atomic receipts/status and
-bounded pageState subscriptions; advertise `noteAnnotations: 1` only for the
+Version 13.7 above reserves this surface against daemon main 13.6. Advertise
+`notePaging: 1` only for the complete core including CAS/atomic receipts/status, all
+six staged operation methods with mapping/effects/inverse paging, and bounded
+pageState subscriptions; advertise `noteAnnotations: 1` only for the
 independent-epoch annotation extension and only alongside notePaging. Hello also
 provides `server.capabilities.notePagingBackendId` for persistent database namespace
 isolation; the exact integer capability and valid identity are both required. The

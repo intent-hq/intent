@@ -1776,3 +1776,21 @@ test('annotation identities: actual escaped reply/context frames honor exact wir
   summaryContract.assertReplyAuthorResources(x.row, x.owner, x.reads, { ...f.limits, wireBytes: maxContext });
   assert.throws(() => summaryContract.assertReplyAuthorResources(x.row, x.owner, x.reads, { ...f.limits, wireBytes: maxContext - 1 }));
 });
+
+
+test('note protocol 13.7 reservation does not advertise partial implementation', () => {
+  assert.match(versioning, /\*\*Documented version:\*\* `13\.7`/);
+  const section = versioning.split('**Version 13.7 —')[1]?.split('**Version 13.6 —')[0];
+  assert.ok(section);
+  assert.match(section, /note\.applySplices/);
+  assert.match(section, /note\.operationStatus/);
+  for (const name of ['begin', 'append', 'seal', 'read', 'commit', 'cancel']) {
+    assert.ok(section.includes(name));
+  }
+  assert.match(section, /451 \/ 395 \/ 56/);
+  assert.match(section, /`notePaging: 1` remains absent until the complete core contract/);
+  assert.match(section, /all six staged operation methods/);
+  assert.match(section, /notePagingBackendId/);
+  assert.match(section, /`noteAnnotations: 1` separately requires/);
+  assert.ok(!versioning.includes('Allocate the next minor against daemon main at implementation time.'));
+});
