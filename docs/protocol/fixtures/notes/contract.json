@@ -820,6 +820,8 @@
           "items": [
             {
               "commentId": "reply-1",
+              "authorPrincipalId": "principal-a",
+              "authorIdentity": { "provider": "gitlab", "host": "forge.example:8443", "externalUserId": "42" },
               "createdAt": "2026-10-03T00:00:00.000Z",
               "preview": "preview",
               "truncated": true,
@@ -862,6 +864,8 @@
           "items": [
             {
               "commentId": "root",
+              "authorPrincipalIdRef": "principal-root",
+              "authorIdentityRef": "identity-root",
               "createdAt": "2026-10-03T00:00:00.000Z",
               "preview": "preview",
               "truncated": true,
@@ -2545,6 +2549,8 @@
           "items": [
             {
               "commentId": "reply-1",
+              "authorPrincipalId": "principal-a",
+              "authorIdentity": { "provider": "gitlab", "host": "forge.example:8443", "externalUserId": "42" },
               "createdAt": "2026-10-03T00:00:00.000Z",
               "preview": "preview",
               "truncated": true,

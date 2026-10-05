@@ -1256,6 +1256,54 @@ across disjoint ranges; overlap boundaries never create synthetic comment IDs.
   suggestion or quoted selection pages through context fragments; no truncation of
   authoritative bodies. Replies do not acquire independent source anchors.
 
+**Paged reply author identity.** The inline types remain the existing output-only
+comment attribution types. Only paged reply items add these reference alternatives:
+
+```ts
+type PagedReplyAuthor = {
+  authorPrincipalId?: string;
+  authorPrincipalIdRef?: string;
+  authorIdentity?: { provider: "github" | "gitlab"; host: string; externalUserId: string };
+  authorIdentityRef?: string;
+};
+```
+
+For each logical value, exactly one of its inline field or reference is present
+when that value exists on the canonical comment; both are omitted when unavailable.
+Both forms together, `null`, or an empty reference are invalid. An empty stored
+string is still a present string, not an absence sentinel. This encoding does not
+change creation, anonymization or canonical identity semantics below, and does not
+add references to legacy unpaged `Comment`/`CommentWire` responses.
+
+An inline principal ID is at most 256 decoded UTF-8 bytes. Inline identity strings
+`host` and `externalUserId` are at most 1,024 decoded UTF-8 bytes each; `provider`
+retains the existing enum. Longer stored values **must use references**, not be
+truncated or rejected merely for their length. A server may use references for
+shorter values to fit the complete escaped JSON-RPC frame. Reference tokens remain
+nonempty and at most 256 decoded UTF-8 bytes. All item and complete-frame budgets
+still apply; the inline limits do not guarantee that a whole page fits.
+
+`authorPrincipalIdRef` resolves directly to scalar-safe context fragments with
+`field: "authorPrincipalId"`. `authorIdentityRef` resolves to the existing paged
+field directory: exactly `provider`, `host`, `externalUserId`, in that order. Each
+directory entry has `kind: "fragment", offset: 0, text: ""` and a nonempty
+`nextRef` for that field's scalar fragments. Directory `nextCursor` enumerates
+fields; field `nextRef` continues the value independently. An empty field value
+has one fragment at offset zero, empty text and `nextRef: null`. These are exact
+stored strings, not a serialized identity JSON object to decode or a whole author
+map. Consumers compare the complete identity triple, never a label or preview.
+
+Every reference is bound to the canonical comment, admitted principal, NoteScope,
+sourceRevision, commentRevision, snapshotId and original expiresAt of its reply
+page. Directory and value responses echo the same scope, sourceRevision,
+commentRevision, snapshotId and expiresAt, including on continuations. Missing or
+mismatched bindings cannot be adopted; following a reference cannot renew expiry
+or switch comments, callers or epochs. These owner/caller bindings are enforced
+by the server's existing reference machinery, not new caller-supplied authority
+fields. Author presentation labels and authorType retain their existing detail
+fields and semantics; a large label uses its own context fragments and is not an
+identity key. Anchor references and canonical marker IDs remain unchanged.
+
 **Root deletion with surviving replies.** Deleting a root does not delete its
 replies or change the original thread/root identity. `rootState: "deleted"` means
 the original root row is absent, not that the thread is missing or the page is

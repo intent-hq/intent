@@ -1654,3 +1654,125 @@ test('inline descriptors obey exact complete escaped frame budgets with maximum 
   item[key] += 'x'; assert.equal(wireBytes(wire), 65537);
   assert.throws(() => summaryContract.assertContextFrame(wire, f.limits));
 });
+
+// Synthetic annotation resources: exercise existing context directories and direct
+// nextRef traversal, not server token issuance or membership enforcement.
+function authorResources(values = {
+  authorPrincipalId: 'p'.repeat(255) + '😀\uFEFF',
+  authorIdentity: { provider: 'gitlab', host: 'forge.example:8443', externalUserId: 'x'.repeat(1023) + '😀\uFEFF' },
+}) {
+  const row = structuredClone(f.annotationPages.pages[1].result.items[0]);
+  const owner = f.annotationPages.pages[1].result;
+  const reads = [];
+  const response = (items, nextCursor = null) => ({ jsonrpc: '2.0', id: '\0"😀', result: {
+    kind: 'noteContextPage', scope: owner.scope, sourceRevision: owner.sourceRevision,
+    commentRevision: owner.commentRevision, snapshotId: owner.snapshotId, expiresAt: owner.expiresAt,
+    items, nextCursor,
+  } });
+  function field(ref, name, text) {
+    const scalars = [...text], chunks = [];
+    do { chunks.push(scalars.splice(0, 127).join('')); } while (scalars.length);
+    let offset = 0;
+    for (let i = 0; i < chunks.length; i++) {
+      const contextRef = i === 0 ? ref : `${ref}-${i}`;
+      reads.push({ contextRef, response: response([{ kind: 'fragment', id: name,
+        field: name, offset, text: chunks[i], nextRef: i + 1 === chunks.length ? null : `${ref}-${i + 1}` }]) });
+      offset += chunks[i].length;
+    }
+  }
+  field(row.authorPrincipalIdRef, 'authorPrincipalId', values.authorPrincipalId);
+  const fields = ['provider', 'host', 'externalUserId'];
+  fields.forEach((name, i) => {
+    reads.push({ contextRef: row.authorIdentityRef, ...(i ? { cursor: `directory-${i}` } : {}),
+      response: response([{ kind: 'fragment', id: `identity-${name}`, field: name, offset: 0,
+        text: '', nextRef: `identity-value-${name}` }], i === 2 ? null : `directory-${i + 1}`) });
+    field(`identity-value-${name}`, name, values.authorIdentity[name]);
+  });
+  return { row, owner, reads, values };
+}
+const checkAuthorResources = x => summaryContract.assertReplyAuthorResources(x.row, x.owner, x.reads, f.limits);
+
+test('annotation identities: existing reply fixtures cover inline, absent and referenced values', () => {
+  assertReplyFrames(f.annotationPages.pages, f.limits, { complete: true });
+  const rows = f.annotationPages.pages.flatMap(p => p.result.items);
+  assert.equal(rows[0].authorPrincipalId, 'principal-a');
+  assert.deepEqual(rows[0].authorIdentity, { provider: 'gitlab', host: 'forge.example:8443', externalUserId: '42' });
+  for (const key of ['authorPrincipalId', 'authorIdentity', 'authorPrincipalIdRef', 'authorIdentityRef']) {
+    assert.equal(Object.hasOwn(rows[1], key), false);
+  }
+  assert.equal(rows[2].authorPrincipalIdRef, 'principal-root');
+  assert.equal(rows[2].authorIdentityRef, 'identity-root');
+});
+
+for (const key of ['authorPrincipalId', 'authorIdentity']) {
+  test(`annotation identities: ${key} inline/reference exclusivity and presence`, () => {
+    const inline = key === 'authorPrincipalId' ? '' : { provider: 'github', host: 'github.com', externalUserId: '' };
+    summaryContract.assertReplyAuthor({});
+    summaryContract.assertReplyAuthor({ [key]: inline }); // present empty string is not omission
+    summaryContract.assertReplyAuthor({ [`${key}Ref`]: 'opaque' });
+    for (const bad of [
+      { [key]: inline, [`${key}Ref`]: 'opaque' }, { [key]: null },
+      { [`${key}Ref`]: null }, { [`${key}Ref`]: '' }, { [`${key}Ref`]: 'x'.repeat(257) },
+    ]) assert.throws(() => summaryContract.assertReplyAuthor(bad));
+  });
+}
+
+test('annotation identities: inline UTF8 boundaries and exact safe identity shape', () => {
+  const row = { authorPrincipalId: '😀'.repeat(64), authorIdentity: {
+    provider: 'gitlab', host: 'h'.repeat(1024), externalUserId: '😀'.repeat(256),
+  } };
+  summaryContract.assertReplyAuthor(row);
+  for (const mutate of [
+    r => { r.authorPrincipalId += 'a'; }, r => { r.authorIdentity.host += 'a'; },
+    r => { r.authorIdentity.externalUserId += 'a'; }, r => { r.authorIdentity.provider = 'other'; },
+    r => { r.authorIdentity.token = 'secret'; }, r => { delete r.authorIdentity.host; },
+    r => { r.authorIdentity.externalUserId = 42; }, r => { r.authorPrincipalId = '\ud800'; },
+  ]) { const bad = structuredClone(row); mutate(bad); assert.throws(() => summaryContract.assertReplyAuthor(bad)); }
+});
+
+test('annotation identities: oversized exact values traverse bounded directory and scalar fragments', () => {
+  const x = authorResources();
+  assert.ok(utf8(x.values.authorPrincipalId) > 256);
+  assert.ok(utf8(x.values.authorIdentity.externalUserId) > 1024);
+  assert.deepEqual(checkAuthorResources(x), x.values);
+  const empty = authorResources({ authorPrincipalId: '', authorIdentity: { provider: 'github', host: 'github.com', externalUserId: '' } });
+  assert.deepEqual(checkAuthorResources(empty), empty.values);
+  assert.equal(Object.hasOwn(checkAuthorResources(empty), 'authorPrincipalId'), true);
+});
+
+for (const key of ['scope', 'sourceRevision', 'commentRevision', 'snapshotId', 'expiresAt']) {
+  test(`annotation identities: missing and changed ${key} binding reject directory and scalar responses`, () => {
+    for (const directory of [false, true]) for (const remove of [false, true]) {
+      const x = authorResources();
+      const page = x.reads.find(r => directory ? r.contextRef === x.row.authorIdentityRef : r.contextRef === x.row.authorPrincipalIdRef).response.result;
+      if (remove) delete page[key];
+      else if (key === 'scope') page.scope = { ...page.scope, noteInstanceId: 'replacement' };
+      else page[key] = key === 'expiresAt' ? '2026-10-03T00:06:00.000Z' : 'different';
+      assert.throws(() => checkAuthorResources(x));
+    }
+  });
+}
+
+test('annotation identities: missing reference, wrong field, order, cycle and scalar offset reject', () => {
+  for (const mutate of [
+    x => { x.reads.shift(); },
+    x => { x.reads[0].contextRef = 'unrelated-ref'; },
+    x => { x.reads[0].response.result.items[0].field = 'body'; },
+    x => { x.reads[0].response.result.items[0].nextRef = x.row.authorPrincipalIdRef; },
+    x => { x.reads[1].response.result.items[0].offset++; },
+    x => { x.reads.find(r => r.contextRef === x.row.authorIdentityRef).response.result.items[0].field = 'externalUserId'; },
+    x => { x.reads.find(r => r.contextRef === 'identity-value-provider').response.result.items[0].text = 'other'; },
+    x => { x.reads.push(structuredClone(x.reads[0])); },
+  ]) { const x = authorResources(); mutate(x); assert.throws(() => checkAuthorResources(x)); }
+});
+
+test('annotation identities: actual escaped reply/context frames honor exact wire boundary', () => {
+  const pages = structuredClone(f.annotationPages.pages);
+  const maxReply = Math.max(...pages.map(wireBytes));
+  assertReplyFrames(pages, { ...f.limits, wireBytes: maxReply });
+  assert.throws(() => assertReplyFrames(pages, { ...f.limits, wireBytes: maxReply - 1 }));
+  const x = authorResources();
+  const maxContext = Math.max(...x.reads.map(r => wireBytes(r.response)));
+  summaryContract.assertReplyAuthorResources(x.row, x.owner, x.reads, { ...f.limits, wireBytes: maxContext });
+  assert.throws(() => summaryContract.assertReplyAuthorResources(x.row, x.owner, x.reads, { ...f.limits, wireBytes: maxContext - 1 }));
+});

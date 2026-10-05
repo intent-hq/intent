@@ -248,6 +248,84 @@ export function assertMetadataFrame(frame, limits) {
   assert.ok(wireBytes(frame) <= limits.wireBytes);
 }
 
+// Paged summaries preserve logical presence without widening legacy inline types.
+export function assertReplyAuthor(row) {
+  for (const key of ['authorPrincipalId', 'authorIdentity']) {
+    const inline = Object.hasOwn(row, key), ref = Object.hasOwn(row, `${key}Ref`);
+    assert.ok(!(inline && ref), 'author inline and reference are mutually exclusive');
+    if (ref) { token(row[`${key}Ref`]); assert.ok(validText(row[`${key}Ref`])); }
+    if (!inline) continue;
+    if (key === 'authorPrincipalId') {
+      assert.ok(validText(row[key]) && utf8(row[key]) <= 256);
+    } else {
+      const value = row[key];
+      assert.ok(value && typeof value === 'object' && !Array.isArray(value));
+      assert.deepEqual(Object.keys(value).sort(), ['externalUserId', 'host', 'provider']);
+      assert.ok(['github', 'gitlab'].includes(value.provider));
+      for (const field of ['host', 'externalUserId']) {
+        assert.ok(validText(value[field]) && utf8(value[field]) <= 1024);
+      }
+    }
+  }
+}
+
+// Fixture response-adoption check only: does not verify signed token ownership,
+// current database membership, or actual server expiry. Those require runtime proof.
+export function assertAnnotationContextFrame(frame, owner, limits, options = {}) {
+  assertContextFrame(frame, limits, options);
+  for (const key of ['scope', 'sourceRevision', 'commentRevision', 'snapshotId', 'expiresAt']) {
+    assert.ok(Object.hasOwn(owner, key) && Object.hasOwn(frame.result, key), `missing ${key} binding`);
+    assert.deepEqual(frame.result[key], owner[key], `mismatched ${key} binding`);
+  }
+  token(frame.result.commentRevision);
+}
+
+// Synthetic read traces bind requested references to recorded responses. This is
+// a specification oracle, not a token parser or a production full-value loader.
+export function assertReplyAuthorResources(row, owner, reads, limits) {
+  assertReplyAuthor(row);
+  const used = new Set();
+  const read = (ref, cursorValue, directory = false) => {
+    token(ref);
+    const matches = reads.filter(r => r.contextRef === ref && (r.cursor ?? null) === cursorValue);
+    assert.equal(matches.length, 1, 'missing or ambiguous reference binding');
+    const entry = matches[0];
+    assert.ok(!used.has(entry), 'cyclic author reference'); used.add(entry);
+    assertAnnotationContextFrame(entry.response, owner, limits, { directory });
+    return entry.response;
+  };
+  const scalar = (ref, field) => {
+    const frames = [];
+    while (ref !== null) {
+      const frame = read(ref, null);
+      assert.equal(frame.result.nextCursor, null, 'scalar continuation uses nextRef');
+      assert.ok(frame.result.items.length > 0);
+      frames.push(frame);
+      ref = frame.result.items.at(-1).nextRef;
+    }
+    return assertTextFragments(frames, field, limits);
+  };
+  const values = {};
+  if (Object.hasOwn(row, 'authorPrincipalId')) values.authorPrincipalId = row.authorPrincipalId;
+  if (Object.hasOwn(row, 'authorIdentity')) values.authorIdentity = row.authorIdentity;
+  if (row.authorPrincipalIdRef !== undefined) {
+    values.authorPrincipalId = scalar(row.authorPrincipalIdRef, 'authorPrincipalId');
+  }
+  if (row.authorIdentityRef !== undefined) {
+    let next = null;
+    const entries = [];
+    do {
+      const frame = read(row.authorIdentityRef, next, true);
+      entries.push(...frame.result.items);
+      next = frame.result.nextCursor;
+    } while (next !== null);
+    assert.deepEqual(entries.map(r => r.field), ['provider', 'host', 'externalUserId']);
+    values.authorIdentity = Object.fromEntries(entries.map(r => [r.field, scalar(r.nextRef, r.field)]));
+    assert.ok(['github', 'gitlab'].includes(values.authorIdentity.provider));
+  }
+  return values;
+}
+
 export function assertReplyFrames(frames, limits, { complete = false } = {}) {
   let previous, first;
   const seen = new Set();
@@ -266,6 +344,7 @@ export function assertReplyFrames(frames, limits, { complete = false } = {}) {
       if (p.rootState === 'deleted') assert.notEqual(row.commentId, p.rootCommentId);
       for (const key of ['commentId', 'bodyRef', 'detailRef']) token(row[key]);
       timestamp(row.createdAt);
+      assertReplyAuthor(row);
       assert.ok(['open', 'resolved', 'pending', 'accepted', 'rejected'].includes(row.status));
       assert.ok(typeof row.preview === 'string' && utf8(row.preview) <= 512);
       assert.equal(typeof row.truncated, 'boolean');
