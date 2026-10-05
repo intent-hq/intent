@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { createHash } from 'node:crypto';
+import { caseFoldTable, sourceSearch } from './source-search.mjs';
 import {
   utf8, wireBytes, digest, boundary, spliceError, applySourceSplices, mapPoint,
   assertSourcePage, cursorError, overlapIds, assertRanges, assertOperationTrace,
@@ -15,6 +16,37 @@ const docs = await readFile(new URL('../../methods/notes-tasks.md', import.meta.
 const events = await readFile(new URL('../../06-events.md', import.meta.url), 'utf8');
 const errors = await readFile(new URL('../../09-error-codes.md', import.meta.url), 'utf8');
 const versioning = await readFile(new URL('../../versioning.md', import.meta.url), 'utf8');
+const searchFixtures = JSON.parse(await readFile(new URL('./source-search.json', import.meta.url), 'utf8'));
+const foldBytes = await readFile(new URL('./CaseFolding-17.0.0.txt', import.meta.url));
+const foldTable = caseFoldTable(foldBytes.toString('utf8'));
+test('source search uses pinned Unicode full folding, not host lowercase', () => {
+  assert.equal(createHash('sha256').update(foldBytes).digest('hex'), searchFixtures.caseFoldingSha256);
+  assert.ok(docs.includes(searchFixtures.caseFoldingSha256));
+  assert.equal(foldTable.get('ß'), 'ss');
+  assert.equal(foldTable.get('İ'), 'i\u0307');
+  assert.equal(foldTable.get('I'), 'i');
+  assert.equal(foldTable.get('ς'), 'σ');
+  assert.match(docs, /cursor retains matcher carry and pending-emission position/u);
+  assert.match(docs, /only terminal exhaustion, after pending hits are emitted, reports an exact total/u);
+});
+for (const row of searchFixtures.vectors) test(`source search policy: ${row.name}`, () => {
+  assert.deepEqual(sourceSearch(row.source, row.query, foldTable, row.ranges), row.expected);
+});
+test('source search rejects empty, malformed, NUL and oversized query; admits exact byte limit', () => {
+  for (const query of ['', '\0', '\uD800', '\uDC00', 'a'.repeat(1025), 'é'.repeat(513)]) {
+    assert.throws(() => sourceSearch('abc', query, foldTable));
+  }
+  assert.deepEqual(sourceSearch('é'.repeat(512), 'é'.repeat(512), foldTable), [[0, 512]]);
+  assert.throws(() => sourceSearch('😀x', 'x', foldTable, [[1, 3]]));
+  assert.throws(() => sourceSearch('abc', 'a', foldTable, [[2, 1]]));
+});
+test('source-search semantic oracle preserves overlaps and expansion across reassembled chunks', () => {
+  // Reassembly is ONLY a fixture oracle. This proves no runtime carry/cursor bounds.
+  for (const chunks of [['ban', 'ana'], ['ba', 'n', 'a', 'na']]) {
+    assert.deepEqual(sourceSearch(chunks.join(''), 'ana', foldTable), [[1, 4], [3, 6]]);
+  }
+  assert.deepEqual(sourceSearch(['😀Stra', 'ß', 'e'].join(''), 'STRASSE', foldTable), [[2, 8]]);
+});
 const frame = (text, start, end, length) => ({ jsonrpc: '2.0', id: 1, result: {
   kind: 'noteSourcePage', scope: f.scope, sourceRevision: 'r:7', snapshotId: 'snapshot-a',
   expiresAt: '2026-10-03T00:05:00.000Z', sourceLength: length, range: { start, end }, text,

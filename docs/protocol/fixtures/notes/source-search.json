@@ -1,0 +1,341 @@
+{
+  "status": "prepared-specification-only",
+  "unicodeVersion": "17.0.0",
+  "caseFoldingSha256": "ff8d8fefbf123574205085d6714c36149eb946d717a0c585c27f0f4ef58c4183",
+  "policy": "C+F full default fold; scalar-boundary matches; all overlaps; no normalization",
+  "vectors": [
+    {
+      "name": "ascii",
+      "source": "AbCaBC",
+      "query": "abc",
+      "expected": [
+        [
+          0,
+          3
+        ],
+        [
+          3,
+          6
+        ]
+      ]
+    },
+    {
+      "name": "overlap",
+      "source": "banana",
+      "query": "ana",
+      "expected": [
+        [
+          1,
+          4
+        ],
+        [
+          3,
+          6
+        ]
+      ]
+    },
+    {
+      "name": "dense-overlap",
+      "source": "aaaa",
+      "query": "aa",
+      "expected": [
+        [
+          0,
+          2
+        ],
+        [
+          1,
+          3
+        ],
+        [
+          2,
+          4
+        ]
+      ]
+    },
+    {
+      "name": "sharp-s",
+      "source": "Straße",
+      "query": "STRASSE",
+      "expected": [
+        [
+          0,
+          6
+        ]
+      ]
+    },
+    {
+      "name": "whole-expansion",
+      "source": "ß",
+      "query": "ss",
+      "expected": [
+        [
+          0,
+          1
+        ]
+      ]
+    },
+    {
+      "name": "partial-expansion",
+      "source": "ß",
+      "query": "s",
+      "expected": []
+    },
+    {
+      "name": "mixed-expansion",
+      "source": "ßss",
+      "query": "ss",
+      "expected": [
+        [
+          0,
+          1
+        ],
+        [
+          1,
+          3
+        ]
+      ]
+    },
+    {
+      "name": "reverse-expansion",
+      "source": "SS",
+      "query": "ß",
+      "expected": [
+        [
+          0,
+          2
+        ]
+      ]
+    },
+    {
+      "name": "dotted-i-partial",
+      "source": "İ",
+      "query": "i",
+      "expected": []
+    },
+    {
+      "name": "dotted-i-full",
+      "source": "İ",
+      "query": "i̇",
+      "expected": [
+        [
+          0,
+          1
+        ]
+      ]
+    },
+    {
+      "name": "non-turkic",
+      "source": "Iıi",
+      "query": "i",
+      "expected": [
+        [
+          0,
+          1
+        ],
+        [
+          2,
+          3
+        ]
+      ]
+    },
+    {
+      "name": "sigma",
+      "source": "Σςσ",
+      "query": "σ",
+      "expected": [
+        [
+          0,
+          1
+        ],
+        [
+          1,
+          2
+        ],
+        [
+          2,
+          3
+        ]
+      ]
+    },
+    {
+      "name": "no-normalization",
+      "source": "é",
+      "query": "é",
+      "expected": []
+    },
+    {
+      "name": "combining-literal",
+      "source": "é",
+      "query": "́",
+      "expected": [
+        [
+          1,
+          2
+        ]
+      ]
+    },
+    {
+      "name": "astral-offset",
+      "source": "😀Straße",
+      "query": "STRASSE",
+      "expected": [
+        [
+          2,
+          8
+        ]
+      ]
+    },
+    {
+      "name": "astral-case",
+      "source": "𐐀x𐐨",
+      "query": "𐐨",
+      "expected": [
+        [
+          0,
+          2
+        ],
+        [
+          3,
+          5
+        ]
+      ]
+    },
+    {
+      "name": "ligature",
+      "source": "ﬃ",
+      "query": "ffi",
+      "expected": [
+        [
+          0,
+          1
+        ]
+      ]
+    },
+    {
+      "name": "ligature-partial",
+      "source": "ﬃ",
+      "query": "fi",
+      "expected": []
+    },
+    {
+      "name": "literal-metacharacters",
+      "source": "a.*b",
+      "query": ".*",
+      "expected": [
+        [
+          1,
+          3
+        ]
+      ]
+    },
+    {
+      "name": "whitespace",
+      "source": " a a ",
+      "query": " ",
+      "expected": [
+        [
+          0,
+          1
+        ],
+        [
+          2,
+          3
+        ],
+        [
+          4,
+          5
+        ]
+      ]
+    },
+    {
+      "name": "empty-source",
+      "source": "",
+      "query": "a",
+      "expected": []
+    },
+    {
+      "name": "range-gap",
+      "source": "banana",
+      "query": "ana",
+      "ranges": [
+        [
+          1,
+          3
+        ],
+        [
+          4,
+          6
+        ]
+      ],
+      "expected": []
+    },
+    {
+      "name": "range-touch",
+      "source": "banana",
+      "query": "ana",
+      "ranges": [
+        [
+          1,
+          3
+        ],
+        [
+          3,
+          6
+        ]
+      ],
+      "expected": [
+        [
+          1,
+          4
+        ],
+        [
+          3,
+          6
+        ]
+      ]
+    },
+    {
+      "name": "range-overlap-dedup",
+      "source": "banana",
+      "query": "ana",
+      "ranges": [
+        [
+          3,
+          6
+        ],
+        [
+          1,
+          5
+        ],
+        [
+          1,
+          5
+        ]
+      ],
+      "expected": [
+        [
+          1,
+          4
+        ],
+        [
+          3,
+          6
+        ]
+      ]
+    },
+    {
+      "name": "empty-selection",
+      "source": "banana",
+      "query": "ana",
+      "ranges": [],
+      "expected": []
+    }
+  ],
+  "invalidQueries": [
+    "empty",
+    "NUL",
+    "1025 UTF8 bytes"
+  ],
+  "limitation": "Whole-string controlled oracle only; no bounded stream, Store, cursor, authorization or renderedText proof."
+}

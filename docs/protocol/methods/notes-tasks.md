@@ -1029,6 +1029,34 @@ selectionGeneration, action: "read" | "mutate", output: "source" |
 mode: "source" | "renderedText" }`, literal search, at most 1,024 decoded UTF-8
 bytes. Rendered-text search projects existing canonical text semantics across marks,
 not DOM fragmentation; each hit supplies a source range and paged projection context.
+The following source-search convention is additive; it does not copy the existing
+DOM-node find implementation. For `mode: "source"`, use Unicode 17.0.0 Default Full
+Case Folding: the `C` and `F` mappings in [CaseFolding-17.0.0.txt](../fixtures/notes/CaseFolding-17.0.0.txt),
+with no Turkic `T` mapping, locale tailoring, normalization or accent stripping.
+The vendored data retains its [Unicode license](../fixtures/notes/Unicode-LICENSE.txt).
+The pinned file SHA-256 is `ff8d8fefbf123574205085d6714c36149eb946d717a0c585c27f0f4ef58c4183`.
+Fold query and source scalar by scalar; retain the original UTF-16 boundaries.
+A folded literal match is valid only when both endpoints are original scalar
+boundaries. Thus `ss` matches all of `ß`, but `s` cannot match half its expansion;
+`STRASSE` matches `Straße` at `[0,6)`. Query text must be nonempty and satisfy the
+existing scalar/NUL and 1,024 decoded UTF-8 byte limits; empty is InvalidParams,
+whitespace is literal, and metacharacters have no regex meaning. The byte limit is
+on the original query, not its folded expansion. Admit bounded folded query,
+boundary mapping and matcher carry separately using this pinned table's expansion
+bound; never truncate or hydrate/fold the whole source to satisfy a page request.
+
+Emit all overlapping distinct original spans (`banana` / `ana` gives `[1,4)` and
+`[3,6)`), deduplicating only identical spans. Hit identity is deterministic for the
+frozen view/query/original span, independent of page size, chunk boundaries and
+scan scheduling; it must not be a page-local ordinal. For search with captured
+ranges, validate scalar-safe endpoints and normalize duplicate/overlapping/touching
+ranges into their union. Match independently in each resulting interval, resetting
+at true gaps; hits must lie wholly within the union and retain absolute source
+offsets. An empty union has no hits. This does not change full-source output's
+separate rule or authorize `renderedText` to use source matching as a fallback.
+Rendered-text search remains unsupported until its canonical projection adapter
+implements the required source correspondence.
+
 Both modes include the frozen dirty prefix. `selection: "ranges"` requires the
 selection stream; `all` means the complete frozen extent without enumerating it.
 Native context-first selection is resolved by the client before capturing this header.
@@ -1306,8 +1334,16 @@ extension: their search/details expire with their pinned view.
 Search items are `{ hitId, sourceRange, detailRef }`, ordered by source start then
 hitId. Search pages additionally carry `scannedThrough` (UTF-16 source extent),
 `count: { value, exact }`; false means matches observed so far, true only after the
-entire frozen view is examined. A work-limited page may have no hits but must advance
-scannedThrough or its cursor; only terminal exhaustion reports an exact total.
+complete captured search domain is examined (the normalized selection union for
+range search, otherwise the full frozen view). `scannedThrough` is the monotone,
+scalar-safe absolute source frontier examined or deliberately skipped outside that
+domain; it can exceed the start of a match still awaiting completion or emission.
+The cursor retains matcher carry and pending-emission position, including a page
+cut at maxItems, so continuations neither lose nor repeat overlapping hits. A
+work-limited page may have no hits but must advance scannedThrough or its cursor;
+only terminal exhaustion, after pending hits are emitted, reports an exact total.
+For range search the exact count covers the entire selected domain, not excluded
+gaps; a partial scan must not report an exact count.
 Target navigation uses that frozen view's source range/context. If live revisions or
 dirty generations have moved, map the target through verified maps or restart search;
 never install an old hit's offsets on current content. An explicit search can run
