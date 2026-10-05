@@ -313,10 +313,11 @@ export function resolveGitlink({ cwd = process.cwd(), intentdDir = DEFAULT_INTEN
   let requested = gitlink;
   if (!requested) {
     try {
-      requested = git(['rev-parse', `HEAD:${intentdDir}`], { cwd }).trim();
+      // intentdDir selects the object store, not the monorepo's gitlink path.
+      requested = git(['rev-parse', `HEAD:${DEFAULT_INTENTD_DIR}`], { cwd }).trim();
     } catch (error) {
       if (gitNotFound(error, cwd)) throw new CheckError(GIT_NOT_FOUND);
-      throw new CheckError(`error: cannot read the ${intentdDir} gitlink from HEAD; run from the monorepo root`);
+      throw new CheckError(`error: cannot read the ${DEFAULT_INTENTD_DIR} gitlink from HEAD; run from the monorepo root`);
     }
   }
   try {

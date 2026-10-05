@@ -609,6 +609,131 @@ class CallbackValidatorTests(unittest.TestCase):
                          str(self.fixture.payload))
         self.assertEqual(os.environ[gate.CALLBACK_FIXTURE_ENV], "../original")
 
+    def test_default_bytecode_preflight_preserves_changed_plan_and_resume(self):
+        if self.host_machine not in ("x86_64", "amd64"):
+            self.skipTest("canonical fixture CLI needs a Linux x64 host")
+        scripts = self.component / "scripts"
+        scripts.mkdir()
+        for name in ("prepare-acp-callback-fixture.py", "changed-tests.sh"):
+            shutil.copy(SCRIPT.parents[1] / "packages/intentd/scripts" / name, scripts)
+        config = self.component / "crates/intent-acp/tests/fixtures"
+        config.mkdir(parents=True)
+        shutil.copy(self.fixture.descriptor_path, config / "claude-callback-adapter.json")
+        for name in ("delta.patch", "files.json"):
+            shutil.copy(self.root / name, config)
+        source = self.component / "crates/intent-services/src/lib.rs"
+        source.parent.mkdir(parents=True)
+        source.write_text("// baseline\n")
+        (self.component / "Cargo.toml").write_text("[workspace]\n")
+        self.node.write_text(f"#!{sys.executable}\nprint('v24.21.0')\n")
+        self.node.chmod(0o755)
+        env = {**os.environ, "PATH": str(self.root) + os.pathsep + os.environ["PATH"],
+               "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+               "GIT_AUTHOR_NAME": "Test", "GIT_AUTHOR_EMAIL": "test@example.invalid",
+               "GIT_COMMITTER_NAME": "Test", "GIT_COMMITTER_EMAIL": "test@example.invalid"}
+        # The parent suite normally runs with -B. Neither that flag nor an
+        # inherited environment setting may hide writes by the actual loader.
+        env.pop("PYTHONDONTWRITEBYTECODE", None)
+        env.pop("PYTHONPYCACHEPREFIX", None)
+        env.pop("NEXTEST_RUNNER", None)
+
+        def process(command):
+            return subprocess.run(command, cwd=self.component, env=env,
+                                  capture_output=True, text=True, timeout=20)
+
+        def git(*args):
+            result = process(["git", *args])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return result.stdout
+
+        git("init", "-q")
+        git("add", "-A")
+        git("commit", "-qm", "base")
+        git("update-ref", "refs/remotes/origin/main", "HEAD")
+        source.write_text("// selected services change\n")
+        git("add", "-A")
+        git("commit", "-qm", "selected change")
+
+        def plan():
+            result = process(["bash", str(scripts / "changed-tests.sh"),
+                              "--dry-run", "--base", "origin/main"])
+            return result.returncode, result.stdout, result.stderr
+
+        before = plan()
+        self.assertEqual(before[0], 0, before)
+        self.assertIn("-p intent-services --lib --bins --tests", before[1])
+        self.assertEqual(git("status", "--porcelain"), "")
+        # Keep imports by the child harness outside both source worktrees.
+        runner = self.root / "runner"
+        runner.mkdir()
+        for name in ("resumable_nextest.py", "test_resumable_nextest.py"):
+            shutil.copy(SCRIPT.parent / name, runner)
+        shutil.copytree(SCRIPT.parent / "_vendor", runner / "_vendor",
+                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        command = [sys.executable, "-S", str(runner / SCRIPT.name),
+                   "--check-callback-fixture", str(self.component)]
+        for attempt in range(2):
+            with self.subTest(preflight=attempt):
+                result = process(command)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(plan(), before)
+                self.assertEqual(git("status", "--porcelain"), "")
+                self.assertEqual(list(self.component.rglob("*.pyc")), [])
+
+        # Use the existing fake-Cargo recorder, but leave the actual validator
+        # loader and validation intact in a fresh, default-bytecode process.
+        child = f'''
+import runpy, sys
+from pathlib import Path
+from unittest import mock
+assert not sys.dont_write_bytecode
+namespace = runpy.run_path({str(runner / 'test_resumable_nextest.py')!r})
+gate = namespace['gate']
+root = Path({str(self.root)!r})
+harness = namespace['PlannedRunHarness'](root, [([namespace['event']('ok', 'alpha::one$passes')], 0)])
+real_popen = gate.subprocess.Popen
+fake_cargo = harness.fake_popen
+harness.fake_popen = lambda command, **kwargs: (fake_cargo(command, **kwargs)
+    if command[0] == 'cargo' else real_popen(command, **kwargs))
+args = namespace['make_args'](root, plan=['-p intent-services --lib'], resume='1')
+with mock.patch.object(gate, 'transfer_fixture_identity', return_value=None):
+    assert harness.execute(args) == 0
+    assert harness.execute(args) == 0
+    assert 'resumed: skipped 1 tests already passed for this tree' in harness.output_lines
+    assert len(harness.run_commands) == 1
+    target = Path({str(self.fixture.payload / 'dist/index.js')!r})
+    for invalid in ('corrupt', 'missing'):
+        if invalid == 'corrupt':
+            target.write_text('tampered')
+        else:
+            target.unlink()
+        with mock.patch.object(gate, 'isolated_output_args', side_effect=AssertionError('Cargo reached')) as cargo:
+            try:
+                harness.execute(args)
+            except RuntimeError as error:
+                assert 'callback fixture:' in str(error), str(error)
+            else:
+                raise AssertionError('invalid fixture received resume credit')
+            cargo.assert_not_called()
+'''
+        result = process([sys.executable, "-S", "-c", child])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(plan(), before)
+        self.assertEqual(git("status", "--porcelain"), "")
+        self.assertEqual(list(self.component.rglob("*.pyc")), [])
+        for name in ("scripts/new-check.py", "Cargo.toml"):
+            with self.subTest(build_wide=name):
+                path = self.component / name
+                original = path.read_bytes() if path.exists() else None
+                path.write_text("# genuine build-wide change\n")
+                fallback = plan()
+                self.assertEqual(fallback[0], 3, fallback)
+                self.assertIn(name, fallback[2])
+                if original is None:
+                    path.unlink()
+                else:
+                    path.write_bytes(original)
+
     def test_corrupt_missing_linked_extra_and_wrong_manifest_are_rejected(self):
         target = self.fixture.payload / "dist/index.js"
         original = target.read_bytes()
@@ -755,6 +880,8 @@ class CallbackValidatorPortabilityTests(unittest.TestCase):
         self.assertEqual(
             [(test._testMethodName, reason) for test, reason in result.skipped],
             [("test_cli_loads_canonical_verifier_and_checks_real_node_version_offline",
+              "canonical fixture CLI needs a Linux x64 host"),
+             ("test_default_bytecode_preflight_preserves_changed_plan_and_resume",
               "canonical fixture CLI needs a Linux x64 host")],
         )
 
