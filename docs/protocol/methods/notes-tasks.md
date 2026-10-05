@@ -1117,7 +1117,7 @@ references survive daemon restart until their deadline; process restart does not
 rebuild client selection/undo state or turn staging into an automatic save.
 
 `note.operation.read` requires a sealed manifest for staged view output. Inline
-receipts also permit `inverse`, `inverseText`, `mapping` and `effects` reads by
+receipts also permit `inverse`, `inverseText`, `mapping`, `effects` and `detail` reads by
 payloadDigest without a staged header. Output is `{ kind:
 "noteOperationPage", scope, operationId, headerDigest, payloadDigest, viewId,
 outputKind, sourceLength, items, nextCursor, expiresAt }`. Inline receipt reads omit
@@ -1141,7 +1141,7 @@ First-read addressing is explicit (all selectors are included in cursor ownershi
 | source, selectionMarkdown, search | No ref/textId; starts at output offset or search scan zero | Sealed frozen view until staging expiresAt; remote writes do not replace it |
 | inverse, mapping, effects | `ref` equal to this receipt's inverseRef, mappingRef or effectsRef | Ordered records until receiptExpiresAt, even after staging expiry or a later source revision |
 | inverseText | `ref: inverseRef`, `textId` from one of its replacement references, `offset?` (default zero) | Exact scalar-safe text fragments `{textId,offset,text}` until receiptExpiresAt |
-| detail | `ref` from a search detailRef, inverse provenanceRef, or an already returned detail/children reference | Paged typed detail records or text fragments; inherits the issuing view's expiresAt or receipt's receiptExpiresAt |
+| detail | `ref` from a search detailRef, inverse provenanceRef, receipt effect detailRef (including sourceEffect), or an already returned detail/children reference | Paged typed detail records or text fragments; inherits the issuing view's expiresAt or receipt's receiptExpiresAt |
 
 For inverseText, offset is UTF-16 within that named text value and must be a scalar
 boundary; length, UTF-8 bytes and raw SHA-256 match the inverse replacement reference.
@@ -1154,7 +1154,15 @@ Every continuation repeats kind and the same ref/textId/budgets, omits offset, a
 sends the issued cursor. A ref/cursor mismatch or a foreign scope/operation/kind is
 `note-page-cursor-invalid`; expired view-owned data is `note-page-expired`, not an
 empty successful page. Receipt-owned reads do not require a still-live staged view;
-they validate the retained receipt/digest and inherit its expiry. Pending/cancelled
+they validate the retained receipt/digest and inherit its expiry. For inline receipt details, the request repeats the exact operation scope,
+operationId and payloadDigest, without a staged headerDigest or viewId. The ref
+must be reachable from that receipt's inverse/effects or a detail already reached
+from them; a same-spelled ref in another receipt is not authority. These details
+expire at receiptExpiresAt, not staging expiry, and remain subject to the receipt
+visibility/deleted-incarnation rules. Their existing bounded context/metadata-tree
+records and scalar fragments carry writer-retained source/provenance; this does
+not introduce a new provenance leaf schema, native identity or marker-alias grant.
+Pending/cancelled
 operations never expose a fabricated inverse. Readonly operations have no receipt
 extension: their search/details expire with their pinned view.
 
@@ -1185,7 +1193,14 @@ it twice. Pending/cancel and lost acknowledgements use the existing durable stat
 
 `note.operation.read kind: "inverse"` (after either inline or staged commit) returns receipt-owned paged inverse
 records `{ historyGroup, inputState, outputState, ordinal, start, end, replacement,
-provenanceRef }`, newest history group first. The first inputState is afterRevision;
+provenanceRef }`, newest history group first. `historyGroup` is a nonempty opaque
+string of at most 256 UTF-8 bytes, identifying a logical history group within this
+receipt. Compare its exact string value; never parse it as a number or equate it
+with a frontend's local numeric history ID. A single-group inline inverse may use
+`"0"`; `"0"`, `"00"` and staged identities such as `"paste"` are distinct. This
+identity does not determine ordering: preserve the returned newest-first group
+sequence and the original staged groups. It neither grants provenance nor permits
+merging separate gestures. The first inputState is afterRevision;
 each group’s ranges share its input state, and its outputState is the next group’s
 input. This preserves dirty-prefix history groups separately from the final gesture;
 undoing only the newest gesture does not discard earlier typing. Large removed text

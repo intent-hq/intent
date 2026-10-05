@@ -657,3 +657,24 @@ export function assertNativeGraph(frames, links, limits) {
   }
   return nodes;
 }
+
+
+// Wire identity only; numeric local editor history IDs are a separate domain.
+export function assertInverseHistoryGroup(value) {
+  token(value);
+}
+
+// Controlled receipt ownership/expiry oracle, not a database authorization check.
+// reachableRefs stands for refs resolved from THIS retained receipt's inverse/effects.
+export function assertInlineReceiptDetail(request, receipt, reachableRefs, now) {
+  assertScope(receipt.scope);
+  for (const key of scopeKeys) assert.equal(request[key], receipt.scope[key]);
+  assert.equal(request.kind, 'detail');
+  token(receipt.operationId); assert.equal(request.operationId, receipt.operationId);
+  assert.match(receipt.payloadDigest, /^[0-9a-f]{64}$/);
+  assert.equal(request.payloadDigest, receipt.payloadDigest);
+  assert.equal(request.headerDigest, undefined); assert.equal(request.viewId, undefined);
+  token(request.ref); assert.ok(reachableRefs.includes(request.ref));
+  timestamp(receipt.receiptExpiresAt);
+  assert.ok(Number.isFinite(now) && now < Date.parse(receipt.receiptExpiresAt));
+}

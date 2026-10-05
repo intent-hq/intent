@@ -1863,3 +1863,47 @@ test('paragraph entry policy: explicit renderer predicate includes trim and whol
   assert.ok(docs.includes('including U+FEFF, excluding U+0085'));
   assert.ok(docs.includes('not only at a parsed fence boundary'));
 });
+
+
+test('inverse history groups preserve staged and inline opaque string identities', () => {
+  for (const row of f.staged.inverse) summaryContract.assertInverseHistoryGroup(row.historyGroup);
+  const groups = ['paste', '0', '00', 'é'.repeat(128)];
+  for (const group of groups) summaryContract.assertInverseHistoryGroup(group);
+  assert.equal(new Set(groups).size, 4);
+  assert.equal(f.staged.inverse[0].historyGroup, 'paste');
+  for (const invalid of [0, 1, null, false, {}, [], '', 'x'.repeat(257), 'é'.repeat(129)])
+    assert.throws(() => summaryContract.assertInverseHistoryGroup(invalid));
+});
+
+function receiptDetailFixture() {
+  const receipt = { scope: f.scope, operationId: 'receipt-operation', payloadDigest: 'a'.repeat(64),
+    receiptExpiresAt: '2026-10-03T01:00:00.000Z' };
+  return { receipt, request: { ...receipt.scope, operationId: receipt.operationId,
+    payloadDigest: receipt.payloadDigest, kind: 'detail', ref: 'inverse-provenance' },
+  refs: ['inverse-provenance', 'canonical-effect-detail', 'nested-text'],
+  now: Date.parse('2026-10-03T00:30:00.000Z') };
+}
+test('inline details resolve inverse/effect/nested refs with receipt lifetime', () => {
+  const x = receiptDetailFixture();
+  for (const ref of x.refs) summaryContract.assertInlineReceiptDetail(
+    { ...x.request, ref }, x.receipt, x.refs, x.now);
+  // No live source revision or still-live staging view is needed for retained receipt data.
+  assert.equal(x.request.sourceRevision, undefined);
+  assert.equal(x.request.headerDigest, undefined);
+  assert.ok(docs.includes('`effects` and `detail` reads by'));
+  assert.ok(docs.includes('receipt effect detailRef (including sourceEffect)'));
+});
+test('inline details reject foreign receipt identity, unreachable refs and exact expiry', () => {
+  const x = receiptDetailFixture();
+  for (const patch of [
+    ...Object.keys(f.scope).map(key => ({ [key]: 'foreign' })),
+    { operationId: 'other' }, { payloadDigest: 'b'.repeat(64) }, { payloadDigest: undefined },
+    { kind: 'inverse' }, { ref: 'foreign-ref' }, { ref: '' },
+    { headerDigest: 'c'.repeat(64) }, { viewId: 'staged-view' },
+  ]) assert.throws(() => summaryContract.assertInlineReceiptDetail(
+    { ...x.request, ...patch }, x.receipt, x.refs, x.now));
+  // A known spelling elsewhere cannot establish reachability from this owner.
+  assert.throws(() => summaryContract.assertInlineReceiptDetail(x.request, x.receipt, [], x.now));
+  for (const now of [Date.parse(x.receipt.receiptExpiresAt), Date.parse(x.receipt.receiptExpiresAt) + 1])
+    assert.throws(() => summaryContract.assertInlineReceiptDetail(x.request, x.receipt, x.refs, now));
+});
