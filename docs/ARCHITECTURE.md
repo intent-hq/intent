@@ -497,7 +497,9 @@ From `packages/intentd`, under the pinned Rust toolchain and after setting
 cargo nextest run --locked -p intentd --test e2e_wss_agent_lifecycle \
   -E 'test(managed_provider::native_managed_catalog_over_wss)' \
   --run-ignored only --show-progress none
-``` Ordinary repository tests do not run
+```
+
+Ordinary repository tests do not run
 these dependency-gated native fixtures; record their results separately from
 mock ACP WSS coverage and the full repository gates.
 
