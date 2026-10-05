@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { createHash } from 'node:crypto';
 import { caseFoldTable, sourceSearch, assertSourceSearchTrace } from './source-search.mjs';
+import { assertSourceHitDetail } from './source-hit-detail.mjs';
 import {
   utf8, wireBytes, digest, boundary, spliceError, applySourceSplices, mapPoint,
   assertSourcePage, cursorError, overlapIds, assertRanges, assertOperationTrace,
@@ -19,6 +20,52 @@ const versioning = await readFile(new URL('../../versioning.md', import.meta.url
 const searchFixtures = JSON.parse(await readFile(new URL('./source-search.json', import.meta.url), 'utf8'));
 const foldBytes = await readFile(new URL('./CaseFolding-17.0.0.txt', import.meta.url));
 const foldTable = caseFoldTable(foldBytes.toString('utf8'));
+const hitDetail = JSON.parse(await readFile(new URL('./source-hit-detail.json', import.meta.url), 'utf8'));
+test('source-hit details resolve exact raw Unicode text with relative offsets and original view identity', () => {
+  assertSourceHitDetail(hitDetail, foldTable);
+  assert.deepEqual(hitDetail.owner.sourceRange, { start: 9, end: 17 });
+  assert.deepEqual(hitDetail.exchanges.map(x => x.response.result.items[0].offset), [0, 4, 6]);
+  assert.equal(hitDetail.exchanges[0].response.result.nextCursor, null);
+  assert.notEqual(hitDetail.exchanges[0].response.result.items[0].nextRef, null);
+  assert.match(docs, /additive resource meaning: a direct fragment field named `source`/u);
+  assert.match(docs, /no empty-field\s+or zero-progress success/u);
+});
+test('source-hit detail rejects foreign or widened claims and wrong owner/query/view/deadline', () => {
+  for (const mutate of [
+    x => { x.exchanges[0].request.params.ref = 'foreign-ref'; },
+    x => { x.claims['hit-source-0'].principalId = 'other'; },
+    x => { x.claims['hit-source-0'].scope.noteId = 'other'; },
+    x => { x.claims['hit-source-0'].query.text = 'different'; },
+    x => { x.claims['hit-source-0'].sourceRange.start = 0; },
+    x => { x.claims['hit-source-0'].viewId = 'other-view'; },
+    x => { x.claims['hit-source-4'].expiresAt = '2026-10-05T17:00:00.000Z'; },
+    x => { x.now = x.owner.expiresAt; },
+    x => { x.exchanges[0].request.params.payloadDigest = x.owner.payloadDigest; },
+  ]) {
+    const bad = structuredClone(hitDetail); mutate(bad);
+    assert.throws(() => assertSourceHitDetail(bad, foldTable));
+  }
+});
+test('source-hit detail rejects folded or surrounding bytes, offset drift, empty and malformed chains', () => {
+  for (const mutate of [
+    x => { x.exchanges[1].response.result.items[0].text = 'sse'; },
+    x => { x.exchanges[0].response.result.items[0].text = 'prefix Stra'; },
+    x => { x.exchanges[1].request.params.offset = 5; },
+    x => { x.exchanges[2].response.result.items[0].offset = 7; },
+    x => { x.exchanges[2].response.result.items[0].text = '\uD83D'; },
+    x => { x.exchanges[2].response.result.items[0].text = ''; },
+    x => { x.exchanges[0].response.result.items[0].field = 'text'; },
+    x => { x.exchanges[0].response.result.items[0].nextRef = null; },
+    x => { x.exchanges[1].response.result.items[0].nextRef = 'hit-source-0'; },
+    x => { delete x.exchanges[2].response.result.items[0].nextRef; },
+    x => { x.exchanges[0].response.result.sourceLength = 8; },
+    x => { x.exchanges[0].response.result.expiresAt = '2026-10-05T17:00:00.000Z'; },
+    x => { x.owner.sourceRange.end = x.owner.sourceRange.start; },
+  ]) {
+    const bad = structuredClone(hitDetail); mutate(bad);
+    assert.throws(() => assertSourceHitDetail(bad, foldTable));
+  }
+});
 test('source search uses pinned Unicode full folding, not host lowercase', () => {
   assert.equal(createHash('sha256').update(foldBytes).digest('hex'), searchFixtures.caseFoldingSha256);
   assert.ok(docs.includes(searchFixtures.caseFoldingSha256));

@@ -1,0 +1,258 @@
+{
+  "status": "prepared-specification-only",
+  "limitation": "Decoded reference claims and whole-string source oracle only, not token/auth/Store proof.",
+  "now": "2026-10-05T15:30:00.000Z",
+  "owner": {
+    "principalId": "principal-a",
+    "scope": {
+      "backendId": "db-a",
+      "workspaceId": "ws-a",
+      "noteId": "spec",
+      "noteInstanceId": "inc-a"
+    },
+    "operationId": "11111111-1111-4111-8111-111111111111",
+    "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "viewId": "view-search-a",
+    "expiresAt": "2026-10-05T16:00:00.000Z",
+    "query": {
+      "text": "STRASSE😀",
+      "caseSensitive": false,
+      "mode": "source"
+    },
+    "source": "prefix 😀Straße😀 suffix",
+    "sourceRange": {
+      "start": 9,
+      "end": 17
+    },
+    "detailRef": "hit-source-0"
+  },
+  "claims": {
+    "hit-source-0": {
+      "principalId": "principal-a",
+      "scope": {
+        "backendId": "db-a",
+        "workspaceId": "ws-a",
+        "noteId": "spec",
+        "noteInstanceId": "inc-a"
+      },
+      "operationId": "11111111-1111-4111-8111-111111111111",
+      "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "viewId": "view-search-a",
+      "expiresAt": "2026-10-05T16:00:00.000Z",
+      "query": {
+        "text": "STRASSE😀",
+        "caseSensitive": false,
+        "mode": "source"
+      },
+      "sourceRange": {
+        "start": 9,
+        "end": 17
+      },
+      "offset": 0
+    },
+    "hit-source-4": {
+      "principalId": "principal-a",
+      "scope": {
+        "backendId": "db-a",
+        "workspaceId": "ws-a",
+        "noteId": "spec",
+        "noteInstanceId": "inc-a"
+      },
+      "operationId": "11111111-1111-4111-8111-111111111111",
+      "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "viewId": "view-search-a",
+      "expiresAt": "2026-10-05T16:00:00.000Z",
+      "query": {
+        "text": "STRASSE😀",
+        "caseSensitive": false,
+        "mode": "source"
+      },
+      "sourceRange": {
+        "start": 9,
+        "end": 17
+      },
+      "offset": 4
+    },
+    "hit-source-6": {
+      "principalId": "principal-a",
+      "scope": {
+        "backendId": "db-a",
+        "workspaceId": "ws-a",
+        "noteId": "spec",
+        "noteInstanceId": "inc-a"
+      },
+      "operationId": "11111111-1111-4111-8111-111111111111",
+      "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "viewId": "view-search-a",
+      "expiresAt": "2026-10-05T16:00:00.000Z",
+      "query": {
+        "text": "STRASSE😀",
+        "caseSensitive": false,
+        "mode": "source"
+      },
+      "sourceRange": {
+        "start": 9,
+        "end": 17
+      },
+      "offset": 6
+    }
+  },
+  "exchanges": [
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "note.operation.read",
+        "params": {
+          "backendId": "db-a",
+          "workspaceId": "ws-a",
+          "noteId": "spec",
+          "noteInstanceId": "inc-a",
+          "operationId": "11111111-1111-4111-8111-111111111111",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "kind": "detail",
+          "ref": "hit-source-0",
+          "maxItems": 1,
+          "maxWireBytes": 4096
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "operationId": "11111111-1111-4111-8111-111111111111",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "viewId": "view-search-a",
+          "expiresAt": "2026-10-05T16:00:00.000Z",
+          "kind": "noteOperationPage",
+          "outputKind": "detail",
+          "sourceLength": 24,
+          "items": [
+            {
+              "kind": "fragment",
+              "id": "fragment-0",
+              "field": "source",
+              "offset": 0,
+              "text": "Stra",
+              "nextRef": "hit-source-4"
+            }
+          ],
+          "nextCursor": null
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "note.operation.read",
+        "params": {
+          "backendId": "db-a",
+          "workspaceId": "ws-a",
+          "noteId": "spec",
+          "noteInstanceId": "inc-a",
+          "operationId": "11111111-1111-4111-8111-111111111111",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "kind": "detail",
+          "ref": "hit-source-4",
+          "maxItems": 1,
+          "maxWireBytes": 4096,
+          "offset": 4
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "operationId": "11111111-1111-4111-8111-111111111111",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "viewId": "view-search-a",
+          "expiresAt": "2026-10-05T16:00:00.000Z",
+          "kind": "noteOperationPage",
+          "outputKind": "detail",
+          "sourceLength": 24,
+          "items": [
+            {
+              "kind": "fragment",
+              "id": "fragment-1",
+              "field": "source",
+              "offset": 4,
+              "text": "ße",
+              "nextRef": "hit-source-6"
+            }
+          ],
+          "nextCursor": null
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "note.operation.read",
+        "params": {
+          "backendId": "db-a",
+          "workspaceId": "ws-a",
+          "noteId": "spec",
+          "noteInstanceId": "inc-a",
+          "operationId": "11111111-1111-4111-8111-111111111111",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "kind": "detail",
+          "ref": "hit-source-6",
+          "maxItems": 1,
+          "maxWireBytes": 4096,
+          "offset": 6
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "operationId": "11111111-1111-4111-8111-111111111111",
+          "headerDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "viewId": "view-search-a",
+          "expiresAt": "2026-10-05T16:00:00.000Z",
+          "kind": "noteOperationPage",
+          "outputKind": "detail",
+          "sourceLength": 24,
+          "items": [
+            {
+              "kind": "fragment",
+              "id": "fragment-2",
+              "field": "source",
+              "offset": 6,
+              "text": "😀",
+              "nextRef": null
+            }
+          ],
+          "nextCursor": null
+        }
+      }
+    }
+  ]
+}

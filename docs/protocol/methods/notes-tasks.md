@@ -1316,6 +1316,38 @@ First-read addressing is explicit (all selectors are included in cursor ownershi
 | inverseText | `ref: inverseRef`, `textId` from one of its replacement references, `offset?` (default zero) | Exact scalar-safe text fragments `{textId,offset,text}` until receiptExpiresAt |
 | detail | `ref` from a search detailRef, inverse provenanceRef, receipt effect detailRef (including sourceEffect), or an already returned detail/children reference | Paged typed detail records or text fragments; inherits the issuing view's expiresAt or receipt's receiptExpiresAt |
 
+For `query.mode: "source"`, the search hit's `detailRef` has an explicitly
+additive resource meaning: a direct fragment field named `source` containing only
+the exact raw matched span from the immutable dirty view. It is not a lexical
+boundary directory or metadata wrapper. Read it using `note.operation.read` with
+`kind: "detail"`, the staged `headerDigest` and `ref`; the request does not add a
+payloadDigest. The existing NoteOperationPage envelope has `outputKind: "detail"`,
+its original headerDigest/payloadDigest/viewId/expiresAt and the full frozen view's
+sourceLength, not the hit length. The original hit retains its absolute sourceRange.
+
+Each response has one existing `{ kind: "fragment", id, field: "source", offset,
+text, nextRef }` item and `nextCursor: null`. Offsets are scalar-safe UTF-16 positions
+relative to that matched span, starting at zero. A nonterminal fragment advances;
+nextRef addresses its next field position and is null exactly at span exhaustion.
+Resolve a nextRef with a new `kind: "detail", ref: nextRef` request, not a collection
+cursor continuation. An optional offset must equal the position bound to that ref
+(zero for the initial hit detailRef); it cannot seek elsewhere. A null nextCursor
+alone does not end the field while nextRef remains nonnull. The item ID is opaque
+and snapshot-local, never a native node or canonical comment identity. Since a
+valid source-search query and match are nonempty, this resource has no empty-field
+or zero-progress success, including at exhaustion; its terminal fragment is nonempty.
+
+Initial and derived refs bind the authenticated owner, operation, captured query,
+header/payload/view identities, original matched span, field position and original
+view expiry. Reject foreign, widened-span, off-position or expired refs; neither
+ref traversal nor a later source revision renews the lifetime. Field text is exact
+raw source, never folded, normalized, stripped or extended with surrounding text.
+These source-only details supply no lexical parsing context, native projection or
+rendered-text search authority. Parsing or edit navigation still requires its
+separately validated actual context. The rendered-text projection requirement is
+not a requirement to construct lexical ancestors merely to return this raw source
+hit field, and this convention does not enable the renderedText adapter.
+
 For inverseText, offset is UTF-16 within that named text value and must be a scalar
 boundary; length, UTF-8 bytes and raw SHA-256 match the inverse replacement reference.
 A text ID not reachable through the given inverseRef is invalid, even if another
