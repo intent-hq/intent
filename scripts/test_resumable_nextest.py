@@ -89,6 +89,8 @@ class PlannedRunHarness:
         (root / "intentd").mkdir(exist_ok=True)
         self.root = root
         self.runs = list(runs)
+        self.listing = None
+        self.selection_index = 0
         self.list_commands = []
         self.run_commands = []
         self.run_environments = []
@@ -99,15 +101,45 @@ class PlannedRunHarness:
             return json.dumps({"target_directory": str(self.root / "target")})
         assert command[:3] == ["cargo", "nextest", "list"], command
         self.list_commands.append(command)
-        return LISTING
+        if self.listing is not None:
+            return self.listing
+        # These transport/policy tests use tiny canned children. Give each one
+        # its actual inventory; coverage tests supply independent explicit lists.
+        rows = self.runs[self.selection_index][0] if self.selection_index < len(self.runs) else None
+        self.selection_index += 1
+        if not isinstance(rows, list):
+            return LISTING
+        suites = {}
+        for line in rows:
+            item = json.loads(line)
+            if item.get("type") == "test":
+                alias, _, name = item["name"].partition("$")
+                name = gate.RETRY_SUFFIX_RE.sub("", name)
+                package, _, binary = alias.partition("::")
+                suite = suites.setdefault(alias, {"package-name": package, "binary-name": binary,
+                                                 "binary-id": alias, "testcases": {}})
+                suite["testcases"][name] = {"ignored": item["event"] == "ignored" or name == "skipped"}
+            elif item.get("type") == "suite" and item.get("ignored"):
+                alias = item['nextest']['crate'] + '::' + item['nextest']['test_binary']
+                suite = suites.setdefault(alias, {"package-name": item['nextest']['crate'],
+                    "binary-name": item['nextest']['test_binary'], "binary-id": alias, "testcases": {}})
+                suite['testcases'].setdefault('skipped', {'ignored': True})
+        for binary, name in gate.load_passed(self.root / 'cache' / KEY / 'passed.jsonl'):
+            if binary == 'alpha::one':
+                suite = suites.setdefault(binary, {'package-name': 'alpha', 'binary-name': 'one',
+                    'binary-id': binary, 'testcases': {}})
+                suite['testcases'].setdefault(name, {})
+        return json.dumps({'rust-suites': suites})
 
     def fake_popen(self, command, **kwargs):
+        self.selection_index = 0
         self.run_commands.append(command)
         self.run_environments.append(kwargs.get("env"))
         lines, status = self.runs.pop(0)
         return FakeProcess(lines, status)
 
     def execute(self, args):
+        self.selection_index = 0
         with mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
             gate, "run", side_effect=self.fake_run
         ), mock.patch.object(
@@ -144,7 +176,7 @@ class AttemptReceiptTests(unittest.TestCase):
                 harness = PlannedRunHarness(root, [
                     ([event("ok", "alpha::one$passes"), event("failed", "alpha::one$fails")], 101),
                     ([event("ok", "alpha::one$fails")], 0),
-                    ([event("ok", "alpha::one$passes")], 0),
+                    ([event("ok", "alpha::one$passes"), event("ok", "alpha::one$fails")], 0),
                 ])
                 original_popen = harness.fake_popen
 
@@ -153,7 +185,13 @@ class AttemptReceiptTests(unittest.TestCase):
                     data = tomllib.loads(config.read_text())
                     profile = command[command.index("--profile") + 1]
                     junit = Path(data["store"]["dir"]) / profile / data["profile"][profile]["junit"]["path"]
-                    junit.write_text(f"<testsuites attempt='{len(harness.run_commands)}'/>")
+                    outcomes = {}
+                    for line in harness.runs[0][0]:
+                        item = json.loads(line)
+                        outcomes[item['name'].partition('$')[2]] = item['event']
+                    cases = ''.join(f'<testcase name="{name}">' + ('<failure/>' if outcome == 'failed' else '') + '</testcase>'
+                                    for name, outcome in outcomes.items())
+                    junit.write_text('<testsuites><testsuite name="alpha::one">' + cases + '</testsuite></testsuites>')
                     return original_popen(command, **kwargs)
 
                 harness.fake_popen = popen
@@ -182,8 +220,7 @@ class AttemptReceiptTests(unittest.TestCase):
                         self.assertIsNotNone(result["finished_at"])
                         self.assertTrue((new / result["junit"]).is_file())
                         self.assertIn('"type": "test"', (new / result["events"]).read_text())
-                        self.assertEqual(json.loads((new / "listing-1.json").read_text()), json.loads(LISTING))
-                        self.assertEqual(len(receipt["selection_membership"][0]), 3)
+                        self.assertEqual(len(receipt["selection_membership"][0]), 2)
                     frozen[new] = self.snapshot(new)
                 self.assertFalse((scope / "run.json").exists(), "no overwriting compatibility alias")
                 self.assertEqual(len(harness.run_commands), 3)
@@ -216,7 +253,7 @@ with mock.patch.object(gate, "callback_fixture_identity", return_value=None), mo
                 self.assertIsNone(receipt["results"][0]["exit_code"])
                 self.assertIn("passes", (attempt / receipt["results"][0]["events"]).read_text())
                 before = self.snapshot(attempt)
-                harness = PlannedRunHarness(root, [([event("ok", "alpha::one$fails")], 0)])
+                harness = PlannedRunHarness(root, [([event("ok", "alpha::one$fails"), event("ignored", "alpha::one$skipped")], 0)])
                 self.assertEqual(harness.execute(make_args(root, plan=plans, resume="1")), 0)
                 self.assertEqual(self.snapshot(attempt), before)
                 self.assertEqual(len(list(scope.glob("attempts/*"))), 2)
@@ -239,7 +276,7 @@ with mock.patch.object(gate, "callback_fixture_identity", return_value=None), mo
     def test_legacy_shortcut_does_not_fabricate_attempt_history(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            harness = PlannedRunHarness(root, [])
+            harness = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
             args = make_args(root, resume="1")
             scope = self.scope(root, args.plan)
             scope.mkdir(parents=True)
@@ -251,7 +288,7 @@ with mock.patch.object(gate, "callback_fixture_identity", return_value=None), mo
             attempts = list(scope.glob("attempts/*"))
             self.assertEqual(len(attempts), 1)
             receipt = json.loads((attempts[0] / "run.json").read_text())
-            self.assertEqual(receipt["kind"], "completed-resume")
+            self.assertEqual(receipt["kind"], "execution")
             self.assertIsNone(receipt["resume_source_attempt"])
             self.assertEqual((legacy.stat().st_ino, legacy.read_bytes()), before)
 
@@ -746,26 +783,14 @@ class ResumableNextestTests(unittest.TestCase):
     def test_complete_marker_fast_path_does_not_invoke_nextest(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            (root / "intentd").mkdir()
-            key = "a" * 64
-            run_dir = root / "cache" / key
-            run_dir.mkdir(parents=True)
-            (run_dir / "passed.jsonl").write_text(
-                '{"binary_id":"binary","test":"test"}\n', encoding="utf-8"
-            )
-            (run_dir / "complete").write_text("complete\n", encoding="utf-8")
-            args = make_args(
-                root, resume="1", label=gate.DEFAULT_LABEL, plan=None, base=None
-            )
-            with mock.patch.object(gate, "isolated_output_args", return_value=[]), mock.patch.object(gate, "tree_key", return_value=key), mock.patch.object(
-                gate, "run", side_effect=AssertionError("nextest must not run")
-            ), contextlib.redirect_stdout(io.StringIO()) as stdout:
-                self.assertEqual(gate.run_nextest(args), 0)
-            self.assertEqual(
-                stdout.getvalue(),
-                "resumed: skipped 1 tests already passed for this tree\n"
-                f"[test-intentd] record: {latest_attempt(run_dir)}\n",
-            )
+            args = make_args(root, resume="1", label=gate.DEFAULT_LABEL, plan=None, base=None)
+            first = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+            self.assertEqual(first.execute(args), 0)
+            second = PlannedRunHarness(root, [])
+            self.assertEqual(second.execute(args), 0)
+            self.assertEqual(second.list_commands, [])
+            self.assertEqual(second.run_commands, [])
+            self.assertIn("resumed: skipped 1 tests already passed", second.stdout.getvalue())
 
     def test_plans_are_split_with_shlex_and_keyed_in_order(self):
         plans = gate.split_plans(["-p alpha --test one --test two", "-p 'beta' -p gamma --tests "])
@@ -883,7 +908,8 @@ class ResumableNextestTests(unittest.TestCase):
                 run_dir.mkdir(parents=True)
                 journal = run_dir / "passed.jsonl"
                 if resume == "1":
-                    journal.write_text(gate.record_line("alpha::one", "passes", "ok"))
+                    seed = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 101)])
+                    self.assertEqual(seed.execute(args), 101)
                 lines = [event("started", "alpha::one$skipped")]
                 if individual:
                     lines.append(event("ignored", "alpha::one$skipped"))
@@ -924,7 +950,6 @@ class ResumableNextestTests(unittest.TestCase):
             lines = [
                 event("ignored", "beta::two$skipped"),
                 event("started", "alpha::one$skipped"),
-                summary,
                 summary,
             ]
             harness = PlannedRunHarness(root, [(lines, 0), ([summary], 0)])
@@ -975,11 +1000,10 @@ class ResumableNextestTests(unittest.TestCase):
             root = Path(temporary)
             run_dir = root / "cache" / KEY
             run_dir.mkdir(parents=True)
-            (run_dir / "passed.jsonl").write_text(
-                '{"binary_id":"alpha::one","test":"passes"}\n'
-                '{"binary_id":"other","test":"elsewhere"}\n',
-                encoding="utf-8",
-            )
+            seed = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 101)])
+            self.assertEqual(seed.execute(make_args(root)), 101)
+            with (run_dir / "passed.jsonl").open('a') as journal:
+                journal.write(gate.record_line('other', 'elsewhere', 'ok'))
             harness = PlannedRunHarness(root, [([event("ok", "alpha::one$fails")], 0)])
             self.assertEqual(harness.execute(make_args(root, resume="1")), 0)
             self.assertEqual(harness.run_commands[0][-2:], ["--no-tests", "pass"])
@@ -1000,34 +1024,18 @@ class ResumableNextestTests(unittest.TestCase):
     def test_planned_complete_marker_short_circuits_unless_forced(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            (root / "intentd").mkdir()
-            run_dir = root / "cache" / KEY
-            record_dir = run_dir / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
-            record_dir.mkdir(parents=True)
-            (run_dir / "passed.jsonl").write_text(
-                '{"binary_id":"alpha::one","test":"passes"}\n', encoding="utf-8"
-            )
-            (record_dir / "complete").write_text("complete\n", encoding="utf-8")
-            (record_dir / "run.json").write_text(
-                json.dumps({"passed": 2, "skipped_resumed": 1}), encoding="utf-8"
-            )
-            with mock.patch.object(gate, "isolated_output_args", return_value=[]), mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
-                gate, "run", side_effect=AssertionError("nextest must not run")
-            ), mock.patch.object(
-                gate.subprocess, "Popen", side_effect=AssertionError("cargo must not run")
-            ), contextlib.redirect_stdout(io.StringIO()) as stdout:
-                self.assertEqual(gate.run_nextest(make_args(root, resume="1")), 0)
-            self.assertEqual(
-                stdout.getvalue(), "resumed: skipped 3 tests already passed for this tree\n"
-                f"[test-changed] record: {latest_attempt(record_dir)}\n"
-            )
-
-            harness = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
-            self.assertEqual(harness.execute(make_args(root, resume="1", force="1")), 0)
-            self.assertEqual(len(harness.run_commands), 1)
-            self.assertNotIn("--no-tests", harness.run_commands[0])
-            self.assertIn("[test-changed] GATE_FORCE=1: running every planned test", harness.output_lines)
-            self.assertEqual(harness.output_lines[-2:][1], f"[test-changed] record: {latest_attempt(record_dir)}")
+            args = make_args(root, resume="1")
+            first = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+            self.assertEqual(first.execute(args), 0)
+            second = PlannedRunHarness(root, [])
+            self.assertEqual(second.execute(args), 0)
+            self.assertEqual(second.list_commands, [])
+            self.assertEqual(second.run_commands, [])
+            forced = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+            self.assertEqual(forced.execute(make_args(root, resume="1", force="1")), 0)
+            self.assertEqual(len(forced.run_commands), 1)
+            self.assertNotIn("--no-tests", forced.run_commands[0])
+            self.assertIn("[test-changed] GATE_FORCE=1: running every planned test", forced.output_lines)
 
     def test_failing_planned_run_records_exit_code_and_stops_at_first_failure(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1282,16 +1290,11 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             self.assertTrue((record_dir / "complete").is_file())
             self.assertEqual(gate.load_passed(root / "cache" / KEY / "passed.jsonl"), set())
 
-            with mock.patch.object(gate, "isolated_output_args", return_value=[]), mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
-                gate, "run", side_effect=AssertionError("nextest must not run")
-            ), mock.patch.object(
-                gate.subprocess, "Popen", side_effect=AssertionError("cargo must not run")
-            ), contextlib.redirect_stdout(io.StringIO()) as stdout:
-                self.assertEqual(gate.run_nextest(make_args(root, resume="1")), 0)
-            self.assertEqual(
-                stdout.getvalue(), "resumed: skipped 0 tests already passed for this tree\n"
-                f"[test-changed] record: {latest_attempt(record_dir)}\n"
-            )
+            second = PlannedRunHarness(root, [])
+            self.assertEqual(second.execute(make_args(root, resume="1")), 0)
+            self.assertEqual(second.list_commands, [])
+            self.assertEqual(second.run_commands, [])
+            self.assertIn("resumed: skipped 0 tests already passed", second.stdout.getvalue())
 
             forced = PlannedRunHarness(root, [([event("ignored", "alpha::one$skipped")], 0)])
             self.assertEqual(forced.execute(make_args(root, resume="1", force="1")), 0)
@@ -1317,7 +1320,7 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             self.assertFalse((record_dir / "complete").exists())
             self.assertEqual(json.loads((latest_attempt(record_dir) / "run.json").read_text())["exit_code"], 101)
 
-            third = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+            third = PlannedRunHarness(root, [([], 0)])
             self.assertEqual(third.execute(make_args(root, resume="1")), 0)
             self.assertEqual(len(third.list_commands), 1)
             self.assertEqual(len(third.run_commands), 1)
@@ -1350,7 +1353,7 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
                 stdout.getvalue().splitlines()[-1], f"[test-changed] record: {latest_attempt(record_dir)}"
             )
 
-            third = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+            third = PlannedRunHarness(root, [([], 0)])
             self.assertEqual(third.execute(make_args(root, resume="1")), 0)
             self.assertEqual(len(third.run_commands), 1)
 
@@ -1383,6 +1386,7 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             harness = PlannedRunHarness(root, [([event("ok", "beta::two$unlisted")], 0)])
+            harness.listing = LISTING
             argv = [
                 "resumable_nextest.py",
                 "--repo-root", str(root),
@@ -1487,9 +1491,9 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
                 {("alpha::one", "passes"), ("other", "elsewhere")},
             )
             lines = (run_dir / "passed.jsonl").read_text().splitlines()
-            self.assertEqual(
-                lines[-1], '{"binary_id": "alpha::one", "test": "fails", "outcome": "failed"}'
-            )
+            row = json.loads(lines[-1])
+            self.assertEqual((row['binary_id'], row['test'], row['outcome']), ('alpha::one', 'fails', 'failed'))
+            self.assertIn('attempt', row)
 
             resumed = PlannedRunHarness(root, [([event("failed", "alpha::one$fails")], 100)])
             self.assertEqual(resumed.execute(make_args(root, resume="1")), 100)
@@ -1600,7 +1604,7 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             all_pass = [event("ok", "alpha::one$passes"), event("ok", "alpha::one$fails")]
             workspace = make_args(root, resume="1", label=gate.DEFAULT_LABEL, plan=None, base=None)
             self.assertEqual(PlannedRunHarness(root, [(all_pass, 0)]).execute(workspace), 0)
-            self.assertEqual(PlannedRunHarness(root, [(all_pass, 0)]).execute(plan_b), 0)
+            self.assertEqual(PlannedRunHarness(root, [([], 0)]).execute(plan_b), 0)
             self.assertTrue((run_dir / "complete").is_file())
             self.assertTrue((record_b / "complete").is_file())
 
@@ -1624,7 +1628,7 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             all_pass = [event("ok", "alpha::one$passes"), event("ok", "alpha::one$fails")]
             workspace = make_args(root, resume="1", label=gate.DEFAULT_LABEL, plan=None, base=None)
             self.assertEqual(PlannedRunHarness(root, [(all_pass, 0)]).execute(workspace), 0)
-            self.assertEqual(PlannedRunHarness(root, [(all_pass, 0)]).execute(plan_b), 0)
+            self.assertEqual(PlannedRunHarness(root, [([], 0)]).execute(plan_b), 0)
             self.assertTrue((run_dir / "complete").is_file())
             self.assertTrue((record_b / "complete").is_file())
 
@@ -1901,6 +1905,9 @@ class CallerPolicyResumeTests(unittest.TestCase):
             with self.subTest(plans=plans), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 harness = PlannedRunHarness(root, [])
+                listing = json.loads(LISTING)
+                listing['rust-suites']['alpha::one']['testcases'] = {'passes': {}}
+                harness.listing = json.dumps(listing)
                 seen_env = []
                 inputs = []
                 dumps = json.dumps
@@ -1980,6 +1987,9 @@ class StackSettingResumeTests(unittest.TestCase):
     @contextlib.contextmanager
     def harness(self, root):
         harness = PlannedRunHarness(root, [])
+        listing = json.loads(LISTING)
+        listing['rust-suites']['alpha::one']['testcases'] = {'passes': {}, 'fails': {}}
+        harness.listing = json.dumps(listing)
         harness.children = root / "children.jsonl"
         harness.inputs = []
         harness.interrupt = False
@@ -2212,6 +2222,255 @@ class TransferFixtureSelectionTests(unittest.TestCase):
             self.assertEqual(len(set(keys)), len(keys))
             self.assertEqual(keys[-1], gate.tree_key(
                 root, root, fixture_identity=callbacks[-1], transfer_identity=identities[-1]))
+
+
+class CoverageReconciliationTests(unittest.TestCase):
+    setUp = AttemptReceiptTests.setUp
+    scope = staticmethod(AttemptReceiptTests.scope)
+    snapshot = staticmethod(AttemptReceiptTests.snapshot)
+    def harness(self, root, runs, tests=None):
+        harness = PlannedRunHarness(root, runs)
+        listing = json.loads(LISTING)
+        listing['rust-suites']['alpha::one']['testcases'] = tests or {
+            'passes': {'ignored': False, 'filter-match': {'status': 'matches'}},
+            'fails': {'ignored': False, 'filter-match': {'status': 'matches'}},
+        }
+        original = harness.fake_run
+        harness.fake_run = lambda command, cwd, env=None: (
+            json.dumps(listing) if command[:3] == ['cargo', 'nextest', 'list']
+            else original(command, cwd, env))
+        return harness
+
+    def report(self, root, plans):
+        return json.loads((latest_attempt(self.scope(root, plans)) / 'coverage.json').read_text())
+
+    def test_incomplete_success_never_completes(self):
+        for plans in ([], ['-p alpha']):
+            with self.subTest(plans=plans), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                harness = self.harness(root, [([event('ok', 'alpha::one$passes')], 0)])
+                self.assertEqual(harness.execute(make_args(root, plan=plans)), 2)
+                report = self.report(root, plans)
+                self.assertFalse(report['complete'])
+                self.assertEqual(report['categories']['unfinished'], [['alpha::one', 'fails']])
+                self.assertFalse((self.scope(root, plans) / 'complete').exists())
+
+    def test_interrupted_passes_have_exact_sources_and_no_double_credit(self):
+        for plans in ([], ['-p alpha', '-p beta']):
+            with self.subTest(plans=plans), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                first = self.harness(root, [([event('ok', 'alpha::one$passes')], 101)])
+                self.assertEqual(first.execute(make_args(root, plan=plans)), 101)
+                source = latest_attempt(self.scope(root, plans))
+                frozen = self.snapshot(source)
+                runs = [([event('ok', 'alpha::one$fails')], 0)] * (len(plans) or 1)
+                second = self.harness(root, runs)
+                self.assertEqual(second.execute(make_args(root, plan=plans, resume='1')), 0)
+                report = self.report(root, plans)
+                self.assertTrue(report['complete'])
+                self.assertEqual(report['categories']['executed-passed'], [['alpha::one', 'fails']])
+                self.assertEqual(report['categories']['resumed-passed'], [['alpha::one', 'passes']])
+                self.assertEqual(len(report['active']), 2)
+                self.assertEqual(len(report['resume_sources']), 1)
+                self.assertEqual(self.snapshot(source), frozen)
+
+    def test_damaged_source_cannot_be_resumed_or_shortcut(self):
+        for damage in ('events', 'fingerprint', 'membership', 'junit', 'marker', 'journal'):
+            with self.subTest(damage=damage), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                plans = ['-p alpha']
+                lines = [event('ok', 'alpha::one$passes'), event('ok', 'alpha::one$fails')]
+                self.assertEqual(self.harness(root, [(lines, 0)]).execute(make_args(root, plan=plans)), 0)
+                scope = self.scope(root, plans)
+                source = latest_attempt(scope)
+                if damage == 'events':
+                    (source / 'events-1.jsonl').unlink()
+                elif damage == 'junit':
+                    (source / 'junit-1.xml').write_text('<testsuites><testsuite name="alpha::one"><testcase name="passes"><failure/></testcase></testsuite></testsuites>')
+                elif damage == 'marker':
+                    (scope / 'complete').write_text('unchecked legacy marker')
+                elif damage == 'journal':
+                    (root / 'cache' / KEY / 'passed.jsonl').write_text('')
+                else:
+                    receipt = json.loads((source / 'run.json').read_text())
+                    receipt['test_stack' if damage == 'fingerprint' else 'selection_membership'] = {}
+                    (source / 'run.json').write_text(json.dumps(receipt))
+                harness = self.harness(root, [([] if damage == "marker" else lines, 0)])
+                self.assertEqual(harness.execute(make_args(root, plan=plans, resume='1')), 0)
+                self.assertEqual(len(harness.run_commands), 1)
+
+    def test_filtered_and_ignored_membership_are_disjoint(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            tests = {'passes': {}, 'skipped': {'ignored': True},
+                     'filtered': {'filter-match': {'status': 'mismatch', 'reason': 'expression'}}}
+            harness = self.harness(root, [([event('ok', 'alpha::one$passes'), suite_event(passed=1, failed=0, ignored=1)], 0)], tests)
+            self.assertEqual(harness.execute(make_args(root)), 0)
+            report = self.report(root, ['-p alpha --test one'])
+            self.assertEqual(report['inactive_filtered'], [['alpha::one', 'filtered']])
+            self.assertEqual(report['categories']['ignored'], [['alpha::one', 'skipped']])
+            self.assertEqual(sum(map(len, report['categories'].values())), len(report['active']))
+
+    def test_duplicate_terminals_and_inactive_execution_fail_closed(self):
+        for lines, tests in (
+            ([event('ok', 'alpha::one$passes')] * 2, {'passes': {}}),
+            ([event('ok', 'alpha::one$passes')], {'passes': {'filter-match': {'status': 'mismatch'}}}),
+            ([event('ok', 'alpha::one$passes'), suite_event(ignored=2)], {'passes': {}, 'skipped': {'ignored': True}}),
+        ):
+            with self.subTest(lines=lines), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                self.assertEqual(self.harness(root, [(lines, 0)], tests).execute(make_args(root)), 2)
+                report = self.report(root, ['-p alpha --test one'])
+                self.assertFalse(report['complete'])
+                self.assertTrue(report['errors'])
+
+    def test_retries_retain_native_events_but_count_one_identity(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            lines = [event('failed', 'alpha::one$passes#1'), event('ok', 'alpha::one$passes#2')]
+            harness = self.harness(root, [(lines, 0)], {'passes': {}})
+            self.assertEqual(harness.execute(make_args(root)), 0)
+            report = self.report(root, ['-p alpha --test one'])
+            self.assertEqual(report['categories']['executed-passed'], [['alpha::one', 'passes']])
+            self.assertEqual([r['outcome'] for r in report['selections'][0]['outcomes'][0]['events']], ['failed', 'ok'])
+            resumed = self.harness(root, [], {'passes': {}})
+            self.assertEqual(resumed.execute(make_args(root, resume='1')), 0)
+            self.assertEqual(resumed.run_commands, [])
+
+    def test_overlap_cannot_hide_an_unfinished_selection(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            plans = ['-p alpha', '-p beta']
+            harness = self.harness(root, [([event('ok', 'alpha::one$passes')], 0), ([], 0)], {'passes': {}})
+            self.assertEqual(harness.execute(make_args(root, plan=plans)), 2)
+            report = self.report(root, plans)
+            self.assertEqual(report['categories']['unfinished'], [['alpha::one', 'passes']])
+            self.assertEqual(report['categories']['executed-passed'], [])
+
+    def test_junit_final_outcomes_and_membership_are_checked(self):
+        for cases, status in (
+            ('<testcase name="passes"/>', 0),
+            ('<testcase name="passes"><flakyFailure/></testcase>', 0),
+            ('<testcase name="passes"><failure/></testcase>', 2),
+            ('<testcase name="passes"/><testcase name="passes"/>', 2),
+            ('<testcase name="unknown"/>', 2),
+            ('', 2),
+        ):
+            with self.subTest(cases=cases), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                harness = self.harness(root, [([event('ok', 'alpha::one$passes')], 0)], {'passes': {}})
+                original = harness.fake_popen
+                def popen(command, **kwargs):
+                    config = Path(command[command.index('--tool-config-file') + 1].split(':', 1)[1])
+                    (config.parent / 'junit-1.xml').write_text('<testsuites><testsuite name="alpha::one">' + cases + '</testsuite></testsuites>')
+                    return original(command, **kwargs)
+                harness.fake_popen = popen
+                self.assertEqual(harness.execute(make_args(root)), status)
+                self.assertEqual(self.report(root, ['-p alpha --test one'])['complete'], status == 0)
+
+    def test_duplicate_listing_membership_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            harness = PlannedRunHarness(root, [])
+            listing = json.loads(LISTING)
+            listing['rust-suites']['duplicate'] = listing['rust-suites']['alpha::one']
+            harness.listing = json.dumps(listing)
+            with self.assertRaises((ValueError, RuntimeError)):
+                harness.execute(make_args(root))
+            self.assertEqual(harness.run_commands, [])
+            self.assertFalse((self.scope(root, ['-p alpha --test one']) / 'complete').exists())
+
+    def test_reference_fields_and_raw_duplicate_json_cannot_grant_credit(self):
+        for damage in ('selection', 'line', 'path', 'id', 'duplicate-key', 'duplicate-result', 'duplicate-membership', 'command', 'config', 'stack-file', 'duplicate-journal', 'native-status'):
+            with self.subTest(damage=damage), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                tests = {'passes': {}}
+                lines = [event('ok', 'alpha::one$passes')]
+                self.assertEqual(self.harness(root, [(lines, 0)], tests).execute(make_args(root)), 0)
+                scope = self.scope(root, ['-p alpha --test one'])
+                source = latest_attempt(scope)
+                journal = root / 'cache' / KEY / 'passed.jsonl'
+                row = json.loads(journal.read_text())
+                receipt = json.loads((source / 'run.json').read_text())
+                if damage == 'selection':
+                    row['selection_index'] = 2
+                elif damage == 'line':
+                    row['event_line'] = 10
+                elif damage == 'path':
+                    row['attempt'] = '../' + row['attempt']
+                elif damage == 'id':
+                    receipt['attempt_id'] = 'b' * 32
+                elif damage == 'duplicate-key':
+                    (source / 'events-1.jsonl').write_text('{"type":"test","event":"failed","event":"ok","name":"alpha::one$passes"}\n')
+                elif damage == 'command':
+                    receipt['results'][0]['command'].append('--ignored')
+                elif damage == 'config':
+                    (source / 'nextest-1.toml').write_text('')
+                elif damage == 'stack-file':
+                    (source / 'test-stack.json').unlink()
+                elif damage == 'native-status':
+                    receipt['results'][0]['native_exit_code'] = False
+                elif damage == 'duplicate-journal':
+                    pass
+                elif damage == 'duplicate-result':
+                    receipt['results'] *= 2
+                else:
+                    receipt['selection_membership'][0] *= 2
+                journal.write_text((json.dumps(row) + '\n') * (2 if damage == 'duplicate-journal' else 1))
+                (source / 'run.json').write_text(json.dumps(receipt))
+                harness = self.harness(root, [(lines, 0)], tests)
+                self.assertEqual(harness.execute(make_args(root, resume='1')), 0)
+                self.assertEqual(len(harness.run_commands), 1)
+                self.assertEqual(self.report(root, ['-p alpha --test one'])['categories']['resumed-passed'], [])
+
+
+    def test_failure_arriving_during_execution_invalidates_initial_resume_credit(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = self.harness(root, [([event('ok', 'alpha::one$passes')], 101)])
+            self.assertEqual(source.execute(make_args(root)), 101)
+            def lines():
+                with (root / 'cache' / KEY / 'passed.jsonl').open('a') as journal:
+                    journal.write(gate.record_line('alpha::one', 'passes', 'failed'))
+                yield event('ok', 'alpha::one$fails')
+            second = self.harness(root, [(lines(), 0)])
+            self.assertEqual(second.execute(make_args(root, resume='1')), 2)
+            self.assertFalse(self.report(root, ['-p alpha --test one'])['complete'])
+            self.assertFalse((self.scope(root, ['-p alpha --test one']) / 'complete').exists())
+
+
+    def test_loss_before_second_event_file_keeps_first_selection_pass(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            plans = ['-p alpha', '-p beta']
+            def interrupted():
+                raise KeyboardInterrupt
+                yield
+            source = self.harness(root, [([event('ok', 'alpha::one$passes')], 0), (interrupted(), 0)])
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(source.execute(make_args(root, plan=plans)), 130)
+            directory = latest_attempt(self.scope(root, plans))
+            receipt = json.loads((directory / 'run.json').read_text())
+            receipt.update(finished_at=None, exit_code=None)
+            receipt['results'][1].update(finished_at=None, exit_code=None, native_exit_code=None)
+            (directory / 'run.json').write_text(json.dumps(receipt))
+            (directory / 'events-2.jsonl').unlink()
+            frozen = self.snapshot(directory)
+            second = self.harness(root, [([event('ok', 'alpha::one$fails')], 0)] * 2)
+            self.assertEqual(second.execute(make_args(root, plan=plans, resume='1')), 0)
+            self.assertEqual(self.report(root, plans)['categories']['resumed-passed'], [['alpha::one', 'passes']])
+            self.assertEqual(self.snapshot(directory), frozen)
+
+
+    def test_suite_summary_cannot_claim_unobserved_or_unlisted_passes(self):
+        for summary in (suite_event(passed=2, failed=0, ignored=0),
+                        suite_event(crate='unknown', passed=1, failed=0, ignored=0),
+                        suite_event(passed=1), event('unknown', 'alpha::one$passes')):
+            with self.subTest(summary=summary), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                harness = self.harness(root, [([event('ok', 'alpha::one$passes'), summary], 0)], {'passes': {}})
+                self.assertEqual(harness.execute(make_args(root)), 2)
+                self.assertFalse(self.report(root, ['-p alpha --test one'])['complete'])
 
 
 if __name__ == "__main__":
