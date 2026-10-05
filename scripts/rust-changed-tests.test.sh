@@ -12,6 +12,7 @@ set -euo pipefail
 # BASE=HEAD or DRY_RUN=1 exported would change every expected argv).
 unset BASE DRY_RUN INTENTD_DIR BUILD_JOBS TEST_THREADS NEXTEST_SHOW_PROGRESS CARGO_TERM_PROGRESS_WHEN
 unset NEXTEST_RUNNER RESUME GATE_FORCE NO_FAIL_FAST GATE_CACHE_DIR NEXTEST_HIDE_PROGRESS_BAR MAKEFLAGS MFLAGS
+unset INTENT_ACP_CALLBACK_ADAPTER_FIXTURE NODE_OPTIONS
 unset COMPACT CARGO_INCREMENTAL CARGO_PROFILE_DEV_DEBUG CARGO_PROFILE_TEST_DEBUG
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -397,6 +398,60 @@ SH
   expect_ok
   [[ "$stdout" == *"resumed: skipped 2 tests"* && "$cargo_log" != *"nextest run"* ]] || fail "$case_name: $stdout $cargo_log"
 
+  # Affected plans fail before any compiling Cargo command; dry-run/no-change
+  # planning must not inspect the fixture at all.
+  g checkout -- crates/alpha/tests/one.rs
+  case_name="no-change plan needs no callback fixture"
+  e2e_make 0 0
+  expect_ok
+  [[ "$stdout" == *"nothing to test"* ]] || fail "$case_name: $stdout"
+  mkdir -p "$repo/crates/intent-acp/src"
+  echo "// callback change" >"$repo/crates/intent-acp/src/lib.rs"
+  case_name="affected selected library rejects missing fixture before compiling"
+  e2e_make 1 0
+  [[ "$status" -ne 0 && "$stderr" == *"INTENT_ACP_CALLBACK_ADAPTER_FIXTURE"* ]] || fail "$case_name: $stdout $stderr"
+  [[ "$cargo_log" != *"nextest list"* && "$cargo_log" != *"nextest run"* && "$cargo_log" != *"metadata"* ]] || fail "$case_name: $cargo_log"
+  case_name="affected selected dry run needs no fixture"
+  e2e_make 0 0 DRY_RUN=1
+  expect_ok
+  [[ "$stdout" == *"-p intent-acp --lib --bins --tests"* && "$cargo_log" != *"nextest list"* ]] || fail "$case_name: $stdout $cargo_log"
+  rm -rf "$repo/crates/intent-acp"
+  echo "changed lockfile" >>"$repo/Cargo.lock"
+  case_name="full fallback rejects missing fixture before compiling"
+  e2e_make 1 0
+  [[ "$status" -ne 0 && "$stderr" == *"INTENT_ACP_CALLBACK_ADAPTER_FIXTURE"* ]] || fail "$case_name: $stdout $stderr"
+  [[ "$stdout" == *"falling back to the full 'make test'"* && "$cargo_log" != *"nextest list"* && "$cargo_log" != *"metadata"* ]] || fail "$case_name: $stdout $cargo_log"
+  case_name="full fallback dry run needs no fixture"
+  e2e_make 0 0 DRY_RUN=1
+  [[ "$status" -eq 0 && "$stdout" == *"DRY_RUN: would fall back"* && "$cargo_log" != *"nextest list"* ]] || fail "$case_name: $stdout $stderr $cargo_log"
+  for goal in test test-intentd gate; do
+    case_name="$goal rejects missing fixture before compiling, including parallel gate"
+    E2E_GOAL="$goal" e2e_make 0 0 -j4 -o check
+    [[ "$status" -ne 0 && "$stderr" == *"INTENT_ACP_CALLBACK_ADAPTER_FIXTURE"* ]] || fail "$case_name: $stdout $stderr"
+    [[ "$cargo_log" != *"nextest list"* && "$cargo_log" != *"metadata"* ]] || fail "$case_name: $cargo_log"
+  done
+
+  # Only the launch plumbing is under test here. Canonical integrity/runtime
+  # checks have real-verifier coverage in test_resumable_nextest.py.
+  cat >"$repo/scripts/prepare-acp-callback-fixture.py" <<'PY_STUB'
+from pathlib import Path
+DEFAULT_DESCRIPTOR = Path(__file__)
+class InvalidFixture(Exception):
+    pass
+def platform_check():
+    pass
+def configuration(path):
+    return {"manifest": {"sha256": "stub"}}, {}
+def validate_fixture(root, descriptor, manifest):
+    assert root.is_dir()
+def environment(work):
+    return {}
+def node_tool(descriptor, work, env):
+    return Path(__file__)
+def digest(path):
+    return "stub"
+PY_STUB
+  export INTENT_ACP_CALLBACK_ADAPTER_FIXTURE="$repo"
   case_name="lockfile full fallback retains compact settings and full selection"
   echo "changed lockfile" >>"$repo/Cargo.lock"
   e2e_make 0 0 COMPACT=1
