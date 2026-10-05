@@ -28,7 +28,7 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 | agent.queueMessage | agentId (req), content (req), messageId? *(prepared submission correlation v1, below)*, imageBlocks?, fileBlocks? *(attachment references only since v10.0; an inline-`data` entry is `-32602` naming the index BEFORE enqueueing — see the file-block contract on `agent.sendMessage`)*, messageMetadata?, workspaceId? | { success, queuedMessage, turnId } — May append to an existing pending human entry; `queuedMessage` and `turnId` then identify the surviving entry, not a new entry. See [Shared pending human queue](#shared-pending-human-queue). **Unknown agent → fail closed.** A nonexistent `agentId` is rejected with `-32602` naming the id (`unknown agent id: <id>`) BEFORE enqueueing — no phantom queue entry that can never drain, no `agent:queue:updated` event (same guard contract as `agent.sendMessage`). QueuedMessage = { id, content, queuedAt, position, turnId?, imageBlocks?, fileBlocks?, messageMetadata?, interruptPriority?, editing?, editingMessageId? } — `fileBlocks` echoes the entry's captured attachment-reference blocks (reference-only since v10.0; the seam rejects inline `data`, so no queue row minted on a 10.0 daemon carries file bytes); `interruptPriority: true` (additive, v2.8) marks an entry that entered the queue via an interrupt-priority fallback (a parked — archived-workspace, quarantine, append-failure — or slot-raced `priority: "interrupt"` send): a newly created entry is inserted at the FRONT of the queue, **behind any existing interrupt-priority entries and ahead of every normal entry** (interrupts stay arrival-ordered among themselves); a same-author append retains its survivor's priority and position instead. The flag is omitted (never `false`) on normal entries. `turnId` ([monorepo#1022](https://github.com/intent-hq/monorepo/issues/1022)) is the entry's turn correlation id: equal to the entry `id` for a fresh enqueue, but a terminal-failure requeue mints a NEW entry `id` while KEEPING the failed turn's original `turnId`, so a retry redrive's lifecycle events still correlate with the turn the client keyed at send time. Omitted only when the entry has no id set (every enqueue path mints one today; legacy pre-#1022 persisted rows rehydrate with `turnId = id`), never `null`. `messageMetadata` is only present when the entry was enqueued with per-message metadata — the caller's own `messageMetadata` param (additive within v9.11; previously dropped, so user-typed entries never carried it), an internal wake's `event_notification` payload, or an agent-to-agent send's `agent_message` sender-attribution tag captured while the agent was busy. **Caller `messageMetadata` (within v9.11).** Same contract as the `agent.sendMessage` param: an opaque JSON object captured on the queued entry (echoed on the result's `queuedMessage` and by `agent.getQueue`), subject to the reserved attribution and daemon-owned aggregate rules below; appends preserve conflicting originals in `mergedMessageMetadata`, with the reserved attribution fields `fromAgentId` / `fromAgentName` stripped at this user-origin front door; `null` / omitted reads as absent (no `messageMetadata` key on the entry); any other non-object value is `-32602` (`messageMetadata must be an object`) before any state change. The drain-time persist writes it onto the user message row (`agent_message.metadata`) so the transcript matches a directly-delivered send — and because the answer intake runs on every user-row persist path, an entry queued with `{ type: "question_answers", answeredQuestionsMessageId }` naming the marked assistant message resolves the pending question set on drain exactly as a direct tagged `agent.sendMessage` does (§5.5 "Pending questions"). **User-origin.** `agent.queueMessage` is the FE's front door for a reply typed while the agent is mid-turn, so its entries are recorded **user-origin**: the drained entry retires a pending attention request exactly like a direct `agent.sendMessage` (the "Attention requests" block, step 1) and qualifies for the archived-workspace drain exemption ([intent-hq/intent#3883](https://github.com/intent-hq/intent/issues/3883)) |
 | agent.editQueuedMessage | agentId (req), messageId (req), content (req), editing?, workspaceId? | { success, queuedMessage } (QueuedMessage shape as above). **Author-only for human entries**, independently of shared queue visibility; a displaced editor alias additionally fails the stale-edit conflict check described below: another principal's entry cannot be edited or restamped, including by an owner. Unknown-human entries cannot establish authorship and are refused to every wire caller. Unauthorized edits have no side effects: a non-host-owner wire caller gets `-32602` (`queued message not found: <id>`), even though the entry is visible; a host owner gets `-32602` (`queued message <id> can only be edited by its author`). Agent/daemon callers and genuinely automatic/agent entries retain their existing rules; imported-human delivery restrictions are separate. An unbound wire request fails the membership gate ahead of this check with `-32003 Forbidden` (§5.48). A nonexistent id keeps its existing error. See [Shared pending human queue](#shared-pending-human-queue) |
 | agent.removeQueuedMessage | agentId (req), messageId (req), workspaceId? | { success: true }. **Human entries: author or owner only**, independently of shared queue visibility. Other participants cannot remove someone else's entry, even when its id and content are visible. Unauthorized removal is `-32602` (`queued message not found: <id>`) with no side effects. Automatic/agent entries keep their existing mutation policy. Removal of a nonexistent id remains an idempotent success. See [Shared pending human queue](#shared-pending-human-queue) |
-| agent.getQueue | agentId (req), workspaceId? | { success, queue: QueuedMessage[] } — QueuedMessage = { id, content, queuedAt, position, turnId?, imageBlocks?, fileBlocks?, messageMetadata?, interruptPriority?, editing?, editingMessageId?, author? } (shape as `agent.queueMessage`, including attachment-reference-only `fileBlocks` and the multiplayer `author` projection, §5.48). **Shared queue:** every caller with access to the workspace receives the full queue, including other participants' messages and the owner's. `position` is the zero-based index in the full queue. `agent.diagnostics` queue entries and the `agent:queue:updated` / `agent:queue:processing` events use the same shared-read policy (§6.5). Reading an entry does not authorize editing, removal or immediate delivery; see [Shared pending human queue](#shared-pending-human-queue). Attribution still distinguishes a resolved principal, an unknown human and an automatic/agent entry; missing identity never grants authorship. [Imported unbound human queues](./workspace.md#human-authorship-in-workspace-transfers) retain their historical author, remain held against automatic delivery, and require affirmative current host-owner authorization for an explicit send. A parked dismissal notice (intentd#892, within v4.3) surfaces here with its `questions_dismissed` `messageMetadata` and `interruptPriority: true` at the queue head — promoted to position 0 ahead of even pre-existing interrupt-priority entries, unlike the normal interrupt insertion order; see `agent.dismissQuestions` |
+| agent.getQueue | agentId (req), workspaceId? | { success, queue: QueuedMessage[] } — QueuedMessage = { id, content, queuedAt, position, turnId?, imageBlocks?, fileBlocks?, deliveryGroups?, messageMetadata?, interruptPriority?, editing?, editingMessageId?, author? } (shape as `agent.queueMessage`, including attachment-reference-only `fileBlocks` and the multiplayer `author` projection, §5.48; additive `deliveryGroups` retains [grouped retry content](#queued-delivery-groups-prepared-additive-extension)). **Shared queue:** every caller with access to the workspace receives the full queue, including other participants' messages and the owner's. `position` is the zero-based index in the full queue. `agent.diagnostics` queue entries and the `agent:queue:updated` / `agent:queue:processing` events use the same shared-read policy (§6.5). Reading an entry does not authorize editing, removal or immediate delivery; see [Shared pending human queue](#shared-pending-human-queue). Attribution still distinguishes a resolved principal, an unknown human and an automatic/agent entry; missing identity never grants authorship. [Imported unbound human queues](./workspace.md#human-authorship-in-workspace-transfers) retain their historical author, remain held against automatic delivery, and require affirmative current host-owner authorization for an explicit send. A parked dismissal notice (intentd#892, within v4.3) surfaces here with its `questions_dismissed` `messageMetadata` and `interruptPriority: true` at the queue head — promoted to position 0 ahead of even pre-existing interrupt-priority entries, unlike the normal interrupt insertion order; see `agent.dismissQuestions` |
 | agent.stop | agentId (req), workspaceId? | { success: true } |
 | agent.setModel | agentId (req), modelId (req), workspaceId (req), providerId? | service result — emits `agent:updated`. `modelId` must be a **bare** model id ([intent-hq/intentd#1647](https://github.com/intent-hq/intentd/pull/1647)): a compound `provider:model` value is rejected at the router boundary with `-32602` (`modelId must be a bare model id without ':' (got "<value>"); pass the provider separately alongside the bare model`) before any mutation — `session.model` / `session.provider` are left untouched; pass `providerId` to name the intended provider. A `modelId` without `providerId` is validated against the session's effective provider (`session.provider` → the settings-derived default `model.defaultProvider`, §5.12; with neither set the call fails with `-32602` (`agent.setModel: no default provider/model is configured …`) instead of validating against a positional default — [intent-hq/monorepo#3044](https://github.com/intent-hq/monorepo/issues/3044), [intent-hq/intentd#1648](https://github.com/intent-hq/intentd/pull/1648)) using the same ownership check as `agent.create` — cached dynamic catalogs only ([intent-hq/intentd#922](https://github.com/intent-hq/intentd/pull/922)), with the same asymmetric-evidence rule: a bare id provably owned by other provider(s) is rejected with `-32602` (`agent.setModel: model <id> does not belong to provider <p> (providers with this model: ...); pass providerId to select the intended provider` — the trailing hint is new with the `providerId` param, [intent-hq/intentd#986](https://github.com/intent-hq/intentd/pull/986)) before any mutation; bare ids with no ownership evidence and the `"default"` sentinel pass unchanged. **Explicit provider (`providerId`, additive — [intent-hq/intentd#986](https://github.com/intent-hq/intentd/pull/986), [intent-hq/monorepo#1657](https://github.com/intent-hq/monorepo/issues/1657)).** `providerId` optionally names the intended provider explicitly, so a client that knows which provider group the user picked (e.g. the FE model picker, whose default-provider options carry bare ids) can state it on the wire instead of relying on session-provider inference (compound-id encoding is retired — see the bare-`modelId` rule above). Optional string: JSON `null`, an empty string, and a whitespace-only value all read as absent (the value is trimmed), keeping older clients that send a blank field on the historical path; a present non-string value is rejected with `-32602` (`agent.setModel: providerId must be a string`) at the router boundary. When present it must name a registered ACP provider — an unknown id is rejected with `-32602` (`agent.setModel: unknown provider: <id> (known providers: ...)`) before any mutation. When `providerId` is present the `modelId` is validated against the GIVEN provider instead of the session's effective one (same cached-catalog asymmetric-evidence ownership check as above), and on success `session.provider` is reconciled to `providerId` — a narrow `set_agent_session_model` write — so the next spawn runs the intended binary. Absent `providerId` ⇒ prior behavior unchanged byte-for-byte. **Cross-provider availability gate (behavior only, within v9.13 — [intent-hq/intentd#1823](https://github.com/intent-hq/intentd/pull/1823), [intent-hq/intent#4455](https://github.com/intent-hq/intent/issues/4455)).** When `providerId` names a provider **different from the session's current one** (a switch that actually MOVES the session), the target is held to the same availability bar as the `agent.create` / `agent.delegate` front door — disabled in settings → not authenticated → not installed, one distinct `-32602` each, prefixed `agent.setModel:` (e.g. `agent.setModel: provider "<id>" (<Name>) is not enabled`) — and rejected BEFORE any mutation, so a client can no longer park a session on a switched-off, logged-out, or uninstalled provider only to have the failure surface a turn later as a raw spawn error with nothing tying it back to the `setModel`; `session.model` / `session.provider` are left untouched. The gate runs AFTER the model-ownership check, so the existing error precedence is unchanged: a `modelId` the target provider does not own is still rejected for THAT reason, available or not. Deliberately NOT applied to a same-provider model change (`providerId` naming the provider the session is already on) nor to the no-`providerId` form — an agent already running on a provider must stay able to change its model even while that provider's availability probe is unhappy (a hard-`false` cached auth verdict, a provider disabled after the agent was created). "Already on" means the session's **effective** provider — the one the next spawn would actually run — not the raw `provider` column: a legacy alias (`acp` / `default` / `augment`) normalizes through the provider config exactly as the spawn path and the model-ownership check do, and a NULL column resolves to the settings-derived default, so an explicit `providerId: "auggie"` against a session stored as `acp` or with no column at all is a same-provider model change and stays ungated. This is the front-door counterpart of the additive `errorCode: "quota-exceeded"` / `providerId` pair on `agent:failed` (§6): a client steering a quota-failed agent onto another provider gets a structured rejection at the switch instead of a second failed turn. **Model-change transcript notice (new in intentd).** `agent.setModel` itself never writes to the transcript — the notice is deferred to the next turn start (`ensure_started`), when the turn's spawn-resolved model/provider is compared against the last **committed** turn's identity (persisted `agent_session.last_turn_model` / `last_turn_provider`, written on `ensure_started`'s success paths once the child + ACP session are up). A difference (and at least one committed prior turn) persists ONE informational row: `role: "system"`, one text block (`"Model changed from <from> to <to>."`), row `metadata = { "type": "model_changed", "from": string \| null, "to": string \| null, "fromProvider": string, "toProvider": string }` (`from`/`to` are spawn-resolved model ids; `null` = provider default), and emits the standard `agent:message` event (`role: "system"`) so clients update live. Picker toggles reverted before any message produce NO notice (nothing was committed in between); the agent's very first turn produces NO notice (no committed prior identity, the baseline just commits); a failed spawn/switch commits nothing (the notice only lands once the turn provably starts under the new identity). The row is transcript-only: system-role rows are excluded from supervisor-XML history replay (which renders only user/assistant/error) and never reach any outbound provider prompt **via history replay** — the one qualification is the `auto_unarchived` notice (§5.1 auto-unarchive transcript-notice block), whose text is additionally injected as a trailing prompt block on its TRIGGERING turn only, through a separate one-shot mechanism; history replay itself still excludes every system row, the `model_changed` notice included. Covers same-provider respawn, cross-provider recreate, and idle-agent (no live handle) respawn paths alike — detection is store-based. Best-effort: a notice persist failure is logged and the turn proceeds. |
 | agent.getModels | workspaceId? | { models: [{ id, name, provider, description? }] } (from auggie CLI; an unavailable CLI yields an **empty** list — no static fallback catalog, [intent-hq/intentd#922](https://github.com/intent-hq/intentd/pull/922)) |
@@ -737,8 +737,9 @@ agent's live work for both direct user retirement and MCP self-retirement:
 
 **Same-author append (additive metadata; docs lead implementation).** `agent.queueMessage` and user-origin `agent.sendMessage`
 queue fallbacks select the latest pending human submission for that agent by
-**arrival order**, independently of drain position or interrupt priority. When its
-resolved authenticated principal matches the new submission, append the new text
+**arrival order**, independently of drain position or interrupt priority. When both
+entries have no image or file attachments and the resolved authenticated principal
+matches the new submission, append the new text
 as `oldContent + "\n\n" + newContent`, retaining the original entry's `id`,
 `turnId`, `queuedAt` and queue position. The separator is exactly two newline
 characters; existing text is not trimmed. A later human entry from another
@@ -755,6 +756,10 @@ survives restart without depending on timestamp ties.
 | A: first, B: reply | A: second | A: first, B: reply, A: second |
 | A: first, system: notice | A: second | A: `first\n\nsecond`, system: notice |
 | A: first normal, then B: reply interrupt (B drains first) | A: second normal | Three entries; B remains a human barrier despite its earlier drain position |
+| A: first with images | A: second with images | Two entries; each text keeps its own images |
+| A: first without attachments | A: second with images | Two entries; images belong to the second entry |
+| A: first with images | A: second without attachments | Two entries; images remain with the first entry |
+| A: first with a file | A: second | Two entries; the file remains with the first entry |
 
 These examples concern pending entries only. Already delivered transcript rows
 are never rewritten by append. The author comparison uses a trusted principal
@@ -796,11 +801,16 @@ appended to by automatic activity alone does not qualify. This signal controls
 archive eligibility only; it does not change delivery position, the original
 queue-wait timestamp, arrival-order barriers or held/imported-entry restrictions.
 
-**Attachments and metadata.** Append `imageBlocks` and `fileBlocks` in submission
-order, keeping each reference/block intact and preserving the original author's
-principal stamp. A different interrupt priority does not move the surviving entry
-or reorder the entries around it. Captured interrupt carry-over remains separate
-from newly appended text so already persisted content is not written again.
+**Attachments and metadata.** A submission with a nonempty `imageBlocks` or
+`fileBlocks` array remains a separate queue entry, even when the latest human
+entry has the same principal. An existing entry with attachments is not an append
+target. The same rule applies to captured interrupt carry-over image/file blocks.
+Empty attachment arrays do not prevent text-only merging. The daemon keeps each
+entry's text and attachments together through queue reads, processing snapshots
+and transcript persistence. Clients show each attachment-bearing entry with its
+own text, thumbnails and existing controls. A different interrupt priority does
+not reorder attachments within an entry. Captured interrupt carry-over remains
+separate from newly appended text so already persisted content is not written again.
 
 Per-message metadata differences do not split otherwise mergeable human input.
 The survivor keeps its top-level `messageMetadata`. On append, the additive
@@ -972,15 +982,19 @@ popped entry or its transcript row. A provisionally popped human entry remains
 an arrival-order barrier until delivery or restoration settles: A1 still pending,
 B2 provisionally popped, then A3 arriving must not combine A3 with A1 across B2.
 If an undelivered provisional pop is returned to the queue, restoration normalizes
-same-author pending contributions atomically using their original arrival order,
+attachment-free same-author pending contributions atomically using their original
+arrival order,
 without bypassing another human or already-persisted history. For A1 popped, A2
-queued, then A1 returned, the result is one entry with A1's surviving identity and
+queued, then A1 returned, when both have no attachments the result is one entry
+with A1's surviving identity and
 `A1\n\nA2` content, not two adjacent entries. The merged queue payload is durable and
 rehydrates as one entry; append does not alter the existing restart rules for
 editing holds or imported-human delivery holds. Absorbed submission IDs are kept
 with the surviving pending entry for retry deduplication: enqueueing the same
 stable ID again returns that entry without appending its content or attachments
-twice, including after queue rehydration. This is a pending-entry guarantee,
+twice, including after queue rehydration. Attachment-bearing entries instead
+retain their separate identities and their own text and attachment arrays after
+restoration. This is a pending-entry guarantee,
 not a global exactly-once delivery promise. Without the prepared submission
 correlation capability below, `agent.queueMessage` has no client-supplied message
 ID, so repeating that RPC is a new submission; identical text alone is never a
@@ -1035,7 +1049,9 @@ evidence.
 | Genuine automatic/agent input with spoofed human fields | Trusted origin stays nonhuman; forged attribution grants no edit/merge rights |
 | A1 normal, B1 interrupt, A2 normal; repeat after restart | B1 remains the human barrier even when priority places it first to drain |
 | A1 pending, B2 provisionally popped, A3 arrives, B2 restored | A3 cannot merge across B2 during the pop window or restoration |
-| Undelivered A1 popped, same-author A2 queued, A1 restored | One survivor with A1 identity and arrival-ordered text/attachments/metadata; no loss or duplicate delivery |
+| Attachment-free undelivered A1 popped, same-author A2 queued, A1 restored | One survivor with A1 identity and arrival-ordered text/metadata; no loss or duplicate delivery |
+| A1 or A2 has images/files, undelivered A1 popped, A2 queued, A1 restored | Separate entries keep their identities and text/attachments before and after restart |
+| Image-bearing A1, image-only A2, file-bearing A3 flushed together | One provider turn contains A1 text/images, then A2 images, then A3 text/files in delivery order |
 | Repeated `editing: true` while more input appends | Repeating the hold does not consume preserved text; later save/cancel keeps every append exactly once |
 | Hold A2, restore undelivered A1 into it, append A3, save/cancel using A2 | One A1 row maps `editingMessageId: A2`; exact local draft survives; A1/A3 contributions remain once; authorization checks A1's real author |
 | Two distinct held rows combine while their editors contain unsaved text | Oldest held identity remains mapped; unmapped local draft is recoverable under its original ID; unsafe save is blocked by client and daemon, even for its author |
@@ -1285,6 +1301,76 @@ landing while the target's turn is starting queues keep-alive instead of preempt
 `agent.sendMessage` row above). The question hold that formerly parked automatic interrupts
 behind a pending Q&A was retired in v9.5 ("Pending questions" below).
 
+#### Queued delivery groups (prepared additive extension)
+
+Optional `QueuedMessage.deliveryGroups` preserves the association between text
+and attachments when ordinary failed-flush recovery creates one combined retry
+entry. It is an ordered, nonempty flat array with this shape:
+
+```typescript
+type QueuedDeliveryGroup = {
+  content: string;
+  imageBlocks?: QueuedMessage["imageBlocks"];
+  fileBlocks?: QueuedMessage["fileBlocks"];
+};
+```
+
+Each group contains one source message's text and its own image/file blocks.
+Image-only and file-only groups may have empty `content`. A source's captured
+interrupt carry-over contributes its own group before that source's new content.
+If a source is already a grouped retry, flatten its original groups in delivery
+order rather than adding its combined wrapper text again. Repeated failure and
+subsequent batching preserve the same original units, without nested groups or
+duplicate per-attempt content.
+
+Two accepted submissions with identical text and attachment lists remain two
+source groups. Carry-over normalization may remove a repeated capture of the
+same original source; matching text or attachment bytes alone does not establish
+that identity. Unknown legacy identity must not hide a distinct submission.
+
+Persist these groups in the existing durable queue payload. Preserve them through
+restart, redrive, processing snapshots and further failure recovery. Grouped
+interrupt carry-over and resume recaps also retain each text/attachment unit;
+they must not recover only the last source message or pool earlier images beside
+unrelated text. Build one provider turn in delivery order, with each group's text
+followed immediately by that group's resolved image/file blocks before starting
+the next group. The combined queue text is not delivered again in addition to
+these groups.
+
+The existing top-level `content`, `imageBlocks` and `fileBlocks` remain available
+for old clients. New clients show ordered text/attachment units inside the one
+retry row when `deliveryGroups` is present, and use the aggregate fields when it
+is absent. Do not infer associations from old aggregate data. Thumbnail lookup,
+reconnect recovery and lightbox selection include group-only images, including
+captured carry-over that is absent from the top-level attachment array.
+
+The combined row retains its original head authority, turn identity and existing
+retry policy. Groups have no independent mutation permissions or action buttons;
+`recoverySources` remains the separate identity/correlation field. The editor
+uses the full combined `content`. A successful edit that replaces that content
+clears the old groups and treats the replacement as one message with its retained
+attachments. An editing hold, cancel or save with unchanged content preserves
+the groups. Caller-supplied groups do not establish delivery or mutation authority.
+
+Expose the same optional field on combined entries in queue reads, mutation
+replies, `agent:queue:updated.data.queue` and consumed
+`agent:queue:processing.data.queuedMessages`. This addition is detected by field
+presence; it does not depend on the submission-correlation capability, add a
+method/event, or require a database migration. Legacy entries without captured
+groups keep their aggregate fallback. The documentation addition lands before
+the daemon field and dependent frontend behavior.
+
+| Fixture | Required observation |
+|---|---|
+| Text/image, image-only and text/file sources fail in one flush | One retry row shows each source with its own attachments; provider blocks keep that order |
+| Retry, restart and fail again | Original groups survive without duplicate wrapper text or lost attachments |
+| A new interrupted submission matches an original retry source's text and attachments | Both accepted sources appear; only a repeated capture of the same source is coalesced |
+| Interrupt or resume recap contains several prior image-bearing messages | Each prior message keeps its own images when carried into the next prompt |
+| Retry has a carry-over image absent from top-level `imageBlocks` | Thumbnail, lightbox and reconnect recovery still find the image |
+| Hold, cancel or save unchanged combined text | Original groups and the parent row's permissions remain |
+| Replace combined text and retry | New text is delivered once with retained attachments; old grouped text is not replayed |
+| Legacy combined retry omits `deliveryGroups` | Aggregate text/attachments still render and deliver without invented grouping |
+
 #### Submission correlation and optimistic display (prepared additive extension)
 
 **Support gate.** `client.hello.server.capabilities.submissionCorrelation: 1`
@@ -1356,11 +1442,13 @@ This scoped pending replay protection does not promise deduplication after deliv
 
 **Combined failure recovery.** Keep the existing ordinary failed-flush policy:
 one combined retry entry, with the head entry's execution/mutation authority,
-combined prompt, attachments and original turn identity. Do not split execution
-or grant another source's author edit/remove/send rights. The new correlation
-field is presentation evidence only, not an ACL or a replacement for the entry's
-existing metadata/origin. Context-size and partial-persist failures retain their
-existing individual-entry restoration behavior.
+combined prompt, attachments and original turn identity. Preserve the original
+text/attachment units in additive `deliveryGroups` as specified in the
+[queued delivery groups contract](#queued-delivery-groups-prepared-additive-extension). Do not
+split execution or grant another source's author edit/remove/send rights.
+`recoverySources` is correlation evidence only, not an ACL or a replacement for
+the entry's existing metadata/origin. Context-size and partial-persist failures
+retain their existing individual-entry restoration behavior.
 
 ```typescript
 type RecoverySource = {
@@ -1392,9 +1480,11 @@ known aliases; duplicates never grow on each failure. If any occurrence has an
 unknown alias set, the result stays uncorrelated (omit its `submissionIds`). Never
 combine different principals/origins, restamp sources to the head, or recover
 identity from text. The aliases are those captured by the source, not the new
-retry entry's ID. No nested recovery list, source content copy or per-attempt
-wrapper history is retained. If legacy data cannot establish provenance, retain
-an uncorrelated legacy source rather than claiming complete matching.
+retry entry's ID. No nested recovery list, source content copy inside
+`recoverySources`, or per-attempt wrapper history is retained. Content and
+attachments are retained separately in `deliveryGroups`. If legacy data cannot
+establish provenance, retain an uncorrelated legacy source rather than claiming
+complete matching.
 
 Persist the normalized leaves with the retry's existing durable queue payload;
 thread them through turn options, restart, redrive, subsequent batching, failure
@@ -1422,7 +1512,8 @@ Every overlay row has `mergeEligible: false`, even when its provisional flag has
 settled but its guard has not yet been dropped. Select candidates ONLY from LIVE
 human entries by internal `submission_order`, skipping genuine nonhuman entries,
 not humans carrying custom/system-looking metadata. Only that live human can be
-true: it must have a trusted current principal, not be imported/unbound, and not
+true: it must have a trusted current principal, not be imported/unbound, contain
+no image/file attachments or attachment-bearing interrupt carry-over, and not
 already be persisted to the transcript. A later provisional human in the draining
 registry blocks it; a settled draining row does not. Combined persisted retries
 are not merge targets. Unknown/incomplete legacy ordering is conservative: mark
@@ -1433,8 +1524,10 @@ append; existing draft/prefix/suffix protection still applies.
 Recompute flags after enqueue/append, pop, restore/coalesce, edit and removal,
 including when a provisional barrier settles without changing visible text.
 A renderer may provisionally append only to a true row whose resolved principal
-matches its submitting principal, using the existing two-newline separator and
-ordered attachment concatenation. Keep every pending contribution separately;
+matches its submitting principal, and only when both the row and the new
+submission have no attachments, using the existing two-newline separator.
+Attachment-bearing pending submissions remain separate display rows before their
+acknowledgements arrive. Keep every pending contribution separately;
 never mutate confirmed content to achieve the visual merge. A newer foreign
 human may split that projection on confirmation. Queue position, original
 `queuedAt`, alias-array order and text equality are never arrival evidence.
@@ -1651,6 +1744,10 @@ containing such an entry, as documented in the method contract above.
   dequeue-wait note (original `queuedAt` + wait duration; only for waits at/above the
   5-second threshold, monorepo#2353) and, where applicable, the #576 stale-redrive note —
   applied per entry in the same order as the single-entry drain arms.
+  Each entry's text block is followed immediately by its own image/file blocks,
+  before the next entry's text block. Attachment-reference images resolve within
+  their entry's group; multiple images retain their original order. The prompt
+  does not place all entry text before one pooled list of attachments.
   The combined prompt exists **only on the wire**: it is never persisted as a transcript row.
 - **Per-entry transcript rows.** Each flushed entry persists as its own user message row (own
   id, own `messageMetadata` — including the `queueInfo` stamp: the shared `batchId` on every
