@@ -1804,6 +1804,8 @@ class CallerPolicyResumeTests(unittest.TestCase):
                     legacy = inputs[-1].copy()
                     legacy.pop("test-policy")
                     legacy.pop("callback-fixture")
+                    legacy.pop("test-stack")
+                    legacy.pop("transfer-fixture")
                     legacy["schema"] = 2
                     key = gate.hashlib.sha256(dumps(legacy, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
                     shutil.rmtree(args.cache_dir)
@@ -1820,6 +1822,204 @@ class CallerPolicyResumeTests(unittest.TestCase):
                     self.assertEqual(seen_env[before:], ["1"], "legacy evidence skipped armed verification")
                     self.assertEqual(gate.run_nextest(args), 0)
                     self.assertEqual(len(seen_env), before + 1)
+
+
+class StackSettingResumeTests(unittest.TestCase):
+    """Exercise real controlled children with stable source/build inputs."""
+
+    @contextlib.contextmanager
+    def harness(self, root):
+        harness = PlannedRunHarness(root, [])
+        harness.children = root / "children.jsonl"
+        harness.inputs = []
+        harness.interrupt = False
+        harness.transfer = {"root": str(root / "transfer"), "contract.json": "verified"}
+        dumps = json.dumps
+        real_popen = subprocess.Popen
+
+        def capture_inputs(value, **kwargs):
+            if isinstance(value, dict) and "root-tree" in value:
+                harness.inputs.append(value.copy())
+            return dumps(value, **kwargs)
+
+        def run(command, cwd, env=None):
+            if command in (["rustc", "-vV"], ["cargo", "-V"], ["cargo", "nextest", "--version"]):
+                return "version"
+            return harness.fake_run(command, cwd, env)
+
+        def popen(command, **kwargs):
+            harness.run_commands.append(command)
+            if gate.TRANSFER_FIXTURE_ENV in kwargs["env"]:
+                self.assertEqual(kwargs["env"][gate.TRANSFER_FIXTURE_ENV], harness.transfer["root"])
+            config = command[command.index("--tool-config-file") + 1].split(":", 1)[1]
+            # The child observes the actual launch environment and honors the
+            # generated resume filter. No Rust build or user cache is involved.
+            code = r'''
+import json, os, pathlib, sys, tomllib
+config, receipt, interrupted = sys.argv[1:]
+profile = next(iter(tomllib.loads(pathlib.Path(config).read_text())["profile"].values()))
+expression = profile.get("default-filter", "")
+tests = [name for name in ("passes", "fails") if "test(/^" + name + "$/)" not in expression]
+if interrupted == "1":
+    tests = tests[:1]
+with open(receipt, "a") as output:
+    output.write(json.dumps({"present": "RUST_MIN_STACK" in os.environ,
+                             "value": os.environ.get("RUST_MIN_STACK"),
+                             "executed": tests}) + "\n")
+for name in tests:
+    print(json.dumps({"type": "test", "event": "ok", "name": "alpha::one$" + name}))
+sys.exit(101 if interrupted == "1" else 0)
+'''
+            process = real_popen(
+                [sys.executable, "-S", "-c", code, config, str(harness.children),
+                 "1" if harness.interrupt else "0"], **kwargs
+            )
+            self.addCleanup(process.stdout.close)
+            return process
+
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(
+            gate, "callback_fixture_identity",
+            return_value={"root": str(root / "fixture"), "manifest": "verified"}
+        ), mock.patch.object(
+            gate, "transfer_fixture_identity", side_effect=lambda _: harness.transfer.copy()
+        ), mock.patch.object(
+            gate, "worktree_tree", return_value="tree"
+        ), mock.patch.object(gate, "submodule_heads", return_value=[]), mock.patch.object(
+            gate, "required_hash", return_value="hash"
+        ), mock.patch.object(gate, "build_settings", return_value={}), mock.patch.object(
+            gate, "run", side_effect=run
+        ), mock.patch.object(gate.subprocess, "Popen", side_effect=popen), mock.patch.object(
+            gate.json, "dumps", side_effect=capture_inputs
+        ):
+            yield harness
+
+    def execute(self, harness, args, value):
+        if value is None:
+            os.environ.pop("RUST_MIN_STACK", None)
+        else:
+            os.environ["RUST_MIN_STACK"] = value
+        before = self.receipts(harness)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            status = gate.run_nextest(args)
+        return status, self.receipts(harness)[len(before):], output.getvalue()
+
+    @staticmethod
+    def receipts(harness):
+        if not harness.children.exists():
+            return []
+        return [json.loads(line) for line in harness.children.read_text().splitlines()]
+
+    def assert_execution(self, result, value, tests=("passes", "fails"), resumed=0, status=0):
+        actual_status, children, output = result
+        self.assertEqual(actual_status, status)
+        self.assertEqual(children, [{"present": value is not None, "value": value, "executed": list(tests)}], output)
+        self.assertIn(f"summary: {len(tests)} passed, 0 failed, 0 skipped/ignored, {resumed} resumed", output)
+
+    def assert_reused(self, result, count=2):
+        status, children, output = result
+        self.assertEqual(status, 0)
+        self.assertEqual(children, [], output)
+        self.assertIn(f"resumed: skipped {count} tests already passed", output)
+
+    def test_changed_stack_executes_in_both_directions_and_same_stack_reuses(self):
+        for plans, values in product(
+            ([], ["-p alpha --test one"]),
+            (("8388608", None, ""), (None, "8388608", ""), ("", None, "8388608")),
+        ):
+            with self.subTest(plans=plans, values=values), tempfile.TemporaryDirectory() as directory:
+                with self.harness(Path(directory)) as harness:
+                    args = make_args(harness.root, plan=plans, resume="1")
+                    for value in values:
+                        self.assert_execution(self.execute(harness, args, value), value)
+                        self.assert_reused(self.execute(harness, args, value))
+                    self.assertEqual(len(list(args.cache_dir.glob("*/passed.jsonl"))), 3)
+                    for value in values:
+                        self.assert_reused(self.execute(harness, args, value))
+
+    def test_partial_evidence_only_resumes_for_the_same_child_stack(self):
+        for plans, first, second in product(
+            ([], ["-p alpha --test one"]), (None, "", "8388608"), (None, "", "8388608"),
+        ):
+            with self.subTest(plans=plans, first=first, second=second), tempfile.TemporaryDirectory() as directory:
+                with self.harness(Path(directory)) as harness:
+                    args = make_args(harness.root, plan=plans, resume="1")
+                    harness.interrupt = True
+                    self.assert_execution(self.execute(harness, args, first), first, ("passes",), status=101)
+                    harness.interrupt = False
+                    if first == second:
+                        self.assert_execution(self.execute(harness, args, second), second, ("fails",), resumed=1)
+                    else:
+                        self.assert_execution(self.execute(harness, args, second), second)
+                    self.assert_reused(self.execute(harness, args, second))
+
+    def test_stack_identity_uses_child_environment_and_records_versioned_evidence(self):
+        for plans, value in product(([], ["-p alpha --test one"]), (None, "", "8388608")):
+            with self.subTest(plans=plans, value=value), tempfile.TemporaryDirectory() as directory:
+                with self.harness(Path(directory)) as harness:
+                    args = make_args(harness.root, plan=plans, resume="1")
+                    # Deliberately disagree with the ambient environment. The
+                    # identity must describe nextest_env(), which Popen receives.
+                    child_env = {"PATH": os.defpath}
+                    if value is not None:
+                        child_env["RUST_MIN_STACK"] = value
+                    with mock.patch.object(gate, "nextest_env", return_value=child_env):
+                        self.assert_execution(self.execute(harness, args, "ambient"), value)
+                        self.assert_reused(self.execute(harness, args, "other ambient"))
+                    evidence = {"version": 1, "RUST_MIN_STACK": value}
+                    self.assertEqual(harness.inputs[-1]["test-stack"], evidence)
+                    record = next(args.cache_dir.glob("*/passed.jsonl")).parent
+                    self.assertEqual(json.loads((record / "test-stack.json").read_text()), evidence)
+
+    def test_transfer_and_stack_changes_independently_reject_resume_credit(self):
+        for plans, partial in product(([], ["-p intent-services --lib"]), (False, True)):
+            with self.subTest(plans=plans, partial=partial), tempfile.TemporaryDirectory() as directory:
+                with self.harness(Path(directory)) as harness:
+                    args = make_args(harness.root, plan=plans, resume="1")
+                    for stack, fixture in product((None, "", "8388608"), ("one", "two")):
+                        harness.transfer["contract.json"] = fixture
+                        harness.interrupt = partial
+                        self.assert_execution(
+                            self.execute(harness, args, stack), stack,
+                            ("passes",) if partial else ("passes", "fails"), status=101 if partial else 0,
+                        )
+                        self.assertEqual(harness.inputs[-1]["transfer-fixture"], harness.transfer)
+                        harness.interrupt = False
+                        if partial:
+                            self.assert_execution(self.execute(harness, args, stack), stack, ("fails",), resumed=1)
+                        self.assert_reused(self.execute(harness, args, stack))
+                    self.assertEqual(len(list(args.cache_dir.glob("*/passed.jsonl"))), 6)
+
+    def test_schema_three_passes_and_complete_markers_cannot_resume(self):
+        # Schema 3 existed both before and after transfer fixture identity landed.
+        for plans, transfer in product(([], ["-p alpha --test one"]), (False, True)):
+            with self.subTest(plans=plans, transfer=transfer), tempfile.TemporaryDirectory() as directory:
+                with self.harness(Path(directory)) as harness:
+                    args = make_args(harness.root, plan=plans, resume="1")
+                    self.assert_execution(self.execute(harness, args, None), None)
+                    legacy = harness.inputs[-1].copy()
+                    legacy.pop("test-stack", None)
+                    if not transfer:
+                        legacy.pop("transfer-fixture")
+                    legacy["schema"] = 3
+                    key = gate.hashlib.sha256(json.dumps(legacy, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+                    # A separate temporary store leaves the fresh and legacy
+                    # evidence intact, including both complete marker types.
+                    args.cache_dir = harness.root / "legacy-cache"
+                    record = args.cache_dir / key
+                    record.mkdir(parents=True)
+                    passed = "".join(gate.record_line("alpha::one", name, "ok") for name in ("passes", "fails"))
+                    (record / "passed.jsonl").write_text(passed)
+                    (record / "complete").touch()
+                    planned = record / "changed" / gate.plan_key(gate.split_plans(plans))
+                    planned.mkdir(parents=True)
+                    (planned / "complete").touch()
+                    (planned / "run.json").write_text(json.dumps({"passed": 2, "skipped_resumed": 0}))
+                    self.assert_execution(self.execute(harness, args, None), None)
+                    self.assert_reused(self.execute(harness, args, None))
+                    self.assertEqual((record / "passed.jsonl").read_text(), passed)
+                    self.assertTrue((record / "complete").exists())
+                    self.assertTrue((planned / "complete").exists())
 
 
 class TransferFixtureSelectionTests(unittest.TestCase):
