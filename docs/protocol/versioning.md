@@ -14,7 +14,10 @@ Other prepared extensions retain their independent support gates.
 **Version 13.6 — onboarding adapter preparation (additive, prepared).**
 [`host.prepareProviderAdapters`](./05-method-catalog.md#hostprepareprovideradapters-136-prepared)
 adds one owner-only fast-path method accepting provider IDs and immediately
-acknowledging best-effort preparation of registry-pinned npm adapters. It adds no
+acknowledging best-effort preparation of registry-pinned npm adapters on Unix.
+Windows and other non-Unix hosts silently skip background preparation; their
+ordinary on-demand download/launch remains unchanged. `accepted: true` does not
+establish platform support or readiness. It adds no
 events, settings, arbitrary execution inputs or readiness guarantee. Clients may
 attempt this optional optimization directly and tolerate `-32601` from older
 daemons; no new capability flag is required. Existing prepared extensions retain

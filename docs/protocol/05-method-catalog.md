@@ -649,14 +649,20 @@ does not establish a shipped release or change `host.providerDiscovery`.
   through a focused workspace, remote node, or implicit default host.
 - `accepted: true` means the daemon accepted the bounded request for best-effort
   consideration, including deduplicated/no-op requests. It does **not** mean any
-  adapter is installed, ready, authenticated or even eligible. Return before
+  adapter is installed, ready, authenticated or even eligible, nor that background
+  preparation is supported on this host's platform. Return before
   eligibility probes or package downloads finish. There is no job ID, progress
   subscription, completion event or status polling contract.
 
 **Eligibility and effects (daemon-owned):**
 
+Background preparation is currently supported on **Unix hosts only**. On Windows
+and other non-Unix hosts, an authorized, valid request returns `accepted: true`
+as a silent no-op; no preparation subprocess is started. Ordinary on-demand
+adapter download and agent launch on those hosts are unchanged.
+
 1. Re-evaluate on the daemon using its provider registry, current settings and
-   discovery/launch gates; client detection is only a hint. This contract supports
+   discovery/launch gates; client detection is only a hint. On Unix this supports
    `claude-code`, `codex` and `pi` when their real provider CLI is detected, the
    provider is not gated off, and the effective launch route uses its pinned npm
    adapter. For Pi, retain the launch gate: missing/confirmed-too-old CLI is
