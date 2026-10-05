@@ -1102,10 +1102,18 @@ Only these named streams are accepted; records are tagged and validated as follo
   fence is invalid. Replacement is a text reference. This builds the frozen dirty
   view from base without saving, converting tasks or repairing source markers.
 - `selection`: `{ kind: "range", ordinal, start, end, anchorAffinity, headAffinity,
-  direction }`, ordered disjoint ranges in the **frozen dirty view**. Direction is
+  direction }`, ranges in the **frozen dirty view**. Direction is
   `"forward" | "backward"`; affinities are `"before" | "after"`. Point selections
-  are valid for insertion. Equal starts/overlaps are rejected; large table selections
-  page here without replacing disjoint cells with their hull.
+  are valid for insertion. Only when `header.output === "search"` and
+  `header.query.mode === "source"`, selection records may arrive in arbitrary
+  source-range order with duplicate/equal-start/overlapping ranges across chunks;
+  their normalized union defines the search domain described above. This exception
+  does not relax consecutive record ordinals, chunk sequence/hash identity, bounds,
+  scalar endpoints, affinities or direction. Preserve the exact uploaded records
+  and digests; union normalization is derived state, never a rewrite of that stream.
+  Other selection modes retain ordered disjoint ranges and reject equal starts or
+  overlaps. Dirty and mutation streams retain their existing splice constraints.
+  Large table selections page here without replacing disjoint cells with their hull.
 - `mutation`: `{ kind: "splice", ordinal, start, end, replacement }`, ordered,
   nonoverlapping base ranges against the **frozen dirty view**, using inline splice
   boundary rules but without an all-operation item limit. This describes an optional

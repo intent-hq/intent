@@ -82,6 +82,23 @@ test('controlled search trace retains expansion offsets and exact selected-domai
   assertSourceSearchTrace('zzzz', 'a', foldTable, [[1, 3]], terminalEmpty(3), 1);
   assertSourceSearchTrace('zzzz', 'a', foldTable, [], terminalEmpty(0), 1);
 });
+test('source-search selection union does not inherit or weaken splice ordering', () => {
+  const chunks = [
+    [{ ordinal: 0, start: 3, end: 6 }, { ordinal: 1, start: 1, end: 4 }],
+    [{ ordinal: 2, start: 1, end: 4 }, { ordinal: 3, start: 4, end: 6 }],
+  ];
+  const before = canonicalJson(chunks);
+  const records = chunks.flat();
+  assert.deepEqual(records.map(r => r.ordinal), [0, 1, 2, 3]);
+  assert.deepEqual(sourceSearch('banana', 'ana', foldTable,
+    records.map(r => [r.start, r.end])), [[1, 4], [3, 6]]);
+  assert.equal(canonicalJson(chunks), before);
+  assert.equal(spliceError('banana', [{ start: 1, end: 4, text: '' },
+    { start: 1, end: 4, text: '' }], f.limits), 'invalid-params');
+  assert.match(docs, /Only when `header.output === "search"` and\s+`header.query.mode === "source"`/u);
+  assert.match(docs, /Other selection modes retain ordered disjoint ranges and reject equal starts or\s+overlaps/u);
+  assert.match(docs, /union normalization is derived state, never a rewrite of that stream/u);
+});
 const frame = (text, start, end, length) => ({ jsonrpc: '2.0', id: 1, result: {
   kind: 'noteSourcePage', scope: f.scope, sourceRevision: 'r:7', snapshotId: 'snapshot-a',
   expiresAt: '2026-10-03T00:05:00.000Z', sourceLength: length, range: { start, end }, text,
