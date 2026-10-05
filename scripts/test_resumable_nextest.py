@@ -297,6 +297,195 @@ def latest_attempt(scope):
     return max((scope / "attempts").iterdir(), key=lambda path: path.stat().st_mtime_ns)
 
 
+class RealChildReceiptTests(unittest.TestCase):
+    """Exercise pipes, signals and reap status without requiring cargo/nextest.
+
+    The child replays the verifier's actual cancellation stream/JUnit. Resume
+    honors the generated filter and writes JUnit using nextest's store/profile
+    routing, so mocks cannot accidentally supply the expected destination.
+    """
+
+    scope = staticmethod(AttemptReceiptTests.scope)
+    snapshot = staticmethod(AttemptReceiptTests.snapshot)
+
+    CHILD = r"""
+import json, signal, sys, time, tomllib
+from pathlib import Path
+payload = json.loads(sys.argv[1])
+command = payload['command']
+config = Path(command[command.index('--tool-config-file') + 1].split(':', 1)[1])
+profile = command[command.index('--profile') + 1]
+data = tomllib.loads(config.read_text())
+settings = data['profile'][profile]
+junit = Path(data['store']['dir']) / profile / settings['junit']['path']
+def cancel(signum, frame):
+    junit.write_text(payload['fixture']['junit'])
+    sys.exit(100)
+signal.signal(signal.SIGTERM, cancel)
+if payload['mode'] != 'resume':
+    print(payload['fixture']['events'], end='', flush=True)
+    while True:
+        time.sleep(.05)
+assert settings['default-filter'] == r'not ((binary_id(/^coverage\-probe$/) and (test(/^a_pass$/))))', settings
+name = 'coverage-probe::coverage_probe$b_wait'
+print(json.dumps({'type': 'test', 'event': 'started', 'name': name}), flush=True)
+print(json.dumps({'type': 'test', 'event': 'ok', 'name': name}), flush=True)
+junit.write_text('<testsuites><testsuite name="coverage-probe">'
+                 '<testcase name="b_wait"/></testsuite></testsuites>')
+"""
+
+    def spawn(self, root, plans, mode):
+        code = f"""
+import json, sys
+from pathlib import Path
+from unittest import mock
+from scripts.test_resumable_nextest import (
+    gate, PlannedRunHarness, RealChildReceiptTests, CAPTURED_NEXTEST, make_args, KEY,
+)
+root = Path({str(root)!r})
+mode = {mode!r}
+fixture = CAPTURED_NEXTEST['interrupted']
+harness = PlannedRunHarness(root, [])
+harness.listing = fixture['listing']
+popen = gate.subprocess.Popen
+parse = gate.test_outcome
+def child(command, **kwargs):
+    payload = dict(command=command, fixture=fixture, mode=mode)
+    return popen([sys.executable, '-S', '-B', '-c', RealChildReceiptTests.CHILD,
+                  json.dumps(payload)], **kwargs)
+def parse_line(line):
+    if mode == 'parse-error' and 'b_wait' in line:
+        raise RuntimeError('controlled parser failure after durable pass')
+    return parse(line)
+with mock.patch.object(gate, 'tree_key', return_value=KEY), \\
+     mock.patch.object(gate, 'callback_fixture_identity', return_value=None), \\
+     mock.patch.object(gate, 'transfer_fixture_identity', return_value=None), \\
+     mock.patch.object(gate, 'run', side_effect=harness.fake_run), \\
+     mock.patch.object(gate.subprocess, 'Popen', side_effect=child), \\
+     mock.patch.object(gate, 'test_outcome', side_effect=parse_line):
+    try:
+        status = gate.run_nextest(make_args(root, plan={plans!r}, resume='1'))
+    except RuntimeError as error:
+        status = gate.failure_exit_code(error)
+    raise SystemExit(status)
+"""
+        return subprocess.Popen([sys.executable, '-S', '-B', '-c', code],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, start_new_session=True)
+
+    def finish(self, child):
+        try:
+            return child.communicate(timeout=15)
+        finally:
+            # Also clean up the real grandchild if an assertion/timeout fires.
+            try:
+                os.killpg(child.pid, gate.signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            child.wait(timeout=5)
+            child.stdout.close()
+            child.stderr.close()
+
+    def wait_for_pass(self, root, child):
+        deadline = time.monotonic() + 10
+        journal = root / 'cache' / KEY / 'passed.jsonl'
+        while time.monotonic() < deadline:
+            if journal.exists():
+                rows = [json.loads(line) for line in journal.read_text().splitlines()]
+                if rows:
+                    self.assertEqual([(r['test'], r.get('outcome', 'ok')) for r in rows], [('a_pass', 'ok')])
+                    row = rows[0]
+                    source = journal.parent / row['attempt']
+                    events = source / f"events-{row['selection_index']}.jsonl"
+                    if 'b_wait' in events.read_text():
+                        return
+            self.assertIsNone(child.poll(), 'runner exited before durable pass and waiting test')
+            time.sleep(.01)
+        self.fail('runner did not journal the known pass before the deadline')
+
+    def test_interrupt_resume_and_shortcut_preserve_real_child_receipts(self):
+        for plans, mode in product(([], ['-p coverage-probe --lib']), ('term', 'kill', 'parse-error')):
+            with self.subTest(plans=plans, mode=mode), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                scope = self.scope(root, plans)
+                child = self.spawn(root, plans, mode)
+                try:
+                    if mode != 'parse-error':
+                        self.wait_for_pass(root, child)
+                        if mode == 'kill':
+                            os.killpg(child.pid, gate.signal.SIGKILL)
+                        else:
+                            child.send_signal(gate.signal.SIGTERM)
+                except BaseException:
+                    os.killpg(child.pid, gate.signal.SIGKILL)
+                    self.finish(child)
+                    raise
+                stdout, stderr = self.finish(child)
+                expected = {'term': 143, 'kill': -gate.signal.SIGKILL, 'parse-error': 2}[mode]
+                self.assertEqual(child.returncode, expected, stderr)
+                source = latest_attempt(scope)
+                receipt = json.loads((source / 'run.json').read_text())
+                result = receipt['results'][0]
+                junit = source / result['junit']
+                self.assertEqual(junit.name, 'junit-1.xml' if plans else 'junit.xml')
+                self.assertIsNone(result['exit_code'])
+                self.assertFalse((scope / 'complete').exists())
+                if mode == 'kill':
+                    self.assertIsNone(receipt['exit_code'])
+                    self.assertIsNone(receipt['finished_at'])
+                    self.assertIsNone(result['native_exit_code'])
+                    self.assertIsNone(result['finished_at'])
+                    self.assertFalse(junit.exists())
+                    self.assertFalse((source / 'coverage.json').exists())
+                else:
+                    self.assertEqual(receipt['exit_code'], expected)
+                    self.assertEqual(result['native_exit_code'], 100)
+                    self.assertIsNotNone(receipt['finished_at'])
+                    self.assertIsNotNone(result['finished_at'])
+                    self.assertEqual(junit.read_text(), CAPTURED_NEXTEST['interrupted']['junit'])
+                    proof = json.loads((source / 'coverage.json').read_text())
+                    self.assertFalse(proof['complete'])
+                    self.assertEqual(proof['categories']['executed-passed'], [['coverage-probe', 'a_pass']])
+                    self.assertEqual(proof['categories']['failed'], [['coverage-probe', 'b_wait']])
+                    self.assertEqual(proof['selections'][0]['junit'], 'validated-partial')
+                    self.assertTrue(stdout.rstrip().endswith(f'record: {source}'))
+                frozen = {source: self.snapshot(source)}
+                for shortcut in (False, True):
+                    resumed = self.spawn(root, plans, 'resume')
+                    stdout, stderr = self.finish(resumed)
+                    self.assertEqual(resumed.returncode, 0, stderr)
+                    current = latest_attempt(scope)
+                    self.assertNotIn(current, frozen)
+                    for directory, snapshot in frozen.items():
+                        self.assertEqual(self.snapshot(directory), snapshot)
+                    receipt = json.loads((current / 'run.json').read_text())
+                    proof = json.loads((current / 'coverage.json').read_text())
+                    self.assertTrue(proof['complete'], proof['errors'])
+                    self.assertEqual(proof['categories']['failed'], [])
+                    self.assertEqual(proof['categories']['unfinished'], [])
+                    self.assertTrue(stdout.rstrip().endswith(f'record: {current}'))
+                    if shortcut:
+                        self.assertEqual(receipt['kind'], 'completed-resume')
+                        self.assertEqual(receipt['results'], [])
+                        self.assertEqual(proof['categories']['executed-passed'], [])
+                        self.assertEqual(proof['categories']['resumed-passed'],
+                                         [['coverage-probe', 'a_pass'], ['coverage-probe', 'b_wait']])
+                    else:
+                        self.assertEqual(proof['categories']['resumed-passed'], [['coverage-probe', 'a_pass']])
+                        self.assertEqual(proof['categories']['executed-passed'], [['coverage-probe', 'b_wait']])
+                        self.assertEqual(proof['resume_sources'][0]['attempt'],
+                                         str(source.relative_to(root / 'cache' / KEY)))
+                        result = receipt['results'][0]
+                        self.assertEqual(result['native_exit_code'], 0)
+                        self.assertEqual(result['exit_code'], 0)
+                        self.assertNotIn('$a_pass', (current / result['events']).read_text())
+                        xml = gate.ET.parse(current / result['junit']).getroot()
+                        self.assertEqual([case.attrib['name'] for case in xml.iter('testcase')], ['b_wait'])
+                        self.assertEqual(proof['selections'][0]['junit'], 'validated')
+                    frozen[current] = self.snapshot(current)
+                self.assertEqual(len(list(scope.glob('attempts/*'))), 3)
+
+
 class CallbackPreflightTests(unittest.TestCase):
     def test_missing_fixture_fails_before_cargo_or_resume_credit(self):
         for plans in (None, ["-p intent-acp"], ["-p intent-services --lib --bins --tests"],
