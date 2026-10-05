@@ -31,6 +31,9 @@ class RustTestPolicyTests(unittest.TestCase):
         self.bin.mkdir()
         self.log = Path(temporary.name) / "commands.jsonl"
         self.cache = Path(temporary.name) / "gate records"
+        self.fixture = Path(temporary.name) / "callback fixture"
+        self.fixture.mkdir()
+        (self.fixture / "valid").touch()
         self.env = {k: v for k, v in os.environ.items() if not k.startswith(
             ("CARGO_", "RUST", "NEXTEST_", "INTENTD_")) and k not in {
                 "MAKEFLAGS", "MFLAGS", "MAKELEVEL", "COMPACT", "BASE", "DRY_RUN",
@@ -41,6 +44,7 @@ class RustTestPolicyTests(unittest.TestCase):
                         GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
                         GIT_AUTHOR_NAME="test", GIT_AUTHOR_EMAIL="test@example.invalid",
                         GIT_COMMITTER_NAME="test", GIT_COMMITTER_EMAIL="test@example.invalid",
+                        INTENT_ACP_CALLBACK_ADAPTER_FIXTURE=str(self.fixture),
                         INTENTD_TEST_TIMEOUT_MULTIPLIER="7", RUSTFLAGS="--cfg caller")
         (self.component / "scripts").mkdir(parents=True)
         (self.root / "scripts").mkdir()
@@ -68,6 +72,27 @@ class RustTestPolicyTests(unittest.TestCase):
         shutil.copy(COMPONENT / "Makefile", self.component)
         for name in ("with-test-policy.sh", "changed-tests.sh", "coverage-all.sh", "coverage-e2e.sh"):
             shutil.copy(COMPONENT / "scripts" / name, self.component / "scripts")
+        # Isolate policy/wrapper behavior from the Linux-only fixture payload.
+        # Canonical inventory validation is exercised in CallbackValidatorTests.
+        (self.component / "scripts/prepare-acp-callback-fixture.py").write_text('''
+from pathlib import Path
+DEFAULT_DESCRIPTOR = Path(__file__)
+class InvalidFixture(Exception):
+    pass
+def platform_check():
+    pass
+def configuration(path):
+    return {"manifest": {"sha256": "verified"}}, {}
+def validate_fixture(root, descriptor, manifest):
+    if not (root / "valid").is_file():
+        raise InvalidFixture("invalid synthetic fixture")
+def environment(work):
+    return {}
+def node_tool(descriptor, work, env):
+    return Path(__file__)
+def digest(path):
+    return "verified"
+''')
         for name, content in {
             "Cargo.toml": '[workspace]\n', "Cargo.lock": "lock\n",
             "rust-toolchain.toml": "toolchain\n", ".config/nextest.toml": "",
@@ -96,6 +121,7 @@ args = sys.argv[1:]
 is_test = args[:1] == ['test'] or args[:2] == ['nextest', 'run'] or (args[:1] == ['llvm-cov'] and 'nextest' in args)
 with open(os.environ['POLICY_LOG'], 'a') as log:
     log.write(json.dumps({'args': args, 'policy': os.environ.get('INTENTD_ASSERT_BOUND_CALLER'),
+                         'fixture': os.environ.get('INTENT_ACP_CALLBACK_ADAPTER_FIXTURE'),
                          'timeout': os.environ.get('INTENTD_TEST_TIMEOUT_MULTIPLIER'),
                          'incremental': os.environ.get('CARGO_INCREMENTAL'),
                          'rustflags': os.environ.get('RUSTFLAGS'), 'test': is_test,
@@ -144,11 +170,12 @@ if is_test:
         calls = [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
         return result, calls
 
-    def assert_policy(self, calls, *, inherited=None, compact=False):
+    def assert_policy(self, calls, *, inherited=None, compact=False, fixture=None):
         tests = [call for call in calls if call['test']]
         self.assertTrue(tests, calls)
         for call in tests:
             self.assertEqual(call['policy'], '1', call)
+            self.assertEqual(call['fixture'], str(self.fixture) if fixture is None else fixture, call)
             self.assertEqual(call['rustflags'], '--cfg caller', call)
             coverage = call['args'][0] == 'llvm-cov'
             self.assertEqual(call['timeout'], '3' if coverage else '7', call)
@@ -267,6 +294,66 @@ if is_test:
                 self.assertIn('resumed: skipped 1 tests', result.stdout)
                 self.assertFalse(any(c['test'] for c in calls))
 
+    def test_fixture_preflight_blocks_armed_resume_before_compilation(self):
+        result, calls = self.make('test', policy='0')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assert_policy(calls, inherited='0')
+        for target in ('test', 'gate'):
+            with self.subTest(target=target, fixture='missing'):
+                result, calls = self.make(target, override='0', extra=('RESUME=1',),
+                                          env={'INTENT_ACP_CALLBACK_ADAPTER_FIXTURE': ''})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('callback fixture:', result.stderr)
+                # make test checks tool availability before entering the runner;
+                # no metadata, listing, compilation or test invocation may run.
+                self.assertEqual([c['args'] for c in calls],
+                                 [['nextest', '--version']] if target == 'test' else [])
+                self.assertNotIn('resumed: skipped', result.stdout)
+        (self.fixture / 'valid').unlink()
+        result, calls = self.make('test', override='0', extra=('RESUME=1',))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('invalid synthetic fixture', result.stderr)
+        self.assertEqual([c['args'] for c in calls], [['nextest', '--version']])
+        self.assertNotIn('resumed: skipped', result.stdout)
+
+    def test_mixed_gate_goals_preflight_before_cargo(self):
+        for fixture in ('missing', 'invalid'):
+            if fixture == 'invalid':
+                (self.fixture / 'valid').unlink()
+            env = {'INTENT_ACP_CALLBACK_ADAPTER_FIXTURE':
+                   '' if fixture == 'missing' else str(self.fixture)}
+            for forwarded in (False, True):
+                for goals in (('gate', 'check'), ('check', 'gate')):
+                    for parallel in ((), ('-j4',)):
+                        with self.subTest(fixture=fixture, forwarded=forwarded,
+                                          goals=goals, parallel=parallel):
+                            result, calls = self.make(
+                                goals[0], forwarded=forwarded, override='0',
+                                extra=(goals[1], *parallel), env=env)
+                            self.assertNotEqual(result.returncode, 0)
+                            self.assertIn('callback fixture:', result.stderr)
+                            self.assertEqual(calls, [], result.stdout + result.stderr)
+
+    def test_standalone_check_remains_fixture_free(self):
+        for forwarded in (False, True):
+            with self.subTest(forwarded=forwarded):
+                result, calls = self.make(
+                    'check', forwarded=forwarded, override='0', extra=('-j4',),
+                    env={'INTENT_ACP_CALLBACK_ADAPTER_FIXTURE': ''})
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assert_policy(calls, inherited='0', fixture='')
+
+    def test_valid_mixed_gate_goals_preserve_policy_without_duplicate_checks(self):
+        for forwarded in (False, True):
+            for goals in (('gate', 'check'), ('check', 'gate')):
+                with self.subTest(forwarded=forwarded, goals=goals):
+                    result, calls = self.make(goals[0], forwarded=forwarded,
+                                              override='0', extra=(goals[1], '-j4'))
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assert_policy(calls, inherited='0')
+                    for command in ('fmt', 'clippy', 'test'):
+                        self.assertEqual(sum(c['args'][0] == command for c in calls), 1, calls)
+
 
 @unittest.skipUnless((COMPONENT / "scripts/with-test-policy.sh").is_file() and shutil.which("node"),
                      "initialize intentd and install Node for transfer launcher integration")
@@ -313,6 +400,7 @@ class RustTransferFixtureTests(unittest.TestCase):
                 tests = [c for c in calls if c["test"]]
                 self.assertTrue(tests, calls)
                 self.assertTrue(all(c["transfer_fixture"] == str(self.fixtures) for c in tests), tests)
+                self.assertTrue(all(c["fixture"] == str(self.fixture) for c in tests), tests)
 
     def test_absolute_alias_override_is_forwarded_unchanged(self):
         alias = self.root.parent / "fixture alias with spaces"
@@ -470,6 +558,7 @@ class RustTransferFixtureTests(unittest.TestCase):
 
     def test_unrelated_dry_run_and_no_changes_need_no_fixtures(self):
         shutil.rmtree(self.fixtures)
+        self.env["INTENT_ACP_CALLBACK_ADAPTER_FIXTURE"] = ""
         for route in ("no changes", "unrelated", "service integration", "dry run", "dry fallback"):
             with self.subTest(route=route):
                 self.git(self.component, "reset", "--hard", "origin/main")

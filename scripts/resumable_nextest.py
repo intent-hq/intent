@@ -16,6 +16,7 @@ import argparse
 import contextlib
 from datetime import datetime, timezone
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -187,6 +188,110 @@ def build_settings(cwd: Path) -> dict[str, object]:
     }
 
 
+CALLBACK_FIXTURE_ENV = "INTENT_ACP_CALLBACK_ADAPTER_FIXTURE"
+CALLBACK_PACKAGES = {"intent-acp", "intent-services"}
+
+
+def needs_callback_fixture(plans: list[list[str]]) -> bool:
+    """Recognize the changed-test planner's selectors without compiling.
+
+    --tests includes library unit tests in Cargo; --test NAME and --bins do not.
+    Unknown flags, package globs/specs and filter expressions are conservative:
+    require the fixture rather than trying to duplicate Cargo/nextest selection.
+    """
+    if not plans:
+        return True
+    for plan in plans:
+        packages = set()
+        targets = set()
+        args = iter(plan)
+        for arg in args:
+            if arg.startswith("--package="):
+                packages.add(arg.partition("=")[2])
+            elif arg in ("-p", "--package"):
+                packages.add(next(args, ""))
+            elif arg in ("--test", "--bin"):
+                if not next(args, ""):
+                    return True
+                targets.add(arg)
+            elif arg in ("--lib", "--bins", "--tests"):
+                targets.add(arg)
+            else:
+                return True
+        if not packages or any(not re.fullmatch(r"[A-Za-z0-9_-]+", p) for p in packages):
+            return True
+        if packages & CALLBACK_PACKAGES and (
+            not targets or targets & {"--lib", "--tests"}
+        ):
+            return True
+    return False
+
+
+def callback_setup_help(intentd_dir: Path) -> str:
+    command = [sys.executable, "-I", "-B", "-S",
+               str(intentd_dir / "scripts/prepare-acp-callback-fixture.py"),
+               "--cache-dir", str(Path.home() / ".cache/intent/acp-callback-fixture")]
+    lines = [
+        f"Set {CALLBACK_FIXTURE_ENV} to a verified fixture (Linux x64, descriptor-pinned Node).",
+        "No downloads or repairs were attempted. Prepare explicitly, then retry:",
+    ]
+    for description, flags in (
+        ("Existing cache, offline", ["--offline"]),
+        ("Local pinned bundle, offline", ["--bundle", "/path/to/pinned-bundle.tar.gz"]),
+        ("Source build, network required", ["--build-from-source"]),
+    ):
+        lines.append(f"  {description}:")
+        # Split assignment from export so a failed provisioner is not hidden by
+        # export's exit status. Every path inside substitution is shell-quoted.
+        lines.append(f'    {CALLBACK_FIXTURE_ENV}="$({shlex.join(command + flags)})"'
+                     f" && export {CALLBACK_FIXTURE_ENV}")
+    return "\n".join(lines)
+
+
+def load_callback_validator(intentd_dir: Path):
+    path = intentd_dir / "scripts/prepare-acp-callback-fixture.py"
+    spec = importlib.util.spec_from_file_location("intent_callback_fixture", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def callback_fixture_identity(intentd_dir: Path) -> dict[str, str]:
+    """Verify explicit content on every affected launch; never call prepare().
+
+    The component owns all inventory, lock, descriptor and runtime validation.
+    Validation precedes Cargo metadata and all resume reads, even fast resumes.
+    """
+    try:
+        value = os.environ.get(CALLBACK_FIXTURE_ENV)
+        if not value:
+            raise RuntimeError(f"{CALLBACK_FIXTURE_ENV} is unset or empty")
+        validator = load_callback_validator(intentd_dir)
+        try:
+            validator.platform_check()
+            descriptor, manifest = validator.configuration(validator.DEFAULT_DESCRIPTOR)
+            # Resolve relative inputs against the Cargo invocation directory;
+            # pass the absolute path onward because nextest uses each crate cwd.
+            root = intentd_dir / value
+            validator.validate_fixture(root, descriptor, manifest)
+            with tempfile.TemporaryDirectory(prefix="intent-callback-preflight-") as temp:
+                work = Path(temp)
+                node = validator.node_tool(descriptor, work, validator.environment(work))
+            return {
+                "root": str(root.resolve()),
+                "descriptor": validator.digest(validator.DEFAULT_DESCRIPTOR),
+                "manifest": descriptor["manifest"]["sha256"],
+                "node": str(node),
+                "node-sha256": validator.digest(node),
+            }
+        except validator.InvalidFixture as error:
+            raise RuntimeError(str(error)) from error
+    except (OSError, ImportError, RuntimeError, ValueError, KeyError,
+            subprocess.TimeoutExpired) as error:
+        raise RuntimeError(f"callback fixture: {error}\n{callback_setup_help(intentd_dir)}") from error
+
+
 TRANSFER_FIXTURE_ENV = "TRANSFER_SELECTION_FIXTURE_ROOT"
 TRANSFER_FIXTURE_PATH = "docs/protocol/fixtures/transfer-selection"
 
@@ -253,11 +358,13 @@ def transfer_fixture_identity(repo_root: Path) -> dict[str, str]:
 
 
 def tree_key(repo_root: Path, intentd_dir: Path, output_args: list[str] | None = None,
+             fixture_identity: dict[str, str] | None = None,
              transfer_identity: dict[str, str] | None = None) -> str:
     intentd_dir = intentd_dir.resolve()
     inputs = {
         "source-root": str(intentd_dir),
         "cargo-outputs": output_args,
+        "callback-fixture": fixture_identity,
         "transfer-fixture": transfer_identity,
         "schema": SCHEMA_VERSION,
         "root-tree": worktree_tree(repo_root),
@@ -616,11 +723,14 @@ def run_nextest(args: argparse.Namespace) -> int:
     intentd_dir = (repo_root / args.intentd_dir).resolve()
     cache_dir = Path(args.cache_dir).expanduser().resolve()
     plans = split_plans(args.plan)
+    fixture_identity = callback_fixture_identity(intentd_dir) if needs_callback_fixture(plans) else None
     transfer_identity = transfer_fixture_identity(repo_root) if needs_transfer_fixture(plans) else None
     cargo_config = compact_config(intentd_dir)
     announce_compact()
     prune(cache_dir)
     env = nextest_env()
+    if fixture_identity is not None:
+        env[CALLBACK_FIXTURE_ENV] = fixture_identity["root"]
     if transfer_identity is not None:
         env[TRANSFER_FIXTURE_ENV] = transfer_identity["root"]
     if cargo_config:
@@ -634,7 +744,8 @@ def run_nextest(args: argparse.Namespace) -> int:
             KeyboardInterrupt, Terminated) as error:
         print(f"[{label}] ERROR: resolving Cargo outputs: {error}", file=sys.stderr, flush=True)
         return failure_exit_code(error)
-    key = tree_key(repo_root, intentd_dir, output_args, transfer_identity=transfer_identity)
+    key = tree_key(repo_root, intentd_dir, output_args, fixture_identity,
+                   transfer_identity=transfer_identity)
     run_dir = cache_dir / key
     run_dir.mkdir(parents=True, exist_ok=True)
     os.utime(run_dir)
@@ -826,6 +937,16 @@ def run_nextest(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
+    if sys.argv[1:2] == ["--check-callback-fixture"]:
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--check-callback-fixture", type=Path, required=True)
+        args = parser.parse_args()
+        try:
+            callback_fixture_identity(args.check_callback_fixture.resolve())
+            return 0
+        except RuntimeError as error:
+            print(f"[gate] ERROR: {error}", file=sys.stderr)
+            return HANDLED_ERROR_EXIT
     if sys.argv[1:2] == ["--check-transfer-fixture"]:
         try:
             if len(sys.argv) != 3:

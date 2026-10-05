@@ -505,6 +505,17 @@ lint-shell: ## Run shellcheck over scripts/*.sh (needs shellcheck; make bootstra
 
 RUST_CHECK_TARGETS := check-makefile-targets check-protocol-field-parity lint-shell-sleeps fmt clippy lint-sources
 
+.PHONY: check-callback-fixture
+check-callback-fixture: ensure-intentd-submodule ## Validate the explicit callback test fixture offline before Rust gates
+	@python3 scripts/check_watch_capacity.py --quiet
+	@python3 scripts/resumable_nextest.py --check-callback-fixture "$(INTENTD_DIR)"
+
+# Ordering each leaf, not merely check itself, prevents -j from compiling
+# before fixture validation. Standalone make check needs no callback fixture.
+ifneq ($(filter gate,$(MAKECMDGOALS)),)
+$(RUST_CHECK_TARGETS): | check-callback-fixture
+endif
+
 .PHONY: check-transfer-fixture
 check-transfer-fixture: ## Preflight canonical transfer fixtures before Rust gates
 	@python3 scripts/check_watch_capacity.py --quiet
@@ -518,7 +529,7 @@ endif
 
 check: $(RUST_CHECK_TARGETS) ## Makefile target check + protocol field parity + shell sleep lint + fmt + clippy + source lints
 
-gate: check | check-transfer-fixture ## Run all local Rust gates (fmt, clippy, source lints, then nextest)
+gate: check | check-callback-fixture check-transfer-fixture ## Run all local Rust gates (fmt, clippy, source lints, then nextest)
 	@$(MAKE) --no-print-directory test
 
 test: test-intentd ## Run Rust tests; after interruption use RESUME=1 (GATE_FORCE=1 runs all, NO_FAIL_FAST=1 continues past failures)
