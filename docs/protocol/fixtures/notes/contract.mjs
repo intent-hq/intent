@@ -698,3 +698,24 @@ export function assertInlineReceiptDetail(request, receipt, reachableRefs, now) 
   timestamp(receipt.receiptExpiresAt);
   assert.ok(Number.isFinite(now) && now < Date.parse(receipt.receiptExpiresAt));
 }
+
+// Controlled already-resolved marker descriptor oracle. No source provenance,
+// live comment ownership, uploaded attribute resolver or native mapping is proved.
+export function assertStagedMarkerOccurrence(record, descriptor, attributes, source) {
+  assert.equal(record.kind, 'projection'); assert.equal(record.role, 'marker-occurrence');
+  assert.ok(Number.isSafeInteger(record.ordinal) && record.ordinal >= 0);
+  token(record.canonicalId); assert.ok(validText(record.canonicalId) && !record.canonicalId.includes(':'));
+  assert.equal(descriptor.version, 1); assert.equal(descriptor.nodeType, 'commentAnchor');
+  assert.ok(descriptor.parentOrdinal === null || (Number.isSafeInteger(descriptor.parentOrdinal)
+    && descriptor.parentOrdinal >= 0 && descriptor.parentOrdinal < record.ordinal));
+  token(descriptor.attributesRef);
+  const { from, to } = descriptor.nativeRange;
+  assert.ok(Number.isSafeInteger(from) && from >= 0 && Number.isSafeInteger(to) && to - from === 1);
+  assert.deepEqual(Object.keys(attributes).sort(), ['commentId', 'id', 'type']);
+  assert.ok(['start', 'end', 'point'].includes(attributes.type));
+  assert.equal(attributes.commentId, record.canonicalId);
+  assert.equal(attributes.id, `${record.canonicalId}:${attributes.type}`);
+  const { start, end } = record.sourceRange;
+  assert.ok(boundary(source, start) && boundary(source, end) && start < end);
+  assert.equal(source.slice(start, end), `<!--anchor:${record.canonicalId}:${attributes.type}-->`);
+}

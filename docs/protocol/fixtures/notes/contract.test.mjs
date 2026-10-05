@@ -2105,3 +2105,63 @@ test('staged metadata keys preserve empty and prefix order and reject invalid Un
     assert.throws(() => assertStagedMetadataUpload(value));
   }
 });
+
+const { assertStagedMarkerOccurrence } = await import('./contract.mjs');
+test('staged markers bind individual literals and canonical comment IDs, preserving repeated occurrences', () => {
+  const m = f.stagedMarkerOccurrences;
+  assert.equal(m.status, 'controlled-resolved-descriptors-not-provenance-or-native-map-proof');
+  for (const o of m.occurrences) {
+    assertStagedMarkerOccurrence(o.record, o.descriptor, o.attributes, m.source);
+    assert.equal(o.detailText, canonicalJson(o.descriptor));
+    assert.equal(o.record.detail.sha256, createHash('sha256').update(o.detailText).digest('hex'));
+    assert.equal(o.record.detail.length, o.detailText.length);
+    assert.equal(o.record.detail.utf8Bytes, utf8(o.detailText));
+  }
+  const [first, , , repeated] = m.occurrences;
+  assert.equal(first.record.canonicalId, repeated.record.canonicalId);
+  assert.equal(first.attributes.id, repeated.attributes.id);
+  assert.notDeepEqual(first.record.sourceRange, repeated.record.sourceRange);
+  assert.notEqual(first.record.ordinal, repeated.record.ordinal);
+});
+test('staged markers reject pair/body/whitespace/partial ranges and split Unicode endpoints', () => {
+  const m = f.stagedMarkerOccurrences;
+  for (const range of [
+    { start: m.occurrences[0].record.sourceRange.start, end: m.occurrences[1].record.sourceRange.end },
+    { start: m.occurrences[0].record.sourceRange.end, end: m.occurrences[1].record.sourceRange.start },
+    { start: m.occurrences[0].record.sourceRange.start - 1, end: m.occurrences[0].record.sourceRange.end },
+    { start: m.occurrences[0].record.sourceRange.start + 1, end: m.occurrences[0].record.sourceRange.end },
+    { start: 1, end: m.occurrences[0].record.sourceRange.end },
+  ]) {
+    const o = structuredClone(m.occurrences[0]); o.record.sourceRange = range;
+    assert.throws(() => assertStagedMarkerOccurrence(o.record, o.descriptor, o.attributes, m.source));
+  }
+});
+test('staged markers reject atom-ID aliases, guessed attributes, wrong type/schema/width and parent', () => {
+  const m = f.stagedMarkerOccurrences;
+  for (const mutate of [
+    o => { o.record.canonicalId = o.attributes.id; },
+    o => { o.attributes.commentId = 'different'; },
+    o => { o.attributes.id = o.record.canonicalId; },
+    o => { o.attributes.type = 'point'; o.attributes.id = `${o.record.canonicalId}:point`; },
+    o => { delete o.attributes.type; }, o => { delete o.attributes.id; },
+    o => { delete o.attributes.commentId; }, o => { delete o.descriptor.attributesRef; },
+    o => { o.descriptor.nodeType = 'text'; }, o => { o.descriptor.version = 2; },
+    o => { o.descriptor.nativeRange.to++; }, o => { o.descriptor.nativeRange.to--; },
+    o => { o.descriptor.parentOrdinal = o.record.ordinal; },
+  ]) {
+    const o = structuredClone(m.occurrences[0]); mutate(o);
+    assert.throws(() => assertStagedMarkerOccurrence(o.record, o.descriptor, o.attributes, m.source));
+  }
+});
+test('staged marker shape preserves renderer identifier spelling without claiming canonical authority', () => {
+  const o = structuredClone(f.stagedMarkerOccurrences.occurrences[2]);
+  // Shape-only input: this lookalike has no supplied retained provenance and
+  // cannot be treated as a live canonical comment merely because this oracle accepts it.
+  o.record.canonicalId = 'legacy-comment';
+  o.attributes = { id: 'legacy-comment:point', type: 'point', commentId: 'legacy-comment' };
+  const source = '<!--anchor:legacy-comment:point-->';
+  o.record.sourceRange = { start: 0, end: source.length };
+  assertStagedMarkerOccurrence(o.record, o.descriptor, o.attributes, source);
+  assert.match(docs, /Matching literal text, `canonicalId`, and attributes is necessary but does not/);
+  assert.match(docs, /Non-UUID lookalikes\nremain ordinary source unless independent retained provenance establishes a marker/);
+});

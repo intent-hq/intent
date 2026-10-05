@@ -8059,5 +8059,147 @@
       "markdown",
       "html"
     ]
+  },
+  "stagedMarkerOccurrences": {
+    "status": "controlled-resolved-descriptors-not-provenance-or-native-map-proof",
+    "source": "😀 before <!--anchor:11111111-1111-4111-8111-111111111111:start--> between <!--anchor:11111111-1111-4111-8111-111111111111:end--> between <!--anchor:11111111-1111-4111-8111-111111111111:point--> between <!--anchor:11111111-1111-4111-8111-111111111111:start--> between ",
+    "occurrences": [
+      {
+        "record": {
+          "kind": "projection",
+          "ordinal": 1,
+          "sourceRange": {
+            "start": 10,
+            "end": 66
+          },
+          "role": "marker-occurrence",
+          "canonicalId": "11111111-1111-4111-8111-111111111111",
+          "detail": {
+            "textId": "marker-detail-1",
+            "length": 123,
+            "utf8Bytes": 123,
+            "sha256": "81e0e24de25ed0601ff04a7ff66f33dc6fd0832438997a9afe234ce117f21e7b"
+          }
+        },
+        "descriptor": {
+          "version": 1,
+          "nodeType": "commentAnchor",
+          "parentOrdinal": 0,
+          "nativeRange": {
+            "from": 2,
+            "to": 3
+          },
+          "attributesRef": "marker-attrs-1"
+        },
+        "detailText": "{\"attributesRef\":\"marker-attrs-1\",\"nativeRange\":{\"from\":2,\"to\":3},\"nodeType\":\"commentAnchor\",\"parentOrdinal\":0,\"version\":1}",
+        "attributes": {
+          "id": "11111111-1111-4111-8111-111111111111:start",
+          "type": "start",
+          "commentId": "11111111-1111-4111-8111-111111111111"
+        }
+      },
+      {
+        "record": {
+          "kind": "projection",
+          "ordinal": 2,
+          "sourceRange": {
+            "start": 75,
+            "end": 129
+          },
+          "role": "marker-occurrence",
+          "canonicalId": "11111111-1111-4111-8111-111111111111",
+          "detail": {
+            "textId": "marker-detail-2",
+            "length": 123,
+            "utf8Bytes": 123,
+            "sha256": "e59bd9b702f56ed2f05f4bae28f82d558978a11a0a1d6d94b46095403bb5de85"
+          }
+        },
+        "descriptor": {
+          "version": 1,
+          "nodeType": "commentAnchor",
+          "parentOrdinal": 0,
+          "nativeRange": {
+            "from": 4,
+            "to": 5
+          },
+          "attributesRef": "marker-attrs-2"
+        },
+        "detailText": "{\"attributesRef\":\"marker-attrs-2\",\"nativeRange\":{\"from\":4,\"to\":5},\"nodeType\":\"commentAnchor\",\"parentOrdinal\":0,\"version\":1}",
+        "attributes": {
+          "id": "11111111-1111-4111-8111-111111111111:end",
+          "type": "end",
+          "commentId": "11111111-1111-4111-8111-111111111111"
+        }
+      },
+      {
+        "record": {
+          "kind": "projection",
+          "ordinal": 3,
+          "sourceRange": {
+            "start": 138,
+            "end": 194
+          },
+          "role": "marker-occurrence",
+          "canonicalId": "11111111-1111-4111-8111-111111111111",
+          "detail": {
+            "textId": "marker-detail-3",
+            "length": 123,
+            "utf8Bytes": 123,
+            "sha256": "5562a1d3f5628607933707024977d2f95300faf123f3a16a197ab9b0adc135e6"
+          }
+        },
+        "descriptor": {
+          "version": 1,
+          "nodeType": "commentAnchor",
+          "parentOrdinal": 0,
+          "nativeRange": {
+            "from": 6,
+            "to": 7
+          },
+          "attributesRef": "marker-attrs-3"
+        },
+        "detailText": "{\"attributesRef\":\"marker-attrs-3\",\"nativeRange\":{\"from\":6,\"to\":7},\"nodeType\":\"commentAnchor\",\"parentOrdinal\":0,\"version\":1}",
+        "attributes": {
+          "id": "11111111-1111-4111-8111-111111111111:point",
+          "type": "point",
+          "commentId": "11111111-1111-4111-8111-111111111111"
+        }
+      },
+      {
+        "record": {
+          "kind": "projection",
+          "ordinal": 4,
+          "sourceRange": {
+            "start": 203,
+            "end": 259
+          },
+          "role": "marker-occurrence",
+          "canonicalId": "11111111-1111-4111-8111-111111111111",
+          "detail": {
+            "textId": "marker-detail-4",
+            "length": 123,
+            "utf8Bytes": 123,
+            "sha256": "8441eaae88111e373837c5f5ac5180b3758386de57b20b30398a54fcbaa6c7fc"
+          }
+        },
+        "descriptor": {
+          "version": 1,
+          "nodeType": "commentAnchor",
+          "parentOrdinal": 0,
+          "nativeRange": {
+            "from": 8,
+            "to": 9
+          },
+          "attributesRef": "marker-attrs-4"
+        },
+        "detailText": "{\"attributesRef\":\"marker-attrs-4\",\"nativeRange\":{\"from\":8,\"to\":9},\"nodeType\":\"commentAnchor\",\"parentOrdinal\":0,\"version\":1}",
+        "attributes": {
+          "id": "11111111-1111-4111-8111-111111111111:start",
+          "type": "start",
+          "commentId": "11111111-1111-4111-8111-111111111111"
+        }
+      }
+    ]
   }
 }

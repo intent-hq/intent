@@ -1105,6 +1105,39 @@ Only these named streams are accepted; records are tagged and validated as follo
   preserve start/end marker provenance; source-dependent details are invalid if
   their range or generation does not match the frozen view.
 
+**Staged marker-occurrence binding.** For this staged role, `canonicalId` is the
+exact embedded `commentId`, not the renderer atom's `id`. One record describes
+one literal `<!--anchor:{commentId}:start-->`, `:end-->` or `:point-->` in the
+frozen dirty source. Its `sourceRange` covers exactly that individual literal,
+excluding surrounding whitespace; it does not span a start/end pair or the
+anchored body. The resolved version-1 descriptor has `nodeType: "commentAnchor"`
+and a `nativeRange` of exactly one ProseMirror position, retaining the existing
+parent/ordinal and frozen-view bindings. `attributesRef` is required for this
+role and resolves through the staged upload grammar below to the explicit
+existing atom attributes `{ id: "{commentId}:{type}", type, commentId }`, where
+type is `"start"`, `"end"` or `"point"`. Do not fill missing attributes from renderer
+parser defaults. This is an additive staged convention, not a new persisted
+marker format or a claim that a staged producer already implements it.
+
+Start and end records share their canonical comment ID but retain separate
+literal ranges and types. Repeated occurrences may share both canonical ID and
+atom attribute ID; their source positions and live-record ordinals distinguish
+occurrences. Never derive a new persisted ID from an ordinal, native position,
+atom attribute ID or duplicate spelling, and never invent a missing partner.
+Preserve the exact retained identifier under existing validation; this rule does
+not add a UUID-shape restriction to legacy source identities. Non-UUID lookalikes
+remain ordinary source unless independent retained provenance establishes a marker
+identity; renderer recognition alone does not promote them to canonical comments.
+
+The server must validate the occurrence against the retained operation's source
+and marker provenance under its original scope, revision, view and expiry.
+Matching literal text, `canonicalId`, and attributes is necessary but does not
+establish live comment ownership or authorize an alias, insertion or restoration.
+Existing deletion/orphan and source-provenance rules still apply. Output adapters
+must separately validate the actual configured schema and native mapping before
+using the record; a source substring and one-position width do not prove that
+mapping. Unsupported provenance/adapter cases remain unsupported, never guessed.
+
 **Staged attribute-tree upload encoding.** This section defines upload resources
 inside the existing `text` stream; it does not change server-issued metadata read
 collections or introduce another stream/method/capability. A live descriptor's
