@@ -2,6 +2,12 @@
 
 The rules system is assembled in the backend by `InstructionService` and sourced from TypeScript instruction modules, end-user overrides, workspace overrides, project rule files, and optional skills catalogs.
 
+Managed provider sessions have a narrower, backend-owned skill catalog than the
+legacy prompt paths described below. See [staged provider configuration ownership](../ARCHITECTURE.md#staged-provider-configuration-ownership)
+for the exact activated Claude runtime/delivery, project skill precedence,
+instruction import behavior and deferred external MCP/provider paths. Personal
+home skills in a public listing do not prove they are present in a managed session.
+
 ## System Prompt Layers
 
 `buildSystemPrompt()` assembles **9 layers** in this order:

@@ -391,6 +391,116 @@ Wire contract: PROTOCOL.md §5.5 ("Creation-time default-model resolution") and
   mutation path). Bundled specialists carry no frontmatter `model` and inherit
   the user's configured default (or the provider CLI default).
 
+## Staged provider configuration ownership
+
+Intent selects managed MCP/skill loading only for verified launch paths. This is
+not universal provider isolation. Before selection, an unsupported configuration
+keeps its previous launch behavior and emits a debug diagnostic with provider,
+purpose and a safe reason. After selection, configuration or policy failures are
+errors; the daemon must not retry with native discovery enabled.
+
+### Production support and evidence
+
+| Path | Activated scope | Evidence and remaining limit |
+| --- | --- | --- |
+| Claude interactive | Native Claude Code **2.1.280**, Intent's pinned **claude-agent-acp 0.81.1 / SDK 0.3.280** via npx, plain **Linux x86_64**, acquired custom non-first-party endpoint and direct API key, supported local policy/auth/instruction sources, **no enabled external MCP catalog** | Actual native/ACP model-request fixtures and production WSS lifecycle test; one workspace bridge, Intent-selected project skills, new/load/respawn and managed-history marker. Other installed adapter deliveries are deferred. |
+| Claude short-lived ACP launches | Same runtime/delivery/platform and acquired endpoint/key/source boundary; completions, provider test prompts, model/auth session probes | Actual ephemeral adapter fixture: zero MCP and skill inventory, including bundled skills, with existing completion tool restrictions. This does not certify every native model-list command. |
+| Claude external MCP catalogs | **Deferred** for interactive production | A lower-level injection fixture proves an allowed external tool can execute. Production delivery still lacks the required live service invocation gates and execution-option enforcement, so that fixture is not supported user configuration. |
+| Claude other credentials, policy or platforms | **Deferred** | Default first-party endpoint, OAuth/unified profiles, unresolved organization/remote policy, exclusive `managed-mcp.json`, unsupported helpers/settings/source layouts, WSL, macOS and Windows are outside acquisition coverage. Ordinary restriction-only `managed-settings.json` is supported within the bounded parser. |
+| Codex | **Deferred** | Static per-path/name denials were tested against 0.160.0, but a newly discovered skill after reload still enters a model request. A deny snapshot does not establish dynamic source isolation. |
+| Pi | **Deferred in production** | Native Pi 0.81.0 Linux fixtures cover loader controls, auth/model routing and history. Policy acquisition and ACP/external gateway delivery are not activated by those fixtures. |
+| Auggie and other providers/launches | **Deferred** | Existing behavior and short-lived tool restrictions remain, including Auggie prompt enhancement; no new MCP/skill isolation claim. |
+
+Native integration tests use synthetic credentials and a loopback model responder,
+not paid provider accounts. They prove executable selection, model request content
+and lifecycle behavior; they do not certify real-account authentication or remote
+organization policy. `bwrap` is only a test-fixture mechanism, never a production
+filesystem wrapper. No maintained provider runtime fork is introduced.
+
+Acquisition observes the installed executable/version and captured environment,
+checks the supported local and system sources, then freezes their identities.
+The custom endpoint and direct key must already be available in the provider's
+captured environment (`ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`). This is a bounded
+eligibility condition, not advice to bypass organization configuration. Unknown
+applicable policy is deferred before selection; a selected managed session fails
+clearly if its verified configuration can no longer be restored. Unrelated
+provider policy is neither translated nor removed.
+
+### Workspace configuration and migration
+
+For an eligible managed interactive session, move deliberately shared skills out
+of personal native home discovery into the repository, for example
+`.intent/skills/<name>/SKILL.md` or `.agents/skills/<name>/SKILL.md`, with normal
+skill name/description metadata and supporting resources alongside the file.
+The spawned catalog scans root-to-working-directory project roots in this order:
+`.pi/skills`, `.agent/skills`, `.opencode/skills`, `.grok/skills`,
+`.factory/skills`, `.codex/skills`, `.agents/skills`, `.claude/skills`,
+`.augment/skills`, `.intent/skills`. Later roots and deeper directories win
+same-name collisions. Ambient home skill directories are not scanned for this
+catalog. Project skills are supplied through Intent's prompt catalog; native
+slash-command discovery is disabled. The public `skills.list` and deferred
+launch paths retain their existing discovery scope, so that list alone is not
+proof of a managed session's effective inventory.
+
+Keep ordinary workspace instructions in `AGENTS.md` or supported Claude instruction
+files. The managed Claude loader explicitly captures cumulative ancestor-to-cwd
+`CLAUDE.md`, `.claude/CLAUDE.md`, `CLAUDE.local.md` and unscoped `.claude/rules/*.md`,
+alongside Intent's usual workspace rules. It deduplicates canonical paths and
+follows in-boundary `@file` imports for four hops, stripping fragments and ignoring
+Markdown code/HTML. Paragraph/list continuations remain eligible imports.
+External or home imports and path-scoped rules defer before selection rather than
+being silently flattened. This does not certify native lazy loading of descendant
+instructions when a later tool reads a file.
+
+Continue managing external MCP servers through Intent's existing MCP settings.
+Do not remove native configuration expecting managed external MCP activation in
+this stage: any enabled effective external entry defers a new interactive launch
+to its existing behavior. An already-managed session instead fails clearly if a
+configuration change would require that deferral.
+
+The catalog foundation reads project defaults in this ascending precedence:
+`.pi/mcp.json`, `.augment/settings.json`, `.opencode/opencode.json`,
+`.opencode/opencode.jsonc`, `opencode.json`, `opencode.jsonc`, `.grok/config.toml`,
+`.factory/mcp.json`, `.codex/config.toml`, `.mcp.json`; deeper project directories
+win over ancestors. Explicit Intent entries override project entries by server
+name, including disabled entries that prevent the project definition reappearing.
+Global and workspace disable lists still refer to stable Intent server IDs.
+`workspace-mcp` is reserved for Intent's bridge. Turning off user MCP suppresses
+external catalog entries; it does not turn off project skills. These are catalog
+selection rules, not authorization to invoke imported external servers.
+
+Applicable MCP denials always win. Claude allow rules preserve native
+name/command/URL selector precedence rather than applying a generic OR rule;
+unsupported matcher forms defer. Profiles never overwrite the user's native
+configuration. Interactive profile history is persistent and scoped by workspace,
+agent and provider; a durable session marker prevents fallback after profile loss.
+Short-lived private profiles remain leased until child/descendant exit is
+confirmed, including cancellation/error paths.
+
+### Reproducing the boundary
+
+Implementation lives in `intent-services/src/spawned_provider_catalog.rs`,
+`skills/spawned.rs`, `provider_profile/{acquisition,acp,staged,policy}.rs`,
+`agent_manager/managed_profiles.rs`, `rules/managed_claude.rs` and
+`acp_adapter/managed.rs` under `packages/intentd/crates/`.
+
+The ignored `provider_profile::acp::tests::acquired_claude_acp_new_load_fixture`
+uses the pinned packages in `INTENT_CLAUDE_FIXTURE_MODULES` and separates synthetic
+external injection from actual AgentManager coverage. The ignored
+`managed_provider::native_managed_catalog_over_wss` in
+`crates/intentd/tests/e2e_wss_agent_lifecycle/managed_provider.rs` drives the actual
+daemon over authenticated, fingerprint-pinned WSS and checks native model input.
+From `packages/intentd`, under the pinned Rust toolchain and after setting
+`INTENT_CLAUDE_FIXTURE_MODULES`, run:
+
+```sh
+cargo nextest run --locked -p intentd --test e2e_wss_agent_lifecycle \
+  -E 'test(managed_provider::native_managed_catalog_over_wss)' \
+  --run-ignored only --show-progress none
+``` Ordinary repository tests do not run
+these dependency-gated native fixtures; record their results separately from
+mock ACP WSS coverage and the full repository gates.
+
 ## Settings state reconciliation
 
 The daemon is the authority for backend-owned settings. Each committed mutation is an
