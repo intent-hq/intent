@@ -178,6 +178,9 @@ class CallbackValidatorTests(unittest.TestCase):
         self.node.write_text("synthetic node identity")
         self.component = self.root / "intentd"
         self.component.mkdir()
+        # Keep callback inventory tests independent of transfer fixtures.
+        # Real combined launch coverage lives in RustTransferFixtureTests.
+        self.patch(mock.patch.object(gate, "transfer_fixture_identity", return_value=None))
         self.patch(mock.patch.object(gate, "load_callback_validator", return_value=self.validator))
         self.patch(mock.patch.object(self.validator, "DEFAULT_DESCRIPTOR", self.fixture.descriptor_path))
         self.node_patch = mock.patch.object(self.validator, "node_tool", return_value=self.node)
@@ -392,6 +395,11 @@ class CallbackValidatorPortabilityTests(unittest.TestCase):
 
 class ResumableNextestTests(unittest.TestCase):
     def setUp(self):
+        # These synthetic suites isolate recording/output policy. The real
+        # fixture boundary is exercised in test_rust_test_policy.py.
+        fixture = mock.patch.object(gate, "transfer_fixture_identity", return_value=None)
+        fixture.start()
+        self.addCleanup(fixture.stop)
         # These tests isolate journaling/selection; canonical fixture coverage
         # lives in CallbackPreflightTests and CallbackValidatorTests.
         patch = mock.patch.object(gate, "callback_fixture_identity", return_value=None)
@@ -1571,6 +1579,13 @@ class IsolatedOutputTests(unittest.TestCase):
 
 
 class EffectiveOutputResumeTests(unittest.TestCase):
+    def setUp(self):
+        # These synthetic suites isolate recording/output policy. The real
+        # fixture boundary is exercised in test_rust_test_policy.py.
+        fixture = mock.patch.object(gate, "transfer_fixture_identity", return_value=None)
+        fixture.start()
+        self.addCleanup(fixture.stop)
+
     def test_metadata_failure_cannot_accept_complete_record(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -1722,6 +1737,13 @@ class SharedTargetInventoryTests(unittest.TestCase):
 
 
 class CallerPolicyResumeTests(unittest.TestCase):
+    def setUp(self):
+        # These synthetic suites isolate recording/output policy. The real
+        # fixture boundary is exercised in test_rust_test_policy.py.
+        fixture = mock.patch.object(gate, "transfer_fixture_identity", return_value=None)
+        fixture.start()
+        self.addCleanup(fixture.stop)
+
     def test_direct_runner_policy_is_honest_and_incompatible_records_do_not_resume(self):
         # Keep all source/config/output inputs identical: only effective child
         # policy may separate these records. Direct runner use does not arm it.
@@ -1783,6 +1805,7 @@ class CallerPolicyResumeTests(unittest.TestCase):
                     legacy.pop("test-policy")
                     legacy.pop("callback-fixture")
                     legacy.pop("test-stack")
+                    legacy.pop("transfer-fixture")
                     legacy["schema"] = 2
                     key = gate.hashlib.sha256(dumps(legacy, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
                     shutil.rmtree(args.cache_dir)
@@ -1810,6 +1833,7 @@ class StackSettingResumeTests(unittest.TestCase):
         harness.children = root / "children.jsonl"
         harness.inputs = []
         harness.interrupt = False
+        harness.transfer = {"root": str(root / "transfer"), "contract.json": "verified"}
         dumps = json.dumps
         real_popen = subprocess.Popen
 
@@ -1825,6 +1849,8 @@ class StackSettingResumeTests(unittest.TestCase):
 
         def popen(command, **kwargs):
             harness.run_commands.append(command)
+            if gate.TRANSFER_FIXTURE_ENV in kwargs["env"]:
+                self.assertEqual(kwargs["env"][gate.TRANSFER_FIXTURE_ENV], harness.transfer["root"])
             config = command[command.index("--tool-config-file") + 1].split(":", 1)[1]
             # The child observes the actual launch environment and honors the
             # generated resume filter. No Rust build or user cache is involved.
@@ -1854,6 +1880,8 @@ sys.exit(101 if interrupted == "1" else 0)
         with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(
             gate, "callback_fixture_identity",
             return_value={"root": str(root / "fixture"), "manifest": "verified"}
+        ), mock.patch.object(
+            gate, "transfer_fixture_identity", side_effect=lambda _: harness.transfer.copy()
         ), mock.patch.object(
             gate, "worktree_tree", return_value="tree"
         ), mock.patch.object(gate, "submodule_heads", return_value=[]), mock.patch.object(
@@ -1943,14 +1971,36 @@ sys.exit(101 if interrupted == "1" else 0)
                     record = next(args.cache_dir.glob("*/passed.jsonl")).parent
                     self.assertEqual(json.loads((record / "test-stack.json").read_text()), evidence)
 
+    def test_transfer_and_stack_changes_independently_reject_resume_credit(self):
+        for plans, partial in product(([], ["-p intent-services --lib"]), (False, True)):
+            with self.subTest(plans=plans, partial=partial), tempfile.TemporaryDirectory() as directory:
+                with self.harness(Path(directory)) as harness:
+                    args = make_args(harness.root, plan=plans, resume="1")
+                    for stack, fixture in product((None, "", "8388608"), ("one", "two")):
+                        harness.transfer["contract.json"] = fixture
+                        harness.interrupt = partial
+                        self.assert_execution(
+                            self.execute(harness, args, stack), stack,
+                            ("passes",) if partial else ("passes", "fails"), status=101 if partial else 0,
+                        )
+                        self.assertEqual(harness.inputs[-1]["transfer-fixture"], harness.transfer)
+                        harness.interrupt = False
+                        if partial:
+                            self.assert_execution(self.execute(harness, args, stack), stack, ("fails",), resumed=1)
+                        self.assert_reused(self.execute(harness, args, stack))
+                    self.assertEqual(len(list(args.cache_dir.glob("*/passed.jsonl"))), 6)
+
     def test_schema_three_passes_and_complete_markers_cannot_resume(self):
-        for plans in ([], ["-p alpha --test one"]):
-            with self.subTest(plans=plans), tempfile.TemporaryDirectory() as directory:
+        # Schema 3 existed both before and after transfer fixture identity landed.
+        for plans, transfer in product(([], ["-p alpha --test one"]), (False, True)):
+            with self.subTest(plans=plans, transfer=transfer), tempfile.TemporaryDirectory() as directory:
                 with self.harness(Path(directory)) as harness:
                     args = make_args(harness.root, plan=plans, resume="1")
                     self.assert_execution(self.execute(harness, args, None), None)
                     legacy = harness.inputs[-1].copy()
                     legacy.pop("test-stack", None)
+                    if not transfer:
+                        legacy.pop("transfer-fixture")
                     legacy["schema"] = 3
                     key = gate.hashlib.sha256(json.dumps(legacy, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
                     # A separate temporary store leaves the fresh and legacy
@@ -1970,6 +2020,46 @@ sys.exit(101 if interrupted == "1" else 0)
                     self.assertEqual((record / "passed.jsonl").read_text(), passed)
                     self.assertTrue((record / "complete").exists())
                     self.assertTrue((planned / "complete").exists())
+
+
+class TransferFixtureSelectionTests(unittest.TestCase):
+    def test_affected_and_unknown_selectors_require_preflight(self):
+        for plans in ([], [["--workspace"]], [["-p", "intent-services"]],
+                      [["--package=intent-services", "--lib"]],
+                      [["-p", "intent-services", "--tests"]],
+                      [["-p", "intent-services", "--lib", "--bins", "--tests"]],
+                      [["-p", "intent-*"]], [["--lib"]], [["-E", "all()"]],
+                      [["-p", "alpha", "--test"]], [["-p", "alpha"], ["-p", "intent-services"]]):
+            with self.subTest(plans=plans):
+                self.assertTrue(gate.needs_transfer_fixture(plans))
+
+    def test_unrelated_targets_do_not_require_preflight(self):
+        for plan in (["-p", "alpha", "--lib", "--bins", "--tests"],
+                     ["-p", "intent-acp", "--lib"],
+                     ["-p", "intent-services", "--test", "one"],
+                     ["--package=intent-services", "--bins"],
+                     ["--package", "intent-services", "--bin", "one"]):
+            with self.subTest(plan=plan):
+                self.assertFalse(gate.needs_transfer_fixture([plan]))
+
+    def test_fixture_identity_separates_resume_credit(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            gate, "worktree_tree", return_value="tree"
+        ), mock.patch.object(gate, "submodule_heads", return_value=[]), mock.patch.object(
+            gate, "required_hash", return_value="hash"
+        ), mock.patch.object(gate, "run", return_value="version"), mock.patch.object(
+            gate, "build_settings", return_value={}
+        ):
+            root = Path(directory)
+            identities = (None, {"root": "/canonical", "contract.json": "one"},
+                          {"root": "/canonical", "contract.json": "two"},
+                          {"root": "/alias", "contract.json": "two"})
+            callbacks = (None, {"manifest": "callback-one"}, {"manifest": "callback-two"})
+            keys = [gate.tree_key(root, root, fixture_identity=callback, transfer_identity=value)
+                    for callback, value in product(callbacks, identities)]
+            self.assertEqual(len(set(keys)), len(keys))
+            self.assertEqual(keys[-1], gate.tree_key(
+                root, root, fixture_identity=callbacks[-1], transfer_identity=identities[-1]))
 
 
 if __name__ == "__main__":
