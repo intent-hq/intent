@@ -120,6 +120,146 @@ class PlannedRunHarness:
         return self.stdout.getvalue().splitlines()
 
 
+class AttemptReceiptTests(unittest.TestCase):
+    def setUp(self):
+        for name in ("callback_fixture_identity", "transfer_fixture_identity"):
+            patch = mock.patch.object(gate, name, return_value=None)
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    @staticmethod
+    def scope(root, plans):
+        tree = root / "cache" / KEY
+        return tree / "changed" / gate.plan_key(gate.split_plans(plans)) if plans else tree
+
+    @staticmethod
+    def snapshot(directory):
+        return {str(p.relative_to(directory)): (p.stat().st_ino, p.read_bytes())
+                for p in directory.rglob("*") if p.is_file()}
+
+    def test_repeated_and_completed_resume_invocations_preserve_all_artifacts(self):
+        for plans in ([], ["-p alpha --test one"]):
+            with self.subTest(plans=plans), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                harness = PlannedRunHarness(root, [
+                    ([event("ok", "alpha::one$passes"), event("failed", "alpha::one$fails")], 101),
+                    ([event("ok", "alpha::one$fails")], 0),
+                    ([event("ok", "alpha::one$passes")], 0),
+                ])
+                original_popen = harness.fake_popen
+
+                def popen(command, **kwargs):
+                    config = Path(command[command.index("--tool-config-file") + 1].split(":", 1)[1])
+                    data = tomllib.loads(config.read_text())
+                    profile = command[command.index("--profile") + 1]
+                    junit = Path(data["store"]["dir"]) / profile / data["profile"][profile]["junit"]["path"]
+                    junit.write_text(f"<testsuites attempt='{len(harness.run_commands)}'/>")
+                    return original_popen(command, **kwargs)
+
+                harness.fake_popen = popen
+                scope = self.scope(root, plans)
+                frozen = {}
+                for index, (status, force) in enumerate(((101, "0"), (0, "0"), (0, "0"), (0, "1")), 1):
+                    self.assertEqual(harness.execute(make_args(root, plan=plans, resume="1", force=force)), status)
+                    attempts = list((scope / "attempts").iterdir()) if (scope / "attempts").exists() else []
+                    self.assertEqual(len(attempts), index, "each invocation needs its own attempt")
+                    for attempt, snapshot in frozen.items():
+                        self.assertEqual(self.snapshot(attempt), snapshot)
+                    new = next(p for p in attempts if p not in frozen)
+                    receipt = json.loads((new / "run.json").read_text())
+                    self.assertEqual(receipt["attempt_id"], new.name)
+                    self.assertEqual(receipt["receipt_schema"], 1)
+                    self.assertEqual(receipt["exit_code"], status)
+                    self.assertIsNotNone(receipt["finished_at"])
+                    self.assertEqual(receipt["kind"], "completed-resume" if index == 3 else "execution")
+                    if index == 3:
+                        self.assertEqual(receipt["results"], [])
+                        self.assertIn(receipt["resume_source_attempt"], {p.name for p in frozen})
+                    else:
+                        result = receipt["results"][0]
+                        self.assertEqual(result["exit_code"], status)
+                        self.assertEqual(result["native_exit_code"], status)
+                        self.assertIsNotNone(result["finished_at"])
+                        self.assertTrue((new / result["junit"]).is_file())
+                        self.assertIn('"type": "test"', (new / result["events"]).read_text())
+                        self.assertEqual(json.loads((new / "listing-1.json").read_text()), json.loads(LISTING))
+                        self.assertEqual(len(receipt["selection_membership"][0]), 3)
+                    frozen[new] = self.snapshot(new)
+                self.assertFalse((scope / "run.json").exists(), "no overwriting compatibility alias")
+                self.assertEqual(len(harness.run_commands), 3)
+
+    def test_abrupt_process_loss_remains_unknown_after_resume(self):
+        for plans in ([], ["-p alpha --test one"]):
+            with self.subTest(plans=plans), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                code = f'''import os, signal
+from pathlib import Path
+from unittest import mock
+from scripts.test_resumable_nextest import gate, PlannedRunHarness, make_args, event
+root = Path({str(root)!r})
+def lines():
+    yield event("ok", "alpha::one$passes")
+    os.kill(os.getpid(), signal.SIGKILL)
+harness = PlannedRunHarness(root, [(lines(), 0)])
+with mock.patch.object(gate, "callback_fixture_identity", return_value=None), mock.patch.object(gate, "transfer_fixture_identity", return_value=None):
+    harness.execute(make_args(root, plan={plans!r}))
+'''
+                child = subprocess.run([sys.executable, "-S", "-B", "-c", code], capture_output=True, text=True, timeout=20)
+                self.assertEqual(child.returncode, -gate.signal.SIGKILL, child.stderr)
+                scope = self.scope(root, plans)
+                attempts = list(scope.glob("attempts/*"))
+                self.assertEqual(len(attempts), 1, "an unfinished receipt must exist before child execution")
+                attempt = attempts[0]
+                receipt = json.loads((attempt / "run.json").read_text())
+                self.assertIsNone(receipt["finished_at"])
+                self.assertIsNone(receipt["exit_code"])
+                self.assertIsNone(receipt["results"][0]["exit_code"])
+                self.assertIn("passes", (attempt / receipt["results"][0]["events"]).read_text())
+                before = self.snapshot(attempt)
+                harness = PlannedRunHarness(root, [([event("ok", "alpha::one$fails")], 0)])
+                self.assertEqual(harness.execute(make_args(root, plan=plans, resume="1")), 0)
+                self.assertEqual(self.snapshot(attempt), before)
+                self.assertEqual(len(list(scope.glob("attempts/*"))), 2)
+
+    def test_listing_failure_still_has_an_attempt(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            harness = PlannedRunHarness(root, [])
+            with mock.patch.object(gate, "isolated_output_args", return_value=[]), mock.patch.object(
+                gate, "run", side_effect=subprocess.CalledProcessError(101, ["cargo", "nextest", "list"])
+            ), mock.patch.object(gate, "tree_key", return_value=KEY), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(gate.run_nextest(make_args(root)), 101)
+            attempts = list(self.scope(root, make_args(root).plan).glob("attempts/*"))
+            self.assertEqual(len(attempts), 1)
+            receipt = json.loads((attempts[0] / "run.json").read_text())
+            self.assertEqual(receipt["exit_code"], 101)
+            self.assertIsNotNone(receipt["finished_at"])
+            self.assertEqual(receipt["results"], [])
+
+    def test_legacy_shortcut_does_not_fabricate_attempt_history(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            harness = PlannedRunHarness(root, [])
+            args = make_args(root, resume="1")
+            scope = self.scope(root, args.plan)
+            scope.mkdir(parents=True)
+            legacy = scope / "run.json"
+            legacy.write_text(json.dumps({"passed": 2, "skipped_resumed": 0}))
+            (scope / "complete").write_text("complete\n")
+            before = (legacy.stat().st_ino, legacy.read_bytes())
+            self.assertEqual(harness.execute(args), 0)
+            attempts = list(scope.glob("attempts/*"))
+            self.assertEqual(len(attempts), 1)
+            receipt = json.loads((attempts[0] / "run.json").read_text())
+            self.assertEqual(receipt["kind"], "completed-resume")
+            self.assertIsNone(receipt["resume_source_attempt"])
+            self.assertEqual((legacy.stat().st_ino, legacy.read_bytes()), before)
+
+
+def latest_attempt(scope):
+    return max((scope / "attempts").iterdir(), key=lambda path: path.stat().st_mtime_ns)
+
+
 class CallbackPreflightTests(unittest.TestCase):
     def test_missing_fixture_fails_before_cargo_or_resume_credit(self):
         for plans in (None, ["-p intent-acp"], ["-p intent-services --lib --bins --tests"],
@@ -623,7 +763,8 @@ class ResumableNextestTests(unittest.TestCase):
                 self.assertEqual(gate.run_nextest(args), 0)
             self.assertEqual(
                 stdout.getvalue(),
-                "resumed: skipped 1 tests already passed for this tree\n",
+                "resumed: skipped 1 tests already passed for this tree\n"
+                f"[test-intentd] record: {latest_attempt(run_dir)}\n",
             )
 
     def test_plans_are_split_with_shlex_and_keyed_in_order(self):
@@ -683,18 +824,18 @@ class ResumableNextestTests(unittest.TestCase):
             self.assertNotIn("--no-tests", harness.run_commands[0])
 
             for index in (1, 2):
-                config = tomllib.loads((record_dir / f"nextest-{index}.toml").read_text())
-                self.assertEqual(config["store"]["dir"], str(run_dir / "changed"))
-                profile = config["profile"][record_dir.name]
+                config = tomllib.loads((latest_attempt(record_dir) / f"nextest-{index}.toml").read_text())
+                self.assertEqual(config["store"]["dir"], str(record_dir / "attempts"))
+                profile = config["profile"][latest_attempt(record_dir).name]
                 self.assertEqual(profile["junit"]["path"], f"junit-{index}.xml")
                 self.assertNotIn("default-filter", profile)
                 self.assertIn(
                     f"--tool-config-file", harness.run_commands[index - 1]
                 )
-                self.assertIn(f"intent-gate:{record_dir / f'nextest-{index}.toml'}", harness.run_commands[index - 1])
-                self.assertIn(record_dir.name, harness.run_commands[index - 1])
+                self.assertIn(f"intent-gate:{latest_attempt(record_dir) / f'nextest-{index}.toml'}", harness.run_commands[index - 1])
+                self.assertIn(latest_attempt(record_dir).name, harness.run_commands[index - 1])
 
-            run_record = json.loads((record_dir / "run.json").read_text())
+            run_record = json.loads((latest_attempt(record_dir) / "run.json").read_text())
             self.assertEqual(run_record["label"], "test-changed")
             self.assertEqual(run_record["base"], "origin/main")
             self.assertEqual(run_record["plans"], plans)
@@ -706,7 +847,8 @@ class ResumableNextestTests(unittest.TestCase):
             self.assertRegex(run_record["started_at"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
             self.assertRegex(run_record["finished_at"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
             self.assertEqual(
-                run_record["results"],
+                [{key: result[key] for key in ("plan", "passed", "failed", "ignored", "exit_code")}
+                 for result in run_record["results"]],
                 [
                     {"plan": plans[0], "passed": 1, "failed": 0, "ignored": 1, "exit_code": 0},
                     {"plan": plans[1], "passed": 1, "failed": 0, "ignored": 0, "exit_code": 0},
@@ -717,9 +859,9 @@ class ResumableNextestTests(unittest.TestCase):
                 "[test-changed] summary: 2 passed, 0 failed, 1 skipped/ignored, 0 resumed "
                 "(tests already passed for this tree)"
             )
-            self.assertEqual((record_dir / "summary.txt").read_text(), summary + "\n")
+            self.assertEqual((latest_attempt(record_dir) / "summary.txt").read_text(), summary + "\n")
             self.assertEqual(
-                harness.output_lines[-2:], [summary, f"[test-changed] record: {record_dir}"]
+                harness.output_lines[-2:], [summary, f"[test-changed] record: {latest_attempt(record_dir)}"]
             )
             self.assertEqual(
                 gate.load_passed(run_dir / "passed.jsonl"),
@@ -760,7 +902,7 @@ class ResumableNextestTests(unittest.TestCase):
                 record_dir = run_dir
                 if planned:
                     record_dir = run_dir / "changed" / gate.plan_key(gate.split_plans(args.plan))
-                    result = json.loads((record_dir / "run.json").read_text())
+                    result = json.loads((latest_attempt(record_dir) / "run.json").read_text())
                     self.assertEqual(
                         (result["passed"], result["failed"], result["ignored"], result["skipped_resumed"]),
                         (passed, int(failed), 1, int(resume)),
@@ -768,7 +910,7 @@ class ResumableNextestTests(unittest.TestCase):
                 expected = gate.summary_line(
                     args.label, {"passed": passed, "failed": int(failed), "ignored": 1}, int(resume)
                 )
-                self.assertEqual((record_dir / "summary.txt").read_text(), expected + "\n")
+                self.assertEqual((latest_attempt(record_dir) / "summary.txt").read_text(), expected + "\n")
                 self.assertEqual(harness.output_lines[-2], expected)
                 self.assertEqual(gate.load_passed(journal), {("alpha::one", "passes")})
                 self.assertNotIn("skipped", journal.read_text())
@@ -788,7 +930,7 @@ class ResumableNextestTests(unittest.TestCase):
             harness = PlannedRunHarness(root, [(lines, 0), ([summary], 0)])
             self.assertEqual(harness.execute(args), 0)
             record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(args.plan))
-            result = json.loads((record_dir / "run.json").read_text())
+            result = json.loads((latest_attempt(record_dir) / "run.json").read_text())
             self.assertEqual(result["ignored"], 3)
             self.assertEqual([row["ignored"] for row in result["results"]], [2, 1])
             self.assertEqual((result["passed"], result["failed"]), (0, 0))
@@ -824,7 +966,7 @@ class ResumableNextestTests(unittest.TestCase):
             with contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(harness.execute(args), 130)
             record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(args.plan))
-            result = json.loads((record_dir / "run.json").read_text())
+            result = json.loads((latest_attempt(record_dir) / "run.json").read_text())
             self.assertEqual((result["passed"], result["failed"], result["ignored"]), (0, 0, 3))
             self.assertFalse((record_dir / "complete").exists())
 
@@ -842,12 +984,12 @@ class ResumableNextestTests(unittest.TestCase):
             self.assertEqual(harness.execute(make_args(root, resume="1")), 0)
             self.assertEqual(harness.run_commands[0][-2:], ["--no-tests", "pass"])
             record_dir = run_dir / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
-            profile = tomllib.loads((record_dir / "nextest-1.toml").read_text())["profile"][record_dir.name]
+            profile = tomllib.loads((latest_attempt(record_dir) / "nextest-1.toml").read_text())["profile"][latest_attempt(record_dir).name]
             self.assertEqual(
                 profile["default-filter"],
                 "not ((binary_id(/^alpha::one$/) and (test(/^passes$/))))",
             )
-            self.assertEqual(json.loads((record_dir / "run.json").read_text())["skipped_resumed"], 1)
+            self.assertEqual(json.loads((latest_attempt(record_dir) / "run.json").read_text())["skipped_resumed"], 1)
             self.assertIn("1 resumed", harness.output_lines[-2])
             self.assertIn("resumed: skipped 1 tests already passed for this tree", harness.output_lines)
             self.assertEqual(
@@ -877,6 +1019,7 @@ class ResumableNextestTests(unittest.TestCase):
                 self.assertEqual(gate.run_nextest(make_args(root, resume="1")), 0)
             self.assertEqual(
                 stdout.getvalue(), "resumed: skipped 3 tests already passed for this tree\n"
+                f"[test-changed] record: {latest_attempt(record_dir)}\n"
             )
 
             harness = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
@@ -884,7 +1027,7 @@ class ResumableNextestTests(unittest.TestCase):
             self.assertEqual(len(harness.run_commands), 1)
             self.assertNotIn("--no-tests", harness.run_commands[0])
             self.assertIn("[test-changed] GATE_FORCE=1: running every planned test", harness.output_lines)
-            self.assertEqual(harness.output_lines[-2:][1], f"[test-changed] record: {record_dir}")
+            self.assertEqual(harness.output_lines[-2:][1], f"[test-changed] record: {latest_attempt(record_dir)}")
 
     def test_failing_planned_run_records_exit_code_and_stops_at_first_failure(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -900,7 +1043,7 @@ class ResumableNextestTests(unittest.TestCase):
             record_dir = run_dir / "changed" / gate.plan_key(gate.split_plans(plans))
             self.assertFalse((record_dir / "complete").exists())
             self.assertFalse((run_dir / "complete").exists())
-            run_record = json.loads((record_dir / "run.json").read_text())
+            run_record = json.loads((latest_attempt(record_dir) / "run.json").read_text())
             self.assertEqual(run_record["exit_code"], 100)
             self.assertEqual(len(run_record["results"]), 1)
             self.assertEqual(
@@ -908,7 +1051,7 @@ class ResumableNextestTests(unittest.TestCase):
                 [
                     "[test-changed] summary: 1 passed, 1 failed, 0 skipped/ignored, 0 resumed "
                     "(tests already passed for this tree)",
-                    f"[test-changed] record: {record_dir}",
+                    f"[test-changed] record: {latest_attempt(record_dir)}",
                 ],
             )
             self.assertEqual(
@@ -954,10 +1097,11 @@ class ResumableNextestTests(unittest.TestCase):
             record_dir = run_dir / "changed" / gate.plan_key(gate.split_plans(plans))
             self.assertFalse((record_dir / "complete").exists())
             self.assertFalse((run_dir / "complete").exists())
-            run_record = json.loads((record_dir / "run.json").read_text())
+            run_record = json.loads((latest_attempt(record_dir) / "run.json").read_text())
             self.assertEqual(run_record["exit_code"], 100)
             self.assertEqual(
-                run_record["results"],
+                [{key: result[key] for key in ("plan", "passed", "failed", "ignored", "exit_code")}
+                 for result in run_record["results"]],
                 [
                     {"plan": plans[0], "passed": 1, "failed": 1, "ignored": 0, "exit_code": 100},
                     {"plan": plans[1], "passed": 1, "failed": 0, "ignored": 0, "exit_code": 0},
@@ -968,7 +1112,7 @@ class ResumableNextestTests(unittest.TestCase):
                 [
                     "[test-changed] summary: 2 passed, 1 failed, 0 skipped/ignored, 0 resumed "
                     "(tests already passed for this tree)",
-                    f"[test-changed] record: {record_dir}",
+                    f"[test-changed] record: {latest_attempt(record_dir)}",
                 ],
             )
             self.assertEqual(
@@ -988,7 +1132,7 @@ class ResumableNextestTests(unittest.TestCase):
             self.assertEqual(trailing.execute(make_args(root, plan=three, no_fail_fast="1")), 100)
             self.assertEqual(len(trailing.run_commands), 3)
             record_three = run_dir / "changed" / gate.plan_key(gate.split_plans(three))
-            results = json.loads((record_three / "run.json").read_text())["results"]
+            results = json.loads((latest_attempt(record_three) / "run.json").read_text())["results"]
             self.assertEqual([result["exit_code"] for result in results], [0, 100, 101])
             self.assertFalse((record_three / "complete").exists())
 
@@ -1005,8 +1149,8 @@ class ResumableNextestTests(unittest.TestCase):
                 self.assertEqual(harness.execute(make_args(root)), 130)
             record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
             self.assertFalse((record_dir / "complete").exists())
-            self.assertEqual(json.loads((record_dir / "run.json").read_text())["exit_code"], 130)
-            self.assertEqual(harness.output_lines[-1], f"[test-changed] record: {record_dir}")
+            self.assertEqual(json.loads((latest_attempt(record_dir) / "run.json").read_text())["exit_code"], 130)
+            self.assertEqual(harness.output_lines[-1], f"[test-changed] record: {latest_attempt(record_dir)}")
             self.assertIn("1 passed, 0 failed", harness.output_lines[-2])
             self.assertIn("[test-changed] ERROR: interrupted", stderr.getvalue())
 
@@ -1029,11 +1173,11 @@ class ResumableNextestTests(unittest.TestCase):
                 "(tests already passed for this tree)"
             )
             self.assertEqual(
-                stdout.getvalue().splitlines()[1:], [summary, f"[test-changed] record: {record_dir}"]
+                stdout.getvalue().splitlines()[1:], [summary, f"[test-changed] record: {latest_attempt(record_dir)}"]
             )
             self.assertIn("[test-changed] ERROR:", stderr.getvalue())
-            self.assertEqual((record_dir / "summary.txt").read_text(), summary + "\n")
-            run_record = json.loads((record_dir / "run.json").read_text())
+            self.assertEqual((latest_attempt(record_dir) / "summary.txt").read_text(), summary + "\n")
+            run_record = json.loads((latest_attempt(record_dir) / "run.json").read_text())
             self.assertEqual(run_record["exit_code"], 101)
             self.assertEqual(run_record["results"], [])
             self.assertFalse((record_dir / "complete").exists())
@@ -1055,11 +1199,11 @@ class ResumableNextestTests(unittest.TestCase):
             self.assertIs(gate.signal.getsignal(gate.signal.SIGTERM), previous)
             record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
             self.assertFalse((record_dir / "complete").exists())
-            run_record = json.loads((record_dir / "run.json").read_text())
+            run_record = json.loads((latest_attempt(record_dir) / "run.json").read_text())
             self.assertEqual(run_record["exit_code"], 143)
             self.assertEqual(run_record["results"][0]["exit_code"], None)
             self.assertEqual(run_record["passed"], 1)
-            self.assertEqual(harness.output_lines[-1], f"[test-changed] record: {record_dir}")
+            self.assertEqual(harness.output_lines[-1], f"[test-changed] record: {latest_attempt(record_dir)}")
 
     def test_sigterm_to_real_process_leaves_durable_record(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1119,11 +1263,15 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
             self.assertEqual(child.returncode, 143, stderr)
             self.assertTrue(marker.is_file(), "nextest child was not terminated")
-            self.assertEqual(remaining.splitlines()[-1], f"[test-changed] record: {record_dir}")
+            self.assertEqual(remaining.splitlines()[-1], f"[test-changed] record: {latest_attempt(record_dir)}")
             self.assertIn("1 passed, 0 failed", remaining.splitlines()[-2])
             self.assertIn("ERROR: interrupted", stderr)
             self.assertFalse((record_dir / "complete").exists())
-            self.assertEqual(json.loads((record_dir / "run.json").read_text())["exit_code"], 143)
+            receipt = json.loads((latest_attempt(record_dir) / "run.json").read_text())
+            self.assertEqual(receipt["exit_code"], 143)
+            self.assertEqual(receipt["results"][0]["native_exit_code"], -15)
+            self.assertIsNotNone(receipt["finished_at"])
+            self.assertIsNotNone(receipt["results"][0]["finished_at"])
 
     def test_ignored_only_completed_plan_resumes_without_nextest(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1142,6 +1290,7 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
                 self.assertEqual(gate.run_nextest(make_args(root, resume="1")), 0)
             self.assertEqual(
                 stdout.getvalue(), "resumed: skipped 0 tests already passed for this tree\n"
+                f"[test-changed] record: {latest_attempt(record_dir)}\n"
             )
 
             forced = PlannedRunHarness(root, [([event("ignored", "alpha::one$skipped")], 0)])
@@ -1166,7 +1315,7 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             ):
                 self.assertEqual(gate.run_nextest(make_args(root, resume="1", force="1")), 101)
             self.assertFalse((record_dir / "complete").exists())
-            self.assertEqual(json.loads((record_dir / "run.json").read_text())["exit_code"], 101)
+            self.assertEqual(json.loads((latest_attempt(record_dir) / "run.json").read_text())["exit_code"], 101)
 
             third = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
             self.assertEqual(third.execute(make_args(root, resume="1")), 0)
@@ -1196,9 +1345,9 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             ):
                 self.assertEqual(gate.run_nextest(make_args(root, resume="1", force="1")), 143)
             self.assertFalse((record_dir / "complete").exists())
-            self.assertEqual(json.loads((record_dir / "run.json").read_text())["exit_code"], 143)
+            self.assertEqual(json.loads((latest_attempt(record_dir) / "run.json").read_text())["exit_code"], 143)
             self.assertEqual(
-                stdout.getvalue().splitlines()[-1], f"[test-changed] record: {record_dir}"
+                stdout.getvalue().splitlines()[-1], f"[test-changed] record: {latest_attempt(record_dir)}"
             )
 
             third = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
@@ -1255,10 +1404,10 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             self.assertEqual(exit_code, 2)
             self.assertIn("ERROR: nextest test identifier was not listed", stderr.getvalue())
             record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
-            run_record = json.loads((record_dir / "run.json").read_text())
+            run_record = json.loads((latest_attempt(record_dir) / "run.json").read_text())
             self.assertEqual(run_record["exit_code"], exit_code)
             self.assertFalse((record_dir / "complete").exists())
-            self.assertEqual(stdout.getvalue().splitlines()[-1], f"[test-changed] record: {record_dir}")
+            self.assertEqual(stdout.getvalue().splitlines()[-1], f"[test-changed] record: {latest_attempt(record_dir)}")
 
     def test_failure_exit_codes_match_main_and_interpreter(self):
         self.assertEqual(gate.failure_exit_code(RuntimeError("x")), gate.HANDLED_ERROR_EXIT)
@@ -1280,7 +1429,7 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             self.assertEqual(harness.execute(args), 0)
             self.assertEqual(len(harness.run_commands), 1)
 
-    def test_workspace_run_keeps_default_layout_and_appends_trailing_lines(self):
+    def test_workspace_run_keeps_scope_marker_and_appends_attempt_path(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             harness = PlannedRunHarness(
@@ -1292,13 +1441,13 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             run_dir = root / "cache" / KEY
             self.assertEqual(harness.list_commands[0][3], "--workspace")
             self.assertEqual(harness.run_commands[0][3], "--workspace")
-            self.assertIn(KEY, harness.run_commands[0])
+            self.assertIn(latest_attempt(run_dir).name, harness.run_commands[0])
             self.assertTrue((run_dir / "complete").is_file())
             self.assertFalse((run_dir / "changed").exists())
-            self.assertFalse((run_dir / "run.json").exists())
-            config = tomllib.loads((run_dir / "nextest.toml").read_text())
-            self.assertEqual(config["store"]["dir"], str(root / "cache"))
-            self.assertEqual(config["profile"][KEY]["junit"]["path"], "junit.xml")
+            self.assertTrue((latest_attempt(run_dir) / "run.json").exists())
+            config = tomllib.loads((latest_attempt(run_dir) / "nextest.toml").read_text())
+            self.assertEqual(config["store"]["dir"], str(run_dir / "attempts"))
+            self.assertEqual(config["profile"][latest_attempt(run_dir).name]["junit"]["path"], "junit.xml")
             summary = (
                 "[test-intentd] summary: 1 passed, 0 failed, 1 skipped/ignored, 0 resumed "
                 "(tests already passed for this tree)"
@@ -1310,10 +1459,10 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
                     event("ok", "alpha::one$passes").rstrip("\n"),
                     event("ignored", "alpha::one$skipped").rstrip("\n"),
                     summary,
-                    f"[test-intentd] record: {run_dir}",
+                    f"[test-intentd] record: {latest_attempt(run_dir)}",
                 ],
             )
-            self.assertEqual((run_dir / "summary.txt").read_text(), summary + "\n")
+            self.assertEqual((latest_attempt(run_dir) / "summary.txt").read_text(), summary + "\n")
 
     def test_forced_failure_supersedes_earlier_pass_so_resume_reruns_it(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1346,13 +1495,13 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             self.assertEqual(resumed.execute(make_args(root, resume="1")), 100)
             self.assertEqual(len(resumed.list_commands), 1)
             self.assertEqual(len(resumed.run_commands), 1)
-            profile = tomllib.loads((record_dir / "nextest-1.toml").read_text())["profile"][record_dir.name]
+            profile = tomllib.loads((latest_attempt(record_dir) / "nextest-1.toml").read_text())["profile"][latest_attempt(record_dir).name]
             self.assertEqual(
                 profile["default-filter"],
                 "not ((binary_id(/^alpha::one$/) and (test(/^passes$/))))",
             )
             self.assertFalse((record_dir / "complete").exists())
-            run_record = json.loads((record_dir / "run.json").read_text())
+            run_record = json.loads((latest_attempt(record_dir) / "run.json").read_text())
             self.assertEqual(run_record["exit_code"], 100)
             self.assertEqual((run_record["failed"], run_record["skipped_resumed"]), (1, 1))
 
@@ -1383,9 +1532,9 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             self.assertEqual(resumed.execute(workspace), 100)
             self.assertEqual(len(resumed.run_commands), 1)
             self.assertEqual(resumed.run_commands[0][3], "--workspace")
-            config = tomllib.loads((run_dir / "nextest.toml").read_text())
+            config = tomllib.loads((latest_attempt(run_dir) / "nextest.toml").read_text())
             self.assertEqual(
-                config["profile"][KEY]["default-filter"],
+                config["profile"][latest_attempt(run_dir).name]["default-filter"],
                 "not ((binary_id(/^alpha::one$/) and (test(/^passes$/))))",
             )
             self.assertFalse((run_dir / "complete").exists())
@@ -1409,7 +1558,7 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             self.assertEqual(rerun.execute(plan_b), 0)
             self.assertEqual(len(rerun.list_commands), 1)
             self.assertEqual(len(rerun.run_commands), 1)
-            profile = tomllib.loads((record_b / "nextest-1.toml").read_text())["profile"][record_b.name]
+            profile = tomllib.loads((latest_attempt(record_b) / "nextest-1.toml").read_text())["profile"][latest_attempt(record_b).name]
             self.assertEqual(
                 profile["default-filter"],
                 "not ((binary_id(/^alpha::one$/) and (test(/^passes$/))))",
@@ -1422,7 +1571,8 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             self.assertEqual(skip.run_commands, [])
             self.assertEqual(skip.list_commands, [])
             self.assertEqual(
-                skip.output_lines, ["resumed: skipped 2 tests already passed for this tree"]
+                skip.output_lines, ["resumed: skipped 2 tests already passed for this tree",
+                                    f"[test-changed] record: {latest_attempt(record_b)}"]
             )
 
     def test_invalidate_completion_markers_drops_tree_and_every_plan_marker(self):
@@ -1531,7 +1681,7 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             self.assertEqual(resumed.execute(plan_b), 100)
             self.assertEqual(len(resumed.list_commands), 1)
             self.assertEqual(len(resumed.run_commands), 1)
-            profile = tomllib.loads((record_b / "nextest-1.toml").read_text())["profile"][record_b.name]
+            profile = tomllib.loads((latest_attempt(record_b) / "nextest-1.toml").read_text())["profile"][latest_attempt(record_b).name]
             self.assertEqual(
                 profile["default-filter"],
                 "not ((binary_id(/^alpha::one$/) and (test(/^passes$/))))",
@@ -1727,11 +1877,11 @@ class SharedTargetInventoryTests(unittest.TestCase):
             outcomes = gate.load_outcomes(root / "cache" / KEY / "passed.jsonl")
             self.assertEqual({name for (_, name) in outcomes}, {"first_only"})
             record = root / "cache" / KEY / "changed" / gate.plan_key([["-p", "inventory-probe", "--lib"]])
-            result = json.loads((record / "run.json").read_text())
+            result = json.loads((latest_attempt(record) / "run.json").read_text())
             self.assertEqual(result["passed"], 1)
             self.assertEqual(result["cargo_output_args"][0], "--target-dir")
             self.assertTrue((record / "complete").is_file())
-            outputs = json.loads((record / "cargo-outputs.json").read_text())
+            outputs = json.loads((latest_attempt(record) / "cargo-outputs.json").read_text())
             self.assertEqual(outputs["source_root"], str(first.resolve()))
             self.assertEqual(outputs["args"], result["cargo_output_args"])
 
@@ -1969,7 +2119,9 @@ sys.exit(101 if interrupted == "1" else 0)
                     evidence = {"version": 1, "RUST_MIN_STACK": value}
                     self.assertEqual(harness.inputs[-1]["test-stack"], evidence)
                     record = next(args.cache_dir.glob("*/passed.jsonl")).parent
-                    self.assertEqual(json.loads((record / "test-stack.json").read_text()), evidence)
+                    if plans:
+                        record = record / "changed" / gate.plan_key(gate.split_plans(plans))
+                    self.assertEqual(json.loads((latest_attempt(record) / "test-stack.json").read_text()), evidence)
 
     def test_transfer_and_stack_changes_independently_reject_resume_credit(self):
         for plans, partial in product(([], ["-p intent-services --lib"]), (False, True)):

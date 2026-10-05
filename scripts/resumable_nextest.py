@@ -11,6 +11,27 @@ builds; coverage and custom bare-Cargo scripts still manage their own output own
 
 Resume identity includes the exact child RUST_MIN_STACK setting, also saved in
 test-stack.json: null means unset, distinct from an empty string or explicit value.
+
+Receipt schema 1 (independent of the tree-key schema): full runs live under
+TREE/attempts/UUID; planned runs under TREE/changed/PLAN/attempts/UUID. The shared
+TREE/passed.jsonl and scope-level complete markers keep their existing policy.
+New complete markers contain the successful execution's UUID; legacy markers
+and receipts are left in place, without synthesizing historical attempts.
+
+run.json is created before journal reads/listing and updated only by its owner.
+Its null finished_at/exit_code means the runner never observed its own finish.
+results are written before launching each child, with relative config, events
+and JUnit paths, command, selection_index (1-based), and nullable native_exit_code
+and finished_at. Native status is the Popen wait result (negative for signals);
+result exit_code remains null when streaming raises, even if cleanup reaps the
+child. events-N.jsonl retains stdout lines, flushed before journal updates.
+listing-N.json retains nextest's inventory, including ignored/filter metadata;
+selection_membership holds listed binary/test pairs, or null before discovery.
+resume_candidates is the initial shared credit; resumed_tests is the credit
+used after listing, or null when not resolved. Completed-resume receipts contain
+no child results and point to resume_source_attempt when the marker has one.
+Counts and markers retain the existing policy, not authoritative reconciliation.
+No later invocation repairs unfinished receipts; only tree expiry removes them.
 """
 
 from __future__ import annotations
@@ -32,6 +53,7 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 # Cargo accepts TOML 1.1, which older stdlib tomllib versions cannot parse.
 # Use the pinned parser offline, including direct-script/importlib invocation.
 if __package__:
@@ -625,11 +647,15 @@ def stream_nextest(
     outcomes: dict[str, str],
     suite_ignored: dict[str, int],
     run_dir: Path,
+    events,
+    result: dict[str, object],
 ) -> int:
     process = subprocess.Popen(command, cwd=cwd, env=env, text=True, stdout=subprocess.PIPE)
     assert process.stdout is not None
     try:
         for line in process.stdout:
+            events.write(line)
+            events.flush()
             sys.stdout.write(line)
             sys.stdout.flush()
             outcome = test_outcome(line)
@@ -646,16 +672,26 @@ def stream_nextest(
                     # a pass this failure has just superseded.
                     invalidate_completion_markers(run_dir)
                 os.write(descriptor, record_line(*recorded).encode())
-        return process.wait()
+        status = process.wait()
+        result.update(native_exit_code=status, finished_at=utc_now())
+        return status
     except BaseException:
         process.terminate()
-        process.wait()
+        result.update(native_exit_code=process.wait(), finished_at=utc_now())
         raise
+
+
+def completed_attempt(record_dir: Path) -> str | None:
+    """Only new markers point to receipts; legacy markers have no attempt ID."""
+    value = (record_dir / "complete").read_text(encoding="utf-8").strip()
+    return value if re.fullmatch(r"[0-9a-f]{32}", value) else None
 
 
 def previously_passed(record_dir: Path, fallback: int) -> int:
     try:
-        previous = json.loads((record_dir / "run.json").read_text(encoding="utf-8"))
+        attempt = completed_attempt(record_dir)
+        source = record_dir / "attempts" / attempt if attempt else record_dir
+        previous = json.loads((source / "run.json").read_text(encoding="utf-8"))
         return int(previous["passed"]) + int(previous["skipped_resumed"])
     except (OSError, ValueError, KeyError, TypeError):
         return fallback
@@ -761,74 +797,61 @@ def run_nextest(args: argparse.Namespace) -> int:
     run_dir = cache_dir / key
     run_dir.mkdir(parents=True, exist_ok=True)
     os.utime(run_dir)
-    write_atomic(run_dir / "test-stack.json", json.dumps(test_stack_identity(env), indent=2) + "\n")
-    record = run_dir / "passed.jsonl"
-    outcomes_by_test = load_outcomes(record)
-    recorded = {test for test, outcome in outcomes_by_test.items() if outcome == "ok"}
-    failed_on_tree = len(outcomes_by_test) - len(recorded)
-    resumed = recorded if args.resume == "1" and args.force != "1" else set()
     if plans:
-        # The full-suite `complete` marker belongs to `--workspace` runs only; a
-        # planned run keeps its own marker, junit files and run.json under changed/.
-        store_dir = run_dir / "changed"
-        profile = plan_key(plans)
-        record_dir = store_dir / profile
-        record_dir.mkdir(parents=True, exist_ok=True)
+        plan_identity = plan_key(plans)
+        scope_dir = run_dir / "changed" / plan_identity
         selections = plans
         scope = "every planned test"
     else:
-        store_dir = cache_dir
-        profile = key
-        record_dir = run_dir
+        plan_identity = None
+        scope_dir = run_dir
         selections = [["--workspace"]]
         scope = "the complete suite"
-    complete = record_dir / "complete"
-    resuming = args.resume == "1" and args.force != "1"
-    # A completed plan may legitimately have passed nothing (every selected test
-    # ignored), so the planned fast path keys on the marker alone. A test that
-    # later failed on this tree (in any run sharing passed.jsonl) supersedes the
-    # marker: the run proceeds and reruns whatever is no longer recorded as passed.
-    if complete.is_file() and not failed_on_tree and (resuming if plans else bool(resumed)):
-        skipped = previously_passed(record_dir, len(resumed)) if plans else len(resumed)
-        print(f"resumed: skipped {skipped} tests already passed for this tree", flush=True)
-        return 0
-
-    # Invalidate the previous marker before nextest is invoked so a failed or
-    # interrupted list step cannot leave a stale `complete` behind.
-    complete.unlink(missing_ok=True)
-    started_at = utc_now()
+    # Receipt schema is independent of the resume fingerprint. Never migrate or
+    # alias old per-plan files: they remain evidence of exactly what was saved.
+    # Only this invocation writes its attempt; pruning still expires whole trees.
+    profile = uuid.uuid4().hex
+    store_dir = scope_dir / "attempts"
+    record_dir = store_dir / profile
+    record_dir.mkdir(parents=True)
+    complete = scope_dir / "complete"
     results: list[dict[str, object]] = []
+    resumed: set[tuple[str, str]] = set()
+    run_record = {
+        "receipt_schema": 1, "attempt_id": profile, "kind": "execution",
+        "label": label, "base": args.base, "plans": [" ".join(plan) for plan in plans],
+        "tree_key": key, "plan_key": plan_identity,
+        "started_at": utc_now(), "finished_at": None, "exit_code": None,
+        "cargo_output_args": output_args, "cargo_config_args": cargo_config,
+        "resume_requested": args.resume == "1", "force": args.force == "1",
+        "no_fail_fast": no_fail_fast, "build_jobs": args.build_jobs,
+        "test_threads": args.test_threads, "test_stack": test_stack_identity(env),
+        "callback_fixture": fixture_identity, "transfer_fixture": transfer_identity,
+        "resume_source_attempt": None, "resume_candidates": [], "resumed_tests": None,
+        "selection_membership": [None for _ in selections],
+        "selections": selections, "results": results,
+        "skipped_resumed": 0, "passed": 0, "failed": 0, "ignored": 0,
+    }
+
+    def save_receipt() -> None:
+        write_atomic(record_dir / "run.json", json.dumps(run_record, indent=2) + "\n")
+
+    save_receipt()
 
     def finalize(status: int | None) -> None:
         totals = {"passed": 0, "failed": 0, "ignored": 0}
         for result in results:
             for name in totals:
                 totals[name] += int(result[name])
+        run_record.update(totals, finished_at=utc_now(), exit_code=status,
+                          skipped_resumed=len(resumed))
+        save_receipt()
         if status == 0:
-            write_atomic(complete, "complete\n")
+            write_atomic(complete, profile + "\n")
             if resumed:
-                print(
-                    f"resumed: skipped {len(resumed)} tests already passed for this tree",
-                    flush=True,
-                )
+                print(f"resumed: skipped {len(resumed)} tests already passed for this tree", flush=True)
         summary = summary_line(label, totals, len(resumed))
         write_atomic(record_dir / "summary.txt", summary + "\n")
-        if plans:
-            run_record = {
-                "label": label,
-                "base": args.base,
-                "plans": [" ".join(plan) for plan in plans],
-                "tree_key": key,
-                "cargo_output_args": output_args,
-                "plan_key": profile,
-                "started_at": started_at,
-                "finished_at": utc_now(),
-                "exit_code": status,
-                "skipped_resumed": len(resumed),
-                **totals,
-                "results": results,
-            }
-            write_atomic(record_dir / "run.json", json.dumps(run_record, indent=2) + "\n")
         print(summary, flush=True)
         print(f"[{label}] record: {record_dir}", flush=True)
 
@@ -836,12 +859,36 @@ def run_nextest(args: argparse.Namespace) -> int:
     # KeyboardInterrupt or SIGTERM — leaves the summary/record lines and files.
     try:
         with terminate_on_signal():
+            write_atomic(record_dir / "test-stack.json", json.dumps(test_stack_identity(env), indent=2) + "\n")
+            project_config = intentd_dir / ".config/nextest.toml"
+            if project_config.is_file():
+                (record_dir / "project-nextest.toml").write_bytes(project_config.read_bytes())
+            record = run_dir / "passed.jsonl"
+            outcomes_by_test = load_outcomes(record)
+            recorded = {test for test, outcome in outcomes_by_test.items() if outcome == "ok"}
+            failed_on_tree = len(outcomes_by_test) - len(recorded)
+            resuming = args.resume == "1" and args.force != "1"
+            resumed = recorded if resuming else set()
+            run_record["resume_candidates"] = sorted(resumed)
+            save_receipt()
+            # Keep the established fast-path policy. A legacy marker provides
+            # no source attempt or membership: do not fabricate either.
+            if complete.is_file() and not failed_on_tree and (resuming if plans else bool(resumed)):
+                skipped = previously_passed(scope_dir, len(resumed)) if plans else len(resumed)
+                run_record.update(kind="completed-resume", resume_source_attempt=completed_attempt(scope_dir),
+                                  skipped_resumed=skipped, finished_at=utc_now(), exit_code=0)
+                save_receipt()
+                print(f"resumed: skipped {skipped} tests already passed for this tree", flush=True)
+                print(f"[{label}] record: {record_dir}", flush=True)
+                return 0
+            # Failed/interrupted listing cannot leave a stale completion marker.
+            complete.unlink(missing_ok=True)
             print(f"[{label}] isolated Cargo outputs: {shlex.join(output_args)}", flush=True)
             write_atomic(record_dir / "cargo-outputs.json", json.dumps({
                 "source_root": str(intentd_dir), "args": output_args,
             }, indent=2) + "\n")
             binary_ids: dict[tuple[str, str], str] = {}
-            for selection in selections:
+            for index, selection in enumerate(selections, start=1):
                 list_output = run(
                     [
                         "cargo", "nextest", "list", *selection,
@@ -852,7 +899,12 @@ def run_nextest(args: argparse.Namespace) -> int:
                     intentd_dir,
                     env,
                 )
-                binary_ids.update(test_binary_ids(list_output))
+                write_atomic(record_dir / f"listing-{index}.json", list_output + "\n")
+                selected_ids = test_binary_ids(list_output)
+                run_record["selection_membership"][index - 1] = sorted(
+                    {(binary_id, test) for (_, test), binary_id in selected_ids.items()})
+                save_receipt()
+                binary_ids.update(selected_ids)
             known_tests = {(binary_id, test) for (_, test), binary_id in binary_ids.items()}
             if plans:
                 # passed.jsonl is shared by every run on this tree; only the tests
@@ -864,6 +916,8 @@ def run_nextest(args: argparse.Namespace) -> int:
                     raise RuntimeError(
                         f"passed-test record contains {len(unknown)} unlisted tests"
                     )
+            run_record["resumed_tests"] = sorted(resumed)
+            save_receipt()
             configs = []
             for index, _ in enumerate(selections, start=1):
                 if plans:
@@ -872,7 +926,7 @@ def run_nextest(args: argparse.Namespace) -> int:
                         config, store_dir, profile, resumed, f"junit-{index}.xml"
                     )
                 else:
-                    config = run_dir / "nextest.toml"
+                    config = record_dir / "nextest.toml"
                     write_tool_config(config, store_dir, profile, resumed)
                 configs.append(config)
 
@@ -895,7 +949,7 @@ def run_nextest(args: argparse.Namespace) -> int:
             first_failure: int | None = None
             descriptor = os.open(record, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
             try:
-                for selection, config in zip(selections, configs):
+                for index, (selection, config) in enumerate(zip(selections, configs), start=1):
                     command = [
                         "cargo", "nextest", "run", *selection,
                         "--build-jobs", args.build_jobs,
@@ -912,16 +966,26 @@ def run_nextest(args: argparse.Namespace) -> int:
                         command.extend(["--no-tests", "pass"])
                     outcomes: dict[str, str] = {}
                     suite_ignored: dict[str, int] = {}
-                    result: dict[str, object] = {"plan": " ".join(selection)}
+                    result: dict[str, object] = {
+                        "plan": " ".join(selection), "selection_index": index,
+                        "command": command, "config": config.name,
+                        "junit": f"junit-{index}.xml" if plans else "junit.xml",
+                        "events": f"events-{index}.jsonl", "started_at": utc_now(),
+                        "finished_at": None, "exit_code": None, "native_exit_code": None,
+                        "passed": 0, "failed": 0, "ignored": 0,
+                    }
                     results.append(result)
                     status = None
+                    save_receipt()
                     try:
-                        status = stream_nextest(
-                            command, intentd_dir, env, binary_ids, descriptor, outcomes,
-                            suite_ignored, run_dir
-                        )
+                        with (record_dir / result["events"]).open("x", encoding="utf-8") as events:
+                            status = stream_nextest(
+                                command, intentd_dir, env, binary_ids, descriptor, outcomes,
+                                suite_ignored, run_dir, events, result
+                            )
                     finally:
                         result.update(tally(outcomes, suite_ignored), exit_code=status)
+                        save_receipt()
                     if status != 0:
                         if not no_fail_fast:
                             break
