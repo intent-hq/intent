@@ -37,18 +37,22 @@ The prepared [GitLab checkout contract (§5.53)](./methods/repository-checkout.m
 adds six pre-workspace router methods. `gitlabCheckout: 1` gates the complete
 contract on the selected destination; it does not confer host or project access.
 
-The documented surface reserves **450 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
+The prepared onboarding request `host.prepareProviderAdapters` (§5.14 below)
+adds one owner-only fast-path method. Its acknowledgement is not a readiness claim;
+older daemons may reject it without blocking onboarding.
+
+The documented surface reserves **451 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
 
 - **Router methods:** 395 methods dispatched via the main router (`router::dispatch`)
-- **Fast-path methods:** 55 methods intercepted before the router for performance or per-connection state
+- **Fast-path methods:** 56 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 0; use canonical Git read names
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 5 notifications: `events.event` (§6.3) and the socket-private `workspace.repositoryContext.retired`, `workspace.repositorySelection.retired`, `accept-changes.retired`, `sourceControl.read.retired` controls (§6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 6 methods total — 2 are **dual-role** and counted within the 450 dispatchable names (`browser.exec`, `host.openInEditor`), and 4 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) — see §5.9, §5.14 and the reverse-RPC list below
+- **Client-served reverse RPCs:** 6 methods total — 2 are **dual-role** and counted within the 451 dispatchable names (`browser.exec`, `host.openInEditor`), and 4 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) — see §5.9, §5.14 and the reverse-RPC list below
 
-**Total:** 450 dispatchable names + 5 notifications. Of the 6 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 4 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) are daemon→client-only reverse RPCs, never dispatched client→server.
+**Total:** 451 dispatchable names + 5 notifications. Of the 6 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 4 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
 The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.53) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
 
@@ -117,11 +121,11 @@ pin, while all existing methods and prepared extensions remain present.
 
 Namespaces without their own numbered subsection below (`accept-changes.*`, `file-tracking.*`, `drafts.*`, `host.*`) are covered in §5.14–§5.20; `browser.exec` is in §5.9 and the `browser.*` tab-registry methods are in §5.45.
 
-### Fast-path methods (55 total)
+### Fast-path methods (56 total)
 
-The following 55 methods are intercepted **before** the main router for performance or to access per-connection state. They share the same JSON-RPC envelope validation but are dispatched earlier in the connection task. The retired `invite.redeem` is not dispatchable at the current pin; `/invite` serves only inspect, accept, challenge and prove.
+The following 56 methods are intercepted **before** the main router for performance or to access per-connection state. They share the same JSON-RPC envelope validation but are dispatched earlier in the connection task. The retired `invite.redeem` is not dispatchable at the current pin; `/invite` serves only inspect, accept, challenge and prove.
 
-browser.closeTab, browser.exec, browser.listTabs, browser.navigateTab, browser.removeTab, browser.syncTabs, browser.upsertTab, client.hello, drafts.clear, drafts.get, drafts.set, events.subscribe, events.unsubscribe, host.checkAuggie, host.checkGh, host.checkGit, host.checkNode, host.createDirectory, host.directoryStatus, host.env, host.exec, host.execStream, host.execStream.cancel, host.execStream.write, host.findApp, host.findBinary, host.invite.create, host.listDirectory, host.listInstalledEditors, host.openInEditor, host.providerAuthStatus, host.providerDiscovery, host.providerTestPrompt, host.status, host.toolAvailability, invite.accept, invite.challenge, invite.inspect, invite.prove, note.presence.update, pairing.getInfo, pairing.getSelfInfo, presence.update, providers.setup.cancel, providers.setup.login, providers.setup.start, providers.setup.status, server.pairingInfo, server.rotateToken, system.gitCredential, system.importLegacy, system.requestUpdate, system.shutdown, system.status, workspace.invite.create
+browser.closeTab, browser.exec, browser.listTabs, browser.navigateTab, browser.removeTab, browser.syncTabs, browser.upsertTab, client.hello, drafts.clear, drafts.get, drafts.set, events.subscribe, events.unsubscribe, host.checkAuggie, host.checkGh, host.checkGit, host.checkNode, host.createDirectory, host.directoryStatus, host.env, host.exec, host.execStream, host.execStream.cancel, host.execStream.write, host.findApp, host.findBinary, host.invite.create, host.listDirectory, host.listInstalledEditors, host.openInEditor, host.prepareProviderAdapters, host.providerAuthStatus, host.providerDiscovery, host.providerTestPrompt, host.status, host.toolAvailability, invite.accept, invite.challenge, invite.inspect, invite.prove, note.presence.update, pairing.getInfo, pairing.getSelfInfo, presence.update, providers.setup.cancel, providers.setup.login, providers.setup.start, providers.setup.status, server.pairingInfo, server.rotateToken, system.gitCredential, system.importLegacy, system.requestUpdate, system.shutdown, system.status, workspace.invite.create
 
 The multiplayer methods (presence §5.47, invites §5.48) are fast-path because they act on per-connection state: `presence.update` sets the connection's **own** focus set and typing target (member workspaces only; transient, never persisted; returns the connection's opaque typing source handle) and `note.presence.update` the caller's own caret on a note it holds a `note.presence.subscribe` lease for (coalesced daemon-side, never persisted) — both feed the `presence:changed` / `note:presence` events (§6.5); `workspace.invite.create` (owner/member under §5.49; no linked-forge prerequisite with `hostMembership: 1`; otherwise the legacy owner-only policy; optional `pinLogin` with its v10.8 `pinProvider` / `pinHost`, `expiresInSecs` default 7 days) mints an invite the transport wraps into the `intent://invite?…` link, and the four `invite.*` methods are the unauthenticated join served on the `/invite` endpoint only: `invite.inspect` previews an open `(inviteId, secret)` → `{ workspaceId, workspaceTitle, hostname, prettyHostname, pinIdentity }`, with the required `pinIdentity` triple or explicit `null` (10.8; see [Selecting the guest identity](./methods/multiplayer.md#selecting-the-guest-identity) for the triple shape, legacy pins, and older-daemon omission rules); `invite.challenge` returns the same preview plus the single-use `nonce` and `nonceExpiresAt`, and the guest publishes the nonce under its forge account (`sourceControl.identityProof.create`); `invite.prove { …, nonce, login, proofId, provider?, host? }` verifies that proof and commits the join → `{ status: "authorized", token, principalId, login, workspaceId }` exactly once, and `invite.accept { …, credential }` is the returning guest's proof-less join with a credential this host minted earlier ([intent-hq/intentd#1963](https://github.com/intent-hq/intentd/pull/1963), [#1965](https://github.com/intent-hq/intentd/pull/1965)). `invite.redeem` — the earlier two-phase, host-run GitHub device-flow join — was removed from intentd by [#1969](https://github.com/intent-hq/intentd/pull/1969); its name stays listed above only until the pinned intentd advances past that removal, then this entry is dropped.
 
@@ -615,6 +619,91 @@ Live end-to-end provider test: spawns the provider's ACP adapter through the sam
 - **Any successfully completed turn is a pass** — the answer is never surfaced or streamed, and a turn that completes with no assistant text still passes. The prompt phase budget is **90 seconds** (absorbs a first-run npx package download); setup keeps the launch's npx-aware staged budgets, and the run claims a slot in the same daemon-wide adapter bound as `agent.completeOnce` (§5.32).
 - **Auth-verdict cache coupling:** a passed test **promotes** the provider's cached `host.providerAuthStatus` verdict to a hard `true`; an `auth-required` failure **demotes** it to a hard `false` (the same demotion seam as the runtime spawn/prompt auth mapping) — in both directions the live result supersedes any probe already in flight. Other failure reasons leave the cache untouched.
 - `providers.catalog` rows (§5.38) always include `supportsTestPrompt`, which tells clients whether a provider supports this probe. It is `false` for `unsloth` because its first prompt can trigger a long model download or load. It is also `false` for `antigravity`, which requires a private guarded profile.
+
+#### `host.prepareProviderAdapters` (13.6, prepared)
+
+Best-effort background preparation of detected providers' pinned npm ACP adapters
+during first-time onboarding. This additive contract leads implementation; it
+does not establish a shipped release or change `host.providerDiscovery`.
+
+**Request and immediate response:**
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"host.prepareProviderAdapters","params":{"providerIds":["claude-code","codex","pi"]}}
+```
+
+```json
+{"jsonrpc":"2.0","id":1,"result":{"accepted":true}}
+```
+
+- `providerIds` is required: an array of at most 32 non-empty strings, each at most
+  64 UTF-8 bytes. Validate the entire array before scheduling any work; malformed
+  params yield `-32602` (Invalid params). An empty array is a successful no-op;
+  duplicates are collapsed. Unknown IDs and known but ineligible providers are
+  silently skipped, including when mixed with eligible IDs.
+- The only accepted parameter is `providerIds`; reject extra keys with `-32602`.
+  Clients cannot supply packages, versions, commands, arguments, environment,
+  paths, a working directory, or a workspace destination.
+- Authorize before scheduling: owner/administrator only, using the existing
+  host-mutation policy on authenticated UDS/WSS connections. Host members and
+  workspace guests receive `-32003` (Forbidden) with no work scheduled. Their
+  permission to read provider discovery does not grant preparation authority.
+- This is a direct daemon-host operation before workspace creation. Use the
+  captured onboarding connection to the host that will launch agents; no routing
+  through a focused workspace, remote node, or implicit default host.
+- `accepted: true` means the daemon accepted the bounded request for best-effort
+  consideration, including deduplicated/no-op requests. It does **not** mean any
+  adapter is installed, ready, authenticated or even eligible, nor that background
+  preparation is supported on this host's platform. Return before
+  eligibility probes or package downloads finish. There is no job ID, progress
+  subscription, completion event or status polling contract.
+
+**Eligibility and effects (daemon-owned):**
+
+Background preparation is currently supported on **Unix hosts only**. On Windows
+and other non-Unix hosts, an authorized, valid request returns `accepted: true`
+as a silent no-op; no preparation subprocess is started. Ordinary on-demand
+adapter download and agent launch on those hosts are unchanged.
+
+1. Re-evaluate on the daemon using its provider registry, current settings and
+   discovery/launch gates; client detection is only a hint. On Unix this supports
+   `claude-code`, `codex` and `pi` when their real provider CLI is detected, the
+   provider is not gated off, and the effective launch route uses its pinned npm
+   adapter. For Pi, retain the launch gate: missing/confirmed-too-old CLI is
+   ineligible; an inconclusive version probe alone does not disqualify a detected
+   CLI. Do not require or initiate authentication to prepare packages.
+2. Honor the current launch resolver: Claude, Codex and Pi all retain their
+   registry-pinned npm route. Legacy adapter path overrides are ignored and must
+   neither suppress preparation nor count as proof of a real provider CLI.
+   Require the same usable npm/npx toolchain as launch; never install or upgrade
+   provider CLIs or the toolchain.
+3. Select the exact package/version from the daemon registry and populate the
+   same npm/npx cache and execution environment used by real launches. Isolate
+   preparation from repository-local packages/configuration using launch's
+   existing isolation rules. Do not run the adapter entrypoint, create an ACP
+   session, prompt for login, or make a model request.
+4. Run eligible providers concurrently under a bounded daemon-owned limit;
+   coalesce repeated requests by effective adapter package/version and cache
+   context. Bound pending work and suppress repeated successful preparation while
+   the prepared cache remains usable; cache deletion or invalidation must allow
+   a later request to prepare again, even in the same daemon lifetime. Failed
+   attempts may retry after bounded backoff;
+   repeated discovery must not create a download storm. The acknowledgement
+   does not promise durable work across a daemon restart.
+5. Bound attempt duration and clean up preparation subprocesses on timeout or
+   shutdown. Offline, download or probe failure never blocks onboarding or marks
+   a provider unusable. A concurrent first agent launch retains its normal cache
+   resolution/install fallback and must not depend on preparation completing;
+   concurrent cache access must remain safe.
+
+**Client compatibility:** trigger after first-time onboarding detection, for all
+detected candidate IDs, without awaiting preparation to advance onboarding or
+refresh discovery. Consume rejections so there is no unhandled promise or error
+dialog. An older daemon may return `-32601` (Method not found); skip preparation
+for that connection, with no shell-execution fallback. Forbidden, transport and
+other failures are also non-blocking, without tight retries. No capability flag
+is added: this optional optimization is attempted directly and gracefully
+skipped when unsupported; a numeric protocol version is not a support probe.
 
 #### `host.providerDiscovery`
 

@@ -6,6 +6,7 @@ import io
 from itertools import product
 import json
 import os
+import platform
 import shutil
 from pathlib import Path
 import subprocess
@@ -90,6 +91,7 @@ class PlannedRunHarness:
         self.runs = list(runs)
         self.list_commands = []
         self.run_commands = []
+        self.run_environments = []
         self.stdout = io.StringIO()
 
     def fake_run(self, command, cwd, env=None):
@@ -101,6 +103,7 @@ class PlannedRunHarness:
 
     def fake_popen(self, command, **kwargs):
         self.run_commands.append(command)
+        self.run_environments.append(kwargs.get("env"))
         lines, status = self.runs.pop(0)
         return FakeProcess(lines, status)
 
@@ -117,7 +120,292 @@ class PlannedRunHarness:
         return self.stdout.getvalue().splitlines()
 
 
+class CallbackPreflightTests(unittest.TestCase):
+    def test_missing_fixture_fails_before_cargo_or_resume_credit(self):
+        for plans in (None, ["-p intent-acp"], ["-p intent-services --lib --bins --tests"],
+                      ["-p alpha --test one", "-p intent-acp --lib"]):
+            with self.subTest(plans=plans), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                record = root / "cache" / KEY
+                record.mkdir(parents=True)
+                (record / "complete").write_text("complete\n")
+                (record / "passed.jsonl").write_text(gate.record_line("alpha::one", "passes", "ok"))
+                with mock.patch.dict(os.environ, {"INTENT_ACP_CALLBACK_ADAPTER_FIXTURE": ""}), mock.patch.object(
+                    gate, "isolated_output_args", return_value=[]
+                ) as cargo, mock.patch.object(gate, "tree_key", return_value=KEY) as key:
+                    with self.assertRaisesRegex(RuntimeError, "INTENT_ACP_CALLBACK_ADAPTER_FIXTURE"):
+                        gate.run_nextest(make_args(root, plan=plans, resume="1"))
+                    cargo.assert_not_called()
+                    key.assert_not_called()
+
+    def test_selection_is_conservative_but_skips_unrelated_targets(self):
+        affected = [[], [["--workspace"]], [["-p", "intent-acp"]],
+                    [["-p", "intent-services", "--tests"]], [["--package=intent-acp", "--lib"]],
+                    [["-p", "intent-*", "--lib"]], [["-E", "test(callback)"]],
+                    [["-p", "alpha", "--unknown-selector"]]]
+        unrelated = [[["-p", "alpha", "--lib", "--bins", "--tests"]],
+                     [["-p", "intent-acp", "--test", "wire_contract"]],
+                     [["-p", "intent-services", "--bins"]],
+                     [["-p", "intent-services", "--bin", "helper"]]]
+        for plans in affected:
+            with self.subTest(plans=plans):
+                self.assertTrue(gate.needs_callback_fixture(plans))
+        for plans in unrelated:
+            with self.subTest(plans=plans):
+                self.assertFalse(gate.needs_callback_fixture(plans))
+
+
+class CallbackValidatorTests(unittest.TestCase):
+    """Exercise the component verifier with its own synthetic fixture builder."""
+
+    def setUp(self):
+        path = SCRIPT.parents[1] / "packages/intentd/scripts/test-prepare-acp-callback-fixture.py"
+        if not path.is_file() or sys.platform != "linux":
+            self.skipTest("canonical fixture integration needs intentd and Linux")
+        spec = importlib.util.spec_from_file_location("fixture_tests", path)
+        fixture_tests = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(fixture_tests)
+        self.validator = fixture_tests.PREP
+        self.host_machine = platform.machine().lower()
+        # Synthetic payloads and mocked Node do not execute architecture-specific
+        # code. Keep the real check, with controlled input for these tests.
+        self.patch(mock.patch.object(self.validator.platform, "machine", return_value="x86_64"))
+        self.temp = tempfile.TemporaryDirectory(prefix="callback gate's ")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.fixture = fixture_tests.Fixture(self.root)
+        self.node = self.root / "node"
+        self.node.write_text("synthetic node identity")
+        self.component = self.root / "intentd"
+        self.component.mkdir()
+        # Keep callback inventory tests independent of transfer fixtures.
+        # Real combined launch coverage lives in RustTransferFixtureTests.
+        self.patch(mock.patch.object(gate, "transfer_fixture_identity", return_value=None))
+        self.patch(mock.patch.object(gate, "load_callback_validator", return_value=self.validator))
+        self.patch(mock.patch.object(self.validator, "DEFAULT_DESCRIPTOR", self.fixture.descriptor_path))
+        self.node_patch = mock.patch.object(self.validator, "node_tool", return_value=self.node)
+        self.patch(self.node_patch)
+        self.patch(mock.patch.dict(os.environ, {
+            gate.CALLBACK_FIXTURE_ENV: str(self.fixture.payload), "NODE_OPTIONS": "", "COMPACT": "0",
+        }))
+        self.patch(mock.patch.object(self.validator.urllib.request, "urlopen",
+                                     side_effect=AssertionError("preflight attempted network")))
+        self.patch(mock.patch.object(self.validator, "prepare",
+                                     side_effect=AssertionError("preflight attempted provisioning")))
+
+    def patch(self, patch):
+        result = patch.start()
+        self.addCleanup(patch.stop)
+        return result
+
+    def identity(self):
+        return gate.callback_fixture_identity(self.component)
+
+    def test_offline_valid_fixture_and_relative_quoted_path(self):
+        absolute = self.identity()
+        os.environ[gate.CALLBACK_FIXTURE_ENV] = "../original"
+        self.assertEqual(self.identity(), absolute)
+        self.assertEqual(absolute["manifest"], self.fixture.descriptor["manifest"]["sha256"])
+        self.assertEqual(absolute["root"], str(self.fixture.payload))
+        self.assertEqual(absolute["node-sha256"], self.validator.digest(self.node))
+
+    def test_cli_loads_canonical_verifier_and_checks_real_node_version_offline(self):
+        # The child interpreter does not inherit the in-process platform mock.
+        if self.host_machine not in ("x86_64", "amd64"):
+            self.skipTest("canonical fixture CLI needs a Linux x64 host")
+        scripts = self.component / "scripts"
+        scripts.mkdir()
+        shutil.copy(SCRIPT.parents[1] / "packages/intentd/scripts/prepare-acp-callback-fixture.py", scripts)
+        config = self.component / "crates/intent-acp/tests/fixtures"
+        config.mkdir(parents=True)
+        shutil.copy(self.fixture.descriptor_path, config / "claude-callback-adapter.json")
+        for name in ("delta.patch", "files.json"):
+            shutil.copy(self.root / name, config)
+        self.node.write_text(f"#!{sys.executable}\nprint('v24.21.0')\n")
+        self.node.chmod(0o755)
+        env = {**os.environ, "PATH": str(self.root) + os.pathsep + os.environ["PATH"]}
+        command = [sys.executable, "-S", "-B", str(SCRIPT),
+                   "--check-callback-fixture", str(self.component)]
+        valid = subprocess.run(command, env=env, capture_output=True, text=True, timeout=10)
+        self.assertEqual(valid.returncode, 0, valid.stderr)
+        self.assertIn('"event": "node-tool"', valid.stderr)
+        self.node.write_text(f"#!{sys.executable}\nprint('v0.0.0')\n")
+        invalid = subprocess.run(command, env=env, capture_output=True, text=True, timeout=10)
+        self.assertEqual(invalid.returncode, 2, invalid.stderr)
+        self.assertIn("Node version mismatch", invalid.stderr)
+        self.assertIn("No downloads or repairs were attempted", invalid.stderr)
+
+    def test_relative_fixture_reaches_test_children_as_absolute_path(self):
+        os.environ[gate.CALLBACK_FIXTURE_ENV] = "../original"
+        harness = PlannedRunHarness(self.root, [([event("ok", "alpha::one$passes")], 0)])
+        self.assertEqual(harness.execute(make_args(self.root, plan=["-p intent-acp --lib"])), 0)
+        self.assertEqual(harness.run_environments[0][gate.CALLBACK_FIXTURE_ENV],
+                         str(self.fixture.payload))
+        self.assertEqual(os.environ[gate.CALLBACK_FIXTURE_ENV], "../original")
+
+    def test_corrupt_missing_linked_extra_and_wrong_manifest_are_rejected(self):
+        target = self.fixture.payload / "dist/index.js"
+        original = target.read_bytes()
+        target.write_bytes(b"bad fixture")
+        with self.assertRaisesRegex(RuntimeError, "mismatch"):
+            self.identity()
+        target.write_bytes(original)
+        target.unlink()
+        with self.assertRaisesRegex(RuntimeError, "missing payload"):
+            self.identity()
+        target.symlink_to(self.node)
+        with self.assertRaisesRegex(RuntimeError, "not a regular file"):
+            self.identity()
+        target.unlink()
+        target.write_bytes(original)
+        target.chmod(0o755)
+        extra = self.fixture.payload / "extra"
+        extra.write_text("extra")
+        with self.assertRaisesRegex(RuntimeError, "extra payload"):
+            self.identity()
+        extra.unlink()
+        (self.fixture.payload / "FIXTURE-MANIFEST.json").write_text("{}")
+        with self.assertRaisesRegex(RuntimeError, "mismatch"):
+            self.identity()
+
+    def test_descriptor_lock_and_runtime_identity_use_canonical_checks(self):
+        self.fixture.descriptor["lock_sha256"] = "0" * 64
+        self.fixture.descriptor_path.write_text(json.dumps(self.fixture.descriptor))
+        with self.assertRaisesRegex(RuntimeError, "manifest lock mismatch"):
+            self.identity()
+        self.fixture.descriptor["lock_sha256"] = self.fixture.manifest["lock_sha256"]
+        self.fixture.manifest["runtime_dependencies"] = {"unexpected": {}}
+        self.fixture.descriptor["expected_runtime_packages"] = 1
+        self.fixture.seal()
+        with self.assertRaisesRegex(RuntimeError, "installed package set mismatch"):
+            self.identity()
+
+    def test_platform_node_options_and_node_version_constraints(self):
+        with mock.patch.object(self.validator.platform, "machine", return_value="aarch64"):
+            with self.assertRaisesRegex(RuntimeError, "Linux x64"):
+                self.identity()
+        with mock.patch.dict(os.environ, {"NODE_OPTIONS": "--require unexpected"}):
+            with self.assertRaisesRegex(RuntimeError, "NODE_OPTIONS"):
+                self.identity()
+        self.node_patch.stop()
+        with mock.patch.object(self.validator.shutil, "which", return_value=str(self.node)), mock.patch.object(
+            self.validator, "command", return_value="v0.0.0"
+        ):
+            with self.assertRaisesRegex(RuntimeError, "Node version mismatch"):
+                self.identity()
+
+    def test_corruption_after_success_cannot_get_complete_resume_credit(self):
+        harness = PlannedRunHarness(self.root, [([event("ok", "alpha::one$passes")], 0)])
+        for plans in (None, ["-p intent-acp --lib"]):
+            with self.subTest(plans=plans):
+                harness.runs = [([event("ok", "alpha::one$passes")], 0)]
+                args = make_args(self.root, plan=plans)
+                self.assertEqual(harness.execute(args), 0)
+                self.assertEqual(harness.execute(make_args(self.root, plan=plans, resume="1")), 0)
+                target = self.fixture.payload / "dist/index.js"
+                original = target.read_bytes()
+                target.write_bytes(b"tampered")
+                with mock.patch.object(gate, "isolated_output_args") as cargo:
+                    with self.assertRaisesRegex(RuntimeError, "mismatch"):
+                        harness.execute(make_args(self.root, plan=plans, resume="1"))
+                    cargo.assert_not_called()
+                target.write_bytes(original)
+
+    def test_verified_identity_changes_resume_key_without_weakening_other_inputs(self):
+        with mock.patch.object(gate, "worktree_tree", return_value="tree"), mock.patch.object(
+            gate, "submodule_heads", return_value=[]
+        ), mock.patch.object(gate, "required_hash", return_value="hash"), mock.patch.object(
+            gate, "run", return_value="version"
+        ):
+            identity = self.identity()
+            key = gate.tree_key(self.root, self.component, [], identity)
+            self.assertNotEqual(key, gate.tree_key(self.root, self.component, [], None))
+            for field in ("root", "descriptor", "manifest", "node", "node-sha256"):
+                changed = {**identity, field: "changed"}
+                self.assertNotEqual(key, gate.tree_key(self.root, self.component, [], changed), field)
+            self.node.write_text("replacement node, same path")
+            self.assertNotEqual(identity, self.identity())
+            self.assertNotEqual(key, gate.tree_key(self.root, self.component, [], self.identity()))
+
+    def test_replacing_verified_node_cannot_resume_previous_passes(self):
+        harness = PlannedRunHarness(self.root, [([event("ok", "alpha::one$passes")], 0)] * 2)
+        original_key = gate.tree_key
+
+        def key(*args, **kwargs):
+            with mock.patch.object(gate, "worktree_tree", return_value="tree"), mock.patch.object(
+                gate, "submodule_heads", return_value=[]
+            ), mock.patch.object(gate, "required_hash", return_value="hash"), mock.patch.object(
+                gate, "run", return_value="version"
+            ):
+                return original_key(*args, **kwargs)
+
+        with mock.patch.object(gate, "tree_key", side_effect=key), mock.patch.object(
+            gate, "run", side_effect=harness.fake_run
+        ), mock.patch.object(gate.subprocess, "Popen", side_effect=harness.fake_popen), contextlib.redirect_stdout(
+            harness.stdout
+        ):
+            args = make_args(self.root, plan=["-p intent-services --lib"], resume="1")
+            self.assertEqual(gate.run_nextest(args), 0)
+            self.assertEqual(gate.run_nextest(args), 0)
+            self.assertEqual(len(harness.run_commands), 1)
+            self.node.write_text("different verified Node bytes")
+            self.assertEqual(gate.run_nextest(args), 0)
+        self.assertEqual(len(harness.run_commands), 2)
+        self.assertNotIn("--no-tests", harness.run_commands[1], "stale passes were credited")
+        self.assertEqual(len(list((self.root / "cache").iterdir())), 2)
+
+    def test_setup_commands_quote_paths_and_preserve_provisioner_failure(self):
+        component = self.root / "repo's component"
+        script = component / "scripts/prepare-acp-callback-fixture.py"
+        script.parent.mkdir(parents=True)
+        log = self.root / "argv.json"
+        script.write_text("import json, sys\n"
+                          f"open({str(log)!r}, 'w').write(json.dumps(sys.argv[1:]))\n"
+                          "sys.exit(7)\n")
+        with mock.patch.dict(os.environ, {"HOME": str(self.root / "user's home")}):
+            commands = [line.strip() for line in gate.callback_setup_help(component).splitlines()
+                        if line.startswith("    ")]
+        self.assertEqual(len(commands), 3)
+        for command, route in zip(commands, ("--offline", "--bundle", "--build-from-source")):
+            result = subprocess.run(["sh", "-c", command], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 7, result.stderr)
+            argv = json.loads(log.read_text())
+            self.assertEqual(argv[:2], ["--cache-dir", str(self.root / "user's home/.cache/intent/acp-callback-fixture")])
+            self.assertEqual(argv[2], route)
+
+
+class CallbackValidatorPortabilityTests(unittest.TestCase):
+    def test_synthetic_suite_on_arm64_keeps_checks_and_skips_only_native_cli(self):
+        path = SCRIPT.parents[1] / "packages/intentd/scripts/test-prepare-acp-callback-fixture.py"
+        if not path.is_file() or sys.platform != "linux":
+            self.skipTest("canonical fixture integration needs intentd and Linux")
+        suite = unittest.defaultTestLoader.loadTestsFromTestCase(CallbackValidatorTests)
+        expected_count = suite.countTestCases()
+        result = unittest.TestResult()
+        with mock.patch.object(platform, "machine", return_value="aarch64"):
+            suite.run(result)
+        self.assertTrue(result.wasSuccessful(), result.errors + result.failures)
+        self.assertEqual(result.testsRun, expected_count)
+        self.assertEqual(
+            [(test._testMethodName, reason) for test, reason in result.skipped],
+            [("test_cli_loads_canonical_verifier_and_checks_real_node_version_offline",
+              "canonical fixture CLI needs a Linux x64 host")],
+        )
+
+
 class ResumableNextestTests(unittest.TestCase):
+    def setUp(self):
+        # These synthetic suites isolate recording/output policy. The real
+        # fixture boundary is exercised in test_rust_test_policy.py.
+        fixture = mock.patch.object(gate, "transfer_fixture_identity", return_value=None)
+        fixture.start()
+        self.addCleanup(fixture.stop)
+        # These tests isolate journaling/selection; canonical fixture coverage
+        # lives in CallbackPreflightTests and CallbackValidatorTests.
+        patch = mock.patch.object(gate, "callback_fixture_identity", return_value=None)
+        patch.start()
+        self.addCleanup(patch.stop)
+
     def test_pass_events_and_exact_filter(self):
         binary_ids = {
             ("intentd::e2e", "module::passes"): "intentd::e2e",
@@ -1291,6 +1579,13 @@ class IsolatedOutputTests(unittest.TestCase):
 
 
 class EffectiveOutputResumeTests(unittest.TestCase):
+    def setUp(self):
+        # These synthetic suites isolate recording/output policy. The real
+        # fixture boundary is exercised in test_rust_test_policy.py.
+        fixture = mock.patch.object(gate, "transfer_fixture_identity", return_value=None)
+        fixture.start()
+        self.addCleanup(fixture.stop)
+
     def test_metadata_failure_cannot_accept_complete_record(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -1415,7 +1710,7 @@ class SharedTargetInventoryTests(unittest.TestCase):
                 "os.execv(sys.argv[1], sys.argv[1:])\n")
             env['CARGO_TARGET_' + host.upper().replace('-', '_') + '_RUNNER'] = (
                 gate.shlex.join([sys.executable, str(runner)]))
-            args = make_args(root, intentd_dir=first, plan=["--lib"], build_jobs="1")
+            args = make_args(root, intentd_dir=first, plan=["-p inventory-probe --lib"], build_jobs="1")
             with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(
                 gate, "tree_key", return_value=KEY
             ):
@@ -1431,7 +1726,7 @@ class SharedTargetInventoryTests(unittest.TestCase):
                 self.assertEqual(passed, ['inventory-probe::inventory_probe$second_only'])
             outcomes = gate.load_outcomes(root / "cache" / KEY / "passed.jsonl")
             self.assertEqual({name for (_, name) in outcomes}, {"first_only"})
-            record = root / "cache" / KEY / "changed" / gate.plan_key([["--lib"]])
+            record = root / "cache" / KEY / "changed" / gate.plan_key([["-p", "inventory-probe", "--lib"]])
             result = json.loads((record / "run.json").read_text())
             self.assertEqual(result["passed"], 1)
             self.assertEqual(result["cargo_output_args"][0], "--target-dir")
@@ -1442,6 +1737,13 @@ class SharedTargetInventoryTests(unittest.TestCase):
 
 
 class CallerPolicyResumeTests(unittest.TestCase):
+    def setUp(self):
+        # These synthetic suites isolate recording/output policy. The real
+        # fixture boundary is exercised in test_rust_test_policy.py.
+        fixture = mock.patch.object(gate, "transfer_fixture_identity", return_value=None)
+        fixture.start()
+        self.addCleanup(fixture.stop)
+
     def test_direct_runner_policy_is_honest_and_incompatible_records_do_not_resume(self):
         # Keep all source/config/output inputs identical: only effective child
         # policy may separate these records. Direct runner use does not arm it.
@@ -1468,7 +1770,10 @@ class CallerPolicyResumeTests(unittest.TestCase):
                     harness.run_commands.append(command)
                     return FakeProcess([event("ok", "alpha::one$passes")], 0)
 
+                fixture_identity = {"root": str(root / "fixture"), "manifest": "verified"}
                 with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(
+                    gate, "callback_fixture_identity", return_value=fixture_identity
+                ), mock.patch.object(
                     gate, "worktree_tree", return_value="tree"
                 ), mock.patch.object(gate, "submodule_heads", return_value=[]), mock.patch.object(
                     gate, "required_hash", return_value="hash"
@@ -1491,12 +1796,16 @@ class CallerPolicyResumeTests(unittest.TestCase):
                     self.assertEqual(len(list(args.cache_dir.glob("*/passed.jsonl"))), 5)
                     for value in inputs:
                         self.assertIn("test-policy", value)
+                        self.assertEqual(value["callback-fixture"], None if plans else fixture_identity)
                     self.assertEqual(inputs[-1]["test-policy"], {"INTENTD_ASSERT_BOUND_CALLER": "1"})
 
                     # Seed a genuine schema-2 input hash (no policy field), with
                     # complete evidence for both full and planned scopes.
                     legacy = inputs[-1].copy()
                     legacy.pop("test-policy")
+                    legacy.pop("callback-fixture")
+                    legacy.pop("test-stack")
+                    legacy.pop("transfer-fixture")
                     legacy["schema"] = 2
                     key = gate.hashlib.sha256(dumps(legacy, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
                     shutil.rmtree(args.cache_dir)
@@ -1513,6 +1822,244 @@ class CallerPolicyResumeTests(unittest.TestCase):
                     self.assertEqual(seen_env[before:], ["1"], "legacy evidence skipped armed verification")
                     self.assertEqual(gate.run_nextest(args), 0)
                     self.assertEqual(len(seen_env), before + 1)
+
+
+class StackSettingResumeTests(unittest.TestCase):
+    """Exercise real controlled children with stable source/build inputs."""
+
+    @contextlib.contextmanager
+    def harness(self, root):
+        harness = PlannedRunHarness(root, [])
+        harness.children = root / "children.jsonl"
+        harness.inputs = []
+        harness.interrupt = False
+        harness.transfer = {"root": str(root / "transfer"), "contract.json": "verified"}
+        dumps = json.dumps
+        real_popen = subprocess.Popen
+
+        def capture_inputs(value, **kwargs):
+            if isinstance(value, dict) and "root-tree" in value:
+                harness.inputs.append(value.copy())
+            return dumps(value, **kwargs)
+
+        def run(command, cwd, env=None):
+            if command in (["rustc", "-vV"], ["cargo", "-V"], ["cargo", "nextest", "--version"]):
+                return "version"
+            return harness.fake_run(command, cwd, env)
+
+        def popen(command, **kwargs):
+            harness.run_commands.append(command)
+            if gate.TRANSFER_FIXTURE_ENV in kwargs["env"]:
+                self.assertEqual(kwargs["env"][gate.TRANSFER_FIXTURE_ENV], harness.transfer["root"])
+            config = command[command.index("--tool-config-file") + 1].split(":", 1)[1]
+            # The child observes the actual launch environment and honors the
+            # generated resume filter. No Rust build or user cache is involved.
+            code = r'''
+import json, os, pathlib, sys, tomllib
+config, receipt, interrupted = sys.argv[1:]
+profile = next(iter(tomllib.loads(pathlib.Path(config).read_text())["profile"].values()))
+expression = profile.get("default-filter", "")
+tests = [name for name in ("passes", "fails") if "test(/^" + name + "$/)" not in expression]
+if interrupted == "1":
+    tests = tests[:1]
+with open(receipt, "a") as output:
+    output.write(json.dumps({"present": "RUST_MIN_STACK" in os.environ,
+                             "value": os.environ.get("RUST_MIN_STACK"),
+                             "executed": tests}) + "\n")
+for name in tests:
+    print(json.dumps({"type": "test", "event": "ok", "name": "alpha::one$" + name}))
+sys.exit(101 if interrupted == "1" else 0)
+'''
+            process = real_popen(
+                [sys.executable, "-S", "-c", code, config, str(harness.children),
+                 "1" if harness.interrupt else "0"], **kwargs
+            )
+            self.addCleanup(process.stdout.close)
+            return process
+
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(
+            gate, "callback_fixture_identity",
+            return_value={"root": str(root / "fixture"), "manifest": "verified"}
+        ), mock.patch.object(
+            gate, "transfer_fixture_identity", side_effect=lambda _: harness.transfer.copy()
+        ), mock.patch.object(
+            gate, "worktree_tree", return_value="tree"
+        ), mock.patch.object(gate, "submodule_heads", return_value=[]), mock.patch.object(
+            gate, "required_hash", return_value="hash"
+        ), mock.patch.object(gate, "build_settings", return_value={}), mock.patch.object(
+            gate, "run", side_effect=run
+        ), mock.patch.object(gate.subprocess, "Popen", side_effect=popen), mock.patch.object(
+            gate.json, "dumps", side_effect=capture_inputs
+        ):
+            yield harness
+
+    def execute(self, harness, args, value):
+        if value is None:
+            os.environ.pop("RUST_MIN_STACK", None)
+        else:
+            os.environ["RUST_MIN_STACK"] = value
+        before = self.receipts(harness)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            status = gate.run_nextest(args)
+        return status, self.receipts(harness)[len(before):], output.getvalue()
+
+    @staticmethod
+    def receipts(harness):
+        if not harness.children.exists():
+            return []
+        return [json.loads(line) for line in harness.children.read_text().splitlines()]
+
+    def assert_execution(self, result, value, tests=("passes", "fails"), resumed=0, status=0):
+        actual_status, children, output = result
+        self.assertEqual(actual_status, status)
+        self.assertEqual(children, [{"present": value is not None, "value": value, "executed": list(tests)}], output)
+        self.assertIn(f"summary: {len(tests)} passed, 0 failed, 0 skipped/ignored, {resumed} resumed", output)
+
+    def assert_reused(self, result, count=2):
+        status, children, output = result
+        self.assertEqual(status, 0)
+        self.assertEqual(children, [], output)
+        self.assertIn(f"resumed: skipped {count} tests already passed", output)
+
+    def test_changed_stack_executes_in_both_directions_and_same_stack_reuses(self):
+        for plans, values in product(
+            ([], ["-p alpha --test one"]),
+            (("8388608", None, ""), (None, "8388608", ""), ("", None, "8388608")),
+        ):
+            with self.subTest(plans=plans, values=values), tempfile.TemporaryDirectory() as directory:
+                with self.harness(Path(directory)) as harness:
+                    args = make_args(harness.root, plan=plans, resume="1")
+                    for value in values:
+                        self.assert_execution(self.execute(harness, args, value), value)
+                        self.assert_reused(self.execute(harness, args, value))
+                    self.assertEqual(len(list(args.cache_dir.glob("*/passed.jsonl"))), 3)
+                    for value in values:
+                        self.assert_reused(self.execute(harness, args, value))
+
+    def test_partial_evidence_only_resumes_for_the_same_child_stack(self):
+        for plans, first, second in product(
+            ([], ["-p alpha --test one"]), (None, "", "8388608"), (None, "", "8388608"),
+        ):
+            with self.subTest(plans=plans, first=first, second=second), tempfile.TemporaryDirectory() as directory:
+                with self.harness(Path(directory)) as harness:
+                    args = make_args(harness.root, plan=plans, resume="1")
+                    harness.interrupt = True
+                    self.assert_execution(self.execute(harness, args, first), first, ("passes",), status=101)
+                    harness.interrupt = False
+                    if first == second:
+                        self.assert_execution(self.execute(harness, args, second), second, ("fails",), resumed=1)
+                    else:
+                        self.assert_execution(self.execute(harness, args, second), second)
+                    self.assert_reused(self.execute(harness, args, second))
+
+    def test_stack_identity_uses_child_environment_and_records_versioned_evidence(self):
+        for plans, value in product(([], ["-p alpha --test one"]), (None, "", "8388608")):
+            with self.subTest(plans=plans, value=value), tempfile.TemporaryDirectory() as directory:
+                with self.harness(Path(directory)) as harness:
+                    args = make_args(harness.root, plan=plans, resume="1")
+                    # Deliberately disagree with the ambient environment. The
+                    # identity must describe nextest_env(), which Popen receives.
+                    child_env = {"PATH": os.defpath}
+                    if value is not None:
+                        child_env["RUST_MIN_STACK"] = value
+                    with mock.patch.object(gate, "nextest_env", return_value=child_env):
+                        self.assert_execution(self.execute(harness, args, "ambient"), value)
+                        self.assert_reused(self.execute(harness, args, "other ambient"))
+                    evidence = {"version": 1, "RUST_MIN_STACK": value}
+                    self.assertEqual(harness.inputs[-1]["test-stack"], evidence)
+                    record = next(args.cache_dir.glob("*/passed.jsonl")).parent
+                    self.assertEqual(json.loads((record / "test-stack.json").read_text()), evidence)
+
+    def test_transfer_and_stack_changes_independently_reject_resume_credit(self):
+        for plans, partial in product(([], ["-p intent-services --lib"]), (False, True)):
+            with self.subTest(plans=plans, partial=partial), tempfile.TemporaryDirectory() as directory:
+                with self.harness(Path(directory)) as harness:
+                    args = make_args(harness.root, plan=plans, resume="1")
+                    for stack, fixture in product((None, "", "8388608"), ("one", "two")):
+                        harness.transfer["contract.json"] = fixture
+                        harness.interrupt = partial
+                        self.assert_execution(
+                            self.execute(harness, args, stack), stack,
+                            ("passes",) if partial else ("passes", "fails"), status=101 if partial else 0,
+                        )
+                        self.assertEqual(harness.inputs[-1]["transfer-fixture"], harness.transfer)
+                        harness.interrupt = False
+                        if partial:
+                            self.assert_execution(self.execute(harness, args, stack), stack, ("fails",), resumed=1)
+                        self.assert_reused(self.execute(harness, args, stack))
+                    self.assertEqual(len(list(args.cache_dir.glob("*/passed.jsonl"))), 6)
+
+    def test_schema_three_passes_and_complete_markers_cannot_resume(self):
+        # Schema 3 existed both before and after transfer fixture identity landed.
+        for plans, transfer in product(([], ["-p alpha --test one"]), (False, True)):
+            with self.subTest(plans=plans, transfer=transfer), tempfile.TemporaryDirectory() as directory:
+                with self.harness(Path(directory)) as harness:
+                    args = make_args(harness.root, plan=plans, resume="1")
+                    self.assert_execution(self.execute(harness, args, None), None)
+                    legacy = harness.inputs[-1].copy()
+                    legacy.pop("test-stack", None)
+                    if not transfer:
+                        legacy.pop("transfer-fixture")
+                    legacy["schema"] = 3
+                    key = gate.hashlib.sha256(json.dumps(legacy, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+                    # A separate temporary store leaves the fresh and legacy
+                    # evidence intact, including both complete marker types.
+                    args.cache_dir = harness.root / "legacy-cache"
+                    record = args.cache_dir / key
+                    record.mkdir(parents=True)
+                    passed = "".join(gate.record_line("alpha::one", name, "ok") for name in ("passes", "fails"))
+                    (record / "passed.jsonl").write_text(passed)
+                    (record / "complete").touch()
+                    planned = record / "changed" / gate.plan_key(gate.split_plans(plans))
+                    planned.mkdir(parents=True)
+                    (planned / "complete").touch()
+                    (planned / "run.json").write_text(json.dumps({"passed": 2, "skipped_resumed": 0}))
+                    self.assert_execution(self.execute(harness, args, None), None)
+                    self.assert_reused(self.execute(harness, args, None))
+                    self.assertEqual((record / "passed.jsonl").read_text(), passed)
+                    self.assertTrue((record / "complete").exists())
+                    self.assertTrue((planned / "complete").exists())
+
+
+class TransferFixtureSelectionTests(unittest.TestCase):
+    def test_affected_and_unknown_selectors_require_preflight(self):
+        for plans in ([], [["--workspace"]], [["-p", "intent-services"]],
+                      [["--package=intent-services", "--lib"]],
+                      [["-p", "intent-services", "--tests"]],
+                      [["-p", "intent-services", "--lib", "--bins", "--tests"]],
+                      [["-p", "intent-*"]], [["--lib"]], [["-E", "all()"]],
+                      [["-p", "alpha", "--test"]], [["-p", "alpha"], ["-p", "intent-services"]]):
+            with self.subTest(plans=plans):
+                self.assertTrue(gate.needs_transfer_fixture(plans))
+
+    def test_unrelated_targets_do_not_require_preflight(self):
+        for plan in (["-p", "alpha", "--lib", "--bins", "--tests"],
+                     ["-p", "intent-acp", "--lib"],
+                     ["-p", "intent-services", "--test", "one"],
+                     ["--package=intent-services", "--bins"],
+                     ["--package", "intent-services", "--bin", "one"]):
+            with self.subTest(plan=plan):
+                self.assertFalse(gate.needs_transfer_fixture([plan]))
+
+    def test_fixture_identity_separates_resume_credit(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            gate, "worktree_tree", return_value="tree"
+        ), mock.patch.object(gate, "submodule_heads", return_value=[]), mock.patch.object(
+            gate, "required_hash", return_value="hash"
+        ), mock.patch.object(gate, "run", return_value="version"), mock.patch.object(
+            gate, "build_settings", return_value={}
+        ):
+            root = Path(directory)
+            identities = (None, {"root": "/canonical", "contract.json": "one"},
+                          {"root": "/canonical", "contract.json": "two"},
+                          {"root": "/alias", "contract.json": "two"})
+            callbacks = (None, {"manifest": "callback-one"}, {"manifest": "callback-two"})
+            keys = [gate.tree_key(root, root, fixture_identity=callback, transfer_identity=value)
+                    for callback, value in product(callbacks, identities)]
+            self.assertEqual(len(set(keys)), len(keys))
+            self.assertEqual(keys[-1], gate.tree_key(
+                root, root, fixture_identity=callbacks[-1], transfer_identity=identities[-1]))
 
 
 if __name__ == "__main__":

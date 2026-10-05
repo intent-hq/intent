@@ -320,7 +320,7 @@ sys.exit(int(os.environ.get("STUB_EXIT", "0")))
         # Contract/formatting tools are unrelated to this fixture; retain the
         # real check prerequisites and real clippy/lint-sources recipes.
         self.skips = ["-o", "check-makefile-targets", "-o", "check-protocol-field-parity",
-                      "-o", "lint-shell-sleeps", "-o", "fmt"]
+                      "-o", "lint-shell-sleeps", "-o", "fmt", "-o", "check-transfer-fixture"]
 
     def run_make(self, *args, env=None, cwd=None):
         self.log.unlink(missing_ok=True)
@@ -366,9 +366,20 @@ sys.exit(int(os.environ.get("STUB_EXIT", "0")))
                     self.assertEqual(result.stdout.count("cargo clippy"), checks, result.stdout)
                     self.assertEqual(calls, [])
 
+    def test_missing_callback_fixture_blocks_gate_check_even_in_parallel(self):
+        for goals in (["gate"], ["gate", "check"], ["check", "gate"]):
+            for parallel in ([], ["-j4"]):
+                with self.subTest(goals=goals, parallel=parallel):
+                    result, calls = self.run_make(*goals, *parallel, env={
+                        "INTENT_ACP_CALLBACK_ADAPTER_FIXTURE": "",
+                    })
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("INTENT_ACP_CALLBACK_ADAPTER_FIXTURE", result.stderr)
+                    self.assertEqual(calls, [], "a check prerequisite compiled before preflight")
+
     def test_compiler_failure_remains_failure(self):
         for target in ("check", "gate"):
-            result, calls = self.run_make(target, "COMPACT=1", env={"STUB_EXIT": "101"})
+            result, calls = self.run_make(target, "-o", "check-callback-fixture", "COMPACT=1", env={"STUB_EXIT": "101"})
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("Error 101", result.stderr)
             self.assertEqual(len(calls), 1)
