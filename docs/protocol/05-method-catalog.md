@@ -29,20 +29,24 @@ The prepared [desktop control contract (§5.51)](./methods/desktop.md) adds four
 user/executor router methods and one daemon-only reverse RPC. Agent lifecycle
 and actions are MCP-only; `desktopControl: 1` gates support independently at both ends.
 
-The documented surface reserves **436 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
+The prepared [GitLab checkout contract (§5.53)](./methods/repository-checkout.md)
+adds six pre-workspace router methods. `gitlabCheckout: 1` gates the complete
+contract on the selected destination; it does not confer host or project access.
 
-- **Router methods:** 381 methods dispatched via the main router (`router::dispatch`)
+The documented surface reserves **442 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
+
+- **Router methods:** 387 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 55 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 0; use canonical Git read names
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 5 notifications: `events.event` (§6.3) and the socket-private `workspace.repositoryContext.retired`, `workspace.repositorySelection.retired`, `accept-changes.retired`, `sourceControl.read.retired` controls (§6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 6 methods total — 2 are **dual-role** and counted within the 436 dispatchable names (`browser.exec`, `host.openInEditor`), and 4 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) — see §5.9, §5.14 and the reverse-RPC list below
+- **Client-served reverse RPCs:** 6 methods total — 2 are **dual-role** and counted within the 442 dispatchable names (`browser.exec`, `host.openInEditor`), and 4 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) — see §5.9, §5.14 and the reverse-RPC list below
 
-**Total:** 436 dispatchable names + 5 notifications. Of the 6 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 4 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) are daemon→client-only reverse RPCs, never dispatched client→server.
+**Total:** 442 dispatchable names + 5 notifications. Of the 6 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 4 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
-The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.52) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
+The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.53) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
 
 **Prepared GitLab repository additions:** the [repository context and selection
 contracts](methods/workspace.md#repository-context), [native review and commit
@@ -53,7 +57,7 @@ capabilities gate support; catalog entries do not grant permission or establish
 which desktop release contains the feature. The methods below lead the component
 pin, while all existing methods and prepared extensions remain present.
 
-### Router methods by namespace (381 total)
+### Router methods by namespace (387 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
@@ -97,7 +101,7 @@ pin, while all existing methods and prepared extensions remain present.
 | sentry | 8 | assignIssue, authStatus, getIssue, ignoreIssue, listIssues, listProjects, resolveIssue, searchIssues |
 | settings | 4 | get, list, reset, update |
 | skill | 1 | list |
-| sourceControl | 10 | authStatus, cancelAuth, connect, getUser, identityProof.create, identityProof.delete, read.capture, read.detail, read.release, revoke — the provider-generic forge auth surface (§5.27 "Provider-generic auth — `sourceControl.*`"; v10.5, daemon-global; optional routing-only `workspaceId` on `authStatus` / `getUser` only) plus, in v10.8, the provider-generic guest half of the invite identity proof (`identityProof.create` / `identityProof.delete`, §5.27 "Identity proof"; `github.identityProof.*` are their `provider: "github"` aliases, separate dispatchable names like the auth rows). The `github.authStatus` / `connect` / `cancelAuth` / `revoke` / `getUser` rows of the `github` namespace are aliases of these with `provider: "github"` pinned; they remain separate dispatchable names (not `METHOD_ALIASES` entries) because their result shapes are the byte-identical pre-v10.5 projections |
+| sourceControl | 16 | authStatus, cancelAuth, checkout.branches, checkout.capture, checkout.project, checkout.projects, checkout.release, checkout.warm, connect, getUser, identityProof.create, identityProof.delete, read.capture, read.detail, read.release, revoke — the provider-generic forge auth surface (§5.27 "Provider-generic auth — `sourceControl.*`"; v10.5, daemon-global; optional routing-only `workspaceId` on `authStatus` / `getUser` only) plus, in v10.8, the provider-generic guest half of the invite identity proof (`identityProof.create` / `identityProof.delete`, §5.27 "Identity proof"; `github.identityProof.*` are their `provider: "github"` aliases, separate dispatchable names like the auth rows). The `github.authStatus` / `connect` / `cancelAuth` / `revoke` / `getUser` rows of the `github` namespace are aliases of these with `provider: "github"` pinned; they remain separate dispatchable names (not `METHOD_ALIASES` entries) because their result shapes are the byte-identical pre-v10.5 projections. The six prepared `checkout.*` methods (§5.53) require an explicit destination and original connection, without workspace routing |
 | specialist | 5 | create, delete, edit, get, list |
 | stats | 2 | getRateHistory, getUsage — `getRateHistory` is daemon-global (§5.39; v2.9, no `workspaceId`) |
 | system (router) | 1 | capabilities — machine-level capabilities, optional routing-only workspaceId; distinct from the `system.*` fast-path controls below (v2.3, see the note after the fast-path catalog) |
@@ -701,4 +705,4 @@ Conventions used below: parameters marked **(req)** are required (a missing/`nul
 
 ### §5.x subsection index
 
-The per-namespace subsections (§5.1–§5.52) live in the [methods/](./methods/) directory; the canonical § → file map is the [§5.x subsections table in the README](./README.md#5x-subsections-methods).
+The per-namespace subsections (§5.1–§5.53) live in the [methods/](./methods/) directory; the canonical § → file map is the [§5.x subsections table in the README](./README.md#5x-subsections-methods).
