@@ -2473,5 +2473,371 @@ class CoverageReconciliationTests(unittest.TestCase):
                 self.assertFalse(self.report(root, ['-p alpha --test one'])['complete'])
 
 
+# Captured cargo-nextest 0.9.143 fixtures: real list projection, verbatim stdout
+# and JUnit. Replaying these requires only Python, not Cargo or a Rust toolchain.
+CAPTURED_NEXTEST = {
+    'full': {
+        'listing': '''{
+  "rust-suites": {
+    "coverage-probe": {
+      "package-name": "coverage-probe",
+      "binary-id": "coverage-probe",
+      "binary-name": "coverage_probe",
+      "testcases": {
+        "filtered": {
+          "kind": "test",
+          "ignored": false,
+          "filter-match": {
+            "status": "matches"
+          }
+        },
+        "flaky": {
+          "kind": "test",
+          "ignored": false,
+          "filter-match": {
+            "status": "matches"
+          }
+        },
+        "ignored": {
+          "kind": "test",
+          "ignored": true,
+          "filter-match": {
+            "status": "mismatch",
+            "reason": "ignored"
+          }
+        },
+        "passes": {
+          "kind": "test",
+          "ignored": false,
+          "filter-match": {
+            "status": "matches"
+          }
+        }
+      }
+    }
+  }
+}''',
+        'events': '''{"type":"suite","event":"started","test_count":4,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$filtered"}
+{"type":"test","event":"ok","name":"coverage-probe::coverage_probe$filtered","exec_time":0.013692121}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$ignored"}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$flaky"}
+{"type":"test","event":"ignored","name":"coverage-probe::coverage_probe$ignored"}
+{"type":"test","event":"ok","name":"coverage-probe::coverage_probe$flaky#2","exec_time":0.014177485}
+{"type":"suite","event":"ok","passed":2,"failed":0,"ignored":1,"measured":0,"filtered_out":0,"exec_time":0.027869606,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"suite","event":"started","test_count":4,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$passes"}
+{"type":"test","event":"ok","name":"coverage-probe::coverage_probe$passes","exec_time":0.009071929}
+{"type":"suite","event":"ok","passed":1,"failed":0,"ignored":1,"measured":0,"filtered_out":2,"exec_time":0.009071929,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+''',
+        'junit': '''<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="3" skipped="0" failures="0" errors="0" uuid="d1c627f7-9b6b-478d-84e1-64d16b368ca3" timestamp="2026-10-05T15:26:34.457+00:00" time="0.108">
+    <testsuite name="coverage-probe" tests="3" skipped="0" errors="0" failures="0">
+        <testcase name="filtered" classname="coverage-probe" timestamp="2026-10-05T15:26:34.457+00:00" time="0.014"/>
+        <testcase name="flaky" classname="coverage-probe" timestamp="2026-10-05T15:26:34.490+00:00" time="0.014">
+            <flakyFailure timestamp="2026-10-05T15:26:34.471+00:00" time="0.017" message="thread &apos;flaky&apos; (2788581) panicked at src/lib.rs:5:5" type="test failure with exit code 101">thread &apos;flaky&apos; (2788581) panicked at src/lib.rs:5:5:
+assertion failed: std::env::var(&quot;NEXTEST_ATTEMPT&quot;).unwrap().parse::&lt;usize&gt;().unwrap() &gt; 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test flaky ... FAILED
+
+failures:
+
+failures:
+    flaky
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+                <system-out>
+running 1 test
+
+thread &apos;flaky&apos; (2788581) panicked at src/lib.rs:5:5:
+assertion failed: std::env::var(&quot;NEXTEST_ATTEMPT&quot;).unwrap().parse::&lt;usize&gt;().unwrap() &gt; 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test flaky ... FAILED
+
+failures:
+
+failures:
+    flaky
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+</system-out>
+                <system-err>(stdout and stderr are combined)</system-err>
+            </flakyFailure>
+        </testcase>
+        <testcase name="passes" classname="coverage-probe" timestamp="2026-10-05T15:26:34.505+00:00" time="0.009"/>
+    </testsuite>
+</testsuites>
+''',
+    },
+    'filtered': {
+        'listing': '''{
+  "rust-suites": {
+    "coverage-probe": {
+      "package-name": "coverage-probe",
+      "binary-id": "coverage-probe",
+      "binary-name": "coverage_probe",
+      "testcases": {
+        "filtered": {
+          "kind": "test",
+          "ignored": false,
+          "filter-match": {
+            "status": "mismatch",
+            "reason": "expression"
+          }
+        },
+        "flaky": {
+          "kind": "test",
+          "ignored": false,
+          "filter-match": {
+            "status": "mismatch",
+            "reason": "expression"
+          }
+        },
+        "ignored": {
+          "kind": "test",
+          "ignored": true,
+          "filter-match": {
+            "status": "mismatch",
+            "reason": "ignored"
+          }
+        },
+        "passes": {
+          "kind": "test",
+          "ignored": false,
+          "filter-match": {
+            "status": "matches"
+          }
+        }
+      }
+    }
+  }
+}''',
+        'events': '''{"type":"suite","event":"started","test_count":2,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$ignored"}
+{"type":"suite","event":"ok","passed":0,"failed":0,"ignored":1,"measured":0,"filtered_out":2,"exec_time":0,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"suite","event":"started","test_count":2,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$passes"}
+{"type":"test","event":"ok","name":"coverage-probe::coverage_probe$passes","exec_time":0.03023805}
+{"type":"suite","event":"ok","passed":1,"failed":0,"ignored":1,"measured":0,"filtered_out":2,"exec_time":0.03023805,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+''',
+        'junit': '''<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="1" skipped="0" failures="0" errors="0" uuid="832c4ddc-71d1-49ba-81e9-b2c365fc7908" timestamp="2026-10-05T15:26:37.921+00:00" time="0.036">
+    <testsuite name="coverage-probe" tests="1" skipped="0" errors="0" failures="0">
+        <testcase name="passes" classname="coverage-probe" timestamp="2026-10-05T15:26:37.924+00:00" time="0.030"/>
+    </testsuite>
+</testsuites>
+''',
+    },
+    'interrupted': {
+        'listing': '''{
+  "rust-suites": {
+    "coverage-probe": {
+      "package-name": "coverage-probe",
+      "binary-id": "coverage-probe",
+      "binary-name": "coverage_probe",
+      "testcases": {
+        "a_pass": {
+          "kind": "test",
+          "ignored": false,
+          "filter-match": {
+            "status": "matches"
+          }
+        },
+        "b_wait": {
+          "kind": "test",
+          "ignored": false,
+          "filter-match": {
+            "status": "matches"
+          }
+        }
+      }
+    }
+  }
+}''',
+        'events': '''{"type":"suite","event":"started","test_count":2,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$a_pass"}
+{"type":"test","event":"ok","name":"coverage-probe::coverage_probe$a_pass","exec_time":0.012768281}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$b_wait"}
+''',
+        'junit': '''<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="2" skipped="0" failures="1" errors="0" uuid="920ee485-9d36-42cd-bb06-feff20142af2" timestamp="2026-10-05T15:30:55.034+00:00" time="0.035">
+    <testsuite name="coverage-probe" tests="2" skipped="0" errors="0" failures="1">
+        <testcase name="a_pass" classname="coverage-probe" timestamp="2026-10-05T15:30:55.035+00:00" time="0.013"/>
+        <testcase name="b_wait" classname="coverage-probe" timestamp="2026-10-05T15:30:55.048+00:00" time="0.021">
+            <failure message="process aborted with signal 15 (SIGTERM)" type="test abort">process aborted with signal 15 (SIGTERM)</failure>
+            <system-out>
+running 1 test
+</system-out>
+            <system-err>(stdout and stderr are combined)</system-err>
+        </testcase>
+    </testsuite>
+</testsuites>
+''',
+    },
+}
+
+
+class CapturedNextestTests(unittest.TestCase):
+    setUp = AttemptReceiptTests.setUp
+    scope = staticmethod(AttemptReceiptTests.scope)
+    snapshot = staticmethod(AttemptReceiptTests.snapshot)
+
+    def harness(self, root, fixture, count=1, interrupted=False):
+        def lines():
+            yield from fixture['events'].splitlines(keepends=True)
+            if interrupted:
+                raise gate.Terminated(gate.signal.SIGTERM)
+        harness = PlannedRunHarness(root, [(lines(), 100 if interrupted else 0) for _ in range(count)])
+        harness.listing = fixture['listing']
+        original = harness.fake_popen
+        def popen(command, **kwargs):
+            config = Path(command[command.index('--tool-config-file') + 1].split(':', 1)[1])
+            profile = command[command.index('--profile') + 1]
+            junit = tomllib.loads(config.read_text())['profile'][profile]['junit']['path']
+            (config.parent / junit).write_text(fixture['junit'])
+            return original(command, **kwargs)
+        harness.fake_popen = popen
+        return harness
+
+    def proof(self, root, plans):
+        directory = latest_attempt(self.scope(root, plans))
+        return directory, json.loads((directory / 'coverage.json').read_text())
+
+    def test_repeated_frames_reject_duplicate_credit_and_contradictions(self):
+        fixture = CAPTURED_NEXTEST['filtered']
+        lines = fixture['events'].splitlines(keepends=True)
+        variants = {
+            'duplicate summary': fixture['events'] + lines[-1],
+            'duplicate test across frames': fixture['events'] + ''.join(lines[-4:]),
+            'overlapping starts': lines[0] + fixture['events'],
+            'wrong frame count': fixture['events'].replace('"passed":0', '"passed":1'),
+            'wrong ignored count': fixture['events'].replace('"ignored":1', '"ignored":2'),
+            'expression filtered event': ''.join(lines[:-1]) + event('ok', 'coverage-probe::coverage_probe$filtered') + lines[-1],
+            'unknown suite': fixture['events'].replace('"crate":"coverage-probe"', '"crate":"unknown"'),
+        }
+        for reason, raw in variants.items():
+            with self.subTest(reason=reason), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(self.harness(root, dict(fixture, events=raw)).execute(make_args(root, plan=[])), 2)
+                directory, proof = self.proof(root, [])
+                self.assertFalse(proof['complete'])
+                self.assertTrue(proof['errors'])
+                self.assertFalse((directory.parent.parent / 'complete').exists())
+
+    def test_ignored_filter_reason_must_agree_with_metadata(self):
+        listing = json.loads(CAPTURED_NEXTEST['filtered']['listing'])
+        tests = listing['rust-suites']['coverage-probe']['testcases']
+        tests['ignored']['filter-match']['reason'] = 'expression'
+        members, _ = gate.inventory(json.dumps(listing))
+        self.assertFalse(members['coverage-probe', 'ignored']['active'])
+        tests['ignored']['filter-match']['reason'] = 'ignored'
+        tests['ignored']['ignored'] = False
+        with self.assertRaises(ValueError):
+            gate.inventory(json.dumps(listing))
+
+    def test_cancellation_exception_rejects_missing_or_conflicting_proof(self):
+        fixture = CAPTURED_NEXTEST['interrupted']
+        variants = {
+            'unknown case': dict(fixture, junit=fixture['junit'].replace('name="b_wait"', 'name="unknown"')),
+            'unstarted abort': dict(fixture, events=''.join(fixture['events'].splitlines(keepends=True)[:-1])),
+            'unrecorded success': dict(fixture, junit='<testsuites><testsuite name="coverage-probe"><testcase name="a_pass"/><testcase name="b_wait"/></testsuite></testsuites>'),
+            'duplicate case': dict(fixture, junit=fixture['junit'].replace('</testsuite>', '<testcase name="a_pass"/></testsuite>')),
+            'conflicting pass': dict(fixture, junit=fixture['junit'].replace('/>', '><failure/></testcase>', 1)),
+            'ordinary failure': dict(fixture, junit=fixture['junit'].replace('type="test abort"', 'type="test failure"')),
+            'missing passed case': dict(fixture, junit='\n'.join(line for line in fixture['junit'].splitlines() if 'name="a_pass"' not in line)),
+        }
+        for reason, changed in variants.items():
+            with self.subTest(reason=reason), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(self.harness(root, changed, interrupted=True).execute(make_args(root, plan=[])), 143)
+                directory, proof = self.proof(root, [])
+                self.assertFalse(proof['complete'])
+                self.assertTrue(proof['errors'])
+                receipt = json.loads((directory / 'run.json').read_text())
+                tree = directory.parent.parent
+                credits, _ = gate.eligible_credits(tree / 'passed.jsonl', gate.Evidence(tree, receipt))
+                self.assertEqual(credits, {})
+
+    def test_cancellation_invalidates_older_pass_in_shared_journal(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            plans = ['-p coverage-probe --lib']
+            fixture = CAPTURED_NEXTEST['interrupted']
+            passed = dict(fixture,
+                events=event('ok', 'coverage-probe::coverage_probe$a_pass') + event('ok', 'coverage-probe::coverage_probe$b_wait'),
+                junit='<testsuites><testsuite name="coverage-probe"><testcase name="a_pass"/><testcase name="b_wait"/></testsuite></testsuites>')
+            self.assertEqual(self.harness(root, passed).execute(make_args(root, plan=plans)), 0)
+            old, _ = self.proof(root, plans)
+            frozen = self.snapshot(old)
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(self.harness(root, fixture, interrupted=True).execute(
+                    make_args(root, plan=plans, resume='1', force='1')), 143)
+            directory, proof = self.proof(root, plans)
+            self.assertFalse(proof['complete'])
+            self.assertFalse((self.scope(root, plans) / 'complete').exists())
+            receipt = json.loads((directory / 'run.json').read_text())
+            tree = root / 'cache' / KEY
+            credits, _ = gate.eligible_credits(tree / 'passed.jsonl', gate.Evidence(tree, receipt))
+            self.assertEqual(set(credits), {('coverage-probe', 'a_pass')})
+            row = json.loads((tree / 'passed.jsonl').read_text().splitlines()[-1])
+            self.assertEqual(row['test'], 'b_wait')
+            self.assertEqual(row['failure_evidence']['source'], 'junit')
+            self.assertNotIn('event_line', row)
+            self.assertEqual(self.snapshot(old), frozen)
+
+    def test_actual_ignored_metadata_and_frames_complete_and_shortcut(self):
+        for case, plans in product(('full', 'filtered'), ([], ['-p coverage-probe --lib'],
+                                                            ['-p coverage-probe --lib', '-p coverage-probe'])):
+            with self.subTest(case=case, plans=plans), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                fixture = CAPTURED_NEXTEST[case]
+                harness = self.harness(root, fixture, count=len(plans) or 1)
+                self.assertEqual(harness.execute(make_args(root, plan=plans)), 0)
+                directory, proof = self.proof(root, plans)
+                self.assertTrue(proof['complete'])
+                passed = ['filtered', 'flaky', 'passes'] if case == 'full' else ['passes']
+                self.assertEqual(proof['categories']['executed-passed'], [['coverage-probe', t] for t in passed])
+                self.assertEqual(proof['categories']['ignored'], [['coverage-probe', 'ignored']])
+                self.assertEqual(proof['inactive_filtered'], [] if case == 'full' else
+                                 [['coverage-probe', t] for t in ['filtered', 'flaky']])
+                frozen = self.snapshot(directory)
+                shortcut = self.harness(root, fixture, count=0)
+                self.assertEqual(shortcut.execute(make_args(root, plan=plans, resume='1')), 0)
+                self.assertEqual(shortcut.run_commands, [])
+                _, resumed = self.proof(root, plans)
+                self.assertEqual(resumed['categories']['resumed-passed'], proof['categories']['executed-passed'])
+                self.assertEqual(self.snapshot(directory), frozen)
+
+    def test_actual_cancellation_junit_retains_raw_pass_without_completion(self):
+        for plans in ([], ['-p coverage-probe --lib']):
+            with self.subTest(plans=plans), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                fixture = CAPTURED_NEXTEST['interrupted']
+                first = self.harness(root, fixture, interrupted=True)
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(first.execute(make_args(root, plan=plans)), 143)
+                directory, proof = self.proof(root, plans)
+                receipt = json.loads((directory / 'run.json').read_text())
+                self.assertEqual(receipt['results'][0]['native_exit_code'], 100)
+                self.assertIsNone(receipt['results'][0]['exit_code'])
+                self.assertFalse(proof['complete'])
+                self.assertFalse((self.scope(root, plans) / 'complete').exists())
+                self.assertEqual(proof['categories']['executed-passed'], [['coverage-probe', 'a_pass']])
+                self.assertEqual(proof['categories']['failed'], [['coverage-probe', 'b_wait']])
+                frozen = self.snapshot(directory)
+                successor = dict(fixture, events=event('ok', 'coverage-probe::coverage_probe$b_wait'),
+                    junit='<testsuites><testsuite name="coverage-probe"><testcase name="b_wait"/></testsuite></testsuites>')
+                second = self.harness(root, successor)
+                self.assertEqual(second.execute(make_args(root, plan=plans, resume='1')), 0)
+                _, proof = self.proof(root, plans)
+                self.assertTrue(proof['complete'])
+                self.assertEqual(proof['categories']['executed-passed'], [['coverage-probe', 'b_wait']])
+                self.assertEqual(proof['categories']['resumed-passed'], [['coverage-probe', 'a_pass']])
+                self.assertEqual(self.snapshot(directory), frozen)
+
+
 if __name__ == "__main__":
     unittest.main()

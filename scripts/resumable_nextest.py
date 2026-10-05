@@ -513,10 +513,14 @@ def inventory(text: str):
                 raise ValueError("invalid test identity")
             if identity in identities or (alias, test) in aliases:
                 raise ValueError("duplicate or ambiguous listed identity")
-            match = metadata.get("filter-match", {"status": "matches"})["status"]
+            filtering = metadata.get("filter-match", {"status": "matches"})
+            match = filtering["status"]
             if match not in ("matches", "mismatch") or type(metadata.get("ignored", False)) is not bool:
                 raise ValueError("unknown inventory activation metadata")
-            identities[identity] = {"active": match == "matches",
+            ignored_filter = match == "mismatch" and filtering.get("reason") == "ignored"
+            if ignored_filter and not metadata.get("ignored", False):
+                raise ValueError("ignored filter disagrees with test metadata")
+            identities[identity] = {"active": match == "matches" or ignored_filter,
                                     "ignored": metadata.get("ignored", False), "alias": alias}
             aliases[alias, test] = binary
     return identities, aliases
@@ -591,15 +595,17 @@ def validate_result_config(directory: Path, receipt: dict, result: dict, resumed
 def selection_evidence(directory: Path, result: dict, members: dict, resumed: set):
     """Replay terminal events; retries replace failures, duplicate terminals fail closed.
 
-    A missing JUnit is honest for interrupted children. When present, its exact
-    executed membership and final outcomes must agree with the raw stream.
+    A missing JUnit is honest for interrupted children. Available JUnit must
+    corroborate raw outcomes; it may additionally record a started test's abort
+    after interrupted stdout ends. That is failure evidence, never pass credit.
     """
     index = result["selection_index"]
     if result["events"] != f"events-{index}.jsonl":
         raise ValueError("unexpected events path")
     aliases = {(meta["alias"], test): (binary, test)
                for (binary, test), meta in members.items()}
-    outcomes, history, summaries = {}, {}, {}
+    suite_aliases = {meta["alias"] for meta in members.values()}
+    outcomes, history, frames, summaries, started = {}, {}, {}, [], set()
     if (not (directory / result["events"]).exists() and
             all(result[field] is None for field in ("native_exit_code", "exit_code", "finished_at")) and
             not (directory / result["junit"]).exists()):
@@ -617,18 +623,26 @@ def selection_evidence(directory: Path, result: dict, members: dict, resumed: se
                 raise ValueError("malformed raw event")
             if not isinstance(event, dict):
                 raise ValueError("invalid raw event")
+            if event.get("type") == "suite" and event.get("event") == "started":
+                metadata = event.get("nextest", {})
+                alias = f'{metadata.get("crate")}::{metadata.get("test_binary")}'
+                if alias not in suite_aliases:
+                    raise ValueError("unknown suite frame")
+                if alias in frames and not frames[alias]["closed"]:
+                    raise ValueError("overlapping suite frames")
+                frames[alias] = {"closed": False, "outcomes": {}}
             if event.get("type") == "suite" and event.get("event") in ("ok", "failed"):
                 summary = suite_ignored_count(line)
-                if summary is None:
+                if summary is None or summary[0] not in suite_aliases:
                     raise ValueError("invalid terminal suite summary")
-                if summary[0] in summaries:
+                frame = frames.setdefault(summary[0], {"closed": False, "outcomes": {}})
+                if frame["closed"]:
                     raise ValueError("duplicate suite summary")
-                summaries[summary[0]] = event
+                frame["closed"] = True
+                summaries.append((summary[0], event, frame["outcomes"]))
             if event.get("type") != "test":
                 continue
-            if event.get("event") == "started":
-                continue
-            if event.get("event") not in TEST_OUTCOMES:
+            if event.get("event") not in (*TEST_OUTCOMES, "started"):
                 raise ValueError("unknown terminal test outcome")
             name = event.get("name", "")
             alias, sep, test = name.partition("$")
@@ -637,6 +651,12 @@ def selection_evidence(directory: Path, result: dict, members: dict, resumed: se
             identity = aliases.get((alias, test))
             if not sep or identity is None or not members[identity]["active"] or identity in resumed:
                 raise ValueError(f"unselected or resumed terminal event: {name}")
+            frame = frames.setdefault(alias, {"closed": False, "outcomes": {}})
+            if frame["closed"]:
+                raise ValueError("test event outside an open suite frame")
+            if event["event"] == "started":
+                started.add(identity)
+                continue
             ordinal = int(retry.group()[1:]) if retry else 1
             previous = history.get(identity, [])
             if ordinal < 1 or (previous and (ordinal != previous[-1]["retry"] + 1 or previous[-1]["outcome"] != "failed")):
@@ -644,12 +664,13 @@ def selection_evidence(directory: Path, result: dict, members: dict, resumed: se
             previous.append({"outcome": event["event"], "retry": ordinal, "event_line": line_number})
             history[identity] = previous
             outcomes[identity] = event["event"]
-    for alias, summary in summaries.items():
+            frame["outcomes"][identity] = event["event"]
+    for alias, summary, frame_outcomes in summaries:
         count = summary["ignored"]
         for field, outcome in (("passed", "ok"), ("failed", "failed")):
             if field in summary:
                 observed_count = sum(value == outcome and members[identity]["alias"] == alias
-                                     for identity, value in outcomes.items())
+                                     for identity, value in frame_outcomes.items())
                 if type(summary[field]) is not int or summary[field] != observed_count:
                     raise ValueError(f"{field} suite total disagrees with raw outcomes")
         ignored = {identity for identity, meta in members.items()
@@ -670,7 +691,7 @@ def selection_evidence(directory: Path, result: dict, members: dict, resumed: se
         xml = ET.parse(junit_path).getroot()
         if xml.tag not in ("testsuites", "testsuite"):
             raise ValueError("invalid JUnit root")
-        junit = {}
+        junit, aborted = {}, set()
         for suite in xml.iter("testsuite"):
             for case in suite.findall("testcase"):
                 identity = (suite.get("name"), case.get("name"))
@@ -678,14 +699,26 @@ def selection_evidence(directory: Path, result: dict, members: dict, resumed: se
                     raise ValueError("unknown or duplicate JUnit identity")
                 junit[identity] = ("failed" if case.find("failure") is not None or case.find("error") is not None
                                    else "ignored" if case.find("skipped") is not None else "ok")
+                if any(node.get("type") == "test abort" for node in case.findall("failure") + case.findall("error")):
+                    aborted.add(identity)
         if len(list(xml.iter("testcase"))) != len(junit):
             raise ValueError("unmapped JUnit cases")
+        # nextest may finish cancellation bookkeeping after stdout capture was
+        # interrupted. Preserve corroborated passes and expose those failures
+        # explicitly, without inventing a terminal event or successful child.
+        extra = junit.keys() - outcomes.keys()
+        if extra:
+            if (result["native_exit_code"] in (None, 0) or result["exit_code"] == 0 or
+                    not extra <= aborted & started or any(
+                        not members[i]["active"] or i in resumed for i in extra)):
+                raise ValueError("unexplained JUnit outcomes absent from raw events")
+            outcomes.update({identity: "failed" for identity in extra})
         # Nextest omits ignored cases in JUnit; either omission or explicit skipped is valid.
         expected = {identity: outcome for identity, outcome in outcomes.items() if outcome != "ignored"}
         if {i: o for i, o in junit.items() if o != "ignored"} != expected or any(
                 outcomes.get(i) != o for i, o in junit.items()):
             raise ValueError("JUnit and raw outcomes disagree")
-        junit_status = "validated"
+        junit_status = "validated-partial" if extra else "validated"
     return outcomes, history, junit_status
 
 
@@ -836,6 +869,7 @@ def coverage_report(directory: Path, receipt: dict, credits: dict):
             report["selections"].append({"selection_index": index, "evidence_attempt": receipt["attempt_id"], "active": sorted(selected),
                 "unfinished": sorted(missing), "native_exit_code": result["native_exit_code"] if result else None,
                 "junit": junit, "outcomes": [{"identity": identity, "outcome": outcome,
+                "source": "raw" if identity in history else "junit" if outcome == "failed" else "suite-summary",
                 "events": history.get(identity, [])} for identity, outcome in sorted(outcomes.items())]})
         categories["failed"] = failed
         categories["unfinished"] = unfinished - failed
@@ -1219,6 +1253,23 @@ def run_nextest(args: argparse.Namespace) -> int:
                 totals[name] += int(result[name])
         run_record.update(totals, finished_at=utc_now(), exit_code=status,
                           skipped_resumed=len(resumed))
+        if status != 0:
+            partial = coverage_report(record_dir, run_record, credits)
+            cancellation_rows = []
+            for selection in partial["selections"]:
+                for outcome in selection["outcomes"]:
+                    if outcome["source"] == "junit" and outcome["outcome"] == "failed":
+                        binary, test = outcome["identity"]
+                        cancellation_rows.append({"binary_id": binary, "test": test, "outcome": "failed",
+                            "failure_evidence": {"attempt": str(record_dir.relative_to(run_dir)),
+                                "selection_index": selection["selection_index"], "source": "junit"}})
+            if cancellation_rows:
+                # These are failure-only invalidations, not raw pass references.
+                # Append to the shared journal; historical attempts stay untouched.
+                invalidate_completion_markers(run_dir)
+                with (run_dir / "passed.jsonl").open("a", encoding="utf-8") as journal:
+                    for row in cancellation_rows:
+                        journal.write(json.dumps(row) + "\n")
         # Re-read at the decision point: a failure or damaged source observed
         # during execution must not leave a marker based on initial credit.
         try:
