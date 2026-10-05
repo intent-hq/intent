@@ -1323,6 +1323,11 @@ order rather than adding its combined wrapper text again. Repeated failure and
 subsequent batching preserve the same original units, without nested groups or
 duplicate per-attempt content.
 
+Two accepted submissions with identical text and attachment lists remain two
+source groups. Carry-over normalization may remove a repeated capture of the
+same original source; matching text or attachment bytes alone does not establish
+that identity. Unknown legacy identity must not hide a distinct submission.
+
 Persist these groups in the existing durable queue payload. Preserve them through
 restart, redrive, processing snapshots and further failure recovery. Grouped
 interrupt carry-over and resume recaps also retain each text/attachment unit;
@@ -1359,6 +1364,7 @@ the daemon field and dependent frontend behavior.
 |---|---|
 | Text/image, image-only and text/file sources fail in one flush | One retry row shows each source with its own attachments; provider blocks keep that order |
 | Retry, restart and fail again | Original groups survive without duplicate wrapper text or lost attachments |
+| A new interrupted submission matches an original retry source's text and attachments | Both accepted sources appear; only a repeated capture of the same source is coalesced |
 | Interrupt or resume recap contains several prior image-bearing messages | Each prior message keeps its own images when carried into the next prompt |
 | Retry has a carry-over image absent from top-level `imageBlocks` | Thumbnail, lightbox and reconnect recovery still find the image |
 | Hold, cancel or save unchanged combined text | Original groups and the parent row's permissions remain |
