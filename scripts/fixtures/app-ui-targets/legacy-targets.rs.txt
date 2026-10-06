@@ -1,0 +1,58 @@
+fn targets() -> Value {
+    // Port of APP_UI_TARGETS from packages/cloudlands-fe/src/shared/app-ui-targets.ts
+    // DRIFT RISK: This is a static copy; changes to the FE targets table require
+    // manual sync. Keep this in sync with the FE reference.
+    json!([
+        {
+            "id": "home",
+            "tab": "",
+            "label": "Home",
+            "route": "/",
+            "category": "navigation",
+            "description": "Workspace home and global overview."
+        },
+        {
+            "id": "new-workspace",
+            "tab": "",
+            "label": "New workspace",
+            "route": "/workspace/new",
+            "category": "navigation",
+            "description": "Create-workspace flow."
+        },
+        // Settings targets
+        {
+            "id": "quickActions.defaultModel",
+            "tab": "agents",
+            "hashAliases": ["default-model", "quickActions.defaultModel"],
+            "scrollSelector": "#default-model",
+            "highlightSelector": "[data-highlight-id=\"quickActions.defaultModel\"]",
+            "label": "Settings: Default model",
+            "route": "/settings?tab=agents#default-model",
+            "category": "settings",
+            "description": "Default AI behavior model selection."
+        },
+        {
+            "id": "agents",
+            "tab": "agents",
+            "hashAliases": ["agents", "specialists", "all-agents"],
+            "scrollSelector": "#specialists",
+            "highlightSelector": "[data-highlight-id=\"specialists\"]",
+            "label": "Settings: Agents",
+            "route": "/settings?tab=agents#specialists",
+            "category": "settings",
+            "description": "Agent and specialist settings."
+        },
+        {
+            "id": "workspace-card",
+            "tab": "",
+            "hashAliases": ["workspace-card"],
+            "highlightSelector": "[data-highlight-id^=\"workspace-\"]",
+            "label": "Workspace card",
+            "route": "/",
+            "category": "workspace",
+            "description": "A workspace card on workspace list surfaces.",
+            "dynamic": true,
+            "idPattern": "workspace-{workspaceId}"
+        },
+    ])
+}

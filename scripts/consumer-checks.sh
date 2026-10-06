@@ -38,7 +38,7 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 cd "$repo_root"
 
-checks="event-catalog-check check-mcp-bindings docs-check check-protocol-catalog check-makefile-targets check-protocol-field-parity check-transfer-selection-contract check-backend-keychain-contract check-agent-worker-contract check-note-pagination-contract"
+checks="event-catalog-check check-mcp-bindings docs-check check-protocol-catalog check-makefile-targets check-protocol-field-parity check-transfer-selection-contract check-backend-keychain-contract check-agent-worker-contract check-app-ui-targets check-note-pagination-contract"
 advisory=${CONSUMER_CHECKS_ADVISORY:-}
 context=${CONSUMER_CHECKS_CONTEXT:-monorepo}
 make_bin=${MAKE:-make}
@@ -92,6 +92,7 @@ fix_path() {
     check-protocol-field-parity) echo "scripts/check-protocol-field-parity.mjs PAIRS (ignore manifest) or the cloudlands-fe type that consumes the row struct" ;;
     check-transfer-selection-contract) echo "docs/protocol/fixtures/transfer-selection/ (shape, coverage and provenance; no compilation)" ;;
     check-backend-keychain-contract) echo "docs/protocol/fixtures/backend-keychain/v1/ + adopted component mirrors/locks (see docs/protocol/backend-keychain.md)" ;;
+    check-app-ui-targets) echo "intentd app-ui-targets.json + cloudlands-fe app-ui-targets.ts (supported routes and aliases)" ;;
     check-agent-worker-contract) echo "docs/protocol/methods/agent-workers.md + fixtures/agent-workers/v1/ + scripts/agent-worker-contract*.mjs (synthetic only)" ;;
     check-note-pagination-contract) echo "docs/protocol/fixtures/notes/ + methods/notes-tasks.md (prepared specification only)" ;;
     *) echo "unknown check" ;;
