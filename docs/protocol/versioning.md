@@ -8,8 +8,15 @@ capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `13.7` — prepared checkout owner-avatar extension; not a shipped-version claim.
+**Documented version:** `13.8` — prepared checkout configuration extension; not a shipped-version claim.
 Other prepared extensions retain their independent support gates.
+
+**Version 13.8 — selected checkout configuration (additive, prepared).**
+Adds `sourceControl.checkout.repoConfig` and `gitlabCheckoutRepoConfig: 1` for a
+fixed `.intent/config.json` read at an observed immutable SHA. The original
+checkout capability and authority remain required. Missing config is distinct
+from unavailable reads; old clients and old-daemon fallback remain compatible.
+See the [configuration contract](./methods/repository-checkout.md#selected-repository-configuration-prepared-protocol-138).
 
 **Version 13.7 — checkout owner avatars (additive, prepared).**
 The [owner-avatar extension](./methods/repository-checkout.md#owner-avatar-extension-prepared-protocol-137)

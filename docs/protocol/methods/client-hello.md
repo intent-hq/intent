@@ -159,6 +159,15 @@ Legacy captures keep their original shape, including on a newer daemon.
 Clients connected to older daemons omit the request member and retain image
 fallbacks. See the [owner-avatar contract](repository-checkout.md#owner-avatar-extension-prepared-protocol-137).
 
+#### GitLab checkout configuration capability
+
+**Prepared additive extension, protocol 13.8.**
+`server.capabilities.gitlabCheckoutRepoConfig: 1`, alongside `gitlabCheckout: 1`,
+allows the fixed pre-workspace configuration read on the original socket.
+Require exactly integer `1` for both capabilities. A numeric protocol version,
+method catalog entry or successful unrelated call is insufficient. See the
+[configuration contract](repository-checkout.md#selected-repository-configuration-prepared-protocol-138).
+
 #### Repository context capability
 
 **Prepared additive contract.** `server.capabilities.repositoryContext: 1`
