@@ -273,8 +273,8 @@ run_real_make env MAKE="$make_bin" "$script_bash" scripts/consumer-checks.sh --c
   fail "a caller-controlled toolchain executable ran under consumer-checks:"$'\n'"$(cat "$marker_log")"$'\n'"$real_output"
 grep -q '^trusted node scripts/check-protocol-catalog.mjs$' "$trusted_log" ||
   fail "the trusted node did not run check-protocol-catalog:"$'\n'"$(cat "$trusted_log")"
-[ "$(grep -c '^trusted node ' "$trusted_log")" -eq 12 ] ||
-  fail "expected the 12 node invocations to run the trusted node:"$'\n'"$(cat "$trusted_log")"
+[ "$(grep -c '^trusted node ' "$trusted_log")" -eq 13 ] ||
+  fail "expected the 13 node invocations to run the trusted node:"$'\n'"$(cat "$trusted_log")"
 grep -q '^trusted node --test docs/protocol/fixtures/scripts/monitors.test.mjs$' "$trusted_log" ||
   fail "script monitor contract tests did not run with the trusted node:"$'\n'"$(cat "$trusted_log")"
 grep -q '^trusted node --test docs/protocol/fixtures/submission-correlation/contract.test.mjs$' "$trusted_log" ||
@@ -282,8 +282,8 @@ grep -q '^trusted node --test docs/protocol/fixtures/submission-correlation/cont
 grep -q '^trusted docs-check$' "$trusted_log" || fail "docs-check.sh did not run:"$'\n'"$(cat "$trusted_log")"
 grep -q '^  check-protocol-catalog  *FAIL  ' <<<"$real_output" ||
   fail "the trusted checker's failure did not reach the summary table:"$'\n'"$real_output"
-[ "$(grep -c '^  [a-z-]*  *pass  ' <<<"$real_output")" -eq 9 ] ||
-  fail "real-make run did not list the other 9 checks as pass:"$'\n'"$real_output"
+[ "$(grep -c '^  [a-z-]*  *pass  ' <<<"$real_output")" -eq 10 ] ||
+  fail "real-make run did not list the other 10 checks as pass:"$'\n'"$real_output"
 
 # The reusable workflow pipes the runner through `tee`, so its step must run
 # under GitHub's `shell: bash` (`bash --noprofile --norc -eo pipefail {0}`);
