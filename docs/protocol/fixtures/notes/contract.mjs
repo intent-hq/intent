@@ -1,71 +1,23 @@
 // Specification arithmetic and validators only. No daemon/store implementation.
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
 import { canonicalJson } from '../../../../scripts/check-transfer-selection-contract.mjs';
 
 export const utf8 = value => Buffer.byteLength(value, 'utf8');
 export const wireBytes = value => utf8(JSON.stringify(value));
-export const digest = value => createHash('sha256').update(canonicalJson(value), 'utf8').digest('hex');
 export const boundary = (text, offset) => Number.isSafeInteger(offset) && offset >= 0
   && offset <= text.length && !(offset > 0 && offset < text.length
     && /[\uD800-\uDBFF]/u.test(text[offset - 1]) && /[\uDC00-\uDFFF]/u.test(text[offset]));
 export const validText = text => typeof text === 'string' && !text.includes('\0')
   && !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(text);
 
-// Fixture oracle for the EXISTING service guard, not a streaming implementation.
-export function isNumberedReadPresentation(text) {
-  const trailer = text.indexOf('\n\n--- Task Metadata ---\n');
-  if (trailer === 0) return true;
-  const body = trailer < 0 ? text : text.slice(0, trailer);
-  const number = line => {
-    if (line === undefined) return undefined;
-    const rest = line.replace(/^ +/u, '');
-    const pad = line.length - rest.length;
-    const digits = rest.match(/^[0-9]+/u)?.[0];
-    if (!digits || pad + digits.length !== Math.max(4, digits.length)) return undefined;
-    const after = rest.slice(digits.length);
-    if (!after.startsWith(' | ') && after !== ' |') return undefined;
-    const n = BigInt(digits);
-    return n <= 18446744073709551615n ? n : undefined;
-  };
-  const [first, second] = body.split('\n', 2).map(number);
-  return first !== undefined && second !== undefined && second === first + 1n;
-}
-
-export function spliceError(source, splices, limits) {
-  if (!Array.isArray(splices) || !splices.length) return 'invalid-params';
-  if (splices.length > limits.splices) return 'note-page-budget';
-  let previous;
-  for (const s of splices) {
-    if (!boundary(source, s.start) || !boundary(source, s.end) || s.start > s.end
-      || !validText(s.text) || isNumberedReadPresentation(s.text) || (previous && (previous.end > s.start || previous.start >= s.start))) {
-      return 'invalid-params';
-    }
-    previous = s;
-  }
-  return splices.reduce((bytes, s) => bytes + utf8(s.text), 0) > limits.sourceBytes
-    ? 'note-page-budget' : null;
-}
-
-export function applySourceSplices(source, splices) {
-  return splices.reduceRight((text, s) => text.slice(0, s.start) + s.text + text.slice(s.end), source);
-}
-
-export function mapPoint(point, affinity, changes) {
-  let delta = 0;
-  for (const c of changes) {
-    if (point < c.start) break;
-    if (point < c.end || (c.start === c.end && point === c.start)) {
-      return { offset: c.start + delta + (affinity === 'after' ? c.insertedLength : 0),
-        deleted: point > c.start && point < c.end };
-    }
-    delta += c.insertedLength - (c.end - c.start);
-  }
-  return { offset: point + delta, deleted: false };
-}
-
 export function assertSourcePage(source, frame, limits, request = { direction: 'forward' }) {
+  assert.equal(frame.jsonrpc, '2.0');
+  rpcId(frame.id);
   const p = frame.result;
+  assertScope(p.scope);
+  for (const key of ['sourceRevision', 'snapshotId', 'contextRef', 'metadataRef']) token(p[key]);
+  timestamp(p.expiresAt);
+  cursor(p.nextCursor); cursor(p.previousCursor);
   assert.equal(p.kind, 'noteSourcePage');
   assert.equal(p.note, undefined);
   assert.equal(p.content, undefined);
@@ -117,45 +69,6 @@ export function assertRanges(ranges, maxRanges) {
   }
 }
 
-// Validate recorded scenario transitions; does not execute persistence or emulate RPC.
-export function assertOperationTrace(trace) {
-  const receipts = new Map();
-  let commits = 0;
-  for (const row of trace.steps) {
-    const key = row.operationId;
-    const prior = receipts.get(key);
-    if (row.outcome === 'committed') {
-      if (prior) {
-        assert.equal(row.digest, prior.digest);
-        assert.deepEqual(row.receipt, prior.receipt);
-        assert.equal(row.writeCount, 0);
-        assert.equal(row.historyCount, 0);
-        assert.equal(row.eventCount, 0);
-      } else {
-        assert.equal(row.writeCount, 1);
-        assert.equal(row.historyCount, 1);
-        assert.equal(row.eventCount, 1);
-        assert.ok(row.atomicReceipt);
-        assert.ok(row.receipt.beforeRevision !== row.receipt.afterRevision);
-        receipts.set(key, row);
-        commits++;
-      }
-    } else {
-      assert.equal(row.writeCount, 0);
-      assert.equal(row.historyCount, 0);
-      assert.equal(row.eventCount, 0);
-      assert.equal(row.draftRetained, true);
-      if (row.error === 'note-operation-mismatch') {
-        assert.ok(prior);
-        assert.notEqual(row.digest, prior.digest);
-      }
-    }
-    // Queue drain, missing ack, conflict and pending are never a clear-draft signal.
-    if (!row.acknowledged || row.outcome !== 'committed') assert.equal(row.clearDraft, false);
-  }
-  assert.equal(commits, trace.expectedCommits);
-}
-
 export function admitState(current, incoming) {
   assertScope(incoming.scope);
   if (current && scopeKeys.some(k => incoming.scope[k] !== current.scope[k])) return current;
@@ -167,60 +80,6 @@ export function admitState(current, incoming) {
   return current;
 }
 
-// Validate finite staged fixtures, not a durable staging server.
-export function assertStream(chunks, expected, limits, frames) {
-  assert.ok(Array.isArray(frames), 'complete append RPC frames are required');
-  assert.equal(frames.length, chunks.length);
-  let previousDigest = null, records = 0;
-  for (const [sequence, chunk] of chunks.entries()) {
-    const frame = frames[sequence];
-    assertAppendFrame(frame, limits);
-    const { backendId, workspaceId, noteId, noteInstanceId, operationId, headerDigest, ...wireChunk } = frame.params;
-    assert.deepEqual(wireChunk, chunk);
-    if (sequence) for (const key of [...scopeKeys, 'operationId', 'headerDigest']) {
-      assert.equal(frame.params[key], frames[0].params[key]);
-    }
-    assert.equal(chunk.sequence, sequence);
-    assert.equal(chunk.stream, expected.stream);
-    assert.equal(chunk.previousDigest, previousDigest);
-    const { chunkDigest, ...payload } = chunk;
-    assert.equal(digest(payload), chunkDigest);
-    assert.ok(chunk.records.length <= limits.items);
-    assert.ok(chunk.records.reduce((n, r) => n + utf8(r.text ?? ''), 0) <= limits.sourceBytes);
-    previousDigest = chunkDigest;
-    records += chunk.records.length;
-  }
-  assert.equal(expected.chunks, chunks.length);
-  assert.equal(expected.records, records);
-  assert.equal(expected.lastDigest, previousDigest);
-}
-
-export function frozenSource(base, groups, fence, textById, limits) {
-  let lastSequence = -1;
-  return groups.reduce((source, group) => {
-    assert.ok(group.localSequence > lastSequence && group.localSequence <= fence);
-    lastSequence = group.localSequence;
-    const splices = group.splices.map(s => ({ ...s, text: textById[s.textId] }));
-    // Group/item streaming removes the inline total-input cap, not scalar/range rules.
-    assert.equal(spliceError(source, splices, { ...limits, splices: Number.MAX_SAFE_INTEGER,
-      sourceBytes: Number.MAX_SAFE_INTEGER }), null);
-    return applySourceSplices(source, splices);
-  }, base);
-}
-
-export function assertUnchangedGaps(before, after, splices) {
-  let input = 0, output = 0;
-  for (const s of splices) {
-    const gap = before.slice(input, s.start);
-    assert.equal(after.slice(output, output + gap.length), gap);
-    output += gap.length;
-    assert.equal(after.slice(output, output + s.text.length), s.text);
-    output += s.text.length;
-    input = s.end;
-  }
-  assert.equal(after.slice(output), before.slice(input));
-}
-
 const scopeKeys = ['backendId', 'workspaceId', 'noteId', 'noteInstanceId'];
 const token = value => assert.ok(typeof value === 'string' && value.length > 0 && utf8(value) <= 256);
 export function assertScope(scope) {
@@ -230,28 +89,6 @@ export function assertScope(scope) {
 const rpcId = id => assert.ok(Number.isSafeInteger(id) || (typeof id === 'string' && utf8(id) <= 64));
 const timestamp = value => assert.ok(typeof value === 'string' && Number.isFinite(Date.parse(value)));
 const cursor = value => value === null ? undefined : token(value);
-
-// Complete wire validation is mandatory; hash-chain arithmetic alone is insufficient.
-export function assertAppendFrame(frame, limits) {
-  assert.equal(frame.jsonrpc, '2.0');
-  assert.equal(frame.method, 'note.operation.append');
-  rpcId(frame.id);
-  const p = frame.params;
-  assertScope(p);
-  assert.match(p.operationId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
-  for (const key of ['headerDigest', 'chunkDigest']) assert.match(p[key], /^[0-9a-f]{64}$/);
-  assert.ok(['text', 'dirty', 'selection', 'mutation', 'live'].includes(p.stream));
-  assert.ok(Number.isSafeInteger(p.sequence) && p.sequence >= 0);
-  if (p.previousDigest !== null) assert.match(p.previousDigest, /^[0-9a-f]{64}$/);
-  assert.ok(Array.isArray(p.records) && p.records.length <= limits.items);
-  if (p.stream === 'text') for (const row of p.records) {
-    assert.equal(row.kind, 'text'); token(row.id);
-    assert.ok(Number.isSafeInteger(row.offset) && row.offset >= 0);
-    assert.ok(validText(row.text));
-  }
-  assert.ok(p.records.reduce((n, r) => n + utf8(r.text ?? ''), 0) <= limits.sourceBytes);
-  assert.ok(wireBytes(frame) <= limits.wireBytes, 'complete append RPC exceeds wire budget');
-}
 
 export function assertSnapshotResult(page) {
   assertScope(page.scope);
@@ -398,12 +235,12 @@ export function assertPageStateFrame(frame, limits) {
   assert.equal(typeof s.deleted, 'boolean'); assert.equal(s.invalidation, 'all');
   assert.deepEqual(Object.keys(s).sort(), ['kind', 'scope', 'stateGeneration', 'sourceRevision',
     'attributionGeneration', 'attributionState', 'commentRevision', 'deleted', 'invalidation'].sort());
-  assert.ok(wireBytes(frame) <= limits.receiptBytes);
+  assert.ok(wireBytes(frame) <= limits.stateBytes);
 }
 
 export function pagingBackendId(frame) {
   const caps = frame?.result?.server?.capabilities;
-  return caps?.notePaging === 1 && typeof caps.notePagingBackendId === 'string'
+  return caps?.notePagingRead === 1 && typeof caps.notePagingBackendId === 'string'
     && caps.notePagingBackendId.length > 0 && utf8(caps.notePagingBackendId) <= 256
     ? caps.notePagingBackendId : null;
 }
@@ -676,53 +513,4 @@ export function assertNativeGraph(frames, links, limits) {
     }
   }
   return nodes;
-}
-
-
-// Wire identity only; numeric local editor history IDs are a separate domain.
-export function assertInverseHistoryGroup(value) {
-  token(value);
-}
-
-// Controlled receipt ownership/expiry oracle, not a database authorization check.
-// reachableRefs stands for refs resolved from THIS retained receipt's inverse/effects.
-export function assertInlineReceiptDetail(request, receipt, reachableRefs, now) {
-  assertScope(receipt.scope);
-  for (const key of scopeKeys) assert.equal(request[key], receipt.scope[key]);
-  assert.equal(request.kind, 'detail');
-  token(receipt.operationId); assert.equal(request.operationId, receipt.operationId);
-  assert.match(receipt.payloadDigest, /^[0-9a-f]{64}$/);
-  assert.equal(request.payloadDigest, receipt.payloadDigest);
-  assert.equal(request.headerDigest, undefined); assert.equal(request.viewId, undefined);
-  token(request.ref); assert.ok(reachableRefs.includes(request.ref));
-  timestamp(receipt.receiptExpiresAt);
-  assert.ok(Number.isFinite(now) && now < Date.parse(receipt.receiptExpiresAt));
-}
-
-// Controlled already-resolved marker descriptor oracle. No source provenance,
-// live comment ownership, uploaded attribute resolver or native mapping is proved.
-export function assertStagedMarkerOccurrence(record, descriptor, attributes, source) {
-  assert.equal(record.kind, 'projection'); assert.equal(record.role, 'marker-occurrence');
-  assert.ok(Number.isSafeInteger(record.ordinal) && record.ordinal >= 0);
-  token(record.canonicalId); assert.ok(validText(record.canonicalId) && !record.canonicalId.includes(':'));
-  assert.equal(descriptor.version, 1); assert.equal(descriptor.nodeType, 'commentAnchor');
-  assert.ok(descriptor.parentOrdinal === null || (Number.isSafeInteger(descriptor.parentOrdinal)
-    && descriptor.parentOrdinal >= 0 && descriptor.parentOrdinal < record.ordinal));
-  token(descriptor.attributesRef);
-  const { from, to } = descriptor.nativeRange;
-  assert.ok(Number.isSafeInteger(from) && from >= 0 && Number.isSafeInteger(to) && to - from === 1);
-  assert.deepEqual(Object.keys(attributes).sort(), ['commentId', 'id', 'type']);
-  assert.ok(['start', 'end', 'point'].includes(attributes.type));
-  assert.equal(attributes.commentId, record.canonicalId);
-  assert.equal(attributes.id, `${record.canonicalId}:${attributes.type}`);
-  const { start, end } = record.sourceRange;
-  assert.ok(boundary(source, start) && boundary(source, end) && start < end);
-  assert.equal(source.slice(start, end), `<!--anchor:${record.canonicalId}:${attributes.type}-->`);
-}
-
-// Controlled primary-view selector check, not a persisted-header or runtime auth proof.
-export function assertCapturedViewOutput(header, requestKind, responseKind) {
-  assert.ok(['source', 'selectionMarkdown', 'search'].includes(header.output));
-  assert.equal(requestKind, header.output);
-  assert.equal(responseKind, header.output);
 }

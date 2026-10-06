@@ -97,53 +97,22 @@ These errors are future contracts; current CoW errors remain until retirement.
 
 ### Prepared note paging errors
 
-Only the opt-in [note paging/partial-write contract](./methods/notes-tasks.md#revision-safe-note-pages-prepared-additive-contract)
+Only the opt-in [read-only note paging contract](./methods/notes-tasks.md#revision-safe-note-pages-prepared-additive-contract)
 uses these bounded outcomes. Legacy errors (including full `current` conflict
 entities) remain unchanged. A page-aware error's entire JSON-RPC envelope is at most
-4,096 escaped UTF-8 bytes; `data` includes `code`, optional `operationId` and
-`currentRevision`, never `current: Note`, old/deleted text or a full annotation map.
+4,096 escaped UTF-8 bytes; `data` includes `code`, optional `currentRevision`,
+never `current: Note`, old/deleted text or a full annotation map.
 Messages are fixed short descriptions; do not echo user payloads into errors.
 
 | Numeric code | data.code | Meaning / client action |
 | --- | --- | --- |
 | -32602 | not-found | Fresh paged comment lookup addresses a missing resource: `data.entity` is `commentThread` after its final comment is deleted, or `comment` for a deleted commentId. A deleted root with surviving replies is a successful `rootState: "deleted"` thread page, not this error. These outcomes do not imply note deletion. Old continuation cursors instead follow the normal stale-epoch rule. Legacy unpaged comment errors remain unchanged. |
-| -32602 | invalid-params | Invalid range, overlap, surrogate boundary, unpaired surrogate, NUL, unknown shape, disallowed filter or malformed digest; no note mutation. |
+| -32602 | invalid-params | Invalid range, overlap, surrogate boundary, unpaired surrogate, NUL, unknown shape, disallowed filter; no note mutation. |
 | -32602 | note-page-cursor-invalid | Tampered, wrong scope/kind/budget/range-set cursor; reject, never reinterpret it as a first page. |
 | -32602 | note-page-expired | Snapshot expired, evicted or unavailable after restart; preserve drafts and reacquire. Not entity deletion. |
 | -32005 | note-page-stale | Source revision or relevant annotation epoch changed; invalidate that view and reconcile. |
-| -32005 | note-revision-conflict | Partial write base differs from authoritative revision; whole batch rejected, no source/history mutation. |
-| -32602 | note-operation-mismatch | Existing operation identity has another payload/digest; never execute it again. |
-| -32602 | note-operation-expired | Deadline passed before new admission; do not execute even if the receipt was pruned. |
 | -32602 | note-page-budget | Request exceeds hard item/decoded/wire limits, or minimum valid response cannot fit requested budgets; no mutation. |
 | -32602 | not-found | Entity absent or invisible under existing visibility policy. Only this code invokes the deleted-entity flow. |
-| -32603 | note-operation-pending | Durable admission is unsettled; inspect status or retry exactly, retaining the draft. |
-
-For applySplices, explicit validation/conflict errors classify as rejected/conflict
-only when the server guarantees no note mutation. Persist admitted terminal outcomes
-with the operation record. Transport loss, cancellation and unclassified internal
-errors are **unknown**, not proof of failure or rollback. `note.operationStatus`
-returns `pending`, `unknown`, `conflict`, `rejected` or the committed receipt; unknown
-cannot clear dirty state. A lost reply after a successful commit is recovered from
-the same durable receipt. An internal error with an uncertain commit must never be
-translated into an authoritative rejected status. Authorization is checked before
-receipt/cursor details are disclosed, and again on replay.
-
-Staged `note.operation.*` calls additionally use these bounded discriminators:
-
-| Numeric code | data.code | Meaning / client action |
-| --- | --- | --- |
-| -32602 | note-operation-chunk | Chunk sequence/hash-chain gap or mismatch; accepted prefix is unchanged; query status and retry the exact missing chunk. |
-| -32602 | note-operation-incomplete | Seal has missing chunks/text, wrong counts/digests or invalid final addresses; nothing sealed or committed. |
-| -32602 | note-operation-state | Append after seal, read before seal, commit of a read-only operation, or unknown stream/context version; no mutation. |
-| -32602 | note-operation-cancelled | Cancellation won before commit admission; no note/history mutation and no later commit under this ID. |
-| -32603 | note-operation-capacity | Snapshot/staging/output storage cannot admit work; preserve drafts, report failure and release unpublished output; no truncation or partial commit. |
-
-Staged status uses headerDigest to resolve lost begin/append/seal acknowledgements,
-then also binds payloadDigest after sealing. Cancellation that loses to commit
-admission returns pending or the committed receipt, never a false cancelled outcome.
-Remote source changes can invalidate commit while the retained read view remains
-valid until expiry. A shared pageState equal-generation/different-epochs payload is
-a client-detected protocol inconsistency, not permission to overwrite cache state.
 
 ### Prepared desktop control errors
 

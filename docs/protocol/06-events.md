@@ -735,7 +735,7 @@ These additions prepare metadata, not connection relaying or reconnect ownership
 ### Prepared note page subscriptions
 
 The [revision-safe note contract](./methods/notes-tasks.md#revision-safe-note-pages-prepared-additive-contract)
-adds opt-in projections, **not new event names**. `notePaging: 1` gates
+adds opt-in projections, **not new event names**. `notePagingRead: 1` gates
 `note.subscribe { workspaceId, noteId, projection: "pageState" }`;
 `noteAnnotations: 1` additionally gates
 `comment.subscribe { workspaceId, noteId, projection: "pageState" }`.
@@ -763,13 +763,13 @@ summary or replies are included. Each complete push is at most **4,096 escaped
 UTF-8 bytes**. Invalidations deliberately do not enumerate unbounded changed ranges,
 comment IDs or task IDs. Indexed pages/counts are fetched separately on demand.
 
-Publish after the source/receipt or annotation transaction commits. Metadata-only
-updates, every full writer, partial writes, marker rewrites and task conversion all
+Publish after the source or annotation transaction commits. Metadata-only
+updates, every full writer, marker rewrites and task conversion all
 advance the appropriate source state. Attribution-only recompute changes only its
 generation; comment-only reply/resolve/delete changes only commentRevision. A
 source-writing comment action changes source and comment state together. Coalesce
 pending state per subscription to the newest complete tuple; do not concatenate
-unbounded deltas. A retry of an already committed operation publishes nothing new.
+unbounded deltas.
 `stateGeneration` is a persisted monotonic unsigned 64-bit counter serialized as a
 canonical decimal string, shared by **both** channels for one NoteScope. Increment
 it in the same transaction as any tuple change (including metadata, annotation

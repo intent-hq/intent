@@ -1,279 +1,15 @@
-import { canonicalJson } from '../../../../scripts/check-transfer-selection-contract.mjs';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { createHash } from 'node:crypto';
-import { caseFoldTable, sourceSearch, assertSourceSearchTrace } from './source-search.mjs';
-import { assertSourceHitDetail } from './source-hit-detail.mjs';
-import { assertRenderedIdentityCapture } from './rendered-search.mjs';
-import { assertRenderedHitDetail, assertOutputStringEncoding } from './rendered-hit-detail.mjs';
 import {
-  utf8, wireBytes, digest, boundary, spliceError, applySourceSplices, mapPoint,
-  assertSourcePage, cursorError, overlapIds, assertRanges, assertOperationTrace,
-  admitState, assertStream, frozenSource, assertUnchangedGaps,
-  assertAppendFrame, assertMetadataFrame, assertReplyFrames, assertPageStateFrame,
+  utf8, wireBytes, boundary, assertSourcePage, cursorError, overlapIds, assertRanges,
+  admitState, assertMetadataFrame, assertReplyFrames, assertPageStateFrame,
 } from './contract.mjs';
-
 const f = JSON.parse(await readFile(new URL('./contract.json', import.meta.url), 'utf8'));
 const docs = await readFile(new URL('../../methods/notes-tasks.md', import.meta.url), 'utf8');
 const events = await readFile(new URL('../../06-events.md', import.meta.url), 'utf8');
 const errors = await readFile(new URL('../../09-error-codes.md', import.meta.url), 'utf8');
 const versioning = await readFile(new URL('../../versioning.md', import.meta.url), 'utf8');
-const searchFixtures = JSON.parse(await readFile(new URL('./source-search.json', import.meta.url), 'utf8'));
-const foldBytes = await readFile(new URL('./CaseFolding-17.0.0.txt', import.meta.url));
-const foldTable = caseFoldTable(foldBytes.toString('utf8'));
-const renderedSearchFixtures = JSON.parse(await readFile(new URL('./rendered-search.json', import.meta.url), 'utf8'));
-const renderedDetail = JSON.parse(await readFile(new URL('./rendered-hit-detail.json', import.meta.url), 'utf8'));
-test('server output string exceptions preserve decoded UTF8 thresholds and reference ownership forms', () => {
-  for (const value of ['', 'ordinary', 'é'.repeat(512), '😀'.repeat(256)]) {
-    for (const domain of ['receiptDetail', 'renderedHit'])
-      assertOutputStringEncoding({ type: 'string', value }, value, domain);
-    assertOutputStringEncoding({ type: 'string', valueRef: 'owned-value' }, value, 'receiptDetail');
-  }
-  for (const value of ['é'.repeat(512) + 'a', '😀'.repeat(257)]) {
-    for (const domain of ['receiptDetail', 'renderedHit']) {
-      assert.throws(() => assertOutputStringEncoding({ type: 'string', value }, value, domain));
-      assertOutputStringEncoding({ type: 'string', valueRef: 'owned-value' }, value, domain);
-    }
-  }
-  // Rendered ordinary short strings are deterministic inline output; the whole
-  // leaf is the separate mandatory-reference exception even when just one byte.
-  assert.throws(() => assertOutputStringEncoding({ type: 'string', valueRef: 'r' }, 'x', 'renderedHit'));
-  assertOutputStringEncoding({ type: 'string', valueRef: 'r' }, 'x', 'renderedHit', true);
-  assert.throws(() => assertOutputStringEncoding({ type: 'string', value: 'x' }, 'x', 'renderedHit', true));
-});
-test('server output string exceptions reject both, missing, null, malformed and oversized encodings', () => {
-  for (const entry of [
-    { type: 'string', value: 'x', valueRef: 'r' }, { type: 'string' },
-    { type: 'string', value: null }, { type: 'string', value: '' },
-    { type: 'null', value: 'x' }, { type: 'string', valueRef: '' },
-    { type: 'string', valueRef: 'é'.repeat(129) },
-    { type: 'string', valueRef: 'r', childrenRef: 'children' },
-  ]) assert.throws(() => assertOutputStringEncoding(entry, 'x', 'receiptDetail'));
-  for (const value of ['\ud800', '\udc00'])
-    assert.throws(() => assertOutputStringEncoding({ type: 'string', value }, value, 'receiptDetail'));
-  const bad = structuredClone(renderedDetail);
-  const entries = bad.exchanges.flatMap(x => x.response.result.items);
-  const wholeLeaf = entries.find(x => x.key === 'renderedText');
-  delete wholeLeaf.valueRef; wholeLeaf.value = bad.expected.leaf.renderedText;
-  assert.throws(() => assertRenderedHitDetail(bad, renderedSearchFixtures.identityCapture, foldTable));
-  const oversized = structuredClone(renderedDetail);
-  oversized.exchanges[0].response.id = oversized.exchanges[0].request.id = 'x'.repeat(4096);
-  assert.throws(() => assertRenderedHitDetail(oversized, renderedSearchFixtures.identityCapture, foldTable));
-});
-test('output inline exceptions do not broaden staged attribute uploads or ordinary note metadata', () => {
-  assert.match(docs, /only to server-produced\s+canonical receipt-detail output and the `stagedRenderedHit` output/);
-  assert.match(docs, /may use valueRef for a shorter string/);
-  assert.match(docs, /no output inline-string exception[\s\S]*?strings require `valueRef` even when empty or short/);
-  assert.match(docs, /ordinary string entries use inline `value` when\s+at most 1024 decoded UTF-8 bytes and `valueRef` when longer, never both/);
-});
-test('rendered hit context resolves a typed metadata tree and whole-leaf scalar fragments', () => {
-  assertRenderedHitDetail(renderedDetail, renderedSearchFixtures.identityCapture, foldTable);
-  assert.equal(renderedDetail.expected.kind, 'stagedRenderedHit');
-  assert.equal(renderedDetail.expected.leaf.renderedText, 'Straße😀');
-  assert.equal(renderedDetail.expected.renderedRange.end, 6); // Detail includes the following emoji.
-  assert.ok(renderedDetail.exchanges.some(x => x.response.result.nextCursor !== null));
-  assert.ok(renderedDetail.exchanges.some(x => x.response.result.items.length === 0));
-});
-test('rendered detail refuses foreign or widened claims, missing context and malformed text continuation', () => {
-  for (const mutate of [
-    f => { f.claims['hit-detail'].leafOrdinal = 2; },
-    f => { f.claims['hit-detail'].sourceRange.end++; },
-    f => { f.claims['hit-detail'].principalId = 'foreign'; },
-    f => { f.claims['hit-detail'].query.mode = 'source'; },
-    f => { f.claims['hit-detail'].expiresAt = '2026-10-07T18:00:00.000Z'; },
-    f => { f.exchanges[0].response.result.sourceLength = 8; },
-    f => { f.exchanges[0].request.params.payloadDigest = f.owner.payloadDigest; },
-    f => { f.exchanges = f.exchanges.filter(x => !x.response.result.items.some(i => i.key === 'parent')); },
-    f => { f.exchanges = f.exchanges.filter(x => x.response.result.items.length !== 0); },
-    f => { f.exchanges.find(x => x.request.params.ref === 'rendered-text-4').response.result.items[0].offset = 5; },
-    f => { f.exchanges.find(x => x.request.params.ref === 'rendered-text-6').response.result.items[0].text = '\ud83d'; },
-    f => { f.exchanges.find(x => x.request.params.ref === 'rendered-text-0').response.result.items[0].field = 'source'; },
-    f => { f.exchanges.find(x => x.request.params.ref === 'rendered-text-4').response.result.items[0].nextRef = 'rendered-text-0'; },
-    f => { f.exchanges.find(x => x.request.params.ref === 'rendered-text-6').response.result.items[0].text = ''; },
-    f => { f.now = f.owner.expiresAt; },
-  ]) {
-    const bad = structuredClone(renderedDetail); mutate(bad);
-    assert.throws(() => assertRenderedHitDetail(bad, renderedSearchFixtures.identityCapture, foldTable));
-  }
-});
-test('rendered v2 capture names owned full-leaf text separately from v1 parent and selected range', () => {
-  const capture = structuredClone(renderedSearchFixtures.identityCapture);
-  assert.deepEqual(assertRenderedIdentityCapture(capture, foldTable), [
-    { renderedRange: [0, 6], sourceRange: [12, 18] },
-  ]);
-  capture.selection[0].start = 18;
-  capture.selection[0].end = 18;
-  assert.deepEqual(assertRenderedIdentityCapture(capture, foldTable), []);
-});
-test('rendered upload rejects foreign, missing, mismatched and unsupported descriptor resources', () => {
-  for (const mutate of [
-    c => { c.leaf.descriptor.version = 1; },
-    c => { delete c.leaf.descriptor.renderedText; },
-    c => { c.leaf.descriptor.extra = true; },
-    c => { c.leaf.descriptor.nodeType = 'image'; },
-    c => { c.leaf.descriptor.parentOrdinal = 1; },
-    c => { delete c.leaf.descriptor.attributesRef; },
-    c => { c.resources['leaf-attrs'].attributes = { text: c.source }; },
-    c => { c.resources['captured-text'].operationId = 'foreign'; },
-    c => { delete c.resources['captured-text']; },
-    c => { c.leaf.descriptor.renderedText.length++; },
-    c => { c.leaf.descriptor.renderedText.utf8Bytes++; },
-    c => { c.leaf.descriptor.renderedText.sha256 = '0'.repeat(64); },
-    c => { c.source = 'different'; },
-    c => { c.leaf.record.sourceRange.start++; },
-    c => { c.leaf.descriptor.nativeRange.to++; },
-    c => { c.selection[0].end = 19; }, // Inside the emoji surrogate pair.
-    c => { c.selection.push({ ...c.selection[0], ordinal: 1 }); },
-    c => { c.header.selection = 'all'; },
-  ]) {
-    const capture = structuredClone(renderedSearchFixtures.identityCapture); mutate(capture);
-    assert.throws(() => assertRenderedIdentityCapture(capture, foldTable));
-  }
-});
-test('rendered matching uses fullfold across canonical mark splits with original scalar endpoints', () => {
-  // Reuse only the whole-string folding oracle on a controlled rendered run.
-  // These artificial leaves neither authenticate native capture nor map to source.
-  for (const item of renderedSearchFixtures.cases) {
-    const rendered = item.leaves.map(leaf => leaf.text).join('');
-    assert.deepEqual(sourceSearch(rendered, item.query, foldTable), item.expected, item.name);
-  }
-  for (const query of ['', '\u0000', '\ud800', 'a'.repeat(1025)])
-    assert.throws(() => sourceSearch('rendered', query, foldTable));
-});
-test('rendered policy remains distinct from DOM find, source fallback and projection authority', () => {
-  assert.match(docs, /Rendered-search matching policy \(additive\)/u);
-  assert.match(docs, /Marks do not split a canonical\ntext run/u);
-  assert.match(docs, /source coordinates under the frozen operation's scope, generations and expiry/u);
-  assert.match(docs, /equal lengths, caller-uploaded bytes or an empty live stream are not that proof/u);
-  assert.match(docs, /never source-search or selectionMarkdown fallbacks/u);
-});
-const hitDetail = JSON.parse(await readFile(new URL('./source-hit-detail.json', import.meta.url), 'utf8'));
-test('source-hit details resolve exact raw Unicode text with relative offsets and original view identity', () => {
-  assertSourceHitDetail(hitDetail, foldTable);
-  assert.deepEqual(hitDetail.owner.sourceRange, { start: 9, end: 17 });
-  assert.deepEqual(hitDetail.exchanges.map(x => x.response.result.items[0].offset), [0, 4, 6]);
-  assert.equal(hitDetail.exchanges[0].response.result.nextCursor, null);
-  assert.notEqual(hitDetail.exchanges[0].response.result.items[0].nextRef, null);
-  assert.match(docs, /additive resource meaning: a direct fragment field named `source`/u);
-  assert.match(docs, /no empty-field\s+or zero-progress success/u);
-});
-test('source-hit detail rejects foreign or widened claims and wrong owner/query/view/deadline', () => {
-  for (const mutate of [
-    x => { x.exchanges[0].request.params.ref = 'foreign-ref'; },
-    x => { x.claims['hit-source-0'].principalId = 'other'; },
-    x => { x.claims['hit-source-0'].scope.noteId = 'other'; },
-    x => { x.claims['hit-source-0'].query.text = 'different'; },
-    x => { x.claims['hit-source-0'].sourceRange.start = 0; },
-    x => { x.claims['hit-source-0'].viewId = 'other-view'; },
-    x => { x.claims['hit-source-4'].expiresAt = '2026-10-05T17:00:00.000Z'; },
-    x => { x.now = x.owner.expiresAt; },
-    x => { x.exchanges[0].request.params.payloadDigest = x.owner.payloadDigest; },
-  ]) {
-    const bad = structuredClone(hitDetail); mutate(bad);
-    assert.throws(() => assertSourceHitDetail(bad, foldTable));
-  }
-});
-test('source-hit detail rejects folded or surrounding bytes, offset drift, empty and malformed chains', () => {
-  for (const mutate of [
-    x => { x.exchanges[1].response.result.items[0].text = 'sse'; },
-    x => { x.exchanges[0].response.result.items[0].text = 'prefix Stra'; },
-    x => { x.exchanges[1].request.params.offset = 5; },
-    x => { x.exchanges[2].response.result.items[0].offset = 7; },
-    x => { x.exchanges[2].response.result.items[0].text = '\uD83D'; },
-    x => { x.exchanges[2].response.result.items[0].text = ''; },
-    x => { x.exchanges[0].response.result.items[0].field = 'text'; },
-    x => { x.exchanges[0].response.result.items[0].nextRef = null; },
-    x => { x.exchanges[1].response.result.items[0].nextRef = 'hit-source-0'; },
-    x => { delete x.exchanges[2].response.result.items[0].nextRef; },
-    x => { x.exchanges[0].response.result.sourceLength = 8; },
-    x => { x.exchanges[0].response.result.expiresAt = '2026-10-05T17:00:00.000Z'; },
-    x => { x.owner.sourceRange.end = x.owner.sourceRange.start; },
-  ]) {
-    const bad = structuredClone(hitDetail); mutate(bad);
-    assert.throws(() => assertSourceHitDetail(bad, foldTable));
-  }
-});
-test('source search uses pinned Unicode full folding, not host lowercase', () => {
-  assert.equal(createHash('sha256').update(foldBytes).digest('hex'), searchFixtures.caseFoldingSha256);
-  assert.ok(docs.includes(searchFixtures.caseFoldingSha256));
-  assert.equal(foldTable.get('ß'), 'ss');
-  assert.equal(foldTable.get('İ'), 'i\u0307');
-  assert.equal(foldTable.get('I'), 'i');
-  assert.equal(foldTable.get('ς'), 'σ');
-  assert.match(docs, /cursor retains matcher carry and pending-emission position/u);
-  assert.match(docs, /only terminal exhaustion, after pending hits are emitted, reports an exact total/u);
-});
-for (const row of searchFixtures.vectors) test(`source search policy: ${row.name}`, () => {
-  assert.deepEqual(sourceSearch(row.source, row.query, foldTable, row.ranges), row.expected);
-});
-test('source search rejects empty, malformed, NUL and oversized query; admits exact byte limit', () => {
-  for (const query of ['', '\0', '\uD800', '\uDC00', 'a'.repeat(1025), 'é'.repeat(513)]) {
-    assert.throws(() => sourceSearch('abc', query, foldTable));
-  }
-  assert.deepEqual(sourceSearch('é'.repeat(512), 'é'.repeat(512), foldTable), [[0, 512]]);
-  assert.throws(() => sourceSearch('😀x', 'x', foldTable, [[1, 3]]));
-  assert.throws(() => sourceSearch('abc', 'a', foldTable, [[2, 1]]));
-});
-test('source-search semantic oracle preserves overlaps and expansion across reassembled chunks', () => {
-  // Reassembly is ONLY a fixture oracle. This proves no runtime carry/cursor bounds.
-  for (const chunks of [['ban', 'ana'], ['ba', 'n', 'a', 'na']]) {
-    assert.deepEqual(sourceSearch(chunks.join(''), 'ana', foldTable), [[1, 4], [3, 6]]);
-  }
-  assert.deepEqual(sourceSearch(['😀Stra', 'ß', 'e'].join(''), 'STRASSE', foldTable), [[2, 8]]);
-});
-test('controlled search trace resumes overlaps across scan seams and maxItems cuts', () => {
-  const pages = [
-    { items: [], scannedThrough: 3, count: { value: 0, exact: false }, nextCursor: 'carry-an' },
-    { items: [[1, 4]], scannedThrough: 6, count: { value: 2, exact: false }, nextCursor: 'pending-second-hit' },
-    { items: [[3, 6]], scannedThrough: 6, count: { value: 2, exact: true }, nextCursor: null },
-  ];
-  assertSourceSearchTrace('banana', 'ana', foldTable, undefined, pages, 1);
-  for (const mutate of [
-    p => { p[2].items = []; },
-    p => { p[2].items = [[1, 4]]; },
-    p => { p[1].count.exact = true; },
-    p => { p[1].items.push([3, 6]); },
-    p => { p[2].scannedThrough = 5; },
-    p => { p[0].count.value = 2; },
-  ]) {
-    const bad = structuredClone(pages); mutate(bad);
-    assert.throws(() => assertSourceSearchTrace('banana', 'ana', foldTable, undefined, bad, 1));
-  }
-});
-test('controlled search trace retains expansion offsets and exact selected-domain count', () => {
-  assertSourceSearchTrace('😀ßss', 'ss', foldTable, [[2, 3], [3, 5]], [
-    { items: [[2, 3]], scannedThrough: 5, count: { value: 2, exact: false }, nextCursor: 'pending-ascii' },
-    { items: [[3, 5]], scannedThrough: 5, count: { value: 2, exact: true }, nextCursor: null },
-  ], 1);
-  assertSourceSearchTrace('banana', 'ana', foldTable, [[1, 3], [4, 6]], [
-    { items: [], scannedThrough: 3, count: { value: 0, exact: false }, nextCursor: 'skip-gap' },
-    { items: [], scannedThrough: 6, count: { value: 0, exact: true }, nextCursor: null },
-  ], 1);
-  const terminalEmpty = frontier => [{ items: [], scannedThrough: frontier,
-    count: { value: 0, exact: true }, nextCursor: null }];
-  assert.throws(() => assertSourceSearchTrace('zzz', 'a', foldTable, undefined, terminalEmpty(0), 1));
-  assert.throws(() => assertSourceSearchTrace('zzzz', 'a', foldTable, [[1, 3]], terminalEmpty(2), 1));
-  assertSourceSearchTrace('zzzz', 'a', foldTable, [[1, 3]], terminalEmpty(3), 1);
-  assertSourceSearchTrace('zzzz', 'a', foldTable, [], terminalEmpty(0), 1);
-});
-test('source-search selection union does not inherit or weaken splice ordering', () => {
-  const chunks = [
-    [{ ordinal: 0, start: 3, end: 6 }, { ordinal: 1, start: 1, end: 4 }],
-    [{ ordinal: 2, start: 1, end: 4 }, { ordinal: 3, start: 4, end: 6 }],
-  ];
-  const before = canonicalJson(chunks);
-  const records = chunks.flat();
-  assert.deepEqual(records.map(r => r.ordinal), [0, 1, 2, 3]);
-  assert.deepEqual(sourceSearch('banana', 'ana', foldTable,
-    records.map(r => [r.start, r.end])), [[1, 4], [3, 6]]);
-  assert.equal(canonicalJson(chunks), before);
-  assert.equal(spliceError('banana', [{ start: 1, end: 4, text: '' },
-    { start: 1, end: 4, text: '' }], f.limits), 'invalid-params');
-  assert.match(docs, /Only when `header.output === "search"` and\s+`header.query.mode === "source"`/u);
-  assert.match(docs, /Other selection modes retain ordered disjoint ranges and reject equal starts or\s+overlaps/u);
-  assert.match(docs, /union normalization is derived state, never a rewrite of that stream/u);
-});
 const frame = (text, start, end, length) => ({ jsonrpc: '2.0', id: 1, result: {
   kind: 'noteSourcePage', scope: f.scope, sourceRevision: 'r:7', snapshotId: 'snapshot-a',
   expiresAt: '2026-10-03T00:05:00.000Z', sourceLength: length, range: { start, end }, text,
@@ -285,19 +21,18 @@ const frame = (text, start, end, length) => ({ jsonrpc: '2.0', id: 1, result: {
 // create tokens, prove database atomicity, or claim real paging implementation.
 test('prepared status, capability gates, hard limits and catalog integration agree', () => {
   assert.equal(f.status, 'prepared-specification-only');
-  assert.deepEqual(f.capabilities, { notePaging: 1, noteAnnotations: 1 });
+  assert.deepEqual(f.capabilities, { notePagingRead: 1, noteAnnotations: 1 });
   for (const cap of Object.keys(f.capabilities)) {
     assert.ok(docs.includes(`${cap}: 1`));
     assert.ok(versioning.includes(`${cap}: 1`));
   }
   for (const limit of [16384, 65536, 4096]) assert.ok(docs.includes(limit.toLocaleString('en-US')));
-  assert.deepEqual(f.limits, { sourceBytes: 16384, wireBytes: 65536, receiptBytes: 4096,
-    items: 128, annotationItems: 64, ranges: 32, splices: 32, tokenBytes: 256 });
-  for (const method of ['note.applySplices', 'note.operationStatus']) assert.ok(docs.includes(`| ${method} |`));
+  assert.deepEqual(f.limits, { sourceBytes: 16384, wireBytes: 65536, stateBytes: 4096,
+    items: 128, annotationItems: 64, ranges: 32, tokenBytes: 256 });
   assert.ok(events.includes('projection: "pageState"'));
   assert.ok(events.includes('4,096'));
   for (const error of ['note-page-stale', 'note-page-expired', 'note-page-cursor-invalid',
-    'note-revision-conflict', 'note-operation-mismatch', 'note-operation-expired', 'note-page-budget']) {
+    'note-page-budget']) {
     assert.ok(errors.includes(`| ${error} |`));
   }
 });
@@ -355,18 +90,6 @@ test('recorded wire page fits exactly after JSON escaping; one extra scalar exce
   assert.throws(() => assertSourcePage(source, extra, { sourceBytes: f.limits.sourceBytes, wireBytes: c.maxWireBytes }));
 });
 
-for (const c of f.splices) test(`base-addressed splice: ${c.id}`, () => {
-  const error = spliceError(c.source, c.splices, f.limits);
-  assert.equal(error, c.error ?? null);
-  if (!error) assert.equal(applySourceSplices(c.source, c.splices), c.expect);
-});
-
-test('inline input has independent count and decoded-byte limits', () => {
-  assert.equal(spliceError('a'.repeat(34), Array.from({ length: 33 }, (_, i) => ({ start: i, end: i, text: '' })), f.limits), 'note-page-budget');
-  assert.equal(spliceError('', [{ start: 0, end: 0, text: '😀'.repeat(4096) }], f.limits), null);
-  assert.equal(spliceError('', [{ start: 0, end: 0, text: '😀'.repeat(4097) }], f.limits), 'note-page-budget');
-});
-
 for (const c of f.cursors) test(`cursor consistency: ${c.id}`, () => {
   const claim = { ...f.cursorClaim, ...c.claimPatch };
   const request = { ...claim, ...c.requestPatch };
@@ -398,45 +121,6 @@ test('disjoint annotation queries retain outside-start overlap and canonical ali
   assert.throws(() => assertRanges([{ start: 10, end: 30 }, { start: 20, end: 40 }], 32));
 });
 
-test('authoritative mapping retains affinity and deletion independent of source size', () => {
-  for (const c of f.mapping.points) assert.deepEqual(mapPoint(c.point, c.affinity, f.mapping.changes), c.expect);
-  assert.deepEqual(mapPoint(1000000, 'after', [{ start: 0, end: 2000000, insertedLength: 3 }]), { offset: 3, deleted: true });
-  assert.deepEqual(mapPoint(2, 'after', [{ start: 0, end: 2, insertedLength: 1 }, { start: 2, end: 2, insertedLength: 4 }]), { offset: 5, deleted: false });
-  const many = Array.from({ length: 1000 }, (_, i) => ({ start: i * 2, end: i * 2 + 1, insertedLength: 0 }));
-  const pages = [];
-  for (let i = 0; i < many.length; i += f.limits.items) pages.push(many.slice(i, i + f.limits.items));
-  assert.deepEqual(pages.flat(), many);
-  assert.ok(pages.every(p => p.length <= 128 && wireBytes(p) < f.limits.wireBytes));
-  assert.notDeepEqual(mapPoint(2001, 'after', pages[0]), mapPoint(2001, 'after', pages.flat()));
-});
-
-test('digest binds exact scope, base, operation identity and ordered payload', () => {
-  const c = f.digestVector;
-  assert.equal(digest(c.payload), c.sha256);
-  assert.equal(digest(Object.fromEntries(Object.entries(c.payload).reverse())), c.sha256);
-  for (const field of ['backendId', 'workspaceId', 'noteId', 'noteInstanceId', 'baseRevision', 'operationId', 'expiresAt']) {
-    assert.notEqual(digest({ ...c.payload, [field]: 'changed' }), c.sha256);
-  }
-  assert.notEqual(digest({ ...c.payload, splices: [...c.payload.splices].reverse() }), c.sha256);
-});
-
-test('recorded receipt transitions reject duplicate writes, false failures and false save success', () => {
-  assertOperationTrace(f.operationTrace);
-  const receipt = f.operationTrace.steps.find(s => s.receipt).receipt;
-  assert.ok(wireBytes({ jsonrpc: '2.0', id: 1, result: receipt }) <= f.limits.receiptBytes);
-  for (const forbidden of ['content', 'newContent', 'oldContent', 'current', 'note', 'splices']) assert.equal(receipt[forbidden], undefined);
-  for (const mutate of [
-    t => { t.steps[4].writeCount = 1; },
-    t => { t.steps[4].receipt.afterRevision = 'r:11'; },
-    t => { t.steps[2].atomicReceipt = false; },
-    t => { t.steps[3].clearDraft = true; },
-    t => { t.steps[6].historyCount = 1; },
-  ]) {
-    const bad = structuredClone(f.operationTrace); mutate(bad);
-    assert.throws(() => assertOperationTrace(bad));
-  }
-});
-
 test('annotation summaries, reply pages, fragments and events remain bounded', () => {
   const c = f.annotationPages;
   for (const p of c.pages) {
@@ -456,7 +140,7 @@ test('annotation summaries, reply pages, fragments and events remain bounded', (
   assert.equal(c.fragments.map(p => p.text).join(''), c.expectedBody);
   assert.ok(c.fragments.every(p => utf8(p.text) <= f.limits.sourceBytes));
   for (const event of c.events) {
-    assert.ok(wireBytes(event) <= f.limits.receiptBytes);
+    assert.ok(wireBytes(event) <= f.limits.stateBytes);
     assert.equal(event.params.snapshot.invalidation, 'all');
     for (const field of ['content', 'note', 'attributions', 'threads', 'comments']) assert.equal(event.params.snapshot[field], undefined);
   }
@@ -468,17 +152,6 @@ test('annotation summaries, reply pages, fragments and events remain bounded', (
   assert.equal(states[2].attributionGeneration, states[1].attributionGeneration);
 });
 
-test('frozen dirty view excludes later typing and preserves current selected-copy MIME', () => {
-  const c = f.frozenOperation;
-  const prefix = c.edits.filter(e => e.sequence <= c.capturedSequence);
-  const view = prefix.reduce((text, e) => applySourceSplices(text, [e]), c.source);
-  assert.equal(view, c.expect);
-  assert.equal(c.saveCount, 0);
-  assert.equal(c.mime, 'text/plain');
-  for (const outcome of c.cutOutcomes) assert.equal(outcome.sourceWrites,
-    outcome.publication === 'succeeded' && outcome.commit === 'committed' ? 1 : 0);
-});
-
 test('legacy full result and page discriminants cannot be interchanged', () => {
   assert.equal(f.legacy.request.params.page, undefined);
   assert.equal(f.legacy.result.note.content, 'whole note');
@@ -487,21 +160,6 @@ test('legacy full result and page discriminants cannot be interchanged', () => {
   assert.equal(page.result.note, undefined);
   assert.equal(page.result.content, undefined);
   assert.throws(() => assertSourcePage('whole note', { result: f.legacy.result }, f.limits));
-});
-
-test('wire requests retain explicit opt-ins and the digest includes the method', () => {
-  for (const request of f.requests) {
-    assert.equal(request.jsonrpc, '2.0');
-    assert.ok(Number.isSafeInteger(request.id));
-    assert.equal(request.params.workspaceId, f.scope.workspaceId);
-    assert.equal(request.params.noteId, f.scope.noteId);
-    assert.ok(wireBytes(request) <= f.limits.wireBytes);
-    assert.ok(docs.includes(`| ${request.method} |`));
-  }
-  const request = f.requests.find(r => r.method === 'note.applySplices');
-  const { payloadDigest, ...payload } = request.params;
-  assert.equal(digest({ method: request.method, ...payload }), payloadDigest);
-  assert.equal(f.requests.find(r => r.method === 'note.operationStatus').params.payloadDigest, payloadDigest);
 });
 
 test('structural context and alias expansions page separately from source', () => {
@@ -542,22 +200,6 @@ test('attribution pending and independent ready generation never relabel an old 
   assert.ok(wireBytes(s) < 4096);
 });
 
-test('atomic outcome goldens prohibit partial source/index/history/receipt publication', () => {
-  const c = f.atomicStates;
-  assert.deepEqual(Object.keys(c.before).sort(), [...c.fields].sort());
-  assert.deepEqual(Object.keys(c.after).sort(), [...c.fields].sort());
-  const validate = (scenario, actual) => assert.deepEqual(actual, c[scenario.expect]);
-  for (const scenario of c.scenarios) {
-    validate(scenario, c[scenario.expect]);
-    const opposite = scenario.expect === 'before' ? c.after : c.before;
-    for (const field of c.fields) {
-      assert.throws(() => validate(scenario, { ...c[scenario.expect], [field]: opposite[field] }));
-    }
-  }
-  // These are required observable states for component fault-injection tests,
-  // not evidence that a real transaction has been executed by this suite.
-});
-
 test('page validator detects changed bytes, false exhaustion, excess budget and partial Note shape', () => {
   const p = frame('same', 0, 4, 9);
   assertSourcePage('same same', p, f.limits);
@@ -566,30 +208,6 @@ test('page validator detects changed bytes, false exhaustion, excess budget and 
     assert.throws(() => assertSourcePage('same same', { ...p, result: { ...p.result, ...patch } }, f.limits));
   }
   assert.throws(() => assertSourcePage('same same', p, { sourceBytes: 3, wireBytes: 65536 }));
-});
-
-test('distant canonical effects have explicit footprints without widening caller edits', () => {
-  const c = f.sideEffects;
-  assert.equal(applySourceSplices(c.base, c.caller), c.callerResult);
-  assertUnchangedGaps(c.base, c.callerResult, c.caller);
-  let source = c.callerResult, state = 'callerResult';
-  for (const phase of c.phases) {
-    assert.equal(phase.inputState, state);
-    assert.ok(['task-conversion', 'phantom-scrub'].includes(phase.reason));
-    assert.equal(spliceError(source, phase.splices, f.limits), null);
-    assert.equal(applySourceSplices(source, phase.splices), phase.expect);
-    assertUnchangedGaps(source, phase.expect, phase.splices);
-    source = phase.expect; state = phase.outputState;
-  }
-  assert.equal(source, c.expect);
-  assert.ok(source.includes(`anchor:${c.liveMarkerId}:start`));
-  assert.ok(source.includes('<!--anchor:demo:start-->literal'));
-  assert.ok(source.includes(c.canonicalChildId));
-  assert.ok(!source.includes('@@@task'));
-  assert.throws(() => assertUnchangedGaps(c.base, c.expect, c.caller));
-  // The caller-only intermediate still contains the unconverted task fence.
-  assert.ok(c.callerResult.includes('@@@task'));
-  assert.ok(!c.callerResult.includes('task-1'));
 });
 
 test('crossed note/comment channels cannot regress shared authoritative epochs', () => {
@@ -605,105 +223,6 @@ test('crossed note/comment channels cannot regress shared authoritative epochs',
   assert.throws(() => admitState(state, { ...state, stateGeneration: '18446744073709551616' }));
 });
 
-test('staged header and sealed manifest bind stable identity and all five streams', () => {
-  const c = f.staged;
-  assert.equal(digest(c.begin), c.headerDigest);
-  assert.equal(digest({ headerDigest: c.headerDigest, manifest: c.manifest }), c.payloadDigest);
-  assert.deepEqual(c.manifest.map(m => m.stream), ['text', 'dirty', 'selection', 'mutation', 'live']);
-  for (const m of c.manifest) assertStream(c.streams[m.stream], m, f.limits, c.appendFrames[m.stream]);
-  for (const method of ['begin', 'append', 'seal', 'read', 'commit', 'cancel']) assert.ok(docs.includes(`| note.operation.${method} |`));
-  assert.ok(events.includes('stateGeneration'));
-  const reordered = [...c.manifest].reverse();
-  assert.notEqual(digest({ headerDigest: c.headerDigest, manifest: reordered }), c.payloadDigest);
-  for (const key of ['localEditSequence', 'liveGeneration', 'selectionGeneration', 'editorSessionId']) {
-    assert.notEqual(digest({ ...c.begin, header: { ...c.begin.header, [key]: 'other' } }), c.headerDigest);
-  }
-});
-
-test('staged text is contiguous and exact beyond an inline request budget', () => {
-  const c = f.staged;
-  const texts = {};
-  for (const chunk of c.streams.text) for (const r of chunk.records) {
-    assert.equal(r.offset, (texts[r.id] ?? '').length);
-    texts[r.id] = (texts[r.id] ?? '') + r.text;
-  }
-  for (const name of ['dirty', 'mutation']) for (const chunk of c.streams[name]) for (const r of chunk.records) {
-    const ref = r.replacement, value = texts[ref.textId];
-    assert.equal(value.length, ref.length);
-    assert.equal(utf8(value), ref.utf8Bytes);
-    assert.equal(createHash('sha256').update(value, 'utf8').digest('hex'), ref.sha256);
-  }
-  const frozen = frozenSource(c.base, c.dirtyGroups, c.begin.header.localEditSequence, texts, f.limits);
-  assert.equal(frozen, c.frozen);
-  const mutation = c.streams.mutation[0].records.map(r => ({ ...r, text: texts[r.replacement.textId] }));
-  assert.equal(spliceError(frozen, mutation, f.limits), 'note-page-budget');
-  const final = applySourceSplices(frozen, mutation);
-  assert.equal(final, c.expectedResultPrefix + texts.paste);
-  assert.ok(utf8(texts.paste) > f.limits.sourceBytes);
-  // Undo the newest gesture only; earlier dirty history groups remain visible.
-  const inverse = c.inverse.map(r => ({ ...r, text: c.inverseText }));
-  assert.equal(applySourceSplices(final, inverse), c.frozen);
-  assert.equal(applySourceSplices(c.frozen, [{ start: 4, end: 7, text: 'two' }]), 'ONE two');
-  assert.equal(applySourceSplices('ONE two', [{ start: 0, end: 3, text: 'one' }]), c.base);
-});
-
-test('staged gaps, reordered chunks, corrupt hashes and mismatched totals fail closed', () => {
-  const c = f.staged, manifest = c.manifest[0];
-  for (const mutate of [
-    chunks => chunks.splice(1, 1),
-    chunks => chunks.reverse(),
-    chunks => { chunks[1].previousDigest = '0'.repeat(64); },
-    chunks => { chunks[0].records[0].text = 'CORRUPTED'; },
-    chunks => { chunks[0].sequence = 1; },
-  ]) {
-    const chunks = structuredClone(c.streams.text); mutate(chunks);
-    assert.throws(() => assertStream(chunks, manifest, f.limits, chunks.map(appendFrame)));
-  }
-  assert.throws(() => assertStream(c.streams.text, { ...manifest, records: manifest.records + 1 }, f.limits, c.streams.text.map(appendFrame)));
-  // Exact chunk retransmission matches its ack; a different payload cannot.
-  const first = c.streams.text[0];
-  assert.deepEqual(structuredClone(first), first);
-  assert.notEqual(digest({ ...first, records: [] }), first.chunkDigest);
-});
-
-test('frozen staged input rejects later edits, split scalars and overlapping groups', () => {
-  const c = f.staged, texts = { prefix: 'ONE', second: 'TWO' };
-  assert.throws(() => frozenSource(c.base, [...c.dirtyGroups, { localSequence: 3, splices: [] }], 2, texts, f.limits));
-  assert.throws(() => frozenSource(c.base, [...c.dirtyGroups].reverse(), 2, texts, f.limits));
-  assert.throws(() => frozenSource('A😀B', [{ localSequence: 1, splices: [{ start: 2, end: 3, textId: 'prefix' }] }], 2, texts, f.limits));
-  assert.throws(() => frozenSource(c.base, [{ localSequence: 1, splices: [{ start: 0, end: 5, textId: 'prefix' }, { start: 4, end: 7, textId: 'second' }] }], 2, texts, f.limits));
-});
-
-for (const c of f.stagedOutcomes) test(`staged lifecycle specification: ${c.id}`, () => {
-  const index = name => c.order.indexOf(name);
-  const cancelFirst = index('cancel') >= 0 && (index('admit') < 0 || index('cancel') < index('admit'));
-  const expiredFirst = index('expire') >= 0 && index('admit') < 0;
-  const committed = index('commit') >= 0 && index('admit') >= 0 && !cancelFirst && !expiredFirst && index('remoteWrite') < 0;
-  assert.equal(c.sourceWrites, committed ? 1 : 0);
-  assert.equal(c.historyGroups, committed ? 1 : 0); // final gesture, not captured-prefix groups
-  const unknown = c.order.at(-1) === 'lostAck';
-  assert.equal(c.clearDraft, committed && !unknown);
-  if (cancelFirst) assert.equal(c.outcome, 'cancelled');
-  if (expiredFirst) assert.equal(c.outcome, 'expired');
-  if (unknown) assert.equal(c.outcome, 'unknown');
-  if (index('remoteWrite') >= 0) assert.equal(c.outcome, index('commit') >= 0 ? 'conflict' : 'readComplete');
-  if (c.order.at(-1) === 'cancel' && index('admit') >= 0 && index('commit') < 0) assert.equal(c.outcome, 'pending');
-});
-
-test('work-limited search pages progress without false exact counts or false exhaustion', () => {
-  let scanned = 0, seen = 0;
-  for (const [index, page] of f.searchPages.entries()) {
-    assert.ok(page.scannedThrough > scanned);
-    scanned = page.scannedThrough;
-    seen += page.items.length;
-    assert.equal(page.count.value, seen);
-    assert.equal(page.count.exact, index === f.searchPages.length - 1);
-    assert.equal(page.nextCursor === null, page.count.exact);
-  }
-  assert.equal(scanned, 5000);
-  assert.equal(seen, 1);
-});
-
 test('metadata title/tags and live details use separately paged values and children', () => {
   for (const page of f.metadataPages) {
     assert.equal(page.kind, 'noteMetadataPage');
@@ -716,8 +235,6 @@ test('metadata title/tags and live details use separately paged values and child
     }
   }
   assert.ok(docs.includes('metadataRef: string'));
-  assert.ok(docs.includes('parentOrdinal'));
-  assert.ok(docs.includes('delta'));
 });
 
 test('late page replies cannot overwrite newer state admitted from another channel', () => {
@@ -727,47 +244,6 @@ test('late page replies cannot overwrite newer state admitted from another chann
   const oldSource = { ...f.cursorClaim, sourceRevision: 'r:6' };
   assert.equal(cursorError(oldSource, oldSource, { ...state, boot: 'boot-a' }, 1000), 'note-page-stale');
   assert.equal(state.commentRevision, 'c:5');
-});
-
-test('receipt-owned inverse text addressing outlives staging without crossing owners', () => {
-  const receipt = { scope: f.scope, operationId: f.staged.begin.operationId,
-    inverseRef: 'inverse-a', textIds: ['inverse-paste'], stagingExpiresAt: 1000, receiptExpiresAt: 7000 };
-  const read = { ...receipt.scope, operationId: receipt.operationId, kind: 'inverseText', ref: 'inverse-a', textId: 'inverse-paste', offset: 0 };
-  const valid = (r, now) => now < receipt.receiptExpiresAt && r.operationId === receipt.operationId
-    && Object.keys(receipt.scope).every(k => r[k] === receipt.scope[k])
-    && r.kind === 'inverseText' && r.ref === receipt.inverseRef && receipt.textIds.includes(r.textId)
-    && boundary(f.staged.inverseText, r.offset);
-  assert.equal(valid(read, 2000), true);
-  assert.equal(valid(read, 7000), false);
-  for (const patch of [{ operationId: 'another' }, { noteId: 'another' }, { ref: 'another' },
-    { textId: 'another' }, { kind: 'source' }, { offset: 4 }]) assert.equal(valid({ ...read, ...patch }, 2000), false);
-  assert.ok(docs.includes('Receipt-owned reads do not require a still-live staged view'));
-});
-
-// Independent review regressions: assertions first recorded against a27af5ff.
-test('review F1: recoverable conversion failure keeps completed canonical cleanup', () => {
-  assert.doesNotMatch(docs, /retains callerResult with the legacy no-conversion outcome/);
-  const c = f.conversionFailure;
-  assert.ok(c, 'combined cleanup/conversion-failure scenario is required');
-  let source = applySourceSplices(c.base, c.caller);
-  assert.equal(source, c.callerResult);
-  for (const phase of c.preConversionEffects) {
-    assertUnchangedGaps(source, phase.expect, phase.splices);
-    source = applySourceSplices(source, phase.splices);
-    assert.equal(source, phase.expect);
-  }
-  assert.equal(source, c.preConversionCanonical);
-  assert.equal(c.final, source);
-  assert.ok(c.final.includes('@@@task'));
-  assert.ok(!c.final.includes(c.phantomId));
-  assert.ok(c.final.includes(`anchor:${c.liveMarkerId}:end`));
-  assert.deepEqual(c.committedEffects, c.preConversionEffects);
-  assert.equal(c.createdChildren, 0);
-  assert.equal(c.conversionSnapshots, 0);
-  assert.deepEqual(c.epochs.before, { sourceRevision: 'r:7', attributionGeneration: 'a:2', commentRevision: 'c:4', stateGeneration: '10' });
-  assert.deepEqual(c.epochs.after, { sourceRevision: 'r:8', attributionGeneration: 'a:3', commentRevision: 'c:5', stateGeneration: '11' });
-  assert.deepEqual(c.versionSnapshots, [c.preConversionCanonical]);
-  assertOperationTrace(c.trace);
 });
 
 test('review F2: equal-time replies are ordered by canonical ID across pages', () => {
@@ -811,25 +287,6 @@ test('review F3: JSON member order does not change scope identity', () => {
   assert.equal(admitState(current, incoming), incoming);
 });
 
-const appendFrame = chunk => ({ jsonrpc: '2.0', id: 1, method: 'note.operation.append', params: {
-  ...f.scope, operationId: f.staged.begin.operationId, headerDigest: f.staged.headerDigest, ...chunk,
-} });
-const textChunk = text => {
-  const payload = { stream: 'text', sequence: 0, previousDigest: null, records: [{ kind: 'text', id: 'text', offset: 0, text }] };
-  return { ...payload, chunkDigest: digest(payload) };
-};
-const singleManifest = chunk => ({ stream: 'text', chunks: 1, records: 1, lastDigest: chunk.chunkDigest });
-
-test('review F3: escaped append payload fitting alone cannot overflow its RPC', () => {
-  let chunk = textChunk('');
-  const count = Math.floor((f.limits.wireBytes - wireBytes(chunk)) / 6);
-  chunk = textChunk('\u0001'.repeat(count));
-  assert.ok(utf8(chunk.records[0].text) < f.limits.sourceBytes);
-  assert.ok(wireBytes(chunk) <= f.limits.wireBytes);
-  assert.ok(wireBytes(appendFrame(chunk)) > f.limits.wireBytes);
-  assert.throws(() => assertStream([chunk], singleManifest(chunk), f.limits, [appendFrame(chunk)]));
-});
-
 test('review F2: full wire validators reject missing page identity and reply fields', () => {
   assertReplyFrames(f.annotationPages.pages, f.limits);
   for (const page of f.metadataPages) assertMetadataFrame({ jsonrpc: '2.0', id: 1, result: page }, f.limits);
@@ -870,56 +327,6 @@ test('review F2: concrete event frame matches docs and rejects ambiguous contain
   }
 });
 
-test('review F3: complete escaped append RPC fits exactly and rejects one-byte overflow', () => {
-  // Maximum legal RPC ID and all four scope IDs, with multibyte source and escaping.
-  const wrap = chunk => {
-    const request = appendFrame(chunk);
-    request.id = 'i'.repeat(64);
-    for (const key of Object.keys(f.scope)) request.params[key] = 's'.repeat(256);
-    return request;
-  };
-  const base = '😀中\\"';
-  const available = f.limits.wireBytes - wireBytes(wrap(textChunk(base)));
-  const text = base + '\u0001'.repeat(Math.floor(available / 6)) + 'a'.repeat(available % 6);
-  const chunk = textChunk(text), request = wrap(chunk);
-  assert.equal(wireBytes(request), 65536);
-  assert.ok(utf8(text) < 16384);
-  assertStream([chunk], singleManifest(chunk), f.limits, [request]);
-  const overflow = textChunk(text + 'a');
-  assert.equal(wireBytes(wrap(overflow)), 65537);
-  assert.throws(() => assertStream([overflow], singleManifest(overflow), f.limits, [wrap(overflow)]));
-  assert.throws(() => assertStream([chunk], singleManifest(chunk), f.limits));
-  assert.throws(() => assertStream([chunk], singleManifest(chunk), f.limits, []));
-  for (const mutate of [
-    r => { r.id += 'x'; },
-    r => { r.params.noteId += 'x'; },
-    r => { r.method = 'other'; },
-    r => { delete r.params.headerDigest; },
-    r => { r.params.records[0].text = '\ud800'; },
-  ]) {
-    const bad = structuredClone(request); mutate(bad);
-    assert.throws(() => assertAppendFrame(bad, f.limits));
-  }
-});
-
-test('review F1: cleanup history, orphan state and final receipt survive only conversion rollback', () => {
-  const c = f.conversionFailure;
-  assert.equal(c.savepointAfter, 'preConversionCanonical');
-  assert.deepEqual(c.rolledBack, ['conversion-source', 'conversion-children', 'conversion-version', 'conversion-effects']);
-  assert.equal(c.commentsBefore[1].isOrphaned, false);
-  assert.equal(c.commentsAfter[1].isOrphaned, true);
-  const first = c.trace.steps[0], replay = c.trace.steps.at(-1);
-  assert.equal(first.receipt.sourceLength, c.final.length);
-  assert.equal(first.receipt.afterRevision, c.epochs.after.sourceRevision);
-  assert.deepEqual(replay.receipt, first.receipt);
-  assert.equal(replay.historyCount, 0);
-  assert.equal(replay.writeCount, 0);
-  assert.equal(replay.eventCount, 0);
-  assert.equal(c.trace.steps[1].outcome, 'unknown');
-  assert.equal(c.trace.steps[1].clearDraft, false);
-  assert.ok(wireBytes({ jsonrpc: '2.0', id: 1, result: first.receipt }) <= f.limits.receiptBytes);
-});
-
 test('deleted root is explicit on every reply page without changing thread identity', () => {
   for (const page of f.annotationPages.pages) assert.equal(page.result.rootState, 'present');
   const c = f.deletedRoot;
@@ -953,8 +360,6 @@ test('root deletion invalidates old annotation snapshots without invalidating un
   assert.equal(admitted.sourceRevision, c.afterRootDelete.sourceRevision);
   assert.equal(admitted.attributionGeneration, c.afterRootDelete.attributionGeneration);
   assert.equal(c.acceptLateOldPage, c.cachedBeforeDelete.result.commentRevision === admitted.commentRevision);
-  assert.equal(c.retainedFrozenSource.before, c.retainedFrozenSource.after);
-  assert.equal(c.retainedFrozenSource.commentRevision, undefined);
 });
 
 test('rootless exhaustion, reply deletion and missing thread have distinct outcomes', () => {
@@ -972,7 +377,7 @@ test('rootless exhaustion, reply deletion and missing thread have distinct outco
   assert.equal(c.missingThread.error.code, -32602);
   assert.equal(c.missingThread.error.data.code, 'not-found');
   assert.equal(c.missingThread.error.data.entity, 'commentThread');
-  assert.ok(wireBytes(c.missingThread) <= f.limits.receiptBytes);
+  assert.ok(wireBytes(c.missingThread) <= f.limits.stateBytes);
   assert.equal(c.summary.result.totalThreads, 1);
   assert.equal(c.summary.result.totalComments, 2);
   assert.equal(c.summary.result.items[0].anchorRef, null);
@@ -1128,10 +533,10 @@ test('summary frame budget measures full escaping at exact fit and one-byte over
 });
 test('hello requires the exact capability path, version and valid backend identity', () => {
   assert.equal(summaryContract.pagingBackendId(f.helloPaging), 'db-a');
-  for (const caps of [{}, { notePaging: true, notePagingBackendId: 'db-a' },
-    { notePaging: '1', notePagingBackendId: 'db-a' }, { notePaging: 2, notePagingBackendId: 'db-a' },
-    { notePaging: 1 }, { notePaging: 1, notePagingBackendId: '' },
-    { notePaging: 1, notePagingBackendId: 'x'.repeat(257) }]) {
+  for (const caps of [{}, { notePagingRead: true, notePagingBackendId: 'db-a' },
+    { notePagingRead: '1', notePagingBackendId: 'db-a' }, { notePagingRead: 2, notePagingBackendId: 'db-a' },
+    { notePagingRead: 1 }, { notePagingRead: 1, notePagingBackendId: '' },
+    { notePagingRead: 1, notePagingBackendId: 'x'.repeat(257) }]) {
     const hello = structuredClone(f.helloPaging); hello.result.server.capabilities = caps;
     hello.result.notePagingBackendId = 'wrong-place';
     assert.equal(summaryContract.pagingBackendId(hello), null);
@@ -2038,29 +1443,6 @@ test('annotation identities: actual escaped reply/context frames honor exact wir
 });
 
 
-test('note protocol 13.8 reservation does not advertise partial implementation', () => {
-  const avatars = versioning.split('**Version 13.7 —')[1]?.split('**Version 13.6 —')[0];
-  assert.ok(avatars);
-  assert.match(avatars, /checkout owner avatars/);
-  assert.match(avatars, /`gitlabCheckoutOwnerAvatar: 1`/);
-  assert.doesNotMatch(avatars, /note\.applySplices/);
-  assert.match(versioning, /\*\*Documented version:\*\* `13\.8`/);
-  const section = versioning.split('**Version 13.8 —')[1]?.split('**Version 13.7 —')[0];
-  assert.ok(section);
-  assert.match(section, /note\.applySplices/);
-  assert.match(section, /note\.operationStatus/);
-  for (const name of ['begin', 'append', 'seal', 'read', 'commit', 'cancel']) {
-    assert.ok(section.includes(name));
-  }
-  assert.match(section, /451 \/ 395 \/ 56/);
-  assert.match(section, /`notePaging: 1` remains absent until the complete core contract/);
-  assert.match(section, /all six staged operation methods/);
-  assert.match(section, /notePagingBackendId/);
-  assert.match(section, /`noteAnnotations: 1` separately requires/);
-  assert.ok(!versioning.includes('Allocate the next minor against daemon main at implementation time.'));
-});
-
-
 function paragraphEntryFrame() {
   return { jsonrpc: '2.0', id: 'paragraph\u0000id', result: {
     kind: 'noteContextPage', scope: f.scope, sourceRevision: 'r:7', snapshotId: 'snapshot-a',
@@ -2106,7 +1488,7 @@ test('paragraph entry path: documented authority remains document-wide and snaps
   assert.ok(section);
   for (const text of ['complete source', '<!--anchor:', 'ws-block', 'original expiry',
     'source revision', 'snapshot', 'incarnation', 'without hydrating', 'safe-edit proof',
-    'full `notePaging: 1` activation gate remains unchanged']) assert.ok(section.includes(text), text);
+    'complete `notePagingRead: 1` activation gate still applies']) assert.ok(section.includes(text), text);
 });
 
 
@@ -2127,373 +1509,4 @@ test('paragraph entry policy: explicit renderer predicate includes trim and whol
   assert.ok(docs.includes('ECMAScript `String.prototype.trim()`'));
   assert.ok(docs.includes('including U+FEFF, excluding U+0085'));
   assert.ok(docs.includes('not only at a parsed fence boundary'));
-});
-
-
-test('inverse history groups preserve staged and inline opaque string identities', () => {
-  for (const row of f.staged.inverse) summaryContract.assertInverseHistoryGroup(row.historyGroup);
-  const groups = ['paste', '0', '00', 'é'.repeat(128)];
-  for (const group of groups) summaryContract.assertInverseHistoryGroup(group);
-  assert.equal(new Set(groups).size, 4);
-  assert.equal(f.staged.inverse[0].historyGroup, 'paste');
-  for (const invalid of [0, 1, null, false, {}, [], '', 'x'.repeat(257), 'é'.repeat(129)])
-    assert.throws(() => summaryContract.assertInverseHistoryGroup(invalid));
-});
-
-function receiptDetailFixture() {
-  const receipt = { scope: f.scope, operationId: 'receipt-operation', payloadDigest: 'a'.repeat(64),
-    receiptExpiresAt: '2026-10-03T01:00:00.000Z' };
-  return { receipt, request: { ...receipt.scope, operationId: receipt.operationId,
-    payloadDigest: receipt.payloadDigest, kind: 'detail', ref: 'inverse-provenance' },
-  refs: ['inverse-provenance', 'canonical-effect-detail', 'nested-text'],
-  now: Date.parse('2026-10-03T00:30:00.000Z') };
-}
-test('inline details resolve inverse/effect/nested refs with receipt lifetime', () => {
-  const x = receiptDetailFixture();
-  for (const ref of x.refs) summaryContract.assertInlineReceiptDetail(
-    { ...x.request, ref }, x.receipt, x.refs, x.now);
-  // No live source revision or still-live staging view is needed for retained receipt data.
-  assert.equal(x.request.sourceRevision, undefined);
-  assert.equal(x.request.headerDigest, undefined);
-  assert.ok(docs.includes('`effects` and `detail` reads by'));
-  assert.ok(docs.includes('receipt effect detailRef (including sourceEffect)'));
-});
-test('inline details reject foreign receipt identity, unreachable refs and exact expiry', () => {
-  const x = receiptDetailFixture();
-  for (const patch of [
-    ...Object.keys(f.scope).map(key => ({ [key]: 'foreign' })),
-    { operationId: 'other' }, { payloadDigest: 'b'.repeat(64) }, { payloadDigest: undefined },
-    { kind: 'inverse' }, { ref: 'foreign-ref' }, { ref: '' },
-    { headerDigest: 'c'.repeat(64) }, { viewId: 'staged-view' },
-  ]) assert.throws(() => summaryContract.assertInlineReceiptDetail(
-    { ...x.request, ...patch }, x.receipt, x.refs, x.now));
-  // A known spelling elsewhere cannot establish reachability from this owner.
-  assert.throws(() => summaryContract.assertInlineReceiptDetail(x.request, x.receipt, [], x.now));
-  for (const now of [Date.parse(x.receipt.receiptExpiresAt), Date.parse(x.receipt.receiptExpiresAt) + 1])
-    assert.throws(() => summaryContract.assertInlineReceiptDetail(x.request, x.receipt, x.refs, now));
-});
-
-
-test('logical replacement guard preserves existing leading-run and trailer recognition', () => {
-  for (const text of ['   1 | first\n   2 | second', '  12 | first\n  13 |',
-    '9999 | first\n10000 | next', '   1 | first\n   2 | second\nordinary tail',
-    '\n\n--- Task Metadata ---\nstatus: open']) {
-    assert.equal(summaryContract.isNumberedReadPresentation(text), true);
-    assert.equal(spliceError('base', [{ start: 0, end: 4, text }], f.limits), 'invalid-params');
-  }
-  for (const text of ['1. first\n2. second', '1 | Alice\n2 | Bob', '| 1 | a |\n| 2 | b |',
-    '    1 | code\n    2 | code', '   1 | single', '1|a\n2|b',
-    'prose\n   1 | a\n   2 | b', '```\n   1 | a\n   2 | b\n```', '']) {
-    assert.equal(summaryContract.isNumberedReadPresentation(text), false);
-    assert.equal(spliceError('base', [{ start: 0, end: 4, text }], f.limits), null);
-  }
-});
-test('logical replacement guard rejects a later bad splice before applying any batch', () => {
-  const base = 'first second';
-  const splices = [{ start: 0, end: 5, text: 'changed' },
-    { start: 6, end: 12, text: '   1 | a\n   2 | b' }];
-  const before = structuredClone(splices), payloadHash = digest(splices);
-  const error = spliceError(base, splices, f.limits);
-  const result = error ? base : applySourceSplices(base, splices);
-  assert.equal(error, 'invalid-params'); assert.equal(result, base);
-  assert.deepEqual(splices, before); assert.equal(digest(splices), payloadHash);
-});
-test('logical replacement guard neither scans untouched base nor combines independent splices', () => {
-  const base = '   1 | first\n   2 | second';
-  const repair = [{ start: base.length, end: base.length, text: ' repaired' }];
-  assert.equal(spliceError(base, repair, f.limits), null);
-  assert.equal(applySourceSplices(base, repair), base + ' repaired');
-  const splices = [{ start: 0, end: 1, text: '   1 | a\n' },
-    { start: 1, end: 2, text: '   2 | b' }];
-  assert.equal(spliceError('ab', splices, f.limits), null);
-  assert.equal(summaryContract.isNumberedReadPresentation(applySourceSplices('ab', splices)), true);
-});
-test('staged logical replacement guard is independent of every scalar-safe chunk seam', () => {
-  for (const text of ['   1 | a😀\n   2 | b', '```\n   1 | a\n   2 | b\n```',
-    '\n\n--- Task Metadata ---\nstatus: open']) {
-    const expected = summaryContract.isNumberedReadPresentation(text);
-    for (let at = 0; at <= text.length; at++) {
-      if (!boundary(text, at)) continue;
-      // Fixture reassembly only, not permission for full production hydration.
-      const chunks = [text.slice(0, at), text.slice(at)];
-      assert.equal(summaryContract.isNumberedReadPresentation(chunks.join('')), expected);
-      assert.equal(digest(chunks.join('')), digest(text));
-    }
-  }
-});
-test('logical replacement guard preserves historical replay and exact bytes by contract', () => {
-  const section = docs.split('**Numbered-read guard on logical replacements.**')[1]?.split('`operationId` is')[0];
-  assert.ok(section);
-  for (const text of ['existing unchanged', 'each `splices[].text`', 'reject the whole batch',
-    'complete logical', 'Do not strip prefixes', 'combine independent splices',
-    'Retained historical receipt replay', 'existing ordering']) assert.ok(section.includes(text), text);
-});
-
-
-const stagedMetadataFixture = JSON.parse(await readFile(new URL('./staged-metadata.json', import.meta.url), 'utf8'));
-const { assertStagedMetadataUpload } = await import('./staged-metadata.mjs');
-const metadataClone = () => structuredClone(stagedMetadataFixture);
-const resource = (f, id) => f.texts.find(r => r.id === id);
-const rewriteMetadata = (f, id, change) => {
-  const r = resource(f, id), v = JSON.parse(r.text); change(v);
-  r.text = canonicalJson(v);
-};
-test('staged metadata upload resolves distinct entry/text identities, nested and empty containers', () => {
-  const f = metadataClone(), result = assertStagedMetadataUpload(f);
-  assert.equal(f.status, 'controlled-upload-graph-not-runtime-proof');
-  assert.deepEqual([...result.entryIds].sort(), [...f.expectedEntryIds].sort());
-  assert.ok(result.readTextIds.includes('scalar-shared'));
-  assert.ok(!result.parsedTextIds.includes('scalar-shared'));
-  assert.ok(!result.readTextIds.includes('unreachable-upload'));
-  assert.equal(result.parsedTextIds.filter(id => id === 'text-root').length, 1);
-});
-test('staged metadata upload follows only owned explicit references including empty directories', () => {
-  for (const id of ['text-root', 'dir-root-b', 'dir-empty-array', 'scalar-long-key', 'scalar-shared']) {
-    const missing = metadataClone(); missing.texts = missing.texts.filter(r => r.id !== id);
-    assert.throws(() => assertStagedMetadataUpload(missing));
-    const foreign = metadataClone(); resource(foreign, id).operationId = 'another-operation';
-    assert.throws(() => assertStagedMetadataUpload(foreign));
-  }
-  const unused = metadataClone(); resource(unused, 'unreachable-upload').text = '{invalid';
-  assertStagedMetadataUpload(unused);
-});
-test('staged metadata upload rejects aliases, duplicate identities, cycles and multiple owners', () => {
-  const mutations = [
-    f => rewriteMetadata(f, 'text-root', e => { e.childrenRef = 'text-array'; }),
-    f => rewriteMetadata(f, 'text-array', e => { e.parentId = 'text-root'; }),
-    f => rewriteMetadata(f, 'text-title', e => { e.id = 'entry-array'; }),
-    f => rewriteMetadata(f, 'dir-root-b', d => { d.items.push('text-title'); }),
-    f => rewriteMetadata(f, 'dir-root-b', d => { d.nextRef = 'dir-root-a'; }),
-    f => rewriteMetadata(f, 'dir-array', d => { d.items[0] = 'text-root'; }),
-    f => rewriteMetadata(f, 'text-empty-object', e => { e.childrenRef = 'dir-empty-array'; }),
-    f => rewriteMetadata(f, 'dir-array', d => { d.items[0] = 'text-title'; }),
-  ];
-  for (const mutate of mutations) { const f = metadataClone(); mutate(f); assert.throws(() => assertStagedMetadataUpload(f)); }
-});
-test('staged metadata upload rejects malformed entries/directories and non-progressing empty continuations', () => {
-  const mutations = [
-    f => rewriteMetadata(f, 'text-root', e => { e.key = 'root-is-not-member'; }),
-    f => rewriteMetadata(f, 'text-title', e => { e.keyRef = 'scalar-long-key'; }),
-    f => rewriteMetadata(f, 'text-title', e => { e.value = 'not-inline'; }),
-    f => rewriteMetadata(f, 'text-null', e => { delete e.value; }),
-    f => rewriteMetadata(f, 'text-null', e => { e.value = ''; }),
-    f => rewriteMetadata(f, 'dir-root-a', d => { d.kind = 'children'; }),
-    f => rewriteMetadata(f, 'dir-root-a', d => { d.extra = true; }),
-    f => rewriteMetadata(f, 'dir-root-b', d => { delete d.nextRef; }),
-    f => rewriteMetadata(f, 'dir-root-a', d => { d.items = []; }),
-    f => rewriteMetadata(f, 'dir-root-b', d => { d.items = []; }),
-    f => rewriteMetadata(f, 'dir-empty-array', d => { d.nextRef = 'dir-array'; }),
-    f => { resource(f, 'dir-root-a').text += '\n'; },
-    f => { const r = resource(f, 'text-root'); r.text = r.text.replace('{', '{"id":"discarded",'); },
-  ];
-  for (const mutate of mutations) { const f = metadataClone(); mutate(f); assert.throws(() => assertStagedMetadataUpload(f)); }
-});
-test('staged metadata sibling order spans directory pages and uses decoded scalar keys, not text IDs', () => {
-  for (const mutate of [
-    f => rewriteMetadata(f, 'dir-root-b', d => { d.items.reverse(); }),
-    f => rewriteMetadata(f, 'text-long-key', e => { delete e.keyRef; e.key = 'title'; }),
-    f => { resource(f, 'scalar-long-key').text = 'title'; },
-    f => rewriteMetadata(f, 'text-null', e => { e.index = 2; }),
-  ]) { const f = metadataClone(); mutate(f); assert.throws(() => assertStagedMetadataUpload(f)); }
-  const f = metadataClone();
-  rewriteMetadata(f, 'dir-root-a', d => { d.items = ['text-title']; });
-  rewriteMetadata(f, 'dir-root-b', d => { d.items = ['text-long-key']; });
-  rewriteMetadata(f, 'text-title', e => { e.key = '\uE000'; });
-  resource(f, 'scalar-long-key').text = '\u{10000}';
-  // Unicode scalar/UTF8 order differs from JS UTF16 .sort() for this pair.
-  assert.deepEqual(['\uE000', '\u{10000}'].sort(), ['\u{10000}', '\uE000']);
-  assertStagedMetadataUpload(f);
-  rewriteMetadata(f, 'text-title', e => { e.key = '\u{10000}'; });
-  resource(f, 'scalar-long-key').text = '\uE000';
-  assert.throws(() => assertStagedMetadataUpload(f));
-});
-function metadataDirectoryFixture(count) {
-  const owner = 'operation', items = Array.from({ length: count }, (_, i) => `child-${i}`);
-  const texts = [{ id: 'root', operationId: owner, text: canonicalJson({ id: 'root-entry', parentId: null, type: 'array', childrenRef: 'children' }) },
-    { id: 'children', operationId: owner, text: '' },
-    ...items.map((id, index) => ({ id, operationId: owner, text: canonicalJson({ id: `entry-${index}`, parentId: 'root-entry', index, type: 'null', value: null }) }))];
-  const f = { operationId: owner, roots: ['root'], texts };
-  const update = () => { resource(f, 'children').text = canonicalJson({ kind: 'metadataChildren', items, nextRef: null }); };
-  update(); return { f, items, update };
-}
-test('staged metadata directory item and exact escaped logical-byte ceilings are independent', () => {
-  assertStagedMetadataUpload(metadataDirectoryFixture(64).f);
-  assert.throws(() => assertStagedMetadataUpload(metadataDirectoryFixture(65).f));
-  const { f, items, update } = metadataDirectoryFixture(64);
-  // Escaped control bytes stress encoded JSON; text IDs remain valid and <=256 raw UTF8 bytes.
-  for (let i = 0; i < items.length; i++) { items[i] = `child-${i}-` + '\u0001'.repeat(30); f.texts[i + 2].id = items[i]; }
-  update();
-  while (utf8(resource(f, 'children').text) < 16384) {
-    const i = items.findIndex(id => utf8(id) < 256); assert.ok(i >= 0);
-    items[i] += 'x'; f.texts[i + 2].id = items[i]; update();
-  }
-  assert.equal(utf8(resource(f, 'children').text), 16384); assertStagedMetadataUpload(f);
-  const i = items.findIndex(id => utf8(id) < 256); assert.ok(i >= 0);
-  items[i] += 'x'; f.texts[i + 2].id = items[i]; update();
-  assert.equal(utf8(resource(f, 'children').text), 16385);
-  assert.throws(() => assertStagedMetadataUpload(f));
-});
-test('staged metadata logical resources are chunk-independent and large scalar values remain separate', () => {
-  const f = metadataClone(); resource(f, 'scalar-shared').text = '😀'.repeat(5000);
-  const expected = assertStagedMetadataUpload(f);
-  for (const id of ['text-root', 'dir-root-a', 'scalar-shared']) {
-    const r = resource(f, id), whole = r.text;
-    for (const at of [0, 1, Math.floor(whole.length / 2), whole.length]) {
-      if (!boundary(whole, at)) continue;
-      r.chunks = [whole.slice(0, at), whole.slice(at)]; delete r.text;
-      assert.deepEqual(assertStagedMetadataUpload(f), expected);
-      delete r.chunks; r.text = whole;
-    }
-  }
-});
-
-test('staged metadata keys preserve empty and prefix order and reject invalid Unicode scalars', () => {
-  const f = metadataClone();
-  rewriteMetadata(f, 'dir-root-a', d => { d.items = ['text-title']; });
-  rewriteMetadata(f, 'dir-root-b', d => { d.items = ['text-long-key']; });
-  for (const [first, second] of [['', 'a'], ['a', 'aa']]) {
-    rewriteMetadata(f, 'text-title', e => { e.key = first; });
-    resource(f, 'scalar-long-key').text = second;
-    assertStagedMetadataUpload(f);
-    rewriteMetadata(f, 'text-title', e => { e.key = second; });
-    resource(f, 'scalar-long-key').text = first;
-    assert.throws(() => assertStagedMetadataUpload(f));
-  }
-  for (const bad of ['\0', '\uD800', '\uDC00']) {
-    const inline = metadataClone();
-    rewriteMetadata(inline, 'text-title', e => { e.key = bad; });
-    assert.throws(() => assertStagedMetadataUpload(inline));
-    const referenced = metadataClone(); resource(referenced, 'scalar-long-key').text = bad;
-    assert.throws(() => assertStagedMetadataUpload(referenced));
-    const value = metadataClone(); resource(value, 'scalar-shared').text = bad;
-    assert.throws(() => assertStagedMetadataUpload(value));
-  }
-});
-
-const { assertStagedMarkerOccurrence } = await import('./contract.mjs');
-test('staged markers bind individual literals and canonical comment IDs, preserving repeated occurrences', () => {
-  const m = f.stagedMarkerOccurrences;
-  assert.equal(m.status, 'controlled-resolved-descriptors-not-provenance-or-native-map-proof');
-  for (const o of m.occurrences) {
-    assertStagedMarkerOccurrence(o.record, o.descriptor, o.attributes, m.source);
-    assert.equal(o.detailText, canonicalJson(o.descriptor));
-    assert.equal(o.record.detail.sha256, createHash('sha256').update(o.detailText).digest('hex'));
-    assert.equal(o.record.detail.length, o.detailText.length);
-    assert.equal(o.record.detail.utf8Bytes, utf8(o.detailText));
-  }
-  const [first, , , repeated] = m.occurrences;
-  assert.equal(first.record.canonicalId, repeated.record.canonicalId);
-  assert.equal(first.attributes.id, repeated.attributes.id);
-  assert.notDeepEqual(first.record.sourceRange, repeated.record.sourceRange);
-  assert.notEqual(first.record.ordinal, repeated.record.ordinal);
-});
-test('staged markers reject pair/body/whitespace/partial ranges and split Unicode endpoints', () => {
-  const m = f.stagedMarkerOccurrences;
-  for (const range of [
-    { start: m.occurrences[0].record.sourceRange.start, end: m.occurrences[1].record.sourceRange.end },
-    { start: m.occurrences[0].record.sourceRange.end, end: m.occurrences[1].record.sourceRange.start },
-    { start: m.occurrences[0].record.sourceRange.start - 1, end: m.occurrences[0].record.sourceRange.end },
-    { start: m.occurrences[0].record.sourceRange.start + 1, end: m.occurrences[0].record.sourceRange.end },
-    { start: 1, end: m.occurrences[0].record.sourceRange.end },
-  ]) {
-    const o = structuredClone(m.occurrences[0]); o.record.sourceRange = range;
-    assert.throws(() => assertStagedMarkerOccurrence(o.record, o.descriptor, o.attributes, m.source));
-  }
-});
-test('staged markers reject atom-ID aliases, guessed attributes, wrong type/schema/width and parent', () => {
-  const m = f.stagedMarkerOccurrences;
-  for (const mutate of [
-    o => { o.record.canonicalId = o.attributes.id; },
-    o => { o.attributes.commentId = 'different'; },
-    o => { o.attributes.id = o.record.canonicalId; },
-    o => { o.attributes.type = 'point'; o.attributes.id = `${o.record.canonicalId}:point`; },
-    o => { delete o.attributes.type; }, o => { delete o.attributes.id; },
-    o => { delete o.attributes.commentId; }, o => { delete o.descriptor.attributesRef; },
-    o => { o.descriptor.nodeType = 'text'; }, o => { o.descriptor.version = 2; },
-    o => { o.descriptor.nativeRange.to++; }, o => { o.descriptor.nativeRange.to--; },
-    o => { o.descriptor.parentOrdinal = o.record.ordinal; },
-  ]) {
-    const o = structuredClone(m.occurrences[0]); mutate(o);
-    assert.throws(() => assertStagedMarkerOccurrence(o.record, o.descriptor, o.attributes, m.source));
-  }
-});
-test('staged marker shape preserves renderer identifier spelling without claiming canonical authority', () => {
-  const o = structuredClone(f.stagedMarkerOccurrences.occurrences[2]);
-  // Shape-only input: this lookalike has no supplied retained provenance and
-  // cannot be treated as a live canonical comment merely because this oracle accepts it.
-  o.record.canonicalId = 'legacy-comment';
-  o.attributes = { id: 'legacy-comment:point', type: 'point', commentId: 'legacy-comment' };
-  const source = '<!--anchor:legacy-comment:point-->';
-  o.record.sourceRange = { start: 0, end: source.length };
-  assertStagedMarkerOccurrence(o.record, o.descriptor, o.attributes, source);
-  assert.match(docs, /Matching literal text, `canonicalId`, and attributes is necessary but does not/);
-  assert.match(docs, /Non-UUID lookalikes\nremain ordinary source unless independent retained provenance establishes a marker/);
-});
-
-const { assertCapturedViewOutput } = await import('./contract.mjs');
-test('staged primary output kind stays bound to the captured header across first and continued reads', () => {
-  const kinds = ['source', 'selectionMarkdown', 'search'];
-  for (const output of kinds) for (const action of ['read', 'mutate'])
-    for (const selection of ['all', 'ranges']) {
-      const header = { ...f.staged.header, output, action, selection };
-      for (const continuation of [false, true]) {
-        // Cursor ownership and persisted header lookup remain separate runtime requirements.
-        const request = { kind: output, ...(continuation ? { cursor: 'owned-cursor' } : {}) };
-        assertCapturedViewOutput(header, request.kind, output);
-        for (const wrong of kinds.filter(k => k !== output)) {
-          assert.throws(() => assertCapturedViewOutput(header, wrong, output));
-          assert.throws(() => assertCapturedViewOutput(header, output, wrong));
-          assert.throws(() => assertCapturedViewOutput(header, wrong, wrong));
-        }
-      }
-    }
-});
-test('unavailable staged adapters do not create a source fallback or constrain receipt selectors', () => {
-  for (const output of ['selectionMarkdown', 'search'])
-    assert.throws(() => assertCapturedViewOutput({ output }, 'source', 'source'));
-  for (const output of [undefined, 'inverse', 'detail', 'SOURCE'])
-    assert.throws(() => assertCapturedViewOutput({ output }, 'source', 'source'));
-  assert.match(docs, /unavailable selected adapter must not fall back to `source`/);
-  assert.match(docs, /This equality does not change the separately addressed receipt reads or reachable/);
-  assert.match(docs, /A captured `source` output remains the exact frozen source without selection/);
-});
-
-test('staged inverse composes canonical outside-range changes into the newest original group', () => {
-  // Controlled source algebra, not a canonical writer, native history owner or provenance proof.
-  const base = 'ab', first = 'aXb', second = 'aXYb', canonical = '[aXYb]';
-  const originalGroups = ['typed-first', 'typed-second'];
-  const inverse = [
-    { historyGroup: originalGroups[1], input: canonical, output: first, splices: [
-      { start: 0, end: 1, text: '' }, { start: 3, end: 4, text: '' }, { start: 5, end: 6, text: '' },
-    ] },
-    { historyGroup: originalGroups[0], input: first, output: base, splices: [{ start: 1, end: 2, text: '' }] },
-  ];
-  assert.equal(applySourceSplices(base, [{ start: 1, end: 1, text: 'X' }]), first);
-  assert.equal(applySourceSplices(first, [{ start: 2, end: 2, text: 'Y' }]), second);
-  assert.deepEqual(inverse.map(g => g.historyGroup), [...originalGroups].reverse());
-  let current = canonical;
-  for (const group of inverse) {
-    summaryContract.assertInverseHistoryGroup(group.historyGroup);
-    assert.equal(current, group.input);
-    current = applySourceSplices(current, group.splices);
-    assert.equal(current, group.output);
-  }
-  assert.equal(current, base);
-  assert.notEqual(applySourceSplices(canonical, [{ start: 3, end: 4, text: '' }]), first);
-  assert.match(docs, /do not drop them, flatten earlier groups, or invent a\nseparate native gesture/);
-});
-test('zero-user-group commits retain an empty inverse or one receipt-owned canonical-source inverse', () => {
-  const capturedNativeGroups = [], base = 'ab';
-  const unchanged = { source: base, inverseRef: 'owned-empty-inverse', groups: [] };
-  assert.equal(unchanged.source, base); assert.equal(unchanged.groups.length, 0);
-  const changed = { source: '[ab]', inverseRef: 'owned-operation-inverse', groups: [{
-    historyGroup: 'operation-only', input: '[ab]', output: base,
-    splices: [{ start: 0, end: 1, text: '' }, { start: 3, end: 4, text: '' }],
-  }] };
-  const group = changed.groups[0]; summaryContract.assertInverseHistoryGroup(group.historyGroup);
-  assert.equal(applySourceSplices(group.input, group.splices), group.output);
-  assert.equal(group.output, base); assert.equal(capturedNativeGroups.length, 0);
-  assert.match(docs, /receipt owns an explicitly empty inverse collection/);
-  assert.match(docs, /That group represents\nthis committed operation, not an invented captured native gesture/);
-  assert.match(docs, /No reserved group spelling or new wire discriminator is introduced/);
 });

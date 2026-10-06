@@ -8,29 +8,27 @@ capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `13.8` — prepared note paging and operations; not a shipped-version claim.
+**Documented version:** `13.8` — prepared read-only note paging; not a shipped-version claim.
 Other prepared extensions retain their independent support gates.
 
-**Version 13.8 — note paging and operations (additive, prepared).**
+**Version 13.8 — read-only note paging (additive, prepared).**
 [Revision-safe note pages](./methods/notes-tasks.md#revision-safe-note-pages-prepared-additive-contract)
-reserve this minor for the eight already documented router methods:
-`note.applySplices`, `note.operationStatus`, and `note.operation.begin`, `append`,
-`seal`, `read`, `commit`, `cancel`. Implementation may proceed incrementally, but
-advertising protocol 13.8 does not establish support for any of these methods,
-paging, annotations or editing integration. The combined documented catalog stays
-**451 / 395 / 56** (dispatchable / router / fast path); these eight methods are
-already included, not counted again. No new event names are introduced.
+reserve this minor after the 13.7 checkout owner-avatar extension. Exactly integer
+`notePagingRead: 1` plus a valid `server.capabilities.notePagingBackendId` gates the
+complete source/context/metadata/task-ID paging and bounded pageState subscription
+contract. `noteAnnotations: 1` separately requires the complete independent-epoch
+annotation extension alongside read paging. Numeric version, catalog presence and
+partial implementation do not establish support. Neither capability is advertised
+until its complete declared contract passes component validation.
 
-`notePaging: 1` remains absent until the complete core contract is implemented:
-source/context/metadata/mapping and ordered task-link pages, inline CAS edits with
-atomic receipts and retry status, all six staged operation methods with their
-mapping/effects/inverse paging, and bounded pageState subscriptions. Clients also
-require a valid `server.capabilities.notePagingBackendId`; numeric version or a
-working subset is not a substitute. `noteAnnotations: 1` separately requires the
-complete annotation extension alongside notePaging. Existing legacy methods keep
-their compatibility behavior. This reservation follows the documented checkout owner-avatar allocation in
-13.7; check for competing minor allocations again before merging the implementation. It makes
-no shipped-version, complete-feature or component-test claim.
+The earlier prepared `notePaging` promised partial writes and staged operations;
+it remains absent and is not repurposed. Those eight unshipped method reservations
+are withdrawn. Paging extends existing methods with no new event names; the
+combined catalog is **443 / 387 / 56** (dispatchable / router / fast path).
+Editing explicitly loads full source and uses existing complete-document editors
+and `note.setContent`, preserving its documented merge behavior and limitations.
+This is not a shipped-version or product-enablement claim. Recheck competing minor
+allocations before merging the implementation.
 
 **Version 13.7 — checkout owner avatars (additive, prepared).**
 The [owner-avatar extension](./methods/repository-checkout.md#owner-avatar-extension-prepared-protocol-137)
@@ -54,10 +52,9 @@ events, settings, arbitrary execution inputs or readiness guarantee. Clients may
 attempt this optional optimization directly and tolerate `-32601` from older
 daemons; no new capability flag is required. Existing prepared extensions retain
 their independent gates, and discovery remains unchanged. The documented surface
-is now **451 / 395 / 56** (dispatchable / router / fast path). This reservation
+is now **443 / 387 / 56** (dispatchable / router / fast path). This reservation
 does not advertise runtime implementation or change the pinned daemon version.
-It includes the eight independently prepared note paging methods; their
-`notePaging: 1` gate does not follow from the numeric protocol version.
+Read-only note paging has its own independent capability gate.
 
 **Version 13.5 — GitLab project checkout (additive, prepared).**
 [Pre-workspace checkout](./methods/repository-checkout.md) adds six router methods:
@@ -226,41 +223,22 @@ These additive docs precede consumer merges/contract acceptance; authorized loca
 development and draft preparation may proceed in parallel. Static fixtures do not
 qualify a listener, fresh-workspace source, provider or ready/ACK behavior.
 
-**Prepared note paging and operation contract (additive, reserved in 13.8).**
+**Prepared read-only note paging contract (additive, reserved in 13.8).**
 [§5.2](./methods/notes-tasks.md#revision-safe-note-pages-prepared-additive-contract)
-reserves `note.applySplices`, `note.operationStatus` and six `note.operation.*`
-staging/read/commit methods, adding eight router methods with no new event names.
-The [method catalog](./05-method-catalog.md) maintains the combined totals.
-Source/context/metadata/mapping and ordered raw task-link ID pages use opt-in `note.get` shapes;
-annotation paging and bounded subscription projections extend existing methods.
-Version 13.8 above reserves this surface after the documented 13.7 owner-avatar
-allocation. Advertise
-`notePaging: 1` only for the complete core including CAS/atomic receipts/status, all
-six staged operation methods with mapping/effects/inverse paging, and bounded
-pageState subscriptions; advertise `noteAnnotations: 1` only for the
-independent-epoch annotation extension and only alongside notePaging. Hello also
-provides `server.capabilities.notePagingBackendId` for persistent database namespace
-isolation; the exact integer capability and valid identity are both required. The
-ordered task-link summary preserves lexical first-occurrence ordering and exact
-deduplication, including long raw IDs through bounded fragments. It does not change
-legacy `note.listTasks` checkbox rows or `task.list` membership.
+defines the exhaustive read/annotation/subscription allowlist. Source, context,
+metadata and ordered task-ID pages extend `note.get`; annotation pages and bounded
+pageState projections extend existing methods. Exact integer `notePagingRead: 1`
+and valid `notePagingBackendId` are required; `noteAnnotations: 1` gates the complete
+annotation extension. Old clients retain complete-note APIs and events. New clients
+validate discriminants and never pass page content to full-document writers.
+Capability loss on reconnect preserves drafts and surfaces incompatibility.
 
-Numeric protocol versions, catalog presence and an ignored unknown option do not
-establish support. Old clients keep the existing complete-note methods and events;
-new clients require capabilities plus page discriminants and keep partial data out
-of full Note types/writers. Loss of capability on reconnect retains drafts and
-surfaces incompatibility, never converts a page cache into a full-note replacement.
-Docs land before additive components; daemon protocol support lands before FE
-opt-in, with human authorization at every merge. Pin advancement remains automated.
-
-The operation contract includes staged large input/inverse paging, frozen dirty-view
-reads, cancellation races and receipts. It preserves selected-copy Markdown text/plain,
-allows explicitly requested raw-source materialization with virtual DOM and delta-based
-editing, and preserves current fresh canonical/restart behavior without a new durable
-undo promise. Shared subscription stateGeneration orders crossed channel deliveries.
-Source paging is not a claim that the complete virtual editor is ready or its size
-guard may be removed. Notes fixtures validate prepared examples and arithmetic,
-not backend storage complexity or shipped support.
+Additive docs land before dependent component opt-in. Withdrawn prepared write
+entries must be removed from component catalogs/consumers before a consumer check
+can pass against this reduced contract; do not weaken the checker to hide a pending
+component mismatch. Daemon support lands before frontend opt-in, with human merge
+authorization. Automated pin advancement remains unchanged. Controlled fixtures
+validate contract examples and bounds, not production storage or shipped support.
 
 **Prepared command-default change — recommended 11.0, not shipped.**
 [Script creation defaults (§5.8)](./methods/scripts.md#command-creation-defaults-prepared-breaking-change)

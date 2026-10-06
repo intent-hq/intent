@@ -157,7 +157,7 @@ check-transfer-selection-contract: ## Validate transfer-selection fixtures and p
 	@node scripts/check-transfer-selection-contract.mjs
 
 check-note-pagination-contract: ## Validate prepared note paging examples (no component runtime/storage proof)
-	@node --test docs/protocol/fixtures/notes/contract.test.mjs
+	@node --test docs/protocol/fixtures/notes/*.test.mjs
 
 check-agent-worker-contract: ## Validate synthetic worker observation goldens, model and regression sensitivity
 	@node scripts/agent-worker-contract.mjs
