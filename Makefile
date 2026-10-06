@@ -194,7 +194,7 @@ mcp-bindings-doc: ## Regenerate docs/protocol/methods/mcp-bindings.md from inten
 # (the upstream consumer-checks job passes HEAD, the caller's own head).
 CHECK_MAKEFILE_TARGETS_GITLINK ?=
 check-makefile-targets: ensure-intentd-submodule ## Check Makefile-referenced intentd crates and --test targets exist at the pinned gitlink
-	@node scripts/check-makefile-targets.mjs $(if $(CHECK_MAKEFILE_TARGETS_GITLINK),--gitlink $(CHECK_MAKEFILE_TARGETS_GITLINK))
+	@node scripts/check-makefile-targets.mjs --intentd-dir "$(INTENTD_DIR)" $(if $(CHECK_MAKEFILE_TARGETS_GITLINK),--gitlink $(CHECK_MAKEFILE_TARGETS_GITLINK))
 
 # Every wire field an intentd row struct emits (AgentLite, Workspace) must be
 # present in the cloudlands-fe type that consumes it, or listed in the script's

@@ -83,6 +83,15 @@ restoration evidence requires a fresh, locally fenced queue read; see the
 [complete contract and precedence table](./methods/agents.md#submission-correlation-and-optimistic-display-prepared-additive-extension).
 No new event types or event-envelope revision fields are introduced.
 
+**Prepared queued delivery groups.** Combined retry rows may additionally carry
+`deliveryGroups` in `agent:queue:updated.data.queue` and
+`agent:queue:processing.data.queuedMessages`. Each ordered group keeps one source
+message's text with its own images/files. The row retains its head authority and
+existing controls; groups do not grant separate edit/remove/send rights. The
+aggregate fields remain available for older clients. Field presence enables
+grouped display independently of submission correlation. See the
+[delivery, persistence and edit contract](./methods/agents.md#queued-delivery-groups-prepared-additive-extension).
+
 #### Private repository context retirement
 
 **Prepared additive contract:** the

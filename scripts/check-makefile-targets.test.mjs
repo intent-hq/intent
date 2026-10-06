@@ -34,6 +34,7 @@ import {
 const words = (command) => splitShellCommands(command)[0] ?? [];
 
 const SCRIPT = fileURLToPath(new URL('./check-makefile-targets.mjs', import.meta.url));
+const MAKEFILE = fileURLToPath(new URL('../Makefile', import.meta.url));
 const SHA = 'a'.repeat(40);
 
 // `paths` are blob paths; a directory entry is listed for every path directly
@@ -509,6 +510,14 @@ test('parses CLI arguments', () => {
   assert.throws(() => parseArguments(['--gitlink']), CheckError);
 });
 
+function fixtureEnv() {
+  const env = cleanNodeEnv();
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('GIT_') || ['MAKEFLAGS', 'MAKEFILES', 'MFLAGS', 'MAKELEVEL', 'CHECK_MAKEFILE_TARGETS_GITLINK'].includes(key)) delete env[key];
+  }
+  return { ...env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull, GIT_TEMPLATE_DIR: '' };
+}
+
 // Builds a throwaway "monorepo" whose packages/intentd gitlink points at a
 // nested throwaway intentd repo containing crates/foo and crates/bar.
 function makeFixture(t) {
@@ -519,7 +528,7 @@ function makeFixture(t) {
       cwd,
       encoding: 'utf8',
       env: {
-        ...process.env,
+        ...fixtureEnv(),
         GIT_AUTHOR_NAME: 'test',
         GIT_AUTHOR_EMAIL: 'test@example.invalid',
         GIT_COMMITTER_NAME: 'test',
@@ -551,6 +560,103 @@ function makeFixture(t) {
   git(root, 'commit', '-q', '-m', 'monorepo');
   return { root, intentd, sha, git };
 }
+
+// Run the repository's actual Makefile recipe and prerequisite, with the real
+// checker reading a small fixture Makefile. No copied recipe or stub checker.
+function makeRecipeFixture(t, { defaultCheckout = 'empty' } = {}) {
+  const fixture = makeFixture(t);
+  const { root, intentd: defaultIntentd, git } = fixture;
+  const external = fs.mkdtempSync(path.join(os.tmpdir(), 'external intentd '));
+  t.after(() => fs.rmSync(external, { recursive: true, force: true }));
+  const intentd = path.join(external, 'component repo');
+  fs.renameSync(defaultIntentd, intentd);
+  fs.mkdirSync(defaultIntentd);
+  if (defaultCheckout === 'different') {
+    git(root, 'clone', '-q', '--no-local', intentd, defaultIntentd);
+  }
+  fs.writeFileSync(path.join(intentd, 'crates/foo/tests/head_only.rs'), '');
+  git(intentd, 'add', 'crates/foo/tests/head_only.rs');
+  git(intentd, 'commit', '-q', '-m', 'component head');
+  const head = git(intentd, 'rev-parse', 'HEAD').trim();
+  fs.mkdirSync(path.join(root, 'scripts'));
+  fs.copyFileSync(SCRIPT, path.join(root, 'scripts/check-makefile-targets.mjs'));
+  const references = (recipe = 'cargo test -p foo --test flat') => {
+    fs.writeFileSync(path.join(root, 'Makefile'), `lint:\n\tcd $(INTENTD_DIR) && ${recipe}\n`);
+  };
+  references();
+  const run = (...variables) => spawnSync('make', [
+    '--no-print-directory', '-f', MAKEFILE, 'check-makefile-targets',
+    `INTENTD_DIR=${intentd}`, ...variables,
+  ], { cwd: root, encoding: 'utf8', env: fixtureEnv() });
+  return { ...fixture, intentd, head, references, run };
+}
+
+test('external object-store paths do not change the canonical gitlink path', (t) => {
+  const { root, intentd, sha, head } = makeRecipeFixture(t);
+  assert.equal(resolveGitlink({ cwd: root, intentdDir: intentd }), sha);
+  assert.equal(resolveGitlink({ cwd: root, intentdDir: intentd, gitlink: 'HEAD' }), head);
+});
+
+for (const defaultCheckout of ['empty', 'different']) {
+  test(`canonical Make recipe uses external path with spaces and the canonical pin (${defaultCheckout} default checkout)`, (t) => {
+    const { sha, head, run } = makeRecipeFixture(t, { defaultCheckout });
+    assert.notEqual(sha, head);
+    const result = run();
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, new RegExp(`checked 2 cargo references against intentd@${sha.slice(0, 7)}`));
+  });
+}
+
+test('canonical Make recipe resolves explicit HEAD and SHA in the selected repository', (t) => {
+  const { head, sha, references, run } = makeRecipeFixture(t, { defaultCheckout: 'different' });
+  references('cargo test -p foo --test head_only');
+  for (const revision of ['HEAD', head]) {
+    const result = run(`CHECK_MAKEFILE_TARGETS_GITLINK=${revision}`);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, new RegExp(`checked 2 cargo references against intentd@${head.slice(0, 7)}`));
+  }
+  const pinned = run();
+  assert.equal(pinned.status, 2, pinned.stderr);
+  assert.match(pinned.stderr, /cargo test target 'head_only'.*is missing/);
+  assert.ok(pinned.stderr.includes(`pinned intentd gitlink ${sha.slice(0, 7)}`), pinned.stderr);
+});
+
+test('canonical Make recipe fails when the selected repository lacks the canonical pin', (t) => {
+  const { intentd, sha, git, run } = makeRecipeFixture(t, { defaultCheckout: 'different' });
+  // The default checkout still has the pin; only the selected object store lacks it.
+  fs.rmSync(path.join(intentd, '.git'), { recursive: true });
+  git(intentd, 'init', '-q', '-b', 'main');
+  git(intentd, 'add', '.');
+  git(intentd, 'commit', '-q', '-m', 'unrelated history');
+  const result = run();
+  assert.equal(result.status, 2, result.stderr);
+  assert.ok(result.stderr.includes(`gitlink ${sha} is not present in ${intentd}`), result.stderr);
+  assert.ok(result.stderr.includes(`fetch origin ${sha}`), result.stderr);
+});
+
+test('canonical Make recipe rejects missing explicit revisions in the selected repository', (t) => {
+  const { intentd, run } = makeRecipeFixture(t);
+  const missing = '1'.repeat(40);
+  const result = run(`CHECK_MAKEFILE_TARGETS_GITLINK=${missing}`);
+  assert.equal(result.status, 2, result.stderr);
+  assert.ok(result.stderr.includes(`gitlink ${missing} is not present in ${intentd}`), result.stderr);
+});
+
+test('canonical Make recipe retains crate and test validation in the selected repository', (t) => {
+  const { head, references, run } = makeRecipeFixture(t);
+  for (const [recipe, diagnostic] of [
+    ['cargo test -p missing-crate --test flat', /cargo package 'missing-crate' is unknown/],
+    ['cargo test -p foo --test absent', /cargo test target 'absent'.*missing/],
+    ['cargo test -p foo --test uncommitted', /cargo test target 'uncommitted'.*missing/],
+  ]) {
+    references(recipe);
+    const result = run('CHECK_MAKEFILE_TARGETS_GITLINK=HEAD');
+    assert.equal(result.status, 2, result.stderr);
+    assert.match(result.stderr, diagnostic);
+    assert.ok(result.stderr.includes(`Makefile:2: error:`), result.stderr);
+    assert.ok(result.stderr.includes(head.slice(0, 7)), result.stderr);
+  }
+});
 
 function runCli(cwd, ...args) {
   const result = spawnSync(process.execPath, [SCRIPT, ...args], { cwd, encoding: 'utf8', env: cleanNodeEnv() });

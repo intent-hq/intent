@@ -8,15 +8,15 @@ capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `13.7` — prepared note paging and operations; not a shipped-version claim.
+**Documented version:** `13.8` — prepared note paging and operations; not a shipped-version claim.
 Other prepared extensions retain their independent support gates.
 
-**Version 13.7 — note paging and operations (additive, prepared).**
+**Version 13.8 — note paging and operations (additive, prepared).**
 [Revision-safe note pages](./methods/notes-tasks.md#revision-safe-note-pages-prepared-additive-contract)
 reserve this minor for the eight already documented router methods:
 `note.applySplices`, `note.operationStatus`, and `note.operation.begin`, `append`,
 `seal`, `read`, `commit`, `cancel`. Implementation may proceed incrementally, but
-advertising protocol 13.7 does not establish support for any of these methods,
+advertising protocol 13.8 does not establish support for any of these methods,
 paging, annotations or editing integration. The combined documented catalog stays
 **451 / 395 / 56** (dispatchable / router / fast path); these eight methods are
 already included, not counted again. No new event names are introduced.
@@ -28,9 +28,20 @@ mapping/effects/inverse paging, and bounded pageState subscriptions. Clients als
 require a valid `server.capabilities.notePagingBackendId`; numeric version or a
 working subset is not a substitute. `noteAnnotations: 1` separately requires the
 complete annotation extension alongside notePaging. Existing legacy methods keep
-their compatibility behavior. This reservation follows daemon main's 13.6; check
-for competing minor allocations again before merging the implementation. It makes
+their compatibility behavior. This reservation follows the documented checkout owner-avatar allocation in
+13.7; check for competing minor allocations again before merging the implementation. It makes
 no shipped-version, complete-feature or component-test claim.
+
+**Version 13.7 — checkout owner avatars (additive, prepared).**
+The [owner-avatar extension](./methods/repository-checkout.md#owner-avatar-extension-prepared-protocol-137)
+adds optional `includeOwnerAvatar` to checkout capture and optional
+`ownerAvatarUrl` to its project page/detail projection. Exactly integer
+`gitlabCheckoutOwnerAvatar: 1` on the original connection permits the opt-in;
+legacy captures retain the previous shape, and new clients omit the input on
+older daemons. Metadata comes from the matching owning namespace in the existing
+project response, with no additional provider read. No method, event, authority,
+or catalog count changes. At its reservation, the documented surface was
+**443 / 387 / 56**.
 
 **Version 13.6 — onboarding adapter preparation (additive, prepared).**
 [`host.prepareProviderAdapters`](./05-method-catalog.md#hostprepareprovideradapters-136-prepared)
@@ -215,14 +226,15 @@ These additive docs precede consumer merges/contract acceptance; authorized loca
 development and draft preparation may proceed in parallel. Static fixtures do not
 qualify a listener, fresh-workspace source, provider or ready/ACK behavior.
 
-**Prepared note paging and operation contract (additive, reserved in 13.7).**
+**Prepared note paging and operation contract (additive, reserved in 13.8).**
 [§5.2](./methods/notes-tasks.md#revision-safe-note-pages-prepared-additive-contract)
 reserves `note.applySplices`, `note.operationStatus` and six `note.operation.*`
 staging/read/commit methods, adding eight router methods with no new event names.
 The [method catalog](./05-method-catalog.md) maintains the combined totals.
 Source/context/metadata/mapping and ordered raw task-link ID pages use opt-in `note.get` shapes;
 annotation paging and bounded subscription projections extend existing methods.
-Version 13.7 above reserves this surface against daemon main 13.6. Advertise
+Version 13.8 above reserves this surface after the documented 13.7 owner-avatar
+allocation. Advertise
 `notePaging: 1` only for the complete core including CAS/atomic receipts/status, all
 six staged operation methods with mapping/effects/inverse paging, and bounded
 pageState subscriptions; advertise `noteAnnotations: 1` only for the

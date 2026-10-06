@@ -55,29 +55,50 @@ an existing weaker rule over adding another instruction agents must remember.
 
 ## Output template
 
-Use this block once per finding. Replace every placeholder. It must stand alone as a
-workspace `initialPrompt`, without relying on the retrospective transcript.
+Write for the person deciding whether to approve the work. Assume they have not read
+the conversation and do not know the implementation. Use a short title that describes
+the improvement, such as "Keep database upgrade tests reliable" instead of "Stabilize
+historical migration fixtures".
 
-```markdown
-# Finding: <short outcome-oriented title>
+Start the task with two short paragraphs: the observed problem and why it matters,
+then the proposed change and what it will improve. Use everyday words before technical
+terms. For example, say "tests for upgrades from older databases" before "migration
+fixtures". The first few sentences must explain the value without paths, hashes,
+commands, or internal labels such as "Finding" and "Proposed rung".
 
-## Finding
-<Observed repository friction and the desired outcome.>
+The task appears in a plain text box. Use short paragraphs, simple labels, and a few
+bullets. Avoid Markdown heading markers and code fences. Aim for about 150 words;
+add only the detail needed for the new agent to work without the original transcript.
+Put essential technical facts at the end, one fact per bullet. Link to longer evidence
+instead of copying an investigation into the card.
 
-## Evidence (file/PR/commit)
-<Exact paths, PRs, commits, failures, or corrections that demonstrate the incident.>
+Use this shape once per finding. Replace every placeholder:
 
-## Cost (time or bug)
-<Measured or bounded time, repeated work, escaped bug, flake, or release risk.>
+```text
+<What is going wrong and its practical cost, in plain English.>
 
-## Proposed rung + concrete change
-<Rung 1-4 and the exact repository change. Explain why every stronger rung is infeasible.>
+<What to improve, why it helps, and why it belongs in a separate workspace.>
 
-## Verification steps
-- <Command or scenario and its expected result.>
+What to do:
+- <Concrete step in plain English.>
+- <Concrete step in plain English.>
 
-## Dedup check performed
-<Sibling workspaces and open issues searched, including queries and any related results.>
+Implementation notes:
+- <Essential code locations and linked evidence for the observed problem.>
+- <Chosen enforcement rung and why stronger rungs are infeasible.>
+- <Check to run and the expected result.>
+- <Sibling workspaces and issue searches checked, with any related results.>
+```
+
+For example, the opening for the database finding can be:
+
+```text
+Tests for upgrades from older databases currently break when unrelated features add
+new fields. This creates extra repair work before we can check whether upgrades work.
+
+Give these tests a way to create an old database directly. They can then check the
+upgrade itself and keep working as the app changes. This is separate test cleanup
+that will make future database changes easier to check.
 ```
 
 ## Where it goes
@@ -88,8 +109,9 @@ in the template, including related work that narrows or supersedes the proposal.
 
 For each accepted, non-duplicate finding, a foreground top-level agent proposes one
 follow-up workspace with `ws.workspace.proposeSibling({ title, initialPrompt })`. Use a
-short outcome-oriented `title` and the completed template verbatim as the self-contained
-`initialPrompt`. The user must approve the proposal; do not claim the workspace exists.
+short outcome-oriented `title` and the readable task above as the self-contained
+`initialPrompt`. Keep the plain English reason in the opening of that task. The user
+must approve the proposal; do not claim the workspace exists.
 
 Delegated or background agents must instead send the completed finding to their parent
 with `ws.agent.reportToParent`; the parent decides whether to propose it. Outside

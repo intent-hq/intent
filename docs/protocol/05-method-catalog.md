@@ -255,6 +255,7 @@ The `system.status` result also includes **additive** routing fields so an authe
   "localIps": ["192.168.1.10", "10.0.0.5"], // addresses the WSS listener actually answers on (bind-aware; empty when the listener is down)
   "hostname": "studio.local",               // local OS hostname
   "prettyHostname": "Clement's Mac Studio", // OS "pretty" device name (falls back to hostname)
+  "collaborationName": null, // owner-chosen sharing.machineName, null when unset/reset
   "tcAddress": "tcoWFwWCAAAQIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHw", // tailcat address — present only while the sidecar is running
   "host": {
     "deviceKind": "macStudio",
@@ -267,6 +268,12 @@ The `system.status` result also includes **additive** routing fields so an authe
 
 - `localIps` is **bind-aware** ([intent-hq/intentd#1656](https://github.com/intent-hq/intentd/pull/1656)): it names only addresses the running WSS listener actually answers on, not a blanket interface enumeration. A listener bound to specific addresses advertises exactly those — **loopback included** when bound (this is the diagnostic surface; the pairing surfaces below filter loopback out), and since `127.0.0.1` is always bound alongside a specific `server.bindAddress` set ([intent-hq/intentd#1695](https://github.com/intent-hq/intentd/pull/1695); §1.1) it always appears here next to the configured addresses — while an unspecified bind falls back to enumerating the machine's local addresses (virtual/container interfaces skipped): non-loopback IPv4 for `0.0.0.0`, plus non-link-local IPv6 for `::` — link-local (`fe80::/10`) is skipped as unusable without a zone index, while ULA (`fd00::/8`) addresses are advertised (the `::` listener is bound explicitly dual-stack, so the advertised IPv4 routes are reachable on every OS). With **no live TCP listener** (UDS-only daemon, stopped/failed WSS) it is **empty** — every entry would be a dead route — instead of the historical full enumeration. Always an array, never `null`. The interface enumerations come from a background-refreshed cache (~15s TTL) but the bind-set filter runs on the read path, so a runtime `server.bindAddress` change is reflected immediately while a changed interface list may take one refresh interval to appear.
 - `hostname` is the local OS hostname (falls back to `intent` when unresolvable), matching `server.pairingInfo` / `host.status`.
+- `collaborationName` (additive, presence-detected) is the owner-chosen
+  `sharing.machineName` override or explicit `null` when unset/reset. It appears in
+  both administrator and collaborator status projections. Use it only for
+  collaboration labels, preserving OS identity and personal device aliases; refresh
+  on normal status polling/reconnect and clear cached overrides on `null`. Older
+  daemons omit the field. See [the setting contract](./methods/settings.md#collaborator-facing-machine-name).
 - `prettyHostname` ([intent-hq/intentd#1466](https://github.com/intent-hq/intentd/pull/1466)) is the OS "pretty" device name (macOS Computer Name, e.g. "Clement's Mac Studio"), falling back to `hostname` when no pretty name is available — matching `server.pairingInfo` / `host.status`. Served from the same background-refreshed cache as `localIps`/`hostname`.
 - `host.deviceKind` / `host.hardwareModel` are optional, additive host-identity fields shared with `host.status` and `server.pairingInfo`. `deviceKind`, when known, is `"macMini" | "macStudio" | "laptop" | "desktop" | "server" | "cloudVm"`; `hardwareModel` is the raw OS product/model name. Both fields are omitted (never `null`) when unknown and must be detected by presence. Detection runs in the background-refreshed host cache, never on the RPC path.
 - **Tailcat address format:** literal `tc` followed by case-sensitive, unpadded base64url-encoded CBOR. This is an opaque endpoint, not a DNS hostname. Preserve its case through parsing, storage, and dialing. Only trim surrounding whitespace. The examples use a dummy public key; they do not identify a live server.

@@ -257,7 +257,10 @@ def load_callback_validator(intentd_dir: Path):
     spec = importlib.util.spec_from_file_location("intent_callback_fixture", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    # Preflight must not create an untracked scripts/__pycache__ in intentd:
+    # changed-test planning treats it as a build-wide change. Execute source
+    # directly, preserving module metadata without reading or writing bytecode.
+    exec(compile(path.read_bytes(), str(path), "exec"), module.__dict__)
     return module
 
 

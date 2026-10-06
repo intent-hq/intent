@@ -2038,9 +2038,14 @@ test('annotation identities: actual escaped reply/context frames honor exact wir
 });
 
 
-test('note protocol 13.7 reservation does not advertise partial implementation', () => {
-  assert.match(versioning, /\*\*Documented version:\*\* `13\.7`/);
-  const section = versioning.split('**Version 13.7 —')[1]?.split('**Version 13.6 —')[0];
+test('note protocol 13.8 reservation does not advertise partial implementation', () => {
+  const avatars = versioning.split('**Version 13.7 —')[1]?.split('**Version 13.6 —')[0];
+  assert.ok(avatars);
+  assert.match(avatars, /checkout owner avatars/);
+  assert.match(avatars, /`gitlabCheckoutOwnerAvatar: 1`/);
+  assert.doesNotMatch(avatars, /note\.applySplices/);
+  assert.match(versioning, /\*\*Documented version:\*\* `13\.8`/);
+  const section = versioning.split('**Version 13.8 —')[1]?.split('**Version 13.7 —')[0];
   assert.ok(section);
   assert.match(section, /note\.applySplices/);
   assert.match(section, /note\.operationStatus/);
