@@ -976,23 +976,34 @@ Bounded subscriptions and reconnect rules are in [§6](../06-events.md#prepared-
 Paging is a read-only viewing contract. Ordinary viewing must not hydrate the
 complete source. Explicit Edit loads a complete revision-bound source before
 making either legacy full-document editor writable; partial pages must never be
-passed to `note.setContent`. The product cutoff is 300,000 UTF-8 bytes of the
+passed to any full-content writer. The product cutoff is 300,000 UTF-8 bytes of the
 complete source: at or below it use the existing rich editor, above it use the
 existing raw Markdown editor. `sourceLength` remains UTF-16, not a UTF-8 size hint.
 This cutoff is editor policy, not a new wire limit or a maximum readable note size.
 Cancellation, note switching, failed loading and revision changes must not expose
 a writable partial draft. Growth across the cutoff must preserve unsaved text.
 
-Full-source editing reuses existing complete-document read/editor/save semantics.
-The exact save route remains pending the backend concurrency and side-effect audit.
-The existing `note.setContent` contract includes merge, task conversion, history
-and anchor behavior documented above. A missing retained version snapshot can make
-stale `expectedVersion` fall back to last-writer-wins; this read capability does not
-turn setContent into strict CAS. The existing content arm of `note.update` provides
-strict `expectedVersion` CAS, but its suitability for the editor also requires
-verification of canonicalization, task, anchor, history and event semantics. No
-new mutation contract is introduced here. The edit integration must preserve drafts
-and refuse unsafe saves when it cannot establish concurrency safety. Preflight the actual escaped full JSON frame
+Full-source editor saves use the existing Services-backed
+`note.update { workspaceId, noteId, content, expectedVersion }` with the loaded
+revision. Its content arm provides strict `expectedVersion` CAS: a stale draft is
+rejected without overwriting newer source. Never omit the revision or retry
+unconditionally. Preserve the complete draft on conflict or an unknown acknowledgement.
+Adopt the final returned `note.content` and `note.rev`, while retaining local typing
+that arrived after the submitted draft was captured.
+
+This path retains existing membership/presentation checks, anchor recovery and
+phantom scrub, user authorship, version/index/orphan maintenance, attribution,
+task conversion and note/spec events. Task conversion is the existing best-effort
+separate transaction; the initial content write and conversion are not one atomic
+save. The returned Note is refetched after conversion.
+
+Unlike `note.setContent`, this exact-draft route does not strip surrounding quotes,
+extract JSON text, reject intentionally empty content, or impose setContent's
+short-content/reduction confirmation guards. Intentional empty, quoted, JSON-looking
+source and large deletions remain valid editor drafts. Legacy `note.setContent`
+remains separate and unchanged: a missing retained version snapshot can make stale
+`expectedVersion` fall back to last-writer-wins. Read paging adds no mutation
+capability or new write API. Preflight the actual escaped full JSON frame
 against the existing transport bounds; the paging budget does not apply to a
 complete-source edit, nor does the raw editor imply unlimited transport capacity.
 Do not truncate, silently overwrite, or clear a draft on an uncertain save outcome.

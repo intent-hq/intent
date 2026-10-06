@@ -28,7 +28,10 @@ test('prepared protocol omits edit RPCs and retains full-content concurrency cav
   for (const text of [docs, catalog]) assert.doesNotMatch(text, /\| note\.(applySplices|operationStatus|operation\.(begin|append|seal|read|commit|cancel)) \|/);
   assert.match(docs, /300,000 UTF-8 bytes/);
   assert.match(docs, /missing retained version snapshot/);
-  assert.match(docs, /exact save route remains pending the backend concurrency and side-effect audit/);
+  assert.match(docs, /note.update \{ workspaceId, noteId, content, expectedVersion \}/);
+  assert.match(docs, /Never omit the revision or retry\nunconditionally/);
+  assert.match(docs, /initial content write and conversion are not one atomic/);
+  assert.match(docs, /Intentional empty, quoted, JSON-looking/);
   assert.match(docs, /strict `expectedVersion` CAS/);
   assert.match(docs, /sourceLength.*UTF-16/);
 });
