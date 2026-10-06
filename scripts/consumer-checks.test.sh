@@ -75,18 +75,18 @@ fi
 expect_all_ran "all-green run"
 grep -q -- '--no-print-directory RUSTUP_CARGO= -o event-catalog-check -o check-mcp-bindings docs-check$' "$stub_log" ||
   fail "docs-check was not invoked with its prerequisites assumed old: $(cat "$stub_log")"
-[ "$(grep -c . "$stub_log")" -eq 10 ] || fail "expected 10 make invocations: $(cat "$stub_log")"
+[ "$(grep -c . "$stub_log")" -eq 11 ] || fail "expected 11 make invocations: $(cat "$stub_log")"
 # The Makefile prepends the rust-toolchain.toml toolchain's bin/ to every
 # recipe's PATH; upstream that file is the caller's PR head, so every make
 # call must empty the probe on its command line (see the real-make run below).
-[ "$(grep -c -- '--no-print-directory RUSTUP_CARGO= ' "$stub_log")" -eq 10 ] ||
+[ "$(grep -c -- '--no-print-directory RUSTUP_CARGO= ' "$stub_log")" -eq 11 ] ||
   fail "not every make invocation carries the RUSTUP_CARGO= override: $(cat "$stub_log")"
 grep -q -- '--no-print-directory RUSTUP_CARGO= check-makefile-targets$' "$stub_log" ||
   fail "monorepo context did not run check-makefile-targets at the pinned gitlink: $(cat "$stub_log")"
 grep -q 'CHECK_MAKEFILE_TARGETS_GITLINK' "$stub_log" &&
   fail "monorepo context overrode the check-makefile-targets gitlink: $(cat "$stub_log")"
-[ "$(grep -c '^  [a-z-]*  *pass  ' <<<"$check_output")" -eq 10 ] ||
-  fail "summary table did not list 10 passing rows: $check_output"
+[ "$(grep -c '^  [a-z-]*  *pass  ' <<<"$check_output")" -eq 11 ] ||
+  fail "summary table did not list 11 passing rows: $check_output"
 grep -q '::warning::' <<<"$check_output" && fail "all-green run printed a warning: $check_output"
 grep -q '^Fix order:' <<<"$check_output" && fail "monorepo context printed the upstream fix-order line: $check_output"
 [ "$(tail -n 1 <<<"$check_output")" = "consumer-checks: all checks passed" ] ||
