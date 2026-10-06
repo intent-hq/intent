@@ -8,12 +8,12 @@ capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `13.8` — prepared read-only note paging; not a shipped-version claim.
+**Documented version:** `13.9` — prepared read-only note paging; not a shipped-version claim.
 Other prepared extensions retain their independent support gates.
 
-**Version 13.8 — read-only note paging (additive, prepared).**
+**Version 13.9 — read-only note paging (additive, prepared).**
 [Revision-safe note pages](./methods/notes-tasks.md#revision-safe-note-pages-prepared-additive-contract)
-reserve this minor after the 13.7 checkout owner-avatar extension. Exactly integer
+reserve this minor after the 13.8 selected checkout configuration extension. Exactly integer
 `notePagingRead: 1` plus a valid `server.capabilities.notePagingBackendId` gates the
 complete source/context/metadata/task-ID paging and bounded pageState subscription
 contract. `noteAnnotations: 1` separately requires the complete independent-epoch
@@ -24,13 +24,20 @@ until its complete declared contract passes component validation.
 The earlier prepared `notePaging` promised partial writes and staged operations;
 it remains absent and is not repurposed. Those eight unshipped method reservations
 are withdrawn. Paging extends existing methods with no new event names; the
-combined catalog is **443 / 387 / 56** (dispatchable / router / fast path).
+combined catalog is **444 / 388 / 56** (dispatchable / router / fast path).
 Editing explicitly loads full source and reuses existing complete-document editors.
 Full drafts save through existing `note.update` with the loaded `expectedVersion`
 and strict stale refusal. Legacy `note.setContent` retains its separate sanitation
 and merge behavior; no new write API or mutation capability is introduced.
 This is not a shipped-version or product-enablement claim. Recheck competing minor
 allocations before merging the implementation.
+
+**Version 13.8 — selected checkout configuration (additive, prepared).**
+Adds `sourceControl.checkout.repoConfig` and `gitlabCheckoutRepoConfig: 1` for a
+fixed `.intent/config.json` read at an observed immutable SHA. The original
+checkout capability and authority remain required. Missing config is distinct
+from unavailable reads; old clients and old-daemon fallback remain compatible.
+See the [configuration contract](./methods/repository-checkout.md#selected-repository-configuration-prepared-protocol-138).
 
 **Version 13.7 — checkout owner avatars (additive, prepared).**
 The [owner-avatar extension](./methods/repository-checkout.md#owner-avatar-extension-prepared-protocol-137)
@@ -225,7 +232,7 @@ These additive docs precede consumer merges/contract acceptance; authorized loca
 development and draft preparation may proceed in parallel. Static fixtures do not
 qualify a listener, fresh-workspace source, provider or ready/ACK behavior.
 
-**Prepared read-only note paging contract (additive, reserved in 13.8).**
+**Prepared read-only note paging contract (additive, reserved in 13.9).**
 [§5.2](./methods/notes-tasks.md#revision-safe-note-pages-prepared-additive-contract)
 defines the exhaustive read/annotation/subscription allowlist. Source, context,
 metadata and ordered task-ID pages extend `note.get`; annotation pages and bounded

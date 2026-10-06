@@ -15,6 +15,7 @@ before a workspace exists; they do not create a hosted project.
 | sourceControl.checkout.projects | checkoutId, revision, query?, cursor?, limit? | Checkout outcome containing {items: Project[], nextCursor?} |
 | sourceControl.checkout.project | checkoutId, revision, exactly one of projectPath or url | Checkout outcome containing {project: Project, contextUrl?} |
 | sourceControl.checkout.branches | checkoutId, revision, projectPath, query?, cursor?, limit?, cached? | Checkout outcome containing {items: Branch[], nextCursor?, defaultBranch?, cached: boolean} |
+| sourceControl.checkout.repoConfig | checkoutId, revision, projectPath, branch, commitSha | Checkout outcome containing {projectPath, branch, commitSha, config: object or null, exists: boolean}; requires gitlabCheckoutRepoConfig: 1 |
 | sourceControl.checkout.warm | checkoutId, revision, projectPath, branch, commitSha, mode | Checkout outcome containing {projectPath, branch, commitSha, cached: boolean} |
 | sourceControl.checkout.release | checkoutId, revision | {released: boolean} |
 
@@ -269,3 +270,54 @@ Follow the [checkout client lifecycle](../10-thin-client.md#gitlab-checkout-life
 for draft restoration, stale-response rejection and progress. These wire and
 client obligations do not claim live hosted/self-managed acceptance or a carrying
 desktop release.
+
+### Selected repository configuration (prepared, protocol 13.8)
+
+Require exactly integer `server.capabilities.gitlabCheckoutRepoConfig: 1` **and**
+`gitlabCheckout: 1` on the original destination connection before calling
+`sourceControl.checkout.repoConfig`. Older clients retain their existing behavior;
+clients on older daemons must report configuration detection as unavailable rather
+than interpreting unsupported reads as an absent file.
+
+The request contains exactly `checkoutId`, `revision`, `projectPath`, `branch`
+and `commitSha`. Select a branch and its full 40-character hexadecimal SHA from
+this checkout's branch observations first. Unknown fields (including URL, file
+path, mode and workspace ID) are invalid. The server reads only
+`.intent/config.json`, at that immutable SHA, without cloning, warming a cache,
+creating a workspace or writing files. It uses the original caller, socket,
+connection, credential and project admission. It does not acquire replacement
+authority when a request retires.
+
+```json
+{"jsonrpc":"2.0","id":305,"method":"sourceControl.checkout.repoConfig","params":{"checkoutId":"checkout-1","revision":"revision-1","projectPath":"team/sub/project","branch":"release/config","commitSha":"0123456789012345678901234567890123456789"}}
+```
+
+```json
+{"jsonrpc":"2.0","id":305,"result":{"status":"ready","value":{"projectPath":"team/sub/project","branch":"release/config","commitSha":"0123456789012345678901234567890123456789","config":{"setupScript":"npm ci"},"exists":true}}}
+```
+
+All ready fields are required. `config` is explicitly null and `exists` false
+only for confirmed file absence. A present invalid JSON document, non-object or
+repo-config schema mismatch yields `{}` and `exists: true`, using the existing
+repository-config tolerant parser; valid objects preserve unknown keys.
+Confirmed matching file/commit responses with undecodable content also yield
+`{}`/true, following the existing remote repo-config parser. Missing/mismatched
+provider identity, malformed transport JSON, auth/transport failures and
+ambiguous HTTP 404s never become absent config. The fixed-file adapter recognizes
+GitLab's exact `404 File Not Found` response, distinguished from project/commit
+not-found or generic denial. It preserves the existing bounded provider response
+limit (16 MiB), a 15-second overall read budget and the original checkout lifetime.
+
+The server validates project identity and branch-to-SHA before and after the file
+read. Branch movement or disappearance returns existing `branch-changed`;
+project replacement returns `retired`. Other failures use the existing unavailable
+reasons and authorization errors. Original authority is checked again through
+final response delivery, so a late private configuration cannot escape retirement.
+No config response refreshes the checkout lease or grants workspace creation.
+
+Clients must correlate the result with the original destination, checkout,
+project, branch and SHA. A changed selection invalidates both detected defaults
+and pending reads; an older response cannot overwrite a newer selection.
+
+The [canonical JSON fixture](../fixtures/checkout-repo-config.json) is mirrored by
+intent-core’s serialization golden and checked byte-for-byte during validation.

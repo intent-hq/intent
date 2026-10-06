@@ -89,6 +89,8 @@ class PlannedRunHarness:
         (root / "intentd").mkdir(exist_ok=True)
         self.root = root
         self.runs = list(runs)
+        self.listing = None
+        self.selection_index = 0
         self.list_commands = []
         self.run_commands = []
         self.run_environments = []
@@ -99,15 +101,45 @@ class PlannedRunHarness:
             return json.dumps({"target_directory": str(self.root / "target")})
         assert command[:3] == ["cargo", "nextest", "list"], command
         self.list_commands.append(command)
-        return LISTING
+        if self.listing is not None:
+            return self.listing
+        # These transport/policy tests use tiny canned children. Give each one
+        # its actual inventory; coverage tests supply independent explicit lists.
+        rows = self.runs[self.selection_index][0] if self.selection_index < len(self.runs) else None
+        self.selection_index += 1
+        if not isinstance(rows, list):
+            return LISTING
+        suites = {}
+        for line in rows:
+            item = json.loads(line)
+            if item.get("type") == "test":
+                alias, _, name = item["name"].partition("$")
+                name = gate.RETRY_SUFFIX_RE.sub("", name)
+                package, _, binary = alias.partition("::")
+                suite = suites.setdefault(alias, {"package-name": package, "binary-name": binary,
+                                                 "binary-id": alias, "testcases": {}})
+                suite["testcases"][name] = {"ignored": item["event"] == "ignored" or name == "skipped"}
+            elif item.get("type") == "suite" and item.get("ignored"):
+                alias = item['nextest']['crate'] + '::' + item['nextest']['test_binary']
+                suite = suites.setdefault(alias, {"package-name": item['nextest']['crate'],
+                    "binary-name": item['nextest']['test_binary'], "binary-id": alias, "testcases": {}})
+                suite['testcases'].setdefault('skipped', {'ignored': True})
+        for binary, name in gate.load_passed(self.root / 'cache' / KEY / 'passed.jsonl'):
+            if binary == 'alpha::one':
+                suite = suites.setdefault(binary, {'package-name': 'alpha', 'binary-name': 'one',
+                    'binary-id': binary, 'testcases': {}})
+                suite['testcases'].setdefault(name, {})
+        return json.dumps({'rust-suites': suites})
 
     def fake_popen(self, command, **kwargs):
+        self.selection_index = 0
         self.run_commands.append(command)
         self.run_environments.append(kwargs.get("env"))
         lines, status = self.runs.pop(0)
         return FakeProcess(lines, status)
 
     def execute(self, args):
+        self.selection_index = 0
         with mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
             gate, "run", side_effect=self.fake_run
         ), mock.patch.object(
@@ -118,6 +150,342 @@ class PlannedRunHarness:
     @property
     def output_lines(self):
         return self.stdout.getvalue().splitlines()
+
+
+class AttemptReceiptTests(unittest.TestCase):
+    def setUp(self):
+        for name in ("callback_fixture_identity", "transfer_fixture_identity"):
+            patch = mock.patch.object(gate, name, return_value=None)
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    @staticmethod
+    def scope(root, plans):
+        tree = root / "cache" / KEY
+        return tree / "changed" / gate.plan_key(gate.split_plans(plans)) if plans else tree
+
+    @staticmethod
+    def snapshot(directory):
+        return {str(p.relative_to(directory)): (p.stat().st_ino, p.read_bytes())
+                for p in directory.rglob("*") if p.is_file()}
+
+    def test_repeated_and_completed_resume_invocations_preserve_all_artifacts(self):
+        for plans in ([], ["-p alpha --test one"]):
+            with self.subTest(plans=plans), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                harness = PlannedRunHarness(root, [
+                    ([event("ok", "alpha::one$passes"), event("failed", "alpha::one$fails")], 101),
+                    ([event("ok", "alpha::one$fails")], 0),
+                    ([event("ok", "alpha::one$passes"), event("ok", "alpha::one$fails")], 0),
+                ])
+                original_popen = harness.fake_popen
+
+                def popen(command, **kwargs):
+                    config = Path(command[command.index("--tool-config-file") + 1].split(":", 1)[1])
+                    data = tomllib.loads(config.read_text())
+                    profile = command[command.index("--profile") + 1]
+                    junit = Path(data["store"]["dir"]) / profile / data["profile"][profile]["junit"]["path"]
+                    outcomes = {}
+                    for line in harness.runs[0][0]:
+                        item = json.loads(line)
+                        outcomes[item['name'].partition('$')[2]] = item['event']
+                    cases = ''.join(f'<testcase name="{name}">' + ('<failure/>' if outcome == 'failed' else '') + '</testcase>'
+                                    for name, outcome in outcomes.items())
+                    junit.write_text('<testsuites><testsuite name="alpha::one">' + cases + '</testsuite></testsuites>')
+                    return original_popen(command, **kwargs)
+
+                harness.fake_popen = popen
+                scope = self.scope(root, plans)
+                frozen = {}
+                for index, (status, force) in enumerate(((101, "0"), (0, "0"), (0, "0"), (0, "1")), 1):
+                    self.assertEqual(harness.execute(make_args(root, plan=plans, resume="1", force=force)), status)
+                    attempts = list((scope / "attempts").iterdir()) if (scope / "attempts").exists() else []
+                    self.assertEqual(len(attempts), index, "each invocation needs its own attempt")
+                    for attempt, snapshot in frozen.items():
+                        self.assertEqual(self.snapshot(attempt), snapshot)
+                    new = next(p for p in attempts if p not in frozen)
+                    receipt = json.loads((new / "run.json").read_text())
+                    self.assertEqual(receipt["attempt_id"], new.name)
+                    self.assertEqual(receipt["receipt_schema"], 3)
+                    self.assertEqual(receipt["exit_code"], status)
+                    self.assertIsNotNone(receipt["finished_at"])
+                    self.assertEqual(receipt["kind"], "completed-resume" if index == 3 else "execution")
+                    if index == 3:
+                        self.assertEqual(receipt["results"], [])
+                        self.assertIn(receipt["resume_source_attempt"], {p.name for p in frozen})
+                    else:
+                        result = receipt["results"][0]
+                        self.assertEqual(result["exit_code"], status)
+                        self.assertEqual(result["native_exit_code"], status)
+                        self.assertIsNotNone(result["finished_at"])
+                        self.assertTrue((new / result["junit"]).is_file())
+                        self.assertIn('"type": "test"', (new / result["events"]).read_text())
+                        self.assertEqual(len(receipt["selection_membership"][0]), 2)
+                    frozen[new] = self.snapshot(new)
+                self.assertFalse((scope / "run.json").exists(), "no overwriting compatibility alias")
+                self.assertEqual(len(harness.run_commands), 3)
+
+    def test_abrupt_process_loss_remains_unknown_after_resume(self):
+        for plans in ([], ["-p alpha --test one"]):
+            with self.subTest(plans=plans), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                code = f'''import os, signal
+from pathlib import Path
+from unittest import mock
+from scripts.test_resumable_nextest import gate, PlannedRunHarness, make_args, event
+root = Path({str(root)!r})
+def lines():
+    yield event("ok", "alpha::one$passes")
+    os.kill(os.getpid(), signal.SIGKILL)
+harness = PlannedRunHarness(root, [(lines(), 0)])
+with mock.patch.object(gate, "callback_fixture_identity", return_value=None), mock.patch.object(gate, "transfer_fixture_identity", return_value=None):
+    harness.execute(make_args(root, plan={plans!r}))
+'''
+                child = subprocess.run([sys.executable, "-S", "-B", "-c", code], capture_output=True, text=True, timeout=20)
+                self.assertEqual(child.returncode, -gate.signal.SIGKILL, child.stderr)
+                scope = self.scope(root, plans)
+                attempts = list(scope.glob("attempts/*"))
+                self.assertEqual(len(attempts), 1, "an unfinished receipt must exist before child execution")
+                attempt = attempts[0]
+                receipt = json.loads((attempt / "run.json").read_text())
+                self.assertIsNone(receipt["finished_at"])
+                self.assertIsNone(receipt["exit_code"])
+                self.assertIsNone(receipt["results"][0]["exit_code"])
+                self.assertIn("passes", (attempt / receipt["results"][0]["events"]).read_text())
+                before = self.snapshot(attempt)
+                harness = PlannedRunHarness(root, [([event("ok", "alpha::one$fails"), event("ignored", "alpha::one$skipped")], 0)])
+                self.assertEqual(harness.execute(make_args(root, plan=plans, resume="1")), 0)
+                self.assertEqual(self.snapshot(attempt), before)
+                self.assertEqual(len(list(scope.glob("attempts/*"))), 2)
+
+    def test_listing_failure_still_has_an_attempt(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            harness = PlannedRunHarness(root, [])
+            with mock.patch.object(gate, "isolated_output_args", return_value=[]), mock.patch.object(
+                gate, "run", side_effect=subprocess.CalledProcessError(101, ["cargo", "nextest", "list"])
+            ), mock.patch.object(gate, "tree_key", return_value=KEY), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(gate.run_nextest(make_args(root)), 101)
+            attempts = list(self.scope(root, make_args(root).plan).glob("attempts/*"))
+            self.assertEqual(len(attempts), 1)
+            receipt = json.loads((attempts[0] / "run.json").read_text())
+            self.assertEqual(receipt["exit_code"], 101)
+            self.assertIsNotNone(receipt["finished_at"])
+            self.assertEqual(receipt["results"], [])
+
+    def test_legacy_shortcut_does_not_fabricate_attempt_history(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            harness = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+            args = make_args(root, resume="1")
+            scope = self.scope(root, args.plan)
+            scope.mkdir(parents=True)
+            legacy = scope / "run.json"
+            legacy.write_text(json.dumps({"passed": 2, "skipped_resumed": 0}))
+            (scope / "complete").write_text("complete\n")
+            before = (legacy.stat().st_ino, legacy.read_bytes())
+            self.assertEqual(harness.execute(args), 0)
+            attempts = list(scope.glob("attempts/*"))
+            self.assertEqual(len(attempts), 1)
+            receipt = json.loads((attempts[0] / "run.json").read_text())
+            self.assertEqual(receipt["kind"], "execution")
+            self.assertIsNone(receipt["resume_source_attempt"])
+            self.assertEqual((legacy.stat().st_ino, legacy.read_bytes()), before)
+
+
+def latest_attempt(scope):
+    return max((scope / "attempts").iterdir(), key=lambda path: path.stat().st_mtime_ns)
+
+
+class RealChildReceiptTests(unittest.TestCase):
+    """Exercise pipes, signals and reap status without requiring cargo/nextest.
+
+    The child replays the verifier's actual cancellation stream/JUnit. Resume
+    honors the generated filter and writes JUnit using nextest's store/profile
+    routing, so mocks cannot accidentally supply the expected destination.
+    """
+
+    scope = staticmethod(AttemptReceiptTests.scope)
+    snapshot = staticmethod(AttemptReceiptTests.snapshot)
+
+    CHILD = r"""
+import json, signal, sys, time, tomllib
+from pathlib import Path
+payload = json.loads(sys.argv[1])
+command = payload['command']
+config = Path(command[command.index('--tool-config-file') + 1].split(':', 1)[1])
+profile = command[command.index('--profile') + 1]
+data = tomllib.loads(config.read_text())
+settings = data['profile'][profile]
+junit = Path(data['store']['dir']) / profile / settings['junit']['path']
+def cancel(signum, frame):
+    junit.write_text(payload['fixture']['junit'])
+    sys.exit(100)
+signal.signal(signal.SIGTERM, cancel)
+if payload['mode'] != 'resume':
+    print(payload['fixture']['events'], end='', flush=True)
+    while True:
+        time.sleep(.05)
+assert 'default-filter' not in settings, settings
+assert command[command.index('-E') + 1] == 'not group(=@tool:intent-gate:resumed)', command
+assert settings['overrides'][0]['filter'] == r'not (not ((binary_id(/^coverage\-probe$/) and (test(/^a_pass$/)))))', settings
+name = 'coverage-probe::coverage_probe$b_wait'
+print(json.dumps({'type': 'test', 'event': 'started', 'name': name}), flush=True)
+print(json.dumps({'type': 'test', 'event': 'ok', 'name': name}), flush=True)
+junit.write_text('<testsuites><testsuite name="coverage-probe">'
+                 '<testcase name="b_wait"/></testsuite></testsuites>')
+"""
+
+    def spawn(self, root, plans, mode):
+        code = f"""
+import json, sys
+from pathlib import Path
+from unittest import mock
+from scripts.test_resumable_nextest import (
+    gate, PlannedRunHarness, RealChildReceiptTests, CAPTURED_NEXTEST, make_args, KEY,
+)
+root = Path({str(root)!r})
+mode = {mode!r}
+fixture = CAPTURED_NEXTEST['interrupted']
+harness = PlannedRunHarness(root, [])
+harness.listing = fixture['listing']
+popen = gate.subprocess.Popen
+parse = gate.test_outcome
+def child(command, **kwargs):
+    payload = dict(command=command, fixture=fixture, mode=mode)
+    return popen([sys.executable, '-S', '-B', '-c', RealChildReceiptTests.CHILD,
+                  json.dumps(payload)], **kwargs)
+def parse_line(line):
+    if mode == 'parse-error' and 'b_wait' in line:
+        raise RuntimeError('controlled parser failure after durable pass')
+    return parse(line)
+with mock.patch.object(gate, 'tree_key', return_value=KEY), \\
+     mock.patch.object(gate, 'callback_fixture_identity', return_value=None), \\
+     mock.patch.object(gate, 'transfer_fixture_identity', return_value=None), \\
+     mock.patch.object(gate, 'run', side_effect=harness.fake_run), \\
+     mock.patch.object(gate.subprocess, 'Popen', side_effect=child), \\
+     mock.patch.object(gate, 'test_outcome', side_effect=parse_line):
+    try:
+        status = gate.run_nextest(make_args(root, plan={plans!r}, resume='1'))
+    except RuntimeError as error:
+        status = gate.failure_exit_code(error)
+    raise SystemExit(status)
+"""
+        return subprocess.Popen([sys.executable, '-S', '-B', '-c', code],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, start_new_session=True)
+
+    def finish(self, child):
+        try:
+            return child.communicate(timeout=15)
+        finally:
+            # Also clean up the real grandchild if an assertion/timeout fires.
+            try:
+                os.killpg(child.pid, gate.signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            child.wait(timeout=5)
+            child.stdout.close()
+            child.stderr.close()
+
+    def wait_for_pass(self, root, child):
+        deadline = time.monotonic() + 10
+        journal = root / 'cache' / KEY / 'passed.jsonl'
+        while time.monotonic() < deadline:
+            if journal.exists():
+                rows = [json.loads(line) for line in journal.read_text().splitlines()]
+                if rows:
+                    self.assertEqual([(r['test'], r.get('outcome', 'ok')) for r in rows], [('a_pass', 'ok')])
+                    row = rows[0]
+                    source = journal.parent / row['attempt']
+                    events = source / f"events-{row['selection_index']}.jsonl"
+                    if 'b_wait' in events.read_text():
+                        return
+            self.assertIsNone(child.poll(), 'runner exited before durable pass and waiting test')
+            time.sleep(.01)
+        self.fail('runner did not journal the known pass before the deadline')
+
+    def test_interrupt_resume_and_shortcut_preserve_real_child_receipts(self):
+        for plans, mode in product(([], ['-p coverage-probe --lib']), ('term', 'kill', 'parse-error')):
+            with self.subTest(plans=plans, mode=mode), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                scope = self.scope(root, plans)
+                child = self.spawn(root, plans, mode)
+                try:
+                    if mode != 'parse-error':
+                        self.wait_for_pass(root, child)
+                        if mode == 'kill':
+                            os.killpg(child.pid, gate.signal.SIGKILL)
+                        else:
+                            child.send_signal(gate.signal.SIGTERM)
+                except BaseException:
+                    os.killpg(child.pid, gate.signal.SIGKILL)
+                    self.finish(child)
+                    raise
+                stdout, stderr = self.finish(child)
+                expected = {'term': 143, 'kill': -gate.signal.SIGKILL, 'parse-error': 2}[mode]
+                self.assertEqual(child.returncode, expected, stderr)
+                source = latest_attempt(scope)
+                receipt = json.loads((source / 'run.json').read_text())
+                result = receipt['results'][0]
+                junit = source / result['junit']
+                self.assertEqual(junit.name, 'junit-1.xml' if plans else 'junit.xml')
+                self.assertIsNone(result['exit_code'])
+                self.assertFalse((scope / 'complete').exists())
+                if mode == 'kill':
+                    self.assertIsNone(receipt['exit_code'])
+                    self.assertIsNone(receipt['finished_at'])
+                    self.assertIsNone(result['native_exit_code'])
+                    self.assertIsNone(result['finished_at'])
+                    self.assertFalse(junit.exists())
+                    self.assertFalse((source / 'coverage.json').exists())
+                else:
+                    self.assertEqual(receipt['exit_code'], expected)
+                    self.assertEqual(result['native_exit_code'], 100)
+                    self.assertIsNotNone(receipt['finished_at'])
+                    self.assertIsNotNone(result['finished_at'])
+                    self.assertEqual(junit.read_text(), CAPTURED_NEXTEST['interrupted']['junit'])
+                    proof = json.loads((source / 'coverage.json').read_text())
+                    self.assertFalse(proof['complete'])
+                    self.assertEqual(proof['categories']['executed-passed'], [['coverage-probe', 'a_pass']])
+                    self.assertEqual(proof['categories']['failed'], [['coverage-probe', 'b_wait']])
+                    self.assertEqual(proof['selections'][0]['junit'], 'validated-partial')
+                    self.assertTrue(stdout.rstrip().endswith(f'record: {source}'))
+                frozen = {source: self.snapshot(source)}
+                for shortcut in (False, True):
+                    resumed = self.spawn(root, plans, 'resume')
+                    stdout, stderr = self.finish(resumed)
+                    self.assertEqual(resumed.returncode, 0, stderr)
+                    current = latest_attempt(scope)
+                    self.assertNotIn(current, frozen)
+                    for directory, snapshot in frozen.items():
+                        self.assertEqual(self.snapshot(directory), snapshot)
+                    receipt = json.loads((current / 'run.json').read_text())
+                    proof = json.loads((current / 'coverage.json').read_text())
+                    self.assertTrue(proof['complete'], proof['errors'])
+                    self.assertEqual(proof['categories']['failed'], [])
+                    self.assertEqual(proof['categories']['unfinished'], [])
+                    self.assertTrue(stdout.rstrip().endswith(f'record: {current}'))
+                    if shortcut:
+                        self.assertEqual(receipt['kind'], 'completed-resume')
+                        self.assertEqual(receipt['results'], [])
+                        self.assertEqual(proof['categories']['executed-passed'], [])
+                        self.assertEqual(proof['categories']['resumed-passed'],
+                                         [['coverage-probe', 'a_pass'], ['coverage-probe', 'b_wait']])
+                    else:
+                        self.assertEqual(proof['categories']['resumed-passed'], [['coverage-probe', 'a_pass']])
+                        self.assertEqual(proof['categories']['executed-passed'], [['coverage-probe', 'b_wait']])
+                        self.assertEqual(proof['resume_sources'][0]['attempt'],
+                                         str(source.relative_to(root / 'cache' / KEY)))
+                        result = receipt['results'][0]
+                        self.assertEqual(result['native_exit_code'], 0)
+                        self.assertEqual(result['exit_code'], 0)
+                        self.assertNotIn('$a_pass', (current / result['events']).read_text())
+                        xml = gate.ET.parse(current / result['junit']).getroot()
+                        self.assertEqual([case.attrib['name'] for case in xml.iter('testcase')], ['b_wait'])
+                        self.assertEqual(proof['selections'][0]['junit'], 'validated')
+                    frozen[current] = self.snapshot(current)
+                self.assertEqual(len(list(scope.glob('attempts/*'))), 3)
 
 
 class CallbackPreflightTests(unittest.TestCase):
@@ -718,40 +1086,29 @@ class ResumableNextestTests(unittest.TestCase):
             )
             self.assertEqual(staged.returncode, 0)
 
-    def test_tool_config_writes_junit_and_remaining_filter(self):
+    def test_tool_config_inherits_default_filter_and_writes_junit(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             config = root / "tree" / "nextest.toml"
             config.parent.mkdir()
-            gate.write_tool_config(config, root, "a" * 64, {("binary", "test")})
+            gate.write_tool_config(config, root, "a" * 64)
             parsed = tomllib.loads(config.read_text(encoding="utf-8"))
             profile = parsed["profile"]["a" * 64]
             self.assertEqual(profile["inherits"], "default")
-            self.assertIn("binary_id(/^binary$/)", profile["default-filter"])
+            self.assertNotIn("default-filter", profile)
             self.assertEqual(profile["junit"]["path"], "junit.xml")
 
     def test_complete_marker_fast_path_does_not_invoke_nextest(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            (root / "intentd").mkdir()
-            key = "a" * 64
-            run_dir = root / "cache" / key
-            run_dir.mkdir(parents=True)
-            (run_dir / "passed.jsonl").write_text(
-                '{"binary_id":"binary","test":"test"}\n', encoding="utf-8"
-            )
-            (run_dir / "complete").write_text("complete\n", encoding="utf-8")
-            args = make_args(
-                root, resume="1", label=gate.DEFAULT_LABEL, plan=None, base=None
-            )
-            with mock.patch.object(gate, "isolated_output_args", return_value=[]), mock.patch.object(gate, "tree_key", return_value=key), mock.patch.object(
-                gate, "run", side_effect=AssertionError("nextest must not run")
-            ), contextlib.redirect_stdout(io.StringIO()) as stdout:
-                self.assertEqual(gate.run_nextest(args), 0)
-            self.assertEqual(
-                stdout.getvalue(),
-                "resumed: skipped 1 tests already passed for this tree\n",
-            )
+            args = make_args(root, resume="1", label=gate.DEFAULT_LABEL, plan=None, base=None)
+            first = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+            self.assertEqual(first.execute(args), 0)
+            second = PlannedRunHarness(root, [])
+            self.assertEqual(second.execute(args), 0)
+            self.assertEqual(second.list_commands, [])
+            self.assertEqual(second.run_commands, [])
+            self.assertIn("resumed: skipped 1 tests already passed", second.stdout.getvalue())
 
     def test_plans_are_split_with_shlex_and_keyed_in_order(self):
         plans = gate.split_plans(["-p alpha --test one --test two", "-p 'beta' -p gamma --tests "])
@@ -810,18 +1167,18 @@ class ResumableNextestTests(unittest.TestCase):
             self.assertNotIn("--no-tests", harness.run_commands[0])
 
             for index in (1, 2):
-                config = tomllib.loads((record_dir / f"nextest-{index}.toml").read_text())
-                self.assertEqual(config["store"]["dir"], str(run_dir / "changed"))
-                profile = config["profile"][record_dir.name]
+                config = tomllib.loads((latest_attempt(record_dir) / f"nextest-{index}.toml").read_text())
+                self.assertEqual(config["store"]["dir"], str(record_dir / "attempts"))
+                profile = config["profile"][latest_attempt(record_dir).name]
                 self.assertEqual(profile["junit"]["path"], f"junit-{index}.xml")
                 self.assertNotIn("default-filter", profile)
                 self.assertIn(
                     f"--tool-config-file", harness.run_commands[index - 1]
                 )
-                self.assertIn(f"intent-gate:{record_dir / f'nextest-{index}.toml'}", harness.run_commands[index - 1])
-                self.assertIn(record_dir.name, harness.run_commands[index - 1])
+                self.assertIn(f"intent-gate:{latest_attempt(record_dir) / f'nextest-{index}.toml'}", harness.run_commands[index - 1])
+                self.assertIn(latest_attempt(record_dir).name, harness.run_commands[index - 1])
 
-            run_record = json.loads((record_dir / "run.json").read_text())
+            run_record = json.loads((latest_attempt(record_dir) / "run.json").read_text())
             self.assertEqual(run_record["label"], "test-changed")
             self.assertEqual(run_record["base"], "origin/main")
             self.assertEqual(run_record["plans"], plans)
@@ -833,7 +1190,8 @@ class ResumableNextestTests(unittest.TestCase):
             self.assertRegex(run_record["started_at"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
             self.assertRegex(run_record["finished_at"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
             self.assertEqual(
-                run_record["results"],
+                [{key: result[key] for key in ("plan", "passed", "failed", "ignored", "exit_code")}
+                 for result in run_record["results"]],
                 [
                     {"plan": plans[0], "passed": 1, "failed": 0, "ignored": 1, "exit_code": 0},
                     {"plan": plans[1], "passed": 1, "failed": 0, "ignored": 0, "exit_code": 0},
@@ -844,9 +1202,9 @@ class ResumableNextestTests(unittest.TestCase):
                 "[test-changed] summary: 2 passed, 0 failed, 1 skipped/ignored, 0 resumed "
                 "(tests already passed for this tree)"
             )
-            self.assertEqual((record_dir / "summary.txt").read_text(), summary + "\n")
+            self.assertEqual((latest_attempt(record_dir) / "summary.txt").read_text(), summary + "\n")
             self.assertEqual(
-                harness.output_lines[-2:], [summary, f"[test-changed] record: {record_dir}"]
+                harness.output_lines[-2:], [summary, f"[test-changed] record: {latest_attempt(record_dir)}"]
             )
             self.assertEqual(
                 gate.load_passed(run_dir / "passed.jsonl"),
@@ -868,7 +1226,8 @@ class ResumableNextestTests(unittest.TestCase):
                 run_dir.mkdir(parents=True)
                 journal = run_dir / "passed.jsonl"
                 if resume == "1":
-                    journal.write_text(gate.record_line("alpha::one", "passes", "ok"))
+                    seed = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 101)])
+                    self.assertEqual(seed.execute(args), 101)
                 lines = [event("started", "alpha::one$skipped")]
                 if individual:
                     lines.append(event("ignored", "alpha::one$skipped"))
@@ -887,7 +1246,7 @@ class ResumableNextestTests(unittest.TestCase):
                 record_dir = run_dir
                 if planned:
                     record_dir = run_dir / "changed" / gate.plan_key(gate.split_plans(args.plan))
-                    result = json.loads((record_dir / "run.json").read_text())
+                    result = json.loads((latest_attempt(record_dir) / "run.json").read_text())
                     self.assertEqual(
                         (result["passed"], result["failed"], result["ignored"], result["skipped_resumed"]),
                         (passed, int(failed), 1, int(resume)),
@@ -895,7 +1254,7 @@ class ResumableNextestTests(unittest.TestCase):
                 expected = gate.summary_line(
                     args.label, {"passed": passed, "failed": int(failed), "ignored": 1}, int(resume)
                 )
-                self.assertEqual((record_dir / "summary.txt").read_text(), expected + "\n")
+                self.assertEqual((latest_attempt(record_dir) / "summary.txt").read_text(), expected + "\n")
                 self.assertEqual(harness.output_lines[-2], expected)
                 self.assertEqual(gate.load_passed(journal), {("alpha::one", "passes")})
                 self.assertNotIn("skipped", journal.read_text())
@@ -910,12 +1269,11 @@ class ResumableNextestTests(unittest.TestCase):
                 event("ignored", "beta::two$skipped"),
                 event("started", "alpha::one$skipped"),
                 summary,
-                summary,
             ]
             harness = PlannedRunHarness(root, [(lines, 0), ([summary], 0)])
             self.assertEqual(harness.execute(args), 0)
             record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(args.plan))
-            result = json.loads((record_dir / "run.json").read_text())
+            result = json.loads((latest_attempt(record_dir) / "run.json").read_text())
             self.assertEqual(result["ignored"], 3)
             self.assertEqual([row["ignored"] for row in result["results"]], [2, 1])
             self.assertEqual((result["passed"], result["failed"]), (0, 0))
@@ -951,7 +1309,7 @@ class ResumableNextestTests(unittest.TestCase):
             with contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(harness.execute(args), 130)
             record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(args.plan))
-            result = json.loads((record_dir / "run.json").read_text())
+            result = json.loads((latest_attempt(record_dir) / "run.json").read_text())
             self.assertEqual((result["passed"], result["failed"], result["ignored"]), (0, 0, 3))
             self.assertFalse((record_dir / "complete").exists())
 
@@ -960,21 +1318,21 @@ class ResumableNextestTests(unittest.TestCase):
             root = Path(temporary)
             run_dir = root / "cache" / KEY
             run_dir.mkdir(parents=True)
-            (run_dir / "passed.jsonl").write_text(
-                '{"binary_id":"alpha::one","test":"passes"}\n'
-                '{"binary_id":"other","test":"elsewhere"}\n',
-                encoding="utf-8",
-            )
+            seed = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 101)])
+            self.assertEqual(seed.execute(make_args(root)), 101)
+            with (run_dir / "passed.jsonl").open('a') as journal:
+                journal.write(gate.record_line('other', 'elsewhere', 'ok'))
             harness = PlannedRunHarness(root, [([event("ok", "alpha::one$fails")], 0)])
             self.assertEqual(harness.execute(make_args(root, resume="1")), 0)
             self.assertEqual(harness.run_commands[0][-2:], ["--no-tests", "pass"])
             record_dir = run_dir / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
-            profile = tomllib.loads((record_dir / "nextest-1.toml").read_text())["profile"][record_dir.name]
+            profile = tomllib.loads((latest_attempt(record_dir) / "nextest-1.toml").read_text())["profile"][latest_attempt(record_dir).name]
+            self.assertNotIn("default-filter", profile)
             self.assertEqual(
-                profile["default-filter"],
-                "not ((binary_id(/^alpha::one$/) and (test(/^passes$/))))",
+                harness.run_commands[0][harness.run_commands[0].index("-E") + 1],
+                gate.RESUME_GROUP_FILTER,
             )
-            self.assertEqual(json.loads((record_dir / "run.json").read_text())["skipped_resumed"], 1)
+            self.assertEqual(json.loads((latest_attempt(record_dir) / "run.json").read_text())["skipped_resumed"], 1)
             self.assertIn("1 resumed", harness.output_lines[-2])
             self.assertIn("resumed: skipped 1 tests already passed for this tree", harness.output_lines)
             self.assertEqual(
@@ -985,33 +1343,18 @@ class ResumableNextestTests(unittest.TestCase):
     def test_planned_complete_marker_short_circuits_unless_forced(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            (root / "intentd").mkdir()
-            run_dir = root / "cache" / KEY
-            record_dir = run_dir / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
-            record_dir.mkdir(parents=True)
-            (run_dir / "passed.jsonl").write_text(
-                '{"binary_id":"alpha::one","test":"passes"}\n', encoding="utf-8"
-            )
-            (record_dir / "complete").write_text("complete\n", encoding="utf-8")
-            (record_dir / "run.json").write_text(
-                json.dumps({"passed": 2, "skipped_resumed": 1}), encoding="utf-8"
-            )
-            with mock.patch.object(gate, "isolated_output_args", return_value=[]), mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
-                gate, "run", side_effect=AssertionError("nextest must not run")
-            ), mock.patch.object(
-                gate.subprocess, "Popen", side_effect=AssertionError("cargo must not run")
-            ), contextlib.redirect_stdout(io.StringIO()) as stdout:
-                self.assertEqual(gate.run_nextest(make_args(root, resume="1")), 0)
-            self.assertEqual(
-                stdout.getvalue(), "resumed: skipped 3 tests already passed for this tree\n"
-            )
-
-            harness = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
-            self.assertEqual(harness.execute(make_args(root, resume="1", force="1")), 0)
-            self.assertEqual(len(harness.run_commands), 1)
-            self.assertNotIn("--no-tests", harness.run_commands[0])
-            self.assertIn("[test-changed] GATE_FORCE=1: running every planned test", harness.output_lines)
-            self.assertEqual(harness.output_lines[-2:][1], f"[test-changed] record: {record_dir}")
+            args = make_args(root, resume="1")
+            first = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+            self.assertEqual(first.execute(args), 0)
+            second = PlannedRunHarness(root, [])
+            self.assertEqual(second.execute(args), 0)
+            self.assertEqual(second.list_commands, [])
+            self.assertEqual(second.run_commands, [])
+            forced = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+            self.assertEqual(forced.execute(make_args(root, resume="1", force="1")), 0)
+            self.assertEqual(len(forced.run_commands), 1)
+            self.assertNotIn("--no-tests", forced.run_commands[0])
+            self.assertIn("[test-changed] GATE_FORCE=1: running every planned test", forced.output_lines)
 
     def test_failing_planned_run_records_exit_code_and_stops_at_first_failure(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1027,7 +1370,7 @@ class ResumableNextestTests(unittest.TestCase):
             record_dir = run_dir / "changed" / gate.plan_key(gate.split_plans(plans))
             self.assertFalse((record_dir / "complete").exists())
             self.assertFalse((run_dir / "complete").exists())
-            run_record = json.loads((record_dir / "run.json").read_text())
+            run_record = json.loads((latest_attempt(record_dir) / "run.json").read_text())
             self.assertEqual(run_record["exit_code"], 100)
             self.assertEqual(len(run_record["results"]), 1)
             self.assertEqual(
@@ -1035,7 +1378,7 @@ class ResumableNextestTests(unittest.TestCase):
                 [
                     "[test-changed] summary: 1 passed, 1 failed, 0 skipped/ignored, 0 resumed "
                     "(tests already passed for this tree)",
-                    f"[test-changed] record: {record_dir}",
+                    f"[test-changed] record: {latest_attempt(record_dir)}",
                 ],
             )
             self.assertEqual(
@@ -1081,10 +1424,11 @@ class ResumableNextestTests(unittest.TestCase):
             record_dir = run_dir / "changed" / gate.plan_key(gate.split_plans(plans))
             self.assertFalse((record_dir / "complete").exists())
             self.assertFalse((run_dir / "complete").exists())
-            run_record = json.loads((record_dir / "run.json").read_text())
+            run_record = json.loads((latest_attempt(record_dir) / "run.json").read_text())
             self.assertEqual(run_record["exit_code"], 100)
             self.assertEqual(
-                run_record["results"],
+                [{key: result[key] for key in ("plan", "passed", "failed", "ignored", "exit_code")}
+                 for result in run_record["results"]],
                 [
                     {"plan": plans[0], "passed": 1, "failed": 1, "ignored": 0, "exit_code": 100},
                     {"plan": plans[1], "passed": 1, "failed": 0, "ignored": 0, "exit_code": 0},
@@ -1095,7 +1439,7 @@ class ResumableNextestTests(unittest.TestCase):
                 [
                     "[test-changed] summary: 2 passed, 1 failed, 0 skipped/ignored, 0 resumed "
                     "(tests already passed for this tree)",
-                    f"[test-changed] record: {record_dir}",
+                    f"[test-changed] record: {latest_attempt(record_dir)}",
                 ],
             )
             self.assertEqual(
@@ -1115,7 +1459,7 @@ class ResumableNextestTests(unittest.TestCase):
             self.assertEqual(trailing.execute(make_args(root, plan=three, no_fail_fast="1")), 100)
             self.assertEqual(len(trailing.run_commands), 3)
             record_three = run_dir / "changed" / gate.plan_key(gate.split_plans(three))
-            results = json.loads((record_three / "run.json").read_text())["results"]
+            results = json.loads((latest_attempt(record_three) / "run.json").read_text())["results"]
             self.assertEqual([result["exit_code"] for result in results], [0, 100, 101])
             self.assertFalse((record_three / "complete").exists())
 
@@ -1132,8 +1476,8 @@ class ResumableNextestTests(unittest.TestCase):
                 self.assertEqual(harness.execute(make_args(root)), 130)
             record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
             self.assertFalse((record_dir / "complete").exists())
-            self.assertEqual(json.loads((record_dir / "run.json").read_text())["exit_code"], 130)
-            self.assertEqual(harness.output_lines[-1], f"[test-changed] record: {record_dir}")
+            self.assertEqual(json.loads((latest_attempt(record_dir) / "run.json").read_text())["exit_code"], 130)
+            self.assertEqual(harness.output_lines[-1], f"[test-changed] record: {latest_attempt(record_dir)}")
             self.assertIn("1 passed, 0 failed", harness.output_lines[-2])
             self.assertIn("[test-changed] ERROR: interrupted", stderr.getvalue())
 
@@ -1156,11 +1500,11 @@ class ResumableNextestTests(unittest.TestCase):
                 "(tests already passed for this tree)"
             )
             self.assertEqual(
-                stdout.getvalue().splitlines()[1:], [summary, f"[test-changed] record: {record_dir}"]
+                stdout.getvalue().splitlines()[1:], [summary, f"[test-changed] record: {latest_attempt(record_dir)}"]
             )
             self.assertIn("[test-changed] ERROR:", stderr.getvalue())
-            self.assertEqual((record_dir / "summary.txt").read_text(), summary + "\n")
-            run_record = json.loads((record_dir / "run.json").read_text())
+            self.assertEqual((latest_attempt(record_dir) / "summary.txt").read_text(), summary + "\n")
+            run_record = json.loads((latest_attempt(record_dir) / "run.json").read_text())
             self.assertEqual(run_record["exit_code"], 101)
             self.assertEqual(run_record["results"], [])
             self.assertFalse((record_dir / "complete").exists())
@@ -1182,11 +1526,11 @@ class ResumableNextestTests(unittest.TestCase):
             self.assertIs(gate.signal.getsignal(gate.signal.SIGTERM), previous)
             record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
             self.assertFalse((record_dir / "complete").exists())
-            run_record = json.loads((record_dir / "run.json").read_text())
+            run_record = json.loads((latest_attempt(record_dir) / "run.json").read_text())
             self.assertEqual(run_record["exit_code"], 143)
             self.assertEqual(run_record["results"][0]["exit_code"], None)
             self.assertEqual(run_record["passed"], 1)
-            self.assertEqual(harness.output_lines[-1], f"[test-changed] record: {record_dir}")
+            self.assertEqual(harness.output_lines[-1], f"[test-changed] record: {latest_attempt(record_dir)}")
 
     def test_sigterm_to_real_process_leaves_durable_record(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1246,11 +1590,15 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
             self.assertEqual(child.returncode, 143, stderr)
             self.assertTrue(marker.is_file(), "nextest child was not terminated")
-            self.assertEqual(remaining.splitlines()[-1], f"[test-changed] record: {record_dir}")
+            self.assertEqual(remaining.splitlines()[-1], f"[test-changed] record: {latest_attempt(record_dir)}")
             self.assertIn("1 passed, 0 failed", remaining.splitlines()[-2])
             self.assertIn("ERROR: interrupted", stderr)
             self.assertFalse((record_dir / "complete").exists())
-            self.assertEqual(json.loads((record_dir / "run.json").read_text())["exit_code"], 143)
+            receipt = json.loads((latest_attempt(record_dir) / "run.json").read_text())
+            self.assertEqual(receipt["exit_code"], 143)
+            self.assertEqual(receipt["results"][0]["native_exit_code"], -15)
+            self.assertIsNotNone(receipt["finished_at"])
+            self.assertIsNotNone(receipt["results"][0]["finished_at"])
 
     def test_ignored_only_completed_plan_resumes_without_nextest(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1261,15 +1609,11 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             self.assertTrue((record_dir / "complete").is_file())
             self.assertEqual(gate.load_passed(root / "cache" / KEY / "passed.jsonl"), set())
 
-            with mock.patch.object(gate, "isolated_output_args", return_value=[]), mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
-                gate, "run", side_effect=AssertionError("nextest must not run")
-            ), mock.patch.object(
-                gate.subprocess, "Popen", side_effect=AssertionError("cargo must not run")
-            ), contextlib.redirect_stdout(io.StringIO()) as stdout:
-                self.assertEqual(gate.run_nextest(make_args(root, resume="1")), 0)
-            self.assertEqual(
-                stdout.getvalue(), "resumed: skipped 0 tests already passed for this tree\n"
-            )
+            second = PlannedRunHarness(root, [])
+            self.assertEqual(second.execute(make_args(root, resume="1")), 0)
+            self.assertEqual(second.list_commands, [])
+            self.assertEqual(second.run_commands, [])
+            self.assertIn("resumed: skipped 0 tests already passed", second.stdout.getvalue())
 
             forced = PlannedRunHarness(root, [([event("ignored", "alpha::one$skipped")], 0)])
             self.assertEqual(forced.execute(make_args(root, resume="1", force="1")), 0)
@@ -1293,9 +1637,9 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             ):
                 self.assertEqual(gate.run_nextest(make_args(root, resume="1", force="1")), 101)
             self.assertFalse((record_dir / "complete").exists())
-            self.assertEqual(json.loads((record_dir / "run.json").read_text())["exit_code"], 101)
+            self.assertEqual(json.loads((latest_attempt(record_dir) / "run.json").read_text())["exit_code"], 101)
 
-            third = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+            third = PlannedRunHarness(root, [([], 0)])
             self.assertEqual(third.execute(make_args(root, resume="1")), 0)
             self.assertEqual(len(third.list_commands), 1)
             self.assertEqual(len(third.run_commands), 1)
@@ -1323,12 +1667,12 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             ):
                 self.assertEqual(gate.run_nextest(make_args(root, resume="1", force="1")), 143)
             self.assertFalse((record_dir / "complete").exists())
-            self.assertEqual(json.loads((record_dir / "run.json").read_text())["exit_code"], 143)
+            self.assertEqual(json.loads((latest_attempt(record_dir) / "run.json").read_text())["exit_code"], 143)
             self.assertEqual(
-                stdout.getvalue().splitlines()[-1], f"[test-changed] record: {record_dir}"
+                stdout.getvalue().splitlines()[-1], f"[test-changed] record: {latest_attempt(record_dir)}"
             )
 
-            third = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+            third = PlannedRunHarness(root, [([], 0)])
             self.assertEqual(third.execute(make_args(root, resume="1")), 0)
             self.assertEqual(len(third.run_commands), 1)
 
@@ -1361,6 +1705,7 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             harness = PlannedRunHarness(root, [([event("ok", "beta::two$unlisted")], 0)])
+            harness.listing = LISTING
             argv = [
                 "resumable_nextest.py",
                 "--repo-root", str(root),
@@ -1382,10 +1727,10 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             self.assertEqual(exit_code, 2)
             self.assertIn("ERROR: nextest test identifier was not listed", stderr.getvalue())
             record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
-            run_record = json.loads((record_dir / "run.json").read_text())
+            run_record = json.loads((latest_attempt(record_dir) / "run.json").read_text())
             self.assertEqual(run_record["exit_code"], exit_code)
             self.assertFalse((record_dir / "complete").exists())
-            self.assertEqual(stdout.getvalue().splitlines()[-1], f"[test-changed] record: {record_dir}")
+            self.assertEqual(stdout.getvalue().splitlines()[-1], f"[test-changed] record: {latest_attempt(record_dir)}")
 
     def test_failure_exit_codes_match_main_and_interpreter(self):
         self.assertEqual(gate.failure_exit_code(RuntimeError("x")), gate.HANDLED_ERROR_EXIT)
@@ -1407,7 +1752,7 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             self.assertEqual(harness.execute(args), 0)
             self.assertEqual(len(harness.run_commands), 1)
 
-    def test_workspace_run_keeps_default_layout_and_appends_trailing_lines(self):
+    def test_workspace_run_keeps_scope_marker_and_appends_attempt_path(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             harness = PlannedRunHarness(
@@ -1419,13 +1764,13 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             run_dir = root / "cache" / KEY
             self.assertEqual(harness.list_commands[0][3], "--workspace")
             self.assertEqual(harness.run_commands[0][3], "--workspace")
-            self.assertIn(KEY, harness.run_commands[0])
+            self.assertIn(latest_attempt(run_dir).name, harness.run_commands[0])
             self.assertTrue((run_dir / "complete").is_file())
             self.assertFalse((run_dir / "changed").exists())
-            self.assertFalse((run_dir / "run.json").exists())
-            config = tomllib.loads((run_dir / "nextest.toml").read_text())
-            self.assertEqual(config["store"]["dir"], str(root / "cache"))
-            self.assertEqual(config["profile"][KEY]["junit"]["path"], "junit.xml")
+            self.assertTrue((latest_attempt(run_dir) / "run.json").exists())
+            config = tomllib.loads((latest_attempt(run_dir) / "nextest.toml").read_text())
+            self.assertEqual(config["store"]["dir"], str(run_dir / "attempts"))
+            self.assertEqual(config["profile"][latest_attempt(run_dir).name]["junit"]["path"], "junit.xml")
             summary = (
                 "[test-intentd] summary: 1 passed, 0 failed, 1 skipped/ignored, 0 resumed "
                 "(tests already passed for this tree)"
@@ -1437,10 +1782,10 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
                     event("ok", "alpha::one$passes").rstrip("\n"),
                     event("ignored", "alpha::one$skipped").rstrip("\n"),
                     summary,
-                    f"[test-intentd] record: {run_dir}",
+                    f"[test-intentd] record: {latest_attempt(run_dir)}",
                 ],
             )
-            self.assertEqual((run_dir / "summary.txt").read_text(), summary + "\n")
+            self.assertEqual((latest_attempt(run_dir) / "summary.txt").read_text(), summary + "\n")
 
     def test_forced_failure_supersedes_earlier_pass_so_resume_reruns_it(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1465,21 +1810,22 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
                 {("alpha::one", "passes"), ("other", "elsewhere")},
             )
             lines = (run_dir / "passed.jsonl").read_text().splitlines()
-            self.assertEqual(
-                lines[-1], '{"binary_id": "alpha::one", "test": "fails", "outcome": "failed"}'
-            )
+            row = json.loads(lines[-1])
+            self.assertEqual((row['binary_id'], row['test'], row['outcome']), ('alpha::one', 'fails', 'failed'))
+            self.assertIn('attempt', row)
 
             resumed = PlannedRunHarness(root, [([event("failed", "alpha::one$fails")], 100)])
             self.assertEqual(resumed.execute(make_args(root, resume="1")), 100)
             self.assertEqual(len(resumed.list_commands), 1)
             self.assertEqual(len(resumed.run_commands), 1)
-            profile = tomllib.loads((record_dir / "nextest-1.toml").read_text())["profile"][record_dir.name]
+            profile = tomllib.loads((latest_attempt(record_dir) / "nextest-1.toml").read_text())["profile"][latest_attempt(record_dir).name]
+            self.assertNotIn("default-filter", profile)
             self.assertEqual(
-                profile["default-filter"],
-                "not ((binary_id(/^alpha::one$/) and (test(/^passes$/))))",
+                resumed.run_commands[0][resumed.run_commands[0].index("-E") + 1],
+                gate.RESUME_GROUP_FILTER,
             )
             self.assertFalse((record_dir / "complete").exists())
-            run_record = json.loads((record_dir / "run.json").read_text())
+            run_record = json.loads((latest_attempt(record_dir) / "run.json").read_text())
             self.assertEqual(run_record["exit_code"], 100)
             self.assertEqual((run_record["failed"], run_record["skipped_resumed"]), (1, 1))
 
@@ -1510,10 +1856,11 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             self.assertEqual(resumed.execute(workspace), 100)
             self.assertEqual(len(resumed.run_commands), 1)
             self.assertEqual(resumed.run_commands[0][3], "--workspace")
-            config = tomllib.loads((run_dir / "nextest.toml").read_text())
+            config = tomllib.loads((latest_attempt(run_dir) / "nextest.toml").read_text())
+            self.assertNotIn("default-filter", config["profile"][latest_attempt(run_dir).name])
             self.assertEqual(
-                config["profile"][KEY]["default-filter"],
-                "not ((binary_id(/^alpha::one$/) and (test(/^passes$/))))",
+                resumed.run_commands[0][resumed.run_commands[0].index("-E") + 1],
+                gate.RESUME_GROUP_FILTER,
             )
             self.assertFalse((run_dir / "complete").exists())
             self.assertIn("1 failed", resumed.output_lines[-2])
@@ -1536,10 +1883,11 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             self.assertEqual(rerun.execute(plan_b), 0)
             self.assertEqual(len(rerun.list_commands), 1)
             self.assertEqual(len(rerun.run_commands), 1)
-            profile = tomllib.loads((record_b / "nextest-1.toml").read_text())["profile"][record_b.name]
+            profile = tomllib.loads((latest_attempt(record_b) / "nextest-1.toml").read_text())["profile"][latest_attempt(record_b).name]
+            self.assertNotIn("default-filter", profile)
             self.assertEqual(
-                profile["default-filter"],
-                "not ((binary_id(/^alpha::one$/) and (test(/^passes$/))))",
+                rerun.run_commands[0][rerun.run_commands[0].index("-E") + 1],
+                gate.RESUME_GROUP_FILTER,
             )
             self.assertNotIn("resumed: skipped 2 tests already passed for this tree", rerun.output_lines)
             self.assertTrue((record_b / "complete").is_file())
@@ -1549,7 +1897,8 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             self.assertEqual(skip.run_commands, [])
             self.assertEqual(skip.list_commands, [])
             self.assertEqual(
-                skip.output_lines, ["resumed: skipped 2 tests already passed for this tree"]
+                skip.output_lines, ["resumed: skipped 2 tests already passed for this tree",
+                                    f"[test-changed] record: {latest_attempt(record_b)}"]
             )
 
     def test_invalidate_completion_markers_drops_tree_and_every_plan_marker(self):
@@ -1577,7 +1926,7 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             all_pass = [event("ok", "alpha::one$passes"), event("ok", "alpha::one$fails")]
             workspace = make_args(root, resume="1", label=gate.DEFAULT_LABEL, plan=None, base=None)
             self.assertEqual(PlannedRunHarness(root, [(all_pass, 0)]).execute(workspace), 0)
-            self.assertEqual(PlannedRunHarness(root, [(all_pass, 0)]).execute(plan_b), 0)
+            self.assertEqual(PlannedRunHarness(root, [([], 0)]).execute(plan_b), 0)
             self.assertTrue((run_dir / "complete").is_file())
             self.assertTrue((record_b / "complete").is_file())
 
@@ -1601,7 +1950,7 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             all_pass = [event("ok", "alpha::one$passes"), event("ok", "alpha::one$fails")]
             workspace = make_args(root, resume="1", label=gate.DEFAULT_LABEL, plan=None, base=None)
             self.assertEqual(PlannedRunHarness(root, [(all_pass, 0)]).execute(workspace), 0)
-            self.assertEqual(PlannedRunHarness(root, [(all_pass, 0)]).execute(plan_b), 0)
+            self.assertEqual(PlannedRunHarness(root, [([], 0)]).execute(plan_b), 0)
             self.assertTrue((run_dir / "complete").is_file())
             self.assertTrue((record_b / "complete").is_file())
 
@@ -1658,10 +2007,11 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             self.assertEqual(resumed.execute(plan_b), 100)
             self.assertEqual(len(resumed.list_commands), 1)
             self.assertEqual(len(resumed.run_commands), 1)
-            profile = tomllib.loads((record_b / "nextest-1.toml").read_text())["profile"][record_b.name]
+            profile = tomllib.loads((latest_attempt(record_b) / "nextest-1.toml").read_text())["profile"][latest_attempt(record_b).name]
+            self.assertNotIn("default-filter", profile)
             self.assertEqual(
-                profile["default-filter"],
-                "not ((binary_id(/^alpha::one$/) and (test(/^passes$/))))",
+                resumed.run_commands[0][resumed.run_commands[0].index("-E") + 1],
+                gate.RESUME_GROUP_FILTER,
             )
             self.assertNotIn("resumed: skipped 2 tests already passed for this tree", resumed.output_lines)
             self.assertFalse((record_b / "complete").exists())
@@ -1777,6 +2127,290 @@ class EffectiveOutputResumeTests(unittest.TestCase):
                 self.assertEqual(len(harness.run_commands), 2, "changed effective outputs reused a completed record")
 
 
+class LargeResumeTransportTests(unittest.TestCase):
+    setUp = AttemptReceiptTests.setUp
+
+    def test_large_partial_resume_starts_real_child_with_bounded_arguments(self):
+        real_popen = subprocess.Popen
+        # A single old exclusion exceeds Linux MAX_ARG_STRLEN at 2500 names;
+        # 30000 names with repeated filters also exceeds aggregate exec limits.
+        for count, plans in product((2500, 30000), ([], [
+                '-p alpha --test one -E all() -E default() -E test(unfinished)'])):
+            with self.subTest(count=count, plans=plans), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                names = [f'test_{n:05d}_preserves_expected_identity_after_interrupted_operation'
+                         for n in range(count)]
+                listing = json.loads(LISTING)
+                listing['rust-suites']['alpha::one']['testcases'] = {
+                    name: {'ignored': False, 'filter-match': {'status': 'matches'}}
+                    for name in [*names, 'unfinished']}
+                seed = PlannedRunHarness(root, [([event('ok', 'alpha::one$' + n) for n in names], 101)])
+                seed.listing = json.dumps(listing)
+                self.assertEqual(seed.execute(make_args(root, plan=plans)), 101)
+                source = latest_attempt(AttemptReceiptTests.scope(root, plans))
+                frozen = AttemptReceiptTests.snapshot(source)
+                current = PlannedRunHarness(root, [])
+                current.listing = json.dumps(listing)
+                launches = []
+
+                def spawn(command, **kwargs):
+                    # Pass the entire real command through OS exec, not a mock.
+                    # The child verifies the disk transport before emitting a pass.
+                    code = r'''
+import json, pathlib, sys, tomllib
+command = sys.argv[1:]
+config = pathlib.Path(command[command.index('--tool-config-file') + 1].split(':', 1)[1])
+settings = tomllib.loads(config.read_text())
+profile = settings['profile'][command[command.index('--profile') + 1]]
+assert 'default-filter' not in profile
+assert settings['nextest-version'] == '0.9.133'
+assert profile['overrides'][0]['test-group'] == '@tool:intent-gate:resumed'
+assert len(profile['overrides'][0]['filter']) > 131072
+assert 'test_00000_' in profile['overrides'][0]['filter']
+print(json.dumps({'type':'test', 'event':'ok', 'name':'alpha::one$unfinished'}), flush=True)
+'''
+                    child = real_popen([sys.executable, '-S', '-B', '-c', code, *command], **kwargs)
+                    self.addCleanup(child.stdout.close)
+                    launches.append(command)
+                    return child
+
+                current.fake_popen = spawn
+                self.assertEqual(current.execute(make_args(root, plan=plans, resume='1')), 0)
+                self.assertEqual(len(launches), 1)
+                self.assertLess(max(len(a.encode()) for a in launches[0]), 4096)
+                self.assertLess(sum(len(a.encode()) + 1 for a in launches[0]), 8192)
+                attempt = latest_attempt(AttemptReceiptTests.scope(root, plans))
+                receipt = json.loads((attempt / 'run.json').read_text())
+                proof = json.loads((attempt / 'coverage.json').read_text())
+                self.assertTrue(proof['complete'], proof['errors'])
+                self.assertEqual(receipt['results'][0]['native_exit_code'], 0)
+                self.assertEqual(proof['categories']['executed-passed'], [['alpha::one', 'unfinished']])
+                self.assertEqual(proof['categories']['resumed-passed'], [['alpha::one', n] for n in names])
+                self.assertEqual(len(proof['resume_sources']), count)
+                for index, ref in enumerate(proof['resume_sources'], 1):
+                    self.assertEqual(ref['attempt'], str(source.relative_to(root / 'cache' / KEY)))
+                    self.assertEqual(ref['event_line'], index)
+                    self.assertEqual(ref['test'], names[index - 1])
+                self.assertEqual(AttemptReceiptTests.snapshot(source), frozen)
+                frozen_current = AttemptReceiptTests.snapshot(attempt)
+                shortcut = PlannedRunHarness(root, [])
+                self.assertEqual(shortcut.execute(make_args(root, plan=plans, resume='1')), 0)
+                self.assertEqual(shortcut.run_commands, [])
+                self.assertEqual(AttemptReceiptTests.snapshot(source), frozen)
+                self.assertEqual(AttemptReceiptTests.snapshot(attempt), frozen_current)
+
+
+class ResumeSelectionTests(unittest.TestCase):
+    setUp = AttemptReceiptTests.setUp
+
+    def test_intersection_preserves_each_union_term_and_argument_forms(self):
+        passed = {('binary', 'passed')}
+        remaining = 'not ((binary_id(/^binary$/) and (test(/^passed$/))))'
+        for args in (['-E', 'default()'], ['--filterset', 'default()'],
+                     ['--filterset=default()'], ['--filter-expr', 'default()'],
+                     ['--filter-expr=default()'], ['-Edefault()'], ['-E=default()']):
+            selection = ['-p', 'binary', '--ignore-default-filter', *args,
+                         '-E', 'test(=pending)', '--', 'substring']
+            original = selection.copy()
+            self.assertEqual(gate.resume_selection(selection, passed), [
+                '-p', 'binary', '--ignore-default-filter',
+                '-E', f'(default()) and ({remaining})',
+                '-E', f'(test(=pending)) and ({remaining})', '--', 'substring'])
+            self.assertEqual(selection, original)
+        self.assertEqual(gate.resume_selection(['--workspace', '--', '-Ename'], passed),
+                         ['--workspace', '-E', remaining, '--', '-Ename'])
+        self.assertEqual(gate.resume_selection(['--workspace'], passed),
+                         ['--workspace', '-E', remaining])
+        self.assertEqual(gate.resume_selection(['-E', 'default()'], set()), ['-E', 'default()'])
+        with self.assertRaisesRegex(ValueError, 'missing filterset'):
+            gate.resume_selection(['-E'], passed)
+
+    def test_group_transport_tampering_cannot_grant_credit(self):
+        for damage in ('identities', 'group', 'minimum-version', 'command', 'schema'):
+            with self.subTest(damage=damage), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                args = make_args(root, resume='1')
+                seed = PlannedRunHarness(root, [([event('ok', 'alpha::one$passes')], 101)])
+                self.assertEqual(seed.execute(args), 101)
+                source = PlannedRunHarness(root, [([event('ok', 'alpha::one$fails')], 0)])
+                self.assertEqual(source.execute(args), 0)
+                attempt = latest_attempt(AttemptReceiptTests.scope(root, args.plan))
+                receipt = json.loads((attempt / 'run.json').read_text())
+                result = receipt['results'][0]
+                config = attempt / result['config']
+                if damage == 'identities':
+                    config.write_text(config.read_text().replace('test(/^passes$/)', 'test(/^fails$/)'))
+                elif damage == 'group':
+                    config.write_text(config.read_text().replace('@tool:intent-gate:resumed', '@tool:intent-gate:other'))
+                elif damage == 'minimum-version':
+                    config.write_text(config.read_text().replace('0.9.133', '0.9.99'))
+                elif damage == 'command':
+                    result['command'][result['command'].index('-E') + 1] = 'all()'
+                else:
+                    receipt['receipt_schema'] = 2
+                (attempt / 'run.json').write_text(json.dumps(receipt))
+                credits, rejected = gate.eligible_credits(root / 'cache' / KEY / 'passed.jsonl',
+                                                          gate.Evidence(root / 'cache' / KEY, receipt))
+                self.assertEqual(set(credits), {('alpha::one', 'passes')})
+                self.assertTrue(rejected)
+
+    def test_prior_schema_partial_receipts_remain_eligible_without_rewriting(self):
+        for schema, plans in product((1, 2), ([], ['-p alpha'])):
+            with self.subTest(schema=schema, plans=plans), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                # Model both prior receipt formats with their original saved
+                # command/config pairs; do not weaken validation for either.
+                seed = PlannedRunHarness(root, [([event('ok', 'alpha::one$passes')], 101)])
+                self.assertEqual(seed.execute(make_args(root, plan=plans, resume='1')), 101)
+                prior = latest_attempt(AttemptReceiptTests.scope(root, plans))
+                source = PlannedRunHarness(root, [([event('ok', 'alpha::one$fails')], 0)])
+                self.assertEqual(source.execute(make_args(root, plan=plans, resume='1')), 0)
+                completed = latest_attempt(AttemptReceiptTests.scope(root, plans))
+                for attempt in (prior, completed):
+                    receipt = json.loads((attempt / 'run.json').read_text())
+                    receipt['receipt_schema'] = schema
+                    for result in receipt['results']:
+                        config = attempt / result['config']
+                        gate.write_tool_config(config, attempt.parent, attempt.name, result['junit'])
+                        if receipt['resumed_tests']:
+                            exclusion = gate.remaining_filter(set(map(tuple, receipt['resumed_tests'])))
+                            command = result['command']
+                            position = command.index('-E')
+                            if schema == 1:
+                                del command[position:position + 2]
+                                config.write_text(config.read_text().replace('inherits = "default"',
+                                    'inherits = "default"\ndefault-filter = ' + json.dumps(exclusion)))
+                            else:
+                                command[position + 1] = exclusion
+                    (attempt / 'run.json').write_text(json.dumps(receipt))
+                frozen = {p: AttemptReceiptTests.snapshot(p) for p in (prior, completed)}
+                shortcut = PlannedRunHarness(root, [])
+                self.assertEqual(shortcut.execute(make_args(root, plan=plans, resume='1')), 0)
+                self.assertEqual(shortcut.run_commands, [])
+                self.assertEqual(shortcut.list_commands, [])
+                for p, snapshot in frozen.items():
+                    self.assertEqual(AttemptReceiptTests.snapshot(p), snapshot)
+                # Neither schema may silently accept the other's command/config.
+                receipt = json.loads((completed / 'run.json').read_text())
+                resumed = set(map(tuple, receipt['resumed_tests']))
+                receipt['receipt_schema'] = 3
+                with self.assertRaisesRegex(ValueError, 'config disagrees'):
+                    gate.validate_result_config(completed, receipt, receipt['results'][0], resumed)
+                receipt['receipt_schema'] = schema
+                receipt['results'][0]['command'].extend(['-E', gate.remaining_filter(resumed)])
+                with self.assertRaisesRegex(ValueError, 'command disagrees'):
+                    gate.validate_result_config(completed, receipt, receipt['results'][0], resumed)
+
+
+class ProjectDefaultFilterTests(unittest.TestCase):
+    """Real nextest selects independently of the runner's saved evidence."""
+
+    setUp = AttemptReceiptTests.setUp
+
+    def check_resume(self, plans, expected=('b_pass',)):
+        if not shutil.which('cargo') or subprocess.run(
+                ['cargo', 'nextest', '--version'], capture_output=True).returncode:
+            self.skipTest('project filter regression requires installed cargo-nextest')
+        with tempfile.TemporaryDirectory(prefix='intent-default-filter-') as temporary:
+            root = Path(temporary)
+            crate = root / 'intentd'
+            (crate / 'src').mkdir(parents=True)
+            (crate / '.config').mkdir()
+            (crate / 'Cargo.toml').write_text(
+                '[package]\nname="default-probe"\nversion="0.0.0"\nedition="2021"\n')
+            marker = root / 'filtered-ran'
+            (crate / 'src/lib.rs').write_text(
+                '#[test] fn a_pass() {}\n'
+                '#[test] fn b_pass() { assert_eq!(std::env::var("NEXTEST_TEST_GROUP").unwrap(), "project-serial"); }\n'
+                '#[test] fn c_filtered() { assert_eq!(std::env::var("NEXTEST_TEST_GROUP").unwrap(), "@global"); std::fs::write('
+                'std::env::var("FILTER_SENTINEL").unwrap(), "ran").unwrap(); }\n')
+            (crate / '.config/nextest.toml').write_text(
+                '[profile.default]\ndefault-filter = "not test(=c_filtered)"\n'
+                '[test-groups.project-serial]\nmax-threads = 1\n'
+                '[[profile.default.overrides]]\nfilter = "default()"\n'
+                'test-group = "project-serial"\n')
+            env = {k: v for k, v in os.environ.items()
+                   if not k.startswith(('CARGO_', 'RUST', 'NEXTEST_')) and k != 'COMPACT'}
+            env.update(RUSTUP_AUTO_INSTALL='0', FILTER_SENTINEL=str(marker))
+            frozen = {}
+
+            def invoke(selection):
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    status = gate.run_nextest(make_args(root, plan=selection, resume='1'))
+                attempt = Path(next(line.split('record: ', 1)[1]
+                    for line in output.getvalue().splitlines() if 'record: ' in line))
+                receipt = json.loads((attempt / 'run.json').read_text())
+                proof = json.loads((attempt / 'coverage.json').read_text())
+                for prior, snapshot in frozen.items():
+                    self.assertEqual(AttemptReceiptTests.snapshot(prior), snapshot)
+                frozen[attempt] = AttemptReceiptTests.snapshot(attempt)
+                self.assertEqual(status, 0, proof)
+                self.assertTrue(proof['complete'], proof)
+                return attempt, receipt, proof
+
+            with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(
+                    gate, 'tree_key', return_value=KEY):
+                seed, _, _ = invoke(['-p default-probe --lib -E test(=a_pass)'])
+                attempt, receipt, proof = invoke(plans)
+                identities = lambda names: [['default-probe', name] for name in names]
+                self.assertEqual(proof['categories']['executed-passed'], identities(expected))
+                self.assertEqual(proof['categories']['resumed-passed'], identities(['a_pass']))
+                self.assertEqual(proof['inactive_filtered'], identities(
+                    [] if 'c_filtered' in expected else ['c_filtered']))
+                self.assertEqual(proof['categories']['unfinished'], [])
+                self.assertEqual(proof['categories']['failed'], [])
+                self.assertEqual(len(proof['resume_sources']), 1)
+                source = proof['resume_sources'][0]
+                self.assertEqual(source['attempt'], str(seed.relative_to(root / 'cache' / KEY)))
+                raw_seed = json.loads((seed / 'events-1.jsonl').read_text().splitlines()[source['event_line'] - 1])
+                self.assertEqual(raw_seed['name'], 'default-probe::default_probe$a_pass')
+                self.assertEqual(raw_seed['event'], 'ok')
+                result = receipt['results'][0]
+                self.assertEqual(result['native_exit_code'], 0)
+                raw = [json.loads(line) for line in (attempt / result['events']).read_text().splitlines()]
+                self.assertEqual({r['name'].split('$')[1] for r in raw if r['type'] == 'test'}, set(expected))
+                junit = gate.ET.parse(attempt / result['junit'])
+                self.assertEqual({c.attrib['name'] for c in junit.iter('testcase')}, set(expected))
+                self.assertEqual(marker.exists(), 'c_filtered' in expected)
+                # Compare real discovery with the effective execution selection.
+                command = result['command'].copy()
+                command[2] = 'list'
+                for option in ('--test-threads', '--message-format-version', '--no-tests'):
+                    if option in command:
+                        index = command.index(option)
+                        del command[index:index + 2]
+                command[command.index('--message-format') + 1] = 'json'
+                members, _ = gate.inventory(gate.run(command, crate, gate.nextest_env()))
+                self.assertEqual({name for (_, name), meta in members.items() if meta['active']}, set(expected))
+                shortcut, shortcut_receipt, shortcut_proof = invoke(plans)
+                self.assertNotEqual(shortcut, attempt)
+                self.assertEqual(shortcut_receipt['kind'], 'completed-resume')
+                self.assertEqual(shortcut_receipt['results'], [])
+                self.assertEqual(shortcut_proof['categories']['executed-passed'], [])
+                self.assertEqual(shortcut_proof['categories']['resumed-passed'], identities(['a_pass', *expected]))
+                self.assertEqual((attempt.parent.parent / 'complete').read_text().strip(), attempt.name)
+                self.assertEqual(marker.exists(), 'c_filtered' in expected)
+
+    def test_full_partial_resume_preserves_project_default_filter(self):
+        self.check_resume([])
+
+    def test_planned_partial_resume_preserves_project_default_filter(self):
+        self.check_resume(['-p default-probe --lib'])
+
+    def test_user_filter_union_and_explicit_default_override(self):
+        for filters, expected in (
+            ('-E test(=a_pass) --filterset=test(=b_pass)', ('b_pass',)),
+            ('--ignore-default-filter', ('b_pass', 'c_filtered')),
+            ('--ignore-default-filter -E default()', ('b_pass',)),
+            ('--filter-expr=default()', ('b_pass',)),
+            ('--ignore-default-filter -E group(=project-serial)', ('b_pass',)),
+            ('--ignore-default-filter -Etest(=a_pass) -E=test(=b_pass)', ('b_pass',)),
+        ):
+            with self.subTest(filters=filters):
+                self.check_resume(['-p default-probe --lib ' + filters], expected)
+
+
 class SharedTargetInventoryTests(unittest.TestCase):
     def test_other_worktree_build_cannot_replace_listed_gate_inventory(self):
         """A second Cargo writer runs while nextest waits to list its first binary."""
@@ -1854,11 +2488,11 @@ class SharedTargetInventoryTests(unittest.TestCase):
             outcomes = gate.load_outcomes(root / "cache" / KEY / "passed.jsonl")
             self.assertEqual({name for (_, name) in outcomes}, {"first_only"})
             record = root / "cache" / KEY / "changed" / gate.plan_key([["-p", "inventory-probe", "--lib"]])
-            result = json.loads((record / "run.json").read_text())
+            result = json.loads((latest_attempt(record) / "run.json").read_text())
             self.assertEqual(result["passed"], 1)
             self.assertEqual(result["cargo_output_args"][0], "--target-dir")
             self.assertTrue((record / "complete").is_file())
-            outputs = json.loads((record / "cargo-outputs.json").read_text())
+            outputs = json.loads((latest_attempt(record) / "cargo-outputs.json").read_text())
             self.assertEqual(outputs["source_root"], str(first.resolve()))
             self.assertEqual(outputs["args"], result["cargo_output_args"])
 
@@ -1878,6 +2512,9 @@ class CallerPolicyResumeTests(unittest.TestCase):
             with self.subTest(plans=plans), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 harness = PlannedRunHarness(root, [])
+                listing = json.loads(LISTING)
+                listing['rust-suites']['alpha::one']['testcases'] = {'passes': {}}
+                harness.listing = json.dumps(listing)
                 seen_env = []
                 inputs = []
                 dumps = json.dumps
@@ -1957,6 +2594,9 @@ class StackSettingResumeTests(unittest.TestCase):
     @contextlib.contextmanager
     def harness(self, root):
         harness = PlannedRunHarness(root, [])
+        listing = json.loads(LISTING)
+        listing['rust-suites']['alpha::one']['testcases'] = {'passes': {}, 'fails': {}}
+        harness.listing = json.dumps(listing)
         harness.children = root / "children.jsonl"
         harness.inputs = []
         harness.interrupt = False
@@ -1985,7 +2625,8 @@ class StackSettingResumeTests(unittest.TestCase):
 import json, os, pathlib, sys, tomllib
 config, receipt, interrupted = sys.argv[1:]
 profile = next(iter(tomllib.loads(pathlib.Path(config).read_text())["profile"].values()))
-expression = profile.get("default-filter", "")
+assert "default-filter" not in profile
+expression = profile.get("overrides", [{"filter": ""}])[0]["filter"]
 tests = [name for name in ("passes", "fails") if "test(/^" + name + "$/)" not in expression]
 if interrupted == "1":
     tests = tests[:1]
@@ -2096,7 +2737,9 @@ sys.exit(101 if interrupted == "1" else 0)
                     evidence = {"version": 1, "RUST_MIN_STACK": value}
                     self.assertEqual(harness.inputs[-1]["test-stack"], evidence)
                     record = next(args.cache_dir.glob("*/passed.jsonl")).parent
-                    self.assertEqual(json.loads((record / "test-stack.json").read_text()), evidence)
+                    if plans:
+                        record = record / "changed" / gate.plan_key(gate.split_plans(plans))
+                    self.assertEqual(json.loads((latest_attempt(record) / "test-stack.json").read_text()), evidence)
 
     def test_transfer_and_stack_changes_independently_reject_resume_credit(self):
         for plans, partial in product(([], ["-p intent-services --lib"]), (False, True)):
@@ -2187,6 +2830,1147 @@ class TransferFixtureSelectionTests(unittest.TestCase):
             self.assertEqual(len(set(keys)), len(keys))
             self.assertEqual(keys[-1], gate.tree_key(
                 root, root, fixture_identity=callbacks[-1], transfer_identity=identities[-1]))
+
+
+class CoverageReconciliationTests(unittest.TestCase):
+    setUp = AttemptReceiptTests.setUp
+    scope = staticmethod(AttemptReceiptTests.scope)
+    snapshot = staticmethod(AttemptReceiptTests.snapshot)
+    def harness(self, root, runs, tests=None):
+        harness = PlannedRunHarness(root, runs)
+        listing = json.loads(LISTING)
+        listing['rust-suites']['alpha::one']['testcases'] = tests or {
+            'passes': {'ignored': False, 'filter-match': {'status': 'matches'}},
+            'fails': {'ignored': False, 'filter-match': {'status': 'matches'}},
+        }
+        original = harness.fake_run
+        harness.fake_run = lambda command, cwd, env=None: (
+            json.dumps(listing) if command[:3] == ['cargo', 'nextest', 'list']
+            else original(command, cwd, env))
+        return harness
+
+    def report(self, root, plans):
+        return json.loads((latest_attempt(self.scope(root, plans)) / 'coverage.json').read_text())
+
+    def test_incomplete_success_never_completes(self):
+        for plans in ([], ['-p alpha']):
+            with self.subTest(plans=plans), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                harness = self.harness(root, [([event('ok', 'alpha::one$passes')], 0)])
+                self.assertEqual(harness.execute(make_args(root, plan=plans)), 2)
+                report = self.report(root, plans)
+                self.assertFalse(report['complete'])
+                self.assertEqual(report['categories']['unfinished'], [['alpha::one', 'fails']])
+                self.assertFalse((self.scope(root, plans) / 'complete').exists())
+
+    def test_interrupted_passes_have_exact_sources_and_no_double_credit(self):
+        for plans in ([], ['-p alpha', '-p beta']):
+            with self.subTest(plans=plans), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                first = self.harness(root, [([event('ok', 'alpha::one$passes')], 101)])
+                self.assertEqual(first.execute(make_args(root, plan=plans)), 101)
+                source = latest_attempt(self.scope(root, plans))
+                frozen = self.snapshot(source)
+                runs = [([event('ok', 'alpha::one$fails')], 0)] * (len(plans) or 1)
+                second = self.harness(root, runs)
+                self.assertEqual(second.execute(make_args(root, plan=plans, resume='1')), 0)
+                report = self.report(root, plans)
+                self.assertTrue(report['complete'])
+                self.assertEqual(report['categories']['executed-passed'], [['alpha::one', 'fails']])
+                self.assertEqual(report['categories']['resumed-passed'], [['alpha::one', 'passes']])
+                self.assertEqual(len(report['active']), 2)
+                self.assertEqual(len(report['resume_sources']), 1)
+                self.assertEqual(self.snapshot(source), frozen)
+
+    def test_damaged_source_cannot_be_resumed_or_shortcut(self):
+        for damage in ('events', 'fingerprint', 'membership', 'junit', 'marker', 'journal'):
+            with self.subTest(damage=damage), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                plans = ['-p alpha']
+                lines = [event('ok', 'alpha::one$passes'), event('ok', 'alpha::one$fails')]
+                self.assertEqual(self.harness(root, [(lines, 0)]).execute(make_args(root, plan=plans)), 0)
+                scope = self.scope(root, plans)
+                source = latest_attempt(scope)
+                if damage == 'events':
+                    (source / 'events-1.jsonl').unlink()
+                elif damage == 'junit':
+                    (source / 'junit-1.xml').write_text('<testsuites><testsuite name="alpha::one"><testcase name="passes"><failure/></testcase></testsuite></testsuites>')
+                elif damage == 'marker':
+                    (scope / 'complete').write_text('unchecked legacy marker')
+                elif damage == 'journal':
+                    (root / 'cache' / KEY / 'passed.jsonl').write_text('')
+                else:
+                    receipt = json.loads((source / 'run.json').read_text())
+                    receipt['test_stack' if damage == 'fingerprint' else 'selection_membership'] = {}
+                    (source / 'run.json').write_text(json.dumps(receipt))
+                harness = self.harness(root, [([] if damage == "marker" else lines, 0)])
+                self.assertEqual(harness.execute(make_args(root, plan=plans, resume='1')), 0)
+                self.assertEqual(len(harness.run_commands), 1)
+
+    def test_filtered_and_ignored_membership_are_disjoint(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            tests = {'passes': {}, 'skipped': {'ignored': True},
+                     'filtered': {'filter-match': {'status': 'mismatch', 'reason': 'expression'}}}
+            harness = self.harness(root, [([event('ok', 'alpha::one$passes'), suite_event(passed=1, failed=0, ignored=1)], 0)], tests)
+            self.assertEqual(harness.execute(make_args(root)), 0)
+            report = self.report(root, ['-p alpha --test one'])
+            self.assertEqual(report['inactive_filtered'], [['alpha::one', 'filtered']])
+            self.assertEqual(report['categories']['ignored'], [['alpha::one', 'skipped']])
+            self.assertEqual(sum(map(len, report['categories'].values())), len(report['active']))
+
+    def test_duplicate_terminals_and_inactive_execution_fail_closed(self):
+        for lines, tests in (
+            ([event('ok', 'alpha::one$passes')] * 2, {'passes': {}}),
+            ([event('ok', 'alpha::one$passes')], {'passes': {'filter-match': {'status': 'mismatch'}}}),
+            ([event('ok', 'alpha::one$passes'), suite_event(ignored=2)], {'passes': {}, 'skipped': {'ignored': True}}),
+        ):
+            with self.subTest(lines=lines), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                self.assertEqual(self.harness(root, [(lines, 0)], tests).execute(make_args(root)), 2)
+                report = self.report(root, ['-p alpha --test one'])
+                self.assertFalse(report['complete'])
+                self.assertTrue(report['errors'])
+
+    def test_retries_retain_native_events_but_count_one_identity(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            lines = [event('failed', 'alpha::one$passes#1'), event('ok', 'alpha::one$passes#2')]
+            harness = self.harness(root, [(lines, 0)], {'passes': {}})
+            self.assertEqual(harness.execute(make_args(root)), 0)
+            report = self.report(root, ['-p alpha --test one'])
+            self.assertEqual(report['categories']['executed-passed'], [['alpha::one', 'passes']])
+            self.assertEqual([r['outcome'] for r in report['selections'][0]['outcomes'][0]['events']], ['failed', 'ok'])
+            resumed = self.harness(root, [], {'passes': {}})
+            self.assertEqual(resumed.execute(make_args(root, resume='1')), 0)
+            self.assertEqual(resumed.run_commands, [])
+
+    def test_overlap_cannot_hide_an_unfinished_selection(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            plans = ['-p alpha', '-p beta']
+            harness = self.harness(root, [([event('ok', 'alpha::one$passes')], 0), ([], 0)], {'passes': {}})
+            self.assertEqual(harness.execute(make_args(root, plan=plans)), 2)
+            report = self.report(root, plans)
+            self.assertEqual(report['categories']['unfinished'], [['alpha::one', 'passes']])
+            self.assertEqual(report['categories']['executed-passed'], [])
+
+    def test_junit_final_outcomes_and_membership_are_checked(self):
+        for cases, status in (
+            ('<testcase name="passes"/>', 0),
+            ('<testcase name="passes"><flakyFailure/></testcase>', 0),
+            ('<testcase name="passes"><failure/></testcase>', 2),
+            ('<testcase name="passes"/><testcase name="passes"/>', 2),
+            ('<testcase name="unknown"/>', 2),
+            ('', 2),
+        ):
+            with self.subTest(cases=cases), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                harness = self.harness(root, [([event('ok', 'alpha::one$passes')], 0)], {'passes': {}})
+                original = harness.fake_popen
+                def popen(command, **kwargs):
+                    config = Path(command[command.index('--tool-config-file') + 1].split(':', 1)[1])
+                    (config.parent / 'junit-1.xml').write_text('<testsuites><testsuite name="alpha::one">' + cases + '</testsuite></testsuites>')
+                    return original(command, **kwargs)
+                harness.fake_popen = popen
+                self.assertEqual(harness.execute(make_args(root)), status)
+                self.assertEqual(self.report(root, ['-p alpha --test one'])['complete'], status == 0)
+
+    def test_duplicate_listing_membership_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            harness = PlannedRunHarness(root, [])
+            listing = json.loads(LISTING)
+            listing['rust-suites']['duplicate'] = listing['rust-suites']['alpha::one']
+            harness.listing = json.dumps(listing)
+            with self.assertRaises((ValueError, RuntimeError)):
+                harness.execute(make_args(root))
+            self.assertEqual(harness.run_commands, [])
+            self.assertFalse((self.scope(root, ['-p alpha --test one']) / 'complete').exists())
+
+    def test_reference_fields_and_raw_duplicate_json_cannot_grant_credit(self):
+        for damage in ('selection', 'line', 'path', 'id', 'duplicate-key', 'duplicate-result', 'duplicate-membership', 'command', 'config', 'stack-file', 'duplicate-journal', 'native-status'):
+            with self.subTest(damage=damage), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                tests = {'passes': {}}
+                lines = [event('ok', 'alpha::one$passes')]
+                self.assertEqual(self.harness(root, [(lines, 0)], tests).execute(make_args(root)), 0)
+                scope = self.scope(root, ['-p alpha --test one'])
+                source = latest_attempt(scope)
+                journal = root / 'cache' / KEY / 'passed.jsonl'
+                row = json.loads(journal.read_text())
+                receipt = json.loads((source / 'run.json').read_text())
+                if damage == 'selection':
+                    row['selection_index'] = 2
+                elif damage == 'line':
+                    row['event_line'] = 10
+                elif damage == 'path':
+                    row['attempt'] = '../' + row['attempt']
+                elif damage == 'id':
+                    receipt['attempt_id'] = 'b' * 32
+                elif damage == 'duplicate-key':
+                    (source / 'events-1.jsonl').write_text('{"type":"test","event":"failed","event":"ok","name":"alpha::one$passes"}\n')
+                elif damage == 'command':
+                    receipt['results'][0]['command'].append('--ignored')
+                elif damage == 'config':
+                    (source / 'nextest-1.toml').write_text('')
+                elif damage == 'stack-file':
+                    (source / 'test-stack.json').unlink()
+                elif damage == 'native-status':
+                    receipt['results'][0]['native_exit_code'] = False
+                elif damage == 'duplicate-journal':
+                    pass
+                elif damage == 'duplicate-result':
+                    receipt['results'] *= 2
+                else:
+                    receipt['selection_membership'][0] *= 2
+                journal.write_text((json.dumps(row) + '\n') * (2 if damage == 'duplicate-journal' else 1))
+                (source / 'run.json').write_text(json.dumps(receipt))
+                harness = self.harness(root, [(lines, 0)], tests)
+                self.assertEqual(harness.execute(make_args(root, resume='1')), 0)
+                self.assertEqual(len(harness.run_commands), 1)
+                self.assertEqual(self.report(root, ['-p alpha --test one'])['categories']['resumed-passed'], [])
+
+
+    def test_failure_arriving_during_execution_invalidates_initial_resume_credit(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = self.harness(root, [([event('ok', 'alpha::one$passes')], 101)])
+            self.assertEqual(source.execute(make_args(root)), 101)
+            def lines():
+                with (root / 'cache' / KEY / 'passed.jsonl').open('a') as journal:
+                    journal.write(gate.record_line('alpha::one', 'passes', 'failed'))
+                yield event('ok', 'alpha::one$fails')
+            second = self.harness(root, [(lines(), 0)])
+            self.assertEqual(second.execute(make_args(root, resume='1')), 2)
+            self.assertFalse(self.report(root, ['-p alpha --test one'])['complete'])
+            self.assertFalse((self.scope(root, ['-p alpha --test one']) / 'complete').exists())
+
+
+    def test_loss_before_second_event_file_keeps_first_selection_pass(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            plans = ['-p alpha', '-p beta']
+            def interrupted():
+                raise KeyboardInterrupt
+                yield
+            source = self.harness(root, [([event('ok', 'alpha::one$passes')], 0), (interrupted(), 0)])
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(source.execute(make_args(root, plan=plans)), 130)
+            directory = latest_attempt(self.scope(root, plans))
+            receipt = json.loads((directory / 'run.json').read_text())
+            receipt.update(finished_at=None, exit_code=None)
+            receipt['results'][1].update(finished_at=None, exit_code=None, native_exit_code=None)
+            (directory / 'run.json').write_text(json.dumps(receipt))
+            (directory / 'events-2.jsonl').unlink()
+            frozen = self.snapshot(directory)
+            second = self.harness(root, [([event('ok', 'alpha::one$fails')], 0)] * 2)
+            self.assertEqual(second.execute(make_args(root, plan=plans, resume='1')), 0)
+            self.assertEqual(self.report(root, plans)['categories']['resumed-passed'], [['alpha::one', 'passes']])
+            self.assertEqual(self.snapshot(directory), frozen)
+
+
+    def test_suite_summary_cannot_claim_unobserved_or_unlisted_passes(self):
+        for summary in (suite_event(passed=2, failed=0, ignored=0),
+                        suite_event(crate='unknown', passed=1, failed=0, ignored=0),
+                        suite_event(passed=1), event('unknown', 'alpha::one$passes')):
+            with self.subTest(summary=summary), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                harness = self.harness(root, [([event('ok', 'alpha::one$passes'), summary], 0)], {'passes': {}})
+                self.assertEqual(harness.execute(make_args(root)), 2)
+                self.assertFalse(self.report(root, ['-p alpha --test one'])['complete'])
+
+
+# Captured cargo-nextest 0.9.143 fixtures: real list projection, verbatim stdout
+# and JUnit. Replaying these requires only Python, not Cargo or a Rust toolchain.
+CAPTURED_NEXTEST = {
+    'full': {
+        'listing': '''{
+  "rust-suites": {
+    "coverage-probe": {
+      "package-name": "coverage-probe",
+      "binary-id": "coverage-probe",
+      "binary-name": "coverage_probe",
+      "testcases": {
+        "filtered": {
+          "kind": "test",
+          "ignored": false,
+          "filter-match": {
+            "status": "matches"
+          }
+        },
+        "flaky": {
+          "kind": "test",
+          "ignored": false,
+          "filter-match": {
+            "status": "matches"
+          }
+        },
+        "ignored": {
+          "kind": "test",
+          "ignored": true,
+          "filter-match": {
+            "status": "mismatch",
+            "reason": "ignored"
+          }
+        },
+        "passes": {
+          "kind": "test",
+          "ignored": false,
+          "filter-match": {
+            "status": "matches"
+          }
+        }
+      }
+    }
+  }
+}''',
+        'events': '''{"type":"suite","event":"started","test_count":4,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$filtered"}
+{"type":"test","event":"ok","name":"coverage-probe::coverage_probe$filtered","exec_time":0.013692121}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$ignored"}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$flaky"}
+{"type":"test","event":"ignored","name":"coverage-probe::coverage_probe$ignored"}
+{"type":"test","event":"ok","name":"coverage-probe::coverage_probe$flaky#2","exec_time":0.014177485}
+{"type":"suite","event":"ok","passed":2,"failed":0,"ignored":1,"measured":0,"filtered_out":0,"exec_time":0.027869606,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"suite","event":"started","test_count":4,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$passes"}
+{"type":"test","event":"ok","name":"coverage-probe::coverage_probe$passes","exec_time":0.009071929}
+{"type":"suite","event":"ok","passed":1,"failed":0,"ignored":1,"measured":0,"filtered_out":2,"exec_time":0.009071929,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+''',
+        'junit': '''<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="3" skipped="0" failures="0" errors="0" uuid="d1c627f7-9b6b-478d-84e1-64d16b368ca3" timestamp="2026-10-05T15:26:34.457+00:00" time="0.108">
+    <testsuite name="coverage-probe" tests="3" skipped="0" errors="0" failures="0">
+        <testcase name="filtered" classname="coverage-probe" timestamp="2026-10-05T15:26:34.457+00:00" time="0.014"/>
+        <testcase name="flaky" classname="coverage-probe" timestamp="2026-10-05T15:26:34.490+00:00" time="0.014">
+            <flakyFailure timestamp="2026-10-05T15:26:34.471+00:00" time="0.017" message="thread &apos;flaky&apos; (2788581) panicked at src/lib.rs:5:5" type="test failure with exit code 101">thread &apos;flaky&apos; (2788581) panicked at src/lib.rs:5:5:
+assertion failed: std::env::var(&quot;NEXTEST_ATTEMPT&quot;).unwrap().parse::&lt;usize&gt;().unwrap() &gt; 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test flaky ... FAILED
+
+failures:
+
+failures:
+    flaky
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+                <system-out>
+running 1 test
+
+thread &apos;flaky&apos; (2788581) panicked at src/lib.rs:5:5:
+assertion failed: std::env::var(&quot;NEXTEST_ATTEMPT&quot;).unwrap().parse::&lt;usize&gt;().unwrap() &gt; 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test flaky ... FAILED
+
+failures:
+
+failures:
+    flaky
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+</system-out>
+                <system-err>(stdout and stderr are combined)</system-err>
+            </flakyFailure>
+        </testcase>
+        <testcase name="passes" classname="coverage-probe" timestamp="2026-10-05T15:26:34.505+00:00" time="0.009"/>
+    </testsuite>
+</testsuites>
+''',
+    },
+    'filtered': {
+        'listing': '''{
+  "rust-suites": {
+    "coverage-probe": {
+      "package-name": "coverage-probe",
+      "binary-id": "coverage-probe",
+      "binary-name": "coverage_probe",
+      "testcases": {
+        "filtered": {
+          "kind": "test",
+          "ignored": false,
+          "filter-match": {
+            "status": "mismatch",
+            "reason": "expression"
+          }
+        },
+        "flaky": {
+          "kind": "test",
+          "ignored": false,
+          "filter-match": {
+            "status": "mismatch",
+            "reason": "expression"
+          }
+        },
+        "ignored": {
+          "kind": "test",
+          "ignored": true,
+          "filter-match": {
+            "status": "mismatch",
+            "reason": "ignored"
+          }
+        },
+        "passes": {
+          "kind": "test",
+          "ignored": false,
+          "filter-match": {
+            "status": "matches"
+          }
+        }
+      }
+    }
+  }
+}''',
+        'events': '''{"type":"suite","event":"started","test_count":2,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$ignored"}
+{"type":"suite","event":"ok","passed":0,"failed":0,"ignored":1,"measured":0,"filtered_out":2,"exec_time":0,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"suite","event":"started","test_count":2,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$passes"}
+{"type":"test","event":"ok","name":"coverage-probe::coverage_probe$passes","exec_time":0.03023805}
+{"type":"suite","event":"ok","passed":1,"failed":0,"ignored":1,"measured":0,"filtered_out":2,"exec_time":0.03023805,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+''',
+        'junit': '''<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="1" skipped="0" failures="0" errors="0" uuid="832c4ddc-71d1-49ba-81e9-b2c365fc7908" timestamp="2026-10-05T15:26:37.921+00:00" time="0.036">
+    <testsuite name="coverage-probe" tests="1" skipped="0" errors="0" failures="0">
+        <testcase name="passes" classname="coverage-probe" timestamp="2026-10-05T15:26:37.924+00:00" time="0.030"/>
+    </testsuite>
+</testsuites>
+''',
+    },
+    'interrupted': {
+        'listing': '''{
+  "rust-suites": {
+    "coverage-probe": {
+      "package-name": "coverage-probe",
+      "binary-id": "coverage-probe",
+      "binary-name": "coverage_probe",
+      "testcases": {
+        "a_pass": {
+          "kind": "test",
+          "ignored": false,
+          "filter-match": {
+            "status": "matches"
+          }
+        },
+        "b_wait": {
+          "kind": "test",
+          "ignored": false,
+          "filter-match": {
+            "status": "matches"
+          }
+        }
+      }
+    }
+  }
+}''',
+        'events': '''{"type":"suite","event":"started","test_count":2,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$a_pass"}
+{"type":"test","event":"ok","name":"coverage-probe::coverage_probe$a_pass","exec_time":0.012768281}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$b_wait"}
+''',
+        'junit': '''<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="2" skipped="0" failures="1" errors="0" uuid="920ee485-9d36-42cd-bb06-feff20142af2" timestamp="2026-10-05T15:30:55.034+00:00" time="0.035">
+    <testsuite name="coverage-probe" tests="2" skipped="0" errors="0" failures="1">
+        <testcase name="a_pass" classname="coverage-probe" timestamp="2026-10-05T15:30:55.035+00:00" time="0.013"/>
+        <testcase name="b_wait" classname="coverage-probe" timestamp="2026-10-05T15:30:55.048+00:00" time="0.021">
+            <failure message="process aborted with signal 15 (SIGTERM)" type="test abort">process aborted with signal 15 (SIGTERM)</failure>
+            <system-out>
+running 1 test
+</system-out>
+            <system-err>(stdout and stderr are combined)</system-err>
+        </testcase>
+    </testsuite>
+</testsuites>
+''',
+    },
+}
+
+
+CAPTURED_IGNORED_MODES = {
+    'all': {
+        'listing': '''{
+  "rust-suites": {
+    "coverage-probe": {
+      "package-name": "coverage-probe",
+      "binary-id": "coverage-probe",
+      "binary-name": "coverage_probe",
+      "testcases": {
+        "opt_in": {
+          "kind": "test",
+          "ignored": true,
+          "filter-match": {
+            "status": "matches"
+          }
+        },
+        "ordinary": {
+          "kind": "test",
+          "ignored": false,
+          "filter-match": {
+            "status": "matches"
+          }
+        }
+      }
+    }
+  }
+}''',
+        'events': '''{"type":"suite","event":"started","test_count":2,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$opt_in"}
+{"type":"test","event":"ok","name":"coverage-probe::coverage_probe$opt_in","exec_time":0.02726781}
+{"type":"suite","event":"ok","passed":1,"failed":0,"ignored":1,"measured":0,"filtered_out":0,"exec_time":0.02726781,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"suite","event":"started","test_count":2,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$ordinary"}
+{"type":"test","event":"ok","name":"coverage-probe::coverage_probe$ordinary","exec_time":0.024622307}
+{"type":"suite","event":"ok","passed":1,"failed":0,"ignored":1,"measured":0,"filtered_out":0,"exec_time":0.024622307,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+''',
+        'junit': '''<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="2" skipped="0" failures="0" errors="0" uuid="24918fef-65f0-4ed1-956f-7d06bfb2ccde" timestamp="2026-10-05T15:55:14.097+00:00" time="0.070">
+    <testsuite name="coverage-probe" tests="2" skipped="0" errors="0" failures="0">
+        <testcase name="opt_in" classname="coverage-probe" timestamp="2026-10-05T15:55:14.098+00:00" time="0.027"/>
+        <testcase name="ordinary" classname="coverage-probe" timestamp="2026-10-05T15:55:14.125+00:00" time="0.025"/>
+    </testsuite>
+</testsuites>
+''',
+    },
+    'only': {
+        'listing': '''{
+  "rust-suites": {
+    "coverage-probe": {
+      "package-name": "coverage-probe",
+      "binary-id": "coverage-probe",
+      "binary-name": "coverage_probe",
+      "testcases": {
+        "opt_in": {
+          "kind": "test",
+          "ignored": true,
+          "filter-match": {
+            "status": "matches"
+          }
+        },
+        "ordinary": {
+          "kind": "test",
+          "ignored": false,
+          "filter-match": {
+            "status": "mismatch",
+            "reason": "ignored"
+          }
+        }
+      }
+    }
+  }
+}''',
+        'events': '''{"type":"suite","event":"started","test_count":1,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$ordinary"}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$opt_in"}
+{"type":"test","event":"ignored","name":"coverage-probe::coverage_probe$ordinary"}
+{"type":"test","event":"ok","name":"coverage-probe::coverage_probe$opt_in","exec_time":0.053474325}
+{"type":"suite","event":"ok","passed":1,"failed":0,"ignored":1,"measured":0,"filtered_out":18446744073709551615,"exec_time":0.053474325,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+''',
+        'junit': '''<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="1" skipped="0" failures="0" errors="0" uuid="c44657f5-5ae5-4f35-b74a-443083b1f700" timestamp="2026-10-05T15:55:14.906+00:00" time="0.056">
+    <testsuite name="coverage-probe" tests="1" skipped="0" errors="0" failures="0">
+        <testcase name="opt_in" classname="coverage-probe" timestamp="2026-10-05T15:55:14.909+00:00" time="0.053"/>
+    </testsuite>
+</testsuites>
+''',
+    },
+    'all-filtered': {
+        'listing': '''{
+  "rust-suites": {
+    "coverage-probe": {
+      "package-name": "coverage-probe",
+      "binary-id": "coverage-probe",
+      "binary-name": "coverage_probe",
+      "testcases": {
+        "normal1": {
+          "kind": "test",
+          "ignored": false,
+          "filter-match": {
+            "status": "matches"
+          }
+        },
+        "normal2": {
+          "kind": "test",
+          "ignored": false,
+          "filter-match": {
+            "status": "mismatch",
+            "reason": "expression"
+          }
+        },
+        "normal3": {
+          "kind": "test",
+          "ignored": false,
+          "filter-match": {
+            "status": "mismatch",
+            "reason": "expression"
+          }
+        },
+        "opt1": {
+          "kind": "test",
+          "ignored": true,
+          "filter-match": {
+            "status": "mismatch",
+            "reason": "expression"
+          }
+        },
+        "opt2": {
+          "kind": "test",
+          "ignored": true,
+          "filter-match": {
+            "status": "mismatch",
+            "reason": "expression"
+          }
+        }
+      }
+    }
+  }
+}''',
+        'events': '''{"type":"suite","event":"started","test_count":3,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$normal1"}
+{"type":"test","event":"ok","name":"coverage-probe::coverage_probe$normal1","exec_time":0.004047634}
+{"type":"suite","event":"ok","passed":1,"failed":0,"ignored":2,"measured":0,"filtered_out":2,"exec_time":0.004047634,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+''',
+        'junit': '''<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="1" skipped="0" failures="0" errors="0" uuid="3b69eb06-e877-4a77-99cb-421ad2bb2b38" timestamp="2026-10-05T16:01:03.355+00:00" time="0.004">
+    <testsuite name="coverage-probe" tests="1" skipped="0" errors="0" failures="0">
+        <testcase name="normal1" classname="coverage-probe" timestamp="2026-10-05T16:01:03.355+00:00" time="0.004"/>
+    </testsuite>
+</testsuites>
+''',
+    },
+    'only-filtered': {
+        'listing': '''{
+  "rust-suites": {
+    "coverage-probe": {
+      "package-name": "coverage-probe",
+      "binary-id": "coverage-probe",
+      "binary-name": "coverage_probe",
+      "testcases": {
+        "normal1": {
+          "kind": "test",
+          "ignored": false,
+          "filter-match": {
+            "status": "mismatch",
+            "reason": "ignored"
+          }
+        },
+        "normal2": {
+          "kind": "test",
+          "ignored": false,
+          "filter-match": {
+            "status": "mismatch",
+            "reason": "ignored"
+          }
+        },
+        "normal3": {
+          "kind": "test",
+          "ignored": false,
+          "filter-match": {
+            "status": "mismatch",
+            "reason": "ignored"
+          }
+        },
+        "opt1": {
+          "kind": "test",
+          "ignored": true,
+          "filter-match": {
+            "status": "matches"
+          }
+        },
+        "opt2": {
+          "kind": "test",
+          "ignored": true,
+          "filter-match": {
+            "status": "mismatch",
+            "reason": "expression"
+          }
+        }
+      }
+    }
+  }
+}''',
+        'events': '''{"type":"suite","event":"started","test_count":2,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$normal1"}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$normal2"}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$normal3"}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$opt1"}
+{"type":"test","event":"ignored","name":"coverage-probe::coverage_probe$normal1"}
+{"type":"test","event":"ignored","name":"coverage-probe::coverage_probe$normal2"}
+{"type":"test","event":"ignored","name":"coverage-probe::coverage_probe$normal3"}
+{"type":"test","event":"ok","name":"coverage-probe::coverage_probe$opt1","exec_time":0.005019092}
+{"type":"suite","event":"ok","passed":1,"failed":0,"ignored":2,"measured":0,"filtered_out":18446744073709551615,"exec_time":0.005019092,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+''',
+        'junit': '''<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="1" skipped="0" failures="0" errors="0" uuid="7552f528-dcdf-4ce3-b4b1-99fdc3879661" timestamp="2026-10-05T16:01:03.999+00:00" time="0.005">
+    <testsuite name="coverage-probe" tests="1" skipped="0" errors="0" failures="0">
+        <testcase name="opt1" classname="coverage-probe" timestamp="2026-10-05T16:01:03.999+00:00" time="0.005"/>
+    </testsuite>
+</testsuites>
+''',
+    },
+}
+
+# Native tool-filtered stdout/JUnit; replay uses the pre-resume inventory.
+CAPTURED_MODE_RESUME = {
+    ('default', 'fresh'): {
+        'events': '''{"type":"suite","event":"started","test_count":2,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$opt_in"}
+{"type":"suite","event":"ok","passed":0,"failed":0,"ignored":1,"measured":0,"filtered_out":0,"exec_time":0,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"suite","event":"started","test_count":2,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$ordinary"}
+{"type":"test","event":"ok","name":"coverage-probe::coverage_probe$ordinary","exec_time":0.003753527}
+{"type":"suite","event":"ok","passed":1,"failed":0,"ignored":1,"measured":0,"filtered_out":0,"exec_time":0.003753527,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+''',
+        'junit': '''<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="1" skipped="0" failures="0" errors="0" uuid="8b37de6f-7f9c-46ba-8065-eccc709c1c3b" timestamp="2026-10-05T16:02:58.130+00:00" time="0.004">
+    <testsuite name="coverage-probe" tests="1" skipped="0" errors="0" failures="0">
+        <testcase name="ordinary" classname="coverage-probe" timestamp="2026-10-05T16:02:58.130+00:00" time="0.004"/>
+    </testsuite>
+</testsuites>
+''',
+        'listing': '''{
+  "rust-suites": {
+    "coverage-probe": {
+      "package-name": "coverage-probe",
+      "binary-id": "coverage-probe",
+      "binary-name": "coverage_probe",
+      "testcases": {
+        "opt_in": {
+          "kind": "test",
+          "ignored": true,
+          "filter-match": {
+            "status": "mismatch",
+            "reason": "ignored"
+          }
+        },
+        "ordinary": {
+          "kind": "test",
+          "ignored": false,
+          "filter-match": {
+            "status": "matches"
+          }
+        }
+      }
+    }
+  }
+}''',
+    },
+    ('default', 'resume_ordinary'): {
+        'events': '''{"type":"suite","event":"started","test_count":1,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$opt_in"}
+{"type":"suite","event":"ok","passed":0,"failed":0,"ignored":1,"measured":0,"filtered_out":0,"exec_time":0,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+''',
+        'junit': '''<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="0" skipped="0" failures="0" errors="0" uuid="25bdcee1-7db8-4ed8-999c-fbe784cff121" timestamp="2026-10-05T16:02:58.313+00:00" time="0.000">
+</testsuites>
+''',
+    },
+    ('default', 'resume_opt_in'): {
+        'events': '''{"type":"suite","event":"started","test_count":2,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$opt_in"}
+{"type":"suite","event":"ok","passed":0,"failed":0,"ignored":1,"measured":0,"filtered_out":0,"exec_time":0,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"suite","event":"started","test_count":2,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$ordinary"}
+{"type":"test","event":"ok","name":"coverage-probe::coverage_probe$ordinary","exec_time":0.00424383}
+{"type":"suite","event":"ok","passed":1,"failed":0,"ignored":1,"measured":0,"filtered_out":0,"exec_time":0.00424383,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+''',
+        'junit': '''<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="1" skipped="0" failures="0" errors="0" uuid="bd3a3e27-495f-4a11-baae-9b0242b7d092" timestamp="2026-10-05T16:02:58.487+00:00" time="0.005">
+    <testsuite name="coverage-probe" tests="1" skipped="0" errors="0" failures="0">
+        <testcase name="ordinary" classname="coverage-probe" timestamp="2026-10-05T16:02:58.487+00:00" time="0.004"/>
+    </testsuite>
+</testsuites>
+''',
+    },
+    ('default', 'resume_both'): {
+        'events': '''{"type":"suite","event":"started","test_count":1,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$opt_in"}
+{"type":"suite","event":"ok","passed":0,"failed":0,"ignored":1,"measured":0,"filtered_out":0,"exec_time":0,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+''',
+        'junit': '''<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="0" skipped="0" failures="0" errors="0" uuid="d647ceff-9ab8-4947-8cb8-a4673b30d8d0" timestamp="2026-10-05T16:02:58.660+00:00" time="0.000">
+</testsuites>
+''',
+    },
+    ('all', 'resume_ordinary'): {
+        'events': '''{"type":"suite","event":"started","test_count":1,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$opt_in"}
+{"type":"suite","event":"ok","passed":0,"failed":0,"ignored":1,"measured":0,"filtered_out":1,"exec_time":0,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"suite","event":"started","test_count":1,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"ok","name":"coverage-probe::coverage_probe$opt_in","exec_time":0.004719626}
+{"type":"suite","event":"ok","passed":1,"failed":0,"ignored":1,"measured":0,"filtered_out":0,"exec_time":0.004719626,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+''',
+        'junit': '''<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="1" skipped="0" failures="0" errors="0" uuid="ccdd9726-8bc9-4f0a-907b-7779e4b40256" timestamp="2026-10-05T16:02:59.200+00:00" time="0.005">
+    <testsuite name="coverage-probe" tests="1" skipped="0" errors="0" failures="0">
+        <testcase name="opt_in" classname="coverage-probe" timestamp="2026-10-05T16:02:59.201+00:00" time="0.005"/>
+    </testsuite>
+</testsuites>
+''',
+    },
+    ('all', 'resume_opt_in'): {
+        'events': '''{"type":"suite","event":"started","test_count":2,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$ordinary"}
+{"type":"test","event":"ok","name":"coverage-probe::coverage_probe$ordinary","exec_time":0.005466696}
+{"type":"suite","event":"ok","passed":1,"failed":0,"ignored":1,"measured":0,"filtered_out":0,"exec_time":0.005466696,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+''',
+        'junit': '''<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="1" skipped="0" failures="0" errors="0" uuid="a96b452d-4009-4527-be94-b82a39287b59" timestamp="2026-10-05T16:02:59.384+00:00" time="0.006">
+    <testsuite name="coverage-probe" tests="1" skipped="0" errors="0" failures="0">
+        <testcase name="ordinary" classname="coverage-probe" timestamp="2026-10-05T16:02:59.384+00:00" time="0.005"/>
+    </testsuite>
+</testsuites>
+''',
+    },
+    ('all', 'resume_both'): {
+        'events': '''''',
+        'junit': '''<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="0" skipped="0" failures="0" errors="0" uuid="e783c4c8-608b-4551-b0dc-783c1f1f4e72" timestamp="2026-10-05T16:02:59.573+00:00" time="0.000">
+</testsuites>
+''',
+    },
+    ('only', 'resume_ordinary'): {
+        'events': '''{"type":"suite","event":"started","test_count":1,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$ordinary"}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$opt_in"}
+{"type":"test","event":"ignored","name":"coverage-probe::coverage_probe$ordinary"}
+{"type":"test","event":"ok","name":"coverage-probe::coverage_probe$opt_in","exec_time":0.004094281}
+{"type":"suite","event":"ok","passed":1,"failed":0,"ignored":1,"measured":0,"filtered_out":18446744073709551615,"exec_time":0.004094281,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+''',
+        'junit': '''<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="1" skipped="0" failures="0" errors="0" uuid="a15979ba-f8d3-4740-8908-c4791446d938" timestamp="2026-10-05T16:03:00.240+00:00" time="0.004">
+    <testsuite name="coverage-probe" tests="1" skipped="0" errors="0" failures="0">
+        <testcase name="opt_in" classname="coverage-probe" timestamp="2026-10-05T16:03:00.240+00:00" time="0.004"/>
+    </testsuite>
+</testsuites>
+''',
+    },
+    ('only', 'resume_opt_in'): {
+        'events': '''{"type":"suite","event":"started","test_count":1,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$ordinary"}
+{"type":"suite","event":"ok","passed":0,"failed":0,"ignored":1,"measured":0,"filtered_out":0,"exec_time":0,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+''',
+        'junit': '''<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="0" skipped="0" failures="0" errors="0" uuid="e1bb1fce-8d5a-42c2-b0e1-d7723bc7215e" timestamp="2026-10-05T16:03:00.381+00:00" time="0.000">
+</testsuites>
+''',
+    },
+    ('only', 'resume_both'): {
+        'events': '''{"type":"suite","event":"started","test_count":1,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+{"type":"test","event":"started","name":"coverage-probe::coverage_probe$ordinary"}
+{"type":"suite","event":"ok","passed":0,"failed":0,"ignored":1,"measured":0,"filtered_out":0,"exec_time":0,"nextest":{"crate":"coverage-probe","test_binary":"coverage_probe","kind":"lib"}}
+''',
+        'junit': '''<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="0" skipped="0" failures="0" errors="0" uuid="4167a3cb-7b19-4eec-9af7-9f40778b55ef" timestamp="2026-10-05T16:03:00.533+00:00" time="0.000">
+</testsuites>
+''',
+    },
+}
+
+class CapturedNextestTests(unittest.TestCase):
+    setUp = AttemptReceiptTests.setUp
+    scope = staticmethod(AttemptReceiptTests.scope)
+    snapshot = staticmethod(AttemptReceiptTests.snapshot)
+
+    def harness(self, root, fixture, count=1, interrupted=False):
+        fixtures = fixture if isinstance(fixture, list) else [fixture] * count
+        def lines(item):
+            yield from item['events'].splitlines(keepends=True)
+            if interrupted:
+                raise gate.Terminated(gate.signal.SIGTERM)
+        harness = PlannedRunHarness(root, [(lines(item), 100 if interrupted else 0) for item in fixtures])
+        if isinstance(fixture, list):
+            listings = iter(fixtures)
+            original_run = harness.fake_run
+            def run(command, cwd, env=None):
+                if command[:3] == ['cargo', 'nextest', 'list']:
+                    harness.listing = next(listings)['listing']
+                return original_run(command, cwd, env)
+            harness.fake_run = run
+        else:
+            harness.listing = fixture['listing']
+        children = iter(fixtures)
+        original = harness.fake_popen
+        def popen(command, **kwargs):
+            config = Path(command[command.index('--tool-config-file') + 1].split(':', 1)[1])
+            profile = command[command.index('--profile') + 1]
+            junit = tomllib.loads(config.read_text())['profile'][profile]['junit']['path']
+            (config.parent / junit).write_text(next(children)['junit'])
+            return original(command, **kwargs)
+        harness.fake_popen = popen
+        return harness
+
+    def proof(self, root, plans):
+        directory = latest_attempt(self.scope(root, plans))
+        return directory, json.loads((directory / 'coverage.json').read_text())
+
+    def test_repeated_frames_reject_duplicate_credit_and_contradictions(self):
+        fixture = CAPTURED_NEXTEST['filtered']
+        lines = fixture['events'].splitlines(keepends=True)
+        variants = {
+            'duplicate summary': fixture['events'] + lines[-1],
+            'duplicate test across frames': fixture['events'] + ''.join(lines[-4:]),
+            'overlapping starts': lines[0] + fixture['events'],
+            'wrong frame count': fixture['events'].replace('"passed":0', '"passed":1'),
+            'wrong ignored count': fixture['events'].replace('"ignored":1', '"ignored":2'),
+            'expression filtered event': ''.join(lines[:-1]) + event('ok', 'coverage-probe::coverage_probe$filtered') + lines[-1],
+            'unknown suite': fixture['events'].replace('"crate":"coverage-probe"', '"crate":"unknown"'),
+        }
+        for reason, raw in variants.items():
+            with self.subTest(reason=reason), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(self.harness(root, dict(fixture, events=raw)).execute(make_args(root, plan=[])), 2)
+                directory, proof = self.proof(root, [])
+                self.assertFalse(proof['complete'])
+                self.assertTrue(proof['errors'])
+                self.assertFalse((directory.parent.parent / 'complete').exists())
+
+    def test_ignored_filter_reason_is_independent_of_annotation(self):
+        listing = json.loads(CAPTURED_NEXTEST['filtered']['listing'])
+        tests = listing['rust-suites']['coverage-probe']['testcases']
+        tests['ignored']['filter-match']['reason'] = 'expression'
+        members, _ = gate.inventory(json.dumps(listing))
+        self.assertFalse(members['coverage-probe', 'ignored']['active'])
+        tests['ignored']['filter-match']['reason'] = 'ignored'
+        tests['ignored']['ignored'] = False
+        members, _ = gate.inventory(json.dumps(listing))
+        self.assertTrue(members['coverage-probe', 'ignored']['active'])
+
+    def test_cancellation_exception_rejects_missing_or_conflicting_proof(self):
+        fixture = CAPTURED_NEXTEST['interrupted']
+        variants = {
+            'unknown case': dict(fixture, junit=fixture['junit'].replace('name="b_wait"', 'name="unknown"')),
+            'unstarted abort': dict(fixture, events=''.join(fixture['events'].splitlines(keepends=True)[:-1])),
+            'unrecorded success': dict(fixture, junit='<testsuites><testsuite name="coverage-probe"><testcase name="a_pass"/><testcase name="b_wait"/></testsuite></testsuites>'),
+            'duplicate case': dict(fixture, junit=fixture['junit'].replace('</testsuite>', '<testcase name="a_pass"/></testsuite>')),
+            'conflicting pass': dict(fixture, junit=fixture['junit'].replace('/>', '><failure/></testcase>', 1)),
+            'ordinary failure': dict(fixture, junit=fixture['junit'].replace('type="test abort"', 'type="test failure"')),
+            'missing passed case': dict(fixture, junit='\n'.join(line for line in fixture['junit'].splitlines() if 'name="a_pass"' not in line)),
+        }
+        for reason, changed in variants.items():
+            with self.subTest(reason=reason), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(self.harness(root, changed, interrupted=True).execute(make_args(root, plan=[])), 143)
+                directory, proof = self.proof(root, [])
+                self.assertFalse(proof['complete'])
+                self.assertTrue(proof['errors'])
+                receipt = json.loads((directory / 'run.json').read_text())
+                tree = directory.parent.parent
+                credits, _ = gate.eligible_credits(tree / 'passed.jsonl', gate.Evidence(tree, receipt))
+                self.assertEqual(credits, {})
+
+    def test_cancellation_invalidates_older_pass_in_shared_journal(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            plans = ['-p coverage-probe --lib']
+            fixture = CAPTURED_NEXTEST['interrupted']
+            passed = dict(fixture,
+                events=event('ok', 'coverage-probe::coverage_probe$a_pass') + event('ok', 'coverage-probe::coverage_probe$b_wait'),
+                junit='<testsuites><testsuite name="coverage-probe"><testcase name="a_pass"/><testcase name="b_wait"/></testsuite></testsuites>')
+            self.assertEqual(self.harness(root, passed).execute(make_args(root, plan=plans)), 0)
+            old, _ = self.proof(root, plans)
+            frozen = self.snapshot(old)
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(self.harness(root, fixture, interrupted=True).execute(
+                    make_args(root, plan=plans, resume='1', force='1')), 143)
+            directory, proof = self.proof(root, plans)
+            self.assertFalse(proof['complete'])
+            self.assertFalse((self.scope(root, plans) / 'complete').exists())
+            receipt = json.loads((directory / 'run.json').read_text())
+            tree = root / 'cache' / KEY
+            credits, _ = gate.eligible_credits(tree / 'passed.jsonl', gate.Evidence(tree, receipt))
+            self.assertEqual(set(credits), {('coverage-probe', 'a_pass')})
+            row = json.loads((tree / 'passed.jsonl').read_text().splitlines()[-1])
+            self.assertEqual(row['test'], 'b_wait')
+            self.assertEqual(row['failure_evidence']['source'], 'junit')
+            self.assertNotIn('event_line', row)
+            self.assertEqual(self.snapshot(old), frozen)
+
+    def test_explicit_ignored_modes_execute_shortcut_force_and_overlap(self):
+        for mode, overlap in product(('all', 'only'), (False, True)):
+            with self.subTest(mode=mode, overlap=overlap), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                plans = [f'-p coverage-probe --lib --run-ignored {mode}'] * (2 if overlap else 1)
+                fixture = CAPTURED_IGNORED_MODES[mode]
+                passed = [['coverage-probe', name] for name in (['opt_in', 'ordinary'] if mode == 'all' else ['opt_in'])]
+                ignored = [] if mode == 'all' else [['coverage-probe', 'ordinary']]
+                frozen = {}
+                for step in ('execution', 'shortcut', 'force'):
+                    child = self.harness(root, fixture, count=0 if step == 'shortcut' else len(plans))
+                    self.assertEqual(child.execute(make_args(root, plan=plans,
+                        resume='0' if step == 'execution' else '1', force='1' if step == 'force' else '0')), 0)
+                    directory, proof = self.proof(root, plans)
+                    self.assertTrue(proof['complete'])
+                    self.assertEqual(proof['categories']['resumed-passed' if step == 'shortcut' else 'executed-passed'], passed)
+                    self.assertEqual(proof['categories']['ignored'], ignored)
+                    self.assertEqual(proof['inactive_filtered'], [])
+                    for old, snapshot in frozen.items():
+                        self.assertEqual(self.snapshot(old), snapshot)
+                    frozen[directory] = self.snapshot(directory)
+
+    def test_ignored_modes_combine_with_expression_filters(self):
+        for mode in ('all', 'only'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                name = 'normal1' if mode == 'all' else 'opt1'
+                plans = [f'-p coverage-probe --lib --run-ignored {mode} -E test(={name})']
+                fixture = CAPTURED_IGNORED_MODES[mode + '-filtered']
+                for step in ('execution', 'shortcut', 'force'):
+                    child = self.harness(root, fixture, count=0 if step == 'shortcut' else 1)
+                    self.assertEqual(child.execute(make_args(root, plan=plans,
+                        resume='0' if step == 'execution' else '1', force='1' if step == 'force' else '0')), 0)
+                    _, proof = self.proof(root, plans)
+                    self.assertTrue(proof['complete'])
+                    self.assertEqual(proof['categories']['resumed-passed' if step == 'shortcut' else 'executed-passed'], [['coverage-probe', name]])
+                    self.assertEqual(proof['categories']['ignored'], [] if mode == 'all' else
+                        [['coverage-probe', n] for n in ('normal1', 'normal2', 'normal3')])
+                    self.assertEqual(proof['inactive_filtered'], [['coverage-probe', n] for n in
+                        (('normal2', 'normal3', 'opt1', 'opt2') if mode == 'all' else ('opt2',))])
+
+    def test_ignored_mode_overlap_does_not_supersede_executed_passes(self):
+        for modes in (('all', 'only'), ('only', 'all')):
+            with self.subTest(modes=modes), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                plans = [f'-p coverage-probe --lib --run-ignored {m}' for m in modes]
+                fixtures = [CAPTURED_IGNORED_MODES[m] for m in modes]
+                frozen = {}
+                for step in ('execution', 'shortcut', 'force'):
+                    child = self.harness(root, [] if step == 'shortcut' else fixtures)
+                    self.assertEqual(child.execute(make_args(root, plan=plans,
+                        resume='0' if step == 'execution' else '1', force='1' if step == 'force' else '0')), 0)
+                    directory, proof = self.proof(root, plans)
+                    self.assertTrue(proof['complete'])
+                    self.assertEqual(proof['categories']['ignored'], [])
+                    self.assertEqual(proof['categories']['resumed-passed' if step == 'shortcut' else 'executed-passed'],
+                                     [['coverage-probe', 'opt_in'], ['coverage-probe', 'ordinary']])
+                    for old, snapshot in frozen.items():
+                        self.assertEqual(self.snapshot(old), snapshot)
+                    frozen[directory] = self.snapshot(directory)
+
+    def test_prior_pass_is_not_resume_credit_for_currently_skipped_test(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            all_plans = ['-p coverage-probe --lib --run-ignored all']
+            only_plans = ['-p coverage-probe --lib --run-ignored only']
+            self.assertEqual(self.harness(root, CAPTURED_IGNORED_MODES['all']).execute(make_args(root, plan=all_plans)), 0)
+            source, _ = self.proof(root, all_plans)
+            frozen = self.snapshot(source)
+            fixture = dict(CAPTURED_IGNORED_MODES['only'],
+                events=event('ignored', 'coverage-probe::coverage_probe$ordinary') +
+                    suite_event(crate='coverage-probe', binary='coverage_probe', passed=0, failed=0, ignored=1),
+                junit='<testsuites/>')
+            self.assertEqual(self.harness(root, fixture).execute(make_args(root, plan=only_plans, resume='1')), 0)
+            _, proof = self.proof(root, only_plans)
+            self.assertEqual(proof['categories']['resumed-passed'], [['coverage-probe', 'opt_in']])
+            self.assertEqual(proof['categories']['ignored'], [['coverage-probe', 'ordinary']])
+            self.assertEqual(self.snapshot(source), frozen)
+
+    def test_ignored_annotation_cannot_hide_missing_or_contradictory_execution(self):
+        original = CAPTURED_IGNORED_MODES['all']
+        junit = '\n'.join(line for line in original['junit'].splitlines() if 'name="opt_in"' not in line)
+        ignored = original['events'].replace('"event":"ok","name":"coverage-probe::coverage_probe$opt_in"',
+                                            '"event":"ignored","name":"coverage-probe::coverage_probe$opt_in"')
+        ignored = ignored.replace('"passed":1', '"passed":0', 1)
+        missing = '\n'.join(line for line in ignored.splitlines() if '$opt_in"' not in line) + '\n'
+        for name, raw in (('contradictory', ignored), ('missing', missing)):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                plans = ['-p coverage-probe --lib --run-ignored all']
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(self.harness(root, dict(original, events=raw, junit=junit)).execute(
+                        make_args(root, plan=plans)), 2)
+                _, proof = self.proof(root, plans)
+                self.assertFalse(proof['complete'])
+                self.assertEqual(proof['categories']['ignored'], [])
+
+    def test_native_ignored_modes_with_each_partial_resume_filter(self):
+        credit_cases = {'fresh': [], 'resume_ordinary': ['ordinary'], 'resume_opt_in': ['opt_in'],
+                        'resume_both': ['opt_in', 'ordinary'], 'force': ['opt_in', 'ordinary']}
+        for mode, case in product(('default', 'all', 'only'), credit_cases):
+            with self.subTest(mode=mode, case=case), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                credit = credit_cases[case]
+                frozen = {}
+                if credit:
+                    seed = dict(CAPTURED_IGNORED_MODES['all'],
+                        events=''.join(event('ok', 'coverage-probe::coverage_probe$' + name) for name in credit),
+                        junit='<testsuites><testsuite name="coverage-probe">' +
+                            ''.join(f'<testcase name="{name}"/>' for name in credit) + '</testsuite></testsuites>')
+                    child = self.harness(root, seed)
+                    child.runs = [(lines, 101) for lines, _ in child.runs]
+                    seed_plans = ['-p coverage-probe --run-ignored all']
+                    self.assertEqual(child.execute(make_args(root, plan=seed_plans)), 101)
+                    source, _ = self.proof(root, seed_plans)
+                    frozen[source] = self.snapshot(source)
+                base = CAPTURED_MODE_RESUME['default', 'fresh'] if mode == 'default' else CAPTURED_IGNORED_MODES[mode]
+                fixture = base if case in ('fresh', 'force') else dict(base, **CAPTURED_MODE_RESUME[mode, case])
+                plans = [f'-p coverage-probe --lib --run-ignored {mode}']
+                self.assertEqual(self.harness(root, fixture).execute(make_args(root, plan=plans,
+                    resume='1', force='1' if case == 'force' else '0')), 0)
+                directory, proof = self.proof(root, plans)
+                executable = {'ordinary'} if mode == 'default' else {'opt_in'} if mode == 'only' else {'opt_in', 'ordinary'}
+                resumed = executable & set(credit) if case != 'force' else set()
+                for category, names in (('executed-passed', executable - resumed), ('resumed-passed', resumed),
+                                        ('ignored', {'opt_in', 'ordinary'} - executable)):
+                    self.assertEqual(proof['categories'][category], [['coverage-probe', name] for name in sorted(names)])
+                self.assertTrue(proof['complete'])
+                frozen[directory] = self.snapshot(directory)
+                shortcut = self.harness(root, base, count=0)
+                self.assertEqual(shortcut.execute(make_args(root, plan=plans, resume='1')), 0)
+                self.assertEqual(shortcut.run_commands, [])
+                for old, snapshot in frozen.items():
+                    self.assertEqual(self.snapshot(old), snapshot)
+
+    def test_actual_ignored_metadata_and_frames_complete_and_shortcut(self):
+        for case, plans in product(('full', 'filtered'), ([], ['-p coverage-probe --lib'],
+                                                            ['-p coverage-probe --lib', '-p coverage-probe'])):
+            with self.subTest(case=case, plans=plans), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                fixture = CAPTURED_NEXTEST[case]
+                harness = self.harness(root, fixture, count=len(plans) or 1)
+                self.assertEqual(harness.execute(make_args(root, plan=plans)), 0)
+                directory, proof = self.proof(root, plans)
+                self.assertTrue(proof['complete'])
+                passed = ['filtered', 'flaky', 'passes'] if case == 'full' else ['passes']
+                self.assertEqual(proof['categories']['executed-passed'], [['coverage-probe', t] for t in passed])
+                self.assertEqual(proof['categories']['ignored'], [['coverage-probe', 'ignored']])
+                self.assertEqual(proof['inactive_filtered'], [] if case == 'full' else
+                                 [['coverage-probe', t] for t in ['filtered', 'flaky']])
+                frozen = self.snapshot(directory)
+                shortcut = self.harness(root, fixture, count=0)
+                self.assertEqual(shortcut.execute(make_args(root, plan=plans, resume='1')), 0)
+                self.assertEqual(shortcut.run_commands, [])
+                _, resumed = self.proof(root, plans)
+                self.assertEqual(resumed['categories']['resumed-passed'], proof['categories']['executed-passed'])
+                self.assertEqual(self.snapshot(directory), frozen)
+
+    def test_actual_cancellation_junit_retains_raw_pass_without_completion(self):
+        for plans in ([], ['-p coverage-probe --lib']):
+            with self.subTest(plans=plans), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                fixture = CAPTURED_NEXTEST['interrupted']
+                first = self.harness(root, fixture, interrupted=True)
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(first.execute(make_args(root, plan=plans)), 143)
+                directory, proof = self.proof(root, plans)
+                receipt = json.loads((directory / 'run.json').read_text())
+                self.assertEqual(receipt['results'][0]['native_exit_code'], 100)
+                self.assertIsNone(receipt['results'][0]['exit_code'])
+                self.assertFalse(proof['complete'])
+                self.assertFalse((self.scope(root, plans) / 'complete').exists())
+                self.assertEqual(proof['categories']['executed-passed'], [['coverage-probe', 'a_pass']])
+                self.assertEqual(proof['categories']['failed'], [['coverage-probe', 'b_wait']])
+                frozen = self.snapshot(directory)
+                successor = dict(fixture, events=event('ok', 'coverage-probe::coverage_probe$b_wait'),
+                    junit='<testsuites><testsuite name="coverage-probe"><testcase name="b_wait"/></testsuite></testsuites>')
+                second = self.harness(root, successor)
+                self.assertEqual(second.execute(make_args(root, plan=plans, resume='1')), 0)
+                _, proof = self.proof(root, plans)
+                self.assertTrue(proof['complete'])
+                self.assertEqual(proof['categories']['executed-passed'], [['coverage-probe', 'b_wait']])
+                self.assertEqual(proof['categories']['resumed-passed'], [['coverage-probe', 'a_pass']])
+                self.assertEqual(self.snapshot(directory), frozen)
 
 
 if __name__ == "__main__":

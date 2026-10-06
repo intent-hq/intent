@@ -36,13 +36,18 @@ test('prepared protocol omits edit RPCs and retains full-content concurrency cav
   assert.match(docs, /sourceLength.*UTF-16/);
 });
 
-test('13.8 allocation follows owner avatars and catalog counts reflect only retained methods', async () => {
+test('13.9 allocation follows checkout configuration and catalog counts reflect only retained methods', async () => {
   const versioning = await readFile(new URL('../../versioning.md', import.meta.url), 'utf8');
-  assert.match(versioning, /\*\*Documented version:\*\* `13\.8`/);
-  const section = versioning.split('**Version 13.8 —')[1].split('**Version 13.7 —')[0];
+  assert.match(versioning, /\*\*Documented version:\*\* `13\.9`/);
+  const section = versioning.split('**Version 13.9 —')[1].split('**Version 13.8 —')[0];
   assert.match(section, /`notePagingRead: 1`/);
-  assert.match(section, /443 \/ 387 \/ 56/);
+  assert.match(section, /444 \/ 388 \/ 56/);
   assert.match(section, /`noteAnnotations: 1` separately requires/);
+  const checkout = versioning.split('**Version 13.8 —')[1].split('**Version 13.7 —')[0];
+  assert.match(checkout, /`sourceControl.checkout.repoConfig`/);
+  assert.match(checkout, /`gitlabCheckoutRepoConfig: 1`/);
+  assert.equal((versioning.match(/\*\*Version 13\.8 —/g) ?? []).length, 1);
+  assert.equal((versioning.match(/\*\*Version 13\.9 —/g) ?? []).length, 1);
   const avatars = versioning.split('**Version 13.7 —')[1].split('**Version 13.6 —')[0];
   assert.match(avatars, /`gitlabCheckoutOwnerAvatar: 1`/);
   const catalog = await readFile(new URL('../../05-method-catalog.md', import.meta.url), 'utf8');

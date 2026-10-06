@@ -11,6 +11,39 @@ builds; coverage and custom bare-Cargo scripts still manage their own output own
 
 Resume identity includes the exact child RUST_MIN_STACK setting, also saved in
 test-stack.json: null means unset, distinct from an empty string or explicit value.
+
+Receipt schemas (independent of the tree-key schema): full runs live under
+TREE/attempts/UUID; planned runs under TREE/changed/PLAN/attempts/UUID. The shared
+TREE/passed.jsonl and scope-level complete markers remain mutable coordination
+state. New complete markers contain the successful execution's UUID; legacy
+receipts are never upgraded into synthetic historical attempts. Schema 3 keeps
+resume identities in a tool-owned test group (nextest >= 0.9.133), with only a
+constant-size exclusion on the CLI; schemas 1/2 retain their original validation.
+
+run.json is created before journal reads/listing and updated only by its owner.
+Its null finished_at/exit_code means the runner never observed its own finish.
+results are written before launching each child, with relative config, events
+and JUnit paths, command, selection_index (1-based), and nullable native_exit_code
+and finished_at. Native status is the Popen wait result (negative for signals);
+result exit_code remains null when streaming raises, even if cleanup reaps the
+child. events-N.jsonl retains stdout lines, flushed before journal updates.
+listing-N.json retains nextest's inventory, including ignored/filter metadata;
+selection_membership holds listed binary/test pairs, or null before discovery.
+resume_candidates is the initial shared credit; resumed_tests is the credit
+used after listing, or null when not resolved. Completed-resume receipts contain
+no child results and point to resume_source_attempt when the marker has one.
+coverage.json (coverage_schema=1) is the completion authority: active is partitioned
+into executed-passed, resumed-passed, ignored, failed and unfinished, with inactive
+filtered identities separate. selections retain native outcomes and retry events;
+legitimate selection overlap is counted once globally but every selection must
+finish. Shared journal entries add attempt (tree-relative path), selection_index,
+and event_line. Only matching raw passes from compatible receipts grant resume
+credit; unreferenced legacy credit is rerun, never upgraded or rewritten. Available
+JUnit must agree; absent JUnit is explicitly reported and does not erase reliable
+streamed passes. Old run.json counters remain native per-child diagnostic totals,
+not unique coverage totals. A completed shortcut revalidates its execution source
+and records that source on the report, including each selection's evidence owner.
+No later invocation repairs unfinished receipts; only tree expiry removes them.
 """
 
 from __future__ import annotations
@@ -32,6 +65,8 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
+import xml.etree.ElementTree as ET
 # Cargo accepts TOML 1.1, which older stdlib tomllib versions cannot parse.
 # Use the pinned parser offline, including direct-script/importlib invocation.
 if __package__:
@@ -44,6 +79,9 @@ else:
 # effective test policy. Schema 4 binds passes to the child's stack setting;
 # earlier records cannot establish that the requested stack was tested.
 SCHEMA_VERSION = 4
+RESUME_GROUP = "@tool:intent-gate:resumed"
+RESUME_GROUP_FILTER = f"not group(={RESUME_GROUP})"
+RESUME_NEXTEST_VERSION = "0.9.133"
 MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 KEY_RE = re.compile(r"^[0-9a-f]{64}$")
 RUST_FLAG_ENV = {"RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_RUSTFLAGS"}
@@ -428,6 +466,8 @@ def load_outcomes(record: Path) -> dict[tuple[str, str], str]:
                 item = json.loads(line)
                 test = (item["binary_id"], item["test"])
                 outcome = item.get("outcome", "ok")
+                if not all(isinstance(value, str) and value for value in test):
+                    continue
             except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
                 continue
             outcomes[test] = outcome
@@ -453,18 +493,471 @@ def remaining_filter(passed: set[tuple[str, str]]) -> str:
     return "not (" + " | ".join(terms) + ")"
 
 
+def resume_selection(selection: list[str], passed: set[tuple[str, str]],
+                     *, expression: str | None = None) -> list[str]:
+    """Intersect each user filterset with resume exclusions, preserving defaults.
+
+    Nextest unions repeated -E arguments, so appending an exclusion expression
+    would broaden selection. Leave project profiles (and default()) to nextest;
+    --ignore-default-filter then still overrides only the project's default.
+    """
+    if not passed:
+        return list(selection)
+    remaining = remaining_filter(passed) if expression is None else expression
+    result = []
+    found = False
+    args = iter(selection)
+    for arg in args:
+        if arg == "--":
+            if not found:
+                result.extend(["-E", remaining])
+            return [*result, arg, *args]
+        if arg in ("-E", "--filterset", "--filter-expr"):
+            expression = next(args, None)
+            if expression is None:
+                raise ValueError("missing filterset expression")
+        elif arg.startswith(("--filterset=", "--filter-expr=")):
+            expression = arg.split("=", 1)[1]
+        elif arg.startswith("-E"):
+            expression = arg[2:].removeprefix("=")
+        else:
+            result.append(arg)
+            continue
+        result.extend(["-E", f"({expression}) and ({remaining})"])
+        found = True
+    if not found:
+        result.extend(["-E", remaining])
+    return result
+
+
 def test_binary_ids(list_output: str) -> dict[tuple[str, str], str]:
-    suites = json.loads(list_output)["rust-suites"]
-    binary_ids: dict[tuple[str, str], str] = {}
-    for suite in suites.values():
-        event_suite = f'{suite["package-name"]}::{suite["binary-name"]}'
-        for test in suite["testcases"]:
-            key = (event_suite, test)
-            binary_id = suite["binary-id"]
-            if key in binary_ids and binary_ids[key] != binary_id:
-                raise RuntimeError(f"ambiguous nextest test identifier: {event_suite}${test}")
-            binary_ids[key] = binary_id
-    return binary_ids
+    return inventory(list_output)[1]
+
+
+def strict_json(text: str):
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise ValueError(f"duplicate JSON key: {key}")
+            result[key] = value
+        return result
+    return json.loads(text, object_pairs_hook=pairs)
+
+
+def inventory(text: str):
+    """Identity plus activation metadata; duplicates within a listing are invalid."""
+    data = strict_json(text)
+    identities, aliases = {}, {}
+    for suite in data["rust-suites"].values():
+        binary = suite["binary-id"]
+        alias = f'{suite["package-name"]}::{suite["binary-name"]}'
+        for test, metadata in suite["testcases"].items():
+            identity = (binary, test)
+            if not all(isinstance(value, str) and value for value in identity):
+                raise ValueError("invalid test identity")
+            if identity in identities or (alias, test) in aliases:
+                raise ValueError("duplicate or ambiguous listed identity")
+            filtering = metadata.get("filter-match", {"status": "matches"})
+            match = filtering["status"]
+            if match not in ("matches", "mismatch") or type(metadata.get("ignored", False)) is not bool:
+                raise ValueError("unknown inventory activation metadata")
+            ignored_filter = match == "mismatch" and filtering.get("reason") == "ignored"
+            identities[identity] = {"active": match == "matches" or ignored_filter,
+                "ignored": metadata.get("ignored", False), "annotation_known": "ignored" in metadata,
+                "skipped": ignored_filter or ("filter-match" not in metadata and metadata.get("ignored", False)),
+                "filter_known": "filter-match" in metadata, "alias": alias}
+            aliases[alias, test] = binary
+    return identities, aliases
+
+
+CATEGORIES = ("executed-passed", "resumed-passed", "ignored", "failed", "unfinished")
+COMPATIBILITY_FIELDS = ("tree_key", "cargo_output_args", "cargo_config_args", "test_stack",
+                        "callback_fixture", "transfer_fixture")
+
+
+def identity_set(rows):
+    if not isinstance(rows, list):
+        raise ValueError("missing identity membership")
+    result = set()
+    for row in rows:
+        if not isinstance(row, (list, tuple)) or len(row) != 2 or not all(isinstance(x, str) and x for x in row):
+            raise ValueError("invalid identity membership")
+        if tuple(row) in result:
+            raise ValueError("duplicate identity membership")
+        result.add(tuple(row))
+    return result
+
+
+def receipt_inventories(directory: Path, receipt: dict):
+    inventories = []
+    aliases = {}
+    selections = receipt["selections"]
+    if not selections or len(receipt["selection_membership"]) != len(selections):
+        raise ValueError("missing selection membership")
+    for index in range(1, len(selections) + 1):
+        members, names = inventory((directory / f"listing-{index}.json").read_text())
+        if set(members) != identity_set(receipt["selection_membership"][index - 1]):
+            raise ValueError("listing and recorded membership differ")
+        for name, binary in names.items():
+            if name in aliases and aliases[name] != binary:
+                raise ValueError("ambiguous identity across selections")
+            aliases[name] = binary
+        inventories.append(members)
+    return inventories
+
+
+
+def validate_result_config(directory: Path, receipt: dict, result: dict, resumed: set) -> None:
+    index = result["selection_index"]
+    for field in ("native_exit_code", "exit_code"):
+        if result[field] is not None and type(result[field]) is not int:
+            raise ValueError("invalid native status evidence")
+    planned = receipt["plan_key"] is not None
+    config = f"nextest-{index}.toml" if planned else "nextest.toml"
+    junit = f"junit-{index}.xml" if planned else "junit.xml"
+    if result["config"] != config or result["junit"] != junit:
+        raise ValueError("result paths disagree with selection")
+    expected_profile = {"inherits": "default", "junit": {"path": junit}}
+    if resumed and receipt["receipt_schema"] == 1:
+        expected_profile["default-filter"] = remaining_filter(resumed)
+    expected = {"store": {"dir": str(directory.parent)},
+                "profile": {receipt["attempt_id"]: expected_profile}}
+    if resumed and receipt["receipt_schema"] == 3:
+        expected["nextest-version"] = RESUME_NEXTEST_VERSION
+        expected["test-groups"] = {RESUME_GROUP: {"max-threads": 1}}
+        expected_profile["overrides"] = [{"filter": f"not ({remaining_filter(resumed)})",
+                                           "test-group": RESUME_GROUP}]
+    if cargo_toml.loads((directory / config).read_text()) != expected:
+        raise ValueError("saved nextest config disagrees with receipt")
+    selection = receipt["selections"][index - 1]
+    if receipt["receipt_schema"] in (2, 3):
+        selection = resume_selection(selection, resumed, expression=(
+            RESUME_GROUP_FILTER if receipt["receipt_schema"] == 3 else None))
+    command = ["cargo", "nextest", "run", *selection,
+               "--build-jobs", receipt["build_jobs"], "--test-threads", receipt["test_threads"],
+               "--tool-config-file", f"intent-gate:{directory / config}",
+               "--profile", receipt["attempt_id"], "--message-format", "libtest-json-plus",
+               "--message-format-version", "0.1", *receipt["cargo_config_args"], *receipt["cargo_output_args"]]
+    if receipt["no_fail_fast"]:
+        command.append("--no-fail-fast")
+    if resumed:
+        command.extend(["--no-tests", "pass"])
+    if result["command"] != command or result["plan"] != " ".join(receipt["selections"][index - 1]):
+        raise ValueError("saved command disagrees with receipt")
+
+def selection_evidence(directory: Path, result: dict, members: dict, resumed: set):
+    """Replay terminal events; retries replace failures, duplicate terminals fail closed.
+
+    A missing JUnit is honest for interrupted children. Available JUnit must
+    corroborate raw outcomes; it may additionally record a started test's abort
+    after interrupted stdout ends. That is failure evidence, never pass credit.
+    """
+    index = result["selection_index"]
+    if result["events"] != f"events-{index}.jsonl":
+        raise ValueError("unexpected events path")
+    aliases = {(meta["alias"], test): (binary, test)
+               for (binary, test), meta in members.items()}
+    suite_aliases = {meta["alias"] for meta in members.values()}
+    outcomes, history, frames, summaries, started = {}, {}, {}, [], set()
+    if (not (directory / result["events"]).exists() and
+            all(result[field] is None for field in ("native_exit_code", "exit_code", "finished_at")) and
+            not (directory / result["junit"]).exists()):
+        # The receipt precedes opening stdout. Loss in that window supplies no
+        # outcome for this child, but must not erase another child's raw pass.
+        return {}, {}, "absent"
+    with (directory / result["events"]).open() as stream:
+        for line_number, line in enumerate(stream, 1):
+            try:
+                event = strict_json(line)
+            except ValueError:
+                # Abrupt loss can truncate the final line; it is never evidence.
+                if not line.endswith("\n") and result.get("native_exit_code") != 0:
+                    continue
+                raise ValueError("malformed raw event")
+            if not isinstance(event, dict):
+                raise ValueError("invalid raw event")
+            if event.get("type") == "suite" and event.get("event") == "started":
+                metadata = event.get("nextest", {})
+                alias = f'{metadata.get("crate")}::{metadata.get("test_binary")}'
+                if alias not in suite_aliases:
+                    raise ValueError("unknown suite frame")
+                if alias in frames and not frames[alias]["closed"]:
+                    raise ValueError("overlapping suite frames")
+                frames[alias] = {"closed": False, "outcomes": {}}
+            if event.get("type") == "suite" and event.get("event") in ("ok", "failed"):
+                summary = suite_ignored_count(line)
+                if summary is None or summary[0] not in suite_aliases:
+                    raise ValueError("invalid terminal suite summary")
+                frame = frames.setdefault(summary[0], {"closed": False, "outcomes": {}})
+                if frame["closed"]:
+                    raise ValueError("duplicate suite summary")
+                frame["closed"] = True
+                summaries.append((summary[0], event, frame["outcomes"]))
+            if event.get("type") != "test":
+                continue
+            if event.get("event") not in (*TEST_OUTCOMES, "started"):
+                raise ValueError("unknown terminal test outcome")
+            name = event.get("name", "")
+            alias, sep, test = name.partition("$")
+            retry = RETRY_SUFFIX_RE.search(test)
+            test = RETRY_SUFFIX_RE.sub("", test)
+            identity = aliases.get((alias, test))
+            if (not sep or identity is None or not members[identity]["active"] or
+                    identity in resumed and not members[identity]["skipped"]):
+                raise ValueError(f"unselected or resumed terminal event: {name}")
+            frame = frames.setdefault(alias, {"closed": False, "outcomes": {}})
+            if frame["closed"]:
+                raise ValueError("test event outside an open suite frame")
+            if event["event"] == "started":
+                started.add(identity)
+                continue
+            if ((members[identity]["skipped"] and event["event"] != "ignored") or
+                    (members[identity]["filter_known"] and not members[identity]["skipped"] and event["event"] == "ignored")):
+                raise ValueError("terminal outcome disagrees with selection metadata")
+            ordinal = int(retry.group()[1:]) if retry else 1
+            previous = history.get(identity, [])
+            if ordinal < 1 or (previous and (ordinal != previous[-1]["retry"] + 1 or previous[-1]["outcome"] != "failed")):
+                raise ValueError(f"duplicate or invalid retry terminal: {name}")
+            previous.append({"outcome": event["event"], "retry": ordinal, "event_line": line_number})
+            history[identity] = previous
+            outcomes[identity] = event["event"]
+            frame["outcomes"][identity] = event["event"]
+    for alias, summary, frame_outcomes in summaries:
+        count = summary["ignored"]
+        for field, outcome in (("passed", "ok"), ("failed", "failed")):
+            if field in summary:
+                observed_count = sum(value == outcome and members[identity]["alias"] == alias
+                                     for identity, value in frame_outcomes.items())
+                if type(summary[field]) is not int or summary[field] != observed_count:
+                    raise ValueError(f"{field} suite total disagrees with raw outcomes")
+        # Native suite totals count annotations, even with --run-ignored all or
+        # expression filters. Only selection metadata identifies skipped tests.
+        annotated = {identity for identity, meta in members.items() if meta["alias"] == alias and meta["ignored"]}
+        legacy_observed = {identity for identity, outcome in outcomes.items()
+                          if outcome == "ignored" and members[identity]["alias"] == alias and not members[identity]["annotation_known"]}
+        if count != len(annotated | legacy_observed):
+            raise ValueError("ignored summary cannot be reconciled to exact identities")
+        ignored = {identity for identity, meta in members.items()
+                   if meta["alias"] == alias and meta["active"] and meta["skipped"]}
+        for identity in ignored:
+            if identity in outcomes and outcomes[identity] != "ignored":
+                raise ValueError("ignored inventory disagrees with execution")
+            outcomes[identity] = "ignored"
+    junit_path = directory / result["junit"]
+    if result["junit"] not in ("junit.xml", f"junit-{index}.xml"):
+        raise ValueError("unexpected JUnit path")
+    junit_status = "absent"
+    if junit_path.exists():
+        xml = ET.parse(junit_path).getroot()
+        if xml.tag not in ("testsuites", "testsuite"):
+            raise ValueError("invalid JUnit root")
+        junit, aborted = {}, set()
+        for suite in xml.iter("testsuite"):
+            for case in suite.findall("testcase"):
+                identity = (suite.get("name"), case.get("name"))
+                if identity not in members or identity in junit:
+                    raise ValueError("unknown or duplicate JUnit identity")
+                junit[identity] = ("failed" if case.find("failure") is not None or case.find("error") is not None
+                                   else "ignored" if case.find("skipped") is not None else "ok")
+                if any(node.get("type") == "test abort" for node in case.findall("failure") + case.findall("error")):
+                    aborted.add(identity)
+        if len(list(xml.iter("testcase"))) != len(junit):
+            raise ValueError("unmapped JUnit cases")
+        # nextest may finish cancellation bookkeeping after stdout capture was
+        # interrupted. Preserve corroborated passes and expose those failures
+        # explicitly, without inventing a terminal event or successful child.
+        extra = junit.keys() - outcomes.keys()
+        if extra:
+            if (result["native_exit_code"] in (None, 0) or result["exit_code"] == 0 or
+                    not extra <= aborted & started or any(
+                        not members[i]["active"] or members[i]["skipped"] or i in resumed for i in extra)):
+                raise ValueError("unexplained JUnit outcomes absent from raw events")
+            outcomes.update({identity: "failed" for identity in extra})
+        # Nextest omits ignored cases in JUnit; either omission or explicit skipped is valid.
+        expected = {identity: outcome for identity, outcome in outcomes.items() if outcome != "ignored"}
+        if {i: o for i, o in junit.items() if o != "ignored"} != expected or any(
+                outcomes.get(i) != o for i, o in junit.items()):
+            raise ValueError("JUnit and raw outcomes disagree")
+        junit_status = "validated-partial" if extra else "validated"
+    return outcomes, history, junit_status
+
+
+class Evidence:
+    """One invocation's memoized validation of direct execution references."""
+    def __init__(self, tree: Path, current: dict):
+        self.tree, self.current = tree, current
+        self.cache = {}
+
+    def read(self, reference: str):
+        if reference in self.cache:
+            value = self.cache[reference]
+            if isinstance(value, Exception):
+                # Do not grow a cached exception's traceback once per test.
+                raise ValueError(str(value)) from None
+            return value
+        try:
+            value = self._read(reference)
+        except (OSError, ValueError, KeyError, TypeError, IndexError, AttributeError, ET.ParseError) as error:
+            self.cache[reference] = error
+            raise
+        self.cache[reference] = value
+        return value
+
+    def _read(self, reference: str):
+        parts = Path(reference).parts
+        if not (len(parts) == 2 and parts[0] == "attempts" or
+                len(parts) == 4 and parts[0] == "changed" and KEY_RE.fullmatch(parts[1]) and parts[2] == "attempts"):
+            raise ValueError("invalid attempt reference")
+        if not re.fullmatch(r"[0-9a-f]{32}", parts[-1]):
+            raise ValueError("invalid attempt ID")
+        directory = self.tree / reference
+        if directory.resolve() != directory.absolute():
+            raise ValueError("attempt reference follows a symlink")
+        receipt = strict_json((directory / "run.json").read_text())
+        if type(receipt.get("receipt_schema")) is not int or receipt["receipt_schema"] not in (1, 2, 3) or receipt.get("attempt_id") != directory.name:
+            raise ValueError("unsupported or mismatched receipt")
+        if receipt.get("exit_code") is not None and type(receipt["exit_code"]) is not int:
+            raise ValueError("invalid receipt exit status")
+        if receipt.get("kind") != "execution" or any(
+                field not in receipt or receipt[field] != self.current[field] for field in COMPATIBILITY_FIELDS):
+            raise ValueError("incompatible attempt evidence")
+        expected_plan = parts[1] if len(parts) == 4 else None
+        if receipt["plan_key"] != expected_plan or (expected_plan is not None and
+                plan_key(receipt["selections"]) != expected_plan) or (
+                expected_plan is None and receipt["selections"] != [["--workspace"]]):
+            raise ValueError("mismatched plan identity")
+        if strict_json((directory / "test-stack.json").read_text()) != receipt["test_stack"]:
+            raise ValueError("stack evidence disagrees with receipt")
+        inventories = receipt_inventories(directory, receipt)
+        resumed = identity_set(receipt["resumed_tests"])
+        results = {}
+        for result in receipt["results"]:
+            index = result["selection_index"]
+            if type(index) is not int or index in results or not 1 <= index <= len(inventories):
+                raise ValueError("duplicate or invalid result selection")
+            validate_result_config(directory, receipt, result, resumed)
+            outcomes, history, junit = selection_evidence(directory, result, inventories[index - 1], resumed)
+            results[index] = (outcomes, history, junit)
+        return receipt, inventories, results
+
+    def credit(self, row: dict):
+        receipt, inventories, results = self.read(row["attempt"])
+        identity = (row["binary_id"], row["test"])
+        if type(row["selection_index"]) is not int or type(row["event_line"]) is not int:
+            raise ValueError("invalid event reference")
+        outcomes, history, _ = results[row["selection_index"]]
+        last_index = max(index for index, (outcomes, _, _) in results.items()
+                         if identity in outcomes and outcomes[identity] != "ignored")
+        if row["selection_index"] != last_index:
+            raise ValueError("pass reference was superseded in this attempt")
+        if outcomes.get(identity) != "ok" or history[identity][-1]["event_line"] != row["event_line"]:
+            raise ValueError("pass reference does not identify a final raw pass")
+        return identity
+
+
+def eligible_credits(record: Path, evidence: Evidence):
+    latest, errors, references = {}, [], set()
+    if record.exists():
+        for line in record.read_text().splitlines():
+            try:
+                row = strict_json(line)
+                identity = (row["binary_id"], row["test"])
+                if not all(isinstance(x, str) and x for x in identity):
+                    raise ValueError("invalid journal identity")
+                if "attempt" in row:
+                    reference = (row["attempt"], row["selection_index"], row["event_line"])
+                    if reference in references:
+                        raise ValueError("duplicate journal event reference")
+                    references.add(reference)
+                latest[identity] = row
+            except (ValueError, KeyError, TypeError, AttributeError):
+                # Unknown malformed records could hide a later failure. Drop
+                # earlier credit, but allow fresh evidence appended afterwards.
+                latest.clear()
+                errors.append("malformed or duplicate shared journal record")
+                continue
+    credits = {}
+    for identity, row in latest.items():
+        if row.get("outcome", "ok") != "ok":
+            continue
+        try:
+            if evidence.credit(row) != identity:
+                raise ValueError("journal identity mismatch")
+            credits[identity] = row
+        except (OSError, ValueError, KeyError, TypeError, IndexError, AttributeError, ET.ParseError) as error:
+            errors.append(f"{identity}: {error}")
+    return credits, errors
+
+
+def coverage_report(directory: Path, receipt: dict, credits: dict):
+    categories = {name: set() for name in CATEGORIES}
+    report = {"coverage_schema": 1, "attempt_id": receipt["attempt_id"],
+              "tree_key": receipt["tree_key"], "plan_key": receipt["plan_key"], "kind": "execution",
+              "membership_complete": False, "complete": False, "errors": [], "active": [], "inactive_filtered": [],
+              "categories": {}, "resume_sources": [], "selections": []}
+    active, inactive, executed, failed, ignored, unfinished = (set() for _ in range(6))
+    try:
+        inventories = receipt_inventories(directory, receipt)
+        report["membership_complete"] = True
+        resumed = identity_set(receipt["resumed_tests"])
+        for members in inventories:
+            active.update(i for i, meta in members.items() if meta["active"])
+            inactive.update(i for i, meta in members.items() if not meta["active"])
+        if not resumed <= active or not resumed <= credits.keys():
+            raise ValueError("resumed membership has no eligible pass reference")
+        results = {result["selection_index"]: result for result in receipt["results"]}
+        if len(results) != len(receipt["results"]) or not set(results) <= set(range(1, len(inventories) + 1)):
+            raise ValueError("duplicate or invalid result selection")
+        all_obligations = True
+        for index, members in enumerate(inventories, 1):
+            selected = {i for i, meta in members.items() if meta["active"]}
+            outcomes, history, junit = {}, {}, "absent"
+            result = results.get(index)
+            if result is not None:
+                try:
+                    validate_result_config(directory, receipt, result, resumed)
+                    outcomes, history, junit = selection_evidence(directory, result, members, resumed)
+                except (OSError, ValueError, KeyError, TypeError, AttributeError, ET.ParseError) as error:
+                    report["errors"].append(f"selection {index}: {error}")
+            executed.update(i for i, o in outcomes.items() if o == "ok")
+            failed.update(i for i, o in outcomes.items() if o == "failed")
+            ignored.update(i for i, o in outcomes.items() if o == "ignored")
+            missing = selected - outcomes.keys() - resumed
+            unfinished.update(missing)
+            if (missing or result is None or result["native_exit_code"] != 0 or
+                    result["exit_code"] != 0 or not result["finished_at"]):
+                all_obligations = False
+            report["selections"].append({"selection_index": index, "evidence_attempt": receipt["attempt_id"], "active": sorted(selected),
+                "unfinished": sorted(missing), "native_exit_code": result["native_exit_code"] if result else None,
+                "junit": junit, "outcomes": [{"identity": identity, "outcome": outcome,
+                "source": "raw" if identity in history else "junit" if outcome == "failed" else "suite-summary",
+                "events": history.get(identity, [])} for identity, outcome in sorted(outcomes.items())]})
+        categories["failed"] = failed
+        categories["unfinished"] = unfinished - failed
+        categories["executed-passed"] = executed - failed - unfinished
+        categories["resumed-passed"] = resumed - failed - executed - unfinished
+        categories["ignored"] = ignored - failed - executed - resumed - unfinished
+        report["resume_sources"] = [credits[i] for i in sorted(resumed)]
+        report["complete"] = all_obligations and not failed and not report["errors"] and receipt["exit_code"] == 0 and bool(receipt["finished_at"])
+    except (OSError, ValueError, KeyError, TypeError, IndexError, AttributeError, ET.ParseError) as error:
+        report["errors"].append(str(error))
+        # Discovery itself may be interrupted. Preserve the identities we can
+        # still prove; membership_complete=false distinguishes unknown remainder.
+        if not report["membership_complete"]:
+            for index in range(1, len(receipt["selections"]) + 1):
+                try:
+                    members, _ = inventory((directory / f"listing-{index}.json").read_text())
+                    if set(members) != identity_set(receipt["selection_membership"][index - 1]):
+                        continue
+                    active.update(i for i, meta in members.items() if meta["active"])
+                    inactive.update(i for i, meta in members.items() if not meta["active"])
+                except (OSError, ValueError, KeyError, TypeError, IndexError, AttributeError):
+                    continue
+    categories["unfinished"].update(active - set().union(*categories.values()))
+    report.update(active=sorted(active), inactive_filtered=sorted(inactive - active),
+                  categories={name: sorted(rows) for name, rows in categories.items()})
+    return report
 
 
 def parse_recorded_event(
@@ -580,8 +1073,8 @@ def write_tool_config(
     path: Path,
     cache_dir: Path,
     profile: str,
-    passed: set[tuple[str, str]],
     junit: str = "junit.xml",
+    *, passed: set[tuple[str, str]] | None = None,
 ) -> None:
     lines = [
         "[store]",
@@ -589,9 +1082,16 @@ def write_tool_config(
         f"[profile.{profile}]",
         'inherits = "default"',
     ]
-    if passed:
-        lines.append(f"default-filter = {json.dumps(remaining_filter(passed))}")
     lines.extend([f"[profile.{profile}.junit]", f"path = {json.dumps(junit)}", ""])
+    if passed:
+        # Profile-specific group assignment precedes inherited project groups.
+        # Only resumed tests are reassigned, and none of those will execute.
+        # Default filters and all settings for executed tests remain inherited.
+        lines[0:0] = [f"nextest-version = {json.dumps(RESUME_NEXTEST_VERSION)}"]
+        lines.extend([f"[test-groups.{json.dumps(RESUME_GROUP)}]", "max-threads = 1",
+                      f"[[profile.{profile}.overrides]]",
+                      f"filter = {json.dumps(f'not ({remaining_filter(passed)})')}",
+                      f"test-group = {json.dumps(RESUME_GROUP)}", ""])
     write_atomic(path, "\n".join(lines))
 
 
@@ -628,11 +1128,15 @@ def stream_nextest(
     outcomes: dict[str, str],
     suite_ignored: dict[str, int],
     run_dir: Path,
+    events,
+    result: dict[str, object],
 ) -> int:
     process = subprocess.Popen(command, cwd=cwd, env=env, text=True, stdout=subprocess.PIPE)
     assert process.stdout is not None
     try:
-        for line in process.stdout:
+        for line_number, line in enumerate(process.stdout, 1):
+            events.write(line)
+            events.flush()
             sys.stdout.write(line)
             sys.stdout.flush()
             outcome = test_outcome(line)
@@ -648,20 +1152,24 @@ def stream_nextest(
                     # journal line, so an interrupt cannot leave a marker resting on
                     # a pass this failure has just superseded.
                     invalidate_completion_markers(run_dir)
-                os.write(descriptor, record_line(*recorded).encode())
-        return process.wait()
+                row = json.loads(record_line(*recorded))
+                row.update(attempt=str(Path(events.name).parent.relative_to(run_dir)),
+                           selection_index=result["selection_index"], event_line=line_number)
+                os.write(descriptor, (json.dumps(row) + "\n").encode())
+        status = process.wait()
+        result.update(native_exit_code=status, finished_at=utc_now())
+        return status
     except BaseException:
         process.terminate()
-        process.wait()
+        result.update(native_exit_code=process.wait(), finished_at=utc_now())
         raise
 
 
-def previously_passed(record_dir: Path, fallback: int) -> int:
-    try:
-        previous = json.loads((record_dir / "run.json").read_text(encoding="utf-8"))
-        return int(previous["passed"]) + int(previous["skipped_resumed"])
-    except (OSError, ValueError, KeyError, TypeError):
-        return fallback
+def completed_attempt(record_dir: Path) -> str | None:
+    """Only new markers point to receipts; legacy markers have no attempt ID."""
+    value = (record_dir / "complete").read_text(encoding="utf-8").strip()
+    return value if re.fullmatch(r"[0-9a-f]{32}", value) else None
+
 
 
 class Terminated(BaseException):
@@ -764,87 +1272,159 @@ def run_nextest(args: argparse.Namespace) -> int:
     run_dir = cache_dir / key
     run_dir.mkdir(parents=True, exist_ok=True)
     os.utime(run_dir)
-    write_atomic(run_dir / "test-stack.json", json.dumps(test_stack_identity(env), indent=2) + "\n")
-    record = run_dir / "passed.jsonl"
-    outcomes_by_test = load_outcomes(record)
-    recorded = {test for test, outcome in outcomes_by_test.items() if outcome == "ok"}
-    failed_on_tree = len(outcomes_by_test) - len(recorded)
-    resumed = recorded if args.resume == "1" and args.force != "1" else set()
     if plans:
-        # The full-suite `complete` marker belongs to `--workspace` runs only; a
-        # planned run keeps its own marker, junit files and run.json under changed/.
-        store_dir = run_dir / "changed"
-        profile = plan_key(plans)
-        record_dir = store_dir / profile
-        record_dir.mkdir(parents=True, exist_ok=True)
+        plan_identity = plan_key(plans)
+        scope_dir = run_dir / "changed" / plan_identity
         selections = plans
         scope = "every planned test"
     else:
-        store_dir = cache_dir
-        profile = key
-        record_dir = run_dir
+        plan_identity = None
+        scope_dir = run_dir
         selections = [["--workspace"]]
         scope = "the complete suite"
-    complete = record_dir / "complete"
-    resuming = args.resume == "1" and args.force != "1"
-    # A completed plan may legitimately have passed nothing (every selected test
-    # ignored), so the planned fast path keys on the marker alone. A test that
-    # later failed on this tree (in any run sharing passed.jsonl) supersedes the
-    # marker: the run proceeds and reruns whatever is no longer recorded as passed.
-    if complete.is_file() and not failed_on_tree and (resuming if plans else bool(resumed)):
-        skipped = previously_passed(record_dir, len(resumed)) if plans else len(resumed)
-        print(f"resumed: skipped {skipped} tests already passed for this tree", flush=True)
-        return 0
-
-    # Invalidate the previous marker before nextest is invoked so a failed or
-    # interrupted list step cannot leave a stale `complete` behind.
-    complete.unlink(missing_ok=True)
-    started_at = utc_now()
+    # Receipt schema is independent of the resume fingerprint. Never migrate or
+    # alias old per-plan files: they remain evidence of exactly what was saved.
+    # Schema 3 stores exclusion identities in a tool group, keeping argv bounded.
+    # Schemas 1/2 keep their original command/config validation.
+    # Only this invocation writes its attempt; pruning still expires whole trees.
+    profile = uuid.uuid4().hex
+    store_dir = scope_dir / "attempts"
+    record_dir = store_dir / profile
+    record_dir.mkdir(parents=True)
+    complete = scope_dir / "complete"
     results: list[dict[str, object]] = []
+    resumed: set[tuple[str, str]] = set()
+    run_record = {
+        "receipt_schema": 3, "attempt_id": profile, "kind": "execution",
+        "label": label, "base": args.base, "plans": [" ".join(plan) for plan in plans],
+        "tree_key": key, "plan_key": plan_identity,
+        "started_at": utc_now(), "finished_at": None, "exit_code": None,
+        "cargo_output_args": output_args, "cargo_config_args": cargo_config,
+        "resume_requested": args.resume == "1", "force": args.force == "1",
+        "no_fail_fast": no_fail_fast, "build_jobs": args.build_jobs,
+        "test_threads": args.test_threads, "test_stack": test_stack_identity(env),
+        "callback_fixture": fixture_identity, "transfer_fixture": transfer_identity,
+        "resume_source_attempt": None, "resume_candidates": [], "resumed_tests": None,
+        "selection_membership": [None for _ in selections],
+        "selections": selections, "results": results,
+        "skipped_resumed": 0, "passed": 0, "failed": 0, "ignored": 0,
+    }
 
-    def finalize(status: int | None) -> None:
+    def save_receipt() -> None:
+        write_atomic(record_dir / "run.json", json.dumps(run_record, indent=2) + "\n")
+
+    save_receipt()
+
+    credits = {}
+
+    def finalize(status: int | None) -> int | None:
         totals = {"passed": 0, "failed": 0, "ignored": 0}
         for result in results:
             for name in totals:
                 totals[name] += int(result[name])
-        if status == 0:
-            write_atomic(complete, "complete\n")
+        run_record.update(totals, finished_at=utc_now(), exit_code=status,
+                          skipped_resumed=len(resumed))
+        if status != 0:
+            partial = coverage_report(record_dir, run_record, credits)
+            cancellation_rows = []
+            for selection in partial["selections"]:
+                for outcome in selection["outcomes"]:
+                    if outcome["source"] == "junit" and outcome["outcome"] == "failed":
+                        binary, test = outcome["identity"]
+                        cancellation_rows.append({"binary_id": binary, "test": test, "outcome": "failed",
+                            "failure_evidence": {"attempt": str(record_dir.relative_to(run_dir)),
+                                "selection_index": selection["selection_index"], "source": "junit"}})
+            if cancellation_rows:
+                # These are failure-only invalidations, not raw pass references.
+                # Append to the shared journal; historical attempts stay untouched.
+                invalidate_completion_markers(run_dir)
+                with (run_dir / "passed.jsonl").open("a", encoding="utf-8") as journal:
+                    for row in cancellation_rows:
+                        journal.write(json.dumps(row) + "\n")
+        # Re-read at the decision point: a failure or damaged source observed
+        # during execution must not leave a marker based on initial credit.
+        try:
+            final_credits, _ = eligible_credits(run_dir / "passed.jsonl", Evidence(run_dir, run_record))
+        except OSError:
+            final_credits = {}
+        proof = coverage_report(record_dir, run_record, final_credits)
+        if proof["complete"] and not set(map(tuple, proof["categories"]["executed-passed"])) <= final_credits.keys():
+            proof["complete"] = False
+            proof["errors"].append("executed passes no longer have current journal evidence")
+        write_atomic(record_dir / "coverage.json", json.dumps(proof, indent=2) + "\n")
+        if status == 0 and not proof["complete"]:
+            status = HANDLED_ERROR_EXIT
+            run_record["exit_code"] = status
+            print(f"[{label}] ERROR: coverage evidence is incomplete or inconsistent", file=sys.stderr, flush=True)
+        save_receipt()
+        if status == 0 and proof["complete"]:
+            write_atomic(complete, profile + "\n")
             if resumed:
-                print(
-                    f"resumed: skipped {len(resumed)} tests already passed for this tree",
-                    flush=True,
-                )
+                print(f"resumed: skipped {len(resumed)} tests already passed for this tree", flush=True)
         summary = summary_line(label, totals, len(resumed))
         write_atomic(record_dir / "summary.txt", summary + "\n")
-        if plans:
-            run_record = {
-                "label": label,
-                "base": args.base,
-                "plans": [" ".join(plan) for plan in plans],
-                "tree_key": key,
-                "cargo_output_args": output_args,
-                "plan_key": profile,
-                "started_at": started_at,
-                "finished_at": utc_now(),
-                "exit_code": status,
-                "skipped_resumed": len(resumed),
-                **totals,
-                "results": results,
-            }
-            write_atomic(record_dir / "run.json", json.dumps(run_record, indent=2) + "\n")
         print(summary, flush=True)
         print(f"[{label}] record: {record_dir}", flush=True)
+        return status
 
     # From the first `cargo nextest list` onwards every exit — failure,
     # KeyboardInterrupt or SIGTERM — leaves the summary/record lines and files.
     try:
         with terminate_on_signal():
+            write_atomic(record_dir / "test-stack.json", json.dumps(test_stack_identity(env), indent=2) + "\n")
+            project_config = intentd_dir / ".config/nextest.toml"
+            if project_config.is_file():
+                (record_dir / "project-nextest.toml").write_bytes(project_config.read_bytes())
+            record = run_dir / "passed.jsonl"
+            outcomes_by_test = load_outcomes(record)
+            recorded = {test for test, outcome in outcomes_by_test.items() if outcome == "ok"}
+            failed_on_tree = len(outcomes_by_test) - len(recorded)
+            resuming = args.resume == "1" and args.force != "1"
+            resumed = recorded if resuming else set()
+            run_record["resume_candidates"] = sorted(resumed)
+            save_receipt()
+            evidence = Evidence(run_dir, run_record)
+            credits, rejected = eligible_credits(record, evidence) if resuming else ({}, [])
+            resumed = set(credits)
+            run_record["resume_candidates"] = sorted(resumed)
+            run_record["rejected_resume_evidence"] = rejected
+            if complete.is_file() and not failed_on_tree and resuming:
+                try:
+                    source_id = completed_attempt(scope_dir)
+                    if source_id is None:
+                        raise ValueError("legacy marker has no verifiable receipt")
+                    source_dir = scope_dir / "attempts" / source_id
+                    source, _, _ = evidence.read(str(source_dir.relative_to(run_dir)))
+                    if source["selections"] != selections:
+                        raise ValueError("completion selection arguments differ")
+                    proof = coverage_report(source_dir, source, credits)
+                    passed = set(map(tuple, proof["categories"]["executed-passed"])) | set(map(tuple, proof["categories"]["resumed-passed"]))
+                    if not proof["complete"] or not passed <= credits.keys():
+                        raise ValueError("completion evidence no longer validates")
+                    for index in range(1, len(selections) + 1):
+                        (record_dir / f"listing-{index}.json").write_bytes((source_dir / f"listing-{index}.json").read_bytes())
+                    proof.update(attempt_id=profile, kind="completed-resume", source_attempt=str(source_dir.relative_to(run_dir)))
+                    proof["categories"]["executed-passed"] = []
+                    proof["categories"]["resumed-passed"] = sorted(passed)
+                    proof["resume_sources"] = [credits[i] for i in sorted(passed)]
+                    write_atomic(record_dir / "coverage.json", json.dumps(proof, indent=2) + "\n")
+                    run_record.update(kind="completed-resume", resume_source_attempt=source_id,
+                                      resumed_tests=sorted(passed), selection_membership=source["selection_membership"],
+                                      skipped_resumed=len(passed), finished_at=utc_now(), exit_code=0)
+                    save_receipt()
+                    print(f"resumed: skipped {len(passed)} tests already passed for this tree", flush=True)
+                    print(f"[{label}] record: {record_dir}", flush=True)
+                    return 0
+                except (OSError, ValueError, KeyError, TypeError, IndexError, AttributeError, ET.ParseError):
+                    pass
+            # Failed/interrupted listing cannot leave a stale completion marker.
+            complete.unlink(missing_ok=True)
             print(f"[{label}] isolated Cargo outputs: {shlex.join(output_args)}", flush=True)
             write_atomic(record_dir / "cargo-outputs.json", json.dumps({
                 "source_root": str(intentd_dir), "args": output_args,
             }, indent=2) + "\n")
             binary_ids: dict[tuple[str, str], str] = {}
-            for selection in selections:
+            for index, selection in enumerate(selections, start=1):
                 list_output = run(
                     [
                         "cargo", "nextest", "list", *selection,
@@ -855,28 +1435,31 @@ def run_nextest(args: argparse.Namespace) -> int:
                     intentd_dir,
                     env,
                 )
-                binary_ids.update(test_binary_ids(list_output))
-            known_tests = {(binary_id, test) for (_, test), binary_id in binary_ids.items()}
-            if plans:
-                # passed.jsonl is shared by every run on this tree; only the tests
-                # these plans select count as resumed here.
-                resumed = resumed & known_tests
-            else:
-                unknown = resumed - known_tests
-                if unknown:
-                    raise RuntimeError(
-                        f"passed-test record contains {len(unknown)} unlisted tests"
-                    )
+                write_atomic(record_dir / f"listing-{index}.json", list_output + "\n")
+                selected_ids = test_binary_ids(list_output)
+                run_record["selection_membership"][index - 1] = sorted(
+                    {(binary_id, test) for (_, test), binary_id in selected_ids.items()})
+                save_receipt()
+                for identity, binary in selected_ids.items():
+                    if identity in binary_ids and binary_ids[identity] != binary:
+                        raise RuntimeError("ambiguous nextest identity across selections")
+                    binary_ids[identity] = binary
+            known_tests = set().union(*({i for i, meta in inventory((record_dir / f"listing-{n}.json").read_text())[0].items()
+                                        if meta["active"] and not meta["skipped"]} for n in range(1, len(selections) + 1)))
+            # Shared credit applies only to this invocation's active selection.
+            resumed &= known_tests
+            run_record["resumed_tests"] = sorted(resumed)
+            save_receipt()
             configs = []
             for index, _ in enumerate(selections, start=1):
                 if plans:
                     config = record_dir / f"nextest-{index}.toml"
                     write_tool_config(
-                        config, store_dir, profile, resumed, f"junit-{index}.xml"
+                        config, store_dir, profile, f"junit-{index}.xml", passed=resumed
                     )
                 else:
-                    config = run_dir / "nextest.toml"
-                    write_tool_config(config, store_dir, profile, resumed)
+                    config = record_dir / "nextest.toml"
+                    write_tool_config(config, store_dir, profile, passed=resumed)
                 configs.append(config)
 
             if not resumed and not plans:
@@ -898,9 +1481,10 @@ def run_nextest(args: argparse.Namespace) -> int:
             first_failure: int | None = None
             descriptor = os.open(record, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
             try:
-                for selection, config in zip(selections, configs):
+                for index, (selection, config) in enumerate(zip(selections, configs), start=1):
                     command = [
-                        "cargo", "nextest", "run", *selection,
+                        "cargo", "nextest", "run",
+                        *resume_selection(selection, resumed, expression=RESUME_GROUP_FILTER),
                         "--build-jobs", args.build_jobs,
                         "--test-threads", args.test_threads,
                         "--tool-config-file", f"intent-gate:{config}",
@@ -915,16 +1499,26 @@ def run_nextest(args: argparse.Namespace) -> int:
                         command.extend(["--no-tests", "pass"])
                     outcomes: dict[str, str] = {}
                     suite_ignored: dict[str, int] = {}
-                    result: dict[str, object] = {"plan": " ".join(selection)}
+                    result: dict[str, object] = {
+                        "plan": " ".join(selection), "selection_index": index,
+                        "command": command, "config": config.name,
+                        "junit": f"junit-{index}.xml" if plans else "junit.xml",
+                        "events": f"events-{index}.jsonl", "started_at": utc_now(),
+                        "finished_at": None, "exit_code": None, "native_exit_code": None,
+                        "passed": 0, "failed": 0, "ignored": 0,
+                    }
                     results.append(result)
                     status = None
+                    save_receipt()
                     try:
-                        status = stream_nextest(
-                            command, intentd_dir, env, binary_ids, descriptor, outcomes,
-                            suite_ignored, run_dir
-                        )
+                        with (record_dir / result["events"]).open("x", encoding="utf-8") as events:
+                            status = stream_nextest(
+                                command, intentd_dir, env, binary_ids, descriptor, outcomes,
+                                suite_ignored, run_dir, events, result
+                            )
                     finally:
                         result.update(tally(outcomes, suite_ignored), exit_code=status)
+                        save_receipt()
                     if status != 0:
                         if not no_fail_fast:
                             break
@@ -948,8 +1542,7 @@ def run_nextest(args: argparse.Namespace) -> int:
         finalize(failure_exit_code(error))
         raise
     assert status is not None
-    finalize(status)
-    return status
+    return finalize(status)
 
 
 def main() -> int:
