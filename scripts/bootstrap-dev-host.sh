@@ -45,6 +45,9 @@ export CARGO_HOME PATH
 GH_MIN_VERSION="2.94.0"
 GH_INSTALL_URL="https://github.com/cli/cli#installation"
 
+# group() transports large resume exclusions without growing the command line.
+NEXTEST_MIN_VERSION="0.9.133"
+
 # jq: the release-notifier test suites parse GitHub API fixtures with it
 # (intentd scripts/test-notify-fixed-issues.sh via make test, cloudlands-fe pnpm test:unit).
 JQ_INSTALL_URL="https://jqlang.github.io/jq/download/"
@@ -470,6 +473,24 @@ gh_ready() {
   [[ "$version" == "$base" || "$base" != "$GH_MIN_VERSION" ]]
 }
 
+nextest_version() {
+  command -v cargo >/dev/null 2>&1 || return 1
+  local output line
+  output=$(cargo nextest --version 2>/dev/null) || return 1
+  line=${output%%$'\n'*}
+  [[ "$line" =~ ^cargo-nextest[[:space:]]([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)([[:space:]]|$) ]] || return 1
+  printf '%s\n' "${BASH_REMATCH[1]}"
+}
+
+nextest_ready() {
+  local version base
+  version=$(nextest_version) || return 1
+  base=${version%%-*}
+  version_ge "$base" "$NEXTEST_MIN_VERSION" || return 1
+  # The minimum prerelease is not the supported stable release.
+  [[ "$version" == "$base" || "$base" != "$NEXTEST_MIN_VERSION" ]]
+}
+
 jq_version() {
   command -v jq >/dev/null 2>&1 || return 1
   local output
@@ -560,7 +581,7 @@ installable_gap_exists() {
   openssl_dev_ready || return 0
   rust_toolchain_ready || return 0
   active_toolchain_ready || return 0
-  cargo nextest --version >/dev/null 2>&1 || return 0
+  nextest_ready || return 0
   node_ready || return 0
   command -v corepack >/dev/null 2>&1 || return 0
   pnpm_ready || return 0
@@ -696,10 +717,13 @@ check_all() {
     missing "active Rust toolchain: expected $TOOLCHAIN at the repository root"
   fi
 
-  if command -v cargo >/dev/null 2>&1 && cargo nextest --version >/dev/null 2>&1; then
-    ok "cargo-nextest: $(cargo nextest --version 2>/dev/null | head -n 1)"
+  local nextest_found
+  if nextest_ready; then
+    ok "cargo-nextest: cargo-nextest $(nextest_version)"
+  elif nextest_found=$(nextest_version); then
+    missing "cargo-nextest >= $NEXTEST_MIN_VERSION: found $nextest_found; required for resumable test filters; run make bootstrap-dev-host"
   else
-    missing "cargo-nextest: required by make test"
+    missing "cargo-nextest >= $NEXTEST_MIN_VERSION: missing or unusable; required for resumable test filters; run make bootstrap-dev-host"
   fi
   report_coverage_tooling
 
@@ -871,11 +895,11 @@ install_rust() {
     echo "[skip] Rust $TOOLCHAIN already active"
   fi
 
-  if cargo nextest --version >/dev/null 2>&1; then
-    echo "[skip] cargo-nextest already installed"
+  if nextest_ready; then
+    echo "[skip] cargo-nextest $(nextest_version) already installed (minimum $NEXTEST_MIN_VERSION)"
   else
     command -v curl >/dev/null 2>&1 || { echo "ERROR: curl is required to install cargo-nextest" >&2; exit 1; }
-    echo "[install] cargo-nextest 0.9 from its official prebuilt archive"
+    echo "[install] cargo-nextest >= $NEXTEST_MIN_VERSION from its official prebuilt archive"
     case "$(uname -s):$(uname -m)" in
       Linux:x86_64) nextest_platform=linux ;;
       Linux:aarch64|Linux:arm64) nextest_platform=linux-arm ;;
@@ -889,6 +913,7 @@ install_rust() {
     rm -f -- "$TEMP_FILE"
     TEMP_FILE=""
     hash -r
+    nextest_ready || { echo "ERROR: cargo-nextest >= $NEXTEST_MIN_VERSION is still unavailable after installation; check Cargo's PATH or run cargo install cargo-nextest --locked" >&2; exit 1; }
   fi
 }
 

@@ -278,7 +278,8 @@ gate check clippy lint-sources build-intentd test test-intentd test-changed cove
 gate check clippy lint-sources build-intentd test test-intentd test-changed coverage-changed coverage-e2e coverage-all list-tests: export GIT_PAGER ?= cat
 
 # Resumable local test runs are opt-in. Records are keyed by the complete
-# monorepo + intentd worktree state and kept outside the checkout.
+# monorepo + intentd worktree state and kept outside the checkout. Each invocation
+# prints its own attempt path, including fully resumed runs; see CONTRIBUTING.md.
 RESUME ?= 0
 GATE_FORCE ?= 0
 # NO_FAIL_FAST=1 keeps nextest running past a known flake so the remaining
@@ -570,9 +571,10 @@ test-intentd: ensure-intentd-submodule | check-transfer-fixture
 # header for the path → crate mapping; the same script drives intentd's
 # pull_request `coverage-changed` job), executed through
 # scripts/resumable_nextest.py, so the run writes the same gate-run record as
-# `make test` (junit, summary, run.json under GATE_CACHE_DIR, path printed on
-# exit) and RESUME=1 / GATE_FORCE=1 apply unchanged. Reverse dependencies are
-# not propagated, so `make test` stays the complete gate.
+# `make test` (per-attempt run.json, coverage.json and available JUnit under
+# GATE_CACHE_DIR; record path printed even on a fully resumed invocation).
+# RESUME=1 / GATE_FORCE=1 apply unchanged. Reverse dependencies are not
+# propagated, so `make test` stays the complete gate.
 # The script exits 3 when a build-wide file (Cargo.toml/Cargo.lock, nextest
 # config, toolchain) changed; the target then announces the fallback and runs
 # the full `make test` (skipped under DRY_RUN=1, which only prints the plan).
