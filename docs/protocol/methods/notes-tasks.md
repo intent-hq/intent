@@ -983,12 +983,16 @@ This cutoff is editor policy, not a new wire limit or a maximum readable note si
 Cancellation, note switching, failed loading and revision changes must not expose
 a writable partial draft. Growth across the cutoff must preserve unsaved text.
 
-Full-source editing uses the existing unpaged read and `note.setContent` contracts,
-including revision, merge, task conversion, history and anchor behavior documented
-above. A missing retained version snapshot can make stale `expectedVersion` fall
-back to last-writer-wins; this read capability does not turn setContent into strict
-CAS. The edit integration must preserve drafts and refuse unsafe saves when it
-cannot establish concurrency safety. Preflight the actual escaped full JSON frame
+Full-source editing reuses existing complete-document read/editor/save semantics.
+The exact save route remains pending the backend concurrency and side-effect audit.
+The existing `note.setContent` contract includes merge, task conversion, history
+and anchor behavior documented above. A missing retained version snapshot can make
+stale `expectedVersion` fall back to last-writer-wins; this read capability does not
+turn setContent into strict CAS. The existing content arm of `note.update` provides
+strict `expectedVersion` CAS, but its suitability for the editor also requires
+verification of canonicalization, task, anchor, history and event semantics. No
+new mutation contract is introduced here. The edit integration must preserve drafts
+and refuse unsafe saves when it cannot establish concurrency safety. Preflight the actual escaped full JSON frame
 against the existing transport bounds; the paging budget does not apply to a
 complete-source edit, nor does the raw editor imply unlimited transport capacity.
 Do not truncate, silently overwrite, or clear a draft on an uncertain save outcome.

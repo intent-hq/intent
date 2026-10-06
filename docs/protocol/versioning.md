@@ -25,8 +25,9 @@ The earlier prepared `notePaging` promised partial writes and staged operations;
 it remains absent and is not repurposed. Those eight unshipped method reservations
 are withdrawn. Paging extends existing methods with no new event names; the
 combined catalog is **443 / 387 / 56** (dispatchable / router / fast path).
-Editing explicitly loads full source and uses existing complete-document editors
-and `note.setContent`, preserving its documented merge behavior and limitations.
+Editing explicitly loads full source and reuses existing complete-document editors.
+Selection of the existing save route awaits the concurrency and side-effect audit;
+this read capability does not establish safe mutation semantics.
 This is not a shipped-version or product-enablement claim. Recheck competing minor
 allocations before merging the implementation.
 
