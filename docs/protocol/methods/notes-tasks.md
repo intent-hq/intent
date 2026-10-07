@@ -669,15 +669,39 @@ Document-owned separator mappings are positive, scalar-safe exact raw extents,
 `mapping: "omitted"`, `renderedRange: { start: 0, end: 0 }`, with `textNodeId`,
 `textNodeRef` and `textRef` all null. Each `ownerRef` resolves the stable
 `markdownDocument` owner, never a paragraph, arbitrary root or another snapshot.
-They account only for source discarded between the union of original parser-event
-ranges, determined at indexing time. This is not the complement of successfully
-rendered maps: parsed but unsupported content must remain a coverage error, not
-be silently converted to omitted text. Overlapping/nested parser-event ranges
-are unioned before deriving gaps. There is no blanket omitted map over the
-document envelope. The
-complete map union must cover an admitted window without manufacturing rendered
-leaves, duplicating block ownership or hiding unsupported content. Missing
+Omission needs indexed parser provenance, not whitespace guessing or the
+complement of successfully rendered maps. Outer gaps between original parser-event
+ranges are only one subset. Within parser-confirmed list, item and blockquote
+containers, delimiter receipts use the container's exact original envelope minus
+its structural **direct children**: a child start protects its whole envelope,
+a leaf protects its exact extent, and a balanced end only closes the child.
+Unknown or unsupported child events still protect their source. Union overlapping
+child extents before deriving delimiter intervals. Out-of-container or nonscalar
+ranges must not be clamped into a plausible omission. A list item's explicit
+checkbox token belongs to that item even if emitted after a paragraph start.
+
+Before exposing document-owned omissions, reconcile these receipts against
+existing block-owned ranges and maps, retaining existing ownership for tight
+implicit paragraphs, inline code, links, images and nested lists. Do not subtract
+only rendered text maps: syntax or unsupported parsed content is not automatically
+discardable. Each final source interval has one omission owner; shared ancestors
+must not duplicate it. The complete map union must cover an admitted window
+without manufacturing rendered leaves or hiding unsupported content. Missing
 coverage is still an error; the document owner alone does not prove coverage.
+
+**Existing task semantics remain canonical.** A parser task marker may be omitted
+from text only when its existing state is preserved by the canonical native tree.
+The existing schema uses `taskList` and `taskItem` containers; for Markdown checkbox
+source, unchecked items carry `{ checked: false, status: "todo", delegatedAgentId:
+null }` and checked items carry `{ checked: true, status: "done", delegatedAgentId:
+null }` through the usual paged `attributesRef` resource. Preserve contiguous
+mixed task/plain sibling groups, ordinary `bulletList`/`orderedList` and `listItem`
+semantics, nesting, child ordinals, exact source provenance, text and link marks
+(including hrefs). Neither a missing text leaf nor a sanitizer-discard claim
+justifies deleting checkbox state. These are existing read-only canonical schema
+nodes, not new task interactions, editor-adapter support or loaded task-metadata
+UI guarantees. The full-editor processor/schema output for the same source is
+the parity oracle; matching text alone does not establish that parity.
 
 As with existing HTML document admission, a separator-only source window must
 resolve its document owner and native root through public context traversal even
@@ -702,7 +726,8 @@ it does not fabricate a positive or zero-length omitted `sourceMap` item. The
 stable direct owner still omits map bindings and continuation flags. A nonempty
 no-gap Markdown note requires no document separator owner. An empty source window
 in a nonempty note (including an exhausted seek at `sourceLength`) admits no
-separator occurrence or map; the empty-document exception never applies there. A whitespace-only note can have a positive full-source omitted
+separator occurrence or map; the empty-document exception never applies there.
+A whitespace-only note can have a positive full-source omitted
 range and must still be readable through bounded separator-only windows; omitted
 source never becomes invented rendered text. Leading and trailing discarded
 separators follow the same indexed rule as gaps between blocks.
@@ -721,7 +746,10 @@ invalidate the derived index through the existing rules.
 The controlled `fixtures/notes/markdown-document.json` examples and validators
 exercise descriptor identity and separator coverage, including the reported
 heading/paragraph gap, empty/whitespace-only sources, CRLF page seams, leading and
-trailing separators, and a far separator-only seek. They are
+trailing separators, and a far separator-only seek. The task-native fixture
+preserves source-bound full-editor oracle outputs for loose, tight, mixed and
+nested task lists; marker-state and protected-child checks keep omission distinct
+from text/native loss. These fixtures are
 specification evidence, not proof of production index construction, query cost,
 authentication, or renderer acceptance. Additive documentation lands before
 component opt-in when merges are authorized; existing checks remain strict.

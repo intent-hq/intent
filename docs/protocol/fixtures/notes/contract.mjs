@@ -598,3 +598,37 @@ export function assertMarkdownDocumentResources(resources, limits) {
 
   assert.deepEqual(join(ranges), join(expected));
 }
+
+// Controlled parser-marker receipts plus full-editor oracle output, not a parser.
+export function assertMarkdownTaskMarker(source, marker, native) {
+  const { start, end } = marker.sourceRange;
+  assert.ok(boundary(source, start) && boundary(source, end));
+  assert.equal(typeof marker.checked, 'boolean');
+  assert.ok((marker.checked ? ['[x]', '[X]'] : ['[ ]']).includes(source.slice(start,end)));
+  let node = native, parent;
+  for (const index of marker.nativePath) {
+    assert.ok(Number.isSafeInteger(index) && index >= 0);
+    parent = node; node = node?.content?.[index];
+  }
+  assert.equal(parent?.type, 'taskList'); assert.equal(node?.type, 'taskItem');
+  assert.deepEqual(node.attrs, { checked: marker.checked,
+    status: marker.checked ? 'done' : 'todo', delegatedAgentId: null });
+}
+
+// Validate a supplied structural direct-child receipt, without parsing Markdown.
+export function assertMarkdownDelimiterReceipt(source, receipt) {
+  assert.ok(['document','list','item','blockquote'].includes(receipt.kind));
+  const { start, end } = receipt.sourceRange;
+  assert.ok(boundary(source,start) && boundary(source,end) && start <= end);
+  const protectedRanges = receipt.children.map(c=>c.sourceRange).sort((a,b)=>a.start-b.start||a.end-b.end);
+  const expected=[];
+  let offset=start;
+  for (const child of protectedRanges) {
+    assert.ok(boundary(source,child.start) && boundary(source,child.end));
+    assert.ok(child.start >= start && child.start <= child.end && child.end <= end);
+    if (offset < child.start) expected.push({start:offset,end:child.start});
+    offset=Math.max(offset,child.end);
+  }
+  if (offset < end) expected.push({start:offset,end});
+  assert.deepEqual(receipt.delimiters,expected);
+}

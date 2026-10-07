@@ -354,6 +354,85 @@
           ]
         }
       ]
+    },
+    {
+      "id": "blockquote-delimiters",
+      "source": "> first café 🙂\n>\n> second\n\n> third\n",
+      "blocks": [
+        {
+          "id": "paragraph-1",
+          "range": [
+            2,
+            16
+          ]
+        },
+        {
+          "id": "paragraph-2",
+          "range": [
+            20,
+            27
+          ]
+        },
+        {
+          "id": "paragraph-3",
+          "range": [
+            30,
+            36
+          ]
+        }
+      ],
+      "separators": [
+        [
+          0,
+          2
+        ],
+        [
+          16,
+          20
+        ],
+        [
+          27,
+          30
+        ]
+      ],
+      "windows": [
+        {
+          "range": [
+            0,
+            16
+          ],
+          "maps": [
+            [
+              0,
+              2
+            ]
+          ]
+        },
+        {
+          "range": [
+            16,
+            20
+          ],
+          "maps": [
+            [
+              16,
+              20
+            ]
+          ]
+        },
+        {
+          "range": [
+            27,
+            31
+          ],
+          "maps": [
+            [
+              27,
+              30
+            ]
+          ]
+        }
+      ]
     }
   ]
 }

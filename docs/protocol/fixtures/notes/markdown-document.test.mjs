@@ -125,8 +125,8 @@ test('Markdown nonempty no-gap and block-only windows cannot invent separator ad
 
 test('Markdown separator documentation preserves the strict admission and rollout guarantees', async () => {
   const docs = await readFile(new URL('../../methods/notes-tasks.md',import.meta.url),'utf8');
-  for (const required of ['construct: "markdownDocument"', 'union of original parser-event',
-    'not the complement of successfully', 'no paragraph/heading overlaps',
+  for (const required of ['construct: "markdownDocument"', 'original parser-event',
+    'complement of successfully rendered maps', 'no paragraph/heading overlaps',
     'empty native range', 'sourceLength', 'CR from LF', 'fixed expiry',
     'Additive documentation lands before']) assert.ok(docs.includes(required),required);
 });
@@ -148,4 +148,25 @@ test('Markdown empty document admits its root through an empty window-bound map 
     const bad = structuredClone(r); mutate(bad);
     assert.throws(() => assertMarkdownDocumentResources(bad,common.limits));
   }
+});
+
+test('structural delimiter receipts protect entire direct children and reject clamping', async () => {
+  const { assertMarkdownDelimiterReceipt } = await import('./contract.mjs');
+  const c=fixture.cases.find(c=>c.id==='blockquote-delimiters');
+  const receipt={kind:'blockquote',sourceRange:{start:0,end:27},children:[
+    {kind:'paragraph',sourceRange:{start:2,end:16}},
+    {kind:'paragraph',sourceRange:{start:20,end:27}}],
+    delimiters:[{start:0,end:2},{start:16,end:20}]};
+  assertMarkdownDelimiterReceipt(c.source,receipt);
+  // Unknown child kinds still protect their complete original envelopes.
+  receipt.children[0].kind='unsupported';assertMarkdownDelimiterReceipt(c.source,receipt);
+  for(const mutate of [x=>{x.children[0].sourceRange.start=-1;},
+    x=>{x.children[1].sourceRange.end=28;},x=>{x.children[0].sourceRange.end=14;},
+    x=>{x.delimiters[0].end=3;},x=>{x.kind='paragraph';}]) {
+    const bad=structuredClone(receipt);mutate(bad);
+    assert.throws(()=>assertMarkdownDelimiterReceipt(c.source,bad));
+  }
+  const overlap=structuredClone(receipt);
+  overlap.children.push({kind:'unknown',sourceRange:{start:5,end:10}});
+  assertMarkdownDelimiterReceipt(c.source,overlap);
 });

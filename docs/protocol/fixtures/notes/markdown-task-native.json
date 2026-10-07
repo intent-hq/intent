@@ -1,0 +1,531 @@
+{
+  "status": "source-bound-full-editor-oracle-goldens-not-component-parity-proof",
+  "cases": [
+    {
+      "id": "loose",
+      "source": "- [ ] [First task](intent://local/task/first)\n\n- [x] [Second task](intent://local/task/second)\n",
+      "native": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "taskList",
+            "content": [
+              {
+                "type": "taskItem",
+                "attrs": {
+                  "checked": false,
+                  "status": "todo",
+                  "delegatedAgentId": null
+                },
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "marks": [
+                          {
+                            "type": "link",
+                            "attrs": {
+                              "href": "intent://local/task/first",
+                              "target": "_blank",
+                              "rel": "noopener noreferrer nofollow",
+                              "class": "text-primary-ink underline cursor-pointer"
+                            }
+                          }
+                        ],
+                        "text": "First task"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "taskItem",
+                "attrs": {
+                  "checked": true,
+                  "status": "done",
+                  "delegatedAgentId": null
+                },
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "marks": [
+                          {
+                            "type": "link",
+                            "attrs": {
+                              "href": "intent://local/task/second",
+                              "target": "_blank",
+                              "rel": "noopener noreferrer nofollow",
+                              "class": "text-primary-ink underline cursor-pointer"
+                            }
+                          }
+                        ],
+                        "text": "Second task"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "links": [
+        {
+          "text": "First task",
+          "attrs": {
+            "href": "intent://local/task/first",
+            "target": "_blank",
+            "rel": "noopener noreferrer nofollow",
+            "class": "text-primary-ink underline cursor-pointer"
+          }
+        },
+        {
+          "text": "Second task",
+          "attrs": {
+            "href": "intent://local/task/second",
+            "target": "_blank",
+            "rel": "noopener noreferrer nofollow",
+            "class": "text-primary-ink underline cursor-pointer"
+          }
+        }
+      ],
+      "oracleSha256": "77566ec974ba9a59d17b49dc2c1d01524f98a2f4022bd897c50341ba407c0499",
+      "markers": [
+        {
+          "sourceRange": {
+            "start": 2,
+            "end": 5
+          },
+          "nativePath": [
+            0,
+            0
+          ],
+          "checked": false
+        },
+        {
+          "sourceRange": {
+            "start": 49,
+            "end": 52
+          },
+          "nativePath": [
+            0,
+            1
+          ],
+          "checked": true
+        }
+      ]
+    },
+    {
+      "id": "tight",
+      "source": "- [ ] [First task](intent://local/task/first)\n- [x] [Second task](intent://local/task/second)\n",
+      "native": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "taskList",
+            "content": [
+              {
+                "type": "taskItem",
+                "attrs": {
+                  "checked": false,
+                  "status": "todo",
+                  "delegatedAgentId": null
+                },
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "marks": [
+                          {
+                            "type": "link",
+                            "attrs": {
+                              "href": "intent://local/task/first",
+                              "target": "_blank",
+                              "rel": "noopener noreferrer nofollow",
+                              "class": "text-primary-ink underline cursor-pointer"
+                            }
+                          }
+                        ],
+                        "text": "First task"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "taskItem",
+                "attrs": {
+                  "checked": true,
+                  "status": "done",
+                  "delegatedAgentId": null
+                },
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "marks": [
+                          {
+                            "type": "link",
+                            "attrs": {
+                              "href": "intent://local/task/second",
+                              "target": "_blank",
+                              "rel": "noopener noreferrer nofollow",
+                              "class": "text-primary-ink underline cursor-pointer"
+                            }
+                          }
+                        ],
+                        "text": "Second task"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "links": [
+        {
+          "text": "First task",
+          "attrs": {
+            "href": "intent://local/task/first",
+            "target": "_blank",
+            "rel": "noopener noreferrer nofollow",
+            "class": "text-primary-ink underline cursor-pointer"
+          }
+        },
+        {
+          "text": "Second task",
+          "attrs": {
+            "href": "intent://local/task/second",
+            "target": "_blank",
+            "rel": "noopener noreferrer nofollow",
+            "class": "text-primary-ink underline cursor-pointer"
+          }
+        }
+      ],
+      "oracleSha256": "3c9abb77d9000b1ba3943941505304a182731ec4664419e4a3ec36059096de9e",
+      "markers": [
+        {
+          "sourceRange": {
+            "start": 2,
+            "end": 5
+          },
+          "nativePath": [
+            0,
+            0
+          ],
+          "checked": false
+        },
+        {
+          "sourceRange": {
+            "start": 48,
+            "end": 51
+          },
+          "nativePath": [
+            0,
+            1
+          ],
+          "checked": true
+        }
+      ]
+    },
+    {
+      "id": "mixed",
+      "source": "- [ ] [First task](intent://local/task/first)\n- ordinary sibling\n- [x] [Second task](intent://local/task/second)\n",
+      "native": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "taskList",
+            "content": [
+              {
+                "type": "taskItem",
+                "attrs": {
+                  "checked": false,
+                  "status": "todo",
+                  "delegatedAgentId": null
+                },
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "marks": [
+                          {
+                            "type": "link",
+                            "attrs": {
+                              "href": "intent://local/task/first",
+                              "target": "_blank",
+                              "rel": "noopener noreferrer nofollow",
+                              "class": "text-primary-ink underline cursor-pointer"
+                            }
+                          }
+                        ],
+                        "text": "First task"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "bulletList",
+            "content": [
+              {
+                "type": "listItem",
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "ordinary sibling"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "taskList",
+            "content": [
+              {
+                "type": "taskItem",
+                "attrs": {
+                  "checked": true,
+                  "status": "done",
+                  "delegatedAgentId": null
+                },
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "marks": [
+                          {
+                            "type": "link",
+                            "attrs": {
+                              "href": "intent://local/task/second",
+                              "target": "_blank",
+                              "rel": "noopener noreferrer nofollow",
+                              "class": "text-primary-ink underline cursor-pointer"
+                            }
+                          }
+                        ],
+                        "text": "Second task"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "links": [
+        {
+          "text": "First task",
+          "attrs": {
+            "href": "intent://local/task/first",
+            "target": "_blank",
+            "rel": "noopener noreferrer nofollow",
+            "class": "text-primary-ink underline cursor-pointer"
+          }
+        },
+        {
+          "text": "Second task",
+          "attrs": {
+            "href": "intent://local/task/second",
+            "target": "_blank",
+            "rel": "noopener noreferrer nofollow",
+            "class": "text-primary-ink underline cursor-pointer"
+          }
+        }
+      ],
+      "oracleSha256": "cc9491e492210cd9e67c7690e7cc4b42a7fd6c9c329b7994bbfd01bf7f313ade",
+      "markers": [
+        {
+          "sourceRange": {
+            "start": 2,
+            "end": 5
+          },
+          "nativePath": [
+            0,
+            0
+          ],
+          "checked": false
+        },
+        {
+          "sourceRange": {
+            "start": 67,
+            "end": 70
+          },
+          "nativePath": [
+            2,
+            0
+          ],
+          "checked": true
+        }
+      ]
+    },
+    {
+      "id": "nested",
+      "source": "- [ ] [First task](intent://local/task/first)\n  - [x] [Second task](intent://local/task/second)\n- ordinary sibling\n",
+      "native": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "taskList",
+            "content": [
+              {
+                "type": "taskItem",
+                "attrs": {
+                  "checked": false,
+                  "status": "todo",
+                  "delegatedAgentId": null
+                },
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "marks": [
+                          {
+                            "type": "link",
+                            "attrs": {
+                              "href": "intent://local/task/first",
+                              "target": "_blank",
+                              "rel": "noopener noreferrer nofollow",
+                              "class": "text-primary-ink underline cursor-pointer"
+                            }
+                          }
+                        ],
+                        "text": "First task"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "taskList",
+                    "content": [
+                      {
+                        "type": "taskItem",
+                        "attrs": {
+                          "checked": true,
+                          "status": "done",
+                          "delegatedAgentId": null
+                        },
+                        "content": [
+                          {
+                            "type": "paragraph",
+                            "content": [
+                              {
+                                "type": "text",
+                                "marks": [
+                                  {
+                                    "type": "link",
+                                    "attrs": {
+                                      "href": "intent://local/task/second",
+                                      "target": "_blank",
+                                      "rel": "noopener noreferrer nofollow",
+                                      "class": "text-primary-ink underline cursor-pointer"
+                                    }
+                                  }
+                                ],
+                                "text": "Second task"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "bulletList",
+            "content": [
+              {
+                "type": "listItem",
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "ordinary sibling"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "links": [
+        {
+          "text": "First task",
+          "attrs": {
+            "href": "intent://local/task/first",
+            "target": "_blank",
+            "rel": "noopener noreferrer nofollow",
+            "class": "text-primary-ink underline cursor-pointer"
+          }
+        },
+        {
+          "text": "Second task",
+          "attrs": {
+            "href": "intent://local/task/second",
+            "target": "_blank",
+            "rel": "noopener noreferrer nofollow",
+            "class": "text-primary-ink underline cursor-pointer"
+          }
+        }
+      ],
+      "oracleSha256": "4e7273aa276f79de20f5f883dab2486688e43254c348f5f9add3c7546d5c0067",
+      "markers": [
+        {
+          "sourceRange": {
+            "start": 2,
+            "end": 5
+          },
+          "nativePath": [
+            0,
+            0
+          ],
+          "checked": false
+        },
+        {
+          "sourceRange": {
+            "start": 50,
+            "end": 53
+          },
+          "nativePath": [
+            0,
+            0,
+            1,
+            0
+          ],
+          "checked": true
+        }
+      ]
+    }
+  ]
+}
