@@ -189,6 +189,27 @@ The static provider registry (the `intent-providers` crate's `ACP_PROVIDERS` tab
 - `visible` is the **daemon-evaluated** gating verdict: `requiresEnvVar` is checked for **presence** against the **daemon's** process environment (an empty-string value counts as set), and a configured `requiresFeatureCode` **always** gates the row off (**default-deny** — the daemon stores no feature-code enablement; no registered provider currently carries one, but the mechanism remains for future providers). `cortex` and `droid` carry `requiresEnvVar` (`INTENTD_ENABLE_CORTEX` / `INTENTD_ENABLE_DROID`) and are hidden by default — not yet well-tested; setting the env var in the daemon's environment restores the provider. The raw gating fields pass through when set, so clients can either trust the verdict or re-derive it. This is the single env-var/feature-code gate shared with `host.providerDiscovery`'s `gatedOff` (§5.14).
 - The optional fields (`legacyAliases`, `loginCommandHint`, `loginDocsUrl`, `authErrorPatterns`, `requiresEnvVar`, `requiresFeatureCode`) are **omitted when unset, never null** — clients detect by presence.
 - `supportsTestPrompt` *(v9.3; [intent-hq/intentd#1657](https://github.com/intent-hq/intentd/pull/1657))* is **always present**: whether the provider can be exercised by the live `host.providerTestPrompt` probe (§5.14). `false` for `unsloth`, whose first prompt can trigger a long model download, and `antigravity`, which requires a private guarded profile. For these providers, the RPC returns `unsupported` without resolution or spawn.
+- `accessToken` is an optional static descriptor for supported token entry. Omitted
+  means unsupported (including older daemons); clients must not infer support from
+  a provider name. It never contains a credential or configured-state probe:
+
+  ```ts
+  interface ProviderAccessToken {
+    kind: "claudeSetupToken" | "codexAccessToken";
+    settingPath: string;
+    label: string;
+    guidance: string;
+  }
+  ```
+
+  Claude Code advertises `claudeSetupToken` with
+  `settingPath: "providers.claude-code.accessToken"`; Codex advertises
+  `codexAccessToken` with `settingPath: "providers.codex.accessToken"`.
+  The label and guidance explain obtaining the token, target-machine CLI
+  prerequisites and subsequent-launch application. Codex guidance explicitly
+  names ChatGPT Business or Enterprise workspace eligibility. Other provider rows
+  omit this field. Configured state and mutations use the existing sensitive
+  [settings contract](settings.md#optional-provider-access-tokens), not catalog reads.
 - `supportsFastMode` is an additive boolean: whether this daemon can apply the
   provider's `providers.fastMode` preference (§5.12). Implementing daemons emit it
   on every row: `true` for `claude-code` and `codex`, `false` for other providers.
