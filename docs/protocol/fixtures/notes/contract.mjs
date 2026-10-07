@@ -392,6 +392,14 @@ export function assertContextFrame(frame, limits, { directory = false, directOwn
       assert.ok(typeof vocabulary === 'string' && vocabulary.length > 0 && utf8(vocabulary) <= 1024);
       assert.equal(item.text, undefined);
       if (item.kind === 'boundary') {
+        if (item.construct === 'markdownDocument') {
+          assert.equal(item.profile, 'canonicalNote'); assert.equal(item.profileVersion, 1);
+          assert.equal(item.entryPath, 'markdown'); assert.equal(r.start, 0);
+          token(item.nativeRef); token(item.attributesRef);
+          assert.equal(item.parentRef, undefined);
+          if (directOwner) assert.equal(item.sourceMapRef, undefined);
+          else token(item.sourceMapRef);
+        }
         if (item.construct === 'paragraph' && Object.hasOwn(item, 'entryPath')) {
           assert.ok(['markdown', 'html'].includes(item.entryPath));
         }
@@ -444,7 +452,7 @@ export function assertContextFrame(frame, limits, { directory = false, directOwn
             assert.equal(position.columnIndex, undefined); assert.equal(position.alignment, undefined);
           }
         } else assert.equal(item.tablePosition, undefined);
-        if (directOwner && item.htmlPosition) {
+        if (directOwner && (item.htmlPosition || item.construct === 'markdownDocument')) {
           assert.equal(item.continuationBefore, undefined);
           assert.equal(item.continuationAfter, undefined);
         } else {
@@ -513,4 +521,74 @@ export function assertNativeGraph(frames, links, limits) {
     }
   }
   return nodes;
+}
+
+// Cross-resource specification checks; the caller supplies known separator extents.
+// This is not a Markdown parser, database index, or production admission algorithm.
+export function assertMarkdownDocumentResources(resources, limits) {
+  const { source, window, ownerRef, nativeRef, ownerFrame, nativeFrame,
+    occurrenceFrame, mapFrames, separatorRanges } = resources;
+  assert.ok(validText(source)); token(ownerRef); token(nativeRef);
+  assert.ok(boundary(source, window.start) && boundary(source, window.end));
+  assert.ok(window.start <= window.end);
+  assert.ok(utf8(source.slice(window.start, window.end)) <= limits.sourceBytes);
+  assertContextFrame(occurrenceFrame, limits);
+  const expected = separatorRanges.map(r => ({ start: Math.max(r.start, window.start),
+    end: Math.min(r.end, window.end) })).filter(r => r.start < r.end);
+  if (!separatorRanges.length) {
+    assert.equal(ownerFrame, null); assert.equal(nativeFrame, null);
+    assert.deepEqual(occurrenceFrame.result.items, []); assert.deepEqual(mapFrames, []);
+    return;
+  }
+  assertContextFrame(ownerFrame, limits, { directOwner: true });
+  assertContextFrame(nativeFrame, limits);
+  assertContextFrame(occurrenceFrame, limits);
+  for (const f of [nativeFrame, occurrenceFrame, ...mapFrames]) {
+    assertContextFrame(f, limits);
+    for (const field of ['scope', 'sourceRevision', 'snapshotId', 'expiresAt'])
+      assert.deepEqual(f.result[field], ownerFrame.result[field]);
+  }
+  assert.equal(ownerFrame.result.items.length, 1);
+  assert.equal(nativeFrame.result.items.length, 1);
+  assert.equal(occurrenceFrame.result.items.length, expected.length ? 1 : 0);
+  const owner = ownerFrame.result.items[0], root = nativeFrame.result.items[0];
+  assert.equal(owner.construct, 'markdownDocument');
+  assert.deepEqual(owner.sourceRange, { start: 0, end: source.length });
+  assert.equal(owner.nativeRef, nativeRef);
+  assert.equal(root.kind, 'nativeNode'); assert.equal(root.nodeType, 'doc');
+  assert.equal(root.nodeClass, 'container'); assert.equal(root.parentRef, null);
+  assert.equal(root.childIndex, 0); assert.equal(root.provenance, 'implicit');
+  assert.deepEqual(root.sourceRange, { start: 0, end: 0 });
+  assert.equal(root.attributesRef, owner.attributesRef);
+  if (!expected.length) {
+    assert.deepEqual(mapFrames, []);
+    return;
+  }
+  const { sourceMapRef, continuationBefore, continuationAfter, ...stable } = occurrenceFrame.result.items[0];
+  assert.deepEqual(stable, owner);
+  assert.equal(continuationBefore, window.start > 0);
+  assert.equal(continuationAfter, window.end < source.length);
+  token(sourceMapRef);
+  const maps = mapFrames.flatMap(f => f.result.items);
+  const ranges = [];
+  for (const map of maps) {
+    assert.equal(map.kind, 'sourceMap'); assert.equal(map.ownerRef, ownerRef);
+    assert.equal(map.mapping, 'omitted'); assert.equal(map.textNodeId, null);
+    assert.equal(map.textNodeRef, null); assert.equal(map.textRef, null);
+    assert.deepEqual(map.renderedRange, { start: 0, end: 0 });
+    const { start, end } = map.sourceRange;
+    assert.ok(boundary(source, start) && boundary(source, end));
+    assert.ok(start >= window.start && end <= window.end && start < end);
+    assert.ok(separatorRanges.some(r => start >= r.start && end <= r.end));
+    if (ranges.length) assert.ok(ranges.at(-1).end <= start);
+    ranges.push({ start, end });
+  }
+  // Adjacent scalar-safe chunks can subdivide a separator, including CR | LF.
+  const join = rs => rs.reduce((out, r) => {
+    if (out.length && out.at(-1).end === r.start) out.at(-1).end = r.end;
+    else out.push({ ...r });
+    return out;
+  }, []);
+
+  assert.deepEqual(join(ranges), join(expected));
 }

@@ -20,6 +20,10 @@ contract. `noteAnnotations: 1` separately requires the complete independent-epoc
 annotation extension alongside read paging. Numeric version, catalog presence and
 partial implementation do not establish support. Neither capability is advertised
 until its complete declared contract passes component validation.
+The prepared `markdownDocument` source owner supplies indexed omitted separator
+mappings without widening paragraph/heading ranges or changing the implicit native
+root. It uses the same canonicalNote v1 profile and read capability; component
+validation must include separator-only context discovery and exact source coverage.
 
 The earlier prepared `notePaging` promised partial writes and staged operations;
 it remains absent and is not repurposed. Those eight unshipped method reservations

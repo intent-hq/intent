@@ -283,7 +283,7 @@ hidden inside a source page. Items are discriminated:
   comment markers and structural seams. IDs are snapshot-local; identical text at
   another address has another ID. `role` distinguishes source-bearing text from
   zero-width editor projections; it never fabricates source bytes.
-- `sourceMap`: the window-bound canonical HTML/inline-code raw-to-rendered mapping described
+- `sourceMap`: the window-bound canonical HTML/Markdown raw-to-rendered mapping described
   below; it never replaces canonical source pages.
 - `nativeNode` and `sourcePiece`: the bounded canonical tree and provenance
   descriptors below, distinct from text mappings and session-native editor IDs.
@@ -307,7 +307,7 @@ Context version 1 uses these wire spellings (not library enum/debug strings):
 
 | Field | Vocabulary / meaning |
 | --- | --- |
-| boundary.construct | `paragraph`, `heading`, `blockquote`, `codeBlock`, `list`, `listItem`, `table`, `tableHead`, `tableRow`, `tableCell`, `emphasis`, `strong`, `strikethrough`, `link`, `image`, `htmlBlock`, `footnoteDefinition`, `definitionList`, `definitionListTitle`, `definitionListDefinition`, `superscript`, `subscript`, `metadataBlock`, `htmlTable`, `htmlTableRow`, `htmlTableCell` |
+| boundary.construct | `paragraph`, `heading`, `blockquote`, `codeBlock`, `list`, `listItem`, `table`, `tableHead`, `tableRow`, `tableCell`, `emphasis`, `strong`, `strikethrough`, `link`, `image`, `htmlBlock`, `footnoteDefinition`, `definitionList`, `definitionListTitle`, `definitionListDefinition`, `superscript`, `subscript`, `metadataBlock`, `htmlTable`, `htmlTableRow`, `htmlTableCell`, `markdownDocument` |
 | span.role | `text` (source text), `code` (inline code), `literal` (raw HTML/literal syntax), `commentMarker` (canonical anchor marker syntax), `lineBreak` (soft/hard break syntax), `rule`, `taskMarker` (checkbox syntax), `delimiter` (explicit syntax delimiter), `projection` (zero-width editor seam) |
 
 Every item has its `kind` discriminator. Ranges address original source even when
@@ -634,6 +634,92 @@ entities, CRLF and sanitizer removals require differential source-map fixtures
 against the actual profile before an adapter claims support. Index construction
 and invalidation cost are measured separately; ordinary reads must use indexed
 owners, interval overlap and checkpoints rather than scanning unloaded prefixes.
+
+**Canonical Markdown document separator ownership (prepared, additive).**
+A `markdownDocument` boundary owns indexed source separators independently of the
+canonical native root. It does not widen a paragraph or heading range, rename a
+lexical boundary, or promote an ordinary paragraph into a native owner. It uses
+the existing `note.get` context/metadata resources and `notePagingRead: 1` gate;
+no method, capability version, profile version or write API is added.
+
+```typescript
+type MarkdownDocumentOwner = {
+  kind: "boundary"; id: string; construct: "markdownDocument";
+  profile: "canonicalNote"; profileVersion: 1; entryPath: "markdown";
+  sourceRange: { start: 0; end: number }; // exactly sourceLength in UTF-16
+  nativeRef: string; attributesRef: string;
+  // Window occurrences additionally require sourceMapRef and both continuation flags.
+  // Direct owners omit those three fields; there is no lexical parentRef.
+};
+```
+
+When the Markdown index has parser-discarded separators, its snapshot-stable
+singleton source owner spans exactly `[0,sourceLength)`.
+Its `nativeRef` resolves exactly one `nativeNode` with `nodeType: "doc"`,
+`nodeClass: "container"`, `parentRef: null`, `childIndex: 0`, the same
+`canonicalNote` profile/version and matching `attributesRef`. That existing
+implicit native root retains `provenance: "implicit"` and range `[0,0)`;
+its empty native range must not be confused with the full source-owner range.
+Root identity, attributes and all non-window owner fields remain stable under
+repeated, concurrent or reordered requests within the same snapshot. Ordinary
+paragraph/heading owners keep their exact source ranges and native identities;
+the document exception never relaxes their validation.
+
+Document-owned separator mappings are positive, scalar-safe exact raw extents,
+`mapping: "omitted"`, `renderedRange: { start: 0, end: 0 }`, with `textNodeId`,
+`textNodeRef` and `textRef` all null. Each `ownerRef` resolves the stable
+`markdownDocument` owner, never a paragraph, arbitrary root or another snapshot.
+They account only for source discarded between the union of original parser-event
+ranges, determined at indexing time. This is not the complement of successfully
+rendered maps: parsed but unsupported content must remain a coverage error, not
+be silently converted to omitted text. Overlapping/nested parser-event ranges
+are unioned before deriving gaps. There is no blanket omitted map over the
+document envelope. The
+complete map union must cover an admitted window without manufacturing rendered
+leaves, duplicating block ownership or hiding unsupported content. Missing
+coverage is still an error; the document owner alone does not prove coverage.
+
+As with existing HTML document admission, a separator-only source window must
+resolve its document owner and native root through public context traversal even
+when no paragraph/heading overlaps the window. Discovery uses indexed mapped-piece
+membership, not the implicit native root's `[0,0)` range or a scan of earlier
+blocks. The document occurrence is admitted exactly when its own indexed separator
+pieces intersect the nonempty requested window, and is deduplicated when multiple
+pieces intersect. Its full envelope alone does not admit it to other windows.
+A far seek needs neither preceding source pages nor connection-local last-window
+state. Window occurrences bind `sourceMapRef` to the exact admitted
+window; direct-owner reads have no mapping reference or continuation flags.
+Occurrences retain the full source-owner range, with continuation flags relative
+to that window. An owner deduplicated across pages must not erase these separate
+window map bindings.
+
+An empty source has no positive separator range: do not fabricate an omitted
+map or document owner. Preserve the existing empty-document canonical behavior.
+A no-gap Markdown note likewise requires no document separator owner. An empty
+source window (including an exhausted seek at `sourceLength`) admits no separator
+occurrence or map. A whitespace-only note can have a positive full-source omitted
+range and must still be readable through bounded separator-only windows; omitted
+source never becomes invented rendered text. Leading and trailing discarded
+separators follow the same indexed rule as gaps between blocks.
+
+Existing item, source-text, escaped-wire and token limits apply to every context
+and map frame. Long separator runs are served as indexed, bounded, window-clipped
+omitted ranges, not copied into descriptors. Raw CRLF is preserved exactly; a
+scalar-safe source-page seam may separate CR from LF, and each resulting omitted
+map covers only its admitted raw extent. No newline normalization or invented
+source byte is permitted. Unicode source offsets remain scalar-safe UTF-16;
+byte budgets remain decoded UTF-8 and escaped JSON as specified above. These
+resources retain the original authenticated scope, revision, snapshot,
+incarnation and fixed expiry; reads never renew it. Source/profile changes
+invalidate the derived index through the existing rules.
+
+The controlled `fixtures/notes/markdown-document.json` examples and validators
+exercise descriptor identity and separator coverage, including the reported
+heading/paragraph gap, empty/whitespace-only sources, CRLF page seams, leading and
+trailing separators, and a far separator-only seek. They are
+specification evidence, not proof of production index construction, query cost,
+authentication, or renderer acceptance. Additive documentation lands before
+component opt-in when merges are authorized; existing checks remain strict.
 
 **Canonical Markdown inline-code continuation.** General Markdown `span.role:
 "code"` reuses the same canonical profile, native-node, mark, mapping and fragment
