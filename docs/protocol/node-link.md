@@ -1280,13 +1280,63 @@ from head are materialized there on the node. After node loss, resume notice say
 prior tool outputs are gone and calls may need re-running; it never abandons the
 agent for that reason. Content hashes are integrity checks, not authorization.
 
-Phase 1 credential qualification uses an already-supported static provider API
-key supplied through existing head secret configuration. Inject only the selected
-provider/MCP's allowlisted variables at spawn; do not copy interactive refresh
-tokens, ambient head environment or login directories. Private temporary files
-are deleted on stop and excluded from Git/session snapshots. Unsupported providers
-fail remote admission. Subscription-token onboarding, rotation UI, expiry warnings
-and `credential.*`/credential-push APIs are not part of this phase.
+Provider authentication supports the optional tokens advertised by
+[`providers.catalog`](methods/models-providers.md)
+and stored through the [sensitive settings contract](methods/settings.md#optional-provider-access-tokens).
+A supplied token is selected for the subsequent launch; an absent token uses the
+node service account's manually configured authentication. Existing explicit
+API-key support remains available. A failed secret-store read is not absence and
+must not select manual authentication or another account. A rejected supplied
+token fails authentication without fallback.
+
+### Guarded provider credential startup callback
+
+`node.credentials.provider` is a private node-link startup callback, not a public
+WSS/UDS router method, generic workspace API method, or agent tool. It is admitted
+only under the original authenticated native Start and its still-live callback
+lifetime. Its params contain exactly:
+
+```json
+{ "runId": "<assigned run UUID>", "assignmentEpoch": "7", "provider": "codex" }
+```
+
+The run and epoch must match the current assignment, and `provider` must equal
+the original Start's selected provider. Unknown providers, stale assignments,
+non-startup calls and extra parameters are rejected. Common link authority and
+callback lifetime are revalidated around the read and at native response write.
+The response policy additionally binds the exact serialized response bytes.
+
+The guarded result is one of:
+
+```ts
+type ProviderStartupCredential =
+  | { mode: "manual" }
+  | { mode: "accessToken"; secret: string };
+```
+
+Head reads the selected provider's existing SecretStore account fresh for this
+launch. Only absence returns `manual`; store failures fail the callback.
+`accessToken` carries the opaque nonempty token only on this guarded channel.
+It must never be exposed through ordinary catalog/settings reads, agent tools,
+logs, errors, journals, checkpoints or session snapshots. Register the selected
+secret with the credential redaction mechanism before delivery and launch.
+
+The pinned Claude adapter passes `CLAUDE_CODE_OAUTH_TOKEN` to its CLI/SDK;
+the pinned Codex adapter passes `CODEX_ACCESS_TOKEN` to `codex app-server`.
+Token mode uses owned private home/config state so node-account credentials do
+not replace the supplied token. Manual mode borrows the node service account's
+home/profile in place, with node-local `CLAUDE_CONFIG_DIR` / `CODEX_HOME` overrides
+when configured. It never reads or copies head login directories or refresh
+tokens. Borrowed authentication state must remain outside checkpoint/session
+capture and must never be deleted by launch cleanup. Owned private state is
+excluded from capture and removed only after acknowledged process cleanup;
+uncertain cleanup retains its owner/state. Token changes are per-launch snapshots,
+not a promise to mutate a running process. Missing manual login reports an
+authentication failure on that target. CLI installation remains a prerequisite.
+
+Inject only the selected provider/MCP's allowlisted credential variables;
+do not copy the ambient head environment. Other credential-push APIs, automatic
+token renewal and expiry warnings are outside this contract.
 
 Node Git credential helper `get` calls head each time with the bound agent and
 granted repo; head normalizes provider/host/repo and returns only scoped fetch
