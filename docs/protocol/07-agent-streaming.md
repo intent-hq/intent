@@ -189,15 +189,15 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   (pairing/structural fields intact), and oversized `image.data` is swapped for the write-time
   thumbnail (`dataTruncated`/`dataIsThumbnail`/`dataBytes`; legacy pre-thumbnail rows serve the
   block with `data` omitted). The projection is fixed for the subscription's lifetime and applies
-  to **every frame the subscription emits** — the seq-0 snapshot, lag-recovery snapshots, live
-  tool-block deltas, and the seq-0 live-turn merge — so slim snapshots and deltas agree on the
+  to **every frame the subscription emits** — the seq-0 snapshot, history frames, lag-recovery
+  snapshots, live tool-block deltas, and the seq-0 live-turn merge — so their projections agree on the
   served block shape. Absent / `null` selects slim (the v8.0 default, BREAKING over the v7.1
   "byte-identical" opt-in contract) and `projection: "slim"` is an explicit no-op; any other
   value is `-32602`, never coerced. A client holding a truncated
   slim block fetches the full body on demand via `agent.getMessageBlock` (§5.5, v7.2). Slim
-  snapshots additionally inherit the **slim page byte budget** (within v7.2 —
-  [intent-hq/intentd#1314](https://github.com/intent-hq/intentd/pull/1314)): the seq-0 and
-  lag-recovery snapshots reuse the `agent.getConversation` read, so a snapshot page is bounded
+  atomic snapshots additionally inherit the **slim page byte budget** (within v7.2 —
+  [intent-hq/intentd#1314](https://github.com/intent-hq/intentd/pull/1314)): atomic initial,
+  successful-resume and recovery snapshots reuse the `agent.getConversation` read, so a snapshot page is bounded
   at `SLIM_PAGE_BUDGET_BYTES` (512 KiB) total serialized message bytes and may carry fewer than
   the chosen message limit, with `nextToken` re-minted at the first excluded row (§5.5) — the client
   pages older history exactly as before, just in more round-trips. The budget covers the
@@ -205,7 +205,9 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   (always served, even alone over budget — the §5.5 one-message floor), and oldest persisted
   rows are evicted until the merged page fits both the chosen message limit and byte budget,
   with `truncated`/`nextToken` re-minted at the eviction boundary so the evicted rows stay
-  reachable via `agent.getConversation`. Since v10.0
+  reachable via `agent.getConversation`. Progressive initial delivery instead owns
+  bounded continuation until its target or exhaustion; it withholds the cursor
+  until the terminal history frame, as specified above. Since v10.0
   every frame also inherits the `agent.getConversation` legacy-inline-file-block projection
   (§5.5): a persisted pre-10.0 `{ type: "file", data, … }` block with no non-empty
   `attachmentId` is served as `{ type: "text", text: "Attached file: <fileName>" }` (`"Attached
@@ -214,26 +216,35 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   delta ever carries a `type: "file"` block with a `data` key.
 - **Resume via `sinceMessageId` (additive within v6.4).** A reconnecting client that already
   holds the transcript up to a known message id may pass it as the optional `sinceMessageId`
-  (string). Absent / `null` / `""` all mean "no resume" — the standard snapshot below, carrying
+  (string). Absent / `null` / `""` all mean "no resume" — fresh delivery in the selected mode, carrying
   **no** `resumed` key on the initial snapshot; a present non-string value is a `-32602` error. When provided,
   the daemon reads the **same newest page bounded by the subscription's chosen limit** as
-  the standard snapshot (still exactly one conversation read — resume is a post-filter, never a second
-  fetch; monorepo#958 cost contract)
+  the atomic snapshot to check the anchor (exactly one bounded conversation read
+  for this check — resume filtering never searches further back; monorepo#958 cost contract)
   and then:
   - **Id found in the page** → the seq-0 snapshot's `messages[]` carries only the messages
     **after** that id (possibly empty when the id is the newest row), with `resumed: true`,
     `truncated: false`, and `nextToken: null` — no gap exists toward older history, the client
     already holds everything up to `sinceMessageId`, so no older-pages cursor is served.
     `totalMessages` stays the transcript-wide count (same semantics as the standard snapshot,
-    where `messages.length` already ≠ `totalMessages` on a truncated page).
+    where `messages.length` already ≠ `totalMessages` on a truncated page). This is
+    atomic in either delivery mode; progressive subscribers also receive the mode
+    echo and `initialHistory.complete: true`.
   - **Id not in the page** (unknown, pruned, or older than the bounded newest page —
     indistinguishable without an unbounded lookup, which the bounded-read contract forbids) →
-    the **standard full page** is served unchanged (`truncated` / `nextToken` intact) with
+    in atomic mode, the **standard full page** is served unchanged (`truncated` / `nextToken` intact) with
     `resumed: false`: the client MUST discard its cached transcript and rehydrate from this
-    snapshot as if it had subscribed fresh.
+    snapshot as if it had subscribed fresh. In progressive mode, the anchor check
+    is followed by fresh progressive delivery: the newest row is sent with
+    `resumed: false`, an incomplete `initialHistory`, and `nextToken: null`, then
+    older rows and terminal completion follow as specified above. An empty
+    conversation completes in its empty seq-0 snapshot. These additional bounded
+    history reads fill the requested window; they do not search for the missing anchor.
   The live-turn slot merge (in-flight or orphaned, below) and the activity-flags overlay apply
-  identically in both cases, **after** the filter — a merged partial is never trimmed away.
-  Deltas (seq 1, 2, …) are unaffected by resume.
+  after the filter for atomic delivery, or when capturing the first progressive
+  row — a merged partial is never trimmed away by the resume filter.
+  Live deltas retain their semantics. They begin at seq 1 after an atomic resume,
+  or after the last history frame when a failed resume restarts progressive delivery.
 - **Transcript invalidation.** Editing/regenerating or replacing messages emits
   `agent:updated` with `truncatedCount` or `replacedCount`. Standing chat subscriptions
   respond with a fresh snapshot bounded by the subscription's chosen limit (including any
