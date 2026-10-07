@@ -2378,6 +2378,7 @@
         "suppliedLayout": "layout-a",
         "actions": [
           "screenshot",
+          "move",
           "click",
           "scroll",
           "drag"
@@ -2400,6 +2401,7 @@
         "suppliedLayout": "layout-a",
         "actions": [
           "screenshot",
+          "move",
           "click",
           "scroll",
           "drag"
@@ -2418,6 +2420,7 @@
         "suppliedLayout": "layout-a",
         "actions": [
           "screenshot",
+          "move",
           "click",
           "scroll",
           "drag"
@@ -2436,6 +2439,7 @@
         "suppliedLayout": "layout-a",
         "actions": [
           "screenshot",
+          "move",
           "click",
           "scroll",
           "drag"
@@ -2460,6 +2464,7 @@
         "suppliedLayout": "layout-a",
         "actions": [
           "screenshot",
+          "move",
           "click",
           "scroll",
           "drag"
@@ -2479,6 +2484,7 @@
         "suppliedLayout": "layout-a",
         "actions": [
           "screenshot",
+          "move",
           "click",
           "scroll",
           "drag"
@@ -2503,6 +2509,7 @@
         "layout": "layout-a",
         "actions": [
           "screenshot",
+          "move",
           "click",
           "scroll",
           "drag"
@@ -2526,6 +2533,7 @@
         "suppliedLayout": "layout-a",
         "actions": [
           "screenshot",
+          "move",
           "click",
           "scroll",
           "drag"
@@ -2551,6 +2559,7 @@
         "suppliedLayout": "layout-a",
         "actions": [
           "screenshot",
+          "move",
           "click",
           "scroll",
           "drag"
@@ -2574,6 +2583,7 @@
         "suppliedLayout": "layout-a",
         "actions": [
           "screenshot",
+          "move",
           "click",
           "scroll",
           "drag"
@@ -2600,6 +2610,132 @@
         "expectSelectedId": "display-left",
         "expectSelectedOnly": true,
         "expectFallback": false
+      }
+    ]
+  },
+  "cursorMove": {
+    "binding": "ws.desktop.move",
+    "actionKind": "move",
+    "result": {
+      "ok": true
+    },
+    "buttonEvents": 0,
+    "implicitStart": false,
+    "coordinates": "display-local image pixels",
+    "requiredArguments": [
+      "x",
+      "y",
+      "layoutId"
+    ],
+    "optionalArguments": [
+      "displayId"
+    ],
+    "forbiddenArguments": [
+      "button",
+      "clickCount",
+      "from",
+      "to",
+      "agentId",
+      "clientId",
+      "sessionId"
+    ],
+    "cases": [
+      {
+        "id": "move-single-display",
+        "args": {
+          "x": 10.5,
+          "y": 20,
+          "layoutId": "layout-a"
+        },
+        "expectResult": {
+          "ok": true
+        },
+        "expectButtonEvents": 0
+      },
+      {
+        "id": "move-selected-display",
+        "args": {
+          "x": 0,
+          "y": 0,
+          "layoutId": "layout-a",
+          "displayId": "display-left"
+        },
+        "expectResult": {
+          "ok": true
+        },
+        "expectButtonEvents": 0
+      }
+    ],
+    "refusals": [
+      {
+        "id": "inactive",
+        "code": "desktop-not-active",
+        "execution": "not_started",
+        "nativeMoves": 0,
+        "buttonEvents": 0
+      },
+      {
+        "id": "revoked",
+        "code": "desktop-not-active",
+        "execution": "not_started",
+        "nativeMoves": 0,
+        "buttonEvents": 0
+      },
+      {
+        "id": "missing-layout",
+        "code": "invalid-params",
+        "execution": "not_started",
+        "nativeMoves": 0,
+        "buttonEvents": 0
+      },
+      {
+        "id": "nonfinite",
+        "code": "invalid-params",
+        "execution": "not_started",
+        "nativeMoves": 0,
+        "buttonEvents": 0
+      },
+      {
+        "id": "negative",
+        "code": "invalid-params",
+        "execution": "not_started",
+        "nativeMoves": 0,
+        "buttonEvents": 0
+      },
+      {
+        "id": "out-of-bounds",
+        "code": "invalid-params",
+        "execution": "not_started",
+        "nativeMoves": 0,
+        "buttonEvents": 0
+      },
+      {
+        "id": "button-argument",
+        "code": "invalid-params",
+        "execution": "not_started",
+        "nativeMoves": 0,
+        "buttonEvents": 0
+      },
+      {
+        "id": "stale-layout",
+        "code": "desktop-stale-layout",
+        "execution": "not_started",
+        "nativeMoves": 0,
+        "buttonEvents": 0
+      },
+      {
+        "id": "multiple-without-id",
+        "code": "desktop-display-selection-required",
+        "execution": "not_started",
+        "nativeMoves": 0,
+        "buttonEvents": 0
+      },
+      {
+        "id": "missing-display",
+        "code": "desktop-display-unavailable",
+        "execution": "not_started",
+        "nativeMoves": 0,
+        "buttonEvents": 0
       }
     ]
   }
