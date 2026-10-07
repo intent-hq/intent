@@ -170,3 +170,30 @@ test('structural delimiter receipts protect entire direct children and reject cl
   overlap.children.push({kind:'unknown',sourceRange:{start:5,end:10}});
   assertMarkdownDelimiterReceipt(c.source,overlap);
 });
+
+
+test('synthesized paragraph retains exact inline-group body pieces and block envelope', async () => {
+  const { assertMarkdownRepairedParagraph } = await import('./contract.mjs');
+  const source = '- [café 🙂](intent://task/a)';
+  const ranges = [{ start: 2, end: source.length }];
+  const receipt = { itemRef: 'item-ref', nodeRef: 'paragraph-ref',
+    candidates: [{ itemRef: 'item-ref', ranges }] };
+  const native = { nodeType: 'paragraph', provenance: 'repaired', parentRef: 'item-ref',
+    sourcePiecesRef: 'body-pieces', sourceRange: ranges[0] };
+  const block = { sourceRange: ranges[0] };
+  const pieces = [{ kind: 'sourcePiece', id: 'body-1', nodeRef: 'paragraph-ref',
+    role: 'body', sourceRange: ranges[0] }];
+  const check = x => assertMarkdownRepairedParagraph(source, x.receipt, x.native, x.block, x.pieces);
+  const good = { receipt, native, block, pieces }; check(good);
+  for (const mutate of [x => { x.receipt.candidates.push(x.receipt.candidates[0]); },
+    x => { x.receipt.candidates[0].itemRef = 'nested-item'; },
+    x => { x.native.provenance = 'implicit'; }, x => { delete x.native.sourcePiecesRef; },
+    x => { x.native.sourceRange = { start: 0, end: 0 }; },
+    x => { x.block.sourceRange = { start: 3, end: 10 }; },
+    x => { x.pieces[0].nodeRef = 'other-paragraph'; },
+    x => { x.pieces[0].role = 'opening'; }, x => { x.pieces.push(x.pieces[0]); },
+    x => { x.pieces[0].sourceRange = { start: 2, end: 2 }; },
+    x => { x.pieces[0].sourceRange = { start: 2, end: 9 }; }]) {
+    const bad = structuredClone(good); mutate(bad); assert.throws(() => check(bad));
+  }
+});

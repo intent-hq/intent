@@ -689,6 +689,21 @@ must not duplicate it. The complete map union must cover an admitted window
 without manufacturing rendered leaves or hiding unsupported content. Missing
 coverage is still an error; the document owner alone does not prove coverage.
 
+**Synthesized tight-list paragraphs use repaired provenance.** When the parser
+omits a paragraph wrapper, associate the canonical paragraph with one unique
+inline group belonging to the same immediate parser item. Do not borrow source
+from a nested item or adjacent group. The native paragraph and its block owner
+have the same exact source envelope and `repaired` native provenance; the existing
+`sourcePiecesRef` exposes its original body pieces through bounded context pages.
+Each piece has the paragraph's direct `nodeRef`, role `body`, and an exact,
+scalar-safe, nonempty original source range. Pieces are sorted by
+`(sourceRange.start, sourceRange.end, id)` with no duplicated piece in the traversal.
+There are no fabricated opening/closing tags. The envelope is the hull of these
+pieces, not permission to own intervening bytes. Preserve link delimiters and other
+inline syntax through their actual source pieces and mappings; a label-only block
+or source-less native anchor must not erase them. Ambiguous group association is
+not permission to guess an owner. Existing source-piece, page and map bounds apply.
+
 **Existing task semantics remain canonical.** A parser task marker may be omitted
 from text only when its existing state is preserved by the canonical native tree.
 The existing schema uses `taskList` and `taskItem` containers; for Markdown checkbox

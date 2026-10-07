@@ -632,3 +632,28 @@ export function assertMarkdownDelimiterReceipt(source, receipt) {
   if (offset < end) expected.push({start:offset,end});
   assert.deepEqual(receipt.delimiters,expected);
 }
+
+// A supplied unique inline-group receipt, not parser/group discovery evidence.
+export function assertMarkdownRepairedParagraph(source, receipt, native, block, pieces) {
+  assert.equal(receipt.candidates.length, 1);
+  const group = receipt.candidates[0];
+  assert.equal(group.itemRef, receipt.itemRef);
+  assert.equal(native.parentRef, receipt.itemRef);
+  assert.equal(native.nodeType, 'paragraph');
+  assert.equal(native.provenance, 'repaired'); token(native.sourcePiecesRef);
+  assert.ok(pieces.length > 0);
+  const seen = new Set();
+  let previous;
+  for (const piece of pieces) {
+    assert.equal(piece.kind, 'sourcePiece'); assert.equal(piece.nodeRef, receipt.nodeRef);
+    assert.equal(piece.role, 'body'); token(piece.id);
+    const { start, end } = piece.sourceRange;
+    assert.ok(boundary(source, start) && boundary(source, end) && start < end);
+    const key = JSON.stringify([start, end]); assert.ok(!seen.has(key)); seen.add(key);
+    if (previous) assert.ok(previous.start < start || previous.start === start && previous.end < end);
+    previous = piece.sourceRange;
+  }
+  assert.deepEqual(pieces.map(p => p.sourceRange), group.ranges);
+  const hull = { start: pieces[0].sourceRange.start, end: Math.max(...pieces.map(p => p.sourceRange.end)) };
+  assert.deepEqual(native.sourceRange, hull); assert.deepEqual(block.sourceRange, hull);
+}
