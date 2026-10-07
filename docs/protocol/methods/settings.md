@@ -503,3 +503,52 @@ Clients use the override only for collaboration labels, otherwise retain their
 existing pretty-hostname/hostname fallback. Connected clients refresh through their
 existing status polling and reconnect path; `null` must clear a cached override.
 There is no new RPC, event or broader guest settings access.
+
+
+#### Optional provider access tokens
+
+These additive sensitive settings reuse `settings.get`, `settings.list`,
+`settings.update` and `settings.reset`. They are administrator-only, like the
+other global settings. Member and guest callers cannot read or change them.
+
+| Path | Type | Credential kind | Storage |
+| --- | --- | --- | --- |
+| `providers.claude-code.accessToken` | string, sensitive | Claude setup token | SecretStore, account equals path |
+| `providers.codex.accessToken` | string, sensitive | Codex access token | SecretStore, account equals path |
+
+Clients show token controls only when the corresponding `providers.catalog` row
+advertises `accessToken`, and use its `settingPath`. Unsupported providers and
+unknown paths return `-32602`. Save or replace with
+`settings.update({ changes: [{ path, value: token }] })`; remove with
+`settings.reset({ path })`. Blank/whitespace-only tokens and non-string values
+(including null) are rejected with `-32602`; reset is the removal operation.
+
+Reads return `value: "********"` when configured or `value: null` when absent,
+never the token, token prefix or token suffix. Sensitive definition metadata has
+`type: "string"`, `category: "providers"`, `sensitive: true` and no default value.
+The existing placeholder-preserve behavior applies. Update results and
+`settings:changed` events redact tokens; reset returns null. As for other sensitive
+settings, presence reads treat backing-store errors as absent for display and do
+not attest provider authentication. Tokens are kept out of config.toml and the
+ordinary settings database. Existing API-key storage and authentication remain
+available independently.
+
+Token changes apply to subsequent launches. Saving does not check account
+eligibility, renew a token, install a provider CLI or mutate a running process.
+Without a saved token, the target machine must be authenticated separately. A
+supplied token takes precedence in token-aware launch consumers; rejection must
+surface as authentication failure rather than selecting another account.
+
+**Adapter evidence:** the reviewed Claude adapter
+`@agentclientprotocol/claude-agent-acp@0.81.1` merges process environment into the
+SDK query options, including `CLAUDE_CODE_OAUTH_TOKEN`. Obtain the value with
+`claude setup-token`; see [Claude authentication](https://code.claude.com/docs/en/authentication).
+The reviewed `@agentclientprotocol/codex-acp@2.1.1` starts `codex app-server` with
+its inherited environment and reads the account via `account/read`.
+`CODEX_ACCESS_TOKEN` is consumed by a compatible installed Codex CLI, not by a
+new ACP authenticate method. [OpenAI's access-token documentation](https://learn.chatgpt.com/docs/enterprise/access-tokens)
+limits these tokens to ChatGPT Business and Enterprise workspaces and specifies
+CLI/app-server environment support. Use the CLI version required by the token
+creation dialog. These are Codex-scoped workspace access tokens, not arbitrary
+copied interactive OAuth sessions. Synthetic adapter tests can prove forwarding;
+only a live eligible account can establish provider acceptance.
