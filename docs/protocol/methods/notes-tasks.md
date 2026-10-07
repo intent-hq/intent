@@ -637,8 +637,10 @@ owners, interval overlap and checkpoints rather than scanning unloaded prefixes.
 
 **Canonical Markdown document separator ownership (prepared, additive).**
 A `markdownDocument` boundary owns indexed source separators independently of the
-canonical native root. It does not widen a paragraph or heading range, rename a
-lexical boundary, or promote an ordinary paragraph into a native owner. It uses
+canonical native root. It does not widen an authored paragraph or heading range
+to the document envelope, rename a lexical boundary, or promote an ordinary
+paragraph into a native owner. Synthesized paragraphs retain the separately
+specified repaired provenance and exact source-piece rules below. It uses
 the existing `note.get` context/metadata resources and `notePagingRead: 1` gate;
 no method, capability version, profile version or write API is added.
 
