@@ -535,7 +535,8 @@ export function assertMarkdownDocumentResources(resources, limits) {
   assertContextFrame(occurrenceFrame, limits);
   const expected = separatorRanges.map(r => ({ start: Math.max(r.start, window.start),
     end: Math.min(r.end, window.end) })).filter(r => r.start < r.end);
-  if (!separatorRanges.length) {
+  const emptyDocument = source.length === 0;
+  if (!separatorRanges.length && !emptyDocument) {
     assert.equal(ownerFrame, null); assert.equal(nativeFrame, null);
     assert.deepEqual(occurrenceFrame.result.items, []); assert.deepEqual(mapFrames, []);
     return;
@@ -550,7 +551,7 @@ export function assertMarkdownDocumentResources(resources, limits) {
   }
   assert.equal(ownerFrame.result.items.length, 1);
   assert.equal(nativeFrame.result.items.length, 1);
-  assert.equal(occurrenceFrame.result.items.length, expected.length ? 1 : 0);
+  assert.equal(occurrenceFrame.result.items.length, expected.length || emptyDocument ? 1 : 0);
   const owner = ownerFrame.result.items[0], root = nativeFrame.result.items[0];
   assert.equal(owner.construct, 'markdownDocument');
   assert.deepEqual(owner.sourceRange, { start: 0, end: source.length });
@@ -560,7 +561,7 @@ export function assertMarkdownDocumentResources(resources, limits) {
   assert.equal(root.childIndex, 0); assert.equal(root.provenance, 'implicit');
   assert.deepEqual(root.sourceRange, { start: 0, end: 0 });
   assert.equal(root.attributesRef, owner.attributesRef);
-  if (!expected.length) {
+  if (!expected.length && !emptyDocument) {
     assert.deepEqual(mapFrames, []);
     return;
   }
@@ -569,6 +570,11 @@ export function assertMarkdownDocumentResources(resources, limits) {
   assert.equal(continuationBefore, window.start > 0);
   assert.equal(continuationAfter, window.end < source.length);
   token(sourceMapRef);
+  if (emptyDocument) {
+    assert.equal(mapFrames.length, 1);
+    assert.deepEqual(mapFrames[0].result.items, []);
+    assert.equal(mapFrames[0].result.nextCursor, null);
+  }
   const maps = mapFrames.flatMap(f => f.result.items);
   const ranges = [];
   for (const map of maps) {

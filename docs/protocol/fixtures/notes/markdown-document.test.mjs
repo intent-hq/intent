@@ -48,11 +48,11 @@ function resources(c, w) {
     textNodeId: null, textNodeRef: null, textRef: null }));
   const mapFrame = frame(stable); mapFrame.result.items = maps;
   const occurrenceFrame = frame(occurrence);
-  if (!maps.length) occurrenceFrame.result.items = [];
+  if (!maps.length && source.length) occurrenceFrame.result.items = [];
   return { source, window: range(w.range), ownerRef: fixture.ownerRef, nativeRef: fixture.nativeRef,
-    ownerFrame: c.separators.length ? frame(stable) : null,
-    nativeFrame: c.separators.length ? frame(structuredClone(fixture.root)) : null,
-    occurrenceFrame, mapFrames: maps.length ? [mapFrame] : [], separatorRanges: c.separators.map(range) };
+    ownerFrame: c.separators.length || !source.length ? frame(stable) : null,
+    nativeFrame: c.separators.length || !source.length ? frame(structuredClone(fixture.root)) : null,
+    occurrenceFrame, mapFrames: maps.length || !source.length ? [mapFrame] : [], separatorRanges: c.separators.map(range) };
 }
 for (const c of fixture.cases) test(`Markdown exact separator ownership: ${c.id}`, () => {
   const source = sourceOf(c);
@@ -115,8 +115,8 @@ test('Markdown separators remain complete across bounded map pages and reject a 
   assert.throws(() => assertMarkdownDocumentResources(notASep,common.limits));
 });
 
-test('Markdown empty, no-gap and block-only windows cannot invent separator admission', () => {
-  for (const c of fixture.cases) for (const w of c.windows.filter(w => !w.maps.length)) {
+test('Markdown nonempty no-gap and block-only windows cannot invent separator admission', () => {
+  for (const c of fixture.cases.filter(c => sourceOf(c).length)) for (const w of c.windows.filter(w => !w.maps.length)) {
     const r = resources(c,w);
     r.occurrenceFrame.result.items = [structuredClone(owner)];
     assert.throws(() => assertMarkdownDocumentResources(r,common.limits));
@@ -129,4 +129,23 @@ test('Markdown separator documentation preserves the strict admission and rollou
     'not the complement of successfully', 'no paragraph/heading overlaps',
     'empty native range', 'sourceLength', 'CR from LF', 'fixed expiry',
     'Additive documentation lands before']) assert.ok(docs.includes(required),required);
+});
+
+
+test('Markdown empty document admits its root through an empty window-bound map collection', () => {
+  const c = fixture.cases.find(c => c.id === 'empty');
+  const r = resources(c,c.windows[0]);
+  assertMarkdownDocumentResources(r,common.limits);
+  assert.equal(r.occurrenceFrame.result.items.length,1);
+  assert.deepEqual(r.mapFrames[0].result.items,[]);
+  for (const mutate of [x => { x.occurrenceFrame.result.items = []; },
+    x => { x.mapFrames = []; },
+    x => { delete x.occurrenceFrame.result.items[0].sourceMapRef; },
+    x => { x.mapFrames[0].result.items = [{ kind:'sourceMap',id:'invented',
+      profile:'canonicalNote',profileVersion:1,ownerRef:fixture.ownerRef,
+      sourceRange:{start:0,end:0},renderedRange:{start:0,end:0},mapping:'omitted',
+      textNodeId:null,textNodeRef:null,textRef:null }]; }]) {
+    const bad = structuredClone(r); mutate(bad);
+    assert.throws(() => assertMarkdownDocumentResources(bad,common.limits));
+  }
 });

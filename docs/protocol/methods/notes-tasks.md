@@ -653,8 +653,8 @@ type MarkdownDocumentOwner = {
 };
 ```
 
-When the Markdown index has parser-discarded separators, its snapshot-stable
-singleton source owner spans exactly `[0,sourceLength)`.
+When the Markdown index has parser-discarded separators, or the source is empty,
+its snapshot-stable singleton source owner spans exactly `[0,sourceLength)`.
 Its `nativeRef` resolves exactly one `nativeNode` with `nodeType: "doc"`,
 `nodeClass: "container"`, `parentRef: null`, `childIndex: 0`, the same
 `canonicalNote` profile/version and matching `attributesRef`. That existing
@@ -693,11 +693,16 @@ Occurrences retain the full source-owner range, with continuation flags relative
 to that window. An owner deduplicated across pages must not erase these separate
 window map bindings.
 
-An empty source has no positive separator range: do not fabricate an omitted
-map or document owner. Preserve the existing empty-document canonical behavior.
-A no-gap Markdown note likewise requires no document separator owner. An empty
-source window (including an exhausted seek at `sourceLength`) admits no separator
-occurrence or map. A whitespace-only note can have a positive full-source omitted
+The sole zero-length admission exception is an empty source: `sourceLength: 0`
+and window `[0,0)` must admit the stable document owner and implicit native root.
+The occurrence has both continuation flags false and a window-bound `sourceMapRef`
+that resolves an empty context collection (`items: []`, `nextCursor: null`). This
+lets the consumer traverse and assemble the existing canonical empty document;
+it does not fabricate a positive or zero-length omitted `sourceMap` item. The
+stable direct owner still omits map bindings and continuation flags. A nonempty
+no-gap Markdown note requires no document separator owner. An empty source window
+in a nonempty note (including an exhausted seek at `sourceLength`) admits no
+separator occurrence or map; the empty-document exception never applies there. A whitespace-only note can have a positive full-source omitted
 range and must still be readable through bounded separator-only windows; omitted
 source never becomes invented rendered text. Leading and trailing discarded
 separators follow the same indexed rule as gaps between blocks.
