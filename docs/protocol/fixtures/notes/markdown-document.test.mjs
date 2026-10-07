@@ -197,3 +197,23 @@ test('synthesized paragraph retains exact inline-group body pieces and block env
     const bad = structuredClone(good); mutate(bad); assert.throws(() => check(bad));
   }
 });
+
+test('repaired task paragraph preserves exact link, code and entity body pieces', async () => {
+  const { assertMarkdownRepairedParagraph } = await import('./contract.mjs');
+  const source = '- [ ] [Café 🙂](https://example.test) and `x y` &amp;\n- plain\n';
+  const ranges = [[6,37],[37,42],[42,47],[47,48],[48,53]].map(([start,end])=>({start,end}));
+  assert.deepEqual(ranges.map(r=>source.slice(r.start,r.end)),
+    ['[Café 🙂](https://example.test)', ' and ', '`x y`', ' ', '&amp;']);
+  const receipt = { itemRef: 'task-item', nodeRef: 'task-paragraph',
+    candidates: [{ itemRef: 'task-item', ranges }] };
+  const native = { nodeType: 'paragraph', provenance: 'repaired', parentRef: 'task-item',
+    sourcePiecesRef: 'inline-pieces', sourceRange: { start: 6, end: 53 } };
+  const block = { sourceRange: { start: 6, end: 53 } };
+  const pieces = ranges.map((sourceRange,i)=>({kind:'sourcePiece',id:`inline-${i}`,
+    nodeRef:'task-paragraph',role:'body',sourceRange}));
+  assertMarkdownRepairedParagraph(source,receipt,native,block,pieces);
+  const reordered = [pieces[1],pieces[0],...pieces.slice(2)];
+  assert.throws(()=>assertMarkdownRepairedParagraph(source,receipt,native,block,reordered));
+  const labelOnly = structuredClone(pieces); labelOnly[0].sourceRange = {start:7,end:14};
+  assert.throws(()=>assertMarkdownRepairedParagraph(source,receipt,native,block,labelOnly));
+});
