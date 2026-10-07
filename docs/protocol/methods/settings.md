@@ -527,7 +527,7 @@ Reads return `value: "********"` when configured or `value: null` when absent,
 never the token, token prefix or token suffix. Sensitive definition metadata has
 `type: "string"`, `category: "providers"`, `sensitive: true` and no default value.
 The existing placeholder-preserve behavior applies. Update results and
-`settings:changed` events redact tokens; reset returns null. As for other sensitive
+`settings:changed` events redact tokens; reset returns `{ path, value: null, revision }`. As for other sensitive
 settings, presence reads treat backing-store errors as absent for display and do
 not attest provider authentication. Tokens are kept out of config.toml and the
 ordinary settings database. Existing API-key storage and authentication remain
