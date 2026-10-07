@@ -511,10 +511,10 @@ These additive sensitive settings reuse `settings.get`, `settings.list`,
 `settings.update` and `settings.reset`. They are administrator-only, like the
 other global settings. Member and guest callers cannot read or change them.
 
-| Path | Type | Credential kind | Storage |
+| Credential kind | Setting path | Type | Storage |
 | --- | --- | --- | --- |
-| `providers.claude-code.accessToken` | string, sensitive | Claude setup token | SecretStore, account equals path |
-| `providers.codex.accessToken` | string, sensitive | Codex access token | SecretStore, account equals path |
+| Claude setup token | `providers.claude-code.accessToken` | string, sensitive | SecretStore, account equals path |
+| Codex access token | `providers.codex.accessToken` | string, sensitive | SecretStore, account equals path |
 
 Clients show token controls only when the corresponding `providers.catalog` row
 advertises `accessToken`, and use its `settingPath`. Unsupported providers and
