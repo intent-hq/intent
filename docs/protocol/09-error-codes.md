@@ -123,3 +123,14 @@ selection or missing display, with no capture/input),
 `-32603` for offline, busy, unsupported and native/transport failures, and
 `-32003` for authority refusal. Action failures distinguish not-started, partial
 and unknown execution; an uncertain input outcome must never be replayed.
+
+### Prepared note deletion grace errors (13.10)
+
+The dedicated grace methods use bounded `error.data.code` values
+`NOTE_DELETE_INVALID`, `NOTE_DELETE_UNAVAILABLE`, `NOTE_DELETE_STALE`,
+`NOTE_DELETE_KEY_EXPIRED`, `NOTE_DELETE_KEY_MISMATCH`, `NOTE_DELETE_ALREADY_PENDING`,
+`NOTE_DELETE_QUOTA`, `NOTE_DELETE_GRAPH_LIMIT`, `NOTE_DELETE_SHUTTING_DOWN` and
+`NOTE_DELETE_FORBIDDEN`. Their exact numeric mapping and side-effect guarantees
+are in the [grace error table](./note-delete-grace.md#errors-and-verification).
+Rejected requests admit no new operation; they do not cancel an earlier operation.
+`UNKNOWN` and `OUTCOME_UNKNOWN` are distinct typed results, never proof of rollback.

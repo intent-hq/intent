@@ -38,7 +38,7 @@ test('prepared protocol omits edit RPCs and retains full-content concurrency cav
 
 test('13.9 allocation follows checkout configuration and catalog counts reflect only retained methods', async () => {
   const versioning = await readFile(new URL('../../versioning.md', import.meta.url), 'utf8');
-  assert.match(versioning, /\*\*Documented version:\*\* `13\.9`/);
+  assert.match(versioning, /\*\*Documented version:\*\* `13\.10`/);
   const section = versioning.split('**Version 13.9 —')[1].split('**Version 13.8 —')[0];
   assert.match(section, /`notePagingRead: 1`/);
   assert.match(section, /444 \/ 388 \/ 56/);
@@ -53,7 +53,7 @@ test('13.9 allocation follows checkout configuration and catalog counts reflect 
   const catalog = await readFile(new URL('../../05-method-catalog.md', import.meta.url), 'utf8');
   const row = catalog.split('\n').find(line => line.startsWith('| note |'));
   const methods = row.split('|')[3].trim().split(', ');
-  assert.equal(methods.length, 18);
+  assert.equal(methods.length, 21);
   assert.ok(!methods.some(name => name.startsWith('operation') || name === 'applySplices'));
 });
 

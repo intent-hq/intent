@@ -827,3 +827,14 @@ for each permission event; durable event queries (including pagination), activit
 summaries and aggregate search apply the same workspace boundary. Guest access to
 other management events is unchanged. See [§8](./08-permission-flow.md) for snapshot
 recovery after establishing a subscription and for demotion/revocation behavior.
+
+### Cancellable note deletion event (prepared 13.10)
+
+`note:delete-operation` is a workspace-scoped invalidation gated by `noteDeleteGrace: 1`.
+Its data is `{ workspaceId, noteId, noteInstanceId, epoch, sequence, operationKey,
+state, deadlineTickMs }`; all fields, state values and bounds follow the
+[grace contract](./note-delete-grace.md#events-and-recovery). It carries no body or
+credentials and grants no cancellation authority. Global sequence gaps are not
+proof of lost workspace events. Bounded snapshots retain settled uncertain markers;
+marker absence requires affected-note reconciliation, never cached-note resurrection.
+Existing `note:deleted` and task side effects occur only after actual commit.

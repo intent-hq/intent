@@ -8,8 +8,18 @@ capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `13.9` — prepared read-only note paging; not a shipped-version claim.
+**Documented version:** `13.10` — prepared cancellable note deletion; not a shipped-version claim.
 Other prepared extensions retain their independent support gates.
+
+**Version 13.10 — cancellable note deletion (additive, prepared).**
+The [grace deletion contract](./note-delete-grace.md) adds `note.deleteSchedule`,
+`note.deleteCancel`, `note.deleteStatus` and `note:delete-operation`, gated by exact
+integer `noteDeleteGrace: 1`. It preserves original data during cancellable grace,
+uses guarded deletion at expiry and does not implement postcommit restore.
+Immediate `note.delete` and the independently gated 13.9 reading contract remain
+unchanged. The documented surface is **447 / 391 / 56** (dispatchable / router /
+fast path). Result objects are bounded independently of existing transport frames;
+unknown outcomes and restart require reconciliation, not automatic deletion retry.
 
 **Version 13.9 — read-only note paging (additive, prepared).**
 [Revision-safe note pages](./methods/notes-tasks.md#revision-safe-note-pages-prepared-additive-contract)
