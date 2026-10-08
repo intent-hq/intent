@@ -546,9 +546,12 @@ request from a racing resolution, and emits the existing `agent:updated` payload
 `{ agentId, attentionRequestCleared: true }`. A repeated call, absent blocker or current
 discussion returns `resolved: false` without a clear event. Pending questions, other
 agents' requests, agent activity and historical transcript notices stay intact. A linked
-task returns from `blocked` to `in_progress` only if it is still blocked; terminal and
-other task states stay intact. The workspace display status is recomputed from its
-remaining causes, so another blocker or unanswered question can keep it in Needs you.
+task returns from `blocked` to `in_progress` only if it is still blocked, assigned to
+the caller and linked to that agent. The conditional database write checks the observed
+note revision and current session link together, so reassignment or relinking prevents
+a stale recovery from reopening the task. Terminal and other task states stay intact.
+The workspace display status is recomputed from its remaining causes, so another
+blocker or unanswered question can keep it in Needs you.
 
 A blocker resolved before its idle-deferred flush must not surface later; cancellation
 is scoped to the resolved blocker and preserves current or newer discussion requests.
