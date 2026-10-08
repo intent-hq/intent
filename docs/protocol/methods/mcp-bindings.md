@@ -32,6 +32,7 @@ ws.agent.removeQueuedMessage(agentId, messageId) → { ok, agentId, messageId }
 ws.agent.reportBlocker(reason) → { ok, kind, reason, savedAt }
 ws.agent.reportToParent(report) → { ok, ... }
 ws.agent.requestDiscussion(reason) → { ok, kind, reason, savedAt }
+ws.agent.resolveBlocker(reason) → { ok, resolved, reason }
 ws.agent.retire(reason?) → { ok, agentId, retired, retiredAt, reason? }
 ws.agent.send(agentId, message, priority?) → { ok, agentId, delivery?, ... }
 ws.agent.sendToTask(taskNoteId, message, priority?) → { ok, taskNoteId, delivery?, ... }
