@@ -476,7 +476,8 @@ delegated or not, with or without a linked task. `reason` is required (trimmed; 
    it — the parent/coordinator is those agents' attention surface, so its follow-up is the
    acknowledgement. For top-level foreground agents, automatic deliveries do **NOT** retire
    it (their turns run with the request left pending) — an automatic message must never
-   dismiss a request the user has not seen. The turn-begin clear emits `agent:updated` with
+   dismiss a request the user has not seen. Explicit blocker recovery is described below.
+   The turn-begin clear emits `agent:updated` with
    `data { agentId, attentionRequestCleared: true }` and removes all three session fields
    (skipped silently when none is pending); no new wire surface is introduced by the
    child/background automatic retire. Both the surfacing and the retire also
@@ -533,6 +534,33 @@ delegated or not, with or without a linked task. `reason` is required (trimmed; 
    caller's parent is excluded (step 5 already woke it directly, so a parent that ALSO
    explicitly watches its child never receives a duplicate attention wake). Watches are left
    in place: attention is not a completion.
+
+**Explicit blocker recovery.** `ws.agent.resolveBlocker(reason)` is an agent-only MCP
+binding, with no wire method or target-agent parameter. Call it after confirming that the
+reported infrastructure problem has recovered, including recovery during an automatic
+hook or PR-monitor wake. `reason` is required and trimmed; a blank reason is rejected
+before mutation. The result is `{ ok: true, resolved: boolean, reason }`.
+
+The operation clears only the caller's matching pending `blocker`, protects a replacement
+request from a racing resolution, and emits the existing `agent:updated` payload
+`{ agentId, attentionRequestCleared: true }`. A repeated call, absent blocker or current
+discussion returns `resolved: false` without a clear event. Pending questions, other
+agents' requests, agent activity and historical transcript notices stay intact. A linked
+task returns from `blocked` to `in_progress` only if it is still blocked, assigned to
+the caller and linked to that agent. The conditional database write checks the observed
+note revision and current session link together, so reassignment or relinking prevents
+a stale recovery from reopening the task. Terminal and other task states stay intact.
+The workspace display status is recomputed from its remaining causes, so another
+blocker or unanswered question can keep it in Needs you.
+
+A blocker resolved before its idle-deferred flush must not surface later; cancellation
+is scoped to the resolved blocker and preserves current or newer discussion requests.
+Superseded raises must not restore live attention after the durable request is cleared.
+Ordinary automatic wakes still do not dismiss a foreground request. Recovery guidance
+comes from the live API reference and per-turn state context, including for sessions
+created under an older pinned harness; historical doctrine is unchanged. The binding
+uses the existing `attentionRequests` feature gate. The live recovery reminder remains
+available when `stateSnapshot` is disabled, provided `attentionRequests` is enabled.
 
 **Idle-deferred surfacing *(new in intentd —
 [intent-hq/intentd#1639](https://github.com/intent-hq/intentd/pull/1639))*.** A raise from
