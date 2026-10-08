@@ -275,7 +275,9 @@ def callback_setup_help(intentd_dir: Path) -> str:
                "--cache-dir", str(Path.home() / ".cache/intent/acp-callback-fixture")]
     lines = [
         f"Set {CALLBACK_FIXTURE_ENV} to a verified fixture (Linux x64, descriptor-pinned Node).",
-        "No downloads or repairs were attempted. Prepare explicitly, then retry:",
+        "Native macOS is not supported by this fixture. Use an existing authorized Linux x64 host.",
+        "Complete checkout, tools and gate recipe: CONTRIBUTING.md#linux-x64-callback-gates",
+        "No downloads or repairs were attempted. On that Linux host, prepare explicitly, then retry:",
     ]
     for description, flags in (
         ("Existing cache, offline", ["--offline"]),

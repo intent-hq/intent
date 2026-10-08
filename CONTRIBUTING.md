@@ -139,6 +139,113 @@ root makes per goal: `make -C packages/intentd test coverage-changed COMPACT=1` 
 run the noncoverage goal before rejecting coverage. It still never starts compact
 coverage. Use separate invocations with the appropriate mode for each goal.
 
+#### Linux x64 callback gates
+
+The full Rust suite uses the canonical ACP callback adapter fixture, which currently
+supports **Linux x64 only**, with the descriptor's exact Node version. Native
+macOS callback gates are not supported. Mac contributors can run the full gates on
+an **existing authorized Linux x64 host** (for example, their Intent daemon host).
+Use that host's normal access method; the commands below run in **Bash on Linux**,
+not in the Mac terminal. This recipe does not create a host or install a native
+provider. The callbacks exercise the frozen adapter/SDK with a scripted query
+process, without provider credentials or a native Claude login.
+
+Start with a complete monorepo checkout on Linux at the revision you intend to
+validate. For a new checkout, replace the revision below with its full commit SHA:
+
+```bash
+set -euo pipefail
+[ "$(uname -s)" = Linux ] && [ "$(uname -m)" = x86_64 ] || {
+  echo "Run this recipe on the authorized Linux x64 host." >&2
+  exit 1
+}
+git clone https://github.com/intent-hq/intent.git intent-linux-gates
+cd intent-linux-gates
+git checkout --detach "<intended-monorepo-commit>"
+git submodule update --init --recursive
+git rev-parse HEAD
+git submodule status
+make bootstrap-dev-host
+make doctor
+```
+
+The recorded gitlinks select the component revisions; do not advance them to
+latest main or copy a Mac `node_modules` directory. Private iOS is intentionally
+skipped. When testing an unmerged component change, use its reviewed branch/SHA
+in this isolated checkout and record that SHA too; no manual pin-bump PR is needed.
+Keep the monorepo's `docs/protocol/fixtures/transfer-selection` intact: full gates
+also validate those canonical fixtures before Cargo and pass their path to tests.
+
+Bootstrap supplies the repository Rust pin (with rustfmt/Clippy), nextest and host
+prerequisites. Use **Python 3.10+** for the gate runner, even if doctor's host-status
+minimum is lower. Bootstrap checks the frontend's supported Node range; it does
+not promise the callback descriptor's exact version. Activate that exact Node
+version using the host's existing tool manager or installed toolchain, put its
+`bin` directory on `PATH`, then check it below. The descriptor currently pins
+Node `v24.21.0`, npm `11.19.0` and TypeScript `6.0.3`; the checked-out descriptor is
+the authority. An available npm launcher is required for the source route; the
+provisioner obtains its pinned npm privately when necessary and installs the
+locked TypeScript dependencies without package lifecycle scripts.
+
+Continue in the same Linux shell from the monorepo root:
+
+```bash
+set -euo pipefail
+python3 -I -B -S -c 'import sys; assert sys.version_info >= (3, 10), "Python 3.10+ required"'
+callback_node=$(python3 -I -B -S -c 'import json; print(json.load(open("packages/intentd/crates/intent-acp/tests/fixtures/claude-callback-adapter.json"))["tools"]["node"])')
+[ "$(node --version)" = "$callback_node" ] || {
+  echo "Activate descriptor-pinned Node $callback_node on this Linux host first." >&2
+  exit 1
+}
+command -v npm
+
+# New private directory: this run must build, not reuse an existing fixture.
+callback_run=$(mktemp -d "$HOME/intent-callback-gates.XXXXXX")
+callback_cache="$callback_run/cache"
+printf 'Keep setup logs and test receipts under %s\n' "$callback_run"
+INTENT_ACP_CALLBACK_ADAPTER_FIXTURE=$(python3 -I -B -S \
+  packages/intentd/scripts/prepare-acp-callback-fixture.py \
+  --cache-dir "$callback_cache" --build-from-source \
+  2>"$callback_run/source-build.log")
+export INTENT_ACP_CALLBACK_ADAPTER_FIXTURE
+
+# Revalidate the same cache without acquisition; stdout is only the fixture path.
+callback_offline=$(python3 -I -B -S \
+  packages/intentd/scripts/prepare-acp-callback-fixture.py \
+  --cache-dir "$callback_cache" --offline \
+  2>"$callback_run/offline.log")
+[ "$callback_offline" = "$INTENT_ACP_CALLBACK_ADAPTER_FIXTURE" ]
+make check-callback-fixture check-transfer-fixture
+
+GATE_CACHE_DIR="$callback_run/gate-runs"
+export GATE_CACHE_DIR
+make gate 2>&1 | tee "$callback_run/gate.log"
+```
+
+The explicit source build needs network access to the descriptor's pinned upstream
+archive and npm registry. It verifies archive, patched source, lockfile, packed
+artifact and runtime inventory before publishing a ready cache. Keep assignment
+and `export` separate as above: `export VAR=$(...)` hides a failed provisioner's
+exit status. With `set -euo pipefail`, preparation or gate failure stops the recipe
+and remains a failure even through `tee`. Inspect the retained log before retrying.
+
+For later runs, reuse the saved `callback_cache` path with `--offline`, assign and
+export its returned fixture path, and rerun preflight. An empty offline cache
+refuses; it never downloads. Corrupt caches, mismatched manifests/Node and injected
+`NODE_OPTIONS` refuse too. Do not bypass validation or edit a ready cache to make it
+pass. The optional `--bundle /path/to/pinned-bundle.tar.gz` route requires an
+independently supplied matching local bundle; no published download URL exists.
+
+`make gate` includes the full `make test` phase; do not repeat a successful suite.
+Use `make test` when only tests are needed, or `RESUME=1 make test` to continue an
+interrupted attempt with the same source/settings. The gate owns caller assertions
+and validates fixtures before Cargo or resume credit. Keep the printed `record:`
+path under `$GATE_CACHE_DIR` with `gate.log`, `source-build.log` and `offline.log`;
+[attempt receipts](#test-attempt-receipts-and-resume-coverage) describe how to inspect
+completion and failures. A preflight/check failure before the test phase has no
+nextest attempt receipt. A callback-only pass does not establish a full-gate pass;
+retain unrelated failures as failures.
+
 ### Test attempt receipts and resume coverage
 
 Every invocation that resolves a tree/plan identity creates a new attempt:
