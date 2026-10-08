@@ -522,6 +522,23 @@ exists; with multiple threads the renderer leaves their content unchanged.
 Explicit user link clicks still activate content. Settings navigation and
 `openInNewWindow: true` retain their explicit navigation behavior.
 
+**Workspace reminder acknowledgements.** `workspace:updated.data.changes` adds
+`attentionReminder: true` as an invalidation key for the caller-relative
+`Workspace.attentionReminder` projection (§5.1). It is not a Workspace field value.
+A new or revised review/discussion/question reason publishes this signal even
+when the raw `displayStatus` remains `needs_attention`. A changed acknowledgement
+publishes the same signal. Unchanged reads, repeated PR polls and unrelated row
+updates do not publish it.
+
+The signal data carries neither receipts nor principal IDs. Each authorized recipient
+re-reads its own reminder projection; one person's dismissal cannot change
+another person's projection. This follows the existing membership/invite
+invalidation pattern: a caller-relative value cannot be supplied by one shared
+broadcast. The event envelope retains standard caller attribution. The
+reason-aware dismiss response returns the acting person's fresh workspace
+directly. Raw attention/display-status events keep their existing
+shared-state semantics, and pending agent question/request controls stay intact.
+
 ### 6.6 Turn/event lifecycle & batching window
 
 **Prompt (user-initiated) turns.** A turn opened by a daemon-dispatched `session/prompt`

@@ -31,7 +31,7 @@ unchanged. Host-administration virtual workspaces retain their existing boundary
 | workspace.cancelDelete *(v6.7)* | workspaceId (req) | { cancelled: boolean } — cancels a pending (grace-window) deletion scheduled by `workspace.delete` with `undoDelayMs`. `true` clears the pending deletion, emits `workspace:delete-cancelled { workspaceId }` (§6.5), and drops `pendingDeleteAt` from the row; `false` is the race-safe non-error when no deletion is pending (never scheduled, already cancelled, or already committed) |
 | workspace.archive | workspaceId (req) | { workspace: Workspace } — returns the refreshed record with `archived: true` / `status: "Archived"` / `archivedAt` set, so callers do not need to follow up with `workspace.get`. Emits `workspace:updated` with the full applied delta `changes: { archived: true, status: "Archived", archivedAt: <ts> }` where `<ts>` is the same ISO timestamp persisted on the row (§6.5). **Archive stops active work** ([intent-hq/intentd#896](https://github.com/intent-hq/intentd/pull/896); PR monitors: [intent-hq/intentd#1067](https://github.com/intent-hq/intentd/pull/1067)): in-flight agent turns are gracefully interrupted, ACTIVE background hooks and ACTIVE PR monitors (§5.42) are cancelled, and queued messages/wakes park while the workspace stays archived — see the archive active-work teardown block below. **Archive removes guests** ([intent-hq/intentd#2066](https://github.com/intent-hq/intentd/pull/2066)): the archived flip, the detach of every `collaborator` membership and the revocation of every open invite commit in **one** store transaction — atomic, so a store failure fails the call with the workspace still active — and are announced before the `archived` delta: one `workspace:updated { changes: { members: true, removedPrincipalId, memberCount } }` per detached collaborator (its queued messages dropped, as for `workspace.members.remove`), then one `{ invites: true }` when at least one invite was revoked (§5.48). The returned record's `memberCount` / `openInviteCount` are the post-sweep values. -32602 if not found. |
 | workspace.unarchive | workspaceId (req) | { workspace: Workspace } — mirror of `workspace.archive`; returns the refreshed record with `archived: false` / `status: "Active"` and `archivedAt` cleared. Emits `workspace:updated` with `changes: { archived: false, status: "Active", archivedAt: null }` — an explicit JSON `null` so clients clear the field (§6.5). Re-kicks the queue drains parked by the archived gates so parked messages deliver without a manual kick; cancelled hooks and PR monitors are NOT resurrected, and neither are the collaborators and open invites the archive removed — the owner is the sole member afterwards and brings a guest back explicitly, via `workspace.members.add` or a fresh invite (see the archive active-work teardown block below). The same delta shape is also emitted by the turn-start **auto-unarchive** (see the auto-unarchive block below), which additionally stamps the additive `autoUnarchive` field into `changes` — the stamp is never present on this manual path (or `workspace.restore`). -32602 if not found. |
-| workspace.dismissAttention | workspaceId (req) | { workspace: Workspace } — clears `attention` to `"none"`; -32602 if not found |
+| workspace.dismissAttention | workspaceId (req), reasons?: AttentionReminderReason[] | { workspace: Workspace } — with `reasons`, acknowledges only matching current reason identity/revision pairs for the bound person and returns their fresh reminder projection; preserves pending questions, requests and raw workspace state. Omitted `reasons` retains the legacy shared `attention` clear. -32602 if not found; supplied reasons require a bound wire principal and membership. See `attentionReminder` below |
 | workspace.markSeen | workspaceId (req) | { workspace: Workspace } — marks the workspace seen: advances **every top-level (no parent, non-background, non-deleted) session's per-conversation seen marker** to its `lastMessageId` through the `agent.markSeen` op (§5.5; same monotonic CAS, each advanced session emits its own `agent:updated` marker event; background/child sessions are untouched), which settles the **derived workspace `unread`** (see the `attention` bullet below) to `none` and emits ONE `workspace:attention-changed { none }` on the transition; also clears the stored legacy flag (guarded on `unread` — a persistent `review_required` survives; the clear re-checks the derivation atomically inside the guarded write, so an assistant message landing mid-call is never retired). **Marker advances are the call's contract, so failures propagate**: a failed pending-list read or per-session marker write is the call's error — the caller never sees success while a session stays unread; the one tolerated per-session failure is a racing `agent.delete` (a deleted session no longer feeds the derivation, so it is skipped). Idempotent: a re-call with nothing unseen writes and emits nothing. `updated_at` stays untouched (looking is not "activity", monorepo#1466) |
 | workspace.getContext | workspaceId (req) | { items: ContextItem[] } — persisted chat-context attachments for the workspace; empty array before the first save. -32602 if the workspace is absent. |
 | workspace.updateContext | workspaceId (req), items (req): ContextItem[] | { items: ContextItem[] } — atomic full-list replacement (matches the FE's `hydrate/add/remove/update` collapsed to a single authoritative-list write). Order is preserved. Emits `workspace:context-changed` with the persisted list. -32602 on missing workspace, malformed `items`, or an item with an empty `id`. |
@@ -1182,14 +1182,53 @@ each with a dedicated change event (§6.5) that carries the new value:
   session is read, clears the stored legacy flag and emits ONE
   `workspace:attention-changed { none }` (partial reads stay silent). The two
   workspace-level clears are **not** interchangeable (intentd#945):
-  `workspace.dismissAttention` retires the stored flag whatever its value (a derived
+  `workspace.dismissAttention` without `reasons` retires the stored flag whatever its value (a derived
   `unread` resurfaces on the next read while unseen messages remain), while
   `workspace.markSeen` marks every top-level conversation seen (see its row above) and
   leaves a persistent `review_required` in place (see the attention-flag write guard
   under the derived `displayStatus` block below). Both surface via
   `workspace:attention-changed` (§6.5). This is shared BE state rather than
-  per-client local state (the daemon is single-user in v1; per-viewer cursors are a future
-  extension).
+  per-client local state. The reason-aware acknowledgement below is separate from
+  these shared flags and conversation seen markers.
+- `attentionReminder?` — **caller-relative, read-only reminder projection.** Present
+  for bound wire callers on list/get, mutation responses and workspace subscription
+  snapshots; older daemons may omit it. Shape:
+  `{ reasons: AttentionReminderReason[], dismissed: boolean, displayStatus: WorkspaceDisplayStatus | "waiting" }`.
+  Each reason is `{ id: string, revision: string }`. Clients treat both strings as
+  opaque and replay the snapshot observed when opening the workspace actions menu.
+  The set contains current foreground, top-level review, discussion and structured
+  question reminders; child, background, retired, muted and deferred requests do not
+  contribute. Blockers and failures retain their operational status and are not
+  dismissed by this acknowledgement.
+
+  `workspace.dismissAttention { workspaceId, reasons }` acknowledges the intersection
+  of the supplied pairs and the current pairs for the bound person. An empty array
+  is a no-op. Malformed pairs, empty strings, strings over 512 bytes or more than
+  1024 supplied pairs return -32602. Unknown pairs and stale revisions do not acknowledge a new reason,
+  including one that arrives during the call. Receipts persist across reconnects
+  and daemon restarts and are shared by that person's devices, independently of
+  other people. Resolving one old reason does not resurface another acknowledged
+  reason. A new question, discussion/review generation or another agent's reason
+  does resurface it. Repeated reads, unchanged messages, PR polls and unrelated row
+  updates do not change a reason revision. An explicit repeated review or discussion
+  raise has a fresh durable generation. Legacy reasons have stable fallback revisions.
+
+  `dismissed` is true only when the nonempty current reminder set is fully
+  acknowledged. Its `displayStatus` preserves failed/blocked precedence. Fully
+  acknowledged human reminders read `in_progress` while an agent actually runs,
+  otherwise `waiting`. PR-only states retain their ordinary status. This projection
+  does not change raw `Workspace.attention`, raw `Workspace.displayStatus`, question
+  dismissal/answer markers, agent pauses, PRs, completion or activity timestamps.
+  The `waiting` word here is a reminder presentation, independent of the existing
+  external-condition `Workspace.waiting` flag below. Missing projection means the
+  reason-aware UI action is unavailable, not that the reminder is acknowledged.
+
+  New or revised reasons and changed receipts publish a receipt-free
+  `workspace:updated { changes: { attentionReminder: true } }` invalidation (§6.5),
+  including when raw `displayStatus` stays the same. Clients fetch their own fresh
+  projection; they must not merge the boolean invalidation as a Workspace field.
+  No principal receipt or reason identity is broadcast in this event's data;
+  its envelope retains standard caller attribution.
 - `waiting?` — **derived, read-only, orthogonal wait flag (v6.17).** `true` when the
   workspace has any of: an ACTIVE (`scheduled`/`running`) background hook (§5.40), an
   ACTIVE PR monitor (§5.42), or a **waiting agent subscription** — an undelivered child
@@ -1967,8 +2006,9 @@ inside the turn — `retired_at` set by the time its drain ends) or muted
 store error fails open (raise + warn). The raise is
 further guarded on the stored flag being `none`: it never downgrades a persistent
 `review_required` (no `workspace:attention-changed`), and `workspace.markSeen` — guarded
-on `unread` — leaves `review_required` in place; only `workspace.dismissAttention`
-retires that flag (its documented contract).
+on `unread` — leaves `review_required` in place; the legacy
+`workspace.dismissAttention` call without `reasons` retires that flag. The
+reason-aware call preserves it and records a separate person-relative receipt.
 
 A merged PR in history never masks an open PR (step 4.1 scans `pullRequests` — plus the
 folded git-root PRs and the monitor signals — for open/draft entries) or open tasks
