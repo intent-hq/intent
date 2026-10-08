@@ -101,7 +101,10 @@ applicable limits. No credentials, source, title or arbitrary error dumps appear
 
 The full `(epoch, issuedTickMs, nonce)` tuple is the operation identity. Current
 authority and the original stable caller identity are required for retained replay,
-status and cancel; possession of a key is not authority. Resolve retained exact
+keyed receipt status and cancel; possession of a key is not authority. Workspace
+snapshots and unkeyed current-identity status require current workspace authority,
+not the original operation caller. Other authorized clients receive the shared
+markers with `canCancel: false`. Resolve retained exact
 replays **before** age validation, but require identical target, guards and effective
 delay (omitted delay means 15000). Changed arguments are rejected. Replaying a key
 never starts a second worker, extends its deadline or re-emits transition effects.

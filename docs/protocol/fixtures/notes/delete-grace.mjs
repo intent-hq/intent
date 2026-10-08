@@ -100,8 +100,10 @@ export class GraceTrace {
   constructor(request, epoch, now) {
     assertRequest('note.deleteSchedule',request);assert.equal(request.operationKey.epoch,epoch);
     tick(now);assert.ok(request.operationKey.issuedTickMs<=now && now-request.operationKey.issuedTickMs<=60000);
-    this.request=structuredClone(request);this.delay=request.undoDelayMs??15000;
-    this.deadline=now+this.delay;this.state='PENDING';this.settled=false;this.expiry=null;
+    const delay=request.undoDelayMs??15000, deadline=now+delay;tick(deadline);
+    this.request=structuredClone(request);this.delay=delay;
+    this.deadline=deadline;this.state='PENDING';this.settled=false;this.expiry=null;
+    this.outcomeRecorded=false;
     this.deletions=0;this.epoch=epoch;
   }
   replay(request,now,authorized=true) {
@@ -114,15 +116,17 @@ export class GraceTrace {
   claim(now) {assert.ok(now>=this.deadline);if(this.state==='PENDING')this.state='COMMITTING';return this.state;}
   outcome(state,{guards=true,authorized=true}={}) {
     assert.equal(this.state,'COMMITTING');
+    assert.equal(this.outcomeRecorded,false);
     assert.ok(['DELETED','CONFLICT','FAILED','OUTCOME_UNKNOWN'].includes(state));
     if(state==='DELETED'){assert.ok(guards&&authorized);this.deletions++;}
+    this.outcomeRecorded=true;
     // Ambiguous acknowledgement cannot become a public settled receipt while
     // physical work remains. Keep COMMITTING until settle supplies the boundary.
     if(state==='OUTCOME_UNKNOWN')this.settledOutcome=state;else this.state=state;
   }
-  settle(now) {tick(now);assert.ok(!this.settled);
+  settle(now) {tick(now);assert.ok(!this.settled);const expiry=now+300000;tick(expiry);
     if(this.settledOutcome)this.state=this.settledOutcome;
-    assert.ok(!active.includes(this.state));this.settled=true;this.expiry=now+300000;}
+    assert.ok(!active.includes(this.state));this.settled=true;this.expiry=expiry;}
   expired(now) {return this.settled && now>=this.expiry;}
   markerVisible() {return visible.includes(this.state);}
 }

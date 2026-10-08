@@ -224,3 +224,29 @@ test('machine errors match the canonical table without promising absence of olde
   assert.ok(docs.includes('Comment-only'));
   assert.ok(docs.includes('not total graph bytes'));
 });
+
+test('one ambiguous outcome cannot be overwritten before physical settlement', () => {
+  const trace=new GraceTrace(schedule,fixture.epoch,1000);trace.claim(16000);
+  trace.outcome('OUTCOME_UNKNOWN');
+  for(const state of ['DELETED','FAILED','CONFLICT','OUTCOME_UNKNOWN'])assert.throws(()=>trace.outcome(state));
+  assert.equal(trace.state,'COMMITTING');assert.equal(trace.deletions,0);
+  trace.settle(17000);assert.equal(trace.state,'OUTCOME_UNKNOWN');
+});
+
+test('computed deadlines reject safe-integer overflow before constructing a trace', () => {
+  const now=Number.MAX_SAFE_INTEGER-14999;
+  const request={...schedule,operationKey:{...fixture.key,issuedTickMs:now}};
+  assert.throws(()=>new GraceTrace(request,fixture.epoch,now));
+  const limit=now-1;
+  const trace=new GraceTrace({...request,operationKey:{...fixture.key,issuedTickMs:limit}},fixture.epoch,limit);
+  assert.equal(trace.deadline,Number.MAX_SAFE_INTEGER);
+});
+
+test('computed expiry rejects overflow without exposing or partially settling an outcome', () => {
+  const trace=new GraceTrace(schedule,fixture.epoch,1000);trace.claim(16000);trace.outcome('OUTCOME_UNKNOWN');
+  assert.throws(()=>trace.settle(Number.MAX_SAFE_INTEGER-299999));
+  assert.equal(trace.state,'COMMITTING');assert.equal(trace.settled,false);assert.equal(trace.expiry,null);
+  trace.settle(Number.MAX_SAFE_INTEGER-300000);
+  assert.equal(trace.state,'OUTCOME_UNKNOWN');assert.equal(trace.expiry,Number.MAX_SAFE_INTEGER);
+  assert.throws(()=>trace.settle(17000));
+});
