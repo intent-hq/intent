@@ -525,12 +525,16 @@ API gains root support; all other file APIs retain their existing scope.
 >   opener, emulated (sizing invariant unchanged), returned by `listTabs` (with
 >   `visibility: 'hidden'`), and its webview renders offscreen — with **no panel
 >   mount and no focus or active-tab change**. `visible: true` on a **fresh** open
->   opts into opening directly into the panel layout: the tab is mounted per the
->   requested `position` (`adjacent`, `same`, or the new-tab fallback of `replace`)
->   **and activated in its panel** (made the panel's active tab in the saved
->   layout) **without** moving panel/keyboard focus on **every** placement, and the
->   action's `result` carries an **optional `displayed?: boolean`** (the same
->   layout meaning as `listTabs`, read from the layout after the open): **present
+>   inserts the tab **immediately behind the current panel's active tab** (below
+>   it in the panel content menu), preserving active content, keyboard focus, and
+>   forward history. This background insertion is **pending the companion frontend
+>   release**; older frontends activate fresh visible opens. It applies to every
+>   new-tab `position` (`adjacent`, `same`, or the fallback of `replace`). Replacing
+>   an existing owned tab keeps its existing behavior. In an empty panel the new
+>   tab becomes active. User-initiated opens are unchanged. The action's `result`
+>   carries an **optional `displayed?: boolean`** (normally `false` for an insertion
+>   behind an active tab; the same layout meaning as `listTabs`, read from the
+>   layout after the open): **present
 >   only when the FE confirmed the tab's layout state** from a fresh tab list;
 >   **absent when that state is unknown** (stale or unavailable list, tab not
 >   listed) — absence means *unknown*, never `false`, and the caller re-reads it
@@ -543,6 +547,16 @@ API gains root support; all other file APIs retain their existing scope.
 >   visible. A dedupe hit under `visible: true` carries the same optional
 >   `displayed?` for the reused tab (`false` for a hidden tab when confirmed,
 >   absent when unknown). Revealing an existing tab is **`showTab`-only**.
+>   A successful open returns `{ action: "openTab", success: true, result:
+>   { tabId, url, ... } }`. The companion frontend update adds `url` to fresh-open
+>   results; reused-open results already carry it. It is the resolved URL submitted
+>   to the browser, not a guarantee of the eventual page URL after redirects.
+>   Existing `requestedUrl` / `finalUrl` rewrite echoes are unchanged. The daemon
+>   forwards these fields unchanged. Address subsequent actions by the returned
+>   `tabId`, because background insertion does not change the active tab. The
+>   accompanying chat UI turns successful opens with a tab ID and URL into a
+>   clickable **Browsing hostname** badge (including a non-default port) that
+>   reveals the existing tab; this UI also requires the companion frontend release.
 > - **`showTab { tabId, focus? }`** — **activates** an owned tab in a visible panel:
 >   reveals a hidden tab, or brings a visible-but-inactive tab to the front of its
 >   panel; **owner-only** (on a tab the caller does not own it returns the
