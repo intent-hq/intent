@@ -612,6 +612,10 @@ availability semantics. Null counts stay null; unknown thread counts stay absent
 known empty data stays zero. Preserve restricted/unavailable/transient/rate-limited/
 unknown states. A pipeline for a different head cannot establish readiness for the
 current head. Do not deserialize qualified checklists through legacy non-null defaults.
+The compact row's `lastSnapshot.checks.failingRequired` and `pendingRequired` are
+numeric counts (or null when unavailable), and omit the rich `items` list. Full
+snapshot/registration `requirements.checks` retain their named lists. An empty
+observed list projects to zero; unavailable evidence must not project to zero.
 
 **Events and wakes.** Keep the five existing `prMonitor:*` names and
 `type: "pr_monitor_wake"`, `prNumber`, reason words and transfer semantics.
@@ -664,7 +668,19 @@ ownership or silently take over an existing target.
 The declaration/golden tests establish serialization, structural addressing and
 pure recipient-projection and default-implementation compatibility only. A source-bound
 legacy-consumer probe demonstrates the unsafe raw input and tests the policy output;
-unknown-field tolerance alone is not compatibility proof. Runtime recipient enforcement
-and provenance classification are still unimplemented. Later owners must prove actual
-Store/MCP/WSS/UDS routing, polling, restart, private output and Electron behavior before
-capability advertisement. Controlled captures do not establish live-provider support.
+unknown-field tolerance alone is not compatibility proof. Direct MCP snapshot,
+registration, list and cancellation now use original request admission and trusted
+producer provenance. A registered target retains its original private binding and
+does not follow later root selections. Cancellation compares the captured row,
+including owner, target and binding, atomically with its state change. These paths
+remain unavailable to production qualified recipients: the test-owned receipt is
+not a negotiated connection capability. Native qualified cancel/flush refuse and
+native lists omit qualified rows before provider reads or effects.
+
+Later owners must still prove polling, restart/restoration, transfer notices,
+events, waits, whole wake/history/replay delivery, native recipient negotiation and
+Electron behavior before capability advertisement. The private registration
+envelope contains `monitorBinding`, nullable `qualifiedSnapshot` and optional
+`retryAt`; it is evidence, never permission or a delivery acknowledgment. Later
+writers must preserve it and supply independent original authority. Controlled
+captures do not establish live-provider support.
