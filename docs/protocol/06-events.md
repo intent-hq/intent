@@ -694,6 +694,19 @@ wire method**:
 Clients **read** current state and **subscribe** to changes; they never invoke the internal
 writers. This keeps the FE thin: it reflects backend-owned state rather than driving it.
 
+#### Planned review-monitor identity extension
+
+The [planned qualified monitoring contract](methods/pr.md#planned-qualified-review-monitoring-not-yet-advertised)
+adds optional `resource` and `monitorAvailability` to the existing `prMonitor:*`
+payloads and `pr_monitor_wake` metadata. It is not yet advertised or emitted by
+this declaration wave. Keep the same event names, `prNumber`, ownership and
+terminal semantics. Availability transitions refetch the existing list through
+`prMonitor:changed`, with the current net `changes` (possibly empty); unchanged
+polls emit nothing. Snapshots and private host/account binding receipts do not ride
+these events. Every private delivery, including queued/persisted replay, requires
+fresh admission under the original host/caller/account. See the linked contract
+for unknown values, old-client compatibility and the construction/retirement owners.
+
 ### 6.9 Snapshot+delta subscription channels *(new in intentd)*
 
 The `events.subscribe` firehose (§6.1) carries every bus event; a thin client that needs **structured live state for a specific entity family** subscribes to a typed channel instead. Each channel is intercepted on the transport fast-path **before** the JSON-RPC dispatcher (alongside `events.subscribe` and `system.*`), returns a `{ subscriptionId }` ack, then pushes a seq-0 **snapshot** followed by ordered **deltas** as `subscription.push` notifications (§3.3). The firehose stays unchanged and **coexists** with these channels.

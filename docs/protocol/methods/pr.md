@@ -472,3 +472,137 @@ Lifecycle is observable via the `prMonitor:*` event category (§6.5), and each a
 // ← response — nothing changed vs. the emit baseline: no wake
 { "jsonrpc":"2.0","id":101,"result":{ "ok":true,"flushed":false } }
 ```
+
+#### Planned qualified review monitoring (not yet advertised)
+
+This contract is **planned**, not a claim that GitLab monitoring is available.
+The current runtime bindings and generated [MCP index](mcp-bindings.md) remain
+unchanged. The additive declarations in `intent-core::review_monitor` and the
+`WorkspaceApi` addressed methods establish the handoff to implementation. Their
+default implementations return unsupported without a legacy fallback. Neither a
+new renderer registration method nor another monitor registry is introduced.
+
+**Capability and entry points.** A completed implementation advertises integer
+`server.capabilities.reviewMonitoring: 1` through `client.hello`. Absent, zero,
+or an unrecognized non-integer value must not enable addressed requests or GitLab
+monitor controls. Version 1 includes addressed snapshots, registration, list,
+cancellation, explicit refresh/flush, polling, restoration and qualified private
+output. Do not advertise it for a partial implementation. Existing
+`agentFeatures.prMonitor` and GitLab Labs/connection gates remain independent;
+capability is host support, not authorization, connection status or merge readiness.
+Older hosts continue to use the existing GitHub UI and calls. Unsupported/disabled
+GitLab behavior uses the established availability treatment in the shared flow.
+
+Both namespace aliases keep the existing number argument named `prNumber` and
+share records, limits, caller ownership, adoption, cancellation and wakes. The
+planned options for snapshot, monitor and unmonitor are exactly one of:
+
+| Address | Planned resolution |
+| --- | --- |
+| no selector | Read the current authorized primary root's saved review selection using the shipped repository-context resolver. No remote, unresolved provenance or multiple plausible projects is a refusal, never a guessed GitHub fallback. |
+| `repo: "owner/name"` | Preserve the explicit legacy GitHub.com override, its validation, output and errors. An old `repo: null` remains omission. It does not select GitLab even through the MR alias. |
+| `gitRootId: "registered-id"` | Resolve that registered root in the requesting workspace under original authority, then use its saved selection. Paths are not IDs; foreign/removed/ambiguous roots fail without primary-root fallback. |
+| `target: ReviewTarget` | A per-call explicit review address: `{ repository: { provider, instanceBaseUrl, projectPath }, kind, number }`. Reuse the shipped target type. Provider canonicalization and current admission are required; a valid authorized explicit target works without an implicit remote. It does not change a saved selection. |
+
+Selectors cannot be combined, even if they appear equivalent. New selectors cannot
+be `null`. The explicit target's number must equal `prNumber`; it is the project-local
+PR number or MR iid, not a GitLab global ID. Only GitHub `pull-request` and GitLab
+`merge-request` kinds are supported; issue monitoring is outside this contract.
+New addressed numbers must be positive JavaScript-safe integers. Legacy number
+validation is unchanged. Preserve nested/case-sensitive GitLab paths and the logical
+instance root including ports and installation prefixes. Never choose identity from
+a display URL, namespace spelling, bare project string or the current default forge.
+Caller, account, connection and daemon IDs are not request options.
+
+**Public projections.** Existing fields and lifecycle words remain intact. Add
+`resource?: ReviewTarget` and `monitorAvailability?` to monitor rows, refusal identity,
+`waitingOnPrMonitors` entries, lifecycle event data and wake metadata when known.
+Unresolved target provenance omits `resource`; absence on an older row is unknown,
+not evidence that the row belongs to GitHub. A known resource's `number` equals
+`prNumber`; `repo` remains the full project path. Always supply the observed canonical
+URL for qualified rows/wakes when known; missing GitLab URLs do not permit a GitHub
+URL fallback. The identity supplement does not disclose account/authority receipts.
+
+The monitor's own health is separate from `state: active|completed` and from the
+provider's merge checklist. `monitorAvailability` is one of:
+
+| Shape | Meaning in the existing shared status flow |
+| --- | --- |
+| `{ state: "available" }` | Current admission permits monitoring; does not mean the review is mergeable. |
+| `{ state: "pending" }` | Awaiting the first admitted observation; no invented checklist. |
+| `{ state: "reconnect-required" }` | Original connection is disconnected or needs authentication; retain target, do not use a replacement account. |
+| `{ state: "backoff", retryAt }` | Polling is delayed until the RFC 3339 deadline for this connection. Retain known snapshots as stale. |
+| `{ state: "restricted" }` | Access is denied; do not emit private cached data or pending text. |
+| `{ state: "disabled" }` / `{ state: "unsupported" }` | Existing feature gate or host support prevents monitoring. |
+| `{ state: "unavailable" }` | A transient provider/read failure without a known retry deadline; no successful-poll timestamp advance. |
+| `{ state: "unresolved", reason }` | `missing-provenance`, `unverified-import`, `invalid-target` or `missing-authority`; retain inspectable/cancellable evidence without a provider read. |
+| `{ state: "unknown" }` | Insufficient evidence. Unknown future state/reason words are treated as unknown, never available. |
+
+`lastError` remains a sanitized explanation. Existing `pausedUntil` remains compatible:
+for a qualified active monitor it mirrors a known future backoff deadline; it is omitted
+when no such deadline exists and on terminal rows. GitLab quotas/outages never close
+the global GitHub gate. Use the existing status sentence and detail positions; this
+contract requires no GitLab-only row, panel, action ordering or recovery screen.
+Necessary copy differences are GitLab branding, MR/`!` notation, actual links, and
+truthful capability/data availability.
+
+Qualified rows and registration/snapshot results use the already-shipped qualified
+snapshot projection above, including its `availability` object (`policy`, `approvals`,
+`checks`, `discussions`). The producer reuses `ReviewAvailability`, not another signal
+vocabulary. Where present, `lastSnapshot` retains that projection's requirements and
+availability semantics. Null counts stay null; unknown thread counts stay absent;
+known empty data stays zero. Preserve restricted/unavailable/transient/rate-limited/
+unknown states. A pipeline for a different head cannot establish readiness for the
+current head. Do not deserialize qualified checklists through legacy non-null defaults.
+
+**Events and wakes.** Keep the five existing `prMonitor:*` names and
+`type: "pr_monitor_wake"`, `prNumber`, reason words and transfer semantics.
+The optional extension is additive; events carry identity/health, not snapshots or
+private binding data. A material availability transition uses `prMonitor:changed`
+with the complete current `changes` list (possibly empty) and prompts a list refetch.
+An unchanged poll emits nothing. Availability changes must not fabricate a check-count
+delta. Provider changes remain debounced against the last delivered baseline;
+confirmed merge/close completes the monitor with the immediate final wake. Existing
+cancel/flush routes continue to address `workspaceId` plus `monitorId`, so same-number
+GitHub/GitLab rows cannot collide. Explicit checks, cached replay, queued wakes and
+persisted wake replay all require fresh original-authority admission before private
+output. Unauthorized output is suppressed, not rewritten as a passing/empty snapshot.
+
+**Original authority and persistence.** Services capture the original daemon,
+authenticated caller/workspace authority and settled connection/account before the
+first await/queue boundary. `ReviewMonitorBinding { scope: ExecutionScope,
+connection: RepositoryConnectionScope, resource: ReviewTarget }` is private durable
+binding evidence, not a public event, caller input or bearer capability. Its full
+scope/generation/connection/resource tuple qualifies observation/cache sharing;
+`monitorId` remains the public record/control key. Identical names/numbers on another
+forge, instance, daemon or account never share private observations.
+
+Reuse Store migration 0145 and its qualified monitor APIs for canonical target and
+provenance. Store the private binding receipt in the existing snapshot JSON envelope
+under `monitorBinding`, including a receipt-only envelope before a deferred first
+baseline. `lastSnapshot` public projections must exclude this receipt. Poll/baseline
+writes must preserve it. This needs no new migration or duplicate target table.
+A resolved Store target alone does not prove original authority. Restart revalidates
+against trusted durable host/caller/account evidence; matching public IDs or replacing
+an old generation with the current one cannot create a lease. If original evidence
+cannot be established, leave the row unresolved/reconnect-required and cancellable.
+Never recover provenance from changed remotes, current login, a default connection
+or untrusted imported receipts. Store indexes continue to enforce one active owner
+per canonical review per workspace; replacement accounts do not create parallel
+ownership or silently take over an existing target.
+
+**Construction and retirement owner map.**
+
+| Owner | Required responsibility before enabling the capability |
+| --- | --- |
+| ACP binding and addressed service routing | Parse the shared request; preserve both aliases and explicit legacy GitHub calls. Capture the original `RepositoryReadRequest` / private host scope synchronously; derive caller ownership from that scope. Resolve and canonicalize once, capture binding evidence, and use existing Store qualification/adoption APIs. Never trust a deserialized binding as admission. |
+| Monitor service and repository admission | Own the long-lived registration admission separate from the short MCP request. Transfer only through the original admitted owner; retire the short request at reply/cancel. Revalidate the retained original authority/account before each read, cache reuse and private delivery; do not capture a later ambient caller to extend it. |
+| Polling/cache/wake owner | Reuse qualified observations/cache keys, connection quota isolation and current-head evidence. Preserve receipts on writes, debounce meaningful changes, retire terminal watches, and fence pending/queued/persisted output on authority loss. |
+| Restoration/lifecycle owner | Re-admit the original durable binding, without reselecting remotes. Retire runtime handles on cancel, completion, workspace teardown, owner loss or authority/account invalidation; retain durable unresolved evidence where appropriate. Apply existing orphan/parent-adoption rules with fresh admission and unchanged canonical target. |
+| Native transport and desktop state owner | Carry qualified identity/health through original-host list, cancel, flush, event and replay boundaries, rechecking member/guest access and using capability detection. Cache by host/workspace/monitor identity; do not let local backend state replace a remote host's record. |
+| Shared UI and agent guidance owner | Extend the actual GitHub components/copy and metadata consumers. Keep old harness stamps, explicit GitHub behavior, action ordering, keyboard/focus behavior and unknown values. Compare compact/wide captures and matched-input interactions against the recorded GitHub reference. |
+
+The declaration/golden tests establish serialization, structural addressing and
+old-client/default-implementation compatibility only. Later owners must prove actual
+Store/MCP/WSS/UDS routing, polling, restart, private output and Electron behavior before
+capability advertisement. Controlled captures do not establish live-provider support.

@@ -410,3 +410,13 @@ has `isAdministrator: false`; cached roles are refreshed on reconnect and
 `host:members-changed`. The principal ID remains immutable while effective host
 role is current. [§5.49](./shared-host-membership.md#authority-and-discovery) gives
 the fail-closed compatibility rules when fields/capabilities are missing.
+
+#### Planned review monitoring capability
+
+`server.capabilities.reviewMonitoring: 1` is reserved for the complete
+[qualified monitoring contract](pr.md#planned-qualified-review-monitoring-not-yet-advertised).
+It is **not yet advertised** by the declaration wave. Absence or zero means no
+addressed/GitLab monitoring support; existing GitHub calls remain compatible.
+Do not derive support from repository reads, MR aliases, a daemon version, or the
+GitLab connection being configured. Feature gates and current original-host
+authorization remain separate from this support flag.
