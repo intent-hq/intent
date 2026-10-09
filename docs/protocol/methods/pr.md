@@ -672,7 +672,12 @@ unknown-field tolerance alone is not compatibility proof. Direct MCP snapshot,
 registration, list and cancellation now use original request admission and trusted
 producer provenance. A registered target retains its original private binding and
 does not follow later root selections. Cancellation compares the captured row,
-including owner, target and binding, atomically with its state change. These paths
+including owner, target and binding, atomically with its state change. Direct
+insertion, refresh/adoption and cancellation reserve the database writer before
+entering original physical/account authority fences, and retain those fences
+through SQL execution and commit. Retirement before admission leaves no durable
+change; retirement after SQL admission joins its completion. Dropping the async
+caller does not cancel an admitted commit or undo a completed effect. These paths
 remain unavailable to production qualified recipients: the test-owned receipt is
 not a negotiated connection capability. Native qualified cancel/flush refuse and
 native lists omit qualified rows before provider reads or effects.
