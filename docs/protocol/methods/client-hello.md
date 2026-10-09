@@ -420,3 +420,14 @@ addressed/GitLab monitoring support; existing GitHub calls remain compatible.
 Do not derive support from repository reads, MR aliases, a daemon version, or the
 GitLab connection being configured. Feature gates and current original-host
 authorization remain separate from this support flag.
+
+The planned review-monitor extension also requires **recipient** support:
+`client.hello.params.capabilities.reviewMonitoring: 1` opts only the current live
+connection into qualified output. Missing/malformed support remains legacy; a server
+flag alone never authorizes qualified data to an old desktop. Remote forwarding must
+intersect the end consumer and decoding intermediaries, not substitute proxy support.
+Agent recipients use a trusted versioned harness/session receipt, not client identity
+or model-supplied parameters. Reconnect/replacement invalidates cached support.
+The [planned recipient/output policy](pr.md#planned-qualified-review-monitoring-not-yet-advertised)
+defines unchanged legacy GitHub projection, qualified suppression, direct-call errors,
+and whole-envelope wake/history replay gating. Neither side advertises support yet.

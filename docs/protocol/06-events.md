@@ -771,3 +771,16 @@ for each permission event; durable event queries (including pagination), activit
 summaries and aggregate search apply the same workspace boundary. Guest access to
 other management events is unchanged. See [§8](./08-permission-flow.md) for snapshot
 recovery after establishing a subscription and for demotion/revocation behavior.
+
+### Planned qualified monitor recipient boundary
+
+The planned `resource` / `monitorAvailability` additions are eligible only when both
+host and destination support qualified monitoring. A host capability does not opt an
+old desktop or old agent into the extension. The [recipient/output policy](methods/pr.md#planned-qualified-review-monitoring-not-yet-advertised)
+applies to the whole lifecycle event, idle/AgentLite/diagnostics waiting entry, queued
+wake/transfer notice and persisted/history replay envelope. Preserve ordinary legacy
+GitHub events unchanged; omit qualified events/wait entries for unsupported recipients,
+and retain internal waiting/ownership and undelivered wake state. Never strip target
+identity or convert null facts for legacy delivery. Recheck destination support and
+original authority on replay; no snapshot/private receipt travels in event DTOs.
+This declaration does not activate producers, subscription filters or capabilities.

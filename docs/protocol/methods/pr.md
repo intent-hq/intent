@@ -493,6 +493,64 @@ capability is host support, not authorization, connection status or merge readin
 Older hosts continue to use the existing GitHub UI and calls. Unsupported/disabled
 GitLab behavior uses the established availability treatment in the shared flow.
 
+**Recipient support and legacy output boundary.** Host support alone is insufficient.
+Qualified output requires BOTH server support and an explicit version-1-or-newer
+integer `reviewMonitoring` capability from the actual recipient. Missing, zero,
+negative, boolean, string, fractional or otherwise malformed recipient values mean
+legacy. This is a compatibility declaration, never authorization.
+
+- **Desktop/transport recipient:** read `client.hello.params.capabilities.reviewMonitoring`
+  on the authenticated live connection. It covers that connection only, not all
+  connections sharing a `clientId`. Re-negotiate after reconnect; do not copy a
+  previous socket's declaration. Forwarded/remote-host traffic uses the end consumer's
+  declaration AND each decoding intermediary's support; a capable local proxy cannot
+  upgrade an old desktop. Subscribe, seed, reconnect, direct responses and history
+  projections use the same destination-specific decision.
+- **Agent recipient:** the daemon's trusted harness/session construction records a
+  versioned `reviewMonitoring` support receipt only after that harness's bindings,
+  guidance and wake/history readers implement this contract. It is scoped to the
+  concrete session/host and retired on replacement, retirement or restoration without
+  trusted evidence. A tool argument, prompt, model-generated claim, workspace setting,
+  namespace spelling or persisted wake cannot assert support. Old/unknown harness
+  stamps have no receipt. Re-evaluate both the owning agent's receipt and any desktop
+  viewing its conversation; support of one never implies support of the other.
+
+The internal pure policy `ReviewMonitorOutput<T>::project` divides producer output
+into `LegacyGithub` and `Qualified`. These are not wire tags or caller inputs.
+`LegacyGithub` means the unchanged existing GitHub producer envelope, with its existing
+validation, counts/omissions, errors, URLs and ownership semantics. It must NEVER be
+constructed by stripping identity/availability from a qualified observation. All
+GitLab output, qualified GitHub output (including nullable/restricted facts), and
+unresolved provenance are `Qualified`, regardless of alias or display string.
+Only proven legacy GitHub provenance can select the old producer. Unproven provenance
+must not be guessed from `repo`, a missing `resource`, current remotes or a URL.
+
+| Surface | Recipient without qualified support | Recipient with qualified support and enabled host |
+| --- | --- | --- |
+| List, `agent:idle` / AgentLite / diagnostics wait summaries | Preserve legacy GitHub entries exactly; omit qualified entries. Keep internal waiting/settlement/ownership accounting intact; omission is not completion or cancellation. | Deliver both classes; preserve canonical identity and unknown facts. |
+| Lifecycle event / subscription / replay | Deliver original legacy GitHub events; suppress the entire qualified event. Never emit a slug-only substitute. | Deliver qualified identity/health after fresh admission. |
+| Snapshot, registration, adoption/refusal, cancel/flush and lookup by ID | Legacy GitHub calls retain existing output and ownership. If resolution selects qualified data, return the existing generic unsupported error BEFORE provider reads, registration/adoption/cancel/flush side effects or ownership disclosure. No fallback, disguised success, owner names, qualified URLs or instructions. | Existing admission and canonical ownership rules apply; typed qualified output is allowed. |
+| Agent wake, transfer notice, queue dispatch, persisted replay | Withhold the WHOLE qualified envelope (body, metadata, URL, attachments and derived summaries); do not acknowledge delivery, advance delivered baseline, or discard pending/terminal notices. Preserve registration and durable pending delivery until an admitted capable recipient or explicit cancellation. Legacy GitHub delivery remains unchanged. | Re-check recipient receipt and fresh original authority at delivery; then deliver once through normal debounce/dedup/terminal semantics. |
+| Conversation/history export or desktop view of an agent wake | Omit whole qualified monitor-derived messages and any embedded replay/summary content for that destination. No generic GitHub label or guessed link. Do not alter stored history or agent delivery acknowledgments. | Preserve the full qualified envelope under the same authority and recipient checks. |
+| URLs | Only original legacy GitHub output is eligible; qualified missing-URL output is withheld with its envelope. | An absent observed canonical URL remains absent. Render a non-navigable label/disable existing open actions; never construct a GitHub URL from `repo`/`prNumber`. |
+
+New `gitRootId`/`target` selectors require negotiated support before resolving a
+provider read, including when the requested provider is GitHub. Legacy selectors
+remain unchanged; if their resolution selects qualified data, the same unsupported
+boundary applies without fallback.
+
+An unsupported old agent cannot acquire/adopt a qualified registration. A previously
+capable owner downgraded/replaced without a receipt keeps durable ownership/pending
+notices under existing lifecycle rules; do not silently transfer it to another account
+or consume its pending wake. A capable admitted replacement/adopter must pass the
+existing ownership and authority checks before pending output can be reconsidered.
+Capability withdrawal invalidates any cached per-recipient projection. Preformatted
+queued messages are not an exception: retain internal producer provenance across
+queue/history boundaries and apply the decision again to the entire envelope.
+Never convert null to zero, strip restrictions, or mislabel GitLab to satisfy an old
+consumer. This conservative boundary intentionally hides qualified monitors from old
+clients until they upgrade; it does not hide or change ordinary legacy GitHub monitors.
+
 Both namespace aliases keep the existing number argument named `prNumber` and
 share records, limits, caller ownership, adoption, cancellation and wakes. The
 planned options for snapshot, monitor and unmonitor are exactly one of:
@@ -514,7 +572,7 @@ instance root including ports and installation prefixes. Never choose identity f
 a display URL, namespace spelling, bare project string or the current default forge.
 Caller, account, connection and daemon IDs are not request options.
 
-**Public projections.** Existing fields and lifecycle words remain intact. Add
+**Public projections (qualified recipients only).** Existing fields and lifecycle words remain intact. Add
 `resource?: ReviewTarget` and `monitorAvailability?` to monitor rows, refusal identity,
 `waitingOnPrMonitors` entries, lifecycle event data and wake metadata when known.
 Unresolved target provenance omits `resource`; absence on an older row is unknown,
@@ -557,7 +615,8 @@ current head. Do not deserialize qualified checklists through legacy non-null de
 
 **Events and wakes.** Keep the five existing `prMonitor:*` names and
 `type: "pr_monitor_wake"`, `prNumber`, reason words and transfer semantics.
-The optional extension is additive; events carry identity/health, not snapshots or
+The optional extension is additive for supported recipients only; events carry
+identity/health, not snapshots or
 private binding data. A material availability transition uses `prMonitor:changed`
 with the complete current `changes` list (possibly empty) and prompts a list refetch.
 An unchanged poll emits nothing. Availability changes must not fabricate a check-count
@@ -595,14 +654,17 @@ ownership or silently take over an existing target.
 
 | Owner | Required responsibility before enabling the capability |
 | --- | --- |
-| ACP binding and addressed service routing | Parse the shared request; preserve both aliases and explicit legacy GitHub calls. Capture the original `RepositoryReadRequest` / private host scope synchronously; derive caller ownership from that scope. Resolve and canonicalize once, capture binding evidence, and use existing Store qualification/adoption APIs. Never trust a deserialized binding as admission. |
+| ACP binding and addressed service routing | Establish trusted per-agent-session support receipts; enforce unsupported direct-call behavior before side effects or ownership disclosure. Parse the shared request; preserve both aliases and explicit legacy GitHub calls. Capture the original `RepositoryReadRequest` / private host scope synchronously; derive caller ownership from that scope. Resolve and canonicalize once, capture binding evidence, and use existing Store qualification/adoption APIs. Never trust a deserialized binding as admission. |
 | Monitor service and repository admission | Own the long-lived registration admission separate from the short MCP request. Transfer only through the original admitted owner; retire the short request at reply/cancel. Revalidate the retained original authority/account before each read, cache reuse and private delivery; do not capture a later ambient caller to extend it. |
-| Polling/cache/wake owner | Reuse qualified observations/cache keys, connection quota isolation and current-head evidence. Preserve receipts on writes, debounce meaningful changes, retire terminal watches, and fence pending/queued/persisted output on authority loss. |
+| Polling/cache/wake owner | Apply recipient projection to whole queued/wake/history envelopes and replays; preserve pending delivery on withheld output without acknowledging it. Reuse qualified observations/cache keys, connection quota isolation and current-head evidence. Preserve receipts on writes, debounce meaningful changes, retire terminal watches, and fence pending/queued/persisted output on authority loss. |
 | Restoration/lifecycle owner | Re-admit the original durable binding, without reselecting remotes. Retire runtime handles on cancel, completion, workspace teardown, owner loss or authority/account invalidation; retain durable unresolved evidence where appropriate. Apply existing orphan/parent-adoption rules with fresh admission and unchanged canonical target. |
-| Native transport and desktop state owner | Carry qualified identity/health through original-host list, cancel, flush, event and replay boundaries, rechecking member/guest access and using capability detection. Cache by host/workspace/monitor identity; do not let local backend state replace a remote host's record. |
+| Native transport and desktop state owner | Negotiate per-connection recipient support, including end-consumer/intermediary intersection across hosts; retire it on disconnect/reconnect. Filter all response/event/history/wait projections by destination. Carry qualified identity/health through original-host list, cancel, flush, event and replay boundaries, rechecking member/guest access and using capability detection. Cache by host/workspace/monitor identity; do not let local backend state replace a remote host's record. |
 | Shared UI and agent guidance owner | Extend the actual GitHub components/copy and metadata consumers. Keep old harness stamps, explicit GitHub behavior, action ordering, keyboard/focus behavior and unknown values. Compare compact/wide captures and matched-input interactions against the recorded GitHub reference. |
 
 The declaration/golden tests establish serialization, structural addressing and
-old-client/default-implementation compatibility only. Later owners must prove actual
+pure recipient-projection and default-implementation compatibility only. A source-bound
+legacy-consumer probe demonstrates the unsafe raw input and tests the policy output;
+unknown-field tolerance alone is not compatibility proof. Runtime recipient enforcement
+and provenance classification are still unimplemented. Later owners must prove actual
 Store/MCP/WSS/UDS routing, polling, restart, private output and Electron behavior before
 capability advertisement. Controlled captures do not establish live-provider support.
