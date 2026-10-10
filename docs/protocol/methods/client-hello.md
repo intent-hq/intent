@@ -73,7 +73,7 @@ absence means unavailable, not permission to infer support from version numbers.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| client.hello | clientId?, name?, capabilities?, hostname? *(v9.9)*, prettyHostname? *(v9.9)*, deviceKind? *(v9.9)* | { clientId, protocolVersion, server: { locality, hasDisplay, osArch, version, buildCommit?, protocolVersion, capabilities } } |
+| client.hello | clientId?, connectionRole? *(prepared; see attachment contract below)*, name?, capabilities?, hostname? *(v9.9)*, prettyHostname? *(v9.9)*, deviceKind? *(v9.9)* | { clientId, connectionRole? *(prepared attachment acknowledgement only)*, protocolVersion, server: { locality, hasDisplay, osArch, version, buildCommit?, protocolVersion, capabilities } } |
 | client.list *(v9.9)* | workspaceId? | { clients: [{ clientId, name?, hostname?, prettyHostname?, deviceKind?, capabilities, connections, transports, connectedAt }] } — the **live, hello'd** connections grouped by logical `clientId`; see the `client.list` block below |
 
 - **Global handshake.** `client.hello` does **not** require `workspaceId` (§3.6); it is the
@@ -123,7 +123,7 @@ absence means unavailable, not permission to infer support from version numbers.
 ```
 
 **Errors.** A malformed `clientId` (non-string) → `-32602`; a persistence failure → `-32603`.
-The handshake is idempotent: re-sending `client.hello` on the same connection updates `name` /
+The ordinary handshake is idempotent: re-sending `client.hello` on the same connection updates `name` /
 `capabilities` / host identification and re-returns the same `server` block.
 
 #### Qualified monitor attachment (prepared, not advertised)
