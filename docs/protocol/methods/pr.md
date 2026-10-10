@@ -516,6 +516,84 @@ legacy. This is a compatibility declaration, never authorization.
   stamps have no receipt. Re-evaluate both the owning agent's receipt and any desktop
   viewing its conversation; support of one never implies support of the other.
 
+**Agent private-context extension (prepared, not advertised).** The daemon offers
+`initialize.clientCapabilities._meta.reviewMonitoring: 1` only in an explicitly
+qualified composition. The actual initialize result and each successful session/new
+or session/load result must independently declare `_meta.reviewMonitoring >= 1`.
+Both startup methods carry `_meta.reviewMonitoringContext =
+{version:1, ownerKey, loadAttemptId}` and must echo that exact object in the result.
+These opaque identifiers come from the original daemon-owned agent/workspace and
+startup allocation. They are correlation, not authority. The receipt binds the
+original physical Connection, initialize generation, startup attempt and callback
+Query; it becomes eligible for **new** monitor delivery only after the original
+callback registration acknowledges. A missing/malformed/mismatched echo, delayed
+reply, replacement, reinitialize or retirement cannot establish or revive support.
+Ordinary startup/callback metadata remains unchanged when this extension is absent.
+
+The daemon retains a random private native-family key with the original startup
+owner. Its installation-local `review_context_enrollment` row is committed in the
+same guarded transaction as that exact winning agent/workspace/native session ID.
+A losing startup cannot borrow the winner's key. Cold load reads the exact existing
+association without creating or deriving one; missing enrollment refuses qualified
+resume. Identity, import or transcript replacement invalidates the association,
+including identical-byte replacement; ordinary name and usage updates preserve it.
+The table is excluded from transfer and public projections, and injected import
+rows are rejected. Commit facts remain distinct from later owner confirmation or
+callback failure. This association selects a family only: fresh complete source
+admission, exact attempt ownership and callback support remain independent.
+
+Before resuming native context, the daemon invokes the agent-side method
+`_intent/session/prepare_review_history({sessionId, ownerKey, loadAttemptId})`.
+The result is `{preparationId, snapshotDigest, monitorMessages:
+[{messageId, storeEnvelopeDigest, acpPayloadDigest}]}`. Preparation may classify and
+pin history but must not spawn a native Query, load model context, replay messages,
+or disclose bodies. The daemon independently verifies original private Store
+provenance and freshly admits the entire original source/account/workspace set.
+Only then may it send session/load with `_meta.reviewMonitoringHistory =
+{version:1, preparationId, snapshotDigest, loadAttemptId}`, alongside the matching
+startup context. This pre-resume admission deliberately precedes Query/callback
+creation; it never replaces the callback ACK required for a new wake.
+
+The preparation is bounded, one-use and bound to the original connection,
+initialize generation, owner, session and startup attempt. Consume it before any
+await/spawn. `snapshotDigest` commits the held complete native resume-input closure,
+authoritative enrollment/lineage and complete monotonic source journal. No ambient
+reread or raw-resume fallback is allowed. Empty `monitorMessages` means proven
+ordinary lineage. Missing, copied, truncated or unverifiable classification must
+not become ordinary, even through an incapable route. Compaction, derived and child
+context retain every original source dependency. Installation-private enrollment
+and durable pre-feed journaling must map each Store correlation and exact ACP payload
+to its native SDK UUID/content. Journal persistence never proves transfer or ACK.
+
+A new admitted committed monitor prompt carries `_meta.reviewMonitoringMessage =
+{version:1, messageId, storeEnvelopeDigest, acpPayloadDigest}`. The Store digest is
+opaque; private binding fields never cross ACP. The independently verifiable ACP
+digest commits both correlations, destination and every accepted payload field.
+Strict text-only v1 accepts exactly `{sessionId, prompt:[{type:"text", text}],
+_meta:{reviewMonitoringMessage:{version:1, messageId, storeEnvelopeDigest,
+acpPayloadDigest}}}`. Extra keys, blocks, attachments and sibling metadata refuse
+rather than disappear during conversion; ordinary rich prompts retain their path.
+For this profile, the digest is lowercase SHA-256 of the UTF-8 compact JSON array
+`["intent-review-monitor-acp-text-v1", sessionId, messageId, storeEnvelopeDigest,
+text]`, with no BOM/newline or Unicode normalization. Invalid Unicode refuses.
+Constant field names/types/version are fixed by this domain; only the digest's own
+self-reference is excluded. Conversion to `task-notification` must preserve the
+actual UUID/result/idle/cancel settlement, independently of unrelated autonomous
+turns. Public/model text and metadata cannot mint original account authority.
+
+Retirement invokes `_intent/session/retire_review_context({sessionId,
+loadAttemptId})`. On entry, close eligibility for new private use/dispatch and
+invalidate preparations before any awaitable cleanup. `{retired:true}` is valid
+only after that exact known allocation's native execution/process tree and
+forwarders join, or for its retained matching joined tombstone. Unknown attempts
+cannot select a same-ID replacement or receive fabricated success. Timeout/peer
+loss requires joining only the exact owned execution; ordinary interrupt alone is
+not a retirement proof. Loaded qualified context remains dependent on all original
+sources for subsequent ordinary/autonomous work. Discard delayed replies after
+retirement. Already-dispatched authorized external work cannot be recalled; retain
+uncertain delivery without an exactly-once or rollback claim. Default offers and
+production activation remain disabled pending native qualification.
+
 The internal pure policy `ReviewMonitorOutput<T>::project` divides producer output
 into `LegacyGithub` and `Qualified`. These are not wire tags or caller inputs.
 `LegacyGithub` means the unchanged existing GitHub producer envelope, with its existing
@@ -654,6 +732,22 @@ Never recover provenance from changed remotes, current login, a default connecti
 or untrusted imported receipts. Store indexes continue to enforce one active owner
 per canonical review per workspace; replacement accounts do not create parallel
 ownership or silently take over an existing target.
+
+**Original saved-message evidence.** Qualified history uses a private local
+association written atomically with the original prepared message. It binds the
+original workspace, agent, complete review binding and a versioned digest of the
+exact unprojected envelope. This evidence constrains fresh account and recipient
+admission; it never grants access, proves transfer or acknowledges a pending wake.
+Monitor rearm, adoption or cancellation cannot rewrite an older message's origin.
+Message or payload mutation, message replacement and session identity changes
+invalidate the association. Ordinary session timestamp or usage updates preserve
+it. Imports and copies cannot recreate it, even when public message bytes match.
+Legacy or malformed evidence remains withheld; there is no inferred backfill.
+Supported history delivery must retain the verified envelope and retire queued
+output before a relevant mutation completes, rather than authorize an ID and
+reload its current content. The private evidence is excluded from transfers;
+the separate workspace-transfer refusal also protects retained public message
+bodies and monitor rows.
 
 **Recovery of uncertain qualified delivery.** A saved message is not proof that
 its original recipient received it. Process loss can leave the same stored row
