@@ -55,6 +55,20 @@ For the [prepared source export lifecycle](../workspace-routing.md#source-worksp
 
 Human message history follows the [transfer authorship contract](#human-authorship-in-workspace-transfers) below.
 
+**Private review-monitor history in workspace transfers.** Workspace-manager
+permission does not authorize exporting a monitor's original forge account data.
+Until transfer has that independent admission, `workspace.export.start` refuses
+workspaces containing qualified private monitor envelopes, including retained
+messages and completed or cancelled monitor records. The refusal uses the existing
+error flow without disclosing the target, account, or message body. It preserves
+the original history and pending monitor state; cancelling a monitor does not make
+retained private history transferable. No rows are silently omitted. Known refusals
+occur before stopping agents or creating export artifacts. The builder also checks
+the exact archive row snapshot, so a concurrent insertion cannot produce a sealed
+archive or readable chunk; failures after preflight use normal export cleanup.
+Ordinary history and proven legacy GitHub monitor transfers retain their existing
+behavior.
+
 **Root Git remote state in workspace transfers** (`workspace.export.start` /
 `workspace.import.commit`; [intent-hq/intent#4438](https://github.com/intent-hq/intent/issues/4438),
 [intent-hq/intentd#1749](https://github.com/intent-hq/intentd/pull/1749)). The root
