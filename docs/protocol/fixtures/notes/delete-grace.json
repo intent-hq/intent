@@ -1,0 +1,11 @@
+{
+  "version": "13.10",
+  "capability": {"noteDeleteGrace": 1},
+  "limits": {"defaultDelayMs":15000,"maxDelayMs":60000,"admissionAgeMs":60000,"retentionMs":300000,"workspaceEntries":256,"globalEntries":1024,"workers":4,"directChildren":256,"resultBytes":524288,"idBytes":128,"wallBytes":30},
+  "epoch": "11111111-1111-4111-8111-111111111111",
+  "otherEpoch": "22222222-2222-4222-8222-222222222222",
+  "key": {"epoch":"11111111-1111-4111-8111-111111111111","issuedTickMs":1000,"nonce":"33333333-3333-4333-8333-333333333333"},
+  "schedule": {"workspaceId":"workspace-a","noteId":"note-a","noteInstanceId":"instance-a","expectedVersion":7,"sourceRevision":"r:7:9","operationKey":{"epoch":"11111111-1111-4111-8111-111111111111","issuedTickMs":1000,"nonce":"33333333-3333-4333-8333-333333333333"}},
+  "pending": {"operationKey":{"epoch":"11111111-1111-4111-8111-111111111111","issuedTickMs":1000,"nonce":"33333333-3333-4333-8333-333333333333"},"workspaceId":"workspace-a","noteId":"note-a","noteInstanceId":"instance-a","state":"PENDING","sequence":1,"deadlineTickMs":16000,"deleteAt":"2026-10-08T15:00:16.000Z","expiresTickMs":null,"reason":null},
+  "errorCodes": {"NOTE_DELETE_INVALID":-32602,"NOTE_DELETE_UNAVAILABLE":-32602,"NOTE_DELETE_STALE":-32005,"NOTE_DELETE_KEY_EXPIRED":-32005,"NOTE_DELETE_KEY_MISMATCH":-32005,"NOTE_DELETE_ALREADY_PENDING":-32005,"NOTE_DELETE_QUOTA":-32603,"NOTE_DELETE_GRAPH_LIMIT":-32603,"NOTE_DELETE_SHUTTING_DOWN":-32603,"NOTE_DELETE_FORBIDDEN":-32003}
+}

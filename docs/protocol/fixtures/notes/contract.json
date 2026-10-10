@@ -1,0 +1,6547 @@
+{
+  "status": "prepared-specification-only",
+  "capabilities": {
+    "notePagingRead": 1,
+    "noteAnnotations": 1
+  },
+  "limits": {
+    "sourceBytes": 16384,
+    "wireBytes": 65536,
+    "items": 128,
+    "annotationItems": 64,
+    "ranges": 32,
+    "tokenBytes": 256,
+    "stateBytes": 4096
+  },
+  "scope": {
+    "backendId": "db-a",
+    "workspaceId": "ws-a",
+    "noteId": "spec",
+    "noteInstanceId": "inc-a"
+  },
+  "sources": [
+    {
+      "id": "empty",
+      "text": "",
+      "boundaries": [
+        0,
+        0
+      ]
+    },
+    {
+      "id": "unicode-surrogates-crlf",
+      "text": "A😀é\r\n中",
+      "boundaries": [
+        0,
+        1,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ]
+    },
+    {
+      "id": "repeated-markdown",
+      "text": "**same**\n**same**",
+      "boundaries": [
+        0,
+        1,
+        3,
+        8,
+        11,
+        16,
+        17
+      ]
+    },
+    {
+      "id": "boundary-constructs",
+      "text": "```js\r\nx😀\r\n```\r\n- **list**\n\n| a | b |\n|---|---|\n| x | y |",
+      "boundaries": [
+        0,
+        2,
+        7,
+        10,
+        15,
+        20,
+        30,
+        40,
+        50,
+        58
+      ]
+    },
+    {
+      "id": "huge-fence",
+      "recipe": {
+        "prefix": "```\n",
+        "repeat": "😀\t\\\"\r\n",
+        "count": 10000,
+        "suffix": "\n```"
+      },
+      "maxSourceBytes": 4096
+    }
+  ],
+  "cursorClaim": {
+    "backendId": "db-a",
+    "workspaceId": "ws-a",
+    "noteId": "spec",
+    "noteInstanceId": "inc-a",
+    "principalId": "p-a",
+    "kind": "source",
+    "budgets": {
+      "sourceBytes": 4096,
+      "wireBytes": 65536
+    },
+    "sourceRevision": "r:7",
+    "expiresAt": 300000,
+    "boot": "boot-a"
+  },
+  "current": {
+    "sourceRevision": "r:7",
+    "attributionGeneration": "a:2",
+    "commentRevision": "c:4",
+    "boot": "boot-a"
+  },
+  "cursors": [
+    {
+      "id": "unchanged",
+      "expect": null
+    },
+    {
+      "id": "cross-backendId",
+      "requestPatch": {
+        "backendId": "other"
+      },
+      "expect": "note-page-cursor-invalid"
+    },
+    {
+      "id": "cross-workspaceId",
+      "requestPatch": {
+        "workspaceId": "other"
+      },
+      "expect": "note-page-cursor-invalid"
+    },
+    {
+      "id": "cross-noteId",
+      "requestPatch": {
+        "noteId": "other"
+      },
+      "expect": "note-page-cursor-invalid"
+    },
+    {
+      "id": "cross-noteInstanceId",
+      "requestPatch": {
+        "noteInstanceId": "other"
+      },
+      "expect": "note-page-cursor-invalid"
+    },
+    {
+      "id": "cross-principalId",
+      "requestPatch": {
+        "principalId": "other"
+      },
+      "expect": "note-page-cursor-invalid"
+    },
+    {
+      "id": "cross-kind",
+      "requestPatch": {
+        "kind": "other"
+      },
+      "expect": "note-page-cursor-invalid"
+    },
+    {
+      "id": "changed-budget",
+      "requestPatch": {
+        "budgets": {
+          "sourceBytes": 8192,
+          "wireBytes": 65536
+        }
+      },
+      "expect": "note-page-cursor-invalid"
+    },
+    {
+      "id": "metadata-only-revision",
+      "currentPatch": {
+        "sourceRevision": "r:8"
+      },
+      "expect": "note-page-stale"
+    },
+    {
+      "id": "full-writer-revision",
+      "currentPatch": {
+        "sourceRevision": "r:9"
+      },
+      "expect": "note-page-stale"
+    },
+    {
+      "id": "expiry-equality",
+      "now": 300000,
+      "expect": "note-page-expired"
+    },
+    {
+      "id": "restart",
+      "currentPatch": {
+        "boot": "boot-b"
+      },
+      "expect": "note-page-expired"
+    },
+    {
+      "id": "stale-attribution",
+      "claimPatch": {
+        "attributionGeneration": "a:1"
+      },
+      "expect": "note-page-stale"
+    },
+    {
+      "id": "stale-comment",
+      "claimPatch": {
+        "commentRevision": "c:3"
+      },
+      "expect": "note-page-stale"
+    },
+    {
+      "id": "comment-ignores-attribution",
+      "claimPatch": {
+        "commentRevision": "c:4"
+      },
+      "currentPatch": {
+        "attributionGeneration": "a:3"
+      },
+      "expect": null
+    },
+    {
+      "id": "attribution-ignores-comment",
+      "claimPatch": {
+        "attributionGeneration": "a:2"
+      },
+      "currentPatch": {
+        "commentRevision": "c:5"
+      },
+      "expect": null
+    },
+    {
+      "id": "disjoint-not-hull",
+      "claimPatch": {
+        "ranges": [
+          {
+            "start": 0,
+            "end": 2
+          },
+          {
+            "start": 8,
+            "end": 10
+          }
+        ]
+      },
+      "requestPatch": {
+        "ranges": [
+          {
+            "start": 0,
+            "end": 10
+          }
+        ]
+      },
+      "expect": "note-page-cursor-invalid"
+    }
+  ],
+  "annotations": {
+    "ranges": [
+      {
+        "start": 10,
+        "end": 20
+      },
+      {
+        "start": 40,
+        "end": 50
+      }
+    ],
+    "anchors": [
+      {
+        "canonicalId": "outside-start",
+        "start": 5,
+        "end": 15
+      },
+      {
+        "canonicalId": "gap-only",
+        "start": 25,
+        "end": 35
+      },
+      {
+        "canonicalId": "spans-both",
+        "start": 8,
+        "end": 45
+      },
+      {
+        "canonicalId": "alias",
+        "start": 11,
+        "end": 12
+      },
+      {
+        "canonicalId": "alias",
+        "start": 41,
+        "end": 42
+      },
+      {
+        "canonicalId": "end-exclusive",
+        "start": 20,
+        "end": 20
+      },
+      {
+        "canonicalId": "point-start",
+        "start": 40,
+        "end": 40
+      }
+    ],
+    "expect": [
+      "alias",
+      "outside-start",
+      "point-start",
+      "spans-both"
+    ]
+  },
+  "legacy": {
+    "request": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "note.get",
+      "params": {
+        "workspaceId": "ws-a",
+        "noteId": "spec"
+      }
+    },
+    "result": {
+      "note": {
+        "id": "spec",
+        "workspaceId": "ws-a",
+        "content": "whole note",
+        "rev": 7
+      }
+    }
+  },
+  "escapedWire": {
+    "scalar": "\t",
+    "sourceCount": 10000,
+    "end": 1842,
+    "expectedWireBytes": 4095,
+    "maxWireBytes": 4096
+  },
+  "annotationPages": {
+    "pages": [
+      {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "kind": "noteReplyPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:7",
+          "commentRevision": "c:4",
+          "snapshotId": "comment-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "threadId": "root",
+          "rootCommentId": "root",
+          "totalComments": 3,
+          "items": [
+            {
+              "commentId": "reply-1",
+              "authorPrincipalId": "principal-a",
+              "authorIdentity": { "provider": "gitlab", "host": "forge.example:8443", "externalUserId": "42" },
+              "createdAt": "2026-10-03T00:00:00.000Z",
+              "preview": "preview",
+              "truncated": true,
+              "bodyRef": "body-reply-1",
+              "detailRef": "detail-reply-1",
+              "status": "open"
+            },
+            {
+              "commentId": "reply-2",
+              "createdAt": "2026-10-03T00:00:00.000Z",
+              "preview": "preview",
+              "truncated": true,
+              "bodyRef": "body-reply-2",
+              "detailRef": "detail-reply-2",
+              "status": "open"
+            }
+          ],
+          "nextCursor": "next-replies",
+          "rootState": "present"
+        }
+      },
+      {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "kind": "noteReplyPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:7",
+          "commentRevision": "c:4",
+          "snapshotId": "comment-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "threadId": "root",
+          "rootCommentId": "root",
+          "totalComments": 3,
+          "items": [
+            {
+              "commentId": "root",
+              "authorPrincipalIdRef": "principal-root",
+              "authorIdentityRef": "identity-root",
+              "createdAt": "2026-10-03T00:00:00.000Z",
+              "preview": "preview",
+              "truncated": true,
+              "bodyRef": "body-root",
+              "detailRef": "detail-root",
+              "status": "open"
+            }
+          ],
+          "nextCursor": null,
+          "rootState": "present"
+        }
+      }
+    ],
+    "fragments": [
+      {
+        "offset": 0,
+        "text": "first😀",
+        "nextRef": "fragment-2"
+      },
+      {
+        "offset": 7,
+        "text": "\r\nlast",
+        "nextRef": null
+      }
+    ],
+    "expectedBody": "first😀\r\nlast",
+    "events": [
+      {
+        "jsonrpc": "2.0",
+        "method": "subscription.push",
+        "params": {
+          "subscriptionId": "sub-a",
+          "seq": 0,
+          "kind": "snapshot",
+          "snapshot": {
+            "kind": "notePageState",
+            "scope": {
+              "backendId": "db-a",
+              "workspaceId": "ws-a",
+              "noteId": "spec",
+              "noteInstanceId": "inc-a"
+            },
+            "sourceRevision": "r:7",
+            "attributionGeneration": "a:2",
+            "commentRevision": "c:4",
+            "attributionState": "ready",
+            "deleted": false,
+            "invalidation": "all",
+            "stateGeneration": "10"
+          }
+        }
+      },
+      {
+        "jsonrpc": "2.0",
+        "method": "subscription.push",
+        "params": {
+          "subscriptionId": "sub-a",
+          "seq": 1,
+          "kind": "snapshot",
+          "snapshot": {
+            "kind": "notePageState",
+            "scope": {
+              "backendId": "db-a",
+              "workspaceId": "ws-a",
+              "noteId": "spec",
+              "noteInstanceId": "inc-a"
+            },
+            "sourceRevision": "r:7",
+            "attributionGeneration": "a:3",
+            "commentRevision": "c:4",
+            "attributionState": "ready",
+            "deleted": false,
+            "invalidation": "all",
+            "stateGeneration": "11"
+          }
+        }
+      },
+      {
+        "jsonrpc": "2.0",
+        "method": "subscription.push",
+        "params": {
+          "subscriptionId": "sub-a",
+          "seq": 2,
+          "kind": "snapshot",
+          "snapshot": {
+            "kind": "notePageState",
+            "scope": {
+              "backendId": "db-a",
+              "workspaceId": "ws-a",
+              "noteId": "spec",
+              "noteInstanceId": "inc-a"
+            },
+            "sourceRevision": "r:7",
+            "attributionGeneration": "a:3",
+            "commentRevision": "c:5",
+            "attributionState": "ready",
+            "deleted": false,
+            "invalidation": "all",
+            "stateGeneration": "12"
+          }
+        }
+      }
+    ]
+  },
+  "attributionPages": [
+    {
+      "kind": "noteAttributionPage",
+      "scope": {
+        "backendId": "db-a",
+        "workspaceId": "ws-a",
+        "noteId": "spec",
+        "noteInstanceId": "inc-a"
+      },
+      "sourceRevision": "r:7",
+      "snapshotId": "annotation-snapshot",
+      "expiresAt": "2026-10-03T00:05:00.000Z",
+      "attributionGeneration": "a:2",
+      "state": "pending",
+      "items": [],
+      "nextCursor": null
+    },
+    {
+      "kind": "noteAttributionPage",
+      "scope": {
+        "backendId": "db-a",
+        "workspaceId": "ws-a",
+        "noteId": "spec",
+        "noteInstanceId": "inc-a"
+      },
+      "sourceRevision": "r:7",
+      "snapshotId": "annotation-snapshot",
+      "expiresAt": "2026-10-03T00:05:00.000Z",
+      "attributionGeneration": "a:3",
+      "state": "ready",
+      "items": [
+        {
+          "id": "line-1",
+          "sourceRange": {
+            "start": 0,
+            "end": 20
+          },
+          "startLine": 1,
+          "endLine": 1,
+          "authorRef": "author-a",
+          "timestamp": 1790985600000
+        }
+      ],
+      "nextCursor": null
+    }
+  ],
+  "commentSummaryPage": {
+    "kind": "noteCommentPage",
+    "scope": {
+      "backendId": "db-a",
+      "workspaceId": "ws-a",
+      "noteId": "spec",
+      "noteInstanceId": "inc-a"
+    },
+    "sourceRevision": "r:7",
+    "snapshotId": "annotation-snapshot",
+    "expiresAt": "2026-10-03T00:05:00.000Z",
+    "commentRevision": "c:4",
+    "totalThreads": 90000,
+    "totalComments": 100000,
+    "items": [
+      {
+        "threadId": "root",
+        "status": "open",
+        "totalComments": 3,
+        "latestCommentId": "reply-2",
+        "latestCommentPreview": "bounded",
+        "truncated": true,
+        "anchorRef": "anchor-page",
+        "detailRef": "thread-detail",
+        "rootCommentId": "root",
+        "rootState": "present"
+      }
+    ],
+    "nextCursor": "next-summary"
+  },
+  "contextPages": [
+    {
+      "kind": "noteContextPage",
+      "scope": {
+        "backendId": "db-a",
+        "workspaceId": "ws-a",
+        "noteId": "spec",
+        "noteInstanceId": "inc-a"
+      },
+      "sourceRevision": "r:7",
+      "snapshotId": "annotation-snapshot",
+      "expiresAt": "2026-10-03T00:05:00.000Z",
+      "items": [
+        {
+          "kind": "boundary",
+          "id": "boundary-1",
+          "sourceRange": {
+            "start": 0,
+            "end": 2000000
+          },
+          "construct": "codeBlock",
+          "continuationBefore": false,
+          "continuationAfter": true,
+          "detailRef": "syntax-1"
+        }
+      ],
+      "nextCursor": "context-2"
+    },
+    {
+      "kind": "noteContextPage",
+      "scope": {
+        "backendId": "db-a",
+        "workspaceId": "ws-a",
+        "noteId": "spec",
+        "noteInstanceId": "inc-a"
+      },
+      "sourceRevision": "r:7",
+      "snapshotId": "annotation-snapshot",
+      "expiresAt": "2026-10-03T00:05:00.000Z",
+      "items": [
+        {
+          "kind": "span",
+          "id": "marker-1",
+          "sourceRange": {
+            "start": 8,
+            "end": 45
+          },
+          "role": "commentMarker",
+          "detailRef": "anchor-page"
+        }
+      ],
+      "nextCursor": null
+    }
+  ],
+  "anchorOccurrences": {
+    "canonicalId": "11111111-1111-4111-8111-111111111111",
+    "pages": [
+      [
+        {
+          "occurrenceId": "alias-1",
+          "sourceRange": {
+            "start": 10,
+            "end": 15
+          },
+          "canonicalId": "11111111-1111-4111-8111-111111111111"
+        }
+      ],
+      [
+        {
+          "occurrenceId": "alias-2",
+          "sourceRange": {
+            "start": 40,
+            "end": 45
+          },
+          "canonicalId": "11111111-1111-4111-8111-111111111111"
+        }
+      ]
+    ]
+  },
+  "requests": [
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "note.get",
+      "params": {
+        "workspaceId": "ws-a",
+        "noteId": "spec",
+        "page": {
+          "kind": "source",
+          "at": 1,
+          "maxSourceBytes": 4
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "method": "note.get",
+      "params": {
+        "workspaceId": "ws-a",
+        "noteId": "spec",
+        "page": {
+          "kind": "context",
+          "contextRef": "opaque-context",
+          "maxItems": 2
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 5,
+      "method": "note.lineAttribution.load",
+      "params": {
+        "backendId": "db-a",
+        "workspaceId": "ws-a",
+        "noteId": "spec",
+        "noteInstanceId": "inc-a",
+        "sourceRevision": "r:7",
+        "page": {
+          "kind": "attribution",
+          "ranges": [
+            {
+              "start": 10,
+              "end": 20
+            }
+          ]
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 6,
+      "method": "comment.list",
+      "params": {
+        "backendId": "db-a",
+        "workspaceId": "ws-a",
+        "noteId": "spec",
+        "noteInstanceId": "inc-a",
+        "sourceRevision": "r:7",
+        "page": {
+          "kind": "comments",
+          "ranges": [
+            {
+              "start": 10,
+              "end": 20
+            },
+            {
+              "start": 40,
+              "end": 50
+            }
+          ]
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 7,
+      "method": "comment.getThread",
+      "params": {
+        "backendId": "db-a",
+        "workspaceId": "ws-a",
+        "noteId": "spec",
+        "noteInstanceId": "inc-a",
+        "sourceRevision": "r:7",
+        "page": {
+          "kind": "replies",
+          "threadId": "root"
+        }
+      }
+    }
+  ],
+  "crossedChannels": {
+    "frames": [
+      {
+        "channel": "note",
+        "seq": 1,
+        "state": {
+          "kind": "notePageState",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "stateGeneration": "10",
+          "sourceRevision": "r:7",
+          "attributionGeneration": "a:2",
+          "commentRevision": "c:4",
+          "attributionState": "ready",
+          "deleted": false,
+          "invalidation": "all"
+        }
+      },
+      {
+        "channel": "comment",
+        "seq": 0,
+        "state": {
+          "kind": "notePageState",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "stateGeneration": "9",
+          "sourceRevision": "r:6",
+          "attributionGeneration": "a:1",
+          "commentRevision": "c:3",
+          "attributionState": "ready",
+          "deleted": false,
+          "invalidation": "all"
+        }
+      },
+      {
+        "channel": "note",
+        "seq": 2,
+        "state": {
+          "kind": "notePageState",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "stateGeneration": "11",
+          "sourceRevision": "r:7",
+          "attributionGeneration": "a:3",
+          "commentRevision": "c:4",
+          "attributionState": "ready",
+          "deleted": false,
+          "invalidation": "all"
+        }
+      },
+      {
+        "channel": "comment",
+        "seq": 2,
+        "state": {
+          "kind": "notePageState",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "stateGeneration": "10",
+          "sourceRevision": "r:7",
+          "attributionGeneration": "a:2",
+          "commentRevision": "c:4",
+          "attributionState": "ready",
+          "deleted": false,
+          "invalidation": "all"
+        }
+      },
+      {
+        "channel": "comment",
+        "seq": 3,
+        "state": {
+          "kind": "notePageState",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "stateGeneration": "12",
+          "sourceRevision": "r:7",
+          "attributionGeneration": "a:3",
+          "commentRevision": "c:5",
+          "attributionState": "ready",
+          "deleted": false,
+          "invalidation": "all"
+        }
+      },
+      {
+        "channel": "note",
+        "seq": 3,
+        "state": {
+          "kind": "notePageState",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "stateGeneration": "11",
+          "sourceRevision": "r:7",
+          "attributionGeneration": "a:3",
+          "commentRevision": "c:4",
+          "attributionState": "ready",
+          "deleted": false,
+          "invalidation": "all"
+        }
+      }
+    ],
+    "expectedGenerations": [
+      "10",
+      "10",
+      "11",
+      "11",
+      "12",
+      "12"
+    ],
+    "expected": {
+      "kind": "notePageState",
+      "scope": {
+        "backendId": "db-a",
+        "workspaceId": "ws-a",
+        "noteId": "spec",
+        "noteInstanceId": "inc-a"
+      },
+      "stateGeneration": "12",
+      "sourceRevision": "r:7",
+      "attributionGeneration": "a:3",
+      "commentRevision": "c:5",
+      "attributionState": "ready",
+      "deleted": false,
+      "invalidation": "all"
+    }
+  },
+  "metadataPages": [
+    {
+      "kind": "noteMetadataPage",
+      "items": [
+        {
+          "id": "root",
+          "parentId": null,
+          "type": "object",
+          "childrenRef": "root-children"
+        }
+      ],
+      "nextCursor": null,
+      "scope": {
+        "backendId": "db-a",
+        "workspaceId": "ws-a",
+        "noteId": "spec",
+        "noteInstanceId": "inc-a"
+      },
+      "sourceRevision": "r:7",
+      "snapshotId": "snapshot-a",
+      "expiresAt": "2026-10-03T00:05:00.000Z"
+    },
+    {
+      "kind": "noteMetadataPage",
+      "items": [
+        {
+          "id": "tags",
+          "parentId": "root",
+          "key": "tags",
+          "type": "array",
+          "childrenRef": "tag-page"
+        },
+        {
+          "id": "title",
+          "parentId": "root",
+          "key": "title",
+          "type": "string",
+          "valueRef": "large-title"
+        }
+      ],
+      "nextCursor": null,
+      "scope": {
+        "backendId": "db-a",
+        "workspaceId": "ws-a",
+        "noteId": "spec",
+        "noteInstanceId": "inc-a"
+      },
+      "sourceRevision": "r:7",
+      "snapshotId": "snapshot-a",
+      "expiresAt": "2026-10-03T00:05:00.000Z"
+    },
+    {
+      "kind": "noteMetadataPage",
+      "items": [
+        {
+          "id": "tag-0",
+          "parentId": "tags",
+          "index": 0,
+          "type": "string",
+          "valueRef": "large-tag"
+        }
+      ],
+      "nextCursor": "tag-page-2",
+      "scope": {
+        "backendId": "db-a",
+        "workspaceId": "ws-a",
+        "noteId": "spec",
+        "noteInstanceId": "inc-a"
+      },
+      "sourceRevision": "r:7",
+      "snapshotId": "snapshot-a",
+      "expiresAt": "2026-10-03T00:05:00.000Z"
+    }
+  ],
+  "fixtureRepresentations": {
+    "wireFrames": [
+      "requests",
+      "annotationPages.pages",
+      "annotationPages.events",
+      "deletedRoot.pages",
+      "deletedRoot.exhausted",
+      "deletedRoot.afterReplyDelete",
+      "deletedRoot.summary",
+      "deletedRoot.cachedBeforeDelete",
+      "deletedRoot.missingThread",
+      "deletedRoot.notification"
+    ],
+    "resultObjects": [
+      "metadataPages",
+      "contextPages",
+      "attributionPages",
+      "commentSummaryPage"
+    ],
+    "recordsOnly": [
+      "annotationPages.fragments",
+      "crossedChannels",
+      "deletedRoot.oldReplyCursor",
+      "deletedRoot.survivorCursor"
+    ],
+    "note": "Result objects are wrapped in JSON-RPC response envelopes before wire validation. Records-only scenarios are not complete RPC examples."
+  },
+  "deletedRoot": {
+    "pages": [
+      {
+        "jsonrpc": "2.0",
+        "id": 30,
+        "result": {
+          "kind": "noteReplyPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:7",
+          "commentRevision": "c:5",
+          "snapshotId": "root-deleted-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "threadId": "root",
+          "rootCommentId": "root",
+          "totalComments": 2,
+          "items": [
+            {
+              "commentId": "reply-1",
+              "authorPrincipalId": "principal-a",
+              "authorIdentity": {
+                "provider": "gitlab",
+                "host": "forge.example:8443",
+                "externalUserId": "42"
+              },
+              "createdAt": "2026-10-03T00:00:00.000Z",
+              "preview": "preview",
+              "truncated": true,
+              "bodyRef": "body-reply-1",
+              "detailRef": "detail-reply-1",
+              "status": "open"
+            }
+          ],
+          "nextCursor": "root-deleted-next",
+          "rootState": "deleted"
+        }
+      },
+      {
+        "jsonrpc": "2.0",
+        "id": 31,
+        "result": {
+          "kind": "noteReplyPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:7",
+          "commentRevision": "c:5",
+          "snapshotId": "root-deleted-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "threadId": "root",
+          "rootCommentId": "root",
+          "totalComments": 2,
+          "items": [
+            {
+              "commentId": "reply-2",
+              "createdAt": "2026-10-03T00:00:00.000Z",
+              "preview": "preview",
+              "truncated": true,
+              "bodyRef": "body-reply-2",
+              "detailRef": "detail-reply-2",
+              "status": "open"
+            }
+          ],
+          "nextCursor": null,
+          "rootState": "deleted"
+        }
+      }
+    ],
+    "exhausted": {
+      "jsonrpc": "2.0",
+      "id": 32,
+      "result": {
+        "kind": "noteReplyPage",
+        "scope": {
+          "backendId": "db-a",
+          "workspaceId": "ws-a",
+          "noteId": "spec",
+          "noteInstanceId": "inc-a"
+        },
+        "sourceRevision": "r:7",
+        "commentRevision": "c:5",
+        "snapshotId": "root-deleted-snapshot",
+        "expiresAt": "2026-10-03T00:05:00.000Z",
+        "threadId": "root",
+        "rootCommentId": "root",
+        "totalComments": 2,
+        "items": [],
+        "nextCursor": null,
+        "rootState": "deleted"
+      }
+    },
+    "afterReplyDelete": [
+      {
+        "jsonrpc": "2.0",
+        "id": 31,
+        "result": {
+          "kind": "noteReplyPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:7",
+          "commentRevision": "c:6",
+          "snapshotId": "one-survivor-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "threadId": "root",
+          "rootCommentId": "root",
+          "totalComments": 1,
+          "items": [
+            {
+              "commentId": "reply-2",
+              "createdAt": "2026-10-03T00:00:00.000Z",
+              "preview": "preview",
+              "truncated": true,
+              "bodyRef": "body-reply-2",
+              "detailRef": "detail-reply-2",
+              "status": "open"
+            }
+          ],
+          "nextCursor": null,
+          "rootState": "deleted"
+        }
+      }
+    ],
+    "summary": {
+      "jsonrpc": "2.0",
+      "id": 33,
+      "result": {
+        "kind": "noteCommentPage",
+        "scope": {
+          "backendId": "db-a",
+          "workspaceId": "ws-a",
+          "noteId": "spec",
+          "noteInstanceId": "inc-a"
+        },
+        "sourceRevision": "r:7",
+        "snapshotId": "root-deleted-summary",
+        "expiresAt": "2026-10-03T00:05:00.000Z",
+        "commentRevision": "c:5",
+        "totalThreads": 1,
+        "totalComments": 2,
+        "items": [
+          {
+            "threadId": "root",
+            "status": "open",
+            "totalComments": 2,
+            "latestCommentId": "reply-2",
+            "latestCommentPreview": "bounded",
+            "truncated": true,
+            "anchorRef": null,
+            "detailRef": "thread-detail",
+            "rootCommentId": "root",
+            "rootState": "deleted"
+          }
+        ],
+        "nextCursor": null
+      }
+    },
+    "oldReplyCursor": {
+      "backendId": "db-a",
+      "workspaceId": "ws-a",
+      "noteId": "spec",
+      "noteInstanceId": "inc-a",
+      "principalId": "p-a",
+      "kind": "replies",
+      "budgets": {
+        "sourceBytes": 4096,
+        "wireBytes": 65536
+      },
+      "sourceRevision": "r:7",
+      "expiresAt": 300000,
+      "boot": "boot-a",
+      "threadId": "root",
+      "commentRevision": "c:4"
+    },
+    "afterRootDelete": {
+      "sourceRevision": "r:7",
+      "attributionGeneration": "a:2",
+      "commentRevision": "c:5",
+      "boot": "boot-a"
+    },
+    "cachedBeforeDelete": {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "result": {
+        "kind": "noteReplyPage",
+        "scope": {
+          "backendId": "db-a",
+          "workspaceId": "ws-a",
+          "noteId": "spec",
+          "noteInstanceId": "inc-a"
+        },
+        "sourceRevision": "r:7",
+        "commentRevision": "c:4",
+        "snapshotId": "comment-snapshot",
+        "expiresAt": "2026-10-03T00:05:00.000Z",
+        "threadId": "root",
+        "rootCommentId": "root",
+        "totalComments": 3,
+        "items": [
+          {
+            "commentId": "root",
+            "createdAt": "2026-10-03T00:00:00.000Z",
+            "preview": "preview",
+            "truncated": true,
+            "bodyRef": "body-root",
+            "detailRef": "detail-root",
+            "status": "open"
+          }
+        ],
+        "nextCursor": null,
+        "rootState": "present"
+      }
+    },
+    "acceptLateOldPage": false,
+    "survivorCursor": {
+      "backendId": "db-a",
+      "workspaceId": "ws-a",
+      "noteId": "spec",
+      "noteInstanceId": "inc-a",
+      "principalId": "p-a",
+      "kind": "replies",
+      "budgets": {
+        "sourceBytes": 4096,
+        "wireBytes": 65536
+      },
+      "sourceRevision": "r:7",
+      "expiresAt": 300000,
+      "boot": "boot-a",
+      "threadId": "root",
+      "commentRevision": "c:6"
+    },
+    "afterFinalDelete": {
+      "sourceRevision": "r:7",
+      "attributionGeneration": "a:2",
+      "commentRevision": "c:7",
+      "boot": "boot-a"
+    },
+    "missingThread": {
+      "jsonrpc": "2.0",
+      "id": 34,
+      "error": {
+        "code": -32602,
+        "message": "Comment thread not found",
+        "data": {
+          "code": "not-found",
+          "entity": "commentThread"
+        }
+      }
+    },
+    "notification": {
+      "jsonrpc": "2.0",
+      "method": "subscription.push",
+      "params": {
+        "subscriptionId": "sub-a",
+        "seq": 1,
+        "kind": "snapshot",
+        "snapshot": {
+          "kind": "notePageState",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:7",
+          "attributionGeneration": "a:2",
+          "commentRevision": "c:5",
+          "attributionState": "ready",
+          "deleted": false,
+          "invalidation": "all",
+          "stateGeneration": "11"
+        }
+      }
+    }
+  },
+  "orderedTaskIds": {
+    "source": "😀 Prose [one](intent://local/task/first) and [two](intent://local/task/second)\r\n- [ ] [again](intent://local/task/first)\n`[code](intent://local/task/code-id)` ![image](intent://local/task/image-id)\n[fq](intent://local/ws-a/task/excluded) [](intent://local/task/no-label) [empty](intent://local/task/)\n[encoded](intent://local/task/a%2Fb) [decoded](intent://local/task/a/b)\n[raw](intent://local/task/ spaced\\id\r\nnext)\n[long](intent://local/task/長😀LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL)\n[repeat](intent://local/task/second)",
+    "expected": [
+      "first",
+      "second",
+      "code-id",
+      "image-id",
+      "a%2Fb",
+      "a/b",
+      " spaced\\id\r\nnext",
+      "長😀LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL"
+    ],
+    "request": {
+      "jsonrpc": "2.0",
+      "id": "task-summary",
+      "method": "note.get",
+      "params": {
+        "workspaceId": "ws-a",
+        "noteId": "spec",
+        "page": {
+          "kind": "taskIds",
+          "maxItems": 2
+        }
+      }
+    },
+    "pages": [
+      {
+        "jsonrpc": "2.0",
+        "id": "task-summary",
+        "result": {
+          "kind": "noteTaskIdsPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:7",
+          "snapshotId": "task-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "totalItems": 8,
+          "startIndex": 0,
+          "items": [
+            {
+              "index": 0,
+              "sourceRange": {
+                "start": 35,
+                "end": 40
+              },
+              "taskNoteIdLength": 5,
+              "taskNoteId": "first"
+            },
+            {
+              "index": 1,
+              "sourceRange": {
+                "start": 72,
+                "end": 78
+              },
+              "taskNoteIdLength": 6,
+              "taskNoteId": "second"
+            }
+          ],
+          "nextCursor": "task-cursor-2"
+        }
+      },
+      {
+        "jsonrpc": "2.0",
+        "id": "task-summary",
+        "result": {
+          "kind": "noteTaskIdsPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:7",
+          "snapshotId": "task-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "totalItems": 8,
+          "startIndex": 2,
+          "items": [
+            {
+              "index": 2,
+              "sourceRange": {
+                "start": 150,
+                "end": 157
+              },
+              "taskNoteIdLength": 7,
+              "taskNoteId": "code-id"
+            },
+            {
+              "index": 3,
+              "sourceRange": {
+                "start": 189,
+                "end": 197
+              },
+              "taskNoteIdLength": 8,
+              "taskNoteId": "image-id"
+            }
+          ],
+          "nextCursor": "task-cursor-4"
+        }
+      },
+      {
+        "jsonrpc": "2.0",
+        "id": "task-summary",
+        "result": {
+          "kind": "noteTaskIdsPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:7",
+          "snapshotId": "task-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "totalItems": 8,
+          "startIndex": 4,
+          "items": [
+            {
+              "index": 4,
+              "sourceRange": {
+                "start": 332,
+                "end": 337
+              },
+              "taskNoteIdLength": 5,
+              "taskNoteId": "a%2Fb"
+            },
+            {
+              "index": 5,
+              "sourceRange": {
+                "start": 369,
+                "end": 372
+              },
+              "taskNoteIdLength": 3,
+              "taskNoteId": "a/b"
+            }
+          ],
+          "nextCursor": "task-cursor-6"
+        }
+      },
+      {
+        "jsonrpc": "2.0",
+        "id": "task-summary",
+        "result": {
+          "kind": "noteTaskIdsPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:7",
+          "snapshotId": "task-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "totalItems": 8,
+          "startIndex": 6,
+          "items": [
+            {
+              "index": 6,
+              "sourceRange": {
+                "start": 400,
+                "end": 416
+              },
+              "taskNoteIdLength": 16,
+              "taskNoteId": " spaced\\id\r\nnext"
+            },
+            {
+              "index": 7,
+              "sourceRange": {
+                "start": 445,
+                "end": 748
+              },
+              "taskNoteIdLength": 303,
+              "taskNoteIdRef": "task-id-7"
+            }
+          ],
+          "nextCursor": null
+        }
+      }
+    ],
+    "longIdFragments": [
+      {
+        "jsonrpc": "2.0",
+        "id": "task-summary",
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:7",
+          "snapshotId": "task-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "fragment",
+              "id": "task-fragment-0",
+              "field": "taskNoteId",
+              "offset": 0,
+              "text": "長😀LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
+              "nextRef": "long-tail"
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      {
+        "jsonrpc": "2.0",
+        "id": "task-summary",
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:7",
+          "snapshotId": "task-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "fragment",
+              "id": "task-fragment-1",
+              "field": "taskNoteId",
+              "offset": 101,
+              "text": "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
+              "nextRef": null
+            }
+          ],
+          "nextCursor": null
+        }
+      }
+    ],
+    "empty": {
+      "jsonrpc": "2.0",
+      "id": "task-summary",
+      "result": {
+        "kind": "noteTaskIdsPage",
+        "scope": {
+          "backendId": "db-a",
+          "workspaceId": "ws-a",
+          "noteId": "spec",
+          "noteInstanceId": "inc-a"
+        },
+        "sourceRevision": "r:7",
+        "snapshotId": "task-snapshot",
+        "expiresAt": "2026-10-03T00:05:00.000Z",
+        "totalItems": 0,
+        "startIndex": 0,
+        "items": [],
+        "nextCursor": null
+      }
+    },
+    "exhausted": {
+      "jsonrpc": "2.0",
+      "id": "task-summary",
+      "result": {
+        "kind": "noteTaskIdsPage",
+        "scope": {
+          "backendId": "db-a",
+          "workspaceId": "ws-a",
+          "noteId": "spec",
+          "noteInstanceId": "inc-a"
+        },
+        "sourceRevision": "r:7",
+        "snapshotId": "task-snapshot",
+        "expiresAt": "2026-10-03T00:05:00.000Z",
+        "totalItems": 8,
+        "startIndex": 8,
+        "items": [],
+        "nextCursor": null
+      }
+    }
+  },
+  "helloPaging": {
+    "jsonrpc": "2.0",
+    "id": "hello",
+    "result": {
+      "clientId": "client-a",
+      "protocolVersion": "11.0",
+      "server": {
+        "locality": "local",
+        "hasDisplay": false,
+        "osArch": "linux/x86_64",
+        "version": "prepared-example",
+        "protocolVersion": "11.0",
+        "capabilities": {
+          "noteAnnotations": 1,
+          "notePagingBackendId": "db-a",
+          "notePagingRead": 1
+        }
+      }
+    }
+  },
+  "contextWire": {
+    "directory": {
+      "jsonrpc": "2.0",
+      "id": "context",
+      "result": {
+        "kind": "noteContextPage",
+        "scope": {
+          "backendId": "db-a",
+          "workspaceId": "ws-a",
+          "noteId": "spec",
+          "noteInstanceId": "inc-a"
+        },
+        "sourceRevision": "r:7",
+        "snapshotId": "context-snapshot",
+        "expiresAt": "2026-10-03T00:05:00.000Z",
+        "items": [
+          {
+            "kind": "fragment",
+            "id": "d-0",
+            "field": "openingSource",
+            "offset": 0,
+            "text": "",
+            "nextRef": "field-0"
+          },
+          {
+            "kind": "fragment",
+            "id": "d-1",
+            "field": "closingSource",
+            "offset": 0,
+            "text": "",
+            "nextRef": "field-1"
+          },
+          {
+            "kind": "fragment",
+            "id": "d-2",
+            "field": "linkType",
+            "offset": 0,
+            "text": "",
+            "nextRef": "field-2"
+          },
+          {
+            "kind": "fragment",
+            "id": "d-3",
+            "field": "destination",
+            "offset": 0,
+            "text": "",
+            "nextRef": "field-3"
+          },
+          {
+            "kind": "fragment",
+            "id": "d-4",
+            "field": "title",
+            "offset": 0,
+            "text": "",
+            "nextRef": "field-4"
+          },
+          {
+            "kind": "fragment",
+            "id": "d-5",
+            "field": "referenceId",
+            "offset": 0,
+            "text": "",
+            "nextRef": "field-5"
+          }
+        ],
+        "nextCursor": null
+      }
+    },
+    "fields": {
+      "openingSource": {
+        "expected": "[",
+        "pages": [
+          {
+            "jsonrpc": "2.0",
+            "id": "context",
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:7",
+              "snapshotId": "context-snapshot",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "v-0-0",
+                  "field": "openingSource",
+                  "offset": 0,
+                  "text": "[",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        ]
+      },
+      "closingSource": {
+        "expected": "](https://example.test/a%20b \"\")",
+        "pages": [
+          {
+            "jsonrpc": "2.0",
+            "id": "context",
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:7",
+              "snapshotId": "context-snapshot",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "v-1-0",
+                  "field": "closingSource",
+                  "offset": 0,
+                  "text": "](https://example.test/a%20b \"\")",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        ]
+      },
+      "linkType": {
+        "expected": "Inline",
+        "pages": [
+          {
+            "jsonrpc": "2.0",
+            "id": "context",
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:7",
+              "snapshotId": "context-snapshot",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "v-2-0",
+                  "field": "linkType",
+                  "offset": 0,
+                  "text": "Inline",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        ]
+      },
+      "destination": {
+        "expected": "https://example.test/a%20b",
+        "pages": [
+          {
+            "jsonrpc": "2.0",
+            "id": "context",
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:7",
+              "snapshotId": "context-snapshot",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "v-3-0",
+                  "field": "destination",
+                  "offset": 0,
+                  "text": "https://example.",
+                  "nextRef": "field-3-tail"
+                }
+              ],
+              "nextCursor": null
+            }
+          },
+          {
+            "jsonrpc": "2.0",
+            "id": "context",
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:7",
+              "snapshotId": "context-snapshot",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "v-3-1",
+                  "field": "destination",
+                  "offset": 16,
+                  "text": "test/a%20b",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        ]
+      },
+      "title": {
+        "expected": "",
+        "pages": [
+          {
+            "jsonrpc": "2.0",
+            "id": "context",
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:7",
+              "snapshotId": "context-snapshot",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "v-4-0",
+                  "field": "title",
+                  "offset": 0,
+                  "text": "",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        ]
+      },
+      "referenceId": {
+        "expected": "",
+        "pages": [
+          {
+            "jsonrpc": "2.0",
+            "id": "context",
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:7",
+              "snapshotId": "context-snapshot",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "v-5-0",
+                  "field": "referenceId",
+                  "offset": 0,
+                  "text": "",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        ]
+      }
+    },
+    "descriptor": {
+      "jsonrpc": "2.0",
+      "id": "context",
+      "result": {
+        "kind": "noteContextPage",
+        "scope": {
+          "backendId": "db-a",
+          "workspaceId": "ws-a",
+          "noteId": "spec",
+          "noteInstanceId": "inc-a"
+        },
+        "sourceRevision": "r:7",
+        "snapshotId": "context-snapshot",
+        "expiresAt": "2026-10-03T00:05:00.000Z",
+        "items": [
+          {
+            "kind": "boundary",
+            "id": "link-1",
+            "sourceRange": {
+              "start": 0,
+              "end": 38
+            },
+            "construct": "link",
+            "continuationBefore": false,
+            "continuationAfter": true,
+            "detailRef": "details-link"
+          }
+        ],
+        "nextCursor": null
+      }
+    },
+    "constructs": [
+      "paragraph",
+      "heading",
+      "blockquote",
+      "codeBlock",
+      "list",
+      "listItem",
+      "table",
+      "tableHead",
+      "tableRow",
+      "tableCell",
+      "emphasis",
+      "strong",
+      "strikethrough",
+      "link",
+      "image",
+      "htmlBlock",
+      "footnoteDefinition",
+      "definitionList",
+      "definitionListTitle",
+      "definitionListDefinition",
+      "superscript",
+      "subscript",
+      "metadataBlock"
+    ],
+    "roles": [
+      "text",
+      "code",
+      "literal",
+      "commentMarker",
+      "lineBreak",
+      "rule",
+      "taskMarker",
+      "delimiter",
+      "projection"
+    ],
+    "source": "[label](https://example.test/a%20b \"\")",
+    "wikiLinks": [
+      {
+        "source": "[[target]]",
+        "body": "target",
+        "directory": {
+          "jsonrpc": "2.0",
+          "id": "context",
+          "result": {
+            "kind": "noteContextPage",
+            "scope": {
+              "backendId": "db-a",
+              "workspaceId": "ws-a",
+              "noteId": "spec",
+              "noteInstanceId": "inc-a"
+            },
+            "sourceRevision": "r:7",
+            "snapshotId": "context-snapshot",
+            "expiresAt": "2026-10-03T00:05:00.000Z",
+            "items": [
+              {
+                "kind": "fragment",
+                "id": "wiki-false-d-0",
+                "field": "openingSource",
+                "offset": 0,
+                "text": "",
+                "nextRef": "wiki-false-field-0"
+              },
+              {
+                "kind": "fragment",
+                "id": "wiki-false-d-1",
+                "field": "closingSource",
+                "offset": 0,
+                "text": "",
+                "nextRef": "wiki-false-field-1"
+              },
+              {
+                "kind": "fragment",
+                "id": "wiki-false-d-2",
+                "field": "linkType",
+                "offset": 0,
+                "text": "",
+                "nextRef": "wiki-false-field-2"
+              },
+              {
+                "kind": "fragment",
+                "id": "wiki-false-d-3",
+                "field": "destination",
+                "offset": 0,
+                "text": "",
+                "nextRef": "wiki-false-field-3"
+              },
+              {
+                "kind": "fragment",
+                "id": "wiki-false-d-4",
+                "field": "title",
+                "offset": 0,
+                "text": "",
+                "nextRef": "wiki-false-field-4"
+              },
+              {
+                "kind": "fragment",
+                "id": "wiki-false-d-5",
+                "field": "referenceId",
+                "offset": 0,
+                "text": "",
+                "nextRef": "wiki-false-field-5"
+              },
+              {
+                "kind": "fragment",
+                "id": "wiki-false-d-6",
+                "field": "hasPothole",
+                "offset": 0,
+                "text": "",
+                "nextRef": "wiki-false-field-6"
+              }
+            ],
+            "nextCursor": null
+          }
+        },
+        "fields": {
+          "openingSource": {
+            "expected": "[[",
+            "pages": [
+              {
+                "jsonrpc": "2.0",
+                "id": "context",
+                "result": {
+                  "kind": "noteContextPage",
+                  "scope": {
+                    "backendId": "db-a",
+                    "workspaceId": "ws-a",
+                    "noteId": "spec",
+                    "noteInstanceId": "inc-a"
+                  },
+                  "sourceRevision": "r:7",
+                  "snapshotId": "context-snapshot",
+                  "expiresAt": "2026-10-03T00:05:00.000Z",
+                  "items": [
+                    {
+                      "kind": "fragment",
+                      "id": "wiki-false-v-0",
+                      "field": "openingSource",
+                      "offset": 0,
+                      "text": "[[",
+                      "nextRef": null
+                    }
+                  ],
+                  "nextCursor": null
+                }
+              }
+            ]
+          },
+          "closingSource": {
+            "expected": "]]",
+            "pages": [
+              {
+                "jsonrpc": "2.0",
+                "id": "context",
+                "result": {
+                  "kind": "noteContextPage",
+                  "scope": {
+                    "backendId": "db-a",
+                    "workspaceId": "ws-a",
+                    "noteId": "spec",
+                    "noteInstanceId": "inc-a"
+                  },
+                  "sourceRevision": "r:7",
+                  "snapshotId": "context-snapshot",
+                  "expiresAt": "2026-10-03T00:05:00.000Z",
+                  "items": [
+                    {
+                      "kind": "fragment",
+                      "id": "wiki-false-v-1",
+                      "field": "closingSource",
+                      "offset": 0,
+                      "text": "]]",
+                      "nextRef": null
+                    }
+                  ],
+                  "nextCursor": null
+                }
+              }
+            ]
+          },
+          "linkType": {
+            "expected": "WikiLink",
+            "pages": [
+              {
+                "jsonrpc": "2.0",
+                "id": "context",
+                "result": {
+                  "kind": "noteContextPage",
+                  "scope": {
+                    "backendId": "db-a",
+                    "workspaceId": "ws-a",
+                    "noteId": "spec",
+                    "noteInstanceId": "inc-a"
+                  },
+                  "sourceRevision": "r:7",
+                  "snapshotId": "context-snapshot",
+                  "expiresAt": "2026-10-03T00:05:00.000Z",
+                  "items": [
+                    {
+                      "kind": "fragment",
+                      "id": "wiki-false-v-2",
+                      "field": "linkType",
+                      "offset": 0,
+                      "text": "WikiLink",
+                      "nextRef": null
+                    }
+                  ],
+                  "nextCursor": null
+                }
+              }
+            ]
+          },
+          "destination": {
+            "expected": "target",
+            "pages": [
+              {
+                "jsonrpc": "2.0",
+                "id": "context",
+                "result": {
+                  "kind": "noteContextPage",
+                  "scope": {
+                    "backendId": "db-a",
+                    "workspaceId": "ws-a",
+                    "noteId": "spec",
+                    "noteInstanceId": "inc-a"
+                  },
+                  "sourceRevision": "r:7",
+                  "snapshotId": "context-snapshot",
+                  "expiresAt": "2026-10-03T00:05:00.000Z",
+                  "items": [
+                    {
+                      "kind": "fragment",
+                      "id": "wiki-false-v-3",
+                      "field": "destination",
+                      "offset": 0,
+                      "text": "target",
+                      "nextRef": null
+                    }
+                  ],
+                  "nextCursor": null
+                }
+              }
+            ]
+          },
+          "title": {
+            "expected": "",
+            "pages": [
+              {
+                "jsonrpc": "2.0",
+                "id": "context",
+                "result": {
+                  "kind": "noteContextPage",
+                  "scope": {
+                    "backendId": "db-a",
+                    "workspaceId": "ws-a",
+                    "noteId": "spec",
+                    "noteInstanceId": "inc-a"
+                  },
+                  "sourceRevision": "r:7",
+                  "snapshotId": "context-snapshot",
+                  "expiresAt": "2026-10-03T00:05:00.000Z",
+                  "items": [
+                    {
+                      "kind": "fragment",
+                      "id": "wiki-false-v-4",
+                      "field": "title",
+                      "offset": 0,
+                      "text": "",
+                      "nextRef": null
+                    }
+                  ],
+                  "nextCursor": null
+                }
+              }
+            ]
+          },
+          "referenceId": {
+            "expected": "",
+            "pages": [
+              {
+                "jsonrpc": "2.0",
+                "id": "context",
+                "result": {
+                  "kind": "noteContextPage",
+                  "scope": {
+                    "backendId": "db-a",
+                    "workspaceId": "ws-a",
+                    "noteId": "spec",
+                    "noteInstanceId": "inc-a"
+                  },
+                  "sourceRevision": "r:7",
+                  "snapshotId": "context-snapshot",
+                  "expiresAt": "2026-10-03T00:05:00.000Z",
+                  "items": [
+                    {
+                      "kind": "fragment",
+                      "id": "wiki-false-v-5",
+                      "field": "referenceId",
+                      "offset": 0,
+                      "text": "",
+                      "nextRef": null
+                    }
+                  ],
+                  "nextCursor": null
+                }
+              }
+            ]
+          },
+          "hasPothole": {
+            "expected": "false",
+            "pages": [
+              {
+                "jsonrpc": "2.0",
+                "id": "context",
+                "result": {
+                  "kind": "noteContextPage",
+                  "scope": {
+                    "backendId": "db-a",
+                    "workspaceId": "ws-a",
+                    "noteId": "spec",
+                    "noteInstanceId": "inc-a"
+                  },
+                  "sourceRevision": "r:7",
+                  "snapshotId": "context-snapshot",
+                  "expiresAt": "2026-10-03T00:05:00.000Z",
+                  "items": [
+                    {
+                      "kind": "fragment",
+                      "id": "wiki-false-v-6",
+                      "field": "hasPothole",
+                      "offset": 0,
+                      "text": "false",
+                      "nextRef": null
+                    }
+                  ],
+                  "nextCursor": null
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "source": "[[target|label]]",
+        "body": "label",
+        "directory": {
+          "jsonrpc": "2.0",
+          "id": "context",
+          "result": {
+            "kind": "noteContextPage",
+            "scope": {
+              "backendId": "db-a",
+              "workspaceId": "ws-a",
+              "noteId": "spec",
+              "noteInstanceId": "inc-a"
+            },
+            "sourceRevision": "r:7",
+            "snapshotId": "context-snapshot",
+            "expiresAt": "2026-10-03T00:05:00.000Z",
+            "items": [
+              {
+                "kind": "fragment",
+                "id": "wiki-true-d-0",
+                "field": "openingSource",
+                "offset": 0,
+                "text": "",
+                "nextRef": "wiki-true-field-0"
+              },
+              {
+                "kind": "fragment",
+                "id": "wiki-true-d-1",
+                "field": "closingSource",
+                "offset": 0,
+                "text": "",
+                "nextRef": "wiki-true-field-1"
+              },
+              {
+                "kind": "fragment",
+                "id": "wiki-true-d-2",
+                "field": "linkType",
+                "offset": 0,
+                "text": "",
+                "nextRef": "wiki-true-field-2"
+              },
+              {
+                "kind": "fragment",
+                "id": "wiki-true-d-3",
+                "field": "destination",
+                "offset": 0,
+                "text": "",
+                "nextRef": "wiki-true-field-3"
+              },
+              {
+                "kind": "fragment",
+                "id": "wiki-true-d-4",
+                "field": "title",
+                "offset": 0,
+                "text": "",
+                "nextRef": "wiki-true-field-4"
+              },
+              {
+                "kind": "fragment",
+                "id": "wiki-true-d-5",
+                "field": "referenceId",
+                "offset": 0,
+                "text": "",
+                "nextRef": "wiki-true-field-5"
+              },
+              {
+                "kind": "fragment",
+                "id": "wiki-true-d-6",
+                "field": "hasPothole",
+                "offset": 0,
+                "text": "",
+                "nextRef": "wiki-true-field-6"
+              }
+            ],
+            "nextCursor": null
+          }
+        },
+        "fields": {
+          "openingSource": {
+            "expected": "[[target|",
+            "pages": [
+              {
+                "jsonrpc": "2.0",
+                "id": "context",
+                "result": {
+                  "kind": "noteContextPage",
+                  "scope": {
+                    "backendId": "db-a",
+                    "workspaceId": "ws-a",
+                    "noteId": "spec",
+                    "noteInstanceId": "inc-a"
+                  },
+                  "sourceRevision": "r:7",
+                  "snapshotId": "context-snapshot",
+                  "expiresAt": "2026-10-03T00:05:00.000Z",
+                  "items": [
+                    {
+                      "kind": "fragment",
+                      "id": "wiki-true-v-0",
+                      "field": "openingSource",
+                      "offset": 0,
+                      "text": "[[target|",
+                      "nextRef": null
+                    }
+                  ],
+                  "nextCursor": null
+                }
+              }
+            ]
+          },
+          "closingSource": {
+            "expected": "]]",
+            "pages": [
+              {
+                "jsonrpc": "2.0",
+                "id": "context",
+                "result": {
+                  "kind": "noteContextPage",
+                  "scope": {
+                    "backendId": "db-a",
+                    "workspaceId": "ws-a",
+                    "noteId": "spec",
+                    "noteInstanceId": "inc-a"
+                  },
+                  "sourceRevision": "r:7",
+                  "snapshotId": "context-snapshot",
+                  "expiresAt": "2026-10-03T00:05:00.000Z",
+                  "items": [
+                    {
+                      "kind": "fragment",
+                      "id": "wiki-true-v-1",
+                      "field": "closingSource",
+                      "offset": 0,
+                      "text": "]]",
+                      "nextRef": null
+                    }
+                  ],
+                  "nextCursor": null
+                }
+              }
+            ]
+          },
+          "linkType": {
+            "expected": "WikiLink",
+            "pages": [
+              {
+                "jsonrpc": "2.0",
+                "id": "context",
+                "result": {
+                  "kind": "noteContextPage",
+                  "scope": {
+                    "backendId": "db-a",
+                    "workspaceId": "ws-a",
+                    "noteId": "spec",
+                    "noteInstanceId": "inc-a"
+                  },
+                  "sourceRevision": "r:7",
+                  "snapshotId": "context-snapshot",
+                  "expiresAt": "2026-10-03T00:05:00.000Z",
+                  "items": [
+                    {
+                      "kind": "fragment",
+                      "id": "wiki-true-v-2",
+                      "field": "linkType",
+                      "offset": 0,
+                      "text": "WikiLink",
+                      "nextRef": null
+                    }
+                  ],
+                  "nextCursor": null
+                }
+              }
+            ]
+          },
+          "destination": {
+            "expected": "target",
+            "pages": [
+              {
+                "jsonrpc": "2.0",
+                "id": "context",
+                "result": {
+                  "kind": "noteContextPage",
+                  "scope": {
+                    "backendId": "db-a",
+                    "workspaceId": "ws-a",
+                    "noteId": "spec",
+                    "noteInstanceId": "inc-a"
+                  },
+                  "sourceRevision": "r:7",
+                  "snapshotId": "context-snapshot",
+                  "expiresAt": "2026-10-03T00:05:00.000Z",
+                  "items": [
+                    {
+                      "kind": "fragment",
+                      "id": "wiki-true-v-3",
+                      "field": "destination",
+                      "offset": 0,
+                      "text": "target",
+                      "nextRef": null
+                    }
+                  ],
+                  "nextCursor": null
+                }
+              }
+            ]
+          },
+          "title": {
+            "expected": "",
+            "pages": [
+              {
+                "jsonrpc": "2.0",
+                "id": "context",
+                "result": {
+                  "kind": "noteContextPage",
+                  "scope": {
+                    "backendId": "db-a",
+                    "workspaceId": "ws-a",
+                    "noteId": "spec",
+                    "noteInstanceId": "inc-a"
+                  },
+                  "sourceRevision": "r:7",
+                  "snapshotId": "context-snapshot",
+                  "expiresAt": "2026-10-03T00:05:00.000Z",
+                  "items": [
+                    {
+                      "kind": "fragment",
+                      "id": "wiki-true-v-4",
+                      "field": "title",
+                      "offset": 0,
+                      "text": "",
+                      "nextRef": null
+                    }
+                  ],
+                  "nextCursor": null
+                }
+              }
+            ]
+          },
+          "referenceId": {
+            "expected": "",
+            "pages": [
+              {
+                "jsonrpc": "2.0",
+                "id": "context",
+                "result": {
+                  "kind": "noteContextPage",
+                  "scope": {
+                    "backendId": "db-a",
+                    "workspaceId": "ws-a",
+                    "noteId": "spec",
+                    "noteInstanceId": "inc-a"
+                  },
+                  "sourceRevision": "r:7",
+                  "snapshotId": "context-snapshot",
+                  "expiresAt": "2026-10-03T00:05:00.000Z",
+                  "items": [
+                    {
+                      "kind": "fragment",
+                      "id": "wiki-true-v-5",
+                      "field": "referenceId",
+                      "offset": 0,
+                      "text": "",
+                      "nextRef": null
+                    }
+                  ],
+                  "nextCursor": null
+                }
+              }
+            ]
+          },
+          "hasPothole": {
+            "expected": "true",
+            "pages": [
+              {
+                "jsonrpc": "2.0",
+                "id": "context",
+                "result": {
+                  "kind": "noteContextPage",
+                  "scope": {
+                    "backendId": "db-a",
+                    "workspaceId": "ws-a",
+                    "noteId": "spec",
+                    "noteInstanceId": "inc-a"
+                  },
+                  "sourceRevision": "r:7",
+                  "snapshotId": "context-snapshot",
+                  "expiresAt": "2026-10-03T00:05:00.000Z",
+                  "items": [
+                    {
+                      "kind": "fragment",
+                      "id": "wiki-true-v-6",
+                      "field": "hasPothole",
+                      "offset": 0,
+                      "text": "true",
+                      "nextRef": null
+                    }
+                  ],
+                  "nextCursor": null
+                }
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "tablePositions": {
+    "recipe": {
+      "header": "|A|B|C|\r\n|---|:---:|---:|\r\n",
+      "precedingBodyRow": "|same|same|same|\r\n",
+      "precedingBodyRows": 100000,
+      "giantFirstCellScalar": "😀",
+      "giantFirstCellRepeats": 300000,
+      "lastRowTail": "|same|目标😀|\r\n",
+      "afterFirstTable": "\r\n|D|E|\r\n|:---|---|\r\n|z|q|\r\n"
+    },
+    "expected": {
+      "rowIndex": 100001,
+      "columnIndex": 2,
+      "alignment": "right",
+      "cellStart": 2400034,
+      "cellEnd": 2400038,
+      "sourceLength": 2400069,
+      "alignments": [
+        "none",
+        "center",
+        "right"
+      ]
+    },
+    "sourceRequest": {
+      "jsonrpc": "2.0",
+      "id": "far-cell",
+      "method": "note.get",
+      "params": {
+        "workspaceId": "ws-a",
+        "noteId": "spec",
+        "page": {
+          "kind": "source",
+          "at": 2400035,
+          "maxSourceBytes": 16,
+          "maxWireBytes": 4096
+        }
+      }
+    },
+    "sourceFrame": {
+      "jsonrpc": "2.0",
+      "id": "far-cell",
+      "result": {
+        "kind": "noteSourcePage",
+        "scope": {
+          "backendId": "db-a",
+          "workspaceId": "ws-a",
+          "noteId": "spec",
+          "noteInstanceId": "inc-a"
+        },
+        "sourceRevision": "r:table",
+        "snapshotId": "table-snapshot",
+        "expiresAt": "2026-10-03T00:05:00.000Z",
+        "sourceLength": 2400069,
+        "range": {
+          "start": 2400035,
+          "end": 2400038
+        },
+        "text": "标😀",
+        "nextCursor": "after-cell",
+        "previousCursor": "before-cell",
+        "contextRef": "far-cell-context",
+        "metadataRef": "metadata-ref"
+      }
+    },
+    "cellFrame": {
+      "jsonrpc": "2.0",
+      "id": "far-cell",
+      "result": {
+        "kind": "noteContextPage",
+        "scope": {
+          "backendId": "db-a",
+          "workspaceId": "ws-a",
+          "noteId": "spec",
+          "noteInstanceId": "inc-a"
+        },
+        "sourceRevision": "r:table",
+        "snapshotId": "table-snapshot",
+        "expiresAt": "2026-10-03T00:05:00.000Z",
+        "items": [
+          {
+            "kind": "boundary",
+            "id": "cell-100001-2",
+            "sourceRange": {
+              "start": 2400034,
+              "end": 2400038
+            },
+            "construct": "tableCell",
+            "continuationBefore": true,
+            "continuationAfter": false,
+            "parentRef": "far-row-ref",
+            "tablePosition": {
+              "tableRef": "first-table-ref",
+              "rowIndex": 100001,
+              "columnIndex": 2,
+              "alignment": "right"
+            },
+            "detailRef": "far-cell-details"
+          }
+        ],
+        "nextCursor": null
+      }
+    },
+    "rowFrame": {
+      "jsonrpc": "2.0",
+      "id": "far-cell",
+      "result": {
+        "kind": "noteContextPage",
+        "scope": {
+          "backendId": "db-a",
+          "workspaceId": "ws-a",
+          "noteId": "spec",
+          "noteInstanceId": "inc-a"
+        },
+        "sourceRevision": "r:table",
+        "snapshotId": "table-snapshot",
+        "expiresAt": "2026-10-03T00:05:00.000Z",
+        "items": [
+          {
+            "kind": "boundary",
+            "id": "row-100001",
+            "sourceRange": {
+              "start": 1800027,
+              "end": 2400041
+            },
+            "construct": "tableRow",
+            "continuationBefore": true,
+            "continuationAfter": true,
+            "parentRef": "first-table-ref",
+            "tablePosition": {
+              "tableRef": "first-table-ref",
+              "rowIndex": 100001
+            }
+          }
+        ],
+        "nextCursor": null
+      }
+    },
+    "tableFrame": {
+      "jsonrpc": "2.0",
+      "id": "far-cell",
+      "result": {
+        "kind": "noteContextPage",
+        "scope": {
+          "backendId": "db-a",
+          "workspaceId": "ws-a",
+          "noteId": "spec",
+          "noteInstanceId": "inc-a"
+        },
+        "sourceRevision": "r:table",
+        "snapshotId": "table-snapshot",
+        "expiresAt": "2026-10-03T00:05:00.000Z",
+        "items": [
+          {
+            "kind": "boundary",
+            "id": "table-1",
+            "sourceRange": {
+              "start": 0,
+              "end": 2400041
+            },
+            "construct": "table",
+            "continuationBefore": true,
+            "continuationAfter": true,
+            "detailRef": "table-details"
+          }
+        ],
+        "nextCursor": null
+      }
+    },
+    "headerFrame": {
+      "jsonrpc": "2.0",
+      "id": "far-cell",
+      "result": {
+        "kind": "noteContextPage",
+        "scope": {
+          "backendId": "db-a",
+          "workspaceId": "ws-a",
+          "noteId": "spec",
+          "noteInstanceId": "inc-a"
+        },
+        "sourceRevision": "r:table",
+        "snapshotId": "table-snapshot",
+        "expiresAt": "2026-10-03T00:05:00.000Z",
+        "items": [
+          {
+            "kind": "boundary",
+            "id": "header",
+            "sourceRange": {
+              "start": 0,
+              "end": 9
+            },
+            "construct": "tableHead",
+            "continuationBefore": true,
+            "continuationAfter": false,
+            "parentRef": "first-table-ref",
+            "tablePosition": {
+              "tableRef": "first-table-ref",
+              "rowIndex": 0
+            }
+          },
+          {
+            "kind": "boundary",
+            "id": "head-cell",
+            "sourceRange": {
+              "start": 1,
+              "end": 2
+            },
+            "construct": "tableCell",
+            "continuationBefore": true,
+            "continuationAfter": false,
+            "parentRef": "header-ref",
+            "tablePosition": {
+              "tableRef": "first-table-ref",
+              "rowIndex": 0,
+              "columnIndex": 0,
+              "alignment": "none"
+            }
+          }
+        ],
+        "nextCursor": null
+      }
+    },
+    "secondTableFrame": {
+      "jsonrpc": "2.0",
+      "id": "far-cell",
+      "result": {
+        "kind": "noteContextPage",
+        "scope": {
+          "backendId": "db-a",
+          "workspaceId": "ws-a",
+          "noteId": "spec",
+          "noteInstanceId": "inc-a"
+        },
+        "sourceRevision": "r:table",
+        "snapshotId": "table-snapshot",
+        "expiresAt": "2026-10-03T00:05:00.000Z",
+        "items": [
+          {
+            "kind": "boundary",
+            "id": "second-header",
+            "sourceRange": {
+              "start": 2400043,
+              "end": 2400050
+            },
+            "construct": "tableHead",
+            "continuationBefore": true,
+            "continuationAfter": false,
+            "parentRef": "second-table-ref",
+            "tablePosition": {
+              "tableRef": "second-table-ref",
+              "rowIndex": 0
+            }
+          },
+          {
+            "kind": "boundary",
+            "id": "second-cell",
+            "sourceRange": {
+              "start": 2400063,
+              "end": 2400064
+            },
+            "construct": "tableCell",
+            "continuationBefore": true,
+            "continuationAfter": false,
+            "parentRef": "second-row-ref",
+            "tablePosition": {
+              "tableRef": "second-table-ref",
+              "rowIndex": 1,
+              "columnIndex": 0,
+              "alignment": "left"
+            }
+          }
+        ],
+        "nextCursor": null
+      }
+    },
+    "cellDetails": {
+      "directory": {
+        "jsonrpc": "2.0",
+        "id": "far-cell",
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:table",
+          "snapshotId": "table-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "fragment",
+              "id": "cell-openingSource-descriptor",
+              "field": "openingSource",
+              "offset": 0,
+              "text": "",
+              "nextRef": "cell-openingSource-ref"
+            },
+            {
+              "kind": "fragment",
+              "id": "cell-closingSource-descriptor",
+              "field": "closingSource",
+              "offset": 0,
+              "text": "",
+              "nextRef": "cell-closingSource-ref"
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "openingSource": {
+        "jsonrpc": "2.0",
+        "id": "far-cell",
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:table",
+          "snapshotId": "table-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "fragment",
+              "id": "cell-openingSource-value",
+              "field": "openingSource",
+              "offset": 0,
+              "text": "",
+              "nextRef": null
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "closingSource": {
+        "jsonrpc": "2.0",
+        "id": "far-cell",
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:table",
+          "snapshotId": "table-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "fragment",
+              "id": "cell-closingSource-value",
+              "field": "closingSource",
+              "offset": 0,
+              "text": "",
+              "nextRef": null
+            }
+          ],
+          "nextCursor": null
+        }
+      }
+    }
+  },
+  "htmlContinuation": {
+    "profile": "canonicalNote",
+    "recipe": {
+      "open": "<table><tbody><tr><td>",
+      "extra": "PREVIOUS</td><td>",
+      "repeat": "x",
+      "count": 2000000,
+      "tail": "</td><td>TARGET</td></tr></tbody></table>"
+    },
+    "expected": {
+      "rowIndex": 0,
+      "columnIndexA": 1,
+      "columnIndexB": 2,
+      "target": "TARGET",
+      "cellRole": "data",
+      "targetRange": {
+        "start": 2000031,
+        "end": 2000037
+      },
+      "sourceLength": 2000063
+    },
+    "rolePair": {
+      "data": "<table><tr><td>BODY</td></tr></table>",
+      "header": "<table><tr><th>BODY</th></tr></table>"
+    },
+    "frames": {
+      "a": {
+        "cell": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "result": {
+            "kind": "noteContextPage",
+            "scope": {
+              "backendId": "db-a",
+              "workspaceId": "ws-a",
+              "noteId": "spec",
+              "noteInstanceId": "inc-a"
+            },
+            "sourceRevision": "r:html-a",
+            "snapshotId": "html-a",
+            "expiresAt": "2026-10-03T00:05:00.000Z",
+            "items": [
+              {
+                "kind": "boundary",
+                "id": "a-htmlTableCell",
+                "construct": "htmlTableCell",
+                "sourceRange": {
+                  "start": 2000027,
+                  "end": 2000042
+                },
+                "continuationBefore": true,
+                "continuationAfter": true,
+                "parentRef": "a-row",
+                "detailRef": "a-htmlTableCell-raw-details",
+                "htmlPosition": {
+                  "profile": "canonicalNote",
+                  "tableRef": "a-table",
+                  "rowIndex": 0,
+                  "columnIndex": 1,
+                  "cellRole": "data",
+                  "profileVersion": 1
+                },
+                "htmlSource": {
+                  "provenance": "explicit",
+                  "openingRange": {
+                    "start": 2000027,
+                    "end": 2000031
+                  },
+                  "bodyRange": {
+                    "start": 2000031,
+                    "end": 2000037
+                  },
+                  "closingRange": {
+                    "start": 2000037,
+                    "end": 2000042
+                  }
+                },
+                "attributesRef": "a-htmlTableCell-attrs",
+                "sourceMapRef": "a-htmlTableCell-window-map",
+                "nativeRef": "a-native-cell"
+              }
+            ],
+            "nextCursor": null
+          }
+        },
+        "row": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "result": {
+            "kind": "noteContextPage",
+            "scope": {
+              "backendId": "db-a",
+              "workspaceId": "ws-a",
+              "noteId": "spec",
+              "noteInstanceId": "inc-a"
+            },
+            "sourceRevision": "r:html-a",
+            "snapshotId": "html-a",
+            "expiresAt": "2026-10-03T00:05:00.000Z",
+            "items": [
+              {
+                "kind": "boundary",
+                "id": "a-htmlTableRow",
+                "construct": "htmlTableRow",
+                "sourceRange": {
+                  "start": 14,
+                  "end": 2000047
+                },
+                "continuationBefore": true,
+                "continuationAfter": true,
+                "parentRef": "a-table",
+                "detailRef": "a-htmlTableRow-raw-details",
+                "htmlPosition": {
+                  "profile": "canonicalNote",
+                  "tableRef": "a-table",
+                  "rowIndex": 0,
+                  "profileVersion": 1
+                },
+                "htmlSource": {
+                  "provenance": "explicit",
+                  "openingRange": {
+                    "start": 14,
+                    "end": 18
+                  },
+                  "bodyRange": {
+                    "start": 18,
+                    "end": 2000042
+                  },
+                  "closingRange": {
+                    "start": 2000042,
+                    "end": 2000047
+                  }
+                },
+                "attributesRef": "a-htmlTableRow-attrs",
+                "sourceMapRef": "a-htmlTableRow-window-map",
+                "nativeRef": "a-native-row"
+              }
+            ],
+            "nextCursor": null
+          }
+        },
+        "table": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "result": {
+            "kind": "noteContextPage",
+            "scope": {
+              "backendId": "db-a",
+              "workspaceId": "ws-a",
+              "noteId": "spec",
+              "noteInstanceId": "inc-a"
+            },
+            "sourceRevision": "r:html-a",
+            "snapshotId": "html-a",
+            "expiresAt": "2026-10-03T00:05:00.000Z",
+            "items": [
+              {
+                "kind": "boundary",
+                "id": "a-htmlTable",
+                "construct": "htmlTable",
+                "sourceRange": {
+                  "start": 0,
+                  "end": 2000063
+                },
+                "continuationBefore": true,
+                "continuationAfter": true,
+                "parentRef": "html-block-a",
+                "detailRef": "a-htmlTable-raw-details",
+                "htmlPosition": {
+                  "profile": "canonicalNote",
+                  "tableRef": "a-table",
+                  "profileVersion": 1
+                },
+                "htmlSource": {
+                  "provenance": "explicit",
+                  "openingRange": {
+                    "start": 0,
+                    "end": 7
+                  },
+                  "bodyRange": {
+                    "start": 7,
+                    "end": 2000055
+                  },
+                  "closingRange": {
+                    "start": 2000055,
+                    "end": 2000063
+                  }
+                },
+                "attributesRef": "a-htmlTable-attrs",
+                "sourceMapRef": "a-htmlTable-window-map",
+                "nativeRef": "a-native-table"
+              }
+            ],
+            "nextCursor": null
+          }
+        },
+        "map": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "result": {
+            "kind": "noteContextPage",
+            "scope": {
+              "backendId": "db-a",
+              "workspaceId": "ws-a",
+              "noteId": "spec",
+              "noteInstanceId": "inc-a"
+            },
+            "sourceRevision": "r:html-a",
+            "snapshotId": "html-a",
+            "expiresAt": "2026-10-03T00:05:00.000Z",
+            "items": [
+              {
+                "kind": "sourceMap",
+                "id": "a-map",
+                "profile": "canonicalNote",
+                "ownerRef": "a-cell",
+                "textNodeId": "a-target-leaf",
+                "sourceRange": {
+                  "start": 2000031,
+                  "end": 2000037
+                },
+                "renderedRange": {
+                  "start": 0,
+                  "end": 6
+                },
+                "mapping": "identity",
+                "textRef": "a-text",
+                "profileVersion": 1,
+                "textNodeRef": "a-native-leaf"
+              }
+            ],
+            "nextCursor": null
+          }
+        },
+        "text": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "result": {
+            "kind": "noteContextPage",
+            "scope": {
+              "backendId": "db-a",
+              "workspaceId": "ws-a",
+              "noteId": "spec",
+              "noteInstanceId": "inc-a"
+            },
+            "sourceRevision": "r:html-a",
+            "snapshotId": "html-a",
+            "expiresAt": "2026-10-03T00:05:00.000Z",
+            "items": [
+              {
+                "kind": "fragment",
+                "id": "a-text-fragment",
+                "field": "renderedText",
+                "offset": 0,
+                "text": "TARGET",
+                "nextRef": null
+              }
+            ],
+            "nextCursor": null
+          }
+        },
+        "attributes": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "result": {
+            "kind": "noteMetadataPage",
+            "scope": {
+              "backendId": "db-a",
+              "workspaceId": "ws-a",
+              "noteId": "spec",
+              "noteInstanceId": "inc-a"
+            },
+            "sourceRevision": "r:html-a",
+            "snapshotId": "html-a",
+            "expiresAt": "2026-10-03T00:05:00.000Z",
+            "items": [
+              {
+                "id": "a-attrs-root",
+                "parentId": null,
+                "type": "object",
+                "childrenRef": "a-attrs-children"
+              }
+            ],
+            "nextCursor": null
+          }
+        },
+        "native": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "result": {
+            "kind": "noteContextPage",
+            "scope": {
+              "backendId": "db-a",
+              "workspaceId": "ws-a",
+              "noteId": "spec",
+              "noteInstanceId": "inc-a"
+            },
+            "sourceRevision": "r:html-a",
+            "snapshotId": "html-a",
+            "expiresAt": "2026-10-03T00:05:00.000Z",
+            "items": [
+              {
+                "kind": "nativeNode",
+                "id": "a-native-doc",
+                "profile": "canonicalNote",
+                "profileVersion": 1,
+                "nodeType": "doc",
+                "nodeClass": "container",
+                "parentRef": null,
+                "childIndex": 0,
+                "sourceRange": {
+                  "start": 0,
+                  "end": 0
+                },
+                "provenance": "implicit",
+                "attributesRef": "a-native-doc-attrs"
+              },
+              {
+                "kind": "nativeNode",
+                "id": "a-native-table",
+                "profile": "canonicalNote",
+                "profileVersion": 1,
+                "nodeType": "table",
+                "nodeClass": "container",
+                "parentRef": "a-native-doc",
+                "childIndex": 0,
+                "sourceRange": {
+                  "start": 0,
+                  "end": 2000063
+                },
+                "provenance": "explicit",
+                "attributesRef": "a-native-table-attrs"
+              },
+              {
+                "kind": "nativeNode",
+                "id": "a-native-row",
+                "profile": "canonicalNote",
+                "profileVersion": 1,
+                "nodeType": "tableRow",
+                "nodeClass": "container",
+                "parentRef": "a-native-table",
+                "childIndex": 0,
+                "sourceRange": {
+                  "start": 14,
+                  "end": 2000047
+                },
+                "provenance": "explicit",
+                "attributesRef": "a-native-row-attrs"
+              },
+              {
+                "kind": "nativeNode",
+                "id": "a-native-cell",
+                "profile": "canonicalNote",
+                "profileVersion": 1,
+                "nodeType": "tableCell",
+                "nodeClass": "container",
+                "parentRef": "a-native-row",
+                "childIndex": 1,
+                "sourceRange": {
+                  "start": 2000027,
+                  "end": 2000042
+                },
+                "provenance": "explicit",
+                "attributesRef": "a-native-cell-attrs"
+              },
+              {
+                "kind": "nativeNode",
+                "id": "a-native-paragraph",
+                "profile": "canonicalNote",
+                "profileVersion": 1,
+                "nodeType": "paragraph",
+                "nodeClass": "container",
+                "parentRef": "a-native-cell",
+                "childIndex": 0,
+                "sourceRange": {
+                  "start": 2000031,
+                  "end": 2000031
+                },
+                "provenance": "implicit",
+                "attributesRef": "a-native-paragraph-attrs"
+              },
+              {
+                "kind": "nativeNode",
+                "id": "a-target-leaf",
+                "profile": "canonicalNote",
+                "profileVersion": 1,
+                "nodeType": "text",
+                "nodeClass": "text",
+                "parentRef": "a-native-paragraph",
+                "childIndex": 0,
+                "sourceRange": {
+                  "start": 2000031,
+                  "end": 2000037
+                },
+                "provenance": "explicit",
+                "attributesRef": "a-native-leaf-attrs",
+                "marksRef": "a-leaf-marks"
+              }
+            ],
+            "nextCursor": null
+          }
+        }
+      },
+      "b": {
+        "cell": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "result": {
+            "kind": "noteContextPage",
+            "scope": {
+              "backendId": "db-a",
+              "workspaceId": "ws-a",
+              "noteId": "spec",
+              "noteInstanceId": "inc-a"
+            },
+            "sourceRevision": "r:html-b",
+            "snapshotId": "html-b",
+            "expiresAt": "2026-10-03T00:05:00.000Z",
+            "items": [
+              {
+                "kind": "boundary",
+                "id": "b-htmlTableCell",
+                "construct": "htmlTableCell",
+                "sourceRange": {
+                  "start": 2000027,
+                  "end": 2000042
+                },
+                "continuationBefore": true,
+                "continuationAfter": true,
+                "parentRef": "b-row",
+                "detailRef": "b-htmlTableCell-raw-details",
+                "htmlPosition": {
+                  "profile": "canonicalNote",
+                  "tableRef": "b-table",
+                  "rowIndex": 0,
+                  "columnIndex": 2,
+                  "cellRole": "data",
+                  "profileVersion": 1
+                },
+                "htmlSource": {
+                  "provenance": "explicit",
+                  "openingRange": {
+                    "start": 2000027,
+                    "end": 2000031
+                  },
+                  "bodyRange": {
+                    "start": 2000031,
+                    "end": 2000037
+                  },
+                  "closingRange": {
+                    "start": 2000037,
+                    "end": 2000042
+                  }
+                },
+                "attributesRef": "b-htmlTableCell-attrs",
+                "sourceMapRef": "b-htmlTableCell-window-map",
+                "nativeRef": "b-native-cell"
+              }
+            ],
+            "nextCursor": null
+          }
+        },
+        "row": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "result": {
+            "kind": "noteContextPage",
+            "scope": {
+              "backendId": "db-a",
+              "workspaceId": "ws-a",
+              "noteId": "spec",
+              "noteInstanceId": "inc-a"
+            },
+            "sourceRevision": "r:html-b",
+            "snapshotId": "html-b",
+            "expiresAt": "2026-10-03T00:05:00.000Z",
+            "items": [
+              {
+                "kind": "boundary",
+                "id": "b-htmlTableRow",
+                "construct": "htmlTableRow",
+                "sourceRange": {
+                  "start": 14,
+                  "end": 2000047
+                },
+                "continuationBefore": true,
+                "continuationAfter": true,
+                "parentRef": "b-table",
+                "detailRef": "b-htmlTableRow-raw-details",
+                "htmlPosition": {
+                  "profile": "canonicalNote",
+                  "tableRef": "b-table",
+                  "rowIndex": 0,
+                  "profileVersion": 1
+                },
+                "htmlSource": {
+                  "provenance": "explicit",
+                  "openingRange": {
+                    "start": 14,
+                    "end": 18
+                  },
+                  "bodyRange": {
+                    "start": 18,
+                    "end": 2000042
+                  },
+                  "closingRange": {
+                    "start": 2000042,
+                    "end": 2000047
+                  }
+                },
+                "attributesRef": "b-htmlTableRow-attrs",
+                "sourceMapRef": "b-htmlTableRow-window-map",
+                "nativeRef": "b-native-row"
+              }
+            ],
+            "nextCursor": null
+          }
+        },
+        "table": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "result": {
+            "kind": "noteContextPage",
+            "scope": {
+              "backendId": "db-a",
+              "workspaceId": "ws-a",
+              "noteId": "spec",
+              "noteInstanceId": "inc-a"
+            },
+            "sourceRevision": "r:html-b",
+            "snapshotId": "html-b",
+            "expiresAt": "2026-10-03T00:05:00.000Z",
+            "items": [
+              {
+                "kind": "boundary",
+                "id": "b-htmlTable",
+                "construct": "htmlTable",
+                "sourceRange": {
+                  "start": 0,
+                  "end": 2000063
+                },
+                "continuationBefore": true,
+                "continuationAfter": true,
+                "parentRef": "html-block-b",
+                "detailRef": "b-htmlTable-raw-details",
+                "htmlPosition": {
+                  "profile": "canonicalNote",
+                  "tableRef": "b-table",
+                  "profileVersion": 1
+                },
+                "htmlSource": {
+                  "provenance": "explicit",
+                  "openingRange": {
+                    "start": 0,
+                    "end": 7
+                  },
+                  "bodyRange": {
+                    "start": 7,
+                    "end": 2000055
+                  },
+                  "closingRange": {
+                    "start": 2000055,
+                    "end": 2000063
+                  }
+                },
+                "attributesRef": "b-htmlTable-attrs",
+                "sourceMapRef": "b-htmlTable-window-map",
+                "nativeRef": "b-native-table"
+              }
+            ],
+            "nextCursor": null
+          }
+        },
+        "map": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "result": {
+            "kind": "noteContextPage",
+            "scope": {
+              "backendId": "db-a",
+              "workspaceId": "ws-a",
+              "noteId": "spec",
+              "noteInstanceId": "inc-a"
+            },
+            "sourceRevision": "r:html-b",
+            "snapshotId": "html-b",
+            "expiresAt": "2026-10-03T00:05:00.000Z",
+            "items": [
+              {
+                "kind": "sourceMap",
+                "id": "b-map",
+                "profile": "canonicalNote",
+                "ownerRef": "b-cell",
+                "textNodeId": "b-target-leaf",
+                "sourceRange": {
+                  "start": 2000031,
+                  "end": 2000037
+                },
+                "renderedRange": {
+                  "start": 0,
+                  "end": 6
+                },
+                "mapping": "identity",
+                "textRef": "b-text",
+                "profileVersion": 1,
+                "textNodeRef": "b-native-leaf"
+              }
+            ],
+            "nextCursor": null
+          }
+        },
+        "text": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "result": {
+            "kind": "noteContextPage",
+            "scope": {
+              "backendId": "db-a",
+              "workspaceId": "ws-a",
+              "noteId": "spec",
+              "noteInstanceId": "inc-a"
+            },
+            "sourceRevision": "r:html-b",
+            "snapshotId": "html-b",
+            "expiresAt": "2026-10-03T00:05:00.000Z",
+            "items": [
+              {
+                "kind": "fragment",
+                "id": "b-text-fragment",
+                "field": "renderedText",
+                "offset": 0,
+                "text": "TARGET",
+                "nextRef": null
+              }
+            ],
+            "nextCursor": null
+          }
+        },
+        "attributes": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "result": {
+            "kind": "noteMetadataPage",
+            "scope": {
+              "backendId": "db-a",
+              "workspaceId": "ws-a",
+              "noteId": "spec",
+              "noteInstanceId": "inc-a"
+            },
+            "sourceRevision": "r:html-b",
+            "snapshotId": "html-b",
+            "expiresAt": "2026-10-03T00:05:00.000Z",
+            "items": [
+              {
+                "id": "b-attrs-root",
+                "parentId": null,
+                "type": "object",
+                "childrenRef": "b-attrs-children"
+              }
+            ],
+            "nextCursor": null
+          }
+        },
+        "native": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "result": {
+            "kind": "noteContextPage",
+            "scope": {
+              "backendId": "db-a",
+              "workspaceId": "ws-a",
+              "noteId": "spec",
+              "noteInstanceId": "inc-a"
+            },
+            "sourceRevision": "r:html-b",
+            "snapshotId": "html-b",
+            "expiresAt": "2026-10-03T00:05:00.000Z",
+            "items": [
+              {
+                "kind": "nativeNode",
+                "id": "b-native-doc",
+                "profile": "canonicalNote",
+                "profileVersion": 1,
+                "nodeType": "doc",
+                "nodeClass": "container",
+                "parentRef": null,
+                "childIndex": 0,
+                "sourceRange": {
+                  "start": 0,
+                  "end": 0
+                },
+                "provenance": "implicit",
+                "attributesRef": "b-native-doc-attrs"
+              },
+              {
+                "kind": "nativeNode",
+                "id": "b-native-table",
+                "profile": "canonicalNote",
+                "profileVersion": 1,
+                "nodeType": "table",
+                "nodeClass": "container",
+                "parentRef": "b-native-doc",
+                "childIndex": 0,
+                "sourceRange": {
+                  "start": 0,
+                  "end": 2000063
+                },
+                "provenance": "explicit",
+                "attributesRef": "b-native-table-attrs"
+              },
+              {
+                "kind": "nativeNode",
+                "id": "b-native-row",
+                "profile": "canonicalNote",
+                "profileVersion": 1,
+                "nodeType": "tableRow",
+                "nodeClass": "container",
+                "parentRef": "b-native-table",
+                "childIndex": 0,
+                "sourceRange": {
+                  "start": 14,
+                  "end": 2000047
+                },
+                "provenance": "explicit",
+                "attributesRef": "b-native-row-attrs"
+              },
+              {
+                "kind": "nativeNode",
+                "id": "b-native-cell",
+                "profile": "canonicalNote",
+                "profileVersion": 1,
+                "nodeType": "tableCell",
+                "nodeClass": "container",
+                "parentRef": "b-native-row",
+                "childIndex": 2,
+                "sourceRange": {
+                  "start": 2000027,
+                  "end": 2000042
+                },
+                "provenance": "explicit",
+                "attributesRef": "b-native-cell-attrs"
+              },
+              {
+                "kind": "nativeNode",
+                "id": "b-native-paragraph",
+                "profile": "canonicalNote",
+                "profileVersion": 1,
+                "nodeType": "paragraph",
+                "nodeClass": "container",
+                "parentRef": "b-native-cell",
+                "childIndex": 0,
+                "sourceRange": {
+                  "start": 2000031,
+                  "end": 2000031
+                },
+                "provenance": "implicit",
+                "attributesRef": "b-native-paragraph-attrs"
+              },
+              {
+                "kind": "nativeNode",
+                "id": "b-target-leaf",
+                "profile": "canonicalNote",
+                "profileVersion": 1,
+                "nodeType": "text",
+                "nodeClass": "text",
+                "parentRef": "b-native-paragraph",
+                "childIndex": 0,
+                "sourceRange": {
+                  "start": 2000031,
+                  "end": 2000037
+                },
+                "provenance": "explicit",
+                "attributesRef": "b-native-leaf-attrs",
+                "marksRef": "b-leaf-marks"
+              }
+            ],
+            "nextCursor": null
+          }
+        }
+      }
+    },
+    "profileVersion": 1,
+    "canonicalOracleCases": [
+      {
+        "id": "cellRoles",
+        "source": "<table><tr><th>HEADER</th><td>DATA</td></tr></table>",
+        "native": {
+          "content": [
+            {
+              "content": [
+                {
+                  "content": [
+                    {
+                      "attrs": {
+                        "align": null,
+                        "colspan": 1,
+                        "colwidth": null,
+                        "rowspan": 1
+                      },
+                      "content": [
+                        {
+                          "content": [
+                            {
+                              "text": "HEADER",
+                              "type": "text"
+                            }
+                          ],
+                          "type": "paragraph"
+                        }
+                      ],
+                      "type": "tableHeader"
+                    },
+                    {
+                      "attrs": {
+                        "align": null,
+                        "colspan": 1,
+                        "colwidth": null,
+                        "rowspan": 1
+                      },
+                      "content": [
+                        {
+                          "content": [
+                            {
+                              "text": "DATA",
+                              "type": "text"
+                            }
+                          ],
+                          "type": "paragraph"
+                        }
+                      ],
+                      "type": "tableCell"
+                    }
+                  ],
+                  "type": "tableRow"
+                }
+              ],
+              "type": "table"
+            }
+          ],
+          "type": "doc"
+        }
+      },
+      {
+        "id": "implicitBodiesAndEnds",
+        "source": "<table><tr><td>ONE<td>TWO<tr><td>THREE</table>",
+        "native": {
+          "content": [
+            {
+              "content": [
+                {
+                  "content": [
+                    {
+                      "attrs": {
+                        "align": null,
+                        "colspan": 1,
+                        "colwidth": null,
+                        "rowspan": 1
+                      },
+                      "content": [
+                        {
+                          "content": [
+                            {
+                              "text": "ONE",
+                              "type": "text"
+                            }
+                          ],
+                          "type": "paragraph"
+                        }
+                      ],
+                      "type": "tableCell"
+                    },
+                    {
+                      "attrs": {
+                        "align": null,
+                        "colspan": 1,
+                        "colwidth": null,
+                        "rowspan": 1
+                      },
+                      "content": [
+                        {
+                          "content": [
+                            {
+                              "text": "TWO",
+                              "type": "text"
+                            }
+                          ],
+                          "type": "paragraph"
+                        }
+                      ],
+                      "type": "tableCell"
+                    }
+                  ],
+                  "type": "tableRow"
+                },
+                {
+                  "content": [
+                    {
+                      "attrs": {
+                        "align": null,
+                        "colspan": 1,
+                        "colwidth": null,
+                        "rowspan": 1
+                      },
+                      "content": [
+                        {
+                          "content": [
+                            {
+                              "text": "THREE",
+                              "type": "text"
+                            }
+                          ],
+                          "type": "paragraph"
+                        }
+                      ],
+                      "type": "tableCell"
+                    }
+                  ],
+                  "type": "tableRow"
+                }
+              ],
+              "type": "table"
+            }
+          ],
+          "type": "doc"
+        }
+      },
+      {
+        "id": "entitiesAndWhitespace",
+        "source": "<table><tr><td> A &amp; B&#x1f680;\r\n  C\t D&nbsp;E<br>F </td></tr></table>",
+        "native": {
+          "content": [
+            {
+              "content": [
+                {
+                  "content": [
+                    {
+                      "attrs": {
+                        "align": null,
+                        "colspan": 1,
+                        "colwidth": null,
+                        "rowspan": 1
+                      },
+                      "content": [
+                        {
+                          "content": [
+                            {
+                              "text": "A & B\ud83d\ude80 C D\u00a0E",
+                              "type": "text"
+                            },
+                            {
+                              "type": "hardBreak"
+                            },
+                            {
+                              "text": "F",
+                              "type": "text"
+                            }
+                          ],
+                          "type": "paragraph"
+                        }
+                      ],
+                      "type": "tableCell"
+                    }
+                  ],
+                  "type": "tableRow"
+                }
+              ],
+              "type": "table"
+            }
+          ],
+          "type": "doc"
+        }
+      },
+      {
+        "id": "nestedTable",
+        "source": "<table><tr><td>OUTER<table><tr><th>INNER</th></tr></table>AFTER</td><td>LAST</td></tr></table>",
+        "native": {
+          "content": [
+            {
+              "content": [
+                {
+                  "content": [
+                    {
+                      "attrs": {
+                        "align": null,
+                        "colspan": 1,
+                        "colwidth": null,
+                        "rowspan": 1
+                      },
+                      "content": [
+                        {
+                          "content": [
+                            {
+                              "text": "OUTER",
+                              "type": "text"
+                            }
+                          ],
+                          "type": "paragraph"
+                        },
+                        {
+                          "content": [
+                            {
+                              "content": [
+                                {
+                                  "attrs": {
+                                    "align": null,
+                                    "colspan": 1,
+                                    "colwidth": null,
+                                    "rowspan": 1
+                                  },
+                                  "content": [
+                                    {
+                                      "content": [
+                                        {
+                                          "text": "INNER",
+                                          "type": "text"
+                                        }
+                                      ],
+                                      "type": "paragraph"
+                                    }
+                                  ],
+                                  "type": "tableHeader"
+                                }
+                              ],
+                              "type": "tableRow"
+                            }
+                          ],
+                          "type": "table"
+                        },
+                        {
+                          "content": [
+                            {
+                              "text": "AFTER",
+                              "type": "text"
+                            }
+                          ],
+                          "type": "paragraph"
+                        }
+                      ],
+                      "type": "tableCell"
+                    },
+                    {
+                      "attrs": {
+                        "align": null,
+                        "colspan": 1,
+                        "colwidth": null,
+                        "rowspan": 1
+                      },
+                      "content": [
+                        {
+                          "content": [
+                            {
+                              "text": "LAST",
+                              "type": "text"
+                            }
+                          ],
+                          "type": "paragraph"
+                        }
+                      ],
+                      "type": "tableCell"
+                    }
+                  ],
+                  "type": "tableRow"
+                }
+              ],
+              "type": "table"
+            }
+          ],
+          "type": "doc"
+        }
+      },
+      {
+        "id": "malformedSpans",
+        "source": "<table><tr><td rowspan=\"0\" colspan=\"-2\">ZERO</td><td rowspan=\"wat\" colspan=\"999999999999999999999\">BAD</td></tr></table>",
+        "native": {
+          "content": [
+            {
+              "content": [
+                {
+                  "content": [
+                    {
+                      "attrs": {
+                        "align": null,
+                        "colspan": 1,
+                        "colwidth": null,
+                        "rowspan": 1
+                      },
+                      "content": [
+                        {
+                          "content": [
+                            {
+                              "text": "ZERO",
+                              "type": "text"
+                            }
+                          ],
+                          "type": "paragraph"
+                        }
+                      ],
+                      "type": "tableCell"
+                    },
+                    {
+                      "attrs": {
+                        "align": null,
+                        "colspan": 1,
+                        "colwidth": null,
+                        "rowspan": 1
+                      },
+                      "content": [
+                        {
+                          "content": [
+                            {
+                              "text": "BAD",
+                              "type": "text"
+                            }
+                          ],
+                          "type": "paragraph"
+                        }
+                      ],
+                      "type": "tableCell"
+                    }
+                  ],
+                  "type": "tableRow"
+                }
+              ],
+              "type": "table"
+            }
+          ],
+          "type": "doc"
+        }
+      },
+      {
+        "id": "unsafeAttributes",
+        "source": "<table onclick=\"alert(1)\" style=\"color:red\"><tr><td data-unknown=\"raw\" title=\"cell\" onmouseover=\"alert(2)\"><a href=\"javascript:alert(3)\" title=\"link\">LINK</a><script>evil()</script><style>body{display:none}</style>TEXT</td></tr></table>",
+        "native": {
+          "content": [
+            {
+              "content": [
+                {
+                  "content": [
+                    {
+                      "attrs": {
+                        "align": null,
+                        "colspan": 1,
+                        "colwidth": null,
+                        "rowspan": 1
+                      },
+                      "content": [
+                        {
+                          "content": [
+                            {
+                              "text": "LINKTEXT",
+                              "type": "text"
+                            }
+                          ],
+                          "type": "paragraph"
+                        }
+                      ],
+                      "type": "tableCell"
+                    }
+                  ],
+                  "type": "tableRow"
+                }
+              ],
+              "type": "table"
+            }
+          ],
+          "type": "doc"
+        }
+      },
+      {
+        "id": "retainedAttributes",
+        "source": "<table><tr><td><a href=\"https://example.test/long\" title=\"tttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt\">LINK</a><img src=\"https://example.test/image.png\" alt=\"ALT\" title=\"IMAGE\"></td></tr></table>",
+        "native": {
+          "content": [
+            {
+              "content": [
+                {
+                  "content": [
+                    {
+                      "attrs": {
+                        "align": null,
+                        "colspan": 1,
+                        "colwidth": null,
+                        "rowspan": 1
+                      },
+                      "content": [
+                        {
+                          "content": [
+                            {
+                              "marks": [
+                                {
+                                  "attrs": {
+                                    "class": "text-primary-ink underline cursor-pointer",
+                                    "href": "https://example.test/long",
+                                    "rel": "noopener noreferrer nofollow",
+                                    "target": "_blank"
+                                  },
+                                  "type": "link"
+                                }
+                              ],
+                              "text": "LINK",
+                              "type": "text"
+                            }
+                          ],
+                          "type": "paragraph"
+                        },
+                        {
+                          "attrs": {
+                            "alt": "ALT",
+                            "height": null,
+                            "mediaUnsupported": null,
+                            "src": "https://example.test/image.png",
+                            "title": "IMAGE",
+                            "width": null
+                          },
+                          "type": "image"
+                        }
+                      ],
+                      "type": "tableCell"
+                    }
+                  ],
+                  "type": "tableRow"
+                }
+              ],
+              "type": "table"
+            }
+          ],
+          "type": "doc"
+        }
+      }
+    ],
+    "entityMapping": {
+      "source": "<table><tr><td> A &amp; B&#x1f680;\r\n  C\t D&nbsp;E<br>F </td></tr></table>",
+      "maps": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:html-entities",
+          "snapshotId": "html-entities",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "sourceMap",
+              "id": "entity-map-0",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "entities-cell",
+              "textNodeId": "entities-leaf-0",
+              "textNodeRef": "entities-native-leaf-0",
+              "sourceRange": {
+                "start": 15,
+                "end": 16
+              },
+              "renderedRange": {
+                "start": 0,
+                "end": 0
+              },
+              "mapping": "omitted",
+              "textRef": null
+            },
+            {
+              "kind": "sourceMap",
+              "id": "entity-map-1",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "entities-cell",
+              "textNodeId": "entities-leaf-0",
+              "textNodeRef": "entities-native-leaf-0",
+              "sourceRange": {
+                "start": 16,
+                "end": 18
+              },
+              "renderedRange": {
+                "start": 0,
+                "end": 2
+              },
+              "mapping": "identity",
+              "textRef": "entity-text-1"
+            },
+            {
+              "kind": "sourceMap",
+              "id": "entity-map-2",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "entities-cell",
+              "textNodeId": "entities-leaf-0",
+              "textNodeRef": "entities-native-leaf-0",
+              "sourceRange": {
+                "start": 18,
+                "end": 23
+              },
+              "renderedRange": {
+                "start": 2,
+                "end": 3
+              },
+              "mapping": "entity",
+              "textRef": "entity-text-2"
+            },
+            {
+              "kind": "sourceMap",
+              "id": "entity-map-3",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "entities-cell",
+              "textNodeId": "entities-leaf-0",
+              "textNodeRef": "entities-native-leaf-0",
+              "sourceRange": {
+                "start": 23,
+                "end": 25
+              },
+              "renderedRange": {
+                "start": 3,
+                "end": 5
+              },
+              "mapping": "identity",
+              "textRef": "entity-text-3"
+            },
+            {
+              "kind": "sourceMap",
+              "id": "entity-map-4",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "entities-cell",
+              "textNodeId": "entities-leaf-0",
+              "textNodeRef": "entities-native-leaf-0",
+              "sourceRange": {
+                "start": 25,
+                "end": 34
+              },
+              "renderedRange": {
+                "start": 5,
+                "end": 7
+              },
+              "mapping": "entity",
+              "textRef": "entity-text-4"
+            },
+            {
+              "kind": "sourceMap",
+              "id": "entity-map-5",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "entities-cell",
+              "textNodeId": "entities-leaf-0",
+              "textNodeRef": "entities-native-leaf-0",
+              "sourceRange": {
+                "start": 34,
+                "end": 38
+              },
+              "renderedRange": {
+                "start": 7,
+                "end": 8
+              },
+              "mapping": "normalized",
+              "textRef": "entity-text-5"
+            },
+            {
+              "kind": "sourceMap",
+              "id": "entity-map-6",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "entities-cell",
+              "textNodeId": "entities-leaf-0",
+              "textNodeRef": "entities-native-leaf-0",
+              "sourceRange": {
+                "start": 38,
+                "end": 39
+              },
+              "renderedRange": {
+                "start": 8,
+                "end": 9
+              },
+              "mapping": "identity",
+              "textRef": "entity-text-6"
+            },
+            {
+              "kind": "sourceMap",
+              "id": "entity-map-7",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "entities-cell",
+              "textNodeId": "entities-leaf-0",
+              "textNodeRef": "entities-native-leaf-0",
+              "sourceRange": {
+                "start": 39,
+                "end": 41
+              },
+              "renderedRange": {
+                "start": 9,
+                "end": 10
+              },
+              "mapping": "normalized",
+              "textRef": "entity-text-7"
+            },
+            {
+              "kind": "sourceMap",
+              "id": "entity-map-8",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "entities-cell",
+              "textNodeId": "entities-leaf-0",
+              "textNodeRef": "entities-native-leaf-0",
+              "sourceRange": {
+                "start": 41,
+                "end": 42
+              },
+              "renderedRange": {
+                "start": 10,
+                "end": 11
+              },
+              "mapping": "identity",
+              "textRef": "entity-text-8"
+            },
+            {
+              "kind": "sourceMap",
+              "id": "entity-map-9",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "entities-cell",
+              "textNodeId": "entities-leaf-0",
+              "textNodeRef": "entities-native-leaf-0",
+              "sourceRange": {
+                "start": 42,
+                "end": 48
+              },
+              "renderedRange": {
+                "start": 11,
+                "end": 12
+              },
+              "mapping": "entity",
+              "textRef": "entity-text-9"
+            },
+            {
+              "kind": "sourceMap",
+              "id": "entity-map-10",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "entities-cell",
+              "textNodeId": "entities-leaf-0",
+              "textNodeRef": "entities-native-leaf-0",
+              "sourceRange": {
+                "start": 48,
+                "end": 49
+              },
+              "renderedRange": {
+                "start": 12,
+                "end": 13
+              },
+              "mapping": "identity",
+              "textRef": "entity-text-10"
+            },
+            {
+              "kind": "sourceMap",
+              "id": "entity-map-12",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "entities-cell",
+              "textNodeId": "entities-leaf-1",
+              "textNodeRef": "entities-native-leaf-1",
+              "sourceRange": {
+                "start": 53,
+                "end": 54
+              },
+              "renderedRange": {
+                "start": 0,
+                "end": 1
+              },
+              "mapping": "identity",
+              "textRef": "entity-text-12"
+            },
+            {
+              "kind": "sourceMap",
+              "id": "entity-map-13",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "entities-cell",
+              "textNodeId": "entities-leaf-1",
+              "textNodeRef": "entities-native-leaf-1",
+              "sourceRange": {
+                "start": 54,
+                "end": 55
+              },
+              "renderedRange": {
+                "start": 1,
+                "end": 1
+              },
+              "mapping": "omitted",
+              "textRef": null
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "textResources": [
+        {
+          "ref": "entity-text-1",
+          "frame": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:html-entities",
+              "snapshotId": "html-entities",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "entity-text-1-0",
+                  "field": "renderedText",
+                  "offset": 0,
+                  "text": "A ",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        },
+        {
+          "ref": "entity-text-2",
+          "frame": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:html-entities",
+              "snapshotId": "html-entities",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "entity-text-2-0",
+                  "field": "renderedText",
+                  "offset": 0,
+                  "text": "&",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        },
+        {
+          "ref": "entity-text-3",
+          "frame": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:html-entities",
+              "snapshotId": "html-entities",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "entity-text-3-0",
+                  "field": "renderedText",
+                  "offset": 0,
+                  "text": " B",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        },
+        {
+          "ref": "entity-text-4",
+          "frame": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:html-entities",
+              "snapshotId": "html-entities",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "entity-text-4-0",
+                  "field": "renderedText",
+                  "offset": 0,
+                  "text": "\ud83d\ude80",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        },
+        {
+          "ref": "entity-text-5",
+          "frame": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:html-entities",
+              "snapshotId": "html-entities",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "entity-text-5-0",
+                  "field": "renderedText",
+                  "offset": 0,
+                  "text": " ",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        },
+        {
+          "ref": "entity-text-6",
+          "frame": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:html-entities",
+              "snapshotId": "html-entities",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "entity-text-6-0",
+                  "field": "renderedText",
+                  "offset": 0,
+                  "text": "C",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        },
+        {
+          "ref": "entity-text-7",
+          "frame": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:html-entities",
+              "snapshotId": "html-entities",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "entity-text-7-0",
+                  "field": "renderedText",
+                  "offset": 0,
+                  "text": " ",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        },
+        {
+          "ref": "entity-text-8",
+          "frame": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:html-entities",
+              "snapshotId": "html-entities",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "entity-text-8-0",
+                  "field": "renderedText",
+                  "offset": 0,
+                  "text": "D",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        },
+        {
+          "ref": "entity-text-9",
+          "frame": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:html-entities",
+              "snapshotId": "html-entities",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "entity-text-9-0",
+                  "field": "renderedText",
+                  "offset": 0,
+                  "text": "\u00a0",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        },
+        {
+          "ref": "entity-text-10",
+          "frame": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:html-entities",
+              "snapshotId": "html-entities",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "entity-text-10-0",
+                  "field": "renderedText",
+                  "offset": 0,
+                  "text": "E",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        },
+        {
+          "ref": "entity-text-12",
+          "frame": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:html-entities",
+              "snapshotId": "html-entities",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "entity-text-12-0",
+                  "field": "renderedText",
+                  "offset": 0,
+                  "text": "F",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        }
+      ],
+      "atom": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:html-entities",
+          "snapshotId": "html-entities",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "nativeNode",
+              "id": "hard-break",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "nodeType": "hardBreak",
+              "nodeClass": "atom",
+              "parentRef": "entities-paragraph",
+              "childIndex": 1,
+              "sourceRange": {
+                "start": 49,
+                "end": 53
+              },
+              "provenance": "explicit",
+              "attributesRef": "hard-break-attrs"
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "expectedLeaves": [
+        "A & B\ud83d\ude80 C D\u00a0E",
+        "F"
+      ]
+    },
+    "repairedProvenance": {
+      "source": "<table><tr><td>ONE<td>TWO<tr><td>THREE</table>",
+      "cell": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:html-repaired",
+          "snapshotId": "html-repaired",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "boundary",
+              "id": "repaired-cell",
+              "construct": "htmlTableCell",
+              "sourceRange": {
+                "start": 11,
+                "end": 18
+              },
+              "continuationBefore": true,
+              "continuationAfter": true,
+              "parentRef": "repaired-row",
+              "detailRef": "a-htmlTableCell-raw-details",
+              "htmlPosition": {
+                "profile": "canonicalNote",
+                "tableRef": "repaired-table",
+                "rowIndex": 0,
+                "columnIndex": 0,
+                "cellRole": "data",
+                "profileVersion": 1
+              },
+              "htmlSource": {
+                "provenance": "repaired",
+                "openingRange": {
+                  "start": 11,
+                  "end": 15
+                },
+                "bodyRange": {
+                  "start": 15,
+                  "end": 18
+                },
+                "closingRange": null,
+                "piecesRef": "repaired-pieces"
+              },
+              "attributesRef": "repaired-attrs",
+              "sourceMapRef": "repaired-map",
+              "nativeRef": "repaired-native-cell"
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "pieces": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:html-repaired",
+          "snapshotId": "html-repaired",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "sourcePiece",
+              "id": "repair-opening",
+              "nodeRef": "repaired-native-cell",
+              "sourceRange": {
+                "start": 11,
+                "end": 15
+              },
+              "role": "opening"
+            },
+            {
+              "kind": "sourcePiece",
+              "id": "repair-body",
+              "nodeRef": "repaired-native-cell",
+              "sourceRange": {
+                "start": 15,
+                "end": 18
+              },
+              "role": "body"
+            }
+          ],
+          "nextCursor": null
+        }
+      }
+    }
+  },
+  "ownerResolution": {
+  "windows": [
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "kind": "noteContextPage",
+        "scope": {
+          "backendId": "db-a",
+          "workspaceId": "ws-a",
+          "noteId": "spec",
+          "noteInstanceId": "inc-a"
+        },
+        "sourceRevision": "r:html-a",
+        "snapshotId": "html-a",
+        "expiresAt": "2026-10-03T00:05:00.000Z",
+        "items": [
+          {
+            "kind": "boundary",
+            "id": "a-htmlTableCell",
+            "construct": "htmlTableCell",
+            "sourceRange": {
+              "start": 2000027,
+              "end": 2000042
+            },
+            "continuationBefore": true,
+            "continuationAfter": true,
+            "parentRef": "a-row",
+            "detailRef": "a-htmlTableCell-raw-details",
+            "htmlPosition": {
+              "profile": "canonicalNote",
+              "tableRef": "a-table",
+              "rowIndex": 0,
+              "columnIndex": 1,
+              "cellRole": "data",
+              "profileVersion": 1
+            },
+            "htmlSource": {
+              "provenance": "explicit",
+              "openingRange": {
+                "start": 2000027,
+                "end": 2000031
+              },
+              "bodyRange": {
+                "start": 2000031,
+                "end": 2000037
+              },
+              "closingRange": {
+                "start": 2000037,
+                "end": 2000042
+              }
+            },
+            "attributesRef": "a-htmlTableCell-attrs",
+            "sourceMapRef": "a-htmlTableCell-window-map",
+            "nativeRef": "a-native-cell"
+          }
+        ],
+        "nextCursor": null
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "kind": "noteContextPage",
+        "scope": {
+          "backendId": "db-a",
+          "workspaceId": "ws-a",
+          "noteId": "spec",
+          "noteInstanceId": "inc-a"
+        },
+        "sourceRevision": "r:html-a",
+        "snapshotId": "html-a",
+        "expiresAt": "2026-10-03T00:05:00.000Z",
+        "items": [
+          {
+            "kind": "boundary",
+            "id": "a-htmlTableCell",
+            "construct": "htmlTableCell",
+            "sourceRange": {
+              "start": 2000027,
+              "end": 2000042
+            },
+            "continuationBefore": false,
+            "continuationAfter": true,
+            "parentRef": "a-row",
+            "detailRef": "a-htmlTableCell-raw-details",
+            "htmlPosition": {
+              "profile": "canonicalNote",
+              "tableRef": "a-table",
+              "rowIndex": 0,
+              "columnIndex": 1,
+              "cellRole": "data",
+              "profileVersion": 1
+            },
+            "htmlSource": {
+              "provenance": "explicit",
+              "openingRange": {
+                "start": 2000027,
+                "end": 2000031
+              },
+              "bodyRange": {
+                "start": 2000031,
+                "end": 2000037
+              },
+              "closingRange": {
+                "start": 2000037,
+                "end": 2000042
+              }
+            },
+            "attributesRef": "a-htmlTableCell-attrs",
+            "sourceMapRef": "a-cell-window-two-map",
+            "nativeRef": "a-native-cell"
+          }
+        ],
+        "nextCursor": null
+      }
+    }
+  ],
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "note.get",
+    "params": {
+      "workspaceId": "ws-a",
+      "noteId": "spec",
+      "page": {
+        "kind": "context",
+        "contextRef": "a-cell-owner",
+        "maxItems": 128,
+        "maxWireBytes": 65536
+      }
+    }
+  },
+  "directResponse": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "kind": "noteContextPage",
+      "scope": {
+        "backendId": "db-a",
+        "workspaceId": "ws-a",
+        "noteId": "spec",
+        "noteInstanceId": "inc-a"
+      },
+      "sourceRevision": "r:html-a",
+      "snapshotId": "html-a",
+      "expiresAt": "2026-10-03T00:05:00.000Z",
+      "items": [
+        {
+          "kind": "boundary",
+          "id": "a-htmlTableCell",
+          "construct": "htmlTableCell",
+          "sourceRange": {
+            "start": 2000027,
+            "end": 2000042
+          },
+          "parentRef": "a-row",
+          "detailRef": "a-htmlTableCell-raw-details",
+          "htmlPosition": {
+            "profile": "canonicalNote",
+            "tableRef": "a-table",
+            "rowIndex": 0,
+            "columnIndex": 1,
+            "cellRole": "data",
+            "profileVersion": 1
+          },
+          "htmlSource": {
+            "provenance": "explicit",
+            "openingRange": {
+              "start": 2000027,
+              "end": 2000031
+            },
+            "bodyRange": {
+              "start": 2000031,
+              "end": 2000037
+            },
+            "closingRange": {
+              "start": 2000037,
+              "end": 2000042
+            }
+          },
+          "attributesRef": "a-htmlTableCell-attrs",
+          "nativeRef": "a-native-cell"
+        }
+      ],
+      "nextCursor": null
+    }
+  }
+},
+  "inlineCodeContinuation": {
+  "canonicalOracleCases": [
+    {
+      "id": "multilineTrim",
+      "expectedText": "A ` B C",
+      "expectedMarks": [
+        "code"
+      ],
+      "expectedProse": [
+        "before ",
+        " after"
+      ],
+      "sourceLength": 27,
+      "windowFrame": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "span",
+              "id": "multilineTrim-code",
+              "role": "code",
+              "sourceRange": {
+                "start": 7,
+                "end": 21
+              },
+              "parentRef": "multilineTrim-paragraph-owner",
+              "codeSource": {
+                "profile": "canonicalNote",
+                "profileVersion": 1,
+                "openingRange": {
+                  "start": 7,
+                  "end": 9
+                },
+                "bodyRange": {
+                  "start": 9,
+                  "end": 19
+                },
+                "closingRange": {
+                  "start": 19,
+                  "end": 21
+                }
+              },
+              "nativeRef": "multilineTrim-leaf-ref",
+              "sourceMapRef": "multilineTrim-window-map"
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "directFrame": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "span",
+              "id": "multilineTrim-code",
+              "role": "code",
+              "sourceRange": {
+                "start": 7,
+                "end": 21
+              },
+              "parentRef": "multilineTrim-paragraph-owner",
+              "codeSource": {
+                "profile": "canonicalNote",
+                "profileVersion": 1,
+                "openingRange": {
+                  "start": 7,
+                  "end": 9
+                },
+                "bodyRange": {
+                  "start": 9,
+                  "end": 19
+                },
+                "closingRange": {
+                  "start": 19,
+                  "end": 21
+                }
+              },
+              "nativeRef": "multilineTrim-leaf-ref"
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "maps": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "sourceMap",
+              "id": "multilineTrim-map-0",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "multilineTrim-owner",
+              "textNodeId": null,
+              "textNodeRef": null,
+              "sourceRange": {
+                "start": 7,
+                "end": 10
+              },
+              "renderedRange": {
+                "start": 0,
+                "end": 0
+              },
+              "mapping": "omitted",
+              "textRef": null
+            },
+            {
+              "kind": "sourceMap",
+              "id": "multilineTrim-map-1",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "multilineTrim-owner",
+              "textNodeId": "multilineTrim-leaf",
+              "textNodeRef": "multilineTrim-leaf-ref",
+              "sourceRange": {
+                "start": 10,
+                "end": 15
+              },
+              "renderedRange": {
+                "start": 0,
+                "end": 5
+              },
+              "mapping": "identity",
+              "textRef": "multilineTrim-text-1"
+            },
+            {
+              "kind": "sourceMap",
+              "id": "multilineTrim-map-2",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "multilineTrim-owner",
+              "textNodeId": "multilineTrim-leaf",
+              "textNodeRef": "multilineTrim-leaf-ref",
+              "sourceRange": {
+                "start": 15,
+                "end": 17
+              },
+              "renderedRange": {
+                "start": 5,
+                "end": 6
+              },
+              "mapping": "normalized",
+              "textRef": "multilineTrim-text-2"
+            },
+            {
+              "kind": "sourceMap",
+              "id": "multilineTrim-map-3",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "multilineTrim-owner",
+              "textNodeId": "multilineTrim-leaf",
+              "textNodeRef": "multilineTrim-leaf-ref",
+              "sourceRange": {
+                "start": 17,
+                "end": 18
+              },
+              "renderedRange": {
+                "start": 6,
+                "end": 7
+              },
+              "mapping": "identity",
+              "textRef": "multilineTrim-text-3"
+            },
+            {
+              "kind": "sourceMap",
+              "id": "multilineTrim-map-4",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "multilineTrim-owner",
+              "textNodeId": null,
+              "textNodeRef": null,
+              "sourceRange": {
+                "start": 18,
+                "end": 21
+              },
+              "renderedRange": {
+                "start": 0,
+                "end": 0
+              },
+              "mapping": "omitted",
+              "textRef": null
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "texts": [
+        {
+          "mapId": "multilineTrim-map-1",
+          "frame": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:inline",
+              "snapshotId": "inline-snapshot",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "multilineTrim-text-1",
+                  "field": "renderedText",
+                  "offset": 0,
+                  "text": "A ` B",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        },
+        {
+          "mapId": "multilineTrim-map-2",
+          "frame": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:inline",
+              "snapshotId": "inline-snapshot",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "multilineTrim-text-2",
+                  "field": "renderedText",
+                  "offset": 0,
+                  "text": " ",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        },
+        {
+          "mapId": "multilineTrim-map-3",
+          "frame": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:inline",
+              "snapshotId": "inline-snapshot",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "multilineTrim-text-3",
+                  "field": "renderedText",
+                  "offset": 0,
+                  "text": "C",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        }
+      ],
+      "native": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "nativeNode",
+              "id": "multilineTrim-doc",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "nodeType": "doc",
+              "nodeClass": "container",
+              "parentRef": null,
+              "childIndex": 0,
+              "sourceRange": {
+                "start": 0,
+                "end": 0
+              },
+              "provenance": "implicit",
+              "attributesRef": "multilineTrim-doc-attrs"
+            },
+            {
+              "kind": "nativeNode",
+              "id": "multilineTrim-paragraph",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "nodeType": "paragraph",
+              "nodeClass": "container",
+              "parentRef": "multilineTrim-doc-ref",
+              "childIndex": 0,
+              "sourceRange": {
+                "start": 0,
+                "end": 27
+              },
+              "provenance": "explicit",
+              "attributesRef": "multilineTrim-paragraph-attrs"
+            },
+            {
+              "kind": "nativeNode",
+              "id": "multilineTrim-leaf",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "nodeType": "text",
+              "nodeClass": "text",
+              "parentRef": "multilineTrim-paragraph-ref",
+              "childIndex": 1,
+              "sourceRange": {
+                "start": 9,
+                "end": 19
+              },
+              "provenance": "explicit",
+              "attributesRef": "multilineTrim-leaf-attrs",
+              "marksRef": "multilineTrim-marks"
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "nativeLinks": {
+        "multilineTrim-doc-ref": "multilineTrim-doc",
+        "multilineTrim-paragraph-ref": "multilineTrim-paragraph",
+        "multilineTrim-leaf-ref": "multilineTrim-leaf"
+      },
+      "source": "before `` A ` B\r\nC `` after",
+      "marks": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteMetadataPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "id": "multilineTrim-marks",
+              "parentId": null,
+              "type": "array",
+              "childrenRef": "multilineTrim-marks-items"
+            },
+            {
+              "id": "multilineTrim-mark-code",
+              "parentId": "multilineTrim-marks",
+              "index": 0,
+              "type": "object",
+              "childrenRef": "multilineTrim-mark-fields"
+            },
+            {
+              "id": "multilineTrim-mark-type",
+              "parentId": "multilineTrim-mark-code",
+              "key": "type",
+              "type": "string",
+              "valueRef": "multilineTrim-mark-name"
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "markName": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "fragment",
+              "id": "multilineTrim-mark-name",
+              "field": "value",
+              "offset": 0,
+              "text": "code",
+              "nextRef": null
+            }
+          ],
+          "nextCursor": null
+        }
+      }
+    },
+    {
+      "id": "noTrimAllSpaces",
+      "expectedText": null,
+      "expectedMarks": [],
+      "expectedProse": [
+        "before after"
+      ],
+      "sourceLength": 18,
+      "windowFrame": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "span",
+              "id": "noTrimAllSpaces-code",
+              "role": "code",
+              "sourceRange": {
+                "start": 7,
+                "end": 12
+              },
+              "parentRef": "noTrimAllSpaces-paragraph-owner",
+              "codeSource": {
+                "profile": "canonicalNote",
+                "profileVersion": 1,
+                "openingRange": {
+                  "start": 7,
+                  "end": 8
+                },
+                "bodyRange": {
+                  "start": 8,
+                  "end": 11
+                },
+                "closingRange": {
+                  "start": 11,
+                  "end": 12
+                }
+              },
+              "nativeRef": null,
+              "sourceMapRef": "noTrimAllSpaces-window-map"
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "directFrame": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "span",
+              "id": "noTrimAllSpaces-code",
+              "role": "code",
+              "sourceRange": {
+                "start": 7,
+                "end": 12
+              },
+              "parentRef": "noTrimAllSpaces-paragraph-owner",
+              "codeSource": {
+                "profile": "canonicalNote",
+                "profileVersion": 1,
+                "openingRange": {
+                  "start": 7,
+                  "end": 8
+                },
+                "bodyRange": {
+                  "start": 8,
+                  "end": 11
+                },
+                "closingRange": {
+                  "start": 11,
+                  "end": 12
+                }
+              },
+              "nativeRef": null
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "maps": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "sourceMap",
+              "id": "noTrimAllSpaces-map-0",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "noTrimAllSpaces-owner",
+              "textNodeId": null,
+              "textNodeRef": null,
+              "sourceRange": {
+                "start": 7,
+                "end": 12
+              },
+              "renderedRange": {
+                "start": 0,
+                "end": 0
+              },
+              "mapping": "omitted",
+              "textRef": null
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "texts": [],
+      "native": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "nativeNode",
+              "id": "noTrimAllSpaces-doc",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "nodeType": "doc",
+              "nodeClass": "container",
+              "parentRef": null,
+              "childIndex": 0,
+              "sourceRange": {
+                "start": 0,
+                "end": 0
+              },
+              "provenance": "implicit",
+              "attributesRef": "noTrimAllSpaces-doc-attrs"
+            },
+            {
+              "kind": "nativeNode",
+              "id": "noTrimAllSpaces-paragraph",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "nodeType": "paragraph",
+              "nodeClass": "container",
+              "parentRef": "noTrimAllSpaces-doc-ref",
+              "childIndex": 0,
+              "sourceRange": {
+                "start": 0,
+                "end": 18
+              },
+              "provenance": "explicit",
+              "attributesRef": "noTrimAllSpaces-paragraph-attrs"
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "nativeLinks": {
+        "noTrimAllSpaces-doc-ref": "noTrimAllSpaces-doc",
+        "noTrimAllSpaces-paragraph-ref": "noTrimAllSpaces-paragraph"
+      },
+      "source": "before `   ` after"
+    },
+    {
+      "id": "multipleDelimiters",
+      "expectedText": "x `` y ` z",
+      "expectedMarks": [
+        "code"
+      ],
+      "expectedProse": [
+        "before ",
+        " after"
+      ],
+      "sourceLength": 29,
+      "windowFrame": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "span",
+              "id": "multipleDelimiters-code",
+              "role": "code",
+              "sourceRange": {
+                "start": 7,
+                "end": 23
+              },
+              "parentRef": "multipleDelimiters-paragraph-owner",
+              "codeSource": {
+                "profile": "canonicalNote",
+                "profileVersion": 1,
+                "openingRange": {
+                  "start": 7,
+                  "end": 10
+                },
+                "bodyRange": {
+                  "start": 10,
+                  "end": 20
+                },
+                "closingRange": {
+                  "start": 20,
+                  "end": 23
+                }
+              },
+              "nativeRef": "multipleDelimiters-leaf-ref",
+              "sourceMapRef": "multipleDelimiters-window-map"
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "directFrame": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "span",
+              "id": "multipleDelimiters-code",
+              "role": "code",
+              "sourceRange": {
+                "start": 7,
+                "end": 23
+              },
+              "parentRef": "multipleDelimiters-paragraph-owner",
+              "codeSource": {
+                "profile": "canonicalNote",
+                "profileVersion": 1,
+                "openingRange": {
+                  "start": 7,
+                  "end": 10
+                },
+                "bodyRange": {
+                  "start": 10,
+                  "end": 20
+                },
+                "closingRange": {
+                  "start": 20,
+                  "end": 23
+                }
+              },
+              "nativeRef": "multipleDelimiters-leaf-ref"
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "maps": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "sourceMap",
+              "id": "multipleDelimiters-map-0",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "multipleDelimiters-owner",
+              "textNodeId": null,
+              "textNodeRef": null,
+              "sourceRange": {
+                "start": 7,
+                "end": 10
+              },
+              "renderedRange": {
+                "start": 0,
+                "end": 0
+              },
+              "mapping": "omitted",
+              "textRef": null
+            },
+            {
+              "kind": "sourceMap",
+              "id": "multipleDelimiters-map-1",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "multipleDelimiters-owner",
+              "textNodeId": "multipleDelimiters-leaf",
+              "textNodeRef": "multipleDelimiters-leaf-ref",
+              "sourceRange": {
+                "start": 10,
+                "end": 20
+              },
+              "renderedRange": {
+                "start": 0,
+                "end": 10
+              },
+              "mapping": "identity",
+              "textRef": "multipleDelimiters-text-1"
+            },
+            {
+              "kind": "sourceMap",
+              "id": "multipleDelimiters-map-2",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "multipleDelimiters-owner",
+              "textNodeId": null,
+              "textNodeRef": null,
+              "sourceRange": {
+                "start": 20,
+                "end": 23
+              },
+              "renderedRange": {
+                "start": 0,
+                "end": 0
+              },
+              "mapping": "omitted",
+              "textRef": null
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "texts": [
+        {
+          "mapId": "multipleDelimiters-map-1",
+          "frame": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:inline",
+              "snapshotId": "inline-snapshot",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "multipleDelimiters-text-1",
+                  "field": "renderedText",
+                  "offset": 0,
+                  "text": "x `` y ` z",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        }
+      ],
+      "native": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "nativeNode",
+              "id": "multipleDelimiters-doc",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "nodeType": "doc",
+              "nodeClass": "container",
+              "parentRef": null,
+              "childIndex": 0,
+              "sourceRange": {
+                "start": 0,
+                "end": 0
+              },
+              "provenance": "implicit",
+              "attributesRef": "multipleDelimiters-doc-attrs"
+            },
+            {
+              "kind": "nativeNode",
+              "id": "multipleDelimiters-paragraph",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "nodeType": "paragraph",
+              "nodeClass": "container",
+              "parentRef": "multipleDelimiters-doc-ref",
+              "childIndex": 0,
+              "sourceRange": {
+                "start": 0,
+                "end": 29
+              },
+              "provenance": "explicit",
+              "attributesRef": "multipleDelimiters-paragraph-attrs"
+            },
+            {
+              "kind": "nativeNode",
+              "id": "multipleDelimiters-leaf",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "nodeType": "text",
+              "nodeClass": "text",
+              "parentRef": "multipleDelimiters-paragraph-ref",
+              "childIndex": 1,
+              "sourceRange": {
+                "start": 10,
+                "end": 20
+              },
+              "provenance": "explicit",
+              "attributesRef": "multipleDelimiters-leaf-attrs",
+              "marksRef": "multipleDelimiters-marks"
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "nativeLinks": {
+        "multipleDelimiters-doc-ref": "multipleDelimiters-doc",
+        "multipleDelimiters-paragraph-ref": "multipleDelimiters-paragraph",
+        "multipleDelimiters-leaf-ref": "multipleDelimiters-leaf"
+      },
+      "source": "before ```x `` y ` z``` after",
+      "marks": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteMetadataPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "id": "multipleDelimiters-marks",
+              "parentId": null,
+              "type": "array",
+              "childrenRef": "multipleDelimiters-marks-items"
+            },
+            {
+              "id": "multipleDelimiters-mark-code",
+              "parentId": "multipleDelimiters-marks",
+              "index": 0,
+              "type": "object",
+              "childrenRef": "multipleDelimiters-mark-fields"
+            },
+            {
+              "id": "multipleDelimiters-mark-type",
+              "parentId": "multipleDelimiters-mark-code",
+              "key": "type",
+              "type": "string",
+              "valueRef": "multipleDelimiters-mark-name"
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "markName": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "fragment",
+              "id": "multipleDelimiters-mark-name",
+              "field": "value",
+              "offset": 0,
+              "text": "code",
+              "nextRef": null
+            }
+          ],
+          "nextCursor": null
+        }
+      }
+    },
+    {
+      "id": "giantOpening",
+      "expectedText": "TARGET",
+      "expectedMarks": [
+        "code"
+      ],
+      "expectedProse": [
+        "before ",
+        " after"
+      ],
+      "sourceLength": 200021,
+      "directFrame": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "span",
+              "id": "giantOpening-code",
+              "role": "code",
+              "sourceRange": {
+                "start": 7,
+                "end": 200015
+              },
+              "parentRef": "giantOpening-paragraph-owner",
+              "codeSource": {
+                "profile": "canonicalNote",
+                "profileVersion": 1,
+                "openingRange": {
+                  "start": 7,
+                  "end": 100008
+                },
+                "bodyRange": {
+                  "start": 100008,
+                  "end": 100014
+                },
+                "closingRange": {
+                  "start": 100014,
+                  "end": 200015
+                }
+              },
+              "nativeRef": "giantOpening-leaf-ref"
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "texts": [
+        {
+          "mapId": "giantOpening-map-1",
+          "frame": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:inline",
+              "snapshotId": "inline-snapshot",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "giantOpening-text-1",
+                  "field": "renderedText",
+                  "offset": 0,
+                  "text": "RGET",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        }
+      ],
+      "native": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "nativeNode",
+              "id": "giantOpening-doc",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "nodeType": "doc",
+              "nodeClass": "container",
+              "parentRef": null,
+              "childIndex": 0,
+              "sourceRange": {
+                "start": 0,
+                "end": 0
+              },
+              "provenance": "implicit",
+              "attributesRef": "giantOpening-doc-attrs"
+            },
+            {
+              "kind": "nativeNode",
+              "id": "giantOpening-paragraph",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "nodeType": "paragraph",
+              "nodeClass": "container",
+              "parentRef": "giantOpening-doc-ref",
+              "childIndex": 0,
+              "sourceRange": {
+                "start": 0,
+                "end": 200021
+              },
+              "provenance": "explicit",
+              "attributesRef": "giantOpening-paragraph-attrs"
+            },
+            {
+              "kind": "nativeNode",
+              "id": "giantOpening-leaf",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "nodeType": "text",
+              "nodeClass": "text",
+              "parentRef": "giantOpening-paragraph-ref",
+              "childIndex": 1,
+              "sourceRange": {
+                "start": 100008,
+                "end": 100014
+              },
+              "provenance": "explicit",
+              "attributesRef": "giantOpening-leaf-attrs",
+              "marksRef": "giantOpening-marks"
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "nativeLinks": {
+        "giantOpening-doc-ref": "giantOpening-doc",
+        "giantOpening-paragraph-ref": "giantOpening-paragraph",
+        "giantOpening-leaf-ref": "giantOpening-leaf"
+      },
+      "recipe": {
+        "prefix": "before ",
+        "delimiter": "`",
+        "delimiterCount": 100001,
+        "body": "TARGET",
+        "suffix": " after"
+      },
+      "marks": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteMetadataPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "id": "giantOpening-marks",
+              "parentId": null,
+              "type": "array",
+              "childrenRef": "giantOpening-marks-items"
+            },
+            {
+              "id": "giantOpening-mark-code",
+              "parentId": "giantOpening-marks",
+              "index": 0,
+              "type": "object",
+              "childrenRef": "giantOpening-mark-fields"
+            },
+            {
+              "id": "giantOpening-mark-type",
+              "parentId": "giantOpening-mark-code",
+              "key": "type",
+              "type": "string",
+              "valueRef": "giantOpening-mark-name"
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "markName": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:inline",
+          "snapshotId": "inline-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "fragment",
+              "id": "giantOpening-mark-name",
+              "field": "value",
+              "offset": 0,
+              "text": "code",
+              "nextRef": null
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "windows": [
+        {
+          "sourceRange": {
+            "start": 50000,
+            "end": 50008
+          },
+          "contextRef": "giant-context-0",
+          "occurrence": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:inline",
+              "snapshotId": "inline-snapshot",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "span",
+                  "id": "giantOpening-code",
+                  "role": "code",
+                  "sourceRange": {
+                    "start": 7,
+                    "end": 200015
+                  },
+                  "parentRef": "giantOpening-paragraph-owner",
+                  "codeSource": {
+                    "profile": "canonicalNote",
+                    "profileVersion": 1,
+                    "openingRange": {
+                      "start": 7,
+                      "end": 100008
+                    },
+                    "bodyRange": {
+                      "start": 100008,
+                      "end": 100014
+                    },
+                    "closingRange": {
+                      "start": 100014,
+                      "end": 200015
+                    }
+                  },
+                  "nativeRef": "giantOpening-leaf-ref",
+                  "sourceMapRef": "giant-map-window-0"
+                }
+              ],
+              "nextCursor": null
+            }
+          },
+          "maps": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:inline",
+              "snapshotId": "inline-snapshot",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "sourceMap",
+                  "id": "giantOpening-map-0",
+                  "profile": "canonicalNote",
+                  "profileVersion": 1,
+                  "ownerRef": "giantOpening-owner",
+                  "textNodeId": null,
+                  "textNodeRef": null,
+                  "sourceRange": {
+                    "start": 50000,
+                    "end": 50008
+                  },
+                  "renderedRange": {
+                    "start": 0,
+                    "end": 0
+                  },
+                  "mapping": "omitted",
+                  "textRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        },
+        {
+          "sourceRange": {
+            "start": 100010,
+            "end": 100014
+          },
+          "contextRef": "giant-context-1",
+          "occurrence": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:inline",
+              "snapshotId": "inline-snapshot",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "span",
+                  "id": "giantOpening-code",
+                  "role": "code",
+                  "sourceRange": {
+                    "start": 7,
+                    "end": 200015
+                  },
+                  "parentRef": "giantOpening-paragraph-owner",
+                  "codeSource": {
+                    "profile": "canonicalNote",
+                    "profileVersion": 1,
+                    "openingRange": {
+                      "start": 7,
+                      "end": 100008
+                    },
+                    "bodyRange": {
+                      "start": 100008,
+                      "end": 100014
+                    },
+                    "closingRange": {
+                      "start": 100014,
+                      "end": 200015
+                    }
+                  },
+                  "nativeRef": "giantOpening-leaf-ref",
+                  "sourceMapRef": "giant-map-window-1"
+                }
+              ],
+              "nextCursor": null
+            }
+          },
+          "maps": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:inline",
+              "snapshotId": "inline-snapshot",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "sourceMap",
+                  "id": "giantOpening-map-1",
+                  "profile": "canonicalNote",
+                  "profileVersion": 1,
+                  "ownerRef": "giantOpening-owner",
+                  "textNodeId": "giantOpening-leaf",
+                  "textNodeRef": "giantOpening-leaf-ref",
+                  "sourceRange": {
+                    "start": 100010,
+                    "end": 100014
+                  },
+                  "renderedRange": {
+                    "start": 2,
+                    "end": 6
+                  },
+                  "mapping": "identity",
+                  "textRef": "giantOpening-text-1"
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "segmentPolicy": {
+    "maximumRenderedTextBytes": 16384,
+    "scalarSafe": true,
+    "noPrecedingBodyReads": true
+  }
+},
+  "paragraphEntryPath": {
+    "status": "controlled-shape-fixture-not-store-capture",
+    "paragraph": {
+      "kind": "boundary",
+      "id": "paragraph-far",
+      "construct": "paragraph",
+      "sourceRange": {
+        "start": 20000,
+        "end": 20003
+      },
+      "continuationBefore": false,
+      "continuationAfter": false,
+      "detailRef": "paragraph-detail"
+    },
+    "entryPaths": [
+      "markdown",
+      "html"
+    ]
+  },
+  "readOnly": {
+    "noteGetKinds": [
+      "source",
+      "context",
+      "metadata",
+      "taskIds"
+    ],
+    "annotationKinds": {
+      "note.lineAttribution.load": "attribution",
+      "comment.list": "comments",
+      "comment.getThread": "replies"
+    },
+    "subscriptions": [
+      "note.subscribe",
+      "comment.subscribe"
+    ],
+    "projection": "pageState"
+  }
+}

@@ -1,0 +1,219 @@
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import test from 'node:test';
+import { assertContextFrame } from './contract.mjs';
+const common = JSON.parse(await readFile(new URL('./contract.json', import.meta.url)));
+const owner = { kind: 'boundary', id: 'markdown-document', construct: 'markdownDocument',
+  profile: 'canonicalNote', profileVersion: 1, entryPath: 'markdown',
+  sourceRange: { start: 0, end: 22 }, nativeRef: 'native-doc', attributesRef: 'doc-attrs',
+  sourceMapRef: 'window-separators', continuationBefore: false, continuationAfter: false };
+const frame = item => ({ jsonrpc: '2.0', id: 'document', result: {
+  kind: 'noteContextPage', scope: common.scope, sourceRevision: 'r:7', snapshotId: 'snapshot-a',
+  expiresAt: '2026-10-03T00:05:00.000Z', items: [item], nextCursor: null,
+} });
+
+test('Markdown document owner rejects malformed profile, entry path and references', () => {
+  assertContextFrame(frame(owner), common.limits);
+  for (const mutate of [x => { x.profile = 'other'; }, x => { x.profileVersion = 2; },
+    x => { x.entryPath = 'html'; }, x => { x.sourceRange.start = 1; },
+    x => { delete x.nativeRef; }, x => { delete x.attributesRef; },
+    x => { delete x.sourceMapRef; }]) {
+    const bad = structuredClone(owner); mutate(bad);
+    assert.throws(() => assertContextFrame(frame(bad), common.limits));
+  }
+});
+
+test('Markdown direct owner excludes window bindings and continuation flags', () => {
+  const direct = structuredClone(owner);
+  for (const key of ['sourceMapRef', 'continuationBefore', 'continuationAfter']) delete direct[key];
+  assertContextFrame(frame(direct), common.limits, { directOwner: true });
+  for (const key of ['sourceMapRef', 'continuationBefore', 'continuationAfter']) {
+    const bad = { ...direct, [key]: owner[key] };
+    assert.throws(() => assertContextFrame(frame(bad), common.limits, { directOwner: true }));
+  }
+});
+
+const fixture = JSON.parse(await readFile(new URL('./markdown-document.json', import.meta.url)));
+const { assertMarkdownDocumentResources, wireBytes, boundary } = await import('./contract.mjs');
+const range = ([start, end]) => ({ start, end });
+const sourceOf = c => c.source ?? c.recipe.prefix + c.recipe.repeat.repeat(c.recipe.count) + c.recipe.suffix;
+function resources(c, w) {
+  const source = sourceOf(c), stable = structuredClone(fixture.owner);
+  stable.sourceRange.end = source.length;
+  const occurrence = { ...stable, sourceMapRef: `maps-${w.range.join('-')}`,
+    continuationBefore: w.range[0] > 0, continuationAfter: w.range[1] < source.length };
+  const maps = w.maps.map((r, i) => ({ kind: 'sourceMap', id: `separator-${i}`,
+    profile: 'canonicalNote', profileVersion: 1, ownerRef: fixture.ownerRef,
+    sourceRange: range(r), renderedRange: { start: 0, end: 0 }, mapping: 'omitted',
+    textNodeId: null, textNodeRef: null, textRef: null }));
+  const mapFrame = frame(stable); mapFrame.result.items = maps;
+  const occurrenceFrame = frame(occurrence);
+  if (!maps.length && source.length) occurrenceFrame.result.items = [];
+  return { source, window: range(w.range), ownerRef: fixture.ownerRef, nativeRef: fixture.nativeRef,
+    ownerFrame: c.separators.length || !source.length ? frame(stable) : null,
+    nativeFrame: c.separators.length || !source.length ? frame(structuredClone(fixture.root)) : null,
+    occurrenceFrame, mapFrames: maps.length || !source.length ? [mapFrame] : [], separatorRanges: c.separators.map(range) };
+}
+for (const c of fixture.cases) test(`Markdown exact separator ownership: ${c.id}`, () => {
+  const source = sourceOf(c);
+  // Independent fixture partition: separators must neither expand nor overlap block owners.
+  const partition = [...c.blocks.map(b => b.range), ...c.separators].sort((a,b) => a[0]-b[0]);
+  let end = 0;
+  for (const r of partition) {
+    assert.equal(r[0], end); assert.ok(r[1] > r[0]);
+    assert.ok(boundary(source, r[0]) && boundary(source, r[1])); end = r[1];
+  }
+  assert.equal(end, source.length);
+  const owners = c.windows.map(w => resources(c,w));
+  for (const r of owners) assertMarkdownDocumentResources(r, common.limits);
+  for (const r of owners) assert.deepEqual(r.ownerFrame, owners[0].ownerFrame);
+  const refs = owners.flatMap(r => r.occurrenceFrame.result.items.map(o => o.sourceMapRef));
+  assert.equal(new Set(refs).size, refs.length);
+});
+
+test('Markdown document rejects wrong root, owner binding, scope and omitted coverage', () => {
+  const good = resources(fixture.cases[0], fixture.cases[0].windows[0]);
+  const native = r => r.nativeFrame.result.items[0];
+  const map = r => r.mapFrames[0].result.items[0];
+  for (const mutate of [r => { native(r).nodeType = 'paragraph'; },
+    r => { native(r).nodeClass = 'atom'; }, r => { native(r).parentRef = 'parent'; },
+    r => { native(r).childIndex = 1; }, r => { native(r).attributesRef = 'other'; },
+    r => { native(r).sourceRange = { start: 2, end: 2 }; },
+    r => { r.ownerFrame.result.items[0].sourceRange.end--; },
+    r => { r.nativeRef = 'wrong-root'; }, r => { map(r).ownerRef = 'wrong-owner'; },
+    r => { map(r).sourceRange = { start: 20, end: 22 }; },
+    r => { map(r).mapping = 'projection'; }, r => { map(r).textNodeId = 'fake-leaf'; map(r).textNodeRef = 'fake-ref'; },
+    r => { r.mapFrames[0].result.items = []; }, r => { r.mapFrames[0].result.items.push(structuredClone(map(r))); },
+    r => { r.mapFrames[0].result.snapshotId = 'different'; },
+    r => { r.occurrenceFrame.result.items[0].nativeRef = 'different'; }]) {
+    const bad = structuredClone(good); mutate(bad);
+    assert.throws(() => assertMarkdownDocumentResources(bad, common.limits));
+  }
+});
+
+test('Markdown document window frames retain escaped byte and item limits', () => {
+  const r = resources(fixture.cases[2], fixture.cases[2].windows[0]);
+  const max = Math.max(...[r.ownerFrame,r.nativeFrame,r.occurrenceFrame,...r.mapFrames].map(wireBytes));
+  assertMarkdownDocumentResources(r,{...common.limits,wireBytes:max});
+  assert.throws(() => assertMarkdownDocumentResources(r,{...common.limits,wireBytes:max-1}));
+  assert.throws(() => assertMarkdownDocumentResources(r,{...common.limits,items:0}));
+});
+
+test('Markdown separators remain complete across bounded map pages and reject a missing seam', () => {
+  const c = fixture.cases.find(c => c.id === 'leading-trailing-unicode');
+  const r = resources(c,c.windows[0]);
+  const combined = r.mapFrames[0];
+  r.mapFrames = combined.result.items.map(item => ({ ...combined,
+    result: { ...combined.result, items: [item] } }));
+  assertMarkdownDocumentResources(r,{...common.limits,items:1});
+  const missing = structuredClone(r); missing.mapFrames.pop();
+  assert.throws(() => assertMarkdownDocumentResources(missing,common.limits));
+  const scalarSplit = structuredClone(r); scalarSplit.window.start = 4;
+  assert.throws(() => assertMarkdownDocumentResources(scalarSplit,common.limits));
+  const notASep = structuredClone(r);
+  notASep.mapFrames[0].result.items[0].sourceRange = {start:1,end:3};
+  assert.throws(() => assertMarkdownDocumentResources(notASep,common.limits));
+});
+
+test('Markdown nonempty no-gap and block-only windows cannot invent separator admission', () => {
+  for (const c of fixture.cases.filter(c => sourceOf(c).length)) for (const w of c.windows.filter(w => !w.maps.length)) {
+    const r = resources(c,w);
+    r.occurrenceFrame.result.items = [structuredClone(owner)];
+    assert.throws(() => assertMarkdownDocumentResources(r,common.limits));
+  }
+});
+
+test('Markdown separator documentation preserves the strict admission and rollout guarantees', async () => {
+  const docs = await readFile(new URL('../../methods/notes-tasks.md',import.meta.url),'utf8');
+  for (const required of ['construct: "markdownDocument"', 'original parser-event',
+    'complement of successfully rendered maps', 'no paragraph/heading overlaps',
+    'empty native range', 'sourceLength', 'CR from LF', 'fixed expiry',
+    'Additive documentation lands before']) assert.ok(docs.includes(required),required);
+});
+
+
+test('Markdown empty document admits its root through an empty window-bound map collection', () => {
+  const c = fixture.cases.find(c => c.id === 'empty');
+  const r = resources(c,c.windows[0]);
+  assertMarkdownDocumentResources(r,common.limits);
+  assert.equal(r.occurrenceFrame.result.items.length,1);
+  assert.deepEqual(r.mapFrames[0].result.items,[]);
+  for (const mutate of [x => { x.occurrenceFrame.result.items = []; },
+    x => { x.mapFrames = []; },
+    x => { delete x.occurrenceFrame.result.items[0].sourceMapRef; },
+    x => { x.mapFrames[0].result.items = [{ kind:'sourceMap',id:'invented',
+      profile:'canonicalNote',profileVersion:1,ownerRef:fixture.ownerRef,
+      sourceRange:{start:0,end:0},renderedRange:{start:0,end:0},mapping:'omitted',
+      textNodeId:null,textNodeRef:null,textRef:null }]; }]) {
+    const bad = structuredClone(r); mutate(bad);
+    assert.throws(() => assertMarkdownDocumentResources(bad,common.limits));
+  }
+});
+
+test('structural delimiter receipts protect entire direct children and reject clamping', async () => {
+  const { assertMarkdownDelimiterReceipt } = await import('./contract.mjs');
+  const c=fixture.cases.find(c=>c.id==='blockquote-delimiters');
+  const receipt={kind:'blockquote',sourceRange:{start:0,end:27},children:[
+    {kind:'paragraph',sourceRange:{start:2,end:16}},
+    {kind:'paragraph',sourceRange:{start:20,end:27}}],
+    delimiters:[{start:0,end:2},{start:16,end:20}]};
+  assertMarkdownDelimiterReceipt(c.source,receipt);
+  // Unknown child kinds still protect their complete original envelopes.
+  receipt.children[0].kind='unsupported';assertMarkdownDelimiterReceipt(c.source,receipt);
+  for(const mutate of [x=>{x.children[0].sourceRange.start=-1;},
+    x=>{x.children[1].sourceRange.end=28;},x=>{x.children[0].sourceRange.end=14;},
+    x=>{x.delimiters[0].end=3;},x=>{x.kind='paragraph';}]) {
+    const bad=structuredClone(receipt);mutate(bad);
+    assert.throws(()=>assertMarkdownDelimiterReceipt(c.source,bad));
+  }
+  const overlap=structuredClone(receipt);
+  overlap.children.push({kind:'unknown',sourceRange:{start:5,end:10}});
+  assertMarkdownDelimiterReceipt(c.source,overlap);
+});
+
+
+test('synthesized paragraph retains exact inline-group body pieces and block envelope', async () => {
+  const { assertMarkdownRepairedParagraph } = await import('./contract.mjs');
+  const source = '- [café 🙂](intent://task/a)';
+  const ranges = [{ start: 2, end: source.length }];
+  const receipt = { itemRef: 'item-ref', nodeRef: 'paragraph-ref',
+    candidates: [{ itemRef: 'item-ref', ranges }] };
+  const native = { nodeType: 'paragraph', provenance: 'repaired', parentRef: 'item-ref',
+    sourcePiecesRef: 'body-pieces', sourceRange: ranges[0] };
+  const block = { sourceRange: ranges[0] };
+  const pieces = [{ kind: 'sourcePiece', id: 'body-1', nodeRef: 'paragraph-ref',
+    role: 'body', sourceRange: ranges[0] }];
+  const check = x => assertMarkdownRepairedParagraph(source, x.receipt, x.native, x.block, x.pieces);
+  const good = { receipt, native, block, pieces }; check(good);
+  for (const mutate of [x => { x.receipt.candidates.push(x.receipt.candidates[0]); },
+    x => { x.receipt.candidates[0].itemRef = 'nested-item'; },
+    x => { x.native.provenance = 'implicit'; }, x => { delete x.native.sourcePiecesRef; },
+    x => { x.native.sourceRange = { start: 0, end: 0 }; },
+    x => { x.block.sourceRange = { start: 3, end: 10 }; },
+    x => { x.pieces[0].nodeRef = 'other-paragraph'; },
+    x => { x.pieces[0].role = 'opening'; }, x => { x.pieces.push(x.pieces[0]); },
+    x => { x.pieces[0].sourceRange = { start: 2, end: 2 }; },
+    x => { x.pieces[0].sourceRange = { start: 2, end: 9 }; }]) {
+    const bad = structuredClone(good); mutate(bad); assert.throws(() => check(bad));
+  }
+});
+
+test('repaired task paragraph preserves exact link, code and entity body pieces', async () => {
+  const { assertMarkdownRepairedParagraph } = await import('./contract.mjs');
+  const source = '- [ ] [Café 🙂](https://example.test) and `x y` &amp;\n- plain\n';
+  const ranges = [[6,37],[37,42],[42,47],[47,48],[48,53]].map(([start,end])=>({start,end}));
+  assert.deepEqual(ranges.map(r=>source.slice(r.start,r.end)),
+    ['[Café 🙂](https://example.test)', ' and ', '`x y`', ' ', '&amp;']);
+  const receipt = { itemRef: 'task-item', nodeRef: 'task-paragraph',
+    candidates: [{ itemRef: 'task-item', ranges }] };
+  const native = { nodeType: 'paragraph', provenance: 'repaired', parentRef: 'task-item',
+    sourcePiecesRef: 'inline-pieces', sourceRange: { start: 6, end: 53 } };
+  const block = { sourceRange: { start: 6, end: 53 } };
+  const pieces = ranges.map((sourceRange,i)=>({kind:'sourcePiece',id:`inline-${i}`,
+    nodeRef:'task-paragraph',role:'body',sourceRange}));
+  assertMarkdownRepairedParagraph(source,receipt,native,block,pieces);
+  const reordered = [pieces[1],pieces[0],...pieces.slice(2)];
+  assert.throws(()=>assertMarkdownRepairedParagraph(source,receipt,native,block,reordered));
+  const labelOnly = structuredClone(pieces); labelOnly[0].sourceRange = {start:7,end:14};
+  assert.throws(()=>assertMarkdownRepairedParagraph(source,receipt,native,block,labelOnly));
+});

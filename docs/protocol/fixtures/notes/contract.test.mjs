@@ -1,0 +1,1512 @@
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import test from 'node:test';
+import {
+  utf8, wireBytes, boundary, assertSourcePage, cursorError, overlapIds, assertRanges,
+  admitState, assertMetadataFrame, assertReplyFrames, assertPageStateFrame,
+} from './contract.mjs';
+const f = JSON.parse(await readFile(new URL('./contract.json', import.meta.url), 'utf8'));
+const docs = await readFile(new URL('../../methods/notes-tasks.md', import.meta.url), 'utf8');
+const events = await readFile(new URL('../../06-events.md', import.meta.url), 'utf8');
+const errors = await readFile(new URL('../../09-error-codes.md', import.meta.url), 'utf8');
+const versioning = await readFile(new URL('../../versioning.md', import.meta.url), 'utf8');
+const frame = (text, start, end, length) => ({ jsonrpc: '2.0', id: 1, result: {
+  kind: 'noteSourcePage', scope: f.scope, sourceRevision: 'r:7', snapshotId: 'snapshot-a',
+  expiresAt: '2026-10-03T00:05:00.000Z', sourceLength: length, range: { start, end }, text,
+  nextCursor: end === length ? null : 'opaque-next', previousCursor: start === 0 ? null : 'opaque-previous',
+  contextRef: 'opaque-context', metadataRef: 'opaque-metadata',
+} });
+
+// The functions above operate only on fixture strings. They do not service requests,
+// create tokens, prove database atomicity, or claim real paging implementation.
+test('prepared status, capability gates, hard limits and catalog integration agree', () => {
+  assert.equal(f.status, 'prepared-specification-only');
+  assert.deepEqual(f.capabilities, { notePagingRead: 1, noteAnnotations: 1 });
+  for (const cap of Object.keys(f.capabilities)) {
+    assert.ok(docs.includes(`${cap}: 1`));
+    assert.ok(versioning.includes(`${cap}: 1`));
+  }
+  for (const limit of [16384, 65536, 4096]) assert.ok(docs.includes(limit.toLocaleString('en-US')));
+  assert.deepEqual(f.limits, { sourceBytes: 16384, wireBytes: 65536, stateBytes: 4096,
+    items: 128, annotationItems: 64, ranges: 32, tokenBytes: 256 });
+  assert.ok(events.includes('projection: "pageState"'));
+  assert.ok(events.includes('4,096'));
+  for (const error of ['note-page-stale', 'note-page-expired', 'note-page-cursor-invalid',
+    'note-page-budget']) {
+    assert.ok(errors.includes(`| ${error} |`));
+  }
+});
+
+for (const fixture of f.sources) test(`exact source pages: ${fixture.id}`, () => {
+  const source = fixture.text ?? fixture.recipe.prefix + fixture.recipe.repeat.repeat(fixture.recipe.count) + fixture.recipe.suffix;
+  const limits = { ...f.limits, sourceBytes: fixture.maxSourceBytes ?? f.limits.sourceBytes };
+  const boundaries = fixture.boundaries ? [...fixture.boundaries] : [0];
+  if (!fixture.boundaries) {
+    let pos = 0;
+    // Deliberately page a giant single construct by scalar bytes, never by grammar.
+    while (pos < source.length) {
+      let end = pos, bytes = 0;
+      for (const scalar of source.slice(pos)) {
+        if (bytes + utf8(scalar) > limits.sourceBytes) break;
+        bytes += utf8(scalar); end += scalar.length;
+      }
+      boundaries.push(end); pos = end;
+    }
+  }
+  assert.equal(boundaries[0], 0);
+  assert.equal(boundaries.at(-1), source.length);
+  const pages = boundaries.slice(1).map((end, i) => frame(source.slice(boundaries[i], end), boundaries[i], end, source.length));
+  for (const p of pages) assertSourcePage(source, p, limits);
+  assert.equal(pages.map(p => p.result.text).join(''), source);
+  assert.equal([...pages].reverse().reduce((s, p) => p.result.text + s, ''), source);
+  if (fixture.recipe) {
+    assert.ok(source.length > 10 * limits.sourceBytes);
+    assert.ok(pages.length > 10);
+    assert.ok(pages[1].result.text.length > 0 && !pages[1].result.text.includes('```'));
+  }
+});
+
+test('UTF-16/scalar/UTF-8 units differ and only surrogate interiors are invalid', () => {
+  const text = 'A😀é\r\n中';
+  assert.equal(text.length, 8);
+  assert.equal([...text].length, 7);
+  assert.equal(utf8(text), 13);
+  assert.equal(boundary(text, 2), false);
+  assert.equal(boundary(text, 6), true); // between CR and LF is valid
+  const p = frame('😀', 1, 3, text.length);
+  assertSourcePage(text, p, { ...f.limits, sourceBytes: 4 });
+  assert.throws(() => assertSourcePage(text, { ...p, result: { ...p.result, range: { start: 2, end: 3 }, text: '\ude00' } }, f.limits));
+});
+
+test('recorded wire page fits exactly after JSON escaping; one extra scalar exceeds budget', () => {
+  const c = f.escapedWire;
+  const source = c.scalar.repeat(c.sourceCount);
+  const page = frame(source.slice(0, c.end), 0, c.end, source.length);
+  assert.equal(wireBytes(page), c.expectedWireBytes);
+  assert.ok(utf8(page.result.text) < c.maxWireBytes);
+  assertSourcePage(source, page, { sourceBytes: f.limits.sourceBytes, wireBytes: c.maxWireBytes });
+  const extra = frame(source.slice(0, c.end + 1), 0, c.end + 1, source.length);
+  assert.ok(wireBytes(extra) > c.maxWireBytes);
+  assert.throws(() => assertSourcePage(source, extra, { sourceBytes: f.limits.sourceBytes, wireBytes: c.maxWireBytes }));
+});
+
+for (const c of f.cursors) test(`cursor consistency: ${c.id}`, () => {
+  const claim = { ...f.cursorClaim, ...c.claimPatch };
+  const request = { ...claim, ...c.requestPatch };
+  assert.equal(cursorError(claim, request, { ...f.current, ...c.currentPatch }, c.now ?? 1000), c.expect);
+});
+
+test('seek, backward exhaustion and late responses retain scope/revision identity', () => {
+  const source = 'same 😀 same';
+  const p = frame('😀', 5, 7, source.length);
+  assertSourcePage(source, p, f.limits);
+  const backward = frame(source.slice(0, 5), 0, 5, source.length);
+  assertSourcePage(source, backward, f.limits);
+  assert.equal(backward.result.previousCursor, null);
+  const exhausted = frame('', source.length, source.length, source.length);
+  assertSourcePage(source, exhausted, f.limits);
+  assert.equal(exhausted.result.nextCursor, null);
+  const key = p => JSON.stringify([p.scope, p.sourceRevision, p.snapshotId]);
+  assert.notEqual(key(p.result), key({ ...p.result, sourceRevision: 'r:8' }));
+  assert.notEqual(key(p.result), key({ ...p.result, scope: { ...f.scope, noteId: 'other' } }));
+});
+
+test('disjoint annotation queries retain outside-start overlap and canonical alias IDs', () => {
+  const c = f.annotations;
+  assertRanges(c.ranges, f.limits.ranges);
+  assert.deepEqual(overlapIds(c.anchors, c.ranges), c.expect);
+  assert.deepEqual(overlapIds(c.anchors, []), []);
+  assert.ok(overlapIds(c.anchors, [{ start: 10, end: 50 }]).includes('gap-only'));
+  assert.throws(() => assertRanges([{ start: 10, end: 20 }, { start: 20, end: 30 }], 32));
+  assert.throws(() => assertRanges([{ start: 10, end: 30 }, { start: 20, end: 40 }], 32));
+});
+
+test('annotation summaries, reply pages, fragments and events remain bounded', () => {
+  const c = f.annotationPages;
+  for (const p of c.pages) {
+    assert.ok(wireBytes(p) <= f.limits.wireBytes);
+    assert.ok(p.result.items.length <= f.limits.annotationItems);
+    assert.equal(p.result.commentRevision, 'c:4');
+    assert.equal(p.result.totalComments, 3);
+    for (const row of p.result.items) {
+      assert.equal(row.comments, undefined);
+      assert.equal(row.replies, undefined);
+      assert.ok(utf8(row.preview) <= 512);
+      assert.ok(row.bodyRef);
+    }
+  }
+  assert.deepEqual(c.pages.flatMap(p => p.result.items.map(r => r.commentId)), ['reply-1', 'reply-2', 'root']);
+  assert.equal(c.pages.at(-1).result.nextCursor, null);
+  assert.equal(c.fragments.map(p => p.text).join(''), c.expectedBody);
+  assert.ok(c.fragments.every(p => utf8(p.text) <= f.limits.sourceBytes));
+  for (const event of c.events) {
+    assert.ok(wireBytes(event) <= f.limits.stateBytes);
+    assert.equal(event.params.snapshot.invalidation, 'all');
+    for (const field of ['content', 'note', 'attributions', 'threads', 'comments']) assert.equal(event.params.snapshot[field], undefined);
+  }
+  const states = c.events.map(e => e.params.snapshot);
+  assert.equal(states[0].sourceRevision, states[1].sourceRevision);
+  assert.notEqual(states[0].attributionGeneration, states[1].attributionGeneration);
+  assert.equal(states[1].commentRevision, states[0].commentRevision);
+  assert.notEqual(states[2].commentRevision, states[1].commentRevision);
+  assert.equal(states[2].attributionGeneration, states[1].attributionGeneration);
+});
+
+test('legacy full result and page discriminants cannot be interchanged', () => {
+  assert.equal(f.legacy.request.params.page, undefined);
+  assert.equal(f.legacy.result.note.content, 'whole note');
+  assert.equal(f.legacy.result.kind, undefined);
+  const page = frame('', 0, 0, 0);
+  assert.equal(page.result.note, undefined);
+  assert.equal(page.result.content, undefined);
+  assert.throws(() => assertSourcePage('whole note', { result: f.legacy.result }, f.limits));
+});
+
+test('structural context and alias expansions page separately from source', () => {
+  for (const p of f.contextPages) {
+    assert.equal(p.kind, 'noteContextPage');
+    assert.equal(p.sourceRevision, 'r:7');
+    assert.ok(p.items.length <= f.limits.items);
+    assert.ok(wireBytes({ jsonrpc: '2.0', id: 1, result: p }) <= f.limits.wireBytes);
+    for (const item of p.items) {
+      assert.ok(item.detailRef);
+      assert.equal(item.content, undefined);
+      assert.equal(item.text, undefined);
+    }
+  }
+  assert.ok(f.contextPages[0].items[0].sourceRange.end > f.limits.sourceBytes);
+  const aliases = f.anchorOccurrences.pages.flat();
+  assert.equal(new Set(aliases.map(a => a.occurrenceId)).size, 2);
+  assert.deepEqual([...new Set(aliases.map(a => a.canonicalId))], [f.anchorOccurrences.canonicalId]);
+});
+
+test('attribution pending and independent ready generation never relabel an old map', () => {
+  const [pending, ready] = f.attributionPages;
+  assert.equal(pending.state, 'pending');
+  assert.deepEqual(pending.items, []);
+  assert.equal(pending.nextCursor, null);
+  assert.equal(ready.state, 'ready');
+  assert.equal(ready.sourceRevision, pending.sourceRevision);
+  assert.notEqual(ready.attributionGeneration, pending.attributionGeneration);
+  for (const p of f.attributionPages) {
+    assert.equal(p.attributions, undefined);
+    assert.ok(wireBytes({ jsonrpc: '2.0', id: 1, result: p }) <= f.limits.wireBytes);
+  }
+  const s = f.commentSummaryPage;
+  assert.equal(s.items[0].comments, undefined);
+  assert.equal(s.items[0].replies, undefined);
+  assert.ok(s.totalThreads > s.items.length);
+  assert.ok(s.nextCursor); // this is a partial page, not false exhaustion
+  assert.ok(wireBytes(s) < 4096);
+});
+
+test('page validator detects changed bytes, false exhaustion, excess budget and partial Note shape', () => {
+  const p = frame('same', 0, 4, 9);
+  assertSourcePage('same same', p, f.limits);
+  for (const patch of [{ text: 'SAME' }, { nextCursor: null }, { previousCursor: 'wrong' },
+    { sourceLength: 8 }, { content: 'same' }, { note: { content: 'same' } }, { range: { start: 0, end: 5 } }]) {
+    assert.throws(() => assertSourcePage('same same', { ...p, result: { ...p.result, ...patch } }, f.limits));
+  }
+  assert.throws(() => assertSourcePage('same same', p, { sourceBytes: 3, wireBytes: 65536 }));
+});
+
+test('crossed note/comment channels cannot regress shared authoritative epochs', () => {
+  let state;
+  for (const [i, frame] of f.crossedChannels.frames.entries()) {
+    state = admitState(state, frame.state);
+    assert.equal(state.stateGeneration, f.crossedChannels.expectedGenerations[i]);
+  }
+  assert.deepEqual(state, f.crossedChannels.expected);
+  assert.deepEqual(admitState(state, structuredClone(state)), state);
+  assert.throws(() => admitState(state, { ...state, sourceRevision: 'r:wrong' }));
+  assert.equal(admitState(state, { ...state, scope: { ...state.scope, noteId: 'other' }, stateGeneration: '99' }), state);
+  assert.throws(() => admitState(state, { ...state, stateGeneration: '18446744073709551616' }));
+});
+
+test('metadata title/tags and live details use separately paged values and children', () => {
+  for (const page of f.metadataPages) {
+    assert.equal(page.kind, 'noteMetadataPage');
+    assert.ok(page.items.length <= f.limits.items);
+    assert.ok(wireBytes(page) <= f.limits.wireBytes);
+    for (const item of page.items) {
+      assert.equal(item.value, undefined);
+      if (item.type === 'string') assert.ok(item.valueRef);
+      else assert.ok(item.childrenRef);
+    }
+  }
+  assert.ok(docs.includes('metadataRef: string'));
+});
+
+test('late page replies cannot overwrite newer state admitted from another channel', () => {
+  const state = f.crossedChannels.expected;
+  const claim = { ...f.cursorClaim, commentRevision: 'c:4' };
+  assert.equal(cursorError(claim, claim, { ...state, boot: 'boot-a' }, 1000), 'note-page-stale');
+  const oldSource = { ...f.cursorClaim, sourceRevision: 'r:6' };
+  assert.equal(cursorError(oldSource, oldSource, { ...state, boot: 'boot-a' }, 1000), 'note-page-stale');
+  assert.equal(state.commentRevision, 'c:5');
+});
+
+test('review F2: equal-time replies are ordered by canonical ID across pages', () => {
+  const rows = f.annotationPages.pages.flatMap(p => p.result.items);
+  const keys = rows.map(r => `${r.createdAt}\0${r.commentId}`);
+  assert.deepEqual(keys, [...keys].sort());
+});
+
+test('review F2: reply summaries include status', () => {
+  for (const row of f.annotationPages.pages.flatMap(p => p.result.items)) {
+    assert.ok(['open', 'resolved'].includes(row.status));
+  }
+});
+
+test('review F2: metadata pages carry their source snapshot identity', () => {
+  for (const p of f.metadataPages) {
+    assert.deepEqual(p.scope, f.scope);
+    assert.equal(p.sourceRevision, 'r:7');
+    assert.equal(p.snapshotId, 'snapshot-a');
+    assert.equal(p.expiresAt, '2026-10-03T00:05:00.000Z');
+  }
+});
+
+test('review F2: pageState uses the subscription snapshot envelope', () => {
+  for (const e of f.annotationPages.events) {
+    assert.equal(e.params.kind, 'snapshot');
+    assert.equal(e.params.snapshot.kind, 'notePageState');
+    assert.equal(e.params.payload, undefined);
+  }
+});
+
+test('review F3: backward exhaustion at zero is a valid empty page', () => {
+  assertSourcePage('abc', frame('', 0, 0, 3), f.limits, { direction: 'backward', at: 0 });
+  assert.throws(() => assertSourcePage('abc', frame('', 1, 1, 3), f.limits, { direction: 'backward', at: 1 }));
+  assert.throws(() => assertSourcePage('abc', frame('', 0, 0, 3), f.limits, { direction: 'forward', at: 0 }));
+});
+
+test('review F3: JSON member order does not change scope identity', () => {
+  const current = f.crossedChannels.expected;
+  const incoming = { ...current, scope: Object.fromEntries(Object.entries(current.scope).reverse()), stateGeneration: '13' };
+  assert.equal(admitState(current, incoming), incoming);
+});
+
+test('review F2: full wire validators reject missing page identity and reply fields', () => {
+  assertReplyFrames(f.annotationPages.pages, f.limits);
+  for (const page of f.metadataPages) assertMetadataFrame({ jsonrpc: '2.0', id: 1, result: page }, f.limits);
+  for (const field of ['scope', 'sourceRevision', 'snapshotId', 'expiresAt', 'items', 'nextCursor']) {
+    const bad = structuredClone(f.metadataPages[0]); delete bad[field];
+    assert.throws(() => assertMetadataFrame({ jsonrpc: '2.0', id: 1, result: bad }, f.limits), field);
+    const replies = structuredClone(f.annotationPages.pages); delete replies[0].result[field];
+    assert.throws(() => assertReplyFrames(replies, f.limits), field);
+  }
+  for (const field of ['status', 'commentId', 'createdAt', 'preview', 'truncated', 'bodyRef', 'detailRef']) {
+    const bad = structuredClone(f.annotationPages.pages); delete bad[0].result.items[0][field];
+    assert.throws(() => assertReplyFrames(bad, f.limits), field);
+  }
+  const wrongOrder = structuredClone(f.annotationPages.pages);
+  [wrongOrder[0].result.items[0], wrongOrder[1].result.items[0]] =
+    [wrongOrder[1].result.items[0], wrongOrder[0].result.items[0]];
+  assert.throws(() => assertReplyFrames(wrongOrder, f.limits));
+  const mixedSnapshot = structuredClone(f.annotationPages.pages);
+  mixedSnapshot[1].result.commentRevision = 'c:5';
+  assert.throws(() => assertReplyFrames(mixedSnapshot, f.limits));
+});
+
+test('review F2: concrete event frame matches docs and rejects ambiguous containers', () => {
+  for (const e of f.annotationPages.events) assertPageStateFrame(e, f.limits);
+  const documented = events.split('\n').find(line => line.startsWith('{"jsonrpc":"2.0","method":"subscription.push"'));
+  assert.deepEqual(JSON.parse(documented), f.annotationPages.events[0]);
+  for (const mutate of [
+    e => { delete e.params.kind; },
+    e => { e.params.kind = 'delta'; },
+    e => { e.params.payload = e.params.snapshot; delete e.params.snapshot; },
+    e => { e.params.snapshot = [e.params.snapshot]; },
+    e => { delete e.params.snapshot.attributionState; },
+    e => { e.params.snapshot.comments = []; },
+    e => { e.params.snapshot.scope = {}; },
+  ]) {
+    const bad = structuredClone(f.annotationPages.events[0]); mutate(bad);
+    assert.throws(() => assertPageStateFrame(bad, f.limits));
+  }
+});
+
+test('deleted root is explicit on every reply page without changing thread identity', () => {
+  for (const page of f.annotationPages.pages) assert.equal(page.result.rootState, 'present');
+  const c = f.deletedRoot;
+  assert.ok(c, 'root deletion with surviving replies requires wire fixtures');
+  assertReplyFrames(c.pages, f.limits, { complete: true });
+  for (const page of c.pages) {
+    assert.equal(page.result.rootCommentId, 'root');
+    assert.equal(page.result.threadId, 'root');
+    assert.equal(page.result.rootState, 'deleted');
+    assert.equal(page.result.totalComments, 2);
+    assert.equal(page.result.commentRevision, 'c:5');
+    assert.deepEqual(page.result.scope, f.scope);
+    assert.ok(!page.result.items.some(row => row.commentId === 'root'));
+  }
+  assert.deepEqual(c.pages.flatMap(page => page.result.items.map(row => row.commentId)), ['reply-1', 'reply-2']);
+  assert.ok(c.pages[0].result.nextCursor);
+  assert.equal(c.pages.at(-1).result.nextCursor, null);
+});
+
+test('root deletion invalidates old annotation snapshots without invalidating unchanged source', () => {
+  const c = f.deletedRoot;
+  assert.ok(c, 'root deletion epoch scenario is required');
+  assert.equal(cursorError(c.oldReplyCursor, c.oldReplyCursor, c.afterRootDelete, 1000), 'note-page-stale');
+  assert.equal(cursorError(f.cursorClaim, f.cursorClaim, c.afterRootDelete, 1000), null);
+  assert.equal(c.cachedBeforeDelete.result.commentRevision, 'c:4');
+  assert.notEqual(c.cachedBeforeDelete.result.commentRevision, c.afterRootDelete.commentRevision);
+  assert.equal(c.cachedBeforeDelete.result.sourceRevision, c.afterRootDelete.sourceRevision);
+  assertPageStateFrame(c.notification, f.limits);
+  const admitted = admitState(f.annotationPages.events[0].params.snapshot, c.notification.params.snapshot);
+  assert.equal(admitted.commentRevision, c.afterRootDelete.commentRevision);
+  assert.equal(admitted.sourceRevision, c.afterRootDelete.sourceRevision);
+  assert.equal(admitted.attributionGeneration, c.afterRootDelete.attributionGeneration);
+  assert.equal(c.acceptLateOldPage, c.cachedBeforeDelete.result.commentRevision === admitted.commentRevision);
+});
+
+test('rootless exhaustion, reply deletion and missing thread have distinct outcomes', () => {
+  const c = f.deletedRoot;
+  assert.ok(c, 'rootless lifecycle is required');
+  assertReplyFrames([c.exhausted], f.limits);
+  assert.deepEqual(c.exhausted.result.items, []);
+  assert.equal(c.exhausted.result.totalComments, 2);
+  assert.equal(c.exhausted.result.rootState, 'deleted');
+  assertReplyFrames(c.afterReplyDelete, f.limits, { complete: true });
+  assert.equal(c.afterReplyDelete[0].result.totalComments, 1);
+  assert.equal(c.afterReplyDelete[0].result.items[0].commentId, 'reply-2');
+  assert.equal(cursorError(c.survivorCursor, c.survivorCursor, c.afterFinalDelete, 1000), 'note-page-stale');
+  assert.equal(c.missingThread.result, undefined);
+  assert.equal(c.missingThread.error.code, -32602);
+  assert.equal(c.missingThread.error.data.code, 'not-found');
+  assert.equal(c.missingThread.error.data.entity, 'commentThread');
+  assert.ok(wireBytes(c.missingThread) <= f.limits.stateBytes);
+  assert.equal(c.summary.result.totalThreads, 1);
+  assert.equal(c.summary.result.totalComments, 2);
+  assert.equal(c.summary.result.items[0].anchorRef, null);
+  assert.equal(c.summary.result.items[0].rootState, 'deleted');
+});
+
+test('deleted-root cursor keeps thread binding and rejects expiry, foreign scope and source changes', () => {
+  const claim = { ...f.deletedRoot.oldReplyCursor, commentRevision: 'c:5' };
+  assert.equal(cursorError(claim, claim, f.deletedRoot.afterRootDelete, 1000), null);
+  assert.equal(cursorError(claim, { ...claim, threadId: 'another-thread' }, f.deletedRoot.afterRootDelete, 1000), 'note-page-cursor-invalid');
+  assert.equal(cursorError(claim, { ...claim, noteId: 'another-note' }, f.deletedRoot.afterRootDelete, 1000), 'note-page-cursor-invalid');
+  assert.equal(cursorError(claim, claim, f.deletedRoot.afterRootDelete, claim.expiresAt), 'note-page-expired');
+  assert.equal(cursorError(claim, claim, { ...f.deletedRoot.afterRootDelete, sourceRevision: 'r:8' }, 1000), 'note-page-stale');
+});
+
+test('deleted-root wire rejects fake roots, mixed headers, missing state and inflated counts', () => {
+  assertReplyFrames(f.annotationPages.pages, f.limits, { complete: true });
+  const survivors = f.annotationPages.pages.flatMap(p => p.result.items).filter(row => row.commentId !== 'root');
+  assert.deepEqual(f.deletedRoot.pages.flatMap(p => p.result.items), survivors);
+  for (const mutate of [
+    p => { delete p[0].result.rootState; },
+    p => { p[0].result.items[0].commentId = 'root'; },
+    p => { p[1].result.rootState = 'present'; },
+    p => { for (const frame of p) frame.result.rootState = 'present'; },
+    p => { for (const frame of p) frame.result.totalComments = 3; },
+    p => { p[1].result.items = []; },
+    p => { p[0].result.totalComments = 0; },
+    p => { p[1].result.rootCommentId = 'reply-1'; },
+  ]) {
+    const bad = structuredClone(f.deletedRoot.pages); mutate(bad);
+    assert.throws(() => assertReplyFrames(bad, f.limits, { complete: true }));
+  }
+  const exhausted = structuredClone(f.deletedRoot.exhausted);
+  exhausted.result.totalComments = 0;
+  assert.throws(() => assertReplyFrames([exhausted], f.limits));
+  const summary = f.deletedRoot.summary;
+  assert.ok(wireBytes(summary) <= f.limits.wireBytes);
+  assert.deepEqual(summary.result.scope, f.scope);
+  assert.equal(summary.result.commentRevision, 'c:5');
+  assert.equal(summary.result.items[0].latestCommentId, survivors.at(-1).commentId);
+  assert.ok(docs.includes('Legacy unpaged lookup errors'));
+  assert.ok(errors.includes('data.entity'));
+});
+
+
+// Review regressions: accepted/rejected are existing CommentStatus values.
+for (const status of ['open', 'resolved', 'pending', 'accepted', 'rejected']) {
+  test(`reply pages preserve existing ${status} status`, () => {
+    const frames = structuredClone(f.deletedRoot.pages);
+    for (const page of frames) for (const item of page.result.items) item.status = status;
+    assertReplyFrames(frames, f.limits, { complete: true });
+  });
+}
+test('reply pages reject an unknown status', () => {
+  const frames = structuredClone(f.deletedRoot.pages);
+  frames[0].result.items[0].status = 'approved';
+  assert.throws(() => assertReplyFrames(frames, f.limits));
+});
+
+const summaryContract = await import('./contract.mjs');
+test('ordered summary wire contract exists without full Note hydration', () => {
+  assert.equal(typeof summaryContract.assertTaskIdFrames, 'function');
+  assert.equal(typeof summaryContract.assertTextFragments, 'function');
+  assert.equal(typeof summaryContract.pagingBackendId, 'function');
+});
+test('ordered summary retains the existing lexical first-occurrence oracle', () => {
+  const x = f.orderedTaskIds;
+  // Intentionally the literal existing FE oracle, independent of fixture validator.
+  const matches = [...x.source.matchAll(/\[([^\]]+)\]\(intent:\/\/local\/task\/([^)]+)\)/g)];
+  assert.deepEqual([...new Set(matches.map(m => m[2]))], x.expected);
+  assert.deepEqual(summaryContract.assertTaskIdFrames(x.source, x.pages, f.limits), x.expected);
+  assert.equal(x.pages.flatMap(p => p.result.items).length, 8);
+  assert.ok(x.source.includes('\r\n'));
+  assert.equal(x.pages.at(-1).result.items.at(-1).taskNoteId, undefined);
+  const text = summaryContract.assertTextFragments(x.longIdFragments, 'taskNoteId', f.limits);
+  assert.equal(text, x.expected.at(-1));
+  assert.ok(utf8(text) > 256);
+});
+test('ordered summary is independent of arbitrary source-page splits', () => {
+  const x = f.orderedTaskIds;
+  for (let i = 0; i <= x.source.length; i++) {
+    if (!boundary(x.source, i)) continue;
+    // Reassembly oracle includes a match crossing every legal split; a producer
+    // needs an index, not independent regex matches over each transported page.
+    assert.deepEqual(summaryContract.assertTaskIdFrames(x.source.slice(0, i) + x.source.slice(i),
+      x.pages, f.limits), x.expected);
+  }
+});
+test('task summary validator rejects order, dedup, range, identity and count corruption', () => {
+  const x = f.orderedTaskIds;
+  for (const corrupt of [
+    p => { p[0].result.items.reverse(); },
+    p => { p[1].result.items[0] = p[0].result.items[0]; },
+    p => { p[0].result.items[0].sourceRange.start++; },
+    p => { p[1].result.sourceRevision = 'r:8'; },
+    p => { p[1].result.scope.noteId = 'other'; },
+    p => { p[1].result.startIndex++; },
+    p => { p[1].result.totalItems++; },
+    p => { p[0].result.nextCursor = null; },
+    p => { p[0].result.items[0].taskNoteId = 'FIRST'; },
+    p => { p[0].result.items[0].taskNoteIdRef = 'duplicate-arm'; },
+    p => { const r = p.at(-1).result.items.at(-1); r.taskNoteId = x.expected.at(-1); delete r.taskNoteIdRef; },
+    p => { p.at(-1).result.items.at(-1).taskNoteIdLength--; },
+  ]) {
+    const pages = structuredClone(x.pages); corrupt(pages);
+    assert.throws(() => summaryContract.assertTaskIdFrames(x.source, pages, f.limits));
+  }
+});
+test('ordered summary supports empty and exhausted pages and rejects nonadvancing traversal', () => {
+  const x = f.orderedTaskIds;
+  assert.deepEqual(summaryContract.assertTaskIdFrames('', [x.empty], f.limits), []);
+  assert.deepEqual(summaryContract.assertTaskIdFrames(x.source, [x.exhausted], f.limits,
+    { startIndex: 8 }), []);
+  const invalid = structuredClone(x.exhausted); invalid.result.startIndex = 7;
+  assert.throws(() => summaryContract.assertTaskIdFrames(x.source, [invalid], f.limits, { startIndex: 7 }));
+});
+test('summary fragments retain exact UTF16 offsets and reject mixed revisions/gaps/oversize', () => {
+  const x = f.orderedTaskIds;
+  for (const corrupt of [
+    p => { p[1].result.items[0].offset--; },
+    p => { p[1].result.sourceRevision = 'r:8'; },
+    p => { p[1].result.items[0].field = 'title'; },
+    p => { p[0].result.items[0].nextRef = null; },
+    p => { p[0].result.items[0].text = 'x'.repeat(16385); },
+  ]) {
+    const pages = structuredClone(x.longIdFragments); corrupt(pages);
+    assert.throws(() => summaryContract.assertTextFragments(pages, 'taskNoteId', f.limits));
+  }
+});
+test('summary cursor binds kind, scope, budgets, live revision and expiration', () => {
+  const base = { ...f.scope, principalId: 'p', kind: 'taskIds', budgets: { maxItems: 2 },
+    sourceRevision: 'r:7', boot: 'boot-a', expiresAt: 100 };
+  assert.equal(cursorError(base, base, base, 1), null);
+  for (const changed of [{ kind: 'source' }, { noteId: 'other' }, { workspaceId: 'other' },
+    { principalId: 'other' }, { budgets: { maxItems: 3 } }]) {
+    assert.equal(cursorError(base, { ...base, ...changed }, base, 1), 'note-page-cursor-invalid');
+  }
+  assert.equal(cursorError(base, base, { ...base, sourceRevision: 'r:8' }, 1), 'note-page-stale');
+  assert.equal(cursorError(base, base, { ...base, commentRevision: 'c:2' }, 1), null);
+  assert.equal(cursorError(base, base, base, 100), 'note-page-expired');
+});
+test('summary frame budget measures full escaping at exact fit and one-byte overflow', () => {
+  const source = `[x](intent://local/task/${'\u0001'.repeat(220)})`;
+  const row = { index: 0, sourceRange: { start: 24, end: 244 }, taskNoteIdLength: 220,
+    taskNoteId: '\u0001'.repeat(220) };
+  const page = structuredClone(f.orderedTaskIds.empty);
+  page.result.totalItems = 1; page.result.items = [row];
+  row.sourceRange.start = source.indexOf('\u0001'); row.sourceRange.end = source.lastIndexOf('\u0001') + 1;
+  const size = wireBytes(page);
+  assert.ok(size > utf8(source));
+  assert.doesNotThrow(() => summaryContract.assertTaskIdFrames(source, [page], { ...f.limits, wireBytes: size }));
+  assert.throws(() => summaryContract.assertTaskIdFrames(source, [page], { ...f.limits, wireBytes: size - 1 }));
+});
+test('hello requires the exact capability path, version and valid backend identity', () => {
+  assert.equal(summaryContract.pagingBackendId(f.helloPaging), 'db-a');
+  for (const caps of [{}, { notePagingRead: true, notePagingBackendId: 'db-a' },
+    { notePagingRead: '1', notePagingBackendId: 'db-a' }, { notePagingRead: 2, notePagingBackendId: 'db-a' },
+    { notePagingRead: 1 }, { notePagingRead: 1, notePagingBackendId: '' },
+    { notePagingRead: 1, notePagingBackendId: 'x'.repeat(257) }]) {
+    const hello = structuredClone(f.helloPaging); hello.result.server.capabilities = caps;
+    hello.result.notePagingBackendId = 'wrong-place';
+    assert.equal(summaryContract.pagingBackendId(hello), null);
+  }
+});
+
+test('context uses explicit vocabulary and separately addressed field directories', () => {
+  const x = f.contextWire;
+  for (const value of [...x.constructs, ...x.roles]) assert.ok(docs.includes('`' + value + '`'));
+  const descriptor = x.descriptor.result.items[0];
+  assert.ok(x.constructs.includes(descriptor.construct));
+  assert.equal(descriptor.detailRef, 'details-link');
+  const fields = x.directory.result.items;
+  assert.deepEqual(fields.map(f => f.field), Object.keys(x.fields));
+  assert.ok(fields.every(f => f.kind === 'fragment' && f.offset === 0 && f.text === '' && f.nextRef));
+  assert.ok(wireBytes(x.directory) <= f.limits.wireBytes);
+  assert.ok(fields.length <= f.limits.items);
+  for (const [field, resource] of Object.entries(x.fields)) {
+    assert.equal(summaryContract.assertTextFragments(resource.pages, field, f.limits), resource.expected);
+  }
+  assert.equal(x.fields.title.pages[0].result.items[0].nextRef, null);
+  assert.equal(x.fields.destination.pages[0].result.nextCursor, null);
+  assert.notEqual(x.fields.destination.pages[0].result.items[0].nextRef, null);
+});
+test('nonempty field resource cannot use a zero-progress directory item as text', () => {
+  assert.throws(() => summaryContract.assertTextFragments([f.contextWire.directory], 'openingSource', f.limits));
+  const p = structuredClone(f.orderedTaskIds.longIdFragments);
+  p[0].result.items[0].text = '\ud800';
+  assert.throws(() => summaryContract.assertTextFragments(p, 'taskNoteId', f.limits));
+});
+test('task summary exact 65536-byte full frame and one-byte overflow with legal maximum identities', () => {
+  const values = Array.from({ length: 90 }, (_, i) => '\u0001'.repeat(80) + i);
+  const make = () => {
+    let source = '';
+    const items = values.map((value, index) => {
+      const prefix = '[x](intent://local/task/';
+      const start = source.length + prefix.length;
+      source += prefix + value + ')\n';
+      return { index, sourceRange: { start, end: start + value.length },
+        taskNoteIdLength: value.length, taskNoteId: value };
+    });
+    const p = structuredClone(f.orderedTaskIds.empty);
+    p.id = 'i'.repeat(64);
+    for (const k of Object.keys(p.result.scope)) p.result.scope[k] = 's'.repeat(256);
+    p.result.sourceRevision = 'r'.repeat(256); p.result.snapshotId = 'v'.repeat(256);
+    p.result.totalItems = items.length; p.result.items = items;
+    return { source, p };
+  };
+  let candidate = make();
+  // Legal raw IDs remain <=256 decoded bytes. Fill one ASCII byte at a time;
+  // this independent JSON.stringify oracle includes all header/address growth.
+  for (let i = 0; wireBytes(candidate.p) < 65536 && i < 100000; i++) {
+    const index = values.findIndex(v => utf8(v) < 256);
+    assert.ok(index >= 0); values[index] += 'x'; candidate = make();
+  }
+  assert.equal(wireBytes(candidate.p), 65536);
+  assert.doesNotThrow(() => summaryContract.assertTaskIdFrames(candidate.source, [candidate.p], f.limits));
+  values[89] += 'x'; candidate = make();
+  assert.equal(wireBytes(candidate.p), 65537);
+  assert.throws(() => summaryContract.assertTaskIdFrames(candidate.source, [candidate.p], f.limits), /wire budget/);
+});
+test('full context frames validate identities, directories, fragments and opaque future grammar', () => {
+  for (const page of f.contextPages) summaryContract.assertContextFrame({ jsonrpc: '2.0', id: 1, result: page }, f.limits);
+  summaryContract.assertContextFrame(f.contextWire.descriptor, f.limits);
+  summaryContract.assertContextFrame(f.contextWire.directory, f.limits, { directory: true });
+  for (const resource of Object.values(f.contextWire.fields)) for (const page of resource.pages) {
+    summaryContract.assertContextFrame(page, f.limits);
+  }
+  const future = structuredClone(f.contextWire.descriptor);
+  future.result.items[0].construct = 'futureSyntax';
+  assert.doesNotThrow(() => summaryContract.assertContextFrame(future, f.limits));
+  assert.equal(f.contextWire.fields.openingSource.expected + 'label' + f.contextWire.fields.closingSource.expected,
+    f.contextWire.source);
+  assert.equal(f.contextWire.descriptor.result.items[0].sourceRange.end, f.contextWire.source.length);
+});
+test('context frames reject malformed directory, range, projection, oversized field and wire', () => {
+  for (const corrupt of [
+    p => { p.result.items[0].sourceRange.end = -1; },
+    p => { p.result.items[0].kind = 'parserObject'; },
+    p => { delete p.result.scope; },
+    p => { p.result.items[0].continuationAfter = 1; },
+    p => { Object.assign(p.result.items[0], { kind: 'span', role: 'projection' }); },
+  ]) {
+    const page = structuredClone(f.contextWire.descriptor); corrupt(page);
+    assert.throws(() => summaryContract.assertContextFrame(page, f.limits));
+  }
+  const directory = structuredClone(f.contextWire.directory);
+  directory.result.items[0].nextRef = null;
+  assert.throws(() => summaryContract.assertContextFrame(directory, f.limits, { directory: true }));
+  const field = structuredClone(f.contextWire.fields.destination.pages[0]);
+  field.result.items[0].field = 'x'.repeat(1025);
+  assert.throws(() => summaryContract.assertContextFrame(field, f.limits));
+  assert.throws(() => summaryContract.assertContextFrame(f.contextWire.directory,
+    { ...f.limits, wireBytes: wireBytes(f.contextWire.directory) - 1 }));
+});
+
+test('WikiLink details preserve explicit true and false hasPothole wire strings', () => {
+  assert.ok(docs.includes('`WikiLink`'));
+  assert.ok(docs.includes('`hasPothole`'));
+  for (const x of f.contextWire.wikiLinks) {
+    summaryContract.assertContextFrame(x.directory, f.limits, { directory: true });
+    assert.deepEqual(x.directory.result.items.map(row => row.field),
+      ['openingSource', 'closingSource', 'linkType', 'destination', 'title', 'referenceId', 'hasPothole']);
+    const values = Object.fromEntries(Object.entries(x.fields).map(([key, resource]) => {
+      for (const frame of resource.pages) summaryContract.assertContextFrame(frame, f.limits);
+      const value = summaryContract.assertTextFragments(resource.pages, key, f.limits);
+      assert.equal(value, resource.expected);
+      return [key, value];
+    }));
+    summaryContract.assertLinkFields(values);
+    assert.equal(values.openingSource + x.body + values.closingSource, x.source);
+  }
+});
+test('link detail validator rejects Debug enum strings and misplaced or malformed WikiLink flags', () => {
+  const base = { linkType: 'Inline', destination: '/target', title: '', referenceId: '' };
+  assert.doesNotThrow(() => summaryContract.assertLinkFields(base));
+  for (const patch of [{ linkType: 'WikiLink' }, { hasPothole: 'true' },
+    { linkType: 'WikiLink', hasPothole: true }, { linkType: 'WikiLink', hasPothole: 'TRUE' },
+    { linkType: 'WikiLink { has_pothole: true }' }]) {
+    assert.throws(() => summaryContract.assertLinkFields({ ...base, ...patch }));
+  }
+});
+
+// Specification source materialization is an oracle only, not a production reader.
+const tableFixture = f.tablePositions;
+const tableRecipe = tableFixture.recipe;
+const tableSource = tableRecipe.header + tableRecipe.precedingBodyRow.repeat(tableRecipe.precedingBodyRows)
+  + '|' + tableRecipe.giantFirstCellScalar.repeat(tableRecipe.giantFirstCellRepeats) + tableRecipe.lastRowTail + tableRecipe.afterFirstTable;
+test('far table cell has an absolute address without preceding row or cell source', () => {
+  const x = tableFixture;
+  assert.equal(tableSource.length, x.expected.sourceLength);
+  assert.ok(utf8(tableSource.slice(0, x.expected.cellStart)) > 2_000_000);
+  assert.equal(tableSource.slice(x.expected.cellStart, x.expected.cellEnd), '目标😀');
+  assertSourcePage(tableSource, x.sourceFrame, { ...f.limits, sourceBytes: 16, wireBytes: 4096 },
+    { direction: 'forward', at: x.sourceRequest.params.page.at });
+  for (const frame of [x.cellFrame, x.rowFrame, x.tableFrame]) summaryContract.assertContextFrame(frame, f.limits);
+  const cell = x.cellFrame.result.items[0];
+  assert.deepEqual(cell.tablePosition, { tableRef: 'first-table-ref', rowIndex: 100001, columnIndex: 2, alignment: 'right' });
+  assert.equal(cell.tablePosition.alignment, x.expected.alignments[cell.tablePosition.columnIndex]);
+  assert.equal(x.cellFrame.result.items.length, 1);
+  assert.equal(cell.sourceRange.start, x.expected.cellStart);
+  assert.equal(cell.text, undefined);
+  assert.equal(cell.parentRef, 'far-row-ref');
+  assert.equal(cell.detailRef, 'far-cell-details');
+  summaryContract.assertContextFrame(x.cellDetails.directory, f.limits, { directory: true });
+  for (const field of ['openingSource', 'closingSource']) {
+    assert.equal(summaryContract.assertTextFragments([x.cellDetails[field]], field, f.limits), '');
+  }
+  assert.ok([x.cellFrame, x.rowFrame, x.tableFrame].every(p => wireBytes(p) <= 4096));
+});
+test('table positions are mandatory and distinguish row, header and cell shapes', () => {
+  const x = tableFixture;
+  for (const frame of [x.cellFrame, x.rowFrame, x.headerFrame]) {
+    const absent = structuredClone(frame); delete absent.result.items[0].tablePosition;
+    assert.throws(() => summaryContract.assertContextFrame(absent, f.limits));
+  }
+  for (const corrupt of [
+    p => { p.rowIndex = -1; }, p => { p.rowIndex = Number.MAX_SAFE_INTEGER + 1; },
+    p => { p.columnIndex = 1.5; }, p => { delete p.columnIndex; },
+    p => { p.rowIndex = '100001'; }, p => { p.alignment = 'justify'; },
+    p => { delete p.alignment; }, p => { p.tableRef = ''; },
+    p => { p.tableRef = 'x'.repeat(257); }, p => { p.rowSpan = 2; },
+    p => { p.colSpan = 2; },
+  ]) {
+    const bad = structuredClone(x.cellFrame); corrupt(bad.result.items[0].tablePosition);
+    assert.throws(() => summaryContract.assertContextFrame(bad, f.limits));
+  }
+  const row = structuredClone(x.rowFrame); row.result.items[0].tablePosition.columnIndex = 0;
+  assert.throws(() => summaryContract.assertContextFrame(row, f.limits));
+  const header = structuredClone(x.headerFrame); header.result.items[0].tablePosition.rowIndex = 1;
+  assert.throws(() => summaryContract.assertContextFrame(header, f.limits));
+  const body = structuredClone(x.rowFrame); body.result.items[0].tablePosition.rowIndex = 0;
+  assert.throws(() => summaryContract.assertContextFrame(body, f.limits));
+});
+test('table reference continuations reject cross-table, cross-note and changed revision use', () => {
+  const claim = { ...f.scope, kind: 'context', contextRef: 'first-table-ref',
+    sourceRevision: 'r:table', boot: 'boot', expiresAt: 100, budgets: { maxWireBytes: 4096 } };
+  assert.equal(cursorError(claim, claim, claim, 1), null);
+  assert.equal(cursorError(claim, { ...claim, contextRef: 'second-table-ref' }, claim, 1), 'note-page-cursor-invalid');
+  assert.equal(cursorError(claim, { ...claim, noteId: 'other' }, claim, 1), 'note-page-cursor-invalid');
+  assert.equal(cursorError(claim, claim, { ...claim, sourceRevision: 'r:next' }, 1), 'note-page-stale');
+});
+test('header/body ordinals reset per table and are independent of viewport continuation', () => {
+  const x = tableFixture;
+  for (const frame of [x.headerFrame, x.secondTableFrame]) summaryContract.assertContextFrame(frame, f.limits);
+  assert.equal(x.headerFrame.result.items[1].tablePosition.columnIndex, 0);
+  assert.equal(x.secondTableFrame.result.items[0].tablePosition.rowIndex, 0);
+  assert.equal(x.secondTableFrame.result.items[1].tablePosition.rowIndex, 1);
+  assert.notEqual(x.cellFrame.result.items[0].tablePosition.tableRef,
+    x.secondTableFrame.result.items[1].tablePosition.tableRef);
+  const before = structuredClone(x.cellFrame);
+  before.result.items[0].continuationBefore = false;
+  before.result.items[0].continuationAfter = true;
+  assert.deepEqual(before.result.items[0].tablePosition, x.cellFrame.result.items[0].tablePosition);
+});
+test('table position frames honor exact full-wire limits even with maximally escaped references', () => {
+  const frame = structuredClone(tableFixture.cellFrame);
+  frame.id = 'i'.repeat(64);
+  for (const k of Object.keys(frame.result.scope)) frame.result.scope[k] = 's'.repeat(256);
+  frame.result.sourceRevision = 'r'.repeat(256); frame.result.snapshotId = 'v'.repeat(256);
+  frame.result.items = Array.from({ length: 17 }, (_, i) => ({
+    kind: 'boundary', id: '\u0001'.repeat(128) + i, construct: 'tableCell',
+    sourceRange: { start: i * 5, end: i * 5 + 4 }, continuationBefore: false, continuationAfter: false,
+    parentRef: '\u0001'.repeat(128) + i, detailRef: '\u0001'.repeat(128) + i,
+    tablePosition: { tableRef: '\u0001'.repeat(128) + i, rowIndex: 1, columnIndex: 2, alignment: 'right' },
+  }));
+  const slots = frame.result.items.flatMap(item => [[item, 'id'], [item, 'parentRef'],
+    [item, 'detailRef'], [item.tablePosition, 'tableRef']]);
+  assert.ok(wireBytes(frame) < 65536);
+  while (wireBytes(frame) < 65536) {
+    const slot = slots.find(([owner, key]) => utf8(owner[key]) < 256);
+    assert.ok(slot, 'fixture must reach the wire ceiling before token capacity');
+    slot[0][slot[1]] += 'x';
+  }
+  assert.equal(wireBytes(frame), 65536);
+  summaryContract.assertContextFrame(frame, f.limits);
+  const slot = slots.find(([owner, key]) => utf8(owner[key]) < 256);
+  assert.ok(slot); slot[0][slot[1]] += 'x';
+  assert.equal(wireBytes(frame), 65537);
+  assert.throws(() => summaryContract.assertContextFrame(frame, f.limits));
+});
+test('table address metadata stays bounded as unloaded prefix extent grows', () => {
+  const near = structuredClone(tableFixture.cellFrame);
+  near.result.items[0].tablePosition.rowIndex = 1;
+  near.result.items[0].sourceRange = { start: 30, end: 34 };
+  assert.ok(wireBytes(tableFixture.cellFrame) - wireBytes(near) < 32);
+  const nearCell = near.result.items[0];
+  const empty = structuredClone(near);
+  empty.result.items[0].sourceRange.end = nearCell.sourceRange.start;
+  summaryContract.assertContextFrame(empty, f.limits);
+  assert.equal(empty.result.items[0].tablePosition.columnIndex, 2);
+  const tooMany = structuredClone(near);
+  tooMany.result.items = Array.from({ length: 129 }, () => nearCell);
+  assert.throws(() => summaryContract.assertContextFrame(tooMany, f.limits));
+  const split = structuredClone(tableFixture.sourceFrame);
+  split.result.range.start = tableFixture.expected.cellStart + 3;
+  split.result.text = tableSource.slice(split.result.range.start, split.result.range.end);
+  assert.throws(() => assertSourcePage(tableSource, split, f.limits,
+    { direction: 'forward', at: split.result.range.start }));
+});
+
+
+test('canonical HTML continuation requires owner metadata when identical windows have different columns', () => {
+  const { recipe: r, expected: e } = f.htmlContinuation;
+  const a = r.open + r.repeat.repeat(r.count) + r.tail;
+  const b = r.open + r.extra + r.repeat.repeat(r.count - r.extra.length) + r.tail;
+  assert.equal(a.length, b.length);
+  assert.equal(a.indexOf(e.target), b.indexOf(e.target));
+  const start = a.indexOf(e.target), end = start + e.target.length;
+  assert.equal(a.slice(start, end), b.slice(start, end));
+  assert.notEqual(e.columnIndexA, e.columnIndexB);
+  for (const source of [a, b]) assertSourcePage(source,
+    frame(source.slice(start, end), start, end, source.length), f.limits,
+    { direction: 'forward', at: start });
+  const incomplete = structuredClone(tableFixture.cellFrame);
+  incomplete.result.items[0].construct = 'htmlTableCell';
+  delete incomplete.result.items[0].tablePosition;
+  assert.throws(() => summaryContract.assertContextFrame(incomplete, f.limits));
+});
+
+test('canonical HTML cell descriptors cannot silently promote raw spans to live geometry', () => {
+  const invalid = structuredClone(tableFixture.cellFrame);
+  const cell = invalid.result.items[0];
+  cell.construct = 'htmlTableCell'; delete cell.tablePosition;
+  cell.htmlPosition = { profile: 'canonicalNote', tableRef: 'html-table', rowIndex: 0,
+    columnIndex: 1, cellRole: 'data', rowSpan: 2, colSpan: 2 };
+  assert.throws(() => summaryContract.assertContextFrame(invalid, f.limits));
+});
+
+test('HTML table owners and raw body addresses distinguish identical far source windows', () => {
+  const x = f.htmlContinuation;
+  const source = x.recipe.open + x.recipe.repeat.repeat(x.recipe.count) + x.recipe.tail;
+  for (const [variant, column] of [['a', 1], ['b', 2]]) {
+    const frames = x.frames[variant];
+    for (const kind of ['cell', 'row', 'table', 'map', 'text'])
+      summaryContract.assertContextFrame(frames[kind], f.limits);
+    assertMetadataFrame(frames.attributes, f.limits);
+    const cell = frames.cell.result.items[0], row = frames.row.result.items[0];
+    assert.equal(cell.htmlPosition.columnIndex, column);
+    assert.equal(cell.htmlPosition.rowIndex, 0);
+    assert.equal(row.htmlPosition.rowIndex, 0);
+    assert.equal(cell.htmlPosition.tableRef, row.htmlPosition.tableRef);
+    assert.deepEqual(cell.htmlSource.bodyRange, x.expected.targetRange);
+    assert.equal(source.slice(cell.htmlSource.bodyRange.start, cell.htmlSource.bodyRange.end), 'TARGET');
+    assert.equal(source.slice(cell.htmlSource.openingRange.start, cell.htmlSource.openingRange.end), '<td>');
+    assert.equal(source.slice(cell.htmlSource.closingRange.start, cell.htmlSource.closingRange.end), '</td>');
+    const text = summaryContract.assertTextFragments([frames.text], 'renderedText', f.limits);
+    const map = frames.map.result.items[0];
+    assert.equal(text.length, map.renderedRange.end - map.renderedRange.start);
+    assert.equal(text, source.slice(map.sourceRange.start, map.sourceRange.end));
+    assert.ok(Object.values(frames).every(frame => wireBytes(frame) < 4096));
+  }
+  assert.equal(x.expected.sourceLength, source.length);
+  assert.ok(source.length > 2_000_000);
+  assert.notEqual(x.frames.a.cell.result.sourceRevision, x.frames.b.cell.result.sourceRevision);
+  assert.ok(docs.includes('htmlTableCell') && docs.includes('context.attributes'));
+});
+
+test('canonical HTML address validation rejects spans, roles, unsafe offsets and cross-profile claims', () => {
+  for (const change of [
+    c => { c.htmlPosition.profileVersion = 2; },
+    c => { c.htmlPosition.rowSpan = 2; }, c => { c.htmlPosition.colSpan = 2; },
+    c => { c.htmlPosition.rowIndex = -1; }, c => { c.htmlPosition.columnIndex = 0.5; },
+    c => { c.htmlPosition.columnIndex = Number.MAX_SAFE_INTEGER + 1; },
+    c => { c.htmlPosition.cellRole = 'td'; }, c => { c.htmlPosition.profile = 'liveSession'; },
+    c => { c.htmlPosition.tableRef = 'x'.repeat(257); }, c => { delete c.parentRef; },
+    c => { delete c.attributesRef; }, c => { delete c.sourceMapRef; },
+    c => { c.htmlSource.bodyRange.end = c.sourceRange.end + 1; },
+    c => { c.htmlSource.openingRange = null; },
+    c => { c.htmlSource.provenance = 'implicit'; },
+  ]) {
+    const bad = structuredClone(f.htmlContinuation.frames.a.cell);
+    change(bad.result.items[0]);
+    assert.throws(() => summaryContract.assertContextFrame(bad, f.limits));
+  }
+  const header = structuredClone(f.htmlContinuation.frames.a.cell);
+  header.result.items[0].htmlPosition.cellRole = 'header';
+  header.result.items[0].htmlPosition.rowIndex = 7;
+  summaryContract.assertContextFrame(header, f.limits);
+  for (const type of ['row', 'table']) {
+    const bad = structuredClone(f.htmlContinuation.frames.a[type]);
+    bad.result.items[0].htmlPosition.columnIndex = 0;
+    assert.throws(() => summaryContract.assertContextFrame(bad, f.limits));
+  }
+});
+
+test('source-less HTML projections have explicit anchors and no fabricated syntax', () => {
+  const implicit = structuredClone(f.htmlContinuation.frames.a.row);
+  const node = implicit.result.items[0];
+  node.sourceRange.end = node.sourceRange.start;
+  node.htmlSource = { provenance: 'implicit', openingRange: null, bodyRange: null, closingRange: null };
+  summaryContract.assertContextFrame(implicit, f.limits);
+  node.htmlSource.bodyRange = { ...node.sourceRange };
+  assert.throws(() => summaryContract.assertContextFrame(implicit, f.limits));
+  node.htmlSource.provenance = 'repaired'; node.htmlSource.piecesRef = 'repair-pieces';
+  summaryContract.assertContextFrame(implicit, f.limits);
+});
+
+test('HTML rendered offsets are leaf-local and mapping modes constrain source ownership', () => {
+  const frame = structuredClone(f.htmlContinuation.frames.a.map);
+  const item = frame.result.items[0];
+  assert.equal(item.renderedRange.start, 0);
+  assert.ok(item.sourceRange.start > 2_000_000);
+  for (const mutate of [
+    m => { m.profileVersion = 2; }, m => { m.profile = 'liveSession'; }, m => { m.mapping = 'guess'; },
+    m => { m.renderedRange.end++; }, m => { m.textRef = null; },
+    m => { m.ownerRef = ''; }, m => { m.textNodeId = 'x'.repeat(257); },
+    m => { m.mapping = 'projection'; }, m => { m.mapping = 'omitted'; },
+    m => { m.renderedRange.start = -1; },
+  ]) {
+    const bad = structuredClone(frame); mutate(bad.result.items[0]);
+    assert.throws(() => summaryContract.assertContextFrame(bad, f.limits));
+  }
+  item.mapping = 'omitted'; item.renderedRange.end = 0; item.textRef = null;
+  summaryContract.assertContextFrame(frame, f.limits);
+  item.mapping = 'projection'; item.sourceRange.end = item.sourceRange.start;
+  item.renderedRange.end = 1; item.textRef = 'projection-text';
+  summaryContract.assertContextFrame(frame, f.limits);
+});
+
+test('HTML mapping refs retain window, owner, revision and expiration guards', () => {
+  const claim = { ...f.scope, kind: 'context', contextRef: 'a-cell-window-map',
+    sourceRevision: 'r:html-a', boot: 'boot', profileRevision: 'canonical-build-a', expiresAt: 100,
+    budgets: { maxWireBytes: 4096 } };
+  assert.equal(cursorError(claim, claim, claim, 1), null);
+  for (const contextRef of ['b-cell-window-map', 'a-other-window-map', 'live-session-map', 'a-table'])
+    assert.equal(cursorError(claim, { ...claim, contextRef }, claim, 1), 'note-page-cursor-invalid');
+  assert.equal(cursorError(claim, { ...claim, noteId: 'other' }, claim, 1), 'note-page-cursor-invalid');
+  assert.equal(cursorError(claim, claim, { ...claim, sourceRevision: 'r:html-b' }, 1), 'note-page-stale');
+  assert.equal(cursorError(claim, claim, claim, 100), 'note-page-expired');
+  assert.equal(cursorError(claim, claim, { ...claim, profileRevision: 'canonical-build-b' }, 1), 'note-page-expired');
+});
+
+test('HTML maps use the complete escaped-wire budget with no inline source exceptions', () => {
+  const frame = structuredClone(f.htmlContinuation.frames.a.map);
+  frame.id = 'i'.repeat(64);
+  for (const key of Object.keys(frame.result.scope)) frame.result.scope[key] = 's'.repeat(256);
+  frame.result.items = Array.from({ length: 12 }, (_, i) => ({
+    ...frame.result.items[0], id: '\u0001'.repeat(127) + i,
+    ownerRef: '\u0001'.repeat(127) + i, textNodeId: '\u0001'.repeat(127) + i,
+    textRef: '\u0001'.repeat(127) + i,
+  }));
+  const slots = frame.result.items.flatMap(item => ['id', 'ownerRef', 'textNodeId', 'textRef'].map(key => [item, key]));
+  // Escaped legal controls grow six wire bytes each; then fill the exact residual with ASCII.
+  for (const [item, key] of slots) {
+    const room = Math.min(256 - utf8(item[key]), Math.floor((65536 - wireBytes(frame)) / 6));
+    if (room > 0) item[key] += '\u0001'.repeat(room);
+  }
+  const remaining = 65536 - wireBytes(frame);
+  const [item, key] = slots.find(([item, key]) => utf8(item[key]) + remaining + 1 <= 256);
+  item[key] += 'x'.repeat(remaining);
+  assert.equal(wireBytes(frame), 65536);
+  summaryContract.assertContextFrame(frame, f.limits);
+  item[key] += 'x';
+  assert.equal(wireBytes(frame), 65537);
+  assert.throws(() => summaryContract.assertContextFrame(frame, f.limits));
+});
+
+test('same HTML owner survives two admitted windows with separately retained map bindings', () => {
+  const one = structuredClone(f.htmlContinuation.frames.a.cell);
+  const two = structuredClone(one);
+  two.result.items[0].sourceMapRef = 'a-same-cell-second-window-map';
+  two.result.items[0].continuationBefore = !one.result.items[0].continuationBefore;
+  const immutable = ({ sourceMapRef, continuationBefore, continuationAfter, ...owner }) => owner;
+  assert.deepEqual(immutable(one.result.items[0]), immutable(two.result.items[0]));
+  assert.notEqual(one.result.items[0].sourceMapRef, two.result.items[0].sourceMapRef);
+  const bindings = new Map([['window-1', one.result.items[0].sourceMapRef], ['window-2', two.result.items[0].sourceMapRef]]);
+  assert.equal(bindings.size, 2);
+  for (const frame of [one, two]) summaryContract.assertContextFrame(frame, f.limits);
+});
+
+test('direct native leaf references preserve rendered ancestry without earlier sibling reads', () => {
+  const x = f.htmlContinuation.frames.b;
+  summaryContract.assertContextFrame(x.native, f.limits);
+  const nodes = new Map(x.native.result.items.map(n => [n.nodeClass === 'text' ? 'b-native-leaf' : n.id, n]));
+  const map = x.map.result.items[0];
+  let node = nodes.get(map.textNodeRef);
+  assert.equal(node.id, map.textNodeId);
+  const chain = [], seen = new Set();
+  while (node) {
+    assert.ok(!seen.has(node.id)); seen.add(node.id); chain.push(node.nodeType);
+    if (node.nodeType === 'tableCell') assert.equal(node.childIndex, 2);
+    node = node.parentRef === null ? undefined : nodes.get(node.parentRef);
+  }
+  assert.deepEqual(chain, ['text', 'paragraph', 'tableCell', 'tableRow', 'table', 'doc']);
+  const paragraph = nodes.get('b-native-paragraph');
+  assert.equal(paragraph.sourceRange.start, paragraph.sourceRange.end);
+  // Ancestor closure returns this implicit node even though an interior seek does not overlap it.
+  assert.ok(paragraph.sourceRange.end < map.sourceRange.start + 1);
+  assert.equal(x.native.result.items.filter(n => n.nodeType === 'tableCell').length, 1);
+  const invalid = structuredClone(x.native);
+  invalid.result.items.at(-1).childIndex = -1;
+  assert.throws(() => summaryContract.assertContextFrame(invalid, f.limits));
+  invalid.result.items.at(-1).childIndex = 0;
+  invalid.result.items.at(-1).children = [{ text: 'unbounded hidden subtree' }];
+  assert.throws(() => summaryContract.assertContextFrame(invalid, f.limits));
+});
+
+test('entity and whitespace segments reconstruct actual canonical leaves without source-prefix reads', () => {
+  const x = f.htmlContinuation.entityMapping;
+  summaryContract.assertContextFrame(x.maps, f.limits);
+  summaryContract.assertContextFrame(x.atom, f.limits);
+  const resources = new Map(x.textResources.map(r => [r.ref, r.frame]));
+  const leaves = ['', ''];
+  for (const item of x.maps.result.items) {
+    assert.ok(boundary(x.source, item.sourceRange.start) && boundary(x.source, item.sourceRange.end));
+    const leaf = Number(item.textNodeId.at(-1));
+    const text = item.textRef === null ? '' : summaryContract.assertTextFragments([resources.get(item.textRef)], 'renderedText', f.limits);
+    assert.equal(item.renderedRange.start, leaves[leaf].length);
+    assert.equal(item.renderedRange.end, leaves[leaf].length + text.length);
+    const raw = x.source.slice(item.sourceRange.start, item.sourceRange.end);
+    if (item.mapping === 'identity') assert.equal(text, raw);
+    if (item.mapping === 'entity') assert.equal(text, { '&amp;': '&', '&#x1f680;': '🚀', '&nbsp;': '\u00a0' }[raw]);
+    if (item.mapping === 'normalized') assert.ok(['\r\n  ', '\t '].includes(raw) && text === ' ');
+    leaves[leaf] += text;
+  }
+  assert.deepEqual(leaves, x.expectedLeaves);
+  const oracle = f.htmlContinuation.canonicalOracleCases.find(c => c.id === 'entitiesAndWhitespace');
+  const paragraph = oracle.native.content[0].content[0].content[0].content[0];
+  assert.deepEqual(paragraph.content.map(n => n.text ?? n.type), [leaves[0], 'hardBreak', leaves[1]]);
+  const entity = x.maps.result.items.find(m => x.source.slice(m.sourceRange.start, m.sourceRange.end) === '&amp;');
+  const seek = entity.sourceRange.start + 2;
+  assert.equal(x.source.slice(seek, entity.sourceRange.end), 'mp;');
+  assert.equal(summaryContract.assertTextFragments([resources.get(entity.textRef)], 'renderedText', f.limits), '&');
+  const atom = x.atom.result.items[0];
+  assert.equal(x.source.slice(atom.sourceRange.start, atom.sourceRange.end), '<br>');
+  assert.equal(atom.childIndex, 1);
+  assert.equal(atom.nodeClass, 'atom');
+});
+
+test('recorded canonical parser outcomes retain roles, nested order and sanitized atomic attributes', () => {
+  const cases = Object.fromEntries(f.htmlContinuation.canonicalOracleCases.map(c => [c.id, c]));
+  const cells = cases.cellRoles.native.content[0].content[0].content;
+  assert.deepEqual(cells.map(n => n.type), ['tableHeader', 'tableCell']);
+  const repaired = cases.implicitBodiesAndEnds.native.content[0];
+  assert.deepEqual(repaired.content.map(r => r.content.length), [2, 1]);
+  const nested = cases.nestedTable.native.content[0].content[0].content[0].content;
+  assert.deepEqual(nested.map(n => n.type), ['paragraph', 'table', 'paragraph']);
+  assert.equal(nested[1].content[0].content[0].type, 'tableHeader');
+  const malformed = cases.malformedSpans.native.content[0].content[0].content;
+  assert.ok(malformed.every(n => n.attrs.colspan === 1 && n.attrs.rowspan === 1));
+  const unsafe = JSON.stringify(cases.unsafeAttributes.native);
+  for (const removed of ['javascript:', 'alert(', 'evil()', 'display:none']) assert.ok(!unsafe.includes(removed));
+  const retained = cases.retainedAttributes.native.content[0].content[0].content[0].content;
+  assert.deepEqual(retained.map(n => n.type), ['paragraph', 'image']);
+  assert.equal(retained[0].content[0].marks[0].attrs.href, 'https://example.test/long');
+  assert.equal(retained[1].attrs.src, 'https://example.test/image.png');
+  assert.ok(cases.retainedAttributes.source.includes('t'.repeat(256)));
+  assert.ok(!JSON.stringify(retained).includes('t'.repeat(256)), 'schema drops the raw link title');
+});
+
+test('repaired HTML provenance preserves absent syntax and separately paged exact source pieces', () => {
+  const x = f.htmlContinuation.repairedProvenance;
+  summaryContract.assertContextFrame(x.cell, f.limits);
+  summaryContract.assertContextFrame(x.pieces, f.limits);
+  const cell = x.cell.result.items[0], parts = x.pieces.result.items;
+  assert.equal(cell.htmlSource.closingRange, null);
+  assert.deepEqual(parts.map(p => x.source.slice(p.sourceRange.start, p.sourceRange.end)), ['<td>', 'ONE']);
+  assert.ok(parts.every(p => p.nodeRef === cell.nativeRef));
+  assert.equal(cell.sourceRange.start, Math.min(...parts.map(p => p.sourceRange.start)));
+  assert.equal(cell.sourceRange.end, Math.max(...parts.map(p => p.sourceRange.end)));
+  const missing = structuredClone(x.cell); delete missing.result.items[0].htmlSource.piecesRef;
+  assert.throws(() => summaryContract.assertContextFrame(missing, f.limits));
+  const bad = structuredClone(x.pieces); bad.result.items[0].sourceRange.end = bad.result.items[0].sourceRange.start;
+  assert.throws(() => summaryContract.assertContextFrame(bad, f.limits));
+});
+
+test('native graph references reject duplicate rendered positions, missing parents and cycles', () => {
+  const frame = f.htmlContinuation.frames.a.native;
+  const links = Object.fromEntries(frame.result.items.map(n => [n.nodeClass === 'text' ? 'a-native-leaf' : n.id, n.id]));
+  const nodes = summaryContract.assertNativeGraph([frame], links, f.limits);
+  assert.equal(nodes.get(links['a-native-leaf']).nodeClass, 'text');
+  assert.equal(nodes.get(links['a-native-leaf']).id, f.htmlContinuation.frames.a.map.result.items[0].textNodeId);
+  const duplicated = structuredClone(frame);
+  duplicated.result.items.push({ ...duplicated.result.items.at(-1), id: 'different-leaf-same-position' });
+  assert.throws(() => summaryContract.assertNativeGraph([duplicated], links, f.limits));
+  const cyclic = structuredClone(frame);
+  cyclic.result.items.find(n => n.id === 'a-native-paragraph').parentRef = 'a-native-leaf';
+  assert.throws(() => summaryContract.assertNativeGraph([cyclic], links, f.limits));
+  const missing = structuredClone(frame); missing.result.items.pop();
+  missing.result.items.find(n => n.id === 'a-native-paragraph').parentRef = 'missing';
+  assert.throws(() => summaryContract.assertNativeGraph([missing], links, f.limits));
+  const foreign = structuredClone(frame); foreign.result.snapshotId = 'other-snapshot';
+  assert.throws(() => summaryContract.assertNativeGraph([frame, foreign], links, f.limits));
+});
+
+test('repaired native text preserves disjoint raw pieces and never treats hull gaps as displayed content', () => {
+  const example = f.htmlContinuation.canonicalOracleCases.find(c => c.id === 'unsafeAttributes');
+  const expected = example.native.content[0].content[0].content[0].content[0].content[0].text;
+  const first = example.source.indexOf('LINK'), last = example.source.lastIndexOf('TEXT');
+  const frame = structuredClone(f.htmlContinuation.frames.a.native);
+  frame.result.items = [{ kind: 'nativeNode', id: 'repaired-leaf', profile: 'canonicalNote', profileVersion: 1,
+    nodeType: 'text', nodeClass: 'text', parentRef: 'repaired-paragraph', childIndex: 0,
+    sourceRange: { start: first, end: last + 4 }, provenance: 'repaired',
+    sourcePiecesRef: 'leaf-pieces', attributesRef: 'leaf-attrs' }];
+  summaryContract.assertContextFrame(frame, f.limits);
+  const pieces = structuredClone(f.htmlContinuation.repairedProvenance.pieces);
+  pieces.result.items = [first, last].map((start, i) => ({ kind: 'sourcePiece', id: `part-${i}`,
+    nodeRef: 'repaired-leaf-ref', sourceRange: { start, end: start + 4 }, role: 'body' }));
+  summaryContract.assertContextFrame(pieces, f.limits);
+  assert.equal(pieces.result.items.map(p => example.source.slice(p.sourceRange.start, p.sourceRange.end)).join(''), expected);
+  assert.ok(example.source.slice(first + 4, last).includes('<script>evil()</script>'));
+  assert.ok(!expected.includes('evil'));
+});
+
+test('HTML attribute resources page long raw values without confusing them with effective attributes', () => {
+  const value = '😀\r\n"'.repeat(20_000);
+  const source = `<table><tr><td title='${value}'>TARGET</td></tr></table>`;
+  const cell = structuredClone(f.htmlContinuation.frames.a.cell);
+  cell.result.items[0].sourceRange = { start: source.indexOf('<td'), end: source.indexOf('</td>') + 5 };
+  cell.result.items[0].htmlSource = { provenance: 'explicit',
+    openingRange: { start: source.indexOf('<td'), end: source.indexOf('TARGET') },
+    bodyRange: { start: source.indexOf('TARGET'), end: source.indexOf('TARGET') + 6 },
+    closingRange: { start: source.indexOf('</td>'), end: source.indexOf('</td>') + 5 } };
+  summaryContract.assertContextFrame(cell, f.limits);
+  assert.ok(wireBytes(cell) < 2048);
+  const first = structuredClone(f.htmlContinuation.frames.a.text);
+  first.result.items[0] = { kind: 'fragment', id: 'raw-attribute-part', field: 'rawAttributeValue:0',
+    offset: 0, text: value.slice(0, 5120), nextRef: 'raw-attribute-next' };
+  summaryContract.assertContextFrame(first, f.limits);
+  assert.ok(utf8(first.result.items[0].text) <= f.limits.sourceBytes);
+  assert.ok(first.result.items[0].text.length < value.length);
+  assert.notEqual(cell.result.items[0].attributesRef, first.result.items[0].nextRef);
+});
+
+
+test('stable owner resolution has no hidden last-window map or continuation state', () => {
+  const x = f.ownerResolution;
+  for (const window of x.windows) summaryContract.assertContextFrame(window, f.limits);
+  for (const order of [x.windows, [...x.windows].reverse()]) {
+    const replies = order.map(() => structuredClone(x.directResponse));
+    for (const reply of replies) summaryContract.assertContextFrame(reply, f.limits, { directOwner: true });
+    assert.deepEqual(replies[0], replies[1]);
+    assert.ok(wireBytes(x.request) <= f.limits.wireBytes);
+    assert.deepEqual(x.windows.map(w => w.result.items[0].sourceMapRef),
+      ['a-htmlTableCell-window-map', 'a-cell-window-two-map']);
+  }
+});
+
+test('stable owner responses reject window-only maps and continuation flags', () => {
+  const x = f.ownerResolution;
+  for (const key of ['sourceMapRef', 'continuationBefore', 'continuationAfter']) {
+    const bad = structuredClone(x.directResponse);
+    bad.result.items[0][key] = x.windows[0].result.items[0][key];
+    assert.throws(() => summaryContract.assertContextFrame(bad, f.limits, { directOwner: true }));
+  }
+  assert.throws(() => summaryContract.assertContextFrame(x.windows[0], f.limits, { directOwner: true }));
+  assert.throws(() => summaryContract.assertContextFrame(x.directResponse, f.limits));
+});
+
+const inlineSource = c => c.source ?? (c.recipe.prefix + c.recipe.delimiter.repeat(c.recipe.delimiterCount)
+  + c.recipe.body + c.recipe.delimiter.repeat(c.recipe.delimiterCount) + c.recipe.suffix);
+
+test('inline code requires indexed delimiter/body addressing and canonical ownership', () => {
+  const x = f.inlineCodeContinuation.canonicalOracleCases[0];
+  for (const field of ['codeSource', 'nativeRef', 'sourceMapRef']) {
+    const bad = structuredClone(x.windowFrame); delete bad.result.items[0][field];
+    assert.throws(() => summaryContract.assertContextFrame(bad, f.limits));
+  }
+});
+
+test('inline code ranges reject gaps, overlapping delimiters and invented profile state', () => {
+  const x = f.inlineCodeContinuation.canonicalOracleCases[0];
+  for (const mutate of [c => { c.codeSource.bodyRange.start++; },
+    c => { c.codeSource.closingRange.start--; }, c => { c.codeSource.openingRange.start--; },
+    c => { c.codeSource.openingRange.end = c.codeSource.openingRange.start; },
+    c => { c.codeSource.profileVersion = 2; }, c => { c.codeSource.bodyRange.end = 0.5; },
+    c => { c.nativeRef = ''; }]) {
+    const bad = structuredClone(x.windowFrame); mutate(bad.result.items[0]);
+    assert.throws(() => summaryContract.assertContextFrame(bad, f.limits));
+  }
+});
+
+test('rendered mapping resource cannot conceal a giant prefix in individually bounded fragments', () => {
+  const base = f.htmlContinuation.frames.a.text;
+  const pages = [structuredClone(base), structuredClone(base)];
+  pages[0].result.items[0].text = 'x'.repeat(f.limits.sourceBytes);
+  pages[0].result.items[0].nextRef = 'next-piece';
+  pages[1].result.items[0].text = 'x'; pages[1].result.items[0].offset = f.limits.sourceBytes;
+  pages[1].result.items[0].nextRef = null;
+  assert.throws(() => summaryContract.assertTextFragments(pages, 'renderedText', f.limits));
+  const map = structuredClone(f.htmlContinuation.frames.a.map);
+  map.result.items[0].sourceRange = { start: 0, end: f.limits.sourceBytes + 1 };
+  map.result.items[0].renderedRange = { start: 0, end: f.limits.sourceBytes + 1 };
+  assert.throws(() => summaryContract.assertContextFrame(map, f.limits));
+});
+
+test('canonical inline-code oracle outputs retain normalization and omitted all-space leaf', () => {
+  const expected = { multilineTrim: 'A ` B C', multipleDelimiters: 'x `` y ` z',
+    noTrimAllSpaces: null, giantOpening: 'TARGET' };
+  for (const c of f.inlineCodeContinuation.canonicalOracleCases) {
+    assert.equal(c.expectedText, expected[c.id]);
+    const source = inlineSource(c), owner = c.directFrame.result.items[0], r = owner.codeSource;
+    assert.equal(source.length, c.sourceLength);
+    summaryContract.assertContextFrame(c.directFrame, f.limits, { directOwner: true });
+    for (const range of [owner.sourceRange, r.openingRange, r.bodyRange, r.closingRange]) {
+      assert.ok(boundary(source, range.start) && boundary(source, range.end));
+    }
+    const opening = source.slice(r.openingRange.start, r.openingRange.end);
+    assert.match(opening, /^`+$/);
+    assert.equal(source.slice(r.closingRange.start, r.closingRange.end), opening);
+    const graph = summaryContract.assertNativeGraph([c.native], c.nativeLinks, f.limits);
+    if (c.expectedText === null) {
+      assert.equal(owner.nativeRef, null);
+      assert.deepEqual(c.expectedProse, ['before after']);
+      assert.ok([...graph.values()].every(n => n.nodeClass !== 'text'));
+      assert.ok(c.maps.result.items.every(m => m.mapping === 'omitted' && m.textNodeId === null));
+    } else {
+      const leaf = graph.get(c.nativeLinks[owner.nativeRef]);
+      assert.equal(leaf.nodeClass, 'text');
+      assert.equal(leaf.marksRef, c.marks.result.items[0].id);
+      assertMetadataFrame(c.marks, f.limits);
+      assert.equal(c.marks.result.items[1].index, 0);
+      assert.equal(summaryContract.assertTextFragments([c.markName], 'value', f.limits), 'code');
+    }
+    if (c.windowFrame) summaryContract.assertContextFrame(c.windowFrame, f.limits);
+    if (c.maps) summaryContract.assertContextFrame(c.maps, f.limits);
+    for (const resource of c.texts) {
+      const text = summaryContract.assertTextFragments([resource.frame], 'renderedText', f.limits);
+      const map = (c.maps?.result.items ?? c.windows.flatMap(w => w.maps.result.items))
+        .find(m => m.id === resource.mapId);
+      assert.equal(text, c.expectedText.slice(map.renderedRange.start, map.renderedRange.end));
+      assert.equal(text.length, map.renderedRange.end - map.renderedRange.start);
+      if (map.mapping === 'identity') assert.equal(text, source.slice(map.sourceRange.start, map.sourceRange.end));
+      assert.equal(map.textNodeRef, owner.nativeRef);
+    }
+  }
+});
+
+test('inline CRLF and trim map exact raw bytes to canonical leaf without copying delimiters', () => {
+  const c = f.inlineCodeContinuation.canonicalOracleCases[0], source = inlineSource(c);
+  const maps = c.maps.result.items;
+  assert.deepEqual(maps.map(m => source.slice(m.sourceRange.start, m.sourceRange.end)),
+    ['`` ', 'A ` B', '\r\n', 'C', ' ``']);
+  assert.deepEqual(maps.map(m => [m.renderedRange.start, m.renderedRange.end]),
+    [[0, 0], [0, 5], [5, 6], [6, 7], [0, 0]]);
+  assert.equal(c.texts.map(r => r.frame.result.items[0].text).join(''), 'A ` B C');
+  assert.equal(source, 'before `` A ` B\r\nC `` after');
+});
+
+test('giant inline delimiters and far body have separate bounded windows with one stable owner', () => {
+  const c = f.inlineCodeContinuation.canonicalOracleCases.find(c => c.id === 'giantOpening');
+  const source = inlineSource(c), owner = c.directFrame.result.items[0];
+  assert.equal(source.length, 200021); assert.equal(source.indexOf('TARGET'), 100008);
+  assert.deepEqual(owner.codeSource.bodyRange, { start: 100008, end: 100014 });
+  for (const w of c.windows) {
+    const r = w.sourceRange;
+    assertSourcePage(source, frame(source.slice(r.start, r.end), r.start, r.end, source.length), f.limits,
+      { direction: 'forward', at: r.start });
+    summaryContract.assertContextFrame(w.occurrence, f.limits);
+    summaryContract.assertContextFrame(w.maps, f.limits);
+    assert.ok(wireBytes(w.occurrence) < 2048); assert.ok(wireBytes(w.maps) < 2048);
+    const { sourceMapRef, ...stable } = w.occurrence.result.items[0];
+    assert.deepEqual(stable, owner);
+    assert.equal(w.maps.result.items[0].ownerRef, 'giantOpening-owner');
+  }
+  assert.equal(c.windows[0].maps.result.items[0].mapping, 'omitted');
+  assert.equal(c.windows[0].maps.result.items[0].textRef, null);
+  assert.deepEqual(c.windows[1].maps.result.items[0].renderedRange, { start: 2, end: 6 });
+  assert.notEqual(c.windows[0].occurrence.result.items[0].sourceMapRef,
+    c.windows[1].occurrence.result.items[0].sourceMapRef);
+});
+
+test('inline direct owner response rejects a window map and all-space owner invents no leaf', () => {
+  for (const c of f.inlineCodeContinuation.canonicalOracleCases) {
+    const bad = structuredClone(c.directFrame);
+    bad.result.items[0].sourceMapRef = 'a-window-map';
+    assert.throws(() => summaryContract.assertContextFrame(bad, f.limits, { directOwner: true }));
+    assert.throws(() => summaryContract.assertContextFrame(c.directFrame, f.limits));
+  }
+});
+
+test('rendered segment total uses UTF8 bytes across fragments while preserving scalar offsets', () => {
+  const base = f.htmlContinuation.frames.a.text;
+  const pages = [structuredClone(base), structuredClone(base)];
+  pages[0].result.items[0].text = '🚀'.repeat(4095); pages[0].result.items[0].nextRef = 'next';
+  pages[1].result.items[0].text = '🚀'; pages[1].result.items[0].offset = 8190;
+  pages[1].result.items[0].nextRef = null;
+  const text = summaryContract.assertTextFragments(pages, 'renderedText', f.limits);
+  assert.equal(utf8(text), 16384); assert.equal(text.length, 8192);
+  pages[1].result.items[0].text += 'x';
+  assert.throws(() => summaryContract.assertTextFragments(pages, 'renderedText', f.limits));
+});
+
+test('far identity checkpoints keep absolute leaf offsets and segment-local fragment offsets', () => {
+  const total = 2_000_000, start = total - 12;
+  const map = structuredClone(f.htmlContinuation.frames.a.map);
+  Object.assign(map.result.items[0], { sourceRange: { start, end: total },
+    renderedRange: { start, end: total }, mapping: 'identity' });
+  const text = structuredClone(f.htmlContinuation.frames.a.text);
+  Object.assign(text.result.items[0], { offset: 0, text: '🚀'.repeat(6), nextRef: null });
+  summaryContract.assertContextFrame(map, f.limits);
+  assert.equal(summaryContract.assertTextFragments([text], 'renderedText', f.limits).length, 12);
+  assert.ok(wireBytes(map) < 2048 && wireBytes(text) < 2048);
+  assert.ok(map.result.items[0].renderedRange.start > f.limits.sourceBytes);
+});
+
+test('stable HTML table and row owners omit maps just like cell owners', () => {
+  for (const kind of ['table', 'row', 'cell']) {
+    const window = structuredClone(f.htmlContinuation.frames.a[kind]);
+    summaryContract.assertContextFrame(window, f.limits);
+    const owner = structuredClone(window);
+    for (const k of ['sourceMapRef', 'continuationBefore', 'continuationAfter']) delete owner.result.items[0][k];
+    summaryContract.assertContextFrame(owner, f.limits, { directOwner: true });
+    assert.throws(() => summaryContract.assertContextFrame(owner, f.limits));
+  }
+});
+
+test('inline mapping cursor cannot switch owner, source window, revision or canonical profile', () => {
+  const claim = { ...f.scope, kind: 'context', contextRef: 'inline-body-window-map',
+    sourceRevision: 'r:inline', boot: 'boot', profileRevision: 'canonical-build-a', expiresAt: 100,
+    budgets: { maxWireBytes: 4096 } };
+  assert.equal(cursorError(claim, claim, claim, 1), null);
+  for (const contextRef of ['inline-opening-window-map', 'inline-owner', 'other-inline-owner-map'])
+    assert.equal(cursorError(claim, { ...claim, contextRef }, claim, 1), 'note-page-cursor-invalid');
+  for (const key of ['backendId', 'workspaceId', 'noteId', 'noteInstanceId'])
+    assert.equal(cursorError(claim, { ...claim, [key]: 'other' }, claim, 1), 'note-page-cursor-invalid');
+  assert.equal(cursorError(claim, claim, { ...claim, sourceRevision: 'changed' }, 1), 'note-page-stale');
+  assert.equal(cursorError(claim, claim, { ...claim, profileRevision: 'changed' }, 1), 'note-page-expired');
+  assert.equal(cursorError(claim, claim, claim, 100), 'note-page-expired');
+});
+
+test('inline descriptors obey exact complete escaped frame budgets with maximum legal scope and id', () => {
+  const wire = structuredClone(f.inlineCodeContinuation.canonicalOracleCases[0].windowFrame);
+  wire.id = 'i'.repeat(64);
+  for (const key of Object.keys(wire.result.scope)) wire.result.scope[key] = 's'.repeat(256);
+  wire.result.items = Array.from({ length: 12 }, (_, i) => ({ ...structuredClone(wire.result.items[0]),
+    id: '\u0001'.repeat(127) + i, parentRef: '\u0001'.repeat(127) + i,
+    nativeRef: '\u0001'.repeat(127) + i, sourceMapRef: '\u0001'.repeat(127) + i }));
+  const slots = wire.result.items.flatMap(item => ['id', 'parentRef', 'nativeRef', 'sourceMapRef'].map(key => [item, key]));
+  for (const [item, key] of slots) {
+    const room = Math.min(256 - utf8(item[key]), Math.floor((65536 - wireBytes(wire)) / 6));
+    if (room > 0) item[key] += '\u0001'.repeat(room);
+  }
+  const remaining = 65536 - wireBytes(wire);
+  assert.ok(remaining >= 0);
+  const [item, key] = slots.find(([item, key]) => utf8(item[key]) + remaining + 1 <= 256);
+  item[key] += 'x'.repeat(remaining);
+  assert.equal(wireBytes(wire), 65536); summaryContract.assertContextFrame(wire, f.limits);
+  item[key] += 'x'; assert.equal(wireBytes(wire), 65537);
+  assert.throws(() => summaryContract.assertContextFrame(wire, f.limits));
+});
+
+// Synthetic annotation resources: exercise existing context directories and direct
+// nextRef traversal, not server token issuance or membership enforcement.
+function authorResources(values = {
+  authorPrincipalId: 'p'.repeat(255) + '😀\uFEFF',
+  authorIdentity: { provider: 'gitlab', host: 'forge.example:8443', externalUserId: 'x'.repeat(1023) + '😀\uFEFF' },
+}) {
+  const row = structuredClone(f.annotationPages.pages[1].result.items[0]);
+  const owner = f.annotationPages.pages[1].result;
+  const reads = [];
+  const response = (items, nextCursor = null) => ({ jsonrpc: '2.0', id: '\0"😀', result: {
+    kind: 'noteContextPage', scope: owner.scope, sourceRevision: owner.sourceRevision,
+    commentRevision: owner.commentRevision, snapshotId: owner.snapshotId, expiresAt: owner.expiresAt,
+    items, nextCursor,
+  } });
+  function field(ref, name, text) {
+    const scalars = [...text], chunks = [];
+    do { chunks.push(scalars.splice(0, 127).join('')); } while (scalars.length);
+    let offset = 0;
+    for (let i = 0; i < chunks.length; i++) {
+      const contextRef = i === 0 ? ref : `${ref}-${i}`;
+      reads.push({ contextRef, response: response([{ kind: 'fragment', id: name,
+        field: name, offset, text: chunks[i], nextRef: i + 1 === chunks.length ? null : `${ref}-${i + 1}` }]) });
+      offset += chunks[i].length;
+    }
+  }
+  field(row.authorPrincipalIdRef, 'authorPrincipalId', values.authorPrincipalId);
+  const fields = ['provider', 'host', 'externalUserId'];
+  fields.forEach((name, i) => {
+    reads.push({ contextRef: row.authorIdentityRef, ...(i ? { cursor: `directory-${i}` } : {}),
+      response: response([{ kind: 'fragment', id: `identity-${name}`, field: name, offset: 0,
+        text: '', nextRef: `identity-value-${name}` }], i === 2 ? null : `directory-${i + 1}`) });
+    field(`identity-value-${name}`, name, values.authorIdentity[name]);
+  });
+  return { row, owner, reads, values };
+}
+const checkAuthorResources = x => summaryContract.assertReplyAuthorResources(x.row, x.owner, x.reads, f.limits);
+
+test('annotation identities: existing reply fixtures cover inline, absent and referenced values', () => {
+  assertReplyFrames(f.annotationPages.pages, f.limits, { complete: true });
+  const rows = f.annotationPages.pages.flatMap(p => p.result.items);
+  assert.equal(rows[0].authorPrincipalId, 'principal-a');
+  assert.deepEqual(rows[0].authorIdentity, { provider: 'gitlab', host: 'forge.example:8443', externalUserId: '42' });
+  for (const key of ['authorPrincipalId', 'authorIdentity', 'authorPrincipalIdRef', 'authorIdentityRef']) {
+    assert.equal(Object.hasOwn(rows[1], key), false);
+  }
+  assert.equal(rows[2].authorPrincipalIdRef, 'principal-root');
+  assert.equal(rows[2].authorIdentityRef, 'identity-root');
+});
+
+for (const key of ['authorPrincipalId', 'authorIdentity']) {
+  test(`annotation identities: ${key} inline/reference exclusivity and presence`, () => {
+    const inline = key === 'authorPrincipalId' ? '' : { provider: 'github', host: 'github.com', externalUserId: '' };
+    summaryContract.assertReplyAuthor({});
+    summaryContract.assertReplyAuthor({ [key]: inline }); // present empty string is not omission
+    summaryContract.assertReplyAuthor({ [`${key}Ref`]: 'opaque' });
+    for (const bad of [
+      { [key]: inline, [`${key}Ref`]: 'opaque' }, { [key]: null },
+      { [`${key}Ref`]: null }, { [`${key}Ref`]: '' }, { [`${key}Ref`]: 'x'.repeat(257) },
+    ]) assert.throws(() => summaryContract.assertReplyAuthor(bad));
+  });
+}
+
+test('annotation identities: inline UTF8 boundaries and exact safe identity shape', () => {
+  const row = { authorPrincipalId: '😀'.repeat(64), authorIdentity: {
+    provider: 'gitlab', host: 'h'.repeat(1024), externalUserId: '😀'.repeat(256),
+  } };
+  summaryContract.assertReplyAuthor(row);
+  for (const mutate of [
+    r => { r.authorPrincipalId += 'a'; }, r => { r.authorIdentity.host += 'a'; },
+    r => { r.authorIdentity.externalUserId += 'a'; }, r => { r.authorIdentity.provider = 'other'; },
+    r => { r.authorIdentity.token = 'secret'; }, r => { delete r.authorIdentity.host; },
+    r => { r.authorIdentity.externalUserId = 42; }, r => { r.authorPrincipalId = '\ud800'; },
+  ]) { const bad = structuredClone(row); mutate(bad); assert.throws(() => summaryContract.assertReplyAuthor(bad)); }
+});
+
+test('annotation identities: oversized exact values traverse bounded directory and scalar fragments', () => {
+  const x = authorResources();
+  assert.ok(utf8(x.values.authorPrincipalId) > 256);
+  assert.ok(utf8(x.values.authorIdentity.externalUserId) > 1024);
+  assert.deepEqual(checkAuthorResources(x), x.values);
+  const empty = authorResources({ authorPrincipalId: '', authorIdentity: { provider: 'github', host: 'github.com', externalUserId: '' } });
+  assert.deepEqual(checkAuthorResources(empty), empty.values);
+  assert.equal(Object.hasOwn(checkAuthorResources(empty), 'authorPrincipalId'), true);
+});
+
+for (const key of ['scope', 'sourceRevision', 'commentRevision', 'snapshotId', 'expiresAt']) {
+  test(`annotation identities: missing and changed ${key} binding reject directory and scalar responses`, () => {
+    for (const directory of [false, true]) for (const remove of [false, true]) {
+      const x = authorResources();
+      const page = x.reads.find(r => directory ? r.contextRef === x.row.authorIdentityRef : r.contextRef === x.row.authorPrincipalIdRef).response.result;
+      if (remove) delete page[key];
+      else if (key === 'scope') page.scope = { ...page.scope, noteInstanceId: 'replacement' };
+      else page[key] = key === 'expiresAt' ? '2026-10-03T00:06:00.000Z' : 'different';
+      assert.throws(() => checkAuthorResources(x));
+    }
+  });
+}
+
+test('annotation identities: missing reference, wrong field, order, cycle and scalar offset reject', () => {
+  for (const mutate of [
+    x => { x.reads.shift(); },
+    x => { x.reads[0].contextRef = 'unrelated-ref'; },
+    x => { x.reads[0].response.result.items[0].field = 'body'; },
+    x => { x.reads[0].response.result.items[0].nextRef = x.row.authorPrincipalIdRef; },
+    x => { x.reads[1].response.result.items[0].offset++; },
+    x => { x.reads.find(r => r.contextRef === x.row.authorIdentityRef).response.result.items[0].field = 'externalUserId'; },
+    x => { x.reads.find(r => r.contextRef === 'identity-value-provider').response.result.items[0].text = 'other'; },
+    x => { x.reads.push(structuredClone(x.reads[0])); },
+  ]) { const x = authorResources(); mutate(x); assert.throws(() => checkAuthorResources(x)); }
+});
+
+test('annotation identities: actual escaped reply/context frames honor exact wire boundary', () => {
+  const pages = structuredClone(f.annotationPages.pages);
+  const maxReply = Math.max(...pages.map(wireBytes));
+  assertReplyFrames(pages, { ...f.limits, wireBytes: maxReply });
+  assert.throws(() => assertReplyFrames(pages, { ...f.limits, wireBytes: maxReply - 1 }));
+  const x = authorResources();
+  const maxContext = Math.max(...x.reads.map(r => wireBytes(r.response)));
+  summaryContract.assertReplyAuthorResources(x.row, x.owner, x.reads, { ...f.limits, wireBytes: maxContext });
+  assert.throws(() => summaryContract.assertReplyAuthorResources(x.row, x.owner, x.reads, { ...f.limits, wireBytes: maxContext - 1 }));
+});
+
+
+function paragraphEntryFrame() {
+  return { jsonrpc: '2.0', id: 'paragraph\u0000id', result: {
+    kind: 'noteContextPage', scope: f.scope, sourceRevision: 'r:7', snapshotId: 'snapshot-a',
+    expiresAt: '2026-10-03T00:05:00.000Z',
+    items: [structuredClone(f.paragraphEntryPath.paragraph)], nextCursor: null,
+  } };
+}
+test('paragraph entry path: both modes preserve ordinary far lexical identity and details', () => {
+  assert.equal(f.paragraphEntryPath.status, 'controlled-shape-fixture-not-store-capture');
+  for (const entryPath of f.paragraphEntryPath.entryPaths) {
+    const frame = paragraphEntryFrame();
+    frame.result.items[0].entryPath = entryPath;
+    summaryContract.assertContextFrame(frame, f.limits);
+    const { entryPath: mode, ...ordinary } = frame.result.items[0];
+    assert.equal(mode, entryPath);
+    assert.deepEqual(ordinary, f.paragraphEntryPath.paragraph);
+    for (const key of ['nativeRef', 'sourceMapRef', 'profile', 'profileVersion'])
+      assert.equal(frame.result.items[0][key], undefined);
+  }
+});
+test('paragraph entry path: absence remains valid without manufacturing a mode', () => {
+  const frame = paragraphEntryFrame();
+  summaryContract.assertContextFrame(frame, f.limits);
+  assert.equal(Object.hasOwn(frame.result.items[0], 'entryPath'), false);
+  assert.match(docs, /Absence means \*\*unknown\*\*/);
+});
+test('paragraph entry path: present null, non-string and unsupported values reject', () => {
+  for (const value of [null, false, 1, {}, [], '', 'Markdown', 'plain_text', 'markdownBlock']) {
+    const frame = paragraphEntryFrame(); frame.result.items[0].entryPath = value;
+    assert.throws(() => summaryContract.assertContextFrame(frame, f.limits));
+  }
+});
+test('paragraph entry path: complete escaped frame accounting includes the added field', () => {
+  for (const entryPath of f.paragraphEntryPath.entryPaths) {
+    const frame = paragraphEntryFrame(); frame.result.items[0].entryPath = entryPath;
+    const bytes = wireBytes(frame);
+    summaryContract.assertContextFrame(frame, { ...f.limits, wireBytes: bytes });
+    assert.throws(() => summaryContract.assertContextFrame(frame, { ...f.limits, wireBytes: bytes - 1 }));
+  }
+});
+test('paragraph entry path: documented authority remains document-wide and snapshot-bound', () => {
+  const section = docs.split('**Paragraph document entry path')[1]?.split('**Absolute table addresses.**')[0];
+  assert.ok(section);
+  for (const text of ['complete source', '<!--anchor:', 'ws-block', 'original expiry',
+    'source revision', 'snapshot', 'incarnation', 'without hydrating', 'safe-edit proof',
+    'complete `notePagingRead: 1` activation gate still applies']) assert.ok(section.includes(text), text);
+});
+
+
+test('paragraph entry policy: explicit renderer predicate includes trim and whole-source edge cases', () => {
+  // Reference expectations for cross-language producer captures, not Store execution.
+  const classify = source => source.trim().startsWith('<')
+    && !source.trim().startsWith('<!--anchor:') && !source.includes('```ws-block')
+    ? 'html' : 'markdown';
+  for (const [source, expected] of [
+    ['abc', 'markdown'], ['abc\n\ndef', 'markdown'], ['<p>abc</p>\n\ndef', 'html'],
+    ['\uFEFF<p>abc</p>', 'html'], ['\u0085<p>abc</p>', 'markdown'],
+    [' '.repeat(20000) + '<p>abc</p>', 'html'],
+    ['<!--anchor:x--><p>abc</p>', 'markdown'],
+    ['<p>abc</p>' + 'x'.repeat(20000) + '```ws-block', 'markdown'],
+    ['<p>inline ```ws-block text</p>', 'markdown'],
+    ['<p>inline ```WS-BLOCK text</p>', 'html'],
+  ]) assert.equal(classify(source), expected);
+  assert.ok(docs.includes('ECMAScript `String.prototype.trim()`'));
+  assert.ok(docs.includes('including U+FEFF, excluding U+0085'));
+  assert.ok(docs.includes('not only at a parsed fence boundary'));
+});
