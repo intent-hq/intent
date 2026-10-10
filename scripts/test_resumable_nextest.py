@@ -501,8 +501,10 @@ class CallbackPreflightTests(unittest.TestCase):
                 with mock.patch.dict(os.environ, {"INTENT_ACP_CALLBACK_ADAPTER_FIXTURE": ""}), mock.patch.object(
                     gate, "isolated_output_args", return_value=[]
                 ) as cargo, mock.patch.object(gate, "tree_key", return_value=KEY) as key:
-                    with self.assertRaisesRegex(RuntimeError, "INTENT_ACP_CALLBACK_ADAPTER_FIXTURE"):
+                    with self.assertRaisesRegex(RuntimeError, "INTENT_ACP_CALLBACK_ADAPTER_FIXTURE") as refused:
                         gate.run_nextest(make_args(root, plan=plans, resume="1"))
+                    self.assertIn("CONTRIBUTING.md#linux-x64-callback-gates", str(refused.exception))
+                    self.assertIn("existing authorized Linux x64 host", str(refused.exception))
                     cargo.assert_not_called()
                     key.assert_not_called()
 
@@ -786,6 +788,32 @@ with mock.patch.object(gate, 'transfer_fixture_identity', return_value=None):
         ):
             with self.assertRaisesRegex(RuntimeError, "Node version mismatch"):
                 self.identity()
+
+    def test_unsupported_host_points_to_linux_recipe_before_cargo_or_resume(self):
+        # Diagnostic coverage through the real launcher/platform check, not a
+        # native macOS runtime test. Synthetic payloads never reach Node.
+        record = self.root / "cache" / KEY
+        record.mkdir(parents=True)
+        (record / "complete").write_text("complete\n")
+        passed = gate.record_line("alpha::one", "passes", "ok")
+        (record / "passed.jsonl").write_text(passed)
+        with mock.patch.object(self.validator.sys, "platform", "darwin"), mock.patch.object(
+            self.validator.platform, "machine", return_value="arm64"
+        ), mock.patch.object(gate, "isolated_output_args") as cargo, mock.patch.object(
+            gate, "tree_key", return_value=KEY
+        ) as key:
+            with self.assertRaisesRegex(RuntimeError, "Linux x64") as refused:
+                gate.run_nextest(make_args(self.root, plan=["-p intent-acp --lib"], resume="1"))
+            self.assertIn("CONTRIBUTING.md#linux-x64-callback-gates", str(refused.exception))
+            self.assertIn("existing authorized Linux x64 host", str(refused.exception))
+            self.assertIn("macOS is not supported", str(refused.exception))
+            cargo.assert_not_called()
+            key.assert_not_called()
+            self.validator.prepare.assert_not_called()
+            self.validator.urllib.request.urlopen.assert_not_called()
+            self.validator.node_tool.assert_not_called()
+        self.assertEqual((record / "passed.jsonl").read_text(), passed)
+        self.assertEqual(list(record.glob("attempts/*")), [])
 
     def test_corruption_after_success_cannot_get_complete_resume_credit(self):
         harness = PlannedRunHarness(self.root, [([event("ok", "alpha::one$passes")], 0)])

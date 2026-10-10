@@ -97,10 +97,12 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
 
 - **Methods:** `chat.subscribe` / `chat.unsubscribe`, intercepted on the subscription fast-path
   before the JSON-RPC dispatcher (like `events.subscribe`). `params` is
-  `{ agentId, limit?, sinceMessageId?, deltaEncoding?, projection?, replaceGroup?, workspaceId? }` — a missing/empty `agentId` is a
+  `{ agentId, limit?, sinceMessageId?, historyDelivery?, deltaEncoding?, projection?, replaceGroup?, workspaceId? }` — a missing/empty `agentId` is a
   `-32602` error.
   `chat.subscribe` returns `{ subscriptionId }`, then
   pushes a seq-0 `subscription.push` **snapshot**, then ordered **deltas** (seq 1, 2, …).
+  The prepared opt-in progressive-history contract below inserts ordered `history`
+  pushes between the initial snapshot and live deltas.
   `replaceGroup` (atomic swap) and per-connection cleanup behave as for the other channels (§6.1).
   The [prepared routing-only](./workspace-routing.md) `workspaceId?` is optional
   for direct callers; workspace clients capture it with the subscription and
@@ -115,10 +117,70 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   and lag-recovery snapshots, including any merged live-turn row. It is a message-count
   upper bound, not a guaranteed page size: shorter histories or the existing slim byte
   budget can yield fewer messages. For example, `limit: 50` requests the newest 50
-  messages in transcript order when enough history fits the budget. No automatic
-  history backfill is added. Daemons predating configurable limits ignore this parameter and retain
+  messages in transcript order when enough history fits the budget. Atomic snapshot
+  delivery adds no automatic history backfill. Daemons predating configurable limits ignore this parameter and retain
   their five-message window; daemons with configurable limits predating the default
   increase also default to five, but honor an explicit `limit`.
+- **Progressive initial history (prepared additive contract; docs lead implementation).**
+  `historyDelivery` accepts `"progressive"` or `"snapshot"`; absent / `null` selects
+  the existing atomic snapshot behavior. Any other value or type returns `-32602`.
+  A progressive subscription's snapshots echo `historyDelivery: "progressive"`
+  and carry `initialHistory: { target, received, complete }`. `target` is the
+  validated subscription `limit`; `received` counts distinct rows delivered from
+  the initial window, including a synthetic live row at most once. These counts
+  are separate from transcript-wide `totalMessages` and from live-message arrivals.
+
+  For a fresh subscription or failed resume, the daemon sends the newest complete
+  slim message in the seq-0 snapshot, then one older complete message per
+  `subscription.push` with `kind: "history"`. An empty conversation instead sends
+  a complete empty snapshot. Every history frame carries
+  `history: { message?, target, received, complete, nextToken?, truncated?, totalMessages? }`.
+  A message-bearing frame has `complete: false`; the final frame has no `message`,
+  has `complete: true`, and supplies authoritative `nextToken`, `truncated`, and
+  `totalMessages`. The final frame is sent even if the newest row alone meets the
+  target. While incomplete, the initial snapshot withholds its usable older-history
+  cursor (`nextToken: null`); that null is **not** evidence of exhaustion.
+
+  Arrival order is newest to oldest. Display order remains chronological by message
+  `seq`, with `id` used for identity and deduplication. These are historical message
+  rows, not live block updates: they must not start an assistant streaming indicator,
+  count as new unread messages, or replay new-message side effects. History frames
+  share the subscription's monotonically increasing envelope `seq` with snapshots
+  and live deltas; duplicate, stale, and gap handling applies to all three kinds.
+  For this mode, the convergence invariant includes the history pushes and covers
+  the selected initial window plus subsequent live events; a single byte-budgeted
+  atomic conversation page can contain fewer rows than that reconstructed window.
+
+  The daemon owns continuation until it has sent the requested number of initial
+  rows or reached the actual beginning of the conversation. A slim page's 512 KiB
+  budget can split the initial transfer into multiple bounded reads; it must not
+  silently lower the target. Slim block projections, the one-message floor, bounded
+  buffering, and connection backpressure remain in force. The final cursor points
+  immediately before the oldest delivered initial row. New rows arriving during
+  transfer do not count toward the captured initial window. A read failure or
+  interrupted transfer must recover rather than report successful exhaustion.
+
+  Clients render rows as they arrive but must gate additional history requests,
+  including automatic viewport filling and history seeks, until `complete: true`.
+  First-content visibility and initial-history completion are separate states;
+  completion-dependent read markers and divider placement must not finalize from
+  the newest row alone. Bottom-follow and reader-position anchoring apply to these
+  prepends, including the first transition from short content to an overflowing
+  viewport. Completion does not require changing short-chat alignment.
+
+  Successful resumes and recovery snapshots may remain atomic. They echo the mode
+  with `initialHistory.complete: true`, preserving the existing resume/reset and
+  byte-budget semantics. A replacement snapshot supersedes any partial initial
+  transfer. Disconnect, unsubscribe, revocation, and transcript invalidation must
+  prevent the superseded transfer's chunks or completion from mutating its replacement.
+  Live deltas continue after the initial transfer, with the existing live-turn
+  overlap and lag-recovery protections.
+
+  The echo negotiates delivery: older daemons ignore the request parameter and send
+  an ordinary snapshot without the echo, which a new client treats as complete.
+  Clients that omit `historyDelivery` never receive `history` frames. This keeps
+  desktop and iOS adoption independent; requesting a different `limit` alone does
+  not opt a client into progressive history.
 - **Slim projection (the wire default since v8.0; introduced opt-in within v7.1 —
   [intent-hq/intentd#1304](https://github.com/intent-hq/intentd/pull/1304)).** Every
   subscription serves the same bounded tool/image block projection as
@@ -127,15 +189,15 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   (pairing/structural fields intact), and oversized `image.data` is swapped for the write-time
   thumbnail (`dataTruncated`/`dataIsThumbnail`/`dataBytes`; legacy pre-thumbnail rows serve the
   block with `data` omitted). The projection is fixed for the subscription's lifetime and applies
-  to **every frame the subscription emits** — the seq-0 snapshot, lag-recovery snapshots, live
-  tool-block deltas, and the seq-0 live-turn merge — so slim snapshots and deltas agree on the
+  to **every frame the subscription emits** — the seq-0 snapshot, history frames, lag-recovery
+  snapshots, live tool-block deltas, and the seq-0 live-turn merge — so their projections agree on the
   served block shape. Absent / `null` selects slim (the v8.0 default, BREAKING over the v7.1
   "byte-identical" opt-in contract) and `projection: "slim"` is an explicit no-op; any other
   value is `-32602`, never coerced. A client holding a truncated
   slim block fetches the full body on demand via `agent.getMessageBlock` (§5.5, v7.2). Slim
-  snapshots additionally inherit the **slim page byte budget** (within v7.2 —
-  [intent-hq/intentd#1314](https://github.com/intent-hq/intentd/pull/1314)): the seq-0 and
-  lag-recovery snapshots reuse the `agent.getConversation` read, so a snapshot page is bounded
+  atomic snapshots additionally inherit the **slim page byte budget** (within v7.2 —
+  [intent-hq/intentd#1314](https://github.com/intent-hq/intentd/pull/1314)): atomic initial,
+  successful-resume and recovery snapshots reuse the `agent.getConversation` read, so a snapshot page is bounded
   at `SLIM_PAGE_BUDGET_BYTES` (512 KiB) total serialized message bytes and may carry fewer than
   the chosen message limit, with `nextToken` re-minted at the first excluded row (§5.5) — the client
   pages older history exactly as before, just in more round-trips. The budget covers the
@@ -143,7 +205,9 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   (always served, even alone over budget — the §5.5 one-message floor), and oldest persisted
   rows are evicted until the merged page fits both the chosen message limit and byte budget,
   with `truncated`/`nextToken` re-minted at the eviction boundary so the evicted rows stay
-  reachable via `agent.getConversation`. Since v10.0
+  reachable via `agent.getConversation`. Progressive initial delivery instead owns
+  bounded continuation until its target or exhaustion; it withholds the cursor
+  until the terminal history frame, as specified above. Since v10.0
   every frame also inherits the `agent.getConversation` legacy-inline-file-block projection
   (§5.5): a persisted pre-10.0 `{ type: "file", data, … }` block with no non-empty
   `attachmentId` is served as `{ type: "text", text: "Attached file: <fileName>" }` (`"Attached
@@ -152,26 +216,35 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   delta ever carries a `type: "file"` block with a `data` key.
 - **Resume via `sinceMessageId` (additive within v6.4).** A reconnecting client that already
   holds the transcript up to a known message id may pass it as the optional `sinceMessageId`
-  (string). Absent / `null` / `""` all mean "no resume" — the standard snapshot below, carrying
+  (string). Absent / `null` / `""` all mean "no resume" — fresh delivery in the selected mode, carrying
   **no** `resumed` key on the initial snapshot; a present non-string value is a `-32602` error. When provided,
   the daemon reads the **same newest page bounded by the subscription's chosen limit** as
-  the standard snapshot (still exactly one conversation read — resume is a post-filter, never a second
-  fetch; monorepo#958 cost contract)
+  the atomic snapshot to check the anchor (exactly one bounded conversation read
+  for this check — resume filtering never searches further back; monorepo#958 cost contract)
   and then:
   - **Id found in the page** → the seq-0 snapshot's `messages[]` carries only the messages
     **after** that id (possibly empty when the id is the newest row), with `resumed: true`,
     `truncated: false`, and `nextToken: null` — no gap exists toward older history, the client
     already holds everything up to `sinceMessageId`, so no older-pages cursor is served.
     `totalMessages` stays the transcript-wide count (same semantics as the standard snapshot,
-    where `messages.length` already ≠ `totalMessages` on a truncated page).
+    where `messages.length` already ≠ `totalMessages` on a truncated page). This is
+    atomic in either delivery mode; progressive subscribers also receive the mode
+    echo and `initialHistory.complete: true`.
   - **Id not in the page** (unknown, pruned, or older than the bounded newest page —
     indistinguishable without an unbounded lookup, which the bounded-read contract forbids) →
-    the **standard full page** is served unchanged (`truncated` / `nextToken` intact) with
+    in atomic mode, the **standard full page** is served unchanged (`truncated` / `nextToken` intact) with
     `resumed: false`: the client MUST discard its cached transcript and rehydrate from this
-    snapshot as if it had subscribed fresh.
+    snapshot as if it had subscribed fresh. In progressive mode, the anchor check
+    is followed by fresh progressive delivery: the newest row is sent with
+    `resumed: false`, an incomplete `initialHistory`, and `nextToken: null`, then
+    older rows and terminal completion follow as specified above. An empty
+    conversation completes in its empty seq-0 snapshot. These additional bounded
+    history reads fill the requested window; they do not search for the missing anchor.
   The live-turn slot merge (in-flight or orphaned, below) and the activity-flags overlay apply
-  identically in both cases, **after** the filter — a merged partial is never trimmed away.
-  Deltas (seq 1, 2, …) are unaffected by resume.
+  after the filter for atomic delivery, or when capturing the first progressive
+  row — a merged partial is never trimmed away by the resume filter.
+  Live deltas retain their semantics. They begin at seq 1 after an atomic resume,
+  or after the last history frame when a failed resume restarts progressive delivery.
 - **Transcript invalidation.** Editing/regenerating or replacing messages emits
   `agent:updated` with `truncatedCount` or `replacedCount`. Standing chat subscriptions
   respond with a fresh snapshot bounded by the subscription's chosen limit (including any
@@ -224,7 +297,7 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   preserved — the client simply applies more appends). Tool calls, terminal reconciles, and
   message-row deltas are conflation barriers in both modes, so a conflated fragment run never
   crosses an authoritative frame.
-- **Snapshot granularity = messages; delta granularity = blocks.** Fresh, stale-resume,
+- **Snapshot granularity = messages; delta granularity = blocks.** In atomic mode, fresh, stale-resume,
   invalidation and lag-recovery snapshots contain the newest **at most `limit` messages**
   (default **20**), including any merged live-turn row. The daemon requests
   `agent.getConversation` with the chosen subscription limit, then counts a merged live row
@@ -741,6 +814,40 @@ terminal must refetch. Live (pre-terminal) chunk deltas never carry `metadata`.
     ],
     "truncated":false,"totalMessages":1,"nextToken":null } } }
 ```
+
+#### Progressive history frames (prepared contract)
+
+For a two-message conversation requested with `limit: 20`, seq 0 carries only
+the newer row and `initialHistory: { "target": 20, "received": 1, "complete": false }`,
+alongside the `historyDelivery: "progressive"` echo. The older row follows:
+
+```json
+{ "jsonrpc":"2.0","method":"subscription.push","params":{
+  "subscriptionId":"sub-progressive","kind":"history","seq":1,
+  "history":{
+    "target":20,"received":2,"complete":false,
+    "message":{
+      "id":"older-user","agentId":"agent-123","seq":0,"role":"user",
+      "contentBlocks":[ { "type":"text","id":"older-user:0","text":"Run the tests" } ],
+      "timestamp":"2026-06-27T01:00:00.000Z"
+    } } } }
+```
+
+Exhaustion completes the transfer without waiting for eighteen nonexistent rows:
+
+```json
+{ "jsonrpc":"2.0","method":"subscription.push","params":{
+  "subscriptionId":"sub-progressive","kind":"history","seq":2,
+  "history":{
+    "target":20,"received":2,"complete":true,
+    "nextToken":null,"truncated":false,"totalMessages":2 } } }
+```
+
+A transfer that instead reaches its target with older history remaining has
+`truncated: true` and a non-null final `nextToken`. Live deltas then start at the
+next envelope sequence number. Message `seq` is transcript position; envelope
+`seq` is transport order, so the two sequences intentionally run in different
+directions during initial history delivery.
 
 #### delta frame (in-flight block upsert)
 
