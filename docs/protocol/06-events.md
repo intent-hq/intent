@@ -783,4 +783,12 @@ GitHub events unchanged; omit qualified events/wait entries for unsupported reci
 and retain internal waiting/ownership and undelivered wake state. Never strip target
 identity or convert null facts for legacy delivery. Recheck destination support and
 original authority on replay; no snapshot/private receipt travels in event DTOs.
+
+Unsubscribe, subscription replacement, and document/connection retirement must
+retire the original subscription and join any admitted output write before reporting
+completion. Already queued private envelopes must fail their next final-write check;
+requesting asynchronous forwarder cancellation alone is insufficient. Retirement
+must not revoke an independent sibling subscription or document. Ordinary event
+subscriptions retain their existing behavior.
+
 This declaration does not activate producers, subscription filters or capabilities.
