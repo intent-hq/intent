@@ -149,6 +149,7 @@ ws.desktop.startControl()
 ws.desktop.endControl()
 ws.desktop.listDisplay()
 ws.desktop.screenshot(args?)
+ws.desktop.move(args)
 ws.desktop.click(args)
 ws.desktop.type(args)
 ws.desktop.keypress(args)
@@ -162,6 +163,7 @@ ws.desktop.drag(args)
 | `endControl()` | none | `{ ended: boolean, withdrawn: boolean }` |
 | `listDisplay()` | none | `DisplayListResult` below (metadata only) |
 | `screenshot(args?)` | `displayId?: string, layoutId?: string` | `ScreenshotResult` below (one selected display) |
+| `move(args)` | `displayId?: string, layoutId, x, y` | `{ ok: true }` |
 | `click(args)` | `displayId?: string, layoutId, x, y, button?: "left" \| "right", clickCount?: 1 \| 2` | `{ ok: true }` |
 | `type(args)` | `text: string` | `{ ok: true }` |
 | `keypress(args)` | `key: string, modifiers?: ("Shift" \| "Control" \| "Alt" \| "Meta")[]` | `{ ok: true }` |
@@ -498,7 +500,7 @@ All fields are required, trusted daemon-generated strings. Each operation adds:
 | `execute` | `computerId, sessionId, commandId, sequence, deadlineId` | `{ commandId, sequence, result }` |
 
 `action` is `{ kind: "listDisplay" }`, `{ kind: "screenshot", displayId?, layoutId? }`
-or the matching input name (`click`, `type`, `keypress`, `scroll`, `drag`) plus that
+or the matching input name (`move`, `click`, `type`, `keypress`, `scroll`, `drag`) plus that
 binding's arguments. `listDisplay` execution returns `DisplayListResult`; screenshot
 returns `ScreenshotResult`; input returns `{ ok: true }`. Listing uses the same
 command ticket and session gates, never an unauthenticated discovery operation.
@@ -628,11 +630,11 @@ changes and later changes back. The same unchanged layout keeps its token across
 listing and capture. Never combine metadata from different topology generations.
 
 Screenshot accepts no argument or an object with optional `displayId` and
-`layoutId`. Click, scroll and drag retain all existing coordinates and the required
-`layoutId`, but their `displayId` becomes optional. Empty IDs, null fields and
+`layoutId`. Move, click, scroll and drag use all existing coordinates and the required
+`layoutId`, with optional `displayId`. Empty IDs, null fields and
 unknown arguments are invalid params. Validate supplied layout before selection:
 old tokens fail `desktop-stale-layout`. Then apply the same selection rule to all
-four operations:
+five operations:
 
 - No available display: `desktop-display-unavailable`.
 - Explicit ID: select exactly that available display; unknown/disconnected IDs
@@ -683,6 +685,19 @@ macOS points; never assume one global scale. Drag stays on one selected display.
 Use listDisplay to learn IDs/layout/geometry and a selected screenshot when visual
 content is needed. Type and keypress keep their existing focused-window semantics;
 they accept no display selector and do not move focus to a requested monitor.
+
+`move` moves the cursor to the requested position without pressing or releasing
+any button, clicking, scrolling or dragging. It requires active consent, the same
+principal/connection/lease and command-ticket fences, a current `layoutId`, and
+the display selection and bounds checks above. It never starts control implicitly.
+Reject `button`, `clickCount`, `from`, `to` and all other unknown arguments.
+Malformed/nonfinite or out-of-bounds coordinates fail before native movement.
+The wire action is `{ kind: "move", x, y, layoutId, displayId? }`; successful
+execution returns exactly `{ ok: true }`. This is an additive action on the existing
+`desktop.control` reverse method, not a new router method or capability version.
+Older executors reject the unknown action without input; never emulate it with a
+click or retry automatically. As with other input, errors after native execution
+retain truthful partial/unknown execution and do not claim rollback.
 
 Click defaults: left button, one click; right button and double click are
 required. Scroll deltas are signed finite **image pixels**, positive right/down,
