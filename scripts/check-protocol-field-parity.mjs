@@ -39,6 +39,7 @@ export const PAIRS = [
     rust: { file: MODEL_RS, struct: 'Workspace' },
     ts: { file: 'packages/cloudlands-fe/src/shared/types.ts', type: 'Workspace' },
     ignore: {
+      attentionReminder: 'documented optional per-person reminder projection; staged daemon-first adoption before https://github.com/intent-hq/cloudlands-fe/pull/3308; remove once the monorepo frontend pin includes that PR',
       lastContentActivity: 'documented optional content timestamp; staged daemon-first adoption before https://github.com/intent-hq/cloudlands-fe/pull/3124; remove once the monorepo frontend pin includes that PR',
       canManage: 'documented optional capability; staged daemon-first adoption before https://github.com/intent-hq/cloudlands-fe/pull/2911; remove once the monorepo frontend pin includes that PR',
       tokenUsage: 'read via workspace.getTokenUsage and the workspace:tokenUsage-changed event into the token-usage slice, not from the row',
