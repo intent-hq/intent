@@ -654,6 +654,30 @@ or untrusted imported receipts. Store indexes continue to enforce one active own
 per canonical review per workspace; replacement accounts do not create parallel
 ownership or silently take over an existing target.
 
+**Recovery of uncertain qualified delivery.** A saved message is not proof that
+its original recipient received it. Process loss can leave the same stored row
+and message after either an unsent attempt or a transferred but unacknowledged
+attempt. Automatic restart, reconnect, polling, negotiation, list/history reads
+and ordinary re-registration must preserve that pending obligation and its raw
+baseline evidence without resending it or claiming delivery. Surviving trustworthy
+transfer evidence permits acknowledgement-only reconciliation under fresh original
+authority, never a second prompt for that known transfer.
+
+The existing `prMonitor.flush` action, including Check and Flush, is an explicit
+request for a fresh attempt when the previous transfer cannot be determined.
+Independently readmit the original pinned target/account and intended capable
+recipient before that attempt. It uses the existing guarded delivery pipeline;
+an old serialized body or receipt is not replay authority. This may repeat an
+update transferred immediately before a crash; recovery does not promise exactly
+once delivery. Repeated calls for the same live attempt retain normal deduplication.
+Check and Flush refreshes the pinned target and recomputes the consolidated view.
+If no sendable net change remains, report no delivered wake and preserve the old
+uncertain obligation rather than silently acknowledging it. Only an acknowledged
+recovery attempt or explicit cancellation resolves the uncertain pending evidence,
+including terminal work. Unverifiable original provenance stays withheld and
+cancellable. These qualified recovery rules do not change legacy GitHub recovery,
+add a method or introduce a separate UI action.
+
 **Construction and retirement owner map.**
 
 | Owner | Required responsibility before enabling the capability |
