@@ -126,6 +126,48 @@ absence means unavailable, not permission to infer support from version numbers.
 The handshake is idempotent: re-sending `client.hello` on the same connection updates `name` /
 `capabilities` / host identification and re-returns the same `server` block.
 
+#### Qualified monitor attachment (prepared, not advertised)
+
+The first supported `server.capabilities.reviewMonitoring: 1` includes the
+[qualified recipient contract](pr.md#planned-qualified-review-monitoring-not-yet-advertised)
+and this attachment handshake. Production advertisement remains disabled until
+all native recipients, intermediaries and consumers are qualified.
+
+A document opens a separate physical connection to the original host only after
+its captured successful ordinary hello advertises integer `reviewMonitoring >= 1`.
+It presents exactly the canonical `clientId` from that acknowledgement:
+
+```json
+{ "jsonrpc":"2.0", "id":1, "method":"client.hello", "params":{
+  "clientId":"cli-7f3a", "connectionRole":"review-monitor",
+  "capabilities":{ "reviewMonitoring":1 } } }
+```
+
+Success echoes `connectionRole: "review-monitor"` and the same canonical
+`clientId`, alongside the existing `protocolVersion` and `server` result fields.
+Missing or mismatched role/id requires teardown, never an ordinary-hello fallback.
+An older host receives no attachment request. No second server capability exists.
+
+The role and client id grant no authority. Admission requires the same authenticated
+principal and exactly one live acknowledged ordinary source connection with that
+canonical id. Absent, foreign, unacknowledged or ambiguous sources are refused
+before profile, presence or browser side effects. The attachment retains that
+physical source and hello generation; it never selects a replacement by client id.
+Multiple document attachments to one source remain independent.
+
+Attachments do not create/update logical profiles, override name/host/capabilities,
+become browser reverse targets, change workspace browser pins, or keep a departed
+ordinary device online. Their consumer support never upgrades pooled connections,
+other documents or grouped client capabilities. Repository/account/workspace
+authority remains independently required for private content.
+
+Source retirement/rehello, attachment rehello failure/withdrawal/close, and document
+retirement invalidate affected receipts and dependent queued output/subscriptions.
+An established ordinary socket cannot become an attachment, and an established
+attachment cannot become ordinary through a missing, changed or unknown role.
+Unknown/malformed roles and unsupported attachment transitions fail closed.
+Ordinary hellos retain their existing profile-update behavior.
+
 #### GitLab checkout capability
 
 **Prepared additive contract, protocol 13.5.**

@@ -500,7 +500,8 @@ negative, boolean, string, fractional or otherwise malformed recipient values me
 legacy. This is a compatibility declaration, never authorization.
 
 - **Desktop/transport recipient:** read `client.hello.params.capabilities.reviewMonitoring`
-  on the authenticated live connection. It covers that connection only, not all
+  on the admitted [monitor attachment](client-hello.md#qualified-monitor-attachment-prepared-not-advertised).
+  Ordinary pooled connections remain legacy recipients. It covers that connection only, not all
   connections sharing a `clientId`. Re-negotiate after reconnect; do not copy a
   previous socket's declaration. Forwarded/remote-host traffic uses the end consumer's
   declaration AND each decoding intermediary's support; a capable local proxy cannot
