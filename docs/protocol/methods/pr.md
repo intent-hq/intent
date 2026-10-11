@@ -808,3 +808,51 @@ envelope contains `monitorBinding`, nullable `qualifiedSnapshot` and optional
 `retryAt`; it is evidence, never permission or a delivery acknowledgment. Later
 writers must preserve it and supply independent original authority. Controlled
 captures do not establish live-provider support.
+
+#### Agent guidance for prepared qualified observations
+
+The current help for both observation aliases documents the existing additive
+`gitRootId` and `target` selectors. These examples describe the prepared contract;
+qualified production offers remain disabled. Alias presence, a connected account
+or a harness stamp does not enable private monitoring. The session's captured
+`agentFeatures.prMonitor`, recipient support and current access remain independent.
+
+For a supported session, an explicit GitLab address is:
+
+```javascript
+await ws.mr.snapshot(7, {
+  target: {
+    repository: {
+      provider: "gitlab",
+      instanceBaseUrl: "https://git.example:8443/gitlab",
+      projectPath: "team/sub/app"
+    },
+    kind: "merge-request",
+    number: 7
+  }
+});
+```
+
+The existing `ws.pr.snapshot(7, { repo: "team/app" })` instead addresses GitHub.com
+PR #7. Both aliases share this distinction; MR !7 is a project-local iid, not a
+global GitLab ID. Never combine selectors, infer a forge from the alias or treat
+a per-call address as a saved-selection update. Native observation needs neither
+`gh` nor `glab`. Creation, comments and merging still use forge-appropriate tools
+with separate authentication and write authorization; no native write binding is added.
+
+Harness 3.2 adds these monitor-address and recovery instructions to the existing
+optional repository-context delivery path. Earlier stamps retain their templates
+and captured features; no existing session is upgraded. Current facts remain inert
+JSON, bounded and subject to the same original context admission and final writer
+checks. A capability or remote change updates guidance for subsequent operations,
+not the target/account of an existing watch or restored history.
+
+Structured selection-required or repository-unavailable results require an
+explicit authorized selection, never an origin or GitHub fallback. Reconnect the
+original account for reconnect-required. Restricted, disabled, unsupported and
+unknown states do not authorize private cached output. After interrupted delivery,
+retain pending changes and use the existing Check/Flush controls with a fresh
+check for explicit recovery; a no-change check may leave pending changes intact.
+External work already accepted cannot be recalled, and explicit retry does not
+promise exactly-once effects. Wakes retain the existing sentence patterns and
+machine fields, with actual returned links and PR/# or MR/! terminology.
