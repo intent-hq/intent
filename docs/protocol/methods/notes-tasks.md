@@ -16,6 +16,9 @@ All `note.*` methods require `workspaceId`. All except `list` and `create` addit
 | note.setContent | noteId (req), content (req), confirmReplacement?: boolean, expectedVersion?: int | { ok, noteId, title, previousTitle?, updatedAt, oldContent?, newContent, convertedCount, createdTaskNoteIds, createdTasks, warnings, rev } (full replace). `rev` (additive) is the note's post-write `rev` — after any `@@@task` auto-conversion refetch — i.e. the value a follow-up conditional write sends as `expectedVersion`; `newContent` is the persisted (possibly merged) text. `expectedVersion` is the base the writer read: absent or equal to the current `rev` → `content` replaces the note as-is; **stale** → the write is **merged, not rejected** (see "Three-way merge on stale `expectedVersion`" below) — the writer's intent (`diff(base → content)`, base = the retained snapshot at that rev) is applied onto the current text, or degrades to last-writer-wins when no snapshot survives for that rev. The reduction guard (`> 50 %` shorter without `confirmReplacement`, `-32603`) is measured `base → content` when a base is recoverable and `current → content` otherwise. `-32005` (no write) in exactly two cases: an `expectedVersion` **above** the current `rev` — a rev this note never served — is rejected immediately, and a bounded read-merge-persist loop (5 attempts) whose every attempt misses its rev gate surfaces the last `Conflict`. `-32602` when `content` is the line-numbered `note.read` display (see below) |
 | note.updateMetadata | noteId (req), title?, tags?: string \| string[], expectedVersion?: int | { ok, noteId, title?, tags?, updatedAt?, skipped?, reason? } — metadata-only write (no version snapshot); emits `note:updated`. A stale `expectedVersion` → `-32005` Conflict with `error.data = { code: "conflict", current }` and no write (§9) |
 | note.delete | noteId (req), expectedVersion?: int | { ok, noteId, deleted } — a stale `expectedVersion` → `-32005` Conflict with `error.data = { code: "conflict", current }` and no delete (§9). Emits `note:deleted`. Deleting a **task note** additionally recomputes + emits `task:ready-tasks-changed` (§6.5) after the `note:deleted`, with the additive trigger `triggeredBy: { noteId, reason: "note-deleted" }` (monorepo#1981; generalized by intentd#1121, monorepo#2006), whenever the delete actually **moves** the ready set: deleting a task that was itself ready drops its id from `readyTaskIds`, deleting the last incomplete task child of a parent readies the parent (tree rule), and deleting a task note that other tasks `dependsOn` keeps the #1981 always-emit contract — the dangling edge counts as unmet, so deleting a previously-`complete` dep drops its dependents out of `readyTaskIds`. The pre-delete and post-delete ready sets are compared, so a delete that provably cannot move the set (e.g. a terminal task nobody depends on) emits no recompute. Deleting a **`complete`** dep also re-announces each dependent task note via `note:updated` (the computed `unmetDependsOn` projection moved, monorepo#1979) after the ready-set event — same ordering as the status-transition path (`task:*` first, dependent `note:updated` last) |
+| note.deleteSchedule *(13.10, prepared)* | workspaceId, noteId, noteInstanceId, expectedVersion, sourceRevision, operationKey (req); undoDelayMs? | Guarded cancellable deletion; requires `noteDeleteGrace: 1`; returns bounded OperationResponse. See [grace contract](../note-delete-grace.md). |
+| note.deleteCancel *(13.10, prepared)* | workspaceId, noteId, operationKey (req) | Cancel exact pending operation, or return truthful current/unknown result; never recreate a note. See [grace contract](../note-delete-grace.md). |
+| note.deleteStatus *(13.10, prepared)* | workspaceId (req), noteId?, operationKey? (requires noteId) | Bounded workspace pending snapshot, current identity or historical keyed receipt; see [grace contract](../note-delete-grace.md). |
 | note.listTasks | noteId (req) | { tasks: [...] } (checkbox/task rows + taskNoteId). Rows with a linked task note also carry the linked task's `dependsOn?` / `conflictsWith?` / computed `unmetDependsOn?` (v6.8; presence-detected, omitted when empty — see §5.4 task.setRelations). A row's `status` word (`done` / `in-progress` / `todo`) is read from the line's checkbox marker; on a row with a `taskNoteId` that marker is the daemon-materialized projection of the task note's status (§5.4 "Linked checkboxes are projections of the task note") |
 | note.readAsset | asset (req) — asset id or workspace-asset:// URL | { assetId, mimeType, data, sizeKb } (image assets returned as data) |
 | note.saveAsset | data (req, base64 — a `data:<mime>;base64,` URL prefix is accepted and stripped), mimeType (req), originalName? | { assetId, path, url } — **additive asset write** (no `noteId`; ports the legacy `assets:save` IPC behind note image paste/upload). Writes the decoded bytes under the workspace assets root plus an `<assetId>.meta.json` sidecar (`{ id, originalName, mimeType, size, createdAt }`); `assetId` is `<timestamp36>-<hash8><ext>` with `<ext>` derived from `mimeType` (default `.png`), `url` is `workspace-asset://<workspaceId>/<assetId>` and round-trips through `note.readAsset`. `-32602` on missing params; `-32603` on invalid base64 or when asset storage is not configured |
@@ -154,6 +157,1046 @@ since v6.14 (intentd#1162, monorepo#2129) — earlier daemons converted and retu
 `key=` / `dependsOn=` / `conflictsWith=` / `effort=` header attributes with
 convert-with-warnings semantics — grammar, resolution order, and warning contract are
 documented on the `task.convertBlocks` row (§5.4).
+
+### Revision-safe note pages (prepared additive contract)
+
+**Prepared, not implemented at the pin.** This consistency core is independent of
+editor enablement. `notePagingRead: 1` in `client.hello.server.capabilities` gates the
+complete source/context/metadata/task-ID read and bounded subscription contract below;
+`noteAnnotations: 1` additionally gates annotation pages. Absence means unsupported:
+an old daemon can ignore `page` and return a full Note. Require the expected result
+discriminant before admitting a response. Never put a page in `Note.content`, treat
+missing content as empty, or pass partial content to a legacy full-content writer.
+Omitted `page` retains all existing results and behavior, including stale full-draft
+merge, version history, task conversion, anchors and author attribution. `null`,
+unknown page kinds and unsupported versions are invalid on supporting daemons.
+
+#### Identity, addresses and budgets
+
+`NoteScope = { backendId, workspaceId, noteId, noteInstanceId }`. Capability hello
+also supplies `server.capabilities.notePagingBackendId` in the `client.hello` result,
+a stable opaque database namespace (survives
+ordinary restart; changes on database replacement). `noteInstanceId` is a persistent
+incarnation token: deleting/recreating the same note ID cannot reuse it. Tokens
+are scoped to this tuple and the authenticated principal; they confer no access. Recheck current authorization for every read and subscription.
+For example, the capability subtree is `{ "notePagingRead": 1, "noteAnnotations": 1,
+"notePagingBackendId": "db-a" }`; it is not a top-level hello field or a client
+capability. Require exact integer 1 and a nonempty backend ID within the token limit;
+a missing/malformed ID or unsupported version disables paging. This ID must equal
+`scope.backendId` on every admitted page. Reconnect invalidates in-flight requests;
+a changed backend ID invalidates clean caches and retains drafts for reconciliation.
+Advertise `notePagingRead` only after the entire read contract is ready.
+The former write-bearing `notePaging` must remain absent.
+`sourceRevision` is an opaque nonempty string identifying the note's current `rev`
+within that incarnation, including metadata-only revision changes. The daemon must
+map it losslessly to its existing integer rev; clients compare equality only and
+never compute `rev + 1`. It is not the version-history sequence `v`.
+
+All addresses are nonnegative safe integers counting **UTF-16 code units** from
+zero in exact canonical Markdown, with half-open `[start,end)` ranges. Unicode
+scalars outside the BMP consume two units. Endpoints must not split a surrogate
+pair; unpaired surrogates and U+0000 in new source are rejected, never normalized.
+CRLF remains two units/two UTF-8 bytes; paging may split CR from LF and reassembly
+must retain both. No NFC, line-ending, whitespace, Markdown or entity normalization.
+Combining sequences may cross pages. `sourceLength` is UTF-16; the legacy summary
+`contentLength` counts Unicode scalars and is **not** an address. Line numbers are
+1-based, with LF ending a line; a CR in CRLF is not another line. Rendered-text and
+ProseMirror offsets require an explicit source map, never arithmetic substitution.
+
+Version 1 limits (transport limits, not renderer heap or total-note-size limits):
+
+| Quantity | Hard maximum / default |
+| --- | --- |
+| Source text per page | 16,384 decoded UTF-8 bytes |
+| Complete JSON-RPC request/response or subscription push | 65,536 UTF-8 bytes after JSON escaping, including envelope and ID |
+| Error or pageState envelope | 4,096 escaped UTF-8 bytes |
+| Source/context/metadata page items | 128 items (a source page has one segment) |
+| Annotation page items / requested disjoint ranges | 64 / 32 |
+| Opaque token, ID or revision | 256 decoded UTF-8 bytes each (raw task-link captures below use fragments when longer) |
+| Preview text / context scalar string | 512 / 1,024 decoded UTF-8 bytes each |
+| Source-page snapshot lifetime | 300 seconds, fixed from first page; no sliding renewal |
+
+Source requests may lower `maxSourceBytes` to an integer in `[4,16384]`; all page
+requests may lower `maxWireBytes` to `[4096,65536]` and `maxItems` to `[1,128]`
+(annotation maximum 64). Defaults are the maxima. Count the **actual serialized
+frame**, not source bytes or a pre-escape estimate. RPC IDs on this opt-in path
+are safe integers or strings of at most 64 UTF-8 bytes. Reject oversized requests
+before admission. Shrink a response page until every limit holds. A nonempty source
+page must advance by at least one scalar; an empty page is valid only at exhaustion.
+Variable-size context, metadata or annotation fields are separate paged text/range
+references; an oversized item never bypasses a limit or loses data by truncation.
+Previews are explicitly `preview` with `truncated: boolean`, not authoritative text.
+No note's total length is limited to a page budget.
+
+#### Source, seek and structural context
+
+Opt in with `note.get { workspaceId, noteId, page: { kind: "source", ... } }`.
+A first read has `at?: UTF16Offset` (default 0), `direction?: "forward" | "backward"`
+(default forward), and optional `sourceRevision`/`noteInstanceId` expectation.
+Forward returns a segment beginning at `at`; backward returns one ending at `at`
+(default `sourceLength` when backward and `at` omitted). `at=sourceLength` is valid.
+Seek at a split-surrogate offset or beyond the extent is invalid; no silent rounding.
+Subsequent requests send `cursor` only, plus identical budgets; first-read addressing
+fields with a cursor are invalid. A fresh revision-bound seek may use
+`{ snapshotId, sourceRevision, noteInstanceId, at, direction }` instead of a cursor.
+
+```typescript
+type NoteSourcePage = {
+  kind: "noteSourcePage"; scope: NoteScope; sourceRevision: string;
+  snapshotId: string; expiresAt: string; sourceLength: number;
+  range: { start: number; end: number }; text: string;
+  nextCursor: string | null; previousCursor: string | null;
+  contextRef: string; // bounded reference, NOT expanded structure
+  metadataRef: string; // separately paged title/tags/task metadata
+};
+```
+
+There is no `note` or `content` field. `nextCursor === null` iff `range.end ===
+sourceLength`; `previousCursor === null` iff `range.start === 0`. Empty source is
+`[0,0)`, empty text and both cursors null. Following next concatenates exact source
+without overlap/gaps; following previous prepends it. Page sizes need not match in
+each direction. Cursors authenticate the scope, principal, sourceRevision,
+snapshotId, expiry, index generation, kind, continuation offset/direction and
+budgets. They are opaque, not encoded offsets the client may modify. Cross-note,
+cross-kind, cross-principal or changed-budget reuse is invalid. Cursors from an old
+revision fail `note-page-stale`; expired/restarted/evicted snapshot handles fail
+`note-page-expired`. A revision is checked in the same read snapshot as the bytes.
+This live paging mode invalidates on any revision advance; it does not retain old
+source for arbitrary user delays. Expiry can precede the advertised time on restart
+or resource eviction and is always explicit. No long SQLite transaction spans RPCs.
+
+The client cache key includes scope, revision, snapshot and request generation.
+Discard late pages after a switch, new revision or cancelled request even if their
+text coincidentally matches. On stale/expired, retain dirty state, invalidate clean
+pages, acquire a new snapshot and reconcile; never concatenate old/new revisions.
+Metadata-only writes conservatively invalidate source pages even if bytes match.
+Every legacy content writer, restore, task-marker materialization and comment-anchor
+rewrite participates in this invalidation; deletion retires the incarnation.
+
+`note.get { ..., page: { kind: "context", contextRef, cursor?, maxItems?,
+maxWireBytes? } }` returns `kind: "noteContextPage"`, the same scope/revision/snapshot,
+`items`, `nextCursor` (null at end). Reference and cursor must agree; source-byte
+budgets are inapplicable. Context has separate item and wire budgets and is never
+hidden inside a source page. Items are discriminated:
+
+- `boundary`: `{ id, sourceRange, construct, parentRef?, continuationBefore,
+  continuationAfter, detailRef?, entryPath?, tablePosition?, htmlPosition?, htmlSource?, attributesRef?, nativeRef?, sourceMapRef? }`. `construct` is a syntax category, not an editor
+  node ID; `detailRef` pages large opening syntax, attributes and ancestor chains.
+- `span`: `{ id, sourceRange, role, parentRef?, detailRef?, codeSource?, nativeRef?, sourceMapRef? }` for marks, delimiters, literals,
+  comment markers and structural seams. IDs are snapshot-local; identical text at
+  another address has another ID. `role` distinguishes source-bearing text from
+  zero-width editor projections; it never fabricates source bytes.
+- `sourceMap`: the window-bound canonical HTML/Markdown raw-to-rendered mapping described
+  below; it never replaces canonical source pages.
+- `nativeNode` and `sourcePiece`: the bounded canonical tree and provenance
+  descriptors below, distinct from text mappings and session-native editor IDs.
+- `fragment`: `{ id, field, offset, text, nextRef }` pages descriptor strings,
+  including huge URLs/languages/attributes, with scalar-safe UTF-16 field offsets.
+  `nextRef` is null at field exhaustion. Fragment text obeys the source-text limit.
+
+Context enumeration is deterministic `(sourceRange.start, sourceRange.end, id)`
+for boundaries/spans; fragments follow increasing offsets. A descriptor's range
+may exceed the source page; its content must not be inlined. Ancestor references
+and traversal are bounded per request, not recursive expansion. Context can cover
+fences, nested lists, tables, inline marks and note primitives across any transport
+seam. Consumers reconstruct source exactly and obtain the required bounded lexical
+context before parsing a window; they must not parse each page as a standalone
+Markdown document or fetch a whole giant construct to repair a boundary. Unknown
+construct support is an integration obligation, not permission to silently omit it.
+Live native table owners/seams are editor-session metadata, not durable global block
+IDs or inferred fresh canonical structure.
+
+Context version 1 uses these wire spellings (not library enum/debug strings):
+
+| Field | Vocabulary / meaning |
+| --- | --- |
+| boundary.construct | `paragraph`, `heading`, `blockquote`, `codeBlock`, `list`, `listItem`, `table`, `tableHead`, `tableRow`, `tableCell`, `emphasis`, `strong`, `strikethrough`, `link`, `image`, `htmlBlock`, `footnoteDefinition`, `definitionList`, `definitionListTitle`, `definitionListDefinition`, `superscript`, `subscript`, `metadataBlock`, `htmlTable`, `htmlTableRow`, `htmlTableCell`, `markdownDocument` |
+| span.role | `text` (source text), `code` (inline code), `literal` (raw HTML/literal syntax), `commentMarker` (canonical anchor marker syntax), `lineBreak` (soft/hard break syntax), `rule`, `taskMarker` (checkbox syntax), `delimiter` (explicit syntax delimiter), `projection` (zero-width editor seam) |
+
+Every item has its `kind` discriminator. Ranges address original source even when
+parsed semantic attributes decode escapes; `projection` must have an empty range.
+`continuationBefore`/`continuationAfter` mean the full construct starts before/ends
+after the source range associated with contextRef. A parentRef resolves with the
+same context request shape to its parent descriptor; detailRef resolves to a
+**directory of field fragments**, not a JSON-serialized parser object. Parent and
+detail references share scope/revision/snapshot/expiry and never cross an incarnation.
+The transport preserves unknown future construct/role values opaquely; a renderer
+that cannot interpret one must declare it unsupported, never silently drop it or
+claim that arbitrary parser grammar has been implemented. Notes primitives require
+an explicit renderer mapping; this vocabulary alone is not that mapping.
+
+**Paragraph document entry path (additive, presence-detected).** An ordinary
+lexical `boundary` with `construct: "paragraph"` may include
+`entryPath: "markdown" | "html"`. This classifies the **whole document's parser
+entry**, not the paragraph's syntax or its `contentType` metadata. The source index
+computes it from the complete source under the canonical entry policy: after
+applying ECMAScript `String.prototype.trim()` (including U+FEFF, excluding U+0085),
+a leading `<` selects HTML unless it starts `<!--anchor:` or the complete source
+contains the literal, case-sensitive substring ```` ```ws-block ```` anywhere
+(not only at a parsed fence boundary); otherwise entry is Markdown. The existing empty-document
+special cases remain unchanged. Consumers must use the indexed decision rather
+than scanning a loaded prefix or interpreting `construct: "paragraph"` as Markdown.
+A later fenced primitive opener can change the decision even outside the window.
+
+The field shares the descriptor's scope, source revision, snapshot, incarnation
+and original expiry. A source change or entry-policy/profile change invalidates
+the derived projection through the existing revision/profile rules; reading the
+field never renews its lifetime. It is available with bounded paragraph context
+at a far source offset without hydrating the document. Absence means **unknown**
+(for example an older producer), never an implicit `"markdown"`; `null`, arbitrary
+strings and non-string values are invalid when the field is present.
+
+This addition preserves `construct: "paragraph"`, `sourceRange`, `detailRef`, and
+the exact raw `openingSource`/`closingSource` field fragments. It does not alias a
+paragraph to a canonical native owner, introduce `markdownBlock`, or grant a
+native tree, source map, profile or safe-edit proof. A consumer still needs its
+own validated source/native projection and complete required lexical context
+before rendering a window. An absolute-zero loaded-source fallback does not
+establish support for far paragraphs. No method or capability is added, and the
+complete `notePagingRead: 1` activation gate still applies.
+
+**Absolute table addresses.** Version-1 `tableHead`, `tableRow` and `tableCell`
+boundaries also require an inline `tablePosition`; other constructs omit it:
+
+```typescript
+type TableRowPosition = { tableRef: string; rowIndex: number };
+type TableCellPosition = TableRowPosition & {
+  columnIndex: number; alignment: "none" | "left" | "center" | "right";
+};
+// tableHead/tableRow use TableRowPosition; tableCell uses TableCellPosition.
+```
+
+All ordinals are nonnegative safe-integer JSON numbers (not decimal strings).
+`rowIndex` is absolute within the owning canonical table: its one `tableHead` is
+row 0, the first body `tableRow` is row 1, and later body rows increment by one.
+The Markdown delimiter/alignment line is not a row. `columnIndex` is zero-based
+within that row, resets on each new row, and counts canonical parser cell events,
+including empty cells that the existing GFM parser projects for short rows.
+A cell in the header has rowIndex 0. Independent tables reset row/column ordinals;
+nested/outer owners, where represented, never share counters. Repeated cell text,
+source-piece boundaries, viewport seeks and continuation flags do not change an
+address. Scalar-safe sourceRange still identifies this cell's source extent; it
+may be empty for an empty cell and cannot be used to infer an ordinal.
+
+`tableRef` is a bounded opaque **context reference to the owning table boundary**,
+not its item ID, a source offset, a mutable global block ID or a preceding-row
+cursor. Read it with `note.get { ..., page: { kind: "context", contextRef:
+tableRef, ... } }`. Every address of that table in the same snapshot/window uses
+the same tableRef; all refer to the same boundary identity. Reference bytes may
+differ between windows; resolve the table boundary id within the same scope and
+snapshot to compare those owners, never compare against a live editor node ID. A reference cannot
+cross scope, sourceRevision, snapshot, principal or expiry; any continuation cursor
+must agree with the supplied reference. ParentRef remains the direct structural
+parent (a cell's row/header), with its existing semantics. A tableRef may resolve a
+huge table range, but does not include the table's children, row sources, alignment
+array or body. Revision advance invalidates both position and reference, even if
+source happens to look identical. Reacquire the context; do not patch ordinals
+from another snapshot or renumber only the currently loaded rows.
+
+Cell-local `alignment` is the owning table's canonical column alignment, equal to
+its `alignment:N` detail for N=columnIndex. `none` means no explicit alignment;
+clients must not relabel it as explicit left alignment. This fixed-size value is
+inline so a far column never requires enumerating earlier alignment fields.
+Together, tableRef/rowIndex/columnIndex/alignment identify a far cell without
+loading its earlier siblings, preceding row source, header source, whole table or
+full alignment directory. The producer maintains this metadata when indexing the
+revision, not by scanning a prefix on each read. TablePosition and its enclosing
+frame still count toward item/token/complete escaped-wire budgets. It cannot grow
+with the unloaded prefix, and page construction must shrink items if necessary.
+
+This address contract describes the existing canonical GFM **unit-cell** table
+representation. It introduces no rowSpan/colSpan fields, merged-cell grammar or
+synthetic covered cells. HTML uses the separate canonical profile below; never
+reuse GFM header/body ordinals for HTML or infer canonical spans from raw
+HTML attributes or live editor geometry.
+A reader missing a required position or unable to handle the represented grammar
+must report the unsupported projection,
+not fetch a preceding/full source fallback or silently guess column zero. Legacy
+complete Note reads and writer/canonical-reload behavior are unchanged. Native
+session seams/owners remain separate from these revision-local source addresses.
+
+**Canonical HTML continuation.** The separate `canonicalNote` profile describes
+the existing `NoteWithComments` load path: `processMarkdownToHTML` with anchor
+preservation and workspace identity, `sanitizeMarkdownHTML`, then the registered
+`createEditorConfig` schema. It is not unsanitized DOM parsing or a new Markdown
+dialect. Version 1 is explicit as `profileVersion: 1` on HTML positions and maps; it
+preserves the entry-path outcomes in these fixtures. Unknown versions are not
+interpreted as version 1. The index also records the concrete parser/sanitizer/schema
+build identity and relevant options in its internal profile revision; changing the
+parser, sanitizer, schema or their relevant options invalidates that index and its
+references before serving the new profile (`note-page-expired` for retired profile
+resources, even if raw sourceRevision is unchanged). A change to the normative
+projection behavior requires a new profileVersion, not silent reuse of version 1.
+Producer/consumer implementations must pin and differentially test this profile,
+including the existing conditional note
+primitive extensions. Naming the profile does not establish implementation parity.
+
+The current canonical sanitizer removes `colspan`/`rowspan`; canonical cells are
+unit cells. Native `mergeCells` may produce spans in the live editor, while the
+existing HTML-to-Markdown serializer emits GFM and fresh reload loses those spans.
+This contract preserves those distinct outcomes. It never promotes a raw HTML span
+attribute to canonical geometry or promises new durable merged-table persistence.
+Even unit cells need indexed context: an extra earlier cell can change a far cell's
+column while its source offset, source length and visible literal text are identical.
+
+HTML table boundaries use `htmlTable`, `htmlTableRow`, and `htmlTableCell` rather
+than GFM constructs. They require these bounded fields:
+
+```typescript
+type HtmlPosition = {
+  profile: "canonicalNote"; profileVersion: 1;
+  tableRef: string; // direct context reference, including on the table itself
+  rowIndex?: number; // required on row/cell, absent on table
+  columnIndex?: number; // required only on cell
+  cellRole?: "data" | "header"; // required only on cell: native td / th role
+};
+type HtmlSource = {
+  provenance: "explicit" | "implicit" | "repaired";
+  openingRange: { start: number; end: number } | null;
+  bodyRange: { start: number; end: number } | null;
+  closingRange: { start: number; end: number } | null;
+  piecesRef?: string; // required for repaired/noncontiguous source provenance
+};
+// Required on each HTML table boundary, alongside parentRef/detailRef:
+// htmlPosition, htmlSource, attributesRef, nativeRef.
+// sourceMapRef and continuation flags are required only on a window occurrence.
+```
+
+Ordinals are nonnegative safe integers in the **canonical schema output**, with
+every row starting at 0 regardless of header/data role. `thead`/`tbody`/`tfoot`
+wrappers are not rows; a header cell need not be in row 0. Column ordinals reset
+per row and table owners reset for independent or nested tables. Direct tableRef
+resolves exactly that table boundary; a cell's parentRef resolves its row. No raw
+tag count, preceding-row scan, whole-grid enumeration or range-order inference is
+a substitute for these indexed addresses. The canonical address has no span fields.
+
+`sourceRange` is the exact raw envelope of an explicit source construct. An
+implicit source-less node instead has an explicitly identified empty projection
+anchor, not fabricated markup. Its anchor is the least source start among mapped
+canonical descendants; if none exists, the end of the nearest source-bearing
+ancestor's opening syntax, or 0 if no such ancestor exists. This rule is resolved
+at indexing time, not by descendant traversal during reads. `htmlSource` ranges address original scalar-safe
+UTF-16 source and are contained in that envelope. `bodyRange` excludes opening and
+closing syntax, but includes original child markup; it is not decoded text. Null
+means no corresponding contiguous literal range exists. Missing end tags and
+reparented/implicit schema nodes must carry their actual provenance; a repaired
+envelope never licenses rewriting that source. For repaired/noncontiguous nodes,
+sourceRange is only the hull of mapped source pieces, not ownership of every byte
+in that hull. Required piecesRef pages `sourcePiece` records with `{ id, nodeRef,
+sourceRange, role }`, where role is `opening`, `body`, `closing`, `attribute` or
+`omitted`. Ranges are exact, scalar-safe, nonempty source pieces, ordered by
+`(sourceRange.start, sourceRange.end, id)`; parent/child provenance may overlap but
+one node's traversal never duplicates a piece. Missing literal syntax has no piece.
+When no piece exists, the repaired node uses the same empty-anchor rule as an
+implicit node. Explicit/implicit nodes omit piecesRef. Attribute source ranges and values
+page through detail references separately from effective attributes. Unknown or
+unsupported projections must be reported explicitly, never silently represented
+as successfully rendered literal text. This diagnostic does not satisfy native
+rendering acceptance; supported malformed-input behavior follows the same existing
+pipeline, not a new coercion or rejection policy invented by this transport.
+
+`attributesRef` resolves with `page: { kind: "metadata", ref: attributesRef, ... }`
+to the existing bounded metadata-tree shape. It has the distinct resource namespace
+`context.attributes`, never the note metadata root. It contains effective schema
+attributes after sanitization, not raw opening tags. Large primitive payloads,
+column-width arrays, URLs and strings remain separately pageable tree branches;
+clients may not drain the entire tree to admit a window. These resources share
+source snapshot lifetime; the existing conservative metadata-write invalidation
+still applies. Raw attribute spelling, quotes and stripped values remain exact
+source provenance and must not be reconstructed from these effective values.
+
+`sourceMapRef` resolves through `page.kind: "context"` to source-map items for the
+**original admitted source window**, including necessary seam segments. Its opaque
+identity binds window, owner, profile and source snapshot. Resolving it does not
+enumerate a whole giant body or its preceding text. A subsequent seek obtains a
+new window-bound reference; an owner identity alone is not a map-page selector.
+The HTML boundary id, table/parent/native/attribute/detail references and provenance
+are immutable and reusable within the snapshot. Only sourceMapRef and continuation
+flags vary by admitted window. Consumers compare immutable owner fields separately
+and retain map bindings under `(snapshot, window, owner)` even after owner deduplication.
+Two windows in the same giant cell must neither conflict on owner identity nor
+reuse the other's map binding. This HTML rule does not change GFM reference semantics.
+
+Resolving a snapshot-stable HTML owner reference (tableRef, lexical parentRef or
+an equivalent direct owner reference) returns exactly its immutable boundary
+without `sourceMapRef`, `continuationBefore` or `continuationAfter`. These fields
+are absent, not null or false: a direct owner request admits no source window.
+The same direct request gives the same descriptor regardless of earlier, concurrent
+or reordered source-window requests. It must not use connection-local last-window
+state or attach an arbitrary window's mapping. By contrast the original source
+page's window-bound contextRef returns boundary **occurrences** with all three
+fields required. This distinction is determined by the scoped reference's resource
+kind, not by client guesses from the opaque bytes; scope/revision/snapshot and
+cursor validation apply to both. A consumer stores stable owner descriptors once
+and retains each occurrence's map binding separately. Resolving a stable owner
+cannot acquire a new mapping: seek the desired bounded source window and use its
+contextRef. Direct-owner response cursors never change their resource kind or gain
+a window. No new request parameter, implicit server session state or enlarged
+frame budget is introduced.
+
+```typescript
+type CanonicalSourceMapItem = {
+  kind: "sourceMap"; id: string; profile: "canonicalNote"; profileVersion: 1;
+  ownerRef: string; textNodeId: string | null; textNodeRef: string | null;
+  sourceRange: { start: number; end: number };
+  renderedRange: { start: number; end: number };
+  mapping: "identity" | "entity" | "normalized" | "omitted" | "projection";
+  textRef: string | null;
+};
+```
+
+ownerRef identifies the snapshot-stable **source-container boundary or inline-code span** whose
+window issued the mapping. It is not a claim that the text remains a canonical
+descendant of that source container: HTML repair/foster parenting can move it.
+textNodeRef, parentRef and childIndex supply canonical ownership independently;
+neither raw containment nor the old source table determines that ancestry.
+Rendered offsets are scalar-safe UTF-16 within **one immutable canonical TipTap
+text leaf after schema/whitespace normalization**, identified by textNodeId. ownerRef identifies source ownership independently.
+They are neither raw DOM textContent offsets nor document-wide ProseMirror
+positions. The latter include atoms and wrapper positions and remain session-owned.
+An identity segment preserves text and length; an entity segment is an indivisible
+raw-to-decoded mapping; normalized segments record actual canonical normalization.
+Omitted source has an empty rendered range and null textRef; when there is no
+corresponding text leaf, textNodeId is null and renderedRange is `[0,0)` rather
+than naming a fabricated leaf; textNodeRef is also null in that case. All
+non-omitted segments require a real textNodeId and a direct textNodeRef resolving
+its `nativeNode` descriptor (the returned id equals textNodeId).
+A source-less projection has an empty source range. Nonempty rendered segments use a bounded context fragment
+resource `field: "renderedText"` whose offset 0 is the start of that segment, not
+the whole leaf. The resolved text length equals renderedRange length.
+Each complete renderedText resource is at most 16,384 decoded UTF-8 bytes, even
+when a smaller requested budget splits it into several fragment frames. This is a
+per-segment resource limit, not only a per-frame limit. Identity and large
+normalized runs must be indexed into scalar-safe bounded segments/checkpoints;
+a far-window map cannot point to an earlier giant segment and make the consumer
+drain preceding rendered text to reach its window. Returned identity/omitted ranges
+are clipped to the admitted window; genuinely non-bijective normalization/entity
+seams retain their exact raw range and endpoint affinities. A long collapsed raw
+whitespace run may have a large raw range and one bounded rendered space; locating
+that seam uses the index, not a read-time scan of that run. Nonempty rendered ranges
+are capped by the resource's actual UTF-8 bound, not merely its UTF-16 length.
+Window intersection and required seams select checkpoints by index. Resolved
+rendered offsets remain absolute within the canonical text leaf, while textRef
+fragment offsets start at zero in the bounded segment. Repeated requests may
+use the same indexed segments when appropriate; none requires prior-window state.
+Repeated strings have distinct source identities; source-copy/search/edit coordinates always
+use raw ranges. Selection affinities choose declared segment endpoints for
+non-bijective mappings, never interpolate an offset inside an entity or invent
+source bytes. Maps enumerate by `(sourceRange.start, sourceRange.end, id)`; browser
+repair may reorder rendered leaves, so rendered order must not be inferred from it.
+Map references reject other owners/windows/profiles/snapshots and stale revisions;
+stable node, attribute and provenance references remain reusable in that snapshot.
+item, token, decoded-fragment and complete escaped-wire limits are unchanged.
+
+`nativeRef` resolves through `page.kind: "context"` to exactly the associated
+canonical node descriptor, without expanding its children:
+
+```typescript
+type CanonicalNativeNode = {
+  kind: "nativeNode"; id: string; profile: "canonicalNote"; profileVersion: 1;
+  nodeType: string; nodeClass: "container" | "text" | "atom";
+  parentRef: string | null; childIndex: number;
+  sourceRange: { start: number; end: number };
+  provenance: "explicit" | "implicit" | "repaired"; sourcePiecesRef?: string;
+  attributesRef: string; marksRef?: string;
+};
+```
+
+nodeType is the existing schema name (at most 1,024 UTF-8 bytes); nodeClass follows
+that schema. parentRef is another direct native-node reference, null only on the
+canonical `doc` root (childIndex 0). childIndex is a nonnegative safe integer in
+the parent's **rendered schema children**, including text and atomic nodes. It is
+not a raw-source ordinal or an offset into only loaded children. Together with
+parentRef it establishes rendered ancestry/order without scanning siblings, even
+when repairs reorder source. id is snapshot-local, never an editor-session node ID.
+Canonical parent references are acyclic, and each `(parent node id, childIndex)`
+has one child. They are distinct from lexical boundary.parentRef (for example,
+HTML cell to table row versus text leaf to schema paragraph). Empty-anchor
+fallback walks strictly toward a source-bearing ancestor/root at index build time;
+it cannot cycle through projected children.
+Provenance/envelope/anchor/sourcePiecesRef obey the same rules as HTML boundaries.
+attributesRef and optional marksRef use `context.attributes` metadata trees; marks
+are the ordered schema mark array, including each mark's type and attributes.
+Atoms carry their real nodeType and paged attributes and have no fabricated text
+leaf, rendered-text map or recursive inline payload. Text nodes resolve their
+admitted text through window maps rather than a complete-leaf text property.
+
+The original source-context query includes canonical owners of intersecting mapped
+pieces, text/atomic descendants admitted by that window, and the necessary ancestor
+closure. Membership is indexed by projection ownership, **not** solely by overlap
+with descriptor sourceRange. Thus an implicit row/paragraph outside the far window,
+or a reparented ancestor with no overlapping literal range, remains discoverable.
+All descriptors still paginate under the same item/wire bounds; direct refs permit
+targeted resolution without loading sibling directories or a whole subtree.
+
+Native descendants, marks, ancestors and atomic note primitives retain their
+existing typed schema ownership and paged detail/attribute resources. A cell body
+range alone is not permission to flatten block content or drain a large primitive
+attribute. Incomplete tags, implicit nodes, nested tables, empty/repaired cells,
+entities, CRLF and sanitizer removals require differential source-map fixtures
+against the actual profile before an adapter claims support. Index construction
+and invalidation cost are measured separately; ordinary reads must use indexed
+owners, interval overlap and checkpoints rather than scanning unloaded prefixes.
+
+**Canonical Markdown document separator ownership (prepared, additive).**
+A `markdownDocument` boundary owns indexed source separators independently of the
+canonical native root. It does not widen an authored paragraph or heading range
+to the document envelope, rename a lexical boundary, or promote an ordinary
+paragraph into a native owner. Synthesized paragraphs retain the separately
+specified repaired provenance and exact source-piece rules below. It uses
+the existing `note.get` context/metadata resources and `notePagingRead: 1` gate;
+no method, capability version, profile version or write API is added.
+
+```typescript
+type MarkdownDocumentOwner = {
+  kind: "boundary"; id: string; construct: "markdownDocument";
+  profile: "canonicalNote"; profileVersion: 1; entryPath: "markdown";
+  sourceRange: { start: 0; end: number }; // exactly sourceLength in UTF-16
+  nativeRef: string; attributesRef: string;
+  // Window occurrences additionally require sourceMapRef and both continuation flags.
+  // Direct owners omit those three fields; there is no lexical parentRef.
+};
+```
+
+When the Markdown index has parser-discarded separators, or the source is empty,
+its snapshot-stable singleton source owner spans exactly `[0,sourceLength)`.
+Its `nativeRef` resolves exactly one `nativeNode` with `nodeType: "doc"`,
+`nodeClass: "container"`, `parentRef: null`, `childIndex: 0`, the same
+`canonicalNote` profile/version and matching `attributesRef`. That existing
+implicit native root retains `provenance: "implicit"` and range `[0,0)`;
+its empty native range must not be confused with the full source-owner range.
+Root identity, attributes and all non-window owner fields remain stable under
+repeated, concurrent or reordered requests within the same snapshot. Ordinary
+paragraph/heading owners keep their exact source ranges and native identities;
+the document exception never relaxes their validation.
+
+Document-owned separator mappings are positive, scalar-safe exact raw extents,
+`mapping: "omitted"`, `renderedRange: { start: 0, end: 0 }`, with `textNodeId`,
+`textNodeRef` and `textRef` all null. Each `ownerRef` resolves the stable
+`markdownDocument` owner, never a paragraph, arbitrary root or another snapshot.
+Omission needs indexed parser provenance, not whitespace guessing or the
+complement of successfully rendered maps. Outer gaps between original parser-event
+ranges are only one subset. Within parser-confirmed list, item and blockquote
+containers, delimiter receipts use the container's exact original envelope minus
+its structural **direct children**: a child start protects its whole envelope,
+a leaf protects its exact extent, and a balanced end only closes the child.
+Unknown or unsupported child events still protect their source. Union overlapping
+child extents before deriving delimiter intervals. Out-of-container or nonscalar
+ranges must not be clamped into a plausible omission. A list item's explicit
+checkbox token belongs to that item even if emitted after a paragraph start.
+
+Before exposing document-owned omissions, reconcile these receipts against
+existing block-owned ranges and maps, retaining existing ownership for tight
+implicit paragraphs, inline code, links, images and nested lists. Do not subtract
+only rendered text maps: syntax or unsupported parsed content is not automatically
+discardable. Each final source interval has one omission owner; shared ancestors
+must not duplicate it. The complete map union must cover an admitted window
+without manufacturing rendered leaves or hiding unsupported content. Missing
+coverage is still an error; the document owner alone does not prove coverage.
+
+**Synthesized tight-list paragraphs use repaired provenance.** When the parser
+omits a paragraph wrapper, associate the canonical paragraph with one unique
+inline group belonging to the same immediate parser item. Do not borrow source
+from a nested item or adjacent group. The native paragraph and its block owner
+have the same exact source envelope and `repaired` native provenance; the existing
+`sourcePiecesRef` exposes its original body pieces through bounded context pages.
+Each piece has the paragraph's direct `nodeRef`, role `body`, and an exact,
+scalar-safe, nonempty original source range. Pieces are sorted by
+`(sourceRange.start, sourceRange.end, id)` with no duplicated piece in the traversal.
+There are no fabricated opening/closing tags. The envelope is the hull of these
+pieces, not permission to own intervening bytes. Preserve link delimiters and other
+inline syntax through their actual source pieces and mappings; a label-only block
+or source-less native anchor must not erase them. Ambiguous group association is
+not permission to guess an owner. Existing source-piece, page and map bounds apply.
+
+**Existing task semantics remain canonical.** A parser task marker may be omitted
+from text only when its existing state is preserved by the canonical native tree.
+The existing schema uses `taskList` and `taskItem` containers; for Markdown checkbox
+source, unchecked items carry `{ checked: false, status: "todo", delegatedAgentId:
+null }` and checked items carry `{ checked: true, status: "done", delegatedAgentId:
+null }` through the usual paged `attributesRef` resource. Preserve contiguous
+mixed task/plain sibling groups, ordinary `bulletList`/`orderedList` and `listItem`
+semantics, nesting, child ordinals, exact source provenance, text and link marks
+(including hrefs). Neither a missing text leaf nor a sanitizer-discard claim
+justifies deleting checkbox state. These are existing read-only canonical schema
+nodes, not new task interactions, editor-adapter support or loaded task-metadata
+UI guarantees. The full-editor processor/schema output for the same source is
+the parity oracle; matching text alone does not establish that parity.
+
+As with existing HTML document admission, a separator-only source window must
+resolve its document owner and native root through public context traversal even
+when no paragraph/heading overlaps the window. Discovery uses indexed mapped-piece
+membership, not the implicit native root's `[0,0)` range or a scan of earlier
+blocks. The document occurrence is admitted exactly when its own indexed separator
+pieces intersect the nonempty requested window, and is deduplicated when multiple
+pieces intersect. Its full envelope alone does not admit it to other windows.
+A far seek needs neither preceding source pages nor connection-local last-window
+state. Window occurrences bind `sourceMapRef` to the exact admitted
+window; direct-owner reads have no mapping reference or continuation flags.
+Occurrences retain the full source-owner range, with continuation flags relative
+to that window. An owner deduplicated across pages must not erase these separate
+window map bindings.
+
+The sole zero-length admission exception is an empty source: `sourceLength: 0`
+and window `[0,0)` must admit the stable document owner and implicit native root.
+The occurrence has both continuation flags false and a window-bound `sourceMapRef`
+that resolves an empty context collection (`items: []`, `nextCursor: null`). This
+lets the consumer traverse and assemble the existing canonical empty document;
+it does not fabricate a positive or zero-length omitted `sourceMap` item. The
+stable direct owner still omits map bindings and continuation flags. A nonempty
+no-gap Markdown note requires no document separator owner. An empty source window
+in a nonempty note (including an exhausted seek at `sourceLength`) admits no
+separator occurrence or map; the empty-document exception never applies there.
+A whitespace-only note can have a positive full-source omitted
+range and must still be readable through bounded separator-only windows; omitted
+source never becomes invented rendered text. Leading and trailing discarded
+separators follow the same indexed rule as gaps between blocks.
+
+Existing item, source-text, escaped-wire and token limits apply to every context
+and map frame. Long separator runs are served as indexed, bounded, window-clipped
+omitted ranges, not copied into descriptors. Raw CRLF is preserved exactly; a
+scalar-safe source-page seam may separate CR from LF, and each resulting omitted
+map covers only its admitted raw extent. No newline normalization or invented
+source byte is permitted. Unicode source offsets remain scalar-safe UTF-16;
+byte budgets remain decoded UTF-8 and escaped JSON as specified above. These
+resources retain the original authenticated scope, revision, snapshot,
+incarnation and fixed expiry; reads never renew it. Source/profile changes
+invalidate the derived index through the existing rules.
+
+The controlled `fixtures/notes/markdown-document.json` examples and validators
+exercise descriptor identity and separator coverage, including the reported
+heading/paragraph gap, empty/whitespace-only sources, CRLF page seams, leading and
+trailing separators, and a far separator-only seek. The task-native fixture
+preserves source-bound full-editor oracle outputs for loose, tight, mixed and
+nested task lists; marker-state and protected-child checks keep omission distinct
+from text/native loss. These fixtures are
+specification evidence, not proof of production index construction, query cost,
+authentication, or renderer acceptance. Additive documentation lands before
+component opt-in when merges are authorized; existing checks remain strict.
+
+**Canonical Markdown inline-code continuation.** General Markdown `span.role:
+"code"` reuses the same canonical profile, native-node, mark, mapping and fragment
+resources; it is not an HTML table or a new rendering grammar. Each code span
+requires these snapshot-stable fields:
+
+```typescript
+type CodeSource = {
+  profile: "canonicalNote"; profileVersion: 1;
+  openingRange: { start: number; end: number };
+  bodyRange: { start: number; end: number };
+  closingRange: { start: number; end: number };
+};
+// On span.role=code: codeSource: CodeSource; nativeRef: string | null.
+// sourceMapRef: string is required on window occurrences, absent on direct owners.
+```
+
+Ranges are scalar-safe absolute UTF-16 addresses in original source. The nonempty
+opening and closing ranges identify the exact matching backtick runs, have equal
+length, and together with the untrimmed body partition sourceRange contiguously.
+No delimiter bytes or entire body are inlined; enormous runs remain constant-size
+addresses. An unmatched run is ordinary source under the existing parser, not a
+fabricated code span. Delimiter/body addresses are computed at indexing time;
+clients never scan a prefix to determine delimiter length or trim state.
+
+nativeRef resolves the canonical text leaf carrying the existing `code` mark;
+its marksRef retains all actual ordered schema marks. If canonical parsing emits
+no code leaf, nativeRef is null and no leaf or code mark is invented. Adjacent
+source constructs may share one canonical leaf after normalization; source owners
+remain distinct and each map uses the actual leaf-local rendered offsets. The
+window's maps identify raw delimiters, trimmed/removed body and normalization
+seams as omitted or normalized segments. The all-space example `before ` followed
+by a single-backtick-delimited three spaces and ` after` canonically becomes the
+unmarked text `before after`, although a Markdown parser alone retains code spaces.
+Repeated delimiters embedded inside the body are content when the canonical parser
+says so; newline/CRLF normalization and surrounding trim follow the complete
+Markdown-to-HTML, sanitizer and native schema pipeline, not a parser event payload.
+
+A far window wholly inside a giant opening delimiter receives the code owner and
+bounded omitted mapping; it must not fetch the whole opening run or fabricate a
+visible code node. A body window receives scalar-safe bounded maps plus direct
+native/mark ownership, including required schema ancestors, with no earlier-body
+reads. sourceMap.ownerRef may resolve the stable code span; that lexical ownership
+is independent of canonical parentRef/childIndex. The stable direct-owner response
+omits sourceMapRef just as HTML direct owners do. Code spans have no continuation
+flags; their exact ranges provide the source relation. Window context cursors and
+map refs bind the admitted window/profile/scope/revision/snapshot; direct code
+owner/native/mark refs bind the source snapshot and expire under the same profile
+or source invalidation rules. This addition changes no source, copy format,
+persistence, canonical parser or session-live editing policy.
+
+Each detail directory item is `{ kind: "fragment", id, field, offset: 0, text:
+"", nextRef }`; it is an indirection descriptor (empty text is not the value).
+Follow its nextRef through `page.kind: "context", contextRef: nextRef` to the
+field resource. A field resource emits fragment items with increasing scalar-safe
+UTF-16 offsets, a stable `field` name and exact string slices; concatenate only
+within that field/resource. Empty values have one offset-0 empty fragment and
+null nextRef. A nonempty value fragment advances; nextRef points to the next field
+offset or is null exactly at exhaustion. No indirection cycles or zero-progress
+field continuations. The item's `id` identifies that snapshot-local item, not the
+field value or a durable document node. `nextCursor` enumerates the current
+collection only; it is independent of the per-field `nextRef`. Never infer that a
+field ended from a collection cursor being null. Directory entries order as below,
+then each repeated indexed family by numeric suffix; no map-key iteration ambiguity.
+All context responses retain the existing scope/revision/snapshot/expiry header.
+Sum of decoded fragment text on one frame is at most 16,384 bytes; complete wire
+and item budgets still apply, including directories and escaped fragment bodies.
+
+| Detail field(s), in directory order | Encoding |
+| --- | --- |
+| `openingSource`, `closingSource` (every boundary, first) | Exact raw prefix before the first direct child event and suffix after the last direct child event, within the full boundary range. Without children, openingSource is the full range and closingSource is empty. Not rendered text and not an entire child/body serialization. Large prefixes still page. |
+| HTML boundary: `rawAttributeStart:N`, `rawAttributeEnd:N`, `rawAttributeName:N`, `rawAttributeValue:N?` | Zero-based lexical attribute order. Start/end are unsigned decimal UTF-16 offsets of the complete original attribute spelling, excluding surrounding inter-attribute whitespace. Names/values are raw slices, not entity-decoded effective schema attributes; value excludes its quotes and is omitted when absent, including boolean attributes. Each family is ordered as listed, then by N. Large values page normally; consumers do not drain unrelated fields. |
+| codeBlock: `codeStyle`, `info` (info only if fenced) | `fenced` or `indented`; info is parsed fence info text, not JSON |
+| list: `listStart` | `unordered` or unsigned decimal initial ordinal |
+| table: `alignment:N` | Zero-based column; `none`, `left`, `center`, `right` |
+| link/image: `linkType`, `destination`, `title`, `referenceId`, `hasPothole?` | linkType is `Inline`, `Reference`, `ReferenceUnknown`, `Collapsed`, `CollapsedUnknown`, `Shortcut`, `ShortcutUnknown`, `Autolink`, `Email` or `WikiLink`; destination/title/referenceId are parsed strings, possibly empty, never quoted JSON strings. Only WikiLink includes required `hasPothole`, after referenceId: the string `"true"` when an explicit pipe separates destination and label, otherwise `"false"`. Other link types omit it; never emit library Debug enum text. |
+| heading: `level`, `headingId?`, `class:N`, `attributeKey:N`, `attributeValue:N?` | level `h1`–`h6`; zero-based class/attribute order, optional absent value remains absent (not empty); each attribute key precedes its optional value |
+| footnoteDefinition: `label` | Parsed label string |
+| blockquote: `quoteKind?` | Optional `Note`, `Tip`, `Important`, `Warning`, `Caution` |
+| metadataBlock: `metadataStyle` | `YamlStyle` or `PlusesStyle` |
+
+Metadata keys/values below use fragment fields `key`/`value`; ordered task-link
+captures use `taskNoteId`. Those field resources have the same offset/budget rules
+without a boundary directory. Details are a lexical parsing aid, not replacement
+source: exact copy and source maps use canonical source ranges, never reconstructed
+Markdown from decoded attributes. The fixture file includes full context RPC
+frames with a descriptor directory, a multi-fragment destination and empty values.
+
+`note.get { ..., page: { kind: "metadata", ref: metadataRef, cursor?, maxItems?,
+maxWireBytes? } }` returns `kind: "noteMetadataPage"`, the same scope/revision/snapshot,
+`items` and `nextCursor`. Its projection includes title, tags, parent and task metadata
+(including relation arrays), excluding content and annotation collections. Metadata
+uses indexed tree entries `{ id, parentId, key?, keyRef?, index?, type, value?,
+valueRef?, childrenRef? }`: root parentId is null; exactly key or keyRef addresses an
+object member, index addresses an array member. `type` is object/array/string/number/
+boolean/null. Object/array children page through childrenRef; string values page
+through valueRef using context fragments; numeric/boolean/null values are inline.
+Keys up to 1,024 UTF-8 bytes may be inline; longer keys use keyRef. Node IDs/references
+obey token limits. No title, tag, task relation array or arbitrary metadata object
+is a full-row exception. Children enumerate object keys lexicographically and array
+indices numerically, with immutable snapshot-local IDs. An entry is returned exactly
+once per parent traversal; clients need not hydrate siblings to inspect one branch.
+
+#### Ordered task-link summary
+
+`notePagingRead: 1` also gates `note.get { workspaceId, noteId, page: { kind:
+"taskIds", sourceRevision?, noteInstanceId?, snapshotId?, maxItems?, maxWireBytes?
+} }`. This is a canonical-source summary for any note, especially the spec. It
+replaces full-spec hydration for sidebar ordering, not the distinct checkbox/task
+rows of legacy `note.listTasks` or the workspace membership of `task.list`.
+A first request without snapshotId acquires its own live source snapshot. With
+snapshotId it must supply sourceRevision and noteInstanceId from that snapshot;
+there is no requirement to fetch a source body first. Continuations send only
+`kind: "taskIds"`, `cursor` and the identical budgets. Source lifetime, scope,
+principal, sourceRevision and incarnation checks are the same as source pages.
+
+```typescript
+type NoteTaskIdsPage = {
+  kind: "noteTaskIdsPage"; scope: NoteScope; sourceRevision: string;
+  snapshotId: string; expiresAt: string; totalItems: number; startIndex: number;
+  items: Array<{
+    index: number; sourceRange: { start: number; end: number };
+    taskNoteIdLength: number; // UTF-16 length of the entire raw capture
+  } & ({ taskNoteId: string; taskNoteIdRef?: never }
+    | { taskNoteId?: never; taskNoteIdRef: string })>;
+  nextCursor: string | null;
+};
+```
+
+The summary is the exact lexical result of the existing frontend
+`extractOrderedSpecTaskIds` / `TASK_LINK_REGEX_FLEXIBLE`, not a Markdown AST query:
+
+```javascript
+/\[([^\]]+)\]\(intent:\/\/local\/task\/([^)]+)\)/g
+```
+
+Scan the whole raw source left to right with this ECMAScript global expression
+(no extra flags); take the second capture, keep its first occurrence, and deduplicate
+by exact string equality. Labels and IDs are nonempty. Include prose, every match
+on one line, link-shaped code/image text, and any whitespace/newlines or escapes
+accepted by that expression. Do not trim, URI-decode, case-fold, normalize, require
+UUIDs, validate existence, or include workspace-qualified URLs that do not match.
+Encoded IDs and decoded IDs are different; a duplicate on another source page does
+not reappear. Splitting a link across source pieces cannot change membership.
+`sourceRange` addresses the **second capture only**, at its first occurrence, in
+UTF-16 canonical-source offsets; it is neither the label nor the whole link range.
+
+`totalItems` is the exact deduplicated count, a safe integer maintained in the
+revision's index. `startIndex` is the first ordinal on this page, from zero;
+item indices are contiguous. `nextCursor` is null iff
+`startIndex + items.length === totalItems`. A non-exhausted page must advance.
+An empty summary returns startIndex/totalItems 0, empty items and null cursor.
+A valid exhausted traversal returns startIndex equal to totalItems. No arrays of
+all IDs or source content are hidden in headers. Item and complete escaped wire
+budgets apply independently; the request may lower either. Indexed membership,
+first-position, deduplication and totals are daemon obligations, not permission
+to read/regex-scan the whole source on each page request.
+
+Raw captures up to 256 decoded UTF-8 bytes use `taskNoteId`. Longer captures use
+only `taskNoteIdRef`, a bounded opaque reference, and `taskNoteIdLength`; the raw
+capture is not an opaque ID subject to truncation/rejection at 256 bytes. Read it
+with `note.get { ..., page: { kind: "context", contextRef: taskNoteIdRef, ... } }`:
+fragment field `taskNoteId`, offsets starting at zero, exact decoded text, and
+scalar-safe continuation until length/exhaustion. It retains the same live
+snapshot/scope/revision/expiry. Long IDs may require many fragments; they never
+increase the frame bound. Reference identity alone is not task-ID equality.
+
+A source or metadata revision change invalidates summary pages and ID fragments
+(including after task conversion/marker projection); a comment-only epoch advance
+does not. Reacquire after stale/expired and replace the old sequence only from the
+new revision, never append it. FE cache ownership also includes request generation:
+late pages after reconnect, note/workspace switch or cancellation cannot reorder the
+current sidebar. Exhaustion distinguishes a complete empty result from not loaded;
+never use partial page length as the total. Dirty local edits/history stay separate;
+this endpoint promises canonical-source order, not an uncommitted session overlay.
+Old daemons keep the existing full-spec compatibility path. `note.listTasks` and
+`task.list` results remain unchanged; they are not substitutes for this summary.
+
+#### Annotation pages and independent epochs
+
+With `noteAnnotations: 1`, existing `note.lineAttribution.load`, `comment.list` and
+`comment.getThread` accept an opt-in `page` object; omission preserves their exact
+legacy payloads, including full maps/replies where currently returned. Page kinds are respectively `"attribution"`, `"comments"` and `"replies"`. Their
+first request carries ranges/filters (or threadId for replies), `maxItems?` and
+`maxWireBytes?`; continuation carries cursor plus identical query/epoch/budget
+fields. Each snapshot has the same 300-second fixed lifetime and explicit
+stale/expired behavior as source paging. All paged
+requests require the four scope fields and `sourceRevision` at the top level;
+query/budget fields are nested in `page`. Attribution requests additionally
+carry top-level `attributionGeneration` after the first response; comment requests carry
+top-level `commentRevision` after the first response. Epoch strings are opaque. Source edits
+invalidate all projections; recomputation can advance attributionGeneration without
+source changes; reply/resolve/delete can advance commentRevision without either
+source or attribution changes. A source-writing comment action advances both source
+and comment epochs. Persist these epochs atomically with their respective changes.
+
+Range methods take `ranges: [{start,end}]`, sorted, nonempty, pairwise disjoint and
+nonadjacent (client coalesces touching ranges); up to 32 intervals. An empty set is
+valid and produces empty items, not a whole-note query. Cursor identity binds the
+**exact admitted interval set**, filters, scope, relevant epochs, snapshot, budgets
+and continuation. Do not replace a table's admitted disjoint cell ranges with their
+bounding hull. An anchor/attribution interval overlaps if `start < query.end &&
+end > query.start`; point anchors use `query.start <= point < query.end`. Include
+anchors that start outside the viewport. Canonical IDs deduplicate repeated matches
+across disjoint ranges; overlap boundaries never create synthetic comment IDs.
+
+- Attribution page kind `noteAttributionPage`: `scope`, `sourceRevision`,
+  `attributionGeneration`, `snapshotId`, `expiresAt`, `items`, `nextCursor`,
+  `state: "ready" | "pending"`. Pending has no items/cursor and cannot reuse an
+  old map as current. Items contain `{ id, sourceRange, startLine, endLine,
+  authorRef, timestamp, turnNumber? }` with existing author semantics. Authors and
+  optional scale statistics use paged `detailRef` context, never a note-wide legend.
+  Publishing a computation checks its source revision transactionally; an old job
+  must not overwrite a newer generation. Ranges include entire intersecting lines
+  by source extent; do not decode the legacy attribution JSON then discard it.
+- Comment list page kind `noteCommentPage`: `scope`, `sourceRevision`,
+  `commentRevision`, `snapshotId`, `expiresAt`, `items`, `nextCursor`,
+  `totalThreads`, `totalComments`. Comment status values retain all five existing
+  spellings: `open`, `resolved`, `pending`, `accepted`, `rejected`; this also applies
+  to reply items. These exact safe-integer totals refer to the
+  filtered range set at that epoch, independent of the page; indexed aggregate
+  queries must not fetch every row. Summary items have `{ threadId, rootCommentId,
+  rootState: "present" | "deleted", status,
+  totalComments, latestCommentId, latestCommentPreview, truncated, anchorRef,
+  detailRef }`, never nested `comments` or replies. `includeComments: true` with
+  `page` is invalid. An optional `anchorState: "anchored" | "orphaned" | "all"`
+  filter defaults to anchored; orphaned mode is note-scoped and requires `ranges: []`.
+  `all` is also explicitly note-scoped with empty ranges. An ordinary anchored
+  empty-range query stays empty. Anchored rows order by first overlapping position,
+  then threadId; note-scoped rows by threadId. No unstable timestamp-only cursor.
+- `comment.getThread` page kind `noteReplyPage` binds threadId in addition to the
+  epochs and returns bounded comment summaries in `(createdAt,commentId)` order,
+  `totalComments`, `nextCursor`, plus the original `rootCommentId` and
+  `rootState: "present" | "deleted"` on **every** page, including exhaustion.
+  When present, the root is included once across a complete traversal as an ordinary
+  item, never a full embedded exception or necessarily the first item. Each item preserves canonical
+  commentId, authorPrincipalId/authorIdentity presence, status and createdAt, with
+  `preview`, `truncated`, `bodyRef` and `detailRef`. A huge root, reply, author label,
+  suggestion or quoted selection pages through context fragments; no truncation of
+  authoritative bodies. Replies do not acquire independent source anchors.
+
+**Paged reply author identity.** The inline types remain the existing output-only
+comment attribution types. Only paged reply items add these reference alternatives:
+
+```ts
+type PagedReplyAuthor = {
+  authorPrincipalId?: string;
+  authorPrincipalIdRef?: string;
+  authorIdentity?: { provider: "github" | "gitlab"; host: string; externalUserId: string };
+  authorIdentityRef?: string;
+};
+```
+
+For each logical value, exactly one of its inline field or reference is present
+when that value exists on the canonical comment; both are omitted when unavailable.
+Both forms together, `null`, or an empty reference are invalid. An empty stored
+string is still a present string, not an absence sentinel. This encoding does not
+change creation, anonymization or canonical identity semantics below, and does not
+add references to legacy unpaged `Comment`/`CommentWire` responses.
+
+An inline principal ID is at most 256 decoded UTF-8 bytes. Inline identity strings
+`host` and `externalUserId` are at most 1,024 decoded UTF-8 bytes each; `provider`
+retains the existing enum. Longer stored values **must use references**, not be
+truncated or rejected merely for their length. A server may use references for
+shorter values to fit the complete escaped JSON-RPC frame. Reference tokens remain
+nonempty and at most 256 decoded UTF-8 bytes. All item and complete-frame budgets
+still apply; the inline limits do not guarantee that a whole page fits.
+
+`authorPrincipalIdRef` resolves directly to scalar-safe context fragments with
+`field: "authorPrincipalId"`. `authorIdentityRef` resolves to the existing paged
+field directory: exactly `provider`, `host`, `externalUserId`, in that order. Each
+directory entry has `kind: "fragment", offset: 0, text: ""` and a nonempty
+`nextRef` for that field's scalar fragments. Directory `nextCursor` enumerates
+fields; field `nextRef` continues the value independently. An empty field value
+has one fragment at offset zero, empty text and `nextRef: null`. These are exact
+stored strings, not a serialized identity JSON object to decode or a whole author
+map. Consumers compare the complete identity triple, never a label or preview.
+
+Every reference is bound to the canonical comment, admitted principal, NoteScope,
+sourceRevision, commentRevision, snapshotId and original expiresAt of its reply
+page. Directory and value responses echo the same scope, sourceRevision,
+commentRevision, snapshotId and expiresAt, including on continuations. Missing or
+mismatched bindings cannot be adopted; following a reference cannot renew expiry
+or switch comments, callers or epochs. These owner/caller bindings are enforced
+by the server's existing reference machinery, not new caller-supplied authority
+fields. Author presentation labels and authorType retain their existing detail
+fields and semantics; a large label uses its own context fragments and is not an
+identity key. Anchor references and canonical marker IDs remain unchanged.
+
+**Root deletion with surviving replies.** Deleting a root does not delete its
+replies or change the original thread/root identity. `rootState: "deleted"` means
+the original root row is absent, not that the thread is missing or the page is
+exhausted. Retain its canonical root ID (the native creation path uses that ID as
+threadId); never substitute the first surviving reply's ID. Items enumerate only
+surviving comments once, in the same deterministic order; totalComments counts
+those survivors, with no deleted-root/tombstone item, body, preview or synthetic
+author. A readable thread has totalComments greater than zero even on an exhausted
+empty page. Each page repeats the same rootState and exact total for its epoch.
+Thread summaries likewise count survivors and derive status/latest preview from
+them. A deleted-root summary has `anchorRef: null`; it is available through the
+note-scoped `anchorState: "orphaned" | "all"` queries, not range-overlap queries.
+Stray source markers do not create a live root or independent reply anchors.
+
+Read a surviving thread by its original threadId or a surviving commentId. A fresh
+paged lookup after the **last** comment is deleted returns the existing typed
+`-32602` / `data.code: "not-found"` category, with `data.entity: "commentThread"`;
+it is not an empty successful thread. A fresh lookup by a deleted commentId uses
+the same category with `entity: "comment"`; use the retained threadId to read its
+surviving replies. These discriminators describe the addressed comment resource,
+not deletion of its containing note. Legacy unpaged lookup errors and its
+first-survivor `rootComment` fallback remain unchanged.
+
+Each successful comment deletion advances commentRevision and shared stateGeneration.
+Any old reply/summary/detail cursor, even one holding a snapshotId, becomes stale;
+an old in-flight response cannot enter a cache guarded by the newer comment epoch.
+Reacquire from the first page to obtain the new rootState/count. A continuation
+after final deletion follows the same stale-epoch rule; a new lookup then reports
+not-found. Ordinary annotation snapshots do not retain deleted root content across
+epochs. Comment-only deletion leaves sourceRevision/attributionGeneration unchanged;
+source pages retain their existing source semantics, but do not pin comment rows or authorize old annotation replies. A later
+source marker scrub advances sourceRevision and invalidates its dependent pages as
+usual. Retain thread/root identity, survivor counts and root-presence state in
+indexed metadata; determining these headers must not load all replies.
+
+Annotation detail/anchor references resolve through `note.get` context pages with
+the same annotation epochs and expiry. Anchor descriptors retain canonical
+`commentId`, `startId`/`endId` and source marker provenance, with independently paged
+occurrences `{ occurrenceId, sourceRange, canonicalId }`. Occurrence IDs are
+snapshot-local; canonical IDs remain the existing embedded marker UUIDs. Native
+aliases or multiple projections of one marker must not mint new persisted IDs.
+An orphan is explicit, not an empty-success deletion of the comment. Undo restores
+original marker identity; dirty comment drafts remain keyed by canonical IDs and
+are not replaced by a stale summary. An attribution-only change does not expire a
+comment cursor and vice versa. Source change expires both. Each page echoes its
+relevant epochs; clients validate them AND the local request generation before use.
+Bounded subscriptions and reconnect rules are in [§6](../06-events.md#prepared-note-page-subscriptions).
+
+#### Complete-source editing and whole-note operations
+
+Paging is a read-only viewing contract. Ordinary viewing must not hydrate the
+complete source. Explicit Edit loads a complete revision-bound source before
+making either legacy full-document editor writable; partial pages must never be
+passed to any full-content writer. The product cutoff is 300,000 UTF-8 bytes of the
+complete source: at or below it use the existing rich editor, above it use the
+existing raw Markdown editor. `sourceLength` remains UTF-16, not a UTF-8 size hint.
+This cutoff is editor policy, not a new wire limit or a maximum readable note size.
+Cancellation, note switching, failed loading and revision changes must not expose
+a writable partial draft. Growth across the cutoff must preserve unsaved text.
+
+Full-source editor saves use the existing Services-backed
+`note.update { workspaceId, noteId, content, expectedVersion }` with the loaded
+revision. Its content arm provides strict `expectedVersion` CAS: a stale draft is
+rejected without overwriting newer source. Never omit the revision or retry
+unconditionally. Preserve the complete draft on conflict or an unknown acknowledgement.
+Adopt the final returned `note.content` and `note.rev`, while retaining local typing
+that arrived after the submitted draft was captured.
+
+This path retains existing membership/presentation checks, anchor recovery and
+phantom scrub, user authorship, version/index/orphan maintenance, attribution,
+task conversion and note/spec events. Task conversion is the existing best-effort
+separate transaction; the initial content write and conversion are not one atomic
+save. The returned Note is refetched after conversion.
+
+Unlike `note.setContent`, this exact-draft route does not strip surrounding quotes,
+extract JSON text, reject intentionally empty content, or impose setContent's
+short-content/reduction confirmation guards. Intentional empty, quoted, JSON-looking
+source and large deletions remain valid editor drafts. Legacy `note.setContent`
+remains separate and unchanged: a missing retained version snapshot can make stale
+`expectedVersion` fall back to last-writer-wins. Read paging adds no mutation
+capability or new write API. Preflight the actual escaped full JSON frame
+against the existing transport bounds; the paging budget does not apply to a
+complete-source edit, nor does the raw editor imply unlimited transport capacity.
+Do not truncate, silently overwrite, or clear a draft on an uncertain save outcome.
+Editor selection and undo remain within the existing full-document editors;
+mode-transition history behavior must be explicit. No paginated rich edits,
+cross-page native history or canonical save adoption are part of this capability.
+
+Whole-note search/copy may stream source pages pinned to one scope, revision and
+snapshot, including unloaded regions. Do not mix revisions or silently reacquire
+mid-output after expiry. Partial search cannot claim an exact complete count;
+copy/export publishes success only after complete source traversal and successful
+publication. Preserve exact source for full-source copy/export and existing
+Markdown `text/plain` selection-copy behavior. Explicit edit-mode operations use
+the complete local draft, including unsaved text. No staged RPC is required.
+
+#### Implementation handoff
+
+The read-only allowlist is exhaustive:
+
+| Existing method | Opt-in shape |
+| --- | --- |
+| note.get | `page.kind: "source"`, `"context"`, `"metadata"`, `"taskIds"` |
+| note.lineAttribution.load | `page.kind: "attribution"`; also requires `noteAnnotations: 1` |
+| comment.list | `page.kind: "comments"`; also requires `noteAnnotations: 1` |
+| comment.getThread | `page.kind: "replies"`; also requires `noteAnnotations: 1` |
+
+For subscriptions, `note.subscribe` accepts `projection: "pageState"`;
+`comment.subscribe` accepts the same projection with `noteAnnotations: 1` additionally
+required. These are the existing fast-path subscriptions documented in §6.
+
+Native tree, source-piece and source-map descriptors are context items, not separate
+page kinds. Receipt mapping/effects, staged operations and partial mutations are
+outside this contract. The earlier prepared `notePaging` capability promised
+writes; it must remain absent and must not be reinterpreted as read-only support.
+
+Maintain indexed source/context/metadata/task-ID reads and independent annotation
+epochs. Existing full writers, import, version restore, task/comment marker changes
+and deletion must maintain the indexes and publish invalidation transactionally.
+Seek must decode only relevant pieces; fetching a whole Note then slicing is not
+bounded work. Persist the same incarnation/revision and authenticated fixed-lifetime
+snapshot guarantees across every retained read path. Legacy complete APIs remain
+available only through their explicit paths. Page caches and subscription reconnect
+must not silently refill from full Note or annotation payloads.
+
+The machine-readable [notes fixtures](../fixtures/notes/contract.json) and
+`make check-note-pagination-contract` (also in `make consumer-checks`) validate this
+prepared contract. `fixtureRepresentations` distinguishes full JSON-RPC frames from
+result objects and record-only scenarios. Result objects are wrapped in complete
+response frames before wire-budget checks. Reply validation covers required fields
+and ordering across page boundaries; subscription fixtures use the exact pageState
+frame in §6. Component tests must exercise authorization, actual RPC framing,
+concurrent writers, query work, cache budgets and reconnect before advertising
+support. These controlled specification fixtures do not prove production storage,
+renderer memory bounds or released support.
 
 ### 5.2.1 `note.lineAttribution.*`
 
@@ -591,4 +1634,3 @@ clients can ask "who is working on this task?".
   "agentId":"agent-alpha","createdAt":1750000000000
 } } }
 ```
-
