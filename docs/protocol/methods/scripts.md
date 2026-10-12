@@ -72,9 +72,33 @@ These are live reads, not retained snapshots: new rows sorting before a cursor
 appear after refresh; state/archive transitions may enter or leave later pages.
 Clients deduplicate IDs, subscribe before initial reads, journal intervening
 events and refresh on reconnect. Page omission alone never proves deletion,
-archive, lack of initialization or loss of an active monitor. Load all needed
-active pages before calling the active partition complete; history pages are
-user-requested. Clearing history must not clear open output tabs.
+archive, lack of initialization or loss of an active monitor.
+
+**Visible paging.** Initial hydration reads only the first page per visible collection,
+including active scripts and active monitors when more than `limit` rows match.
+Display an explicit **Load more** control whenever `nextCursor` exists. Each
+activation reads one additional page; do not automatically drain active or
+history cursors, prefetch offscreen pages, or refill a page after local filtering.
+Keep the collection visibly partial until an explicit page read omits
+`nextCursor`; neither finishing the first request nor displaying all loaded rows
+means the partition is complete. Refresh/reconnect resets the paging boundary
+and reads only the first page, while preserving selected rows and reconciling
+events. Cursor traversal without individual Load more actions is allowed only
+for an explicit user-requested full-data operation, such as export. Such an
+operation must be distinguished from ordinary list hydration and badge refresh.
+Clearing history must not clear open output tabs.
+
+**Collection selection.** Script views request `archive: "active"`, `"archived"`
+or `"all"` as appropriate; retain `purpose: "saved" | "oneOff"` as row metadata
+(legacy absence still means saved). No server-side purpose filter is added.
+Active is an archive partition, not a synonym for saved or currently running:
+active one-off commands and archived saved commands keep their correct purpose.
+Any local purpose group, count, sort or search describes only loaded rows. An
+empty saved/one-off group with a collection cursor must not claim that no such
+scripts exist or hide Load more; it must not trigger background page traversal.
+The same rule applies to local agent groups over workspace monitor pages. Monitor
+badges request `state: "active"`; an explicitly opened history collection requests
+`state: "terminal"` (or `"all"` for a combined view), with its own visible paging.
 
 **ScriptSummary.** This is a separate projection, not `WorkspaceScript` with an
 empty command or a partial upsert. Only the following fields are returned:
@@ -137,7 +161,9 @@ Do not create eager `Promise.all(rows.map(get))` hydration. Script detection,
 deduplication and save-to-repository must compare/persist complete definitions,
 never previews or omitted env/cwd; an explicit bulk operation may use one legacy
 full list of its required partition. Monitor badges request `state: "active"`,
-not all retained terminal history. Expanding a monitor may read that monitor and
+not all retained terminal history. Initial hydration and script events must not
+unconditionally request a full script list or automatically follow summary cursors.
+Expanding a monitor may read that monitor and
 its one script; badge loading must not request every script definition. Missing
 details are loading/failure states until resolved, not proof of script removal.
 An archived selected script can be restored to the view by `script.get`, without

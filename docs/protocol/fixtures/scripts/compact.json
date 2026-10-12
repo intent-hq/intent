@@ -2,6 +2,14 @@
   "status": "prepared-not-executed",
   "capability": { "scriptListSummary": 1 },
   "page": { "defaultLimit": 100, "maxLimit": 200, "order": "createdAt-desc-id-desc" },
+  "presentation": {
+    "initialPagesPerVisibleCollection": 1,
+    "nextPage": "explicit-load-more",
+    "completeWhen": "nextCursor-absent",
+    "automaticTraversal": "explicit-full-data-operation-only",
+    "serverScriptFilters": ["archive"],
+    "purposeDisplay": "loaded-rows-only"
+  },
   "examples": [
     {
       "kind": "script",
@@ -39,6 +47,12 @@
     }
   ],
   "componentScenarios": [
+    { "id": "initial-visible-page-only", "expect": "Initial hydration, refresh and reconnect read exactly one summary page per visible collection; no cursor drain, detail fanout or unconditional full list read." },
+    { "id": "active-scripts-load-more", "expect": "With more than limit active scripts, show the first page as partial and Load more; one next-page read per explicit action, no automatic refill after local grouping." },
+    { "id": "active-monitors-load-more", "expect": "With 250 active monitors across 50 owners and limit100, first read shows100 and Load more; separate actions reveal100 then50, and only the final response marks complete." },
+    { "id": "partial-purpose-group", "expect": "A first active page of100 oneOff rows may hide older saved rows; retain purpose metadata and collection Load more, show only loaded counts, do not claim saved is empty globally or fetch more automatically." },
+    { "id": "partial-agent-group", "expect": "An empty local agent group on a partial workspace monitor page does not prove that agent has no active monitors; keep workspace Load more available." },
+    { "id": "explicit-full-data-operation", "expect": "Only an explicit user-requested full-data operation such as export may traverse all cursors without individual Load more actions; routine hydration and badge refresh may not." },
     { "id": "legacy-client-new-daemon", "expect": "Unpaged full rows, ascending order, all wire scripts by default; no capability needed." },
     { "id": "new-client-old-daemon", "expect": "No summary/detail calls without capability; explicit legacy fallback." },
     { "id": "ignored-view", "expect": "Missing summary discriminator invalidates support; do not accept ignored cursor or loop." },
@@ -48,7 +62,7 @@
     { "id": "archive-during-page-read", "expect": "Live pages deduplicate IDs and reconcile events; omission from a partial page never deletes or reseeds." },
     { "id": "stale-detail-after-definition-event", "expect": "Older get reply cannot overwrite newer full script:changed or script:state snapshots." },
     { "id": "terminal-event-before-list", "expect": "Delayed active summary cannot revive a settled canonical monitor." },
-    { "id": "badge-read-budget", "expect": "Use active monitor pages; zero full script-list, get, output or monitorDetails reads for collapsed badges." },
+    { "id": "badge-read-budget", "expect": "Read only the first active monitor page on initial badge hydration; zero full script-list, get, output or monitorDetails reads for collapsed badges, including on script events." },
     { "id": "expand-one-monitor", "expect": "At most one monitor detail and one referenced script get; no bulk detail hydration." },
     { "id": "edit-copy-save", "expect": "Complete selected definitions preserve env/cwd; never execute, compare, copy or persist preview text as a command." },
     { "id": "archived-open-output", "expect": "Selected archived script uses get; output uses existing script.output(maxLines) with no restore/restart." },

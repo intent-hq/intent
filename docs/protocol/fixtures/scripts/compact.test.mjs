@@ -59,7 +59,7 @@ test('monitor summaries retain decisions without leaking matched text or full pa
   assert.deepEqual(source, before, 'full monitor events/wakes/get remain canonical');
 });
 
-test('pages bound row accumulation and traverse tied timestamps once in descending ID order', () => {
+test('explicit full-data export can traverse all pages in descending ID order', () => {
   const rows = representativeRows(3174).scripts;
   const params = { workspaceId: 'ws-a', view: 'summary', archive: 'all', limit: 200 };
   let cursor;
@@ -74,6 +74,59 @@ test('pages bound row accumulation and traverse tied timestamps once in descendi
   assert.deepEqual(ids, rows.map(row => row.id).sort().reverse());
   assert.equal(new Set(ids).size, 3174);
   assert.equal(page('script.list', rows, { ...params, limit: undefined }).scripts.length, 100);
+});
+
+test('visible collection contract requires first-page-only hydration and explicit Load more', async () => {
+  assert.deepEqual(fixture.presentation, {
+    initialPagesPerVisibleCollection: 1,
+    nextPage: 'explicit-load-more',
+    completeWhen: 'nextCursor-absent',
+    automaticTraversal: 'explicit-full-data-operation-only',
+    serverScriptFilters: ['archive'],
+    purposeDisplay: 'loaded-rows-only',
+  });
+  const doc = await readFile(new URL('../../methods/scripts.md', import.meta.url), 'utf8');
+  assert.ok(doc.includes('Initial hydration reads only the first page per visible collection'));
+  assert.ok(doc.includes('**Load more**'));
+  assert.ok(doc.includes('No server-side purpose filter'));
+  assert.doesNotMatch(doc.split('\n').find(line => line.startsWith('| script.list |')), /purpose/);
+  assert.doesNotMatch(doc, /Load all needed\nactive pages/);
+});
+
+test('more than one page of active monitors remains partial until explicit Load more', () => {
+  const rows = representativeRows(250).monitors.map((row, i) => {
+    const active = { ...row, state: 'active', agentId: `agent-${Math.floor(i / 5)}` };
+    for (const key of ['settledAt', 'reason', 'trigger']) delete active[key];
+    return active;
+  });
+  const params = { workspaceId: 'ws-a', view: 'summary', state: 'active' };
+  const first = page('scriptMonitor.list', rows, params);
+  assert.equal(first.monitors.length, 100);
+  assert.ok(first.nextCursor, 'first page must keep Load more available');
+  // These calls stand for separate user Load more actions, not hydration.
+  const second = page('scriptMonitor.list', rows, { ...params, cursor: first.nextCursor });
+  assert.equal(second.monitors.length, 100);
+  assert.ok(second.nextCursor);
+  const third = page('scriptMonitor.list', rows, { ...params, cursor: second.nextCursor });
+  assert.equal(third.monitors.length, 50);
+  assert.equal(third.nextCursor, undefined);
+  assert.equal(new Set([...first.monitors, ...second.monitors, ...third.monitors].map(row => row.monitorId)).size, 250);
+});
+
+test('loaded purpose groups cannot claim absence or discard their collection cursor', () => {
+  const rows = representativeRows(250).scripts.map((row, i) => {
+    const active = { ...row, purpose: i >= 150 ? 'oneOff' : 'saved' };
+    delete active.archivedAt;
+    return active;
+  });
+  const params = { workspaceId: 'ws-a', view: 'summary', archive: 'active' };
+  const first = page('script.list', rows, params);
+  assert.equal(first.scripts.length, 100);
+  assert.equal(first.scripts.filter(row => row.purpose === 'saved').length, 0);
+  assert.ok(first.nextCursor, 'no saved rows loaded does not mean no saved rows exist');
+  const next = page('script.list', rows, { ...params, cursor: first.nextCursor });
+  assert.equal(next.scripts.filter(row => row.purpose === 'saved').length, 100);
+  assert.ok(next.nextCursor, 'local grouping does not make the archive partition complete');
 });
 
 test('cursor binds method, workspace and effective filters, but permits a different page size', () => {

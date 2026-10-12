@@ -140,6 +140,9 @@ rows, `terminal` selects all nonactive rows. Reject invalid/null state or any
 state option on a full read with `-32602`. Preserve the existing `agentId` owner
 filter, applied before paging; an unknown owner returns an empty page. Reads
 remain read-only: an overdue active row may remain active until its timer runs.
+Initial hydration reads only the first page, even if more active monitors exist;
+show Load more and retain partial state until the user requests further pages.
+An unopened terminal/history collection is not fetched for active badges.
 
 `ScriptMonitorSummary` preserves `monitorId`, `workspaceId`, `agentId`, `scriptId`,
 `runId`, `scriptName`, `mode`, `state`, `createdAt`, `expiresAt`, optional
