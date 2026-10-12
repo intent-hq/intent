@@ -275,8 +275,8 @@ grep -q '^trusted node scripts/check-protocol-catalog.mjs$' "$trusted_log" ||
   fail "the trusted node did not run check-protocol-catalog:"$'\n'"$(cat "$trusted_log")"
 [ "$(grep -c '^trusted node ' "$trusted_log")" -eq 13 ] ||
   fail "expected the 13 node invocations to run the trusted node:"$'\n'"$(cat "$trusted_log")"
-grep -q '^trusted node --test docs/protocol/fixtures/scripts/monitors.test.mjs$' "$trusted_log" ||
-  fail "script monitor contract tests did not run with the trusted node:"$'\n'"$(cat "$trusted_log")"
+grep -qFx 'trusted node --test docs/protocol/fixtures/scripts/monitors.test.mjs docs/protocol/fixtures/scripts/contract.test.mjs' "$trusted_log" ||
+  fail "script monitor and compact contract tests did not run with the trusted node:"$'\n'"$(cat "$trusted_log")"
 grep -q '^trusted node --test docs/protocol/fixtures/submission-correlation/contract.test.mjs$' "$trusted_log" ||
   fail "submission correlation contract tests did not run with the trusted node:"$'\n'"$(cat "$trusted_log")"
 grep -q '^trusted docs-check$' "$trusted_log" || fail "docs-check.sh did not run:"$'\n'"$(cat "$trusted_log")"
