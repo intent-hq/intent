@@ -171,3 +171,40 @@ test('migration silently removes ineligible pending jobs, including their stale 
   m.restore('agent');
   assert.equal(m.enqueue('script-monitor:old'), false);
 });
+
+test('quick exit refuses the accepted run; a successor cannot be silently monitored by its old ID', () => {
+  const m = new ActiveMonitors();
+  m.store.runs.script = { runId: 'quick-run', final: true };
+  const refused = m.register({ runId: 'quick-run' });
+  assert.equal(refused.reason, 'run-finished');
+  assert.equal(refused.runId, 'quick-run');
+  assert.equal(m.list('ws').length, 0);
+  assert.equal(Object.keys(m.store.jobs).length, 0);
+  m.store.runs.script = { runId: 'successor', final: false };
+  assert.throws(() => m.register({ runId: refused.runId }), /InvalidParams/);
+  assert.equal(m.list('ws').length, 0);
+});
+
+test('quick-exit component scenarios pin refusal handling and run-scoped output attribution', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const fixture = JSON.parse(await readFile(new URL('./compact.json', import.meta.url), 'utf8'));
+  for (const id of ['quick-exit-no-wait', 'quick-exit-successor-before-output', 'quick-exit-successor-during-output', 'quick-exit-no-run-identity'])
+    assert.ok(fixture.componentScenarios.some(row => row.id === id), id);
+  const doc = await readFile(new URL('../../methods/script-monitors.md', import.meta.url), 'utf8');
+  assert.ok(doc.includes('must inspect the registration result before ending a turn'));
+  assert.ok(doc.includes('isolated test databases'));
+  assert.ok(doc.includes('SCRIPT_RUN_MONITOR_RECIPE'));
+});
+
+for (const [before, after, calls] of [['run-a', 'run-a', 3], ['run-b', 'run-b', 1], ['run-a', 'run-b', 3], [undefined, undefined, 1]]) {
+  test(`finished output attribution: ${before} before / ${after} after`, async () => {
+    const { readFinishedOutput } = await import('./active-monitors-model.mjs');
+    const seen = [], readings = [before, after];
+    const result = await readFinishedOutput({ reason: 'run-finished', scriptId: 'script', runId: 'run-a' }, {
+      status: async id => { seen.push(['status', id]); return { runId: readings.shift() }; },
+      output: async id => { seen.push(['output', id]); return ''; },
+    });
+    assert.equal(seen.length, calls);
+    assert.deepEqual(result, before === after && before === 'run-a' ? { kind: 'available', output: '' } : { kind: 'unavailable' });
+  });
+}

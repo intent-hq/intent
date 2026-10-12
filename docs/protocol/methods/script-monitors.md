@@ -48,6 +48,32 @@ retirement refuses a finished run; after expiry/trigger/unmonitor while the run
 still lives it may register a fresh monitor with a fresh deadline. A lost reply
 cannot promise idempotency across deletion; clients must not blindly rearm.
 
+**Quick-exit caller guidance.** Callers must inspect the registration result before ending a turn
+to wait. Carry the nonempty runId returned by start into monitor registration.
+On `run-finished`, its scriptId/runId identify the already-finished run: do not
+wait for a wake or retry without runId (that could watch a successor). On an
+owner refusal, follow its owner instruction; it also promises no wake to this
+caller. Cancellation receipts end this wait and must not be interpreted as a
+terminal monitor whose history can be fetched.
+
+Output is still a current script buffer, not an atomic run-specific read. Before
+attributing output to the refused run, read status and require its runId to
+match, read output, then read status again and require the same runId. A missing
+ID, changed run, read failure or removed script makes that attribution
+unavailable; do not label a successor's output as the refused run's result and
+do not silently rearm. An empty available buffer is valid. This conservative
+three-read sequence is for an explicitly selected finished run, never list
+hydration. No new output parameter or permanent historical output is introduced.
+
+Update both tool-help variants in intent-acp/src/mcp_server/tools.rs (including
+SCRIPT_RUN_MONITOR_RECIPE and its exact-recipe tests), bindings/script.rs run
+budget error guidance, and all bundled workspace-agent instruction versions
+(v1, v1.1, v2.2). They currently teach start → monitor → end turn unconditionally,
+which would strand waiting agents on a quick-exit refusal. Tests must exercise
+completion before registration, a successor before registration, before output
+and during output, missing identity, and active-success waiting. The success
+case alone permits waiting; no refusal manufactures a terminal monitor.
+
 **Mutation receipts.** `scriptMonitor.cancel` / `ws.script.unmonitor` return
 `{ ok: true, monitorId }`, never a finished row. `scriptMonitor.cancelRun`
 returns `{ ok: true, monitorId, runStopped: boolean }`. Unknown/deleted IDs on
@@ -165,6 +191,9 @@ rewiring these boundaries loses wakes. Keep existing output framing, run
 identity, cancel priority and owner isolation tests, and add real-store fault,
 migration/restart and queue-race tests matching `active-monitors.test.mjs`.
 The portable model is a specification oracle, not proof that SQL is atomic.
+Because implementation changes SQLite schema, run migration/restart tests only
+against isolated test databases. Do not use the manual signed-install test
+route, which would migrate a tester's real database without rollback.
 
 #### Historical protocol-13 contract
 

@@ -127,3 +127,15 @@ export class ActiveMonitors {
     });
   }
 }
+
+// Reference caller sequence for an explicit run-finished refusal. The output
+// RPC has no run-specific atomic read, so absence/mismatch fails attribution.
+export async function readFinishedOutput(refusal, { status, output }) {
+  if (refusal.reason !== 'run-finished' || !refusal.runId) return { kind: 'unavailable' };
+  try {
+    if ((await status(refusal.scriptId)).runId !== refusal.runId) return { kind: 'unavailable' };
+    const text = await output(refusal.scriptId);
+    if ((await status(refusal.scriptId)).runId !== refusal.runId) return { kind: 'unavailable' };
+    return { kind: 'available', output: text };
+  } catch { return { kind: 'unavailable' }; }
+}

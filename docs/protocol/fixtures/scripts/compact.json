@@ -189,6 +189,22 @@
     {
       "id": "known-id-only-output-reconnect",
       "expect": "Reconnect a selected archived ID with output/status only, preserving its tab and not editing a preview."
+    },
+    {
+      "id": "quick-exit-no-wait",
+      "expect": "start returns run-a; it exits before monitor(runId:run-a); run-finished refuses with run-a and no monitor/wake. Caller handles status/output immediately instead of ending turn to wait."
+    },
+    {
+      "id": "quick-exit-successor-before-output",
+      "expect": "A successor run-b starts after run-a refusal. Initial status run-b prevents output attribution and prevents blind registration without runId."
+    },
+    {
+      "id": "quick-exit-successor-during-output",
+      "expect": "Status before output says run-a, status after says run-b. Discard refused-run output attribution; no retry/rearm or archive enumeration."
+    },
+    {
+      "id": "quick-exit-no-run-identity",
+      "expect": "Missing runId in refusal/status is unsupported for run-specific attribution, not permission to read a different run or wait for a fabricated monitor."
     }
   ],
   "protocolMajor": 14
