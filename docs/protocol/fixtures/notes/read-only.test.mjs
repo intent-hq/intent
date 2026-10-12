@@ -38,7 +38,7 @@ test('prepared protocol omits edit RPCs and retains full-content concurrency cav
 
 test('13.9 allocation follows checkout configuration and catalog counts reflect only retained methods', async () => {
   const versioning = await readFile(new URL('../../versioning.md', import.meta.url), 'utf8');
-  assert.match(versioning, /\*\*Documented version:\*\* `13\.10`/);
+  assert.match(versioning, /\*\*Documented version:\*\* `13\.11`/);
   const section = versioning.split('**Version 13.9 —')[1].split('**Version 13.8 —')[0];
   assert.match(section, /`notePagingRead: 1`/);
   assert.match(section, /444 \/ 388 \/ 56/);

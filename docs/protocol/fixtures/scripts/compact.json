@@ -1,0 +1,59 @@
+{
+  "status": "prepared-not-executed",
+  "capability": { "scriptListSummary": 1 },
+  "page": { "defaultLimit": 100, "maxLimit": 200, "order": "createdAt-desc-id-desc" },
+  "examples": [
+    {
+      "kind": "script",
+      "full": {
+        "id": "check", "workspaceId": "ws-a", "name": "Check", "command": "npm test",
+        "mode": "command", "source": "user", "createdAt": "2026-10-01T00:00:00Z",
+        "purpose": "saved", "cwd": "packages/app", "env": { "EXAMPLE": "synthetic" },
+        "runtime": { "status": "idle", "restartCount": 0 }
+      },
+      "summary": {
+        "id": "check", "workspaceId": "ws-a", "name": "Check",
+        "mode": "command", "source": "user", "createdAt": "2026-10-01T00:00:00Z",
+        "purpose": "saved", "commandPreview": "npm test", "commandTruncated": false,
+        "runtime": { "status": "idle", "restartCount": 0 }
+      }
+    },
+    {
+      "kind": "monitor",
+      "full": {
+        "monitorId": "monitor-a", "workspaceId": "ws-a", "agentId": "agent-a",
+        "scriptId": "check", "runId": "run-a", "scriptName": "Check", "mode": "command",
+        "state": "triggered", "createdAt": "2026-10-01T00:00:00Z",
+        "expiresAt": "2026-10-01T01:00:00Z", "settledAt": "2026-10-01T00:00:01Z",
+        "outputPattern": "^ok", "lineCount": 10, "reason": "output-match",
+        "trigger": { "observedLineCount": 3, "matchedLine": "ok synthetic fixture" }
+      },
+      "summary": {
+        "monitorId": "monitor-a", "workspaceId": "ws-a", "agentId": "agent-a",
+        "scriptId": "check", "runId": "run-a", "scriptName": "Check", "mode": "command",
+        "state": "triggered", "createdAt": "2026-10-01T00:00:00Z",
+        "expiresAt": "2026-10-01T01:00:00Z", "settledAt": "2026-10-01T00:00:01Z",
+        "outputPatternPreview": "^ok", "outputPatternTruncated": false,
+        "lineCount": 10, "reason": "output-match", "trigger": { "observedLineCount": 3 }
+      }
+    }
+  ],
+  "componentScenarios": [
+    { "id": "legacy-client-new-daemon", "expect": "Unpaged full rows, ascending order, all wire scripts by default; no capability needed." },
+    { "id": "new-client-old-daemon", "expect": "No summary/detail calls without capability; explicit legacy fallback." },
+    { "id": "ignored-view", "expect": "Missing summary discriminator invalidates support; do not accept ignored cursor or loop." },
+    { "id": "foreign-cursor", "expect": "Reject method/workspace/filter mismatch; authorize every page independently." },
+    { "id": "foreign-detail", "expect": "Unknown and foreign IDs indistinguishable after workspace authorization; MCP monitor detail remains owner-scoped." },
+    { "id": "deleted-cursor-row", "expect": "Deleting the boundary or an earlier row does not skip surviving rows on the next page." },
+    { "id": "archive-during-page-read", "expect": "Live pages deduplicate IDs and reconcile events; omission from a partial page never deletes or reseeds." },
+    { "id": "stale-detail-after-definition-event", "expect": "Older get reply cannot overwrite newer full script:changed or script:state snapshots." },
+    { "id": "terminal-event-before-list", "expect": "Delayed active summary cannot revive a settled canonical monitor." },
+    { "id": "badge-read-budget", "expect": "Use active monitor pages; zero full script-list, get, output or monitorDetails reads for collapsed badges." },
+    { "id": "expand-one-monitor", "expect": "At most one monitor detail and one referenced script get; no bulk detail hydration." },
+    { "id": "edit-copy-save", "expect": "Complete selected definitions preserve env/cwd; never execute, compare, copy or persist preview text as a command." },
+    { "id": "archived-open-output", "expect": "Selected archived script uses get; output uses existing script.output(maxLines) with no restore/restart." },
+    { "id": "removed-script-monitor", "expect": "Monitor detail remains readable until retention prunes it; output is not historical run output." },
+    { "id": "lifecycle-events-stay-full", "expect": "script:changed, script:state, monitor registration/mutations/events/wakes retain existing complete shapes." },
+    { "id": "overdue-active-read", "expect": "Summary/list/get do not settle monitors, renew TTL, change ownership or modify retention." }
+  ]
+}

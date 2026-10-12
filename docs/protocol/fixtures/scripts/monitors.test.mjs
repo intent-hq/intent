@@ -54,7 +54,7 @@ test('prepared methods, capability and event inventory match canonical documents
   assert.equal(fixture.status, 'prepared-not-executed');
   assert.deepEqual(fixture.capability, { scriptMonitors: 1 });
   for (const method of ['list', 'cancel', 'cancelRun']) assert.ok(doc.includes(`| scriptMonitor.${method} |`));
-  assert.match(catalog, /\| scriptMonitor \| 3 \| cancel, cancelRun, list/);
+  assert.match(catalog, /\| scriptMonitor \| 4 \| cancel, cancelRun, get, list/);
   for (const state of ['registered', 'completed', 'expired', 'triggered', 'cancelled']) {
     assert.ok(events.types.includes(`scriptMonitor:${state}`));
     assert.ok(doc.includes(`scriptMonitor:${state}`));

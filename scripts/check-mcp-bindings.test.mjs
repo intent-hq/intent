@@ -562,6 +562,20 @@ test('--pinned exits 2 with the submodule hint when the pin is absent from the i
   assert.ok(formatOffPinWarning(checkout.ref).includes(`checkout ${checkout.ref.checkout.slice(0, 7)} is off the recorded pin 1111111`));
 });
 
+test('prepared compact script helpers are scoped and still validate options', async () => {
+  const { checkDoc } = await import('./check-mcp-bindings.mjs');
+  const file = 'docs/protocol/methods/scripts.md';
+  const mention = call => collectDocMentions('`' + call + '`');
+  assert.deepEqual(checkDoc(file, mention('ws.script.listPage({ archive, limit, cursor })'), []), []);
+  assert.deepEqual(checkDoc(file, mention('ws.script.monitorsPage({ state, limit, cursor })'), []), []);
+  assert.deepEqual(checkDoc(file, mention('ws.script.get(scriptId)'), []), []);
+  assert.deepEqual(checkDoc(file, mention('ws.script.monitorDetails(monitorId)'), []), []);
+  assert.equal(checkDoc(file, mention('ws.script.listPage({ workspaceId })'), []).length, 1);
+  assert.equal(checkDoc(file, mention('ws.script.monitorsPage({ agentId })'), []).length, 1);
+  assert.equal(checkDoc('docs/protocol/unrelated.md', mention('ws.script.get(scriptId)'), []).length, 1);
+  assert.equal(renderIndex([]).includes('ws.script.listPage'), false);
+});
+
 test('prepared script monitor helpers are scoped and still validate options', async () => {
   const { checkDoc } = await import('./check-mcp-bindings.mjs');
   const file = 'docs/protocol/methods/script-monitors.md';

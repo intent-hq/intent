@@ -8,8 +8,17 @@ capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `13.10` — prepared cancellable note deletion; not a shipped-version claim.
+**Documented version:** `13.11` — prepared compact script list reads; not a shipped-version claim.
 Other prepared extensions retain their independent support gates.
+
+**Version 13.11 — compact script list reads (additive, prepared).**
+The [summary contract](./methods/scripts.md#compact-list-reads-prepared-additive-extension)
+adds `script.get` and `scriptMonitor.get` plus opt-in summary pages on existing
+list methods, gated by exact integer `scriptListSummary: 1`. It preserves full
+legacy defaults, existing MCP result shapes and full lifecycle events. The
+documented surface is **449 / 393 / 56** (dispatchable / router / fast path).
+No production component or release is implied; verify the minor allocation
+against daemon main at implementation time.
 
 **Version 13.10 — cancellable note deletion (additive, prepared).**
 The [grace deletion contract](./note-delete-grace.md) adds `note.deleteSchedule`,

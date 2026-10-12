@@ -171,7 +171,7 @@ check-backend-keychain-contract: ## Validate canonical backend Keychain fixtures
 
 docs-check: event-catalog-check check-mcp-bindings ## Check documented development targets, knobs, and remote-host guidance
 	@scripts/docs-check.sh
-	@node --test docs/protocol/fixtures/scripts/monitors.test.mjs
+	@node --test docs/protocol/fixtures/scripts/monitors.test.mjs docs/protocol/fixtures/scripts/contract.test.mjs
 	@node --test docs/protocol/fixtures/submission-correlation/contract.test.mjs
 
 check-protocol-catalog: ## Check docs/protocol method catalog against methods/*.md and intentd's catalog.rs

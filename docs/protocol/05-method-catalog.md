@@ -29,6 +29,10 @@ The prepared [note paging core (§5.2)](./methods/notes-tasks.md#revision-safe-n
 defines bounded read-only views; `notePagingRead: 1` gates support.
 Source and annotation pages extend existing methods, not new event names.
 
+The prepared [compact script list contract](./methods/scripts.md#compact-list-reads-prepared-additive-extension)
+adds `script.get` and `scriptMonitor.get`, plus optional bounded summary views on
+the existing lists under `scriptListSummary: 1`. Full defaults and events remain unchanged.
+
 The prepared [cancellable note deletion contract](./note-delete-grace.md) adds
 three router methods and one operation event under `noteDeleteGrace: 1`.
 Immediate deletion and read-only paging capabilities remain unchanged.
@@ -46,18 +50,18 @@ The prepared onboarding request `host.prepareProviderAdapters` (§5.14 below)
 adds one owner-only fast-path method. Its acknowledgement is not a readiness claim;
 older daemons may reject it without blocking onboarding.
 
-The documented surface reserves **447 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
+The documented surface reserves **449 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
 
-- **Router methods:** 391 methods dispatched via the main router (`router::dispatch`)
+- **Router methods:** 393 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 56 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 0; use canonical Git read names
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 5 notifications: `events.event` (§6.3) and the socket-private `workspace.repositoryContext.retired`, `workspace.repositorySelection.retired`, `accept-changes.retired`, `sourceControl.read.retired` controls (§6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 6 methods total — 2 are **dual-role** and counted within the 447 dispatchable names (`browser.exec`, `host.openInEditor`), and 4 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) — see §5.9, §5.14 and the reverse-RPC list below
+- **Client-served reverse RPCs:** 6 methods total — 2 are **dual-role** and counted within the 449 dispatchable names (`browser.exec`, `host.openInEditor`), and 4 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) — see §5.9, §5.14 and the reverse-RPC list below
 
-**Total:** 447 dispatchable names + 5 notifications. Of the 6 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 4 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) are daemon→client-only reverse RPCs, never dispatched client→server.
+**Total:** 449 dispatchable names + 5 notifications. Of the 6 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 4 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
 The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.53) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
 
@@ -70,7 +74,7 @@ capabilities gate support; catalog entries do not grant permission or establish
 which desktop release contains the feature. The methods below lead the component
 pin, while all existing methods and prepared extensions remain present.
 
-### Router methods by namespace (391 total)
+### Router methods by namespace (393 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
@@ -108,8 +112,8 @@ pin, while all existing methods and prepared extensions remain present.
 | repoConfig | 4 | ensureDir, get, has, save |
 | rules | 3 | get, list, update |
 | sandbox | 2 | cow.discard, cow.merge |
-| script | 11 | archive, create, list, output, remove, restart, restore, run, start, status, stop |
-| scriptMonitor | 3 | cancel, cancelRun, list — prepared script run monitors (§5.8a); registration is MCP-only |
+| script | 12 | archive, create, get, list, output, remove, restart, restore, run, start, status, stop |
+| scriptMonitor | 4 | cancel, cancelRun, get, list — prepared script run monitors (§5.8a); registration is MCP-only |
 | search | 7 | cancel, codebase, events, fileNames, inFiles, messages, notes |
 | sentry | 8 | assignIssue, authStatus, getIssue, ignoreIssue, listIssues, listProjects, resolveIssue, searchIssues |
 | settings | 4 | get, list, reset, update |

@@ -33,7 +33,8 @@ too; their exact syntax, limits and framing are defined below.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| scriptMonitor.list | workspaceId (req), agentId? | `{ monitors: ScriptMonitor[] }`; all retained workspace rows, optionally filtered to an owner |
+| scriptMonitor.list | workspaceId (req), agentId?, view? (`full` \| `summary`), state? (`all` \| `active` \| `terminal`), limit?, cursor? | Full `{ monitors: ScriptMonitor[] }` by default; prepared summary extension below |
+| scriptMonitor.get | workspaceId (req), monitorId (req) | Prepared: full canonical retained `ScriptMonitor`; `scriptListSummary: 1` required |
 | scriptMonitor.cancel | workspaceId (req), monitorId (req) | `{ ok: true, monitor }`; stop observation silently, same transition as the owner helper |
 | scriptMonitor.cancelRun | workspaceId (req), monitorId (req) | `{ ok: true, monitor, runStopped: boolean }`; stop only the active monitor's bound run and notify its owner |
 
@@ -126,8 +127,31 @@ the new cancellation as specified below.
 
 #### Canonical row and terminal result
 
-`ScriptMonitor` is the identical full object returned by helpers, wire methods
-and lifecycle events. List order is ascending `(createdAt, monitorId)`.
+`ScriptMonitor` is the identical full object returned by legacy helpers, full
+wire reads, mutations and lifecycle events. Full list order is ascending
+`(createdAt, monitorId)`. The separately gated summary extension below is the
+only exception; it never changes a lifecycle event or wake.
+
+**Prepared compact list extension.** Under exactly integer `scriptListSummary: 1`,
+`view: "summary"` returns `{ view: "summary", monitors: ScriptMonitorSummary[],
+nextCursor? }` using the [shared paging, compatibility, detail and MCP rules](./scripts.md#compact-list-reads-prepared-additive-extension).
+In summary view only, `state` defaults to `all`; `active` selects only active
+rows, `terminal` selects all nonactive rows. Reject invalid/null state or any
+state option on a full read with `-32602`. Preserve the existing `agentId` owner
+filter, applied before paging; an unknown owner returns an empty page. Reads
+remain read-only: an overdue active row may remain active until its timer runs.
+
+`ScriptMonitorSummary` preserves `monitorId`, `workspaceId`, `agentId`, `scriptId`,
+`runId`, `scriptName`, `mode`, `state`, `createdAt`, `expiresAt`, optional
+`lineCount`, `settledAt`, `reason` and `result` (same optional fields and outcome
+rules, with only `result.error` bounded as in script summaries). Omit
+`outputPattern`; when configured, include `outputPatternPreview` (at most 160
+UTF-8 bytes) and `outputPatternTruncated` (boolean). For triggered rows preserve
+`trigger.observedLineCount` but always omit `trigger.matchedLine`, even for
+output-match; `reason` retains the trigger kind. The full pattern and matched
+line remain available via `scriptMonitor.get`/`ws.script.monitorDetails` and
+existing full lifecycle events. No command/env/cwd/stdout/stderr/output fields
+are added. Summary and canonical full monitor types must remain distinct.
 
 | Field | Type and meaning |
 | --- | --- |

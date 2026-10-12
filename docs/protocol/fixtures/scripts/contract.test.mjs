@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import './compact.test.mjs';
 
 const fixture = JSON.parse(await readFile(new URL('./lifecycle.json', import.meta.url), 'utf8'));
 const scriptsDoc = await readFile(new URL('../../methods/scripts.md', import.meta.url), 'utf8');
@@ -18,7 +19,7 @@ test('prepared examples name documented methods and do not claim runtime proof',
     assert.equal(c.request.params.workspaceId, 'ws-a', c.id);
     assert.ok(c.expect && Object.keys(c.expect).length, c.id);
   }
-  assert.match(catalog, /\| script \| 11 \| archive, create, list, output, remove, restart, restore, run, start, status, stop \|/);
+  assert.match(catalog, /\| script \| 12 \| archive, create, get, list, output, remove, restart, restore, run, start, status, stop \|/);
   assert.ok(scriptsDoc.includes('scriptLifecycle: 1'));
 });
 
