@@ -1049,8 +1049,11 @@ member count unchanged; neither presence equality nor count equality suppresses
 this invalidation. Ordinary workspace additions/removals and host removals retain
 the same marker. A no-op join does not emit it. Consumers coalesce a membership-list
 refresh for the named workspace; a promotion need not carry a principal ID or
-member count. This additive delivery guarantee requires the companion daemon
-release; see [§6 shared-host invalidation](../06-events.md#shared-host-delivery-and-invalidation-109).
+member count. This additive delivery guarantee is advertised by
+`client.hello` `server.capabilities.workspaceMembershipEvents: 1` (exact integer).
+Older remote hosts may omit it; clients retain presence-driven membership refreshes
+unless this capability is recognized on that connection. See [§5.17](./client-hello.md)
+and [§6 shared-host invalidation](../06-events.md#shared-host-delivery-and-invalidation-109).
 
 Existing workspace events now reach effective members, including permission,
 terminal, script, browser and preview events needed for management. Filter at

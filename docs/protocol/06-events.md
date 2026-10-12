@@ -430,7 +430,11 @@ required on a promotion. When supplied, `memberCount` retains its existing
 count semantics. No-op joins emit no membership invalidation. Presence/focus/typing
 pushes alone do not imply a membership change. Initial hydration, reconnect and
 event-gap recovery still reconcile membership. This delivery guarantee is additive
-(docs first); consumers relying on it require the companion daemon release.
+(docs first), advertised by `client.hello` server capability
+`workspaceMembershipEvents: 1`. Only exact integer `1` enables dropping
+presence-driven membership refreshes; missing/malformed/unknown capability values
+retain the legacy fallback per connection/backend, including older remote hosts.
+See [§5.17](./methods/client-hello.md) for capability lifecycle and recovery.
 No general access to global settings, account-auth events or unrelated principals
 is implied. See §8 for the permission snapshot/answer/event gate.
 
