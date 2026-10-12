@@ -39,7 +39,28 @@ so `execute` rejects `action:"export"`. A step that fails sets `success:false` a
 
 - **WorkspaceGitStatus** — `{ branch, trunkBranch, aheadOfTrunk, behindTrunk, hasRemote,
   isPushed, uncommittedCount, stagedCount, localCommits: CommitWithAttribution[],
-  existingPR?: { number, url, htmlUrl, title, state: "open"|"closed"|"merged"|"draft" } }`.
+  existingPR?: { number, url, htmlUrl, title, state: "open"|"closed"|"merged"|"draft" },
+  historyIdentity?: string, gitStatus?: GitStatus }`.
+  `gitStatus` is the existing `git.status` (§5.6) snapshot, reused from the
+  working-tree scan, including per-file metadata and any `filesTruncated` /
+  `totalFiles` fields. It does not contain tracked-change attribution.
+  `historyIdentity` is a nonempty opaque equality token for the inputs to
+  `file-tracking.loadCommits`: actual HEAD, actual branch, workspace `baseRef` /
+  `baseCommitSha`, resolved workspace boundary, and the current branch's
+  `origin` tracking tip (which determines each commit's `isPushed`). File-only
+  changes leave it unchanged; commits, resets, rebases, boundary changes and
+  relevant ref changes invalidate it. It is independent of `localCommits`, whose
+  trunk range may be empty or truncated and is not workspace-bounded history.
+  Missing repositories, unborn/unreadable HEAD, unresolved configured boundaries
+  and identity-resolution errors omit the token; absence never proves equality.
+  Detached HEAD with a resolved commit can carry a token. These fields are
+  additive: older hosts and status producers may omit them.
+  Compare tokens only within the same admitted backend/workspace lifetime and
+  history query; they have no chronological ordering. Clients must establish
+  history for the observed token, reject replies superseded by a newer identity
+  or lifetime, and retain bounded recovery for missing/malformed tokens, initial
+  hydration, reconnects and event gaps. An unchanged token does not make a
+  missing history page present. No extra history walk produces this token.
 - **CommitWithAttribution** — a local commit carrying agent provenance:
   `{ hash, message, author, date, filesChanged?, isPushed, files?: [{ path, additions?,
   deletions?, status? }], agentId?, linkedNoteId? }`. `files` and `filesChanged` are
