@@ -8,8 +8,35 @@ capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `13.10` — prepared cancellable note deletion; not a shipped-version claim.
+**Documented version:** `14.0` — prepared active-only script and monitor lists; not a shipped-version claim.
 Other prepared extensions retain their independent support gates.
+
+**Version 14.0 — active-only script and monitor lists (breaking, prepared).**
+The [replacement contract](./methods/scripts.md#active-only-compact-lists-prepared-breaking-contract)
+adds script.get and scriptMonitor.get, optional bounded summary pages, and removes
+archived list selection and terminal monitor storage/history reads. Exact gates
+are `scriptActiveLists: 1` and `scriptMonitors: 2`. Earlier unshipped 13.11 /
+scriptListSummary reservations are withdrawn. Full list JSON shapes survive,
+but default membership, accepted filters, completed registration retries and
+monitor mutation results change; this is a major, not an additive minor.
+The documented surface remains **449 / 393 / 56** (dispatchable / router / fast
+path). No implementation/release is implied. An older client can reach the new
+semantics; current clients do not universally reject future majors. New clients
+must require the relevant capability, never fall back to archived/history reads.
+Update the frontend's registered-root protocol-major guard for 14 as part of the
+coordinated compatible renderer change; merely changing hello is insufficient.
+
+**Rollout ordering.** New get method catalog reservations may land docs-first.
+Prepared v14 sections can coexist with explicitly historical v13 contracts;
+they must not claim that current pins implement removals. Daemon semantic/storage
+removals land first (with explicit human authorization), then the automatic
+monorepo pin bump, then removal of obsolete baseline documentation if desired.
+Never remove currently implemented method/catalog entries docs-first. No router
+method is retired here: archive/restore remain known-ID operations. Withdrawn
+unshipped summary/history reservations need no production removal. Daemon before
+frontend merge, coordinated carrying release and frontend major guard updates
+are required. An older daemon remains unsupported for these new list features;
+known-ID status/output may still be used. This draft grants no merge permission.
 
 **Version 13.10 — cancellable note deletion (additive, prepared).**
 The [grace deletion contract](./note-delete-grace.md) adds `note.deleteSchedule`,
