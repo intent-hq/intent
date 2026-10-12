@@ -1,6 +1,9 @@
 // Aggregate-only audit. No raw responses, commands, env keys/values, error
 // strings or output are logged or saved. --live performs only the two list RPCs.
 // Usage: node docs/protocol/fixtures/scripts/payload-audit.mjs [--live workspaceId]
+// Live reads only unarchived scripts; original all-archive baseline is recorded
+// in the task note and is deliberately not fetched again. Monitor baseline reads
+// may still contain terminal rows on a protocol-13 host.
 // Live uses the repo probe's INTENTD_SOCKET/INTENTD_DATA_DIR discovery.
 import { bytes, page, scriptSummary, monitorSummary, representativeRows } from './compact-model.mjs';
 
@@ -35,7 +38,8 @@ function audit(method, result, workspaceId) {
       joint[bucket] = (joint[bucket] ?? 0) + 1;
     }
   }
-  const summaryRows = rows.map(isScript ? scriptSummary : monitorSummary);
+  const eligible = rows.filter(row => isScript ? !row.archivedAt : row.state === 'active');
+  const summaryRows = eligible.map(isScript ? scriptSummary : monitorSummary);
   const first = page(method, rows, { workspaceId, view: 'summary' });
   const focus = isScript ? ['command', 'env', 'lastRun', 'lastRun.error', 'runtime', 'runtime.error'] : ['outputPattern', 'trigger.matchedLine', 'result', 'result.error'];
   return {
@@ -47,7 +51,9 @@ function audit(method, result, workspaceId) {
     fieldValueBytesWhenPresent: Object.fromEntries(focus.map(name => [name, stats(fieldSizes[name] ?? [])])),
     errors: { occurrences: [...errors.values()].reduce((a, b) => a + b, 0), distinct: errors.size, maxRepeats: Math.max(0, ...errors.values()) },
     referenceProjection: {
-      status: 'reference-model-not-daemon-support',
+      status: 'protocol14-reference-not-daemon-support',
+      eligibleRows: eligible.length,
+      eligibleFullBytes: bytes({ [isScript ? 'scripts' : 'monitors']: eligible }),
       allRowsBytes: bytes({ view: 'summary', [isScript ? 'scripts' : 'monitors']: summaryRows }),
       first100PageBytes: bytes(first),
       first100Rows: first[isScript ? 'scripts' : 'monitors'].length,
@@ -70,7 +76,7 @@ for (const method of ['script.list', 'scriptMonitor.list']) {
     const { defaultSocketPath } = await import('../../../../scripts/uds-ws-bridge.mjs');
     let raw = '';
     const start = performance.now();
-    const code = await runProbe({ method, params: { workspaceId, ...(method === 'script.list' ? { archive: 'all' } : {}) }, socketPath: defaultSocketPath(), stdout: { write: text => { raw += text; } }, stderr: { write: () => {} }, timeout: 30000 });
+    const code = await runProbe({ method, params: { workspaceId, ...(method === 'script.list' ? { archive: 'active' } : {}) }, socketPath: defaultSocketPath(), stdout: { write: text => { raw += text; } }, stderr: { write: () => {} }, timeout: 30000 });
     elapsedMs = Math.round(performance.now() - start);
     wireBytes = Buffer.byteLength(raw);
     if (code) {

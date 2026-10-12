@@ -1,3 +1,5 @@
+// Protocol-13 baseline fixtures remain for framing/lifecycle regression.
+// Protocol-14 membership/retirement overrides are in compact/active-monitors tests.
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';

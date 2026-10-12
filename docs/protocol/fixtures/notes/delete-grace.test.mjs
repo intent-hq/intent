@@ -12,7 +12,7 @@ test('grace deletion reserves distinct guarded methods without changing immediat
   for (const word of ['noteDeleteGrace: 1', 'OUTCOME_UNKNOWN', 'WireCredential',
     'CURRENT incarnation', 'no NEW operation', '524288', '300000', '60000']) assert.ok(docs.includes(word), word);
   const versioning = await read('../../versioning.md');
-  assert.match(versioning, /\*\*Documented version:\*\* `13\.11`/);
+  assert.match(versioning, /\*\*Documented version:\*\* `14\.0`/);
   assert.ok(versioning.includes('**Version 13.9 —'));
   const catalog = await read('../../05-method-catalog.md');
   assert.ok(catalog.includes('**449 dispatchable method names**'));

@@ -1,8 +1,180 @@
-> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.8a Script run monitors (prepared additive extension).
+> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.8a Script run monitors (prepared active-only replacement).
 
 ### 5.8a Script run monitors
 
-**Prepared contract, not implemented by the pinned components.** Advertise
+#### Active-only monitors (prepared protocol 14)
+
+**This section supersedes protocol-13 history/retention and fast-final retry
+semantics below.** Exact integer `scriptMonitors: 2` gates the whole replacement,
+including storage migration, queue fences and recovery. `scriptMonitors: 1` is
+not sufficient. Do not expose the new capability until all boundaries work.
+
+**Read contract.** `scriptMonitor.list`, full/omitted and summary views, returns
+only active rows. The storage table contains **only active monitors**; no
+completed, triggered, expired or cancelled rows remain after a committed
+transition. `scriptMonitor.get`/`ws.script.monitorDetails` retrieves a known
+active ID only; finished/unknown/foreign IDs yield `-32602` after workspace and
+MCP-owner authorization. No history endpoint, terminal cache or retention TTL.
+Read calls remain read-only (an overdue active row may await maintenance).
+Use the [shared active-only paging contract](./scripts.md#active-only-compact-lists-prepared-breaking-contract).
+`agentId?` remains the wire owner filter; MCP fixes it to the caller. Optional
+`state` accepts only `active` in either view; reject all/terminal/null/invalid
+values before any row fetch. Active filtering must occur in storage selection,
+not after materializing old terminal records.
+
+`ScriptMonitorSummary` contains only `monitorId`, `workspaceId`, `agentId`,
+`scriptId`, `runId`, `scriptName`, `mode`, `state: "active"`, `createdAt`,
+`expiresAt`, optional `lineCount`; if configured, `outputPatternPreview`
+(≤160 UTF-8 bytes) and `outputPatternTruncated` (boolean). Omit outputPattern,
+settledAt, reason, result and trigger. Full active detail retains the complete
+pattern but has no terminal fields. Never fetch details to render collapsed
+badges. There is no matched-line history read: terminal notification/event
+snapshots carry the existing bounded matched line, and script.output reads the
+available process buffer by known script ID, not by monitor ID or past run ID.
+
+**Registration and retries.** TTL/options/ownership/run checks and at most one
+active monitor per workspace/script remain unchanged. Same-owner retries of an
+active registration return that row unchanged; another owner is refused.
+Registration of an already-final latest run returns
+`{ ok: false, refused: true, reason: "run-finished", scriptId, runId }`, creates
+nothing and sends no wake. Call status/output for that known ID. A supplied stale
+run ID still fails `-32602`. Under the definition lock and monitor lane, either
+registration sees a final run and refuses, or it durably inserts an active
+monitor before completion deletes it and queues the one wake. The success
+response is the captured active registration snapshot even if completion wins
+before transmission; subscribe/journal events to avoid resurrecting it.
+There is deliberately no completed-registration retry cache: a retry after
+retirement refuses a finished run; after expiry/trigger/unmonitor while the run
+still lives it may register a fresh monitor with a fresh deadline. A lost reply
+cannot promise idempotency across deletion; clients must not blindly rearm.
+
+**Mutation receipts.** `scriptMonitor.cancel` / `ws.script.unmonitor` return
+`{ ok: true, monitorId }`, never a finished row. `scriptMonitor.cancelRun`
+returns `{ ok: true, monitorId, runStopped: boolean }`. Unknown/deleted IDs on
+entry fail `-32602`; owner mismatch remains indistinguishable at owner-scoped
+helpers. If this operation observed an active row but another terminal decision
+wins arbitration, return the receipt (`runStopped: false` for cancelRun), not a
+history fetch. CancelRun keeps definition/run locks, persists cancel intent
+before stopping, releases it on stop failure, and never stops a successor run.
+The reserved cancellation wins over later output callbacks. Successful stop
+uses the matching final result and notifies once; silent unmonitor does not.
+Disconnect cannot abandon an already accepted cancellation. No mutation
+response retains terminal detail merely to make old retry logic work.
+
+**Atomic retirement and delivery.** A successful terminal decision is a single
+store transaction: conditionally delete the matching active monitor (guarded
+by workspace, owner, monitorId and runId), and insert one private delivery job
+for completed/expired/triggered outcomes. Cancellation/lifecycle suppression
+deletes without a job. A unique stable wake key `script-monitor:<monitorId>`
+prevents duplicate jobs. Zero affected rows means another decision won: emit
+nothing, enqueue nothing. Rollback leaves the active row and no job/event;
+keep the existing captured-decision retry arbitration for transient failures.
+No terminal row is written to the monitor table, even temporarily.
+
+A delivery job is **pending notification work, not a monitor record**. Its
+minimal schema is wakeId, workspaceId, agentId, scriptId, runId, notification
+metadata/body, phase (`pending` or `message-persisted`) and createdAt. Metadata
+contains only the existing wake payload: scriptName/mode, reason, timestamps,
+result or bounded trigger data as applicable. Do not copy full definitions,
+output buffers, monitor configuration or row_json. Jobs have no list/get RPC,
+no history UI, and no delivered/suppressed retention period. Keep them only
+until durable delivery ownership transfers or lifecycle suppression commits.
+
+The queue must deduplicate on wakeId and authorize enqueue, durable transcript
+append, drain and actual worker admission against the job plus live owner and
+workspace eligibility, **never a finished monitor row**. Message persistence
+sets phase to message-persisted; it does not discard delivery authority before
+the queued worker can start. Atomically transfer ownership to a durable queued
+turn/admission receipt (ordinary queue/transcript state keyed by wakeId), then
+delete the job. That receipt must record whether admission is pending/accepted
+and support recovery before execution; do not equate "message exists" with
+"worker was admitted". Repeated guards for the same admitted turn remain valid,
+but stale queue snapshots cannot create a new turn once ownership transferred.
+The existing transcript ID/pruned-message tombstone deduplicates the message.
+Completion of ordinary queue delivery removes its pending receipt; ordinary
+transcript history is unchanged. No permanent monitor-delivery ledger is added.
+
+Crashes before retirement leave an active row to reconcile against durable run
+identity/result/cancel intent; after retirement recover the job, without
+re-emitting the terminal transition. Crashes after message append but before
+admission must continue that same wake; after durable admission resume the
+ordinary queued turn instead of enqueueing a second one. This promises one
+durable wake/message and idempotent queue admission; it does not promise
+exactly-once external effects of an agent turn across process crashes. Export
+holds, human questions and temporary delivery errors park the job/queue;
+retry with its stable identity, never reinsert a finished monitor. Pending-job
+checks replace script_monitor wake_state checks used by completion deferral.
+
+Full lifecycle event snapshots (`scriptMonitor:completed`, `:expired`,
+`:triggered`, `:cancelled`) are built from the captured active row and winning
+decision, then published after commit. Registered events stay full active rows.
+Do not reduce the existing full event payload or turn event replay/transcripts
+into a monitor-history query. As in the current post-commit publication path,
+an abrupt crash can lose a live event; reconnect resets the loaded collection
+to its first active page. It does not infer deletion of off-page IDs; selected
+detail is checked lazily and explicit Load more remains available. Durable owner wake delivery must not depend on event success.
+
+**Lifecycle suppression and bounds.** Owner retirement/deletion or workspace
+archive/deletion atomically deletes active monitors, removes pending jobs and
+purges queued monitor wakes, including jobs whose monitor was already removed.
+Recheck lifecycle at worker admission. Superseded queue snapshots must be
+rejected even after restore/unarchive; no delayed summary wake is resurrected.
+Preserve already delivered transcript messages. Compute affected owners from
+both active rows and delivery work, not just monitors. Maintain the existing
+per-owner cap of five active monitors; replace the old 1000-history cap with
+1000 outstanding reservations per workspace (active monitors plus untransferred
+delivery jobs). Every accepted monitor reserves one slot for its possible wake;
+retirement transfers that slot, it never evicts an undelivered notification.
+At capacity reject new registration normally; permit same-active retry. A
+migration backlog above the cap remains deliverable; refuse new registrations
+until it falls below the cap. No seven-day eviction of pending work.
+
+**Upgrade cleanup (implementation must be transactional).** Migration 0142
+currently uses terminal script_monitor rows as its outbox. Before serving v2,
+replace its message/queue admission and lifecycle triggers, and move outstanding
+notification obligations into the private jobs/ordinary queue receipts under
+the same transaction as deleting every terminal monitor row. Pending wakes
+without a transcript become pending jobs; existing stable transcript messages
+(including pruned tombstones) suppress duplicate append, but an unadmitted
+queued delivery still needs a job/receipt. For delivered legacy rows, inspect
+queue/admission state: preserve queued/unadmitted obligations without appending
+a second message; rows with no pending delivery can be discarded. Legacy
+`wake_state=delivered` proves only transcript append: the old worker admission
+lane/commit_queue_history overlay is not a durable admission receipt. When a
+legacy delivered row has a message but no queued obligation, do not invent a
+new wake to resolve that ambiguity; preserve the transcript and let ordinary
+agent retry/recovery handle an interrupted turn. The new admission guarantee
+applies to v2 deliveries, not retroactively to unrecorded old execution. Tests
+must pin this no-replay migration rule. Suppressed
+or ineligible jobs/queues are removed silently. Active rows, cancel intent,
+deadline and run identity survive intact. Tighten the monitor table constraint
+to active-only. Migration is idempotent, all-or-nothing and restart-safe; never
+run a blanket DELETE before moving pending delivery, never synthesize new
+wakes for already delivered history. An implementation must demonstrate the
+durable queue/admission fence, not infer it from an in-memory lane alone.
+
+**Audited implementation dependencies.** `intent-store/migrations/0142_script_monitors.sql`
+requires monitor wake_state in BEFORE message/queue insert triggers and changes
+it after message append; these must move together. `script_monitor_repo.rs`
+settle/pending/prune/cleanup and `script_ops/monitors.rs` registration,
+commit_monitor, cancel/recovery must change together. `script_monitor.rs`
+dispatch/admission/maintenance and `agent_manager.rs` persist_user/worker guards
+currently load the monitor row. `agent_ops.rs`, `agent_subscriptions.rs` and
+service completion checks use pending_for_agent. Deleting the row without
+rewiring these boundaries loses wakes. Keep existing output framing, run
+identity, cancel priority and owner isolation tests, and add real-store fault,
+migration/restart and queue-race tests matching `active-monitors.test.mjs`.
+The portable model is a specification oracle, not proof that SQL is atomic.
+
+#### Historical protocol-13 contract
+
+The sections below preserve the implemented old-host contract and its framing
+fixtures. Their terminal storage, history reads, terminal-returning mutations,
+completed-registration idempotency and retention rules are superseded by v14
+above; they are not permitted implementation fallbacks. Output framing and
+unmodified run/ownership semantics still apply.
+
+**Historical protocol-13 baseline (superseded where stated above).** Advertise
 `client.hello.server.capabilities.scriptMonitors: 1` only when the entire contract,
 including durable identity, output triggers, lifecycle cleanup, queue deduplication
 and MCP helpers, is implemented. Allocate the next additive minor against daemon main then.
@@ -11,7 +183,7 @@ clients hide monitor controls and do not call these methods. Unexpected `-32601`
 also disables them for that connection. Existing script operations and explicit
 polling hooks remain available; do not silently install a hook as a fallback.
 
-#### Surfaces and authority
+#### Protocol-13 baseline: surfaces and authority
 
 Registration is agent-authored, MCP-only, following §6.8; no wire registration
 method or client-supplied owner is added. All helpers use the caller's workspace
@@ -33,8 +205,8 @@ too; their exact syntax, limits and framing are defined below.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| scriptMonitor.list | workspaceId (req), agentId?, view? (`full` \| `summary`), state? (`all` \| `active` \| `terminal`), limit?, cursor? | Full `{ monitors: ScriptMonitor[] }` by default; prepared summary extension below |
-| scriptMonitor.get | workspaceId (req), monitorId (req) | Prepared: full canonical retained `ScriptMonitor`; `scriptListSummary: 1` required |
+| scriptMonitor.list | workspaceId (req), agentId?, view? (`full` \| `summary`), state? (`active` only in v14), limit?, cursor? | Full `{ monitors: ScriptMonitor[] }` by default; prepared summary extension below |
+| scriptMonitor.get | workspaceId (req), monitorId (req) | Prepared: full active `ScriptMonitor`; `scriptMonitors: 2` required |
 | scriptMonitor.cancel | workspaceId (req), monitorId (req) | `{ ok: true, monitor }`; stop observation silently, same transition as the owner helper |
 | scriptMonitor.cancelRun | workspaceId (req), monitorId (req) | `{ ok: true, monitor, runStopped: boolean }`; stop only the active monitor's bound run and notify its owner |
 
@@ -132,29 +304,8 @@ wire reads, mutations and lifecycle events. Full list order is ascending
 `(createdAt, monitorId)`. The separately gated summary extension below is the
 only exception; it never changes a lifecycle event or wake.
 
-**Prepared compact list extension.** Under exactly integer `scriptListSummary: 1`,
-`view: "summary"` returns `{ view: "summary", monitors: ScriptMonitorSummary[],
-nextCursor? }` using the [shared paging, compatibility, detail and MCP rules](./scripts.md#compact-list-reads-prepared-additive-extension).
-In summary view only, `state` defaults to `all`; `active` selects only active
-rows, `terminal` selects all nonactive rows. Reject invalid/null state or any
-state option on a full read with `-32602`. Preserve the existing `agentId` owner
-filter, applied before paging; an unknown owner returns an empty page. Reads
-remain read-only: an overdue active row may remain active until its timer runs.
-Initial hydration reads only the first page, even if more active monitors exist;
-show Load more and retain partial state until the user requests further pages.
-An unopened terminal/history collection is not fetched for active badges.
-
-`ScriptMonitorSummary` preserves `monitorId`, `workspaceId`, `agentId`, `scriptId`,
-`runId`, `scriptName`, `mode`, `state`, `createdAt`, `expiresAt`, optional
-`lineCount`, `settledAt`, `reason` and `result` (same optional fields and outcome
-rules, with only `result.error` bounded as in script summaries). Omit
-`outputPattern`; when configured, include `outputPatternPreview` (at most 160
-UTF-8 bytes) and `outputPatternTruncated` (boolean). For triggered rows preserve
-`trigger.observedLineCount` but always omit `trigger.matchedLine`, even for
-output-match; `reason` retains the trigger kind. The full pattern and matched
-line remain available via `scriptMonitor.get`/`ws.script.monitorDetails` and
-existing full lifecycle events. No command/env/cwd/stdout/stderr/output fields
-are added. Summary and canonical full monitor types must remain distinct.
+The protocol-14 summary projection is specified above. This section describes
+full event snapshots and the older protocol-13 row shape, not retained v14 history.
 
 | Field | Type and meaning |
 | --- | --- |

@@ -29,9 +29,9 @@ The prepared [note paging core (§5.2)](./methods/notes-tasks.md#revision-safe-n
 defines bounded read-only views; `notePagingRead: 1` gates support.
 Source and annotation pages extend existing methods, not new event names.
 
-The prepared [compact script list contract](./methods/scripts.md#compact-list-reads-prepared-additive-extension)
+The prepared [compact script list contract](./methods/scripts.md#active-only-compact-lists-prepared-breaking-contract)
 adds `script.get` and `scriptMonitor.get`, plus optional bounded summary views on
-the existing lists under `scriptListSummary: 1`. Full defaults and events remain unchanged.
+the existing lists under `scriptActiveLists: 1` / `scriptMonitors: 2`. Protocol 14 removes archived list selection and terminal monitor history; full event payloads remain unchanged.
 
 The prepared [cancellable note deletion contract](./note-delete-grace.md) adds
 three router methods and one operation event under `noteDeleteGrace: 1`.

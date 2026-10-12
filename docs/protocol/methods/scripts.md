@@ -4,7 +4,8 @@
 
 The prepared [script monitor extension (§5.8a)](./script-monitors.md) adds
 run identity, one-shot agent monitoring and guarded user cancellation under
-`scriptMonitors: 1`. Existing script controls keep their current semantics.
+`scriptMonitors: 2` in the prepared protocol-14 contract. The protocol-13
+baseline below is historical where explicitly superseded.
 
 The [prepared service readiness extension](#service-readiness-prepared-additive-extension)
 adds optional `healthUrl` / `readyPattern` definition inputs and `ready` /
@@ -12,8 +13,8 @@ adds optional `healthUrl` / `readyPattern` definition inputs and `ready` /
 
 | Method | Params | Result |
 | --- | --- | --- |
-| script.list | workspaceId (req), archive? (`active` \| `archived` \| `all`, default `all`), view? (`full` \| `summary`), limit?, cursor? (prepared summary extension below) | { scripts: [...] } — definition plus `runtime` by default; summary pages are discriminated `{ view: "summary", scripts: ScriptSummary[], nextCursor? } |
-| script.get | workspaceId (req), scriptId (req) | Prepared: full definition plus `runtime`, including archived scripts; `scriptListSummary: 1` required |
+| script.list | workspaceId (req), archive? (`active` only; other values rejected in prepared v14), view? (`full` \| `summary`), limit?, cursor? (prepared summary extension below) | { scripts: [...] } — definition plus `runtime` by default; summary pages are discriminated `{ view: "summary", scripts: ScriptSummary[], nextCursor? } |
+| script.get | workspaceId (req), scriptId (req) | Prepared: full unarchived definition plus `runtime`; `scriptActiveLists: 1` required |
 | script.create | workspaceId (req), name (req), command (req), mode (req: `service` \| `command`), cwd?, env?, category?, autoStart?, scriptId?, purpose? (`saved` \| `oneOff`), healthUrl?, readyPattern?, clearReadiness? (prepared; see below) | { id, workspaceId, name, command, mode, source, createdAt, cwd?, env?, category?, autoStart?, updatedAt?, purpose?, archivedAt?, lastRun?, healthUrl?, readyPattern? } — the persisted `WorkspaceScript` record |
 | script.archive | workspaceId (req), scriptIds (req: nonempty string array) | { archived: [scriptId, ...], skipped: [{ scriptId, reason }] } — 10.11 candidate; inactive commands only |
 | script.restore | workspaceId (req), scriptIds (req: nonempty string array) | { restored: [scriptId, ...], skipped: [{ scriptId, reason }] } — 10.11 candidate; restores visibility without starting |
@@ -25,155 +26,148 @@ adds optional `healthUrl` / `readyPattern` definition inputs and `ready` /
 | script.status | workspaceId (req), scriptId (req) | { status, restartCount, pid?, exitCode?, startedAt?, stoppedAt?, error?, detectedUrl?, previouslyRunning?, ready?, readiness? } — the `ScriptRuntimeState` snapshot; `status` and `restartCount` are always present, every other field is **omitted when unset** (never `null` — a cleared `exitCode` is absent, so hooks test `exitCode !== undefined`); `status` is one of `idle \| starting \| running \| restarting \| exited`. `exited` **always** carries `exitCode` (new in intentd, unreleased): when the real status was not observable it is the sentinel `-1` together with an `error` naming the cause — see the total exit contract note below. `starting` (new in intentd, within v9.12 — intent-hq/intent#4858) is the `script.start` launch window: set synchronously before `script.start` replies, with the previous run's terminal fields cleared, and held until the spawn's `running` (or `exited` on a launch failure), so a poll issued right after `start` never reads the pre-launch `idle` or a stale `exitCode`. `restarting` (new in intentd, monorepo#1318) is the transient restart-in-flight state between an exit and the next spawn attempt — the service auto-restart backoff window and the `script.restart` stop→start gap — so a poll taken mid-restart never reads as a final `exited`/`idle`; the respawn flips it back to `running`. `previouslyRunning?: true` (new in intentd, within v5.1) marks a **service** script that was running when the daemon last stopped; a command script in the same situation hydrates as `exited` / `exitCode: -1` / `error` instead — see the was-running marker note below |
 | script.run | workspaceId (req), scriptId (req), maxLines?, timeoutSeconds? (alias timeout?) | { exitCode?, output, timedOut?, warning? } — `exitCode` follows the same total exit contract as the runtime state (new in intentd, unreleased): `-1` when the exit was unobservable — see the total exit contract note below |
 
-#### Compact list reads (prepared additive extension)
+#### Active-only compact lists (prepared breaking contract)
 
-This is a **prepared contract**, not a claim of implementation or release. Exactly
-integer `client.hello.server.capabilities.scriptListSummary: 1` gates both list
-projections, paging, detail reads and MCP helpers below. It is independent of
-`scriptLifecycle`, `scriptMonitors` and `scriptReadiness`; their existing gates
-still apply to their features. Reserve protocol 13.11 for this additive surface;
-recheck the next minor against daemon main at implementation time. Do not
-advertise the capability until the whole extension passes component tests.
+**Prepared protocol 14.0; not implemented by the pinned components.** This
+replaces the withdrawn, unshipped 13.11 compact/history proposal. Advertise exact
+integer `scriptActiveLists: 1` for script pages/details and `scriptMonitors: 2`
+for active-only monitors with reliable notification delivery. Do not advertise
+the withdrawn `scriptListSummary` capability. Existing lifecycle/readiness gates
+still govern their independent features. The protocol-13 lifecycle/history
+baseline later in this file documents older hosts, not a fallback for v14.
 
-**Compatibility.** Omitted `view` and explicit `view: "full"` preserve the existing
-unpaged `{ scripts: [...] }` and `{ monitors: [...] }` full-row responses and
-ascending `(createdAt, id/monitorId)` order. Wire `script.list` still defaults
-`archive` to `all`; legacy `ws.script.list()` still defaults it to `active`.
-The existing monitor helpers continue returning full canonical rows. No default
-changes, silent truncation, deletion or retention policy changes are authorized.
-In particular, the monitor store's existing 1000-row retention cap is unchanged.
+**Every script list is unarchived-only.** Omitted `archive` and `"active"` select
+only definitions without `archivedAt`. Reject `"all"`, `"archived"`, null and all
+other values with `-32602` **before querying storage or registry definitions**.
+This applies to summary, full, omitted-view, MCP, background and fallback paths.
+Apply the predicate in the store query or registry selection before loading row
+JSON, commands or environment maps; filtering deserialized full archive rows is
+not conforming. Do not delete archived definitions. Internal targeted recovery
+of a known run is distinct from list enumeration. Empty lists must not seed
+replacement scripts merely because archived definitions exist.
 
-Supporting callers opt in with `view: "summary"`. Old daemons may ignore new
-parameters, so negotiate the exact capability first and require the response's
-`view: "summary"` discriminator. A full result without that discriminator is not
-a summary page. On reconnect, renegotiate; on an unexpected missing method or
-wrong shape, invalidate summary support and use the explicit legacy path or
-report unsupported. Never interpret an ignored cursor as successful traversal.
-Future removal of the full default would be a separate major protocol change.
+**Compatibility and shape.** Omitted `view` and `view: "full"` keep the unpaged
+`{ scripts: [...] }` / `{ monitors: [...] }` shapes and ascending UTF-8 lexical
+`(createdAt, id/monitorId)` order, but now only for unarchived scripts / active
+monitors. This intentional semantic removal requires a major version, even
+though JSON shapes remain compatible. Summary requests use `view: "summary"`;
+responses are `{ view: "summary", scripts: ScriptSummary[], nextCursor? }` or
+`{ view: "summary", monitors: ScriptMonitorSummary[], nextCursor? }`.
+New clients require protocol 14 and the exact relevant capability; reconnect
+renegotiates. Missing capability/method or discriminator is unsupported, never
+permission to fall back to archive/history lists or an eager full read. An
+older caller hitting v14 receives the new active-only behavior; v13 history
+assumptions are not supported. Explicit known-ID output/status remain available.
 
-**Pages.** Summary reads accept `limit?: integer` in `[1, 200]`, default `100`, and
-`cursor?: string` (nonempty; existing transport limits apply). Invalid view, null, invalid
-types, fractional/out-of-range limits and malformed/mismatched cursors fail
-`-32602`; do not clamp. `limit`/`cursor` without summary view also fail on supporting
-daemons. Filters apply before paging. Return at most `limit` rows in descending
-`(createdAt, id)` for scripts or `(createdAt, monitorId)` for monitors, using the
-stored timestamp's UTF-8 lexical order and the opaque ID's UTF-8 lexical order as
-a deterministic tie-breaker.
-Return `nextCursor` only when another matching row exists; omit it on the final
-or empty page (never null). There is no approximate total or hidden truncation.
+**Pages.** `limit?: integer` is 1–200, default 100. `cursor?: string` is nonempty
+and opaque. Invalid view, null, types, fractional/out-of-range limits and
+malformed/mismatched cursors fail `-32602`; do not clamp. `limit`/`cursor` with
+full/omitted view also fail. No `purpose` server filter is introduced. Monitors
+accept the existing `agentId?` filter; optional `state: "active"` is redundant,
+and every other supplied state (including `all` and `terminal`) fails in either
+view. Filters apply before paging; unknown owners return empty. Read at most
+limit+1 eligible keys, project at most limit rows, newest first by UTF-8 lexical
+`(createdAt, id)` or `(createdAt, monitorId)`. Emit `nextCursor` only if another
+matching row exists; omit on final/empty pages, never null. No approximate total.
 
-The cursor is a versioned opaque keyset continuation after the last returned
-tuple, bound to method, workspace and effective filters (`archive` for scripts;
-`agentId` and `state` for monitors). Changing page size is allowed. Do not use an
-offset: deleting a preceding row must not skip a surviving row. A cursor is not
-authority; authorize the requested workspace on every page and detail read and
-reject a cursor for another scope. Cursor validation must never widen a filter.
-These are live reads, not retained snapshots: new rows sorting before a cursor
-appear after refresh; state/archive transitions may enter or leave later pages.
-Clients deduplicate IDs, subscribe before initial reads, journal intervening
-events and refresh on reconnect. Page omission alone never proves deletion,
-archive, lack of initialization or loss of an active monitor.
+Cursors are versioned keysets, bound to method, workspace, view and effective
+filters (unarchived for scripts; active plus owner for monitors). Changing limit
+is allowed. Deleted boundaries remain usable; no offsets. Authorize every page
+and detail independently; cursors never confer authority or widen filters.
+Reads are live, not snapshots: newer inserts require refresh. Subscribe before
+initial reads, journal intervening events, deduplicate IDs and refresh on
+reconnect. Missing-page rows are not deletions or evidence of initialization.
+An archived full script event removes list membership but preserves selected
+output IDs. A terminal monitor event removes that monitor; stale pages/details
+must not resurrect it. Keep bounded in-flight event tombstones/generations in
+the client, not durable monitor history.
 
 **Visible paging.** Initial hydration reads only the first page per visible collection,
-including active scripts and active monitors when more than `limit` rows match.
-Display an explicit **Load more** control whenever `nextCursor` exists. Each
-activation reads one additional page; do not automatically drain active or
-history cursors, prefetch offscreen pages, or refill a page after local filtering.
-Keep the collection visibly partial until an explicit page read omits
-`nextCursor`; neither finishing the first request nor displaying all loaded rows
-means the partition is complete. Refresh/reconnect resets the paging boundary
-and reads only the first page, while preserving selected rows and reconciling
-events. Cursor traversal without individual Load more actions is allowed only
-for an explicit user-requested full-data operation, such as export. Such an
-operation must be distinguished from ordinary list hydration and badge refresh.
-Clearing history must not clear open output tabs.
+even with more than limit active scripts/monitors. Keep **Load more** visible
+whenever `nextCursor` exists; each activation fetches one next page. No automatic
+cursor draining, offscreen prefetch or refill after local grouping. Counts,
+search, saved/oneOff groups and agent groups describe loaded rows only; an empty
+local group cannot hide Load more or claim global absence. No server-side purpose filter
+is added; absent legacy `purpose` means saved. Refresh/reconnect resets the
+boundary, reads one page and preserves selected IDs. Only explicit user-requested
+full-data operations such as export may traverse cursors automatically, and
+those operations are still unarchived-only. There is no archive/history view.
 
-**Collection selection.** Script views request `archive: "active"`, `"archived"`
-or `"all"` as appropriate; retain `purpose: "saved" | "oneOff"` as row metadata
-(legacy absence still means saved). No server-side purpose filter is added.
-Active is an archive partition, not a synonym for saved or currently running:
-active one-off commands and archived saved commands keep their correct purpose.
-Any local purpose group, count, sort or search describes only loaded rows. An
-empty saved/one-off group with a collection cursor must not claim that no such
-scripts exist or hide Load more; it must not trigger background page traversal.
-The same rule applies to local agent groups over workspace monitor pages. Monitor
-badges request `state: "active"`; an explicitly opened history collection requests
-`state: "terminal"` (or `"all"` for a combined view), with its own visible paging.
-
-**ScriptSummary.** This is a separate projection, not `WorkspaceScript` with an
-empty command or a partial upsert. Only the following fields are returned:
+**ScriptSummary.** A distinct read type, never an editable/upsert definition:
 
 | Fields | Summary meaning |
 | --- | --- |
-| `id`, `workspaceId`, `name`, `mode`, `source`, `createdAt` | Required, unchanged identity and display metadata |
-| `category?`, `autoStart?`, `updatedAt?`, `purpose?`, `archivedAt?` | Preserve presence and value from the full definition |
-| `commandPreview`, `commandTruncated` | Required display-only command prefix, at most 160 UTF-8 bytes, and a boolean indicating whether text was removed |
-| `runtime` | Required; preserve `status`, `restartCount`, optional `runId`, `pid`, `exitCode`, `startedAt`, `stoppedAt`, `detectedUrl`, `previouslyRunning`, `ready`, `readiness`; bound `error?` as below |
-| `lastRun?` | Preserve `runId?`, `outcome`, `exitCode?`, `startedAt?`, `stoppedAt`; bound `error?` as below |
+| `id`, `workspaceId`, `name`, `mode`, `source`, `createdAt` | Required identity/display metadata |
+| `category?`, `autoStart?`, `updatedAt?`, `purpose?` | Preserve presence and value |
+| `commandPreview`, `commandTruncated` | Required display-only prefix ≤160 UTF-8 bytes and truncation boolean |
+| `runtime` | Preserve `status`, `restartCount`, optional `runId`, `pid`, `exitCode`, `startedAt`, `stoppedAt`, `detectedUrl`, `previouslyRunning`, `ready`, `readiness`; bound `error?` below |
+| `lastRun?` | Preserve `runId?`, `outcome`, `exitCode?`, `startedAt?`, `stoppedAt`; bound `error?` below |
 
-Omit `command`, `env`, `cwd`, `healthUrl`, `readyPattern` and any output fields.
-Neither list embeds stdout/stderr or the process output buffer. Preview limits
-count UTF-8 bytes **before JSON escaping**, truncate only at Unicode scalar
-boundaries and add no ellipsis. Empty strings remain empty. In summary runtime,
-lastRun and monitor result objects, `error?` is a prefix of at most 256 UTF-8
-bytes; add `errorTruncated: true` only if text was removed. Unset fields remain
-omitted, never null. Statuses, exit sentinels, run IDs and outcome semantics do
-not change. Other retained metadata is not silently shortened, so the page row
-limit is not a universal byte ceiling for arbitrary names/IDs/URLs.
-Build summaries from the field whitelist and select the page before copying
-bulky definition text; do not serialize a full list as an intermediate result.
+Omit `archivedAt`, `command`, `env`, `cwd`, `healthUrl`, `readyPattern` and output.
+Previews count UTF-8 bytes before JSON escaping, truncate on scalar boundaries,
+add no ellipsis, preserve empty strings. Runtime/lastRun errors are prefixes
+≤256 bytes; `errorTruncated: true` only when shortened. Unset fields are omitted,
+never null. Names/IDs/URLs are not truncated, so row limits are not universal
+byte ceilings. Whitelist projection happens after eligible key selection, never
+by serializing a full list first. Neither list embeds process output buffers.
 
-**Detail and output.** `script.get({ workspaceId, scriptId })` returns one full
-definition plus current runtime, the same row shape as legacy list, regardless
-of archive state. `scriptMonitor.get({ workspaceId, monitorId })` returns the
-full retained canonical monitor row, even if its script was removed. Both use
-the corresponding list's existing workspace authority; foreign and unknown IDs
-are indistinguishable `-32602`, with authorization checked first. Detail reads
-do not execute, restore, reconcile monitor results, renew TTL or change ownership.
-No historical-run lookup or output history is added. `script.output` remains the
-explicit buffer read with `maxLines`; after restart or removal it may be empty
-or unavailable and is not the historical output of a monitor's bound run.
+**Detail and output.** `script.get({workspaceId, scriptId})` returns one full
+unarchived definition plus runtime for editing/copying/configuration. Archived,
+unknown and foreign IDs are indistinguishable `-32602` after authorization.
+`scriptMonitor.get({workspaceId, monitorId})` returns only a full active monitor,
+including its complete outputPattern if configured; finished/unknown/foreign
+IDs are `-32602`, with no historical lookup. Reads never restore, execute,
+reconcile a monitor, renew TTL or change ownership.
 
-`script:changed` continues carrying a **full row**. `script:state` retains its
-full runtime. Monitor registration, mutations, lifecycle events and wakes retain
-the **full canonical ScriptMonitor**, including trigger text under its existing
-bound. Consumers may project those full events into their list cache; they must
-not weaken the event contract or let a stale list/detail reply replace a newer
-event or revive a settled monitor. Keep detail caches separate from summary
-types; invalidate definitions on `script:changed` and runtime on `script:state`.
+A selected archived script needs **only its known ID**: use existing
+`script.output({workspaceId, scriptId, maxLines?})` and, when displaying runtime,
+`script.status({workspaceId, scriptId})`. Preserve selected tab labels from
+selection/events, or display the ID after reconnect. No archive definition get
+is necessary. Existing buffer lifetime is unchanged: after restart/removal
+output may be empty/unavailable and is not a monitor run's historical log.
+An archived output tab is not an editable definition. Explicit known-ID archive,
+restore/start controls retain their existing semantics; they never enumerate
+archives merely to implement an action.
 
-**MCP.** Add `ws.script.listPage({ archive?, limit?, cursor? }?)` returning the
-summary envelope (helper default archive `active`), `ws.script.get(scriptId)`,
-`ws.script.monitorsPage({ state?, limit?, cursor? }?)` returning the monitor
-summary envelope (helper default state `all`), and
-`ws.script.monitorDetails(monitorId)`. Helpers are bound to the caller workspace;
-monitor helpers also require the authenticated owner and cannot expose another
-owner's detail (foreign/unknown `-32602`). No caller-supplied workspace or owner
-override, including for chief callers. Page helpers perform one page read,
-never automatically drain cursors or read each detail. Existing `list`,
-`monitors`, `monitor`, `unmonitor`, `status` and `output` helper results remain
-unchanged. Help should recommend page helpers for discovery on supporting hosts.
+`script:changed` stays a **full row**, `script:state` a full runtime. Registered
+monitor events carry full active rows; terminal lifecycle events keep their full
+transient snapshots (including bounded matched text), while list/get never
+return terminal rows. Events remain post-commit; after a crash/reconnect an
+active-list refresh is authoritative. Notification delivery is separately
+durable as defined in the monitor contract. Separate detail/summary caches;
+stale get replies must not overwrite newer events or write preview text back.
 
-**Consumer requirements.** Lists render previews; edit/copy/export reads full
-definitions only for the explicitly selected scope. Starting/stopping/restarting,
-archiving/restoring and viewing output use IDs and do not need definition reads.
-Do not create eager `Promise.all(rows.map(get))` hydration. Script detection,
-deduplication and save-to-repository must compare/persist complete definitions,
-never previews or omitted env/cwd; an explicit bulk operation may use one legacy
-full list of its required partition. Monitor badges request `state: "active"`,
-not all retained terminal history. Initial hydration and script events must not
-unconditionally request a full script list or automatically follow summary cursors.
-Expanding a monitor may read that monitor and
-its one script; badge loading must not request every script definition. Missing
-details are loading/failure states until resolved, not proof of script removal.
-An archived selected script can be restored to the view by `script.get`, without
-an all-history list or a process restart. Component tests must prove these read
-counts as well as event races, permission failures and compatibility fallbacks.
+**MCP.** Preferred discovery is `ws.script.listPage({archive?, limit?, cursor?}?)`
+and `ws.script.monitorsPage({state?, limit?, cursor?}?)`, each exactly one summary
+page. Archive/state options only accept `active`. `ws.script.get(scriptId)` and
+`ws.script.monitorDetails(monitorId)` are lazy selected active-detail reads.
+All helpers bind caller workspace; monitor helpers bind authenticated owner,
+including chiefs; foreign/unknown IDs are indistinguishable. Existing `list()`
+and `monitors()` keep array shapes but are unarchived/active-only. Mutation
+receipts change as specified in the v2 monitor contract. `status`/`output` stay
+unchanged. Never automatically drain pages or get every row.
 
-Prepared regression examples and the reference projection/paging oracle live in
-`docs/protocol/fixtures/scripts/compact*.mjs`. The aggregate-only measurement tool
-`payload-audit.mjs` can inspect a local daemon without recording commands, env or
-output. These fixtures prove contract consistency, not production support.
+**Frontend handoff.** Remove archived/History browsing and all-list fallbacks
+from live-scripts-client and lifecycle-read-saga. Preserve selected known IDs
+across partial pages/archive events in terminals-selectors and output hydration;
+use status/output for archived IDs. Monitor service must stop fetching full
+script lists on hydration or script events; collapsed badges read only the
+first active monitor page, zero script get/output/monitor-detail calls. Remove
+terminal entries on lifecycle events. Keep Load more accessible outside empty
+local agent groups (EventSubscriptionsCard), including >limit active monitors.
+MonitoredScriptsRow expansion may lazily read one active monitor and its one
+unarchived script; deletion during expansion becomes unavailable, not history.
+TerminalSidebar purpose grouping/sorting uses loaded rows only. Detection,
+undo snapshots, script update, save-to-repository and QuakeTerminalOverlay edits
+must obtain complete selected unarchived definitions explicitly; previews can
+never become commands or overwrite omitted env/cwd. An explicit bulk operation
+may fetch complete unarchived definitions, but normal hydration must not.
+
+Prepared portable examples/models live in `fixtures/scripts/compact*` and
+`active-monitors*`. Component tests must exercise actual storage predicates,
+transaction rollback/restart and renderer read counts; model tests alone do not
+prove production behavior. `payload-audit.mjs` preserves aggregate-only legacy
+measurements and estimates the revised active-only projection without mutation.
 
 **Working directory.** `cwd` is relative to the workspace root. Omit it, pass an
 empty string, or use `.` to run at that root; a relative subdirectory such as
@@ -502,7 +496,14 @@ upsert, add the existing `scriptId` and omit purpose only to retain its stored
 classification. These examples create definitions, not a successful test result.
 The generated MCP index remains pin-owned and is not edited for this preparation.
 
-#### Saved scripts and one-off history (10.11 implemented candidate)
+#### Saved scripts and one-off history (protocol-13 baseline)
+
+**Historical baseline.** The archive list/history UI and recovery enumeration
+rules in this section apply only through protocol 13. Protocol 14 supersedes
+them with active-only lists and known-ID status/output above. Definition
+retention, targeted recovery, run identity, archive/restore mutations and output
+buffer lifetime remain unchanged. The lifecycle fixtures retain this old-host
+baseline; compact/active-monitor fixtures define v14.
 
 The complete extension is implemented and independently verified in intentd
 [`7a80f18905377545ec1e8a88a8331772557e772e`](https://github.com/intent-hq/intentd/commit/7a80f18905377545ec1e8a88a8331772557e772e)
@@ -782,6 +783,10 @@ launch/completion race barriers. The JSON remains a prepared scenario catalog;
 its static checker does not execute those component tests.
 
 #### Self-contained script changes (prepared additive extension)
+
+For protocol 14, full event payloads remain unchanged, but references below to
+all/history list recovery are superseded by known-ID output/status. Archived
+rows received in events never enter list membership; selected output survives.
 
 This contract is **prepared, not a shipped implementation claim**. It extends
 `script:changed` without adding a method, event type, capability, database field,

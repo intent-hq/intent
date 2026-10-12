@@ -7,7 +7,7 @@ const fixture = JSON.parse(await readFile(new URL('./compact.json', import.meta.
 
 test('portable goldens pin exact full/detail versus summary shapes', () => {
   assert.equal(fixture.status, 'prepared-not-executed');
-  assert.deepEqual(fixture.capability, { scriptListSummary: 1 });
+  assert.deepEqual(fixture.capability, { scriptActiveLists: 1, scriptMonitors: 2 });
   for (const example of fixture.examples)
     assert.deepEqual((example.kind === 'script' ? scriptSummary : monitorSummary)(example.full), example.summary);
   assert.equal(new Set(fixture.componentScenarios.map(row => row.id)).size, fixture.componentScenarios.length);
@@ -46,22 +46,22 @@ test('previews truncate UTF-8 on scalar boundaries and preserve omission and emp
   assert.equal(empty.runtime.errorTruncated, undefined);
 });
 
-test('monitor summaries retain decisions without leaking matched text or full patterns', () => {
+test('active monitor summaries omit terminal decisions and full patterns', () => {
   const source = representativeRows(1).monitors[0];
   const before = structuredClone(source);
   const row = monitorSummary(source);
   assert.equal(row.outputPattern, undefined);
   assert.equal(row.outputPatternPreview, 'p'.repeat(160));
   assert.equal(row.outputPatternTruncated, true);
-  assert.deepEqual(row.trigger, { observedLineCount: 3 });
-  assert.equal(row.reason, 'output-match');
-  assert.equal(row.state, 'triggered');
+  assert.equal(row.trigger, undefined);
+  assert.equal(row.reason, undefined);
+  assert.equal(row.state, 'active');
   assert.deepEqual(source, before, 'full monitor events/wakes/get remain canonical');
 });
 
 test('explicit full-data export can traverse all pages in descending ID order', () => {
-  const rows = representativeRows(3174).scripts;
-  const params = { workspaceId: 'ws-a', view: 'summary', archive: 'all', limit: 200 };
+  const rows = representativeRows(3174).scripts.filter(row => !row.archivedAt);
+  const params = { workspaceId: 'ws-a', view: 'summary', archive: 'active', limit: 200 };
   let cursor;
   const ids = [];
   do {
@@ -72,7 +72,7 @@ test('explicit full-data export can traverse all pages in descending ID order', 
     cursor = result.nextCursor;
   } while (cursor);
   assert.deepEqual(ids, rows.map(row => row.id).sort().reverse());
-  assert.equal(new Set(ids).size, 3174);
+  assert.equal(new Set(ids).size, 1587);
   assert.equal(page('script.list', rows, { ...params, limit: undefined }).scripts.length, 100);
 });
 
@@ -82,7 +82,7 @@ test('visible collection contract requires first-page-only hydration and explici
     nextPage: 'explicit-load-more',
     completeWhen: 'nextCursor-absent',
     automaticTraversal: 'explicit-full-data-operation-only',
-    serverScriptFilters: ['archive'],
+    serverScriptFilters: ['unarchived-only'],
     purposeDisplay: 'loaded-rows-only',
   });
   const doc = await readFile(new URL('../../methods/scripts.md', import.meta.url), 'utf8');
@@ -130,18 +130,18 @@ test('loaded purpose groups cannot claim absence or discard their collection cur
 });
 
 test('cursor binds method, workspace and effective filters, but permits a different page size', () => {
-  const rows = representativeRows(4).scripts;
-  const params = { workspaceId: 'ws-a', view: 'summary', archive: 'all', limit: 1 };
+  const rows = representativeRows(4).scripts.map(({ archivedAt, ...row }) => row);
+  const params = { workspaceId: 'ws-a', view: 'summary', archive: 'active', limit: 1 };
   const cursor = page('script.list', rows, params).nextCursor;
   assert.equal(page('script.list', rows, { ...params, cursor, limit: 2 }).scripts.length, 2);
-  for (const changed of [{ workspaceId: 'ws-b' }, { archive: 'active' }])
+  for (const changed of [{ workspaceId: 'ws-b' }, { view: 'full' }])
     assert.throws(() => page('script.list', rows, { ...params, ...changed, cursor }), /InvalidParams/);
   assert.throws(() => page('scriptMonitor.list', [], { workspaceId: 'ws-a', view: 'summary', cursor }), /InvalidParams/);
   assert.throws(() => page('script.list', rows, { ...params, cursor: 'invalid' }), /InvalidParams/);
 });
 
 test('deleting cursor boundaries does not skip rows; inserts ahead require refresh', () => {
-  const rows = representativeRows(4).scripts;
+  const rows = representativeRows(4).scripts.map(({ archivedAt, ...row }) => row);
   const params = { workspaceId: 'ws-a', view: 'summary', limit: 2 };
   const first = page('script.list', rows, params);
   const survivors = rows.slice(0, 2);
@@ -153,7 +153,7 @@ test('deleting cursor boundaries does not skip rows; inserts ahead require refre
 });
 
 test('ID ties use UTF-8 ordering and long existing IDs remain pageable', () => {
-  const template = representativeRows(1).scripts[0];
+  const { archivedAt, ...template } = representativeRows(1).scripts[0];
   const ids = ['\uE000', '😀', 'z'.repeat(5000)];
   const rows = ids.map(id => ({ ...template, id }));
   const params = { workspaceId: 'ws-a', view: 'summary', limit: 1 };
@@ -167,19 +167,20 @@ test('ID ties use UTF-8 ordering and long existing IDs remain pageable', () => {
   assert.equal(page('script.list', rows, { ...params, cursor: long.nextCursor }).scripts[0].id, 'a');
 });
 
-test('summary options reject invalid values; legacy reads preserve full rows and ascending order', () => {
+test('summary options reject invalid values; full reads preserve eligible row shapes and ascending order', () => {
   const rows = representativeRows(3).scripts;
   for (const limit of [null, 0, -1, 201, 1.5, '2', false])
     assert.throws(() => page('script.list', rows, { workspaceId: 'ws-a', view: 'summary', limit }), /InvalidParams/);
   for (const options of [{ view: null }, { view: 'unknown' }, { limit: 1 }, { cursor: 'x' }, { view: 'summary', cursor: null }, { view: 'summary', archive: null }])
     assert.throws(() => page('script.list', rows, { workspaceId: 'ws-a', ...options }), /InvalidParams/);
   const legacy = page('script.list', rows, { workspaceId: 'ws-a' });
-  assert.deepEqual(legacy, { scripts: rows });
+  assert.deepEqual(legacy, { scripts: rows.filter(row => !row.archivedAt) });
   assert.deepEqual(page('script.list', rows, { workspaceId: 'ws-a', view: 'full' }), legacy);
 });
 
 test('filters precede paging; active monitors do not require downloading retained history', () => {
   const { scripts, monitors } = representativeRows(250);
+  for (const row of monitors) row.state = 'completed';
   scripts[1].workspaceId = 'ws-b';
   assert.equal(page('script.list', scripts, { workspaceId: 'ws-a', view: 'summary', archive: 'active', limit: 200 }).scripts.length, 124);
   monitors[200] = { ...monitors[200], state: 'active' };
@@ -192,13 +193,13 @@ test('filters precede paging; active monitors do not require downloading retaine
   assert.deepEqual(page('scriptMonitor.list', monitors, { workspaceId: 'ws-a', view: 'summary', agentId: 'unknown' }).monitors, []);
 });
 
-test('reference reductions cover long commands and matched lines separately from row accumulation', () => {
+test('reference reductions cover eligible definitions and active monitor configuration', () => {
   const { scripts, monitors } = representativeRows(1000);
   for (const [method, rows, key] of [['script.list', scripts, 'scripts'], ['scriptMonitor.list', monitors, 'monitors']]) {
     const legacy = page(method, rows, { workspaceId: 'ws-a' });
     const compact = page(method, rows, { workspaceId: 'ws-a', view: 'summary' });
     assert.equal(compact[key].length, 100);
-    assert.ok(bytes(compact) < bytes(legacy) / 20);
+    assert.ok(bytes(compact) < bytes(legacy) / 10);
   }
 });
 
@@ -206,7 +207,47 @@ test('prepared method tables document the summary discriminator and detail reads
   const scriptDoc = await readFile(new URL('../../methods/scripts.md', import.meta.url), 'utf8');
   const monitorDoc = await readFile(new URL('../../methods/script-monitors.md', import.meta.url), 'utf8');
   assert.ok(scriptDoc.includes('| script.get |'));
-  assert.ok(scriptDoc.includes('scriptListSummary: 1'));
+  assert.ok(scriptDoc.includes('scriptActiveLists: 1'));
   assert.ok(scriptDoc.includes('commandPreview'));
   assert.ok(monitorDoc.includes('| scriptMonitor.get |'));
+});
+
+for (const view of [undefined, 'full', 'summary']) {
+  test(`all script list paths exclude archived rows and reject obsolete filters (${view})`, () => {
+    const { scripts } = representativeRows(10);
+    const params = { workspaceId: 'ws-a', ...(view ? { view } : {}) };
+    const result = page('script.list', scripts, params);
+    assert.equal(result.scripts.length, 5);
+    assert.ok(result.scripts.every(row => !row.archivedAt));
+    for (const archive of ['all', 'archived', null, false])
+      assert.throws(() => page('script.list', scripts, { ...params, archive }), /InvalidParams/);
+  });
+  test(`all monitor list paths exclude terminal rows (${view})`, () => {
+    const { monitors } = representativeRows(5);
+    ['completed', 'triggered', 'expired', 'cancelled'].forEach((state, i) => { monitors[i].state = state; });
+    const params = { workspaceId: 'ws-a', ...(view ? { view } : {}) };
+    assert.deepEqual(page('scriptMonitor.list', monitors, params).monitors.map(row => row.monitorId), ['00004']);
+    for (const state of ['all', 'terminal', null, false])
+      assert.throws(() => page('scriptMonitor.list', monitors, { ...params, state }), /InvalidParams/);
+  });
+}
+
+test('archived row bodies are never loaded and obsolete filters fail before selection', () => {
+  const hidden = { id: 'archived', workspaceId: 'ws-a', archivedAt: '2026-10-01' };
+  Object.defineProperty(hidden, 'command', { enumerable: true, get() { throw new Error('archived body loaded'); } });
+  assert.deepEqual(page('script.list', [hidden], { workspaceId: 'ws-a' }), { scripts: [] });
+  const neverRead = new Proxy([], { get() { throw new Error('query attempted'); } });
+  assert.throws(() => page('script.list', neverRead, { workspaceId: 'ws-a', archive: 'all' }), /InvalidParams/);
+});
+
+
+test('monitor cursors bind owner and view and malformed workspaces fail before reads', () => {
+  const { monitors } = representativeRows(10);
+  const params = { workspaceId: 'ws-a', view: 'summary', agentId: 'agent-0', limit: 1 };
+  const cursor = page('scriptMonitor.list', monitors, params).nextCursor;
+  assert.ok(cursor);
+  assert.throws(() => page('scriptMonitor.list', monitors, { ...params, cursor, agentId: 'agent-1' }), /InvalidParams/);
+  assert.throws(() => page('scriptMonitor.list', monitors, { ...params, cursor, view: 'full' }), /InvalidParams/);
+  for (const workspaceId of ['', null, undefined, 123])
+    assert.throws(() => page('script.list', [], { workspaceId }), /InvalidParams/);
 });

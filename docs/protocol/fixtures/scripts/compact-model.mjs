@@ -26,18 +26,16 @@ function withError(row, keys) {
 }
 const resultFields = ['outcome', 'exitCode', 'startedAt', 'stoppedAt'];
 export function scriptSummary(row) {
-  const result = pick(row, ['id', 'workspaceId', 'name', 'mode', 'source', 'category', 'autoStart', 'createdAt', 'updatedAt', 'purpose', 'archivedAt']);
+  const result = pick(row, ['id', 'workspaceId', 'name', 'mode', 'source', 'category', 'autoStart', 'createdAt', 'updatedAt', 'purpose']);
   [result.commandPreview, result.commandTruncated] = preview(row.command, 160);
   result.runtime = withError(row.runtime, ['status', 'restartCount', 'runId', 'pid', 'exitCode', 'startedAt', 'stoppedAt', 'detectedUrl', 'previouslyRunning', 'ready', 'readiness']);
   if (row.lastRun) result.lastRun = withError(row.lastRun, ['runId', ...resultFields]);
   return result;
 }
 export function monitorSummary(row) {
-  const result = pick(row, ['monitorId', 'workspaceId', 'agentId', 'scriptId', 'runId', 'scriptName', 'mode', 'state', 'lineCount', 'createdAt', 'expiresAt', 'settledAt', 'reason']);
+  const result = pick(row, ['monitorId', 'workspaceId', 'agentId', 'scriptId', 'runId', 'scriptName', 'mode', 'state', 'lineCount', 'createdAt', 'expiresAt']);
   if (Object.hasOwn(row, 'outputPattern'))
     [result.outputPatternPreview, result.outputPatternTruncated] = preview(row.outputPattern, 160);
-  if (row.result) result.result = withError(row.result, resultFields);
-  if (row.trigger) result.trigger = pick(row.trigger, ['observedLineCount']);
   return result;
 }
 export function representativeRows(count = 3) {
@@ -59,35 +57,35 @@ export function representativeRows(count = 3) {
       },
     });
     monitors.push({
-      monitorId: id, workspaceId: 'ws-a', agentId: 'agent-a', scriptId: id,
-      runId: `run-${id}`, scriptName: `Script ${id}`, mode: 'command', state: 'triggered',
+      monitorId: id, workspaceId: 'ws-a', agentId: `agent-${Math.floor(i / 5)}`, scriptId: id,
+      runId: `run-${id}`, scriptName: `Script ${id}`, mode: 'command', state: 'active',
       outputPattern: 'p'.repeat(1024), createdAt: '2026-10-01T00:00:00Z',
-      expiresAt: '2026-10-01T01:00:00Z', settledAt: '2026-10-01T00:01:00Z',
-      reason: 'output-match', trigger: { observedLineCount: 3, matchedLine: 'p'.repeat(4096) },
+      expiresAt: '2026-10-01T01:00:00Z',
     });
   }
   return { scripts, monitors };
 }
 export function page(method, rows, params) {
+  if (!['script.list', 'scriptMonitor.list'].includes(method) || typeof params.workspaceId !== 'string' || !params.workspaceId) invalid();
   const scripts = method === 'script.list';
   const key = scripts ? 'scripts' : 'monitors';
   const id = scripts ? 'id' : 'monitorId';
   const view = params.view === undefined ? 'full' : params.view;
   if (!['full', 'summary'].includes(view)) invalid();
-  const archive = params.archive === undefined ? 'all' : params.archive;
-  const state = params.state === undefined ? 'all' : params.state;
-  if (scripts && !['active', 'archived', 'all'].includes(archive)) invalid();
-  if (!scripts && !['active', 'terminal', 'all'].includes(state)) invalid();
+  const archive = params.archive === undefined ? 'active' : params.archive;
+  const state = params.state === undefined ? 'active' : params.state;
+  if (scripts && archive !== 'active') invalid();
+  if (!scripts && state !== 'active') invalid();
   if (!scripts && params.agentId !== undefined && (typeof params.agentId !== 'string' || !params.agentId)) invalid();
-  if (view === 'full' && ['limit', 'cursor', 'state'].some(k => Object.hasOwn(params, k))) invalid();
+  if (view === 'full' && ['limit', 'cursor'].some(k => Object.hasOwn(params, k))) invalid();
   if (scripts && Object.hasOwn(params, 'state')) invalid();
-  const scope = [method, params.workspaceId, scripts ? archive : state, scripts ? null : params.agentId ?? null];
+  const scope = [method, params.workspaceId, view, scripts ? archive : state, scripts ? null : params.agentId ?? null];
   const compare = (a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b));
   const tuple = row => [row.createdAt, row[id]];
   const compareTuple = (a, b) => compare(a[0], b[0]) || compare(a[1], b[1]);
   let selected = rows.filter(row => row.workspaceId === params.workspaceId && (scripts
-    ? archive === 'all' || Boolean(row.archivedAt) === (archive === 'archived')
-    : (!params.agentId || row.agentId === params.agentId) && (state === 'all' || (row.state === 'active') === (state === 'active'))));
+    ? !row.archivedAt
+    : row.state === 'active' && (!params.agentId || row.agentId === params.agentId)));
   selected.sort((a, b) => compareTuple(tuple(a), tuple(b)));
   if (view === 'full') return { [key]: structuredClone(selected) };
   const limit = params.limit === undefined ? 100 : params.limit;

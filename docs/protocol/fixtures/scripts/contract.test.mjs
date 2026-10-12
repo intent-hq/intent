@@ -1,7 +1,10 @@
+// Protocol-13 baseline fixtures remain for framing/lifecycle regression.
+// Protocol-14 membership/retirement overrides are in compact/active-monitors tests.
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import './compact.test.mjs';
+import './active-monitors.test.mjs';
 
 const fixture = JSON.parse(await readFile(new URL('./lifecycle.json', import.meta.url), 'utf8'));
 const scriptsDoc = await readFile(new URL('../../methods/scripts.md', import.meta.url), 'utf8');
@@ -101,12 +104,14 @@ test('required concurrency, persistence, cancellation and compatibility examples
   assert.equal(fixture.scenarios.find(c => c.id === 'restart-archived-success').expect.outputMayBeEmpty, true);
 });
 
-test('omitted wire filters retain archived definitions for legacy refetches', () => {
+test('protocol-13 baseline retains archive refetch semantics, superseded by v14', () => {
   const defaultList = fixture.cases.find(c => c.id === 'list-default');
   const allList = fixture.cases.find(c => c.id === 'list-all');
   assert.equal(defaultList.request.params.archive, undefined);
   assert.deepEqual(defaultList.expect.scriptIds, allList.expect.scriptIds);
-  assert.match(scriptsDoc, /default `all`/);
+  assert.match(scriptsDoc, /Historical baseline/);
+  assert.match(scriptsDoc, /omitted `archive` is equivalent to/);
+  assert.equal(fixture.protocolBaseline, 13);
   const legacy = fixture.scenarios.find(c => c.id === 'old-client-new-daemon');
   assert.equal(legacy.expect.defaultListArchive, 'all');
 });
