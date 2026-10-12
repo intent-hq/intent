@@ -1041,6 +1041,17 @@ stale authority. The workspace subscription's server-side snapshot/delta boundar
 must also reconcile newly visible/removed workspaces on an upgrade, with no lost
 concurrent workspace creation and no per-member persisted grant fan-out.
 
+Remaining workspace guests cannot receive `host:members-changed`. Every committed
+host addition/promotion therefore also emits the existing `workspace:updated`
+`changes.members: true` invalidation for each effective workspace, including
+inherited and archived workspaces. Offline promotions may leave both roster and
+member count unchanged; neither presence equality nor count equality suppresses
+this invalidation. Ordinary workspace additions/removals and host removals retain
+the same marker. A no-op join does not emit it. Consumers coalesce a membership-list
+refresh for the named workspace; a promotion need not carry a principal ID or
+member count. This additive delivery guarantee requires the companion daemon
+release; see [§6 shared-host invalidation](../06-events.md#shared-host-delivery-and-invalidation-109).
+
 Existing workspace events now reach effective members, including permission,
 terminal, script, browser and preview events needed for management. Filter at
 delivery and durable-query time, including aggregate queries. Guests retain the

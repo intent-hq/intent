@@ -417,6 +417,20 @@ Membership commits invalidate caches and reconcile workspace subscription snapsh
 before later reads/egress, including an empty host and concurrent workspace creation.
 The global membership event triggers a coalesced principal/workspace/roster refresh;
 its durable revision prevents an older refresh from restoring stale authority.
+Effective membership changes also publish durable, workspace-scoped
+`workspace:updated` with `data: { workspaceId, changes: { members: true } }`
+for each affected workspace, after the membership commit. This includes host
+additions/promotions across inherited workspaces, even when the promoted person
+is offline and both the online roster and member count stay unchanged. Remaining
+authorized workspace guests receive this invalidation through the existing
+membership gate; they never need the global host event. Clients refresh only the
+affected membership list, coalescing concurrent invalidations. `members: true`
+is sufficient: `addedPrincipalId`, `removedPrincipalId` and `memberCount` are not
+required on a promotion. When supplied, `memberCount` retains its existing
+count semantics. No-op joins emit no membership invalidation. Presence/focus/typing
+pushes alone do not imply a membership change. Initial hydration, reconnect and
+event-gap recovery still reconcile membership. This delivery guarantee is additive
+(docs first); consumers relying on it require the companion daemon release.
 No general access to global settings, account-auth events or unrelated principals
 is implied. See §8 for the permission snapshot/answer/event gate.
 
