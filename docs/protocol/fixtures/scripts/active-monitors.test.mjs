@@ -47,6 +47,19 @@ test('active retry is stable; finished registration refuses and creates no histo
   assert.throws(() => m.register({ runId: 'stale' }), /InvalidParams/);
 });
 
+test('active retry rejects a stale run ID without changing valid retry or owner refusal', () => {
+  const { m, id } = prepared();
+  const before = structuredClone(m.store);
+  assert.throws(() => m.register({ runId: 'run-stale' }), /InvalidParams/);
+  assert.deepEqual(m.store, before);
+  assert.deepEqual(m.register({ runId: 'run-a', ttlMs: 2000 }), { ok: true, monitor: m.get('ws', id) });
+  assert.deepEqual(m.register({ agentId: 'other-owner', runId: 'run-stale' }), {
+    ok: false, refused: true, reason: 'already-monitored',
+  });
+  assert.deepEqual(m.store, before);
+  assert.equal(m.events.length, 1);
+});
+
 test('triggered live run can be explicitly monitored afresh, without a terminal retry cache', () => {
   const { m, id } = prepared();
   m.retire(id, 'triggered', { settledAt: 1, reason: 'line-count', trigger: { observedLineCount: 1 } });

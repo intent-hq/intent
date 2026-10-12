@@ -31,7 +31,11 @@ export class ActiveMonitors {
     if (!Number.isInteger(ttlMs) || ttlMs < 1 || ttlMs > 86400000) invalid();
     if (!this.eligible({ workspaceId, agentId })) invalid();
     const old = Object.values(this.store.active).find(row => row.workspaceId === workspaceId && row.scriptId === scriptId);
-    if (old) return old.agentId === agentId ? { ok: true, monitor: structuredClone(old) } : { ok: false, refused: true, reason: 'already-monitored' };
+    if (old) {
+      if (old.agentId !== agentId) return { ok: false, refused: true, reason: 'already-monitored' };
+      if (runId !== undefined && runId !== old.runId) invalid();
+      return { ok: true, monitor: structuredClone(old) };
+    }
     const run = this.store.runs[scriptId];
     if (!run || (runId && run.runId !== runId)) invalid();
     if (run.final) return { ok: false, refused: true, reason: 'run-finished', scriptId, runId: run.runId };
