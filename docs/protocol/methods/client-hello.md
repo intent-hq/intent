@@ -11,6 +11,21 @@ contract, not caller authority. The legacy examples below remain valid for older
 daemons. On each connection, read `principal.me` before activating member controls;
 never infer the role from this client's capabilities or its saved registry category.
 
+**Scoped workspace membership invalidations (additive, docs first).**
+`server.capabilities.workspaceMembershipEvents: 1` guarantees the committed,
+workspace-scoped `workspace:updated` `changes.members: true` invalidations in
+[§6](../06-events.md#shared-host-delivery-and-invalidation-109), including offline
+host promotions with unchanged roster/count and delivery to remaining authorized
+guests. The server advertises support independently of locality, caller authority,
+or client-supplied capabilities; it grants no additional access. Only exact integer
+`1` enables removal of presence-to-membership refreshes. Missing, malformed or
+unknown versions retain the legacy presence-driven membership refresh; never infer
+support from daemon version, `hostMembership`, or seeing one membership event.
+Read this flag per admitted connection/backend and discard it on reconnect until
+hello completes. Initial hydration and reconnect/event-gap recovery remain required.
+A bundled daemon upgrade does not upgrade older remote hosts. This capability
+does not change experimental Multiplayer readiness.
+
 **Submission correlation (prepared).**
 `server.capabilities.submissionCorrelation: 1` gates the complete
 [optimistic submission contract](./agents.md#submission-correlation-and-optimistic-display-prepared-additive-extension):

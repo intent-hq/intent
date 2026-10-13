@@ -8,8 +8,70 @@ capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `13.8` — prepared checkout configuration extension; not a shipped-version claim.
+**Documented version:** `14.0` — prepared active-only script and monitor lists; not a shipped-version claim.
 Other prepared extensions retain their independent support gates.
+
+**Version 14.0 — active-only script and monitor lists (breaking, prepared).**
+The [replacement contract](./methods/scripts.md#active-only-compact-lists-prepared-breaking-contract)
+adds script.get and scriptMonitor.get, optional bounded summary pages, and removes
+archived list selection and terminal monitor storage/history reads. Exact gates
+are `scriptActiveLists: 1` and `scriptMonitors: 2`. Earlier unshipped 13.11 /
+scriptListSummary reservations are withdrawn. Full list JSON shapes survive,
+but default membership, accepted filters, completed registration retries and
+monitor mutation results change; this is a major, not an additive minor.
+The documented surface remains **449 / 393 / 56** (dispatchable / router / fast
+path). No implementation/release is implied. An older client can reach the new
+semantics; current clients do not universally reject future majors. New clients
+must require the relevant capability, never fall back to archived/history reads.
+Update the frontend's registered-root protocol-major guard for 14 as part of the
+coordinated compatible renderer change; merely changing hello is insufficient.
+
+**Rollout ordering.** New get method catalog reservations may land docs-first.
+Prepared v14 sections can coexist with explicitly historical v13 contracts;
+they must not claim that current pins implement removals. Daemon semantic/storage
+removals land first (with explicit human authorization), then the automatic
+monorepo pin bump, then removal of obsolete baseline documentation if desired.
+Never remove currently implemented method/catalog entries docs-first. No router
+method is retired here: archive/restore remain known-ID operations. Withdrawn
+unshipped summary/history reservations need no production removal. Daemon before
+frontend merge, coordinated carrying release and frontend major guard updates
+are required. An older daemon remains unsupported for these new list features;
+known-ID status/output may still be used. This draft grants no merge permission.
+
+**Version 13.10 — cancellable note deletion (additive, prepared).**
+The [grace deletion contract](./note-delete-grace.md) adds `note.deleteSchedule`,
+`note.deleteCancel`, `note.deleteStatus` and `note:delete-operation`, gated by exact
+integer `noteDeleteGrace: 1`. It preserves original data during cancellable grace,
+uses guarded deletion at expiry and does not implement postcommit restore.
+Immediate `note.delete` and the independently gated 13.9 reading contract remain
+unchanged. The documented surface is **447 / 391 / 56** (dispatchable / router /
+fast path). Result objects are bounded independently of existing transport frames;
+unknown outcomes and restart require reconciliation, not automatic deletion retry.
+
+**Version 13.9 — read-only note paging (additive, prepared).**
+[Revision-safe note pages](./methods/notes-tasks.md#revision-safe-note-pages-prepared-additive-contract)
+reserve this minor after the 13.8 selected checkout configuration extension. Exactly integer
+`notePagingRead: 1` plus a valid `server.capabilities.notePagingBackendId` gates the
+complete source/context/metadata/task-ID paging and bounded pageState subscription
+contract. `noteAnnotations: 1` separately requires the complete independent-epoch
+annotation extension alongside read paging. Numeric version, catalog presence and
+partial implementation do not establish support. Neither capability is advertised
+until its complete declared contract passes component validation.
+The prepared `markdownDocument` source owner supplies indexed omitted separator
+mappings without widening paragraph/heading ranges or changing the implicit native
+root. It uses the same canonicalNote v1 profile and read capability; component
+validation must include separator-only context discovery and exact source coverage.
+
+The earlier prepared `notePaging` promised partial writes and staged operations;
+it remains absent and is not repurposed. Those eight unshipped method reservations
+are withdrawn. Paging extends existing methods with no new event names; the
+combined catalog is **444 / 388 / 56** (dispatchable / router / fast path).
+Editing explicitly loads full source and reuses existing complete-document editors.
+Full drafts save through existing `note.update` with the loaded `expectedVersion`
+and strict stale refusal. Legacy `note.setContent` retains its separate sanitation
+and merge behavior; no new write API or mutation capability is introduced.
+This is not a shipped-version or product-enablement claim. Recheck competing minor
+allocations before merging the implementation.
 
 **Version 13.8 — selected checkout configuration (additive, prepared).**
 Adds `sourceControl.checkout.repoConfig` and `gitlabCheckoutRepoConfig: 1` for a
@@ -26,7 +88,8 @@ adds optional `includeOwnerAvatar` to checkout capture and optional
 legacy captures retain the previous shape, and new clients omit the input on
 older daemons. Metadata comes from the matching owning namespace in the existing
 project response, with no additional provider read. No method, event, authority,
-or catalog count changes: the documented surface remains **443 / 387 / 56**.
+or catalog count changes. At its reservation, the documented surface was
+**443 / 387 / 56**.
 
 **Version 13.6 — onboarding adapter preparation (additive, prepared).**
 [`host.prepareProviderAdapters`](./05-method-catalog.md#hostprepareprovideradapters-136-prepared)
@@ -41,6 +104,7 @@ daemons; no new capability flag is required. Existing prepared extensions retain
 their independent gates, and discovery remains unchanged. The documented surface
 is now **443 / 387 / 56** (dispatchable / router / fast path). This reservation
 does not advertise runtime implementation or change the pinned daemon version.
+Read-only note paging has its own independent capability gate.
 
 **Version 13.5 — GitLab project checkout (additive, prepared).**
 [Pre-workspace checkout](./methods/repository-checkout.md) adds six router methods:
@@ -208,6 +272,23 @@ Enrollment is private, excluded from public method and workspace-routing catalog
 These additive docs precede consumer merges/contract acceptance; authorized local
 development and draft preparation may proceed in parallel. Static fixtures do not
 qualify a listener, fresh-workspace source, provider or ready/ACK behavior.
+
+**Prepared read-only note paging contract (additive, reserved in 13.9).**
+[§5.2](./methods/notes-tasks.md#revision-safe-note-pages-prepared-additive-contract)
+defines the exhaustive read/annotation/subscription allowlist. Source, context,
+metadata and ordered task-ID pages extend `note.get`; annotation pages and bounded
+pageState projections extend existing methods. Exact integer `notePagingRead: 1`
+and valid `notePagingBackendId` are required; `noteAnnotations: 1` gates the complete
+annotation extension. Old clients retain complete-note APIs and events. New clients
+validate discriminants and never pass page content to full-document writers.
+Capability loss on reconnect preserves drafts and surfaces incompatibility.
+
+Additive docs land before dependent component opt-in. Withdrawn prepared write
+entries must be removed from component catalogs/consumers before a consumer check
+can pass against this reduced contract; do not weaken the checker to hide a pending
+component mismatch. Daemon support lands before frontend opt-in, with human merge
+authorization. Automated pin advancement remains unchanged. Controlled fixtures
+validate contract examples and bounds, not production storage or shipped support.
 
 **Prepared command-default change — recommended 11.0, not shipped.**
 [Script creation defaults (§5.8)](./methods/scripts.md#command-creation-defaults-prepared-breaking-change)

@@ -1,4 +1,6 @@
 {
+  "protocolBaseline": 13,
+  "supersededBy": "Protocol14 compact.json and active-monitors tests for list membership and terminal persistence; unchanged framing/event shapes remain applicable",
   "status": "prepared-not-executed",
   "capability": {
     "scriptMonitors": 1

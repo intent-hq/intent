@@ -32,6 +32,13 @@ export const PREPARED_BINDINGS = new Map([
     '  ws.script.monitor(scriptId, { ttlMs, runId?, outputPattern?, lineCount? }) → { ok, monitor? }',
     '  ws.script.monitors() → [monitors]',
     '  ws.script.unmonitor(monitorId) → { ok, monitor }',
+    '  ws.script.monitorDetails(monitorId) → monitor',
+  ].join('\n')],
+  ['docs/protocol/methods/scripts.md', [
+    '  ws.script.listPage({ archive?, limit?, cursor? }?) → { view, scripts, nextCursor? }',
+    '  ws.script.get(scriptId) → script',
+    '  ws.script.monitorsPage({ state?, limit?, cursor? }?) → { view, monitors, nextCursor? }',
+    '  ws.script.monitorDetails(monitorId) → monitor',
   ].join('\n')],
 ]);
 

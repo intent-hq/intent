@@ -324,7 +324,7 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | script (new in intentd) | script:output, script:state, script:changed | Live script streaming (§5.8); shared PTY host. `script:changed` is emitted on script definition mutations (create/update/remove); the [10.11 lifecycle candidate](./methods/scripts.md#saved-scripts-and-one-off-history-1011-implemented-candidate) reuses `action: "updated"` for archive/restore/latest-result changes; the [prepared self-contained change extension](./methods/scripts.md#self-contained-script-changes-prepared-additive-extension) adds `data.script` (complete list row with runtime) on create/update so consumers replace directly without a list call, retaining legacy invalidation fallback, preserving status/output access and completion hooks (archive is never `removed`); all payloads carry `scriptId`. data.chunk (script:output) is base64. `script:output` is **transient / broadcast-only** (never persisted, invisible to `event.query` §5.10); replay uses `script.output`. `script:state` lifecycle transitions stay durable; the status value is one of `idle \| starting \| running \| restarting \| exited` (§5.8) — `starting` (new in intentd, within v9.12 — intent-hq/intent#4858) marks the `script.start` launch window: the status is set **before the `script.start` reply** (so a `script.status` read after the reply never observes the pre-launch `idle`), and the transition is published by the owned launch task strictly ahead of the spawn's `running` (or `exited` + `error` on a launch failure) — the reply does not wait for the publish. Its payload carries the previous run's terminal fields already cleared — `pid` / `startedAt` / `exitCode` / `stoppedAt` / `error` / `detectedUrl` are **omitted** from the serialized `ScriptRuntimeState` (`skip_serializing_if = "Option::is_none"`, never `null`); a `script.stop` inside the window settles it back to `idle` with a `script:state`. `restarting` (new in intentd, monorepo#1318) marks the transient restart-in-flight window (auto-restart backoff between an exit and the next spawn attempt, and the `script.restart` stop→start gap; no `starting` is emitted there). The carried `ScriptRuntimeState` also surfaces the optional `previouslyRunning: true` was-running marker (§5.8; omitted when false), including the dismiss path — `script.stop` on a non-running marked script emits a `script:state` snapshot with the marker cleared, so other subscribers never retain a stale `previouslyRunning: true`. |
 | search (new in intentd) | search:result, search:done | Streaming search results (§5.15), correlated by data.requestId. search:result → data { requestId, matches }; search:done → data { requestId, total, truncated }. |
 | drafts (new in intentd) | draft:changed | Emitted after drafts.set / drafts.clear (§5.16). data = { workspaceId, agentId, clientId, hasDraft }; **no draft text** (no leakage). |
-| changes (new in intentd) | changes:tracked, changes:git-status, changes:metrics-changed, changes:agent-locks *(v8.8)* | Code Changes Review (§5.18–§5.20). `changes:tracked` → data { workspaceId, changes: TrackedChange[] } (emitted as the BE records attribution internally — there is no `file-tracking.trackChange` RPC). `changes:git-status` → data { workspaceId, status: WorkspaceGitStatus } — the follow-up emitted by a root-targeted `git.agentCommit` (`gitRootId`, v9.2) additionally carries `gitRootId`, with `status` read from the target root; primary-worktree payloads are byte-identical to before. `changes:metrics-changed` → data { workspaceId, agentId?, metrics: Metrics }. `changes:agent-locks` (v8.8, §5.19) → data { workspaceId, autoCommitEnabled, lockedAgentIds: string[], lockedFilePaths: string[] } — the daemon-computed agent-lock snapshot (which agents' files must not be manually staged/reverted; lock semantics in §5.19), published by the daemon's debounced recompute worker only when the snapshot actually changed; hydrate via `file-tracking.getAgentLocks`. Self-sufficient payloads (§6.7). |
+| changes (new in intentd) | changes:tracked, changes:git-status, changes:metrics-changed, changes:agent-locks *(v8.8)* | Code Changes Review (§5.18–§5.20). `changes:tracked` → data { workspaceId, changes: TrackedChange[] } (emitted as the BE records attribution internally — there is no `file-tracking.trackChange` RPC). `changes:git-status` → data { workspaceId, status: WorkspaceGitStatus } (optional `status.gitStatus` reuses the working-tree scan; optional `status.historyIdentity` permits bounded-history equality checks under §5.18, with conservative recovery when absent) — the follow-up emitted by a root-targeted `git.agentCommit` (`gitRootId`, v9.2) additionally carries `gitRootId`, with `status` read from the target root; primary-worktree payloads are byte-identical to before. `changes:metrics-changed` → data { workspaceId, agentId?, metrics: Metrics }. `changes:agent-locks` (v8.8, §5.19) → data { workspaceId, autoCommitEnabled, lockedAgentIds: string[], lockedFilePaths: string[] } — the daemon-computed agent-lock snapshot (which agents' files must not be manually staged/reverted; lock semantics in §5.19), published by the daemon's debounced recompute worker only when the snapshot actually changed; hydrate via `file-tracking.getAgentLocks`. Self-sufficient payloads (§6.7). |
 | workspace usage (new in intentd) | workspace:tokenUsage-changed | The materialized token/message usage snapshot changed. The daemon publishes this event only after detached end-of-turn usage accounting commits a changed snapshot, or after the internal reconciliation pass commits one (§5.23). Transcript writes do not publish an immediate usage snapshot; their effects appear when one of those materialization paths next commits a changed snapshot. End-of-turn bookkeeping is detached, so this event has no ordering guarantee relative to `agent:stream:end`. data = { workspaceId, tokenUsage: TokenUsage }. `tokenUsage` is the exact shape served by `workspace.getTokenUsage`, including the presence-detected `byAgentModel?` rows. Self-sufficient payload (§6.7); a client replaces its prior snapshot and does not issue a follow-up usage read. |
 | workspace display status (new in intentd) | workspace:displayStatus-changed | Derived `Workspace.displayStatus` rollup transitioned (§5.1). Mutation-driven, never polled: recomputed-and-compared after the mutations that can move the derivation (task status/metadata updates, task-note creation/deletion, PR link/status changes) — and, since intentd#793, on agent start/stop transitions: the 0→1 agent-running flip recomputes-and-emits immediately (normally the promotion to `in_progress`; a pending higher-precedence attention axis — `failed`/`blocked`/`needs_attention`, §5.1 — still outranks it and the transition-only emission suppresses the no-op), and the running→not-running recompute runs after the same debounce grace window as `workspace:activity-changed` (emitting whatever the not-running derivation yields — `idle`, a PR stage, or `complete`) — and on the watch/monitor/hook lifecycle transitions listed on the `workspace:waiting-changed` row below (since v6.17 the wait signals feed the orthogonal `waiting` flag, not this derivation — §5.1 step 3 — so this event's recompute-and-compare still runs at every one of those choke points but is normally a silent no-op at the hook and completion-watch sites; the PR-monitor sites are the exception since [intent-hq/intentd#1329](https://github.com/intent-hq/intentd/pull/1329): the monitored PR's persisted state feeds the §5.1 step-4 PR rungs, so a register on an open PR can emit `pr_open`/`pr_ready`, the poll loop's terminal completion on a merge can emit `pr_merged`, and a cancel can lapse the rung back to the base rollup — the idempotent re-arm still recomputes and stays a silent no-op, and a mid-watch snapshot change is not its own recompute site: the flip surfaces at the next read-path enrichment or later choke-point recompute) — and on the **git-root PR refresh** (§5.1 git-root PR fold; behavior only, no version bump): the PRs persisted on the workspace's secondary git roots (`workspace_git_root.pull_requests`, §5.6) are a same-rung input to the §5.1 step-4 PR rungs, so the background sweep's per-root refresh recomputes-and-compares after it persists a changed root linkage/pool (the same write that emits `gitRoot:updated`) — a secondary-root PR opening can emit `pr_open`/`pr_ready`/`pr_queued`, one merging can emit `pr_merged`, an unchanged sweep stays silent — and a `ws.git.registerRoot` of a root already carrying PR data or the removal of a PR-bearing root (`ws.git.unregisterRoot`, the sweep's auto-prune) recomputes too, lapsing the rung back to the base rollup — and on the **`github.pulls.get` fold** ([intent-hq/intentd#1923](https://github.com/intent-hq/intentd/pull/1923), §5.27): a successful on-demand fetch is upserted into every non-archived, non-remote workspace — and every secondary git root of such a workspace — referencing the PR by URL (a root only updates an existing pool entry and its linked `prStatus` / `prUrl`, §5.27), and each persisted delta (the same write that emits `pr:updated` / `gitRoot:updated`) recomputes-and-compares, so a hover-card read of a just-merged PR can emit `pr_merged` without waiting for the next sweep; an unchanged or unreferenced PR stays silent — and, for the `needs_attention`/`blocked` axes (§5.1), on attention raises (`ws.agent.requestDiscussion` / `ws.agent.reportBlocker` — for a mid-turn raise the recompute runs at the raising agent's turn-end surfacing flush, not at tool-call time: a pending request whose surfacing is still parked is skipped by the derivation until the flush folds it in under the ordinary §5.1 precedence and eligibility rules — [intent-hq/intentd#1639](https://github.com/intent-hq/intentd/pull/1639), §5.5 idle-deferred surfacing) and retires (explicit blocker recovery or the turn-begin clear), question-asking turn ends (the turn-end `pendingQuestionsMessageId` marker write), and pending-questions resolutions — within v6.0 only a `question_answers`-tagged user row naming the marked message, `agent.dismissQuestions`, or a NEWER question-bearing assistant turn resolves the pending set (§5.5); the recompute-and-compare still runs after every user-row persist by the send/drain paths (`agent.sendMessage` direct send, `agent.sendQueuedMessageNow`, `agent.editAndRegenerate`'s regenerated message, a drained user-origin queue entry) and every transcript mutation via the RPCs `agent.appendMessage` / `agent.replaceMessages` (§5.5) after persisting (intentd#833; intentd#965), so the trigger taxonomy holds unconditionally — an untagged row simply leaves the marker armed and the recompute a no-op — and, for the `failed` axis (§5.1, intentd#945), on the mid-turn Error park (recomputed as the park persists) and its retires: `agent.retry` (recomputed before the redriven worker starts, so the `failed → in_progress` transition emits immediately) and the fresh-`agent.sendMessage` recovery (recomputed after the user-row persist) — and, for the `failed` / `blocked` / `needs_attention` axes together, on the §5.5 soft retire (`ws.agent.retire`, including each child retired by the cascade over descendants: a retired session leaves those axes, so the recompute-and-compare runs once per retired session after its `retiredAt` mark persists — `retire_one_session`) and its undo `agent.restore` (a restored session parked in `error` or holding a pending blocker / discussion / question can reintroduce a rung — recomputed after the mark clears; the `restored: false` no-op recomputes nothing) — and, for the `review_required`-driven `needs_attention` (§5.1, intentd#945; the `unread` flag never feeds the derivation), on the workspace attention-flag writes that can move that axis: `workspace.dismissAttention` and `workspace.update { attention }` — the turn-end `raise_attention` writes only `unread` (fired only when a **top-level foreground** agent's queue drains, never for child (`parent_agent_id`) or background agents (intentd#1021), skipped when the draining session is soft-retired (`retiredAt` set, §5.5 — a hidden agent cannot be landed on to read it; `should_raise_turn_end_unread`), and skipped when the workspace is `Archived` at drain time (fail-open on a workspace-read error; [intent-hq/intentd#1075](https://github.com/intent-hq/intentd/pull/1075)); guarded no-op when the stored flag is not `none`) and `workspace.markSeen` only clears `unread`, so neither feeds the derivation and both skip the recompute — and emitted **only on an actual transition** — no-op recomputes stay silent. The in-memory baseline is seeded by the `workspace.list` / `workspace.get` emit-path enrichment (or lazily by the first post-mutation recompute); a first observation records without emitting, and a daemon restart re-seeds on first touch. data = { workspaceId, displayStatus }. Self-sufficient payload (§6.7). |
 | workspace waiting (new in intentd, v6.17) | workspace:waiting-changed | The orthogonal `Workspace.waiting` flag transitioned (§5.1) — the workspace gained its first, or settled its last, live wait signal (ACTIVE background hook §5.40, ACTIVE PR monitor §5.42, or waiting agent subscription §Completion-watch persistence). Mutation-driven, never polled, and emitted **only on an actual transition** against a per-workspace last-observed baseline (the same transition-only + best-effort contract as `workspace:displayStatus-changed` above; no-op recomputes stay silent). Recomputed-and-compared at every choke point that can move a wait signal — **hooks** (intentd#856 established the sites): schedule (all validation-run outcomes) and every settlement — dispatch-retire, eviction, cancel (owner/FE/`workspace.archive` sweep), expiry, on both the synchronous ops and the spawned-task run paths, plus the boot-rehydration owner-gone cancel; **PR monitors** ([intent-hq/intentd#1036](https://github.com/intent-hq/intentd/pull/1036) established the sites): register (`ws.pr.monitor`, including the idempotent re-arm), the owner (`ws.pr.unmonitor`) and FE (`prMonitor.cancel`) cancels, the `workspace.archive` sweep cancels ([intent-hq/intentd#1067](https://github.com/intent-hq/intentd/pull/1067)), the poll loop's terminal completion (PR merged/closed), and the boot-rehydration owner-gone cancels; **completion watches**, recomputed in the parent's home workspace: watch register/adopt (the `agent.delegate` auto-watch, `after_all` group enrollment, explicit `ws.agent.watch`), the deliver-once watch retirement at the child's completion, `after_all` group settlement, `agent.cancelSubscriptions` / `ws.agent.unwatch` cancels, and the workspace-delete subscription sweeps — the same choke points that publish `agent:subscriptions-changed`. Each site runs this recompute alongside the `workspace:displayStatus-changed` one; since v6.17 the waiting half is the one that normally emits at the hook and completion-watch sites, while at the PR-monitor sites the displayStatus half can emit too ([intent-hq/intentd#1329](https://github.com/intent-hq/intentd/pull/1329): the monitored PR's persisted state feeds the §5.1 step-4 PR rungs). The in-memory baseline is seeded by the `workspace.list` / `workspace.get` emit-path enrichment (a seed never emits; `workspace.delete` evicts it, and a daemon restart re-seeds on first touch). data = { workspaceId, waiting } — `waiting` is a plain boolean here (both values on the wire, unlike the presence-detected `Workspace` field). Self-sufficient payload (§6.7): clients flip the wait indicator directly, no follow-up fetch. Tailed by the global `workspace` subscription channel (§6.9). |
@@ -417,6 +417,24 @@ Membership commits invalidate caches and reconcile workspace subscription snapsh
 before later reads/egress, including an empty host and concurrent workspace creation.
 The global membership event triggers a coalesced principal/workspace/roster refresh;
 its durable revision prevents an older refresh from restoring stale authority.
+Effective membership changes also publish durable, workspace-scoped
+`workspace:updated` with `data: { workspaceId, changes: { members: true } }`
+for each affected workspace, after the membership commit. This includes host
+additions/promotions across inherited workspaces, even when the promoted person
+is offline and both the online roster and member count stay unchanged. Remaining
+authorized workspace guests receive this invalidation through the existing
+membership gate; they never need the global host event. Clients refresh only the
+affected membership list, coalescing concurrent invalidations. `members: true`
+is sufficient: `addedPrincipalId`, `removedPrincipalId` and `memberCount` are not
+required on a promotion. When supplied, `memberCount` retains its existing
+count semantics. No-op joins emit no membership invalidation. Presence/focus/typing
+pushes alone do not imply a membership change. Initial hydration, reconnect and
+event-gap recovery still reconcile membership. This delivery guarantee is additive
+(docs first), advertised by `client.hello` server capability
+`workspaceMembershipEvents: 1`. Only exact integer `1` enables dropping
+presence-driven membership refreshes; missing/malformed/unknown capability values
+retain the legacy fallback per connection/backend, including older remote hosts.
+See [§5.17](./methods/client-hello.md) for capability lifecycle and recovery.
 No general access to global settings, account-auth events or unrelated principals
 is implied. See §8 for the permission snapshot/answer/event gate.
 
@@ -761,6 +779,81 @@ These additions prepare metadata, not connection relaying or reconnect ownership
 
 `note` and `task` entities carry an explicit `rev` (the optimistic-concurrency version, §4); `workspace`, `comment`, `agent`, and `chat` entities deliberately do **not** carry `rev`.
 
+### Prepared note page subscriptions
+
+The [revision-safe note contract](./methods/notes-tasks.md#revision-safe-note-pages-prepared-additive-contract)
+adds opt-in projections, **not new event names**. `notePagingRead: 1` gates
+`note.subscribe { workspaceId, noteId, projection: "pageState" }`;
+`noteAnnotations: 1` additionally gates
+`comment.subscribe { workspaceId, noteId, projection: "pageState" }`.
+Both require one note and return the existing subscription ID/seq envelope.
+Unknown projection values are invalid on supporting daemons. Omission preserves
+all existing snapshot/delta behavior; `slim` remains its existing list projection.
+
+For this projection, seq-0 and **every subsequent push** use `params.kind:
+"snapshot"` and a single object in `params.snapshot` (not a collection array).
+There is no `params.payload` or `params.delta`. Each push replaces the state tuple,
+subject to the generation guard below. The complete frame is:
+
+```json
+{"jsonrpc":"2.0","method":"subscription.push","params":{"subscriptionId":"sub-a","kind":"snapshot","seq":0,"snapshot":{"kind":"notePageState","scope":{"backendId":"db-a","workspaceId":"ws-a","noteId":"spec","noteInstanceId":"inc-a"},"stateGeneration":"10","sourceRevision":"r:7","attributionGeneration":"a:2","attributionState":"ready","commentRevision":"c:4","deleted":false,"invalidation":"all"}}}
+```
+
+Both channels use this frame, with their own subscriptionId/seq. The bounded state is:
+`{ kind: "notePageState", scope, stateGeneration, sourceRevision, attributionGeneration,
+commentRevision, deleted, invalidation: "all" }`. Scope is the complete NoteScope
+from §5.2. Epochs are opaque strings; pending attribution uses its current generation
+plus `attributionState: "pending"` (otherwise `"ready"`). `deleted: true` retires
+the incarnation and contains its last known epochs, never a recreated note's state.
+No source text, Note, metadata collection, attribution map, anchor list, thread
+summary or replies are included. Each complete push is at most **4,096 escaped
+UTF-8 bytes**. Invalidations deliberately do not enumerate unbounded changed ranges,
+comment IDs or task IDs. Indexed pages/counts are fetched separately on demand.
+
+Publish after the source or annotation transaction commits. Metadata-only
+updates, every full writer, marker rewrites and task conversion all
+advance the appropriate source state. Attribution-only recompute changes only its
+generation; comment-only reply/resolve/delete changes only commentRevision. A
+source-writing comment action changes source and comment state together. Coalesce
+pending state per subscription to the newest complete tuple; do not concatenate
+unbounded deltas.
+`stateGeneration` is a persisted monotonic unsigned 64-bit counter serialized as a
+canonical decimal string, shared by **both** channels for one NoteScope. Increment
+it in the same transaction as any tuple change (including metadata, annotation
+readiness and deletion); equal generations must have byte-equivalent epoch/state
+fields. Counter exhaustion fails before a mutation, never wraps. It is distinct from
+opaque source/annotation revisions and per-subscription `seq`. Restart keeps it;
+recreated notes have a different incarnation.
+
+The shared cache reducer accepts a tuple only when its stateGeneration exceeds the
+last admitted generation for that scope; equality is an idempotent duplicate,
+smaller generations are discarded even when the other channel's seq is newer.
+An equal-generation/different-tuple frame is a protocol error: retain drafts,
+invalidate clean data and reacquire an authoritative snapshot. Page responses never
+advance this shared tuple; they populate only their matching epoch/generation-owned
+request cache. Thus a delayed comment-channel snapshot cannot restore an old source
+revision after a newer note-channel state snapshot, and an attribution-only update cannot
+roll comments backward. After reconnect, subscribe/snapshot and compare this same
+persisted generation before admitting cached responses.
+
+A sourceRevision invalidation also invalidates ordered task-ID summary pages and
+their long-ID fragments; this state frame never embeds the full ordered-ID array.
+A comment-only revision change leaves that canonical-source summary intact.
+
+Sequence gaps/lag recovery produce another bounded state snapshot, **never** a
+legacy full note/comment refetch. Reconnect reacquires state before any cached page
+is trusted; old request generations cannot repopulate a new subscription.
+
+Page consumers do not subscribe to the legacy annotation firehose or full collection
+channels to populate their page caches. Existing `line-attribution:updated` and
+`comment:*`/`note:*` events feed the server's state projection internally; its
+implementation must obtain epochs without decoding the legacy whole payload.
+Existing legacy subscribers still receive their documented events. An explicitly
+separate legacy subscription is not bounded by the page projection contract and
+must not be silently created by the new path. Unsubscribe, note/workspace switching
+and visibility loss release the scoped subscription and pending state; drafts stay
+session-owned. Permission checks and the existing no-leak not-found policy apply.
+
 ### Permission event audience
 
 `agent:permission:request` and `agent:permission:resolved` are visible to callers
@@ -792,3 +885,14 @@ must not revoke an independent sibling subscription or document. Ordinary event
 subscriptions retain their existing behavior.
 
 This declaration does not activate producers, subscription filters or capabilities.
+
+### Cancellable note deletion event (prepared 13.10)
+
+`note:delete-operation` is a workspace-scoped invalidation gated by `noteDeleteGrace: 1`.
+Its data is `{ workspaceId, noteId, noteInstanceId, epoch, sequence, operationKey,
+state, deadlineTickMs }`; all fields, state values and bounds follow the
+[grace contract](./note-delete-grace.md#events-and-recovery). It carries no body or
+credentials and grants no cancellation authority. Global sequence gaps are not
+proof of lost workspace events. Bounded snapshots retain settled uncertain markers;
+marker absence requires affected-note reconciliation, never cached-note resurrection.
+Existing `note:deleted` and task side effects occur only after actual commit.

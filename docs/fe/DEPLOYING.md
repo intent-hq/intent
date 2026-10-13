@@ -126,8 +126,10 @@ Release workflows require the following secrets configured on `intent-hq/cloudla
 - `RELEASE_PAT` — Personal access token with `repo` scope on `cloudlands-fe` + `cloudlands-releases` (also used by release-please, which needs contents + pull-requests + issues write; `repo` scope covers all three)
 - `INTENTD_READ_PAT` — Personal access token with read-only access to `intent-hq/intentd` (used to download the pinned intentd release assets while the repo is private)
 
-Windows builds require no signing secrets — they ship **unsigned** (see
-[Platform builds and runners](#platform-builds-and-runners)).
+Production Windows releases require no Windows signing secrets because they remain
+**unsigned** (see [Platform builds and runners](#platform-builds-and-runners)).
+Optional manual Azure-signed builds require the separate configuration described
+under [Manual Signed Build](#manual-signed-build-pr-test-builds).
 
 ## Alpha Release Workflow
 
@@ -195,7 +197,7 @@ Notes:
 
 - **Self-hosted runner dependency**: both Linux jobs require their self-hosted runners (`tinybox` for x64 — monorepo#1340, `comfy` for arm64) to be online; a release run queues (and eventually fails) if one is unavailable. macOS uses a GitHub-hosted runner and Windows an org-hosted runner.
 - **Linux arm64 temporarily ships AppImage-only**: electron-builder's bundled fpm fails to spawn on the arm64 runner, so `deb:arm64` is disabled until the runner issue is resolved (monorepo#1286).
-- **Windows builds are unsigned** (first iteration). The `scripts/windows-sign.cjs` sign hook silently skips signing when `INTENT_WINDOWS_ENABLE_INTEGRATED_SIGNING` is unset; DigiCert integrated signing in releases is a follow-up. Expect SmartScreen warnings on install.
+- **Production Windows releases remain unsigned.** Expect SmartScreen warnings on install. Azure Artifact Signing is available only through the explicit manual build configuration; production enablement and native Windows installation/update acceptance remain pending. The retired DigiCert flag `INTENT_WINDOWS_ENABLE_INTEGRATED_SIGNING` must stay unset; enabling it fails the build.
 - **Linux packages are unsigned** (standard for AppImage/deb distributed outside a package repository). Snap is not built or published.
 - macOS remains signed + notarized as before.
 
@@ -265,10 +267,23 @@ Apple Silicon to request it explicitly; a different CPU target fails early.
 `.github/workflows/manual-signed-build.yml` ("Manual Signed Build") is dispatch-only
 and builds any branch/ref — e.g. a PR branch — into platform installers for manual
 testing. Platforms are opt-in (`build_macos` / `build_windows` / `build_linux`);
-`sign` defaults to true (macOS Developer ID + notarization, Windows DigiCert).
+`sign` defaults to true (macOS Developer ID + notarization, Windows Azure Artifact Signing).
+For a manual Windows build, `build_windows=true` selects the platform and
+`sign=false` selects an unsigned build.
 Installers are uploaded as short-lived workflow artifacts (7-day retention),
 version-suffixed `-manual.<run_number>`; nothing is published to
 `intent-hq/cloudlands-releases` and no auto-updater feed is uploaded.
+
+Manual Azure signing requires an approved Azure signing account, certificate
+profile and matching publisher identity. Configure repository variables
+`INTENT_WINDOWS_AZURE_ENDPOINT`, `INTENT_WINDOWS_AZURE_ACCOUNT_NAME`,
+`INTENT_WINDOWS_AZURE_CERTIFICATE_PROFILE_NAME`, `INTENT_WINDOWS_PUBLISHER_NAME`,
+`INTENT_WINDOWS_PUBLISHER_SUBJECT` (the full certificate subject), `AZURE_TENANT_ID`
+and `AZURE_CLIENT_ID`, plus the `AZURE_CLIENT_SECRET` repository secret. The separate
+`intent-manual-windows-build.yml` workflow uses `integrated_signing=true` to request
+Azure signing and defaults to unsigned. Artifact verification does not establish
+that Azure provisioning, native Windows trust, installation or unsigned-to-signed
+updates have passed acceptance.
 
 `build_macos=true` enables Mac builds. The optional `macos_arch` choice selects
 `both` (default), `arm64` (Apple Silicon only), or `x64` (Intel only). Omitting

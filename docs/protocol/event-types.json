@@ -108,6 +108,7 @@
     "mcp:notification",
     "node:changed",
     "note:created",
+    "note:delete-operation",
     "note:deleted",
     "note:presence",
     "note:updated",

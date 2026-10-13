@@ -25,6 +25,18 @@ shipped-version claim; `scriptLifecycle: 1` alone does not distinguish defaults.
 The prepared [worker observation contract (§5.5b)](./methods/agent-workers.md)
 adds a read-only list and subscription; `agentWorkers: 1` gates support.
 
+The prepared [note paging core (§5.2)](./methods/notes-tasks.md#revision-safe-note-pages-prepared-additive-contract)
+defines bounded read-only views; `notePagingRead: 1` gates support.
+Source and annotation pages extend existing methods, not new event names.
+
+The prepared [compact script list contract](./methods/scripts.md#active-only-compact-lists-prepared-breaking-contract)
+adds `script.get` and `scriptMonitor.get`, plus optional bounded summary views on
+the existing lists under `scriptActiveLists: 1` / `scriptMonitors: 2`. Protocol 14 removes archived list selection and terminal monitor history; full event payloads remain unchanged.
+
+The prepared [cancellable note deletion contract](./note-delete-grace.md) adds
+three router methods and one operation event under `noteDeleteGrace: 1`.
+Immediate deletion and read-only paging capabilities remain unchanged.
+
 The prepared [desktop control contract (§5.51)](./methods/desktop.md) adds four
 user/executor router methods and one daemon-only reverse RPC. Agent lifecycle
 and actions are MCP-only; `desktopControl: 1` gates support independently at both ends.
@@ -38,18 +50,18 @@ The prepared onboarding request `host.prepareProviderAdapters` (§5.14 below)
 adds one owner-only fast-path method. Its acknowledgement is not a readiness claim;
 older daemons may reject it without blocking onboarding.
 
-The documented surface reserves **444 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
+The documented surface reserves **449 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
 
-- **Router methods:** 388 methods dispatched via the main router (`router::dispatch`)
+- **Router methods:** 393 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 56 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 0; use canonical Git read names
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 5 notifications: `events.event` (§6.3) and the socket-private `workspace.repositoryContext.retired`, `workspace.repositorySelection.retired`, `accept-changes.retired`, `sourceControl.read.retired` controls (§6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 6 methods total — 2 are **dual-role** and counted within the 444 dispatchable names (`browser.exec`, `host.openInEditor`), and 4 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) — see §5.9, §5.14 and the reverse-RPC list below
+- **Client-served reverse RPCs:** 6 methods total — 2 are **dual-role** and counted within the 449 dispatchable names (`browser.exec`, `host.openInEditor`), and 4 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) — see §5.9, §5.14 and the reverse-RPC list below
 
-**Total:** 444 dispatchable names + 5 notifications. Of the 6 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 4 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) are daemon→client-only reverse RPCs, never dispatched client→server.
+**Total:** 449 dispatchable names + 5 notifications. Of the 6 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 4 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
 The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.53) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
 
@@ -62,7 +74,7 @@ capabilities gate support; catalog entries do not grant permission or establish
 which desktop release contains the feature. The methods below lead the component
 pin, while all existing methods and prepared extensions remain present.
 
-### Router methods by namespace (388 total)
+### Router methods by namespace (393 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
@@ -89,7 +101,7 @@ pin, while all existing methods and prepared extensions remain present.
 | metrics | 1 | getAgentStats |
 | models | 1 | list |
 | node | 4 | drain, list, register, remove — prepared node execution contract (§5.50) |
-| note | 18 | add, create, delete, edit, editLines, get, getVersion, lineAttribution.computeNow, lineAttribution.load, list, listTasks, listVersions, readAsset, restoreVersion, saveAsset, setContent, update, updateMetadata |
+| note | 21 | add, create, delete, deleteCancel, deleteSchedule, deleteStatus, edit, editLines, get, getVersion, lineAttribution.computeNow, lineAttribution.load, list, listTasks, listVersions, readAsset, restoreVersion, saveAsset, setContent, update, updateMetadata |
 | pr | 1 | refresh — status was removed in v12.0; 11 other `pr.*` methods were removed in v5.0 (§5.7) |
 | prMonitor | 3 | list, cancel, flush — the FE surface over centralized PR monitors (§5.42; v6.1). No wire registration method: monitors are agent-owned via the MCP `ws.pr.monitor` binding only, per the §6.8 principle (like `hook.*` vs `ws.hook.schedule`) |
 | presence | 1 | snapshot — the current online roster of a member workspace, i.e. the `presence:changed` payload (§6.5) on demand (`{ workspaceId }` req; §5.47; shipped in intentd b518d31). Ephemeral read, no host reach; the presence writes are fast-path (`presence.update`, `note.presence.update`, below) and the per-note viewer channel is `note.presence.subscribe` / `note.presence.unsubscribe` (§6.9) |
@@ -100,8 +112,8 @@ pin, while all existing methods and prepared extensions remain present.
 | repoConfig | 4 | ensureDir, get, has, save |
 | rules | 3 | get, list, update |
 | sandbox | 2 | cow.discard, cow.merge |
-| script | 11 | archive, create, list, output, remove, restart, restore, run, start, status, stop |
-| scriptMonitor | 3 | cancel, cancelRun, list — prepared script run monitors (§5.8a); registration is MCP-only |
+| script | 12 | archive, create, get, list, output, remove, restart, restore, run, start, status, stop |
+| scriptMonitor | 4 | cancel, cancelRun, get, list — prepared script run monitors (§5.8a); registration is MCP-only |
 | search | 7 | cancel, codebase, events, fileNames, inFiles, messages, notes |
 | sentry | 8 | assignIssue, authStatus, getIssue, ignoreIssue, listIssues, listProjects, resolveIssue, searchIssues |
 | settings | 4 | get, list, reset, update |
@@ -771,7 +783,8 @@ Daemon-owned provider discovery: reports which CLI-backed agent providers are in
 - `gatedOff` (optional string, not shown above) is present — with a human-readable reason — only when the provider is gated off (e.g. a required env var or feature code is missing). Gated providers skip binary probing entirely, so a gated entry never carries `resolvedPath`, `secondaryCommand`, `secondaryResolved`, or `secondaryResolvedPath` and always reports `installed: false`.
 - `npxOnly` is `true` for providers with no local-binary path at all (claude-code): they are launched via `npx <package>`, `installed` reflects npx resolution, and `resolvedPath` (when present) is the npx binary. `npxPackage` (the pinned package spec) is present **iff** `npxOnly` is `true`.
 - `hasNpxFallback` is `true` for providers that prefer a local binary but can fall back to an npx-launched adapter when the binary is absent — so a `hasNpxFallback: true` provider with `installed: false` may still be usable if the `npx` probe below reports `versionOk: true`.
-- **`pi` CLI verdict fields** *(additive, intentd#1044 / monorepo#1662)* — the `pi` row additionally folds in a probe of the real `pi` CLI (the binary the pinned `pi-acp` adapter spawns — distinct from npx, which only launches the adapter). These fields appear **only** on the pi row, and only when it is not `gatedOff` (gated rows are never probed). The probed pi row **always** carries `cliCommand` (the command probed: a non-empty `PI_ACP_PI_COMMAND` daemon-env override, else bare `pi`), `cliResolved` (whether the command resolved to an executable), `cliVersionOk` (`true` **iff** the probe confirmed the minimum version or newer), and `cliRequirement` (the pinned adapter's human-readable requirement, e.g. `"Pi CLI 0.81.0+"` for `pi-acp@0.0.34`; this value can change with the adapter pin). `cliResolvedPath` (absolute path) is present only when the CLI resolved, and `cliVersion` (the trimmed first line of `pi --version` output) only when the version probe succeeded — both **omitted (never null)** otherwise. A bare command name is resolved against the **spawn-time enhanced PATH** (npx's parent dir and `~/.augment/bin` ahead of the enriched/inherited dirs), so the probe reports the same binary the spawned pi-acp child would actually exec.
+- **Adapter-declared CLI minimum** *(additive, intent-hq/intent#6982)* — a non-gated provider whose exact pinned adapter declares a dependency on its mapped underlying CLI package may carry `cliMinimumVersion` (string, derived npm range lower bound), `cliVersionRange` (string, original declaration; multiple requirements joined with ` and `), and `cliRequirement` (human-readable command plus declaration). The accompanying `cliCommand`, `cliResolved`, optional `cliResolvedPath`, and optional `cliVersion` describe the actual installed CLI selected for launches, never the ACP adapter or an SDK. `cliVersionOk` is `false` only when the parsed installed version is below the derived minimum and `true` at or above it; a newer version outside the dependency range's upper bound does **not** trigger this warning. Missing, failed, or unparseable probes omit `cliVersionOk` (never null); unsupported declarations or no declared lower bound omit the new minimum/range fields entirely. Snapshot metadata is generated from exact pinned npm packages and synchronized with pin updates; discovery does no registry/network lookup. Node engine, SDK dependency, and adapter version numbers are not CLI requirements. Discovery is descriptive: these fields do not change `installed` or add `unavailableReason`. Codex separately rejects confirmed versions below this same derived minimum before persistent agent launches, one-shot completions, and model probes, reporting the detected and required versions and an upgrade action. A newer version outside the declaration’s upper bound is allowed; unknown/unparseable versions or absent/unsupported declarations do not create an old-version rejection. This Codex gate does not introduce a new launch gate for other providers. Startup warning eligibility requires `cliMinimumVersion`, `cliResolved: true`, a detected `cliVersion`, and `cliVersionOk: false`. The legacy Pi gate below has no `cliMinimumVersion` unless its adapter independently declares a CLI requirement, so its legacy fields alone never trigger the new warning.
+- **`pi` CLI verdict fields** *(additive, intentd#1044 / monorepo#1662)* — the `pi` row additionally folds in a probe of the real `pi` CLI (the binary the pinned `pi-acp` adapter spawns — distinct from npx, which only launches the adapter). These legacy fields appear on the pi row when it is not `gatedOff`; other providers may reuse them for the adapter-declared check above (gated rows are never probed). The probed pi row **always** carries `cliCommand` (the command probed: a non-empty `PI_ACP_PI_COMMAND` daemon-env override, else bare `pi`), `cliResolved` (whether the command resolved to an executable), `cliVersionOk` (`true` **iff** the probe confirmed the minimum version or newer), and `cliRequirement` (the pinned adapter's human-readable requirement, e.g. `"Pi CLI 0.81.0+"` for `pi-acp@0.0.34`; this value can change with the adapter pin). `cliResolvedPath` (absolute path) is present only when the CLI resolved, and `cliVersion` (the trimmed first line of `pi --version` output) only when the version probe succeeded — both **omitted (never null)** otherwise. A bare command name is resolved against the **spawn-time enhanced PATH** (npx's parent dir and `~/.augment/bin` ahead of the enriched/inherited dirs), so the probe reports the same binary the spawned pi-acp child would actually exec.
 - **`pi` CLI gating** — a **missing** or **confirmed-too-old** CLI marks the pi row unavailable (it never sets `gatedOff`, which stays reserved for the env-var/feature-code mechanism above): `installed` is forced to `false` and `unavailableReason` (optional string, pi row only) carries an actionable message naming the found version (when too old), the requirement, and the adapter pin (e.g. `"pi CLI not found — Pi CLI 0.81.0+ is required by pi-acp@0.0.34"`). An **inconclusive** probe — spawn failure, timeout, unparseable `--version` output, or a relative separator-carrying `PI_ACP_PI_COMMAND` override that did not resolve from the daemon's CWD — is **permissive**: the daemon logs a WARN and does not gate, so `cliVersionOk` is `false` but `installed` is untouched and `unavailableReason` is omitted (a changed `--version` format never false-negatives the provider). Invariant: `unavailableReason` present ⇒ `installed: false` and `cliVersionOk: false`. The same gate fails agent creation fast with a clear error (instead of a silent hang) when a Pi agent is spawned against a missing/too-old CLI.
 - `npx` reports the daemon's npx probe: `resolvedPath` is `null` when npx is not found; `version` is `null` when npx is missing **or** the version probe fails (a failed probe leaves `resolvedPath` set); `versionOk` is whether the resolved version meets the minimum requirement (`false` whenever `version` is `null`).
 
