@@ -6,6 +6,7 @@ from urllib.parse import parse_qs, urlsplit
 from datetime import datetime, timedelta, timezone
 import importlib.util
 import io
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -400,6 +401,26 @@ class MacFeedProtectionTests(unittest.TestCase):
                         text.replace("blockMapSize: 123", 'blockMapSize: "123"')]:
                 with self.subTest(text=bad), self.assertRaises(cleanup.CleanupError):
                     cleanup.feed_version(bad)
+
+    def test_real_sha512_alphabet_quoting_and_padding(self):
+        valid = self.feeds["latest-arm64-mac.yml"]
+        original = cleanup.feed_document(valid)["sha512"]
+        hashes = {}
+        for seed in range(1024):
+            archive = f"archive {seed}".encode()
+            digest = base64.b64encode(hashlib.sha512(archive).digest()).decode()
+            hashes.setdefault(digest[0], (digest, len(archive)))
+        self.assertEqual(set(hashes), set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"))
+        for prefix, (digest, size) in hashes.items():
+            for scalar in (digest, f"'{digest}'", f'"{digest}"', digest + " "):
+                with self.subTest(prefix=prefix, scalar=scalar):
+                    text = valid.replace(original, scalar).replace("size: 35", f"size: {size}")
+                    self.assertEqual(cleanup.feed_version(text), "1.0.24")
+        for digest in (hashes["+"][0], hashes["/"][0]):
+            for invalid in (digest[:-1], digest + "=", digest[:-2] + "!!", digest[:-3] + "B==",
+                            digest[:20] + " " + digest[20:]):
+                with self.subTest(invalid=invalid), self.assertRaises(cleanup.CleanupError):
+                    cleanup.feed_version(valid.replace(original, invalid))
 
     def test_missing_frontend_records_still_protect_both_daemon_dependencies(self):
         for repo in (FE, FE_MIRROR):

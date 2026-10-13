@@ -319,9 +319,13 @@ def json_object(text, label):
     return data
 
 
-def feed_scalar(raw):
+def feed_scalar(raw, *, checksum=False):
     """Read the emitted single-line YAML scalar subset, never arbitrary YAML."""
     raw = raw.strip(" ")
+    # Base64 hashes may begin with + or /. Admit that alphabet only in SHA-512
+    # fields; other scalars retain the narrow syntax and type checks below.
+    if checksum and re.fullmatch(r"[A-Za-z0-9+/]{86}==", raw):
+        return raw
     if re.fullmatch(r"'(?:[^']|'')*'", raw):
         return raw[1:-1].replace("''", "'")
     if raw.startswith('"'):
@@ -379,7 +383,7 @@ def feed_document(text):
                 if raw == "[]":
                     section = None
             else:
-                data[key] = feed_scalar(raw or "")
+                data[key] = feed_scalar(raw or "", checksum=key == "sha512")
         elif section == "files" and (first or (field and entry is not None)):
             if first:
                 entry = {}
@@ -387,7 +391,7 @@ def feed_document(text):
             key, raw = (first or field).groups()
             if key not in file_keys or key in entry:
                 raise CleanupError("unsupported or duplicate frontend file key")
-            entry[key] = feed_scalar(raw)
+            entry[key] = feed_scalar(raw, checksum=key == "sha512")
         else:
             raise CleanupError("unsupported frontend feed document structure")
     if files_block and not data["files"]:
@@ -445,7 +449,7 @@ def feed_version(text, *, allow_empty=False):
                 digest = base64.b64decode(entry["sha512"], validate=True)
             except ValueError as error:
                 raise CleanupError("invalid frontend file checksum") from error
-            if len(digest) != 64:
+            if len(digest) != 64 or base64.b64encode(digest).decode() != entry["sha512"]:
                 raise CleanupError("invalid frontend file checksum")
         if "sha2" in entry and (not isinstance(entry["sha2"], str)
                                or not re.fullmatch(r"[0-9a-fA-F]{64}", entry["sha2"])):
