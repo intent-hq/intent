@@ -82,8 +82,10 @@ False positives are expected. No replay cursor or exactly-once promise is added.
    event has been accepted, producing one next generation. Each emitted barrier
    advances generation by one. On exhaustion close the connection; never wrap.
 5. Delivery under a stalled writer is bounded: allow at most 5,000 ms to drain
-   pre-loss buffered items and enqueue the loss barrier, measured from observing
-   loss, then close the connection if this cannot complete. Transport writer
+   pre-loss buffered items and complete the loss barrier socket write, measured
+   from observing loss, then close the connection if this cannot complete.
+   Queue admission alone is not completion: a queued marker retains its deadline
+   until the writer confirms it; a stalled writer cannot leave the connection live. Transport writer
    failure also closes the connection. Reconnect recovery handles a marker that
    could not arrive. A connection that remains usable must not silently lose it.
 6. Unsubscribe, replacement, authority loss and disconnect retire the old
@@ -151,7 +153,10 @@ on another backend or principal.
 
 Resource keys include backend/principal lifetime, workspace, resource kind and any
 entity/read-identity dimensions. Overlapping subscriptions share a recovery owner
-per key. Each key holds one dirty generation watermark, at most **one active read**,
+per key. Loss-generation watermarks belong to individual leases, never resources:
+lease A generation 1 and a later lease B generation 1 are distinct invalidations.
+Translate each newly admitted marker into a locally increasing resource dirty
+version; a read captures that version. Each key holds one dirty version, at most **one active read**,
 one **pending trailing read bit**, and one timer; no event-sized work queue.
 
 - The first admitted loss dirties affected active resources immediately. Inactive
@@ -176,7 +181,11 @@ one **pending trailing read bit**, and one timer; no event-sized work queue.
   A response started before a newer push cannot overwrite it: merge a bounded
   journal of authoritative pushes over the snapshot, or discard the conflicting
   snapshot and retain one paced trailing read. Journal overflow chooses discard,
-  never unbounded retention. A complete newer snapshot can satisfy old dirtiness
+  never unbounded retention. Queued pre-snapshot domain frames may also arrive after a priority RPC reply;
+  recovery tests must hold and release that ordering, and the read owner must
+  reject stale revisions/identities or reconcile through its bounded trailing
+  read instead of treating receipt order as proof of source freshness.
+  A complete newer snapshot can satisfy old dirtiness
   only when it covers the same resource and no later loss remains.
 - Reuse the existing authoritative read owners so explicit refresh, reconnect,
   ordinary pushes and loss recovery do not issue duplicate reads. A composite
@@ -215,7 +224,8 @@ Use existing caller-relative read owners, pagination and visibility limits.
 | `lib/client/live/live-terminals-client.ts`; `features/terminal/main/terminal.ipc.ts`; ACP terminal handler | Generic terminal stream: `terminal.list` / `terminal.getBuffer` for current state where owned. No promise of exact lost byte replay or replaying exit effects. Separate terminal owners must opt in only after handling loss. |
 | Main-process `features/workspace/main/app-settings.service.ts`, `workspace-path.service.ts`, `features/browser/main/workspace-forward-cleanup.service.ts`, guest workspace lease in `features/backend/main/backend.ipc.ts` | Separate sockets/owners; settings/workspace registry reconciliation and authorization cleanup require independent adoption. Do not mistake renderer recovery for coverage of these streams. |
 | `features/notifications/main/notification.service.ts`; `features/backend/main/workspace-transfer-relay.ts` | Edge notifications / transfer progress: no blind replay of toasts, sounds or transfer side effects. Reconcile current status only through existing authority; explicitly retain legacy semantics until separately adopted. |
-| `lib/client/live/delta-subscription.ts` and live workspace/agent/note/comment/task clients; `live-chat-client.ts` | Independent `subscription.push` snapshot+delta channels already have their own loss/reconnect snapshots. Do not re-fetch their canonical collections/transcripts merely for generic loss. Bridge-only metadata/task links/unread/permission projections still need their own read owners where not covered. |
+| `lib/client/live/delta-subscription.ts` and live workspace/agent/note/comment/task clients | Typed `subscription.push` owners provide reconnect snapshots, but current backend `forward_note_subscription` / `forward_channel_subscription` use `recv_visible`, which skips lag. Sequence continuity alone does not prove no loss. Recover affected mounted collections through one coalesced owner resubscription/fresh snapshot (or a separately proven loss-aware channel), not parallel point reads. Bridge-only metadata/task links/unread/permission projections retain their read owners. |
+| `lib/client/live/live-chat-client.ts` | Chat has explicit backend `Delivery::Lagged` recovery in `forward_chat_subscription`. Preserve its independent snapshots; generic loss must not trigger transcript reads. This does not establish lag recovery for other typed channels. |
 | Activity timeline, stream activity and `app:ui-*` bridge handlers | Best-effort transient presentation; invalidate stale indicators or use a documented current-state read, never invent missing history or execute stale commands. |
 
 Backend implementation owns bus raw-loss delivery, membership failure, negotiation,

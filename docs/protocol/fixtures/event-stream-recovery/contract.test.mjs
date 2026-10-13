@@ -75,7 +75,8 @@ test('all deterministic schedules have component owners and observable assertion
     'membership-only-loss', 'replace-lease', 'generation-exhaustion', 'early-marker',
     'early-staging-overflow', 'overlap-and-trailing', 'sustained-success', 'finite-failures',
     'newer-push', 'teardown-and-aba', 'inactive-resource', 'final-file-git-state',
-    'legacy-fallback', 'typed-channel-independence']) assert.ok(ids.includes(id), id);
+    'legacy-fallback', 'typed-channel-independence', 'queued-writer-timeout',
+    'overlap-independent-generations', 'queued-event-after-read']) assert.ok(ids.includes(id), id);
 });
 
 test('bounded scheduler examples agree with documented policy', () => {

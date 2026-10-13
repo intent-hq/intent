@@ -896,12 +896,61 @@
       "id": "typed-channel-independence",
       "steps": [
         "mount typed note/chat/workspace channels",
-        "deliver generic loss",
-        "deliver independently recovered typed snapshots"
+        "deliver generic loss covering note/workspace resources",
+        "resubscribe affected collection owners once; deliver fresh snapshots",
+        "allow chat to perform its independent lag recovery"
       ],
       "expect": {
         "genericTranscriptReads": 0,
-        "duplicateCollectionReads": 0
+        "duplicateCollectionReads": 0,
+        "collectionOwnerSnapshotsPerAffectedResource": 1
+      },
+      "consumers": [
+        "stores"
+      ]
+    },
+    {
+      "id": "queued-writer-timeout",
+      "steps": [
+        "enqueue loss marker but hold socket writer",
+        "advance paused clock to 5000 ms since loss observation"
+      ],
+      "expect": {
+        "connectionClosed": true,
+        "queueAdmissionIsDelivery": false
+      },
+      "consumers": [
+        "backend"
+      ]
+    },
+    {
+      "id": "overlap-independent-generations",
+      "steps": [
+        "admit lease A generation 1; finish resource read",
+        "admit later lease B generation 1 for the same resource",
+        "advance fake clock to next paced start; finish read"
+      ],
+      "expect": {
+        "reads": 2,
+        "maxActive": 1
+      },
+      "consumers": [
+        "client",
+        "stores"
+      ]
+    },
+    {
+      "id": "queued-event-after-read",
+      "steps": [
+        "hold older domain frame in bulk lane",
+        "resolve recovery snapshot on priority lane",
+        "deliver older queued frame",
+        "settle bounded reconciliation if needed"
+      ],
+      "expect": {
+        "finalState": "authoritative",
+        "receiptOrderIsRevision": false,
+        "maxPending": 1
       },
       "consumers": [
         "stores"
