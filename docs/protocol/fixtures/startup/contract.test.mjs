@@ -31,8 +31,9 @@ function validate(s) {
     assert.equal(s.phaseElapsedMs, 0);
     assert.equal(s.progressAgeMs, 0);
   }
-  if (s.progress) {
+  if ('progress' in s) {
     const p = s.progress;
+    assert.ok(p !== null && typeof p === 'object' && !Array.isArray(p));
     assert.deepEqual(Object.keys(p).sort(), [
       'completedNotes', 'processedSourceBytes', 'totalNotes', 'totalSourceBytes',
     ]);
@@ -47,7 +48,9 @@ function validate(s) {
     assert.ok(s.progressAgeMs < 30000);
   }
   assert.equal('finalizingStep' in s, s.phase === 'finalizing');
-  if (s.finalizingStep) assert.ok(['anchors', 'committing', 'services'].includes(s.finalizingStep));
+  if ('finalizingStep' in s) {
+    assert.ok(['anchors', 'committing', 'services'].includes(s.finalizingStep));
+  }
   assert.equal('failure' in s, s.phase === 'failed');
   if (s.failure) assert.deepEqual(s.failure, {
     code: 'startup-failed', message: 'Daemon startup failed. Check daemon logs.',
@@ -168,6 +171,17 @@ test('true ready status retains the ordinary CLI result and gains no synthetic f
   assert.ok(!('ready' in ready.expectedStdout));
   assert.ok(!('startup' in ready.expectedStdout));
 });
+
+for (const field of ['progress', 'finalizingStep']) {
+  test(`malformed present ${field} never produces CLI liveness success`, () => {
+    const malformed = cliExamples.filter(s => s.name.startsWith(`malformed-${field}-`));
+    assert.equal(malformed.length, 6);
+    for (const sample of malformed) {
+      assert.equal(startupCliProjection(sample.method, sample.response, sample.params),
+        null, sample.name);
+    }
+  });
+}
 
 test('old sitter sees the responding server version, never the probing CLI version', () => {
   const mixed = cliExamples.find(s => s.name === 'new-cli-older-server');
