@@ -38,6 +38,13 @@ frontend merge, coordinated carrying release and frontend major guard updates
 are required. An older daemon remains unsupported for these new list features;
 known-ID status/output may still be used. This draft grants no merge permission.
 
+**Prepared generic stream recovery (independently gated additive extension).**
+[`eventStreamRecovery: 1`](./event-stream-recovery.md) adds an opt-in/ack to
+`events.subscribe` and the socket-private `events.lost` notification. It changes
+no domain event catalog, method count or current advertised protocol version.
+Exact capability and lease negotiation gate adoption, including bounded recovery
+and fail-closed membership watcher loss; older peers retain their legacy shapes.
+
 **Version 13.10 — cancellable note deletion (additive, prepared).**
 The [grace deletion contract](./note-delete-grace.md) adds `note.deleteSchedule`,
 `note.deleteCancel`, `note.deleteStatus` and `note:delete-operation`, gated by exact

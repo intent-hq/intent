@@ -16,6 +16,10 @@ OS/architecture constraints, one named multi-agent node, durable capacity/launch
 and safe model discovery. Its [static fixtures](./fixtures/nodes/platform-routing.test.mjs)
 do not qualify runtime scheduling. Private lifecycle/capture formats are unchanged.
 
+The [generic stream loss contract](./event-stream-recovery.md) is a prepared,
+independently negotiated extension with bounded client recovery and canonical
+wire fixtures. It is not a shipped-version claim.
+
 ## Section → file map
 
 | Section | File |
