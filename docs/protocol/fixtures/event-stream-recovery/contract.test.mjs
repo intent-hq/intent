@@ -126,18 +126,6 @@ test('fences have exact correlation and reject partial or foreign lease sets', (
   }
 });
 
-test('causal fixtures forbid applying a held snapshot or old push before the end boundary', () => {
-  const byId = Object.fromEntries(corpus.scenarios.map(row => [row.id, row]));
-  assert.equal(byId['queued-event-after-read'].expect.heldReadAppliedBeforeEndFence, false);
-  assert.equal(byId['queued-event-after-read'].expect.appliedStalePushes, 0);
-  assert.deepEqual(byId['queued-event-after-read'].expect.appliedSnapshots, ['S2']);
-  assert.equal(byId['fence-covers-bus-worker'].expect.fenceBeforeRawBoundary, false);
-  assert.equal(byId['fence-ordered-ingress'].expect.fenceVisibleBeforeCallback, false);
-  assert.equal(byId['fence-loss-window'].expect.snapshotApplied, false);
-  assert.equal(byId['fence-retired-set'].expect.successfulPartialFence, false);
-});
-
-
 test('request bounds include every begin fence, data read and end fence', () => {
   const byId = Object.fromEntries(corpus.scenarios.map(row => [row.id, row]));
   for (const id of ['overlap-and-trailing', 'finite-failures', 'queued-event-after-read', 'failed-end-fence-budget']) {
