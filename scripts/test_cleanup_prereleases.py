@@ -327,6 +327,24 @@ class MacFeedProtectionTests(unittest.TestCase):
                 with self.subTest(control=repr(control)), self.assertRaises(cleanup.CleanupError):
                     cleanup.feed_version(text, allow_empty=True)
 
+    def test_plain_mapping_delimiters_abort_but_quoted_metadata_and_urls_work(self):
+        valid = self.feeds["latest-arm64-mac.yml"]
+        plan = cleanup.build_plan(self.gh, NOW)
+        for key in ("releaseName", "releaseNotes", "minimumSystemVersion"):
+            for scalar in ("Notes:", "Notes:   ", "Notes: details"):
+                with self.subTest(key=key, scalar=scalar):
+                    self.feeds["latest-arm64-mac.yml"] = valid + f"{key}: {scalar}\n"
+                    with self.assertRaises(cleanup.CleanupError):
+                        cleanup.build_plan(self.gh, NOW)
+                    self.assertFalse(cleanup.apply_plan(self.gh, plan, "cloudlands-fe", NOW)["ok"])
+                    self.assertEqual(self.gh.deleted, [])
+            for scalar in ("'Notes:'", '"Notes:"', "'Notes: details'", "https://example.com/notes"):
+                with self.subTest(key=key, scalar=scalar):
+                    text = valid + f"{key}: {scalar}\n"
+                    self.feeds["latest-arm64-mac.yml"] = text
+                    self.assertEqual(cleanup.feed_version(text), "1.0.24")
+                    self.assertEqual(cleanup.build_plan(self.gh, NOW)["releases"], plan["releases"])
+
     def test_immutable_references_must_match_version_in_path_and_each_file(self):
         valid = self.feeds["latest-mac.yml"]
         old = "https://github.com/intent-hq/cloudlands-releases/releases/download/v1.0.23/"

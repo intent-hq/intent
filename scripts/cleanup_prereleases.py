@@ -346,7 +346,8 @@ def feed_scalar(raw, *, checksum=False):
     if (raw in {"null", "Null", "NULL", "~", "true", "True", "TRUE", "false", "False", "FALSE"}
             or re.fullmatch(r"[+-]?(?:[0-9][0-9_]*(?:\.[0-9_]*)?(?:[eE][+-]?[0-9]+)?|0[xXob][0-9a-fA-F_]+)", raw)):
         raise CleanupError("unsupported typed frontend feed scalar")
-    if re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_./+:@%?=&() -]*", raw) and ": " not in raw:
+    if (re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_./+:@%?=&() -]*", raw)
+            and not re.search(r":(?: |$)", raw)):
         return raw
     raise CleanupError("unsupported frontend feed scalar")
 
