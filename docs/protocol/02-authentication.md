@@ -59,3 +59,13 @@ defaults to workspace; explicit host scope is mandatory for a host invitation.
 other devices. Authentication by GitHub/GitLab proof is independent of repository
 connections; collaboration credentials remain on the signing-in person's daemon
 in their separate purpose. No new unauthenticated endpoint is introduced.
+
+### Protected bootstrap admission (prepared)
+
+The [startup contract](./startup-readiness.md#bootstrap-boundary-and-security)
+allows only the protected local UDS seat and legacy file-secret owner token to
+read early aggregate progress. Supplied nonmatching tokens temporarily receive
+503 because SQLite-backed credentials cannot yet be resolved; missing tokens
+remain 401. No early principal/role is invented. TLS, origin, enable/bind and
+credential rules remain in force, and all bootstrap seats close for fresh normal
+admission at readiness. This is not an unauthenticated status endpoint.
