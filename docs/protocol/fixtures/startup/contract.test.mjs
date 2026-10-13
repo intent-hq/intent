@@ -120,10 +120,14 @@ test('invalid examples cannot claim ready ETA, overflow progress or leak failure
 
 // Specification oracle only; the production CLI and frozen sitter must be
 // exercised by component tests. The CLI build version is deliberately not input.
-function startupCliProjection(method, response) {
+function startupCliProjection(method, response, params) {
   try {
     const { error } = response;
     assert.equal(method, 'system.status');
+    if (params !== undefined) {
+      assert.ok(params && typeof params === 'object' && !Array.isArray(params));
+      assert.deepEqual(Object.keys(params), []);
+    }
     assert.ok(!('result' in response));
     assert.equal(error.code, -32012);
     const { data } = error;
@@ -143,7 +147,7 @@ function startupCliProjection(method, response) {
 test('only a validated live system.status error gets CLI liveness success', () => {
   for (const sample of cliExamples.filter(s => s.response.error || !s.response.result)) {
     const before = JSON.stringify(sample.response);
-    const projected = startupCliProjection(sample.method, sample.response);
+    const projected = startupCliProjection(sample.method, sample.response, sample.params);
     assert.deepEqual(projected, sample.expectedStdout, sample.name);
     assert.equal(projected === null ? 1 : 0, sample.expectedExitCode, sample.name);
     assert.equal(JSON.stringify(sample.response), before, 'wire response is unchanged');

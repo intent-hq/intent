@@ -264,8 +264,9 @@ explicit false readiness marker or use the wire startup/hello contract. A future
 sitter can distinguish liveness from readiness, but updating sitter is not a
 prerequisite for this daemon's safe startup.
 
-The exact projection is restricted to `call system.status` after normal response
-correlation and envelope validation. Require numeric `error.code: -32012`,
+The exact projection is restricted to `call system.status` with absent params or
+an empty object `{}`, after normal response correlation and envelope validation.
+Explicit null, arrays and nonempty objects do not qualify. Require numeric `error.code: -32012`,
 `error.data.code: "daemon-not-ready"`, `retryable: true`, matching outer and
 snapshot retry delays, and a valid schema-1 snapshot in `preparing`, `indexing`
 or `finalizing`, with a nonempty `daemonVersion`. Invalid optional progress or

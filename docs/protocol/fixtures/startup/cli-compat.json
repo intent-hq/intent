@@ -708,5 +708,144 @@
       "clients": 0,
       "agents": 0
     }
+  },
+  {
+    "name": "empty-params",
+    "method": "system.status",
+    "cliVersion": "0.10.47",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 20,
+      "error": {
+        "code": -32012,
+        "message": "Daemon not ready",
+        "data": {
+          "code": "daemon-not-ready",
+          "retryable": true,
+          "retryAfterMs": 1000,
+          "startup": {
+            "startupStatus": 1,
+            "attemptId": "boot-a",
+            "phase": "preparing",
+            "elapsedMs": 1200,
+            "phaseElapsedMs": 1200,
+            "progressAgeMs": 1200,
+            "retryAfterMs": 1000,
+            "daemonVersion": "0.10.47"
+          }
+        }
+      }
+    },
+    "expectedExitCode": 0,
+    "expectedStdout": {
+      "version": "0.10.47",
+      "ready": false,
+      "startup": {
+        "startupStatus": 1,
+        "attemptId": "boot-a",
+        "phase": "preparing",
+        "elapsedMs": 1200,
+        "phaseElapsedMs": 1200,
+        "progressAgeMs": 1200,
+        "retryAfterMs": 1000,
+        "daemonVersion": "0.10.47"
+      }
+    },
+    "params": {}
+  },
+  {
+    "name": "null-params",
+    "method": "system.status",
+    "cliVersion": "0.10.47",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 20,
+      "error": {
+        "code": -32012,
+        "message": "Daemon not ready",
+        "data": {
+          "code": "daemon-not-ready",
+          "retryable": true,
+          "retryAfterMs": 1000,
+          "startup": {
+            "startupStatus": 1,
+            "attemptId": "boot-a",
+            "phase": "preparing",
+            "elapsedMs": 1200,
+            "phaseElapsedMs": 1200,
+            "progressAgeMs": 1200,
+            "retryAfterMs": 1000,
+            "daemonVersion": "0.10.47"
+          }
+        }
+      }
+    },
+    "expectedExitCode": 1,
+    "expectedStdout": null,
+    "params": null
+  },
+  {
+    "name": "array-params",
+    "method": "system.status",
+    "cliVersion": "0.10.47",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 20,
+      "error": {
+        "code": -32012,
+        "message": "Daemon not ready",
+        "data": {
+          "code": "daemon-not-ready",
+          "retryable": true,
+          "retryAfterMs": 1000,
+          "startup": {
+            "startupStatus": 1,
+            "attemptId": "boot-a",
+            "phase": "preparing",
+            "elapsedMs": 1200,
+            "phaseElapsedMs": 1200,
+            "progressAgeMs": 1200,
+            "retryAfterMs": 1000,
+            "daemonVersion": "0.10.47"
+          }
+        }
+      }
+    },
+    "expectedExitCode": 1,
+    "expectedStdout": null,
+    "params": []
+  },
+  {
+    "name": "unknown-params",
+    "method": "system.status",
+    "cliVersion": "0.10.47",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 20,
+      "error": {
+        "code": -32012,
+        "message": "Daemon not ready",
+        "data": {
+          "code": "daemon-not-ready",
+          "retryable": true,
+          "retryAfterMs": 1000,
+          "startup": {
+            "startupStatus": 1,
+            "attemptId": "boot-a",
+            "phase": "preparing",
+            "elapsedMs": 1200,
+            "phaseElapsedMs": 1200,
+            "progressAgeMs": 1200,
+            "retryAfterMs": 1000,
+            "daemonVersion": "0.10.47"
+          }
+        }
+      }
+    },
+    "expectedExitCode": 1,
+    "expectedStdout": null,
+    "params": {
+      "workspaceId": "ws-a"
+    }
   }
 ]
