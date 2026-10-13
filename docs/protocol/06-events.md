@@ -355,15 +355,16 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 and computed `unmetDependsOn`; `removedIds` contains deleted notes or notes that no
 longer have task metadata. Omitted optional fields in an upsert clear their former
 values. A mutation can update several rows, including dependents and tasks whose
-spec linkage changed. Existing `task:created`, `task:status-changed`, ready-task,
-and agent-link events retain their original meanings and shapes.
+spec linkage changed. Existing task creation/status, ready-task, and agent-link
+events retain their original fields and meanings.
 
 `workspace:task-stats-changed` publishes the authoritative §5.1 `taskStats` counts
 only when they change. Clients apply the payload directly; neither event requires
 `task.list`, `note.get`, or `workspace.get` to refresh task rows or statistics.
 Ordinary note-body edits do not publish unchanged statistics.
 
-Durable `note:created` / `note:updated` events additionally carry `data.note`, a
+Durable `note:created` / `note:updated` events, and task creation/status events
+(`task:created` / `task:status-changed`), additionally carry `data.note`, a
 metadata projection of the committed `Note`: all normal entity fields except
 `content` (including title, tags, parentId, revision and task metadata). This is a
 metadata patch, not a full-body replacement; it does not include a content preview.
