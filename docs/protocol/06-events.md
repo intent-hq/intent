@@ -2,7 +2,7 @@
 
 ## 6. Events & Subscriptions
 
-Live event streaming is the **canonical** way a thin client stays in sync. It uses two server-handled methods (the plural `events.` prefix) plus a server-pushed notification.
+Live event streaming is the **canonical** way a thin client stays in sync. It uses two server-handled methods (the plural `events.` prefix) plus a server-pushed notification. The prepared negotiated loss extension adds `events.fence` and `events.lost`.
 
 ### 6.1 `events.subscribe`
 
@@ -101,6 +101,9 @@ It carries `{ subscriptionId, generation, scope: { workspaceId } }`; generation 
 an exact decimal u64 string, and unscoped `workspaceId` is `null`. See the
 [complete loss, membership and recovery contract](event-stream-recovery.md).
 This is socket-private control, not a domain event or replay guarantee.
+The same capability requires `events.fence { subscriptionIds }`, whose bulk-lane
+reply brackets unversioned recovery reads after the named receivers drain their
+captured bus boundaries. See the [causal boundary](event-stream-recovery.md#causal-recovery-boundary-eventsfence).
 
 #### Private repository context retirement
 

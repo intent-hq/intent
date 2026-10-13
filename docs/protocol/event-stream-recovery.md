@@ -3,8 +3,8 @@
 **Prepared additive contract; not a shipped feature.** `eventStreamRecovery: 1`
 in `client.hello.server.capabilities` advertises this complete transport contract.
 A numeric protocol version alone does not establish support. This extends
-[events subscriptions](06-events.md) without changing domain events, method
-counts, chat delivery, durable event queries or snapshot-channel sequences.
+[events subscriptions](06-events.md) with one additional fast-path method, without changing domain events,
+chat delivery, durable event queries or snapshot-channel sequences.
 
 ## Negotiation and wire format
 
@@ -85,7 +85,12 @@ False positives are expected. No replay cursor or exactly-once promise is added.
    pre-loss buffered items and complete the loss barrier socket write, measured
    from observing loss, then close the connection if this cannot complete.
    Queue admission alone is not completion: a queued marker retains its deadline
-   until the writer confirms it; a stalled writer cannot leave the connection live. Transport writer
+   until the writer confirms flush completion; a stalled writer cannot leave the
+   connection live. The deadline cancels the connection task and any active socket
+   send/flush out of band, drops the socket halves, and discards all unwritten
+   priority/bulk/conflation buffers. Enqueuing a close frame behind a stuck send
+   is insufficient. Completion means local socket flush, not peer observation;
+   a broken link still requires ordinary disconnect/liveness recovery. Transport writer
    failure also closes the connection. Reconnect recovery handles a marker that
    could not arrive. A connection that remains usable must not silently lose it.
 6. Unsubscribe, replacement, authority loss and disconnect retire the old
@@ -102,7 +107,8 @@ sound, navigation request or other one-shot effect that was lost.
 A collaborator's membership watcher is an independent security input. Lag or
 unexpected closure on it makes cached allow decisions unsafe, even if the primary
 receiver did not lag. **Fail closed:** stop guarded forwarding, discard its
-conflation buffer and membership cache, and close the physical connection. Do not
+conflation buffer and membership cache, and cancel the physical connection and
+active writer out of band, discarding all unwritten connection queues. Do not
 continue with the watcher disabled, send an ordinary recovery marker as a substitute,
 or fall back to administrator/global admission. Apply this to legacy leases too.
 
@@ -149,6 +155,84 @@ membership removals before scoped recovery. Permission/not-found results retire
 that resource and clear protected stale state; they do not trigger fallback reads
 on another backend or principal.
 
+## Causal recovery boundary: `events.fence`
+
+**Prepared fast-path method, required by `eventStreamRecovery: 1`.** Arrival-time
+mutation epochs cannot distinguish an old bulk push from a fresh read returned on
+the priority lane. A recovering client therefore brackets unversioned authoritative
+reads with fences on **every generic lease allowed to mutate that resource**:
+
+```json
+{"jsonrpc":"2.0","id":62,"method":"events.fence","params":{"subscriptionIds":["ws-sub-1","ws-sub-global"]}}
+{"jsonrpc":"2.0","id":62,"result":{"subscriptionIds":["ws-sub-1","ws-sub-global"]}}
+```
+
+`subscriptionIds` is a required array of 1–64 distinct nonempty strings. Every ID
+must name a live, acknowledged, `lossRecovery: 1` generic lease on this physical
+connection. Unknown, retired, foreign, legacy, typed-channel or duplicate IDs,
+invalid shapes and a missing request ID do not create a fence. A request with an
+ID gets `-32602` and generic message `Invalid recovery subscription set`, with no
+foreign ID details. The success result has only `subscriptionIds`, in request
+order; it gives no global bus cursor, activity count or new authority.
+
+At admission, capture a finite tail boundary in the **raw bus delivery order** for
+each named receiver. Carry an internal ordered barrier through the bus filtering
+worker and its per-subscription delivery queue, not merely the transport queue.
+Every raw item before the boundary must have been filtered/authorized, emitted,
+or reported lost before that forwarder reaches its barrier. A private ordered
+control item (not a published domain event) or an equivalent explicit cursor/ack
+can implement this; checking an empty queue or its current length is not a fence.
+Loss cannot skip a barrier: loss is emitted before its barrier, or the fence fails.
+It is valid to drain conservatively past the captured boundary, but never to wait
+for a future matching event or an indefinitely moving tail.
+
+Each forwarder flushes its pre-boundary conflation before acknowledging the
+internal barrier. After **all** named barriers, enqueue the RPC success on the
+same FIFO bulk lane after their preceding frames. A priority-lane success is
+forbidden. Later events may interleave before the success and conservatively
+invalidate the read. A lease retiring, being replaced or losing authorization
+before success invalidates the whole fence; return the generic error when safe,
+otherwise close. Never silently drop one ID and acknowledge a smaller set.
+The existing 5,000 ms deadline covers admission through socket flush of the fence
+reply and uses the same connection-wide cancellation as loss delivery.
+
+The client recovery cycle is concrete:
+
+1. Capture resource lifetime and the complete mutable lease set. Suppress direct
+   application of unversioned pushes to this resource while recovering; they set
+   a conflict/dirty bit instead. This includes overlapping leases and any still
+   queued callbacks for them. Pause or retire other mutation owners that cannot
+   join this boundary; a non-opted-in overlapping writer cannot be ignored.
+2. Await a **begin fence** on that lease set. Its reply becomes visible to the
+   recovery scheduler only after all preceding notification callbacks have been
+   processed. Then reset this cycle's conflict bit and issue the authoritative
+   read. Events after this boundary cannot be mistaken for older queued work.
+3. Hold the read result without applying it, then issue an **end fence** for the
+   same leases. Process all preceding callbacks before completing that fence.
+   If any relevant domain frame or loss arrived between the observed begin/end
+   replies, discard the held read and retain one paced trailing cycle. Do not
+   replay an unversioned journal over it: the frame may predate the snapshot.
+4. Only a successful read plus a successful end fence, with no intervening
+   relevant frame/loss and unchanged lifetimes/lease set, can replace resource
+   state and clear the captured dirty version. Apply it before processing frames
+   following the end fence. Resume ordinary push handling after recovery settles.
+
+These processing barriers apply across Electron main/preload/renderer as well as
+the direct browser transport. Both read promises and notification callbacks must
+join an ordered ingress dispatcher; physical wire ordering alone is insufficient.
+A fence is reusable for concurrent recovery resources with the same lease set,
+but each resource keeps its own conflict/dirty version. Fence errors/timeouts
+count as cycle failures under the retry policy below, not unlimited retries.
+
+This establishes a boundary for **already published** events, including old frames
+still in the bus worker, conflation buffer, outbound queue or renderer callback
+queue. Producers must retain existing per-resource mutation/publication ordering:
+a producer that publishes obsolete full state after a newer mutation must instead
+supply authoritative revisions or invalidate/refetch in its resource adapter.
+The generic fence is not a source revision and cannot repair a violated producer
+ordering contract. Component adoption tests must check this prerequisite for each
+full-state projection. Sources without it cannot opt into direct payload replay.
+
 ## Bounded recovery policy
 
 Resource keys include backend/principal lifetime, workspace, resource kind and any
@@ -161,10 +245,10 @@ one **pending trailing read bit**, and one timer; no event-sized work queue.
 
 - The first admitted loss dirties affected active resources immediately. Inactive
   cached resources become stale and refresh on their next demand, not eagerly.
-- Start the first read immediately when idle. While it is active, any newer loss
+- Start the first recovery cycle immediately when idle. While it is active, any newer loss
   or snapshot conflict sets the trailing bit. Duplicates do not set it. After a
   successful read, run one trailing read if needed; enforce at least **250 ms
-  between starts** for that resource, including immediately resolving reads.
+  between authoritative read starts** for that resource, including immediately resolving reads.
   Continuous overflow can sustain paced reads, but never polling after it stops.
 - Reads retain the existing finite transport timeout; timeout is a failed read.
   Failed reads get at most **two automatic retries** after the first attempt,
@@ -177,16 +261,12 @@ one **pending trailing read bit**, and one timer; no event-sized work queue.
 - A success resets the consecutive failure budget. Clear only invalidations
   included by that read; a newer loss requires the trailing read. Do not clear
   all dirty state merely because any request succeeded. Timers cancel on teardown.
-- Increment a resource mutation epoch on every accepted state-changing push.
-  A response started before a newer push cannot overwrite it: merge a bounded
-  journal of authoritative pushes over the snapshot, or discard the conflicting
-  snapshot and retain one paced trailing read. Journal overflow chooses discard,
-  never unbounded retention. Queued pre-snapshot domain frames may also arrive after a priority RPC reply;
-  recovery tests must hold and release that ordering, and the read owner must
-  reject stale revisions/identities or reconcile through its bounded trailing
-  read instead of treating receipt order as proof of source freshness.
-  A complete newer snapshot can satisfy old dirtiness
-  only when it covers the same resource and no later loss remains.
+- Unversioned recovery uses the begin/read/end fence cycle above. Accepted pushes
+  during that cycle mark a conflict; they neither overwrite the held snapshot nor
+  get replayed as if arrival time were a source revision. Resource adapters with
+  proven authoritative source revisions may reject stale replies/pushes directly,
+  but must test equivalent causal protection. A complete newer snapshot satisfies
+  old dirtiness only for the same resource with no later loss outstanding.
 - Reuse the existing authoritative read owners so explicit refresh, reconnect,
   ordinary pushes and loss recovery do not issue duplicate reads. A composite
   resource may require several RPCs, but each underlying read key obeys the same
@@ -220,6 +300,9 @@ Use existing caller-relative read owners, pagination and visibility limits.
 | `features/pr-monitor/pr-monitor-service.ts` | Own scoped `prMonitor:*`; reseed `prMonitor.list` for mounted workspace. |
 | `features/hooks/background-hooks-service.ts`; background-hooks saga | Own scoped `hook:*`; `hook.list`, including code available only in list rows. |
 | `features/script-monitor/script-monitor-service.ts` | Own monitor stream; paginated active `scriptMonitor.list` plus selected `scriptMonitor.get`; fence page journals. |
+| `lib/client/live/live-skills-client.ts` | Own unscoped `skills:changed` lease; recover mounted workspace skill catalogs through `skill.list { workspaceId }`. Capture demanded workspaces explicitly: the last event workspace alone cannot recover a lost first/final event. Independent lease admission and disposal fences are required. |
+| `lib/client/live/live-specialists-client.ts` | Own `specialists:changed` lease and catalog snapshot callback; `specialist.list` / existing catalog read owner with its provider/workspace scope. Coalesce with a shared catalog owner only when it is actually the same resource; workspace-catalog recovery does not own this lease automatically. |
+| `shared/main/host-exec-stream.ts` | One generic lease per `host.execStream`, carrying stdout/stderr/exit. Explicitly legacy/transient: no authoritative output/exit snapshot or safe automatic command replay exists. Preserve caller abort/cancel, backend-switch cancel-and-notify and disconnect/RPC-failure cleanup semantics; this task promises neither byte recovery nor recovery of an unreported lost exit. Do not opt in until a separate terminal failure policy is implemented. |
 | `features/hud/hud-subscription.ts` | Own global HUD stream; shared lifecycle read owners for watched workspaces and active agents; do not multiply `agent.listActive` by workspace count. |
 | `lib/client/live/live-terminals-client.ts`; `features/terminal/main/terminal.ipc.ts`; ACP terminal handler | Generic terminal stream: `terminal.list` / `terminal.getBuffer` for current state where owned. No promise of exact lost byte replay or replaying exit effects. Separate terminal owners must opt in only after handling loss. |
 | Main-process `features/workspace/main/app-settings.service.ts`, `workspace-path.service.ts`, `features/browser/main/workspace-forward-cleanup.service.ts`, guest workspace lease in `features/backend/main/backend.ipc.ts` | Separate sockets/owners; settings/workspace registry reconciliation and authorization cleanup require independent adoption. Do not mistake renderer recovery for coverage of these streams. |
@@ -229,7 +312,7 @@ Use existing caller-relative read owners, pagination and visibility limits.
 | Activity timeline, stream activity and `app:ui-*` bridge handlers | Best-effort transient presentation; invalidate stale indicators or use a documented current-state read, never invent missing history or execute stale commands. |
 
 Backend implementation owns bus raw-loss delivery, membership failure, negotiation,
-wire serialization and output barriers. Client coordinator owns transport exposure,
+wire serialization, `events.fence`, raw-bus barriers and output cancellation. Client coordinator owns transport exposure,
 admission and bounded scheduler. Store integration owns the active resource adapters
 above; it must record every row as adopted, independently recovered, or explicitly
 legacy/transient. A global opt-in cannot claim recovered state for an unhandled

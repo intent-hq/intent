@@ -76,7 +76,9 @@ test('all deterministic schedules have component owners and observable assertion
     'early-staging-overflow', 'overlap-and-trailing', 'sustained-success', 'finite-failures',
     'newer-push', 'teardown-and-aba', 'inactive-resource', 'final-file-git-state',
     'legacy-fallback', 'typed-channel-independence', 'queued-writer-timeout',
-    'overlap-independent-generations', 'queued-event-after-read']) assert.ok(ids.includes(id), id);
+    'overlap-independent-generations', 'queued-event-after-read',
+    'held-overlap-independent-generations', 'fence-covers-bus-worker',
+    'fence-retired-set', 'fence-ordered-ingress', 'fence-loss-window']) assert.ok(ids.includes(id), id);
 });
 
 test('bounded scheduler examples agree with documented policy', () => {
@@ -104,4 +106,31 @@ test('invalid opt-in parameters never admit or replace a lease', () => {
     if (!accepted && row.hasRequestId) assert.equal(row.errorCode, -32602, row.id);
     if (!row.hasRequestId) assert.equal(row.response, null, row.id);
   }
+});
+
+
+test('fences have exact correlation and reject partial or foreign lease sets', () => {
+  const { fenceRequest, fenceReply } = corpus.wire;
+  assert.equal(fenceRequest.method, 'events.fence');
+  assert.equal(fenceRequest.id, fenceReply.id);
+  assert.deepEqual(fenceReply.result, fenceRequest.params);
+  assert.deepEqual(Object.keys(fenceReply.result), ['subscriptionIds']);
+  for (const row of corpus.fenceValidation) {
+    const ids = row.subscriptionIds;
+    const accepted = ids.length >= 1 && ids.length <= 64
+      && new Set(ids).size === ids.length
+      && ids.every(id => typeof id === 'string' && id.length > 0 && row.liveOptedInIds.includes(id));
+    assert.equal(accepted, row.accepted, row.id);
+  }
+});
+
+test('causal fixtures forbid applying a held snapshot or old push before the end boundary', () => {
+  const byId = Object.fromEntries(corpus.scenarios.map(row => [row.id, row]));
+  assert.equal(byId['queued-event-after-read'].expect.heldReadAppliedBeforeEndFence, false);
+  assert.equal(byId['queued-event-after-read'].expect.appliedStalePushes, 0);
+  assert.deepEqual(byId['queued-event-after-read'].expect.appliedSnapshots, ['S2']);
+  assert.equal(byId['fence-covers-bus-worker'].expect.fenceBeforeRawBoundary, false);
+  assert.equal(byId['fence-ordered-ingress'].expect.fenceVisibleBeforeCallback, false);
+  assert.equal(byId['fence-loss-window'].expect.snapshotApplied, false);
+  assert.equal(byId['fence-retired-set'].expect.successfulPartialFence, false);
 });

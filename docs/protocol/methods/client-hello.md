@@ -493,6 +493,7 @@ and whole-envelope wake/history replay gating. Neither side advertises support y
 
 **Prepared additive contract.** `server.capabilities.eventStreamRecovery: 1`
 (exact integer) advertises the complete [generic loss contract](../event-stream-recovery.md).
+It also guarantees `events.fence` raw-bus/bulk-lane boundaries for recovery reads.
 Each recovering `events.subscribe` lease must separately request and acknowledge
 `lossRecovery: 1`. Missing/unknown capability or an old request retains legacy
 shapes and reconnect/explicit-refresh fallback; discovery alone does not opt in.

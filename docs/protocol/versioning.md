@@ -40,8 +40,10 @@ known-ID status/output may still be used. This draft grants no merge permission.
 
 **Prepared generic stream recovery (independently gated additive extension).**
 [`eventStreamRecovery: 1`](./event-stream-recovery.md) adds an opt-in/ack to
-`events.subscribe` and the socket-private `events.lost` notification. It changes
-no domain event catalog, method count or current advertised protocol version.
+`events.subscribe`, the socket-private `events.lost` notification and the
+`events.fence` fast-path method. The prepared surface is **450 / 393 / 57**
+(dispatchable / router / fast path); domain event catalog and current advertised
+protocol version are unchanged.
 Exact capability and lease negotiation gate adoption, including bounded recovery
 and fail-closed membership watcher loss; older peers retain their legacy shapes.
 
