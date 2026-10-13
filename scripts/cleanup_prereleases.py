@@ -321,6 +321,7 @@ def json_object(text, label):
 
 def feed_scalar(raw):
     """Read the emitted single-line YAML scalar subset, never arbitrary YAML."""
+    raw = raw.strip(" ")
     if re.fullmatch(r"'(?:[^']|'')*'", raw):
         return raw[1:-1].replace("''", "'")
     if raw.startswith('"'):
@@ -330,7 +331,18 @@ def feed_scalar(raw):
             raise CleanupError("unsupported frontend feed scalar") from error
         if isinstance(value, str) and all(ord(c) >= 32 and not 127 <= ord(c) <= 159 for c in value):
             return value
-    elif re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_./+:@%?=&() -]*", raw) and ": " not in raw:
+        raise CleanupError("unsupported frontend feed scalar")
+    # Preserve the distinction between quoted strings and emitted numbers.
+    # Null/bool and noncanonical YAML numeric spellings are not supported by any
+    # feed field; never reinterpret them as asset names or metadata strings.
+    if re.fullmatch(r"[+-]?(?:0|[1-9][0-9]*)", raw):
+        return int(raw)
+    if re.fullmatch(r"[+-]?(?:[0-9]+\.[0-9]+(?:[eE][+-]?[0-9]+)?|[0-9]+[eE][+-]?[0-9]+)", raw):
+        return float(raw)
+    if (raw in {"null", "Null", "NULL", "~", "true", "True", "TRUE", "false", "False", "FALSE"}
+            or re.fullmatch(r"[+-]?(?:[0-9][0-9_]*(?:\.[0-9_]*)?(?:[eE][+-]?[0-9]+)?|0[xXob][0-9a-fA-F_]+)", raw)):
+        raise CleanupError("unsupported typed frontend feed scalar")
+    if re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_./+:@%?=&() -]*", raw) and ": " not in raw:
         return raw
     raise CleanupError("unsupported frontend feed scalar")
 
@@ -345,8 +357,9 @@ def feed_document(text):
     if re.search(r"[\x00-\x09\x0b-\x1f\x7f-\x9f]", text):
         raise CleanupError("invalid control character in frontend feed")
     data, section, entry, files_block = {}, None, None, False
-    root_keys = {"version", "files", "path", "sha512", "sha2", "size", "releaseDate"}
-    file_keys = {"url", "sha512", "size", "blockMapSize"}
+    root_keys = {"version", "files", "path", "sha512", "sha2", "size", "releaseDate",
+                 "releaseName", "releaseNotes", "minimumSystemVersion", "stagingPercentage"}
+    file_keys = {"url", "sha512", "sha2", "size", "blockMapSize"}
     for line in text.split("\n"):
         if not line:
             continue
@@ -384,6 +397,8 @@ def feed_document(text):
 
 def feed_reference(reference, value):
     """Accept local asset names or exact immutable frontend release URLs."""
+    if not isinstance(reference, str):
+        raise CleanupError("frontend asset reference must be a string")
     try:
         url = urlsplit(reference)
     except ValueError as error:
@@ -421,16 +436,19 @@ def feed_version(text, *, allow_empty=False):
         if entry is not data and not {"url", "sha512", "size"} <= entry.keys():
             raise CleanupError("incomplete frontend file metadata")
         for key in ("size", "blockMapSize"):
-            if key in entry and not re.fullmatch(r"[1-9][0-9]*", entry[key]):
+            if key in entry and (type(entry[key]) is not int or not 0 < entry[key] <= 2**53 - 1):
                 raise CleanupError("invalid frontend file size")
         if "sha512" in entry:
+            if not isinstance(entry["sha512"], str):
+                raise CleanupError("frontend checksum must be a string")
             try:
                 digest = base64.b64decode(entry["sha512"], validate=True)
             except ValueError as error:
                 raise CleanupError("invalid frontend file checksum") from error
             if len(digest) != 64:
                 raise CleanupError("invalid frontend file checksum")
-        if "sha2" in entry and not re.fullmatch(r"[0-9a-fA-F]{64}", entry["sha2"]):
+        if "sha2" in entry and (not isinstance(entry["sha2"], str)
+                               or not re.fullmatch(r"[0-9a-fA-F]{64}", entry["sha2"])):
             raise CleanupError("invalid legacy frontend checksum")
         for key in ("url", "path"):
             if key in entry:
@@ -442,6 +460,13 @@ def feed_version(text, *, allow_empty=False):
             raise CleanupError("legacy frontend path/checksum disagrees with files")
     if "releaseDate" in data:
         timestamp(data["releaseDate"])
+    for key in ("releaseName", "releaseNotes", "minimumSystemVersion"):
+        if key in data and not isinstance(data[key], str):
+            raise CleanupError("frontend descriptive metadata must be a string")
+    if "stagingPercentage" in data:
+        percentage = data["stagingPercentage"]
+        if type(percentage) not in (int, float) or not 0 <= percentage <= 100:
+            raise CleanupError("invalid frontend staging percentage")
     return value
 
 

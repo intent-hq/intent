@@ -447,6 +447,12 @@ must point to the same immutable frontend release version the feed declares.
 Path/checksum metadata must agree with its file entry. The dependency-free parser
 is deliberately limited to the emitted format; changes to that format require
 new compatibility fixtures before cleanup can accept them.
+Quoted strings and numeric scalars retain their types: download references must
+be strings, sizes positive integers, and `stagingPercentage` a number from 0 to
+100. Supported optional metadata includes single-line `releaseName`, `releaseNotes`
+and `minimumSystemVersion` strings, root/file `sha2`, and file `blockMapSize`.
+Multiline/structured notes and other unsupported YAML forms stop cleanup until
+explicitly covered by compatibility tests.
 
 `--max-delete` defaults to **20 release deletion attempts per invocation across
 the selected pair**, not 20 versions per repository. This batch limit is separate

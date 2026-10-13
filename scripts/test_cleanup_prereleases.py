@@ -369,6 +369,38 @@ class MacFeedProtectionTests(unittest.TestCase):
                 cleanup.feed_version(text.replace('version: "1.0.23"', 'version: "1.0.24"')
                                      .replace(path, f"https://github.com/{FE}/releases/download/v1.0.23/old.zip"))
 
+    def test_typed_scalars_do_not_become_download_names_or_sizes(self):
+        valid = self.feeds["latest-arm64-mac.yml"]
+        plan = cleanup.build_plan(self.gh, NOW)
+        bad = [valid.replace("Intent-1.0.24-arm64-mac.zip", scalar)
+               for scalar in ("null", "Null", "~", "true", "FALSE", "2026", "1.23", "1e3", "0x10",
+                              "null ", " true ", "2026 ", "1.23 ")]
+        bad += [valid.replace("size: 35", f"size: {scalar}")
+                for scalar in ('"35"', "'35'", "true", "null", "35.0")]
+        for text in bad:
+            with self.subTest(text=text):
+                self.feeds["latest-arm64-mac.yml"] = text
+                with self.assertRaises(cleanup.CleanupError):
+                    cleanup.build_plan(self.gh, NOW)
+                self.assertFalse(cleanup.apply_plan(self.gh, plan, "cloudlands-fe", NOW)["ok"])
+                self.assertEqual(self.gh.deleted, [])
+
+    def test_producer_preserved_metadata_has_supported_scalar_types(self):
+        # Actual prepareMacChannelFeeds output using the metadata supported by
+        # cloudlands-fe/scripts/mac-update-feed.test.ts, plus per-file SHA-256.
+        for name, value in [("metadata-arm64", "1.0.24"), ("metadata-legacy", "1.0.23")]:
+            text = (self.fixtures / f"{name}.yml").read_text()
+            self.assertEqual(cleanup.feed_version(text), value)
+            for bad in [text.replace("stagingPercentage: 50", 'stagingPercentage: "50"'),
+                        text.replace("stagingPercentage: 50", "stagingPercentage: true"),
+                        text.replace("stagingPercentage: 50", "stagingPercentage: 101"),
+                        text.replace("releaseName: Intel and Apple Silicon", "releaseName: true"),
+                        text.replace("releaseNotes: Signed native builds", "releaseNotes: *missing"),
+                        text.replace("minimumSystemVersion: 13.0.0", "minimumSystemVersion: 13"),
+                        text.replace("blockMapSize: 123", 'blockMapSize: "123"')]:
+                with self.subTest(text=bad), self.assertRaises(cleanup.CleanupError):
+                    cleanup.feed_version(bad)
+
     def test_missing_frontend_records_still_protect_both_daemon_dependencies(self):
         for repo in (FE, FE_MIRROR):
             self.gh.inventory[repo] = [r for r in self.gh.inventory[repo]
