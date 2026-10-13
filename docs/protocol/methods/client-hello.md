@@ -88,7 +88,7 @@ absence means unavailable, not permission to infer support from version numbers.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| client.hello | clientId?, name?, capabilities?, hostname? *(v9.9)*, prettyHostname? *(v9.9)*, deviceKind? *(v9.9)* | { clientId, protocolVersion, server: { locality, hasDisplay, osArch, version, buildCommit?, protocolVersion, capabilities } } |
+| client.hello | clientId?, connectionRole? *(prepared; see attachment contract below)*, name?, capabilities?, hostname? *(v9.9)*, prettyHostname? *(v9.9)*, deviceKind? *(v9.9)* | { clientId, connectionRole? *(prepared attachment acknowledgement only)*, protocolVersion, server: { locality, hasDisplay, osArch, version, buildCommit?, protocolVersion, capabilities } } |
 | client.list *(v9.9)* | workspaceId? | { clients: [{ clientId, name?, hostname?, prettyHostname?, deviceKind?, capabilities, connections, transports, connectedAt }] } — the **live, hello'd** connections grouped by logical `clientId`; see the `client.list` block below |
 
 - **Global handshake.** `client.hello` does **not** require `workspaceId` (§3.6); it is the
@@ -138,8 +138,50 @@ absence means unavailable, not permission to infer support from version numbers.
 ```
 
 **Errors.** A malformed `clientId` (non-string) → `-32602`; a persistence failure → `-32603`.
-The handshake is idempotent: re-sending `client.hello` on the same connection updates `name` /
+The ordinary handshake is idempotent: re-sending `client.hello` on the same connection updates `name` /
 `capabilities` / host identification and re-returns the same `server` block.
+
+#### Qualified monitor attachment (prepared, not advertised)
+
+The first supported `server.capabilities.reviewMonitoring: 1` includes the
+[qualified recipient contract](pr.md#planned-qualified-review-monitoring-not-yet-advertised)
+and this attachment handshake. Production advertisement remains disabled until
+all native recipients, intermediaries and consumers are qualified.
+
+A document opens a separate physical connection to the original host only after
+its captured successful ordinary hello advertises integer `reviewMonitoring >= 1`.
+It presents exactly the canonical `clientId` from that acknowledgement:
+
+```json
+{ "jsonrpc":"2.0", "id":1, "method":"client.hello", "params":{
+  "clientId":"cli-7f3a", "connectionRole":"review-monitor",
+  "capabilities":{ "reviewMonitoring":1 } } }
+```
+
+Success echoes `connectionRole: "review-monitor"` and the same canonical
+`clientId`, alongside the existing `protocolVersion` and `server` result fields.
+Missing or mismatched role/id requires teardown, never an ordinary-hello fallback.
+An older host receives no attachment request. No second server capability exists.
+
+The role and client id grant no authority. Admission requires the same authenticated
+principal and exactly one live acknowledged ordinary source connection with that
+canonical id. Absent, foreign, unacknowledged or ambiguous sources are refused
+before profile, presence or browser side effects. The attachment retains that
+physical source and hello generation; it never selects a replacement by client id.
+Multiple document attachments to one source remain independent.
+
+Attachments do not create/update logical profiles, override name/host/capabilities,
+become browser reverse targets, change workspace browser pins, or keep a departed
+ordinary device online. Their consumer support never upgrades pooled connections,
+other documents or grouped client capabilities. Repository/account/workspace
+authority remains independently required for private content.
+
+Source retirement/rehello, attachment rehello failure/withdrawal/close, and document
+retirement invalidate affected receipts and dependent queued output/subscriptions.
+An established ordinary socket cannot become an attachment, and an established
+attachment cannot become ordinary through a missing, changed or unknown role.
+Unknown/malformed roles and unsupported attachment transitions fail closed.
+Ordinary hellos retain their existing profile-update behavior.
 
 #### GitLab checkout capability
 
@@ -425,3 +467,24 @@ has `isAdministrator: false`; cached roles are refreshed on reconnect and
 `host:members-changed`. The principal ID remains immutable while effective host
 role is current. [§5.49](./shared-host-membership.md#authority-and-discovery) gives
 the fail-closed compatibility rules when fields/capabilities are missing.
+
+#### Planned review monitoring capability
+
+`server.capabilities.reviewMonitoring: 1` is reserved for the complete
+[qualified monitoring contract](pr.md#planned-qualified-review-monitoring-not-yet-advertised).
+It is **not yet advertised** by the declaration wave. Absence or zero means no
+addressed/GitLab monitoring support; existing GitHub calls remain compatible.
+Do not derive support from repository reads, MR aliases, a daemon version, or the
+GitLab connection being configured. Feature gates and current original-host
+authorization remain separate from this support flag.
+
+The planned review-monitor extension also requires **recipient** support:
+`client.hello.params.capabilities.reviewMonitoring: 1` opts only the current live
+connection into qualified output. Missing/malformed support remains legacy; a server
+flag alone never authorizes qualified data to an old desktop. Remote forwarding must
+intersect the end consumer and decoding intermediaries, not substitute proxy support.
+Agent recipients use a trusted versioned harness/session receipt, not client identity
+or model-supplied parameters. Reconnect/replacement invalidates cached support.
+The [planned recipient/output policy](pr.md#planned-qualified-review-monitoring-not-yet-advertised)
+defines unchanged legacy GitHub projection, qualified suppression, direct-call errors,
+and whole-envelope wake/history replay gating. Neither side advertises support yet.

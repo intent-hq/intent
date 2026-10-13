@@ -480,3 +480,387 @@ Lifecycle is observable via the `prMonitor:*` event category (§6.5), and each a
 // ← response — nothing changed vs. the emit baseline: no wake
 { "jsonrpc":"2.0","id":101,"result":{ "ok":true,"flushed":false } }
 ```
+
+#### Planned qualified review monitoring (not yet advertised)
+
+This contract is **planned**, not a claim that GitLab monitoring is available.
+The current runtime bindings and generated [MCP index](mcp-bindings.md) remain
+unchanged. The additive declarations in `intent-core::review_monitor` and the
+`WorkspaceApi` addressed methods establish the handoff to implementation. Their
+default implementations return unsupported without a legacy fallback. Neither a
+new renderer registration method nor another monitor registry is introduced.
+
+**Capability and entry points.** A completed implementation advertises integer
+`server.capabilities.reviewMonitoring: 1` through `client.hello`. Absent, zero,
+or an unrecognized non-integer value must not enable addressed requests or GitLab
+monitor controls. Version 1 includes addressed snapshots, registration, list,
+cancellation, explicit refresh/flush, polling, restoration and qualified private
+output. Do not advertise it for a partial implementation. Existing
+`agentFeatures.prMonitor` and GitLab Labs/connection gates remain independent;
+capability is host support, not authorization, connection status or merge readiness.
+Older hosts continue to use the existing GitHub UI and calls. Unsupported/disabled
+GitLab behavior uses the established availability treatment in the shared flow.
+
+**Recipient support and legacy output boundary.** Host support alone is insufficient.
+Qualified output requires BOTH server support and an explicit version-1-or-newer
+integer `reviewMonitoring` capability from the actual recipient. Missing, zero,
+negative, boolean, string, fractional or otherwise malformed recipient values mean
+legacy. This is a compatibility declaration, never authorization.
+
+- **Desktop/transport recipient:** read `client.hello.params.capabilities.reviewMonitoring`
+  on the admitted [monitor attachment](client-hello.md#qualified-monitor-attachment-prepared-not-advertised).
+  Ordinary pooled connections remain legacy recipients. It covers that connection only, not all
+  connections sharing a `clientId`. Re-negotiate after reconnect; do not copy a
+  previous socket's declaration. Forwarded/remote-host traffic uses the end consumer's
+  declaration AND each decoding intermediary's support; a capable local proxy cannot
+  upgrade an old desktop. Subscribe, seed, reconnect, direct responses and history
+  projections use the same destination-specific decision.
+- **Agent recipient:** the daemon's trusted harness/session construction records a
+  versioned `reviewMonitoring` support receipt only after that harness's bindings,
+  guidance and wake/history readers implement this contract. It is scoped to the
+  concrete session/host and retired on replacement, retirement or restoration without
+  trusted evidence. A tool argument, prompt, model-generated claim, workspace setting,
+  namespace spelling or persisted wake cannot assert support. Old/unknown harness
+  stamps have no receipt. Re-evaluate both the owning agent's receipt and any desktop
+  viewing its conversation; support of one never implies support of the other.
+
+**Agent private-context extension (prepared, not advertised).** The daemon offers
+`initialize.clientCapabilities._meta.reviewMonitoring: 1` only in an explicitly
+qualified composition. The actual initialize result and each successful session/new
+or session/load result must independently declare `_meta.reviewMonitoring >= 1`.
+Both startup methods carry `_meta.reviewMonitoringContext =
+{version:1, ownerKey, loadAttemptId}` and must echo that exact object in the result.
+These opaque identifiers come from the original daemon-owned agent/workspace and
+startup allocation. They are correlation, not authority. The receipt binds the
+original physical Connection, initialize generation, startup attempt and callback
+Query; it becomes eligible for **new** monitor delivery only after the original
+callback registration acknowledges. A missing/malformed/mismatched echo, delayed
+reply, replacement, reinitialize or retirement cannot establish or revive support.
+Ordinary startup/callback metadata remains unchanged when this extension is absent.
+
+The daemon retains a random private native-family key with the original startup
+owner. Its installation-local `review_context_enrollment` row is committed in the
+same guarded transaction as that exact winning agent/workspace/native session ID.
+A losing startup cannot borrow the winner's key. Cold load reads the exact existing
+association without creating or deriving one; missing enrollment refuses qualified
+resume. Identity, import or transcript replacement invalidates the association,
+including identical-byte replacement; ordinary name and usage updates preserve it.
+The table is excluded from transfer and public projections, and injected import
+rows are rejected. Commit facts remain distinct from later owner confirmation or
+callback failure. This association selects a family only: fresh complete source
+admission, exact attempt ownership and callback support remain independent.
+
+Before resuming native context, the daemon invokes the agent-side method
+`_intent/session/prepare_review_history({sessionId, ownerKey, loadAttemptId})`.
+The result is `{preparationId, snapshotDigest, monitorMessages:
+[{messageId, storeEnvelopeDigest, acpPayloadDigest}]}`. Preparation may classify and
+pin history but must not spawn a native Query, load model context, replay messages,
+or disclose bodies. The daemon independently verifies original private Store
+provenance and freshly admits the entire original source/account/workspace set.
+Only then may it send session/load with `_meta.reviewMonitoringHistory =
+{version:1, preparationId, snapshotDigest, loadAttemptId}`, alongside the matching
+startup context. This pre-resume admission deliberately precedes Query/callback
+creation; it never replaces the callback ACK required for a new wake.
+
+The preparation is bounded, one-use and bound to the original connection,
+initialize generation, owner, session and startup attempt. Consume it before any
+await/spawn. `snapshotDigest` commits the held complete native resume-input closure,
+authoritative enrollment/lineage and complete monotonic source journal. No ambient
+reread or raw-resume fallback is allowed. Empty `monitorMessages` means proven
+ordinary lineage. Missing, copied, truncated or unverifiable classification must
+not become ordinary, even through an incapable route. Compaction, derived and child
+context retain every original source dependency. Installation-private enrollment
+and durable pre-feed journaling must map each Store correlation and exact ACP payload
+to its native SDK UUID/content. Journal persistence never proves transfer or ACK.
+
+A new admitted committed monitor prompt carries `_meta.reviewMonitoringMessage =
+{version:1, messageId, storeEnvelopeDigest, acpPayloadDigest}`. The Store digest is
+opaque; private binding fields never cross ACP. The independently verifiable ACP
+digest commits both correlations, destination and every accepted payload field.
+Strict text-only v1 accepts exactly `{sessionId, prompt:[{type:"text", text}],
+_meta:{reviewMonitoringMessage:{version:1, messageId, storeEnvelopeDigest,
+acpPayloadDigest}}}`. Extra keys, blocks, attachments and sibling metadata refuse
+rather than disappear during conversion; ordinary rich prompts retain their path.
+For this profile, the digest is lowercase SHA-256 of the UTF-8 compact JSON array
+`["intent-review-monitor-acp-text-v1", sessionId, messageId, storeEnvelopeDigest,
+text]`, with no BOM/newline or Unicode normalization. Invalid Unicode refuses.
+Constant field names/types/version are fixed by this domain; only the digest's own
+self-reference is excluded. Conversion to `task-notification` must preserve the
+actual UUID/result/idle/cancel settlement, independently of unrelated autonomous
+turns. Public/model text and metadata cannot mint original account authority.
+
+Retirement invokes `_intent/session/retire_review_context({sessionId,
+loadAttemptId})`. On entry, close eligibility for new private use/dispatch and
+invalidate preparations before any awaitable cleanup. `{retired:true}` is valid
+only after that exact known allocation's native execution/process tree and
+forwarders join, or for its retained matching joined tombstone. Unknown attempts
+cannot select a same-ID replacement or receive fabricated success. Timeout/peer
+loss requires joining only the exact owned execution; ordinary interrupt alone is
+not a retirement proof. Loaded qualified context remains dependent on all original
+sources for subsequent ordinary/autonomous work. Discard delayed replies after
+retirement. Already-dispatched authorized external work cannot be recalled; retain
+uncertain delivery without an exactly-once or rollback claim. Default offers and
+production activation remain disabled pending native qualification.
+
+The internal pure policy `ReviewMonitorOutput<T>::project` divides producer output
+into `LegacyGithub` and `Qualified`. These are not wire tags or caller inputs.
+`LegacyGithub` means the unchanged existing GitHub producer envelope, with its existing
+validation, counts/omissions, errors, URLs and ownership semantics. It must NEVER be
+constructed by stripping identity/availability from a qualified observation. All
+GitLab output, qualified GitHub output (including nullable/restricted facts), and
+unresolved provenance are `Qualified`, regardless of alias or display string.
+Only proven legacy GitHub provenance can select the old producer. Unproven provenance
+must not be guessed from `repo`, a missing `resource`, current remotes or a URL.
+
+| Surface | Recipient without qualified support | Recipient with qualified support and enabled host |
+| --- | --- | --- |
+| List, `agent:idle` / AgentLite / diagnostics wait summaries | Preserve legacy GitHub entries exactly; omit qualified entries. Keep internal waiting/settlement/ownership accounting intact; omission is not completion or cancellation. | Deliver both classes; preserve canonical identity and unknown facts. |
+| Lifecycle event / subscription / replay | Deliver original legacy GitHub events; suppress the entire qualified event. Never emit a slug-only substitute. | Deliver qualified identity/health after fresh admission. |
+| Snapshot, registration, adoption/refusal, cancel/flush and lookup by ID | Legacy GitHub calls retain existing output and ownership. If resolution selects qualified data, return the existing generic unsupported error BEFORE provider reads, registration/adoption/cancel/flush side effects or ownership disclosure. No fallback, disguised success, owner names, qualified URLs or instructions. | Existing admission and canonical ownership rules apply; typed qualified output is allowed. |
+| Agent wake, transfer notice, queue dispatch, persisted replay | Withhold the WHOLE qualified envelope (body, metadata, URL, attachments and derived summaries); do not acknowledge delivery, advance delivered baseline, or discard pending/terminal notices. Preserve registration and durable pending delivery until an admitted capable recipient or explicit cancellation. Legacy GitHub delivery remains unchanged. | Re-check recipient receipt and fresh original authority at delivery; then deliver once through normal debounce/dedup/terminal semantics. |
+| Conversation/history export or desktop view of an agent wake | Omit whole qualified monitor-derived messages and any embedded replay/summary content for that destination. No generic GitHub label or guessed link. Do not alter stored history or agent delivery acknowledgments. | Preserve the full qualified envelope under the same authority and recipient checks. |
+| URLs | Only original legacy GitHub output is eligible; qualified missing-URL output is withheld with its envelope. | An absent observed canonical URL remains absent. Render a non-navigable label/disable existing open actions; never construct a GitHub URL from `repo`/`prNumber`. |
+
+New `gitRootId`/`target` selectors require negotiated support before resolving a
+provider read, including when the requested provider is GitHub. Legacy selectors
+remain unchanged; if their resolution selects qualified data, the same unsupported
+boundary applies without fallback.
+
+An unsupported old agent cannot acquire/adopt a qualified registration. A previously
+capable owner downgraded/replaced without a receipt keeps durable ownership/pending
+notices under existing lifecycle rules; do not silently transfer it to another account
+or consume its pending wake. A capable admitted replacement/adopter must pass the
+existing ownership and authority checks before pending output can be reconsidered.
+Capability withdrawal invalidates any cached per-recipient projection. Preformatted
+queued messages are not an exception: retain internal producer provenance across
+queue/history boundaries and apply the decision again to the entire envelope.
+Never convert null to zero, strip restrictions, or mislabel GitLab to satisfy an old
+consumer. This conservative boundary intentionally hides qualified monitors from old
+clients until they upgrade; it does not hide or change ordinary legacy GitHub monitors.
+
+Both namespace aliases keep the existing number argument named `prNumber` and
+share records, limits, caller ownership, adoption, cancellation and wakes. The
+planned options for snapshot, monitor and unmonitor are exactly one of:
+
+| Address | Planned resolution |
+| --- | --- |
+| no selector | Read the current authorized primary root's saved review selection using the shipped repository-context resolver. No remote, unresolved provenance or multiple plausible projects is a refusal, never a guessed GitHub fallback. |
+| `repo: "owner/name"` | Preserve the explicit legacy GitHub.com override, its validation, output and errors. An old `repo: null` remains omission. It does not select GitLab even through the MR alias. |
+| `gitRootId: "registered-id"` | Resolve that registered root in the requesting workspace under original authority, then use its saved selection. Paths are not IDs; foreign/removed/ambiguous roots fail without primary-root fallback. |
+| `target: ReviewTarget` | A per-call explicit review address: `{ repository: { provider, instanceBaseUrl, projectPath }, kind, number }`. Reuse the shipped target type. Provider canonicalization and current admission are required; a valid authorized explicit target works without an implicit remote. It does not change a saved selection. |
+
+Selectors cannot be combined, even if they appear equivalent. New selectors cannot
+be `null`. The explicit target's number must equal `prNumber`; it is the project-local
+PR number or MR iid, not a GitLab global ID. Only GitHub `pull-request` and GitLab
+`merge-request` kinds are supported; issue monitoring is outside this contract.
+New addressed numbers must be positive JavaScript-safe integers. Legacy number
+validation is unchanged. Preserve nested/case-sensitive GitLab paths and the logical
+instance root including ports and installation prefixes. Never choose identity from
+a display URL, namespace spelling, bare project string or the current default forge.
+Caller, account, connection and daemon IDs are not request options.
+
+**Public projections (qualified recipients only).** Existing fields and lifecycle words remain intact. Add
+`resource?: ReviewTarget` and `monitorAvailability?` to monitor rows, refusal identity,
+`waitingOnPrMonitors` entries, lifecycle event data and wake metadata when known.
+Unresolved target provenance omits `resource`; absence on an older row is unknown,
+not evidence that the row belongs to GitHub. A known resource's `number` equals
+`prNumber`; `repo` remains the full project path. Always supply the observed canonical
+URL for qualified rows/wakes when known; missing GitLab URLs do not permit a GitHub
+URL fallback. The identity supplement does not disclose account/authority receipts.
+
+The monitor's own health is separate from `state: active|completed` and from the
+provider's merge checklist. `monitorAvailability` is one of:
+
+| Shape | Meaning in the existing shared status flow |
+| --- | --- |
+| `{ state: "available" }` | Current admission permits monitoring; does not mean the review is mergeable. |
+| `{ state: "pending" }` | Awaiting the first admitted observation; no invented checklist. |
+| `{ state: "reconnect-required" }` | Original connection is disconnected or needs authentication; retain target, do not use a replacement account. |
+| `{ state: "backoff", retryAt }` | Polling is delayed until the RFC 3339 deadline for this connection. Retain known snapshots as stale. |
+| `{ state: "restricted" }` | Access is denied; do not emit private cached data or pending text. |
+| `{ state: "disabled" }` / `{ state: "unsupported" }` | Existing feature gate or host support prevents monitoring. |
+| `{ state: "unavailable" }` | A transient provider/read failure without a known retry deadline; no successful-poll timestamp advance. |
+| `{ state: "unresolved", reason }` | `missing-provenance`, `unverified-import`, `invalid-target` or `missing-authority`; retain inspectable/cancellable evidence without a provider read. |
+| `{ state: "unknown" }` | Insufficient evidence. Unknown future state/reason words are treated as unknown, never available. |
+
+`lastError` remains a sanitized explanation. Existing `pausedUntil` remains compatible:
+for a qualified active monitor it mirrors a known future backoff deadline; it is omitted
+when no such deadline exists and on terminal rows. GitLab quotas/outages never close
+the global GitHub gate. Use the existing status sentence and detail positions; this
+contract requires no GitLab-only row, panel, action ordering or recovery screen.
+Necessary copy differences are GitLab branding, MR/`!` notation, actual links, and
+truthful capability/data availability.
+
+Qualified rows and registration/snapshot results use the already-shipped qualified
+snapshot projection above, including its `availability` object (`policy`, `approvals`,
+`checks`, `discussions`). The producer reuses `ReviewAvailability`, not another signal
+vocabulary. Where present, `lastSnapshot` retains that projection's requirements and
+availability semantics. Null counts stay null; unknown thread counts stay absent;
+known empty data stays zero. Preserve restricted/unavailable/transient/rate-limited/
+unknown states. A pipeline for a different head cannot establish readiness for the
+current head. Do not deserialize qualified checklists through legacy non-null defaults.
+The compact row's `lastSnapshot.checks.failingRequired` and `pendingRequired` are
+numeric counts (or null when unavailable), and omit the rich `items` list. Full
+snapshot/registration `requirements.checks` retain their named lists. An empty
+observed list projects to zero; unavailable evidence must not project to zero.
+
+**Events and wakes.** Keep the five existing `prMonitor:*` names and
+`type: "pr_monitor_wake"`, `prNumber`, reason words and transfer semantics.
+The optional extension is additive for supported recipients only; events carry
+identity/health, not snapshots or
+private binding data. A material availability transition uses `prMonitor:changed`
+with the complete current `changes` list (possibly empty) and prompts a list refetch.
+An unchanged poll emits nothing. Availability changes must not fabricate a check-count
+delta. Provider changes remain debounced against the last delivered baseline;
+confirmed merge/close completes the monitor with the immediate final wake. Existing
+cancel/flush routes continue to address `workspaceId` plus `monitorId`, so same-number
+GitHub/GitLab rows cannot collide. Explicit checks, cached replay, queued wakes and
+persisted wake replay all require fresh original-authority admission before private
+output. Unauthorized output is suppressed, not rewritten as a passing/empty snapshot.
+
+**Original authority and persistence.** Services capture the original daemon,
+authenticated caller/workspace authority and settled connection/account before the
+first await/queue boundary. `ReviewMonitorBinding { scope: ExecutionScope,
+connection: RepositoryConnectionScope, resource: ReviewTarget }` is private durable
+binding evidence, not a public event, caller input or bearer capability. Its full
+scope/generation/connection/resource tuple qualifies observation/cache sharing;
+`monitorId` remains the public record/control key. Identical names/numbers on another
+forge, instance, daemon or account never share private observations.
+
+Reuse Store migration 0145 and its qualified monitor APIs for canonical target and
+provenance. Store the private binding receipt in the existing snapshot JSON envelope
+under `monitorBinding`, including a receipt-only envelope before a deferred first
+baseline. `lastSnapshot` public projections must exclude this receipt. Poll/baseline
+writes must preserve it. This needs no new migration or duplicate target table.
+A resolved Store target alone does not prove original authority. Restart revalidates
+against trusted durable host/caller/account evidence; matching public IDs or replacing
+an old generation with the current one cannot create a lease. If original evidence
+cannot be established, leave the row unresolved/reconnect-required and cancellable.
+Never recover provenance from changed remotes, current login, a default connection
+or untrusted imported receipts. Store indexes continue to enforce one active owner
+per canonical review per workspace; replacement accounts do not create parallel
+ownership or silently take over an existing target.
+
+**Original saved-message evidence.** Qualified history uses a private local
+association written atomically with the original prepared message. It binds the
+original workspace, agent, complete review binding and a versioned digest of the
+exact unprojected envelope. This evidence constrains fresh account and recipient
+admission; it never grants access, proves transfer or acknowledges a pending wake.
+Monitor rearm, adoption or cancellation cannot rewrite an older message's origin.
+Message or payload mutation, message replacement and session identity changes
+invalidate the association. Ordinary session timestamp or usage updates preserve
+it. Imports and copies cannot recreate it, even when public message bytes match.
+Legacy or malformed evidence remains withheld; there is no inferred backfill.
+Supported history delivery must retain the verified envelope and retire queued
+output before a relevant mutation completes, rather than authorize an ID and
+reload its current content. The private evidence is excluded from transfers;
+the separate workspace-transfer refusal also protects retained public message
+bodies and monitor rows.
+
+**Recovery of uncertain qualified delivery.** A saved message is not proof that
+its original recipient received it. Process loss can leave the same stored row
+and message after either an unsent attempt or a transferred but unacknowledged
+attempt. Automatic restart, reconnect, polling, negotiation, list/history reads
+and ordinary re-registration must preserve that pending obligation and its raw
+baseline evidence without resending it or claiming delivery. Surviving trustworthy
+transfer evidence permits acknowledgement-only reconciliation under fresh original
+authority, never a second prompt for that known transfer.
+
+The existing `prMonitor.flush` action, including Check and Flush, is an explicit
+request for a fresh attempt when the previous transfer cannot be determined.
+Independently readmit the original pinned target/account and intended capable
+recipient before that attempt. It uses the existing guarded delivery pipeline;
+an old serialized body or receipt is not replay authority. This may repeat an
+update transferred immediately before a crash; recovery does not promise exactly
+once delivery. Repeated calls for the same live attempt retain normal deduplication.
+Check and Flush refreshes the pinned target and recomputes the consolidated view.
+If no sendable net change remains, report no delivered wake and preserve the old
+uncertain obligation rather than silently acknowledging it. Only an acknowledged
+recovery attempt or explicit cancellation resolves the uncertain pending evidence,
+including terminal work. Unverifiable original provenance stays withheld and
+cancellable. These qualified recovery rules do not change legacy GitHub recovery,
+add a method or introduce a separate UI action.
+
+**Construction and retirement owner map.**
+
+| Owner | Required responsibility before enabling the capability |
+| --- | --- |
+| ACP binding and addressed service routing | Establish trusted per-agent-session support receipts; enforce unsupported direct-call behavior before side effects or ownership disclosure. Parse the shared request; preserve both aliases and explicit legacy GitHub calls. Capture the original `RepositoryReadRequest` / private host scope synchronously; derive caller ownership from that scope. Resolve and canonicalize once, capture binding evidence, and use existing Store qualification/adoption APIs. Never trust a deserialized binding as admission. |
+| Monitor service and repository admission | Own the long-lived registration admission separate from the short MCP request. Transfer only through the original admitted owner; retire the short request at reply/cancel. Revalidate the retained original authority/account before each read, cache reuse and private delivery; do not capture a later ambient caller to extend it. |
+| Polling/cache/wake owner | Apply recipient projection to whole queued/wake/history envelopes and replays; preserve pending delivery on withheld output without acknowledging it. Reuse qualified observations/cache keys, connection quota isolation and current-head evidence. Preserve receipts on writes, debounce meaningful changes, retire terminal watches, and fence pending/queued/persisted output on authority loss. |
+| Restoration/lifecycle owner | Re-admit the original durable binding, without reselecting remotes. Retire runtime handles on cancel, completion, workspace teardown, owner loss or authority/account invalidation; retain durable unresolved evidence where appropriate. Apply existing orphan/parent-adoption rules with fresh admission and unchanged canonical target. |
+| Native transport and desktop state owner | Negotiate per-connection recipient support, including end-consumer/intermediary intersection across hosts; retire it on disconnect/reconnect. Filter all response/event/history/wait projections by destination. Carry qualified identity/health through original-host list, cancel, flush, event and replay boundaries, rechecking member/guest access and using capability detection. Cache by host/workspace/monitor identity; do not let local backend state replace a remote host's record. |
+| Shared UI and agent guidance owner | Extend the actual GitHub components/copy and metadata consumers. Keep old harness stamps, explicit GitHub behavior, action ordering, keyboard/focus behavior and unknown values. Compare compact/wide captures and matched-input interactions against the recorded GitHub reference. |
+
+The declaration/golden tests establish serialization, structural addressing and
+pure recipient-projection and default-implementation compatibility only. A source-bound
+legacy-consumer probe demonstrates the unsafe raw input and tests the policy output;
+unknown-field tolerance alone is not compatibility proof. Direct MCP snapshot,
+registration, list and cancellation now use original request admission and trusted
+producer provenance. A registered target retains its original private binding and
+does not follow later root selections. Cancellation compares the captured row,
+including owner, target and binding, atomically with its state change. Direct
+insertion, refresh/adoption and cancellation reserve the database writer before
+entering original physical/account authority fences, and retain those fences
+through SQL execution and commit. Retirement before admission leaves no durable
+change; retirement after SQL admission joins its completion. Dropping the async
+caller does not cancel an admitted commit or undo a completed effect. These paths
+remain unavailable to production qualified recipients: the test-owned receipt is
+not a negotiated connection capability. Native qualified cancel/flush refuse and
+native lists omit qualified rows before provider reads or effects.
+
+Later owners must still prove polling, restart/restoration, transfer notices,
+events, waits, whole wake/history/replay delivery, native recipient negotiation and
+Electron behavior before capability advertisement. The private registration
+envelope contains `monitorBinding`, nullable `qualifiedSnapshot` and optional
+`retryAt`; it is evidence, never permission or a delivery acknowledgment. Later
+writers must preserve it and supply independent original authority. Controlled
+captures do not establish live-provider support.
+
+#### Agent guidance for prepared qualified observations
+
+The current help for both observation aliases documents the existing additive
+`gitRootId` and `target` selectors. These examples describe the prepared contract;
+qualified production offers remain disabled. Alias presence, a connected account
+or a harness stamp does not enable private monitoring. The session's captured
+`agentFeatures.prMonitor`, recipient support and current access remain independent.
+
+For a supported session, an explicit GitLab address is:
+
+```javascript
+await ws.mr.snapshot(7, {
+  target: {
+    repository: {
+      provider: "gitlab",
+      instanceBaseUrl: "https://git.example:8443/gitlab",
+      projectPath: "team/sub/app"
+    },
+    kind: "merge-request",
+    number: 7
+  }
+});
+```
+
+The existing `ws.pr.snapshot(7, { repo: "team/app" })` instead addresses GitHub.com
+PR #7. Both aliases share this distinction; MR !7 is a project-local iid, not a
+global GitLab ID. Never combine selectors, infer a forge from the alias or treat
+a per-call address as a saved-selection update. Native observation needs neither
+`gh` nor `glab`. Creation, comments and merging still use forge-appropriate tools
+with separate authentication and write authorization; no native write binding is added.
+
+Harness 3.2 adds these monitor-address and recovery instructions to the existing
+optional repository-context delivery path. Earlier stamps retain their templates
+and captured features; no existing session is upgraded. Current facts remain inert
+JSON, bounded and subject to the same original context admission and final writer
+checks. A capability or remote change updates guidance for subsequent operations,
+not the target/account of an existing watch or restored history.
+
+Structured selection-required or repository-unavailable results require an
+explicit authorized selection, never an origin or GitHub fallback. Reconnect the
+original account for reconnect-required. Restricted, disabled, unsupported and
+unknown states do not authorize private cached output. After interrupted delivery,
+retain pending changes and use the existing Check/Flush controls with a fresh
+check for explicit recovery; a no-change check may leave pending changes intact.
+External work already accepted cannot be recalled, and explicit retry does not
+promise exactly-once effects. Wakes retain the existing sentence patterns and
+machine fields, with actual returned links and PR/# or MR/! terminology.
