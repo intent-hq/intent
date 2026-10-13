@@ -438,9 +438,15 @@ referenced immutable frontend versions and daemon dependencies. The ARM feed is
 optional for older releases; an existing channel must still have the legacy Mac
 feed. Only the exact two-key empty legacy sentinel described above has no release
 dependency. Extra sentinel fields, unknown versions whose dependencies cannot be
-resolved, and failed feed reads abort cleanup before deletion. The script remains
-dependency-free and accepts the desktop emitter's narrow block-mapping sentinel
-shape, not arbitrary YAML encodings.
+resolved, and failed feed reads abort cleanup before deletion. Every feed must
+match the supported electron-builder block mapping: scalar metadata and a `files`
+list of scalar mappings (or the older `path`/`sha512` pair). Duplicate keys,
+aliases, multiple documents, invalid controls and unsupported fields/shapes abort
+cleanup. Local asset names are accepted; absolute `files[].url` and `path` values
+must point to the same immutable frontend release version the feed declares.
+Path/checksum metadata must agree with its file entry. The dependency-free parser
+is deliberately limited to the emitted format; changes to that format require
+new compatibility fixtures before cleanup can accept them.
 
 `--max-delete` defaults to **20 release deletion attempts per invocation across
 the selected pair**, not 20 versions per repository. This batch limit is separate
