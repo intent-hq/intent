@@ -184,7 +184,19 @@ control item (not a published domain event) or an equivalent explicit cursor/ack
 can implement this; checking an empty queue or its current length is not a fence.
 Loss cannot skip a barrier: loss is emitted before its barrier, or the fence fails.
 It is valid to drain conservatively past the captured boundary, but never to wait
-for a future matching event or an indefinitely moving tail.
+for a future matching event or an indefinitely moving tail. This includes
+transient events and events rejected by type/workspace/authorization filters.
+The internal barrier itself bypasses domain filters and produces no domain
+notification; it must complete when no later matching event is published.
+
+Fence orchestration is an owned, cancellable task. The request handler validates
+and starts that task, then returns to the connection loop without awaiting any
+receiver drain, output capacity, writer completion or fence result. In particular,
+WSS processes inbound frames and drains outbound frames in one loop: awaiting
+the fence there would deadlock its own writer. The coordinator completes the
+original RPC asynchronously after the barriers; replacing/revoking a named lease,
+disconnect or the deadline cancels it and releases its receipts. No detached task
+may publish success after cancellation.
 
 Each forwarder flushes its pre-boundary conflation before acknowledging the
 internal barrier. After **all** named barriers, enqueue the RPC success on the
@@ -223,6 +235,19 @@ join an ordered ingress dispatcher; physical wire ordering alone is insufficient
 A fence is reusable for concurrent recovery resources with the same lease set,
 but each resource keeps its own conflict/dirty version. Fence errors/timeouts
 count as cycle failures under the retry policy below, not unlimited retries.
+Adding a lease that can mutate the resource changes its local lease-set epoch
+and invalidates an active cycle even if every original ID remains live. A
+replacement, removal or newly overlapping writer has the same effect.
+Fence requests/replies/internal barriers are control-only: they do not increment
+loss generations or resource dirty versions, count as conflicting events, trigger
+ordinary recovery, or reset consecutive failure budgets. Only successful data
+reconciliation resets that budget. Each successful single-read cycle costs exactly
+three RPCs: begin fence, data read, end fence. A failed begin fence costs one;
+a failed data read costs two and skips the end fence; an end-fence failure costs
+three. Resource batching may share fences but may never exceed these unbatched
+counts for the same attempts. The two-retry limit therefore permits at most nine
+RPCs for three failing cycles, or six when each data read fails. A trailing
+successful cycle after an overlapping loss adds three RPCs, not one.
 
 This establishes a boundary for **already published** events, including old frames
 still in the bus worker, conflation buffer, outbound queue or renderer callback
@@ -258,7 +283,11 @@ one **pending trailing read bit**, and one timer; no event-sized work queue.
   this lifetime, retaining stale status. More markers alone do not restart it.
   Explicit refresh, a new demand after unmount/remount, or a new connection may
   open a fresh bounded cycle. Authorization/not-found failures are not retried.
-- A success resets the consecutive failure budget. Clear only invalidations
+- Only a completed, conflict-free begin/read/end cycle resets the consecutive
+  failure budget; a successful data read followed by a failed fence does not.
+  A conflict-discarded cycle keeps the prior failure count and one paced trailing
+  cycle; new domain traffic can sustain these cycles at the same 250 ms bound,
+  but fence-only traffic cannot sustain them. Clear only invalidations
   included by that read; a newer loss requires the trailing read. Do not clear
   all dirty state merely because any request succeeded. Timers cancel on teardown.
 - Unversioned recovery uses the begin/read/end fence cycle above. Accepted pushes

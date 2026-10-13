@@ -78,7 +78,9 @@ test('all deterministic schedules have component owners and observable assertion
     'legacy-fallback', 'typed-channel-independence', 'queued-writer-timeout',
     'overlap-independent-generations', 'queued-event-after-read',
     'held-overlap-independent-generations', 'fence-covers-bus-worker',
-    'fence-retired-set', 'fence-ordered-ingress', 'fence-loss-window']) assert.ok(ids.includes(id), id);
+    'fence-retired-set', 'fence-ordered-ingress', 'fence-loss-window',
+    'fence-filtered-transient-tail', 'fence-new-overlap', 'fence-control-only',
+    'failed-end-fence-budget', 'fence-wss-nonblocking']) assert.ok(ids.includes(id), id);
 });
 
 test('bounded scheduler examples agree with documented policy', () => {
@@ -133,4 +135,18 @@ test('causal fixtures forbid applying a held snapshot or old push before the end
   assert.equal(byId['fence-ordered-ingress'].expect.fenceVisibleBeforeCallback, false);
   assert.equal(byId['fence-loss-window'].expect.snapshotApplied, false);
   assert.equal(byId['fence-retired-set'].expect.successfulPartialFence, false);
+});
+
+
+test('request bounds include every begin fence, data read and end fence', () => {
+  const byId = Object.fromEntries(corpus.scenarios.map(row => [row.id, row]));
+  for (const id of ['overlap-and-trailing', 'finite-failures', 'queued-event-after-read', 'failed-end-fence-budget']) {
+    const e = byId[id].expect;
+    assert.equal(e.totalRpcs, e.beginFenceRpcs + e.dataRpcs + e.endFenceRpcs, id);
+    assert.ok(e.totalRpcs <= 3 * e.dataRpcs, id);
+  }
+  assert.equal(byId['failed-end-fence-budget'].expect.totalRpcs, 9);
+  assert.equal(byId['fence-control-only'].expect.consecutiveFailures, 2);
+  assert.equal(byId['fence-control-only'].expect.newDirtyVersions, 0);
+  assert.equal(byId['fence-new-overlap'].expect.snapshotApplied, false);
 });

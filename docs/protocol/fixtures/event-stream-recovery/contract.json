@@ -777,7 +777,11 @@
         "reads": 2,
         "maxActive": 1,
         "maxPending": 1,
-        "idleTimers": 0
+        "idleTimers": 0,
+        "beginFenceRpcs": 2,
+        "dataRpcs": 2,
+        "endFenceRpcs": 2,
+        "totalRpcs": 6
       },
       "consumers": [
         "client",
@@ -822,7 +826,11 @@
         ],
         "reads": 3,
         "stale": true,
-        "automaticSuspended": true
+        "automaticSuspended": true,
+        "beginFenceRpcs": 3,
+        "dataRpcs": 3,
+        "endFenceRpcs": 0,
+        "totalRpcs": 6
       },
       "consumers": [
         "client",
@@ -978,7 +986,11 @@
         "appliedStalePushes": 0,
         "heldReadAppliedBeforeEndFence": false,
         "finalState": "S2",
-        "maxPending": 1
+        "maxPending": 1,
+        "beginFenceRpcs": 2,
+        "dataRpcs": 2,
+        "endFenceRpcs": 2,
+        "totalRpcs": 6
       },
       "consumers": [
         "stores"
@@ -1074,6 +1086,93 @@
         "backend",
         "client",
         "stores"
+      ]
+    },
+    {
+      "id": "fence-filtered-transient-tail",
+      "steps": [
+        "publish transient matching file update and filtered foreign events",
+        "request fence then publish no later matching event",
+        "drain raw worker, filters, conflation and writer"
+      ],
+      "expect": {
+        "fenceCompletes": true,
+        "foreignDomainFrames": 0,
+        "barrierDomainFrames": 0
+      },
+      "consumers": [
+        "backend"
+      ]
+    },
+    {
+      "id": "fence-new-overlap",
+      "steps": [
+        "begin fence for A and B completes; hold authoritative read",
+        "admit lease C capable of mutating the same resource",
+        "complete old read and end fence for A and B"
+      ],
+      "expect": {
+        "snapshotApplied": false,
+        "leaseSetEpochChanged": true,
+        "maxPending": 1
+      },
+      "consumers": [
+        "client",
+        "stores"
+      ]
+    },
+    {
+      "id": "fence-control-only",
+      "steps": [
+        "record resource with two consecutive failures",
+        "issue and complete unrelated fences with no domain events or loss",
+        "observe scheduler state"
+      ],
+      "expect": {
+        "newDirtyVersions": 0,
+        "lossGenerationChanges": 0,
+        "recoveryReads": 0,
+        "consecutiveFailures": 2
+      },
+      "consumers": [
+        "backend",
+        "client"
+      ]
+    },
+    {
+      "id": "failed-end-fence-budget",
+      "steps": [
+        "run begin fence and successful read; fail end fence",
+        "retry after 1000 ms; fail end fence",
+        "retry after 4000 ms; fail end fence",
+        "emit additional loss/control frames without explicit refresh"
+      ],
+      "expect": {
+        "beginFenceRpcs": 3,
+        "dataRpcs": 3,
+        "endFenceRpcs": 3,
+        "totalRpcs": 9,
+        "automaticSuspended": true
+      },
+      "consumers": [
+        "client"
+      ]
+    },
+    {
+      "id": "fence-wss-nonblocking",
+      "steps": [
+        "WSS receives fence request while outbound bulk lane is full",
+        "return from request handler while owned fence task waits",
+        "WSS drains outbound frames and processes cancellation/replacement",
+        "owned coordinator completes or cancels the original RPC"
+      ],
+      "expect": {
+        "handlerWaitsForDrain": false,
+        "writerCanProgress": true,
+        "successAfterCancellation": false
+      },
+      "consumers": [
+        "backend"
       ]
     }
   ],
