@@ -79,6 +79,17 @@ test('restart has new identity and resets measured progress', () => {
   assert.ok(!('progress' in restarted));
 });
 
+test('fresh unchanged counters remain available; timeout and disconnect do not', () => {
+  for (const observation of examples.pollObservations) {
+    const cached = byName.get(observation.lastSuccessfulScenario);
+    assert.ok(cached.progressAgeMs >= 30000);
+    assert.equal(observation.statusAvailable, observation.pollOutcome === 'success');
+    assert.equal(observation.showEta, false);
+  }
+  assert.deepEqual(examples.pollObservations.map(o => o.pollOutcome),
+    ['success', 'timeout', 'disconnected', 'success']);
+});
+
 test('hello and ordinary operations receive structured rejection; failure is not retryable', () => {
   assert.ok(examples.rejectedRequests.some(s => s.request.method === 'client.hello'));
   for (const { request, response } of examples.rejectedRequests) {

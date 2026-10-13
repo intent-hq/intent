@@ -495,5 +495,35 @@
         }
       }
     }
+  ],
+  "pollObservations": [
+    {
+      "name": "fresh-unchanged-counters",
+      "lastSuccessfulScenario": "indexing-without-estimate",
+      "pollOutcome": "success",
+      "statusAvailable": true,
+      "showEta": false
+    },
+    {
+      "name": "timed-out-status",
+      "lastSuccessfulScenario": "indexing-without-estimate",
+      "pollOutcome": "timeout",
+      "statusAvailable": false,
+      "showEta": false
+    },
+    {
+      "name": "disconnected-status",
+      "lastSuccessfulScenario": "indexing-without-estimate",
+      "pollOutcome": "disconnected",
+      "statusAvailable": false,
+      "showEta": false
+    },
+    {
+      "name": "fresh-again-unchanged-counters",
+      "lastSuccessfulScenario": "indexing-without-estimate",
+      "pollOutcome": "success",
+      "statusAvailable": true,
+      "showEta": false
+    }
   ]
 }

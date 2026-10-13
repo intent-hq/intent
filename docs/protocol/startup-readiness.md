@@ -51,11 +51,12 @@ Secret/config/TLS failure fails closed; do not bind an unprotected status servic
 `Retry-After: 1`, generic body after existing enable/origin gates); unknown paths
 remain 404. They never reach an application or TCP forwarding handler. The Tailcat
 sidecar is distinct from binary `/tunnel`: it carries the owner's `/ws` traffic.
-To show progress over a saved Tailcat route, start that configured sidecar against
-the protected early WSS listener and preserve its route through handoff. If its
-Store/service-dependent control path cannot yet be separated, that route remains
-unreachable until ready; do not silently widen a tunnel-only bind. Report this
-limitation in implementation/release evidence. Per-principal clients likewise
+Saved owner Tailcat routes are part of this feature's acceptance: start the
+configured sidecar against the protected early WSS listener and preserve its
+route through handoff. If its Store/service-dependent control path cannot be
+separated, report the concrete blocker and obtain a scope/design decision before
+claiming completion; deferring that route until ready is not an accepted fallback.
+Never widen a tunnel-only bind to work around it. Per-principal clients
 retain ordinary retry UI until ready; this revision does not expose aggregate
 owner progress to guests or host members.
 
@@ -85,6 +86,12 @@ connection/resource bounds; status polling must not spawn unbounded tasks.
 `system.status`, `principal.me`, capabilities/provider discovery, pairing, shutdown,
 updates, settings and subscriptions are deliberately outside the early allowlist.
 OS/service-manager stop still works; early `system.shutdown` is not implemented.
+As in the existing HTTP parser, `/health` is handled before WebSocket enable,
+origin and bearer checks, on an already-bound listener with the same TLS posture.
+Its generic 503 body is therefore public liveness/readiness only; all detailed
+progress requires protected status admission. No disabled listener is started
+just to serve health. `/ws` keeps enable then origin then credential ordering;
+the unavailable `/invite` and `/tunnel` paths do not upgrade or authorize work.
 
 The retryable error for a well-formed request is exactly:
 
@@ -158,8 +165,14 @@ deletion cost can make byte rate unreliable; omission is always valid. Do not
 extrapolate elapsed/notes alone or report a guaranteed countdown. Show “About …
 remaining for indexing”; finalization remains separate. A large current note can
 leave counters unchanged while work continues. After 30 seconds without progress,
-UI may say “Still working; no recent progress update”, not “hung” or “failed”, and
-must hide ETA. A disconnected transport instead says status is unavailable.
+UI may say “Still indexing; completed-note count unchanged”, not “hung” or
+“failed”, and must hide ETA. Track the last successful status response separately
+from `progressAgeMs`: fresh successful polls with unchanged counters prove the
+status source is responding while a large note may still be processing. The
+client marks status unavailable on disconnection or a failed/timed-out poll and
+stops presenting cached counters/ETA as current. A later successful poll restores
+freshness even if the counters are unchanged; never reset work age just to make
+the UI look active.
 
 ## Ready handoff, desktop behavior and compatibility
 
@@ -220,9 +233,10 @@ Component acceptance requires regression/functional tests of: status responsiven
 while a real index transaction is blocked; zero ordinary reads/writes/subscriptions
 and hello persistence before ready; count/UTF-8 byte accuracy; suppressed ETA;
 commit failure and restart rollback; ownership/bind cleanup; disabled API, TLS,
-origin, bad/missing/owner/per-principal credentials; health readiness; Tailcat
-reachability or explicit limitation; fresh authenticated handoff under concurrent
-requests; and both FE transports' startup/old-peer/reconnect/late-response behavior.
+origin, bad/missing/owner/per-principal credentials; public health versus protected
+progress; saved owner Tailcat reachability; fresh authenticated handoff under concurrent
+requests; and both FE transports' startup/old-peer/reconnect/late-response behavior,
+including fresh unchanged progress versus failed or disconnected status polling.
 Use temporary databases and controlled barriers, never the live user's database.
 Relevant FE seams are `src/features/backend/main/json-rpc-client.ts`, backend
 acquisition/adoption and IPC connection state, and
