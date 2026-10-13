@@ -18,7 +18,8 @@
           "elapsedMs": 1200,
           "phaseElapsedMs": 1200,
           "progressAgeMs": 1200,
-          "retryAfterMs": 1000
+          "retryAfterMs": 1000,
+          "daemonVersion": "0.10.47"
         }
       }
     },
@@ -47,7 +48,8 @@
             "processedSourceBytes": 50000,
             "totalSourceBytes": 150000
           },
-          "estimatedRemainingMs": 10000
+          "estimatedRemainingMs": 10000,
+          "daemonVersion": "0.10.47"
         }
       }
     },
@@ -75,7 +77,8 @@
             "totalNotes": 10,
             "processedSourceBytes": 50000,
             "totalSourceBytes": 150000
-          }
+          },
+          "daemonVersion": "0.10.47"
         }
       }
     },
@@ -104,7 +107,8 @@
             "processedSourceBytes": 150000,
             "totalSourceBytes": 150000
           },
-          "finalizingStep": "anchors"
+          "finalizingStep": "anchors",
+          "daemonVersion": "0.10.47"
         }
       }
     },
@@ -133,7 +137,8 @@
             "processedSourceBytes": 150000,
             "totalSourceBytes": 150000
           },
-          "finalizingStep": "committing"
+          "finalizingStep": "committing",
+          "daemonVersion": "0.10.47"
         }
       }
     },
@@ -162,7 +167,8 @@
             "processedSourceBytes": 150000,
             "totalSourceBytes": 150000
           },
-          "finalizingStep": "services"
+          "finalizingStep": "services",
+          "daemonVersion": "0.10.47"
         }
       }
     },
@@ -189,7 +195,8 @@
             "totalNotes": 10,
             "processedSourceBytes": 150000,
             "totalSourceBytes": 150000
-          }
+          },
+          "daemonVersion": "0.10.47"
         }
       }
     },
@@ -220,7 +227,8 @@
           "failure": {
             "code": "startup-failed",
             "message": "Daemon startup failed. Check daemon logs."
-          }
+          },
+          "daemonVersion": "0.10.47"
         }
       }
     },
@@ -242,7 +250,8 @@
           "elapsedMs": 200,
           "phaseElapsedMs": 200,
           "progressAgeMs": 200,
-          "retryAfterMs": 1000
+          "retryAfterMs": 1000,
+          "daemonVersion": "0.10.47"
         }
       }
     },
@@ -271,7 +280,8 @@
             "totalNotes": 0,
             "processedSourceBytes": 0,
             "totalSourceBytes": 0
-          }
+          },
+          "daemonVersion": "0.10.47"
         }
       }
     }
@@ -301,7 +311,8 @@
               "elapsedMs": 1200,
               "phaseElapsedMs": 1200,
               "progressAgeMs": 1200,
-              "retryAfterMs": 1000
+              "retryAfterMs": 1000,
+              "daemonVersion": "0.10.47"
             }
           }
         }
@@ -331,7 +342,8 @@
               "elapsedMs": 1200,
               "phaseElapsedMs": 1200,
               "progressAgeMs": 1200,
-              "retryAfterMs": 1000
+              "retryAfterMs": 1000,
+              "daemonVersion": "0.10.47"
             }
           }
         }
@@ -361,7 +373,8 @@
               "elapsedMs": 1200,
               "phaseElapsedMs": 1200,
               "progressAgeMs": 1200,
-              "retryAfterMs": 1000
+              "retryAfterMs": 1000,
+              "daemonVersion": "0.10.47"
             }
           }
         }
@@ -391,7 +404,8 @@
               "elapsedMs": 1200,
               "phaseElapsedMs": 1200,
               "progressAgeMs": 1200,
-              "retryAfterMs": 1000
+              "retryAfterMs": 1000,
+              "daemonVersion": "0.10.47"
             }
           }
         }
@@ -421,7 +435,8 @@
               "elapsedMs": 1200,
               "phaseElapsedMs": 1200,
               "progressAgeMs": 1200,
-              "retryAfterMs": 1000
+              "retryAfterMs": 1000,
+              "daemonVersion": "0.10.47"
             }
           }
         }
@@ -451,7 +466,8 @@
               "elapsedMs": 1200,
               "phaseElapsedMs": 1200,
               "progressAgeMs": 1200,
-              "retryAfterMs": 1000
+              "retryAfterMs": 1000,
+              "daemonVersion": "0.10.47"
             }
           }
         }
@@ -489,7 +505,8 @@
               "failure": {
                 "code": "startup-failed",
                 "message": "Daemon startup failed. Check daemon logs."
-              }
+              },
+              "daemonVersion": "0.10.47"
             }
           }
         }

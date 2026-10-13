@@ -176,6 +176,13 @@ The snapshot+delta subscription channels (`note.subscribe`, `chat.subscribe`, `n
 
 #### `system.status` — process resource fields (additive, optional)
 
+During the prepared [startup contract](./startup-readiness.md), this wire method
+still returns `-32012` before readiness. Only `intentd call system.status` has a
+[CLI-only liveness projection](./startup-readiness.md#installed-sitter-compatibility-cli-only)
+for an already-installed sitter; its exit 0 and `ready: false` JSON are not a full
+status reply or application readiness. The resource fields below describe the
+ordinary ready daemon, never fabricated bootstrap metrics.
+
 The `system.status` result includes two **optional** self-process resource fields alongside the existing status payload (`running`, `listenMode`, `transports`, `port`, `clients`, `agents`, `maxAgents`, `version`, `uptimeSeconds`, `fingerprint`, `protocolVersion`, `updateSupported` (v8.7, below), `busyAgents` / `idleUpdateCheck` (v10.2, below), `host`):
 
 ```jsonc

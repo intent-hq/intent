@@ -93,10 +93,14 @@ progress requires protected status admission. No disabled listener is started
 just to serve health. `/ws` keeps enable then origin then credential ordering;
 the unavailable `/invite` and `/tunnel` paths do not upgrade or authorize work.
 
+The [CLI compatibility projection](#installed-sitter-compatibility-cli-only) below
+does not change this wire allowlist: even `system.status` still returns `-32012`
+on a protected bootstrap connection. HTTP health and ordinary hello remain gated.
+
 The retryable error for a well-formed request is exactly:
 
 ```json
-{"jsonrpc":"2.0","id":1,"error":{"code":-32012,"message":"Daemon not ready","data":{"code":"daemon-not-ready","retryable":true,"retryAfterMs":1000,"startup":{"startupStatus":1,"attemptId":"boot-a","phase":"preparing","elapsedMs":1200,"phaseElapsedMs":1200,"progressAgeMs":1200,"retryAfterMs":1000}}}}
+{"jsonrpc":"2.0","id":1,"error":{"code":-32012,"message":"Daemon not ready","data":{"code":"daemon-not-ready","retryable":true,"retryAfterMs":1000,"startup":{"startupStatus":1,"daemonVersion":"0.10.47","attemptId":"boot-a","phase":"preparing","elapsedMs":1200,"phaseElapsedMs":1200,"progressAgeMs":1200,"retryAfterMs":1000}}}}
 ```
 
 `data.startup` is the same atomic snapshot as the status method; outer
@@ -114,6 +118,7 @@ replay. Unknown method errors return to ordinary `-32601` handling after readine
 | Field | Type and meaning |
 | --- | --- |
 | `startupStatus` | Exact integer `1`, schema/support marker. |
+| `daemonVersion` | Additive nonempty string identifying the **responding daemon** build, supplied by the daemon composition root. New producers include it in every snapshot; older candidates may omit it. Absence does not prevent progress UI, but prevents the CLI liveness projection below. Never null, a client/CLI version, or a fabricated fallback. |
 | `attemptId` | Nonempty opaque random string, newly generated each process startup, stable through ready/failure. Not a PID, persisted resume token or database identity. |
 | `phase` | `preparing`, `indexing`, `finalizing`, `ready`, or `failed`. |
 | `elapsedMs` | Nonnegative safe integer; monotonic duration since attempt start, frozen at ready/failure. |
@@ -221,6 +226,70 @@ unrelated versions do not imply this capability. Merge docs additions first,
 daemon next, frontend last, each with human permission. The companion daemon PR
 updates the bundled assistant app guide once the UI behavior is ready for users.
 
+## Installed sitter compatibility (CLI only)
+
+Already-installed sitters must not terminate a responsive daemon merely because
+indexing outlasts their startup deadline. The frozen `b6fc9f881` sitter's
+`intentd-sitter/src/readiness.rs` probes the **newly installed daemon binary** with
+`call system.status`, requires a successful process exit and parses `version` at
+the top level of its stdout JSON. Its startup, supervisor and post-update paths
+use that probe. It discards stderr, so a structured wire startup error printed
+there remains indistinguishable from no response to that sitter.
+
+The compatibility adapter belongs only in the new daemon's CLI `cmd_call` path
+for `system.status`. A validated live-startup error may become exit 0 with an
+explicit not-ready JSON projection on stdout. This is a CLI liveness result,
+never a successful wire `system.status` reply. Do not change hello, API admission,
+HTTP health, auth, or any other `call` method. Ordinary successful ready responses
+still print their existing result without synthesis. Failed startup and missing,
+timed-out, malformed or unsupported observations remain nonzero; no last-known
+status is substituted. Do not print invented full-service fields such as agents,
+clients, resources, capabilities, update support or transport metrics.
+
+The version in this projection must come from the protected responding daemon's
+startup metadata. Never substitute the probing CLI's build version: a new CLI
+can contact a different or older daemon. An old sitter's target-version comparison
+must continue to see the server's actual version and refuse a mismatched target.
+No credential or authority is conveyed by the version metadata.
+
+An unchanged old sitter can consequently report start/update success while
+indexing continues: its “up” or internal “Ready” verdict means the target process
+is responding, not that application initialization or migration commit finished.
+Consumers needing application readiness must complete a fresh normal hello after
+the ready handoff. A subsequent startup failure still exits the daemon nonzero
+and follows existing supervision; the CLI projection cannot retroactively turn
+the old sitter's earlier liveness verdict into a ready guarantee. New CLI/status
+UI should say starting, and new readiness-aware automation must inspect the
+explicit false readiness marker or use the wire startup/hello contract. A future
+sitter can distinguish liveness from readiness, but updating sitter is not a
+prerequisite for this daemon's safe startup.
+
+The exact projection is restricted to `call system.status` after normal response
+correlation and envelope validation. Require numeric `error.code: -32012`,
+`error.data.code: "daemon-not-ready"`, `retryable: true`, matching outer and
+snapshot retry delays, and a valid schema-1 snapshot in `preparing`, `indexing`
+or `finalizing`, with a nonempty `daemonVersion`. Invalid optional progress or
+missing/invalid durations, attempt identity or version, unknown schema/phase, a `ready`/`failed`
+snapshot, terminal error or unrelated error never qualifies. Do not infer a live
+attempt merely from error text or the presence of a version string.
+
+For example, a CLI built as `0.10.47` observing a valid protected startup error
+whose snapshot identifies daemon `0.10.46` prints this stdout JSON and exits 0:
+
+```json
+{"version":"0.10.46","ready":false,"startup":{"startupStatus":1,"daemonVersion":"0.10.46","attemptId":"boot-a","phase":"preparing","elapsedMs":1200,"phaseElapsedMs":1200,"progressAgeMs":1200,"retryAfterMs":1000}}
+```
+
+The old sitter consequently sees `0.10.46`, never the CLI's `0.10.47`, and cannot
+mistake that daemon for its requested newer target. This JSON has no JSON-RPC
+envelope: it is a CLI projection of an error, with exactly `version`, `ready` and
+`startup`; the captured network response still contains `error`, not `result`.
+For true readiness the existing successful `system.status` result is passed
+through unchanged; it need not acquire a new `ready` field. Failure/unsupported
+projection keeps normal CLI error diagnostics on stderr and a nonzero exit.
+The [CLI fixtures](./fixtures/startup/cli-compat.json) pin both positive and
+negative cases, including mixed CLI/server versions.
+
 ## Verification and implementation handoff
 
 [Examples](./fixtures/startup/status.json) cover every phase, unknown ETA, restart,
@@ -237,6 +306,11 @@ origin, bad/missing/owner/per-principal credentials; public health versus protec
 progress; saved owner Tailcat reachability; fresh authenticated handoff under concurrent
 requests; and both FE transports' startup/old-peer/reconnect/late-response behavior,
 including fresh unchanged progress versus failed or disconnected status polling.
+Also run an **unmodified frozen sitter** against the new daemon/CLI through
+indexing longer than its original startup deadline: cover start, supervisor and
+update probes, mismatched CLI/server versions, failed startup, absent/stalled
+responses and true readiness. Fixtures only validate the specified projection;
+they do not prove a real old sitter survives or preserve its shutdown behavior.
 Use temporary databases and controlled barriers, never the live user's database.
 Relevant FE seams are `src/features/backend/main/json-rpc-client.ts`, backend
 acquisition/adoption and IPC connection state, and

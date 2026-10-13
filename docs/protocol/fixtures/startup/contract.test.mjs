@@ -5,6 +5,7 @@ import test from 'node:test';
 // Static contract examples only. Component tests must exercise real dispatch,
 // authentication and a blocked index transaction before claiming runtime support.
 const examples = JSON.parse(readFileSync(new URL('./status.json', import.meta.url)));
+const cliExamples = JSON.parse(readFileSync(new URL('./cli-compat.json', import.meta.url)));
 const byName = new Map(examples.scenarios.map(s => [s.name, s.response.result]));
 const active = new Set(['preparing', 'indexing', 'finalizing']);
 const phases = new Set([...active, 'ready', 'failed']);
@@ -13,10 +14,11 @@ const integer = n => assert.ok(Number.isSafeInteger(n) && n >= 0);
 function validate(s) {
   const fields = new Set(['startupStatus', 'attemptId', 'phase', 'elapsedMs',
     'phaseElapsedMs', 'progressAgeMs', 'retryAfterMs', 'progress',
-    'estimatedRemainingMs', 'finalizingStep', 'failure']);
+    'estimatedRemainingMs', 'finalizingStep', 'failure', 'daemonVersion']);
   assert.ok(Object.keys(s).every(key => fields.has(key)));
   assert.equal(s.startupStatus, 1);
   assert.ok(typeof s.attemptId === 'string' && s.attemptId.length > 0);
+  if ('daemonVersion' in s) assert.ok(typeof s.daemonVersion === 'string' && s.daemonVersion.trim());
   assert.ok(phases.has(s.phase));
   for (const key of ['elapsedMs', 'phaseElapsedMs', 'progressAgeMs']) integer(s[key]);
   assert.ok(s.phaseElapsedMs <= s.elapsedMs);
@@ -114,4 +116,64 @@ test('invalid examples cannot claim ready ETA, overflow progress or leak failure
   assert.throws(() => validate({ ...byName.get('failed'),
     failure: { code: 'startup-failed', message: '/private/notes.db: SQL error' } }));
   assert.throws(() => validate({ ...byName.get('preparing'), noteTitle: 'Private note' }));
+});
+
+// Specification oracle only; the production CLI and frozen sitter must be
+// exercised by component tests. The CLI build version is deliberately not input.
+function startupCliProjection(method, response) {
+  try {
+    const { error } = response;
+    assert.equal(method, 'system.status');
+    assert.ok(!('result' in response));
+    assert.equal(error.code, -32012);
+    const { data } = error;
+    assert.equal(data.code, 'daemon-not-ready');
+    assert.equal(data.retryable, true);
+    const snapshot = data.startup;
+    validate(snapshot);
+    assert.ok(active.has(snapshot.phase));
+    assert.equal(data.retryAfterMs, snapshot.retryAfterMs);
+    assert.ok(typeof snapshot.daemonVersion === 'string' && snapshot.daemonVersion.trim());
+    return { version: snapshot.daemonVersion, ready: false, startup: snapshot };
+  } catch {
+    return null;
+  }
+}
+
+test('only a validated live system.status error gets CLI liveness success', () => {
+  for (const sample of cliExamples.filter(s => s.response.error || !s.response.result)) {
+    const before = JSON.stringify(sample.response);
+    const projected = startupCliProjection(sample.method, sample.response);
+    assert.deepEqual(projected, sample.expectedStdout, sample.name);
+    assert.equal(projected === null ? 1 : 0, sample.expectedExitCode, sample.name);
+    assert.equal(JSON.stringify(sample.response), before, 'wire response is unchanged');
+    if (projected) {
+      assert.deepEqual(Object.keys(projected).sort(), ['ready', 'startup', 'version']);
+      assert.equal(projected.ready, false);
+      assert.equal(sample.response.error.code, -32012);
+      assert.ok(!('result' in sample.response));
+    }
+  }
+});
+
+test('true ready status retains the ordinary CLI result and gains no synthetic fields', () => {
+  const ready = cliExamples.find(s => s.name === 'ordinary-ready-passthrough');
+  assert.equal(startupCliProjection(ready.method, ready.response), null);
+  assert.deepEqual(ready.expectedStdout, ready.response.result);
+  assert.equal(ready.expectedExitCode, 0);
+  assert.ok(!('ready' in ready.expectedStdout));
+  assert.ok(!('startup' in ready.expectedStdout));
+});
+
+test('old sitter sees the responding server version, never the probing CLI version', () => {
+  const mixed = cliExamples.find(s => s.name === 'new-cli-older-server');
+  const projection = startupCliProjection(mixed.method, mixed.response);
+  // Frozen readiness.rs parses version from result-only CLI stdout after exit 0.
+  const parsedByOldSitter = JSON.parse(JSON.stringify(projection)).version;
+  assert.equal(parsedByOldSitter, '0.10.46');
+  assert.notEqual(parsedByOldSitter, mixed.cliVersion);
+  const same = cliExamples.find(s => s.name === 'live-indexing-with-estimate');
+  const live = startupCliProjection(same.method, same.response);
+  assert.equal(live.version, same.cliVersion);
+  assert.equal(live.ready, false, 'old sitter liveness success is not application readiness');
 });

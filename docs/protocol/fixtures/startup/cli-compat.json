@@ -1,0 +1,712 @@
+[
+  {
+    "name": "live-preparing",
+    "method": "system.status",
+    "cliVersion": "0.10.47",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 20,
+      "error": {
+        "code": -32012,
+        "message": "Daemon not ready",
+        "data": {
+          "code": "daemon-not-ready",
+          "retryable": true,
+          "retryAfterMs": 1000,
+          "startup": {
+            "startupStatus": 1,
+            "attemptId": "boot-a",
+            "phase": "preparing",
+            "elapsedMs": 1200,
+            "phaseElapsedMs": 1200,
+            "progressAgeMs": 1200,
+            "retryAfterMs": 1000,
+            "daemonVersion": "0.10.47"
+          }
+        }
+      }
+    },
+    "expectedExitCode": 0,
+    "expectedStdout": {
+      "version": "0.10.47",
+      "ready": false,
+      "startup": {
+        "startupStatus": 1,
+        "attemptId": "boot-a",
+        "phase": "preparing",
+        "elapsedMs": 1200,
+        "phaseElapsedMs": 1200,
+        "progressAgeMs": 1200,
+        "retryAfterMs": 1000,
+        "daemonVersion": "0.10.47"
+      }
+    }
+  },
+  {
+    "name": "live-indexing-with-estimate",
+    "method": "system.status",
+    "cliVersion": "0.10.47",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 20,
+      "error": {
+        "code": -32012,
+        "message": "Daemon not ready",
+        "data": {
+          "code": "daemon-not-ready",
+          "retryable": true,
+          "retryAfterMs": 1000,
+          "startup": {
+            "startupStatus": 1,
+            "attemptId": "boot-a",
+            "phase": "indexing",
+            "elapsedMs": 10000,
+            "phaseElapsedMs": 5000,
+            "progressAgeMs": 0,
+            "retryAfterMs": 1000,
+            "progress": {
+              "completedNotes": 5,
+              "totalNotes": 10,
+              "processedSourceBytes": 50000,
+              "totalSourceBytes": 150000
+            },
+            "estimatedRemainingMs": 10000,
+            "daemonVersion": "0.10.47"
+          }
+        }
+      }
+    },
+    "expectedExitCode": 0,
+    "expectedStdout": {
+      "version": "0.10.47",
+      "ready": false,
+      "startup": {
+        "startupStatus": 1,
+        "attemptId": "boot-a",
+        "phase": "indexing",
+        "elapsedMs": 10000,
+        "phaseElapsedMs": 5000,
+        "progressAgeMs": 0,
+        "retryAfterMs": 1000,
+        "progress": {
+          "completedNotes": 5,
+          "totalNotes": 10,
+          "processedSourceBytes": 50000,
+          "totalSourceBytes": 150000
+        },
+        "estimatedRemainingMs": 10000,
+        "daemonVersion": "0.10.47"
+      }
+    }
+  },
+  {
+    "name": "live-finalizing-committing",
+    "method": "system.status",
+    "cliVersion": "0.10.47",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 20,
+      "error": {
+        "code": -32012,
+        "message": "Daemon not ready",
+        "data": {
+          "code": "daemon-not-ready",
+          "retryable": true,
+          "retryAfterMs": 1000,
+          "startup": {
+            "startupStatus": 1,
+            "attemptId": "boot-a",
+            "phase": "finalizing",
+            "elapsedMs": 51000,
+            "phaseElapsedMs": 1000,
+            "progressAgeMs": 0,
+            "retryAfterMs": 1000,
+            "progress": {
+              "completedNotes": 10,
+              "totalNotes": 10,
+              "processedSourceBytes": 150000,
+              "totalSourceBytes": 150000
+            },
+            "finalizingStep": "committing",
+            "daemonVersion": "0.10.47"
+          }
+        }
+      }
+    },
+    "expectedExitCode": 0,
+    "expectedStdout": {
+      "version": "0.10.47",
+      "ready": false,
+      "startup": {
+        "startupStatus": 1,
+        "attemptId": "boot-a",
+        "phase": "finalizing",
+        "elapsedMs": 51000,
+        "phaseElapsedMs": 1000,
+        "progressAgeMs": 0,
+        "retryAfterMs": 1000,
+        "progress": {
+          "completedNotes": 10,
+          "totalNotes": 10,
+          "processedSourceBytes": 150000,
+          "totalSourceBytes": 150000
+        },
+        "finalizingStep": "committing",
+        "daemonVersion": "0.10.47"
+      }
+    }
+  },
+  {
+    "name": "new-cli-older-server",
+    "method": "system.status",
+    "cliVersion": "0.10.47",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 20,
+      "error": {
+        "code": -32012,
+        "message": "Daemon not ready",
+        "data": {
+          "code": "daemon-not-ready",
+          "retryable": true,
+          "retryAfterMs": 1000,
+          "startup": {
+            "startupStatus": 1,
+            "attemptId": "boot-a",
+            "phase": "preparing",
+            "elapsedMs": 1200,
+            "phaseElapsedMs": 1200,
+            "progressAgeMs": 1200,
+            "retryAfterMs": 1000,
+            "daemonVersion": "0.10.46"
+          }
+        }
+      }
+    },
+    "expectedExitCode": 0,
+    "expectedStdout": {
+      "version": "0.10.46",
+      "ready": false,
+      "startup": {
+        "startupStatus": 1,
+        "attemptId": "boot-a",
+        "phase": "preparing",
+        "elapsedMs": 1200,
+        "phaseElapsedMs": 1200,
+        "progressAgeMs": 1200,
+        "retryAfterMs": 1000,
+        "daemonVersion": "0.10.46"
+      }
+    }
+  },
+  {
+    "name": "missing-server-version",
+    "method": "system.status",
+    "cliVersion": "0.10.47",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 20,
+      "error": {
+        "code": -32012,
+        "message": "Daemon not ready",
+        "data": {
+          "code": "daemon-not-ready",
+          "retryable": true,
+          "retryAfterMs": 1000,
+          "startup": {
+            "startupStatus": 1,
+            "attemptId": "boot-a",
+            "phase": "preparing",
+            "elapsedMs": 1200,
+            "phaseElapsedMs": 1200,
+            "progressAgeMs": 1200,
+            "retryAfterMs": 1000
+          }
+        }
+      }
+    },
+    "expectedExitCode": 1,
+    "expectedStdout": null
+  },
+  {
+    "name": "empty-server-version",
+    "method": "system.status",
+    "cliVersion": "0.10.47",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 20,
+      "error": {
+        "code": -32012,
+        "message": "Daemon not ready",
+        "data": {
+          "code": "daemon-not-ready",
+          "retryable": true,
+          "retryAfterMs": 1000,
+          "startup": {
+            "startupStatus": 1,
+            "attemptId": "boot-a",
+            "phase": "preparing",
+            "elapsedMs": 1200,
+            "phaseElapsedMs": 1200,
+            "progressAgeMs": 1200,
+            "retryAfterMs": 1000,
+            "daemonVersion": ""
+          }
+        }
+      }
+    },
+    "expectedExitCode": 1,
+    "expectedStdout": null
+  },
+  {
+    "name": "wrong-type-server-version",
+    "method": "system.status",
+    "cliVersion": "0.10.47",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 20,
+      "error": {
+        "code": -32012,
+        "message": "Daemon not ready",
+        "data": {
+          "code": "daemon-not-ready",
+          "retryable": true,
+          "retryAfterMs": 1000,
+          "startup": {
+            "startupStatus": 1,
+            "attemptId": "boot-a",
+            "phase": "preparing",
+            "elapsedMs": 1200,
+            "phaseElapsedMs": 1200,
+            "progressAgeMs": 1200,
+            "retryAfterMs": 1000,
+            "daemonVersion": 17
+          }
+        }
+      }
+    },
+    "expectedExitCode": 1,
+    "expectedStdout": null
+  },
+  {
+    "name": "unknown-snapshot-version",
+    "method": "system.status",
+    "cliVersion": "0.10.47",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 20,
+      "error": {
+        "code": -32012,
+        "message": "Daemon not ready",
+        "data": {
+          "code": "daemon-not-ready",
+          "retryable": true,
+          "retryAfterMs": 1000,
+          "startup": {
+            "startupStatus": 2,
+            "attemptId": "boot-a",
+            "phase": "preparing",
+            "elapsedMs": 1200,
+            "phaseElapsedMs": 1200,
+            "progressAgeMs": 1200,
+            "retryAfterMs": 1000,
+            "daemonVersion": "0.10.47"
+          }
+        }
+      }
+    },
+    "expectedExitCode": 1,
+    "expectedStdout": null
+  },
+  {
+    "name": "missing-attempt",
+    "method": "system.status",
+    "cliVersion": "0.10.47",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 20,
+      "error": {
+        "code": -32012,
+        "message": "Daemon not ready",
+        "data": {
+          "code": "daemon-not-ready",
+          "retryable": true,
+          "retryAfterMs": 1000,
+          "startup": {
+            "startupStatus": 1,
+            "phase": "preparing",
+            "elapsedMs": 1200,
+            "phaseElapsedMs": 1200,
+            "progressAgeMs": 1200,
+            "retryAfterMs": 1000,
+            "daemonVersion": "0.10.47"
+          }
+        }
+      }
+    },
+    "expectedExitCode": 1,
+    "expectedStdout": null
+  },
+  {
+    "name": "negative-duration",
+    "method": "system.status",
+    "cliVersion": "0.10.47",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 20,
+      "error": {
+        "code": -32012,
+        "message": "Daemon not ready",
+        "data": {
+          "code": "daemon-not-ready",
+          "retryable": true,
+          "retryAfterMs": 1000,
+          "startup": {
+            "startupStatus": 1,
+            "attemptId": "boot-a",
+            "phase": "preparing",
+            "elapsedMs": -1,
+            "phaseElapsedMs": 1200,
+            "progressAgeMs": 1200,
+            "retryAfterMs": 1000,
+            "daemonVersion": "0.10.47"
+          }
+        }
+      }
+    },
+    "expectedExitCode": 1,
+    "expectedStdout": null
+  },
+  {
+    "name": "unknown-phase",
+    "method": "system.status",
+    "cliVersion": "0.10.47",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 20,
+      "error": {
+        "code": -32012,
+        "message": "Daemon not ready",
+        "data": {
+          "code": "daemon-not-ready",
+          "retryable": true,
+          "retryAfterMs": 1000,
+          "startup": {
+            "startupStatus": 1,
+            "attemptId": "boot-a",
+            "phase": "working",
+            "elapsedMs": 1200,
+            "phaseElapsedMs": 1200,
+            "progressAgeMs": 1200,
+            "retryAfterMs": 1000,
+            "daemonVersion": "0.10.47"
+          }
+        }
+      }
+    },
+    "expectedExitCode": 1,
+    "expectedStdout": null
+  },
+  {
+    "name": "ready-is-not-live-startup",
+    "method": "system.status",
+    "cliVersion": "0.10.47",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 20,
+      "error": {
+        "code": -32012,
+        "message": "Daemon not ready",
+        "data": {
+          "code": "daemon-not-ready",
+          "retryable": true,
+          "retryAfterMs": 1000,
+          "startup": {
+            "startupStatus": 1,
+            "attemptId": "boot-a",
+            "phase": "ready",
+            "elapsedMs": 1200,
+            "phaseElapsedMs": 1200,
+            "progressAgeMs": 1200,
+            "retryAfterMs": 1000,
+            "daemonVersion": "0.10.47"
+          }
+        }
+      }
+    },
+    "expectedExitCode": 1,
+    "expectedStdout": null
+  },
+  {
+    "name": "wrong-retryable",
+    "method": "system.status",
+    "cliVersion": "0.10.47",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 20,
+      "error": {
+        "code": -32012,
+        "message": "Daemon not ready",
+        "data": {
+          "code": "daemon-not-ready",
+          "retryable": false,
+          "retryAfterMs": 1000,
+          "startup": {
+            "startupStatus": 1,
+            "attemptId": "boot-a",
+            "phase": "preparing",
+            "elapsedMs": 1200,
+            "phaseElapsedMs": 1200,
+            "progressAgeMs": 1200,
+            "retryAfterMs": 1000,
+            "daemonVersion": "0.10.47"
+          }
+        }
+      }
+    },
+    "expectedExitCode": 1,
+    "expectedStdout": null
+  },
+  {
+    "name": "unrelated-error",
+    "method": "system.status",
+    "cliVersion": "0.10.47",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 20,
+      "error": {
+        "code": -32603,
+        "message": "Daemon not ready",
+        "data": {
+          "code": "daemon-not-ready",
+          "retryable": true,
+          "retryAfterMs": 1000,
+          "startup": {
+            "startupStatus": 1,
+            "attemptId": "boot-a",
+            "phase": "preparing",
+            "elapsedMs": 1200,
+            "phaseElapsedMs": 1200,
+            "progressAgeMs": 1200,
+            "retryAfterMs": 1000,
+            "daemonVersion": "0.10.47"
+          }
+        }
+      }
+    },
+    "expectedExitCode": 1,
+    "expectedStdout": null
+  },
+  {
+    "name": "malformed-error",
+    "method": "system.status",
+    "cliVersion": "0.10.47",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 20,
+      "error": {
+        "code": -32012,
+        "message": "Daemon not ready",
+        "data": null
+      }
+    },
+    "expectedExitCode": 1,
+    "expectedStdout": null
+  },
+  {
+    "name": "failed-startup",
+    "method": "system.status",
+    "cliVersion": "0.10.47",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 21,
+      "error": {
+        "code": -32012,
+        "message": "Daemon startup failed",
+        "data": {
+          "code": "daemon-startup-failed",
+          "retryable": false,
+          "startup": {
+            "startupStatus": 1,
+            "attemptId": "boot-a",
+            "phase": "failed",
+            "elapsedMs": 51000,
+            "phaseElapsedMs": 0,
+            "progressAgeMs": 0,
+            "progress": {
+              "completedNotes": 10,
+              "totalNotes": 10,
+              "processedSourceBytes": 150000,
+              "totalSourceBytes": 150000
+            },
+            "failure": {
+              "code": "startup-failed",
+              "message": "Daemon startup failed. Check daemon logs."
+            },
+            "daemonVersion": "0.10.47"
+          }
+        }
+      }
+    },
+    "expectedExitCode": 1,
+    "expectedStdout": null
+  },
+  {
+    "name": "never-project-client.hello",
+    "method": "client.hello",
+    "cliVersion": "0.10.47",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 20,
+      "error": {
+        "code": -32012,
+        "message": "Daemon not ready",
+        "data": {
+          "code": "daemon-not-ready",
+          "retryable": true,
+          "retryAfterMs": 1000,
+          "startup": {
+            "startupStatus": 1,
+            "attemptId": "boot-a",
+            "phase": "preparing",
+            "elapsedMs": 1200,
+            "phaseElapsedMs": 1200,
+            "progressAgeMs": 1200,
+            "retryAfterMs": 1000,
+            "daemonVersion": "0.10.47"
+          }
+        }
+      }
+    },
+    "expectedExitCode": 1,
+    "expectedStdout": null
+  },
+  {
+    "name": "never-project-workspace.list",
+    "method": "workspace.list",
+    "cliVersion": "0.10.47",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 20,
+      "error": {
+        "code": -32012,
+        "message": "Daemon not ready",
+        "data": {
+          "code": "daemon-not-ready",
+          "retryable": true,
+          "retryAfterMs": 1000,
+          "startup": {
+            "startupStatus": 1,
+            "attemptId": "boot-a",
+            "phase": "preparing",
+            "elapsedMs": 1200,
+            "phaseElapsedMs": 1200,
+            "progressAgeMs": 1200,
+            "retryAfterMs": 1000,
+            "daemonVersion": "0.10.47"
+          }
+        }
+      }
+    },
+    "expectedExitCode": 1,
+    "expectedStdout": null
+  },
+  {
+    "name": "never-project-system.shutdown",
+    "method": "system.shutdown",
+    "cliVersion": "0.10.47",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 20,
+      "error": {
+        "code": -32012,
+        "message": "Daemon not ready",
+        "data": {
+          "code": "daemon-not-ready",
+          "retryable": true,
+          "retryAfterMs": 1000,
+          "startup": {
+            "startupStatus": 1,
+            "attemptId": "boot-a",
+            "phase": "preparing",
+            "elapsedMs": 1200,
+            "phaseElapsedMs": 1200,
+            "progressAgeMs": 1200,
+            "retryAfterMs": 1000,
+            "daemonVersion": "0.10.47"
+          }
+        }
+      }
+    },
+    "expectedExitCode": 1,
+    "expectedStdout": null
+  },
+  {
+    "name": "never-project-note.setContent",
+    "method": "note.setContent",
+    "cliVersion": "0.10.47",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 20,
+      "error": {
+        "code": -32012,
+        "message": "Daemon not ready",
+        "data": {
+          "code": "daemon-not-ready",
+          "retryable": true,
+          "retryAfterMs": 1000,
+          "startup": {
+            "startupStatus": 1,
+            "attemptId": "boot-a",
+            "phase": "preparing",
+            "elapsedMs": 1200,
+            "phaseElapsedMs": 1200,
+            "progressAgeMs": 1200,
+            "retryAfterMs": 1000,
+            "daemonVersion": "0.10.47"
+          }
+        }
+      }
+    },
+    "expectedExitCode": 1,
+    "expectedStdout": null
+  },
+  {
+    "name": "no-response",
+    "method": "system.status",
+    "cliVersion": "0.10.47",
+    "response": {},
+    "expectedExitCode": 1,
+    "expectedStdout": null
+  },
+  {
+    "name": "ordinary-ready-passthrough",
+    "method": "system.status",
+    "cliVersion": "0.10.47",
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 20,
+      "result": {
+        "running": true,
+        "version": "0.10.47",
+        "listenMode": "uds",
+        "transports": [
+          "uds"
+        ],
+        "clients": 0,
+        "agents": 0
+      }
+    },
+    "expectedExitCode": 0,
+    "expectedStdout": {
+      "running": true,
+      "version": "0.10.47",
+      "listenMode": "uds",
+      "transports": [
+        "uds"
+      ],
+      "clients": 0,
+      "agents": 0
+    }
+  }
+]
