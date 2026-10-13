@@ -1,0 +1,11 @@
+version: 2.0.13
+files:
+  - url: Intent-2.0.13-arm64-mac.zip
+    sha512: JdAwC2gEM8ZkthUO4jfwlZpvHSwXVkKottGofgFYPXVbrCYKM3Z6z04WTurVF19O5G+rd4LDL4BH7uBYPd8qjA==
+    size: 227821385
+  - url: Intent-2.0.13-arm64.dmg
+    sha512: onzjcHfTcyBU2Zh2O4deiR1PVUVPAyVLz74Pbe7IeD2CRVmUyzG27z2Yqb+ZMlARNgJtkkJMMLAEOgPZyX+QYA==
+    size: 238003908
+path: Intent-2.0.13-arm64-mac.zip
+sha512: JdAwC2gEM8ZkthUO4jfwlZpvHSwXVkKottGofgFYPXVbrCYKM3Z6z04WTurVF19O5G+rd4LDL4BH7uBYPd8qjA==
+releaseDate: '2026-07-23T03:15:15.018Z'
