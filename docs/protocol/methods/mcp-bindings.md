@@ -57,6 +57,27 @@ ws.app.agents.send(agentId, message, priority?) → { ok, agentId, agentName, wo
 ws.app.agents.waitFor({ agentIds, waitMode? }) → { ok, waitMode, results }
 ```
 
+### ws.app.chats
+
+```text
+ws.app.chats.cancelDelete(agentId) → { cancelled }
+ws.app.chats.delete(agentId) → { success, scheduled, deleteAt }
+ws.app.chats.getMessageBlock(agentId, messageId, blockId) → { block }
+ws.app.chats.list({ limit?, cursor? }?) → { chats, total, returned, nextCursor? }
+ws.app.chats.readConversation(agentId, { lastN?, startTurn?, endTurn?, includeToolCalls? }?) → { agentId, agentName, totalMessages, returnedMessages, startTurn, endTurn, messages, ... }
+ws.app.chats.rename(agentId, name) → { success, name }
+```
+
+### ws.app.mcp
+
+```text
+ws.app.mcp.createServer(config) → { server, status }
+ws.app.mcp.getServerStatus(serverId) → { status }
+ws.app.mcp.listServers() → { servers }
+ws.app.mcp.setServerEnabled(serverId, enabled) → { status }
+ws.app.mcp.updateServer(serverId, config) → { server, status }
+```
+
 ### ws.app.proposal
 
 ```text
