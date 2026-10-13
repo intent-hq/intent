@@ -62,6 +62,67 @@ for drift inspection, not a release-merge credential. To record an intentional
 ruleset change, run `make check-rulesets UPDATE=1` with that credential and review
 the generated diff; this reads live rules and writes local snapshots only.
 
+## Intel Mac release policy — pending rollout
+
+The approved policy builds Intel Mac binaries only for actual tagged daemon,
+sitter and desktop releases (including reruns of those releases). Intel is
+optional: failed or incomplete Intel outputs are omitted without user-facing
+failure notices or dangling downloads, checksums or feed entries. Apple Silicon,
+Linux and Windows remain required. An optional job that is still queued can
+still delay publication; this policy does not cancel jobs or change runner limits.
+
+**Rollout status:** this monorepo change prepares cleanup and documents the
+companion implementation; it does not enable optional Intel in published builds.
+The existing desktop workflow requires both Mac architectures and uses one shared
+Mac feed. Until both component changes ship, use the existing release procedures
+below. The following behavior applies only after the coordinated rollout:
+
+- Daemon cargo-dist planning removes Intel from PR, branch, merge-queue, cache,
+  schedule and manual-test plans, including generated cross-compilation matrices.
+  Tagged daemon and sitter releases may build Intel. Channel manifests and mirrors
+  include only validated archives with matching checksums; an installed Intel
+  daemon stays on its current version if its exact target is absent. Sitter
+  `sitter-latest` and Homebrew may retain a verified older Intel archive/checksum
+  pair with its actual version, never relabel it as the new release. With no valid
+  prior pair, Intel is absent.
+- Desktop release planning admits Intel only when the exact pinned intentd release
+  contains its archive and checksum. Each included Mac build still signs,
+  notarizes and validates normally; incomplete Intel output is omitted as a unit.
+  Manual PR/test builds use Apple Silicon (`macos_arch=arm64`); `x64`, `both` and
+  universal manual selections are rejected. Linux/Windows x64 are unaffected.
+- New native ARM clients read `latest-arm64-mac.yml`. The legacy `latest-mac.yml`
+  advances on a complete dual-CPU release; otherwise it retains that destination
+  channel's own last compatible dual-CPU release using immutable versioned URLs.
+  Alpha, beta and stable each keep their own history. Promotions advance the ARM
+  feed to the selected release without borrowing alpha's legacy feed. Existing
+  shared-feed ARM clients wait for a successful dual release carrying the routing
+  change or install an ARM build manually; optional Intel does not wait for a
+  prerequisite migration release.
+- Only confirmed lack of compatible channel history permits the exact legacy
+  sentinel mapping `version: 0.0.0` and `files: []`, with no other keys. It offers
+  no update with downgrades disabled. Already-deployed clients can display `0.0.0`
+  in a manual-check toast in that case; new clients display their installed
+  version. Unreadable or malformed history stops publication. Never advertise a
+  missing Intel asset as a new-version download.
+
+**Required order:** land this cleanup compatibility change with human approval
+first. Then both component owners update their `.github/workflows/cleanup-prereleases.yml`
+cleanup-source pins (and intentd's exact-pin test) to the actual merged monorepo
+SHA before the new feeds publish. These are script-source pins, not submodule
+gitlinks; do not guess a future SHA or bypass consumer checks. Review and release
+the companion intentd and cloudlands-fe changes together. The companion bundled
+assistant guide section is **Mac update availability**. Record component PR links
+and carrying versions at rollout; none are established by this documentation.
+
+Enforcement lives with the implementations: intentd's
+`scripts/test-optional-intel-release.py` exercises event gating, cross-target
+matrix filtering and workflow restrictions; `scripts/test-optional-intel-dist.py`
+tests real cargo-dist output. Desktop's `scripts/mac-release-workflows.test.ts`
+executes dynamic release/manual selectors and rejects non-release Intel inputs.
+Run these component gates with their companion changes; the monorepo's older
+component pins do not yet contain the new policy. Cleanup's offline regression
+suite is `python3 -S -B -m unittest -v scripts.test_cleanup_prereleases`.
+
 ## intentd
 
 - release-plz maintains a release PR on `main`. Merging it cuts the `vX.Y.Z` tag,
@@ -371,6 +432,15 @@ commit and workflow-blob identities; legacy `intentdSha` manifests also require
 verified daemon commit metadata. A missing pin, unknown legacy identity or
 malformed manifest is not permission to ignore a dependency. Retained Git tags
 without release records are not enumerated as live dependencies.
+
+Both `latest-mac.yml` and `latest-arm64-mac.yml` protect their independently
+referenced immutable frontend versions and daemon dependencies. The ARM feed is
+optional for older releases; an existing channel must still have the legacy Mac
+feed. Only the exact two-key empty legacy sentinel described above has no release
+dependency. Extra sentinel fields, unknown versions whose dependencies cannot be
+resolved, and failed feed reads abort cleanup before deletion. The script remains
+dependency-free and accepts the desktop emitter's narrow block-mapping sentinel
+shape, not arbitrary YAML encodings.
 
 `--max-delete` defaults to **20 release deletion attempts per invocation across
 the selected pair**, not 20 versions per repository. This batch limit is separate

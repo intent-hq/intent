@@ -206,6 +206,95 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(cleanup.apply_plan(self.gh, plan, "intentd", NOW)["ok"], True)
 
 
+class MacFeedProtectionTests(unittest.TestCase):
+    # Emitted by cloudlands-fe prepareMacChannelFeeds at aedbbd3057e4482632b02508e179e332731455d9
+    # with ARM 1.0.24, dual-CPU history 1.0.23, and absent history respectively.
+    fixtures = Path(__file__).parent / "fixtures/cleanup-mac-feeds"
+
+    def setUp(self):
+        self.gh = FakeGitHub()
+        for repo in cleanup.REPOSITORIES:
+            self.gh.inventory[repo] = [release(i, 40 + i) for i in range(1, 25)]
+        self.gh.pins.update({f"v1.0.{i}": f"1.0.{i}" for i in range(1, 25)})
+        self.gh.inventory[FE_MIRROR].append(release(99, tag_name="alpha"))
+        self.feeds = self.gh.assets[FE_MIRROR, "alpha"] = {
+            "latest-mac.yml": (self.fixtures / "legacy.yml").read_text(),
+            "latest-arm64-mac.yml": (self.fixtures / "arm64.yml").read_text(),
+        }
+
+    def test_actual_desktop_feeds_protect_both_immutable_versions_and_daemons(self):
+        rows = cleanup.build_plan(self.gh, NOW)["releases"]
+        for repo in cleanup.REPOSITORIES:
+            for tag in ("v1.0.23", "v1.0.24"):
+                row = next(r for r in rows if r["repo"] == repo and r["tag"] == tag)
+                self.assertEqual(row["action"], "retain", (repo, tag))
+                self.assertIn("frontend-channel" if repo in (FE, FE_MIRROR)
+                              else "frontend-tag-pin", row["reasons"])
+
+    def test_actual_empty_legacy_feed_has_no_release_dependency(self):
+        self.feeds["latest-mac.yml"] = (self.fixtures / "empty.yml").read_text()
+        rows = cleanup.build_plan(self.gh, NOW)["releases"]
+        for repo in (FE, FE_MIRROR):
+            self.assertEqual(next(r["action"] for r in rows if r["repo"] == repo
+                                  and r["tag"] == "v1.0.24"), "retain")
+            self.assertEqual(next(r["action"] for r in rows if r["repo"] == repo
+                                  and r["tag"] == "v1.0.23"), "delete")
+
+    def test_malformed_sentinels_and_unknown_arm_versions_fail_closed(self):
+        empty = (self.fixtures / "empty.yml").read_text()
+        bad = ["version: 0.0.0\n", "version: v0.0.0\nfiles: []\n",
+               "version: 0.0.0\nfiles: null\n", "version: 0.0.0\nfiles: {}\n",
+               "version: 0.0.0\nfiles:\n - url: old.zip\n",
+               empty + "path: old.zip\n", empty + "sha512: hash\n",
+               empty + "releaseDate: 2026-10-13\n", empty + "extra: {}\n",
+               empty + "files: []\n", empty + "version: 1.0.23\n",
+               empty + "---\nversion: 1.0.23\n", "version: 0.0.0\nfiles: &empty []\n"]
+        for text in bad:
+            with self.subTest(text=text), self.assertRaises(cleanup.CleanupError):
+                cleanup.feed_version(text, allow_empty=True)
+        for name, text in [("latest-arm64-mac.yml", empty),
+                           ("latest-arm64-mac.yml", "version: 99.0.0\n")]:
+            with self.subTest(name=name, text=text):
+                self.feeds[name] = text
+                self.gh.pins["v99.0.0"] = cleanup.CleanupError("missing historical pin")
+                with self.assertRaises(cleanup.CleanupError):
+                    cleanup.build_plan(self.gh, NOW)
+                self.assertEqual(self.gh.deleted, [])
+
+    def test_exact_sentinel_mapping_accepts_key_order_and_scalar_quotes(self):
+        for text in ["files: []\nversion: 0.0.0\n", "version: '0.0.0'\nfiles: []\n",
+                     'version: "0.0.0"\r\nfiles: []\r\n']:
+            self.assertIsNone(cleanup.feed_version(text, allow_empty=True))
+            with self.assertRaises(cleanup.CleanupError):
+                cleanup.feed_version(text)
+
+    def test_missing_legacy_feed_aborts_but_pre_migration_arm_absence_is_valid(self):
+        arm = self.feeds.pop("latest-arm64-mac.yml")
+        cleanup.build_plan(self.gh, NOW)
+        self.feeds["latest-arm64-mac.yml"] = arm
+        del self.feeds["latest-mac.yml"]
+        with self.assertRaises(cleanup.CleanupError):
+            cleanup.build_plan(self.gh, NOW)
+
+    def test_missing_legacy_release_and_unreadable_tag_pin_aborts(self):
+        for repo in (FE, FE_MIRROR):
+            self.gh.inventory[repo] = [r for r in self.gh.inventory[repo] if r["tag_name"] != "v1.0.23"]
+        self.gh.pins["v1.0.23"] = cleanup.CleanupError("HTTP 404")
+        with self.assertRaises(cleanup.CleanupError):
+            cleanup.build_plan(self.gh, NOW)
+        self.assertEqual(self.gh.deleted, [])
+
+    @patch.object(cleanup.GitHub, "request")
+    def test_arm_feed_is_downloaded_and_failed_read_aborts(self, request):
+        arm = self.feeds["latest-arm64-mac.yml"]
+        request.side_effect = [[{"id": 8, "name": "latest-arm64-mac.yml"}], arm]
+        self.assertEqual(cleanup.GitHub().asset_texts(FE_MIRROR, release(99, tag_name="alpha")),
+                         {"latest-arm64-mac.yml": arm})
+        request.side_effect = [[{"id": 8, "name": "latest-arm64-mac.yml"}], cleanup.CleanupError("HTTP 403")]
+        with self.assertRaises(cleanup.CleanupError):
+            cleanup.GitHub().asset_texts(FE_MIRROR, release(99, tag_name="alpha"))
+
+
 class GitHubTests(unittest.TestCase):
     @patch.object(cleanup.GitHub, "request")
     def test_inventory_paginates_and_does_not_accept_failed_later_page(self, request):

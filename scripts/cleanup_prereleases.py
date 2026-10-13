@@ -34,7 +34,7 @@ REPOSITORIES = (DAEMON, DAEMON_MIRROR, FE, FE_MIRROR)
 PAIRS = {"intentd": (DAEMON, DAEMON_MIRROR), "cloudlands-fe": (FE, FE_MIRROR)}
 CHANNELS = ("alpha", "beta", "stable")
 VERSION = re.compile(r"v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?\Z")
-FEEDS = {"latest-mac.yml", "latest.yml", "latest-linux.yml", "latest-linux-arm64.yml"}
+FEEDS = {"latest-mac.yml", "latest-arm64-mac.yml", "latest.yml", "latest-linux.yml", "latest-linux-arm64.yml"}
 PROTECTION_ASSETS = FEEDS | {"release-manifest.json", "alpha.json", "beta.json", "stable.json"}
 
 # Reviewed immutable source-build provenance, not a version cutoff. These exact
@@ -319,7 +319,7 @@ def json_object(text, label):
     return data
 
 
-def feed_version(text):
+def feed_version(text, *, allow_empty=False):
     # Only parse electron-builder's root version scalar, not arbitrary YAML.
     # Unsupported shapes, duplicate keys and multiline scalars fail closed.
     matches = re.findall(r"^version:[ \t]*(.*?)[ \t]*$", text, re.MULTILINE)
@@ -328,7 +328,19 @@ def feed_version(text):
     scalar = matches[0].strip()
     if len(scalar) >= 2 and scalar[0] in "\"'" and scalar[-1] == scalar[0]:
         scalar = scalar[1:-1]
-    return version(scalar)
+    value = version(scalar)
+    if value == "0.0.0":
+        # The desktop emitter writes a two-key block mapping for a legacy Mac
+        # channel with no compatible history. Accept only that shape; never let
+        # extra fields, references, duplicate keys or YAML documents hide a live
+        # dependency. Other feeds cannot opt out of release protection.
+        lines = text.splitlines()
+        if (allow_empty and len(lines) == 2
+                and any(re.fullmatch(r"version:[ \t]*(?:0\.0\.0|'0\.0\.0'|\"0\.0\.0\")[ \t]*", line) for line in lines)
+                and any(re.fullmatch(r"files:[ \t]*\[\][ \t]*", line) for line in lines)):
+            return None
+        raise CleanupError("invalid empty frontend channel feed")
+    return value
 
 
 def build_plan(gh, now):
@@ -384,7 +396,9 @@ def build_plan(gh, now):
                 if "latest-mac.yml" not in assets:
                     raise CleanupError(f"{repo}/{tag}: missing required latest-mac.yml")
                 for name in sorted(FEEDS & assets.keys()):
-                    value = feed_version(assets[name])
+                    value = feed_version(assets[name], allow_empty=name == "latest-mac.yml")
+                    if value is None:
+                        continue
                     frontend_channel_versions.add(value)
                     protect(PAIRS["cloudlands-fe"], value, "frontend-channel")
                 if "release-manifest.json" in assets:
