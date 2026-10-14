@@ -15,7 +15,7 @@ def invalid_runners(text):
     return [value.strip().strip("\"'") for value in
             re.findall(r"^\s+runs-on:\s*([^\n]+)", text, re.M)
             if value.strip().strip("\"'") not in
-            {"depot-ubuntu-24.04", "depot-ubuntu-24.04-8", "depot-macos-15"}]
+            {"depot-ubuntu-24.04", "depot-ubuntu-24.04-8", "depot-macos-latest"}]
 
 
 class DepotRunners(unittest.TestCase):

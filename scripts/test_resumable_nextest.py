@@ -169,6 +169,23 @@ class AttemptReceiptTests(unittest.TestCase):
         return {str(p.relative_to(directory)): (p.stat().st_ino, p.read_bytes())
                 for p in directory.rglob("*") if p.is_file()}
 
+    def test_latest_attempt_does_not_depend_on_filesystem_timestamp_resolution(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            args = make_args(root, resume="1")
+            harness = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+            self.assertEqual(harness.execute(args), 0)
+            self.assertEqual(harness.execute(args), 0)
+            scope = self.scope(root, args.plan)
+            attempts = list((scope / "attempts").iterdir())
+            for attempt in attempts:
+                os.utime(attempt, ns=(1_000_000_000, 1_000_000_000))
+            expected = Path(harness.output_lines[-1].split("record: ", 1)[1])
+            # Reverse directory order to make a timestamp tie pick the wrong receipt.
+            ordered = [attempt for attempt in attempts if attempt != expected] + [expected]
+            with mock.patch.object(Path, "iterdir", return_value=iter(ordered)):
+                self.assertEqual(latest_attempt(scope), expected)
+
     def test_repeated_and_completed_resume_invocations_preserve_all_artifacts(self):
         for plans in ([], ["-p alpha --test one"]):
             with self.subTest(plans=plans), tempfile.TemporaryDirectory() as temp:
@@ -293,8 +310,36 @@ with mock.patch.object(gate, "callback_fixture_identity", return_value=None), mo
             self.assertEqual((legacy.stat().st_ino, legacy.read_bytes()), before)
 
 
+REPORTED_ATTEMPTS = {}
+
+
+def track_record_output(*args, **kwargs):
+    """Observe the real receipt identity while preserving the runner's output."""
+    if len(args) == 1 and isinstance(args[0], str) and args[0].startswith("[") and "] record: " in args[0]:
+        attempt = Path(args[0].split("] record: ", 1)[1])
+        REPORTED_ATTEMPTS[attempt.parent.parent] = attempt
+    print(*args, **kwargs)
+
+
+gate.print = track_record_output
+
+
 def latest_attempt(scope):
-    return max((scope / "attempts").iterdir(), key=lambda path: path.stat().st_mtime_ns)
+    # Directory mtimes can tie on fast runners. Use the reported identity.
+    if scope in REPORTED_ATTEMPTS:
+        return REPORTED_ATTEMPTS[scope]
+    attempts = list((scope / "attempts").iterdir())
+    if len(attempts) != 1:
+        raise AssertionError("multiple attempts require the runner's reported receipt path")
+    return attempts[0]
+
+
+def attempt_from_output(stdout, scope):
+    record = next(line for line in reversed(stdout.splitlines()) if "] record: " in line)
+    attempt = Path(record.split("] record: ", 1)[1])
+    if attempt.parent != scope / "attempts":
+        raise AssertionError(f"receipt is outside expected scope: {attempt}")
+    return attempt
 
 
 class RealChildReceiptTests(unittest.TestCase):
@@ -456,7 +501,7 @@ with mock.patch.object(gate, 'tree_key', return_value=KEY), \\
                     resumed = self.spawn(root, plans, 'resume')
                     stdout, stderr = self.finish(resumed)
                     self.assertEqual(resumed.returncode, 0, stderr)
-                    current = latest_attempt(scope)
+                    current = attempt_from_output(stdout, scope)
                     self.assertNotIn(current, frozen)
                     for directory, snapshot in frozen.items():
                         self.assertEqual(self.snapshot(directory), snapshot)

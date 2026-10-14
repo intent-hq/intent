@@ -637,7 +637,7 @@ promotions of deleted prereleases are not preserved by this retention policy.
 
 Repository automation and consumer checks run on Depot GitHub Actions runners.
 Routed component jobs prefer free self-hosted runners and burst to Depot. Native
-Intel desktop release and manual packaging builds stay on GitHub macos-15-large.
+Intel desktop release and manual packaging builds stay on GitHub macos-latest-large.
 Enable the Depot GitHub integration for each component repository before switching
 its workflow labels. The migration keeps required check names and merge-queue
 triggers stable; submodule pins continue to advance automatically.
