@@ -31,7 +31,7 @@ fail() {
 }
 
 # Keep every launcher invocation on the harness interpreter, including the
-# supervised make recipe. CI uses /bin/bash explicitly for the macOS 3.2 run.
+# supervised make recipe. CI supplies its pinned Bash 3.2 interpreter explicitly.
 if [[ -n "${REQUIRE_BASH3:-}" && "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}" != 3.2 ]]; then
   fail "REQUIRE_BASH3 requires running this suite with a real Bash 3.2 interpreter"
 fi

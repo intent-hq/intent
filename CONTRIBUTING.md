@@ -377,3 +377,16 @@ builds normally. An explicitly set `RUSTC_WRAPPER` (including an empty value)
 takes precedence. Keep tokens out of tracked files. If changing the endpoint
 or credentials while a local sccache server is running, stop that server first
 with `sccache --stop-server` so the next build picks up the new environment.
+
+### Bash 3 compatibility checks
+
+The `shell-tests-bash3` CI job runs on Depot Linux with a checksum-verified
+Bash 3.2.57 build. It tests the shell language compatibility needed by macOS
+users without consuming a macOS runner. To reproduce on Linux:
+
+```bash
+bash scripts/install-ci-bash3.sh /tmp/intent-bash3
+BASH3_BIN=/tmp/intent-bash3/bash REQUIRE_BASH3=1 bash scripts/consumer-checks.test.sh
+```
+
+The interpreter is isolated; the installer does not replace the system shell.
