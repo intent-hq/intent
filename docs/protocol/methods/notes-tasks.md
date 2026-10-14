@@ -171,6 +171,40 @@ Omitted `page` retains all existing results and behavior, including stale full-d
 merge, version history, task conversion, anchors and author attribution. `null`,
 unknown page kinds and unsupported versions are invalid on supporting daemons.
 
+#### Demand-driven index preparation
+
+Derived source/context/metadata/task-ID indexes and source-anchor readiness are
+prepared only when an authorized request needs that note. Startup, canonical-only
+list/state reads and unrelated writes must not convert the pending note backlog.
+Preparation is a separately owned write job before the page's read snapshot;
+whole-note conversion must not run on the page read connection. Concurrent demand
+for the same note incarnation, source revision, index generation and profile shares
+one job. Publication must reject changes to any captured input, including annotation
+root epochs, deletion/recreation and workspace retirement. A read rechecks readiness
+and identity in the snapshot that supplies its bytes.
+
+A cold request may wait briefly (at most 250 ms for the preparation wait), then
+return `-32006` with `data: { code: "note-index-preparing", retryAfterMs: 1000 }`.
+This is not a page or an expired snapshot. Retry only while the same note/view is
+still wanted; do not retry after cancellation, navigation, reconnect or loss of
+authorization. Repeated demand joins the existing job. Ready responses keep their
+existing shapes and budgets; no snapshot lifetime starts before the index is ready.
+The queue is bounded; a full queue returns the same retryable error without admitting
+another job. This wait bound does not redefine transport/authentication deadlines.
+
+An exhausted conversion resource budget returns `-32006` with
+`data: { code: "note-index-resource-limit" }`, without automatic retries. It must
+not publish partial indexes, change canonical content/history, or masquerade as
+an empty note/task list/annotation result. Legacy full-note APIs remain available
+with their existing semantics. Clients preserve drafts and report that the paged
+view could not be prepared; resource failures do not authorize fallback to treating
+partial content as a complete note.
+
+Malformed, wrong-scope and obsolete cursors/references retain their existing
+classification and must not be silently converted to fresh requests. A profile
+rebuild cannot revive a retired reference. Authorization is checked before demand
+is admitted and again after waiting, including before returning an error.
+
 #### Identity, addresses and budgets
 
 `NoteScope = { backendId, workspaceId, noteId, noteInstanceId }`. Capability hello
@@ -187,6 +221,7 @@ a missing/malformed ID or unsupported version disables paging. This ID must equa
 a changed backend ID invalidates clean caches and retains drafts for reconciliation.
 Advertise `notePagingRead` only after the entire read contract is ready.
 The former write-bearing `notePaging` must remain absent.
+
 `sourceRevision` is an opaque nonempty string identifying the note's current `rev`
 within that incarnation, including metadata-only revision changes. The daemon must
 map it losslessly to its existing integer rev; clients compare equality only and

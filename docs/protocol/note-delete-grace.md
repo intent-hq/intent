@@ -177,7 +177,8 @@ retain credentials inside wire receipts.
 
 Admission reads a short coherent snapshot of the live workspace and parent
 instance, numeric revision and page generation, without reading note content. The
-current identity head must be available. Capture a count and SHA256 digest of sorted,
+current identity head must be available and match the canonical revision; a stale
+derived parser projection does not make that identity unavailable. Capture a count and SHA256 digest of sorted,
 length-prefixed direct-child scalar identity/revision/generation tuples. Query at
 most 257 rows to detect overflow and reject more than 256 children or missing/oversized
 identity fields. Retain no child arrays or body snapshots per registry entry.
@@ -185,8 +186,8 @@ identity fields. Retain no child arrays or body snapshots per registry entry.
 At expiry use the same `BEGIN IMMEDIATE` connection to revalidate authority, exact
 parent guards and the exact direct-child set before deleting. Parent edits, child
 add/remove/reparent/edit/incarnation changes, or same-ID recreation produce conflict
-without rebasing. Parent deletion, legacy child-detachment triggers, pending index
-rebuild and annotation finalization commit atomically with existing rollback guards.
+without rebasing. Parent deletion, legacy child-detachment triggers, affected-child index
+repair and annotation finalization commit atomically with existing rollback guards.
 Do not alter migration identities/bytes.
 
 Cancellation preserves **current** original source, metadata, comments, history and
