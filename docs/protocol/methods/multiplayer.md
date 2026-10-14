@@ -277,3 +277,91 @@ field. Reading this projection requires the existing valid open-invite secret.
 `invite.accept` / `invite.prove` keep their existing result shapes; after admission,
 `system.status` supplies and refreshes the same label for guests and host members.
 See [the setting contract](./settings.md#collaborator-facing-machine-name).
+
+### 5.54 Workspace discussions
+
+**Additive, prepared for protocol 14.1.** One persisted human conversation belongs
+to each workspace. It is separate from agent conversations and note comments.
+There are no thread IDs, direct messages, attachments, edits, or reactions in this
+contract. The desktop entry point remains behind the Multiplayer Labs setting.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| discussion.list | workspaceId (req), beforeSequence? (positive integer, exclusive), limit? (integer 1–100, default 50) | `{ messages: DiscussionMessage[], hasMore: boolean }` |
+| discussion.send | workspaceId (req), messageId (req, nonblank string, at most 128 UTF-8 bytes), body (req, nonblank string, at most 16384 UTF-8 bytes) | `{ message: DiscussionMessage }` |
+
+`DiscussionMessage` has the same shape in history, send replies, and events:
+
+```json
+{
+  "id": "server-generated-message-uuid",
+  "workspaceId": "ws-1",
+  "sequence": 42,
+  "body": "Can we keep the first version to one group conversation?",
+  "author": {
+    "principalId": "principal-1",
+    "login": "sam",
+    "displayName": "Sam",
+    "avatarUrl": null
+  },
+  "createdAt": "2026-10-14T12:42:00.000Z"
+}
+```
+
+- `id` is the immutable server-generated row identity. It differs from the
+  client-supplied `messageId`, which is only a retry key. Two people choosing the
+  same retry key still create distinct messages.
+- `sequence` is a positive, monotonically increasing server sequence. It orders
+  messages and is the pagination cursor; gaps are allowed. Clients do not order
+  by local clocks or assume consecutive values.
+- `author` is a snapshot of the connection's authenticated principal at send
+  time. The three profile fields are always present and nullable. Request fields
+  cannot choose an author, sequence, timestamp, or workspace other than the
+  authorized `workspaceId`.
+- `createdAt` is a server RFC-3339 timestamp. `body` is plain text; line breaks
+  are preserved. Render it as text, never HTML or an agent command.
+
+#### History and delivery
+
+`discussion.list` selects the newest `limit` messages below `beforeSequence`, or
+the newest page when no cursor is supplied, and returns that page in ascending
+sequence order. `hasMore` means older rows remain below the returned page. An
+empty discussion returns `{ "messages": [], "hasMore": false }`. Queries are
+bounded by the page limit; the server does not load the entire conversation.
+
+`discussion.send` persists the row before replying and publishes
+`discussion:message` with `data = { workspaceId, message }`. The event carries
+the complete committed message. The retry key is scoped to
+`(workspaceId, authenticated principalId, messageId)`: repeated sends return the
+original immutable row rather than inserting another message. A client retries
+an uncertain send with the same key and body. New intentional sends use new
+keys. History survives daemon restarts and client reconnects.
+
+Clients subscribe to workspace events before reading history, merge by message
+`id`, and sort by `sequence`. A live event, a send reply, and a history page may
+contain the same row. A late history reply must not erase a live row. After a
+reconnect, read the newest page and continue older pages until the previously
+known sequence is reached or `hasMore` is false; do not assume one page spans the
+offline interval. Preserve scroll position when prepending history, and retain
+drafts and uncertain sends until their outcome is known. Discard pending replies
+when the workspace's backend or authenticated principal changes.
+
+#### Access and compatibility
+
+Both methods require an authenticated human client connection and current
+workspace membership, including inherited host membership. Agent, daemon, and
+unbound callers cannot post as people. A missing or inaccessible workspace is
+`-32602 { code: "not-found" }`; a non-human caller is `-32003` Forbidden. Malformed
+fields and out-of-range limits are `-32602` Invalid params. The author comes from
+the bound caller, never `client.hello` display metadata.
+
+`discussion:message` is workspace-scoped and passes the existing delivery-time
+membership gate. Removed members cannot continue reading history, sending, or
+receiving subsequent messages. Sending a discussion message does not route it
+into an agent conversation.
+
+Older owner connections can answer `-32601`; an older collaborator allowlist can
+answer `-32003`. Clients must show that discussions are unavailable, retain the
+draft, and never substitute an agent message or note comment. Authorization
+errors must not be treated as successful sends. A numeric protocol version does
+not bypass membership or the Multiplayer Labs setting.
