@@ -52,7 +52,7 @@ permissions:
 
 jobs:
   stale:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 15
     steps:
       # SHA-pinned (not tag-pinned): this action holds a token that can

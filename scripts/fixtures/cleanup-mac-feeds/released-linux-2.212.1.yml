@@ -1,0 +1,12 @@
+version: 2.212.1
+files:
+  - url: Intent-2.212.1.AppImage
+    sha512: LR7FZTtZ8hxtqN0L+7ie9d1ID6k2Axvps4fSFpKOeT4lKyn0bvuHeiWhwtIpKX8FEIG1R7yjFwxXyxL472OidA==
+    size: 230391353
+    blockMapSize: 241229
+  - url: intent_2.212.1_amd64.deb
+    sha512: WJDTnOeTFS6I5qFOrPtanwb26Eu5lAbk/OYFzjia+vpaB+uvF16rbkI0XDwzj2YCK4UeNAR9ujaFMNt+mj+0ug==
+    size: 178190264
+path: Intent-2.212.1.AppImage
+sha512: LR7FZTtZ8hxtqN0L+7ie9d1ID6k2Axvps4fSFpKOeT4lKyn0bvuHeiWhwtIpKX8FEIG1R7yjFwxXyxL472OidA==
+releaseDate: '2026-10-08T11:48:42.759Z'

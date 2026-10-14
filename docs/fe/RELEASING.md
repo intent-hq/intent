@@ -11,6 +11,34 @@ auto-update validation on each CPU. Follow the
 
 ## Overview
 
+**Pending companion rollout:** the overview and shared-feed verification below
+describe the currently deployed dual-Mac workflow. Optional Intel and the new ARM
+feed are implemented in companion work but are not enabled by this docs change.
+The [coordinated Intel policy](../RELEASING.md#intel-mac-release-policy--pending-rollout)
+defines the root-first cleanup prerequisite, required platforms and migration
+limit. Use the following differences only once those companions are released:
+
+- ARM, Windows and Linux must succeed. Intel is attempted only for a tagged
+  release with the exact pinned daemon's Intel archive/checksum, and only complete
+  validated Intel DMG/ZIP/blockmaps publish. Intel omission creates no new Intel
+  download link and is not a publication failure.
+- Verify five feeds: `latest-arm64-mac.yml`, `latest-mac.yml`, `latest.yml`,
+  `latest-linux.yml`, `latest-linux-arm64.yml`. The ARM and non-Mac feeds identify
+  the selected release. The legacy Mac feed can truthfully identify an older
+  compatible release; verify its immutable URLs and retained versioned assets,
+  rather than requiring its version to equal the release manifest.
+- For beta/stable promotion, verify the destination channel's prepared legacy
+  feed against its own prior compatible history, not alpha's versioned legacy
+  feed. Compare uploaded feeds with the workflow's prepared files; the legacy
+  versioned-versus-channel `cmp` below is only valid for a complete dual release.
+  Promotion guards read the ARM feed, falling back to legacy for old releases.
+- Old shared-feed ARM clients can wait for a compatible dual release carrying
+  the migration or install an ARM build manually. Test both old and new clients;
+  a successful ARM-only build does not prove deployed ARM clients will update.
+  The no-compatible-history sentinel and manual-check display limitation are
+  described in the coordinated policy. Manual test builds use Apple Silicon;
+  see the [manual build procedure](./DEPLOYING.md#manual-signed-build-pr-test-builds).
+
 Releases are built and published by the **Release Alpha** workflow in GitHub Actions. The `intentd` sidecar is **not built from source** — it is downloaded from the pinned `intent-hq/intentd` GitHub Release recorded in the `intentd.version` file (intentd releases on its own cycle). The workflow:
 
 1. Reads the pinned intentd version from `intentd.version` and fetches the matching release asset via `scripts/fetch-sidecar.cjs` (sha256-verified, staged at `resources/sidecar/intentd`); it fails fast if the pinned release or its assets don't exist

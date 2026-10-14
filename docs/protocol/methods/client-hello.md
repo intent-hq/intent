@@ -4,6 +4,13 @@ Routing-only `workspaceId?` additions below are [prepared contract fields](../wo
 
 ### 5.17 `client.hello` handshake & stable client identity
 
+**Startup readiness (prepared).** Exact integer
+`server.capabilities.startupStatus: 1` advertises the full
+[startup contract](../startup-readiness.md). During bootstrap, hello returns
+structured `-32012` instead of persisting identity or returning a partial success.
+Recognize this before legacy hello-error fallback; poll the restricted status
+method, then reconnect and complete ordinary hello before application hydration.
+
 **Shared-host extension (10.9).** [§5.49](./shared-host-membership.md) adds server
 capability flags `hostMembership: 1`, `collaborationIdentity: 1`,
 `personalPairing: 1`, `authenticatedDevices: 1`. Each means full support for its

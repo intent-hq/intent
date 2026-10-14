@@ -11,6 +11,14 @@ capability; documentation alone does not identify a carrying desktop release.
 **Documented version:** `14.0` — prepared active-only script and monitor lists; not a shipped-version claim.
 Other prepared extensions retain their independent support gates.
 
+**Startup readiness (additive, prepared).** The [startup contract](./startup-readiness.md)
+reserves `system.startupStatus` and numeric error `-32012`, with exact
+`startupStatus: 1` support detection. It does not make ordinary hello usable before
+Store or grant guest access to owner progress. Coordinate the additive minor at
+implementation; no shipped numeric version is claimed here. Current documented
+counts including this addition are **451 / 393 / 58** (dispatchable / router /
+fast path); the version-specific counts below describe their original deltas.
+
 **Version 14.0 — active-only script and monitor lists (breaking, prepared).**
 The [replacement contract](./methods/scripts.md#active-only-compact-lists-prepared-breaking-contract)
 adds script.get and scriptMonitor.get, optional bounded summary pages, and removes
@@ -41,7 +49,7 @@ known-ID status/output may still be used. This draft grants no merge permission.
 **Prepared generic stream recovery (independently gated additive extension).**
 [`eventStreamRecovery: 1`](./event-stream-recovery.md) adds an opt-in/ack to
 `events.subscribe`, the socket-private `events.lost` notification and the
-`events.fence` fast-path method. The prepared surface is **450 / 393 / 57**
+`events.fence` fast-path method. The prepared surface is **451 / 393 / 58**
 (dispatchable / router / fast path); domain event catalog and current advertised
 protocol version are unchanged.
 Exact capability and lease negotiation gate adoption, including bounded recovery

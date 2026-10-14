@@ -1,0 +1,17 @@
+files:
+  - sha512: EPYW5hiL7Gb8bSUs0qomJXaUedjYz+D6k33ucJf1u0QJz5vpWUxHVYSbrKto+WW+nY4mq3nh0P8jIzNTOldIZA==
+    size: 308489681
+    url: Intent-2.216.2-x64-mac.zip
+  - sha512: FsqO3iBU2zSUzNjNXBcVisfchHW0adQc8rk59biKx4FQSX2Bes0TLjKAVpGdSURCHt+O/bk5PGkEqqnoxVCPeA==
+    size: 309338322
+    url: Intent-2.216.2-x64.dmg
+  - sha512: 1SEIXa5pvi3r4A2J5ZmX5oBoV5LCKWXs6gQwYljJDL+spsbldya4R2bJcmkv3I8FO0IoC3ftEUxY6S2vG3P1nw==
+    size: 298285168
+    url: Intent-2.216.2-arm64-mac.zip
+  - sha512: 8jd1HN13zAx4NbCsRLa9JG9IMjPyYXMD2ME5HeXlDLhiUBQAE50vjIMdyfiZQENmHaoV+O4p3VkymlHF4M3Y+g==
+    size: 299230737
+    url: Intent-2.216.2-arm64.dmg
+path: Intent-2.216.2-x64-mac.zip
+releaseDate: '2026-10-13T13:11:00.407Z'
+sha512: EPYW5hiL7Gb8bSUs0qomJXaUedjYz+D6k33ucJf1u0QJz5vpWUxHVYSbrKto+WW+nY4mq3nh0P8jIzNTOldIZA==
+version: 2.216.2

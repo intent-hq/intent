@@ -24,7 +24,7 @@ concurrency:
 
 jobs:
   bump:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     steps:
       # Fail-soft: without the token, warn and end the run successfully
       # (mirrors INTENTD_RELEASES_TOKEN / MONOREPO_ISSUES_TOKEN handling).

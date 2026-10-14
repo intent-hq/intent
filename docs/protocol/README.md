@@ -28,6 +28,7 @@ wire fixtures. It is not a shipped-version claim.
 | §1 Transport (1.1–1.4) | [01-transport.md](./01-transport.md) |
 | §2 Authentication (2.1–2.3) | [02-authentication.md](./02-authentication.md) |
 | §3 Message Envelope (JSON-RPC 2.0) (3.1–3.6) | [03-envelope.md](./03-envelope.md) |
+| Startup readiness and indexing progress (prepared) | [startup-readiness.md](./startup-readiness.md) |
 | §4 Heartbeat & Lifecycle | [04-heartbeat.md](./04-heartbeat.md) |
 | §5 Method Catalog — intro, router/fast-path method tables, aliases, client-served reverse RPCs | [05-method-catalog.md](./05-method-catalog.md) |
 | Workspace routing preparation — exact method/variant inventory, compatibility and resource lifetimes | [workspace-routing.md](./workspace-routing.md) |
