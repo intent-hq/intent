@@ -1,0 +1,546 @@
+{
+  "scenarios": [
+    {
+      "name": "preparing",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "system.startupStatus",
+        "params": {}
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "startupStatus": 1,
+          "attemptId": "boot-a",
+          "phase": "preparing",
+          "elapsedMs": 1200,
+          "phaseElapsedMs": 1200,
+          "progressAgeMs": 1200,
+          "retryAfterMs": 1000,
+          "daemonVersion": "0.10.47"
+        }
+      }
+    },
+    {
+      "name": "indexing-with-estimate",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "system.startupStatus",
+        "params": {}
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "startupStatus": 1,
+          "attemptId": "boot-a",
+          "phase": "indexing",
+          "elapsedMs": 10000,
+          "phaseElapsedMs": 5000,
+          "progressAgeMs": 0,
+          "retryAfterMs": 1000,
+          "progress": {
+            "completedNotes": 5,
+            "totalNotes": 10,
+            "processedSourceBytes": 50000,
+            "totalSourceBytes": 150000
+          },
+          "estimatedRemainingMs": 10000,
+          "daemonVersion": "0.10.47"
+        }
+      }
+    },
+    {
+      "name": "indexing-without-estimate",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "system.startupStatus",
+        "params": {}
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "startupStatus": 1,
+          "attemptId": "boot-a",
+          "phase": "indexing",
+          "elapsedMs": 41000,
+          "phaseElapsedMs": 36000,
+          "progressAgeMs": 31000,
+          "retryAfterMs": 1000,
+          "progress": {
+            "completedNotes": 5,
+            "totalNotes": 10,
+            "processedSourceBytes": 50000,
+            "totalSourceBytes": 150000
+          },
+          "daemonVersion": "0.10.47"
+        }
+      }
+    },
+    {
+      "name": "finalizing-anchors",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "system.startupStatus",
+        "params": {}
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": {
+          "startupStatus": 1,
+          "attemptId": "boot-a",
+          "phase": "finalizing",
+          "elapsedMs": 50000,
+          "phaseElapsedMs": 0,
+          "progressAgeMs": 0,
+          "retryAfterMs": 1000,
+          "progress": {
+            "completedNotes": 10,
+            "totalNotes": 10,
+            "processedSourceBytes": 150000,
+            "totalSourceBytes": 150000
+          },
+          "finalizingStep": "anchors",
+          "daemonVersion": "0.10.47"
+        }
+      }
+    },
+    {
+      "name": "finalizing-committing",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "system.startupStatus",
+        "params": {}
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "result": {
+          "startupStatus": 1,
+          "attemptId": "boot-a",
+          "phase": "finalizing",
+          "elapsedMs": 51000,
+          "phaseElapsedMs": 1000,
+          "progressAgeMs": 0,
+          "retryAfterMs": 1000,
+          "progress": {
+            "completedNotes": 10,
+            "totalNotes": 10,
+            "processedSourceBytes": 150000,
+            "totalSourceBytes": 150000
+          },
+          "finalizingStep": "committing",
+          "daemonVersion": "0.10.47"
+        }
+      }
+    },
+    {
+      "name": "finalizing-services",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "system.startupStatus",
+        "params": {}
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "result": {
+          "startupStatus": 1,
+          "attemptId": "boot-a",
+          "phase": "finalizing",
+          "elapsedMs": 52000,
+          "phaseElapsedMs": 2000,
+          "progressAgeMs": 0,
+          "retryAfterMs": 1000,
+          "progress": {
+            "completedNotes": 10,
+            "totalNotes": 10,
+            "processedSourceBytes": 150000,
+            "totalSourceBytes": 150000
+          },
+          "finalizingStep": "services",
+          "daemonVersion": "0.10.47"
+        }
+      }
+    },
+    {
+      "name": "ready",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "system.startupStatus",
+        "params": {}
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "result": {
+          "startupStatus": 1,
+          "attemptId": "boot-a",
+          "phase": "ready",
+          "elapsedMs": 54000,
+          "phaseElapsedMs": 0,
+          "progressAgeMs": 0,
+          "progress": {
+            "completedNotes": 10,
+            "totalNotes": 10,
+            "processedSourceBytes": 150000,
+            "totalSourceBytes": 150000
+          },
+          "daemonVersion": "0.10.47"
+        }
+      }
+    },
+    {
+      "name": "failed",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 8,
+        "method": "system.startupStatus",
+        "params": {}
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 8,
+        "result": {
+          "startupStatus": 1,
+          "attemptId": "boot-a",
+          "phase": "failed",
+          "elapsedMs": 51000,
+          "phaseElapsedMs": 0,
+          "progressAgeMs": 0,
+          "progress": {
+            "completedNotes": 10,
+            "totalNotes": 10,
+            "processedSourceBytes": 150000,
+            "totalSourceBytes": 150000
+          },
+          "failure": {
+            "code": "startup-failed",
+            "message": "Daemon startup failed. Check daemon logs."
+          },
+          "daemonVersion": "0.10.47"
+        }
+      }
+    },
+    {
+      "name": "restarted-attempt",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 9,
+        "method": "system.startupStatus",
+        "params": {}
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 9,
+        "result": {
+          "startupStatus": 1,
+          "attemptId": "boot-b",
+          "phase": "preparing",
+          "elapsedMs": 200,
+          "phaseElapsedMs": 200,
+          "progressAgeMs": 200,
+          "retryAfterMs": 1000,
+          "daemonVersion": "0.10.47"
+        }
+      }
+    },
+    {
+      "name": "nothing-to-rebuild",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 10,
+        "method": "system.startupStatus",
+        "params": {}
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 10,
+        "result": {
+          "startupStatus": 1,
+          "attemptId": "boot-a",
+          "phase": "finalizing",
+          "elapsedMs": 100,
+          "phaseElapsedMs": 0,
+          "progressAgeMs": 0,
+          "finalizingStep": "services",
+          "retryAfterMs": 1000,
+          "progress": {
+            "completedNotes": 0,
+            "totalNotes": 0,
+            "processedSourceBytes": 0,
+            "totalSourceBytes": 0
+          },
+          "daemonVersion": "0.10.47"
+        }
+      }
+    }
+  ],
+  "rejectedRequests": [
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 20,
+        "method": "client.hello",
+        "params": {}
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 20,
+        "error": {
+          "code": -32012,
+          "message": "Daemon not ready",
+          "data": {
+            "code": "daemon-not-ready",
+            "retryable": true,
+            "retryAfterMs": 1000,
+            "startup": {
+              "startupStatus": 1,
+              "attemptId": "boot-a",
+              "phase": "preparing",
+              "elapsedMs": 1200,
+              "phaseElapsedMs": 1200,
+              "progressAgeMs": 1200,
+              "retryAfterMs": 1000,
+              "daemonVersion": "0.10.47"
+            }
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 20,
+        "method": "workspace.list",
+        "params": {}
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 20,
+        "error": {
+          "code": -32012,
+          "message": "Daemon not ready",
+          "data": {
+            "code": "daemon-not-ready",
+            "retryable": true,
+            "retryAfterMs": 1000,
+            "startup": {
+              "startupStatus": 1,
+              "attemptId": "boot-a",
+              "phase": "preparing",
+              "elapsedMs": 1200,
+              "phaseElapsedMs": 1200,
+              "progressAgeMs": 1200,
+              "retryAfterMs": 1000,
+              "daemonVersion": "0.10.47"
+            }
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 20,
+        "method": "note.setContent",
+        "params": {}
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 20,
+        "error": {
+          "code": -32012,
+          "message": "Daemon not ready",
+          "data": {
+            "code": "daemon-not-ready",
+            "retryable": true,
+            "retryAfterMs": 1000,
+            "startup": {
+              "startupStatus": 1,
+              "attemptId": "boot-a",
+              "phase": "preparing",
+              "elapsedMs": 1200,
+              "phaseElapsedMs": 1200,
+              "progressAgeMs": 1200,
+              "retryAfterMs": 1000,
+              "daemonVersion": "0.10.47"
+            }
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 20,
+        "method": "events.subscribe",
+        "params": {}
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 20,
+        "error": {
+          "code": -32012,
+          "message": "Daemon not ready",
+          "data": {
+            "code": "daemon-not-ready",
+            "retryable": true,
+            "retryAfterMs": 1000,
+            "startup": {
+              "startupStatus": 1,
+              "attemptId": "boot-a",
+              "phase": "preparing",
+              "elapsedMs": 1200,
+              "phaseElapsedMs": 1200,
+              "progressAgeMs": 1200,
+              "retryAfterMs": 1000,
+              "daemonVersion": "0.10.47"
+            }
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 20,
+        "method": "system.status",
+        "params": {}
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 20,
+        "error": {
+          "code": -32012,
+          "message": "Daemon not ready",
+          "data": {
+            "code": "daemon-not-ready",
+            "retryable": true,
+            "retryAfterMs": 1000,
+            "startup": {
+              "startupStatus": 1,
+              "attemptId": "boot-a",
+              "phase": "preparing",
+              "elapsedMs": 1200,
+              "phaseElapsedMs": 1200,
+              "progressAgeMs": 1200,
+              "retryAfterMs": 1000,
+              "daemonVersion": "0.10.47"
+            }
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 20,
+        "method": "unknown.method",
+        "params": {}
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 20,
+        "error": {
+          "code": -32012,
+          "message": "Daemon not ready",
+          "data": {
+            "code": "daemon-not-ready",
+            "retryable": true,
+            "retryAfterMs": 1000,
+            "startup": {
+              "startupStatus": 1,
+              "attemptId": "boot-a",
+              "phase": "preparing",
+              "elapsedMs": 1200,
+              "phaseElapsedMs": 1200,
+              "progressAgeMs": 1200,
+              "retryAfterMs": 1000,
+              "daemonVersion": "0.10.47"
+            }
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 21,
+        "method": "client.hello",
+        "params": {}
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 21,
+        "error": {
+          "code": -32012,
+          "message": "Daemon startup failed",
+          "data": {
+            "code": "daemon-startup-failed",
+            "retryable": false,
+            "startup": {
+              "startupStatus": 1,
+              "attemptId": "boot-a",
+              "phase": "failed",
+              "elapsedMs": 51000,
+              "phaseElapsedMs": 0,
+              "progressAgeMs": 0,
+              "progress": {
+                "completedNotes": 10,
+                "totalNotes": 10,
+                "processedSourceBytes": 150000,
+                "totalSourceBytes": 150000
+              },
+              "failure": {
+                "code": "startup-failed",
+                "message": "Daemon startup failed. Check daemon logs."
+              },
+              "daemonVersion": "0.10.47"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "pollObservations": [
+    {
+      "name": "fresh-unchanged-counters",
+      "lastSuccessfulScenario": "indexing-without-estimate",
+      "pollOutcome": "success",
+      "statusAvailable": true,
+      "showEta": false
+    },
+    {
+      "name": "timed-out-status",
+      "lastSuccessfulScenario": "indexing-without-estimate",
+      "pollOutcome": "timeout",
+      "statusAvailable": false,
+      "showEta": false
+    },
+    {
+      "name": "disconnected-status",
+      "lastSuccessfulScenario": "indexing-without-estimate",
+      "pollOutcome": "disconnected",
+      "statusAvailable": false,
+      "showEta": false
+    },
+    {
+      "name": "fresh-again-unchanged-counters",
+      "lastSuccessfulScenario": "indexing-without-estimate",
+      "pollOutcome": "success",
+      "statusAvailable": true,
+      "showEta": false
+    }
+  ]
+}
