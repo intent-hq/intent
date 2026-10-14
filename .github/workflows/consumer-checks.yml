@@ -83,7 +83,7 @@ on:
 
 jobs:
   consumer-checks:
-    runs-on: depot-ubuntu-24.04
+    runs-on: depot-ubuntu-24.04-8
     timeout-minutes: 45
     permissions:
       contents: read
@@ -194,6 +194,10 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends libssl-dev pkg-config
           corepack enable
+
+      - name: Configure Depot managed compiler cache
+        if: steps.monorepo.outcome == 'success'
+        uses: ./.github/actions/depot-rust-cache
 
       - uses: Swatinem/rust-cache@v2
         if: steps.monorepo.outcome == 'success'
