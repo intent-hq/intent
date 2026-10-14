@@ -112,6 +112,8 @@ Messages are fixed short descriptions; do not echo user payloads into errors.
 | -32602 | note-page-expired | Snapshot expired, evicted or unavailable after restart; preserve drafts and reacquire. Not entity deletion. |
 | -32005 | note-page-stale | Source revision or relevant annotation epoch changed; invalidate that view and reconcile. |
 | -32602 | note-page-budget | Request exceeds hard item/decoded/wire limits, or minimum valid response cannot fit requested budgets; no mutation. |
+| -32006 | note-index-preparing | The requested note's derived index is queued/building, or the preparation queue is full. `retryAfterMs: 1000`; retry only while this view is still wanted. No page or snapshot is admitted. |
+| -32006 | note-index-resource-limit | Conversion exceeded a resource budget. No automatic retry, partial publication or canonical mutation; preserve drafts. |
 | -32602 | not-found | Entity absent or invisible under existing visibility policy. Only this code invokes the deleted-entity flow. |
 
 ### Prepared desktop control errors
