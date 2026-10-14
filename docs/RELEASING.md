@@ -632,3 +632,15 @@ promotions of deleted prereleases are not preserved by this retention policy.
   named on stderr.
 - Commits merged after the release PR was cut ride the next release PR (e.g. intentd#517
   landed via follow-up release PR intentd#520).
+
+## Depot CI runners
+
+Repository automation and consumer checks run on Depot GitHub Actions runners.
+Enable the Depot GitHub integration for each component repository before switching
+its workflow labels. The migration keeps required check names and merge-queue
+triggers stable; submodule pins continue to advance automatically.
+
+Rust compiler caching uses Depot Cache through sccache’s WebDAV backend, using
+the short-lived configuration inherited from the runner. Enable automatic Depot
+Cache access in the Depot organization settings. Compiler hit statistics, rather
+than a restored Actions archive, are the evidence of reuse.
