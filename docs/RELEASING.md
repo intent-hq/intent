@@ -632,3 +632,21 @@ promotions of deleted prereleases are not preserved by this retention policy.
   named on stderr.
 - Commits merged after the release PR was cut ride the next release PR (e.g. intentd#517
   landed via follow-up release PR intentd#520).
+
+## Depot CI runners
+
+Repository automation and consumer checks run on Depot GitHub Actions runners.
+Routed component jobs prefer free self-hosted runners and burst to Depot. Native
+Intel desktop release and manual packaging builds stay on GitHub macos-latest-large.
+Enable the Depot GitHub integration for each component repository before switching
+its workflow labels. The migration keeps required check names and merge-queue
+triggers stable; submodule pins continue to advance automatically.
+
+Rust compiler caching uses Depot Cache through sccache’s WebDAV backend, using
+the short-lived configuration inherited from the runner. Enable automatic Depot
+Cache access in the Depot organization settings. Compiler hit statistics, rather
+than a restored Actions archive, are the evidence of reuse. The setup script
+installs checksum-verified sccache directly; no Rust cache actions remain.
+Self-hosted and GitHub Intel runners use the `DEPOT_TOKEN` Actions secret when
+available (otherwise they compile uncached). Local build configuration is in
+[CONTRIBUTING.md](../CONTRIBUTING.md#local-managed-rust-compiler-cache).

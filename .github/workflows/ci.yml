@@ -29,7 +29,7 @@ jobs:
   # runner — no tinybox routing. pull_request-only: it validates the PR
   # title, which merge_group does not carry; the gate accepts its skip there.
   pr-title:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     if: github.event_name == 'pull_request'
     steps:
       # Intermittent TLS failures reaching api.github.com can kill this action
@@ -75,7 +75,7 @@ jobs:
   # suites are also seconds-long and run directly on a GitHub-hosted runner —
   # no tinybox routing, no submodules needed.
   bridge-test:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
         with:
@@ -91,7 +91,7 @@ jobs:
   # Includes offline prerelease retention/deletion tests and a functional check
   # that their failures fail this target. No cleanup credentials or live scan.
   python-tests:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
         with:
@@ -105,7 +105,7 @@ jobs:
   # tested tree as the local reusable call; a failed diff/read must fail CI,
   # not turn into an intentional path skip.
   consumer-checks-prepare:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     outputs:
       selected: ${{ steps.select.outputs.selected }}
       intentd-sha: ${{ steps.select.outputs.intentd-sha }}
@@ -152,7 +152,7 @@ jobs:
   # monorepo file(s) to update; the upstream intentd / cloudlands-fe consumer
   # job runs the same script, so the two lists cannot drift.
   docs-check:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
         with:
@@ -179,7 +179,7 @@ jobs:
   # gitlink via the API with SUBMODULE_BUMP_TOKEN when present and skipped with
   # a warning otherwise (mirrors auto-bump-submodules.yml's ios handling).
   event-catalog-check:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
         with:
@@ -213,7 +213,7 @@ jobs:
   # public intentd submodule at its pin (shallow, the same way
   # event-catalog-check does); packages/ios stays `update = none`.
   shell-tests:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
         with:
@@ -224,6 +224,10 @@ jobs:
           bash scripts/auto-bump-submodules.test.sh
           bash scripts/bootstrap-dev-host.test.sh
           bash scripts/ci-gate.test.sh
+          python3 -S -B scripts/test_depot_runners.py
+          python3 -S -B scripts/test_ci_bash3.py
+          python3 -S -B scripts/test_setup_depot_sccache.py
+          python3 -S -B scripts/test_local_sccache.py
           bash scripts/consumer-checks.test.sh
           bash scripts/dev-ports.test.sh
           bash scripts/dev-sandbox.test.sh
@@ -241,7 +245,7 @@ jobs:
   # `make lint-shell` runs the pinned rule set from .shellcheckrc against the
   # `shellcheck` binary ubuntu-latest ships.
   shell-lint:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
         with:
@@ -249,25 +253,23 @@ jobs:
       - run: shellcheck --version
       - run: make lint-shell
 
-  # Stock macOS /bin/bash is 3.2, and two Bash-3-only regressions shipped
-  # (intent-hq/intent#4706, intent-hq/intent#4759) because the ubuntu leg above
-  # only has Bash 5 and the suites' real Bash 3 rerun is skipped there. Run the
-  # Bash-3-aware suites on macos-latest with REQUIRE_BASH3 set so a missing
-  # Bash 3 fails instead of skipping. `bash` on PATH may be a Homebrew Bash 5
-  # there; the suites then rerun under /bin/bash 3.2 via find_bash3.
+  # Keep stock macOS Bash 3.2 compatibility without renting a Mac for shell tests.
+  # A pinned Linux build runs the same suites; REQUIRE_BASH3 forbids silent skips.
   shell-tests-bash3:
-    runs-on: macos-latest
+    runs-on: depot-ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: false
       - run: git submodule update --init --depth=1 packages/intentd
+      - name: Install pinned Bash 3.2
+        run: bash scripts/install-ci-bash3.sh "$RUNNER_TEMP/bash3"
       - run: |
-          /bin/bash --version
+          "$BASH3_BIN" --version
           REQUIRE_BASH3=1 bash scripts/ci-gate.test.sh
           REQUIRE_BASH3=1 bash scripts/consumer-checks.test.sh
           REQUIRE_BASH3=1 bash scripts/docs-check.test.sh
-          REQUIRE_BASH3=1 DEV_SANDBOX_TEST_STARTUP_ONLY=1 /bin/bash scripts/dev-sandbox.test.sh
+          REQUIRE_BASH3=1 DEV_SANDBOX_TEST_STARTUP_ONLY=1 "$BASH3_BIN" scripts/dev-sandbox.test.sh
           REQUIRE_BASH3=1 bash scripts/lint-fixed-sleeps.test.sh
           REQUIRE_BASH3=1 bash scripts/rust-changed-tests.test.sh
           REQUIRE_BASH3=1 bash scripts/shipped-in.test.sh
@@ -275,7 +277,7 @@ jobs:
   # Agent-facing documentation links and root hygiene are checked without
   # dependencies or initialized submodules, directly on GitHub hosting.
   repo-hygiene:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
         with:
@@ -305,7 +307,7 @@ jobs:
   # ruleset-drift.yml also covers the rules daily, since a ruleset edit on
   # GitHub triggers no PR.
   ruleset-check:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
         with:
@@ -323,7 +325,7 @@ jobs:
   # pull_request-only: reads the PR body, labels and base_ref, none of which
   # exist on merge_group; the gate accepts its skip there.
   breaking-token:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v7
@@ -349,7 +351,7 @@ jobs:
   # pull_request-only: reads head_ref, base_ref and PR labels, none of which
   # exist on merge_group; the gate accepts its skip there.
   submodule-pins:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v7
@@ -370,7 +372,7 @@ jobs:
   # The issue-triage body parser (.github/scripts/issue-triage/) is also
   # zero-dependency Node with a fixture-driven node:test suite.
   triage-parser-test:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
         with:
@@ -394,7 +396,7 @@ jobs:
   # so keep both in step.
   gate:
     name: CI Gate
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     permissions: {}
     if: always()
     needs: [pr-title, bridge-test, python-tests, docs-check, event-catalog-check, shell-tests, shell-lint, shell-tests-bash3, repo-hygiene, ruleset-check, breaking-token, submodule-pins, triage-parser-test, consumer-checks-prepare, consumer-checks-exercise]

@@ -83,7 +83,7 @@ on:
 
 jobs:
   consumer-checks:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04-8
     timeout-minutes: 45
     permissions:
       contents: read
@@ -195,12 +195,12 @@ jobs:
           sudo apt-get install -y --no-install-recommends libssl-dev pkg-config
           corepack enable
 
-      - uses: Swatinem/rust-cache@v2
+      - name: Configure Depot managed compiler cache
         if: steps.monorepo.outcome == 'success'
-        with:
-          workspaces: packages/intentd -> target
-          cache-on-failure: false
-
+        shell: bash
+        env:
+          DEPOT_SCCACHE_TOKEN: ${{ secrets.DEPOT_TOKEN }}
+        run: python3 scripts/setup-depot-sccache.py
       - name: Install the selected renderer dependencies
         if: steps.monorepo.outcome == 'success'
         working-directory: packages/cloudlands-fe

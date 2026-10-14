@@ -27,7 +27,7 @@ permissions:
 
 jobs:
   ruleset-check:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 10
     steps:
       # Pinned to main: workflow_dispatch can be run on any branch, and the
