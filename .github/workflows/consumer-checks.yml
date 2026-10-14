@@ -197,14 +197,10 @@ jobs:
 
       - name: Configure Depot managed compiler cache
         if: steps.monorepo.outcome == 'success'
-        uses: ./.github/actions/depot-rust-cache
-
-      - uses: Swatinem/rust-cache@v2
-        if: steps.monorepo.outcome == 'success'
-        with:
-          workspaces: packages/intentd -> target
-          cache-on-failure: false
-
+        shell: bash
+        env:
+          DEPOT_SCCACHE_TOKEN: ${{ secrets.DEPOT_TOKEN }}
+        run: python3 scripts/setup-depot-sccache.py
       - name: Install the selected renderer dependencies
         if: steps.monorepo.outcome == 'success'
         working-directory: packages/cloudlands-fe

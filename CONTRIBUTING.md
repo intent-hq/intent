@@ -361,3 +361,19 @@ Please do not report security vulnerabilities through public issues — see
 
 By contributing, you agree that your contributions will be licensed under the
 [Apache License 2.0](LICENSE).
+
+### Local managed Rust compiler cache
+
+Install sccache 0.17 or newer and export your Depot cache settings in your shell:
+
+```bash
+export SCCACHE_WEBDAV_ENDPOINT=https://cache.depot.dev
+export SCCACHE_WEBDAV_TOKEN=<your-depot-organization-token>
+make build
+```
+
+`make build` uses the configured cache when `sccache` is on `PATH`; otherwise it
+builds normally. An explicitly set `RUSTC_WRAPPER` (including an empty value)
+takes precedence. Keep tokens out of tracked files. If changing the endpoint
+or credentials while a local sccache server is running, stop that server first
+with `sccache --stop-server` so the next build picks up the new environment.
