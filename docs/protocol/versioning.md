@@ -11,6 +11,14 @@ capability; documentation alone does not identify a carrying desktop release.
 **Documented version:** `14.0` — prepared active-only script and monitor lists; not a shipped-version claim.
 Other prepared extensions retain their independent support gates.
 
+**Startup readiness (additive, prepared).** The [startup contract](./startup-readiness.md)
+reserves `system.startupStatus` and numeric error `-32012`, with exact
+`startupStatus: 1` support detection. It does not make ordinary hello usable before
+Store or grant guest access to owner progress. Coordinate the additive minor at
+implementation; no shipped numeric version is claimed here. Current documented
+counts including this addition are **450 / 393 / 57** (dispatchable / router /
+fast path); the version-specific counts below describe their original deltas.
+
 **Version 14.0 — active-only script and monitor lists (breaking, prepared).**
 The [replacement contract](./methods/scripts.md#active-only-compact-lists-prepared-breaking-contract)
 adds script.get and scriptMonitor.get, optional bounded summary pages, and removes
