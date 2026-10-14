@@ -45,7 +45,9 @@ def install(directory):
     suffix = ".exe" if platform.system() == "Windows" else ""
     binary = directory / ("sccache" + suffix)
     directory.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory() as scratch:
+    # Keep downloads on the runner job volume; Windows system temp may be
+    # on a different, nearly full drive than RUNNER_TEMP.
+    with tempfile.TemporaryDirectory(dir=directory.parent) as scratch:
         archive = Path(scratch) / "sccache.tar.gz"
         urllib.request.urlretrieve(f"https://github.com/mozilla/sccache/releases/download/v{VERSION}/{stem}.tar.gz", archive)
         if hashlib.sha256(archive.read_bytes()).hexdigest() != checksum:

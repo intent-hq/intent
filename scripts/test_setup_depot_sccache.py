@@ -32,6 +32,16 @@ class ManagedCache(unittest.TestCase):
                 cache.install(Path(temp))
             self.assertFalse((Path(temp)/'sccache').exists())
 
+    def test_archive_uses_job_volume_instead_of_system_temp(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp) / 'job-cache'
+            def download(url, dest):
+                self.assertTrue(Path(dest).is_relative_to(directory.parent))
+                Path(dest).write_bytes(b'corrupt archive')
+            with patch.object(cache.urllib.request, 'urlretrieve', download):
+                with self.assertRaisesRegex(RuntimeError, 'checksum mismatch'):
+                    cache.install(directory)
+
     def test_long_compilation_does_not_expire_server(self):
         with tempfile.TemporaryDirectory() as temp:
             env = {'RUNNER_TEMP': temp, 'GITHUB_PATH': temp + '/path',
