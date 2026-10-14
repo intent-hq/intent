@@ -32,6 +32,17 @@ class ManagedCache(unittest.TestCase):
                 cache.install(Path(temp))
             self.assertFalse((Path(temp)/'sccache').exists())
 
+    def test_long_compilation_does_not_expire_server(self):
+        with tempfile.TemporaryDirectory() as temp:
+            env = {'RUNNER_TEMP': temp, 'GITHUB_PATH': temp + '/path',
+                   'GITHUB_ENV': temp + '/env', 'SCCACHE_WEBDAV_ENDPOINT': 'https://cache.depot.dev'}
+            with patch.dict(cache.os.environ, env, clear=True), patch.object(cache, 'install', return_value=Path(temp)):
+                cache.main()
+            values = dict(line.split('=', 1) for line in Path(env['GITHUB_ENV']).read_text().splitlines())
+            # sccache's idle clock counts requests, not active compiler time.
+            self.assertEqual(values['SCCACHE_IDLE_TIMEOUT'], '0')
+            self.assertGreater(int(values['SCCACHE_SERVER_PORT']), 0)
+
     def test_no_rust_cache_actions(self):
         for path in (ROOT/'.github').rglob('*.yml'):
             self.assertNotIn('Swatinem/rust-cache', path.read_text(), str(path))

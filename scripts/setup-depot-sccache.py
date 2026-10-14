@@ -75,7 +75,10 @@ def main():
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         values["SCCACHE_SERVER_PORT"] = str(listener.getsockname()[1])
-    values["SCCACHE_IDLE_TIMEOUT"] = "60"
+    # The idle timer measures time since the last request, even while rustc
+    # is compiling. Long crates must not lose the server mid-request.
+    # GitHub runners clean up job-owned processes at the end of the job.
+    values["SCCACHE_IDLE_TIMEOUT"] = "0"
     with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
         for key, value in values.items():
             if "\n" in value or "\r" in value:
