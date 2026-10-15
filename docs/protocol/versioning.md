@@ -8,15 +8,41 @@ capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `14.0` — prepared active-only script and monitor lists; not a shipped-version claim.
+**Documented version:** `14.1` — prepared scoped repository pages and GitLab child Git policy; not a shipped-version claim.
 Other prepared extensions retain their independent support gates.
+
+**Version 14.1 — scoped repository pages and GitLab child Git policy (additive, prepared).**
+This extension builds on protocol 14.0 without replacing its script and monitor
+list semantics. The [scoped resource-read contract](./methods/repository-resources.md#prepared-project-pages-and-discussions)
+adds six operations: `sourceControl.read.captureScoped`,
+`sourceControl.read.detailScoped`, `sourceControl.read.releaseScoped`,
+`sourceControl.read.resolveKnownRepository`, `sourceControl.read.list` and
+`sourceControl.read.discussions`. The [owner-only child Git policy](./methods/settings.md#prepared-gitlab-child-git-credential-policy)
+adds `sourceControl.gitlab.childGit.get` and `sourceControl.gitlab.childGit.set`.
+
+Require exactly `repositoryResourcePages: 1` or `gitlabChildGitPolicy: 1`, as
+appropriate, on the original physical connection. The existing
+`repositoryResourceRead: 1` and workspace-only capture/detail/release contract
+remain unchanged. Neither protocol 14.0 nor the legacy read capability implies
+support for the new operations; protocol 14.1 alone is not an authority grant.
+Scoped reads retain their original caller, account, full instance and lifetime,
+including the private invalidation/retirement feed. Child Git policy retains its
+owner-only binding and defaults; native Git remains independent of that policy.
+
+These eight router operations extend the documented surface to **458 / 401 / 57**
+(dispatchable / router / fast path), including other independently prepared
+additions. The private `sourceControl.read.invalidated` notification shares the
+original resource-read retirement feed; it is not a global event subscription.
+Catalog inclusion does not identify a carrying release, advance component pins
+or enable either capability on an older daemon. The existing 14.0 script and
+monitor semantics and their separate rollout obligations remain unchanged.
 
 **Startup readiness (additive, prepared).** The [startup contract](./startup-readiness.md)
 reserves `system.startupStatus` and numeric error `-32012`, with exact
 `startupStatus: 1` support detection. It does not make ordinary hello usable before
 Store or grant guest access to owner progress. Coordinate the additive minor at
 implementation; no shipped numeric version is claimed here. Current documented
-counts including this addition are **450 / 393 / 57** (dispatchable / router /
+counts including this addition are **458 / 401 / 57** (dispatchable / router /
 fast path); the version-specific counts below describe their original deltas.
 
 **Version 14.0 — active-only script and monitor lists (breaking, prepared).**

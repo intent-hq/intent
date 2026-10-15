@@ -50,6 +50,34 @@ it does not claim the frontend already implements them.
    revision, selection or account identity. Server entry/final validation remains
    authoritative regardless of notification timing.
 
+#### Scoped repository pages (prepared)
+
+The [prepared resource-page contract](methods/repository-resources.md#prepared-project-pages-and-discussions)
+keeps the original physical connection, caller context and read lifetime for
+capture, detail, every page and release. Require `repositoryResourcePages: 1`;
+the unchanged detail-only capability does not imply these operations.
+
+Choose the actual context before capture: the explicit authorized workspace, or
+the durable Host Owner for a host view without a workspace. Never borrow a
+workspace, convert host membership into ownership, or replace the context during
+pagination. Install the original connection's lifecycle handling before capture
+and reconcile events across the await before using its result. Keep the same
+conservative request-start deadline; responses and page cursors do not renew it.
+
+Bind each pending page to its full instance/project, resource kind, exact query,
+page size and cursor. A query change starts a distinct pager. Preserve empty
+pages with continuation and canonical note/thread identities; an unavailable or
+omitted section is not a successful empty collection. Fence late results after
+denial, disposal or account/connection replacement. Success in a summary or
+discussion cannot refresh an older detail observation.
+
+The [child Git policy control](methods/settings.md#prepared-gitlab-child-git-credential-policy)
+has separate owner authority and capability. Retain its complete original
+binding across an explicit toggle; unavailable, pending and failed state is not
+off. Discard stale read/write results after a full-instance/account transition
+without automatically applying the old choice to the replacement. These are
+client obligations, not a claim of deployed frontend or helper support.
+
 #### Repository selection lifecycle
 
 The [repository selection contract](methods/workspace.md#repository-selection)
