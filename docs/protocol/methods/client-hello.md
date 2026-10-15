@@ -518,3 +518,14 @@ or model-supplied parameters. Reconnect/replacement invalidates cached support.
 The [planned recipient/output policy](pr.md#planned-qualified-review-monitoring-not-yet-advertised)
 defines unchanged legacy GitHub projection, qualified suppression, direct-call errors,
 and whole-envelope wake/history replay gating. Neither side advertises support yet.
+
+### Generic event stream recovery capability
+
+**Prepared additive contract.** `server.capabilities.eventStreamRecovery: 1`
+(exact integer) advertises the complete [generic loss contract](../event-stream-recovery.md).
+It also guarantees `events.fence` raw-bus/bulk-lane boundaries for recovery reads.
+Each recovering `events.subscribe` lease must separately request and acknowledge
+`lossRecovery: 1`. Missing/unknown capability or an old request retains legacy
+shapes and reconnect/explicit-refresh fallback; discovery alone does not opt in.
+The capability does not promise durable replay, typed-channel recovery or product
+readiness. It is advertised only after the transport and membership-loss cases pass.

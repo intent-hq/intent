@@ -2,7 +2,7 @@
 
 ## 6. Events & Subscriptions
 
-Live event streaming is the **canonical** way a thin client stays in sync. It uses two server-handled methods (the plural `events.` prefix) plus a server-pushed notification.
+Live event streaming is the **canonical** way a thin client stays in sync. It uses two server-handled methods (the plural `events.` prefix) plus a server-pushed notification. The prepared negotiated loss extension adds `events.fence` and `events.lost`.
 
 ### 6.1 `events.subscribe`
 
@@ -18,6 +18,7 @@ Params:
 
 - `eventTypes` (req) — **non-empty array** of event-type strings. Empty/missing → error(`-32602` over the wire). Supports exact types (`note:updated`) and `:*`** wildcards**(`agent:*`, `file:*`) — see §6.4.
 - `workspaceId?` — scopes delivery to one workspace. Omit to receive matching events across allworkspaces the connection can see.
+- `lossRecovery?` — prepared opt-in integer `1`, only with `eventStreamRecovery: 1`; the ack echoes `lossRecovery: 1`. See the [loss contract](event-stream-recovery.md) for validation, ordering and legacy fallback.
 - `replaceGroup?` — if set, any existing subscription from the **same connection** with the same`replaceGroup` is removed first (useful for "switch the active workspace" without leaking subs).
 
 A connection may hold **multiple** subscriptions. Each is identified by a server-assigned`subscriptionId` (`ws-sub-<n>`). Subscriptions are **per-connection** and are dropped on disconnect.
@@ -91,6 +92,18 @@ existing controls; groups do not grant separate edit/remove/send rights. The
 aggregate fields remain available for older clients. Field presence enables
 grouped display independently of submission correlation. See the
 [delivery, persistence and edit contract](./methods/agents.md#queued-delivery-groups-prepared-additive-extension).
+
+#### Generic stream loss (prepared)
+
+The negotiated `events.lost` notification conservatively invalidates an admitted
+generic subscription after bus overflow, even without another matching event.
+It carries `{ subscriptionId, generation, scope: { workspaceId } }`; generation is
+an exact decimal u64 string, and unscoped `workspaceId` is `null`. See the
+[complete loss, membership and recovery contract](event-stream-recovery.md).
+This is socket-private control, not a domain event or replay guarantee.
+The same capability requires `events.fence { subscriptionIds }`, whose bulk-lane
+reply brackets unversioned recovery reads after the named receivers drain their
+captured bus boundaries. See the [causal boundary](event-stream-recovery.md#causal-recovery-boundary-eventsfence).
 
 #### Private repository context retirement
 

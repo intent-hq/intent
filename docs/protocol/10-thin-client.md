@@ -277,6 +277,16 @@ the project's real default; it does not request the source fork or merge-request
 head. An unknown instance must not fall back to GitHub or another configured
 account. Preserve the existing GitHub and local-Git paths independently.
 
+### Generic event loss recovery (prepared)
+
+The [negotiated loss contract](event-stream-recovery.md) defines subscription
+admission, ack races, authorization and ABA fences, one active plus one trailing
+read per resource, minimum pacing and finite retries. Recover current authorized
+state through existing read owners; preserve newer pushes and independently
+recovered snapshot channels. Inactive resources refresh on next demand. Old
+daemons retain reconnect/explicit-refresh fallback; no steady-state polling or
+automatic recovery of unreported losses is implied.
+
 ### 10.3 Optimistic UI
 
 For mutations, optimistically apply locally, send the request, and reconcile when (a) the methodresult returns and (b) the corresponding `events.event` arrives. Roll back on error. Use the stable`messageId` you pass to `agent.sendMessage` (and the echoed `agent:user-message:sent` event) tomatch your optimistic message against the canonical one and avoid duplicates across clients.

@@ -29,7 +29,7 @@ Scoped reads retain their original caller, account, full instance and lifetime,
 including the private invalidation/retirement feed. Child Git policy retains its
 owner-only binding and defaults; native Git remains independent of that policy.
 
-These eight router operations extend the documented surface to **458 / 401 / 57**
+These eight router operations extend the documented surface to **459 / 401 / 58**
 (dispatchable / router / fast path), including other independently prepared
 additions. The private `sourceControl.read.invalidated` notification shares the
 original resource-read retirement feed; it is not a global event subscription.
@@ -42,7 +42,7 @@ reserves `system.startupStatus` and numeric error `-32012`, with exact
 `startupStatus: 1` support detection. It does not make ordinary hello usable before
 Store or grant guest access to owner progress. Coordinate the additive minor at
 implementation; no shipped numeric version is claimed here. Current documented
-counts including this addition are **458 / 401 / 57** (dispatchable / router /
+counts including this addition are **459 / 401 / 58** (dispatchable / router /
 fast path); the version-specific counts below describe their original deltas.
 
 **Version 14.0 — active-only script and monitor lists (breaking, prepared).**
@@ -71,6 +71,15 @@ unshipped summary/history reservations need no production removal. Daemon before
 frontend merge, coordinated carrying release and frontend major guard updates
 are required. An older daemon remains unsupported for these new list features;
 known-ID status/output may still be used. This draft grants no merge permission.
+
+**Prepared generic stream recovery (independently gated additive extension).**
+[`eventStreamRecovery: 1`](./event-stream-recovery.md) adds an opt-in/ack to
+`events.subscribe`, the socket-private `events.lost` notification and the
+`events.fence` fast-path method. The prepared surface is **459 / 401 / 58**
+(dispatchable / router / fast path); domain event catalog and current advertised
+protocol version are unchanged.
+Exact capability and lease negotiation gate adoption, including bounded recovery
+and fail-closed membership watcher loss; older peers retain their legacy shapes.
 
 **Version 13.10 — cancellable note deletion (additive, prepared).**
 The [grace deletion contract](./note-delete-grace.md) adds `note.deleteSchedule`,
