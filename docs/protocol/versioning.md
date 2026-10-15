@@ -8,16 +8,29 @@ capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `14.0` — prepared active-only script and monitor lists; not a shipped-version claim.
+**Documented version:** `15.0` — legacy workspace import removal; not a shipped-version claim.
 Other prepared extensions retain their independent support gates.
+
+**Version 15.0 — legacy workspace import removal (breaking).**
+Removes the UDS-only `system.importLegacy` fast-path method. Calls on either UDS
+or WSS now return `-32601 Method not found`. Also removes `intentd import`,
+`intentd import-legacy`, first-boot discovery of legacy Electron workspaces, and
+the frontend's Legacy Import settings. Already imported daemon workspaces remain
+available; source directories and persisted import markers are not deleted.
+The 9.0 removal and 9.1 restoration entries below remain historical records.
+Protocol 14.1 added the startup readiness observations described below.
+The documented surface, including prepared additions, has **450 / 393 / 57**
+dispatchable / router / fast-path methods. Follow [issue #4082](https://github.com/intent-hq/intent/issues/4082)'s
+removal order: frontend callers first, daemon removal second, then these docs
+after the automatic pin advance. The frontend's registered-root major guard
+must accept 15 before the daemon changes its advertised protocol.
 
 **Startup readiness (additive, prepared).** The [startup contract](./startup-readiness.md)
 reserves `system.startupStatus` and numeric error `-32012`, with exact
 `startupStatus: 1` support detection. It does not make ordinary hello usable before
 Store or grant guest access to owner progress. Coordinate the additive minor at
-implementation; no shipped numeric version is claimed here. Current documented
-counts including this addition are **451 / 393 / 58** (dispatchable / router /
-fast path); the version-specific counts below describe their original deltas.
+implementation; no shipped numeric version is claimed here. Before the legacy-import removal, counts including this addition were
+**451 / 393 / 58** (dispatchable / router / fast path); the version-specific counts below describe their original deltas.
 
 **Version 14.0 — active-only script and monitor lists (breaking, prepared).**
 The [replacement contract](./methods/scripts.md#active-only-compact-lists-prepared-breaking-contract)
