@@ -3,21 +3,77 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 const read = path => readFile(new URL(path, import.meta.url), 'utf8');
-test('grace deletion reserves distinct guarded methods without changing immediate deletion', async () => {
-  const notes = await read('../../methods/notes-tasks.md');
+function assertGraceDocumentation({ notes, docs, versioning, catalog, events }) {
   for (const method of ['deleteSchedule', 'deleteCancel', 'deleteStatus'])
     assert.ok(notes.includes(`| note.${method} `));
   assert.ok(notes.includes('| note.delete | noteId (req), expectedVersion?: int |'));
-  const docs = await read('../../note-delete-grace.md');
   for (const word of ['noteDeleteGrace: 1', 'OUTCOME_UNKNOWN', 'WireCredential',
     'CURRENT incarnation', 'no NEW operation', '524288', '300000', '60000']) assert.ok(docs.includes(word), word);
-  const versioning = await read('../../versioning.md');
-  assert.match(versioning, /\*\*Documented version:\*\* `14\.0`/);
+  // Check the note reservation, not the global version/counts of unrelated extensions.
+  assert.match(versioning, /^\*\*Version 13\.10 — cancellable note deletion \(additive, prepared\)\.\*\*$/m);
+  assert.equal((versioning.match(/\*\*Version 13\.10 —/g) ?? []).length, 1);
   assert.ok(versioning.includes('**Version 13.9 —'));
-  const catalog = await read('../../05-method-catalog.md');
-  assert.ok(catalog.includes('**450 dispatchable method names**'));
-  const events = JSON.parse(await read('../../event-types.json'));
+  const section = versioning.split('**Version 13.10 —')[1].split('**Version 13.9 —')[0];
+  assert.match(section, /`noteDeleteGrace: 1`/);
+  assert.match(section, /447 \/ 391 \/ 56/);
+  const row = catalog.split('\n').find(line => line.startsWith('| note |'));
+  const methods = row.split('|')[3].trim().split(', ');
+  for (const method of ['deleteSchedule', 'deleteCancel', 'deleteStatus']) {
+    assert.ok(methods.includes(method), method);
+    assert.ok(section.includes(`\`note.${method}\``), method);
+  }
   assert.ok(events.types.includes('note:delete-operation'));
+}
+
+async function graceDocumentation() {
+  return {
+    notes: await read('../../methods/notes-tasks.md'),
+    docs: await read('../../note-delete-grace.md'),
+    versioning: await read('../../versioning.md'),
+    catalog: await read('../../05-method-catalog.md'),
+    events: JSON.parse(await read('../../event-types.json')),
+  };
+}
+
+test('grace deletion reserves distinct guarded methods without changing immediate deletion', async () => {
+  assertGraceDocumentation(await graceDocumentation());
+});
+
+test('grace reservation survives unrelated version and catalog additions', async () => {
+  const input = await graceDocumentation();
+  assertGraceDocumentation({ ...input,
+    versioning: input.versioning.replace(/\*\*Documented version:\*\* `\d+\.\d+`/, '**Documented version:** `15.0`'),
+    catalog: input.catalog.replace(/\*\*\d+ dispatchable method names\*\*/, '**999 dispatchable method names**'),
+  });
+});
+
+test('grace reservation still rejects lost methods, gates, concurrency guards and event', async () => {
+  const input = await graceDocumentation();
+  for (const method of ['deleteSchedule', 'deleteCancel', 'deleteStatus']) {
+    assert.throws(() => assertGraceDocumentation({ ...input,
+      catalog: input.catalog.replace(`${method}, `, ''),
+    }), { code: 'ERR_ASSERTION' }, method);
+    assert.throws(() => assertGraceDocumentation({ ...input,
+      notes: input.notes.replace(`| note.${method} `, '| removed '),
+    }), { code: 'ERR_ASSERTION' }, method);
+  }
+  for (const [field, before, after] of [
+    ['versioning', '**Version 13.10 —', '**Version 13.99 —'],
+    ['versioning', '**Version 13.10 —', '**Version 13.10 — duplicate\n**Version 13.10 —'],
+    ['versioning', '`noteDeleteGrace: 1`', '`noteDeleteGrace: 2`'],
+    ['versioning', '447 / 391 / 56', '448 / 392 / 56'],
+    ['notes', '| note.delete | noteId (req), expectedVersion?: int |', '| note.delete | noteId (req) |'],
+    ['docs', 'no NEW operation', 'retry automatically'],
+    ['docs', 'CURRENT incarnation', 'any incarnation'],
+  ]) {
+    assert.ok(input[field].includes(before), before);
+    assert.throws(() => assertGraceDocumentation({ ...input,
+      [field]: input[field].replace(before, after),
+    }), { code: 'ERR_ASSERTION' }, before);
+  }
+  assert.throws(() => assertGraceDocumentation({ ...input,
+    events: { types: input.events.types.filter(type => type !== 'note:delete-operation') },
+  }), { code: 'ERR_ASSERTION' });
 });
 
 import { LIMITS, graceSupported, assertRequest, assertReceipt, assertResult, assertEvent,
