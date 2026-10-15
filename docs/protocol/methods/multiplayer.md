@@ -335,7 +335,11 @@ the complete committed message. The retry key is scoped to
 `(workspaceId, authenticated principalId, messageId)`: repeated sends return the
 original immutable row rather than inserting another message. A client retries
 an uncertain send with the same key and body. New intentional sends use new
-keys. History survives daemon restarts and client reconnects.
+keys. Reusing a key with different valid text still returns the original body
+and author snapshot; it does not edit the row or publish another event. History
+survives daemon restarts and client reconnects. The discussion row is the source
+of truth; the event uses the existing durable event bus and publication failures
+do not roll back an already committed message.
 
 Clients subscribe to workspace events before reading history, merge by message
 `id`, and sort by `sequence`. A live event, a send reply, and a history page may
