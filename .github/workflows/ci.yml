@@ -25,11 +25,19 @@ permissions:
   pull-requests: read
 
 jobs:
-  # pr-title is seconds-long, so it runs directly on a GitHub-hosted
-  # runner — no tinybox routing. pull_request-only: it validates the PR
+  runner-route:
+    uses: ./.github/workflows/runner-route.yml
+    permissions:
+      contents: read
+      actions: read
+    secrets:
+      CI_QUEUE_READ_TOKEN: ${{ secrets.CI_QUEUE_READ_TOKEN }}
+
+  # pull_request-only: this validates the PR
   # title, which merge_group does not carry; the gate accepts its skip there.
   pr-title:
-    runs-on: depot-ubuntu-24.04
+    needs: [runner-route]
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
     if: github.event_name == 'pull_request'
     steps:
       # Intermittent TLS failures reaching api.github.com can kill this action
@@ -72,10 +80,10 @@ jobs:
 
   # The UDS→WS bridge shim (scripts/uds-ws-bridge.mjs) and the UDS JSON-RPC
   # probe (scripts/uds-rpc.mjs) are zero-dependency Node, so their node:test
-  # suites are also seconds-long and run directly on a GitHub-hosted runner —
-  # no tinybox routing, no submodules needed.
+  # suites need no submodules and use the shared runner routing policy.
   bridge-test:
-    runs-on: depot-ubuntu-24.04
+    needs: [runner-route]
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -91,11 +99,15 @@ jobs:
   # Includes offline prerelease retention/deletion tests and a functional check
   # that their failures fail this target. No cleanup credentials or live scan.
   python-tests:
-    runs-on: depot-ubuntu-24.04
+    needs: [runner-route]
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
@@ -105,7 +117,8 @@ jobs:
   # tested tree as the local reusable call; a failed diff/read must fail CI,
   # not turn into an intentional path skip.
   consumer-checks-prepare:
-    runs-on: depot-ubuntu-24.04
+    needs: [runner-route]
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
     outputs:
       selected: ${{ steps.select.outputs.selected }}
       intentd-sha: ${{ steps.select.outputs.intentd-sha }}
@@ -128,6 +141,13 @@ jobs:
   consumer-checks-exercise:
     needs: consumer-checks-prepare
     if: needs.consumer-checks-prepare.outputs.selected == 'true'
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    secrets:
+      CI_QUEUE_READ_TOKEN: ${{ secrets.CI_QUEUE_READ_TOKEN }}
+      DEPOT_TOKEN: ${{ secrets.DEPOT_TOKEN }}
     uses: ./.github/workflows/consumer-checks.yml
     with:
       component: intentd
@@ -152,7 +172,8 @@ jobs:
   # monorepo file(s) to update; the upstream intentd / cloudlands-fe consumer
   # job runs the same script, so the two lists cannot drift.
   docs-check:
-    runs-on: depot-ubuntu-24.04
+    needs: [runner-route]
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -179,7 +200,8 @@ jobs:
   # gitlink via the API with SUBMODULE_BUMP_TOKEN when present and skipped with
   # a warning otherwise (mirrors auto-bump-submodules.yml's ios handling).
   event-catalog-check:
-    runs-on: depot-ubuntu-24.04
+    needs: [runner-route]
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -213,11 +235,18 @@ jobs:
   # public intentd submodule at its pin (shallow, the same way
   # event-catalog-check does); packages/ios stays `update = none`.
   shell-tests:
-    runs-on: depot-ubuntu-24.04
+    needs: [runner-route]
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
       - run: git submodule update --init --depth=1 packages/intentd
       - run: |
           echo "shell tests: host-specific daemon and pnpm behavior is stubbed"
@@ -243,25 +272,53 @@ jobs:
   # shellcheck over scripts/*.sh. Quoting and Bash-3 portability slips in the
   # repo scripts reached main because nothing linted them (intent-hq/intent#5638);
   # `make lint-shell` runs the pinned rule set from .shellcheckrc against the
-  # `shellcheck` binary ubuntu-latest ships.
+  # ShellCheck binary, installed explicitly when absent.
   shell-lint:
-    runs-on: depot-ubuntu-24.04
+    needs: [runner-route]
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: false
+      - name: Install ShellCheck when absent
+        run: |
+          if ! command -v shellcheck >/dev/null; then
+            for attempt in 1 2 3; do
+              if sudo -n apt-get -o DPkg::Lock::Timeout=300 update -qq; then break; fi
+              if [ "$attempt" -eq 3 ]; then exit 1; fi
+              sleep $((attempt * 15))
+            done
+            sudo -n apt-get -o DPkg::Lock::Timeout=300 install -y -qq shellcheck
+          fi
       - run: shellcheck --version
       - run: make lint-shell
 
   # Keep stock macOS Bash 3.2 compatibility without renting a Mac for shell tests.
   # A pinned Linux build runs the same suites; REQUIRE_BASH3 forbids silent skips.
   shell-tests-bash3:
-    runs-on: depot-ubuntu-24.04
+    needs: [runner-route]
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
       - run: git submodule update --init --depth=1 packages/intentd
+      - name: Install Bash build prerequisites when absent
+        run: |
+          if ! command -v yacc >/dev/null || ! command -v gcc >/dev/null; then
+            for attempt in 1 2 3; do
+              if sudo -n apt-get -o DPkg::Lock::Timeout=300 update -qq; then break; fi
+              if [ "$attempt" -eq 3 ]; then exit 1; fi
+              sleep $((attempt * 15))
+            done
+            sudo -n apt-get -o DPkg::Lock::Timeout=300 install -y -qq build-essential bison
+          fi
       - name: Install pinned Bash 3.2
         run: bash scripts/install-ci-bash3.sh "$RUNNER_TEMP/bash3"
       - run: |
@@ -275,9 +332,10 @@ jobs:
           REQUIRE_BASH3=1 bash scripts/shipped-in.test.sh
 
   # Agent-facing documentation links and root hygiene are checked without
-  # dependencies or initialized submodules, directly on GitHub hosting.
+  # dependencies or initialized submodules.
   repo-hygiene:
-    runs-on: depot-ubuntu-24.04
+    needs: [runner-route]
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -307,7 +365,8 @@ jobs:
   # ruleset-drift.yml also covers the rules daily, since a ruleset edit on
   # GitHub triggers no PR.
   ruleset-check:
-    runs-on: depot-ubuntu-24.04
+    needs: [runner-route]
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -325,7 +384,8 @@ jobs:
   # pull_request-only: reads the PR body, labels and base_ref, none of which
   # exist on merge_group; the gate accepts its skip there.
   breaking-token:
-    runs-on: depot-ubuntu-24.04
+    needs: [runner-route]
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v7
@@ -351,7 +411,8 @@ jobs:
   # pull_request-only: reads head_ref, base_ref and PR labels, none of which
   # exist on merge_group; the gate accepts its skip there.
   submodule-pins:
-    runs-on: depot-ubuntu-24.04
+    needs: [runner-route]
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v7
@@ -372,7 +433,8 @@ jobs:
   # The issue-triage body parser (.github/scripts/issue-triage/) is also
   # zero-dependency Node with a fixture-driven node:test suite.
   triage-parser-test:
-    runs-on: depot-ubuntu-24.04
+    needs: [runner-route]
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -396,10 +458,10 @@ jobs:
   # so keep both in step.
   gate:
     name: CI Gate
-    runs-on: depot-ubuntu-24.04
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
     permissions: {}
     if: always()
-    needs: [pr-title, bridge-test, python-tests, docs-check, event-catalog-check, shell-tests, shell-lint, shell-tests-bash3, repo-hygiene, ruleset-check, breaking-token, submodule-pins, triage-parser-test, consumer-checks-prepare, consumer-checks-exercise]
+    needs: [pr-title, bridge-test, python-tests, docs-check, event-catalog-check, shell-tests, shell-lint, shell-tests-bash3, repo-hygiene, ruleset-check, breaking-token, submodule-pins, triage-parser-test, consumer-checks-prepare, consumer-checks-exercise, runner-route]
     steps:
       - uses: actions/checkout@v7
         with:

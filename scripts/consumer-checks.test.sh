@@ -315,15 +315,17 @@ grep -qF '          repository: ${{ inputs.self-test && github.repository || job
   fail "monorepo checkout must use the caller locally and workflow repository downstream:"$'\n'"$checkout_block"
 
 # Workflow contract the callers rely on: a `workflow_call` trigger and nothing
-# else, `contents: read` as the only permission (the callers pass no secrets
-# and the job never writes), and the fail-soft monorepo checkout — the
+# else, `contents: read` for the consumer job (only the routing probe
+# adds Actions read), and the fail-soft monorepo checkout — the
 # checkout continues on error, a guard step warns when it did not succeed,
 # and every later step is gated on its success so a monorepo outage yields a
 # green job with a ::warning:: instead of a red caller PR.
 triggers=$(awk '/^on:/ { on = 1; next } /^jobs:/ { on = 0 } on && /^  [a-z_]+:/ { sub(/^  /, ""); sub(/:.*/, ""); print }' "$workflow")
 [ "$triggers" = "workflow_call" ] || fail "consumer-checks.yml must be triggered by workflow_call only; found: $triggers"
 permissions=$(awk '
-  /^[[:blank:]]*permissions:/ {
+  /^  consumer-checks:/ { consumer = 1; next }
+  /^  [a-z-]+:/ { consumer = 0 }
+  consumer && /^    permissions:/ {
     indent = match($0, /[^ ]/)
     in_block = 1
     if ($0 !~ /permissions:[[:blank:]]*$/) print "inline " $0
@@ -334,7 +336,7 @@ permissions=$(awk '
   }
 ' "$workflow")
 [ "$permissions" = "contents: read" ] ||
-  fail "consumer-checks.yml must grant exactly 'permissions: contents: read'; found:"$'\n'"${permissions:-<none>}"
+  fail "consumer job must grant exactly 'permissions: contents: read'; found:"$'\n'"${permissions:-<none>}"
 grep -q '^        continue-on-error: true$' <<<"$checkout_block" ||
   fail "monorepo checkout step lost continue-on-error: true (the job must stay green when the monorepo cannot be checked out):"$'\n'"$checkout_block"
 guard_name='Skip when the monorepo checkout failed'

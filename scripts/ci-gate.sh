@@ -30,7 +30,7 @@
 
 set -euo pipefail
 
-always_on_jobs="bridge-test python-tests docs-check event-catalog-check shell-tests shell-lint shell-tests-bash3 repo-hygiene ruleset-check triage-parser-test consumer-checks-prepare"
+always_on_jobs="runner-route bridge-test python-tests docs-check event-catalog-check shell-tests shell-lint shell-tests-bash3 repo-hygiene ruleset-check triage-parser-test consumer-checks-prepare"
 pull_request_only_jobs="pr-title breaking-token submodule-pins"
 path_selected_jobs="consumer-checks-exercise"
 
