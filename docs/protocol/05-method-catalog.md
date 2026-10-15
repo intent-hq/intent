@@ -58,7 +58,7 @@ The prepared [generic stream recovery contract](./event-stream-recovery.md) adds
 one fast-path method, `events.fence`, under `eventStreamRecovery: 1`. Its bulk-lane
 response brackets recovery reads with actual event-delivery boundaries.
 
-The prepared [protocol 14.1 scoped resource reads](./methods/repository-resources.md#prepared-project-pages-and-discussions)
+The prepared [protocol 14.2 scoped resource reads](./methods/repository-resources.md#prepared-project-pages-and-discussions)
 add six router methods and one socket-private invalidation notification. The
 [owner-only child Git policy](./methods/settings.md#prepared-gitlab-child-git-credential-policy)
 adds two router methods. Require `repositoryResourcePages: 1` and

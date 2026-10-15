@@ -268,7 +268,7 @@ server's final reply-admission checks. Dispose pending UI consumers on retiremen
 and reject late success or error from an old scope; reconnect cannot adopt it.
 See the [client lifecycle](methods/repository-resources.md#client-lifecycle).
 
-#### Private resource-read invalidation (14.1)
+#### Private resource-read invalidation (14.2)
 
 The scoped page contract adds `sourceControl.read.invalidated` on the same
 original physical connection. Its four parameters are `readLifetimeIds`,

@@ -481,7 +481,7 @@ direct routes, and cannot grant access or revoke saved memberships when toggled.
 
 ### Prepared GitLab child Git credential policy
 
-The prepared [protocol 14.1](../versioning.md) per-connection GitLab policy
+The prepared [protocol 14.2](../versioning.md) per-connection GitLab policy
 controls use of Intent's managed Git credential helper by agents and terminals.
 Only the connected host's owner may
 change it; member access to repositories, checkout or workspace operations does
