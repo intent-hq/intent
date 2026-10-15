@@ -636,7 +636,8 @@ class CallbackValidatorTests(unittest.TestCase):
         shutil.copy(self.fixture.descriptor_path, config / "claude-callback-adapter.json")
         for name in ("delta.patch", "files.json"):
             shutil.copy(self.root / name, config)
-        self.node.write_text(f"#!{sys.executable}\nprint('v24.21.0')\n")
+        # The verifier sanitizes loader paths; the version stub needs no Python runtime.
+        self.node.write_text("#!/bin/sh\nprintf '%s\\n' 'v24.21.0'\n")
         self.node.chmod(0o755)
         env = {**os.environ, "PATH": str(self.root) + os.pathsep + os.environ["PATH"]}
         command = [sys.executable, "-S", "-B", str(SCRIPT),
@@ -644,7 +645,7 @@ class CallbackValidatorTests(unittest.TestCase):
         valid = subprocess.run(command, env=env, capture_output=True, text=True, timeout=10)
         self.assertEqual(valid.returncode, 0, valid.stderr)
         self.assertIn('"event": "node-tool"', valid.stderr)
-        self.node.write_text(f"#!{sys.executable}\nprint('v0.0.0')\n")
+        self.node.write_text("#!/bin/sh\nprintf '%s\\n' 'v0.0.0'\n")
         invalid = subprocess.run(command, env=env, capture_output=True, text=True, timeout=10)
         self.assertEqual(invalid.returncode, 2, invalid.stderr)
         self.assertIn("Node version mismatch", invalid.stderr)
@@ -674,7 +675,7 @@ class CallbackValidatorTests(unittest.TestCase):
         source.parent.mkdir(parents=True)
         source.write_text("// baseline\n")
         (self.component / "Cargo.toml").write_text("[workspace]\n")
-        self.node.write_text(f"#!{sys.executable}\nprint('v24.21.0')\n")
+        self.node.write_text("#!/bin/sh\nprintf '%s\\n' 'v24.21.0'\n")
         self.node.chmod(0o755)
         env = {**os.environ, "PATH": str(self.root) + os.pathsep + os.environ["PATH"],
                "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
