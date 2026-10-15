@@ -8,10 +8,10 @@ capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `14.1` — prepared workspace discussions; not a shipped-version claim.
+**Documented version:** `14.2` — prepared workspace discussions; not a shipped-version claim.
 Other prepared extensions retain their independent support gates.
 
-**Version 14.1 — workspace discussions (additive, prepared).**
+**Version 14.2 — workspace discussions (additive, prepared).**
 [Workspace discussions](./methods/multiplayer.md#554-workspace-discussions) add
 `discussion.list`, `discussion.send`, and `discussion:message` for one persisted
 human conversation per workspace. The two router methods use authenticated
@@ -21,11 +21,11 @@ documented surface, including the prepared startup and generic stream recovery a
 **453 / 395 / 58** (dispatchable / router / fast path). This reservation does not
 identify a carrying release or change independent capability gates.
 
-**Startup readiness (additive, prepared).** The [startup contract](./startup-readiness.md)
-reserves `system.startupStatus` and numeric error `-32012`, with exact
+**Version 14.1 — startup readiness (additive).** The [startup contract](./startup-readiness.md)
+adds `system.startupStatus` and numeric error `-32012`, with exact
 `startupStatus: 1` support detection. It does not make ordinary hello usable before
-Store or grant guest access to owner progress. Coordinate the additive minor at
-implementation; no shipped numeric version is claimed here. At this reservation,
+Store or grant guest access to owner progress. The daemon implementation uses
+14.1; this does not identify a carrying desktop release. At the original reservation,
 counts including this addition were **450 / 393 / 57** (dispatchable / router /
 fast path); the version-specific counts below describe their original deltas.
 
