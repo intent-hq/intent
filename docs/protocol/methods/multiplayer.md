@@ -317,7 +317,8 @@ contract. The desktop entry point remains behind the Multiplayer Labs setting.
 - `author` is a snapshot of the connection's authenticated principal at send
   time. The three profile fields are always present and nullable. Request fields
   cannot choose an author, sequence, timestamp, or workspace other than the
-  authorized `workspaceId`.
+  authorized `workspaceId`. The snapshot is immutable; render its profile fields
+  without resolving its principal ID against a current principal registry.
 - `createdAt` is a server RFC-3339 timestamp. `body` is plain text; line breaks
   are preserved. Render it as text, never HTML or an agent command.
 
@@ -349,6 +350,19 @@ known sequence is reached or `hasMore` is false; do not assume one page spans th
 offline interval. Preserve scroll position when prepending history, and retain
 drafts and uncertain sends until their outcome is known. Discard pending replies
 when the workspace's backend or authenticated principal changes.
+
+#### Workspace transfer
+
+Workspace exports include discussion history. Import preserves message IDs,
+sequence order, bodies, timestamps, and author snapshots. An imported author's
+`principalId` is inert source-daemon attribution, not a destination identity or
+membership. A matching destination principal string must not rebind the author,
+change the profile, or establish an own-user comparison.
+
+Import isolates historical retry keys from destination senders, so a new send
+cannot resolve to an imported message merely by reusing its source principal
+string and client key. This uses the existing archive format and exact daemon
+version compatibility gate; it does not transfer membership or credentials.
 
 #### Access and compatibility
 

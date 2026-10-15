@@ -2278,6 +2278,13 @@ not a destination binding. Do not infer it again from the safe identity, a label
 or a matching destination principal. Unknown legacy comments still omit the
 metadata, following §5.3.
 
+Transferred [workspace discussions](./multiplayer.md#workspace-transfer) retain
+their separate immutable `DiscussionAuthor` snapshots. Their `principalId`
+remains inert source attribution and must never resolve against the destination
+principal registry. Import preserves message identity and order while isolating
+historical retry keys from new destination sends. Discussion history transfers
+without memberships or credentials and needs no additional archive format bump.
+
 **History is not admission.** Imported attribution does not create or link a
 principal/account, add a member, authenticate a caller, grant queue ownership or
 select execution credentials. Current access and live sends remain derived from
