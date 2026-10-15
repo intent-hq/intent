@@ -488,7 +488,8 @@ not reacquire it. `mirror-release.yml`, `promote-beta.yml` and
 `promote-stable.yml` hold the same group for their entire workflows. PR-only dist
 plans have separate run-specific groups. After `dist generate`, run daemon
 `python3 scripts/configure-release-concurrency.py` to restore the generated
-workflow's lock; daemon CI tests this contract. Sitter publication only writes
+workflow's lock, then `python3 scripts/configure-runner-routing.py` to restore
+self-hosted-first routing. Daemon CI tests both contracts. Sitter publication only writes
 excluded sitter releases and is outside this daemon-version lock.
 
 Frontend `release-alpha.yml`, `promote-beta.yml`, `release-stable.yml` and
@@ -633,14 +634,43 @@ promotions of deleted prereleases are not preserved by this retention policy.
 - Commits merged after the release PR was cut ride the next release PR (e.g. intentd#517
   landed via follow-up release PR intentd#520).
 
-## Depot CI runners
+## CI runner routing
 
-Repository automation and consumer checks run on Depot GitHub Actions runners.
-Routed component jobs prefer free self-hosted runners and burst to Depot. Native
-Intel desktop release and manual packaging builds stay on GitHub macos-latest-large.
-Enable the Depot GitHub integration for each component repository before switching
-its workflow labels. The migration keeps required check names and merge-queue
-triggers stable; submodule pins continue to advance automatically.
+Jobs in intent, intentd and cloudlands-fe prefer compatible self-hosted runners.
+Each repository has a reusable `runner-route.yml`; its small Depot probe runs
+without checkout so it remains available during a self-hosted outage. Existing
+component CI route jobs use the same tested probe. Utility jobs, consumer checks,
+browser suites and release matrices all consume its decisions. Original Depot
+labels remain fallback keys, preserving the workload's CPU/memory class.
+
+The probe checks online runners and paginated queued/running jobs across all
+three repositories. Linux x64 accepts queue depth up to the smaller of eight and
+the online slot count. Other platforms require explicitly idle runners with room
+for queued demand. Queued jobs older than 15 minutes, missing compatible runners,
+unreadable capacity (including sibling queues), or maintenance overrides select
+Depot; each platform logs its reason. `CI_LINUX_RUNNER_DISABLED`,
+`CI_WINDOWS_RUNNER_DISABLED` and `CI_MACOS_RUNNER_DISABLED` disable the relevant
+self-hosted pool when set to `true`. Fork PRs never select persistent runners.
+
+`CI_QUEUE_READ_TOKEN` needs organization Self-hosted runners read and Actions read
+on all three repositories. The probe falls back to repository runner listing if
+organization listing fails, and to Depot when it cannot establish capacity. Keep
+matching organization runner groups accessible to all three repositories; the
+label probe does not prove group access. Reusable callers explicitly pass the
+queue token and Actions read permission through each level. A probe-runner outage
+can still fail routing itself; affected workflows require a rerun.
+
+Infrastructure exceptions are mechanically allowlisted: routing probes run on
+Depot, Depot cache smoke tests exercise Depot, and the manual packaged macOS
+smoke journey requires a disposable hosted machine. Host maintenance stays bound
+to the machine it maintains. A platform without a compatible self-hosted runner
+uses its hosted fallback (including GitHub's native Intel Mac image where used).
+Browser shards retain their worker counts and browser identities, with per-runner
+browser caches and dependency installation for persistent machines.
+
+Run `python3 -S -B scripts/test_runner_policy.py` in each repository to exercise
+routing fixtures and reject accidental cloud pins. The frontend's existing
+Depot runner Vitest suite and backend/monorepo runner tests invoke it in CI.
 
 Rust compiler caching uses Depot Cache through sccache’s WebDAV backend, using
 the short-lived configuration inherited from the runner. Enable automatic Depot

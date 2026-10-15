@@ -1,0 +1,139 @@
+# Routing stays hosted so an unavailable self-hosted fleet cannot block fallback.
+# Keep identical across intent, intentd, and cloudlands-fe; runner-policy.test.cjs exercises the inline probe.
+name: Runner route
+on:
+  workflow_call:
+    secrets:
+      CI_QUEUE_READ_TOKEN:
+        required: false
+    outputs:
+      runners:
+        value: ${{ jobs.probe.outputs.runners }}
+      linux_labels:
+        value: ${{ jobs.probe.outputs.linux_labels }}
+      check_labels:
+        value: ${{ jobs.probe.outputs.check_labels }}
+      linux_burst:
+        value: ${{ jobs.probe.outputs.linux_burst }}
+      windows_labels:
+        value: ${{ jobs.probe.outputs.windows_labels }}
+      windows_burst:
+        value: ${{ jobs.probe.outputs.windows_burst }}
+      macos_labels:
+        value: ${{ jobs.probe.outputs.macos_labels }}
+      macos_burst:
+        value: ${{ jobs.probe.outputs.macos_burst }}
+permissions:
+  contents: read
+  actions: read
+jobs:
+  probe:
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      runners: ${{ steps.decide.outputs.runners }}
+      linux_labels: ${{ steps.decide.outputs.linux_labels }}
+      check_labels: ${{ steps.decide.outputs.check_labels }}
+      linux_burst: ${{ steps.decide.outputs.linux_burst }}
+      windows_labels: ${{ steps.decide.outputs.windows_labels }}
+      windows_burst: ${{ steps.decide.outputs.windows_burst }}
+      macos_labels: ${{ steps.decide.outputs.macos_labels }}
+      macos_burst: ${{ steps.decide.outputs.macos_burst }}
+    steps:
+      - id: decide
+        uses: actions/github-script@v9
+        env:
+          THRESHOLD: '8'
+          LINUX_RUNNER_DISABLED: ${{ vars.CI_LINUX_RUNNER_DISABLED }}
+          WINDOWS_RUNNER_DISABLED: ${{ vars.CI_WINDOWS_RUNNER_DISABLED }}
+          MACOS_RUNNER_DISABLED: ${{ vars.CI_MACOS_RUNNER_DISABLED }}
+        with:
+          github-token: ${{ secrets.CI_QUEUE_READ_TOKEN || github.token }}
+          script: |
+            // No checkout: routing never executes code from a pull request.
+            // Org runners with these labels must be in groups shared with all three CI repos.
+            const fleets = {
+              linux: ['self-hosted', 'Linux', 'X64'],
+              arm: ['self-hosted', 'Linux', 'ARM64'],
+              windows: ['self-hosted', 'Windows', 'X64'],
+              macos: ['self-hosted', 'macOS', 'ARM64'],
+              intel: ['self-hosted', 'macOS', 'X64'],
+            };
+            const disabled = {
+              linux: process.env.LINUX_RUNNER_DISABLED === 'true',
+              arm: process.env.LINUX_RUNNER_DISABLED === 'true',
+              windows: process.env.WINDOWS_RUNNER_DISABLED === 'true',
+              macos: process.env.MACOS_RUNNER_DISABLED === 'true',
+              intel: process.env.MACOS_RUNNER_DISABLED === 'true',
+            };
+            const burst = Object.fromEntries(Object.keys(fleets).map(k => [k, true]));
+            const reasons = Object.fromEntries(Object.keys(fleets).map(k => [k, 'availability not established']));
+            const pr = context.payload?.pull_request;
+            const fork = context.eventName === 'pull_request' && pr?.head?.repo?.full_name !== `${context.repo.owner}/${context.repo.repo}`;
+            try {
+              if (fork) throw new Error('fork pull request requires an isolated hosted runner');
+              let runners;
+              try {
+                runners = await github.paginate(github.rest.actions.listSelfHostedRunnersForOrg, {org: context.repo.owner, per_page: 100});
+              } catch (error) {
+                core.info(`org runner list failed (${error.message}); trying repository-visible runners`);
+                runners = await github.paginate(github.rest.actions.listSelfHostedRunnersForRepo, {...context.repo, per_page: 100});
+              }
+              const online = Object.fromEntries(Object.entries(fleets).map(([key, labels]) => [key,
+                runners.filter(r => r.status === 'online' && labels.every(l => (r.labels || []).some(x => ['macos', 'intel'].includes(key) ? x.name?.toLowerCase() === l.toLowerCase() : x.name === l))),
+              ]));
+              const jobs = [];
+              // A missing sibling view is unknown demand, not zero demand. Fail open to Depot.
+              if (Object.values(online).some(rs => rs.length)) {
+                for (const repo of new Set(['intent', 'intentd', 'cloudlands-fe', context.repo.repo])) {
+                  const seen = new Set();
+                  for (const status of ['queued', 'in_progress']) {
+                    const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {owner: context.repo.owner, repo, status, per_page: 100});
+                    for (const run of runs) {
+                      if (run.id === context.runId || seen.has(run.id)) continue;
+                      seen.add(run.id);
+                      jobs.push(...await github.paginate(github.rest.actions.listJobsForWorkflowRun, {owner: context.repo.owner, repo, run_id: run.id, per_page: 100}));
+                    }
+                  }
+                }
+              }
+              const threshold = Number(process.env.THRESHOLD || '8');
+              if (!Number.isInteger(threshold) || threshold < 0) throw new Error('invalid queue threshold');
+              for (const [key, labels] of Object.entries(fleets)) {
+                const demand = jobs.filter(j => ['queued', 'in_progress'].includes(j.status) && labels.every(l => (j.labels || []).includes(l)));
+                const stale = demand.some(j => j.status === 'queued' && (!Number.isFinite(Date.parse(j.created_at)) || Date.parse(j.created_at) < Date.now() - 15 * 60 * 1000));
+                const native = key !== 'linux';
+                const capacity = native ? online[key].filter(r => r.busy === false).length : online[key].length;
+                const limit = native ? capacity - 1 : Math.min(threshold, capacity);
+                const depth = native ? demand.filter(j => j.status === 'queued').length : demand.length;
+            burst[key] = disabled[key] || capacity === 0 || stale || depth > limit;
+                reasons[key] = disabled[key] ? 'disabled for maintenance' : capacity === 0 ? 'no available compatible runner' : stale ? 'stalled or unknown-age queue' : `queue depth=${depth} threshold=${limit} online=${online[key].length}`;
+              }
+            } catch (error) {
+              for (const key of Object.keys(fleets)) reasons[key] = `probe failed (${error.message})`;
+            }
+            const mapping = {};
+            for (const version of ['22.04', '24.04']) {
+              for (const size of ['', '-4', '-8', '-16', '-32', '-64']) {
+                for (const arch of ['', '-arm']) {
+                  const label = `depot-ubuntu-${version}${arch}${size}`;
+                  const key = arch ? 'arm' : 'linux';
+                  mapping[label] = burst[key] ? [label] : fleets[key];
+                }
+              }
+            }
+            for (const version of ['2022', '2025']) {
+              for (const size of ['', '-4', '-8', '-16', '-32', '-64']) {
+                const label = `depot-windows-${version}${size}`;
+                mapping[label] = burst.windows ? [label] : fleets.windows;
+              }
+            }
+            mapping['depot-macos-latest'] = burst.macos ? ['depot-macos-latest'] : fleets.macos;
+            mapping['macos-latest-large'] = burst.intel ? ['macos-latest-large'] : fleets.intel;
+            for (const key of Object.keys(fleets)) core.info(`${key} routing: burst=${burst[key]} (${reasons[key]})`);
+            core.setOutput('runners', JSON.stringify(mapping));
+            core.setOutput('linux_labels', JSON.stringify(mapping[`depot-ubuntu-24.04-${process.env.LINUX_SIZE || '8'}`]));
+            core.setOutput('check_labels', JSON.stringify(mapping['depot-ubuntu-24.04-8']));
+            core.setOutput('windows_labels', JSON.stringify(mapping['depot-windows-2022-16']));
+            core.setOutput('macos_labels', JSON.stringify(mapping['depot-macos-latest']));
+            for (const key of ['linux', 'windows', 'macos']) core.setOutput(`${key}_burst`, String(burst[key]));
