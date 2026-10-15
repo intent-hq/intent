@@ -39,6 +39,24 @@ class RunnerPolicy(unittest.TestCase):
         for label in ['depot-ubuntu-24.04', 'ubuntu-latest', '${{ matrix.runner }}', '${{ needs.unrelated.outputs.runner }}']:
             self.assertEqual(violations(f'jobs:\n  new-work:\n    runs-on: {label}\n', 'new.yml'), ['new-work'])
 
+    def test_shell_jobs_prepare_hosted_image_tools(self):
+        text = (ROOT / '.github/workflows/ci.yml').read_text()
+        for job in ['shell-tests', 'shell-tests-bash3']:
+            body = re.search(r'^  ' + job + r':\n(.*?)(?=^  [\w-]+:)', text, re.M | re.S)[1]
+            self.assertIn('uses: actions/setup-node@', body)
+            self.assertIn('uses: actions/setup-python@', body)
+        lint = text.split('  shell-lint:\n')[1].split('  shell-tests-bash3:')[0]
+        self.assertLess(lint.index('install -y -qq shellcheck'), lint.index('run: shellcheck --version'))
+
+    def test_bootstrap_install_uses_isolated_sudo_container(self):
+        text = (ROOT / '.github/workflows/bootstrap-install.yml').read_text()
+        self.assertNotIn('    container:', text)
+        self.assertIn('sudo -n docker', text)
+        self.assertIn('readonly', text)
+        self.assertIn('cp -a /source/. /workspace/', text)
+        self.assertIn('ubuntu:24.04', text)
+        self.assertIn('scripts/bootstrap-dev-host.sh --check', text)
+
     def test_routing_behavior(self):
         subprocess.run(['node', '--test', str(ROOT / 'scripts/runner-policy.test.cjs')], check=True)
 

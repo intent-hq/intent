@@ -48,44 +48,40 @@ jobs:
   bootstrap-install:
     needs: [runner-route]
     runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
-    container: ubuntu:24.04
     timeout-minutes: 30
-    # Inside the container the runner falls back to `sh -e`; the assert step
-    # needs bash for pipefail.
-    defaults:
-      run:
-        shell: bash
     steps:
-      # The image has no git, so checkout needs this much before it can run.
-      # Everything the script is responsible for (python3, pkg-config,
-      # libssl-dev, node, gh, jq, rustup) is deliberately left uninstalled.
-      # The container runs as root, which as_root short-circuits — no sudo.
-      - name: Prepare container
-        run: |
-          apt-get update
-          apt-get install -y git curl ca-certificates
-          git config --global --add safe.directory '*'
       - uses: actions/checkout@v7
         with:
           submodules: false
       - run: git submodule update --init --depth=1 packages/intentd packages/cloudlands-fe
-      - name: Install mode
-        run: BOOTSTRAP_YES=1 scripts/bootstrap-dev-host.sh --yes </dev/null
-      - name: Assert --check passes
+      # Runner services need not be in the docker group. Use passwordless sudo
+      # and a read-only source mount; all installation and generated files stay
+      # inside the disposable container, never in the persistent runner checkout.
+      - name: Install and check in clean Ubuntu
         run: |
-          set -o pipefail
-          scripts/bootstrap-dev-host.sh --check | tee check.log
-          grep -F 'Doctor passed' check.log
-          for prefix in \
-            'rustup:' \
-            'cargo:' \
-            'Rust toolchain:' \
-            'cargo-nextest:' \
-            'Node:' \
-            'Corepack:' \
-            'frontend package manager:' \
-            'frontend dependencies:' \
-            'GitHub CLI:' \
-            'jq:'; do
-            grep -F "[ok]       $prefix" check.log
-          done
+          sudo -n docker run --rm --init \
+            --mount "type=bind,source=$GITHUB_WORKSPACE,target=/source,readonly" \
+            ubuntu:24.04 bash -euxo pipefail -c '
+              mkdir /workspace
+              cp -a /source/. /workspace/
+              cd /workspace
+              apt-get update
+              apt-get install -y git curl ca-certificates
+              git config --global --add safe.directory "*"
+              BOOTSTRAP_YES=1 scripts/bootstrap-dev-host.sh --yes </dev/null
+              scripts/bootstrap-dev-host.sh --check | tee check.log
+              grep -F "Doctor passed" check.log
+              for prefix in \
+                "rustup:" \
+                "cargo:" \
+                "Rust toolchain:" \
+                "cargo-nextest:" \
+                "Node:" \
+                "Corepack:" \
+                "frontend package manager:" \
+                "frontend dependencies:" \
+                "GitHub CLI:" \
+                "jq:"; do
+                grep -F "[ok]       $prefix" check.log
+              done
+            '

@@ -2676,6 +2676,7 @@ class StackSettingResumeTests(unittest.TestCase):
         harness.transfer = {"root": str(root / "transfer"), "contract.json": "verified"}
         dumps = json.dumps
         real_popen = subprocess.Popen
+        python_loader_env = {k: os.environ[k] for k in ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH") if k in os.environ}
 
         def capture_inputs(value, **kwargs):
             if isinstance(value, dict) and "root-tree" in value:
@@ -2711,6 +2712,9 @@ for name in tests:
     print(json.dumps({"type": "test", "event": "ok", "name": "alpha::one$" + name}))
 sys.exit(101 if interrupted == "1" else 0)
 '''
+            # Preserve only interpreter loading paths; the controlled Rust
+            # environment and stack assertions remain unchanged.
+            kwargs["env"] = {**kwargs["env"], **python_loader_env}
             process = real_popen(
                 [sys.executable, "-S", "-c", code, config, str(harness.children),
                  "1" if harness.interrupt else "0"], **kwargs

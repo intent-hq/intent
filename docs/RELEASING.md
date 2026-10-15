@@ -662,7 +662,9 @@ can still fail routing itself; affected workflows require a rerun.
 
 Infrastructure exceptions are mechanically allowlisted: routing probes run on
 Depot, Depot cache smoke tests exercise Depot, and the manual packaged macOS
-smoke journey requires a disposable hosted machine. Host maintenance stays bound
+smoke journey requires a disposable hosted machine. The intentd queue-retirement
+cleanup and its read-only credential probe remain on independent GitHub-hosted
+Linux, preserving their upstream queue-recovery contract. Host maintenance stays bound
 to the machine it maintains. A platform without a compatible self-hosted runner
 uses its hosted fallback (including GitHub's native Intel Mac image where used).
 Browser shards retain their worker counts and browser identities, with per-runner

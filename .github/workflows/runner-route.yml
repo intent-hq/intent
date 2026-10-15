@@ -106,7 +106,7 @@ jobs:
                 const capacity = native ? online[key].filter(r => r.busy === false).length : online[key].length;
                 const limit = native ? capacity - 1 : Math.min(threshold, capacity);
                 const depth = native ? demand.filter(j => j.status === 'queued').length : demand.length;
-            burst[key] = disabled[key] || capacity === 0 || stale || depth > limit;
+                burst[key] = disabled[key] || capacity === 0 || stale || depth > limit;
                 reasons[key] = disabled[key] ? 'disabled for maintenance' : capacity === 0 ? 'no available compatible runner' : stale ? 'stalled or unknown-age queue' : `queue depth=${depth} threshold=${limit} online=${online[key].length}`;
               }
             } catch (error) {
