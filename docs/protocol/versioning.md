@@ -13,17 +13,22 @@ Other prepared extensions retain their independent support gates.
 
 **Version 15.1 — workspace discussions (additive, prepared).**
 [Workspace discussions](./methods/multiplayer.md#554-workspace-discussions) add
-`discussion.list`, `discussion.send`, and `discussion:message` for one persisted
-human conversation per workspace. The two router methods use authenticated
-human membership, bounded forward/backward sequence pagination, and
-principal-scoped retry keys that reject changed bodies. Message events are
-broadcast-only, and agent subscriptions and history queries exclude discussions.
+`discussion.conversations`, `discussion.recipients`, `discussion.list`,
+`discussion.send`, and `discussion:message` for a default workspace-wide discussion
+and direct/group discussions with selected members. The four router methods use
+authenticated human membership, private participant grants, bounded pagination,
+and principal-scoped retry keys that reject changed bodies or targets. The first
+message atomically creates a private conversation. Exactly integer
+`discussionConversations: 1` gates this full contract, preventing older daemons
+from ignoring private target fields. Message events include the conversation
+descriptor, are broadcast-only, and exclude nonparticipants and agents.
 Discussion typing extends the existing `presence.update` and human roster
-shapes with transient `discussionTyping`; it adds no method or event type.
+shapes with transient, conversation-scoped `discussionTyping`, projected per
+recipient; typing adds no method or event type.
 Agent/daemon snapshots omit that field, and older rosters without it remain valid.
 Clients tolerate unsupported methods without sending to an agent instead. The
 documented surface, including the prepared startup and generic stream recovery additions, is now
-**452 / 395 / 57** (dispatchable / router / fast path). This reservation does not
+**454 / 397 / 57** (dispatchable / router / fast path). This reservation does not
 identify a carrying release or change independent capability gates.
 
 **Version 15.0 — legacy workspace import removal (breaking).**

@@ -9,7 +9,7 @@ Ephemeral who-is-here state for shared (multi-principal) workspaces ([intent-hq/
 
 | Method | Params | Result |
 | --- | --- | --- |
-| presence.update *(fast path)* | focus (req, array of `{ workspaceId (req), agentId?, noteId? }`), typing?: `{ agentId (req) }` \| `null`, discussionTyping?: `{ workspaceId (req) }` \| `null` *(15.1, prepared)* | `{ ok: true, typingSource }` — replaces the **connection's own** focus set and typing targets; `typingSource` is the connection's opaque typing handle (`ts-…`), the `source` its own entries carry in every roster |
+| presence.update *(fast path)* | focus (req, array of `{ workspaceId (req), agentId?, noteId? }`), typing?: `{ agentId (req) }` \| `null`, discussionTyping?: `{ workspaceId (req), conversationId? }` \| `null` *(15.1, prepared)* | `{ ok: true, typingSource }` — replaces the **connection's own** focus set and typing targets; `typingSource` is the connection's opaque typing handle (`ts-…`), the `source` its own entries carry in every roster |
 | presence.snapshot | workspaceId (req) | `{ workspaceId, members: PresenceMember[] }` — the current `presence:changed` roster of a member workspace, on demand |
 | note.presence.update *(fast path)* | workspaceId (req), noteId (req), rev (req), anchor (req), head (req) — each of the three a non-negative integer | `{ ok: true }` — the caller's own caret on a note this connection is subscribed to |
 
@@ -56,10 +56,13 @@ The note-presence channel pair is a §6.9 subscription channel (intercepted on t
 #### Discussion typing *(15.1, prepared)*
 
 The [workspace discussion](./multiplayer.md#554-workspace-discussions) composer
-uses the existing presence channel. `discussionTyping: { workspaceId }` names the
-one discussion this connection is typing in. Omission or `null` clears it; the
-whole-state replacement also retains the existing agent `typing` rules. The
+uses the existing presence channel.
+`discussionTyping: { workspaceId, conversationId }` names the one discussion this
+connection is typing in. Omitted `conversationId` means `"default"`; an omitted or
+`null` `discussionTyping` clears it. The whole-state replacement also retains the existing agent `typing` rules. The
 workspace ID must be a non-empty string naming a current member workspace.
+Private conversation targets also require the caller to be a participant; owners
+do not bypass this check. A new unsent composer has no target to report.
 Malformed values return `-32602` Invalid params; an inaccessible or unknown
 workspace returns `-32602` with `data.code: "not-found"`. Validation is atomic
 with the other focus and typing targets, before replacing any connection state.
@@ -68,15 +71,18 @@ Human `presence.snapshot` replies and `presence:changed` member rows add:
 
 ```json
 { "discussionTyping": [
-  { "source": "ts-opaque-connection", "since": "2026-10-16T18:00:00Z", "pulse": 3 }
+  { "source": "ts-opaque-connection", "conversationId": "default", "since": "2026-10-16T18:00:00Z", "pulse": 3 }
 ] }
 ```
 
 The array is always present on a supporting daemon's human roster, empty when
-idle, and contains only entries for the roster's workspace. Each connection has
-one entry, sorted by `source`. It uses the connection's existing `typingSource`;
-`since` stays fixed while typing in the same workspace, and a per-connection
-discussion pulse advances on each update naming that workspace. Another
+idle, and contains only entries for the roster's workspace and conversations the
+receiving human may access. Both snapshots and live rosters are projected for
+each receiver; a private conversation ID or typing activity is never disclosed
+to another workspace member who is not a participant. Each connection has one
+entry, sorted by `source`. It uses the connection's existing `typingSource`;
+`since` stays fixed while typing in the same workspace and conversation, and a
+per-connection discussion pulse advances on each update naming that target. Another
 connection's update or a repeated snapshot does not advance this pulse. Agent
 `typing` entries retain their existing shape and counters.
 
@@ -94,9 +100,9 @@ typing. Receivers expire each source three seconds after its last unseen
 `(source, pulse)`, using local elapsed time rather than comparing wall clocks.
 Re-emitting an unchanged pulse must not revive an expired entry. Clear received
 state on disconnect or workspace/backend/account changes. Hide the current
-person's entries and combine other connections of the same person into one
-localized typing label. Older rosters omit the field; treat omission as no
-discussion typing without affecting discussion history or sending.
+person's entries, filter to the displayed conversation, and combine other
+connections of the same person into one localized typing label. Older rosters
+omit the field; treat omission as no discussion typing without affecting discussion history or sending.
 
 #### Note presence channel
 
