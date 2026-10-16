@@ -280,7 +280,7 @@ See [the setting contract](./settings.md#collaborator-facing-machine-name).
 
 ### 5.54 Workspace discussions
 
-**Additive, prepared for protocol 14.2.** One persisted human conversation belongs
+**Additive, prepared for protocol 15.1.** One persisted human conversation belongs
 to each workspace. It is separate from agent conversations and note comments.
 There are no thread IDs, direct messages, attachments, edits, or reactions in this
 contract. The desktop entry point remains behind the Multiplayer Labs setting.

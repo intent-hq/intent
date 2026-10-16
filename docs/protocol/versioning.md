@@ -8,10 +8,10 @@ capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `14.2` — prepared workspace discussions; not a shipped-version claim.
+**Documented version:** `15.1` — prepared workspace discussions; not a shipped-version claim.
 Other prepared extensions retain their independent support gates.
 
-**Version 14.2 — workspace discussions (additive, prepared).**
+**Version 15.1 — workspace discussions (additive, prepared).**
 [Workspace discussions](./methods/multiplayer.md#554-workspace-discussions) add
 `discussion.list`, `discussion.send`, and `discussion:message` for one persisted
 human conversation per workspace. The two router methods use authenticated
@@ -20,6 +20,12 @@ Clients tolerate unsupported methods without sending to an agent instead. The
 documented surface, including the prepared startup and generic stream recovery additions, is now
 **453 / 395 / 58** (dispatchable / router / fast path). This reservation does not
 identify a carrying release or change independent capability gates.
+
+**Version 15.0 — legacy workspace importer removal.** The daemon removes
+`system.importLegacy`, the legacy import CLI commands, and first-boot import.
+The 15.1 discussion addition preserves these removals. The catalog totals above
+include prepared extensions and baseline entries awaiting pin reconciliation;
+the combined daemon exposes **436 / 380 / 56** (dispatchable / router / fast path).
 
 **Version 14.1 — startup readiness (additive).** The [startup contract](./startup-readiness.md)
 adds `system.startupStatus` and numeric error `-32012`, with exact
