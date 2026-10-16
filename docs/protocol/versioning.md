@@ -14,21 +14,24 @@ Other prepared extensions retain their independent support gates.
 **Version 15.1 — workspace discussions (additive, prepared).**
 [Workspace discussions](./methods/multiplayer.md#554-workspace-discussions) add
 `discussion.conversations`, `discussion.recipients`, `discussion.list`,
-`discussion.send`, and `discussion:message` for a default workspace-wide discussion
-and direct/group discussions with selected members. The four router methods use
+`discussion.send`, `discussion.react`, `discussion:message`, and `discussion:reaction` for a default workspace-wide discussion
+and direct/group discussions with selected members. The five router methods use
 authenticated human membership, private participant grants, bounded pagination,
 and principal-scoped retry keys that reject changed bodies or targets. The first
 message atomically creates a private conversation. Exactly integer
-`discussionConversations: 1` gates this full contract, preventing older daemons
-from ignoring private target fields. Message events include the conversation
+`discussionConversations: 1` gates multiple-conversation targeting, preventing
+older daemons from ignoring private target fields. Message events include the conversation
 descriptor, are broadcast-only, and exclude nonparticipants and agents.
+Replies and per-viewer reaction aggregates require the separate exact
+`discussionMessageActions: 1` capability. Reply targets bind retry identity;
+reaction versions preserve updates without advancing message sequences.
 Discussion typing extends the existing `presence.update` and human roster
 shapes with transient, conversation-scoped `discussionTyping`, projected per
 recipient; typing adds no method or event type.
 Agent/daemon snapshots omit that field, and older rosters without it remain valid.
 Clients tolerate unsupported methods without sending to an agent instead. The
 documented surface, including the prepared startup and generic stream recovery additions, is now
-**454 / 397 / 57** (dispatchable / router / fast path). This reservation does not
+**455 / 398 / 57** (dispatchable / router / fast path). This reservation does not
 identify a carrying release or change independent capability gates.
 
 **Version 15.0 — legacy workspace import removal (breaking).**

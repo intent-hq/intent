@@ -102,6 +102,10 @@ by `system.capabilities`. Clients require this flag before sending private
 conversation IDs or recipient lists, because earlier single-discussion daemons
 may silently ignore unknown targeting fields. The flag grants no membership or
 participant access and does not enable the desktop Multiplayer Labs setting.
+The separate exact integer `discussionMessageActions: 1` capability, advertised
+on hello and `system.capabilities`, gates same-conversation replies and
+per-viewer reaction aggregates. Never discard an unsupported reply target or
+interpret the capability as authorization.
 
 | Method | Params | Result |
 | --- | --- | --- |

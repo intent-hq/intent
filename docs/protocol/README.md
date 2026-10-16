@@ -6,7 +6,8 @@ The [workspace discussion contract](./methods/multiplayer.md#554-workspace-discu
 adds a default workspace-wide chat and direct/group conversations with selected
 members, authenticated authors, and participant-filtered live delivery. The
 desktop feature remains behind Multiplayer Labs; multiple conversations require
-exactly integer `discussionConversations: 1`. Older daemons may reject its methods.
+exactly integer `discussionConversations: 1`. Replies and reactions additionally
+require `discussionMessageActions: 1`. Older daemons may reject its methods.
 
 The [compact script list contract](./methods/scripts.md#active-only-compact-lists-prepared-breaking-contract)
 requires `scriptActiveLists: 1` and `scriptMonitors: 2`; archived lists and terminal monitor history are removed. Known-ID output and full lifecycle events remain available.

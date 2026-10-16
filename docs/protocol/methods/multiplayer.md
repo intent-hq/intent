@@ -283,8 +283,9 @@ See [the setting contract](./settings.md#collaborator-facing-machine-name).
 **Additive, prepared for protocol 15.1.** A workspace has a default discussion for
 all current members and may have direct or group discussions with selected
 members. These are separate from agent conversations and note comments. The
-desktop entry point remains behind Multiplayer Labs. Attachments, message edits,
-reactions, and changes to a conversation's participants are outside this contract.
+desktop entry point remains behind Multiplayer Labs. Replies and reactions use
+the independently gated message-actions extension below. Binary attachments,
+message edits, and changes to a conversation's participants are outside this contract.
 
 Exactly integer `discussionConversations: 1` in the server capabilities advertises
 the complete multiple-conversation contract. Clients must check this capability
@@ -293,12 +294,19 @@ single-discussion daemon may ignore unknown fields and otherwise send private
 content to the workspace-wide discussion. Missing or unrecognized capability
 values never authorize a fallback send.
 
+Exactly integer `discussionMessageActions: 1`, returned by both hello and
+`system.capabilities`, advertises replies and reactions. Clients require it
+before sending `replyToMessageId` or calling `discussion.react`; they must not
+silently drop a reply target on an older daemon. This capability grants no access
+and does not replace the private-conversation gate.
+
 | Method | Params | Result |
 | --- | --- | --- |
 | discussion.conversations | workspaceId (req), beforeId? (exclusive conversation ID), limit? (integer 1–100, default 50) | `{ conversations: DiscussionConversation[], hasMore: boolean }` — only conversations accessible to the caller |
 | discussion.recipients | workspaceId (req), query? (profile search string, at most 256 UTF-8 bytes), afterPrincipalId? (exclusive principal ID), limit? (integer 1–100, default 50) | `{ members: DiscussionAuthor[], hasMore: boolean }` — current effective workspace members, including offline members, excluding the caller |
 | discussion.list | workspaceId (req), conversationId? (default `"default"`), beforeSequence? (positive integer, exclusive), afterSequence? (nonnegative integer, exclusive; mutually exclusive with beforeSequence), limit? (integer 1–100, default 50) | `{ messages: DiscussionMessage[], hasMore: boolean, conversation: DiscussionConversation }` |
-| discussion.send | workspaceId (req), conversationId? (default `"default"` when neither target field is supplied), recipientPrincipalIds? (1–31 distinct other current workspace members; mutually exclusive with conversationId), messageId (req, nonblank string, at most 128 UTF-8 bytes), body (req, nonblank string, at most 16384 UTF-8 bytes) | `{ message: DiscussionMessage, conversation: DiscussionConversation }` |
+| discussion.send | workspaceId (req), conversationId? (default `"default"` when neither target field is supplied), recipientPrincipalIds? (1–31 distinct other current workspace members; mutually exclusive with conversationId), messageId (req, nonblank string, at most 128 UTF-8 bytes), body (req, nonblank string, at most 16384 UTF-8 bytes), replyToMessageId? (existing message in the same conversation; requires `discussionMessageActions: 1`) | `{ message: DiscussionMessage, conversation: DiscussionConversation }` |
+| discussion.react | workspaceId (req), conversationId? (default `"default"`), messageId (req, server message ID), reaction (req, `"👍"` or `"🙂"`), active (req, boolean desired state) | `{ messageId, reactions: DiscussionReaction[], reactionVersion }`; requires `discussionMessageActions: 1` |
 
 `DiscussionConversation` is `{ id, workspaceId, kind, participants, createdAt }`.
 `kind` is `"workspace"`, `"direct"`, or `"group"`. The reserved ID `"default"`
@@ -338,7 +346,11 @@ uses the returned conversation ID for subsequent sends and reads.
     "displayName": "Sam",
     "avatarUrl": null
   },
-  "createdAt": "2026-10-14T12:42:00.000Z"
+  "createdAt": "2026-10-14T12:42:00.000Z",
+  "replyToMessageId": null,
+  "replyTo": null,
+  "reactions": [],
+  "reactionVersion": 0
 }
 ```
 
@@ -356,6 +368,45 @@ uses the returned conversation ID for subsequent sends and reads.
   without resolving its principal ID against a current principal registry.
 - `createdAt` is a server RFC-3339 timestamp. `body` is plain text; line breaks
   are preserved. Render it as text, never HTML or an agent command.
+- On a daemon advertising message actions, `replyToMessageId`, `replyTo`,
+  `reactions`, and `reactionVersion` are always present. Older daemons may omit
+  those fields; absence does not establish support for the extension.
+
+#### Replies and reactions
+
+`replyToMessageId` references an existing message in the same conversation.
+The daemon checks this inside the send transaction, including current membership
+and participation. A new conversation cannot reply to another conversation.
+The committed message carries an immutable, nonrecursive quote
+`replyTo: { id, author: DiscussionAuthor, body }`, or `null` when not a reply.
+The quote uses the original author snapshot and body, bounded by the existing
+message-body limit. It confers no access to another conversation or principal.
+The reply target is part of retry identity: a changed target with the same retry
+key is invalid, rather than editing the committed reply.
+
+`DiscussionReaction` is `{ reaction, count, reacted }`. Only `"👍"` and `"🙂"`
+are accepted; `count` is positive and `reacted` says whether the receiving
+authenticated human has that reaction active. Empty aggregates are omitted.
+No reactor principal IDs or profile lists are exposed. `discussion.react` sets
+the caller's desired reaction state on an existing authorized message;
+repeating the same desired state is a no-op. A mutation rechecks membership and
+participation inside the serialized write transaction.
+
+An actual change increments that message's nonnegative `reactionVersion` and
+publishes transient `discussion:reaction` with
+`{ workspaceId, conversationId, messageId, reactions, reactionVersion }`.
+Every recipient gets its own `reacted` projection after a fresh access check;
+removed members and agents receive none. A no-op produces no event or version
+increment. Reactions do not change message order, sequence cursors, or unread
+message counts. Clients retain the greatest reaction version across events,
+history pages, and send replies; older responses must not overwrite a newer
+aggregate. Reconnect recovery must refresh reactions for displayed messages,
+since message-sequence catch-up alone cannot observe changes to older messages.
+
+Workspace references may be represented by existing canonical workspace links
+in the plain-text body and rendered as navigable chips. The client must preserve
+the target workspace/backend and validate link kinds; reference text is never
+HTML, executable code, or permission to invoke an agent.
 
 #### History and delivery
 
@@ -386,9 +437,10 @@ daemon restarts and client reconnects in the discussion table; `discussion.list`
 is the recovery path when live delivery is missed.
 
 The retry key is scoped to `(workspaceId, authenticated principalId, messageId)`.
-Repeated sends with the same key, target, and exact body return the original
-conversation and immutable row and author snapshot, even if the person's profile
-has since changed. First-message retries use the same recipient set; ordering
+Repeated sends with the same key, target, reply target, and exact body return the original
+conversation, message identity, body, and author snapshot, even if the person's profile
+has since changed. The response projects the current reaction state for the caller.
+First-message retries use the same recipient set; ordering
 of that set is immaterial. A client retries an uncertain send with that same key and body. New intentional
 sends use new keys. Reusing a key with different text or a different conversation
 or recipient set is `-32602` Invalid params; it does not edit the row, create a
@@ -422,7 +474,8 @@ has no server conversation ID and reports no discussion typing. It carries no
 message text and does not change history or message sequence numbers. The existing agent
 typing shape remains unchanged, and agents cannot read discussion typing.
 
-The composer shows other members' names in a localized typing line. Pulses are
+The message stream shows typing avatars and a three-dot bubble, with the other
+members' names in its localized accessible label. Pulses are
 throttled, expire after three seconds without a new pulse, and clear on send,
 empty draft, blur, navigation, hidden window, disconnect, or lost access.
 Multiple connections for one person produce one name; the current person is
@@ -446,6 +499,13 @@ participant grants are cleared on import; their archived history remains
 inaccessible through discussion APIs, even to the destination owner. Default
 discussion history remains available to destination workspace members.
 
+Reply quotes retain their original inert author snapshots. Reaction counts and
+versions remain historical data, but import clears every reactor's principal
+grant. All destination viewers therefore start with `reacted: false`, including
+people whose principal string matches a source reactor. Turning off an unselected
+reaction is a no-op; a destination person's new reaction adds to the historical
+count and can remove only that new selection.
+
 Import isolates historical retry keys from destination senders, so a new send
 cannot resolve to an imported message merely by reusing its source principal
 string and client key. This uses the existing archive format and exact daemon
@@ -453,7 +513,7 @@ version compatibility gate; it does not transfer membership or credentials.
 
 #### Access and compatibility
 
-All four methods require an authenticated human client connection and current
+All five methods require an authenticated human client connection and current
 workspace membership, including inherited host membership. Agent, daemon, and
 unbound callers cannot post as people. A missing or inaccessible workspace is
 `-32602 { code: "not-found" }`; a non-human caller is `-32003` Forbidden. Malformed
@@ -467,7 +527,7 @@ inside the serialized write transaction. An unknown or inaccessible conversation
 missing one. Participant snapshots do not confer membership: a removed workspace
 member loses access even while its historical participant record remains.
 
-`discussion:message` is workspace-scoped and rechecks workspace membership and
+`discussion:message` and `discussion:reaction` are workspace-scoped and recheck workspace membership and
 conversation participation at delivery time. Removed members cannot continue
 reading history, sending, or receiving subsequent messages. Private typing entries
 are projected separately for every receiving human; unrelated workspace members

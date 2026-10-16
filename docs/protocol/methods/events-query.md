@@ -47,7 +47,8 @@ These are **historical/aggregate read** helpers — distinct from live streaming
 #### Human discussion history
 
 Workspace discussion messages are stored in their own table and broadcast as
-transient `discussion:message` events; use the human-only
+transient `discussion:message` events; reaction updates are transient
+`discussion:reaction` events. Neither event type is available through event history; use the human-only
 [`discussion.list`](multiplayer.md#554-workspace-discussions) method for history.
 Agent callers cannot read `discussion:` event rows, including persisted copies
 from earlier development builds. The exclusion is applied in SQL before limits,
