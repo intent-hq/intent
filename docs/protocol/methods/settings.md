@@ -479,6 +479,93 @@ The desktop `labs:multiplayerEnabled` preference is not a daemon setting or
 permission. It gates the experimental collaboration UI, including the tab and
 direct routes, and cannot grant access or revoke saved memberships when toggled.
 
+### Prepared GitLab child Git credential policy
+
+The prepared [protocol 14.2](../versioning.md) per-connection GitLab policy
+controls use of Intent's managed Git credential helper by agents and terminals.
+Only the connected host's owner may
+change it; member access to repositories, checkout or workspace operations does
+not grant permission to enable the helper or manage credentials. This prepared
+policy does not extend the existing GitHub-only `GitCredentialPolicy` projection
+above or imply that older daemons expose a GitLab policy control.
+
+The separate prepared capability is `gitlabChildGitPolicy: 1` on the original
+connection. `sourceControl.gitlab.childGit.get` accepts an empty params object
+`{}`; `sourceControl.gitlab.childGit.set` accepts exactly `binding` and Boolean
+`enabled`. These operations are not an arbitrary `settings.update` path, a
+renderer-owned preference or a general credential API. Catalog presence does
+not establish deployed support.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| sourceControl.gitlab.childGit.get | {} | Connected policy with binding/enabled/effective, or an unavailable reason |
+| sourceControl.gitlab.childGit.set | binding, enabled | Connected policy with binding/enabled/effective, or an unavailable reason |
+
+An illustrative owner read is:
+
+```json
+{"jsonrpc":"2.0","id":221,"method":"sourceControl.gitlab.childGit.get","params":{}}
+```
+
+| Field | Binding meaning |
+| --- | --- |
+| `instanceBaseUrl` | Full canonical HTTPS origin, port and case-sensitive installation prefix. |
+| `connection` | `{ connectionId, accountId, connectionGeneration }` from the original daemon response. The IDs are opaque strings; the generation is a canonical decimal u64 string. |
+| `revision` | Opaque policy revision; compare for equality, never numeric order. |
+
+The outer read/write bodies and the binding reject unknown fields. Retain the
+binding as a whole through an explicit write; a matching URL or account ID does
+not allow a client to synthesize a new binding or reuse one after replacement.
+The illustrative explicit write is:
+
+```json
+{"jsonrpc":"2.0","id":222,"method":"sourceControl.gitlab.childGit.set","params":{"binding":{"instanceBaseUrl":"https://gitlab.example:8443/gitlab","connection":{"connectionId":"original-connection-example","accountId":"account-example","connectionGeneration":"7"},"revision":"policy-example"},"enabled":true}}
+```
+
+The prepared response union is `connected` with exactly `binding`, `enabled`
+and `effective`, or `unavailable` with exactly `reason`. Both connected flags
+are Booleans. Display the returned effective state independently of the stored
+choice; do not infer it from connected authentication or an earlier write.
+`reason` is `"disconnected"` or `"unavailable"`; neither proves a stored false
+choice. Illustrative responses are:
+
+```json
+{"kind":"connected","binding":{"instanceBaseUrl":"https://gitlab.example:8443/gitlab","connection":{"connectionId":"original-connection-example","accountId":"account-example","connectionGeneration":"7"},"revision":"policy-example"},"enabled":false,"effective":false}
+```
+
+```json
+{"kind":"unavailable","reason":"disconnected"}
+```
+
+Only the original owner may read or write this control. Missing capability,
+pending reads, unavailable state and failed writes must stay distinguishable
+from a confirmed disabled choice. The server checks current owner, full instance,
+account/connection and policy revision for a write; stale bindings cannot update
+a replacement. A transport error is not a policy acknowledgement and must not
+be converted into a successful disabled result.
+
+New GitLab connections and upgraded connections without an explicit choice start
+disabled. An explicit on/off choice survives daemon restart and credential
+refresh for the same account and canonical full instance. Replacing the account
+or instance does not inherit the old grant, including a changed port or
+case-sensitive installation prefix. The configured account and public URL alone
+do not grant access to the helper.
+
+When enabled, the helper requests current credentials from the daemon on demand.
+Tokens are not placed in child environments, command arguments, repository URLs,
+renderer state or logs. Disable, revoke and account replacement apply to later
+helper requests, including those from an already-running terminal. A credential
+already delivered cannot be recalled. A failed or uncertain policy update must
+not be displayed as a successful change; retain the actual result and offer an
+explicit retry.
+
+Native GitLab clone, fetch and push remain independent of this child-process
+option. Preserve the existing GitHub policy, explicit caller overrides, SSH and
+alternative Git helpers. Disabling Intent's helper is not a ban on Git and does
+not establish that other authorization is absent. This option does not install,
+authenticate or export credentials to `glab`; that CLI keeps its own separately
+qualified setup.
+
 ### Collaborator-facing machine name
 
 `sharing.machineName` is a host-scoped string setting (category `sharing`, default

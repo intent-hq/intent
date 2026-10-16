@@ -318,6 +318,29 @@ native review capabilities do not imply this explicit-resource capability.
 These are client integration obligations, not a shipped frontend guarantee;
 documentation alone does not establish deployed availability.
 
+The separate [prepared project-page and discussion extension](repository-resources.md#prepared-project-pages-and-discussions)
+is additive in protocol 14.2 and uses `repositoryResourcePages: 1`. Keep
+`repositoryResourceRead: 1` unchanged for
+detail-only clients; it does not imply support for the new operations. Detect
+the page capability on the same physical connection that supplies the read
+lifetime. Its prepared `context` is either an explicitly authorized workspace or
+the original durable Host Owner; Home cannot borrow a workspace or infer the
+owner role from checkout access. A capability cannot authorize another instance
+or account, or supply a fallback after denial. A numeric protocol version or
+catalog entry does not replace the exact capability check.
+
+#### GitLab child Git policy capability (prepared)
+
+The protocol 14.2 capability `result.server.capabilities.gitlabChildGitPolicy: 1`
+gates the separate
+[owner-only policy control](settings.md#prepared-gitlab-child-git-credential-policy).
+An absent or unsupported value means the control is unsupported, not disabled.
+Detect it on the connection whose policy binding will be read and changed.
+Neither this capability nor `gitlabCheckout` grants the owner role, enables the
+helper, or proves a current effective grant. Native clone/fetch/push remain
+independent. This prepared contract does not advertise support on older daemons
+or add GitLab fields to the existing GitHub member-policy projection.
+
 #### Client identity, capabilities & device identification (REV-2, v9.9)
 
 `client.hello` is where a connection acquires the **logical-client identity** the daemon uses

@@ -8,16 +8,46 @@ capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `14.0` — prepared active-only script and monitor lists; not a shipped-version claim.
+**Documented version:** `14.2` — prepared scoped repository pages and GitLab child Git policy; not a shipped-version claim.
 Other prepared extensions retain their independent support gates.
 
-**Startup readiness (additive, prepared).** The [startup contract](./startup-readiness.md)
-reserves `system.startupStatus` and numeric error `-32012`, with exact
-`startupStatus: 1` support detection. It does not make ordinary hello usable before
-Store or grant guest access to owner progress. Coordinate the additive minor at
-implementation; no shipped numeric version is claimed here. Current documented
-counts including this addition are **451 / 393 / 58** (dispatchable / router /
-fast path); the version-specific counts below describe their original deltas.
+**Version 14.2 — scoped repository pages and GitLab child Git policy (additive, prepared).**
+This extension builds on protocol 14.1 without replacing startup readiness or
+protocol 14.0 script and monitor list semantics. The [scoped resource-read contract](./methods/repository-resources.md#prepared-project-pages-and-discussions)
+adds six operations: `sourceControl.read.captureScoped`,
+`sourceControl.read.detailScoped`, `sourceControl.read.releaseScoped`,
+`sourceControl.read.resolveKnownRepository`, `sourceControl.read.list` and
+`sourceControl.read.discussions`. The [owner-only child Git policy](./methods/settings.md#prepared-gitlab-child-git-credential-policy)
+adds `sourceControl.gitlab.childGit.get` and `sourceControl.gitlab.childGit.set`.
+
+Require exactly `repositoryResourcePages: 1` or `gitlabChildGitPolicy: 1`, as
+appropriate, on the original physical connection. The existing
+`repositoryResourceRead: 1` and workspace-only capture/detail/release contract
+remain unchanged. Neither protocol 14.1 nor the legacy read capability implies
+support for the new operations; protocol 14.2 alone is not an authority grant.
+Scoped reads retain their original caller, account, full instance and lifetime,
+including the private invalidation/retirement feed. Child Git policy retains its
+owner-only binding and defaults; native Git remains independent of that policy.
+
+These eight router operations extend the documented surface to **459 / 401 / 58**
+(dispatchable / router / fast path), including other independently prepared
+additions. The private `sourceControl.read.invalidated` notification shares the
+original resource-read retirement feed; it is not a global event subscription.
+Catalog inclusion does not identify a carrying release, advance component pins
+or enable either capability on an older daemon. The existing 14.0 script and
+monitor semantics, 14.1 startup readiness and their separate rollout obligations
+remain unchanged.
+
+**Version 14.1 — startup readiness (additive, implemented upstream).** The
+[startup contract](./startup-readiness.md) adds `system.startupStatus` and numeric
+error `-32012`, with exact `startupStatus: 1` support detection.
+[Daemon source at `8ce3de73`](https://github.com/intent-hq/intentd/blob/8ce3de736b814e43eeb6419148554086d8450c79/crates/intent-transport/src/protocol.rs#L747)
+advertises protocol 14.1 for this contract. It does not make ordinary hello usable
+before Store or grant guest access to owner progress. This source observation does
+not identify a carrying desktop release or advance the recorded component pins.
+Current documented counts including independently prepared additions are
+**459 / 401 / 58** (dispatchable / router / fast path); the version-specific counts
+below describe their original deltas.
 
 **Version 14.0 — active-only script and monitor lists (breaking, prepared).**
 The [replacement contract](./methods/scripts.md#active-only-compact-lists-prepared-breaking-contract)
@@ -49,7 +79,7 @@ known-ID status/output may still be used. This draft grants no merge permission.
 **Prepared generic stream recovery (independently gated additive extension).**
 [`eventStreamRecovery: 1`](./event-stream-recovery.md) adds an opt-in/ack to
 `events.subscribe`, the socket-private `events.lost` notification and the
-`events.fence` fast-path method. The prepared surface is **451 / 393 / 58**
+`events.fence` fast-path method. The prepared surface is **459 / 401 / 58**
 (dispatchable / router / fast path); domain event catalog and current advertised
 protocol version are unchanged.
 Exact capability and lease negotiation gate adoption, including bounded recovery
