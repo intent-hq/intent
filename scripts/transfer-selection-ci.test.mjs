@@ -54,10 +54,10 @@ test('reusable acquisition preserves workflow revision, caller head and counterp
   }
 });
 
-test('the connected step is required after checkout, with no path or missing-harness bypass', () => {
+test('the connected step is required in the queue, with no path or missing-harness bypass', () => {
   for (const name of ['Verify connected harnesses and source revisions', 'Prepare the connected test toolchains', 'Install the selected renderer dependencies', 'Run the connected transfer selection contract']) {
     const block = step(workflow, name);
-    assert.deepEqual(block.match(/^ +if: .*$/gm)?.map((line) => line.trim()), ["if: steps.monorepo.outcome == 'success'"]);
+    assert.deepEqual(block.match(/^ +if: .*$/gm)?.map((line) => line.trim()), ["if: github.event_name == 'merge_group' && steps.monorepo.outcome == 'success'"]);
     assert.doesNotMatch(block, /continue-on-error|hashFiles|paths-filter|--if-present|passWithNoTests/);
   }
   assert.match(step(workflow, 'Verify connected harnesses and source revisions'), /run: node scripts\/test-transfer-selection-contract.mjs --preflight/);

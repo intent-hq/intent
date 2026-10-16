@@ -18,14 +18,22 @@ human conversation per workspace. The two router methods use authenticated
 human membership, bounded sequence pagination, and principal-scoped retry keys.
 Clients tolerate unsupported methods without sending to an agent instead. The
 documented surface, including the prepared startup and generic stream recovery additions, is now
-**453 / 395 / 58** (dispatchable / router / fast path). This reservation does not
+**452 / 395 / 57** (dispatchable / router / fast path). This reservation does not
 identify a carrying release or change independent capability gates.
 
-**Version 15.0 — legacy workspace importer removal.** The daemon removes
-`system.importLegacy`, the legacy import CLI commands, and first-boot import.
-The 15.1 discussion addition preserves these removals. The catalog totals above
-include prepared extensions and baseline entries awaiting pin reconciliation;
-the combined daemon exposes **436 / 380 / 56** (dispatchable / router / fast path).
+**Version 15.0 — legacy workspace import removal (breaking).**
+Removes the UDS-only `system.importLegacy` fast-path method. Calls on either UDS
+or WSS now return `-32601 Method not found`. Also removes `intentd import`,
+`intentd import-legacy`, first-boot discovery of legacy Electron workspaces, and
+the frontend's Legacy Import settings. Already imported daemon workspaces remain
+available; source directories and persisted import markers are not deleted.
+The 9.0 removal and 9.1 restoration entries below remain historical records.
+Protocol 14.1 added the startup readiness observations described below.
+The documented surface, including prepared additions, has **450 / 393 / 57**
+dispatchable / router / fast-path methods. Follow [issue #4082](https://github.com/intent-hq/intent/issues/4082)'s
+removal order: frontend callers first, daemon removal second, then these docs
+after the automatic pin advance. The frontend's registered-root major guard
+must accept 15 before the daemon changes its advertised protocol.
 
 **Version 14.1 — startup readiness (additive).** The [startup contract](./startup-readiness.md)
 adds `system.startupStatus` and numeric error `-32012`, with exact

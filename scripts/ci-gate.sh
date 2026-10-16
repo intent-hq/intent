@@ -10,8 +10,9 @@
 #     not carry) must be `success` on pull_request and job-`skipped` on
 #     merge_group — a skip on pull_request or a run on merge_group is a
 #     misconfiguration and fails;
+#   - queue-only jobs must be skipped on PRs and succeed on merge_group;
 #   - preparation must succeed; the consumer workflow exercise must succeed
-#     when selected and be skipped otherwise, on either event;
+#     when selected in the queue and be skipped otherwise;
 #   - anything else — failure, cancelled, an empty or missing result, a job
 #     absent from the input, an event other than the two above — fails, naming
 #     the offending job or event.
@@ -30,12 +31,13 @@
 
 set -euo pipefail
 
-always_on_jobs="bridge-test python-tests docs-check event-catalog-check shell-tests shell-lint shell-tests-bash3 repo-hygiene ruleset-check triage-parser-test consumer-checks-prepare"
+always_on_jobs="runner-route docs-check event-catalog-check shell-lint repo-hygiene ruleset-check triage-parser-test consumer-checks-prepare ci-policy"
+queue_only_jobs="bridge-test python-tests shell-tests shell-tests-bash3 bootstrap-install"
 pull_request_only_jobs="pr-title breaking-token submodule-pins"
 path_selected_jobs="consumer-checks-exercise"
 
 if [ "${1:-}" = "--list-jobs" ]; then
-  for job in $always_on_jobs $pull_request_only_jobs $path_selected_jobs; do
+  for job in $always_on_jobs $pull_request_only_jobs $queue_only_jobs $path_selected_jobs; do
     printf '%s\n' "$job"
   done
   exit 0
@@ -135,6 +137,17 @@ for job in $pull_request_only_jobs; do
   fi
 done
 
+if [ "$event" = merge_group ]; then queue_expected=success; else queue_expected=skipped; fi
+for job in $queue_only_jobs; do
+  if ! result=$(result_of "$job"); then
+    echo "ci-gate: $job is missing from the needs results"
+    fail=1
+  elif [ "$result" != "$queue_expected" ]; then
+    echo "ci-gate: $job must be $queue_expected on $event (result: '$result')"
+    fail=1
+  fi
+done
+
 case "${GATE_CONSUMER_CHECKS_SELECTED:-}" in
   true) exercise_expected=success ;;
   false) exercise_expected=skipped ;;
@@ -144,6 +157,7 @@ case "${GATE_CONSUMER_CHECKS_SELECTED:-}" in
     fail=1
     ;;
 esac
+if [ "$event" = pull_request ]; then exercise_expected=skipped; fi
 for job in $path_selected_jobs; do
   if ! result=$(result_of "$job"); then
     echo "ci-gate: $job is missing from the needs results"

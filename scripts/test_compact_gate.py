@@ -44,6 +44,8 @@ class CompactSettingsTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.repo = self.root / "repo"
         self.repo.mkdir()
+        # setup-python on self-hosted Linux needs its shared-library path.
+        self.python_loader_env = {k: os.environ[k] for k in ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH") if k in os.environ}
         self.env = mock.patch.dict(os.environ, {"HOME": str(self.root)}, clear=True)
         self.env.start()
         self.addCleanup(self.env.stop)
@@ -241,7 +243,8 @@ for mode in ("0", "1"):
         assert bool(config) == (mode == "1"), (mode, config)
 '''
         result = subprocess.run([sys.executable, "-S", "-B", "-c", code],
-                                cwd=self.root, capture_output=True, text=True, timeout=10)
+                                cwd=self.root, env={**os.environ, **self.python_loader_env},
+                                capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_resume_identity_separates_modes_flags_and_external_config(self):

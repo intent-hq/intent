@@ -201,15 +201,15 @@ The dual-architecture workflow produces five platform/architecture builds in par
 
 | Platform      | Runner                                                         | Artifacts                                           | Feed file                |
 | ------------- | -------------------------------------------------------------- | --------------------------------------------------- | ------------------------ |
-| macOS (arm64) | `macos-15-xlarge` (GitHub-hosted)                              | `.dmg`, `.zip` (+ blockmaps)                        | `latest-mac.yml`         |
-| macOS (x64)   | `macos-15-large` (GitHub-hosted)                               | `.dmg`, `.zip` (+ blockmaps)                        | `latest-mac.yml` (shared) |
-| Windows (x64) | `gh-windows-16x` (org-hosted, Windows Server 2022 image)       | NSIS installer `.exe`, portable `.exe` (+ blockmap) | `latest.yml`             |
-| Linux (x64)   | self-hosted `tinybox` (`[self-hosted, Linux, X64, tinybox]`)   | AppImage, `.deb`                                    | `latest-linux.yml`       |
-| Linux (arm64) | self-hosted `comfy` (`[self-hosted, Linux, ARM64, comfy]`)     | AppImage only (`deb:arm64` temporarily disabled)    | `latest-linux-arm64.yml` |
+| macOS (arm64) | self-hosted macOS ARM64 → `depot-macos-latest`                              | `.dmg`, `.zip` (+ blockmaps)                        | `latest-mac.yml`         |
+| macOS (x64)   | self-hosted macOS X64 → `macos-latest-large`                               | `.dmg`, `.zip` (+ blockmaps)                        | `latest-mac.yml` (shared) |
+| Windows (x64) | self-hosted Windows X64 → `depot-windows-2022-16`       | NSIS installer `.exe`, portable `.exe` (+ blockmap) | `latest.yml`             |
+| Linux (x64)   | self-hosted Linux X64 → `depot-ubuntu-24.04-8`   | AppImage, `.deb`                                    | `latest-linux.yml`       |
+| Linux (arm64) | self-hosted Linux ARM64 → `depot-ubuntu-24.04-arm-8`     | AppImage only (`deb:arm64` temporarily disabled)    | `latest-linux-arm64.yml` |
 
 Notes:
 
-- **Self-hosted runner dependency**: both Linux jobs require their self-hosted runners (`tinybox` for x64 — monorepo#1340, `comfy` for arm64) to be online; a release run queues (and eventually fails) if one is unavailable. macOS uses a GitHub-hosted runner and Windows an org-hosted runner.
+- **Runner routing**: builds prefer compatible self-hosted capacity and use Depot when the fleet is busy, unavailable, under maintenance, or cannot be inspected. The probe stays hosted. See [CI runner routing](../RELEASING.md#ci-runner-routing) for credentials, platform matching, and the disposable smoke-test exception.
 - **Linux arm64 temporarily ships AppImage-only**: electron-builder's bundled fpm fails to spawn on the arm64 runner, so `deb:arm64` is disabled until the runner issue is resolved (monorepo#1286).
 - **Production Windows releases remain unsigned.** Expect SmartScreen warnings on install. Azure Artifact Signing is available only through the explicit manual build configuration; production enablement and native Windows installation/update acceptance remain pending. The retired DigiCert flag `INTENT_WINDOWS_ENABLE_INTEGRATED_SIGNING` must stay unset; enabling it fails the build.
 - **Linux packages are unsigned** (standard for AppImage/deb distributed outside a package repository). Snap is not built or published.
