@@ -1,13 +1,13 @@
 name: CI
-# CI is tiered by event. pull_request runs all applicable jobs; merge_group
-# runs the same jobs on the actual merged tree before the queue lands it, except the
+# PRs run static contracts, metadata, lint and CI-policy regressions. Runtime
+# suites and clean-host installation run on the queued tree. The
 # three PR-metadata checks (pr-title / breaking-token / submodule-pins),
 # which read `github.event.pull_request.*` / `github.head_ref` /
 # `github.base_ref` — none of which exist on merge_group — and already
 # covered the identical diff on the PR run, so they stay pull_request-only.
 # The `gate` job (CI Gate) aggregates every job into the one context the
 # main ruleset requires and is event-aware about those skips. The reusable
-# consumer workflow exercise is selected by changed paths on both events.
+# consumer workflow exercise is selected by changed paths in the queue.
 #
 # Incident: intent-hq/intent#5433 and #5446 were each green alone but broke
 # shell-tests together on every PR (intent-hq/intent#5455) for ~14 h — the
@@ -82,6 +82,7 @@ jobs:
   # probe (scripts/uds-rpc.mjs) are zero-dependency Node, so their node:test
   # suites need no submodules and use the shared runner routing policy.
   bridge-test:
+    if: github.event_name == 'merge_group'
     needs: [runner-route]
     runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
     steps:
@@ -99,6 +100,7 @@ jobs:
   # Includes offline prerelease retention/deletion tests and a functional check
   # that their failures fail this target. No cleanup credentials or live scan.
   python-tests:
+    if: github.event_name == 'merge_group'
     needs: [runner-route]
     runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
     steps:
@@ -140,7 +142,7 @@ jobs:
   # references and setup fail before merge. Keep the full connected exercise.
   consumer-checks-exercise:
     needs: consumer-checks-prepare
-    if: needs.consumer-checks-prepare.outputs.selected == 'true'
+    if: github.event_name == 'merge_group' && needs.consumer-checks-prepare.outputs.selected == 'true'
     permissions:
       contents: read
       pull-requests: read
@@ -235,6 +237,7 @@ jobs:
   # public intentd submodule at its pin (shallow, the same way
   # event-catalog-check does); packages/ios stays `update = none`.
   shell-tests:
+    if: github.event_name == 'merge_group'
     needs: [runner-route]
     runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
     steps:
@@ -296,6 +299,7 @@ jobs:
   # Keep stock macOS Bash 3.2 compatibility without renting a Mac for shell tests.
   # A pinned Linux build runs the same suites; REQUIRE_BASH3 forbids silent skips.
   shell-tests-bash3:
+    if: github.event_name == 'merge_group'
     needs: [runner-route]
     runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
     steps:
@@ -456,12 +460,29 @@ jobs:
   # exercise must match its path selection (success or intentional skip).
   # The self-test diffs the script's job list against this needs list,
   # so keep both in step.
+  bootstrap-install:
+    if: github.event_name == 'merge_group'
+    uses: ./.github/workflows/bootstrap-install.yml
+    secrets: inherit
+
+  ci-policy:
+    needs: [runner-route]
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - run: python3 -m pip install 'PyYAML==6.0.3'
+      - run: bash scripts/ci-gate.test.sh
+      - run: python3 -I -B scripts/test-ci-event-policy.py
+
   gate:
     name: CI Gate
     runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
     permissions: {}
     if: always()
-    needs: [pr-title, bridge-test, python-tests, docs-check, event-catalog-check, shell-tests, shell-lint, shell-tests-bash3, repo-hygiene, ruleset-check, breaking-token, submodule-pins, triage-parser-test, consumer-checks-prepare, consumer-checks-exercise, runner-route]
+    needs: [ci-policy, bootstrap-install, pr-title, bridge-test, python-tests, docs-check, event-catalog-check, shell-tests, shell-lint, shell-tests-bash3, repo-hygiene, ruleset-check, breaking-token, submodule-pins, triage-parser-test, consumer-checks-prepare, consumer-checks-exercise, runner-route]
     steps:
       - uses: actions/checkout@v7
         with:

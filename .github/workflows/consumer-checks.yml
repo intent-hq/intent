@@ -191,11 +191,11 @@ jobs:
           exit "$status"
 
       - name: Verify connected harnesses and source revisions
-        if: steps.monorepo.outcome == 'success'
+        if: github.event_name == 'merge_group' && steps.monorepo.outcome == 'success'
         run: node scripts/test-transfer-selection-contract.mjs --preflight
 
       - name: Prepare the connected test toolchains
-        if: steps.monorepo.outcome == 'success'
+        if: github.event_name == 'merge_group' && steps.monorepo.outcome == 'success'
         shell: bash
         run: |
           # Only an explicit release toolchain, never a caller-controlled PATH.
@@ -213,18 +213,18 @@ jobs:
           corepack enable
 
       - name: Configure Depot managed compiler cache
-        if: steps.monorepo.outcome == 'success'
+        if: github.event_name == 'merge_group' && steps.monorepo.outcome == 'success'
         shell: bash
         env:
           DEPOT_SCCACHE_TOKEN: ${{ secrets.DEPOT_TOKEN }}
         run: python3 scripts/setup-depot-sccache.py
       - name: Install the selected renderer dependencies
-        if: steps.monorepo.outcome == 'success'
+        if: github.event_name == 'merge_group' && steps.monorepo.outcome == 'success'
         working-directory: packages/cloudlands-fe
         run: corepack pnpm install --frozen-lockfile
 
       - name: Run the connected transfer selection contract
-        if: steps.monorepo.outcome == 'success'
+        if: github.event_name == 'merge_group' && steps.monorepo.outcome == 'success'
         shell: bash
         env:
           NODE_OPTIONS: --max-old-space-size=8192
