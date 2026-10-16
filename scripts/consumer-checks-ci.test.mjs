@@ -186,7 +186,7 @@ test('CI prepares every event and exercises the local workflow only when selecte
   }
   const exercise = job(ci, 'consumer-checks-exercise');
   assert.match(exercise, /needs: consumer-checks-prepare/);
-  assert.match(exercise, /if: needs.consumer-checks-prepare.outputs.selected == 'true'/);
+  assert.match(exercise, /if: github.event_name == 'merge_group' && needs.consumer-checks-prepare.outputs.selected == 'true'/);
   assert.match(exercise, /uses: \.\/\.github\/workflows\/consumer-checks.yml/);
   assert.match(exercise, /component: intentd/);
   assert.match(exercise, /head-sha: \$\{\{ needs.consumer-checks-prepare.outputs.intentd-sha \}\}/);

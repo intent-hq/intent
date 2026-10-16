@@ -369,7 +369,8 @@ guard_output=$(SELF_TEST=true MONOREPO_REF=0123456789abcdef0123456789abcdef01234
 grep -q '^::error::consumer-checks:' <<<"$guard_output" ||
   fail "self-test checkout failure did not emit an error:"$'\n'"$guard_output"
 
-downstream_gates=$(awk -v gate="$gate_line" -v guard="- name: $guard_name" '
+queue_gate_line="        if: github.event_name == 'merge_group' && steps.monorepo.outcome == 'success'"
+downstream_gates=$(awk -v queue_gate="$queue_gate_line" -v gate="$gate_line" -v guard="- name: $guard_name" '
   function flush() { if (after_guard && name != "") print (gated ? "gated " : "ungated ") name }
   /^      - / {
     flush()
@@ -380,7 +381,7 @@ downstream_gates=$(awk -v gate="$gate_line" -v guard="- name: $guard_name" '
     if (index($0, guard)) guard_seen = 1
     next
   }
-  $0 == gate { gated = 1 }
+  $0 == gate || $0 == queue_gate { gated = 1 }
   END { flush() }
 ' "$workflow")
 grep -q '^ungated ' <<<"$downstream_gates" &&
