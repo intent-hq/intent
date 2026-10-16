@@ -287,7 +287,7 @@ contract. The desktop entry point remains behind the Multiplayer Labs setting.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| discussion.list | workspaceId (req), beforeSequence? (positive integer, exclusive), limit? (integer 1–100, default 50) | `{ messages: DiscussionMessage[], hasMore: boolean }` |
+| discussion.list | workspaceId (req), beforeSequence? (positive integer, exclusive), afterSequence? (nonnegative integer, exclusive; mutually exclusive with beforeSequence), limit? (integer 1–100, default 50) | `{ messages: DiscussionMessage[], hasMore: boolean }` |
 | discussion.send | workspaceId (req), messageId (req, nonblank string, at most 128 UTF-8 bytes), body (req, nonblank string, at most 16384 UTF-8 bytes) | `{ message: DiscussionMessage }` |
 
 `DiscussionMessage` has the same shape in history, send replies, and events:
@@ -324,32 +324,47 @@ contract. The desktop entry point remains behind the Multiplayer Labs setting.
 
 #### History and delivery
 
-`discussion.list` selects the newest `limit` messages below `beforeSequence`, or
-the newest page when no cursor is supplied, and returns that page in ascending
-sequence order. `hasMore` means older rows remain below the returned page. An
-empty discussion returns `{ "messages": [], "hasMore": false }`. Queries are
-bounded by the page limit; the server does not load the entire conversation.
+`discussion.list` always returns messages in ascending sequence order:
+
+- Without a cursor, select the newest `limit` messages. `hasMore` means older
+  rows remain below the returned page.
+- With `beforeSequence`, select the newest `limit` messages strictly below that
+  sequence. `hasMore` again means older rows remain.
+- With `afterSequence`, select the oldest `limit` messages strictly above that
+  sequence. `hasMore` means newer rows remain above the returned page. Zero is
+  accepted so an initially empty discussion can catch up from its beginning.
+
+The cursors are mutually exclusive; supplying both is `-32602` Invalid params.
+An empty page returns `{ "messages": [], "hasMore": false }`. Queries are bounded
+by the page limit; the server does not load the entire conversation.
 
 `discussion.send` persists the row before replying and publishes
 `discussion:message` with `data = { workspaceId, message }`. The event carries
-the complete committed message. The retry key is scoped to
-`(workspaceId, authenticated principalId, messageId)`: repeated sends return the
-original immutable row rather than inserting another message. A client retries
-an uncertain send with the same key and body. New intentional sends use new
-keys. Reusing a key with different valid text still returns the original body
-and author snapshot; it does not edit the row or publish another event. History
-survives daemon restarts and client reconnects. The discussion row is the source
-of truth; the event uses the existing durable event bus and publication failures
-do not roll back an already committed message.
+the complete committed message and is transient: broadcast through the existing
+event bus without persisting a second copy in the event log. History survives
+daemon restarts and client reconnects in the discussion table; `discussion.list`
+is the recovery path when live delivery is missed.
+
+The retry key is scoped to `(workspaceId, authenticated principalId, messageId)`.
+Repeated sends with the same key and exact body return the original immutable
+row and author snapshot, even if the person's profile has since changed. A
+client retries an uncertain send with that same key and body. New intentional
+sends use new keys. Reusing a key with different text is `-32602` Invalid params;
+it does not edit the row, insert a new message, or publish another event.
 
 Clients subscribe to workspace events before reading history, merge by message
 `id`, and sort by `sequence`. A live event, a send reply, and a history page may
 contain the same row. A late history reply must not erase a live row. After a
-reconnect, read the newest page and continue older pages until the previously
-known sequence is reached or `hasMore` is false; do not assume one page spans the
-offline interval. Preserve scroll position when prepending history, and retain
-drafts and uncertain sends until their outcome is known. Discard pending replies
-when the workspace's backend or authenticated principal changes.
+reconnect, use `afterSequence` from the last successfully synchronized history
+position and advance it through each fetched page until `hasMore` is false.
+Keep this position separate from live arrivals and send replies: seeing a newer
+message does not prove that intervening history was fetched. An initially empty
+history establishes position zero. Bound catch-up work per attempt and preserve
+the last fetched position across interruption or retry; a live message must not
+advance it past unread history. Keep the older-history cursor separate, preserve
+scroll position when prepending history, and retain drafts and uncertain sends
+until their outcome is known. Discard pending replies when the workspace's
+backend or authenticated principal changes.
 
 #### Workspace transfer
 
@@ -375,8 +390,11 @@ the bound caller, never `client.hello` display metadata.
 
 `discussion:message` is workspace-scoped and passes the existing delivery-time
 membership gate. Removed members cannot continue reading history, sending, or
-receiving subsequent messages. Sending a discussion message does not route it
-into an agent conversation.
+receiving subsequent messages. Agent subscriptions cannot subscribe to or receive
+`discussion:` events, including subscriptions restored from storage. Agent event
+history queries exclude discussion rows before pagination, including rows stored
+by earlier development builds; explicit type, wildcard, and unfiltered queries
+cannot expose them. Sending a discussion message does not dispatch an agent turn.
 
 Older owner connections can answer `-32601`; an older collaborator allowlist can
 answer `-32003`. Clients must show that discussions are unavailable, retain the

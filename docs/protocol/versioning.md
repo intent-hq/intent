@@ -15,7 +15,9 @@ Other prepared extensions retain their independent support gates.
 [Workspace discussions](./methods/multiplayer.md#554-workspace-discussions) add
 `discussion.list`, `discussion.send`, and `discussion:message` for one persisted
 human conversation per workspace. The two router methods use authenticated
-human membership, bounded sequence pagination, and principal-scoped retry keys.
+human membership, bounded forward/backward sequence pagination, and
+principal-scoped retry keys that reject changed bodies. Message events are
+broadcast-only, and agent subscriptions and history queries exclude discussions.
 Clients tolerate unsupported methods without sending to an agent instead. The
 documented surface, including the prepared startup and generic stream recovery additions, is now
 **452 / 395 / 57** (dispatchable / router / fast path). This reservation does not
