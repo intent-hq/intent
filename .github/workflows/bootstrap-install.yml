@@ -67,6 +67,7 @@ jobs:
         if: steps.select.outputs.selected == 'true'
         run: |
           sudo -n docker run --rm --init \
+            --env CI=true \
             --mount "type=bind,source=$GITHUB_WORKSPACE,target=/source,readonly" \
             ubuntu:24.04 bash -euxo pipefail -c '
               mkdir /workspace

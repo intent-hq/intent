@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Regression proof for the monorepo PR/queue boundary and bootstrap selection."""
 from pathlib import Path
+import json
 import os
 import subprocess
 import tempfile
@@ -82,6 +83,29 @@ class EventPolicy(unittest.TestCase):
             git('rm','scripts/bootstrap-dev-host.sh')
             git('commit','-qm','test: removal')
             self.assertEqual(run('merge_group',git('rev-parse','HEAD'),head), (0, 'selected=true\n'))
+
+    def test_bootstrap_container_receives_ci_without_a_terminal(self):
+        steps = workflow('bootstrap-install.yml')['jobs']['bootstrap-install']['steps']
+        command = next(s['run'] for s in steps if s.get('name') == 'Install and check in clean Ubuntu')
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            capture = root / 'args.json'
+            sudo = root / 'sudo'
+            sudo.write_text('#!/usr/bin/env python3\nimport json, os, sys\n'
+                            'with open(os.environ["CAPTURE"], "w") as f:\n'
+                            '    json.dump(sys.argv[1:], f)\n')
+            sudo.chmod(0o755)
+            result = subprocess.run(['bash', '-e', '-o', 'pipefail', '-c', command],
+                stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                env={**os.environ, 'PATH': temp + os.pathsep + os.environ['PATH'],
+                     'CAPTURE': str(capture), 'GITHUB_WORKSPACE': '/runner/source with spaces', 'CI': 'true'})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            args = json.loads(capture.read_text())
+            self.assertEqual(args[:4], ['-n', 'docker', 'run', '--rm'])
+            options = args[4:args.index('ubuntu:24.04')]
+            environment = [options[i + 1] for i, arg in enumerate(options) if arg in ('--env', '-e')]
+            self.assertIn('CI=true', environment, 'Docker does not inherit the runner CI environment')
+            self.assertIn('type=bind,source=/runner/source with spaces,target=/source,readonly', options)
 
 
 if __name__ == '__main__':
