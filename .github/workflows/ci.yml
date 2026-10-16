@@ -462,6 +462,9 @@ jobs:
   # so keep both in step.
   bootstrap-install:
     if: github.event_name == 'merge_group'
+    permissions:
+      contents: read
+      actions: read
     uses: ./.github/workflows/bootstrap-install.yml
     secrets: inherit
 

@@ -28,6 +28,7 @@ class EventPolicy(unittest.TestCase):
         self.assertEqual(jobs['consumer-checks-exercise']['if'], "github.event_name == 'merge_group' && needs.consumer-checks-prepare.outputs.selected == 'true'")
         self.assertIn('consumer-checks-exercise', jobs['gate']['needs'])
         self.assertEqual(jobs['bootstrap-install']['uses'], './.github/workflows/bootstrap-install.yml')
+        self.assertEqual(jobs['bootstrap-install']['permissions'], {'contents': 'read', 'actions': 'read'})
 
     def test_reusable_contract_has_static_pr_checks_and_required_queue_runtime(self):
         jobs = workflow('consumer-checks.yml')['jobs']
