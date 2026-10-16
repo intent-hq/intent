@@ -18,6 +18,9 @@ human conversation per workspace. The two router methods use authenticated
 human membership, bounded forward/backward sequence pagination, and
 principal-scoped retry keys that reject changed bodies. Message events are
 broadcast-only, and agent subscriptions and history queries exclude discussions.
+Discussion typing extends the existing `presence.update` and human roster
+shapes with transient `discussionTyping`; it adds no method or event type.
+Agent/daemon snapshots omit that field, and older rosters without it remain valid.
 Clients tolerate unsupported methods without sending to an agent instead. The
 documented surface, including the prepared startup and generic stream recovery additions, is now
 **452 / 395 / 57** (dispatchable / router / fast path). This reservation does not

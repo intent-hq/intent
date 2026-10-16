@@ -60,6 +60,8 @@ response brackets recovery reads with actual event-delivery boundaries.
 
 The prepared [workspace discussion contract (§5.54)](./methods/multiplayer.md#554-workspace-discussions)
 adds two workspace-scoped router methods for one human conversation per workspace.
+Its transient typing indicators extend existing presence parameters and human
+roster rows without adding another method or event type (§5.47).
 Older daemons reject these methods with `-32601`; no agent chat fallback is allowed.
 
 The documented surface reserves **452 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):

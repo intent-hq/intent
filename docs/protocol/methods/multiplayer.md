@@ -366,6 +366,22 @@ scroll position when prepending history, and retain drafts and uncertain sends
 until their outcome is known. Discard pending replies when the workspace's
 backend or authenticated principal changes.
 
+#### Typing indicators
+
+Discussion typing uses the existing transient [presence channel
+(§5.47)](./presence.md#discussion-typing-151-prepared). A human connection reports
+`presence.update` with `discussionTyping: { workspaceId }`; human roster rows
+carry `discussionTyping: [{ source, since, pulse }]`. It carries no message text
+and does not change history or message sequence numbers. The existing agent
+typing shape remains unchanged, and agents cannot read discussion typing.
+
+The composer shows other members' names in a localized typing line. Pulses are
+throttled, expire after three seconds without a new pulse, and clear on send,
+empty draft, blur, navigation, hidden window, disconnect, or lost access.
+Multiple connections for one person produce one name; the current person is
+hidden. Repeated unchanged rosters cannot revive expired typing. An omitted
+field from an older daemon means no indicator, not a discussion failure.
+
 #### Workspace transfer
 
 Workspace exports include discussion history. Import preserves message IDs,
