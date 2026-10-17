@@ -245,11 +245,13 @@ else:
         supervisor_hint = ""
         if isinstance(supervisor, dict):
             supervisor_hint = f" supervisor={supervisor.get('kind')}:{supervisor.get('id')}"
+        specialists_hint = ""
+        if state.get("userSpecialistsDir"):
+            specialists_hint = f" specialists={state['userSpecialistsDir']}"
         print(
             f"{state['mode']}: pid={state['pid']} url={state['url']} "
             f"source={state['intentdSource']} socket={state['socket'] or '-'}"
-            + (f" specialists={state['userSpecialistsDir']}" if state.get("userSpecialistsDir") else "")
-            + f"{supervisor_hint}"
+            f"{specialists_hint}{supervisor_hint}"
         )
     if not live:
         print("No running sandboxes.", file=sys.stderr)
@@ -663,9 +665,17 @@ elif [[ "$mode" == stack ]]; then
   fi
   echo "[dev-sandbox-stack] Starting intentd binary: $intentd_bin"
   socket_path="$dev_data_dir/intentd.sock"
-  user_specialists_dir="$dev_data_dir/specialists"
-  mkdir -p "$dev_data_dir" "$user_specialists_dir"
-  echo "[dev-sandbox-stack] Specialists (user tier): $user_specialists_dir (isolated from ~/.intent/specialists)"
+  specialists_request="$dev_data_dir/specialists"
+  [[ "$specialists_request" == /* ]] || specialists_request="$PWD/$specialists_request"
+  mkdir -p "$dev_data_dir" "$specialists_request"
+  # Older daemons ignore the override and would edit ~/.intent/specialists, so
+  # only claim isolation when the binary knows the variable.
+  if LC_ALL=C grep -qaF INTENTD_USER_SPECIALISTS_DIR "$intentd_bin" 2>/dev/null; then
+    user_specialists_dir=$specialists_request
+    echo "[dev-sandbox-stack] Specialists (user tier): $user_specialists_dir (isolated from ~/.intent/specialists)"
+  else
+    echo "[dev-sandbox-stack] WARNING: $intentd_bin does not support INTENTD_USER_SPECIALISTS_DIR; specialist Settings changes will edit ~/.intent/specialists." >&2
+  fi
   daemon_args=(serve)
   if [[ ${SANDBOX_TCP:-0} == 1 ]]; then
     daemon_args+=(--insecure)
@@ -674,7 +684,7 @@ elif [[ "$mode" == stack ]]; then
   defer_signals
   INTENTD_DATA_DIR="$dev_data_dir" INTENTD_TCP_PORT="$dev_tcp_port" \
     INTENTD_WORKSPACES_DIR="$dev_data_dir/workspaces" INTENTD_ASSERT_HERMETIC_ROOT=1 \
-    INTENTD_LEGACY_IMPORT_ROOTS="" INTENTD_USER_SPECIALISTS_DIR="$user_specialists_dir" \
+    INTENTD_LEGACY_IMPORT_ROOTS="" INTENTD_USER_SPECIALISTS_DIR="$specialists_request" \
     "$intentd_bin" "${daemon_args[@]}" &
   hold_fork_window
   capture_child_pid daemon_pid

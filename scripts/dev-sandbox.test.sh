@@ -390,6 +390,31 @@ kill -TERM "$sandbox_pid"
 wait "$sandbox_pid" 2>/dev/null || true
 sandbox_pid=""
 
+# A daemon that predates INTENTD_USER_SPECIALISTS_DIR must not be reported as
+# isolated: the launcher warns and records a null userSpecialistsDir.
+sed 's/, "INTENTD_USER_SPECIALISTS_DIR"//' "$temp_dir/fake intentd" >"$temp_dir/legacy intentd"
+chmod +x "$temp_dir/legacy intentd"
+! grep -q INTENTD_USER_SPECIALISTS_DIR "$temp_dir/legacy intentd" || fail "legacy fixture still names the override"
+port=$(free_port)
+PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" DEV_DATA_DIR="$temp_dir/legacy-data" \
+  SANDBOX_STATE_DIR="$state_dir" \
+  INTENTD_WORKSPACES_DIR="$temp_dir/ordinary workspaces" INTENTD_ASSERT_HERMETIC_ROOT=0 \
+  INTENTD_BIN="$temp_dir/legacy intentd" HEALTH_MODE=ok SANDBOX_READY_TIMEOUT="$ready_timeout" \
+  "$BASH" "$script" stack >"$temp_dir/legacy.out" 2>&1 &
+sandbox_pid=$!
+wait_for_ready "$temp_dir/legacy.out" || fail "legacy-daemon stack did not become ready: $(cat "$temp_dir/legacy.out")"
+grep -q "does not support INTENTD_USER_SPECIALISTS_DIR" "$temp_dir/legacy.out" || fail "legacy daemon was not flagged"
+! grep -q "isolated from ~/.intent/specialists" "$temp_dir/legacy.out" || fail "legacy daemon was reported as isolated"
+python3 - "$state_dir/stack.json" <<'PY' || fail "legacy daemon state claimed isolation"
+import json
+import sys
+state = json.load(open(sys.argv[1], encoding="utf-8"))
+assert state["userSpecialistsDir"] is None
+PY
+kill -TERM "$sandbox_pid"
+wait "$sandbox_pid" 2>/dev/null || true
+sandbox_pid=""
+
 # App mode connects to the selected installed daemon and leaves its lifetime
 # alone. This independent stub stands in for that daemon inside the fixture.
 app_data_dir="$temp_dir/installed data"

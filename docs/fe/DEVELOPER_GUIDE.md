@@ -73,7 +73,8 @@ For Loop A work against the installed daemon, use `make dev-sandbox-app`; use
 `make dev-sandbox-stack` for an isolated intentd plus renderer. The stack daemon uses its
 own user specialists folder (`$DEV_DATA_DIR/specialists`, recorded as
 `userSpecialistsDir`), so specialist Settings edits and resets never touch
-`~/.intent/specialists`. The first tunneled
+`~/.intent/specialists`. A daemon binary without `INTENTD_USER_SPECIALISTS_DIR` support
+gets a startup warning and a `null` `userSpecialistsDir` instead. The first tunneled
 hydration of a fresh, pre-warmed app takes roughly one to three minutes depending on host
 load. Follow the root health wait and keep waiting if the splash remains.
 
