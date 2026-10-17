@@ -111,8 +111,18 @@ redaction applies. Deleting the file removes every profile.
 - **Writes.** The daemon writes the file atomically (temp file, fsync, rename) and
   serializes all profile mutations. Create writes the secret entry before the
   metadata and removes the secret if the metadata write fails. Delete removes the
-  metadata before the secret. A secret entry with no metadata is inert, and the daemon
-  removes it at startup.
+  metadata before the secret. A secret entry with no metadata is inert.
+- **Orphan cleanup.** The secret store (`~/intent/.secrets.json`) is one file shared by
+  every daemon of the user, dev sandboxes included. The profile file belongs to one
+  data dir, so the daemon never removes `providerProfiles.*` secrets wholesale; that
+  could delete another daemon's profiles. Instead:
+  - Before each create or delete, the daemon records the profile id in an optional
+    `pendingEnvCleanup: string[]` member of its own profile file.
+  - It drops the id once the mutation completes. The member is omitted when empty, so
+    the file normally has exactly the shape above.
+  - At startup, the daemon removes the secret entry only for recorded ids that have no
+    metadata, then clears the list.
+  - A secret orphaned some other way stays inert and is never swept.
 - **Reads.** The daemon reads the file at startup and after its own writes. It does
   not watch for external edits; changes made outside the daemon apply after a restart.
   If the file is malformed or has an unknown `version`, the daemon still starts and
