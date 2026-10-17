@@ -22,10 +22,9 @@
 // precedent as packages/cloudlands-fe/scripts/notify-fixed-issues.sh):
 // once present, re-runs do nothing.
 //
-// The LLM (Auggie CLI — same LLM-in-CI precedent as
-// packages/cloudlands-fe/scripts/generate-release-notes.ts) sees the issue
-// text as untrusted DATA: it is passed via execFile argv (never
-// shell-interpolated), the prompt tells the model to ignore instructions
+// The LLM (Codex CLI) sees the issue text as untrusted DATA: it is passed
+// via execFile stdin (never shell-interpolated), and the prompt tells the
+// model to ignore instructions
 // inside it, and everything the model returns is clamped to the fixed
 // label / field vocabulary and sanitized before it reaches a public comment.
 //
@@ -40,8 +39,13 @@
 //   the Effort field always from the model. An issue whose both fields are
 //   already set is skipped without calling the model, so re-runs are
 //   idempotent. It prints one `fields-only result:` line per issue.
-// Env: TRIAGE_REPO (default intent-hq/intent); GH_TOKEN for gh; auggie
-// auth via AUGMENT_SESSION_AUTH (CI) or an interactive login (local).
+// CI: --prepare-codex <new-directory> reads issue data and writes a prompt,
+// schema and isolated configuration. The official Codex Action writes its
+// final message to <directory>/response.json; --apply-codex <directory>
+// validates it and applies the usual plan. Repeat the issue number and mode
+// flags in both steps. Preparation never writes to GitHub.
+// Env: TRIAGE_REPO (default intent-hq/intent); GH_TOKEN for gh;
+// OPENAI_API_KEY for direct local Codex runs (no personal-login fallback).
 //
 // The pure logic (query extraction, prompt build, response parsing with
 // the label / field allowlists, action gating, comment build) is exported
@@ -50,7 +54,9 @@
 'use strict';
 
 const { execFileSync } = require('node:child_process');
+const path = require('node:path');
 const { ISSUE_TYPE_BY_LABEL, LEGACY_TYPE_LABELS } = require('./parse-issue.js');
+const { runCodex, prepareClassifier, appliedClassifier } = require('./codex-runner.js');
 
 const AGENTIC_MARKER = '<!-- issue-triage: agentic -->';
 const NEEDS_TRIAGE_LABEL = 'needs-triage';
@@ -163,7 +169,7 @@ function sanitizeText(text, max = 240) {
     .slice(0, max);
 }
 
-// The instruction handed to `auggie --print -i`. The issue and candidate
+// The instruction handed to `codex exec` on stdin. The issue and candidate
 // text is embedded as clearly delimited untrusted data. In fields-only
 // (backfill) mode the priority rule asks for a value on every issue —
 // feature requests included — because the whole point of that pass is to
@@ -187,7 +193,7 @@ function buildPrompt(issue, candidates, { fieldsOnly = false } = {}) {
     '(cloudlands-fe, the Electron + SvelteKit desktop frontend), "ios"',
     '(SwiftUI companion app).',
     '',
-    'Reply with ONLY a JSON object inside a ```json fenced block, shaped:',
+    'Reply with ONLY a JSON object matching the supplied schema, shaped:',
     '{',
     '  "duplicates": [{"number": <int>, "confidence": "high"|"medium"|"low", "reason": "<short>"}],',
     '  "component": "intentd"|"fe"|"ios"|null,',
@@ -630,7 +636,7 @@ module.exports = {
 
 // ---------------------------------------------------------------------------
 // CLI. Everything below shells out (execFile — argv, never a shell) and is
-// exercised by the workflow / local dry-runs, not the unit tests.
+// exercised by the mocked CLI tests, workflow and local dry-runs.
 // ---------------------------------------------------------------------------
 
 function warn(msg) {
@@ -837,43 +843,6 @@ function searchCandidates(repo, issueNumber, queries) {
   return [...byNumber.values()].slice(0, MAX_CANDIDATES);
 }
 
-// Same invocation pattern as generate-release-notes.ts: the instruction is
-// an argv element, so untrusted issue text is never shell-interpolated.
-//
-// Unlike the release-notes script (which processes trusted maintainer
-// commit messages), the prompt here embeds attacker-controlled issue text,
-// so the agent is hardened down to pure text-in/text-out: every tool is
-// removed and denied belt-and-braces, the run is capped at one turn, and
-// the GitHub token is scrubbed from the subprocess env (the script's own
-// `gh` calls keep the parent env). A prompt-injected body therefore cannot
-// steer the agent into running `gh`/shell commands or exfiltrating the
-// token — the only thing it can influence is the JSON text this script
-// then clamps to the fixed label vocabulary.
-const AUGGIE_DENIED_TOOLS = [
-  'launch-process', 'view', 'str-replace-editor', 'save-file',
-  'remove-files', 'web-fetch', 'web-search', 'codebase-retrieval',
-  'github-api',
-];
-function runAuggie(instruction) {
-  return execFileSync(
-    'auggie',
-    [
-      '--print', '--quiet', '--max-turns', '1', '--dont-save-session',
-      ...AUGGIE_DENIED_TOOLS.flatMap((t) => [
-        '--remove-tool', t, '--permission', `${t}:deny`,
-      ]),
-      '-i', instruction,
-    ],
-    {
-      encoding: 'utf8',
-      stdio: ['pipe', 'pipe', 'inherit'],
-      timeout: 300000,
-      maxBuffer: 16 * 1024 * 1024,
-      env: { ...process.env, GH_TOKEN: '', GITHUB_TOKEN: '' },
-    }
-  );
-}
-
 // The fields-only (backfill) pass over one issue. Minimal API footprint —
 // no comment read, no duplicate search: one issue read, one context read,
 // at most one model call, and the field write (which re-reads before
@@ -882,7 +851,7 @@ function runAuggie(instruction) {
 // the final `fields-only result:` line is the machine-readable outcome
 // (`existing` = field already set, `label` / `model` = the source of a
 // value written now, `none` = nothing could be planned).
-function runFieldsOnly({ repo, issueNumber, issue, currentLabels, dryRun }) {
+function runFieldsOnly({ repo, issueNumber, issue, currentLabels, dryRun, classify }) {
   const context = fetchIssueContext(repo, issueNumber);
   if (!context.issueNodeId || context.issueFields.length === 0) {
     warn(`fields-only: issue fields unavailable for #${issueNumber}; aborting this issue`);
@@ -914,11 +883,12 @@ function runFieldsOnly({ repo, issueNumber, issue, currentLabels, dryRun }) {
     );
     let output;
     try {
-      output = runAuggie(prompt);
+      output = classify(prompt);
     } catch (e) {
-      warn(`auggie invocation failed: ${e.message}`);
+      warn(`Codex classification failed: ${e.message}`);
       process.exit(1);
     }
+    if (output === null) return; // Prepare-only: the Action runs the model next.
     response = parseTriageResponse(output);
     if (!response) {
       warn('model output contained no valid JSON triage response');
@@ -961,17 +931,31 @@ function main() {
   const args = process.argv.slice(2);
   let dryRun = false;
   let fieldsOnly = false;
-  while (args[0] === '--dry-run' || args[0] === '--fields-only') {
+  let prepareDir;
+  let applyDir;
+  while (['--dry-run', '--fields-only', '--prepare-codex', '--apply-codex'].includes(args[0])) {
     if (args[0] === '--dry-run') dryRun = true;
-    else fieldsOnly = true;
+    else if (args[0] === '--fields-only') fieldsOnly = true;
+    else {
+      const option = args.shift();
+      if (!args[0] || args[0].startsWith('--')) throw new Error(`${option} requires a directory`);
+      if (option === '--prepare-codex') prepareDir = path.resolve(args[0]);
+      else applyDir = path.resolve(args[0]);
+    }
     args.shift();
   }
   const issueNumber = Number(args[0]);
-  if (args.length !== 1 || !Number.isInteger(issueNumber) || issueNumber <= 0) {
-    console.error('usage: agentic-triage.js [--dry-run] [--fields-only] <issue-number>');
+  if (args.length !== 1 || !Number.isInteger(issueNumber) || issueNumber <= 0 || (prepareDir && applyDir)) {
+    console.error('usage: agentic-triage.js [--dry-run] [--fields-only] [--prepare-codex DIR | --apply-codex DIR] <issue-number>');
     process.exit(2);
   }
   const repo = process.env.TRIAGE_REPO || 'intent-hq/intent';
+  const request = { repo, issueNumber, fieldsOnly, dryRun };
+  const classify = prepareDir ? prepareClassifier(prepareDir, request) :
+    applyDir ? appliedClassifier(applyDir, request) : runCodex;
+  // Keep the requested dry-run in the manifest, but prohibit all writes during
+  // preparation, including marker recovery and deterministic fields-only work.
+  const mayWrite = !dryRun && !prepareDir;
 
   const issue = ghJson([
     'issue', 'view', String(issueNumber), '--repo', repo,
@@ -987,7 +971,7 @@ function main() {
   const currentLabels = (issue.labels || []).map((l) => l.name);
 
   if (fieldsOnly) {
-    runFieldsOnly({ repo, issueNumber, issue, currentLabels, dryRun });
+    runFieldsOnly({ repo, issueNumber, issue, currentLabels, dryRun: !mayWrite, classify });
     return;
   }
 
@@ -1030,7 +1014,7 @@ function main() {
     // before the final step leaves needs-triage behind; retire it here so
     // a re-run (workflow_dispatch) completes the pass instead of no-oping.
     if (currentLabels.includes(NEEDS_TRIAGE_LABEL)) {
-      if (dryRun) {
+      if (!mayWrite) {
         console.log(
           `issue #${issueNumber}: marker present; would remove leftover ${NEEDS_TRIAGE_LABEL} (dry-run).`
         );
@@ -1063,11 +1047,12 @@ function main() {
   );
   let output;
   try {
-    output = runAuggie(prompt);
+    output = classify(prompt);
   } catch (e) {
-    warn(`auggie invocation failed: ${e.message}`);
+    warn(`Codex classification failed: ${e.message}`);
     process.exit(1);
   }
+  if (output === null) return; // Prepare-only: the Action runs the model next.
   const response = parseTriageResponse(output);
   if (!response) {
     warn('model output contained no valid JSON triage response');
@@ -1101,7 +1086,7 @@ function main() {
     );
   }
   console.log(`remove ${NEEDS_TRIAGE_LABEL}: ${plan.removeNeedsTriage}`);
-  if (dryRun) {
+  if (!mayWrite) {
     console.log(`--- would comment on ${repo}#${issueNumber}: ---`);
     console.log(buildSummaryComment(plan));
     console.log('dry-run: nothing written');
