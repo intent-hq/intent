@@ -637,6 +637,18 @@ class CallbackValidatorTests(unittest.TestCase):
         self.assertEqual(seen, [None])
         self.assertEqual(os.environ["NODE_OPTIONS"], injected)
 
+    def test_fixture_runs_drop_host_node_options(self):
+        os.environ["NODE_OPTIONS"] = "--require /opt/datadog-packages/dd-trace/init.js"
+        harness = PlannedRunHarness(self.root, [([event("ok", "alpha::one$passes")], 0)])
+        self.assertEqual(harness.execute(make_args(self.root, plan=["-p intent-acp --lib"])), 0)
+        self.assertNotIn("NODE_OPTIONS", harness.run_environments[0])
+        self.assertIn("NODE_OPTIONS", os.environ)
+
+    def test_ready_prefix_matches_component_prepare(self):
+        source = (SCRIPT.parents[1] / "packages/intentd/scripts/prepare-acp-callback-fixture.py").read_text()
+        self.assertIn(f'key = "{gate.CALLBACK_READY_PREFIX}" + descriptor["manifest"]["sha256"]', source,
+                      "prepare() renamed its ready entry; update CALLBACK_READY_PREFIX")
+
     def test_cli_loads_canonical_verifier_and_checks_real_node_version_offline(self):
         # The child interpreter does not inherit the in-process platform mock.
         if self.host_machine not in ("x86_64", "amd64"):
