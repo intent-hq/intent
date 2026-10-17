@@ -70,7 +70,10 @@ corepack pnpm run test:playwright
 ```
 
 For Loop A work against the installed daemon, use `make dev-sandbox-app`; use
-`make dev-sandbox-stack` for an isolated intentd plus renderer. The first tunneled
+`make dev-sandbox-stack` for an isolated intentd plus renderer. The stack daemon uses its
+own user specialists folder (`$DEV_DATA_DIR/specialists`, recorded as
+`userSpecialistsDir`), so specialist Settings edits and resets never touch
+`~/.intent/specialists`. The first tunneled
 hydration of a fresh, pre-warmed app takes roughly one to three minutes depending on host
 load. Follow the root health wait and keep waiting if the splash remains.
 
@@ -90,6 +93,7 @@ On readiness, each launcher atomically writes `.dev/sandbox/<mode>.json` with th
 | `devPort`, `tcpPort` | Resolved renderer and daemon TCP ports |
 | `url`, `daemonLocalhostUrl` | Host-loopback URL and embedded-browser URL |
 | `socket`, `intentdSource` | Daemon socket and `installed`, `bin`, `dev`, `release`, or `none` |
+| `userSpecialistsDir` | Stack only: the daemon's isolated user specialists folder (`INTENTD_USER_SPECIALISTS_DIR`); `null` for `ui`/`app` |
 | `startedAt`, `readyAt` | UTC lifecycle timestamps |
 | `warm` | `{ok, ms}` readiness-gate result and duration |
 | `supervisor` | Supervisor metadata when available; currently `null` |

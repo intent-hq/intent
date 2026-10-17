@@ -253,7 +253,7 @@ import socket
 import sys
 path = sys.argv[1]
 keys = ("INTENTD_DATA_DIR", "INTENTD_WORKSPACES_DIR", "INTENTD_ASSERT_HERMETIC_ROOT",
-        "INTENTD_LEGACY_IMPORT_ROOTS", "INTENTD_TCP_PORT")
+        "INTENTD_LEGACY_IMPORT_ROOTS", "INTENTD_TCP_PORT", "INTENTD_USER_SPECIALISTS_DIR")
 with open(os.path.join(os.environ["INTENTD_DATA_DIR"], "daemon-env.json"), "w", encoding="utf-8") as handle:
     json.dump({key: os.environ.get(key) for key in keys}, handle)
 try: os.unlink(path)
@@ -280,9 +280,11 @@ with open(os.path.join(data_dir, "daemon-env.json"), encoding="utf-8") as handle
     values = json.load(handle)
 expected = {"INTENTD_DATA_DIR": data_dir,
             "INTENTD_WORKSPACES_DIR": os.path.join(data_dir, "workspaces"),
-            "INTENTD_ASSERT_HERMETIC_ROOT": "1", "INTENTD_LEGACY_IMPORT_ROOTS": ""}
+            "INTENTD_ASSERT_HERMETIC_ROOT": "1", "INTENTD_LEGACY_IMPORT_ROOTS": "",
+            "INTENTD_USER_SPECIALISTS_DIR": os.path.join(data_dir, "specialists")}
 for key, value in expected.items():
     assert values[key] == value, (key, values[key], value)
+assert os.path.isdir(os.path.join(data_dir, "specialists")), "sandbox specialists dir was not created"
 PY
 }
 
@@ -311,13 +313,17 @@ PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" DEV_DATA_DIR="
 sandbox_pid=$!
 wait_for_ready "$temp_dir/stack.out" || fail "stack sandbox did not become ready: $(cat "$temp_dir/stack.out")"
 [[ $(grep -c '^Sandbox ready:' "$temp_dir/stack.out") -eq 1 ]] || fail "stack ready line was not printed exactly once"
-python3 - "$state_dir/stack.json" <<'PY' || fail "dev stack state metadata was incorrect"
+python3 - "$state_dir/stack.json" "$data_dir/specialists" <<'PY' || fail "dev stack state metadata was incorrect"
 import json
 import sys
 state = json.load(open(sys.argv[1], encoding="utf-8"))
 assert state["intentdSource"] == "dev" and state["tcpPort"] == 43211
 assert isinstance(state["socket"], str) and state["socket"].endswith("/intentd.sock")
+assert state["userSpecialistsDir"] == sys.argv[2], (state["userSpecialistsDir"], sys.argv[2])
 PY
+SANDBOX_STATE_DIR="$state_dir" "$BASH" "$script" status >"$temp_dir/stack-status.out" 2>&1 || fail "stack status failed"
+grep -qF "specialists=$data_dir/specialists" "$temp_dir/stack-status.out" || fail "status did not report the sandbox specialists dir: $(cat "$temp_dir/stack-status.out")"
+grep -qF "Specialists (user tier): $data_dir/specialists" "$temp_dir/stack.out" || fail "stack did not log its specialists dir"
 assert_build_args "$cargo_log" dev
 assert_daemon_isolated "$data_dir"
 grep -q "Starting intentd binary: $temp_dir/build target/debug/intentd" "$temp_dir/stack.out" || fail "default binary path was not target/debug/intentd"
@@ -407,6 +413,7 @@ import sys
 with open(sys.argv[1], encoding="utf-8") as handle:
     state = json.load(handle)
 assert state["intentdSource"] == "installed" and state["socket"] == sys.argv[2]
+assert state["userSpecialistsDir"] is None
 PY
 kill -TERM "$sandbox_pid"
 wait "$sandbox_pid" 2>/dev/null || true

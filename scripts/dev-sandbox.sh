@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # State schema: intentdSource is installed|bin|dev|release|none; UI uses none
 # with a null socket because it does not connect to a daemon.
+# userSpecialistsDir is the stack daemon's own user specialists folder
+# (INTENTD_USER_SPECIALISTS_DIR, under DEV_DATA_DIR) so specialist Settings can
+# be exercised without touching ~/.intent/specialists; null for ui/app, which
+# do not own a daemon.
 #
 # Test-only hook: SANDBOX_TEST_FORK_HOLD=<path> pauses the script between each
 # child fork and its pid capture for as long as <path> exists, so a test can
@@ -35,6 +39,7 @@ intentd_profile=${INTENTD_PROFILE:-dev}
 intentd_bin=${INTENTD_BIN:-}
 build_jobs=${BUILD_JOBS:--2}
 socket_path=${INTENTD_SOCKET:-}
+user_specialists_dir=""
 fe_pid=""
 daemon_pid=""
 pending_sig=""
@@ -243,7 +248,8 @@ else:
         print(
             f"{state['mode']}: pid={state['pid']} url={state['url']} "
             f"source={state['intentdSource']} socket={state['socket'] or '-'}"
-            f"{supervisor_hint}"
+            + (f" specialists={state['userSpecialistsDir']}" if state.get("userSpecialistsDir") else "")
+            + f"{supervisor_hint}"
         )
     if not live:
         print("No running sandboxes.", file=sys.stderr)
@@ -560,14 +566,15 @@ write_state_file() {
   local ready_at=$1 temp_file="$state_file.tmp.$$"
   mkdir -p "$state_dir"
   python3 - "$temp_file" "$state_file" "$mode" "$$" "$dev_port" "$dev_tcp_port" \
-    "$socket_path" "$intentd_source" "$started_at" "$ready_at" "$warm_ok" "$warm_ms" <<'PY'
+    "$socket_path" "$intentd_source" "$started_at" "$ready_at" "$warm_ok" "$warm_ms" \
+    "$user_specialists_dir" <<'PY'
 import json
 import os
 import subprocess
 import sys
 
 (temp_path, state_path, mode, pid, dev_port, tcp_port, socket_path,
- source, started_at, ready_at, warm_ok, warm_ms) = sys.argv[1:]
+ source, started_at, ready_at, warm_ok, warm_ms, user_specialists_dir) = sys.argv[1:]
 pid = int(pid)
 stat_path = f"/proc/{pid}/stat"
 if os.path.exists(stat_path):
@@ -596,6 +603,7 @@ state = {
     "daemonLocalhostUrl": f"http://daemon.localhost:{dev_port}/",
     "socket": None if mode == "ui" else socket_path,
     "intentdSource": source,
+    "userSpecialistsDir": user_specialists_dir or None,
     "startedAt": started_at,
     "readyAt": ready_at,
     "warm": {"ok": warm_ok == "true", "ms": int(warm_ms)},
@@ -655,7 +663,9 @@ elif [[ "$mode" == stack ]]; then
   fi
   echo "[dev-sandbox-stack] Starting intentd binary: $intentd_bin"
   socket_path="$dev_data_dir/intentd.sock"
-  mkdir -p "$dev_data_dir"
+  user_specialists_dir="$dev_data_dir/specialists"
+  mkdir -p "$dev_data_dir" "$user_specialists_dir"
+  echo "[dev-sandbox-stack] Specialists (user tier): $user_specialists_dir (isolated from ~/.intent/specialists)"
   daemon_args=(serve)
   if [[ ${SANDBOX_TCP:-0} == 1 ]]; then
     daemon_args+=(--insecure)
@@ -664,7 +674,8 @@ elif [[ "$mode" == stack ]]; then
   defer_signals
   INTENTD_DATA_DIR="$dev_data_dir" INTENTD_TCP_PORT="$dev_tcp_port" \
     INTENTD_WORKSPACES_DIR="$dev_data_dir/workspaces" INTENTD_ASSERT_HERMETIC_ROOT=1 \
-    INTENTD_LEGACY_IMPORT_ROOTS="" "$intentd_bin" "${daemon_args[@]}" &
+    INTENTD_LEGACY_IMPORT_ROOTS="" INTENTD_USER_SPECIALISTS_DIR="$user_specialists_dir" \
+    "$intentd_bin" "${daemon_args[@]}" &
   hold_fork_window
   capture_child_pid daemon_pid
 fi
