@@ -239,6 +239,11 @@ break the shared installation. The `env-key-reserved` message names the reason. 
 | `HOME`, `USERPROFILE` | Read for executable discovery and as the source home for account isolation; not replaced at launch. Use `CODEX_HOME` or `CLAUDE_CONFIG_DIR` to select an account. |
 | `npm_config_workspace*`, `npm_workspace*`, `npm_config_include_workspace_root` | Removed from adapter bootstrap launches |
 | `INTENT_*`, `INTENTD_*` | Intent session and bootstrap wiring |
+| `GIT_CONFIG_PARAMETERS`, `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, `GIT_COMMITTER_EMAIL` | Intent sets this at launch (session wiring and commit identity). Reserved for Codex and Claude Code. |
+| `INITIAL_AGENT_MODE` | Intent sets this at launch (session wiring and commit identity). Reserved for Codex only; Claude Code profiles may set it. |
+
+Reservation applies to both `set` and `unset`. A profile therefore cannot override or
+remove Intent's git commit identity or its credential-helper configuration.
 
 Account configuration variables remain supported, for example `CODEX_HOME`,
 `CLAUDE_CONFIG_DIR`, `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`
