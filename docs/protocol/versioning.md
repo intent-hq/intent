@@ -8,8 +8,31 @@ capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `15.0` — legacy workspace import removal; not a shipped-version claim.
+**Documented version:** `15.1` — prepared workspace discussions; not a shipped-version claim.
 Other prepared extensions retain their independent support gates.
+
+**Version 15.1 — workspace discussions (additive, prepared).**
+[Workspace discussions](./methods/multiplayer.md#554-workspace-discussions) add
+`discussion.conversations`, `discussion.recipients`, `discussion.list`,
+`discussion.send`, `discussion.react`, `discussion:message`, and `discussion:reaction` for a default workspace-wide discussion
+and direct/group discussions with selected members. The five router methods use
+authenticated human membership, private participant grants, bounded pagination,
+and principal-scoped retry keys that reject changed bodies or targets. The first
+message atomically creates a private conversation. Exactly integer
+`discussionConversations: 1` gates multiple-conversation targeting, preventing
+older daemons from ignoring private target fields. Message events include the conversation
+descriptor, are broadcast-only, and exclude nonparticipants and agents.
+Replies and per-viewer reaction aggregates require the separate exact
+`discussionMessageActions: 1` capability. Reply targets bind retry identity;
+reaction versions preserve updates without advancing message sequences.
+Discussion typing extends the existing `presence.update` and human roster
+shapes with transient, conversation-scoped `discussionTyping`, projected per
+recipient; typing adds no method or event type.
+Agent/daemon snapshots omit that field, and older rosters without it remain valid.
+Clients tolerate unsupported methods without sending to an agent instead. The
+documented surface, including the prepared startup and generic stream recovery additions, is now
+**455 / 398 / 57** (dispatchable / router / fast path). This reservation does not
+identify a carrying release or change independent capability gates.
 
 **Version 15.0 — legacy workspace import removal (breaking).**
 Removes the UDS-only `system.importLegacy` fast-path method. Calls on either UDS
@@ -25,12 +48,13 @@ removal order: frontend callers first, daemon removal second, then these docs
 after the automatic pin advance. The frontend's registered-root major guard
 must accept 15 before the daemon changes its advertised protocol.
 
-**Startup readiness (additive, prepared).** The [startup contract](./startup-readiness.md)
-reserves `system.startupStatus` and numeric error `-32012`, with exact
+**Version 14.1 — startup readiness (additive).** The [startup contract](./startup-readiness.md)
+adds `system.startupStatus` and numeric error `-32012`, with exact
 `startupStatus: 1` support detection. It does not make ordinary hello usable before
-Store or grant guest access to owner progress. Coordinate the additive minor at
-implementation; no shipped numeric version is claimed here. Before the legacy-import removal, counts including this addition were
-**451 / 393 / 58** (dispatchable / router / fast path); the version-specific counts below describe their original deltas.
+Store or grant guest access to owner progress. The daemon implementation uses
+14.1; this does not identify a carrying desktop release. At the original reservation,
+counts including this addition were **450 / 393 / 57** (dispatchable / router /
+fast path); the version-specific counts below describe their original deltas.
 
 **Version 14.0 — active-only script and monitor lists (breaking, prepared).**
 The [replacement contract](./methods/scripts.md#active-only-compact-lists-prepared-breaking-contract)

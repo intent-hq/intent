@@ -93,6 +93,20 @@ guarded run cancellation and silent lifecycle
 cleanup including queued wakes. Independent of scriptLifecycle/scriptReadiness;
 absence means unavailable, not permission to infer support from version numbers.
 
+**Workspace discussions (prepared additive extension).**
+Exactly integer `server.capabilities.discussionConversations: 1` advertises the
+[§5.54 contract](./multiplayer.md#554-workspace-discussions): conversation and
+recipient discovery, atomic creation with the first message, participant-gated
+history and delivery, and conversation-scoped typing. The same flag is returned
+by `system.capabilities`. Clients require this flag before sending private
+conversation IDs or recipient lists, because earlier single-discussion daemons
+may silently ignore unknown targeting fields. The flag grants no membership or
+participant access and does not enable the desktop Multiplayer Labs setting.
+The separate exact integer `discussionMessageActions: 1` capability, advertised
+on hello and `system.capabilities`, gates same-conversation replies and
+per-viewer reaction aggregates. Never discard an unsupported reply target or
+interpret the capability as authorization.
+
 | Method | Params | Result |
 | --- | --- | --- |
 | client.hello | clientId?, connectionRole? *(prepared; see attachment contract below)*, name?, capabilities?, hostname? *(v9.9)*, prettyHostname? *(v9.9)*, deviceKind? *(v9.9)* | { clientId, connectionRole? *(prepared attachment acknowledgement only)*, protocolVersion, server: { locality, hasDisplay, osArch, version, buildCommit?, protocolVersion, capabilities } } |

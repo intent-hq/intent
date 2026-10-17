@@ -68,6 +68,8 @@
     "desktop:permission-requested",
     "desktop:permission-resolved",
     "desktop:session-changed",
+    "discussion:message",
+    "discussion:reaction",
     "draft:changed",
     "file:changed",
     "file:created",
