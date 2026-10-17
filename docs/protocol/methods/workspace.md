@@ -205,6 +205,21 @@ from the caller workspace. An omitted `baseRef` uses the repository default. A n
 must exist; an unresolved ref is warned before Apply and fails through the existing
 `workspace.create` structured error without fallback.
 
+The checkout kind follows the caller repository's `origin`. When `origin` names the
+caller row's own `github.com` repository (HTTPS or SSH; `repositoryOwner` /
+`repositoryName` compared case-insensitively), `payload.params` carries the canonical
+`githubUrl: "https://github.com/<owner>/<repo>"` and **no** `repositoryPath` /
+`clonePath`, so Apply provisions a standalone checkout hydrated from the repo cache
+(`checkoutMode` `cow` or `direct`) — the same request shape as picking a GitHub
+repository — and `preview.workspaceCreate.repoType` is `"github"`. The row identity is
+required because the clone no longer shares `repositoryPath`, leaving owner/name as the
+`crossWorkspace.*` sibling link. Otherwise (no `origin`, a non-GitHub or different
+`origin`, a row without GitHub identity, or a base ref — named or the default branch —
+that resolves locally but has no `refs/remotes/origin/<ref>`, which a clone would lack)
+the params carry `repositoryPath` and Apply provisions a linked worktree (or a CoW copy
+under `workspace.cowIsolation`); the local-only base ref case adds a preview warning
+naming the ref. Unpushed local work is never carried into a cache-hydrated clone.
+
 The result is the existing `workspace-create` proposal resource with
 `preview.workspaceCreate.mode: "sibling"`, plus a top-level `proposalId` (additive,
 [intentd#1995](https://github.com/intent-hq/intentd/pull/1995)): the proposal's
