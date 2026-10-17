@@ -131,11 +131,13 @@ and unknown execution; an uncertain input outcome must never be replayed.
 
 [§5.54](./methods/provider-profiles.md) uses `-32602` with these `error.data.code`
 values: `invalid-params` with `data.fieldErrors: [{ field, code, message }]` for
-profile validation; `not-found` for an unknown profile id;
+profile validation; `not-found` for an unknown profile id; `provider-profile-not-found` when
+`settings.update` names a missing profile;
 `provider-profile-in-use` with `data.inUse` when saved defaults or specialists still
 select the profile; and `provider-profile-replacement-required` with
 `data: { providerRef, reason }` when a qualified reference names a missing profile
 or a disabled base provider. The last one never falls back to another account.
+An unreadable profile file returns `-32603` with `data.code: "provider-profiles-unreadable"`.
 
 ### Prepared note deletion grace errors (13.10)
 

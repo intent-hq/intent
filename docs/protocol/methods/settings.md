@@ -160,8 +160,10 @@ fields without replacing unaffected siblings or writing defaults back over saved
 
 **Provider profile references (prepared).** `model.defaultProvider` and
 `model.providerDefaults` keys also accept a [provider profile reference](provider-profiles.md#identity-and-provider-references)
-(`<baseProviderId>@<profileId>`). `settings.update` rejects a reference that names
-no saved profile. `providers.enabled`, `providers.paths`, `providers.fastMode` and the
+(`<baseProviderId>@<profileId>`). `settings.update` rejects a missing-profile
+reference in `model.defaultProvider`, or in a `model.providerDefaults` key that is
+new or whose value changed. Unchanged stored keys round-trip, and deleting a profile
+prunes its key ([rules](provider-profiles.md#references-in-settings)). `providers.enabled`, `providers.paths`, `providers.fastMode` and the
 access-token paths stay keyed by base provider id. Profile metadata and environment
 values are managed only through `providers.profiles.*`, never through `settings.*`.
 

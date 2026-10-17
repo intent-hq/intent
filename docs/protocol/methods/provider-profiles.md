@@ -64,29 +64,82 @@ there; a profile inherits those values from its base provider.
 **Why `@`.** `:` is the legacy compound `provider:model` separator. The daemon's
 settings normalizer, specialist `modelOptions` parsing and the frontend's
 `splitLegacyCompoundId` all split on the first `:`. `.` separates dotted setting
-paths such as `providers.codex.accessToken`. `/` appears in model ids. No registered
-provider id and no Codex or Claude model-id convention uses `@`.
+paths such as `providers.codex.accessToken`. No registered provider id contains `@`.
+Some model ids do, such as Vertex AI Claude ids like `claude-…@20250514`. That is
+harmless because references appear only in provider fields and model ids remain
+separate bare fields; clients must never parse a reference out of a model id.
 
-**Downgrade limit.** Before this contract, the spawn path's last-resort lookup
-falls back to the first registered provider (`auggie`) for an unknown persisted
-session provider, with a warning. A conversation saved with a qualified reference
-and then resumed by an older daemon runs that different provider, or fails if it
-is absent. It never runs the base provider's Default account. Downgrading a daemon
-with profiled conversations is unsupported; select a model again after a downgrade.
+**Downgrade behavior.** An older daemon still starts. It never reads the profile
+file below, and it does not validate provider strings while parsing `config.toml`
+(`SettingsFile::validate` checks neither `model.defaultProvider` nor
+`model.providerDefaults` keys). The secret-store entries are inert. Saved
+references then fail later, at the point of use:
+
+- **Default provider setting** (`model.defaultProvider`): read as unset. Agent
+  creation without an explicit provider and delegation fallback fail with the
+  no-default-provider error, and quick actions report unavailable.
+- **Provider default model keys** (`model.providerDefaults`): never looked up, so
+  they are inert.
+- **Specialist provider pin**: `agent.create` and `agent.delegate` fail with
+  `-32602` unknown provider.
+- **Specialist model options** (`modelOptions[].provider`): the option never
+  matches a provider, so it is not applied.
+- **Persisted conversation provider**: the spawn path's unknown-provider fallback
+  runs the first registered provider (`auggie`) with a warning, or fails if it is
+  not installed.
+
+None of these routes to the base provider's Default account. The last row runs a
+different provider, so downgrading with profiled conversations is unsupported:
+select a model again after a downgrade.
 
 #### Storage
 
 | Data | Location | Exposure |
 | --- | --- | --- |
-| `id`, `name`, `baseProviderId`, timestamps | `config.toml` table `[providerProfiles.<profileId>]` with keys `baseProvider`, `name`, `createdAt`, `updatedAt` | Not a `settings.*` path. `settings.get` / `settings.reset` return `-32602`, and `settings.update` rejects it. Hand edits live-reload with the file's normal validation. An invalid table keeps the last-good set. |
+| `id`, `name`, `baseProviderId`, timestamps | Daemon-owned file `<data_dir>/provider-profiles.json` (mode `0600`, next to `config.toml`): `{ "version": 1, "profiles": [{ "id", "baseProvider", "name", "createdAt", "updatedAt" }] }` | Only through `providers.profiles.*`. Not a `settings.*` path: `settings.get` / `settings.reset` return `-32602`, and `settings.update` rejects it. |
 | Environment entries | Existing protected `SecretStore`, account `providerProfiles.<profileId>.env`, one JSON document per profile | Only through `providers.profiles.*` reads, masked |
 
-Environment values never enter `config.toml`, the ordinary `providers.*` map, the
-settings database, `settings.list`, `settings:changed`, catalogs, model rows,
-events, agent-visible metadata or logs. Deleting a profile removes both records.
-Daemon-side `model.providerDefaults` and `quickActions.providerSettings` entries
-keyed by a deleted reference stay inert. The daemon never rewrites client-owned
-snapshots.
+The metadata stays out of `config.toml` because `SettingsFile` denies unknown fields
+and `Config::resolve` fails startup on a malformed file. A new table there would stop
+an older daemon from starting. A separate file is also preferred over SQLite. Older
+daemons ignore an unknown data-dir file, while a schema migration is irreversible and
+blocks hash-built test installs (see the monorepo AGENTS.md manual-build exception).
+The file is reached only through the administrator-only `providers.profiles.*`
+service, the same authorization boundary as `settings.*`. It holds no secrets, so no
+redaction applies. Deleting the file removes every profile.
+
+- **Writes.** The daemon writes the file atomically (temp file, fsync, rename) and
+  serializes all profile mutations. Create writes the secret entry before the
+  metadata and removes the secret if the metadata write fails. Delete removes the
+  metadata before the secret. A secret entry with no metadata is inert, and the daemon
+  removes it at startup.
+- **Reads.** The daemon reads the file at startup and after its own writes. It does
+  not watch for external edits; changes made outside the daemon apply after a restart.
+  If the file is malformed or has an unknown `version`, the daemon still starts and
+  leaves the file untouched. `providers.profiles.*` then return `-32603` with
+  `data.code: "provider-profiles-unreadable"`, and qualified references fail with
+  `provider-profile-replacement-required` (`reason: "profile-missing"`).
+
+Environment values never enter `config.toml`, the profile file, the ordinary
+`providers.*` map, the settings database, `settings.list`, `settings:changed`,
+catalogs, model rows, events, agent-visible metadata or logs. Deleting a profile
+removes both records and prunes its `model.providerDefaults` entry (see
+[References in settings](#references-in-settings)). The daemon never rewrites
+client-owned `quickActions.providerSettings` snapshots; a snapshot keyed by a
+deleted reference stays inert.
+
+#### References in settings
+
+- `model.defaultProvider` accepts a reference. `settings.update` rejects one that
+  names no saved profile with `-32602` and `data.code: "provider-profile-not-found"`.
+- `model.providerDefaults` keys accept references. Clients write the object as a
+  whole value, so validation compares with the stored map. Only a key that is new,
+  or whose value changed, must name a saved profile. An unchanged stored key
+  round-trips without error even if its profile is gone.
+- `providers.profiles.delete` removes the profile's `model.providerDefaults` key in
+  the same commit. That emits `settings:changed` with the new settings revision, as
+  well as `providers:profiles-changed`.
+- `quickActions.providerSettings` stays client-owned and unvalidated.
 
 #### Methods
 
@@ -160,8 +213,12 @@ interface ProfileActivation {
 
 An unknown `profileId` returns `-32602` with `data.code: "not-found"`.
 
-**Reserved keys.** These are compared ignoring ASCII case. Intent owns them, and a saved
-override would be silently replaced at launch:
+**Reserved keys.** These are compared ignoring ASCII case. Intent owns them: launch
+replaces the value, or the daemon reads it to locate the shared installation before
+any profile environment applies. A saved override would therefore be ignored or would
+break the shared installation. The `env-key-reserved` message names the reason. For
+`HOME` and `USERPROFILE` it also points to `CODEX_HOME` (Codex) or `CLAUDE_CONFIG_DIR`
+(Claude Code), which select an account.
 
 | Key or pattern | Why |
 | --- | --- |
@@ -169,7 +226,7 @@ override would be silently replaced at launch:
 | `CODEX_PATH`, `CLAUDE_CODE_EXECUTABLE` | Installed executable selection (`InstalledContext`) |
 | `CODEX_CONFIG` | Enforced Codex policy, set after every env merge |
 | `NODE_OPTIONS` | Daemon-managed adapter memory cap composition |
-| `HOME`, `USERPROFILE` | Executable discovery and the source home for account isolation. Use `CODEX_HOME` or `CLAUDE_CONFIG_DIR` to select an account. |
+| `HOME`, `USERPROFILE` | Read for executable discovery and as the source home for account isolation; not replaced at launch. Use `CODEX_HOME` or `CLAUDE_CONFIG_DIR` to select an account. |
 | `npm_config_workspace*`, `npm_workspace*`, `npm_config_include_workspace_root` | Removed from adapter bootstrap launches |
 | `INTENT_*`, `INTENTD_*` | Intent session and bootstrap wiring |
 
@@ -216,6 +273,20 @@ never removes external account directories.
   `host.providerTestPrompt` accepts a reference and promotes or demotes only that
   reference's verdict. A result for one profile never changes another profile or
   the Default configuration.
+- **Live process versus saved profile.** These reads describe the **saved** profile:
+  the configuration a newly started process will use. They are not the state of a
+  provider process that is already running. For an agent with a live, unchanged
+  process, the source of truth is what that process itself reported:
+  - the session-discovered fields on `AgentLite` / `AgentSession` (current `model`,
+    session `effortLevels`, §5.5);
+  - the results of its own turns, such as an `agent:failed` authentication or quota
+    signal.
+
+  While `usingEarlierProfileSettings` is present, clients must not show a
+  saved-profile auth verdict or model list as that process's state. A choice that
+  starts a new process is checked against the saved profile, because the new process
+  will use it. That includes a different model, a different reference, or any choice
+  when no process is live.
 - UI status mapping: a saved profile is *configured*; *checking* while the client's
   probe is pending; `authenticated: true` is *ready*; `false` is *error* (signed out);
   `null` stays *configured* (not verified). Saving never implies *ready*.
@@ -257,10 +328,15 @@ never removes external account directories.
 
 #### Events
 
-`providers:profiles-changed` is global (no `workspaceId`) and is emitted after each
-committed mutation, including a valid `config.toml` reload. The payload is
+`providers:profiles-changed` is global (no `workspaceId`). Each committed
+`providers.profiles.*` mutation changes exactly one profile and emits exactly one
+event, whose `revision` is one higher than the previous event. The daemon does not
+reload the profile file, so no event covers several profiles. The payload is
 `data = { revision, change: "created" | "updated" | "deleted", profileId, profile?: ProviderProfileSummary, envChanged?: boolean }`.
-It never carries env keys or values. `profile` is omitted on delete.
+It never carries env keys or values. `profile` is omitted on delete. A client that
+sees a revision gap, or reconnects, re-runs `providers.profiles.list` or
+`providers.catalog`. A delete that prunes a `model.providerDefaults` key also emits
+`settings:changed`, with its own settings revision.
 
 #### Compatibility
 
