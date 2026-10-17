@@ -127,6 +127,16 @@ selection or missing display, with no capture/input),
 `-32003` for authority refusal. Action failures distinguish not-started, partial
 and unknown execution; an uncertain input outcome must never be replayed.
 
+### Prepared provider profile errors
+
+[§5.54](./methods/provider-profiles.md) uses `-32602` with these `error.data.code`
+values: `invalid-params` with `data.fieldErrors: [{ field, code, message }]` for
+profile validation; `not-found` for an unknown profile id;
+`provider-profile-in-use` with `data.inUse` when saved defaults or specialists still
+select the profile; and `provider-profile-replacement-required` with
+`data: { providerRef, reason }` when a qualified reference names a missing profile
+or a disabled base provider. The last one never falls back to another account.
+
 ### Prepared note deletion grace errors (13.10)
 
 The dedicated grace methods use bounded `error.data.code` values
