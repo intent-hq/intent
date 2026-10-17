@@ -122,6 +122,7 @@
     "prMonitor:registered",
     "presence:changed",
     "principal:identity-changed",
+    "providers:profiles-changed",
     "script:changed",
     "script:output",
     "script:state",
