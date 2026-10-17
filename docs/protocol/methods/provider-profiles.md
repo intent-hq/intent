@@ -173,6 +173,7 @@ interface ProviderProfile {
   settingsFingerprint: string; // opaque; changes whenever saved env changes; not derived from values alone
   createdAt: string;          // RFC 3339
   updatedAt: string;
+  activation?: { runningProcesses: number }; // see "Activation on reads"
 }
 type EnvEntryRead =
   | { key: string; kind: "set"; value: "********" | "" } // "" means a saved empty string
@@ -201,6 +202,18 @@ interface ProfileActivation {
   same client rules as the [settings revision](settings.md). Reset it on reconnect
   and ignore older results and events.
 - `list` returns masked values only. No method returns a saved value.
+- **Activation on reads.** Every `ProviderProfile` read carries the optional
+  `activation: { runningProcesses }`. That covers `list` and the `profile` in the
+  `create` and `update` results. `runningProcesses` is a non-negative integer: the
+  live provider processes for this profile still running with an earlier
+  `settingsFingerprint`. `0` means every live process uses the saved settings, or
+  none is live. It is value-free, with no keys, values or process details.
+  - Clients show the "running sessions use earlier settings" notice while the count
+    is above `0`, and clear it at `0`.
+  - Daemons that do not track processes omit the field. Clients then keep their
+    last known state; omission does not mean `0`.
+  - The `update` result's top-level `activation` additionally carries `envChanged`.
+  - `ProviderProfileSummary` (catalog rows and events) does not carry activation.
 
 **Validation.** Invalid input returns `-32602` with `data.code: "invalid-params"` and
 `data.fieldErrors: [{ field, code, message }]`, listing every failure found:
@@ -343,14 +356,22 @@ never removes external account directories.
 
 #### Events
 
-`providers:profiles-changed` is global (no `workspaceId`). Each committed
-`providers.profiles.*` mutation changes exactly one profile and emits exactly one
-event, whose `revision` is one higher than the previous event. The daemon does not
-reload the profile file, so no event covers several profiles. The payload is
-`data = { revision, change: "created" | "updated" | "deleted", profileId, profile?: ProviderProfileSummary, envChanged?: boolean }`.
-It never carries env keys or values. `profile` is omitted on delete. A client that
-sees a revision gap, or reconnects, re-runs `providers.profiles.list` or
-`providers.catalog`. A delete that prunes a `model.providerDefaults` key also emits
+`providers:profiles-changed` is global (no `workspaceId`). The daemon emits exactly
+one event, with a `revision` one higher than the previous event, in two cases:
+
+- **A committed `providers.profiles.*` mutation.** Each mutation changes exactly one
+  profile. `change` is `"created"`, `"updated"` or `"deleted"`.
+- **A change in one profile's `activation.runningProcesses`.** For example, a
+  process on earlier settings exits or is recycled, or a new process starts.
+  `change` is `"activation"`, and `profile` and `envChanged` are omitted. The event
+  carries no count; clients re-run `providers.profiles.list` to read it.
+
+The daemon does not reload the profile file, so no event covers several profiles.
+The payload is
+`data = { revision, change: "created" | "updated" | "deleted" | "activation", profileId, profile?: ProviderProfileSummary, envChanged?: boolean }`.
+It never carries env keys or values. `profile` is omitted on delete and activation
+events. A client re-runs `providers.profiles.list` (or `providers.catalog`) when it
+sees an activation event, a revision gap, or a reconnect. A delete that prunes a `model.providerDefaults` key also emits
 `settings:changed`, with its own settings revision.
 
 #### Compatibility
