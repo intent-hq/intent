@@ -201,5 +201,167 @@ class Prune(unittest.TestCase):
                     self.assertEqual(result.returncode, 2)
 
 
+STUB = """#!/usr/bin/env bash
+name="$(basename "$0")"
+printf '%s %s\\n' "$name" "$*" >> "$STUB_DIR/calls.log"
+key="$name"
+case "$name" in lsblk) for a in TYPE MOUNTPOINT NAME FSTYPE; do case "$*" in *" $a "*) key="lsblk.$a";; esac; done;; esac
+[ -f "$STUB_DIR/$key.out" ] && cat "$STUB_DIR/$key.out"
+exit "$(cat "$STUB_DIR/$key.rc" 2>/dev/null || echo 0)"
+"""
+STUBBED = ('ip', 'ufw', 'lsblk', 'pvs', 'vgs', 'lvs', 'wipefs', 'pvcreate', 'vgcreate', 'lvcreate',
+           'blkid', 'mkfs.ext4', 'mountpoint', 'mount', 'df')
+
+
+class Bootstrap(unittest.TestCase):
+    """Sources bootstrap.sh (which then runs nothing) and calls single functions
+    with system commands stubbed; main() is never run."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        for name in STUBBED:
+            p = self.dir / name
+            p.write_text(STUB)
+            p.chmod(0o755)
+        (self.dir / 'fstab').write_text('')
+        (self.dir / 'data').mkdir()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def stub(self, key, out=None, rc=None):
+        if out is not None:
+            (self.dir / f'{key}.out').write_text(out)
+        if rc is not None:
+            (self.dir / f'{key}.rc').write_text(str(rc))
+
+    def calls(self):
+        log = self.dir / 'calls.log'
+        return log.read_text().splitlines() if log.exists() else []
+
+    def run_fn(self, script, env=None):
+        prelude = (f'source {HERE / "bootstrap.sh"}; fstab={self.dir}/fstab; data_dir={self.dir}/data; '
+                   f'os_release={self.dir}/os-release; is_block() {{ [ "$1" != /dev/missing ]; }}; ')
+        full_env = {k: v for k, v in os.environ.items() if k != 'SSH_CONNECTION'}
+        full_env.update(PATH=f'{self.dir}:{os.environ["PATH"]}', STUB_DIR=str(self.dir), **(env or {}))
+        return subprocess.run(['bash', '-c', prelude + script], env=full_env, capture_output=True, text=True)
+
+    def test_sourcing_runs_nothing(self):
+        result = self.run_fn('echo sourced')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, 'sourced\n')
+        self.assertEqual(self.calls(), [])
+
+    def test_parse_args(self):
+        ok = self.run_fn('parse_args cache.example.com --format-disk /dev/nvme1n1 --format-disk /dev/nvme0n1p4 --no-firewall; '
+                         'echo "$domain|${format_disks[*]}|$firewall"')
+        self.assertEqual(ok.stdout.strip(), 'cache.example.com|/dev/nvme1n1 /dev/nvme0n1p4|0', ok.stderr)
+        for args in ('', '--format-disk', '--format-disk nvme1n1 cache.example.com', 'a b', 'https://x', '--bogus x'):
+            with self.subTest(args=args):
+                self.assertEqual(self.run_fn(f'parse_args {args}').returncode, 2)
+
+    def test_check_os(self):
+        (self.dir / 'os-release').write_text('ID=ubuntu\nVERSION_ID="24.04"\n')
+        result = self.run_fn('check_os')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('Ubuntu 24.04', result.stdout)
+        (self.dir / 'os-release').write_text('ID=debian\nVERSION_ID="12"\n')
+        result = self.run_fn('check_os')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('expected Ubuntu', result.stderr)
+
+    def test_firewall_refuses_without_tailscale(self):
+        self.stub('ip', rc=1)
+        for fn in ('check_firewall_preconditions', 'configure_firewall'):
+            with self.subTest(fn=fn):
+                result = self.run_fn(fn)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn('tailscale0 not found', result.stderr)
+        self.assertFalse([c for c in self.calls() if c.startswith('ufw')])
+        self.assertEqual(self.run_fn('firewall=0; check_firewall_preconditions').returncode, 0)
+
+    def test_firewall_ssh_only_on_tailscale(self):
+        result = self.run_fn('configure_firewall')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        ufw = [c for c in self.calls() if c.startswith('ufw ')]
+        self.assertIn('ufw default deny incoming', ufw)
+        self.assertIn('ufw allow 80/tcp', ufw)
+        self.assertIn('ufw allow 443/tcp', ufw)
+        tailnet = ufw.index('ufw allow in on tailscale0 to any port 22 proto tcp')
+        self.assertLess(tailnet, ufw.index('ufw delete allow 22/tcp'))
+        self.assertIn('ufw delete allow OpenSSH', ufw)
+        allows = [c for c in ufw if c.startswith('ufw allow')]
+        self.assertEqual(sorted(allows), sorted(['ufw allow in on tailscale0 to any port 22 proto tcp',
+                                                 'ufw allow 80/tcp', 'ufw allow 443/tcp']))
+        self.assertEqual(ufw[-1], 'ufw --force enable')
+
+    def test_public_ssh_session_warns(self):
+        public = self.run_fn('check_firewall_preconditions', {'SSH_CONNECTION': '203.0.113.5 5555 172.96.141.217 22'})
+        self.assertEqual(public.returncode, 0, public.stderr)
+        self.assertIn('not over Tailscale', public.stdout)
+        tailnet = self.run_fn('check_firewall_preconditions', {'SSH_CONNECTION': '100.101.2.3 5555 100.64.0.9 22'})
+        self.assertNotIn('warning', tailnet.stdout)
+
+    def disk(self, type_='disk', names='nvme1n1\n', mounts='\n', fstype='\n', pv='', vgs_rc=5):
+        self.stub('lsblk.TYPE', type_ + '\n')
+        self.stub('lsblk.NAME', names)
+        self.stub('lsblk.MOUNTPOINT', mounts)
+        self.stub('lsblk.FSTYPE', fstype)
+        self.stub('pvs', pv, 0 if pv else 5)
+        self.stub('vgs', rc=vgs_rc)
+
+    def test_check_disk_refuses_unsafe_devices(self):
+        cases = {
+            'not a block device': ({}, '/dev/missing'),
+            'mounted': ({'mounts': '\n/boot\n', 'names': 'nvme1n1\n'}, '/dev/nvme1n1'),
+            'partitions': ({'names': 'nvme1n1\nnvme1n1p1\n'}, '/dev/nvme1n1'),
+            "volume group 'ubuntu-vg'": ({'pv': '  ubuntu-vg\n'}, '/dev/nvme1n1'),
+            'RAID member': ({'fstype': 'linux_raid_member\n'}, '/dev/nvme1n1'),
+            "'rom' device": ({'type_': 'rom'}, '/dev/nvme1n1'),
+            'already exists without': ({'vgs_rc': 0}, '/dev/nvme1n1'),
+        }
+        for message, (kw, dev) in cases.items():
+            with self.subTest(message):
+                self.disk(**kw)
+                result = self.run_fn(f'check_disk {dev}')
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn(message, result.stderr)
+
+    def test_setup_volume_creates_once(self):
+        self.disk()
+        self.stub('lvs', rc=5)
+        self.stub('mountpoint', rc=1)
+        result = self.run_fn('format_disks=(/dev/nvme1n1 /dev/nvme0n1p4); setup_volume')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.calls()
+        for expected in ('wipefs -a /dev/nvme1n1', 'pvcreate -y /dev/nvme0n1p4',
+                         'vgcreate sccache /dev/nvme1n1 /dev/nvme0n1p4',
+                         'lvcreate -y -n cache -l 100%FREE sccache',
+                         'mkfs.ext4 -q -L sccache -m 0 /dev/sccache/cache'):
+            self.assertIn(expected, calls)
+        self.assertTrue(any(c.startswith('mount ') for c in calls))
+        fstab = (self.dir / 'fstab').read_text()
+        self.assertEqual(fstab, f'/dev/sccache/cache {self.dir}/data ext4 defaults,relatime,nofail 0 2\n')
+
+        (self.dir / 'calls.log').unlink()
+        self.disk(pv='  sccache\n', vgs_rc=0)
+        self.stub('lvs', rc=0)
+        self.stub('blkid', 'ext4\n')
+        self.stub('mountpoint', rc=0)
+        result = self.run_fn('format_disks=(/dev/nvme1n1 /dev/nvme0n1p4); setup_volume')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        destructive = [c for c in self.calls() if c.split()[0] in ('wipefs', 'pvcreate', 'vgcreate', 'lvcreate', 'mkfs.ext4', 'mount')]
+        self.assertEqual(destructive, [])
+        self.assertEqual((self.dir / 'fstab').read_text(), fstab)
+
+    def test_no_format_disk_touches_no_disk(self):
+        self.stub('mountpoint', rc=1)
+        result = self.run_fn('setup_volume')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('uses the root filesystem', result.stdout)
+        self.assertEqual([c.split()[0] for c in self.calls()], ['mountpoint'])
+
+
 if __name__ == '__main__':
     unittest.main()
