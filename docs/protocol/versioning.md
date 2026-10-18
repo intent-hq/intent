@@ -48,6 +48,13 @@ removal order: frontend callers first, daemon removal second, then these docs
 after the automatic pin advance. The frontend's registered-root major guard
 must accept 15 before the daemon changes its advertised protocol.
 
+Also within 15.0 (additive optional event field; presence-detected; no method-catalog
+change, so no version bump): **`workspace:created` carries `origin?`** (§6.5 workspace
+row). `ws.workspace.applyProposal` stamps `{ kind: "proposal", proposalId, agentId,
+sourceWorkspaceId }` on the event for the workspace it creates; every other create omits
+it. The field is daemon-set only: `workspace.create` params do not accept it and the row
+does not persist it.
+
 **Version 14.1 — startup readiness (additive).** The [startup contract](./startup-readiness.md)
 adds `system.startupStatus` and numeric error `-32012`, with exact
 `startupStatus: 1` support detection. It does not make ordinary hello usable before
