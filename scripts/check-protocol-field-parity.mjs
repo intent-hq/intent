@@ -33,6 +33,8 @@ export const PAIRS = [
       contextUsage: 'not consumed by the FE today (no reader of the row field)',
       contextReferences: 'read untyped through the agent-session slice (DETAIL_ONLY_SESSION_FIELDS in agent-session-slice.ts); accepted FE typing debt, not declared on the type',
       fileBlocks: 'read untyped through the agent-session slice (DETAIL_ONLY_SESSION_FIELDS and data.fileBlocks in agent-session-slice.ts); accepted FE typing debt, not declared on the type',
+      usingEarlierProfileSettings: 'documented optional provider-profile field (§5.54); staged daemon-first adoption before https://github.com/intent-hq/cloudlands-fe/pull/3457; remove once the monorepo frontend pin includes that PR',
+      providerReplacementRequired: 'documented optional provider-profile field (§5.54); staged daemon-first adoption before https://github.com/intent-hq/cloudlands-fe/pull/3457; remove once the monorepo frontend pin includes that PR',
     },
   },
   {
