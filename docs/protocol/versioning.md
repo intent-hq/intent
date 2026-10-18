@@ -19,11 +19,28 @@ the frontend's Legacy Import settings. Already imported daemon workspaces remain
 available; source directories and persisted import markers are not deleted.
 The 9.0 removal and 9.1 restoration entries below remain historical records.
 Protocol 14.1 added the startup readiness observations described below.
-The documented surface, including prepared additions, has **450 / 393 / 57**
+The documented surface, including prepared additions, has **451 / 394 / 57**
 dispatchable / router / fast-path methods. Follow [issue #4082](https://github.com/intent-hq/intent/issues/4082)'s
 removal order: frontend callers first, daemon removal second, then these docs
-after the automatic pin advance. The frontend's registered-root major guard
-must accept 15 before the daemon changes its advertised protocol.
+after the automatic pin advance. Clients gate on capabilities or a minimum
+version, never a maximum (see the [compatibility policy](#compatibility-policy)).
+Released frontends still cap registered-root reads at major 15 until
+[cloudlands-fe#3478](https://github.com/intent-hq/cloudlands-fe/pull/3478) ships,
+so the daemon must not advertise major 16 before a carrying frontend release.
+
+Also within 15.0 (additive optional event field; presence-detected; no method-catalog
+change, so no version bump): **`workspace:created` carries `origin?`** (§6.5 workspace
+row). `ws.workspace.applyProposal` stamps `{ kind: "proposal", proposalId, agentId,
+sourceWorkspaceId }` on the event for the workspace it creates; every other create omits
+it. The field is daemon-set only: `workspace.create` params do not accept it and the row
+does not persist it.
+
+**PR workspace lookup (additive, prepared).** The
+[PR workspace lookup](./methods/workspace.md#pull-request-workspace-lookup) reserves
+the read-only router method `workspace.findByPullRequest`, bringing the documented
+surface to **451 / 394 / 57** (dispatchable / router / fast path). The server hello
+capability `prWorkspaceLookup: 1` gates support. No shipped numeric version is
+claimed here.
 
 **Startup readiness (additive, prepared).** The [startup contract](./startup-readiness.md)
 reserves `system.startupStatus` and numeric error `-32012`, with exact
@@ -42,10 +59,9 @@ but default membership, accepted filters, completed registration retries and
 monitor mutation results change; this is a major, not an additive minor.
 The documented surface remains **449 / 393 / 56** (dispatchable / router / fast
 path). No implementation/release is implied. An older client can reach the new
-semantics; current clients do not universally reject future majors. New clients
-must require the relevant capability, never fall back to archived/history reads.
-Update the frontend's registered-root protocol-major guard for 14 as part of the
-coordinated compatible renderer change; merely changing hello is insufficient.
+semantics; current clients do not universally reject future majors, though
+installed builds with a protocol-major cap do. New clients must require the
+relevant capability, never fall back to archived/history reads.
 
 **Rollout ordering.** New get method catalog reservations may land docs-first.
 Prepared v14 sections can coexist with explicitly historical v13 contracts;
@@ -55,8 +71,7 @@ monorepo pin bump, then removal of obsolete baseline documentation if desired.
 Never remove currently implemented method/catalog entries docs-first. No router
 method is retired here: archive/restore remain known-ID operations. Withdrawn
 unshipped summary/history reservations need no production removal. Daemon before
-frontend merge, coordinated carrying release and frontend major guard updates
-are required. An older daemon remains unsupported for these new list features;
+frontend merge and a coordinated carrying release are required. An older daemon remains unsupported for these new list features;
 known-ID status/output may still be used. This draft grants no merge permission.
 
 **Prepared generic stream recovery (independently gated additive extension).**
@@ -237,17 +252,15 @@ and local-daemon forwarding behavior are unchanged. `git.commit` is not part
 of this retirement.
 
 **Installed frontend compatibility.** Registered-root `file.read` and
-`file.readChunk` retain their v11.1 contract in protocol 12 and 13. The updated
-frontend guard in [cloudlands-fe PR #3114](https://github.com/intent-hq/cloudlands-fe/pull/3114)
-accepts known 11.1+ versions within major 11 and known majors 12 and 13. It rejects
-missing, malformed, older, and unknown future-major support (including 14) before
-sending a scoped read.
-
-Installed frontends with the original exact-major-11 guard reject scoped reads
-against protocol 12 or 13. Versions with only the earlier major-12 allowance still
-reject protocol 13. Both require a frontend carrying the updated major-13 guard;
-the PR link and daemon documentation do not establish that the installed desktop
-contains it. Unscoped reads keep their existing behavior. See the
+`file.readChunk` retain their v11.1 contract in protocol 12 and later. Clients
+must accept any well-formed version at or above 11.1 and reject missing,
+malformed or older versions before sending a scoped read. Frontends have capped
+the accepted major (exact-major 11, then up to 12, 13, 14 and 15, as in
+[cloudlands-fe PR #3114](https://github.com/intent-hq/cloudlands-fe/pull/3114));
+[cloudlands-fe#3478](https://github.com/intent-hq/cloudlands-fe/pull/3478)
+removes the cap. Installed copies of capped builds still reject scoped reads on
+later majors.
+Unscoped reads keep their existing behavior. See the
 [registered-root support gate](./methods/files-terminal-browser.md).
 
 The daemon removal landed in [intentd PR #2240](https://github.com/intent-hq/intentd/pull/2240).
@@ -666,5 +679,6 @@ above describe the former method, not a durability guarantee for current commits
 
 - **Additive changes** (new methods, new optional fields, new event types) bump the **minor** version (e.g., 2.0 → 2.1).
 - **Breaking changes** (removed methods, changed signatures, renamed fields) bump the **major** version (e.g., 2.0 → 3.0).
+- **Clients never cap the protocol version.** A client gates a feature on an advertised capability or on a minimum version (`>= major.minor`), never on a maximum, an exact major or an allowlist of known majors: the major moves for unrelated changes, and a cap silently disables working features on every newer daemon (script monitors and script lists on protocol 15, [intent-hq/intent#7206](https://github.com/intent-hq/intent/issues/7206), [#7248](https://github.com/intent-hq/intent/issues/7248)). Capability values are different: each value names one contract, so clients compare them exactly (`scriptMonitors === 2`). A breaking change to a method's semantics must therefore change something an old client checks: a new capability value (e.g. `scriptMonitors: 1` → `2`) or a new method name. A feature gated only by version (no capability) gains a capability before its first breaking change. Removing a method answers `-32601 Method not found`, which clients treat as "unsupported", not as a crash.
 
 The method surface is enforced by golden tests in `crates/intent-transport/src/catalog.rs`. Any drift (added, removed, or renamed methods) causes CI failure with the instruction: "Update ROUTER_METHODS in catalog.rs, update docs/protocol/05-method-catalog.md, and bump the protocol version." Additive response fields on an existing method (e.g., the optional `system.status` resource fields, §5 fast-path notes) do not change the golden-test-enforced catalog and ship within the current version; clients must detect them by **presence**, not by protocol version.
