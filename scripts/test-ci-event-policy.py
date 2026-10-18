@@ -3,6 +3,7 @@
 from pathlib import Path
 import json
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -19,6 +20,60 @@ def workflow(name):
     return yaml.safe_load((ROOT / '.github/workflows' / name).read_text())
 
 
+def queue_job_commands():
+    """Run text of every ci.yml step job that executes on merge_group."""
+    commands = []
+    for job in workflow('ci.yml')['jobs'].values():
+        condition = job.get('if')
+        if condition is None or "== 'merge_group'" in condition:
+            commands += [step['run'] for step in job.get('steps', []) if 'run' in step]
+    return '\n'.join(commands)
+
+
+def make_rule(target):
+    """Prerequisites and recipe of one root Makefile target."""
+    rule, inside = [], False
+    for line in (ROOT / 'Makefile').read_text().splitlines():
+        if inside and line.startswith('\t'):
+            rule.append(line)
+            continue
+        inside = False
+        match = re.match(r'^([\w.-]+(?:[ \t]+[\w.-]+)*)[ \t]*:(?!=)(.*)$', line)
+        if match and target in match.group(1).split():
+            inside = True
+            rule.append(match.group(2).split('##')[0])
+    return '\n'.join(rule)
+
+
+def expand_reachable(text):
+    """Follow make targets and scripts/*.py|*.sh helpers the text invokes.
+
+    This file is never expanded: it names suites in prose, not invocations.
+    """
+    seen = {('file', f'scripts/{Path(__file__).name}')}
+    pending, reached = [('text', text)], []
+    while pending:
+        kind, chunk = pending.pop()
+        reached.append(chunk)
+        refs = [('make', t) for t in re.findall(r'(?:\bmake|\$\(MAKE\))(?:[ \t]+(?:-\S+|[A-Z_]+=\S*))*[ \t]+([a-z][\w-]*)', chunk)]
+        if kind == 'rule':
+            refs += [('make', t) for t in chunk.split('\n', 1)[0].split()]
+        refs += [('file', f) for f in re.findall(r'scripts/[\w.-]+\.(?:py|sh)\b', chunk)]
+        refs += [('file', f'scripts/{m}.py') for m in re.findall(r'\bscripts\.(test_\w+)', chunk)]
+        for ref in refs:
+            if ref in seen:
+                continue
+            seen.add(ref)
+            ref_kind, name = ref
+            if ref_kind == 'make':
+                rule = make_rule(name)
+                if rule:
+                    pending.append(('rule', rule))
+            elif (ROOT / name).is_file():
+                pending.append(('file', (ROOT / name).read_text()))
+    return '\n'.join(reached)
+
+
 class EventPolicy(unittest.TestCase):
     def test_queue_jobs_are_reachable_and_required_without_pr_execution(self):
         jobs = workflow('ci.yml')['jobs']
@@ -30,6 +85,20 @@ class EventPolicy(unittest.TestCase):
         self.assertIn('consumer-checks-exercise', jobs['gate']['needs'])
         self.assertEqual(jobs['bootstrap-install']['uses'], './.github/workflows/bootstrap-install.yml')
         self.assertEqual(jobs['bootstrap-install']['permissions'], {'contents': 'read', 'actions': 'read'})
+
+    def test_every_scripts_node_suite_runs_in_the_merge_queue(self):
+        # check-app-ui-targets.test.mjs landed (#6830) without any CI step, and
+        # the breaking-token / submodule-pins unit suites ran only in their
+        # pull_request-only jobs, so the queue never re-tested them on the
+        # merged tree. Every scripts/ node:test suite must be reached from a
+        # job that runs on merge_group, directly or via make / helper scripts.
+        suites = sorted(p.name for p in (ROOT / 'scripts').iterdir()
+                        if p.name.endswith(('.test.mjs', '.test.cjs')))
+        self.assertTrue(suites)
+        reached = expand_reachable(queue_job_commands())
+        missing = [name for name in suites if name not in reached]
+        self.assertEqual(missing, [], 'scripts/ node:test suites not run by any merge_group job in '
+                         '.github/workflows/ci.yml (add a `node --test` step to a job that runs in the queue)')
 
     def test_reusable_contract_has_static_pr_checks_and_required_queue_runtime(self):
         jobs = workflow('consumer-checks.yml')['jobs']
