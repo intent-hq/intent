@@ -5,10 +5,13 @@ Thanks for your interest in Intent!
 ## CI before and inside the merge queue
 
 PRs run Linux metadata, formatting, static consumer contracts and workflow-policy
-checks. Compilation, instrumented coverage, application tests/builds, browser suites,
-and native runtime checks run on the queued tree before merge. In particular,
-daemon lifecycle (Linux/macOS/Windows), Pi (Linux/Windows and both supported Node
-versions), and PowerShell installer tests do not run on PR updates.
+checks, plus each component's fast Linux correctness checks: intentd's `check`
+(clippy, source lints, `cargo shear`) and `coverage-changed` (the PR's changed tests),
+and the frontend's type/lint checks and unit tests. The queue reruns those on the
+merged tree and adds the rest: native builds, full instrumented coverage, frontend
+builds and integration tests, browser suites, and native runtime checks. In
+particular, daemon lifecycle (Linux/macOS/Windows), Pi (Linux/Windows and both
+supported Node versions), and PowerShell installer tests do not run on PR updates.
 
 The frontend's path-selected browser and macOS fixture suites run in the queue;
 validated release-only diffs keep their existing exemptions. Shared consumer checks
@@ -17,9 +20,9 @@ Monorepo runtime script suites and relevant clean-host bootstrap installation ar
 also queue checks. Manual diagnostics and scheduled maintenance remain available.
 
 `CI Gate` remains required and rejects failed, cancelled, missing, or unexpectedly
-skipped checks. A green PR gate means ready for queued validation, not that runtime
-validation has completed. Use the existing local test and changed-coverage targets
-when earlier feedback is useful.
+skipped checks. A green PR gate means the code compiles, passes lint and passes its
+changed or unit tests, and is ready for queued validation; it does not mean runtime
+validation has completed.
 
 ## Contribution posture
 
