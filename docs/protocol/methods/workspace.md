@@ -24,6 +24,7 @@ unchanged. Host-administration virtual workspaces retain their existing boundary
 | Method | Params | Result |
 | --- | --- | --- |
 | workspace.list | includeArchived?: boolean (default false) | { workspaces: Workspace[] } — triggers background backfill: existing workspaces with a repositoryPath but missing repositoryOwner/Name are enriched from the origin remote URL (same GitHub derivation as workspace.create, non-blocking spawn, deduped per workspace per daemon lifecycle, skips non-GitHub remotes, persists updates, emits workspace:updated with changed fields). **Membership-narrowed** for a non-administrator caller: only workspaces the bound principal is a member of are returned, and every `Workspace` row carries `myRole` (`"owner"` \| `"collaborator"`), `memberCount` and `openInviteCount` (§5.48) |
+| workspace.findByPullRequest *(prepared; `prWorkspaceLookup: 1`)* | url (req): string — a GitHub-form pull-request URL, `https://<host>/<owner>/<repo>/pull/<number>` (trailing path, query or fragment ignored). No `workspaceId`: daemon-global | { workspaces: PullRequestWorkspace[] } — every workspace the daemon has linked to that PR, most recently linked first; `[]` when none. Archived workspaces are included; deleted and remote workspaces never are. Membership-narrowed like `workspace.list`. `-32602 { code: "invalid-params" }` when `url` is missing or not a pull-request URL. See [PR workspace lookup](#pull-request-workspace-lookup) |
 | workspace.get | workspaceId (req) | { workspace: Workspace } — -32602 if not found, **or** if the caller is not a member of it (same `{ code: "not-found" }`, indistinguishable by design; §5.48) |
 | workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipIsolation? (canonical; deprecated alias skipWorktree?), githubUrl?, repositoryCheckout? (prepared GitLab selection; see [GitLab project checkout](#gitlab-project-checkout)), clonePath?, isNewRepo?, progressId? (string — arms the unified provisioning progress stream; see notes), contextLinks? (ContextLink[] — issue/PR context links persisted on the row; a pr-kind link additionally makes the create **PR-aware** — an omitted `branch`/`baseRef` defaults to the PR's head/base branch — see the `contextLinks` and PR-aware create notes below)); optional initialAgent: { prompt? *(a blank/whitespace-only prompt reads as absent; the agent is still created — see "Initial-agent orchestration" in the notes)*, name?, model?, reasoningEffort? (string — creation-time effort; omitted inherits, blank clears; see notes), specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks? *(within v7.4, monorepo#3338: entries may carry an attachment-registry `attachmentId` reference instead of inline `data`, under the same exactly-one-of validation + registry check and daemon-side prompt-assembly resolution as `agent.sendMessage` — §5.5; a bad reference rejects `-32602` pre-side-effect)*, fileBlocks? *(v6.12; attachment references only since v10.0 — same per-entry validation as `agent.sendMessage`: every entry must carry a non-empty `attachmentId`, an entry carrying inline `data` or missing `attachmentId` is `-32602` naming the block index — §5.5)*, metadata? } — no `agentId`: agent IDs are server-assigned, and a request carrying `initialAgent.agentId` is rejected with `-32602` (see notes). Every `-32602` rejection is validated before any side effect (see "Pre-side-effect validation" in the notes) | { workspace: Workspace, initialAgent?: AgentLite } — the created agent's server-minted id is `initialAgent.id`; daemon-owned orchestration inside one idempotent op (see notes: clone → checkout (worktree or CoW) → spec seed → initial agent). |
 | workspace.update | workspaceId (req) + fields to change — the skip toggle uses the same wire names as create: skipIsolation? (canonical; deprecated alias skipWorktree?, either set ⇒ same behavior); the `workspace:updated { changes }` delta serializes it under the canonical skipIsolation name; `statusImageAssetId?: string \| null` is clearable (missing = untouched, `null` = clear, string = set — see the `statusImageAssetId` notes below). A **collaborator** member may change only `title`, `tags`, `statusMessage`, `statusImageAssetId` — any other key is `-32003 { code: "forbidden", detail }` (§5.48). **Archive lifecycle delegation** ([intent-hq/intentd#2066](https://github.com/intent-hq/intentd/pull/2066)): the generic row write never touches `archived` / `archivedAt` and holds `status` while the row is archived — lifecycle state moves only through `workspace.archive` / `workspace.unarchive`. An update carrying `archived` and/or `status: "Archived"` / `"Active"` applies the other fields first, then delegates the flip to those paths: `archived: true` or `status: "Archived"` runs the full `workspace.archive` teardown (guests detached, open invites revoked, hooks / monitors / turns torn down); `archived: false`, or a non-archived `status` on an archived row, runs `workspace.unarchive`. The delegated path publishes the `{ archived, status, archivedAt }` delta itself (`archivedAt` is set by the archive/unarchive path, never by a generic update field), so the update's own `workspace:updated` delta has `archived` and `status` removed from it — both arrive only in the delegated lifecycle delta — and is skipped entirely when nothing else changed. A contradictory pair (e.g. `archived: true` + `status: "Active"`) is `-32602 { code: "invalid-params" }` and nothing is written | { workspace: Workspace } |
@@ -2130,6 +2131,54 @@ successful `updateContext` emits `workspace:context-changed` with the persisted 
 // ← response (emits workspace:context-changed)
 { "jsonrpc":"2.0","id":10,"result":{ "items":[ /* same list */ ] } }
 ```
+
+#### Pull request workspace lookup
+
+*(prepared, additive)* The daemon records which workspaces a pull request belongs
+to, so a client can offer to open the workspace behind a PR link. Support is gated
+by the server hello capability `prWorkspaceLookup: 1`; clients must not call the
+method, or offer the action, without it.
+
+**Recording.** Whenever the daemon persists a changed PR snapshot for a local
+workspace (its `prUrl`, `activePullRequest` or `pullRequests` pool) or for one of its
+registered git roots (§5.6), it links every PR in that snapshot to the workspace. A
+PR is identified by its canonical URL without the scheme (so `http` and `https` links
+match): host lowercased with a leading `www.` removed and any port kept, owner and
+repository lowercased, and the number without leading zeros. Only
+GitHub-form `/<owner>/<repo>/pull/<number>` URLs are recorded or recognized in this
+revision; GitLab merge requests are out of scope. Each workspace gets its own link,
+so several workspaces can be linked to one PR. A link keeps the time it was first
+recorded (`linkedAt`); later sightings by the same workspace do not change it.
+Links survive the PR leaving the pool, the workspace being archived and the git
+root being unregistered, and they ride workspace transfers with their original
+`linkedAt`. Deleting the workspace removes its links. Remote
+workspace rows are not recorded. Recording starts with the implementing daemon
+release; snapshots persisted earlier are linked only once they next change.
+
+**`workspace.findByPullRequest`**
+
+```jsonc
+// request
+{ "url": "https://github.com/intent-hq/intentd/pull/2100/files" }
+// result
+{
+  "workspaces": [
+    {
+      "id": "detect-prs",
+      "title": "Link PRs to workspaces",
+      "archived": false,
+      "linkedAt": "2026-10-18T04:40:00.000Z" // RFC 3339
+    }
+  ]
+}
+```
+
+`PullRequestWorkspace` is `{ id: string, title: string, archived: boolean,
+linkedAt: string }`. Results are ordered by `linkedAt` descending (the most recently
+linked workspace first), ties broken by `id` ascending. The method is daemon-global
+(no `workspaceId`) and read-only; it emits no events. A non-administrator caller
+only sees workspaces it is a member of (§5.48). A missing `url`, or one that is not
+a pull-request URL, is rejected with `-32602 { code: "invalid-params" }`.
 
 #### Human authorship in workspace transfers
 
