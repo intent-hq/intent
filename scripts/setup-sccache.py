@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
-"""Install pinned sccache without Actions caching and select a WebDAV backend.
+"""Install pinned sccache without Actions caching and select the WebDAV cache.
 
 When INTENT_SCCACHE_ENDPOINT is set, the self-hosted cache is used with
 INTENT_SCCACHE_TOKEN and INTENT_SCCACHE_MODE (READ_WRITE by default). It
-overwrites the SCCACHE_WEBDAV_* values Depot runners inject. Without a token
-(for example fork pull requests) compilation is uncached; a Depot token is
-never sent to the self-hosted endpoint. When the variable is unset, Depot
-supplies its job-scoped endpoint, and other runners may supply DEPOT_TOKEN
-through DEPOT_SCCACHE_TOKEN. Missing credentials leave compilation uncached.
+overwrites any SCCACHE_WEBDAV_* values the runner environment already carries.
+Without the variable or a token (for example fork pull requests) compilation
+is uncached.
 """
 import hashlib
 import os
@@ -30,17 +28,11 @@ ASSETS = {
 }
 
 
-DEPOT_ENDPOINT = "https://cache.depot.dev"
 MODES = ("READ_WRITE", "READ_ONLY")
-# Inherited Depot values that would otherwise leak into the self-hosted
+# Inherited runner values that would otherwise leak into the self-hosted
 # configuration. Present ones are blanked; the endpoint and token are replaced.
 INHERITED_WEBDAV = ("SCCACHE_WEBDAV_KEY_PREFIX", "SCCACHE_WEBDAV_USERNAME", "SCCACHE_WEBDAV_PASSWORD")
 WRAPPER = {"SCCACHE_GHA_ENABLED": "false", "CARGO_INCREMENTAL": "0", "RUSTC_WRAPPER": "sccache"}
-
-
-def is_depot(endpoint):
-    host = urllib.parse.urlsplit(endpoint).hostname or ""
-    return host == "depot.dev" or host.endswith(".depot.dev")
 
 
 def self_hosted_endpoint(env):
@@ -51,38 +43,24 @@ def self_hosted_endpoint(env):
     loopback = parts.hostname in ("127.0.0.1", "localhost", "::1")
     if not parts.hostname or not (parts.scheme == "https" or (parts.scheme == "http" and loopback)):
         raise ValueError("INTENT_SCCACHE_ENDPOINT must be an https:// URL")
-    if is_depot(endpoint):
-        raise ValueError("INTENT_SCCACHE_ENDPOINT must not point at Depot; unset it to use Depot Cache")
     return endpoint
 
 
 def select(env):
-    """Return (backend, mode, values); backend is self-hosted, depot or uncached."""
+    """Return (backend, mode, values); backend is self-hosted or uncached."""
     endpoint = self_hosted_endpoint(env)
-    if endpoint:
-        token = (env.get("INTENT_SCCACHE_TOKEN") or "").strip()
-        if not token:
-            return "uncached-self-hosted", None, {}
-        mode = (env.get("INTENT_SCCACHE_MODE") or "READ_WRITE").strip().upper()
-        if mode not in MODES:
-            raise ValueError("INTENT_SCCACHE_MODE must be READ_WRITE or READ_ONLY")
-        result = {key: "" for key in INHERITED_WEBDAV if key in env}
-        result.update(SCCACHE_WEBDAV_ENDPOINT=endpoint, SCCACHE_WEBDAV_TOKEN=token, SCCACHE_WEBDAV_RW_MODE=mode)
-        result.update(WRAPPER)
-        return "self-hosted", mode, result
-    result = {}
-    endpoint = env.get("SCCACHE_WEBDAV_ENDPOINT")
-    token = env.get("SCCACHE_WEBDAV_TOKEN") or env.get("DEPOT_SCCACHE_TOKEN")
-    if not endpoint and token:
-        result["SCCACHE_WEBDAV_ENDPOINT"] = DEPOT_ENDPOINT
-        endpoint = result["SCCACHE_WEBDAV_ENDPOINT"]
     if not endpoint:
         return "uncached", None, {}
-    # The Depot organization token is only ever paired with a Depot endpoint.
-    if token and not env.get("SCCACHE_WEBDAV_TOKEN") and is_depot(endpoint):
-        result["SCCACHE_WEBDAV_TOKEN"] = token
+    token = (env.get("INTENT_SCCACHE_TOKEN") or "").strip()
+    if not token:
+        return "uncached-self-hosted", None, {}
+    mode = (env.get("INTENT_SCCACHE_MODE") or "READ_WRITE").strip().upper()
+    if mode not in MODES:
+        raise ValueError("INTENT_SCCACHE_MODE must be READ_WRITE or READ_ONLY")
+    result = {key: "" for key in INHERITED_WEBDAV if key in env}
+    result.update(SCCACHE_WEBDAV_ENDPOINT=endpoint, SCCACHE_WEBDAV_TOKEN=token, SCCACHE_WEBDAV_RW_MODE=mode)
     result.update(WRAPPER)
-    return "depot", None, result
+    return "self-hosted", mode, result
 
 
 def configuration(env):
@@ -124,7 +102,7 @@ def main():
               "(for example a fork pull request); Rust compilation is uncached.")
         return
     if not values:
-        print("::notice::No Depot cache credentials configured; Rust compilation is uncached.")
+        print("::notice::INTENT_SCCACHE_ENDPOINT is not set; Rust compilation is uncached.")
         return
     # A self-hosted machine may already have an unrelated sccache server.
     # Isolate this job so it cannot inherit that server's backend or token.
@@ -140,11 +118,8 @@ def main():
             if "\n" in value or "\r" in value:
                 raise ValueError("Invalid cache configuration")
             output.write(f"{key}={value}\n")
-    if backend == "self-hosted":
-        host = urllib.parse.urlsplit(values["SCCACHE_WEBDAV_ENDPOINT"]).hostname
-        print(f"Rust compilation uses self-hosted sccache at {host} ({mode}).")
-        return
-    print("Rust compilation uses Depot managed sccache.")
+    host = urllib.parse.urlsplit(values["SCCACHE_WEBDAV_ENDPOINT"]).hostname
+    print(f"Rust compilation uses self-hosted sccache at {host} ({mode}).")
 
 
 if __name__ == "__main__":

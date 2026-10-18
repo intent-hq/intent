@@ -231,8 +231,9 @@ storage read/write errors.
 
 ## Rollback
 
-- **CI back to Depot:** delete the `INTENT_SCCACHE_ENDPOINT` org variable. The
-  next run uses Depot Cache; no code change or server change is needed.
+- **CI without the cache:** delete the `INTENT_SCCACHE_ENDPOINT` org variable.
+  The next run compiles uncached (slower, but correct); no code change or
+  server change is needed. There is no other managed cache to fall back to.
 - **Bad config change on the box:** check out the previous commit of this repo
   and re-run `bootstrap.sh`; tokens and data are kept.
 - **Corrupt or full cache:** `sudo systemctl stop sccache-webdav && sudo find

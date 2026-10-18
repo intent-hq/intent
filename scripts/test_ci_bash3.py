@@ -13,7 +13,7 @@ class Bash3(unittest.TestCase):
         workflow = (ROOT / '.github/workflows/ci.yml').read_text()
         job = workflow.split('  shell-tests-bash3:\n', 1)[1].split('\n  repo-hygiene:', 1)[0]
         self.assertIn('fromJSON(needs.runner-route.outputs.runners', job)
-        self.assertIn("['depot-ubuntu-24.04']", job)
+        self.assertIn("['ubuntu-24.04']", job)
         self.assertIn('bash scripts/install-ci-bash3.sh', job)
         self.assertLess(job.index('install -y -qq build-essential bison'), job.index('bash scripts/install-ci-bash3.sh'))
         self.assertIn('"$BASH3_BIN" scripts/dev-sandbox.test.sh', job)

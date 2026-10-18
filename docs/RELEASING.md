@@ -638,12 +638,15 @@ promotions of deleted prereleases are not preserved by this retention policy.
 
 Jobs in intent, intentd and cloudlands-fe prefer compatible self-hosted runners.
 intent and intentd share one probe: each has a reusable `runner-route.yml`, and
-intentd's CI route job is an inline copy. The probe runs on Depot without checkout,
+intentd's CI route job is an inline copy. The probe runs on GitHub-hosted `ubuntu-24.04` without checkout,
 so it stays available during a self-hosted outage. intentd and cloudlands-fe pull
 requests also run intent's probe through `consumer-checks.yml`. Utility jobs,
 consumer checks, browser suites and release matrices consume its decisions.
-Original Depot labels remain fallback keys, preserving the workload's CPU/memory
-class. cloudlands-fe routes its own Linux jobs with a separate, simpler probe in
+GitHub-hosted labels are the fallback keys, preserving the workload's CPU/memory
+class: standard `ubuntu-24.04`, `windows-2022` and `windows-2025`, the organization
+larger runners `gh-linux-8x`, `gh-linux-16x`, `gh-linux-arm64-8x` and `gh-windows-16x`,
+`macos-15-xlarge` for Apple Silicon and `macos-latest-large` for Intel Macs. The larger
+runners must stay in a runner group shared with all three repositories. cloudlands-fe routes its own Linux jobs with a separate, simpler probe in
 `intent-pr.yml`: a fixed queue threshold of eight and no maintenance overrides.
 
 The shared probe checks online runners and paginated queued/running jobs across all
@@ -656,14 +659,14 @@ platform logs its reason. Fork PRs never select persistent runners.
 
 `CI_QUEUE_READ_TOKEN` needs organization Self-hosted runners read and Actions read
 on all three repositories. The probe falls back to repository runner listing if
-organization listing fails, and to Depot when it cannot establish capacity. Keep
+organization listing fails, and to GitHub-hosted runners when it cannot establish capacity. Keep
 matching organization runner groups accessible to all three repositories; the
 label probe does not prove group access. Reusable callers explicitly pass the
 queue token and Actions read permission through each level. A probe-runner outage
 can still fail routing itself; affected workflows require a rerun.
 
 Infrastructure exceptions are mechanically allowlisted: routing probes run on
-Depot, Depot cache smoke tests exercise Depot, and the manual packaged macOS
+GitHub-hosted Linux, and the manual packaged macOS
 smoke journey requires a disposable hosted machine. The frontend and intentd queue-retirement
 cleanup jobs and intentd read-only credential probe remain on independent GitHub-hosted
 Linux, preserving their upstream queue-recovery contract. Host maintenance stays bound
@@ -674,19 +677,19 @@ browser caches and dependency installation for persistent machines.
 
 Run `python3 -S -B scripts/test_runner_policy.py` in intent and intentd to exercise
 routing fixtures and reject accidental cloud pins. The frontend's existing
-Depot runner Vitest suite and backend/monorepo runner tests invoke it in CI.
+hosted-runner Vitest suite and backend/monorepo runner tests invoke it in CI, and
+`scripts/test_hosted_runners.py` rejects any reintroduced `depot-*` label.
 
 ### Maintenance overrides
 
 Each override is an Actions variable. Setting it to `true` sends that platform's
-routed jobs to the hosted fallback, whatever the machine's state: Depot, or
-GitHub-hosted `macos-latest-large` for Intel macOS. Any other value, or no
+routed jobs to the GitHub-hosted fallback, whatever the machine's state. Any other value, or no
 variable, restores self-hosted preference. The shared probe reads the variables of
 the repository whose workflow run is executing. For a called workflow, that is the
 caller: consumer checks on a cloudlands-fe pull request read cloudlands-fe's
 variables. So when a machine is unhealthy, set the override in intent and intentd,
 and in cloudlands-fe to cover its consumer checks. cloudlands-fe's own
-`intent-pr.yml` routing ignores overrides. It selects Depot only when no tinybox
+`intent-pr.yml` routing ignores overrides. It selects `gh-linux-8x` only when no tinybox
 runner is online, so stop the tinybox runner services to keep its jobs off a broken
 machine that is still online.
 
@@ -704,7 +707,7 @@ Overrides only affect routed jobs. Workflows that name a machine directly keep
 targeting it: intentd's `tinybox-prune.yml`, `macos-prune.yml`, `m1mac-smoke.yml`
 and `provision-m1mac.yml`. `windows-prune.yml` is mixed: its `prune` job names
 5090pc, but it needs the routed `safety-tests` job to pass first. While the Windows
-override is on, those tests run on Depot, so a passing run proves nothing about
+override is on, those tests run on GitHub-hosted Windows, so a passing run proves nothing about
 5090pc. Once the override is off, the tests run on 5090pc, and a failure there skips
 the disk cleanup.
 
@@ -722,7 +725,7 @@ gh variable set CI_LINUX_RUNNER_DISABLED_REASON --repo intent-hq/<repo> \
 
 Turning it off:
 1. Check the requirements below on the machine itself. Maintenance workflows may run
-   their checks on Depot while the override is on.
+   their checks on GitHub-hosted runners while the override is on.
 2. Delete both variables in every repository where they are set.
 3. Watch the next pull request and merge-queue runs:
    - The route log reason must no longer be `disabled for maintenance`.
@@ -740,29 +743,23 @@ These are lasting facts about each machine. Current reasons belong in the
 |---|---|---|
 | tinybox (Linux x64) | 8 (`tinybox` to `tinybox-8`), shared by all three repositories | `tinybox-prune.yml` aims to keep 100 GiB free on `/raid` but stops when it runs out of eligible files; a full `/raid` crashed queue runs ([intentd#2421](https://github.com/intent-hq/intentd/pull/2421)). Node is not installed system-wide, so every job that runs Node must use `actions/setup-node` first ([intentd#2467](https://github.com/intent-hq/intentd/pull/2467) adds a routing-policy test for this). Git is 2.34.1. |
 | 5090pc (Windows x64) | 1 | `windows-prune.yml` keeps 40 GiB free; a full disk failed Rust toolchain installs (`os error 112`). Its safety tests need PowerShell 7 (`pwsh`); without it they fail with `pwsh: command not found` and the cleanup is skipped ([run 38896319862](https://github.com/intent-hq/intentd/actions/runs/38896319862)). |
-| m1mac (macOS ARM64) | 1 | Too slow for intentd's merge-queue `build (aarch64-apple-darwin)` job, even with the compiler cache: over 60 minutes cold and over 26 minutes on an unchanged rerun, against about 8 minutes on Depot ([run 39120530357](https://github.com/intent-hq/intentd/actions/runs/39120530357), [run 39124725329](https://github.com/intent-hq/intentd/actions/runs/39124725329)). Clippy compiles are not cacheable by sccache, and cache keys include the checkout path, so Depot's entries do not match. `actions/setup-python` cannot install there (`mkdir: /Users/runner: Permission denied`); the system Python is 3.9.6. |
+| m1mac (macOS ARM64) | 1 | Too slow for intentd's merge-queue `build (aarch64-apple-darwin)` job, even with the compiler cache: over 60 minutes cold and over 26 minutes on an unchanged rerun, against about 8 minutes on a hosted Apple Silicon runner ([run 39120530357](https://github.com/intent-hq/intentd/actions/runs/39120530357), [run 39124725329](https://github.com/intent-hq/intentd/actions/runs/39124725329)). Clippy compiles are not cacheable by sccache, and cache keys include the checkout path, so hosted runners' entries do not match. `actions/setup-python` cannot install there (`mkdir: /Users/runner: Permission denied`); the system Python is 3.9.6. |
 
 A single-slot machine runs its routed jobs one after another, so the combined time
 of a run's jobs on that platform must fit the merge-queue timeout.
 
-Rust compiler caching uses Depot Cache through sccache’s WebDAV backend, using
-the short-lived configuration inherited from the runner. Enable automatic Depot
-Cache access in the Depot organization settings. Compiler hit statistics, rather
-than a restored Actions archive, are the evidence of reuse. The setup script
-installs checksum-verified sccache directly; no Rust cache actions remain.
-Self-hosted and GitHub Intel runners use the `DEPOT_TOKEN` Actions secret when
-available (otherwise they compile uncached). Local build configuration is in
-[CONTRIBUTING.md](../CONTRIBUTING.md#local-managed-rust-compiler-cache).
-
-The self-hosted sccache WebDAV cache replaces Depot Cache when the organization
-Actions variable `INTENT_SCCACHE_ENDPOINT` (an `https://` URL) is set. The setup
-script then uses the `INTENT_SCCACHE_TOKEN` secret and the optional
-`INTENT_SCCACHE_MODE` variable (`READ_WRITE` by default, or `READ_ONLY`), and
-overwrites the `SCCACHE_WEBDAV_*` values Depot runners inject. Every run that
-receives secrets (main, releases, the cache producer and same-repo pull
-requests) writes. When the variable is set but the token is empty, as in fork
-pull requests, compilation is uncached; the Depot token is never sent to the
-self-hosted endpoint. The job log names the chosen backend and mode, never the
-token. To roll back, delete `INTENT_SCCACHE_ENDPOINT`; the next run uses Depot.
-Reusable workflows such as `consumer-checks.yml` accept `INTENT_SCCACHE_TOKEN` as
-an optional secret next to `DEPOT_TOKEN`.
+Rust compiler caching uses the self-hosted sccache WebDAV cache
+([runbook](SCCACHE_SERVER.md)) when the organization Actions variable
+`INTENT_SCCACHE_ENDPOINT` (an `https://` URL) is set. `scripts/setup-sccache.py`
+installs checksum-verified sccache directly (no Rust cache actions remain), then
+uses the `INTENT_SCCACHE_TOKEN` secret and the optional `INTENT_SCCACHE_MODE`
+variable (`READ_WRITE` by default, or `READ_ONLY`), overwriting any
+`SCCACHE_WEBDAV_*` values the runner already carries. Every run that receives
+secrets (main, releases, the cache producer and same-repo pull requests) writes.
+Without the variable, or when the token is empty as in fork pull requests,
+compilation is uncached. Compiler hit statistics, rather than a restored Actions
+archive, are the evidence of reuse. The job log names the chosen backend and
+mode, never the token. Reusable workflows such as `consumer-checks.yml` accept
+`INTENT_SCCACHE_TOKEN` as an optional secret; their `DEPOT_TOKEN` secret is unused
+and kept only until callers stop passing it. Local build configuration is in
+[CONTRIBUTING.md](../CONTRIBUTING.md#local-rust-compiler-cache).
