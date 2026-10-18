@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise managed cache selection and checksum verification without networking."""
+"""Exercise self-hosted cache selection and checksum verification without networking."""
 import contextlib
 import importlib.util
 import io
@@ -9,23 +9,20 @@ import tempfile
 import unittest
 from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location('cache', ROOT / 'scripts/setup-depot-sccache.py')
+spec = importlib.util.spec_from_file_location('cache', ROOT / 'scripts/setup-sccache.py')
 cache = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(cache)
 
-class ManagedCache(unittest.TestCase):
-    def test_missing_credentials_does_not_configure_wrapper(self):
-        self.assertEqual(cache.configuration({}), {})
+# Values a runner image or a previous configuration may already carry.
+INHERITED = {'SCCACHE_WEBDAV_ENDPOINT': 'https://inherited.example', 'SCCACHE_WEBDAV_TOKEN': 'inherited-secret',
+             'SCCACHE_WEBDAV_KEY_PREFIX': 'inherited/prefix', 'SCCACHE_WEBDAV_USERNAME': 'inherited'}
+SELF_HOSTED = {'INTENT_SCCACHE_ENDPOINT': 'https://cache.example.com', 'INTENT_SCCACHE_TOKEN': 'intent-secret'}
 
-    def test_depot_job_endpoint_is_preserved(self):
-        value = cache.configuration({'SCCACHE_WEBDAV_ENDPOINT': 'https://job.example/cache', 'SCCACHE_WEBDAV_TOKEN': 'job-secret'})
-        self.assertEqual(value, {'RUSTC_WRAPPER': 'sccache', 'CARGO_INCREMENTAL': '0', 'SCCACHE_GHA_ENABLED': 'false'})
 
-    def test_self_hosted_secret_uses_managed_endpoint(self):
-        value = cache.configuration({'DEPOT_SCCACHE_TOKEN': 'fixture'})
-        self.assertEqual(value['SCCACHE_WEBDAV_ENDPOINT'], 'https://cache.depot.dev')
-        self.assertEqual(value['SCCACHE_WEBDAV_TOKEN'], 'fixture')
-        self.assertNotIn('SCCACHE_DIR', value)
+class Install(unittest.TestCase):
+    def test_unset_switch_does_not_configure_wrapper(self):
+        for env in ({}, INHERITED, {'INTENT_SCCACHE_TOKEN': 'intent-secret'}, {**SELF_HOSTED, 'INTENT_SCCACHE_ENDPOINT': ' '}):
+            self.assertEqual(cache.select(env), ('uncached', None, {}))
 
     def test_corrupt_download_is_not_installed(self):
         def download(url, dest):
@@ -48,7 +45,7 @@ class ManagedCache(unittest.TestCase):
     def test_long_compilation_does_not_expire_server(self):
         with tempfile.TemporaryDirectory() as temp:
             env = {'RUNNER_TEMP': temp, 'GITHUB_PATH': temp + '/path',
-                   'GITHUB_ENV': temp + '/env', 'SCCACHE_WEBDAV_ENDPOINT': 'https://cache.depot.dev'}
+                   'GITHUB_ENV': temp + '/env', **SELF_HOSTED}
             with patch.dict(cache.os.environ, env, clear=True), patch.object(cache, 'install', return_value=Path(temp)):
                 cache.main()
             values = dict(line.split('=', 1) for line in Path(env['GITHUB_ENV']).read_text().splitlines())
@@ -60,12 +57,6 @@ class ManagedCache(unittest.TestCase):
         for path in (ROOT/'.github').rglob('*.yml'):
             self.assertNotIn('Swatinem/rust-cache', path.read_text(), str(path))
             self.assertNotIn('mozilla-actions/sccache-action', path.read_text(), str(path))
-
-# Values a Depot runner injects into every job.
-DEPOT_JOB = {'SCCACHE_WEBDAV_ENDPOINT': 'https://cache.depot.dev', 'SCCACHE_WEBDAV_TOKEN': 'depot-job-secret',
-             'DEPOT_SCCACHE_TOKEN': 'depot-org-secret'}
-SELF_HOSTED = {'INTENT_SCCACHE_ENDPOINT': 'https://cache.example.com', 'INTENT_SCCACHE_TOKEN': 'intent-secret'}
-
 
 def run_main(env):
     with tempfile.TemporaryDirectory() as temp:
@@ -86,8 +77,8 @@ class SelfHostedCache(unittest.TestCase):
                                  'SCCACHE_WEBDAV_TOKEN': 'intent-secret', 'SCCACHE_WEBDAV_RW_MODE': 'READ_WRITE',
                                  'RUSTC_WRAPPER': 'sccache', 'CARGO_INCREMENTAL': '0', 'SCCACHE_GHA_ENABLED': 'false'})
 
-    def test_inherited_depot_values_are_overwritten(self):
-        env = {**DEPOT_JOB, 'SCCACHE_WEBDAV_KEY_PREFIX': 'depot/prefix', 'SCCACHE_WEBDAV_USERNAME': 'depot', **SELF_HOSTED}
+    def test_inherited_values_are_overwritten(self):
+        env = {**INHERITED, **SELF_HOSTED}
         value = cache.configuration(env)
         self.assertEqual(value['SCCACHE_WEBDAV_ENDPOINT'], 'https://cache.example.com')
         self.assertEqual(value['SCCACHE_WEBDAV_TOKEN'], 'intent-secret')
@@ -107,25 +98,20 @@ class SelfHostedCache(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'READ_WRITE or READ_ONLY'):
             cache.configuration({**SELF_HOSTED, 'INTENT_SCCACHE_MODE': 'WRITE'})
 
-    def test_missing_token_builds_uncached_without_depot_fallback(self):
-        # Fork pull requests get the variable but no secrets; Depot's values
+    def test_missing_token_builds_uncached_without_inherited_fallback(self):
+        # Fork pull requests get the variable but no secrets; inherited values
         # must not be reused against the self-hosted endpoint.
         for token in ('', None):
-            env = {**DEPOT_JOB, 'INTENT_SCCACHE_ENDPOINT': 'https://cache.example.com'}
+            env = {**INHERITED, 'INTENT_SCCACHE_ENDPOINT': 'https://cache.example.com'}
             if token is not None:
                 env['INTENT_SCCACHE_TOKEN'] = token
             self.assertEqual(cache.select(env), ('uncached-self-hosted', None, {}))
 
-    def test_depot_token_never_reaches_self_hosted_endpoint(self):
-        for env in ({**DEPOT_JOB, **SELF_HOSTED}, {**DEPOT_JOB, 'INTENT_SCCACHE_ENDPOINT': 'https://cache.example.com'}):
+    def test_inherited_token_never_reaches_self_hosted_endpoint(self):
+        for env in ({**INHERITED, **SELF_HOSTED}, {**INHERITED, 'INTENT_SCCACHE_ENDPOINT': 'https://cache.example.com'}):
             written, output = run_main(env)
-            for secret in ('depot-job-secret', 'depot-org-secret'):
-                self.assertNotIn(secret, ''.join(written.values()))
-                self.assertNotIn(secret, output)
-
-    def test_depot_org_token_not_copied_to_inherited_foreign_endpoint(self):
-        value = cache.configuration({'SCCACHE_WEBDAV_ENDPOINT': 'https://other.example', 'DEPOT_SCCACHE_TOKEN': 'depot-org-secret'})
-        self.assertNotIn('SCCACHE_WEBDAV_TOKEN', value)
+            self.assertNotIn('inherited-secret', ''.join(written.values()))
+            self.assertNotIn('inherited-secret', output)
 
     def test_endpoint_must_be_https(self):
         for endpoint in ('http://cache.example.com', 'cache.example.com', 'https://'):
@@ -133,33 +119,29 @@ class SelfHostedCache(unittest.TestCase):
                 cache.configuration({**SELF_HOSTED, 'INTENT_SCCACHE_ENDPOINT': endpoint})
         self.assertIn('SCCACHE_WEBDAV_ENDPOINT', cache.configuration({**SELF_HOSTED, 'INTENT_SCCACHE_ENDPOINT': 'http://127.0.0.1:8080'}))
 
-    def test_endpoint_must_not_be_depot(self):
-        with self.assertRaisesRegex(ValueError, 'Depot'):
-            cache.configuration({**SELF_HOSTED, 'INTENT_SCCACHE_ENDPOINT': 'https://cache.depot.dev'})
-
     def test_main_reports_backend_and_mode_without_token(self):
-        written, output = run_main({**DEPOT_JOB, **SELF_HOSTED, 'INTENT_SCCACHE_MODE': 'READ_ONLY'})
+        written, output = run_main({**INHERITED, **SELF_HOSTED, 'INTENT_SCCACHE_MODE': 'READ_ONLY'})
         self.assertEqual(written['SCCACHE_WEBDAV_ENDPOINT'], 'https://cache.example.com')
         self.assertEqual(written['SCCACHE_WEBDAV_RW_MODE'], 'READ_ONLY')
         self.assertIn('self-hosted sccache at cache.example.com (READ_ONLY)', output)
         self.assertNotIn('intent-secret', output)
 
     def test_main_reports_uncached_when_token_missing(self):
-        written, output = run_main({**DEPOT_JOB, 'INTENT_SCCACHE_ENDPOINT': 'https://cache.example.com'})
+        written, output = run_main({**INHERITED, 'INTENT_SCCACHE_ENDPOINT': 'https://cache.example.com'})
         self.assertEqual(written, {})
         self.assertIn('INTENT_SCCACHE_TOKEN is empty', output)
 
-    def test_unset_variable_keeps_depot_behavior(self):
-        for env in (DEPOT_JOB, {'DEPOT_SCCACHE_TOKEN': 'fixture'}, {}, {'INTENT_SCCACHE_ENDPOINT': ' ', **DEPOT_JOB},
-                    {'INTENT_SCCACHE_TOKEN': 'intent-secret', 'SCCACHE_WEBDAV_ENDPOINT': 'https://cache.depot.dev'}):
-            backend, _, value = cache.select(env)
-            self.assertNotEqual(backend, 'self-hosted')
-            self.assertNotIn('SCCACHE_WEBDAV_RW_MODE', value)
-            self.assertNotIn('intent-secret', ''.join(value.values()))
-        written, output = run_main(DEPOT_JOB)
-        self.assertEqual(set(written), {'RUSTC_WRAPPER', 'CARGO_INCREMENTAL', 'SCCACHE_GHA_ENABLED',
-                                        'SCCACHE_SERVER_PORT', 'SCCACHE_IDLE_TIMEOUT'})
-        self.assertEqual(output, 'Rust compilation uses Depot managed sccache.\n')
+    def test_unset_variable_builds_uncached(self):
+        written, output = run_main(INHERITED)
+        self.assertEqual(written, {})
+        self.assertIn('INTENT_SCCACHE_ENDPOINT is not set', output)
+        self.assertNotIn('inherited-secret', output)
+
+    def test_no_depot_cache_path_remains(self):
+        self.assertNotIn('depot', (ROOT/'scripts/setup-sccache.py').read_text().lower())
+        for path in (ROOT/'.github').rglob('*.yml'):
+            self.assertNotIn('DEPOT_SCCACHE_TOKEN', path.read_text(), str(path))
+            self.assertNotIn('setup-depot-sccache', path.read_text(), str(path))
 
     def test_workflows_pass_self_hosted_inputs(self):
         # Every setup step must receive the switch, token and mode, or the
@@ -167,7 +149,7 @@ class SelfHostedCache(unittest.TestCase):
         steps = 0
         for path in (ROOT/'.github').rglob('*.yml'):
             text = path.read_text()
-            for match in re.finditer(r'\n(\s*)- name:[^\n]*\n((?:\1  [^\n]*\n)*?)\1  run: python3 scripts/setup-depot-sccache\.py', text):
+            for match in re.finditer(r'\n(\s*)- name:[^\n]*\n((?:\1  [^\n]*\n)*?)\1  run: python3 scripts/setup-sccache\.py', text):
                 steps += 1
                 block = match.group(2)
                 for line in ('INTENT_SCCACHE_ENDPOINT: ${{ vars.INTENT_SCCACHE_ENDPOINT }}',

@@ -37,7 +37,7 @@ jobs:
   # title, which merge_group does not carry; the gate accepts its skip there.
   pr-title:
     needs: [runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
     if: github.event_name == 'pull_request'
     steps:
       # Intermittent TLS failures reaching api.github.com can kill this action
@@ -88,7 +88,7 @@ jobs:
   bridge-test:
     if: github.event_name == 'merge_group'
     needs: [runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -107,7 +107,7 @@ jobs:
   python-tests:
     if: github.event_name == 'merge_group'
     needs: [runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -125,7 +125,7 @@ jobs:
   # not turn into an intentional path skip.
   consumer-checks-prepare:
     needs: [runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
     outputs:
       selected: ${{ steps.select.outputs.selected }}
       intentd-sha: ${{ steps.select.outputs.intentd-sha }}
@@ -154,7 +154,6 @@ jobs:
       actions: read
     secrets:
       CI_QUEUE_READ_TOKEN: ${{ secrets.CI_QUEUE_READ_TOKEN }}
-      DEPOT_TOKEN: ${{ secrets.DEPOT_TOKEN }}
       INTENT_SCCACHE_TOKEN: ${{ secrets.INTENT_SCCACHE_TOKEN }}
     uses: ./.github/workflows/consumer-checks.yml
     with:
@@ -181,7 +180,7 @@ jobs:
   # job runs the same script, so the two lists cannot drift.
   docs-check:
     needs: [runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -221,7 +220,7 @@ jobs:
   # a warning otherwise (mirrors auto-bump-submodules.yml's ios handling).
   event-catalog-check:
     needs: [runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -257,7 +256,7 @@ jobs:
   shell-tests:
     if: github.event_name == 'merge_group'
     needs: [runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -274,9 +273,9 @@ jobs:
           bash scripts/auto-bump-submodules.test.sh
           bash scripts/bootstrap-dev-host.test.sh
           bash scripts/ci-gate.test.sh
-          python3 -S -B scripts/test_depot_runners.py
+          python3 -S -B scripts/test_hosted_runners.py
           python3 -S -B scripts/test_ci_bash3.py
-          python3 -S -B scripts/test_setup_depot_sccache.py
+          python3 -S -B scripts/test_setup_sccache.py
           python3 -S -B scripts/test_local_sccache.py
           bash scripts/consumer-checks.test.sh
           bash scripts/dev-ports.test.sh
@@ -315,7 +314,7 @@ jobs:
   # ShellCheck binary, installed explicitly when absent.
   shell-lint:
     needs: [runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -338,7 +337,7 @@ jobs:
   shell-tests-bash3:
     if: github.event_name == 'merge_group'
     needs: [runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -376,7 +375,7 @@ jobs:
   # dependencies or initialized submodules.
   repo-hygiene:
     needs: [runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -407,7 +406,7 @@ jobs:
   # GitHub triggers no PR.
   ruleset-check:
     needs: [runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -426,7 +425,7 @@ jobs:
   # exist on merge_group; the gate accepts its skip there.
   breaking-token:
     needs: [runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v7
@@ -453,7 +452,7 @@ jobs:
   # exist on merge_group; the gate accepts its skip there.
   submodule-pins:
     needs: [runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v7
@@ -475,7 +474,7 @@ jobs:
   # zero-dependency Node with a fixture-driven node:test suite.
   triage-parser-test:
     needs: [runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -507,7 +506,7 @@ jobs:
 
   ci-policy:
     needs: [runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
@@ -519,7 +518,7 @@ jobs:
 
   gate:
     name: CI Gate
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
     permissions: {}
     if: always()
     needs: [ci-policy, bootstrap-install, pr-title, bridge-test, python-tests, docs-check, event-catalog-check, shell-tests, shell-lint, shell-tests-bash3, repo-hygiene, ruleset-check, breaking-token, submodule-pins, triage-parser-test, consumer-checks-prepare, consumer-checks-exercise, runner-route]

@@ -20,7 +20,7 @@ class LocalCache(unittest.TestCase):
                 p=root/name;p.write_text(script);p.chmod(0o755)
             env={k:v for k,v in os.environ.items() if not k.startswith(('SCCACHE_', 'RUSTC_WRAPPER'))}
             env['PATH']=temp
-            if configured:env.update(SCCACHE_WEBDAV_ENDPOINT='https://cache.depot.dev',SCCACHE_WEBDAV_TOKEN='fixture-secret')
+            if configured:env.update(SCCACHE_WEBDAV_ENDPOINT='https://cache.example.com',SCCACHE_WEBDAV_TOKEN='fixture-secret')
             if wrapper is not None:env['RUSTC_WRAPPER']=wrapper
             # Use the real recipe with the preflight overridden by a test-only makefile.
             fixture=root/'fixture.mk';fixture.write_text(f'include {ROOT}/Makefile\nensure-intentd-submodule: ;\n')

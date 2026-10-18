@@ -28,7 +28,7 @@ permissions:
   actions: read
 jobs:
   probe:
-    runs-on: depot-ubuntu-24.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       runners: ${{ steps.decide.outputs.runners }}
@@ -83,7 +83,7 @@ jobs:
                 runners.filter(r => r.status === 'online' && labels.every(l => (r.labels || []).some(x => ['macos', 'intel'].includes(key) ? x.name?.toLowerCase() === l.toLowerCase() : x.name === l))),
               ]));
               const jobs = [];
-              // A missing sibling view is unknown demand, not zero demand. Fail open to Depot.
+              // A missing sibling view is unknown demand, not zero demand. Fail open to GitHub-hosted runners.
               if (Object.values(online).some(rs => rs.length)) {
                 for (const repo of new Set(['intent', 'intentd', 'cloudlands-fe', context.repo.repo])) {
                   const seen = new Set();
@@ -112,28 +112,23 @@ jobs:
             } catch (error) {
               for (const key of Object.keys(fleets)) reasons[key] = `probe failed (${error.message})`;
             }
+            // Keys are the GitHub-hosted fallback labels jobs ask for; values are
+            // the self-hosted fleet labels, or the key itself when the fleet bursts.
+            const hosted = {
+              linux: ['ubuntu-22.04', 'ubuntu-24.04', 'gh-linux-8x', 'gh-linux-16x'],
+              arm: ['ubuntu-24.04-arm', 'gh-linux-arm64-8x'],
+              windows: ['windows-2022', 'windows-2025', 'gh-windows-16x'],
+              macos: ['macos-15-xlarge'],
+              intel: ['macos-latest-large'],
+            };
             const mapping = {};
-            for (const version of ['22.04', '24.04']) {
-              for (const size of ['', '-4', '-8', '-16', '-32', '-64']) {
-                for (const arch of ['', '-arm']) {
-                  const label = `depot-ubuntu-${version}${arch}${size}`;
-                  const key = arch ? 'arm' : 'linux';
-                  mapping[label] = burst[key] ? [label] : fleets[key];
-                }
-              }
+            for (const [key, labels] of Object.entries(hosted)) {
+              for (const label of labels) mapping[label] = burst[key] ? [label] : fleets[key];
             }
-            for (const version of ['2022', '2025']) {
-              for (const size of ['', '-4', '-8', '-16', '-32', '-64']) {
-                const label = `depot-windows-${version}${size}`;
-                mapping[label] = burst.windows ? [label] : fleets.windows;
-              }
-            }
-            mapping['depot-macos-latest'] = burst.macos ? ['depot-macos-latest'] : fleets.macos;
-            mapping['macos-latest-large'] = burst.intel ? ['macos-latest-large'] : fleets.intel;
             for (const key of Object.keys(fleets)) core.info(`${key} routing: burst=${burst[key]} (${reasons[key]})`);
             core.setOutput('runners', JSON.stringify(mapping));
-            core.setOutput('linux_labels', JSON.stringify(mapping[`depot-ubuntu-24.04-${process.env.LINUX_SIZE || '8'}`]));
-            core.setOutput('check_labels', JSON.stringify(mapping['depot-ubuntu-24.04-8']));
-            core.setOutput('windows_labels', JSON.stringify(mapping['depot-windows-2022-16']));
-            core.setOutput('macos_labels', JSON.stringify(mapping['depot-macos-latest']));
+            core.setOutput('linux_labels', JSON.stringify(mapping[`gh-linux-${process.env.LINUX_SIZE || '8'}x`]));
+            core.setOutput('check_labels', JSON.stringify(mapping['gh-linux-8x']));
+            core.setOutput('windows_labels', JSON.stringify(mapping['gh-windows-16x']));
+            core.setOutput('macos_labels', JSON.stringify(mapping['macos-15-xlarge']));
             for (const key of ['linux', 'windows', 'macos']) core.setOutput(`${key}_burst`, String(burst[key]));

@@ -388,13 +388,16 @@ Please do not report security vulnerabilities through public issues — see
 By contributing, you agree that your contributions will be licensed under the
 [Apache License 2.0](LICENSE).
 
-### Local managed Rust compiler cache
+### Local Rust compiler cache
 
-Install sccache 0.17 or newer and export your Depot cache settings in your shell:
+Install sccache 0.17 or newer and point it at the team's self-hosted cache
+([runbook](docs/SCCACHE_SERVER.md)) with the **read-only** token, which a
+maintainer shares with you out of band:
 
 ```bash
-export SCCACHE_WEBDAV_ENDPOINT=https://cache.depot.dev
-export SCCACHE_WEBDAV_TOKEN=<your-depot-organization-token>
+export SCCACHE_WEBDAV_ENDPOINT=https://172.96.141.217
+export SCCACHE_WEBDAV_TOKEN=<read-only-cache-token>
+export SCCACHE_WEBDAV_RW_MODE=READ_ONLY
 make build
 ```
 
@@ -404,14 +407,16 @@ takes precedence. Keep tokens out of tracked files. If changing the endpoint
 or credentials while a local sccache server is running, stop that server first
 with `sccache --stop-server` so the next build picks up the new environment.
 
-CI may use the self-hosted cache instead (see
+CI writes to the same cache with its own read-write token (see
 [docs/RELEASING.md](docs/RELEASING.md)); its `INTENT_SCCACHE_*` settings apply
-only to CI jobs. Local builds keep using the Depot settings above, because
-sccache keys include absolute paths and local builds rarely reuse CI entries.
+only to CI jobs. Local builds get the read-only token so developer machines
+cannot write into the shared cache. sccache keys include absolute
+paths, so a local build only hits entries compiled at the same checkout path;
+expect a low hit rate unless your path matches a CI runner's.
 
 ### Bash 3 compatibility checks
 
-The `shell-tests-bash3` CI job runs on Depot Linux with a checksum-verified
+The `shell-tests-bash3` CI job runs on GitHub-hosted Linux with a checksum-verified
 Bash 3.2.57 build. It tests the shell language compatibility needed by macOS
 users without consuming a macOS runner. To reproduce on Linux:
 

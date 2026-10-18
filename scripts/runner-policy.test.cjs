@@ -67,17 +67,23 @@ async function route(fixture = {}) {
 }
 test('healthy matching fleet is preferred for every workload size', async () => {
   const r = await route();
-  for (const size of ['', '-8', '-16'])
-    assert.deepEqual(r.runners[`depot-ubuntu-24.04${size}`], ['self-hosted', 'Linux', 'X64']);
-  assert.deepEqual(r.runners['depot-ubuntu-24.04-arm-8'], ['self-hosted', 'Linux', 'ARM64']);
-  assert.deepEqual(r.runners['depot-macos-latest'], ['self-hosted', 'macOS', 'ARM64']);
-  assert.deepEqual(r.runners['depot-windows-2022-16'], ['self-hosted', 'Windows', 'X64']);
+  for (const label of ['ubuntu-22.04', 'ubuntu-24.04', 'gh-linux-8x', 'gh-linux-16x'])
+    assert.deepEqual(r.runners[label], ['self-hosted', 'Linux', 'X64']);
+  for (const label of ['ubuntu-24.04-arm', 'gh-linux-arm64-8x'])
+    assert.deepEqual(r.runners[label], ['self-hosted', 'Linux', 'ARM64']);
+  assert.deepEqual(r.runners['macos-15-xlarge'], ['self-hosted', 'macOS', 'ARM64']);
+  for (const label of ['windows-2022', 'windows-2025', 'gh-windows-16x'])
+    assert.deepEqual(r.runners[label], ['self-hosted', 'Windows', 'X64']);
+  assert.deepEqual(JSON.parse(r.outputs.linux_labels), ['self-hosted', 'Linux', 'X64']);
   assert.deepEqual([...new Set(r.queried)].sort(), ['cloudlands-fe', 'intent', 'intentd']);
 });
 test('offline, invisible, API failure, and unreadable sibling capacity burst', async () => {
   for (const f of [{ runners: [] }, { error: true }, { unreadable: 'intent' }]) {
     const r = await route(f);
-    assert.deepEqual(r.runners['depot-ubuntu-24.04-8'], ['depot-ubuntu-24.04-8']);
+    for (const label of Object.keys(r.runners)) assert.deepEqual(r.runners[label], [label]);
+    assert.deepEqual(JSON.parse(r.outputs.check_labels), ['gh-linux-8x']);
+    assert.deepEqual(JSON.parse(r.outputs.windows_labels), ['gh-windows-16x']);
+    assert.deepEqual(JSON.parse(r.outputs.macos_labels), ['macos-15-xlarge']);
     assert.ok(r.messages.some((m) => m.includes('burst=true')));
   }
 });
@@ -111,7 +117,7 @@ test('queued demand and stalled jobs trigger fallback; hosted jobs do not', asyn
     'true',
   );
   assert.equal(
-    (await route({ jobs: [{ ...queued, labels: ['depot-ubuntu-24.04-8'] }] })).outputs.linux_burst,
+    (await route({ jobs: [{ ...queued, labels: ['gh-linux-8x'] }] })).outputs.linux_burst,
     'false',
   );
 });

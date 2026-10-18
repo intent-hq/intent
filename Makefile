@@ -470,7 +470,7 @@ update: ## git pull --rebase monorepo + each submodule onto its .gitmodules bran
 build: build-intentd ## Build the Rust workspace (packages/intentd)
 
 build-intentd: ensure-intentd-submodule
-	cd $(INTENTD_DIR) && bash "$(CURDIR)/scripts/with-depot-sccache.sh" cargo build --workspace --jobs $(BUILD_JOBS)
+	cd $(INTENTD_DIR) && bash "$(CURDIR)/scripts/with-sccache.sh" cargo build --workspace --jobs $(BUILD_JOBS)
 
 fmt: ensure-intentd-submodule ## cargo fmt --check
 	cd "$(INTENTD_DIR)" && cargo fmt --check
@@ -956,7 +956,7 @@ build-sidecar: ensure-intentd-submodule ensure-fe-submodule ## Build intentd rel
 	# the sidecar step.
 	@$(FE_DEPS_FRESH) || (echo "[build-sidecar] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && pnpm install)
 	@echo "[build-sidecar] Building intentd release binary..."
-	cd $(INTENTD_DIR) && bash "$(CURDIR)/scripts/with-depot-sccache.sh" cargo build --release --workspace
+	cd $(INTENTD_DIR) && bash "$(CURDIR)/scripts/with-sccache.sh" cargo build --release --workspace
 	@echo "[build-sidecar] Staging sidecar binary for FE packaging..."
 	cd $(FE_DIR) && node scripts/copy-sidecar.cjs
 
@@ -1013,7 +1013,7 @@ dev: ensure-intentd-submodule ensure-fe-submodule ## One-command dev: launch the
 	#     would otherwise scan the shared ~/intent/workspaces root.
 	@$(FE_DEPS_FRESH) || (echo "[dev] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && pnpm install)
 	@echo "[dev] Building intentd release binary (no-op if already fresh)..."
-	cd $(INTENTD_DIR) && bash "$(CURDIR)/scripts/with-depot-sccache.sh" cargo build --release --workspace
+	cd $(INTENTD_DIR) && bash "$(CURDIR)/scripts/with-sccache.sh" cargo build --release --workspace
 	@mkdir -p "$(DEV_DATA_DIR)"
 	@echo "[dev] Launching FE with sidecar mode enabled (INTENTD_SIDECAR=1)"
 	@echo "[dev]   INTENTD_BIN=$(CURDIR)/$(INTENTD_DIR)/target/release/intentd"

@@ -14,7 +14,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 QUEUE_JOBS = {'bridge-test', 'python-tests', 'shell-tests', 'shell-tests-bash3', 'bootstrap-install'}
 RUNTIME_STEPS = {'Verify connected harnesses and source revisions', 'Prepare the connected test toolchains',
-                 'Configure Depot managed compiler cache', 'Install the selected renderer dependencies',
+                 'Configure the self-hosted compiler cache', 'Install the selected renderer dependencies',
                  'Run the connected transfer selection contract'}
 
 
@@ -253,7 +253,7 @@ class EventPolicy(unittest.TestCase):
         self.assertEqual(SCRIPT_FILE.findall('bash .github/scripts/t/run.sh && scripts/x.py other/scripts/y.sh'),
                          ['.github/scripts/t/run.sh', 'scripts/x.py'])
         self.assertTrue(suite_is_run('scripts/runner-policy.test.cjs',
-                                     expand_reachable(['python3 -S -B scripts/test_depot_runners.py'])))
+                                     expand_reachable(['python3 -S -B scripts/test_hosted_runners.py'])))
         self.assertTrue(suite_is_run('docs/protocol/fixtures/notes/contract.test.mjs',
                                      expand_reachable(['make consumer-checks'])))
         rules = makefile_rules()
