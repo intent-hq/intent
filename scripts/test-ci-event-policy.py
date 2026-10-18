@@ -8,6 +8,7 @@ import re
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,11 +26,14 @@ NODE_SUITE_SUFFIXES = ('.test.mjs', '.test.cjs', '.test.js')
 # Directories whose node:test suites must run in the queue: top-level scripts/
 # only, and every depth of the protocol fixtures and workflow helper scripts.
 SUITE_ROOTS = (('scripts', False), ('docs/protocol/fixtures', True), ('.github/scripts', True))
-SUITE_PATH = re.compile(r'(?<![\w./-])((?:\.github/|docs/|scripts/)[\w./*?\[\]-]*)')
+# A suite path or glob, optionally `./`-prefixed; group 1 is an opening quote,
+# which is what makes bash pass `**` to node (unquoted, bash has no globstar).
+SUITE_PATH = re.compile(r'(?<![\w./-])(["\']?)(?:\./)?((?:\.github/|docs/|scripts/)[\w./*?!\[\]-]*)')
 MAKE_VAR = re.compile(r'^[ \t]*(\w+)=["\']?\$\{MAKE(?::-make)?\}', re.M)
-SHELL_LOOP = re.compile(r'^[ \t]*for[ \t]+\w+[ \t]+in[ \t]+\$\{?(\w+)\}?[ \t]*;[ \t]*do\b(.*?)^[ \t]*done\b', re.M | re.S)
+SHELL_LOOP = re.compile(r'^[ \t]*for[ \t]+\w+[ \t]+in[ \t]+\$\{?(\w+)\}?[ \t]*(?:;|\n)[ \t\n]*do\b(.*?)^[ \t]*done\b',
+                        re.M | re.S)
 MAKE_CALL = re.compile(r'(?:\bmake|\$\(MAKE\))(?:[ \t]+(?:-[Cf][ \t]*\S+|-\S+|[A-Z_]+=\S*))*[ \t]+([a-z][\w-]*)')
-SCRIPT_FILE = re.compile(r'scripts/[\w.-]+\.(?:py|sh)\b')
+SCRIPT_FILE = re.compile(r'(?<![\w./-])(?:\.github/)?scripts/[\w./-]+\.(?:py|sh)\b')
 PY_MODULE = re.compile(r'\bscripts\.(test_\w+)')
 
 
@@ -52,16 +56,22 @@ def without_comments(text):
 
 
 def queue_step_commands(name='ci.yml'):
-    """Run text of every step that can execute on merge_group, following local reusable workflows."""
+    """Run text of every blocking step that can execute on merge_group, following local reusable workflows.
+
+    In ci.yml only jobs the `gate` job needs count, and `continue-on-error`
+    jobs/steps never do: a failing suite there would not block the queue.
+    """
     commands = []
-    for job in workflow(name)['jobs'].values():
-        if not runs_on_merge_group(job.get('if')):
+    jobs = workflow(name)['jobs']
+    required = set(jobs['gate']['needs']) if name == 'ci.yml' else set(jobs)
+    for job_name, job in jobs.items():
+        if job_name not in required or job.get('continue-on-error') or not runs_on_merge_group(job.get('if')):
             continue
         uses = job.get('uses', '')
         if uses.startswith('./.github/workflows/'):
             commands += queue_step_commands(uses.rsplit('/', 1)[1])
         commands += [step['run'] for step in job.get('steps', [])
-                     if 'run' in step and runs_on_merge_group(step.get('if'))]
+                     if 'run' in step and not step.get('continue-on-error') and runs_on_merge_group(step.get('if'))]
     return commands
 
 
@@ -125,12 +135,17 @@ def node_suites():
     for root, recursive in SUITE_ROOTS:
         files = (ROOT / root).rglob('*') if recursive else (ROOT / root).iterdir()
         suites += [p.relative_to(ROOT).as_posix() for p in files
-                   if p.is_file() and p.name.endswith(NODE_SUITE_SUFFIXES)]
+                   if p.is_file() and p.name.endswith(NODE_SUITE_SUFFIXES) and 'node_modules' not in p.parts]
     return sorted(suites)
 
 
-def glob_regex(pattern):
-    """Shell glob -> regex: `*`/`?` stay within one path segment, `**` crosses them."""
+def glob_regex(pattern, globstar=True):
+    """Shell glob -> regex: `*`/`?` stay within one path segment; `**` crosses them only with globstar.
+
+    Brace expansion is not modelled, so `{a,b}` stays literal and fails closed.
+    """
+    if not globstar:
+        pattern = re.sub(r'\*{2,}', '*', pattern)
     out, i = '', 0
     while i < len(pattern):
         if pattern.startswith('**/', i):
@@ -143,7 +158,9 @@ def glob_regex(pattern):
             out, i = out + '[^/]', i + 1
         elif pattern[i] == '[' and ']' in pattern[i + 1:]:
             end = pattern.index(']', i + 1)
-            out, i = out + '[' + pattern[i + 1:end].replace('!', '^', 1).replace('\\', '\\\\') + ']', end + 1
+            body = pattern[i + 1:end]
+            body = '^' + body[1:] if body[:1] in '!^' and body else body
+            out, i = out + '[' + body.replace('\\', '\\\\') + ']', end + 1
         else:
             out, i = out + re.escape(pattern[i]), i + 1
     return re.compile(out)
@@ -151,8 +168,8 @@ def glob_regex(pattern):
 
 def suite_is_run(path, text):
     """Repo-relative `path` appears whole in `text`, or a path glob in `text` matches it."""
-    for token in SUITE_PATH.findall(text):
-        if token == path or (any(c in token for c in '*?[') and glob_regex(token).fullmatch(path)):
+    for quote, token in SUITE_PATH.findall(text):
+        if token == path or (any(c in token for c in '*?[') and glob_regex(token, bool(quote)).fullmatch(path)):
             return True
     return False
 
@@ -168,9 +185,12 @@ def looped_make_targets(text):
     for list_var, body in SHELL_LOOP.findall(text):
         if not any(re.search(r'\$\{?' + var + r'\b', body) for var in make_vars):
             continue
-        assigned = re.search(r'^[ \t]*' + list_var + r'=(["\'])(.*?)\1', text, re.M | re.S)
-        if assigned:
-            targets += assigned.group(2).split()
+        assigned = re.findall(r'^[ \t]*' + list_var + r'=(.*)$', text, re.M)
+        literal = re.fullmatch(r'(["\'])([\w\s-]*)\1', assigned[0].strip()) if len(assigned) == 1 else None
+        if not literal:
+            raise AssertionError(f'make loop over ${list_var} needs one literal quoted assignment, '
+                                 f'extend looped_make_targets: {assigned}')
+        targets += literal.group(2).split()
     return targets
 
 
@@ -219,11 +239,19 @@ class EventPolicy(unittest.TestCase):
         self.assertTrue(suite_is_run(fixture, 'node --test docs/protocol/fixtures/nodes/*.test.mjs'))
         self.assertFalse(suite_is_run(fixture, 'node --test docs/protocol/fixtures/*.test.mjs'))
         self.assertTrue(suite_is_run(fixture, 'node --test "docs/protocol/fixtures/**/*.test.mjs"'))
+        self.assertFalse(suite_is_run(fixture, 'node --test docs/protocol/fixtures/**/**/*.test.mjs'))
+        self.assertTrue(suite_is_run(fixture, 'node --test docs/protocol/fixtures/**/*.test.mjs'))
+        self.assertFalse(suite_is_run('docs/protocol/fixtures/a.test.mjs', 'node --test docs/protocol/fixtures/**/*.test.mjs'))
+        self.assertTrue(suite_is_run(fixture, f'node --test ./{fixture}'))
+        self.assertTrue(suite_is_run(fixture, 'node --test docs/protocol/fixtures/nodes/[!x]nrollment.test.mjs'))
+        self.assertFalse(suite_is_run(fixture, 'node --test docs/protocol/fixtures/nodes/[!e]nrollment.test.mjs'))
         self.assertFalse(suite_is_run(fixture, 'node --test docs/protocol/fixtures/nodes/enrollment.test.mjs.orig'))
         self.assertTrue(suite_is_run('.github/scripts/t/a.test.js', 'node --test .github/scripts/t/[ab].test.js'))
         self.assertFalse(suite_is_run('.github/scripts/t/a.test.js', 'node --test scripts/t/a.test.js'))
         self.assertTrue(suite_is_run('scripts/agent-worker-contract.test.mjs',
                                      expand_reachable(['make RUSTUP_CARGO= check-agent-worker-contract'])))
+        self.assertEqual(SCRIPT_FILE.findall('bash .github/scripts/t/run.sh && scripts/x.py other/scripts/y.sh'),
+                         ['.github/scripts/t/run.sh', 'scripts/x.py'])
         self.assertTrue(suite_is_run('scripts/runner-policy.test.cjs',
                                      expand_reachable(['python3 -S -B scripts/test_depot_runners.py'])))
         self.assertTrue(suite_is_run('docs/protocol/fixtures/notes/contract.test.mjs',
@@ -232,6 +260,14 @@ class EventPolicy(unittest.TestCase):
         self.assertIn('check-agent-worker-contract', rules)
         self.assertNotIn('#', ''.join(line[:1] for line in rules['docs-check'].splitlines()))
 
+    def test_queue_steps_skip_unblocking_jobs_and_steps(self):
+        jobs = {'gate': {'needs': ['a', 'b']},
+                'a': {'steps': [{'run': 'node --test a1'}, {'run': 'node --test a2', 'continue-on-error': True}]},
+                'b': {'continue-on-error': True, 'steps': [{'run': 'node --test b'}]},
+                'c': {'steps': [{'run': 'node --test c'}]}}
+        with mock.patch.dict(globals(), workflow=lambda name: {'jobs': jobs}):
+            self.assertEqual(queue_step_commands(), ['node --test a1'])
+
     def test_looped_make_targets_follow_only_make_invoking_loops(self):
         script = '\n'.join([
             'make_bin=${MAKE:-make}', 'checks="lint docs-check"', 'other="not-a-target"',
@@ -239,6 +275,11 @@ class EventPolicy(unittest.TestCase):
             'for target in $checks; do', '  $make_bin --no-print-directory $target || status=$?', 'done'])
         self.assertEqual(looped_make_targets(script), ['lint', 'docs-check'])
         self.assertEqual(looped_make_targets(script.replace('$make_bin', 'echo')), [])
+        self.assertEqual(looped_make_targets(script.replace('$checks; do', '$checks\ndo')), ['lint', 'docs-check'])
+        with self.assertRaises(AssertionError):
+            looped_make_targets(script + '\nchecks="$checks extra"')
+        with self.assertRaises(AssertionError):
+            looped_make_targets(script.replace('checks="lint docs-check"', 'checks=$(list)'))
         self.assertIn('check-note-pagination-contract',
                       looped_make_targets((ROOT / 'scripts/consumer-checks.sh').read_text()))
 
