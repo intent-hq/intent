@@ -92,8 +92,14 @@ is_block() { [ -b "$1" ]; }
 check_firewall_preconditions() {
   [ "$firewall" -eq 1 ] || return 0
   has_iface tailscale0 || die "tailscale0 not found. The firewall allows SSH only over Tailscale, so applying it now would lock out SSH. Join the tailnet first (tailscale up), or re-run with --no-firewall."
-  local client="${SSH_CONNECTION%% *}"
-  if [ -n "${SSH_CONNECTION:-}" ] && [[ ! "$client" =~ ^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\. ]] && [[ "$client" != fd7a:115c:a1e0:* ]]; then
+  # The interface alone does not prove the node is logged in: require an
+  # assigned tailnet (100.64.0.0/10) address too.
+  local ts_ip
+  ts_ip="$(tailscale ip -4 2>/dev/null | head -n 1 || true)"
+  [[ "$ts_ip" =~ ^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\. ]] || die "tailscale0 exists but the node has no Tailscale IPv4 address (not logged in?). Run 'tailscale up' and confirm 'ssh <user>@$(hostname)' works over the tailnet, or re-run with --no-firewall."
+  local conn="${SSH_CONNECTION:-}"
+  local client="${conn%% *}"
+  if [ -n "$conn" ] && [[ ! "$client" =~ ^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\. ]] && [[ "$client" != fd7a:115c:a1e0:* ]]; then
     log "warning: this SSH session ($client) is not over Tailscale; after the firewall applies, new public SSH connections are refused (this session stays up)"
   fi
 }

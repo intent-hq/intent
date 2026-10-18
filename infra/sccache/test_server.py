@@ -209,7 +209,7 @@ case "$name" in lsblk) for a in TYPE MOUNTPOINT NAME FSTYPE; do case "$*" in *" 
 [ -f "$STUB_DIR/$key.out" ] && cat "$STUB_DIR/$key.out"
 exit "$(cat "$STUB_DIR/$key.rc" 2>/dev/null || echo 0)"
 """
-STUBBED = ('ip', 'ufw', 'lsblk', 'pvs', 'vgs', 'lvs', 'wipefs', 'pvcreate', 'vgcreate', 'lvcreate',
+STUBBED = ('ip', 'ufw', 'tailscale', 'lsblk', 'pvs', 'vgs', 'lvs', 'wipefs', 'pvcreate', 'vgcreate', 'lvcreate',
            'blkid', 'mkfs.ext4', 'mountpoint', 'mount', 'df')
 
 
@@ -296,7 +296,23 @@ class Bootstrap(unittest.TestCase):
                                                  'ufw allow 80/tcp', 'ufw allow 443/tcp']))
         self.assertEqual(ufw[-1], 'ufw --force enable')
 
+    def test_preflight_passes_without_ssh_connection(self):
+        self.stub('tailscale', '100.101.2.3\n')
+        result = self.run_fn('check_firewall_preconditions')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('warning', result.stdout)
+
+    def test_preflight_requires_running_tailscale(self):
+        for out, rc in (('', 1), ('', 0), ('192.0.2.1\n', 0)):
+            with self.subTest(out=out, rc=rc):
+                self.stub('tailscale', out, rc)
+                result = self.run_fn('check_firewall_preconditions')
+                self.assertEqual(result.returncode, 1)
+                self.assertIn('no Tailscale IPv4 address', result.stderr)
+        self.assertFalse([c for c in self.calls() if c.startswith('ufw')])
+
     def test_public_ssh_session_warns(self):
+        self.stub('tailscale', '100.101.2.3\n')
         public = self.run_fn('check_firewall_preconditions', {'SSH_CONNECTION': '203.0.113.5 5555 172.96.141.217 22'})
         self.assertEqual(public.returncode, 0, public.stderr)
         self.assertIn('not over Tailscale', public.stdout)
