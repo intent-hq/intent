@@ -210,6 +210,10 @@ The static provider registry (the `intent-providers` crate's `ACP_PROVIDERS` tab
   names ChatGPT Business or Enterprise workspace eligibility. Other provider rows
   omit this field. Configured state and mutations use the existing sensitive
   [settings contract](settings.md#optional-provider-access-tokens), not catalog reads.
+- `supportsProfiles` and the top-level `profiles` list are prepared additive
+  fields for [named provider profiles](provider-profiles.md#catalog-models-and-status).
+  `providers` keeps one row per provider type. `models.list` accepts a profile
+  `providerRef` as `providerId`.
 - `supportsFastMode` is an additive boolean: whether this daemon can apply the
   provider's `providers.fastMode` preference (§5.12). Implementing daemons emit it
   on every row: `true` for `claude-code` and `codex`, `false` for other providers.

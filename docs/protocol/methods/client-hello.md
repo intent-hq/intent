@@ -101,7 +101,7 @@ absence means unavailable, not permission to infer support from version numbers.
 
 **Workspace discussions (prepared additive extension).**
 Exactly integer `server.capabilities.discussionConversations: 1` advertises the
-[§5.54 contract](./multiplayer.md#554-workspace-discussions): conversation and
+[§5.55 contract](./multiplayer.md#555-workspace-discussions): conversation and
 recipient discovery, atomic creation with the first message, participant-gated
 history and delivery, and conversation-scoped typing. The same flag is returned
 by `system.capabilities`. Clients require this flag before sending private

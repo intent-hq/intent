@@ -50,7 +50,7 @@ every `discussion:`-prefixed type or pattern with `-32602`, and the delivery-tim
 guard excludes these events from restored subscriptions. Human discussions
 cannot wake an agent through `ws.event.subscribe` or `ws.agent.subscribe`.
 Historical discussion rows are excluded separately from agent event queries;
-see [workspace discussions](multiplayer.md#554-workspace-discussions).
+see [workspace discussions](multiplayer.md#555-workspace-discussions).
 
 #### Bundled subscription agents (additive, docs lead implementation)
 

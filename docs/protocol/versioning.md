@@ -12,7 +12,7 @@ capability; documentation alone does not identify a carrying desktop release.
 Other prepared extensions retain their independent support gates.
 
 **Version 15.1 — workspace discussions (additive, prepared).**
-[Workspace discussions](./methods/multiplayer.md#554-workspace-discussions) add
+[Workspace discussions](./methods/multiplayer.md#555-workspace-discussions) add
 `discussion.conversations`, `discussion.recipients`, `discussion.list`,
 `discussion.send`, `discussion.react`, `discussion:message`, and `discussion:reaction` for a default workspace-wide discussion
 and direct/group discussions with selected members. The five router methods use
@@ -30,9 +30,10 @@ shapes with transient, conversation-scoped `discussionTyping`, projected per
 recipient; typing adds no method or event type.
 Agent/daemon snapshots omit that field, and older rosters without it remain valid.
 Clients tolerate unsupported methods without sending to an agent instead. The
-documented surface, including the prepared startup, generic stream recovery, and
-PR workspace lookup additions, is now **456 / 399 / 57** (dispatchable / router / fast path). This reservation does not
-identify a carrying release or change independent capability gates.
+documented surface, including prepared startup, generic stream recovery,
+PR workspace lookup, and provider profile additions, is now **460 / 403 / 57**
+(dispatchable / router / fast path). This reservation does not identify a carrying
+release or change independent capability gates.
 
 **Version 15.0 — legacy workspace import removal (breaking).**
 Removes the UDS-only `system.importLegacy` fast-path method. Calls on either UDS
@@ -61,7 +62,8 @@ does not persist it.
 **PR workspace lookup (additive, prepared).** The
 [PR workspace lookup](./methods/workspace.md#pull-request-workspace-lookup) reserves
 the read-only router method `workspace.findByPullRequest`, bringing the documented
-surface, including the prepared discussions, to **456 / 399 / 57**
+surface, including the prepared discussions and provider profiles, to
+**460 / 403 / 57**
 (dispatchable / router / fast path). The server hello
 capability `prWorkspaceLookup: 1` gates support. No shipped numeric version is
 claimed here.

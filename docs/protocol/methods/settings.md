@@ -158,6 +158,15 @@ may remain in its own provider snapshot for a later switch back; it must not app
 applied choice. Hydration and partial `settings:changed` reconciliation must handle the new
 fields without replacing unaffected siblings or writing defaults back over saved values.
 
+**Provider profile references (prepared).** `model.defaultProvider` and
+`model.providerDefaults` keys also accept a [provider profile reference](provider-profiles.md#identity-and-provider-references)
+(`<baseProviderId>@<profileId>`). `settings.update` rejects a missing-profile
+reference in `model.defaultProvider`, or in a `model.providerDefaults` key that is
+new or whose value changed. Unchanged stored keys round-trip, and deleting a profile
+prunes its key ([rules](provider-profiles.md#references-in-settings)). `providers.enabled`, `providers.paths`, `providers.fastMode` and the
+access-token paths stay keyed by base provider id. Profile metadata and environment
+values are managed only through `providers.profiles.*`, never through `settings.*`.
+
 **Provider Fast mode preference.**
 
 `providers.fastMode` is a non-sensitive, TOML-backed `object` setting in category

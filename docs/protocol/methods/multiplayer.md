@@ -278,7 +278,7 @@ field. Reading this projection requires the existing valid open-invite secret.
 `system.status` supplies and refreshes the same label for guests and host members.
 See [the setting contract](./settings.md#collaborator-facing-machine-name).
 
-### 5.54 Workspace discussions
+### 5.55 Workspace discussions
 
 **Additive, prepared for protocol 15.1.** A workspace has a default discussion for
 all current members and may have direct or group discussions with selected

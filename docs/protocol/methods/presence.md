@@ -55,7 +55,7 @@ The note-presence channel pair is a §6.9 subscription channel (intercepted on t
 
 #### Discussion typing *(15.1, prepared)*
 
-The [workspace discussion](./multiplayer.md#554-workspace-discussions) composer
+The [workspace discussion](./multiplayer.md#555-workspace-discussions) composer
 uses the existing presence channel.
 `discussionTyping: { workspaceId, conversationId }` names the one discussion this
 connection is typing in. Omitted `conversationId` means `"default"`; an omitted or
