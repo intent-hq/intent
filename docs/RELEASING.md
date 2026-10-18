@@ -637,9 +637,10 @@ promotions of deleted prereleases are not preserved by this retention policy.
 ## CI runner routing
 
 Jobs in intent, intentd and cloudlands-fe prefer compatible self-hosted runners.
-Each repository has a reusable `runner-route.yml`; its small Depot probe runs
-without checkout so it remains available during a self-hosted outage. Existing
-component CI route jobs use the same tested probe. Utility jobs, consumer checks,
+intent and intentd each have a reusable `runner-route.yml`; its small Depot probe runs
+without checkout so it remains available during a self-hosted outage. intentd's CI
+route job uses the same tested probe. cloudlands-fe routes Linux jobs with its own
+probe in `intent-pr.yml`. Utility jobs, consumer checks,
 browser suites and release matrices all consume its decisions. Original Depot
 labels remain fallback keys, preserving the workload's CPU/memory class.
 
@@ -648,9 +649,8 @@ three repositories. Linux x64 accepts queue depth up to the smaller of eight and
 the online slot count. Other platforms require explicitly idle runners with room
 for queued demand. Queued jobs older than 15 minutes, missing compatible runners,
 unreadable capacity (including sibling queues), or maintenance overrides select
-Depot; each platform logs its reason. `CI_LINUX_RUNNER_DISABLED`,
-`CI_WINDOWS_RUNNER_DISABLED` and `CI_MACOS_RUNNER_DISABLED` disable the relevant
-self-hosted pool when set to `true`. Fork PRs never select persistent runners.
+Depot; each platform logs its reason. The maintenance overrides are described in
+[Maintenance overrides](#maintenance-overrides). Fork PRs never select persistent runners.
 
 `CI_QUEUE_READ_TOKEN` needs organization Self-hosted runners read and Actions read
 on all three repositories. The probe falls back to repository runner listing if
@@ -673,6 +673,55 @@ browser caches and dependency installation for persistent machines.
 Run `python3 -S -B scripts/test_runner_policy.py` in each repository to exercise
 routing fixtures and reject accidental cloud pins. The frontend's existing
 Depot runner Vitest suite and backend/monorepo runner tests invoke it in CI.
+
+### Maintenance overrides
+
+Each override is a repository Actions variable. Setting it to `true` sends that
+platform's routed jobs to Depot, whatever the machine's state. Any other value, or
+no variable, restores self-hosted preference. The routing in intent and intentd
+reads its own repository's variables. cloudlands-fe has no override; its probe
+selects Depot when no tinybox runner is online.
+
+| Variable | Runner labels covered | Proof in the route log |
+|---|---|---|
+| `CI_LINUX_RUNNER_DISABLED` | `self-hosted, Linux, X64` and `self-hosted, Linux, ARM64` | `linux routing: burst=true (disabled for maintenance)` (ARM64 logs as `arm routing`) |
+| `CI_WINDOWS_RUNNER_DISABLED` | `self-hosted, Windows, X64` | `windows routing: burst=true (disabled for maintenance)` |
+| `CI_MACOS_RUNNER_DISABLED` | `self-hosted, macOS, ARM64` and `self-hosted, macOS, X64` | `macos routing: burst=true (disabled for maintenance)` (X64 logs as `intel routing`) |
+
+Overrides only affect routed jobs. Workflows that name a machine directly keep
+targeting it: intentd's `tinybox-prune.yml`, `windows-prune.yml` (its `prune` job),
+`macos-prune.yml`, `m1mac-smoke.yml` and `provision-m1mac.yml`.
+
+Turning an override on: set the variable, then set
+`CI_<PLATFORM>_RUNNER_DISABLED_REASON` in the same repository to one line giving the
+reason, the UTC date and an evidence link (a failed run or PR). GitHub variables
+have no description field, so `gh variable list` showing the two together is the
+only record of why a platform is on Depot:
+
+```bash
+gh variable set CI_LINUX_RUNNER_DISABLED --repo intent-hq/intentd --body true
+gh variable set CI_LINUX_RUNNER_DISABLED_REASON --repo intent-hq/intentd \
+  --body "2026-10-18: tinybox runners lost contact with GitHub; see <run URL>"
+```
+
+Turning it off: confirm the machine meets the requirements below and its maintenance
+workflow passes. Then delete both variables and watch the next pull request and
+merge-queue runs for `burst=false` in the route log and for passing jobs on the
+machine. Restore the override at the first runner-caused failure.
+
+#### Self-hosted machine requirements
+
+These are lasting facts about each machine. Current reasons belong in the
+`*_REASON` variables, not here.
+
+| Machine | Slots | Requirements and known limits |
+|---|---|---|
+| tinybox (Linux x64) | 8 (`tinybox` to `tinybox-8`), shared by all three repositories | `tinybox-prune.yml` keeps at least 100 GiB free on `/raid`; a full `/raid` crashed queue runs ([intentd#2421](https://github.com/intent-hq/intentd/pull/2421)). Node is not installed system-wide, so every job that runs Node must use `actions/setup-node` first ([intentd#2467](https://github.com/intent-hq/intentd/pull/2467) adds a routing-policy test for this). Git is 2.34.1. |
+| 5090pc (Windows x64) | 1 | `windows-prune.yml` keeps 40 GiB free; a full disk failed Rust toolchain installs (`os error 112`). Its safety tests need PowerShell 7 (`pwsh`); without it they fail with `pwsh: command not found` ([run 38896319862](https://github.com/intent-hq/intentd/actions/runs/38896319862)). |
+| m1mac (macOS ARM64) | 1 | Too slow for intentd's merge-queue `build (aarch64-apple-darwin)` job, even with the compiler cache: over 60 minutes cold and over 26 minutes on an unchanged rerun, against about 8 minutes on Depot ([run 39120530357](https://github.com/intent-hq/intentd/actions/runs/39120530357), [run 39124725329](https://github.com/intent-hq/intentd/actions/runs/39124725329)). Clippy compiles are not cacheable by sccache, and cache keys include the checkout path, so Depot's entries do not match. `actions/setup-python` cannot install there (`mkdir: /Users/runner: Permission denied`); the system Python is 3.9.6. |
+
+A single-slot machine runs its routed jobs one after another, so the combined time
+of a run's jobs on that platform must fit the merge-queue timeout.
 
 Rust compiler caching uses Depot Cache through sccache’s WebDAV backend, using
 the short-lived configuration inherited from the runner. Enable automatic Depot
