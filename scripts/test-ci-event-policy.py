@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Regression proof for the monorepo PR/queue boundary and bootstrap selection."""
 from pathlib import Path
+import fnmatch
+import functools
 import json
 import os
 import re
@@ -20,58 +22,102 @@ def workflow(name):
     return yaml.safe_load((ROOT / '.github/workflows' / name).read_text())
 
 
-def queue_job_commands():
-    """Run text of every ci.yml step job that executes on merge_group."""
+NODE_SUITE_SUFFIXES = ('.test.mjs', '.test.cjs', '.test.js')
+MAKE_CALL = re.compile(r'(?:\bmake|\$\(MAKE\))(?:[ \t]+(?:-[Cf][ \t]*\S+|-\S+|[A-Z_]+=\S*))*[ \t]+([a-z][\w-]*)')
+SCRIPT_FILE = re.compile(r'scripts/[\w.-]+\.(?:py|sh)\b')
+PY_MODULE = re.compile(r'\bscripts\.(test_\w+)')
+
+
+def runs_on_merge_group(condition):
+    """Whether a job/step `if:` can run on merge_group (False only when it pins another event)."""
+    if condition is None or condition is True:
+        return True
+    if condition is False:
+        return False
+    text = re.sub(r'\s+', '', str(condition)).replace('"', "'")
+    events = re.findall(r"github\.event_name(==|!=)'(\w+)'", text)
+    if events and '||' in text:
+        raise AssertionError(f'unsupported event condition, extend runs_on_merge_group: {condition}')
+    return not any((op == '==' and event != 'merge_group') or (op == '!=' and event == 'merge_group')
+                   for op, event in events)
+
+
+def without_comments(text):
+    return '\n'.join(line for line in text.splitlines() if not line.lstrip().startswith('#'))
+
+
+def queue_step_commands(name='ci.yml'):
+    """Run text of every step that can execute on merge_group, following local reusable workflows."""
     commands = []
-    for job in workflow('ci.yml')['jobs'].values():
-        condition = job.get('if')
-        if condition is None or "== 'merge_group'" in condition:
-            commands += [step['run'] for step in job.get('steps', []) if 'run' in step]
-    return '\n'.join(commands)
-
-
-def make_rule(target):
-    """Prerequisites and recipe of one root Makefile target."""
-    rule, inside = [], False
-    for line in (ROOT / 'Makefile').read_text().splitlines():
-        if inside and line.startswith('\t'):
-            rule.append(line)
+    for job in workflow(name)['jobs'].values():
+        if not runs_on_merge_group(job.get('if')):
             continue
-        inside = False
-        match = re.match(r'^([\w.-]+(?:[ \t]+[\w.-]+)*)[ \t]*:(?!=)(.*)$', line)
-        if match and target in match.group(1).split():
-            inside = True
-            rule.append(match.group(2).split('##')[0])
-    return '\n'.join(rule)
+        uses = job.get('uses', '')
+        if uses.startswith('./.github/workflows/'):
+            commands += queue_step_commands(uses.rsplit('/', 1)[1])
+        commands += [step['run'] for step in job.get('steps', [])
+                     if 'run' in step and runs_on_merge_group(step.get('if'))]
+    return commands
 
 
-def expand_reachable(text):
-    """Follow make targets and scripts/*.py|*.sh helpers the text invokes.
+@functools.lru_cache(maxsize=None)
+def makefile_rules():
+    """Root Makefile target -> prerequisites (first line) plus recipe, comments dropped."""
+    rules, current = {}, []
+    for line in (ROOT / 'Makefile').read_text().splitlines():
+        if current and line.startswith('\t'):
+            for target in current:
+                rules[target] += '\n' + line
+            continue
+        if current and (not line.strip() or line.lstrip().startswith('#')):
+            continue
+        current = []
+        match = re.match(r'^([\w.-]+(?:[ \t]+[\w.-]+)*)[ \t]*:(?![:=])(.*)$', line)
+        if match:
+            current = match.group(1).split()
+            for target in current:
+                rules[target] = rules.get(target, '') + match.group(2).split('##')[0]
+    return {target: without_comments(text) for target, text in rules.items()}
 
-    This file is never expanded: it names suites in prose, not invocations.
+
+def expand_reachable(commands):
+    """Text executed by `commands`, following make targets and scripts/*.py|*.sh helpers.
+
+    Make targets are followed only from CI steps and Makefile rules (helper
+    prose such as "run make bootstrap-dev-host" is not an invocation); this
+    file is never followed because it names suites in prose.
     """
     seen = {('file', f'scripts/{Path(__file__).name}')}
-    pending, reached = [('text', text)], []
+    pending = [('text', without_comments(c)) for c in commands]
+    reached = []
     while pending:
         kind, chunk = pending.pop()
         reached.append(chunk)
-        refs = [('make', t) for t in re.findall(r'(?:\bmake|\$\(MAKE\))(?:[ \t]+(?:-\S+|[A-Z_]+=\S*))*[ \t]+([a-z][\w-]*)', chunk)]
+        refs = []
+        if kind in ('text', 'rule'):
+            refs += [('make', t) for t in MAKE_CALL.findall(chunk)]
         if kind == 'rule':
             refs += [('make', t) for t in chunk.split('\n', 1)[0].split()]
-        refs += [('file', f) for f in re.findall(r'scripts/[\w.-]+\.(?:py|sh)\b', chunk)]
-        refs += [('file', f'scripts/{m}.py') for m in re.findall(r'\bscripts\.(test_\w+)', chunk)]
+        refs += [('file', f) for f in SCRIPT_FILE.findall(chunk)]
+        refs += [('file', f'scripts/{m}.py') for m in PY_MODULE.findall(chunk)]
         for ref in refs:
             if ref in seen:
                 continue
             seen.add(ref)
             ref_kind, name = ref
-            if ref_kind == 'make':
-                rule = make_rule(name)
-                if rule:
-                    pending.append(('rule', rule))
-            elif (ROOT / name).is_file():
-                pending.append(('file', (ROOT / name).read_text()))
+            if ref_kind == 'make' and name in makefile_rules():
+                pending.append(('rule', makefile_rules()[name]))
+            elif ref_kind == 'file' and (ROOT / name).is_file():
+                pending.append(('file', without_comments((ROOT / name).read_text())))
     return '\n'.join(reached)
+
+
+def suite_is_run(name, text):
+    """`scripts/<name>` appears as a whole path, or a scripts/ glob in `text` matches it."""
+    if re.search(r'(?<![\w./-])scripts/' + re.escape(name) + r'(?![\w.-])', text):
+        return True
+    globs = re.findall(r'(?<![\w./-])scripts/([\w.*?\[\]-]*[*?[][\w.*?\[\]-]*)', text)
+    return any(fnmatch.fnmatchcase(name, pattern) for pattern in globs)
 
 
 class EventPolicy(unittest.TestCase):
@@ -90,15 +136,34 @@ class EventPolicy(unittest.TestCase):
         # check-app-ui-targets.test.mjs landed (#6830) without any CI step, and
         # the breaking-token / submodule-pins unit suites ran only in their
         # pull_request-only jobs, so the queue never re-tested them on the
-        # merged tree. Every scripts/ node:test suite must be reached from a
-        # job that runs on merge_group, directly or via make / helper scripts.
-        suites = sorted(p.name for p in (ROOT / 'scripts').iterdir()
-                        if p.name.endswith(('.test.mjs', '.test.cjs')))
+        # merged tree. Every top-level scripts/ node:test suite must be reached
+        # from a step that runs on merge_group, directly or via make / helpers.
+        suites = sorted(p.name for p in (ROOT / 'scripts').iterdir() if p.name.endswith(NODE_SUITE_SUFFIXES))
         self.assertTrue(suites)
-        reached = expand_reachable(queue_job_commands())
-        missing = [name for name in suites if name not in reached]
-        self.assertEqual(missing, [], 'scripts/ node:test suites not run by any merge_group job in '
+        reached = expand_reachable(queue_step_commands())
+        missing = [name for name in suites if not suite_is_run(name, reached)]
+        self.assertEqual(missing, [], 'scripts/ node:test suites not run by any merge_group step of '
                          '.github/workflows/ci.yml (add a `node --test` step to a job that runs in the queue)')
+
+    def test_queue_suite_scan_rejects_mentions_and_pr_only_steps(self):
+        self.assertTrue(runs_on_merge_group(None))
+        self.assertTrue(runs_on_merge_group("github.event_name == 'merge_group' && needs.x.outputs.y == 'true'"))
+        self.assertTrue(runs_on_merge_group("github.event_name != 'pull_request'"))
+        self.assertTrue(runs_on_merge_group("steps.check.outcome == 'failure'"))
+        self.assertFalse(runs_on_merge_group("github.event_name=='pull_request'"))
+        self.assertFalse(runs_on_merge_group(False))
+        self.assertTrue(suite_is_run('ref.test.mjs', 'node --test scripts/ref.test.mjs'))
+        self.assertFalse(suite_is_run('ref.test.mjs', 'node --test scripts/submodule-ref.test.mjs'))
+        self.assertFalse(suite_is_run('a.test.mjs', 'node --test scripts/a.test.mjs.bak'))
+        self.assertTrue(suite_is_run('a.test.mjs', 'node --test scripts/*.test.mjs'))
+        self.assertFalse(suite_is_run('a.test.mjs', expand_reachable(['# node --test scripts/a.test.mjs'])))
+        self.assertTrue(suite_is_run('agent-worker-contract.test.mjs',
+                                     expand_reachable(['make RUSTUP_CARGO= check-agent-worker-contract'])))
+        self.assertTrue(suite_is_run('runner-policy.test.cjs',
+                                     expand_reachable(['python3 -S -B scripts/test_depot_runners.py'])))
+        rules = makefile_rules()
+        self.assertIn('check-agent-worker-contract', rules)
+        self.assertNotIn('#', ''.join(line[:1] for line in rules['docs-check'].splitlines()))
 
     def test_reusable_contract_has_static_pr_checks_and_required_queue_runtime(self):
         jobs = workflow('consumer-checks.yml')['jobs']
