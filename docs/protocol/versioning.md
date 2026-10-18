@@ -32,6 +32,13 @@ sourceWorkspaceId }` on the event for the workspace it creates; every other crea
 it. The field is daemon-set only: `workspace.create` params do not accept it and the row
 does not persist it.
 
+**PR workspace lookup (additive, prepared).** The
+[PR workspace lookup](./methods/workspace.md#pull-request-workspace-lookup) reserves
+the read-only router method `workspace.findByPullRequest`, bringing the documented
+surface to **451 / 394 / 57** (dispatchable / router / fast path). No capability
+flag: clients treat `-32601 Method not found` from an older daemon as "no linked
+workspace". No shipped numeric version is claimed here.
+
 **Startup readiness (additive, prepared).** The [startup contract](./startup-readiness.md)
 reserves `system.startupStatus` and numeric error `-32012`, with exact
 `startupStatus: 1` support detection. It does not make ordinary hello usable before
