@@ -155,6 +155,7 @@ jobs:
     secrets:
       CI_QUEUE_READ_TOKEN: ${{ secrets.CI_QUEUE_READ_TOKEN }}
       DEPOT_TOKEN: ${{ secrets.DEPOT_TOKEN }}
+      INTENT_SCCACHE_TOKEN: ${{ secrets.INTENT_SCCACHE_TOKEN }}
     uses: ./.github/workflows/consumer-checks.yml
     with:
       component: intentd
@@ -288,6 +289,25 @@ jobs:
           python3 -S -B scripts/test_rust_test_policy.py
           bash scripts/shipped-in.test.sh
           bash scripts/lint-fixed-sleeps.sh
+      # sccache cache server (infra/sccache): real Caddy + rclone on loopback,
+      # pinned and checksum-verified, so the token access matrix never skips here.
+      - name: sccache server test
+        run: |
+          set -euo pipefail
+          bin="$RUNNER_TEMP/sccache-server-bin"
+          mkdir -p "$bin" && cd "$bin"
+          curl -sSfL -o caddy.tgz https://github.com/caddyserver/caddy/releases/download/v2.10.2/caddy_2.10.2_linux_amd64.tar.gz
+          echo "747df7ee74de188485157a383633a1a963fd9233b71fbb4a69ddcbcc589ce4e2cc82dacf5dbbe136cb51d17e14c59daeb5d9bc92487610b0f3b93680b2646546  caddy.tgz" | sha512sum -c -
+          tar xzf caddy.tgz caddy
+          curl -sSfL -o rclone.zip https://downloads.rclone.org/v1.71.1/rclone-v1.71.1-linux-amd64.zip
+          echo "417e3da236f3a12d292da4e7287d67b1df558b8c2b280d092e563958ed724be7  rclone.zip" | sha256sum -c -
+          python3 -I -c "import zipfile,shutil; z=zipfile.ZipFile('rclone.zip'); shutil.copyfileobj(z.open('rclone-v1.71.1-linux-amd64/rclone'), open('rclone','wb'))"
+          chmod +x caddy rclone
+          cd "$GITHUB_WORKSPACE"
+          CADDY_BIN="$bin/caddy" RCLONE_BIN="$bin/rclone" python3 -S -B infra/sccache/test_server.py -v
+          bash -n infra/sccache/bootstrap.sh
+          command -v shellcheck >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q shellcheck; }
+          shellcheck infra/sccache/*.sh
 
   # shellcheck over scripts/*.sh. Quoting and Bash-3 portability slips in the
   # repo scripts reached main because nothing linted them (intent-hq/intent#5638);

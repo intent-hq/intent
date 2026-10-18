@@ -682,3 +682,16 @@ installs checksum-verified sccache directly; no Rust cache actions remain.
 Self-hosted and GitHub Intel runners use the `DEPOT_TOKEN` Actions secret when
 available (otherwise they compile uncached). Local build configuration is in
 [CONTRIBUTING.md](../CONTRIBUTING.md#local-managed-rust-compiler-cache).
+
+The self-hosted sccache WebDAV cache replaces Depot Cache when the organization
+Actions variable `INTENT_SCCACHE_ENDPOINT` (an `https://` URL) is set. The setup
+script then uses the `INTENT_SCCACHE_TOKEN` secret and the optional
+`INTENT_SCCACHE_MODE` variable (`READ_WRITE` by default, or `READ_ONLY`), and
+overwrites the `SCCACHE_WEBDAV_*` values Depot runners inject. Every run that
+receives secrets (main, releases, the cache producer and same-repo pull
+requests) writes. When the variable is set but the token is empty, as in fork
+pull requests, compilation is uncached; the Depot token is never sent to the
+self-hosted endpoint. The job log names the chosen backend and mode, never the
+token. To roll back, delete `INTENT_SCCACHE_ENDPOINT`; the next run uses Depot.
+Reusable workflows such as `consumer-checks.yml` accept `INTENT_SCCACHE_TOKEN` as
+an optional secret next to `DEPOT_TOKEN`.

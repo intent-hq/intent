@@ -68,6 +68,10 @@ on:
     secrets:
       DEPOT_TOKEN:
         required: false
+      # Self-hosted sccache token; used only when the caller's
+      # INTENT_SCCACHE_ENDPOINT variable is set (otherwise Depot Cache).
+      INTENT_SCCACHE_TOKEN:
+        required: false
       CI_QUEUE_READ_TOKEN:
         required: false
     inputs:
@@ -217,6 +221,9 @@ jobs:
         shell: bash
         env:
           DEPOT_SCCACHE_TOKEN: ${{ secrets.DEPOT_TOKEN }}
+          INTENT_SCCACHE_ENDPOINT: ${{ vars.INTENT_SCCACHE_ENDPOINT }}
+          INTENT_SCCACHE_TOKEN: ${{ secrets.INTENT_SCCACHE_TOKEN }}
+          INTENT_SCCACHE_MODE: ${{ vars.INTENT_SCCACHE_MODE }}
         run: python3 scripts/setup-depot-sccache.py
       - name: Install the selected renderer dependencies
         if: github.event_name == 'merge_group' && steps.monorepo.outcome == 'success'
