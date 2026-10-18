@@ -313,13 +313,13 @@ with no rollback.
   settings (`GATE_FORCE=1` ignores them). To continue past a
   known flake, `RESUME=1 NO_FAIL_FAST=1 make test-changed` (or `make test`) runs the rest
   to completion, records them, and exits non-zero if anything failed ([intent-hq/intent#5645](https://github.com/intent-hq/intent/issues/5645)).
-- Run long gates as saved command-mode `ws.script` entries (`ws.script.start`, a
-  self-checking `ws.hook.schedule` on `ws.script.status`, then `ws.script.output`).
-  The hook must dispatch on `s.status === "exited" && s.exitCode !== undefined` — never
-  on "not running": `starting` is live, and anything else fired a false wake on the
-  validation run ([intent-hq/intent#4858](https://github.com/intent-hq/intent/issues/4858)).
-  `exitCode === -1` means the supervisor could not observe the exit (process lost, or a
-  command script running when the daemon stopped) — read `s.error` and treat as failure.
+- Run long gates as saved command-mode `ws.script` entries: `ws.script.start`, then
+  `ws.script.monitor(scriptId, { ttlMs, runId })` with the start reply's `runId` and a TTL
+  of expected runtime plus margin. End the turn only once registration succeeds; on a
+  `run-finished` refusal, read the result right away. After the wake, read
+  `ws.script.output` and `ws.script.status`: `exitCode === -1` means the supervisor could
+  not observe the exit (process lost, or a command script running when the daemon
+  stopped) — read `s.error` and treat it as failure. Details: `ws.help("script")`.
   `ws.script.run` rejects `timeoutSeconds` above budget − 5s (25s default). Saved scripts
   are PTY-backed, so use the `make` targets (no progress bars or pagers; `make list-tests`
   for nextest discovery) — bare `cargo`/`git`/`gh` without `--no-pager` or that env
