@@ -33,16 +33,17 @@ advertised `client.hello.protocolVersion`: a well-formed protocol version
 `11.1` or later, with no upper bound (see the
 [compatibility policy](../versioning.md#compatibility-policy)). Missing,
 malformed or older versions must fail closed before sending the scoped text or
-chunk request. Re-establish
-support after reconnecting or switching daemons; a previous daemon's result is
-not evidence for the current connection. Documentation version headers and
+chunk request. Re-establish support after reconnecting or switching daemons; a
+previous daemon's result is not evidence for the current connection. Documentation version headers and
 unrelated capability flags do not establish support. Older daemons can ignore
 the unknown selector and successfully return a same-named primary-workspace
 file, so neither a trial scoped read nor retrying without `gitRootId` is a safe
 fallback. Ordinary reads without a selector keep their existing behavior. Older
 installed frontends capped the accepted major and reject scoped reads on later
 protocols; see the [installed-client compatibility
-notice](../versioning.md#protocol-version--compatibility).
+notice](../versioning.md#protocol-version--compatibility). This gate has no
+capability flag: a future breaking change to `gitRootId` reads must add one
+first (see the compatibility policy).
 
 `file.read` and `file.readChunk` accept an additive optional `gitRootId` request
 field. With a nonblank selector, the daemon resolves the root registered to `workspaceId`
