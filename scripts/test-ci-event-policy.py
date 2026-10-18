@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Regression proof for the monorepo PR/queue boundary and bootstrap selection."""
 from pathlib import Path
-import fnmatch
 import functools
 import json
 import os
@@ -23,6 +22,12 @@ def workflow(name):
 
 
 NODE_SUITE_SUFFIXES = ('.test.mjs', '.test.cjs', '.test.js')
+# Directories whose node:test suites must run in the queue: top-level scripts/
+# only, and every depth of the protocol fixtures and workflow helper scripts.
+SUITE_ROOTS = (('scripts', False), ('docs/protocol/fixtures', True), ('.github/scripts', True))
+SUITE_PATH = re.compile(r'(?<![\w./-])((?:\.github/|docs/|scripts/)[\w./*?\[\]-]*)')
+MAKE_VAR = re.compile(r'^[ \t]*(\w+)=["\']?\$\{MAKE(?::-make)?\}', re.M)
+SHELL_LOOP = re.compile(r'^[ \t]*for[ \t]+\w+[ \t]+in[ \t]+\$\{?(\w+)\}?[ \t]*;[ \t]*do\b(.*?)^[ \t]*done\b', re.M | re.S)
 MAKE_CALL = re.compile(r'(?:\bmake|\$\(MAKE\))(?:[ \t]+(?:-[Cf][ \t]*\S+|-\S+|[A-Z_]+=\S*))*[ \t]+([a-z][\w-]*)')
 SCRIPT_FILE = re.compile(r'scripts/[\w.-]+\.(?:py|sh)\b')
 PY_MODULE = re.compile(r'\bscripts\.(test_\w+)')
@@ -98,6 +103,8 @@ def expand_reachable(commands):
             refs += [('make', t) for t in MAKE_CALL.findall(chunk)]
         if kind == 'rule':
             refs += [('make', t) for t in chunk.split('\n', 1)[0].split()]
+        if kind == 'file':
+            refs += [('make', t) for t in looped_make_targets(chunk)]
         refs += [('file', f) for f in SCRIPT_FILE.findall(chunk)]
         refs += [('file', f'scripts/{m}.py') for m in PY_MODULE.findall(chunk)]
         for ref in refs:
@@ -112,12 +119,59 @@ def expand_reachable(commands):
     return '\n'.join(reached)
 
 
-def suite_is_run(name, text):
-    """`scripts/<name>` appears as a whole path, or a scripts/ glob in `text` matches it."""
-    if re.search(r'(?<![\w./-])scripts/' + re.escape(name) + r'(?![\w.-])', text):
-        return True
-    globs = re.findall(r'(?<![\w./-])scripts/([\w.*?\[\]-]*[*?[][\w.*?\[\]-]*)', text)
-    return any(fnmatch.fnmatchcase(name, pattern) for pattern in globs)
+def node_suites():
+    """Repo-relative paths of every node:test suite under SUITE_ROOTS."""
+    suites = []
+    for root, recursive in SUITE_ROOTS:
+        files = (ROOT / root).rglob('*') if recursive else (ROOT / root).iterdir()
+        suites += [p.relative_to(ROOT).as_posix() for p in files
+                   if p.is_file() and p.name.endswith(NODE_SUITE_SUFFIXES)]
+    return sorted(suites)
+
+
+def glob_regex(pattern):
+    """Shell glob -> regex: `*`/`?` stay within one path segment, `**` crosses them."""
+    out, i = '', 0
+    while i < len(pattern):
+        if pattern.startswith('**/', i):
+            out, i = out + '(?:.*/)?', i + 3
+        elif pattern.startswith('**', i):
+            out, i = out + '.*', i + 2
+        elif pattern[i] == '*':
+            out, i = out + '[^/]*', i + 1
+        elif pattern[i] == '?':
+            out, i = out + '[^/]', i + 1
+        elif pattern[i] == '[' and ']' in pattern[i + 1:]:
+            end = pattern.index(']', i + 1)
+            out, i = out + '[' + pattern[i + 1:end].replace('!', '^', 1).replace('\\', '\\\\') + ']', end + 1
+        else:
+            out, i = out + re.escape(pattern[i]), i + 1
+    return re.compile(out)
+
+
+def suite_is_run(path, text):
+    """Repo-relative `path` appears whole in `text`, or a path glob in `text` matches it."""
+    for token in SUITE_PATH.findall(text):
+        if token == path or (any(c in token for c in '*?[') and glob_regex(token).fullmatch(path)):
+            return True
+    return False
+
+
+def looped_make_targets(text):
+    """Targets of a shell `for t in $LIST; do ... $make_var ...; done` where make_var=${MAKE:-make}.
+
+    scripts/consumer-checks.sh runs its checks this way, so `make consumer-checks`
+    reaches each listed target only through LIST's literal assignment.
+    """
+    make_vars = MAKE_VAR.findall(text)
+    targets = []
+    for list_var, body in SHELL_LOOP.findall(text):
+        if not any(re.search(r'\$\{?' + var + r'\b', body) for var in make_vars):
+            continue
+        assigned = re.search(r'^[ \t]*' + list_var + r'=(["\'])(.*?)\1', text, re.M | re.S)
+        if assigned:
+            targets += assigned.group(2).split()
+    return targets
 
 
 class EventPolicy(unittest.TestCase):
@@ -136,13 +190,15 @@ class EventPolicy(unittest.TestCase):
         # check-app-ui-targets.test.mjs landed (#6830) without any CI step, and
         # the breaking-token / submodule-pins unit suites ran only in their
         # pull_request-only jobs, so the queue never re-tested them on the
-        # merged tree. Every top-level scripts/ node:test suite must be reached
+        # merged tree. Nine docs/protocol/fixtures suites likewise never ran in
+        # any CI job. Every node:test suite under SUITE_ROOTS must be reached
         # from a step that runs on merge_group, directly or via make / helpers.
-        suites = sorted(p.name for p in (ROOT / 'scripts').iterdir() if p.name.endswith(NODE_SUITE_SUFFIXES))
-        self.assertTrue(suites)
+        suites = node_suites()
+        for root, _ in SUITE_ROOTS:
+            self.assertTrue(any(s.startswith(root + '/') for s in suites), root)
         reached = expand_reachable(queue_step_commands())
-        missing = [name for name in suites if not suite_is_run(name, reached)]
-        self.assertEqual(missing, [], 'scripts/ node:test suites not run by any merge_group step of '
+        missing = [path for path in suites if not suite_is_run(path, reached)]
+        self.assertEqual(missing, [], 'node:test suites not run by any merge_group step of '
                          '.github/workflows/ci.yml (add a `node --test` step to a job that runs in the queue)')
 
     def test_queue_suite_scan_rejects_mentions_and_pr_only_steps(self):
@@ -152,18 +208,39 @@ class EventPolicy(unittest.TestCase):
         self.assertTrue(runs_on_merge_group("steps.check.outcome == 'failure'"))
         self.assertFalse(runs_on_merge_group("github.event_name=='pull_request'"))
         self.assertFalse(runs_on_merge_group(False))
-        self.assertTrue(suite_is_run('ref.test.mjs', 'node --test scripts/ref.test.mjs'))
-        self.assertFalse(suite_is_run('ref.test.mjs', 'node --test scripts/submodule-ref.test.mjs'))
-        self.assertFalse(suite_is_run('a.test.mjs', 'node --test scripts/a.test.mjs.bak'))
-        self.assertTrue(suite_is_run('a.test.mjs', 'node --test scripts/*.test.mjs'))
-        self.assertFalse(suite_is_run('a.test.mjs', expand_reachable(['# node --test scripts/a.test.mjs'])))
-        self.assertTrue(suite_is_run('agent-worker-contract.test.mjs',
+        self.assertTrue(suite_is_run('scripts/ref.test.mjs', 'node --test scripts/ref.test.mjs'))
+        self.assertFalse(suite_is_run('scripts/ref.test.mjs', 'node --test scripts/submodule-ref.test.mjs'))
+        self.assertFalse(suite_is_run('scripts/a.test.mjs', 'node --test scripts/a.test.mjs.bak'))
+        self.assertFalse(suite_is_run('scripts/a.test.mjs', 'node --test other/scripts/a.test.mjs'))
+        self.assertTrue(suite_is_run('scripts/a.test.mjs', 'node --test scripts/*.test.mjs'))
+        self.assertFalse(suite_is_run('scripts/a.test.mjs', expand_reachable(['# node --test scripts/a.test.mjs'])))
+        fixture = 'docs/protocol/fixtures/nodes/enrollment.test.mjs'
+        self.assertTrue(suite_is_run(fixture, f"node --test '{fixture}'"))
+        self.assertTrue(suite_is_run(fixture, 'node --test docs/protocol/fixtures/nodes/*.test.mjs'))
+        self.assertFalse(suite_is_run(fixture, 'node --test docs/protocol/fixtures/*.test.mjs'))
+        self.assertTrue(suite_is_run(fixture, 'node --test "docs/protocol/fixtures/**/*.test.mjs"'))
+        self.assertFalse(suite_is_run(fixture, 'node --test docs/protocol/fixtures/nodes/enrollment.test.mjs.orig'))
+        self.assertTrue(suite_is_run('.github/scripts/t/a.test.js', 'node --test .github/scripts/t/[ab].test.js'))
+        self.assertFalse(suite_is_run('.github/scripts/t/a.test.js', 'node --test scripts/t/a.test.js'))
+        self.assertTrue(suite_is_run('scripts/agent-worker-contract.test.mjs',
                                      expand_reachable(['make RUSTUP_CARGO= check-agent-worker-contract'])))
-        self.assertTrue(suite_is_run('runner-policy.test.cjs',
+        self.assertTrue(suite_is_run('scripts/runner-policy.test.cjs',
                                      expand_reachable(['python3 -S -B scripts/test_depot_runners.py'])))
+        self.assertTrue(suite_is_run('docs/protocol/fixtures/notes/contract.test.mjs',
+                                     expand_reachable(['make consumer-checks'])))
         rules = makefile_rules()
         self.assertIn('check-agent-worker-contract', rules)
         self.assertNotIn('#', ''.join(line[:1] for line in rules['docs-check'].splitlines()))
+
+    def test_looped_make_targets_follow_only_make_invoking_loops(self):
+        script = '\n'.join([
+            'make_bin=${MAKE:-make}', 'checks="lint docs-check"', 'other="not-a-target"',
+            'for t in $other; do', '  echo "$t"', 'done',
+            'for target in $checks; do', '  $make_bin --no-print-directory $target || status=$?', 'done'])
+        self.assertEqual(looped_make_targets(script), ['lint', 'docs-check'])
+        self.assertEqual(looped_make_targets(script.replace('$make_bin', 'echo')), [])
+        self.assertIn('check-note-pagination-contract',
+                      looped_make_targets((ROOT / 'scripts/consumer-checks.sh').read_text()))
 
     def test_reusable_contract_has_static_pr_checks_and_required_queue_runtime(self):
         jobs = workflow('consumer-checks.yml')['jobs']
