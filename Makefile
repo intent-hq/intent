@@ -513,7 +513,7 @@ lint-shell: ## Run shellcheck over scripts/*.sh (needs shellcheck; make bootstra
 RUST_CHECK_TARGETS := check-makefile-targets check-protocol-field-parity lint-shell-sleeps fmt clippy lint-sources
 
 .PHONY: check-callback-fixture
-check-callback-fixture: ensure-intentd-submodule ## Validate the explicit callback test fixture offline before Rust gates
+check-callback-fixture: ensure-intentd-submodule ## Validate the callback test fixture offline (explicit, or prepared from a ready ~/.cache entry) before Rust gates
 	@python3 scripts/check_watch_capacity.py --quiet
 	@python3 scripts/resumable_nextest.py --check-callback-fixture "$(INTENTD_DIR)"
 

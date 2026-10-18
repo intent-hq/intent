@@ -543,7 +543,9 @@ class CallbackPreflightTests(unittest.TestCase):
                 record.mkdir(parents=True)
                 (record / "complete").write_text("complete\n")
                 (record / "passed.jsonl").write_text(gate.record_line("alpha::one", "passes", "ok"))
-                with mock.patch.dict(os.environ, {"INTENT_ACP_CALLBACK_ADAPTER_FIXTURE": ""}), mock.patch.object(
+                # A temporary HOME has no verified cache, so nothing is auto-prepared.
+                with mock.patch.dict(os.environ, {"INTENT_ACP_CALLBACK_ADAPTER_FIXTURE": "",
+                                                  "HOME": str(root / "home")}), mock.patch.object(
                     gate, "isolated_output_args", return_value=[]
                 ) as cargo, mock.patch.object(gate, "tree_key", return_value=KEY) as key:
                     with self.assertRaisesRegex(RuntimeError, "INTENT_ACP_CALLBACK_ADAPTER_FIXTURE") as refused:
@@ -623,6 +625,29 @@ class CallbackValidatorTests(unittest.TestCase):
         self.assertEqual(absolute["manifest"], self.fixture.descriptor["manifest"]["sha256"])
         self.assertEqual(absolute["root"], str(self.fixture.payload))
         self.assertEqual(absolute["node-sha256"], self.validator.digest(self.node))
+
+    def test_host_node_options_are_cleared_only_for_validation(self):
+        injected = "--require /opt/datadog-packages/dd-trace/init.js"
+        os.environ["NODE_OPTIONS"] = injected
+        seen = []
+        check = self.validator.platform_check
+        with mock.patch.object(self.validator, "platform_check",
+                               side_effect=lambda: (seen.append(os.environ.get("NODE_OPTIONS")), check())[1]):
+            self.assertEqual(self.identity()["root"], str(self.fixture.payload))
+        self.assertEqual(seen, [None])
+        self.assertEqual(os.environ["NODE_OPTIONS"], injected)
+
+    def test_fixture_runs_drop_host_node_options(self):
+        os.environ["NODE_OPTIONS"] = "--require /opt/datadog-packages/dd-trace/init.js"
+        harness = PlannedRunHarness(self.root, [([event("ok", "alpha::one$passes")], 0)])
+        self.assertEqual(harness.execute(make_args(self.root, plan=["-p intent-acp --lib"])), 0)
+        self.assertNotIn("NODE_OPTIONS", harness.run_environments[0])
+        self.assertIn("NODE_OPTIONS", os.environ)
+
+    def test_ready_prefix_matches_component_prepare(self):
+        source = (SCRIPT.parents[1] / "packages/intentd/scripts/prepare-acp-callback-fixture.py").read_text()
+        self.assertIn(f'key = "{gate.CALLBACK_READY_PREFIX}" + descriptor["manifest"]["sha256"]', source,
+                      "prepare() renamed its ready entry; update CALLBACK_READY_PREFIX")
 
     def test_cli_loads_canonical_verifier_and_checks_real_node_version_offline(self):
         # The child interpreter does not inherit the in-process platform mock.
@@ -825,9 +850,8 @@ with mock.patch.object(gate, 'transfer_fixture_identity', return_value=None):
         with mock.patch.object(self.validator.platform, "machine", return_value="aarch64"):
             with self.assertRaisesRegex(RuntimeError, "Linux x64"):
                 self.identity()
-        with mock.patch.dict(os.environ, {"NODE_OPTIONS": "--require unexpected"}):
-            with self.assertRaisesRegex(RuntimeError, "NODE_OPTIONS"):
-                self.identity()
+        # Host NODE_OPTIONS are hidden from validation rather than refused:
+        # see test_host_node_options_are_cleared_only_for_validation.
         self.node_patch.stop()
         with mock.patch.object(self.validator.shutil, "which", return_value=str(self.node)), mock.patch.object(
             self.validator, "command", return_value="v0.0.0"
