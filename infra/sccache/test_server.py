@@ -158,6 +158,45 @@ class AccessMatrix(unittest.TestCase):
         self.assertNotIn(RW.encode(), body)
 
 
+def unit_environment(unit):
+    """Environment= assignments from a systemd unit (simple KEY=VALUE only)."""
+    env = {}
+    for line in (HERE / unit).read_text().splitlines():
+        if line.startswith('Environment='):
+            for item in line[len('Environment='):].split():
+                key, _, value = item.partition('=')
+                env[key] = value
+    return env
+
+
+@unittest.skipUnless(RCLONE, 'rclone not installed (set RCLONE_BIN)')
+class WebdavUnit(unittest.TestCase):
+    def test_rclone_writes_nothing_under_served_dir(self):
+        # The sccache user's home is the served tree, so rclone's default
+        # config dir would land in the cache (visible over WebDAV, pruned).
+        with tempfile.TemporaryDirectory() as data:
+            port = free_port()
+            env = {'PATH': os.environ['PATH'], 'HOME': data, **unit_environment('sccache-webdav.service')}
+            proc = subprocess.Popen([RCLONE, 'serve', 'webdav', data, '--addr', f'127.0.0.1:{port}',
+                                     '--poll-interval', '0'], env=env,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                deadline = time.monotonic() + 20
+                while True:
+                    try:
+                        status, _ = request(f'http://127.0.0.1:{port}/obj', 'PUT', body=b'x')
+                        break
+                    except OSError:
+                        if time.monotonic() > deadline or proc.poll() is not None:
+                            raise
+                        time.sleep(0.2)
+                self.assertIn(status, (201, 204))
+            finally:
+                proc.terminate()
+                proc.wait(timeout=10)
+            self.assertEqual(sorted(p.name for p in Path(data).iterdir()), ['obj'])
+
+
 class EnvCheck(unittest.TestCase):
     def run_check(self, **env):
         base = {k: v for k, v in os.environ.items() if not k.startswith('SCCACHE_')}
@@ -183,7 +222,7 @@ FAKE_DF = """#!/usr/bin/env bash
 # df stand-in: a FAKE_DF_SIZE-byte filesystem whose only content is the data dir.
 dir="${@: -1}"
 echo "1B-blocks Used"
-echo "$FAKE_DF_SIZE $(du -sB1 "$dir" | cut -f1)"
+echo "$FAKE_DF_SIZE $(du -sB1 "$dir" 2>/dev/null | cut -f1)"
 """
 
 
@@ -278,7 +317,7 @@ class Prune(unittest.TestCase):
         used = self.used()
         # Fake df adds 90% of the filesystem as non-cache data, so even an
         # empty cache stays above the cap.
-        (self.bin / 'df').write_text(FAKE_DF.replace('$(du -sB1 "$dir" | cut -f1)', '$(( $(du -sB1 "$dir" | cut -f1) + FAKE_DF_SIZE * 9 / 10 ))'))
+        (self.bin / 'df').write_text(FAKE_DF.replace('$(du -sB1 "$dir" 2>/dev/null | cut -f1)', '$(( $(du -sB1 "$dir" 2>/dev/null | cut -f1) + FAKE_DF_SIZE * 9 / 10 ))'))
         full = dict(os.environ, SCCACHE_DATA_DIR=str(self.data), PATH=f'{self.bin}:{os.environ["PATH"]}', FAKE_DF_SIZE=str(used * 20))
         result = subprocess.run(['bash', str(HERE / 'prune.sh')], env=full, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -296,6 +335,70 @@ class Prune(unittest.TestCase):
         self.assertIn('> 75%', out)
         self.assertLessEqual(self.used(), size // 2)
         self.assertTrue(files[-1].exists())
+
+    @unittest.skipIf(os.geteuid() == 0, 'root reads unreadable directories')
+    def test_unreadable_dirs_are_skipped(self):
+        # A fresh ext4 volume has a root-owned 0700 lost+found at its root;
+        # other unreadable directories are skipped with a warning.
+        old = self.entry('old/entry-a', 30)
+        self.entry('fresh/entry-b', 0)
+        locked = [self.data / 'lost+found', self.data / 'ab' / 'locked']
+        for d in locked:
+            d.mkdir(parents=True)
+            (d / 'entry-x').write_bytes(b'x')
+            os.utime(d / 'entry-x', (self.now - 30 * 86400, self.now - 30 * 86400))
+            d.chmod(0)
+            os.utime(d, (self.now - 2 * 86400, self.now - 2 * 86400))
+        try:
+            for size in (None, self.used() * 100 // 80):
+                with self.subTest(size=size):
+                    full = dict(os.environ, SCCACHE_DATA_DIR=str(self.data))
+                    if size is None:
+                        full.update(SCCACHE_MAX_USE_PERCENT='100', SCCACHE_TARGET_USE_PERCENT='100')
+                    else:
+                        full.update(PATH=f'{self.bin}:{os.environ["PATH"]}', FAKE_DF_SIZE=str(size))
+                    result = subprocess.run(['bash', str(HERE / 'prune.sh')], env=full, capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertNotIn('lost+found', result.stdout + result.stderr)
+                    self.assertNotIn('entry-', result.stdout + result.stderr)
+                    self.assertIn('warning: skipped 1 unreadable', result.stderr)
+                    self.assertFalse(old.exists())
+                    self.assertTrue(all(d.is_dir() for d in locked))
+        finally:
+            for d in locked:
+                d.chmod(0o755)
+        self.assertTrue(all((d / 'entry-x').exists() for d in locked))
+
+    def test_find_errors_still_fail(self):
+        self.entry('old/entry-a', 30)
+        (self.bin / 'find').write_text('#!/usr/bin/env bash\n'
+                                       'echo "find: \'$1/x\': Input/output error" >&2\n'
+                                       'exit 1\n')
+        (self.bin / 'find').chmod(0o755)
+        full = dict(os.environ, SCCACHE_DATA_DIR=str(self.data), PATH=f'{self.bin}:{os.environ["PATH"]}',
+                    FAKE_DF_SIZE=str(10 ** 12))
+        result = subprocess.run(['bash', str(HERE / 'prune.sh')], env=full, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn('Input/output error', result.stderr)
+
+    def test_killed_or_silent_find_fails(self):
+        # Only the first find misbehaves; later ones are real, so a run that
+        # ignores the first find's status would otherwise look clean.
+        self.entry('old/entry-a', 30)
+        real = shutil.which('find')
+        for name, action in (('sigkill', 'kill -9 $$'), ('exit2', 'exit 2'), ('exit1', 'exit 1')):
+            with self.subTest(failure=name):
+                (self.bin / 'calls').write_text('')
+                (self.bin / 'find').write_text('#!/usr/bin/env bash\n'
+                                               f'n=$(wc -l < "{self.bin}/calls"); echo x >> "{self.bin}/calls"\n'
+                                               f'if [ "$n" -eq 0 ]; then {action}; fi\n'
+                                               f'exec {real} "$@"\n')
+                (self.bin / 'find').chmod(0o755)
+                full = dict(os.environ, SCCACHE_DATA_DIR=str(self.data), PATH=f'{self.bin}:{os.environ["PATH"]}',
+                            FAKE_DF_SIZE=str(10 ** 12))
+                result = subprocess.run(['bash', str(HERE / 'prune.sh')], env=full, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn('prune: find failed', result.stderr)
 
     def test_rejects_bad_settings(self):
         for env in ({'SCCACHE_PRUNE_DAYS': '0'}, {'SCCACHE_PRUNE_DAYS': 'abc'}, {'SCCACHE_PRUNE_DAYS': '-3'},
