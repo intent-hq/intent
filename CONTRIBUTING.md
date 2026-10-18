@@ -409,8 +409,8 @@ with `sccache --stop-server` so the next build picks up the new environment.
 
 CI writes to the same cache with its own read-write token (see
 [docs/RELEASING.md](docs/RELEASING.md)); its `INTENT_SCCACHE_*` settings apply
-only to CI jobs. Local builds get the read-only token so a developer machine can
-never write entries that CI would later trust. sccache keys include absolute
+only to CI jobs. Local builds get the read-only token so developer machines
+cannot write into the shared cache. sccache keys include absolute
 paths, so a local build only hits entries compiled at the same checkout path;
 expect a low hit rate unless your path matches a CI runner's.
 

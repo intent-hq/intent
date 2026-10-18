@@ -646,7 +646,11 @@ GitHub-hosted labels are the fallback keys, preserving the workload's CPU/memory
 class: standard `ubuntu-24.04`, `windows-2022` and `windows-2025`, the organization
 larger runners `gh-linux-8x`, `gh-linux-16x`, `gh-linux-arm64-8x` and `gh-windows-16x`,
 `macos-15-xlarge` for Apple Silicon and `macos-latest-large` for Intel Macs. The larger
-runners must stay in a runner group shared with all three repositories. cloudlands-fe routes its own Linux jobs with a separate, simpler probe in
+runners must stay in a runner group shared with all three repositories, with
+**Allow public repositories** enabled: intent, intentd and cloudlands-fe are public,
+and without that setting their larger-runner jobs queue until they time out. During
+the move off Depot, intentd, cloudlands-fe and ios still fall back to `depot-*`
+labels until their own migration PRs land. cloudlands-fe routes its own Linux jobs with a separate, simpler probe in
 `intent-pr.yml`: a fixed queue threshold of eight and no maintenance overrides.
 
 The shared probe checks online runners and paginated queued/running jobs across all
@@ -743,7 +747,7 @@ These are lasting facts about each machine. Current reasons belong in the
 |---|---|---|
 | tinybox (Linux x64) | 8 (`tinybox` to `tinybox-8`), shared by all three repositories | `tinybox-prune.yml` aims to keep 100 GiB free on `/raid` but stops when it runs out of eligible files; a full `/raid` crashed queue runs ([intentd#2421](https://github.com/intent-hq/intentd/pull/2421)). Node is not installed system-wide, so every job that runs Node must use `actions/setup-node` first ([intentd#2467](https://github.com/intent-hq/intentd/pull/2467) adds a routing-policy test for this). Git is 2.34.1. |
 | 5090pc (Windows x64) | 1 | `windows-prune.yml` keeps 40 GiB free; a full disk failed Rust toolchain installs (`os error 112`). Its safety tests need PowerShell 7 (`pwsh`); without it they fail with `pwsh: command not found` and the cleanup is skipped ([run 38896319862](https://github.com/intent-hq/intentd/actions/runs/38896319862)). |
-| m1mac (macOS ARM64) | 1 | Too slow for intentd's merge-queue `build (aarch64-apple-darwin)` job, even with the compiler cache: over 60 minutes cold and over 26 minutes on an unchanged rerun, against about 8 minutes on a hosted Apple Silicon runner ([run 39120530357](https://github.com/intent-hq/intentd/actions/runs/39120530357), [run 39124725329](https://github.com/intent-hq/intentd/actions/runs/39124725329)). Clippy compiles are not cacheable by sccache, and cache keys include the checkout path, so hosted runners' entries do not match. `actions/setup-python` cannot install there (`mkdir: /Users/runner: Permission denied`); the system Python is 3.9.6. |
+| m1mac (macOS ARM64) | 1 | Too slow for intentd's merge-queue `build (aarch64-apple-darwin)` job, even with the compiler cache: over 60 minutes cold and over 26 minutes on an unchanged rerun, against about 8 minutes on a Depot Mac with Depot's managed cache, before the move to GitHub-hosted runners ([run 39120530357](https://github.com/intent-hq/intentd/actions/runs/39120530357), [run 39124725329](https://github.com/intent-hq/intentd/actions/runs/39124725329)). Clippy compiles are not cacheable by sccache, and cache keys include the checkout path, so hosted runners' entries do not match. `actions/setup-python` cannot install there (`mkdir: /Users/runner: Permission denied`); the system Python is 3.9.6. |
 
 A single-slot machine runs its routed jobs one after another, so the combined time
 of a run's jobs on that platform must fit the merge-queue timeout.

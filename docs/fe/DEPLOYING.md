@@ -209,7 +209,7 @@ The dual-architecture workflow produces five platform/architecture builds in par
 
 Notes:
 
-- **Runner routing**: builds prefer compatible self-hosted capacity and use GitHub-hosted runners when the fleet is busy, unavailable, under maintenance, or cannot be inspected. The probe stays hosted. See [CI runner routing](../RELEASING.md#ci-runner-routing) for credentials, platform matching, and the disposable smoke-test exception.
+- **Runner routing** (cloudlands-fe still falls back to the equivalent `depot-*` labels until its migration PR lands): builds prefer compatible self-hosted capacity and use GitHub-hosted runners when the fleet is busy, unavailable, under maintenance, or cannot be inspected. The probe stays hosted. See [CI runner routing](../RELEASING.md#ci-runner-routing) for credentials, platform matching, and the disposable smoke-test exception.
 - **Linux arm64 temporarily ships AppImage-only**: electron-builder's bundled fpm fails to spawn on the arm64 runner, so `deb:arm64` is disabled until the runner issue is resolved (monorepo#1286).
 - **Production Windows releases remain unsigned.** Expect SmartScreen warnings on install. Azure Artifact Signing is available only through the explicit manual build configuration; production enablement and native Windows installation/update acceptance remain pending. The retired DigiCert flag `INTENT_WINDOWS_ENABLE_INTEGRATED_SIGNING` must stay unset; enabling it fails the build.
 - **Linux packages are unsigned** (standard for AppImage/deb distributed outside a package repository). Snap is not built or published.
