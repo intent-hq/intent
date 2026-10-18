@@ -2142,14 +2142,16 @@ method, or offer the action, without it.
 **Recording.** Whenever the daemon persists a changed PR snapshot for a local
 workspace (its `prUrl`, `activePullRequest` or `pullRequests` pool) or for one of its
 registered git roots (§5.6), it links every PR in that snapshot to the workspace. A
-PR is identified by its canonical URL: scheme, host lowercased with a leading `www.`
-removed and any port kept, owner and repository lowercased, and the number. Only
+PR is identified by its canonical URL without the scheme (so `http` and `https` links
+match): host lowercased with a leading `www.` removed and any port kept, owner and
+repository lowercased, and the number without leading zeros. Only
 GitHub-form `/<owner>/<repo>/pull/<number>` URLs are recorded or recognized in this
 revision; GitLab merge requests are out of scope. Each workspace gets its own link,
 so several workspaces can be linked to one PR. A link keeps the time it was first
 recorded (`linkedAt`); later sightings by the same workspace do not change it.
 Links survive the PR leaving the pool, the workspace being archived and the git
-root being unregistered. Deleting the workspace removes its links. Remote
+root being unregistered, and they ride workspace transfers with their original
+`linkedAt`. Deleting the workspace removes its links. Remote
 workspace rows are not recorded. Recording starts with the implementing daemon
 release; snapshots persisted earlier are linked only once they next change.
 
