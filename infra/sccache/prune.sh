@@ -31,29 +31,52 @@ if [ "$max_use" -lt 1 ] || [ "$max_use" -gt 100 ]; then fail "SCCACHE_MAX_USE_PE
 if [ "$target_use" -lt 1 ] || [ "$target_use" -gt "$max_use" ]; then fail "SCCACHE_TARGET_USE_PERCENT must be 1-SCCACHE_MAX_USE_PERCENT"; fi
 [ -d "$data_dir" ] || { echo "prune: $data_dir does not exist" >&2; exit 1; }
 
-# find's exit status is 1 for an unreadable directory and for real errors
-# alike, so judge by its messages instead: find_cache keeps them in errlog
-# and check_find fails on anything but "Permission denied".
+# find exits 1 both for an unreadable directory and for real errors, and a
+# find feeding a loop through process substitution loses its status. So every
+# find records its status in statuslog and its messages in errlog, and
+# check_find accepts only status 0, or 1 explained solely by "Permission
+# denied" messages; a signal, any other status, a missing status or any
+# other message fails the run.
 errlog="$(mktemp)"
-trap 'rm -f -- "$errlog"' EXIT
+statuslog="$(mktemp)"
+trap 'rm -f -- "$errlog" "$statuslog"' EXIT
 export LC_ALL=C
+
+run_find() {
+  local rc=0
+  find "$@" 2>>"$errlog" || rc=$?
+  echo "$rc" >> "$statuslog"
+}
 
 # find_cache [find expression]: files and directories under data_dir, without
 # lost+found. -prune does not combine with -depth/-delete; step 3 skips
 # lost+found its own way.
 find_cache() {
-  find "$data_dir" -xdev -path "$data_dir/lost+found" -prune -o "$@" 2>>"$errlog" || true
+  run_find "$data_dir" -xdev -path "$data_dir/lost+found" -prune -o "$@"
 }
 
+find_failed() {
+  printf 'prune: find failed: %s\n' "$*" >&2
+  exit 1
+}
+
+# check_find <minimum number of finds that must have reported a status>
 check_find() {
-  local denied other
+  local denied other rc n=0
   denied="$(grep -c ': Permission denied$' "$errlog" || true)"
   other="$(grep -v ': Permission denied$' "$errlog" | sed "s/'[^']*'/<path>/" || true)"
+  [ -z "$other" ] || find_failed "$other"
+  while read -r rc; do
+    n=$((n + 1))
+    case "$rc" in
+      0) ;;
+      1) [ "$denied" -gt 0 ] || find_failed "exit status 1 without a message" ;;
+      *) find_failed "exit status $rc" ;;
+    esac
+  done < "$statuslog"
+  [ "$n" -ge "$1" ] || find_failed "no exit status recorded"
   : > "$errlog"
-  if [ -n "$other" ]; then
-    printf 'prune: find failed: %s\n' "$other" >&2
-    exit 1
-  fi
+  : > "$statuslog"
   if [ "$denied" -gt 0 ]; then
     echo "prune: warning: skipped $denied unreadable paths" >&2
   fi
@@ -79,7 +102,8 @@ while IFS=' ' read -r -d '' blocks path; do
   count=$((count + 1))
   bytes=$((bytes + blocks * 512))
 done < <(find_cache -type f -atime +"$((days - 1))" -printf '%b %p\0')
-check_find
+wait "$!" || find_failed "listing exited with status $?"
+check_find 1
 echo "prune: age: removed $count entries ($bytes bytes) not read in $days days"
 
 # Step 2: hard cap on disk use.
@@ -90,12 +114,15 @@ if [ "$use" -gt "$max_use" ]; then
   count=0
   bytes=0
   while IFS=' ' read -r -d '' _atime blocks path; do
-    [ "$bytes" -lt "$need" ] || break
+    # Read to the end rather than break, so sort is not killed by SIGPIPE and
+    # the listing's status stays meaningful.
+    [ "$bytes" -lt "$need" ] || continue
     rm -f -- "$path"
     count=$((count + 1))
     bytes=$((bytes + blocks * 512))
   done < <(find_cache -type f -printf '%A@ %b %p\0' | sort -z -n)
-  check_find
+  wait "$!" || find_failed "listing exited with status $?"
+  check_find 1
   echo "prune: size: disk use ${use}% > ${max_use}%; removed $count least-recently-read entries ($bytes bytes) to reach ${target_use}%"
 else
   echo "prune: size: disk use ${use}% <= ${max_use}%; nothing to do"
@@ -106,9 +133,12 @@ fi
 # Directories this run just emptied count as modified and go on the next run.
 # Starts below data_dir so lost+found (always empty, so a deletion candidate)
 # is never visited.
-dirs="$({ find "$data_dir" -xdev -mindepth 1 -maxdepth 1 -type d ! -name lost+found -print0 |
-  xargs -0 -r sh -c 'exec find "$@" -xdev -type d -empty -mmin +60 -print -delete' sh || true; } 2>>"$errlog" | wc -l)"
-check_find
+# The inner finds record their own status ($0 is statuslog); a killed sh
+# makes xargs fail, which is recorded too.
+dirs="$({ run_find "$data_dir" -xdev -mindepth 1 -maxdepth 1 -type d ! -name lost+found -print0 |
+  { xargs -0 -r sh -c 'find "$@" -xdev -type d -empty -mmin +60 -print -delete; echo "$?" >> "$0"' "$statuslog" ||
+    echo "$?" >> "$statuslog"; }; } 2>>"$errlog" | wc -l)"
+check_find 1
 use="$(use_percent)"
 echo "prune: removed $dirs empty directories; disk use now ${use}%"
 if [ "$use" -gt "$max_use" ]; then

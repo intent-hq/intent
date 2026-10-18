@@ -381,6 +381,25 @@ class Prune(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn('Input/output error', result.stderr)
 
+    def test_killed_or_silent_find_fails(self):
+        # Only the first find misbehaves; later ones are real, so a run that
+        # ignores the first find's status would otherwise look clean.
+        self.entry('old/entry-a', 30)
+        real = shutil.which('find')
+        for name, action in (('sigkill', 'kill -9 $$'), ('exit2', 'exit 2'), ('exit1', 'exit 1')):
+            with self.subTest(failure=name):
+                (self.bin / 'calls').write_text('')
+                (self.bin / 'find').write_text('#!/usr/bin/env bash\n'
+                                               f'n=$(wc -l < "{self.bin}/calls"); echo x >> "{self.bin}/calls"\n'
+                                               f'if [ "$n" -eq 0 ]; then {action}; fi\n'
+                                               f'exec {real} "$@"\n')
+                (self.bin / 'find').chmod(0o755)
+                full = dict(os.environ, SCCACHE_DATA_DIR=str(self.data), PATH=f'{self.bin}:{os.environ["PATH"]}',
+                            FAKE_DF_SIZE=str(10 ** 12))
+                result = subprocess.run(['bash', str(HERE / 'prune.sh')], env=full, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn('prune: find failed', result.stderr)
+
     def test_rejects_bad_settings(self):
         for env in ({'SCCACHE_PRUNE_DAYS': '0'}, {'SCCACHE_PRUNE_DAYS': 'abc'}, {'SCCACHE_PRUNE_DAYS': '-3'},
                     {'SCCACHE_MAX_USE_PERCENT': '101'}, {'SCCACHE_MAX_USE_PERCENT': '0'},
