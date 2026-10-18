@@ -196,7 +196,7 @@ write_env() {
   chmod 0600 "$tmp"
   mv -f "$tmp" "$env_file"
   if [ ! -f "$prune_env" ]; then
-    printf '%s\n' "SCCACHE_PRUNE_DAYS=21" "SCCACHE_MAX_USE_PERCENT=70" > "$prune_env"
+    printf '%s\n' "SCCACHE_PRUNE_DAYS=21" "SCCACHE_MAX_USE_PERCENT=70" "SCCACHE_TARGET_USE_PERCENT=60" > "$prune_env"
     chmod 0644 "$prune_env"
   fi
 }

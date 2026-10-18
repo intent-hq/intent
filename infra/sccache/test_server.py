@@ -166,39 +166,119 @@ class EnvCheck(unittest.TestCase):
                 self.assertNotIn(RW, result.stderr)
 
 
-class Prune(unittest.TestCase):
-    def test_prunes_unread_entries_and_empty_dirs(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            data = Path(tmp)
-            now = time.time()
-            day = 86400
-            files = {'old/a': 30, 'old/b': 22, 'edge/c': 20, 'fresh/d': 0}
-            for rel, age in files.items():
-                p = data / rel
-                p.parent.mkdir(parents=True, exist_ok=True)
-                p.write_bytes(b'x')
-                os.utime(p, (now - age * day, now - 40 * day))
-            (data / 'empty-old').mkdir()
-            (data / 'empty-new').mkdir()
-            for d in ('old', 'empty-old'):
-                os.utime(data / d, (now - 2 * day, now - 2 * day))
-            env = dict(os.environ, SCCACHE_DATA_DIR=tmp, SCCACHE_PRUNE_DAYS='21', SCCACHE_MAX_USE_PERCENT='100')
-            result = subprocess.run(['bash', str(HERE / 'prune.sh')], env=env, capture_output=True, text=True)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('removed 2 entries', result.stdout)
-            self.assertEqual(list((data / 'old').iterdir()), [])
-            self.assertFalse((data / 'empty-old').exists())
-            self.assertTrue((data / 'empty-new').exists())
-            self.assertTrue((data / 'edge/c').exists())
-            self.assertTrue((data / 'fresh/d').exists())
+FAKE_DF = """#!/usr/bin/env bash
+# df stand-in: a FAKE_DF_SIZE-byte filesystem whose only content is the data dir.
+dir="${@: -1}"
+echo "1B-blocks Used"
+echo "$FAKE_DF_SIZE $(du -sB1 "$dir" | cut -f1)"
+"""
 
-    def test_rejects_bad_days(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            for days in ('0', 'abc', '-3'):
-                with self.subTest(days=days):
-                    env = dict(os.environ, SCCACHE_DATA_DIR=tmp, SCCACHE_PRUNE_DAYS=days)
-                    result = subprocess.run(['bash', str(HERE / 'prune.sh')], env=env, capture_output=True, text=True)
-                    self.assertEqual(result.returncode, 2)
+
+class Prune(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        self.data = root / 'data'
+        self.data.mkdir()
+        self.bin = root / 'bin'
+        self.bin.mkdir()
+        (self.bin / 'df').write_text(FAKE_DF)
+        (self.bin / 'df').chmod(0o755)
+        self.now = time.time()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def entry(self, rel, read_days_ago, size=4096):
+        p = self.data / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b'x' * size)
+        os.utime(p, (self.now - read_days_ago * 86400, self.now - 40 * 86400))
+        return p
+
+    def used(self):
+        return int(subprocess.run(['du', '-sB1', str(self.data)], capture_output=True, text=True).stdout.split()[0])
+
+    def run_prune(self, size=None, **env):
+        full = dict(os.environ, SCCACHE_DATA_DIR=str(self.data), **env)
+        if size is not None:
+            full.update(PATH=f'{self.bin}:{os.environ["PATH"]}', FAKE_DF_SIZE=str(size))
+        else:
+            full.setdefault('SCCACHE_MAX_USE_PERCENT', '100')
+            full.setdefault('SCCACHE_TARGET_USE_PERCENT', '100')
+        result = subprocess.run(['bash', str(HERE / 'prune.sh')], env=full, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('entry-', result.stdout + result.stderr)
+        return result.stdout
+
+    def fresh_entries(self, n):
+        # entry-00 was read longest ago (10 days), entry-<n-1> most recently.
+        return [self.entry(f'ab/entry-{i:02d}', 10 - i * 10 / n) for i in range(n)]
+
+    def test_prunes_unread_entries_and_empty_dirs(self):
+        files = {'old/entry-a': 30, 'old/entry-b': 22, 'edge/entry-c': 20, 'fresh/entry-d': 0}
+        for rel, age in files.items():
+            self.entry(rel, age)
+        (self.data / 'empty-old').mkdir()
+        (self.data / 'empty-new').mkdir()
+        for d in ('old', 'empty-old'):
+            os.utime(self.data / d, (self.now - 2 * 86400, self.now - 2 * 86400))
+        out = self.run_prune(SCCACHE_PRUNE_DAYS='21')
+        self.assertIn('age: removed 2 entries', out)
+        self.assertEqual(list((self.data / 'old').iterdir()), [])
+        self.assertFalse((self.data / 'empty-old').exists())
+        self.assertTrue((self.data / 'empty-new').exists())
+        self.assertTrue((self.data / 'edge/entry-c').exists())
+        self.assertTrue((self.data / 'fresh/entry-d').exists())
+
+    def test_under_threshold_no_size_prune(self):
+        files = self.fresh_entries(20)
+        out = self.run_prune(size=self.used() * 100 // 65)
+        self.assertIn('age: removed 0 entries (0 bytes)', out)
+        self.assertIn('nothing to do', out)
+        self.assertTrue(all(f.exists() for f in files))
+
+    def test_over_threshold_prunes_oldest_read_to_low_mark(self):
+        files = self.fresh_entries(40)
+        size = self.used() * 100 // 80
+        out = self.run_prune(size=size)
+        self.assertRegex(out, r'size: disk use 8[01]% > 70%')
+        remaining = [f.exists() for f in files]
+        removed = remaining.index(True)
+        self.assertGreater(removed, 0)
+        self.assertEqual(remaining, [False] * removed + [True] * (len(files) - removed), 'must remove oldest-read first')
+        self.assertIn(f'removed {removed} least-recently-read entries ({removed * 4096} bytes)', out)
+        self.assertLessEqual(self.used(), size * 60 // 100)
+        self.assertGreater(self.used() + 4096, size * 60 // 100, 'must stop at the low mark')
+
+    def test_age_prune_sufficient_no_size_prune(self):
+        old = [self.entry(f'cd/entry-old-{i:02d}', 30) for i in range(20)]
+        fresh = self.fresh_entries(20)
+        out = self.run_prune(size=self.used() * 100 // 80, SCCACHE_PRUNE_DAYS='21')
+        self.assertIn('age: removed 20 entries (81920 bytes)', out)
+        self.assertIn('nothing to do', out)
+        self.assertFalse(any(f.exists() for f in old))
+        self.assertTrue(all(f.exists() for f in fresh))
+
+    def test_thresholds_configurable(self):
+        files = self.fresh_entries(40)
+        size = self.used() * 100 // 80
+        out = self.run_prune(size=size, SCCACHE_MAX_USE_PERCENT='90', SCCACHE_TARGET_USE_PERCENT='50')
+        self.assertIn('nothing to do', out)
+        out = self.run_prune(size=size, SCCACHE_MAX_USE_PERCENT='75', SCCACHE_TARGET_USE_PERCENT='50')
+        self.assertIn('> 75%', out)
+        self.assertLessEqual(self.used(), size // 2)
+        self.assertTrue(files[-1].exists())
+
+    def test_rejects_bad_settings(self):
+        for env in ({'SCCACHE_PRUNE_DAYS': '0'}, {'SCCACHE_PRUNE_DAYS': 'abc'}, {'SCCACHE_PRUNE_DAYS': '-3'},
+                    {'SCCACHE_MAX_USE_PERCENT': '101'}, {'SCCACHE_MAX_USE_PERCENT': '0'},
+                    {'SCCACHE_MAX_USE_PERCENT': '70', 'SCCACHE_TARGET_USE_PERCENT': '80'},
+                    {'SCCACHE_TARGET_USE_PERCENT': 'x'}):
+            with self.subTest(env=env):
+                full = dict(os.environ, SCCACHE_DATA_DIR=str(self.data), **env)
+                result = subprocess.run(['bash', str(HERE / 'prune.sh')], env=full, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 2, result.stdout)
 
 
 STUB = """#!/usr/bin/env bash
