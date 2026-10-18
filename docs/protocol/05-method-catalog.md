@@ -48,7 +48,7 @@ contract on the selected destination; it does not confer host or project access.
 
 The prepared [PR workspace lookup](./methods/workspace.md#pull-request-workspace-lookup)
 adds one read-only router method, `workspace.findByPullRequest`, ahead of the pin.
-Older daemons answer it with method-not-found; clients treat that as no linked workspace.
+`prWorkspaceLookup: 1` gates support.
 
 The prepared onboarding request `host.prepareProviderAdapters` (§5.14 below)
 adds one owner-only fast-path method. Its acknowledgement is not a readiness claim;
