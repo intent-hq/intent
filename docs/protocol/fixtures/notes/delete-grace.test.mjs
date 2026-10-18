@@ -15,7 +15,7 @@ test('grace deletion reserves distinct guarded methods without changing immediat
   assert.match(versioning, /\*\*Documented version:\*\* `15\.0`/);
   assert.ok(versioning.includes('**Version 13.9 —'));
   const catalog = await read('../../05-method-catalog.md');
-  assert.ok(catalog.includes('**450 dispatchable method names**'));
+  assert.ok(catalog.includes('**451 dispatchable method names**'));
   const events = JSON.parse(await read('../../event-types.json'));
   assert.ok(events.types.includes('note:delete-operation'));
 });

@@ -49,6 +49,12 @@ only when this capability is present; older daemons omit it. This is a server su
 flag, independent of the model's `agentFeatures.peerAgents` gate, and does not grant
 caller authority: workspace lifecycle permissions still apply.
 
+**PR workspace lookup (prepared).** `server.capabilities.prWorkspaceLookup: 1`
+advertises [§5.1 `workspace.findByPullRequest`](./workspace.md#pull-request-workspace-lookup)
+and the PR-to-workspace link recording behind it. Clients offer the
+"Open in Original Workspace" link action only for exact integer `1`; older daemons
+omit it. Read it per connection.
+
 The daemon supports a **stable, client-supplied identity** that survives reconnects; the ephemeral
 per-connection id used internally for subscription bookkeeping is retained purely for transport
 bookkeeping and never crosses the wire.

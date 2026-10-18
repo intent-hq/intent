@@ -19,7 +19,7 @@ the frontend's Legacy Import settings. Already imported daemon workspaces remain
 available; source directories and persisted import markers are not deleted.
 The 9.0 removal and 9.1 restoration entries below remain historical records.
 Protocol 14.1 added the startup readiness observations described below.
-The documented surface, including prepared additions, has **450 / 393 / 57**
+The documented surface, including prepared additions, has **451 / 394 / 57**
 dispatchable / router / fast-path methods. Follow [issue #4082](https://github.com/intent-hq/intent/issues/4082)'s
 removal order: frontend callers first, daemon removal second, then these docs
 after the automatic pin advance. Clients gate on capabilities or a minimum
@@ -34,6 +34,13 @@ row). `ws.workspace.applyProposal` stamps `{ kind: "proposal", proposalId, agent
 sourceWorkspaceId }` on the event for the workspace it creates; every other create omits
 it. The field is daemon-set only: `workspace.create` params do not accept it and the row
 does not persist it.
+
+**PR workspace lookup (additive, prepared).** The
+[PR workspace lookup](./methods/workspace.md#pull-request-workspace-lookup) reserves
+the read-only router method `workspace.findByPullRequest`, bringing the documented
+surface to **451 / 394 / 57** (dispatchable / router / fast path). The server hello
+capability `prWorkspaceLookup: 1` gates support. No shipped numeric version is
+claimed here.
 
 **Startup readiness (additive, prepared).** The [startup contract](./startup-readiness.md)
 reserves `system.startupStatus` and numeric error `-32012`, with exact
