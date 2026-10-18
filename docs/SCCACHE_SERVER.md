@@ -16,7 +16,7 @@ CI runner ──HTTPS + Bearer token──▶ Caddy :443 ──▶ rclone serve 
 | `caddy-override.conf` | `/etc/systemd/system/caddy.service.d/sccache.conf` | Loads `/etc/sccache/caddy.env`; drops `--environ` so tokens never reach the journal |
 | `check-caddy-env.sh` | `/usr/local/lib/sccache/` | `ExecStartPre`: refuses empty, short, or identical tokens |
 | `sccache-webdav.service` | `/etc/systemd/system/` | rclone WebDAV on loopback only, as user `sccache` |
-| `prune.sh`, `sccache-prune.{service,timer}` | `/usr/local/lib/sccache/`, `/etc/systemd/system/` | Daily prune |
+| `prune.sh`, `sccache-prune.{service,timer}` | `/usr/local/lib/sccache/`, `/etc/systemd/system/` | Daily prune: age window, then a hard cap on disk use |
 | `bootstrap.sh` | — | Idempotent installer for all of the above, the cache volume (`--format-disk`) and the firewall |
 | `test_server.py` | — | Access-matrix test (runs in monorepo CI `shell-tests`) |
 
@@ -137,11 +137,20 @@ token leaks, rotate first and update the secret second.
 ## Disk sizing and prune tuning
 
 `sccache-prune.timer` runs `prune.sh` daily (randomized within an hour,
-catching up after downtime). It deletes entries not read for
-`SCCACHE_PRUNE_DAYS` days (default 21) and then removes empty directories
-older than an hour (directories it just emptied go on the next run). If disk
-use is still above `SCCACHE_MAX_USE_PERCENT` (default 70), it shortens the
-window one day at a time, down to one day.
+catching up after downtime). Each run:
+
+1. **Age:** deletes entries not read for `SCCACHE_PRUNE_DAYS` days (default 21).
+2. **Hard cap:** if disk use is still above `SCCACHE_MAX_USE_PERCENT` (default
+   70), deletes the least-recently-read entries (oldest access time first)
+   until use is at or below `SCCACHE_TARGET_USE_PERCENT` (default 60).
+3. **Empty directories:** removes those not modified in the last hour
+   (directories it just emptied go on the next run).
+
+It logs counts and bytes for each step, never entry names. Use is measured for
+the whole filesystem, which is why the cache gets its own volume (see
+[Disks](#disks)): on a shared filesystem, other data counts against the cap and
+can push the whole cache out. The run logs a warning when use is still above
+the cap after pruning.
 
 "Not read" uses file access time. Ubuntu's default `relatime` mount option
 updates it at most once a day per file, which suits a day-granular window; do
@@ -153,7 +162,11 @@ overwritten):
 ```bash
 SCCACHE_PRUNE_DAYS=21
 SCCACHE_MAX_USE_PERCENT=70
+SCCACHE_TARGET_USE_PERCENT=60
 ```
+
+`SCCACHE_TARGET_USE_PERCENT` must not exceed `SCCACHE_MAX_USE_PERCENT`; the
+gap between them sets how much headroom one size prune frees.
 
 Check the effect with:
 
@@ -164,9 +177,11 @@ sudo du -sh /srv/sccache
 systemctl list-timers sccache-prune.timer
 ```
 
-Sizing rule of thumb: watch `du` for a week after go-live. If steady-state use
-after prune is well above 70% even at short windows, add disk; if it sits far
-below, lengthen `SCCACHE_PRUNE_DAYS` for a better hit rate.
+Sizing rule of thumb: watch the prune log for a week after go-live. If the
+size step runs most days, the age window is longer than the disk can hold, so
+the cap is evicting entries that are still in use: add disk or accept the lower
+hit rate. If use sits far below the cap, lengthen `SCCACHE_PRUNE_DAYS` for a
+better hit rate.
 
 ## Health check
 
