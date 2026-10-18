@@ -67,21 +67,44 @@ cold caches.
    MagicDNS name. Do this before the bootstrap: once the firewall applies,
    public SSH is refused (the current session stays up). The bootstrap refuses
    to touch the firewall if `tailscale0` does not exist.
-3. Create a DNS A record, e.g. `cache.<our-domain>`, pointing at
-   `172.96.141.217`. It must resolve before Caddy can get a certificate.
+3. No DNS name is needed: CI reaches the cache at `https://172.96.141.217`.
+   Caddy gets a certificate for the IP itself from Let's Encrypt (see
+   [TLS certificate](#tls-certificate)); port 80 must be reachable from the
+   internet for the HTTP-01 challenge, which the firewall allows.
 4. On the box, from a checkout of this repo:
 
    ```bash
    git clone https://github.com/intent-hq/intent.git && cd intent
    lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT   # confirm which device is unused
-   sudo infra/sccache/bootstrap.sh cache.<our-domain> --format-disk /dev/nvme1n1
+   sudo infra/sccache/bootstrap.sh 172.96.141.217 --format-disk /dev/nvme1n1
    # or combine with a free partition on the OS drive:
-   sudo infra/sccache/bootstrap.sh cache.<our-domain> --format-disk /dev/nvme1n1 --format-disk /dev/nvme0n1p4
+   sudo infra/sccache/bootstrap.sh 172.96.141.217 --format-disk /dev/nvme1n1 --format-disk /dev/nvme0n1p4
    ```
+
+   The first argument is the site address that Caddy serves and gets a
+   certificate for: the IP, or a host name if one is added later. The
+   bootstrap stops if the installed Caddy is older than 2.10, which lacks ACME
+   profiles.
 
    Re-running is safe: it keeps the tokens, data and volume, reinstalls the
    config and restarts the services. `--no-firewall` skips the `ufw` step.
 5. Confirm with the [health check](#health-check).
+
+## TLS certificate
+
+Let's Encrypt issues certificates for IP addresses only under its `shortlived`
+profile ([announcement](https://letsencrypt.org/2026/01/15/6day-and-ip-general-availability)),
+so the Caddyfile asks for that profile explicitly. Without it, Caddy would use
+its internal CA for an IP site, which sccache rejects. The certificates last
+about 6 days, and Caddy renews them automatically every few days, over HTTP-01
+(port 80) or TLS-ALPN-01 (port 443).
+
+If renewal fails for longer than the certificate's remaining life (at most
+about 6 days), clients reject the certificate. sccache then reports storage
+errors and CI builds uncached until it renews. Watch the expiry with the
+[health check](#health-check), and look for `obtain` / `renew` errors with
+`journalctl -u caddy`. Typical causes: port 80 or 443 blocked, the box being
+down, or Let's Encrypt rate limits.
 
 ## Disks
 
@@ -120,12 +143,12 @@ sudo grep TOKEN /etc/sccache/caddy.env
 
 Set the `SCCACHE_RW_TOKEN` value as the GitHub org secret
 `INTENT_SCCACHE_TOKEN` (shared with intentd, cloudlands-fe and intent), and the
-endpoint as the org Actions variable `INTENT_SCCACHE_ENDPOINT=https://cache.<our-domain>`.
+endpoint as the org Actions variable `INTENT_SCCACHE_ENDPOINT=https://172.96.141.217`.
 
 ### Rotation
 
 ```bash
-sudo infra/sccache/bootstrap.sh cache.<our-domain> --rotate-rw   # or --rotate-ro
+sudo infra/sccache/bootstrap.sh 172.96.141.217 --rotate-rw   # or --rotate-ro
 sudo grep SCCACHE_RW_TOKEN /etc/sccache/caddy.env
 ```
 
@@ -188,9 +211,11 @@ better hit rate.
 From anywhere (replace the token with the read-only one from the box):
 
 ```bash
-curl -sS -o /dev/null -w '%{http_code}\n' https://cache.<our-domain>/            # expect 401
+echo | openssl s_client -connect 172.96.141.217:443 2>/dev/null \
+  | openssl x509 -noout -issuer -enddate                                        # Let's Encrypt; notAfter a few days out
+curl -sS -o /dev/null -w '%{http_code}\n' https://172.96.141.217/            # expect 401
 curl -sS -o /dev/null -w '%{http_code}\n' -X PROPFIND -H 'Depth: 0' \
-  -H "Authorization: Bearer $RO_TOKEN" https://cache.<our-domain>/                 # expect 207
+  -H "Authorization: Bearer $RO_TOKEN" https://172.96.141.217/                 # expect 207
 ```
 
 On the box (over Tailscale: `ssh intent-cache`):
@@ -214,7 +239,7 @@ storage read/write errors.
   /srv/sccache -mindepth 1 -delete && sudo systemctl start sccache-webdav`.
   The next main-branch runs refill it.
 - **Decommission:** delete the org variable, then the `INTENT_SCCACHE_TOKEN`
-  secret, then the box and DNS record.
+  secret, then the box.
 
 ## Testing changes
 
