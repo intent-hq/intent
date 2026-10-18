@@ -9,6 +9,10 @@
 # filesystem, so the cache should have a dedicated volume (bootstrap.sh
 # --format-disk); on a shared filesystem other data can push it out entirely.
 #
+# A fresh ext4 volume has a root-owned lost+found at its root, unreadable to
+# the sccache user; it is not cache data and is skipped. Other unreadable
+# directories are skipped with a warning; any other find error fails the run.
+#
 # "Read" uses atime. Ubuntu's default relatime updates atime at most once a
 # day per file, which is enough for a day-granular window and for ordering.
 set -euo pipefail
@@ -26,6 +30,34 @@ done
 if [ "$max_use" -lt 1 ] || [ "$max_use" -gt 100 ]; then fail "SCCACHE_MAX_USE_PERCENT must be 1-100"; fi
 if [ "$target_use" -lt 1 ] || [ "$target_use" -gt "$max_use" ]; then fail "SCCACHE_TARGET_USE_PERCENT must be 1-SCCACHE_MAX_USE_PERCENT"; fi
 [ -d "$data_dir" ] || { echo "prune: $data_dir does not exist" >&2; exit 1; }
+
+# find's exit status is 1 for an unreadable directory and for real errors
+# alike, so judge by its messages instead: find_cache keeps them in errlog
+# and check_find fails on anything but "Permission denied".
+errlog="$(mktemp)"
+trap 'rm -f -- "$errlog"' EXIT
+export LC_ALL=C
+
+# find_cache [find expression]: files and directories under data_dir, without
+# lost+found. -prune does not combine with -depth/-delete; step 3 skips
+# lost+found its own way.
+find_cache() {
+  find "$data_dir" -xdev -path "$data_dir/lost+found" -prune -o "$@" 2>>"$errlog" || true
+}
+
+check_find() {
+  local denied other
+  denied="$(grep -c ': Permission denied$' "$errlog" || true)"
+  other="$(grep -v ': Permission denied$' "$errlog" | sed "s/'[^']*'/<path>/" || true)"
+  : > "$errlog"
+  if [ -n "$other" ]; then
+    printf 'prune: find failed: %s\n' "$other" >&2
+    exit 1
+  fi
+  if [ "$denied" -gt 0 ]; then
+    echo "prune: warning: skipped $denied unreadable paths" >&2
+  fi
+}
 
 # Prints "<size bytes> <used bytes>" for the filesystem holding data_dir.
 fs_bytes() {
@@ -46,7 +78,8 @@ while IFS=' ' read -r -d '' blocks path; do
   rm -f -- "$path"
   count=$((count + 1))
   bytes=$((bytes + blocks * 512))
-done < <(find "$data_dir" -xdev -type f -atime +"$((days - 1))" -printf '%b %p\0')
+done < <(find_cache -type f -atime +"$((days - 1))" -printf '%b %p\0')
+check_find
 echo "prune: age: removed $count entries ($bytes bytes) not read in $days days"
 
 # Step 2: hard cap on disk use.
@@ -61,7 +94,8 @@ if [ "$use" -gt "$max_use" ]; then
     rm -f -- "$path"
     count=$((count + 1))
     bytes=$((bytes + blocks * 512))
-  done < <(find "$data_dir" -xdev -type f -printf '%A@ %b %p\0' | sort -z -n)
+  done < <(find_cache -type f -printf '%A@ %b %p\0' | sort -z -n)
+  check_find
   echo "prune: size: disk use ${use}% > ${max_use}%; removed $count least-recently-read entries ($bytes bytes) to reach ${target_use}%"
 else
   echo "prune: size: disk use ${use}% <= ${max_use}%; nothing to do"
@@ -70,7 +104,11 @@ fi
 # Step 3: leave directories modified in the last hour alone so a concurrent
 # MKCOL + PUT from sccache does not lose its freshly created parent.
 # Directories this run just emptied count as modified and go on the next run.
-dirs="$(find "$data_dir" -xdev -mindepth 1 -type d -empty -mmin +60 -print -delete | wc -l)"
+# Starts below data_dir so lost+found (always empty, so a deletion candidate)
+# is never visited.
+dirs="$({ find "$data_dir" -xdev -mindepth 1 -maxdepth 1 -type d ! -name lost+found -print0 |
+  xargs -0 -r sh -c 'exec find "$@" -xdev -type d -empty -mmin +60 -print -delete' sh || true; } 2>>"$errlog" | wc -l)"
+check_find
 use="$(use_percent)"
 echo "prune: removed $dirs empty directories; disk use now ${use}%"
 if [ "$use" -gt "$max_use" ]; then
