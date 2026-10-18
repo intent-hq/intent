@@ -41,7 +41,7 @@ list-row preview cap). A list-shaped `AgentLite` row carries
 `lastAgentResponseTruncated` / `lastUserMessageTruncated` / `digestTruncated` and
 `metadata.completionReportTruncated` / `metadata.attentionRequestReasonTruncated`
 (`true` only, omitted otherwise) when the list cap shortened that field, so clients
-can mark the text as a prefix or read the full value with `agent.get`. Older daemons
+can mark the text as a prefix or read the uncapped value with `agent.get`. Older daemons
 omit the flags; clients must not read their absence as proof a value is complete.
 
 **PR workspace lookup (additive, prepared).** The
