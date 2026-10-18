@@ -404,6 +404,11 @@ takes precedence. Keep tokens out of tracked files. If changing the endpoint
 or credentials while a local sccache server is running, stop that server first
 with `sccache --stop-server` so the next build picks up the new environment.
 
+CI may use the self-hosted cache instead (see
+[docs/RELEASING.md](docs/RELEASING.md)); its `INTENT_SCCACHE_*` settings apply
+only to CI jobs. Local builds keep using the Depot settings above, because
+sccache keys include absolute paths and local builds rarely reuse CI entries.
+
 ### Bash 3 compatibility checks
 
 The `shell-tests-bash3` CI job runs on Depot Linux with a checksum-verified
