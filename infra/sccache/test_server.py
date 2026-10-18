@@ -260,6 +260,20 @@ class Prune(unittest.TestCase):
         self.assertFalse(any(f.exists() for f in old))
         self.assertTrue(all(f.exists() for f in fresh))
 
+    def test_insufficient_reclaim_empties_cache_and_warns(self):
+        files = self.fresh_entries(10)
+        used = self.used()
+        # Fake df adds 90% of the filesystem as non-cache data, so even an
+        # empty cache stays above the cap.
+        (self.bin / 'df').write_text(FAKE_DF.replace('$(du -sB1 "$dir" | cut -f1)', '$(( $(du -sB1 "$dir" | cut -f1) + FAKE_DF_SIZE * 9 / 10 ))'))
+        full = dict(os.environ, SCCACHE_DATA_DIR=str(self.data), PATH=f'{self.bin}:{os.environ["PATH"]}', FAKE_DF_SIZE=str(used * 20))
+        result = subprocess.run(['bash', str(HERE / 'prune.sh')], env=full, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('removed 10 least-recently-read entries', result.stdout)
+        self.assertFalse(any(f.exists() for f in files))
+        self.assertIn('warning: disk use is still above 70%', result.stderr)
+        self.assertNotIn('entry-', result.stdout + result.stderr)
+
     def test_thresholds_configurable(self):
         files = self.fresh_entries(40)
         size = self.used() * 100 // 80
