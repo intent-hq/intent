@@ -637,20 +637,22 @@ promotions of deleted prereleases are not preserved by this retention policy.
 ## CI runner routing
 
 Jobs in intent, intentd and cloudlands-fe prefer compatible self-hosted runners.
-Each repository has a reusable `runner-route.yml`; its small Depot probe runs
-without checkout so it remains available during a self-hosted outage. Existing
-component CI route jobs use the same tested probe. Utility jobs, consumer checks,
-browser suites and release matrices all consume its decisions. Original Depot
-labels remain fallback keys, preserving the workload's CPU/memory class.
+intent and intentd share one probe: each has a reusable `runner-route.yml`, and
+intentd's CI route job is an inline copy. The probe runs on Depot without checkout,
+so it stays available during a self-hosted outage. intentd and cloudlands-fe pull
+requests also run intent's probe through `consumer-checks.yml`. Utility jobs,
+consumer checks, browser suites and release matrices consume its decisions.
+Original Depot labels remain fallback keys, preserving the workload's CPU/memory
+class. cloudlands-fe routes its own Linux jobs with a separate, simpler probe in
+`intent-pr.yml`: a fixed queue threshold of eight and no maintenance overrides.
 
-The probe checks online runners and paginated queued/running jobs across all
+The shared probe checks online runners and paginated queued/running jobs across all
 three repositories. Linux x64 accepts queue depth up to the smaller of eight and
 the online slot count. Other platforms require explicitly idle runners with room
 for queued demand. Queued jobs older than 15 minutes, missing compatible runners,
-unreadable capacity (including sibling queues), or maintenance overrides select
-Depot; each platform logs its reason. `CI_LINUX_RUNNER_DISABLED`,
-`CI_WINDOWS_RUNNER_DISABLED` and `CI_MACOS_RUNNER_DISABLED` disable the relevant
-self-hosted pool when set to `true`. Fork PRs never select persistent runners.
+unreadable capacity (including sibling queues), or
+[maintenance overrides](#maintenance-overrides) select the hosted fallback; each
+platform logs its reason. Fork PRs never select persistent runners.
 
 `CI_QUEUE_READ_TOKEN` needs organization Self-hosted runners read and Actions read
 on all three repositories. The probe falls back to repository runner listing if
@@ -670,9 +672,78 @@ uses its hosted fallback (including GitHub's native Intel Mac image where used).
 Browser shards retain their worker counts and browser identities, with per-runner
 browser caches and dependency installation for persistent machines.
 
-Run `python3 -S -B scripts/test_runner_policy.py` in each repository to exercise
+Run `python3 -S -B scripts/test_runner_policy.py` in intent and intentd to exercise
 routing fixtures and reject accidental cloud pins. The frontend's existing
 Depot runner Vitest suite and backend/monorepo runner tests invoke it in CI.
+
+### Maintenance overrides
+
+Each override is an Actions variable. Setting it to `true` sends that platform's
+routed jobs to the hosted fallback, whatever the machine's state: Depot, or
+GitHub-hosted `macos-latest-large` for Intel macOS. Any other value, or no
+variable, restores self-hosted preference. The shared probe reads the variables of
+the repository whose workflow run is executing. For a called workflow, that is the
+caller: consumer checks on a cloudlands-fe pull request read cloudlands-fe's
+variables. So when a machine is unhealthy, set the override in intent and intentd,
+and in cloudlands-fe to cover its consumer checks. cloudlands-fe's own
+`intent-pr.yml` routing ignores overrides. It selects Depot only when no tinybox
+runner is online, so stop the tinybox runner services to keep its jobs off a broken
+machine that is still online.
+
+| Variable | Runner labels covered | Route log reason when set |
+|---|---|---|
+| `CI_LINUX_RUNNER_DISABLED` | `self-hosted, Linux, X64` and `self-hosted, Linux, ARM64` | `linux routing: burst=true (disabled for maintenance)`; ARM64 logs as `arm routing` |
+| `CI_WINDOWS_RUNNER_DISABLED` | `self-hosted, Windows, X64` | `windows routing: burst=true (disabled for maintenance)` |
+| `CI_MACOS_RUNNER_DISABLED` | `self-hosted, macOS, ARM64` and `self-hosted, macOS, X64` | `macos routing: burst=true (disabled for maintenance)`; X64 logs as `intel routing` |
+
+When the probe itself fails (fork PRs, or runner or job listing errors), every
+platform instead logs `burst=true (probe failed (...))`, with or without an
+override. Read the reason from a same-repository run.
+
+Overrides only affect routed jobs. Workflows that name a machine directly keep
+targeting it: intentd's `tinybox-prune.yml`, `macos-prune.yml`, `m1mac-smoke.yml`
+and `provision-m1mac.yml`. `windows-prune.yml` is mixed: its `prune` job names
+5090pc, but it needs the routed `safety-tests` job to pass first. While the Windows
+override is on, those tests run on Depot, so a passing run proves nothing about
+5090pc. Once the override is off, the tests run on 5090pc, and a failure there skips
+the disk cleanup.
+
+Turning an override on: in each repository it should cover, set the variable and
+`CI_<PLATFORM>_RUNNER_DISABLED_REASON`. The reason is one line with the UTC date,
+what is wrong and an evidence link (a failed run or PR). GitHub variables have no
+description field, so `gh variable list` showing the two together is the only record
+of why a platform is on the hosted fallback:
+
+```bash
+gh variable set CI_LINUX_RUNNER_DISABLED --repo intent-hq/<repo> --body true
+gh variable set CI_LINUX_RUNNER_DISABLED_REASON --repo intent-hq/<repo> \
+  --body "<YYYY-MM-DD>: <what is wrong>; see <run or PR URL>"
+```
+
+Turning it off:
+1. Check the requirements below on the machine itself. Maintenance workflows may run
+   their checks on Depot while the override is on.
+2. Delete both variables in every repository where they are set.
+3. Watch the next pull request and merge-queue runs:
+   - The route log reason must no longer be `disabled for maintenance`.
+   - Routed jobs must land on the machine and pass.
+   - Linux shows `burst=false` when the queue has room. Windows and macOS still show
+     `burst=true` with a queue-depth reason whenever their single slot is busy.
+4. Restore the override at the first runner-caused failure.
+
+#### Self-hosted machine requirements
+
+These are lasting facts about each machine. Current reasons belong in the
+`*_REASON` variables, not here.
+
+| Machine | Slots | Requirements and known limits |
+|---|---|---|
+| tinybox (Linux x64) | 8 (`tinybox` to `tinybox-8`), shared by all three repositories | `tinybox-prune.yml` aims to keep 100 GiB free on `/raid` but stops when it runs out of eligible files; a full `/raid` crashed queue runs ([intentd#2421](https://github.com/intent-hq/intentd/pull/2421)). Node is not installed system-wide, so every job that runs Node must use `actions/setup-node` first ([intentd#2467](https://github.com/intent-hq/intentd/pull/2467) adds a routing-policy test for this). Git is 2.34.1. |
+| 5090pc (Windows x64) | 1 | `windows-prune.yml` keeps 40 GiB free; a full disk failed Rust toolchain installs (`os error 112`). Its safety tests need PowerShell 7 (`pwsh`); without it they fail with `pwsh: command not found` and the cleanup is skipped ([run 38896319862](https://github.com/intent-hq/intentd/actions/runs/38896319862)). |
+| m1mac (macOS ARM64) | 1 | Too slow for intentd's merge-queue `build (aarch64-apple-darwin)` job, even with the compiler cache: over 60 minutes cold and over 26 minutes on an unchanged rerun, against about 8 minutes on Depot ([run 39120530357](https://github.com/intent-hq/intentd/actions/runs/39120530357), [run 39124725329](https://github.com/intent-hq/intentd/actions/runs/39124725329)). Clippy compiles are not cacheable by sccache, and cache keys include the checkout path, so Depot's entries do not match. `actions/setup-python` cannot install there (`mkdir: /Users/runner: Permission denied`); the system Python is 3.9.6. |
+
+A single-slot machine runs its routed jobs one after another, so the combined time
+of a run's jobs on that platform must fit the merge-queue timeout.
 
 Rust compiler caching uses Depot Cache through sccache’s WebDAV backend, using
 the short-lived configuration inherited from the runner. Enable automatic Depot
