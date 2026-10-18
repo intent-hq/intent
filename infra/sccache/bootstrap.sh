@@ -4,7 +4,7 @@
 # config.
 #
 # Usage (as root, from a checkout of this repo):
-#   infra/sccache/bootstrap.sh <domain> [--format-disk <dev>]... \
+#   infra/sccache/bootstrap.sh <site> [--format-disk <dev>]... \
 #     [--rotate-rw] [--rotate-ro] [--no-firewall]
 #
 #   --format-disk <dev>  Use <dev> (a whole unpartitioned disk such as
@@ -15,6 +15,9 @@
 #                        the cache volume are left alone on re-runs.
 #   --rotate-rw/-ro      Replace the read-write / read-only token.
 #   --no-firewall        Do not touch ufw.
+#
+# <site> is the public IP (e.g. 172.96.141.217) or a host name; Caddy gets
+# its certificate from Let's Encrypt's shortlived profile (needs Caddy >= 2.10).
 #
 # Installs Caddy (official apt repo), rclone, ufw and lvm2; creates the
 # `sccache` user and /srv/sccache; writes /etc/sccache/caddy.env (tokens,
@@ -45,7 +48,7 @@ log() { echo "bootstrap: $*"; }
 die() { echo "bootstrap: error: $*" >&2; exit 1; }
 
 usage() {
-  echo "usage: $0 <domain> [--format-disk <dev>]... [--rotate-rw] [--rotate-ro] [--no-firewall]" >&2
+  echo "usage: $0 <site> [--format-disk <dev>]... [--rotate-rw] [--rotate-ro] [--no-firewall]" >&2
   exit 2
 }
 
@@ -68,7 +71,7 @@ parse_args() {
   done
   [ -n "$domain" ] || usage
   if [[ ! "$domain" =~ ^[A-Za-z0-9.-]+$ ]]; then
-    echo "bootstrap: domain must be a bare host name, e.g. cache.example.com" >&2
+    echo "bootstrap: site must be a bare IP address or host name, e.g. 172.96.141.217" >&2
     exit 2
   fi
 }
@@ -170,6 +173,24 @@ install_packages() {
   apt-get install -y -q caddy
 }
 
+# ACME profiles (Let's Encrypt `shortlived`, required for IP certificates)
+# arrived in Caddy 2.10.
+min_caddy_minor=10
+check_caddy_version() {
+  local version major minor
+  version="$(caddy version 2>/dev/null | awk '{print $1}')"
+  if [[ "$version" =~ ^v([0-9]+)\.([0-9]+)\. ]]; then
+    major="${BASH_REMATCH[1]}"
+    minor="${BASH_REMATCH[2]}"
+  else
+    die "could not read the Caddy version (got '${version:-nothing}')"
+  fi
+  if [ "$major" -lt 2 ] || { [ "$major" -eq 2 ] && [ "$minor" -lt "$min_caddy_minor" ]; }; then
+    die "Caddy $version is too old: IP certificates need ACME profiles (Caddy >= 2.$min_caddy_minor). Install Caddy from the official repo (see docs/SCCACHE_SERVER.md)."
+  fi
+  log "Caddy $version supports ACME profiles"
+}
+
 new_token() { openssl rand -hex 32; }
 
 # Print the current value of KEY from the env file, or nothing.
@@ -258,6 +279,7 @@ main() {
   check_os
   check_firewall_preconditions
   install_packages
+  check_caddy_version
   setup_volume
   install_files
   write_env

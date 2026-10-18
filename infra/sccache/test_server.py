@@ -7,6 +7,7 @@ server tests skip when either is missing. The prune and env-check tests need
 only bash and coreutils.
 """
 from pathlib import Path
+import json
 import os
 import shutil
 import socket
@@ -52,14 +53,26 @@ def caddy_env(site, upstream, home):
 
 @unittest.skipUnless(CADDY, 'caddy not installed (set CADDY_BIN)')
 class Validate(unittest.TestCase):
-    def test_caddyfile_validates_for_tls_site(self):
+    def caddy(self, cmd, site):
         with tempfile.TemporaryDirectory() as home:
-            env = caddy_env('cache.example.com', '127.0.0.1:8080', home)
+            env = caddy_env(site, '127.0.0.1:8080', home)
             del env['CADDY_ADMIN']
-            result = subprocess.run([CADDY, 'validate', '--adapter', 'caddyfile', '--config', str(CADDYFILE)],
-                                    env=env, capture_output=True, text=True)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertNotIn(RW, result.stdout + result.stderr)
+            return subprocess.run([CADDY, cmd, '--adapter', 'caddyfile', '--config', str(CADDYFILE)],
+                                  env=env, capture_output=True, text=True)
+
+    def test_caddyfile_validates(self):
+        for site in ('172.96.141.217', 'cache.example.com'):
+            with self.subTest(site=site):
+                result = self.caddy('validate', site)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn(RW, result.stdout + result.stderr)
+
+    def test_ip_site_uses_public_acme_shortlived(self):
+        result = self.caddy('adapt', '172.96.141.217')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        policies = json.loads(result.stdout)['apps']['tls']['automation']['policies']
+        self.assertEqual(policies, [{'subjects': ['172.96.141.217'],
+                                     'issuers': [{'module': 'acme', 'profile': 'shortlived'}]}])
 
 
 @unittest.skipUnless(CADDY and RCLONE, 'caddy and rclone not installed (set CADDY_BIN, RCLONE_BIN)')
@@ -303,7 +316,7 @@ case "$name" in lsblk) for a in TYPE MOUNTPOINT NAME FSTYPE; do case "$*" in *" 
 [ -f "$STUB_DIR/$key.out" ] && cat "$STUB_DIR/$key.out"
 exit "$(cat "$STUB_DIR/$key.rc" 2>/dev/null || echo 0)"
 """
-STUBBED = ('ip', 'ufw', 'tailscale', 'lsblk', 'pvs', 'vgs', 'lvs', 'wipefs', 'pvcreate', 'vgcreate', 'lvcreate',
+STUBBED = ('ip', 'ufw', 'tailscale', 'caddy', 'lsblk', 'pvs', 'vgs', 'lvs', 'wipefs', 'pvcreate', 'vgcreate', 'lvcreate',
            'blkid', 'mkfs.ext4', 'mountpoint', 'mount', 'df')
 
 
@@ -354,6 +367,20 @@ class Bootstrap(unittest.TestCase):
         for args in ('', '--format-disk', '--format-disk nvme1n1 cache.example.com', 'a b', 'https://x', '--bogus x'):
             with self.subTest(args=args):
                 self.assertEqual(self.run_fn(f'parse_args {args}').returncode, 2)
+
+    def test_parse_args_accepts_ip_site(self):
+        result = self.run_fn('parse_args 172.96.141.217; echo "$domain"')
+        self.assertEqual(result.stdout.strip(), '172.96.141.217', result.stderr)
+
+    def test_check_caddy_version(self):
+        for out, ok in (('v2.10.2 h1:abc=\n', True), ('v2.11.0 h1:x\n', True), ('v3.0.0\n', True),
+                        ('v2.9.1 h1:abc=\n', False), ('v2.6.2\n', False), ('', False), ('garbage\n', False)):
+            with self.subTest(out=out):
+                self.stub('caddy', out)
+                result = self.run_fn('check_caddy_version')
+                self.assertEqual(result.returncode == 0, ok, result.stdout + result.stderr)
+                if not ok:
+                    self.assertTrue('too old' in result.stderr or 'could not read' in result.stderr, result.stderr)
 
     def test_check_os(self):
         (self.dir / 'os-release').write_text('ID=ubuntu\nVERSION_ID="24.04"\n')
