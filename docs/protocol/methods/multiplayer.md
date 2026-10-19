@@ -305,7 +305,7 @@ and does not replace the private-conversation gate.
 | discussion.conversations | workspaceId (req), beforeId? (exclusive conversation ID), limit? (integer 1–100, default 50) | `{ conversations: DiscussionConversation[], hasMore: boolean }` — only conversations accessible to the caller |
 | discussion.recipients | workspaceId (req), query? (profile search string, at most 256 UTF-8 bytes), afterPrincipalId? (exclusive principal ID), limit? (integer 1–100, default 50) | `{ members: DiscussionAuthor[], hasMore: boolean }` — current effective workspace members, including offline members, excluding the caller |
 | discussion.list | workspaceId (req), conversationId? (default `"default"`), beforeSequence? (positive integer, exclusive), afterSequence? (nonnegative integer, exclusive; mutually exclusive with beforeSequence), limit? (integer 1–100, default 50) | `{ messages: DiscussionMessage[], hasMore: boolean, conversation: DiscussionConversation }` |
-| discussion.send | workspaceId (req), conversationId? (default `"default"` when neither target field is supplied), recipientPrincipalIds? (1–31 distinct other current workspace members; mutually exclusive with conversationId), messageId (req, nonblank string, at most 128 UTF-8 bytes), body (req, nonblank string, at most 16384 UTF-8 bytes), replyToMessageId? (existing message in the same conversation; requires `discussionMessageActions: 1`) | `{ message: DiscussionMessage, conversation: DiscussionConversation }` |
+| discussion.send | workspaceId (req), conversationId? (default `"default"` when neither target field is supplied), recipientPrincipalIds? (1–31 distinct other current workspace members; mutually exclusive with conversationId), messageId (req, nonblank string, at most 128 UTF-8 bytes), body (req, nonblank string, at most 16384 UTF-8 bytes), replyToMessageId? (existing message in the same conversation; requires `discussionMessageActions: 1`), recipientAgentIds? (up to 31 distinct explicit agent recipients; requires `discussionAgentMessaging: 1`, see below) | `{ message: DiscussionMessage, conversation: DiscussionConversation }` |
 | discussion.react | workspaceId (req), conversationId? (default `"default"`), messageId (req, server message ID), reaction (req, `"👍"` or `"🙂"`), active (req, boolean desired state) | `{ messageId, reactions: DiscussionReaction[], reactionVersion }`; requires `discussionMessageActions: 1` |
 
 `DiscussionConversation` is `{ id, workspaceId, kind, participants, createdAt }`.
@@ -350,7 +350,8 @@ uses the returned conversation ID for subsequent sends and reads.
   "replyToMessageId": null,
   "replyTo": null,
   "reactions": [],
-  "reactionVersion": 0
+  "reactionVersion": 0,
+  "recipientAgentIds": []
 }
 ```
 
@@ -361,13 +362,15 @@ uses the returned conversation ID for subsequent sends and reads.
   messages within a conversation and is its pagination cursor; gaps are allowed.
   Clients do not compare sequence numbers across conversations, order by local
   clocks, or assume consecutive values.
-- `author` is a snapshot of the connection's authenticated principal at send
-  time. The three profile fields are always present and nullable. Request fields
+- `author` is a snapshot of the connection's authenticated principal, or the
+  bound sending agent under the agent-messaging extension, at send time.
+  The three profile fields are always present and nullable. Request fields
   cannot choose an author, sequence, timestamp, or workspace other than the
   authorized `workspaceId`. The snapshot is immutable; render its profile fields
   without resolving its principal ID against a current principal registry.
 - `createdAt` is a server RFC-3339 timestamp. `body` is plain text; line breaks
-  are preserved. Render it as text, never HTML or an agent command.
+  are preserved. Render it as text, never HTML. Text or a navigational agent
+  reference alone never requests agent delivery; only explicit `recipientAgentIds` do.
 - On a daemon advertising message actions, `replyToMessageId`, `replyTo`,
   `reactions`, and `reactionVersion` are always present. Older daemons may omit
   those fields; absence does not establish support for the extension.
@@ -407,6 +410,94 @@ Workspace references may be represented by existing canonical workspace links
 in the plain-text body and rendered as navigable chips. The client must preserve
 the target workspace/backend and validate link kinds; reference text is never
 HTML, executable code, or permission to invoke an agent.
+
+#### Explicit agent messaging (prepared)
+
+Exactly integer `discussionAgentMessaging: 1` on both hello and
+`system.capabilities` gates explicit agent recipients and agent-authored replies.
+This remains part of the unreleased Multiplayer Labs discussion feature.
+Clients must retain an addressed draft when the capability is absent or unknown;
+never drop its recipients and silently post an ordinary message instead.
+
+`recipientAgentIds` selects the agents to receive **this message only**. It is
+independent of human conversation participants, defaults to an empty array,
+and accepts at most 31 distinct, nonempty agent IDs from the same workspace.
+Retired or deleted agents and an agent sender's own ID are invalid targets.
+On a supporting daemon every message includes `recipientAgentIds`, including
+an empty array for ordinary messages. The recipient set is part of retry
+identity: reordering is immaterial, but adding or removing a recipient with the
+same retry key is invalid. Human and agent sender identities have separate
+retry scopes.
+
+The initial extension addresses agents only in the default workspace-wide
+discussion. Private-conversation targeting and agent access remain forbidden:
+ordinary agent transcripts are workspace-visible, so granting private history
+without restricting those transcripts would expose private content.
+Human private conversations keep their existing behavior.
+
+The daemon binds the author to the authenticated human or calling agent; no
+request field can impersonate either. An agent author has `agentId`,
+`principalId: null`, and its captured display name. Human author snapshots keep
+their existing shape with a nonnull `principalId` and no `agentId`.
+Clients identify agent authors explicitly and never compare a null principal
+with the signed-in human to determine ownership. Reply quotes preserve the
+same author snapshot. Imported snapshots are historical attribution, not an
+identity or permission grant on the destination.
+
+For example, an agent-authored message carries:
+
+```json
+{
+  "principalId": null,
+  "agentId": "agent-4fbdc035-e235-43f9-8c15-48d787f05e09",
+  "login": null,
+  "displayName": "Reviewer",
+  "avatarUrl": null
+}
+```
+
+Before being addressed, an agent cannot list or read discussion history or
+post into the discussion. An accepted addressed message establishes durable
+access for that agent to that conversation. The agent receives the addressed
+message and conversation identifiers, without automatically loading history.
+It may then explicitly fetch bounded pages with `ws.discussion.list` and post
+with `ws.discussion.send`; `ws.discussion.conversations` discovers only its
+authorized conversations. These tools bind the agent and workspace from the
+MCP session, never from a caller-supplied author. History uses the same paging
+bounds as human reads. Retired/deleted agents cannot use a previous grant.
+
+The agent-facing calls are:
+
+```javascript
+await ws.discussion.conversations({ limit: 50 });
+await ws.discussion.list("default", { limit: 50 });
+await ws.discussion.send("default", "I checked the change.", {
+  messageId: "unique-reply-key",
+});
+```
+
+The caller supplies a unique `messageId` for each intended post, retaining it
+and all message fields for a retry. To explicitly address another agent, add
+`recipientAgentIds` to the send options. List options also accept
+`beforeSequence` or `afterSequence`; discovery accepts `beforeId`.
+
+An agent's normal turn output is not automatically posted into a discussion.
+It must call the discussion send tool to reply. A reply without explicit agent
+recipients wakes nobody. An authorized agent can explicitly address another
+eligible agent in its reply; merely replying to an agent-authored message or
+including an agent reference does not deliver a turn.
+
+Message persistence, new grants, and pending recipient delivery records share
+one transaction. Delivery uses a stable identity for each message/recipient and
+the existing agent queue; retries preserve the original message and do not
+create a second delivery. Pending delivery must survive daemon restart and
+failed handoff. Being accepted into the queue does not mean that the agent has
+finished replying.
+
+Agents remain excluded from `discussion:` event subscriptions, event history,
+and discussion typing. Addressing one message never subscribes the agent to
+later messages, reactions, or typing activity. Conversation grants and pending
+deliveries must not be reactivated by workspace import.
 
 #### History and delivery
 
@@ -513,10 +604,13 @@ version compatibility gate; it does not transfer membership or credentials.
 
 #### Access and compatibility
 
-All five methods require an authenticated human client connection and current
-workspace membership, including inherited host membership. Agent, daemon, and
-unbound callers cannot post as people. A missing or inaccessible workspace is
-`-32602 { code: "not-found" }`; a non-human caller is `-32003` Forbidden. Malformed
+Human calls require an authenticated client connection and current workspace
+membership, including inherited host membership. The prepared agent-messaging
+extension permits bound agents to discover granted conversations, read their
+history, and send replies as agents. Recipient discovery and reactions remain
+human-only. Agent, daemon, and unbound callers cannot post as people.
+A missing or inaccessible workspace is
+`-32602 { code: "not-found" }`; an unsupported caller is `-32003` Forbidden. Malformed
 fields and out-of-range limits are `-32602` Invalid params. The author comes from
 the bound caller, never `client.hello` display metadata.
 
@@ -535,7 +629,8 @@ receive neither a private conversation ID nor its typing activity. Agent
 subscriptions cannot subscribe to or receive `discussion:` events, including subscriptions restored from storage. All event
 history queries exclude discussion rows before pagination, including rows stored
 by earlier development builds; explicit type, wildcard, and unfiltered queries
-cannot expose them. Sending a discussion message does not dispatch an agent turn.
+cannot expose them. Only a message's explicit `recipientAgentIds`, under the
+agent-messaging extension, requests agent delivery; other sends dispatch no turn.
 
 Older owner connections can answer `-32601`; an older collaborator allowlist can
 answer `-32003`. Clients must show that discussions are unavailable, retain the

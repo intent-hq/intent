@@ -29,6 +29,12 @@ Discussion typing extends the existing `presence.update` and human roster
 shapes with transient, conversation-scoped `discussionTyping`, projected per
 recipient; typing adds no method or event type.
 Agent/daemon snapshots omit that field, and older rosters without it remain valid.
+The prepared `discussionAgentMessaging: 1` extension adds explicit per-message
+agent recipients and bound agent replies to the workspace-wide discussion.
+Addressed agents may read that conversation's history on demand; other messages
+never dispatch a turn automatically. Private chats remain human-only because
+agent transcripts have workspace-wide visibility. This adds no router method or
+event type; agent tools use the existing conversation/list/send operations.
 Clients tolerate unsupported methods without sending to an agent instead. The
 documented surface, including prepared startup, generic stream recovery,
 PR workspace lookup, and provider profile additions, is now **460 / 403 / 57**

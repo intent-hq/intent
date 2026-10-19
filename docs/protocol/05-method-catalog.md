@@ -68,6 +68,10 @@ direct/group discussions with selected workspace members, gated by exactly integ
 `discussionConversations: 1`. Replies and reactions additionally require
 `discussionMessageActions: 1`; `discussion.react` changes a reaction without
 creating a message or advancing its sequence.
+Explicit agent recipients and bound agent replies additionally require
+`discussionAgentMessaging: 1`. The initial extension applies to the default
+workspace-wide conversation; agent history access starts only after an explicit
+addressed message, and no automatic discussion subscription is created.
 Its transient typing indicators extend existing presence parameters and human
 roster rows without adding another method or event type (§5.47).
 Older daemons reject these methods with `-32601`; no agent chat fallback is allowed.
@@ -107,7 +111,7 @@ pin, while all existing methods and prepared extensions remain present.
 | crossWorkspace | 3 | listNotes, listSiblings, readNote |
 | debug | 1 | sampleStacks — point-in-time sample of the daemon's own thread stacks rendered as a text report (§5.43; v6.3, daemon-global — no `workspaceId`) |
 | desktop | 4 | getState, respondPermission, revoke, setPermission — prepared desktop control (§5.51); user/executor only |
-| discussion | 5 | conversations, list, react, recipients, send — workspace-wide and participant-restricted human discussions (§5.55); authenticated members only |
+| discussion | 5 | conversations, list, react, recipients, send — workspace-wide and participant-restricted discussions (§5.55); authenticated humans, plus explicitly addressed agents in the default discussion under `discussionAgentMessaging: 1` |
 | event | 3 | agentActivity, query, workspaceSummary |
 | file | 16 | attachmentUpload.abort, attachmentUpload.begin, attachmentUpload.chunk, attachmentUpload.commit, delete, exists, getAttachmentInfo, list, mkdir, placeAttachment, read, readChunk, rename, stat, tree, write |
 | file-tracking | 5 | getAgentLocks, getChanges, loadCommits, stage, unstage — the per-file audit-trail reads with agent attribution (§5.19; `workspaceId` req). The attribution writer `trackChange` is internal (no wire method), per the §6.8 principle |
