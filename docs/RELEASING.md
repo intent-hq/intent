@@ -58,6 +58,10 @@ landing in that window ships without its changelog entry or version bump. A head
 that is behind, or a tip or comparison that cannot be read, never merges: push
 runs retry within their polling budget. Cron and dispatch runs skip, because the
 push run for the newer main commit is queued behind them and handles the wait.
+release-plz rebuilds the PR on current main after every successful run, so a PR
+that is behind catches up on the next refresh. In v0.11.10 that refresh never
+happened because the release-plz run for 2d7c7bb0 failed on a network error.
+After a failed refresh the cut now waits for the next push to main.
 One race remains: main can move in the seconds between this check and the
 merge, because `--match-head-commit` pins only the head.
 
