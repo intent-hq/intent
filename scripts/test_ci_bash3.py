@@ -19,7 +19,7 @@ class Bash3(unittest.TestCase):
         self.assertIn('"$BASH3_BIN" scripts/dev-sandbox.test.sh', job)
         self.assertNotIn('/bin/bash', job)
         for suite in ('ci-gate', 'consumer-checks', 'docs-check', 'dev-sandbox',
-                      'lint-fixed-sleeps', 'rust-changed-tests', 'shipped-in'):
+                      'lint-fixed-sleeps', 'release-status', 'rust-changed-tests', 'shipped-in'):
             line = next(line for line in job.splitlines() if f'scripts/{suite}.test.sh' in line)
             self.assertIn('REQUIRE_BASH3=1', line)
 
