@@ -334,9 +334,8 @@ guardrails) lives in [docs/RELEASING.md](./docs/RELEASING.md). The agent-facing 
 - Releases are per-component and channel-based: merging a release PR publishes to the
   rolling **alpha** channel automatically; **beta** and **stable** are manual
   promotions of existing releases (no new build).
-- The pipeline is event-chained (intentd alpha publish → cloudlands-fe pin bump →
-  fe alpha cut), with cron backstops: hourly pin bumps and ten-minute frontend
-  cut attempts, subject to the automated hourly release floor.
+- The pipeline is event-chained (intentd alpha publish → fe pin bump → fe alpha cut),
+  with hourly pin-bump and ten-minute cut crons under the hourly release floor.
 - **Never file routine pin-bump PRs** — the workflows own pin advancement (the monorepo
   `submodule-pins` check enforces this; see Phase 2 above). The one sanctioned exception
   is the cloudlands-fe `intentd.version` pin under the emergency-release procedure
@@ -345,7 +344,8 @@ guardrails) lives in [docs/RELEASING.md](./docs/RELEASING.md). The agent-facing 
   done when the PRs merge — monitor until the work ships in a cloudlands-fe alpha, then
   set the final workspace status message to the carrying version (e.g. "Shipped in
   cloudlands-fe vX.Y.Z (alpha)."; intentd-only changes ride the chained fe alpha, so the
-  version is always the cloudlands-fe tag). `scripts/shipped-in.sh <component> <sha>...`
+  version is always the cloudlands-fe tag). `make release-status` (`STATUS_JSON=1`)
+  prints the whole train, including why auto-cut last skipped. `scripts/shipped-in.sh <component> <sha>...`
   (one or more pairs; or `make shipped-in COMPONENT=... SHA=...` /
   `PAIRS="intentd:<sha> cloudlands-fe:<sha>"`) is the canonical detector: it prints the
   first [intent-hq/cloudlands-releases](https://github.com/intent-hq/cloudlands-releases)
