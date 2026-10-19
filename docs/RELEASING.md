@@ -40,6 +40,23 @@ head match prevents a refreshed, unchecked PR head from being merged using the
 earlier decision. Queue submission is not evidence of a completed merge or a
 published alpha; confirm the PR's merged state and the release artifacts.
 
+In intentd, the release PR's own CI is shortened the same way. When the PR's
+`release-fast-path` job reports a metadata-only diff, `check` and
+`coverage-changed` are skipped on that PR. CI Gate accepts the skip only when
+that job succeeded. Main's tip already passed both jobs in the merge queue, and
+every other PR and every merge-queue run still runs them. The classifier runs
+only on `release-plz-*` branches, and its own failure falls back to full CI. It
+also rejects a version bump whose `Cargo.lock` does not carry the new version.
+Without this, each release-plz refresh needed about 8 minutes plus 14 minutes of
+CI. Main merged about every 15 minutes, so the v0.11.9 release PR (intentd#2493,
+2026-10-19) went through 13 CI runs over 4 hours and was never green on current
+main. Auto-cut also waits out two transient states on every run, cron included:
+it re-reads `mergeable=UNKNOWN` every 30 seconds for up to 2 minutes per
+episode. It also treats a missing CI Gate as running CI, with the full
+`AUTO_CUT_CI_WAIT_MINUTES` budget, while other CI jobs on the head are still
+queued or in progress and none has failed. CI Gate only reports after every
+other CI job finishes.
+
 The direct path uses the existing `intent-hq-ci` account exemption: User
 `335379076`, mode `always`, on the repository **Default** ruleset in intentd and
 cloudlands-fe only. The committed allowlists are
