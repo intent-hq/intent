@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
 # One runner slot, one job: register a just-in-time (JIT) org runner, run it
 # in a fresh container until its single job ends, clean up and exit.
-# github-runner@<slot>.service restarts this for the next job.
+# github-runner@<pool>-<n>.service restarts this for the next job.
+#
+# Slots belong to pools (default: heavy, 2 x 8 CPUs, 48 GB, label intent-cache;
+# small, 6 x 1 CPU, 3 GB, label intent-cache-small). Each slot is pinned to its own
+# CPU set from <POOL>_CPUSETS, so nproc and os.availableParallelism() inside
+# a job report that slot's CPU count.
 #
 # SIGTERM (systemctl stop) drains: an idle runner is deregistered and its
 # container stopped at once; a busy runner finishes its job first.
 #
-# Usage: supervisor.sh <slot>
+# Usage: supervisor.sh <pool>-<n>   run one job in slot n of pool
+#        supervisor.sh --plan       validate the config, print every slot
 # Config: /etc/github-runners/runners.env (RUNNERS_CONFIG overrides)
 # Credential: /etc/github-runners/credentials, root 0600 (RUNNERS_CREDENTIALS
 # overrides): the bare token on one line, GITHUB_TOKEN=<fine-grained PAT>, or GITHUB_APP_ID,
@@ -24,38 +30,92 @@ work_folder=/home/runner/work
 log() { echo "runner-slot-${slot:-?}: $*"; }
 die() { echo "runner-slot-${slot:-?}: error: $*" >&2; exit 1; }
 
-# KEY=VALUE lines only; values are taken literally (never evaluated).
+POOL_KEYS='SLOTS|LABELS|CPUSETS|MEMORY|PIDS|SHM'
+
+# KEY=VALUE lines only; values are taken literally (never evaluated). Keys
+# must be listed in $2 or match the per-pool pattern in $3.
 read_kv() {
-  local file="$1" allowed="$2" line key value
+  local file="$1" allowed="$2" pattern="${3:-^$}" line key value
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in ''|'#'*) continue ;; esac
     [[ "$line" == *=* ]] || die "$file: malformed line (expected KEY=VALUE)"
     key="${line%%=*}"
     value="${line#*=}"
-    [[ " $allowed " == *" $key "* ]] || die "$file: unknown key $key"
+    [[ " $allowed " == *" $key "* || "$key" =~ $pattern ]] || die "$file: unknown key $key"
     printf -v "$key" '%s' "$value"
   done < "$file"
 }
 
+# Pool settings are read indirectly through pool_value.
+# shellcheck disable=SC2034
 load_config() {
   GITHUB_ORG=intent-hq
   RUNNER_GROUP_ID=1
-  RUNNER_LABELS=self-hosted,linux,x64,intent-cache
   RUNNER_NAME_PREFIX=intent-cache
   RUNNER_IMAGE=intent-gh-runner:current
   RUNNER_NETWORK=gh-runners
   RUNNER_BRIDGE=gh-runners0
-  RUNNER_CPUS=8
-  RUNNER_MEMORY=48g
-  RUNNER_PIDS=16384
-  RUNNER_SHM=1g
+  RUNNER_POOLS="heavy small"
+  HEAVY_SLOTS=2
+  HEAVY_LABELS=self-hosted,linux,x64,intent-cache
+  HEAVY_CPUSETS="0-7 8-15"
+  HEAVY_MEMORY=48g
+  HEAVY_PIDS=16384
+  HEAVY_SHM=1g
+  SMALL_SLOTS=6
+  SMALL_LABELS=self-hosted,linux,x64,intent-cache-small
+  SMALL_CPUSETS="16 17 18 19 20 21"
+  SMALL_MEMORY=3g
+  SMALL_PIDS=4096
+  SMALL_SHM=256m
   if [ -f "$config_file" ]; then
-    read_kv "$config_file" "GITHUB_ORG RUNNER_GROUP_ID RUNNER_LABELS RUNNER_NAME_PREFIX RUNNER_IMAGE RUNNER_NETWORK RUNNER_BRIDGE RUNNER_CPUS RUNNER_MEMORY RUNNER_PIDS RUNNER_SHM"
+    read_kv "$config_file" "GITHUB_ORG RUNNER_GROUP_ID RUNNER_NAME_PREFIX RUNNER_IMAGE RUNNER_NETWORK RUNNER_BRIDGE RUNNER_POOLS" \
+      "^[A-Z][A-Z0-9]*_($POOL_KEYS)\$"
   fi
   [[ "$GITHUB_ORG" =~ ^[A-Za-z0-9-]+$ ]] || die "GITHUB_ORG is invalid"
   [[ "$RUNNER_GROUP_ID" =~ ^[0-9]+$ ]] || die "RUNNER_GROUP_ID must be a number"
-  [[ "$RUNNER_LABELS" =~ ^[A-Za-z0-9._-]+(,[A-Za-z0-9._-]+)*$ ]] || die "RUNNER_LABELS must be a comma-separated list"
   [[ "$RUNNER_NAME_PREFIX" =~ ^[A-Za-z0-9-]+$ ]] || die "RUNNER_NAME_PREFIX is invalid"
+  [[ "$RUNNER_POOLS" =~ ^[a-z][a-z0-9]*( [a-z][a-z0-9]*)*$ ]] || die "RUNNER_POOLS must be space-separated lowercase names"
+}
+
+# pool_value POOL KEY: the value of <POOL>_<KEY>, or empty.
+pool_value() {
+  local var
+  var="$(tr '[:lower:]' '[:upper:]' <<<"$1")_$2"
+  echo "${!var:-}"
+}
+
+# Number of CPUs in a cpuset list such as 0-7 or 16,18.
+cpuset_count() {
+  local part n=0 a b parts
+  IFS=, read -ra parts <<<"$1"
+  for part in "${parts[@]}"; do
+    if [[ "$part" == *-* ]]; then a="${part%-*}"; b="${part#*-}"; n=$((n + b - a + 1)); else n=$((n + 1)); fi
+  done
+  echo "$n"
+}
+
+# Validate one pool and print its slot instances (<pool>-<n>).
+plan_pool() {
+  local pool="$1" slots labels cpusets memory pids shm sets n
+  slots="$(pool_value "$pool" SLOTS)"; labels="$(pool_value "$pool" LABELS)"; cpusets="$(pool_value "$pool" CPUSETS)"
+  memory="$(pool_value "$pool" MEMORY)"; pids="$(pool_value "$pool" PIDS)"; shm="$(pool_value "$pool" SHM)"
+  [[ "$slots" =~ ^[0-9]+$ ]] || die "pool $pool: SLOTS must be a number"
+  [[ "$labels" =~ ^[A-Za-z0-9._-]+(,[A-Za-z0-9._-]+)*$ ]] || die "pool $pool: LABELS must be a comma-separated list"
+  [[ "$memory" =~ ^[1-9][0-9]*[kmg]$ ]] || die "pool $pool: MEMORY must look like 40g"
+  [[ "${pids:-4096}" =~ ^[1-9][0-9]*$ ]] || die "pool $pool: PIDS must be a number"
+  [[ "${shm:-64m}" =~ ^[1-9][0-9]*[kmg]$ ]] || die "pool $pool: SHM must look like 1g"
+  read -ra sets <<<"$cpusets"
+  [ "${#sets[@]}" -ge "$slots" ] || die "pool $pool: $slots slots but only ${#sets[@]} entries in CPUSETS"
+  for ((n = 1; n <= slots; n++)); do
+    [[ "${sets[n - 1]}" =~ ^[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*$ ]] || die "pool $pool: bad CPUSETS entry '${sets[n - 1]}'"
+    echo "$pool-$n"
+  done
+}
+
+plan() {
+  local pool
+  for pool in $RUNNER_POOLS; do plan_pool "$pool"; done
 }
 
 load_credentials() {
@@ -159,8 +219,22 @@ on_term() {
 
 main() {
   slot="${1:-}"
-  [[ "$slot" =~ ^[1-9][0-9]*$ ]] || { echo "usage: $0 <slot>" >&2; exit 2; }
+  if [ "$slot" = --plan ]; then
+    slot=plan
+    load_config
+    plan
+    exit 0
+  fi
+  [[ "$slot" =~ ^[a-z][a-z0-9]*-[1-9][0-9]*$ ]] || { echo "usage: $0 <pool>-<n> | --plan" >&2; exit 2; }
   load_config
+  local planned
+  planned="$(plan)"
+  grep -qx -- "$slot" <<<"$planned" || die "$slot is not a configured slot (supervisor.sh --plan lists them)"
+  local pool="${slot%-*}" n="${slot##*-}" sets
+  read -ra sets <<<"$(pool_value "$pool" CPUSETS)"
+  local cpuset="${sets[n - 1]}" labels memory pids shm
+  labels="$(pool_value "$pool" LABELS)"; memory="$(pool_value "$pool" MEMORY)"
+  pids="$(pool_value "$pool" PIDS)"; shm="$(pool_value "$pool" SHM)"
   load_credentials
   "$egress" check "$RUNNER_BRIDGE" || die "egress rules missing; refusing to start a job (systemctl restart github-runners-egress)"
   docker network inspect "$RUNNER_NETWORK" >/dev/null || die "docker network $RUNNER_NETWORK is missing (re-run infra/runners/install.sh)"
@@ -174,7 +248,7 @@ main() {
 
   local runner_name body jit
   runner_name="$RUNNER_NAME_PREFIX-$slot-$(date +%s)"
-  body="$(jq -nc --arg name "$runner_name" --argjson group "$RUNNER_GROUP_ID" --arg labels "$RUNNER_LABELS" --arg work "$work_folder" \
+  body="$(jq -nc --arg name "$runner_name" --argjson group "$RUNNER_GROUP_ID" --arg labels "$labels" --arg work "$work_folder" \
     '{name: $name, runner_group_id: $group, labels: ($labels | split(",")), work_folder: $work}')"
   api POST "/orgs/$GITHUB_ORG/actions/runners/generate-jitconfig" "$body"
   if [ "$api_status" != 201 ]; then
@@ -185,16 +259,16 @@ main() {
   runner_id="$(jq -r '.runner.id' <<<"$api_body")"
   jit="$(jq -r '.encoded_jit_config' <<<"$api_body")"
   api_body=""
-  log "registered $runner_name (id $runner_id); starting container $name"
+  log "registered $runner_name (id $runner_id); starting container $name on CPUs $cpuset"
 
   container="$name"
   trap on_term TERM INT
   ACTIONS_RUNNER_INPUT_JITCONFIG="$jit" docker run --rm --init --name "$name" --hostname "$RUNNER_NAME_PREFIX-$slot" \
-    --network "$RUNNER_NETWORK" --cgroup-parent github-runners.slice \
-    --cpus "$RUNNER_CPUS" --memory "$RUNNER_MEMORY" --memory-swap "$RUNNER_MEMORY" \
-    --pids-limit "$RUNNER_PIDS" --shm-size "$RUNNER_SHM" --ulimit nofile=65536:65536 \
+    --network "$RUNNER_NETWORK" --cgroup-parent runners.slice \
+    --cpus "$(cpuset_count "$cpuset")" --cpuset-cpus "$cpuset" --memory "$memory" --memory-swap "$memory" \
+    --pids-limit "${pids:-4096}" --shm-size "${shm:-64m}" --ulimit nofile=65536:65536 \
     --cap-drop ALL --security-opt no-new-privileges \
-    --label "intent.runner.slot=$slot" --label "intent.runner.id=$runner_id" \
+    --label "intent.runner.pool=$pool" --label "intent.runner.slot=$slot" --label "intent.runner.id=$runner_id" \
     --log-opt "tag=$name" --stop-timeout 30 \
     --env ACTIONS_RUNNER_INPUT_JITCONFIG "$RUNNER_IMAGE" &
   local pid=$! rc=0

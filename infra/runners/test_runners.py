@@ -8,6 +8,7 @@ openssl (the GitHub App path signs a real JWT).
 from pathlib import Path
 import base64
 import json
+import re
 import os
 import signal
 import shutil
@@ -133,17 +134,17 @@ class Supervisor(Stubbed):
         self.creds.write_text(f'# org runner credential\nGITHUB_TOKEN={PAT}\n')
         self.creds.chmod(0o600)
         self.config = self.dir / 'runners.env'
-        self.config.write_text('GITHUB_ORG=example-org\nRUNNER_CPUS=8\nRUNNER_MEMORY=48g\n')
+        self.config.write_text('GITHUB_ORG=example-org\n')
         self.responses = {
             'GET /orgs/example-org/actions/runners': [200, {'runners': [
-                {'id': 11, 'name': 'intent-cache-1-100', 'status': 'offline'},
-                {'id': 12, 'name': 'intent-cache-1-200', 'status': 'online'},
-                {'id': 13, 'name': 'intent-cache-2-100', 'status': 'offline'},
-                {'id': 14, 'name': 'intent-cache-10-100', 'status': 'offline'},
+                {'id': 11, 'name': 'intent-cache-heavy-1-100', 'status': 'offline'},
+                {'id': 12, 'name': 'intent-cache-heavy-1-200', 'status': 'online'},
+                {'id': 13, 'name': 'intent-cache-heavy-2-100', 'status': 'offline'},
+                {'id': 14, 'name': 'intent-cache-heavy-10-100', 'status': 'offline'},
             ]}],
             'DELETE /orgs/example-org/actions/runners/11': [204, {}],
             'POST /orgs/example-org/actions/runners/generate-jitconfig': [201, {
-                'runner': {'id': 42, 'name': 'intent-cache-1-x'}, 'encoded_jit_config': JIT}],
+                'runner': {'id': 42, 'name': 'intent-cache-heavy-1-x'}, 'encoded_jit_config': JIT}],
             'GET /orgs/example-org/actions/runners/42': [200, {'id': 42, 'busy': False}],
             'DELETE /orgs/example-org/actions/runners/42': [204, {}],
         }
@@ -167,7 +168,7 @@ class Supervisor(Stubbed):
                 self.assertNotIn(secret, text)
 
     def test_one_job_lifecycle(self):
-        rc, out, err = self.run_supervisor('1')
+        rc, out, err = self.run_supervisor('heavy-1')
         self.assertEqual(rc, 0, err)
         api = [(c['method'], c['path']) for c in self.calls('curl')]
         self.assertEqual(api, [
@@ -183,26 +184,72 @@ class Supervisor(Stubbed):
         self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache'])
         self.assertEqual(body['runner_group_id'], 1)
         self.assertEqual(body['work_folder'], '/home/runner/work')
-        self.assertRegex(body['name'], r'^intent-cache-1-\d+$')
+        self.assertRegex(body['name'], r'^intent-cache-heavy-1-\d+$')
         run = [c for c in self.calls('docker') if c['argv'][0] == 'run'][0]
         self.assertEqual(run['jit'], JIT)
         argv = run['argv']
         self.assertNotIn(JIT, ' '.join(argv))
-        for flag in (['--rm'], ['--init'], ['--name', 'gh-runner-1'], ['--network', 'gh-runners'],
-                     ['--cpus', '8'], ['--memory', '48g'], ['--memory-swap', '48g'],
-                     ['--cgroup-parent', 'github-runners.slice'], ['--cap-drop', 'ALL'],
+        for flag in (['--rm'], ['--init'], ['--name', 'gh-runner-heavy-1'], ['--network', 'gh-runners'],
+                     ['--cpus', '8'], ['--cpuset-cpus', '0-7'], ['--memory', '48g'], ['--memory-swap', '48g'],
+                     ['--pids-limit', '16384'],
+                     ['--cgroup-parent', 'runners.slice'], ['--cap-drop', 'ALL'],
                      ['--security-opt', 'no-new-privileges'], ['--env', 'ACTIONS_RUNNER_INPUT_JITCONFIG']):
             self.assertIn(' '.join(flag), ' '.join(argv))
         self.assertEqual(argv[-1], 'intent-gh-runner:current')
         for forbidden in ('-p', '--publish', '--privileged', '-v', '--volume', '--mount', '/var/run/docker.sock'):
             self.assertNotIn(forbidden, argv)
         self.assertNotIn('host', [argv[i + 1] for i, a in enumerate(argv) if a == '--network'])
-        self.assertIn(['rm', '-f', 'gh-runner-1'], [c['argv'] for c in self.calls('docker')])
+        self.assertIn(['rm', '-f', 'gh-runner-heavy-1'], [c['argv'] for c in self.calls('docker')])
         self.assertEqual((self.dir / 'egress.log').read_text(), 'egress check gh-runners0\n')
         self.assert_no_secret(out, err)
 
+    def test_small_pool_slot(self):
+        rc, out, err = self.run_supervisor('small-3')
+        self.assertEqual(rc, 0, err)
+        body = json.loads([c for c in self.calls('curl') if c['method'] == 'POST'][0]['body'])
+        self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache-small'])
+        self.assertRegex(body['name'], r'^intent-cache-small-3-\d+$')
+        argv = ' '.join([c for c in self.calls('docker') if c['argv'][0] == 'run'][0]['argv'])
+        for flag in ('--name gh-runner-small-3', '--cpus 1 ', '--cpuset-cpus 18 ', '--memory 3g',
+                     '--pids-limit 4096', '--shm-size 256m'):
+            self.assertIn(flag, argv)
+
+    def test_plan_lists_every_slot(self):
+        rc, out, err = self.run_supervisor('--plan')
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(out.split(), ['heavy-1', 'heavy-2'] + [f'small-{n}' for n in range(1, 7)])
+        self.assertEqual(self.calls(), [], 'planning touches neither GitHub nor Docker')
+        self.config.write_text('GITHUB_ORG=example-org\nRUNNER_POOLS=big\nBIG_SLOTS=2\nBIG_LABELS=self-hosted,big\nBIG_CPUSETS=0-3,12-15 4-7,16-19\nBIG_MEMORY=8g\n')
+        rc, out, err = self.run_supervisor('--plan')
+        self.assertEqual((rc, out.split()), (0, ['big-1', 'big-2']), err)
+        rc, out, err = self.run_supervisor('big-2')
+        self.assertEqual(rc, 0, err + out)
+        argv = ' '.join([c for c in self.calls('docker') if c['argv'][0] == 'run'][0]['argv'])
+        self.assertIn('--cpus 8 --cpuset-cpus 4-7,16-19 --memory 8g', argv)
+
+    def test_plan_rejects_bad_pools(self):
+        for config, message in (
+                ('HEAVY_SLOTS=3\n', 'only 2 entries in CPUSETS'),
+                ('SMALL_CPUSETS=1 2 x 4 5 6\n', "bad CPUSETS entry 'x'"),
+                ('HEAVY_MEMORY=lots\n', 'MEMORY must look like 40g'),
+                ('RUNNER_POOLS=heavy extra\n', 'pool extra: SLOTS must be a number'),
+                ('HEAVY_BOGUS=1\n', 'unknown key HEAVY_BOGUS')):
+            with self.subTest(config=config):
+                self.config.write_text(config)
+                rc, _, err = self.run_supervisor('--plan')
+                self.assertNotEqual(rc, 0)
+                self.assertIn(message, err)
+
+    def test_unconfigured_slot(self):
+        for slot in ('heavy-3', 'small-7', 'other-1'):
+            with self.subTest(slot=slot):
+                rc, _, err = self.run_supervisor(slot)
+                self.assertNotEqual(rc, 0)
+                self.assertIn('not a configured slot', err)
+                self.assertEqual(self.calls('curl'), [])
+
     def test_refuses_without_egress_rules(self):
-        rc, out, err = self.run_supervisor('1', STUB_EGRESS_RC='1')
+        rc, out, err = self.run_supervisor('heavy-1', STUB_EGRESS_RC='1')
         self.assertNotEqual(rc, 0)
         self.assertIn('egress rules missing', err)
         self.assertEqual(self.calls('curl'), [])
@@ -210,18 +257,18 @@ class Supervisor(Stubbed):
 
     def test_bare_token_credential(self):
         self.creds.write_text(PAT + '\n')
-        rc, out, err = self.run_supervisor('1')
+        rc, out, err = self.run_supervisor('heavy-1')
         self.assertEqual(rc, 0, err)
         self.assertTrue(all(c['auth'] == PAT for c in self.calls('curl')))
         self.assert_no_secret(out, err)
         self.creds.write_text(PAT + '\nextra\n')
-        rc, out, err = self.run_supervisor('1')
+        rc, out, err = self.run_supervisor('heavy-1')
         self.assertNotEqual(rc, 0)
         self.assert_no_secret(out, err)
 
     def test_refuses_readable_credential(self):
         self.creds.chmod(0o644)
-        rc, out, err = self.run_supervisor('1')
+        rc, out, err = self.run_supervisor('heavy-1')
         self.assertNotEqual(rc, 0)
         self.assertIn('chmod 600', err)
         self.assertEqual(self.calls('curl'), [])
@@ -229,36 +276,36 @@ class Supervisor(Stubbed):
 
     def test_missing_credential(self):
         self.creds.unlink()
-        rc, _, err = self.run_supervisor('1')
+        rc, _, err = self.run_supervisor('heavy-1')
         self.assertNotEqual(rc, 0)
         self.assertIn('missing', err)
 
     def test_config_values_are_not_evaluated(self):
         marker = self.dir / 'pwned'
-        self.config.write_text(f'RUNNER_LABELS=$(touch {marker})\n')
-        rc, _, err = self.run_supervisor('1')
+        self.config.write_text(f'HEAVY_LABELS=$(touch {marker})\n')
+        rc, _, err = self.run_supervisor('heavy-1')
         self.assertNotEqual(rc, 0)
         self.assertFalse(marker.exists())
         self.config.write_text('UNKNOWN=1\n')
-        rc, _, err = self.run_supervisor('1')
+        rc, _, err = self.run_supervisor('heavy-1')
         self.assertNotEqual(rc, 0)
         self.assertIn('unknown key UNKNOWN', err)
 
     def test_bad_slot(self):
-        for slot in ('', '0', 'a', '1;x'):
+        for slot in ('', '0', 'a', '1', 'heavy-0', 'heavy-1;x', 'Heavy-1'):
             with self.subTest(slot=slot):
                 rc, _, _ = self.run_supervisor(slot)
                 self.assertEqual(rc, 2)
 
     def test_registration_failure_exits_nonzero(self):
         self.responses['POST /orgs/example-org/actions/runners/generate-jitconfig'] = [403, {'message': 'Resource not accessible'}]
-        rc, out, err = self.run_supervisor('1')
+        rc, out, err = self.run_supervisor('heavy-1')
         self.assertEqual(rc, 1)
         self.assertIn('HTTP 403', out)
         self.assertNotIn('run', [c['argv'][0] for c in self.calls('docker')])
 
     def test_missing_image(self):
-        rc, _, err = self.run_supervisor('1', STUB_DOCKER_FAIL='image inspect')
+        rc, _, err = self.run_supervisor('heavy-1', STUB_DOCKER_FAIL='image inspect')
         self.assertNotEqual(rc, 0)
         self.assertIn('image intent-gh-runner:current is missing', err)
 
@@ -271,21 +318,21 @@ class Supervisor(Stubbed):
             time.sleep(0.05)
 
     def test_drain_idle_runner_stops_at_once(self):
-        proc = self.start('1', STUB_RUN_SECONDS='60')
+        proc = self.start('heavy-1', STUB_RUN_SECONDS='60')
         self.wait_for_container(proc)
         start = time.time()
         proc.send_signal(signal.SIGTERM)
         out, err = proc.communicate(timeout=30)
         self.assertEqual(proc.returncode, 0, err)
         self.assertLess(time.time() - start, 20)
-        self.assertIn(['stop', '-t', '30', 'gh-runner-1'], [c['argv'] for c in self.calls('docker')])
+        self.assertIn(['stop', '-t', '30', 'gh-runner-heavy-1'], [c['argv'] for c in self.calls('docker')])
         self.assertIn(('DELETE', '/orgs/example-org/actions/runners/42'),
                       [(c['method'], c['path']) for c in self.calls('curl')])
         self.assertIn('drained', out)
 
     def test_drain_busy_runner_waits_for_job(self):
         self.responses['GET /orgs/example-org/actions/runners/42'] = [200, {'id': 42, 'busy': True}]
-        proc = self.start('1', STUB_RUN_SECONDS='3')
+        proc = self.start('heavy-1', STUB_RUN_SECONDS='3')
         self.wait_for_container(proc)
         start = time.time()
         proc.send_signal(signal.SIGTERM)
@@ -301,7 +348,7 @@ class Supervisor(Stubbed):
         subprocess.run(['openssl', 'genrsa', '-out', str(key), '2048'], check=True, capture_output=True)
         self.creds.write_text(f'GITHUB_APP_ID=12345\nGITHUB_APP_INSTALLATION_ID=678\nGITHUB_APP_PRIVATE_KEY_FILE={key}\n')
         self.responses['POST /app/installations/678/access_tokens'] = [201, {'token': APP_TOKEN}]
-        rc, out, err = self.run_supervisor('1')
+        rc, out, err = self.run_supervisor('heavy-1')
         self.assertEqual(rc, 0, err)
         calls = self.calls('curl')
         self.assertEqual(calls[0]['path'], '/app/installations/678/access_tokens')
@@ -341,6 +388,7 @@ class Installer(Stubbed):
                         INSTALL_OWNER_UID=str(os.getuid()),
                         STUB_DOCKER_FAIL='network inspect')
         self.creds = self.prefix / 'etc/github-runners/credentials'
+        self.env_file = self.prefix / 'etc/github-runners/runners.env'
 
     def install(self, *args, **env):
         result = subprocess.run(['bash', str(INSTALL), *args], env={**self.env, **env},
@@ -367,14 +415,15 @@ class Installer(Stubbed):
             self.assertEqual((lib / name).read_bytes(), (HERE / name).read_bytes())
             self.assertTrue((lib / name).stat().st_mode & stat.S_IXUSR)
         units = self.prefix / 'etc/systemd/system'
-        for name in ('github-runner@.service', 'github-runners.slice', 'github-runners-egress.service'):
+        for name in ('github-runner@.service', 'runners.slice', 'github-runners-egress.service'):
             self.assertEqual((units / name).read_bytes(), (HERE / name).read_bytes())
+        for name in ('caddy.service', 'sccache-webdav.service'):
+            self.assertEqual((units / f'{name}.d/runners-priority.conf').read_bytes(), (HERE / 'cache-priority.conf').read_bytes())
         daemon = json.loads((self.prefix / 'etc/docker/daemon.json').read_text())
         self.assertEqual(daemon['userns-remap'], 'default')
         self.assertFalse(daemon['icc'])
         self.assertEqual(stat.S_IMODE((self.prefix / 'etc/github-runners').stat().st_mode), 0o700)
-        self.assertIn('RUNNER_LABELS=self-hosted,linux,x64,intent-cache',
-                      (self.prefix / 'etc/github-runners/runners.env').read_text())
+        self.assertEqual(self.env_file.read_bytes(), (HERE / 'runners.env').read_bytes())
         self.assertIn(['restart', 'docker'], self.systemctl())
         self.assertIn(['restart', 'github-runners-egress.service'], self.systemctl())
         docker = [c['argv'] for c in self.calls('docker')]
@@ -385,42 +434,50 @@ class Installer(Stubbed):
         self.assertEqual(self.enabled(), [])
         self.assertIn('credential missing', result.stdout)
 
-    def test_slots_follow_credential_and_count(self):
+    def test_slots_follow_credential_and_config(self):
         self.place_credential()
         result = self.install()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.enabled(), ['github-runner@1.service', 'github-runner@2.service'])
-        self.assertIn(['enable', '--now', 'github-runner@2.service'], self.systemctl())
+        default = ['github-runner@heavy-1.service', 'github-runner@heavy-2.service'] + \
+            [f'github-runner@small-{n}.service' for n in range(1, 7)]
+        self.assertEqual(self.enabled(), sorted(default))
+        self.assertIn(['enable', '--now', 'github-runner@small-6.service'], self.systemctl())
 
         self.log.write_text('')
-        result = self.install('--slots', '3', '--no-build')
+        self.env_file.write_text(self.env_file.read_text().replace('SMALL_SLOTS=6', 'SMALL_SLOTS=2'))
+        result = self.install('--no-build')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(len(self.enabled()), 3)
-        self.assertFalse(any(a[0] == 'build' for a in (c['argv'] for c in self.calls('docker'))))
+        self.assertEqual(self.enabled(), ['github-runner@heavy-1.service', 'github-runner@heavy-2.service',
+                                          'github-runner@small-1.service', 'github-runner@small-2.service'])
+        self.assertIn(['disable', '--now', 'github-runner@small-3.service'], self.systemctl())
+        self.assertFalse(any(c['argv'][0] == 'build' for c in self.calls('docker')))
         self.assertNotIn(['restart', 'docker'], self.systemctl())
 
-        self.log.write_text('')
+        self.env_file.write_text('RUNNER_POOLS=heavy\nHEAVY_SLOTS=0\n')
         result = self.install('--no-build')
-        self.assertEqual(len(self.enabled()), 3, 'a re-run keeps the current slot count')
-
-        result = self.install('--slots', '1', '--no-build')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.enabled(), ['github-runner@1.service'])
-        self.assertIn(['disable', '--now', 'github-runner@3.service'], self.systemctl())
-        self.assertIn(['disable', '--now', 'github-runner@2.service'], self.systemctl())
-
-        result = self.install('--slots', '0', '--no-build')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.enabled(), [])
 
+    def test_invalid_config_changes_nothing(self):
+        self.place_credential()
+        self.assertEqual(self.install('--no-build').returncode, 0)
+        before = self.enabled()
+        self.env_file.write_text('HEAVY_SLOTS=5\n')
+        self.log.write_text('')
+        result = self.install('--no-build')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('only 2 entries in CPUSETS', result.stderr)
+        self.assertEqual(self.enabled(), before)
+        self.assertFalse(any(a[0] == 'disable' for a in self.systemctl()))
+
     def test_rerun_keeps_config_and_does_not_restart_docker(self):
         self.assertEqual(self.install().returncode, 0)
-        env_file = self.prefix / 'etc/github-runners/runners.env'
-        env_file.write_text('GITHUB_ORG=intent-hq\nRUNNER_CPUS=6\n')
+        env_file = self.env_file
+        env_file.write_text('GITHUB_ORG=intent-hq\nHEAVY_MEMORY=30g\n')
         self.log.write_text('')
         result = self.install('--no-build', STUB_DOCKER_FAIL='')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(env_file.read_text(), 'GITHUB_ORG=intent-hq\nRUNNER_CPUS=6\n')
+        self.assertEqual(env_file.read_text(), 'GITHUB_ORG=intent-hq\nHEAVY_MEMORY=30g\n')
         self.assertNotIn(['restart', 'docker'], self.systemctl())
         self.assertFalse(any(c['argv'][:2] == ['network', 'create'] for c in self.calls('docker')))
 
@@ -439,7 +496,7 @@ class Installer(Stubbed):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("expected Ubuntu, found 'debian'", result.stderr)
         self.assertEqual(self.calls(), [])
-        for args in (['--slots'], ['--slots', 'x'], ['--bogus']):
+        for args in (['--slots', '2'], ['--bogus']):
             with self.subTest(args=args):
                 self.assertEqual(self.install(*args).returncode, 2)
 
@@ -450,15 +507,17 @@ class Static(unittest.TestCase):
         self.assertRegex(text, r'FROM ubuntu:24\.04@sha256:[0-9a-f]{64}')
         self.assertRegex(text, r'ARG RUNNER_VERSION=\d+\.\d+\.\d+')
         self.assertRegex(text, r'ARG RUNNER_SHA256=[0-9a-f]{64}')
-        self.assertRegex(text, r'ARG RUSTUP_SHA256=[0-9a-f]{64}')
-        self.assertEqual(text.count('sha256sum -c'), 2)
+        for tool in ('RUNNER', 'RUSTUP', 'GH', 'NODE', 'PWSH'):
+            self.assertRegex(text, rf'ARG {tool}_SHA256=[0-9a-f]{{64}}')
+        self.assertEqual(text.count('sha256sum -c'), 5)
 
     def test_paths_match_hosted_runners(self):
         text = (HERE / 'Dockerfile').read_text()
         for needle in ('--uid 1001', 'HOME=/home/runner', 'CARGO_HOME=/home/runner/.cargo',
                        'RUSTUP_HOME=/home/runner/.rustup', '/home/runner/work', 'USER runner'):
             self.assertIn(needle, text)
-        self.assertNotIn('sudo', text.split('No sudo')[1])
+        code = '\n'.join(l for l in text.splitlines() if not l.lstrip().startswith('#'))
+        self.assertNotRegex(code, r'\bsudo\b')
 
     def test_egress_blocks_private_and_tailnet(self):
         text = (HERE / 'egress.sh').read_text()
@@ -471,6 +530,40 @@ class Static(unittest.TestCase):
         self.assertIn('KillMode=mixed', text)
         self.assertIn('Restart=always', text)
         self.assertIn('Requires=docker.service github-runners-egress.service', text)
+
+    def test_slice_sits_at_the_cgroup_root(self):
+        # systemd nests a slice named a-b.slice under a.slice, where its low
+        # weight would only compete with its siblings, not with system.slice.
+        slices = [p.name for p in HERE.glob('*.slice')]
+        self.assertEqual(slices, ['runners.slice'])
+        self.assertIn('--cgroup-parent runners.slice', (HERE / 'supervisor.sh').read_text())
+
+    def test_cache_outranks_runners(self):
+        slice_text = (HERE / 'runners.slice').read_text()
+        prio = (HERE / 'cache-priority.conf').read_text()
+        weight = lambda text, key: int(re.search(rf'^{key}=(\d+)$', text, re.M)[1])
+        for key in ('CPUWeight', 'IOWeight'):
+            self.assertGreaterEqual(weight(prio, key), 10 * weight(slice_text, key))
+
+    def test_default_pools_fit_the_box(self):
+        env = dict(line.split('=', 1) for line in (HERE / 'runners.env').read_text().splitlines()
+                   if line and not line.startswith('#'))
+        cpus, memory = [], 0
+        for pool in env['RUNNER_POOLS'].split():
+            p = pool.upper()
+            sets = env[f'{p}_CPUSETS'].split()[:int(env[f'{p}_SLOTS'])]
+            for entry in sets:
+                for part in entry.split(','):
+                    a, _, b = part.partition('-')
+                    cpus += list(range(int(a), int(b or a) + 1))
+            memory += int(env[f'{p}_SLOTS']) * int(env[f'{p}_MEMORY'].rstrip('g'))
+        self.assertEqual(len(cpus), len(set(cpus)), 'slots must not share CPUs')
+        self.assertEqual(sorted(cpus), list(range(22)), 'CPUs 22-23 stay unpinned for the cache and system')
+        self.assertEqual(memory, 2 * 48 + 6 * 3)
+        self.assertLessEqual(memory, 125 - 10, 'leave about 11 GB of the 125 GB for the system and page cache')
+        slice_max = int(re.search(r'^MemoryMax=(\d+)G$', (HERE / 'runners.slice').read_text(), re.M)[1])
+        self.assertGreaterEqual(slice_max, memory)
+        self.assertLess(slice_max, 125)
 
 
 if __name__ == '__main__':

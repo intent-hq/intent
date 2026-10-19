@@ -1,0 +1,11 @@
+# Parent cgroup of every runner container (docker --cgroup-parent), directly
+# under the root cgroup (a dash in the name would nest it). Far lower CPU
+# and IO weight than the cache (Caddy and rclone: 1000, cache-priority.conf) so cache latency
+# stays flat while jobs build; per-container limits come from the supervisor.
+[Unit]
+Description=GitHub Actions runner containers
+
+[Slice]
+CPUWeight=10
+IOWeight=10
+MemoryMax=116G

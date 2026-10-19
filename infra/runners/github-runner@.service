@@ -1,4 +1,4 @@
-# One GitHub Actions runner slot: a fresh container per job, then restart.
+# One GitHub Actions runner slot (%i = <pool>-<n>): a fresh container per job, then restart.
 # `systemctl stop` drains (waits for a running job). See docs/GITHUB_RUNNERS.md.
 [Unit]
 Description=GitHub Actions runner slot %i (ephemeral container)

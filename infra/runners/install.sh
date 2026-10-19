@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Install or update the GitHub Actions runner slots on an Ubuntu box.
 # Idempotent: re-running reapplies config, rebuilds the image (running jobs
-# keep theirs; the next job uses the new one) and sets the slot count.
+# keep theirs; the next job uses the new one) and enables exactly the slots
+# that /etc/github-runners/runners.env describes (pools, slot counts, CPU
+# sets, memory), draining and disabling any others.
 #
 # Usage (as root, from a checkout of this repo):
-#   infra/runners/install.sh [--slots N] [--no-build]
+#   infra/runners/install.sh [--no-build]
 #
-#   --slots N    Number of runner slots (default 2, or the current count on
-#                re-runs). 0 drains and disables every slot.
 #   --no-build   Skip the image build (config-only change).
 #
 # Installs Docker (official apt repo) with user-namespace remapping, the
@@ -32,21 +32,15 @@ bridge=gh-runners0
 subnet=172.30.250.0/24
 image=intent-gh-runner
 
-slots=""
 build=1
 
 log() { echo "install: $*"; }
 die() { echo "install: error: $*" >&2; exit 1; }
-usage() { echo "usage: $0 [--slots N] [--no-build]" >&2; exit 2; }
+usage() { echo "usage: $0 [--no-build]" >&2; exit 2; }
 
 parse_args() {
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --slots)
-        if [ "$#" -lt 2 ] || [[ ! "$2" =~ ^[0-9]+$ ]]; then echo "--slots needs a number" >&2; usage; fi
-        slots="$2"
-        shift
-        ;;
       --no-build) build=0 ;;
       -h|--help) usage ;;
       *) echo "unknown argument: $1" >&2; usage ;;
@@ -112,14 +106,15 @@ install_files() {
   put 0755 "$here/supervisor.sh" "$lib_dir/supervisor.sh" || true
   put 0755 "$here/egress.sh" "$lib_dir/egress.sh" || true
   local unit
-  for unit in github-runner@.service github-runners.slice github-runners-egress.service; do
+  for unit in github-runner@.service runners.slice github-runners-egress.service; do
     put 0644 "$here/$unit" "$unit_dir/$unit" || true
   done
+  for unit in caddy.service sccache-webdav.service; do
+    install -d -m 0755 "$unit_dir/$unit.d"
+    put 0644 "$here/cache-priority.conf" "$unit_dir/$unit.d/runners-priority.conf" || true
+  done
   if [ ! -f "$etc_dir/runners.env" ]; then
-    printf '%s\n' "# Runner slot settings (see docs/GITHUB_RUNNERS.md). Not secret." \
-      "GITHUB_ORG=intent-hq" "RUNNER_GROUP_ID=1" "RUNNER_LABELS=self-hosted,linux,x64,intent-cache" \
-      "RUNNER_CPUS=8" "RUNNER_MEMORY=48g" > "$etc_dir/runners.env"
-    chmod 0644 "$etc_dir/runners.env"
+    install -m 0644 "$here/runners.env" "$etc_dir/runners.env"
   fi
   systemctl daemon-reload
   systemctl enable github-runners-egress.service >/dev/null
@@ -149,7 +144,7 @@ enabled_slots() {
     [ -e "$f" ] || [ -L "$f" ] || continue
     f="${f##*@}"
     echo "${f%.service}"
-  done | sort -n
+  done | sort -V
 }
 
 credential_ok() {
@@ -160,24 +155,24 @@ credential_ok() {
 }
 
 apply_slots() {
-  local current n
-  current="$(enabled_slots | tail -n 1)"
-  [ -n "$slots" ] || slots="${current:-2}"
+  local wanted n
+  wanted="$(RUNNERS_CONFIG="$etc_dir/runners.env" "$lib_dir/supervisor.sh" --plan)" \
+    || die "invalid $etc_dir/runners.env (see above)"
   for n in $(enabled_slots); do
-    if [ "$n" -gt "$slots" ]; then
+    if ! grep -qx -- "$n" <<<"$wanted"; then
       log "draining and disabling slot $n"
       systemctl disable --now "github-runner@$n.service"
     fi
   done
-  [ "$slots" -gt 0 ] || { log "0 slots configured"; return 0; }
+  [ -n "$wanted" ] || { log "0 slots configured"; return 0; }
   if ! credential_ok; then
     log "credential missing: place it at $credentials (root, 0600; see docs/GITHUB_RUNNERS.md), then re-run"
     return 0
   fi
-  for n in $(seq 1 "$slots"); do
+  for n in $wanted; do
     systemctl enable --now "github-runner@$n.service" >/dev/null
   done
-  log "$slots slot(s) enabled"
+  log "slots enabled: $(tr '\n' ' ' <<<"$wanted")"
 }
 
 main() {
