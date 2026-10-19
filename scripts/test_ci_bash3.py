@@ -40,5 +40,34 @@ class Bash3(unittest.TestCase):
             self.assertIn('FAILED', result.stdout)
             self.assertFalse((root / 'executed').exists())
 
+    def test_build_is_serial_even_with_inherited_parallel_flags(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            stubs = {
+                'curl': 'for arg in "$@"; do dest=$arg; done\nprintf source > "$dest"\n',
+                'sha256sum': 'cat > /dev/null\n',
+                'tar': 'mkdir -p bash-3.2.57\nprintf \'#!/bin/bash\\nexit 0\\n\' > bash-3.2.57/configure\n'
+                       'chmod 755 bash-3.2.57/configure\n',
+                'make': 'printf \'%s\\n\' "args=$*" "MAKEFLAGS=${MAKEFLAGS-unset}" "MFLAGS=${MFLAGS-unset}" '
+                        '"GNUMAKEFLAGS=${GNUMAKEFLAGS-unset}" > "$BASH3_TEST_MAKE_LOG"\n'
+                        'printf \'#!/bin/bash\\nif [[ $1 == -c ]]; then printf 3.2; else echo stub; fi\\n\' > bash\n'
+                        'chmod 755 bash\n',
+            }
+            for name, body in stubs.items():
+                path = root / name
+                path.write_text('#!/bin/bash\nset -e\n' + body)
+                path.chmod(0o755)
+            log = root / 'make.log'
+            env = {**os.environ, 'PATH': str(root) + os.pathsep + os.environ['PATH'],
+                   'BASH3_TEST_MAKE_LOG': str(log), 'MAKEFLAGS': '-j8', 'MFLAGS': '-j8',
+                   'GNUMAKEFLAGS': '-j8'}
+            env.pop('GITHUB_ENV', None)
+            result = subprocess.run(['bash', str(ROOT/'scripts/install-ci-bash3.sh'), str(root/'install')],
+                                    env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(log.read_text().splitlines(),
+                             ['args=-j1', 'MAKEFLAGS=unset', 'MFLAGS=unset', 'GNUMAKEFLAGS=unset'])
+            self.assertTrue((root / 'install/bash').exists())
+
 if __name__ == '__main__':
     unittest.main()
