@@ -2808,7 +2808,7 @@ omissions is tabulated under **List-row slimming** in the `Workspace` payload no
 
 **TokenUsage** — `{ byAgentId: { [agentId]: TokenUsageTotals }, totals: TokenUsageTotals,
 byModel: { [modelName]: TokenUsageTotals }, byAgentModel?: TokenUsageCrossFilterRow[],
-lastScanAt: string | null }`, where
+agentNames?: { [agentId]: string }, lastScanAt: string | null }`, where
 **TokenUsageTotals** is the consumption counters plus an optional cost —
 `{ inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, thoughtTokens?,
 cost?: { amount: number, currency: string } }`. `byAgentId` keys are
@@ -2816,6 +2816,29 @@ cost?: { amount: number, currency: string } }`. `byAgentId` keys are
 the RFC-3339 timestamp of the last committed materialization by end-of-turn usage accounting or
 the reconciliation pass (`null` before the first). Updated values are pushed via
 `workspace:tokenUsage-changed` (§6.5).
+
+**Additive agent names** *(additive, [intent-hq/intent#7334](https://github.com/intent-hq/intent/pull/7334))*.
+`agentNames` maps an `agentId` to that agent session's display name, so a client can label
+every usage row, including retired agents, delegated agents it has not loaded, and agents in
+their delete grace window. Its keys are a subset of the `byAgentId` keys: only agents whose
+`byAgentId` bucket reports usage (a non-zero counter or a cost) are named. A session whose name
+is empty after trimming whitespace is omitted, and an empty map is omitted from the wire. An
+absent field can therefore mean an empty map, an older daemon, or a persisted snapshot that
+predates the field. Clients handle all three the same way: prefer the name of an agent they
+have loaded, then `agentNames`, then their own generic label. They never show a raw `agentId`.
+
+Names are materialized with the rest of the snapshot: they are the session names at the last
+committed materialization. A name change is a snapshot change, so a recompute that finds one
+commits and publishes `workspace:tokenUsage-changed` even if no counter moved. An applied
+`agent.rename`, or an `agent.update` that sets `name`, recomputes the snapshot when the stored
+snapshot already has a `byAgentId` bucket for that agent, so a rename of an agent with usage
+publishes the new name right away; renaming a usage-less agent writes nothing. A persisted
+snapshot without the field is not backfilled on the read path. The first reconciliation
+pass after a daemon upgrade recomputes every workspace it sweeps, so each swept workspace
+that has a named agent commits and publishes once. A workspace the pass does not sweep, or
+one whose recompute is declined, keeps serving its stored names (or none) until its next
+committed materialization. Ship order: this contract, then the intentd implementation, then
+the cloudlands-fe consumer; the auto-bump advances the pins.
 
 **Additive cross-filter rows.** `byAgentModel` is the sparse, materialized agent × model
 projection. One **TokenUsageCrossFilterRow** has the exact shape
@@ -2951,6 +2974,7 @@ not fall through to the legacy per-message usage fallback.
     { "agentId":"agent-123","model":"sonnet-4.6","totals":{ "inputTokens":1000,"outputTokens":400,"cacheReadTokens":500,"cacheCreationTokens":100,"cost":{ "amount":0.15,"currency":"USD" } },"humanMessages":1,"agentMessages":1 },
     { "agentId":"agent-456","model":"opus-4.8","totals":{ "inputTokens":4000,"outputTokens":1000,"cacheReadTokens":3500,"cacheCreationTokens":500,"cost":{ "amount":0.40,"currency":"USD" } },"humanMessages":2,"agentMessages":3 }
   ],
+  "agentNames":{ "agent-123":"Coordinator","agent-456":"PR reviewer" },
   "totals":{ "inputTokens":12000,"outputTokens":3400,"cacheReadTokens":8000,"cacheCreationTokens":1200,"cost":{ "amount":1.25,"currency":"USD" } },
   "lastScanAt":"2026-06-17T12:00:00Z" } } }
 ```
