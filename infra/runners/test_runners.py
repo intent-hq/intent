@@ -268,6 +268,24 @@ class Supervisor(Stubbed):
         self.assertEqual(json.loads(calls['PUT']['body']), {'selected_repository_ids': [101, 103]})
         self.assertNotIn(('GET', '/repos/example-org/intentd'), [(c['method'], c['path']) for c in self.calls('curl')])
 
+    def test_group_apply_twice_converges(self):
+        # The group already matches; repeated applies must succeed, create
+        # nothing and write the same desired state each time.
+        self.group_fixture([{'id': 3, 'name': 'intent-cache', 'visibility': 'selected'}])
+        writes = []
+        for attempt in (1, 2):
+            self.log.write_text('')
+            rc, out, err = self.run_supervisor('--group-apply')
+            self.assertEqual(rc, 0, f'apply {attempt}: {err}')
+            calls = [c for c in self.calls('curl') if c['method'] != 'GET']
+            self.assertEqual([c['method'] for c in calls], ['PATCH', 'PUT'], f'apply {attempt}')
+            writes.append([(c['method'], c['path'], json.loads(c['body'])) for c in calls])
+        self.assertEqual(writes[0], writes[1])
+        self.assertEqual(writes[1], [
+            ('PATCH', '/orgs/example-org/actions/runner-groups/3',
+             {'visibility': 'selected', 'allows_public_repositories': True, 'restricted_to_workflows': False}),
+            ('PUT', '/orgs/example-org/actions/runner-groups/3/repositories', {'selected_repository_ids': [101, 102, 103]})])
+
     def test_group_apply_fails_on_unknown_repository(self):
         self.group_fixture([{'id': 3, 'name': 'intent-cache'}])
         self.config.write_text('GITHUB_ORG=example-org\nRUNNER_GROUP_REPOS=intent,nope\n')
