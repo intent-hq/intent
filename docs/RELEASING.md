@@ -665,9 +665,9 @@ larger runners `gh-linux-8x`, `gh-linux-16x`, `gh-linux-arm64-8x` and `gh-window
 `macos-26-xlarge` for Apple Silicon and `macos-latest-large` for Intel Macs. The larger
 runners must stay in a runner group shared with all three repositories, with
 **Allow public repositories** enabled: intent, intentd and cloudlands-fe are public,
-and without that setting their larger-runner jobs queue until they time out. During
-the move off Depot, intentd, cloudlands-fe and ios still fall back to `depot-*`
-labels until their own migration PRs land. cloudlands-fe routes its own Linux jobs with a separate, simpler probe in
+and without that setting their larger-runner jobs queue until they time out.
+cloudlands-fe's signed desktop Mac builds use `macos-15-xlarge`, because
+electron-builder's keychain step fails on macOS 26 images. cloudlands-fe routes its own Linux jobs with a separate, simpler probe in
 `intent-pr.yml` that uses the same Linux labels, slot counts and `CI_LINUX_RUNNER_DISABLED` override.
 
 The self-hosted Linux x64 fleet is two pools of runner slots on the cache box, both
@@ -675,8 +675,8 @@ unprivileged ephemeral containers (no sudo, no Docker socket):
 
 | Pool | Labels | Slots | Takes jobs that ask for |
 |---|---|---|---|
-| heavy | `[self-hosted, linux, x64, intent-cache]` | 2, about 8 CPUs / 48 GB each | larger-runner labels (`gh-linux-8x`, `gh-linux-16x`, `depot-ubuntu-24.04-8`/`-16`) |
-| fast | `[self-hosted, linux, x64, intent-cache-small]` | 6, 1 CPU / 3 GB each | standard labels (`ubuntu-24.04`, `ubuntu-22.04`, `depot-ubuntu-24.04`) |
+| heavy | `[self-hosted, linux, x64, intent-cache]` | 2, about 8 CPUs / 48 GB each | larger-runner labels (`gh-linux-8x`, `gh-linux-16x`) |
+| fast | `[self-hosted, linux, x64, intent-cache-small]` | 6, 1 CPU / 3 GB each | standard labels (`ubuntu-24.04`, `ubuntu-22.04`) |
 
 A job is heavy when it compiles Rust or its recent median duration is over about
 5 minutes; that cut-off is a tunable choice. Heavy jobs ask for a larger-runner label
@@ -794,6 +794,5 @@ Without the variable, or when the token is empty as in fork pull requests,
 compilation is uncached. Compiler hit statistics, rather than a restored Actions
 archive, are the evidence of reuse. The job log names the chosen backend and
 mode, never the token. Reusable workflows such as `consumer-checks.yml` accept
-`INTENT_SCCACHE_TOKEN` as an optional secret; their `DEPOT_TOKEN` secret is unused
-and kept only until callers stop passing it. Local build configuration is in
+`INTENT_SCCACHE_TOKEN` as an optional secret. Local build configuration is in
 [CONTRIBUTING.md](../CONTRIBUTING.md#local-rust-compiler-cache).
