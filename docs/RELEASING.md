@@ -183,8 +183,9 @@ suite is `python3 -S -B -m unittest -v scripts.test_cleanup_prereleases`.
   runtime and lifecycle proofs, release build, `install-ps1` and Windows Pi legs, and
   that push run's CI Gate requires them. A Windows-only regression therefore lands
   on `main` and holds releases instead of merges. Before merging the Release PR,
-  `auto-cut-alpha.yml` reads the latest push-event `ci.yml` run on the Release PR's
-  base (the `main` tip being released). A green run proceeds. A queued or running
+  `auto-cut-alpha.yml` reads the latest push-event `ci.yml` run on `main`'s live tip,
+  which the Release PR head must contain (see
+  [Guarded direct release merges](#guarded-direct-release-merges)). A green run proceeds. A queued or running
   one waits within the CI budget, then the hourly cron retries. Any other conclusion
   (failed, cancelled, timed out) skips the cut. To unblock, re-run the
   failed jobs on that `main` run or land a fix; the next attempt cuts. A human
