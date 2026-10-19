@@ -3,9 +3,11 @@
 [Unit]
 Description=GitHub Actions runner slot %i (ephemeral container)
 Documentation=https://github.com/intent-hq/intent/blob/main/docs/GITHUB_RUNNERS.md
-After=docker.service github-runners-egress.service network-online.target
-# Wants, not Requires: restarting the egress unit must not restart (and so
-# drain) every slot. The supervisor refuses to start a job without the rules.
+# No ordering against the egress unit and no Requires on it: systemd orders a
+# job on that unit behind every draining slot (for hours) and every slot start
+# behind that job. The supervisor refuses to start a job without the rules,
+# and Restart= retries until they exist.
+After=docker.service network-online.target
 Requires=docker.service
 Wants=github-runners-egress.service
 Wants=network-online.target

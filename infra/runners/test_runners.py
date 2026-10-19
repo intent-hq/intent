@@ -392,7 +392,7 @@ class Installer(Stubbed):
         super().setUp()
         self.prefix = self.dir / 'root'
         self.prefix.mkdir()
-        for name in ('apt-get', 'dpkg', 'chown'):
+        for name in ('apt-get', 'dpkg', 'chown', 'iptables', 'ip6tables'):
             write_exe(self.bin / name, LOG_STUB)
         write_exe(self.bin / 'systemctl', SYSTEMCTL_STUB)
         write_exe(self.bin / 'id', '#!/bin/sh\necho 0\n')
@@ -439,7 +439,9 @@ class Installer(Stubbed):
         self.assertEqual(stat.S_IMODE((self.prefix / 'etc/github-runners').stat().st_mode), 0o700)
         self.assertEqual(self.env_file.read_bytes(), (HERE / 'runners.env').read_bytes())
         self.assertIn(['restart', 'docker'], self.systemctl())
-        self.assertIn(['reload', 'github-runners-egress.service'], self.systemctl())
+        self.assertIn(['-w', '-t', 'raw', '-A', 'GH-RUNNERS-EGRESS', '-d', '100.64.0.0/10', '-j', 'DROP'],
+                      [c['argv'] for c in self.calls('iptables')], 'the installer reapplies the egress rules itself')
+        self.assertFalse([a for a in self.systemctl() if a[0] == 'reload'], 'no systemd job that waits behind draining slots')
         self.assertNotIn(['enable', '--now', 'docker'], self.systemctl(),
                          'a start job on running docker queues behind draining slots')
         self.assertNotIn(['start', 'docker'], self.systemctl(), 'docker is already active (stub)')
@@ -563,6 +565,7 @@ class Static(unittest.TestCase):
         self.assertIn('Requires=docker.service\n', text)
         self.assertIn('Wants=github-runners-egress.service', text)
         self.assertNotRegex(text, r'Requires=.*egress', 'a Requires= on the egress unit restarts every slot with it')
+        self.assertNotRegex(text, r'After=.*egress', 'ordering after the egress unit makes its jobs wait behind draining slots')
         self.assertIn('ExecReload=', (HERE / 'github-runners-egress.service').read_text())
 
     def test_slice_sits_at_the_cgroup_root(self):

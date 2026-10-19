@@ -125,10 +125,10 @@ install_files() {
     install -m 0644 "$here/runners.env" "$etc_dir/runners.env"
   fi
   systemctl daemon-reload
-  # Start, then reload to reapply the rules; never restart, which would
-  # also restart every slot that depends on the unit.
+  # Reapply the rules directly rather than through a systemd job, which would
+  # wait behind any slot that is draining a job.
   ensure_started github-runners-egress.service
-  systemctl reload github-runners-egress.service
+  "$lib_dir/egress.sh" apply "$bridge"
 }
 
 create_network() {
