@@ -118,7 +118,7 @@ jobs:
               linux: ['ubuntu-22.04', 'ubuntu-24.04', 'gh-linux-8x', 'gh-linux-16x'],
               arm: ['ubuntu-24.04-arm', 'gh-linux-arm64-8x'],
               windows: ['windows-2022', 'windows-2025', 'gh-windows-16x'],
-              macos: ['macos-15-xlarge'],
+              macos: ['macos-26-xlarge'],
               intel: ['macos-latest-large'],
             };
             const mapping = {};
@@ -130,5 +130,5 @@ jobs:
             core.setOutput('linux_labels', JSON.stringify(mapping[`gh-linux-${process.env.LINUX_SIZE || '8'}x`]));
             core.setOutput('check_labels', JSON.stringify(mapping['gh-linux-8x']));
             core.setOutput('windows_labels', JSON.stringify(mapping['gh-windows-16x']));
-            core.setOutput('macos_labels', JSON.stringify(mapping['macos-15-xlarge']));
+            core.setOutput('macos_labels', JSON.stringify(mapping['macos-26-xlarge']));
             for (const key of ['linux', 'windows', 'macos']) core.setOutput(`${key}_burst`, String(burst[key]));
