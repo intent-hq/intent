@@ -238,6 +238,36 @@ for line in \
   expect_json 'r["components"]["intentd"]["autoCut"]["decision"]' "$(python3 -c 'import json, sys; print(json.dumps(sys.argv[1]))' "$line")"
 done
 
+# --- structured decision line (both auto-cut-alpha.yml decision contracts):
+# preferred over any free-text match, wherever it sits in the log; script
+# source echoes of it never count
+reset_stub
+{
+  printf 'Merge\tMerge\t2026-10-19T12:40:00.5Z \033[36;1m            local line="auto-cut-decision: $1 $2 ${3}"\033[0m\n'
+  printf 'Merge\tMerge\t2026-10-19T12:40:01.0Z \033[36;1m  decide skip draft "x"\033[0m\n'
+  printf 'Merge\tMerge\t2026-10-19T12:40:02.0Z auto-cut-decision: throttle recent-cut Last cut (v0.11.11) was 40 min ago (<60 min); reworded freely\n'
+  printf 'Merge\tMerge\t2026-10-19T12:40:03.0Z ##[warning]some later message that says skipping\n'
+} | put logs/intentd/101.log
+printf 'Merge\tMerge\t2026-10-19T12:30:11.0Z auto-cut-decision: defer pin-bump-open Pin-bump PR #3517 (auto/intentd-pin) is open\n' | put logs/cloudlands-fe/201.log
+json="" run_script
+expect_line "  auto-cut     throttle recent-cut: Last cut (v0.11.11) was 40 min ago (<60 min); reworded freely [run 101, push, 20m ago] (run 102 in_progress)"
+expect_line "  auto-cut     defer pin-bump-open: Pin-bump PR #3517 (auto/intentd-pin) is open [run 201, schedule, 30m ago]"
+json=1 run_script
+expect_json 'r["components"]["intentd"]["autoCut"]["outcome"]' '"throttle"'
+expect_json 'r["components"]["intentd"]["autoCut"]["reason"]' '"recent-cut"'
+expect_json 'r["components"]["intentd"]["autoCut"]["decisionSource"]' '"structured"'
+expect_json 'r["components"]["cloudlands-fe"]["autoCut"]["reason"]' '"pin-bump-open"'
+# A structured line with no detail still renders.
+reset_stub
+printf 'Merge\tMerge\t2026-10-19T12:40:02.0Z auto-cut-decision: noop no-release-pr\n' | put logs/intentd/101.log
+json="" run_script
+expect_line "  auto-cut     noop no-release-pr [run 101, push, 20m ago] (run 102 in_progress)"
+# Pre-contract runs keep the free-text fallback, flagged as such.
+reset_stub
+json=1 run_script
+expect_json 'r["components"]["intentd"]["autoCut"]["decisionSource"]' '"pattern"'
+expect_json 'r["components"]["intentd"]["autoCut"]["outcome"]' 'null'
+
 # --- a tag newer than the newest release: its build has not published yet,
 # so its commits still count as unshipped (since the published release)
 reset_stub

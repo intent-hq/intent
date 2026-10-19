@@ -26,7 +26,10 @@
 #   pin                      intentd.version on intent-hq/cloudlands-fe main
 #   unshipped                compare <newest release>...main on each source repo
 #   auto-cut decision        `gh run view --log` of the newest completed
-#                            auto-cut-alpha.yml runs (up to 5, newest first)
+#                            auto-cut-alpha.yml runs (up to 5, newest first):
+#                            the structured `auto-cut-decision: <outcome>
+#                            <reason> <detail>` line both workflows print once
+#                            per run, else (older runs) a free-text match
 #
 # --no-logs skips the log fetch (the slowest part); the auto-cut section then
 # shows only the newest run. Every lookup is independent and fail-soft: one
@@ -182,27 +185,39 @@ for run in json.load(open(sys.argv[1])):
   wait
 }
 
-# Last auto-cut decision line in a run log. The patterns track the echo
-# strings in both repos' auto-cut-alpha.yml merge steps ("...; skipping.",
-# "throttled", "deferring", "paused", "refusing", "squash-merged", ...).
-# Lines carrying the \e[36;1m prefix are the step's echoed script source, not
-# its output, so their comments never count.
+# Last auto-cut decision in a run log, printed as one JSON object (or nothing).
+# Both repos' auto-cut-alpha.yml print exactly one structured line per run,
+#   auto-cut-decision: <outcome> <reason> <free-text detail>
+# (intentd + cloudlands-fe "decision contract"), which wins whenever present.
+# Runs from before that contract only have free text, so the fallback still
+# tracks the old echo strings ("...; skipping.", "throttled", "deferring",
+# "paused", "refusing", "squash-merged", ...); drop it once no such run is
+# within reach. Lines carrying the \e[36;1m prefix are the step's echoed
+# script source, not its output, so they never count.
 decision_py='
-import re, sys
-pattern = re.compile(
+import json, re, sys
+structured = re.compile(r"^auto-cut-decision: ([a-z][a-z-]*) ([a-z0-9][a-z0-9-]*)(?: (.*))?$")
+legacy = re.compile(
     r"skipping|throttl(ed|ing)|deferring|paused until|refusing|squash-merged|"
     r"Submitted Release PR|DRY RUN|nothing to chain into|gh pr merge failed")
-last = ""
+found, fallback = None, ""
 with open(sys.argv[1], errors="replace") as log:
     for line in log:
         if "\x1b[36;1m" in line:
             continue
-        text = line.rstrip("\n").split("\t")[-1].lstrip("﻿")
+        text = line.rstrip("\n").split("\t")[-1].lstrip("\ufeff")
         text = re.sub(r"^\d{4}-\d\d-\d\dT[\d:.]+Z ", "", text)
-        text = re.sub(r"^(##\[(notice|warning|error)\]|::(notice|warning|error)[^:]*::)", "", text)
-        if pattern.search(text):
-            last = text.strip()
-print(last)
+        text = re.sub(r"^(##\[(notice|warning|error)\]|::(notice|warning|error)[^:]*::)", "", text).strip()
+        match = structured.match(text)
+        if match:
+            found = {"source": "structured", "outcome": match.group(1), "reason": match.group(2),
+                     "detail": (match.group(3) or "").strip()}
+        elif legacy.search(text):
+            fallback = text
+if found is None and fallback:
+    found = {"source": "pattern", "outcome": None, "reason": None, "detail": fallback}
+if found:
+    print(json.dumps(found))
 '
 
 component intentd "$intentd_repo" "$intentd_repo" "release-plz-" &
@@ -397,7 +412,7 @@ def component(key):
     runs = load_json(text, key + ".autoCut") if text is not None else None
     if runs:
         completed = [run for run in runs if run.get("status") == "completed"]
-        chosen, decision = (completed or runs)[0], None
+        chosen, found = (completed or runs)[0], None
         if fetch_logs:
             for run in runs:
                 if run.get("status") != "completed":
@@ -405,13 +420,19 @@ def component(key):
                 result("%s.log.%s" % (key, run["databaseId"]), key + ".autoCut")
                 line = (read("%s.decision.%s" % (key, run["databaseId"])) or "").strip()
                 if line:
-                    chosen, decision = run, line
+                    chosen, found = run, json.loads(line)
                     break
+        found = found or {}
+        decision = found.get("detail")
+        if found.get("source") == "structured":
+            decision = "%s %s%s" % (found["outcome"], found["reason"],
+                                    ": " + found["detail"] if found["detail"] else "")
         data["autoCut"] = {
             "runId": chosen["databaseId"], "url": chosen.get("url"), "event": chosen.get("event"),
             "status": chosen.get("status"), "conclusion": chosen.get("conclusion"),
             "createdAt": chosen.get("createdAt"), "ageMinutes": age_minutes(chosen.get("createdAt")),
-            "decision": decision, "completedRunsScanned": len(completed) if fetch_logs else 0,
+            "decision": decision, "outcome": found.get("outcome"), "reason": found.get("reason"),
+            "decisionSource": found.get("source"), "completedRunsScanned": len(completed) if fetch_logs else 0,
             "newestRunId": runs[0]["databaseId"], "newestRunStatus": runs[0].get("status")}
     return data
 
