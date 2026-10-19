@@ -93,6 +93,7 @@ migrated from `packages/cloudlands-fe/docs/` after an accuracy audit:
 - [fe/RELEASING.md](./fe/RELEASING.md) — release process (beta/stable channels)
 - [fe/DEPLOYING.md](./fe/DEPLOYING.md) — deployment infrastructure, runners, and feeds
 - [SCCACHE_SERVER.md](./SCCACHE_SERVER.md) — self-hosted sccache WebDAV cache server: provisioning, tokens and rotation, prune tuning, health check, rollback (config in `infra/sccache/`)
+- [GITHUB_RUNNERS.md](./GITHUB_RUNNERS.md) — self-hosted GitHub Actions runner slots on the cache box: install, credential and rotation, slots, drain, runner upgrades, troubleshooting (config in `infra/runners/`)
 
 ## Initial porting phase — **COMPLETE (historical)**
 

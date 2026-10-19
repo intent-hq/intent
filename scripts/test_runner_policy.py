@@ -6,15 +6,19 @@ import subprocess
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-# The probe must work when the fleet is offline.
-EXCEPTIONS = {('runner-route.yml', 'probe'), ('manual-signed-build.yml', 'smoke-macos')}
+# The probe must work when the fleet is offline; the intent-cache smoke needs a
+# GitHub-hosted writer to prove self-hosted runners reuse its cache entries.
+EXCEPTIONS = {('runner-route.yml', 'probe'), ('manual-signed-build.yml', 'smoke-macos'),
+              ('intent-cache-smoke.yml', 'cache-writer')}
 # The intent-cache Linux slots are unprivileged containers (no sudo, no Docker
 # socket), so jobs that need either stay on a hosted runner.
 HOSTED_ONLY = {
     ('bootstrap-install.yml', 'bootstrap-install'): 'runs sudo docker',
 }
 EXCEPTIONS |= set(HOSTED_ONLY)
-MAINTENANCE = {('m1mac-smoke.yml', 'smoke'), ('provision-m1mac.yml', 'provision'), ('provision-m1mac.yml', 'verify'), ('macos-prune.yml', 'prune'), ('windows-prune.yml', 'prune')}
+MAINTENANCE = {('m1mac-smoke.yml', 'smoke'), ('provision-m1mac.yml', 'provision'), ('provision-m1mac.yml', 'verify'), ('macos-prune.yml', 'prune'), ('windows-prune.yml', 'prune'),
+               ('intent-cache-smoke.yml', 'isolation'), ('intent-cache-smoke.yml', 'fresh'), ('intent-cache-smoke.yml', 'cache-reader'),
+               ('intent-cache-smoke.yml', 'cache-reader-small')}
 
 
 def jobs(text):
