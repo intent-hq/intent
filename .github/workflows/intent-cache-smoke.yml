@@ -1,8 +1,9 @@
 name: intent-cache runner smoke
 
-# Exercises the self-hosted runner slots on the intent-cache box
-# (infra/runners, docs/GITHUB_RUNNERS.md): isolation and paths, a fresh
-# container per job, and sccache reuse of entries a GitHub-hosted runner wrote.
+# Exercises the self-hosted runner pools on the intent-cache box
+# (infra/runners, docs/GITHUB_RUNNERS.md): isolation, paths and limits on both
+# pools, a fresh container per job, and sccache reuse of entries a
+# GitHub-hosted runner wrote, with every slot busy at once.
 on:
   workflow_dispatch:
   pull_request:
@@ -15,10 +16,15 @@ permissions:
 
 jobs:
   isolation:
-    name: Isolation and paths (intent-cache)
+    name: Isolation and paths (${{ matrix.label }})
     # Never run pull-request code from forks on the self-hosted box.
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, intent-cache]
+    strategy:
+      matrix:
+        include:
+          - {label: intent-cache, cpus: 8, memory: 51539607552}
+          - {label: intent-cache-small, cpus: 1, memory: 3221225472}
+    runs-on: [self-hosted, '${{ matrix.label }}']
     timeout-minutes: 10
     outputs:
       runner: ${{ steps.mark.outputs.runner }}
@@ -39,14 +45,29 @@ jobs:
           check RUSTUP_HOME "$RUSTUP_HOME" /home/runner/.rustup
           check RUNNER_TOOL_CACHE "$RUNNER_TOOL_CACHE" /opt/hostedtoolcache
       - name: Unprivileged and limited
+        env:
+          CPUS: ${{ matrix.cpus }}
+          MEMORY: ${{ matrix.memory }}
         run: |
           set -euo pipefail
           if command -v sudo || command -v docker || [ -e /var/run/docker.sock ]; then echo "::error::sudo or docker is available"; exit 1; fi
           grep -q '^CapEff:[[:space:]]*0000000000000000$' /proc/self/status || { echo "::error::job has capabilities"; exit 1; }
           if [ -e /etc/sccache ] || [ -e /srv/sccache ]; then echo "::error::cache server files are visible"; exit 1; fi
-          [ "$(cat /sys/fs/cgroup/cpu.max)" = "800000 100000" ] || { echo "::error::cpu.max is $(cat /sys/fs/cgroup/cpu.max)"; exit 1; }
-          [ "$(cat /sys/fs/cgroup/memory.max)" = 51539607552 ] || { echo "::error::memory.max is $(cat /sys/fs/cgroup/memory.max)"; exit 1; }
-          echo "cpu.max=$(cat /sys/fs/cgroup/cpu.max) memory.max=$(cat /sys/fs/cgroup/memory.max)"
+          [ "$(cat /sys/fs/cgroup/cpu.max)" = "${CPUS}00000 100000" ] || { echo "::error::cpu.max is $(cat /sys/fs/cgroup/cpu.max)"; exit 1; }
+          [ "$(cat /sys/fs/cgroup/memory.max)" = "$MEMORY" ] || { echo "::error::memory.max is $(cat /sys/fs/cgroup/memory.max)"; exit 1; }
+          [ "$(nproc)" = "$CPUS" ] || { echo "::error::nproc is $(nproc), expected $CPUS"; exit 1; }
+          node_cpus=$(node -p 'require("os").availableParallelism()')
+          [ "$node_cpus" = "$CPUS" ] || { echo "::error::os.availableParallelism() is $node_cpus, expected $CPUS"; exit 1; }
+          echo "cpu.max=$(cat /sys/fs/cgroup/cpu.max) memory.max=$(cat /sys/fs/cgroup/memory.max) nproc=$(nproc) node=$node_cpus cpuset=$(cat /sys/fs/cgroup/cpuset.cpus.effective)"
+      - name: Preinstalled tools
+        run: |
+          set -euo pipefail
+          for tool in gh jq git curl make gcc bison yacc shellcheck zip unzip xz zstd rsync tar file python3 pip3 node npm corepack pwsh pkg-config dpkg-deb sha256sum sha512sum cargo rustc; do
+            command -v "$tool" >/dev/null || { echo "::error::$tool missing"; exit 1; }
+          done
+          python3 -m venv "$RUNNER_TEMP/venv"
+          corepack enable && pnpm --version
+          gh --version | head -n 1; node --version; pwsh --version
       - name: Egress reaches the internet and the cache, not private networks
         run: |
           set -euo pipefail
@@ -136,3 +157,33 @@ jobs:
     runs-on: [self-hosted, intent-cache]
     timeout-minutes: 60
     steps: *cache-build
+
+  # Keeps all six small slots busy while the heavy slots build, so the
+  # cache is measured with every slot loaded.
+  cache-reader-small:
+    name: Build intent-core (intent-cache-small slot ${{ matrix.slot }}, reads the cache)
+    needs: cache-writer
+    strategy:
+      matrix:
+        slot: [1, 2, 3, 4, 5, 6]
+    runs-on: [self-hosted, intent-cache-small]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+      - run: git submodule update --init --depth=1 packages/intentd
+      - name: Configure the self-hosted compiler cache
+        env:
+          INTENT_SCCACHE_ENDPOINT: ${{ vars.INTENT_SCCACHE_ENDPOINT }}
+          INTENT_SCCACHE_TOKEN: ${{ secrets.INTENT_SCCACHE_TOKEN }}
+          INTENT_SCCACHE_MODE: ${{ vars.INTENT_SCCACHE_MODE }}
+        run: python3 scripts/setup-sccache.py
+      - name: Build intent-core
+        working-directory: packages/intentd
+        env:
+          CARGO_TERM_PROGRESS_WHEN: never
+        run: |
+          sccache --zero-stats >/dev/null
+          cargo build --locked -p intent-core
+          sccache --show-stats
