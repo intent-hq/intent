@@ -462,7 +462,8 @@ class Installer(Stubbed):
         default = ['github-runner@heavy-1.service', 'github-runner@heavy-2.service'] + \
             [f'github-runner@small-{n}.service' for n in range(1, 7)]
         self.assertEqual(self.enabled(), sorted(default))
-        self.assertIn(['enable', '--now', 'github-runner@small-6.service'], self.systemctl())
+        self.assertIn(['enable', 'github-runner@small-6.service'], self.systemctl())
+        self.assertFalse([a for a in self.systemctl() if a[:2] == ['enable', '--now']], 'no blocking starts')
 
         self.log.write_text('')
         self.env_file.write_text(self.env_file.read_text().replace('SMALL_SLOTS=6', 'SMALL_SLOTS=2'))

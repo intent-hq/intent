@@ -180,7 +180,9 @@ apply_slots() {
     return 0
   fi
   for n in $wanted; do
-    systemctl enable --now "github-runner@$n.service" >/dev/null
+    # --no-block: a slot that is draining a job would hold a blocking start.
+    systemctl enable "github-runner@$n.service" >/dev/null
+    systemctl is-active --quiet "github-runner@$n.service" || systemctl start --no-block "github-runner@$n.service"
   done
   log "slots enabled: $(tr '\n' ' ' <<<"$wanted")"
 }
