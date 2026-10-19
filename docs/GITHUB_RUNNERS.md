@@ -1,29 +1,39 @@
 # GitHub runner slots runbook (intent-cache)
 
 The `intent-cache` box (see [SCCACHE_SERVER.md](./SCCACHE_SERVER.md#the-box))
-also runs org-wide GitHub Actions Linux runners for `intent-hq`. Each slot runs
-one job in a fresh Docker container, then starts another. Everything needed to
+also runs org-wide GitHub Actions Linux runners for `intent-hq`, in two pools:
+
+| Pool | Slots | Label | Per slot |
+|---|---|---|---|
+| heavy | 2 | `intent-cache` | 8 CPUs (pinned 0-7, 8-15), 48 GB |
+| small | 6 | `intent-cache-small` | 1 CPU (pinned 16-21, one each), 3 GB |
+
+CPUs 22-23 are left to the cache and the system.
+
+Each slot runs one job in a fresh Docker container, then starts another. Everything needed to
 rebuild them lives in [`infra/runners/`](../infra/runners/).
 
 ```
-github-runner@N.service ─ supervisor.sh N ─┬─ GitHub API: JIT registration (one job)
-                                           └─ docker run --rm intent-gh-runner:current
-                                                └─ actions runner ─ job ─ exits ─ container removed
+github-runner@<pool>-<n>.service ─ supervisor.sh <pool>-<n> ─┬─ GitHub API: JIT registration (one job)
+                                                            └─ docker run --rm intent-gh-runner:current
+                                                                 └─ actions runner ─ job ─ exits ─ container removed
 ```
 
 | File | Installed as | Role |
 |---|---|---|
-| `Dockerfile`, `entrypoint.sh` | image `intent-gh-runner:current` | Ubuntu 24.04, build tools, pinned runner and rustup (checksummed), Rust toolchain baked, user `runner` (uid 1001), no sudo |
-| `supervisor.sh` | `/usr/local/lib/github-runners/` | One slot, one job: JIT-register, run the container, drain on stop, deregister |
-| `github-runner@.service` | `/etc/systemd/system/` | One instance per slot; restarts the supervisor after every job |
-| `github-runners.slice` | `/etc/systemd/system/` | Parent cgroup of the containers: CPU and IO weight 50 (cache services: 100), 100G cap |
+| `Dockerfile`, `entrypoint.sh` | image `intent-gh-runner:current` | One image for both pools: Ubuntu 24.04, build tools, pinned and checksummed runner, rustup, gh, Node and PowerShell; Rust toolchain baked; user `runner` (uid 1001); no sudo |
+| `supervisor.sh` | `/usr/local/lib/github-runners/` | One slot, one job: JIT-register, run the pinned container, drain on stop, deregister; `--plan` validates the config and lists the slots |
+| `runners.env` | `/etc/github-runners/runners.env` (once) | Pools, slot counts, labels, CPU sets, memory (not secret) |
+| `github-runner@.service` | `/etc/systemd/system/` | One instance per slot (`heavy-1`, `small-3`, …); restarts the supervisor after every job |
+| `runners.slice` | `/etc/systemd/system/` | Parent cgroup of the containers at the cgroup root: CPU and IO weight 10 (`system.slice`: 100), 116G cap |
+| `cache-priority.conf` | `/etc/systemd/system/{caddy,sccache-webdav}.service.d/runners-priority.conf` | CPU and IO weight 1000 for the cache services |
 | `egress.sh`, `github-runners-egress.service` | `/usr/local/lib/github-runners/`, `/etc/systemd/system/` | Blocks containers from private, tailnet and link-local addresses |
 | `daemon.json` | `/etc/docker/daemon.json` | User-namespace remapping, journald logs, no inter-container traffic, no-new-privileges |
 | `install.sh` | — | Idempotent installer for all of the above and the slot count |
 | `test_runners.py` | — | Supervisor and installer tests with stubbed system commands (monorepo CI `shell-tests`) |
 
 Logs go to journald: `journalctl -u 'github-runner@*' -f` (supervisor and the
-runner output, tagged `github-runner-N`).
+runner output, tagged `github-runner-<pool>-<n>`).
 
 ## Design
 
@@ -49,16 +59,39 @@ runner output, tagged `github-runner-N`).
   link-local in the `raw` table, which Docker, Tailscale and ufw never reorder.
   The supervisor refuses to start a job if those rules are missing. No container
   publishes a port, so Docker never opens anything past ufw.
-- **Limits per slot.** 8 CPUs, 48 GB memory (no swap), 16384 processes, 1 GB
-  `/dev/shm`. Two slots leave 8 threads and about 30 GB for the cache and page
-  cache. Job disk lives in the container layer on the root NVMe
-  (`/var/lib/docker`), separate from the cache disk, and disappears with the
-  container.
-- **Labels.** `self-hosted`, `Linux`, `X64` (GitHub adds these itself) and
-  `intent-cache`. Target them explicitly with
-  `runs-on: [self-hosted, intent-cache]`. The `runner-route` probe also counts
-  every online `self-hosted`/`Linux`/`X64` runner as Linux fleet capacity unless
-  the repository variable `CI_LINUX_RUNNER_DISABLED` is `true`.
+- **Pinned CPUs and limits.** Each slot is pinned to its own CPU set
+  (`--cpuset-cpus`) with a matching CPU quota, so `nproc` and Node's
+  `os.availableParallelism()` report 8 on a heavy slot and 1 on a small one.
+  Memory has no swap: 48 GB (heavy) and 3 GB (small), 2 × 48 + 6 × 3 = 114 GB,
+  leaving about 11 GB of the 125 GB for the system and page cache. Processes:
+  16384 / 4096; `/dev/shm`: 1 GB / 256 MB. Caddy, rclone and the system are not pinned;
+  CPUs 22-23 are never given to a slot, and on the others the cache wins CPU
+  and IO contention (weight 1000 inside
+  `system.slice`, which outweighs `runners.slice` 10 to 1). The box has 12
+  cores with two threads each (CPU *n* and *n*+12 share a core), so with every
+  slot busy the pools share physical cores; for whole-core isolation set the
+  CPU sets to sibling pairs, e.g. `HEAVY_CPUSETS=0-3,12-15 4-7,16-19` and the
+  small pool on 8-10 and 20-22. Job disk lives in the container layer on the
+  root NVMe (`/var/lib/docker`), separate from the cache disk, and disappears
+  with the container.
+- **Labels.** `self-hosted`, `Linux`, `X64` (GitHub adds these itself) plus
+  `intent-cache` (heavy) or `intent-cache-small` (small). Target a pool
+  explicitly, e.g. `runs-on: [self-hosted, intent-cache-small]`. The
+  `runner-route` probe also counts every online `self-hosted`/`Linux`/`X64`
+  runner, from either pool, as Linux fleet capacity unless the repository
+  variable `CI_LINUX_RUNNER_DISABLED` is `true`.
+
+## Preinstalled tools
+
+Routed jobs call these without a setup step, as they would on GitHub-hosted
+`ubuntu-24.04`: bash, git, git-lfs, curl, jq, gh, make, gcc/g++
+(build-essential), bison/yacc, pkg-config, libssl-dev, shellcheck, tar, zip,
+unzip, xz, zstd, rsync, file, dpkg-deb, python3 with pip and venv, Node with
+npm and corepack (in `/opt/node`, owned by `runner`, so `corepack enable` and
+`npm install -g` work without sudo), PowerShell (`pwsh`), and rustup with the
+pinned Rust toolchain. Other versions of Node, Python and Rust come from the
+usual setup actions. Pins and checksums are the `ARG`s at the top of the
+`Dockerfile`; add a tool there when a routed job needs it.
 
 ## Not supported in jobs
 
@@ -114,26 +147,32 @@ installs everything and leaves the slots off. `--no-build` skips the image
 build for configuration-only changes.
 
 Slot settings live in `/etc/github-runners/runners.env` (not secret; the
-installer writes defaults once and never overwrites it): `GITHUB_ORG`,
-`RUNNER_GROUP_ID` (1 = Default), `RUNNER_LABELS`, `RUNNER_CPUS`,
-`RUNNER_MEMORY`, and optionally `RUNNER_PIDS` and `RUNNER_SHM`. Changes apply
-from the next job.
+installer copies [`runners.env`](../infra/runners/runners.env) once and never
+overwrites it): `GITHUB_ORG`, `RUNNER_GROUP_ID` (1 = Default), `RUNNER_POOLS`,
+and per pool `<POOL>_SLOTS`, `_LABELS`, `_CPUSETS` (one entry per slot,
+space-separated), `_MEMORY`, `_PIDS`, `_SHM`. Limits apply from each slot's
+next job.
 
 ## Add or remove slots
 
+Edit `/etc/github-runners/runners.env` (for example `SMALL_SLOTS=4`, or a new
+pool added to `RUNNER_POOLS` with its own keys), check it, then apply:
+
 ```bash
-ssh root@intent-cache /root/infra/runners/install.sh --slots 3 --no-build
+ssh root@intent-cache
+/usr/local/lib/github-runners/supervisor.sh --plan   # validates, lists slots
+/root/infra/runners/install.sh --no-build
 ```
 
-Lowering the count drains and disables the extra slots (highest numbers first);
-`--slots 0` drains all. Keep `slots × RUNNER_CPUS` at or below 16 and
-`slots × RUNNER_MEMORY` at or below 96 GB on this box, or lower the per-slot
-limits.
+The installer enables exactly the planned slots and drains and disables the
+rest; an invalid file changes nothing. Keep CPU sets disjoint, leave a CPU or
+two unpinned, and keep the total memory at or below about 114 GB on this box
+(raise `MemoryMax` in `runners.slice` with it).
 
 ## Drain and stop
 
 ```bash
-systemctl stop github-runner@2          # one slot
+systemctl stop github-runner@heavy-2    # one slot
 systemctl stop 'github-runner@*'        # all slots
 ```
 
@@ -159,18 +198,19 @@ release, so bump the pin at least monthly:
 
 | Symptom | Check |
 |---|---|
-| Slot restarts every few seconds | `journalctl -u github-runner@1 -n 50`: credential missing or not 600, egress rules missing (`systemctl restart github-runners-egress`), image missing (re-run the installer) |
+| Slot restarts every few seconds | `journalctl -u github-runner@heavy-1 -n 50`: credential missing or not 600, egress rules missing (`systemctl restart github-runners-egress`), image missing (re-run the installer) |
 | `JIT registration failed (HTTP 401/403)` | The credential expired or lacks **Self-hosted runners: read and write** on the org |
 | `JIT registration failed (HTTP 409/422)` | Name conflict or bad `RUNNER_GROUP_ID`/labels in `runners.env` |
-| Jobs stay queued | `gh api orgs/intent-hq/actions/runners` (needs the same permission): runners online with the expected labels; the runner group allows the repository; `docker ps` shows `gh-runner-N` |
-| Offline `intent-cache-N-*` runners in the org list | Left by a crash or reboot; the slot deletes its own on its next start |
+| `is not a configured slot` | The unit's instance is not in `supervisor.sh --plan`; re-run the installer |
+| Jobs stay queued | `gh api orgs/intent-hq/actions/runners` (needs the same permission): runners online with the expected labels; the runner group allows the repository; `docker ps` shows `gh-runner-<pool>-<n>` |
+| Offline `intent-cache-<pool>-<n>-*` runners in the org list | Left by a crash or reboot; the slot deletes its own on its next start |
 | A job cannot reach a host | Private and tailnet addresses are blocked on purpose; `iptables -t raw -S GH-RUNNERS-EGRESS` lists them |
-| Cache slow while jobs run | `systemctl show github-runners.slice -p CPUWeight,IOWeight`; lower `RUNNER_CPUS` or the slot count |
+| Cache slow while jobs run | `cat /sys/fs/cgroup/runners.slice/cpu.weight` (10) and `/sys/fs/cgroup/system.slice/caddy.service/cpu.weight` (1000); fewer slots or smaller CPU sets |
 
 Health at a glance:
 
 ```bash
 systemctl status 'github-runner@*' github-runners-egress --no-pager
 docker ps --format '{{.Names}} {{.Status}}'
-systemd-cgtop -1 github-runners.slice
+systemd-cgtop -1 runners.slice
 ```
