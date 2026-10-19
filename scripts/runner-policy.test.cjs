@@ -258,3 +258,20 @@ test('the fast pool routes standard labels and bursts independently of the heavy
   });
   assert.deepEqual(grown.runners['ubuntu-24.04'], SMALL);
 });
+test('both pools carry the generic labels, so capacity and demand are counted per pool label', async () => {
+  // GitHub adds self-hosted/Linux/X64 to every slot; only the pool label separates them.
+  const smallOnly = await route({ runners: Array.from({ length: 6 }, () => smallSlot()) });
+  assert.deepEqual(smallOnly.runners['gh-linux-8x'], ['gh-linux-8x']);
+  assert.deepEqual(smallOnly.runners['ubuntu-24.04'], SMALL);
+  assert.ok(smallOnly.messages.some((m) => m.includes('linux routing: burst=true (no available compatible runner)')));
+  // Six running fast jobs fill the small pool but leave both heavy slots free.
+  const job = (id) => ({ id, status: 'in_progress', labels: SMALL, created_at: new Date().toISOString() });
+  const r = await route({ jobs: Array.from({ length: 6 }, (_, i) => job(i + 3)) });
+  assert.ok(r.messages.some((m) => m.includes('linux routing: burst=false (queue depth=0 threshold=2 online=2)')));
+  // A routed job's labels always include its pool label, so the other pool cannot take it.
+  const healthy = await route({});
+  assert.ok(healthy.runners['gh-linux-8x'].includes('intent-cache'));
+  assert.ok(!healthy.runners['gh-linux-8x'].includes('intent-cache-small'));
+  assert.ok(healthy.runners['ubuntu-24.04'].includes('intent-cache-small'));
+  assert.ok(!healthy.runners['ubuntu-24.04'].includes('intent-cache'));
+});
