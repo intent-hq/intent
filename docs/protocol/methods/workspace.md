@@ -2817,6 +2817,27 @@ the RFC-3339 timestamp of the last committed materialization by end-of-turn usag
 the reconciliation pass (`null` before the first). Updated values are pushed via
 `workspace:tokenUsage-changed` (§6.5).
 
+**Additive agent names** *(additive, [intent-hq/intent#7334](https://github.com/intent-hq/intent/pull/7334))*.
+`agentNames` maps an `agentId` to that agent session's display name, so a client can label
+every usage row, including retired agents, delegated agents it has not loaded, and agents in
+their delete grace window. Its keys are a subset of the `byAgentId` keys. A session whose name
+is empty after trimming whitespace is omitted, and an empty map is omitted from the wire. An
+absent field can therefore mean an empty map, an older daemon, or a persisted snapshot that
+predates the field. Clients handle all three the same way: prefer the name of an agent they
+have loaded, then `agentNames`, then their own generic label. They never show a raw `agentId`.
+
+Names are materialized with the rest of the snapshot and carry the same freshness: they are
+the session names at the last committed materialization. A rename alone does not trigger a
+materialization. When the next end-of-turn usage accounting update or reconciliation pass in
+that workspace recomputes the snapshot, a changed name is a snapshot change: that pass
+commits and publishes `workspace:tokenUsage-changed` even if no counter moved. A persisted
+snapshot without the field is not backfilled on the read path. The first reconciliation
+pass after a daemon upgrade recomputes every workspace it sweeps, so each swept workspace
+that has a named agent commits and publishes once. A workspace the pass does not sweep, or
+one whose recompute is declined, keeps serving its stored names (or none) until its next
+committed materialization. Ship order: this contract, then the intentd implementation, then
+the cloudlands-fe consumer; the auto-bump advances the pins.
+
 **Additive cross-filter rows.** `byAgentModel` is the sparse, materialized agent × model
 projection. One **TokenUsageCrossFilterRow** has the exact shape
 `{ agentId: string, model: string, totals: TokenUsageTotals, humanMessages: number,
@@ -2835,21 +2856,6 @@ counts from `byAgentId` and `byModel`. Loading an old persisted snapshot does no
 the read path. The next end-of-turn usage accounting update that commits a changed snapshot, or
 the next reconciliation pass that commits one, materializes the field. A transcript write alone
 does not materialize the field or publish `workspace:tokenUsage-changed`.
-
-**Additive agent names.** `agentNames` maps an `agentId` to that agent session's display
-name, so a client can label every usage row, including retired agents, delegated agents it
-has not loaded, and agents in their delete grace window. Clients use these names only as a
-fallback after the names of agents they have loaded, and never show a raw `agentId`. Every
-key is also a `byAgentId` key. A session with a missing or empty name is omitted, and so is
-a key absent from `byAgentId`. The daemon writes the map from the same `agent_session` rows
-it already reads when it materializes the snapshot, so `workspace.getTokenUsage` and
-`workspace:tokenUsage-changed` serve it without an extra query. An empty map is omitted
-from the wire. A client therefore cannot tell an empty map apart from an older daemon or
-persisted snapshot, and handles both by falling back to its own label for unnamed rows.
-Names follow the rules for materialized fields: a rename alone does not publish
-`workspace:tokenUsage-changed`. The next committed end-of-turn materialization or
-reconciliation pass in that workspace writes the current names, and a name change by
-itself counts as a snapshot change for that commit.
 
 **Safe rollout order.** Land this additive canonical contract first in
 [intent-hq/intent#4376](https://github.com/intent-hq/intent/pull/4376), then the daemon
