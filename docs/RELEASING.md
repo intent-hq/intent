@@ -47,6 +47,24 @@ head match prevents a refreshed, unchecked PR head from being merged using the
 earlier decision. Queue submission is not evidence of a completed merge or a
 published alpha; confirm the PR's merged state and the release artifacts.
 
+In intentd, every auto-cut run (cron, manual dispatch and push) also reads
+main's live tip right before merging. It requires the release PR head to contain
+that tip, for both the direct merge and the queue path, and the classifier diffs
+against that tip. GitHub's `baseRefOid` and `mergeStateStatus` are only the PR's
+last-synced view of main, and `--admin` bypasses the ruleset's strict
+up-to-date rule. Cron run 39234998462 saw a stale base (b4349bb0) while main was
+at 2d7c7bb0, and cut v0.11.10 (intentd#2506) one commit behind main. A change
+landing in that window ships without its changelog entry or version bump. A head
+that is behind, or a tip or comparison that cannot be read, never merges: push
+runs retry within their polling budget. Cron and dispatch runs skip, because the
+push run for the newer main commit is queued behind them and handles the wait.
+release-plz rebuilds the PR on current main after every successful run, so a PR
+that is behind catches up on the next refresh. In v0.11.10 that refresh never
+happened because the release-plz run for 2d7c7bb0 failed on a network error.
+After a failed refresh the cut now waits for the next push to main.
+One race remains: main can move in the seconds between this check and the
+merge, because `--match-head-commit` pins only the head.
+
 In intentd, the release PR's own CI is shortened the same way. When the PR's
 `release-fast-path` job reports a metadata-only diff, `check` and
 `coverage-changed` are skipped on that PR. CI Gate accepts the skip only when
@@ -165,8 +183,9 @@ suite is `python3 -S -B -m unittest -v scripts.test_cleanup_prereleases`.
   runtime and lifecycle proofs, release build, `install-ps1` and Windows Pi legs, and
   that push run's CI Gate requires them. A Windows-only regression therefore lands
   on `main` and holds releases instead of merges. Before merging the Release PR,
-  `auto-cut-alpha.yml` reads the latest push-event `ci.yml` run on the Release PR's
-  base (the `main` tip being released). A green run proceeds. A queued or running
+  `auto-cut-alpha.yml` reads the latest push-event `ci.yml` run on `main`'s live tip,
+  which the Release PR head must contain (see
+  [Guarded direct release merges](#guarded-direct-release-merges)). A green run proceeds. A queued or running
   one waits within the CI budget, then the hourly cron retries. Any other conclusion
   (failed, cancelled, timed out) skips the cut. To unblock, re-run the
   failed jobs on that `main` run or land a fix; the next attempt cuts. A human
