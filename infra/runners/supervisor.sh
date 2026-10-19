@@ -11,8 +11,10 @@
 # SIGTERM (systemctl stop) drains: an idle runner is deregistered and its
 # container stopped at once; a busy runner finishes its job first.
 #
-# Usage: supervisor.sh <pool>-<n>   run one job in slot n of pool
-#        supervisor.sh --plan       validate the config, print every slot
+# Usage: supervisor.sh <pool>-<n>     run one job in slot n of pool
+#        supervisor.sh --plan         validate the config, print every slot
+#        supervisor.sh --group-apply  create or correct the runner group
+#        supervisor.sh --group-check  print the group and slot membership (JSON)
 # Config: /etc/github-runners/runners.env (RUNNERS_CONFIG overrides)
 # Credential: /etc/github-runners/credentials, root 0600 (RUNNERS_CREDENTIALS
 # overrides): the bare token on one line, GITHUB_TOKEN=<fine-grained PAT>, or GITHUB_APP_ID,
@@ -51,6 +53,7 @@ read_kv() {
 load_config() {
   GITHUB_ORG=intent-hq
   RUNNER_GROUP=intent-cache
+  RUNNER_GROUP_REPOS=intent,intentd,cloudlands-fe
   RUNNER_NAME_PREFIX=intent-cache
   RUNNER_IMAGE=intent-gh-runner:current
   RUNNER_NETWORK=gh-runners
@@ -69,11 +72,12 @@ load_config() {
   SMALL_PIDS=4096
   SMALL_SHM=256m
   if [ -f "$config_file" ]; then
-    read_kv "$config_file" "GITHUB_ORG RUNNER_GROUP RUNNER_NAME_PREFIX RUNNER_IMAGE RUNNER_NETWORK RUNNER_BRIDGE RUNNER_POOLS" \
+    read_kv "$config_file" "GITHUB_ORG RUNNER_GROUP RUNNER_GROUP_REPOS RUNNER_NAME_PREFIX RUNNER_IMAGE RUNNER_NETWORK RUNNER_BRIDGE RUNNER_POOLS" \
       "^[A-Z][A-Z0-9]*_($POOL_KEYS)\$"
   fi
   [[ "$GITHUB_ORG" =~ ^[A-Za-z0-9-]+$ ]] || die "GITHUB_ORG is invalid"
   [[ "$RUNNER_GROUP" =~ ^[A-Za-z0-9._\ -]+$ ]] || die "RUNNER_GROUP is invalid"
+  [[ "$RUNNER_GROUP_REPOS" =~ ^[A-Za-z0-9._-]+(,[A-Za-z0-9._-]+)*$ ]] || die "RUNNER_GROUP_REPOS must be a comma-separated list of repository names"
   [[ "$RUNNER_NAME_PREFIX" =~ ^[A-Za-z0-9-]+$ ]] || die "RUNNER_NAME_PREFIX is invalid"
   [[ "$RUNNER_POOLS" =~ ^[a-z][a-z0-9]*( [a-z][a-z0-9]*)*$ ]] || die "RUNNER_POOLS must be space-separated lowercase names"
 }
@@ -127,7 +131,7 @@ load_credentials() {
   local mode owner
   mode="$(stat -c %a "$credentials_file")"
   owner="$(stat -c %u "$credentials_file")"
-  if [ "$owner" != "$(id -u)" ] || [[ ! "$mode" =~ ^[0-7]00$ ]]; then
+  if [ "$owner" != "${RUNNERS_OWNER_UID:-$(id -u)}" ] || [[ ! "$mode" =~ ^[0-7]00$ ]]; then
     die "$credentials_file must be owned by $(id -un) and not readable by others (chmod 600)"
   fi
   local first
@@ -193,13 +197,22 @@ remove_stale() {
   done
 }
 
-# Sets group_id from the RUNNER_GROUP name. Never falls back to Default: a
-# missing group stops the slot instead of exposing it to every repository.
+# Sets group_id from the RUNNER_GROUP name. Never falls back to Default, and
+# refuses a group that drifted (not "selected", or repositories other than
+# RUNNER_GROUP_REPOS): the repository list is the boundary on who may run code
+# on this box.
 resolve_group() {
   api GET "/orgs/$GITHUB_ORG/actions/runner-groups?per_page=100"
   [ "$api_status" = 200 ] || die "listing runner groups failed (HTTP $api_status)"
-  group_id="$(jq -r --arg n "$RUNNER_GROUP" '[.runner_groups[] | select(.name == $n) | .id][0] // empty' <<<"$api_body")"
-  [ -n "$group_id" ] || die "runner group '$RUNNER_GROUP' not found in $GITHUB_ORG (see docs/GITHUB_RUNNERS.md, Runner group)"
+  local group repos want
+  group="$(jq -c --arg n "$RUNNER_GROUP" '[.runner_groups[] | select(.name == $n)][0] // empty' <<<"$api_body")"
+  [ -n "$group" ] || die "runner group '$RUNNER_GROUP' not found in $GITHUB_ORG (see docs/GITHUB_RUNNERS.md, Runner group)"
+  group_id="$(jq -r .id <<<"$group")"
+  repos="$(all_pages "/orgs/$GITHUB_ORG/actions/runner-groups/$group_id/repositories?" repositories | jq -c '[.[].name] | sort')"
+  want="$(jq -c -n --arg w "$RUNNER_GROUP_REPOS" '$w | split(",") | sort')"
+  if [ "$(jq -r .visibility <<<"$group")" != selected ] || [ "$repos" != "$want" ]; then
+    die "runner group '$RUNNER_GROUP' drifted (visibility $(jq -r .visibility <<<"$group"), repositories $repos, expected $want); refusing to register. Run supervisor.sh --group-apply"
+  fi
 }
 
 deregister() {
@@ -210,6 +223,84 @@ deregister() {
     204|404) ;;
     *) log "warning: could not delete runner $runner_id (HTTP $api_status)" ;;
   esac
+}
+
+# The runner group: RUNNER_GROUP, visible only to RUNNER_GROUP_REPOS (public
+# repositories allowed, since the CI repositories are public), not restricted
+# to workflows. group_apply creates or corrects it; group_check prints the
+# live state (no secrets) and fails on any drift or on a slot runner outside
+# the group.
+group_repo_ids() {
+  local repo ids=()
+  IFS=, read -ra repos <<<"$RUNNER_GROUP_REPOS"
+  for repo in "${repos[@]}"; do
+    api GET "/repos/$GITHUB_ORG/$repo"
+    [ "$api_status" = 200 ] || die "repository $GITHUB_ORG/$repo not found (HTTP $api_status)"
+    ids+=("$(jq -r '.id' <<<"$api_body")")
+  done
+  printf '%s\n' "${ids[@]}" | jq -sc .
+}
+
+find_group() {
+  api GET "/orgs/$GITHUB_ORG/actions/runner-groups?per_page=100"
+  [ "$api_status" = 200 ] || die "listing runner groups failed (HTTP $api_status)"
+  jq -r --arg n "$RUNNER_GROUP" '[.runner_groups[] | select(.name == $n) | .id][0] // empty' <<<"$api_body"
+}
+
+group_apply() {
+  local ids id settings
+  ids="$(group_repo_ids)"
+  id="$(find_group)"
+  settings='{"visibility": "selected", "allows_public_repositories": true, "restricted_to_workflows": false}'
+  if [ -z "$id" ]; then
+    api POST "/orgs/$GITHUB_ORG/actions/runner-groups" \
+      "$(jq -c --arg n "$RUNNER_GROUP" --argjson r "$ids" '. + {name: $n, selected_repository_ids: $r}' <<<"$settings")"
+    [ "$api_status" = 201 ] || die "creating runner group '$RUNNER_GROUP' failed (HTTP $api_status)"
+    log "created runner group '$RUNNER_GROUP'"
+    return 0
+  fi
+  api PATCH "/orgs/$GITHUB_ORG/actions/runner-groups/$id" "$settings"
+  [ "$api_status" = 200 ] || die "updating runner group '$RUNNER_GROUP' failed (HTTP $api_status)"
+  api PUT "/orgs/$GITHUB_ORG/actions/runner-groups/$id/repositories" "$(jq -nc --argjson r "$ids" '{selected_repository_ids: $r}')"
+  [ "$api_status" = 204 ] || die "setting the repositories of '$RUNNER_GROUP' failed (HTTP $api_status)"
+  log "runner group '$RUNNER_GROUP' limited to $RUNNER_GROUP_REPOS"
+}
+
+# all_pages PATH? KEY: every element of .KEY across pages, as one JSON array.
+# PATH must end with "?".
+all_pages() {
+  local page=1 acc='[]' count
+  while :; do
+    api GET "${1}per_page=100&page=$page"
+    [ "$api_status" = 200 ] || die "GET $1 failed (HTTP $api_status)"
+    acc="$(jq -c --argjson a "$acc" --arg k "$2" '$a + .[$k]' <<<"$api_body")"
+    count="$(jq --arg k "$2" '.[$k] | length' <<<"$api_body")"
+    [ "$count" -ge 100 ] || break
+    page=$((page + 1))
+  done
+  echo "$acc"
+}
+
+group_check() {
+  local id group repos ours members report
+  id="$(find_group)"
+  [ -n "$id" ] || die "runner group '$RUNNER_GROUP' not found"
+  api GET "/orgs/$GITHUB_ORG/actions/runner-groups/$id"
+  group="$api_body"
+  repos="$(all_pages "/orgs/$GITHUB_ORG/actions/runner-groups/$id/repositories?" repositories)"
+  ours="$(all_pages "/orgs/$GITHUB_ORG/actions/runners?" runners | jq -c --arg p "$RUNNER_NAME_PREFIX-" '[.[] | select(.name | startswith($p)) | .name]')"
+  members="$(all_pages "/orgs/$GITHUB_ORG/actions/runner-groups/$id/runners?" runners | jq -c '[.[].name]')"
+  report="$(jq -n --argjson g "$group" --argjson r "$repos" --argjson o "$ours" --argjson m "$members" --arg want "$RUNNER_GROUP_REPOS" '{
+    group: $g.name, id: $g.id, visibility: $g.visibility,
+    allows_public_repositories: $g.allows_public_repositories,
+    restricted_to_workflows: $g.restricted_to_workflows,
+    repositories: ([$r[].name] | sort), expected_repositories: ($want | split(",") | sort),
+    slot_runners: ($o | length), in_group: ([$o[] | select(. as $n | $m | index($n))] | length),
+    outside_group: [$o[] | select(. as $n | $m | index($n) | not)]
+  } | .ok = (.visibility == "selected" and .allows_public_repositories and (.restricted_to_workflows | not)
+             and .repositories == .expected_repositories and (.outside_group | length) == 0)')"
+  echo "$report"
+  [ "$(jq -r .ok <<<"$report")" = true ] || exit 1
 }
 
 container=""
@@ -231,13 +322,12 @@ on_term() {
 
 main() {
   slot="${1:-}"
-  if [ "$slot" = --plan ]; then
-    slot=plan
-    load_config
-    plan
-    exit 0
-  fi
-  [[ "$slot" =~ ^[a-z][a-z0-9]*-[1-9][0-9]*$ ]] || { echo "usage: $0 <pool>-<n> | --plan" >&2; exit 2; }
+  case "$slot" in
+    --plan) slot=plan; load_config; plan; exit 0 ;;
+    --group-apply) slot=group; load_config; load_credentials; mint_token; group_apply; exit 0 ;;
+    --group-check) slot=group; load_config; load_credentials; mint_token; group_check; exit 0 ;;
+  esac
+  [[ "$slot" =~ ^[a-z][a-z0-9]*-[1-9][0-9]*$ ]] || { echo "usage: $0 <pool>-<n> | --plan | --group-apply | --group-check" >&2; exit 2; }
   load_config
   local planned
   planned="$(plan)"

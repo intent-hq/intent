@@ -83,6 +83,13 @@ with open(os.environ['STUB_LOG'], 'a') as f:
     f.write(json.dumps({'cmd': os.path.basename(sys.argv[0]), 'argv': sys.argv[1:]}) + '\n')
 '''
 
+# Shell, not Python: egress.sh makes dozens of iptables calls.
+SH_LOG_STUB = r'''#!/bin/sh
+args=""
+for a in "$@"; do args="$args${args:+, }\"$a\""; done
+printf '{"cmd": "%s", "argv": [%s]}\n' "$(basename "$0")" "$args" >> "$STUB_LOG"
+'''
+
 # systemctl: enable/disable maintain the wants/ symlinks like the real one.
 SYSTEMCTL_STUB = r'''#!/usr/bin/env python3
 import json, os, sys
@@ -142,7 +149,10 @@ class Supervisor(Stubbed):
                 {'id': 14, 'name': 'intent-cache-heavy-10-100', 'status': 'offline'},
             ]}],
             'GET /orgs/example-org/actions/runner-groups': [200, {'runner_groups': [
-                {'id': 1, 'name': 'Default'}, {'id': 3, 'name': 'intent-cache'}]}],
+                {'id': 1, 'name': 'Default', 'visibility': 'all'},
+                {'id': 3, 'name': 'intent-cache', 'visibility': 'selected'}]}],
+            'GET /orgs/example-org/actions/runner-groups/3/repositories': [200, {'repositories': [
+                {'name': 'intent'}, {'name': 'intentd'}, {'name': 'cloudlands-fe'}]}],
             'DELETE /orgs/example-org/actions/runners/11': [204, None],
             'POST /orgs/example-org/actions/runners/generate-jitconfig': [201, {
                 'runner': {'id': 42, 'name': 'intent-cache-heavy-1-x'}, 'encoded_jit_config': JIT}],
@@ -174,6 +184,7 @@ class Supervisor(Stubbed):
         api = [(c['method'], c['path']) for c in self.calls('curl')]
         self.assertEqual(api, [
             ('GET', '/orgs/example-org/actions/runner-groups?per_page=100'),
+            ('GET', '/orgs/example-org/actions/runner-groups/3/repositories?per_page=100&page=1'),
             ('GET', '/orgs/example-org/actions/runners?per_page=100&page=1'),
             ('DELETE', '/orgs/example-org/actions/runners/11'),
             ('POST', '/orgs/example-org/actions/runners/generate-jitconfig'),
@@ -225,17 +236,109 @@ class Supervisor(Stubbed):
         self.assertIn(('DELETE', '/orgs/example-org/actions/runners/21'), api)
         self.assertNotIn(('GET', '/orgs/example-org/actions/runners?per_page=100&page=3'), api)
 
+    def group_fixture(self, groups):
+        for i, repo in enumerate(('intent', 'intentd', 'cloudlands-fe')):
+            self.responses[f'GET /repos/example-org/{repo}'] = [200, {'id': 101 + i, 'name': repo}]
+        self.responses['GET /orgs/example-org/actions/runner-groups'] = [200, {'runner_groups': groups}]
+        self.responses['POST /orgs/example-org/actions/runner-groups'] = [201, {'id': 3, 'name': 'intent-cache'}]
+        self.responses['PATCH /orgs/example-org/actions/runner-groups/3'] = [200, {'id': 3}]
+        self.responses['PUT /orgs/example-org/actions/runner-groups/3/repositories'] = [204, None]
+
+    def test_group_apply_creates_a_missing_group(self):
+        self.group_fixture([{'id': 1, 'name': 'Default'}])
+        rc, out, err = self.run_supervisor('--group-apply')
+        self.assertEqual(rc, 0, err)
+        post = [c for c in self.calls('curl') if c['method'] == 'POST']
+        self.assertEqual(json.loads(post[0]['body']), {
+            'name': 'intent-cache', 'visibility': 'selected', 'allows_public_repositories': True,
+            'restricted_to_workflows': False, 'selected_repository_ids': [101, 102, 103]})
+        self.assertFalse([c for c in self.calls('curl') if c['method'] in ('PATCH', 'PUT', 'DELETE')])
+        self.assertEqual(self.calls('docker'), [])
+        self.assert_no_secret(out, err)
+
+    def test_group_apply_corrects_an_existing_group(self):
+        self.group_fixture([{'id': 1, 'name': 'Default'}, {'id': 3, 'name': 'intent-cache'}])
+        self.config.write_text('GITHUB_ORG=example-org\nRUNNER_GROUP_REPOS=intent,cloudlands-fe\n')
+        rc, out, err = self.run_supervisor('--group-apply')
+        self.assertEqual(rc, 0, err)
+        calls = {c['method']: c for c in self.calls('curl') if c['method'] != 'GET'}
+        self.assertEqual(set(calls), {'PATCH', 'PUT'})
+        self.assertEqual(json.loads(calls['PATCH']['body']), {
+            'visibility': 'selected', 'allows_public_repositories': True, 'restricted_to_workflows': False})
+        self.assertEqual(json.loads(calls['PUT']['body']), {'selected_repository_ids': [101, 103]})
+        self.assertNotIn(('GET', '/repos/example-org/intentd'), [(c['method'], c['path']) for c in self.calls('curl')])
+
+    def test_group_apply_fails_on_unknown_repository(self):
+        self.group_fixture([{'id': 3, 'name': 'intent-cache'}])
+        self.config.write_text('GITHUB_ORG=example-org\nRUNNER_GROUP_REPOS=intent,nope\n')
+        rc, _, err = self.run_supervisor('--group-apply')
+        self.assertNotEqual(rc, 0)
+        self.assertIn('repository example-org/nope not found', err)
+        self.assertFalse([c for c in self.calls('curl') if c['method'] != 'GET'])
+
+    def check_fixture(self, members, **group):
+        self.group_fixture([{'id': 1, 'name': 'Default'}, {'id': 3, 'name': 'intent-cache'}])
+        self.responses['GET /orgs/example-org/actions/runner-groups/3'] = [200, {
+            'id': 3, 'name': 'intent-cache', 'visibility': 'selected', 'allows_public_repositories': True,
+            'restricted_to_workflows': False, **group}]
+        self.responses['GET /orgs/example-org/actions/runner-groups/3/repositories'] = [200, {'repositories': [
+            {'name': 'intentd'}, {'name': 'intent'}, {'name': 'cloudlands-fe'}]}]
+        self.responses['GET /orgs/example-org/actions/runners'] = [200, {'runners': [
+            {'name': 'intent-cache-heavy-1-1'}, {'name': 'intent-cache-small-1-1'}, {'name': 'depot-x'}]}]
+        self.responses['GET /orgs/example-org/actions/runner-groups/3/runners'] = [200, {'runners': [
+            {'name': n} for n in members]}]
+
+    def test_group_check_passes_when_every_slot_is_in_the_group(self):
+        self.check_fixture(['intent-cache-heavy-1-1', 'intent-cache-small-1-1'])
+        rc, out, err = self.run_supervisor('--group-check')
+        self.assertEqual(rc, 0, err)
+        report = json.loads(out)
+        self.assertEqual(report['repositories'], ['cloudlands-fe', 'intent', 'intentd'])
+        self.assertEqual((report['slot_runners'], report['in_group'], report['outside_group'], report['ok']), (2, 2, [], True))
+        self.assertFalse([c for c in self.calls('curl') if c['method'] != 'GET'], 'check never changes anything')
+        self.assert_no_secret(out, err)
+
+    def test_group_check_fails_on_drift(self):
+        for members, group, field in ((['intent-cache-heavy-1-1'], {}, 'outside_group'),
+                                      (['intent-cache-heavy-1-1', 'intent-cache-small-1-1'], {'visibility': 'all'}, 'visibility'),
+                                      (['intent-cache-heavy-1-1', 'intent-cache-small-1-1'], {'restricted_to_workflows': True}, 'restricted_to_workflows')):
+            with self.subTest(field=field):
+                self.log.write_text('')
+                self.check_fixture(members, **group)
+                rc, out, _ = self.run_supervisor('--group-check')
+                self.assertEqual(rc, 1)
+                self.assertFalse(json.loads(out)['ok'])
+        self.assertEqual(json.loads(out)['outside_group'], [])
+        self.check_fixture(['intent-cache-heavy-1-1'])
+        rc, out, _ = self.run_supervisor('--group-check')
+        self.assertEqual(json.loads(out)['outside_group'], ['intent-cache-small-1-1'])
+
+    def test_refuses_to_register_into_a_drifted_group(self):
+        cases = {
+            'an extra repository': ('selected', ['intent', 'intentd', 'cloudlands-fe', 'other']),
+            'a missing repository': ('selected', ['intent', 'intentd']),
+            'visibility all': ('all', ['intent', 'intentd', 'cloudlands-fe']),
+        }
+        for case, (visibility, repos) in cases.items():
+            with self.subTest(case=case):
+                self.log.write_text('')
+                self.responses['GET /orgs/example-org/actions/runner-groups'] = [200, {'runner_groups': [
+                    {'id': 3, 'name': 'intent-cache', 'visibility': visibility}]}]
+                self.responses['GET /orgs/example-org/actions/runner-groups/3/repositories'] = [200, {
+                    'repositories': [{'name': r} for r in repos]}]
+                rc, out, err = self.run_supervisor('heavy-1')
+                self.assertNotEqual(rc, 0)
+                self.assertIn("runner group 'intent-cache' drifted", err)
+                self.assertIn('--group-apply', err)
+                self.assertFalse([c for c in self.calls('curl') if c['method'] != 'GET'], 'nothing registered or deleted')
+                self.assertNotIn('run', [c['argv'][0] for c in self.calls('docker')])
+
     def test_missing_runner_group_never_falls_back_to_default(self):
         self.responses['GET /orgs/example-org/actions/runner-groups'] = [200, {'runner_groups': [{'id': 1, 'name': 'Default'}]}]
         rc, out, err = self.run_supervisor('heavy-1')
         self.assertNotEqual(rc, 0)
         self.assertIn("runner group 'intent-cache' not found", err)
         self.assertFalse([c for c in self.calls('curl') if c['method'] == 'POST'])
-        self.config.write_text('GITHUB_ORG=example-org\nRUNNER_GROUP=Default\n')
-        rc, out, err = self.run_supervisor('heavy-1')
-        self.assertEqual(rc, 0, err)
-        body = json.loads([c for c in self.calls('curl') if c['method'] == 'POST'][-1]['body'])
-        self.assertEqual(body['runner_group_id'], 1)
 
     def test_small_pool_slot(self):
         rc, out, err = self.run_supervisor('small-3')
@@ -412,21 +515,30 @@ class Installer(Stubbed):
         super().setUp()
         self.prefix = self.dir / 'root'
         self.prefix.mkdir()
-        for name in ('apt-get', 'dpkg', 'chown', 'iptables', 'ip6tables'):
+        for name in ('apt-get', 'dpkg', 'chown'):
             write_exe(self.bin / name, LOG_STUB)
+        for name in ('iptables', 'ip6tables'):
+            write_exe(self.bin / name, SH_LOG_STUB)
         write_exe(self.bin / 'systemctl', SYSTEMCTL_STUB)
         write_exe(self.bin / 'id', '#!/bin/sh\necho 0\n')
         os_release = self.dir / 'os-release'
         os_release.write_text('ID=ubuntu\nVERSION_ID="24.04"\nVERSION_CODENAME=noble\n')
+        responses = self.dir / 'responses.json'
+        responses.write_text(json.dumps({
+            **{f'GET /repos/intent-hq/{r}': [200, {'id': 101 + i}] for i, r in enumerate(('intent', 'intentd', 'cloudlands-fe'))},
+            'GET /orgs/intent-hq/actions/runner-groups': [200, {'runner_groups': [{'id': 3, 'name': 'intent-cache'}]}],
+            'PATCH /orgs/intent-hq/actions/runner-groups/3': [200, {'id': 3}],
+            'PUT /orgs/intent-hq/actions/runner-groups/3/repositories': [204, None]}))
         self.env.update(INSTALL_PREFIX=str(self.prefix), OS_RELEASE=str(os_release),
-                        INSTALL_OWNER_UID=str(os.getuid()),
+                        INSTALL_OWNER_UID=str(os.getuid()), RUNNERS_OWNER_UID=str(os.getuid()),
+                        STUB_RESPONSES=str(responses),
                         STUB_DOCKER_FAIL='network inspect')
         self.creds = self.prefix / 'etc/github-runners/credentials'
         self.env_file = self.prefix / 'etc/github-runners/runners.env'
 
     def install(self, *args, **env):
         result = subprocess.run(['bash', str(INSTALL), *args], env={**self.env, **env},
-                                capture_output=True, text=True, timeout=60)
+                                capture_output=True, text=True, timeout=300)
         return result
 
     def systemctl(self):
@@ -483,6 +595,10 @@ class Installer(Stubbed):
             [f'github-runner@small-{n}.service' for n in range(1, 7)]
         self.assertEqual(self.enabled(), sorted(default))
         self.assertIn(['enable', 'github-runner@small-6.service'], self.systemctl())
+        rows = [json.loads(line) for line in self.log.read_text().splitlines()]
+        put = [i for i, r in enumerate(rows) if r['cmd'] == 'curl' and r['method'] == 'PUT']
+        enable = [i for i, r in enumerate(rows) if r['cmd'] == 'systemctl' and r['argv'][0] == 'enable' and 'runner@' in r['argv'][-1]]
+        self.assertTrue(put and enable and max(put) < min(enable), 'the group is applied before any slot is enabled')
         self.assertFalse([a for a in self.systemctl() if a[:2] == ['enable', '--now']], 'no blocking starts')
 
         self.log.write_text('')
@@ -498,6 +614,15 @@ class Installer(Stubbed):
         self.env_file.write_text('RUNNER_POOLS=heavy\nHEAVY_SLOTS=0\n')
         result = self.install('--no-build')
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.enabled(), [])
+
+    def test_group_failure_leaves_slots_alone(self):
+        self.place_credential()
+        self.env['STUB_RESPONSES'] = str(self.dir / 'empty.json')
+        (self.dir / 'empty.json').write_text('{}')
+        result = self.install('--no-build')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('could not set up the runner group', result.stderr)
         self.assertEqual(self.enabled(), [])
 
     def test_invalid_config_changes_nothing(self):

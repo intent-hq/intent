@@ -179,6 +179,8 @@ apply_slots() {
     log "credential missing: place it at $credentials (root, 0600; see docs/GITHUB_RUNNERS.md), then re-run"
     return 0
   fi
+  RUNNERS_CONFIG="$etc_dir/runners.env" RUNNERS_CREDENTIALS="$credentials" "$lib_dir/supervisor.sh" --group-apply \
+    || die "could not set up the runner group (see above); slots left unchanged"
   for n in $wanted; do
     # --no-block: a slot that is draining a job would hold a blocking start.
     systemctl enable "github-runner@$n.service" >/dev/null

@@ -102,23 +102,29 @@ private or tailnet addresses.
 
 ## Runner group
 
-Every slot registers into the org runner group `intent-cache` (by name;
-`RUNNER_GROUP` in `runners.env`), never into Default. The group is limited to
-the selected repositories `intent-hq/intent`, `intent-hq/intentd` and
-`intent-hq/cloudlands-fe`, so other org repositories cannot target these
-runners. "Allow public repositories" is on because those three are public.
-Workflows from forks of them can still request the labels, so keep fork
-pull-request workflows behind maintainer approval in the repository settings.
-If the group is missing, slots stop registering rather than fall back to
-Default. To recreate it (with the same credential, or as an org owner in
-**Settings → Actions → Runner groups**):
+Every slot registers into the org runner group named by `RUNNER_GROUP`
+(`intent-cache`), never into Default. The group may be used only by the
+repositories in `RUNNER_GROUP_REPOS` (`intent,intentd,cloudlands-fe`), so other
+org repositories cannot target these runners. "Allow public repositories" is on
+because those three are public. Workflows from forks of them can still request
+the labels, so keep fork pull-request workflows behind maintainer approval in
+the repository settings. If the group is missing, slots stop registering rather
+than fall back to Default.
+
+The installer applies the group (creates it, or resets its visibility,
+public-repository setting, workflow restriction and repository list) before it
+enables any slot. To apply or audit it by hand:
 
 ```bash
-gh api -X POST orgs/intent-hq/actions/runner-groups -f name=intent-cache \
-  -f visibility=selected -F allows_public_repositories=true \
-  -F 'selected_repository_ids[]=<intent id>' -F 'selected_repository_ids[]=<intentd id>' \
-  -F 'selected_repository_ids[]=<cloudlands-fe id>'
+ssh root@intent-cache
+/usr/local/lib/github-runners/supervisor.sh --group-apply
+/usr/local/lib/github-runners/supervisor.sh --group-check   # JSON; exit 1 on drift
 ```
+
+`--group-check` prints the group's visibility, settings and repositories, plus
+every `intent-cache-*` runner that is outside the group. It never prints the
+credential. To change the repositories, edit `RUNNER_GROUP_REPOS` and re-run the
+installer.
 
 ## Credential
 
@@ -169,7 +175,7 @@ build for configuration-only changes.
 
 Slot settings live in `/etc/github-runners/runners.env` (not secret; the
 installer copies [`runners.env`](../infra/runners/runners.env) once and never
-overwrites it): `GITHUB_ORG`, `RUNNER_GROUP` (name, default `intent-cache`), `RUNNER_POOLS`,
+overwrites it): `GITHUB_ORG`, `RUNNER_GROUP` (name, default `intent-cache`), `RUNNER_GROUP_REPOS`, `RUNNER_POOLS`,
 and per pool `<POOL>_SLOTS`, `_LABELS`, `_CPUSETS` (one entry per slot,
 space-separated), `_MEMORY`, `_PIDS`, `_SHM`. Limits apply from each slot's
 next job.
