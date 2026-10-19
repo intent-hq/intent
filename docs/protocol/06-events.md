@@ -538,6 +538,7 @@ the exact message counts make the sparse cell non-empty.
         "byAgentModel":[
           { "agentId":"agent-789","model":"unknown","totals":{ "inputTokens":0,"outputTokens":0,"cacheReadTokens":0,"cacheCreationTokens":0 },"humanMessages":1,"agentMessages":2 }
         ],
+        "agentNames":{ "agent-789":"Coordinator" },
         "totals":{ "inputTokens":0,"outputTokens":0,"cacheReadTokens":0,"cacheCreationTokens":0 },
         "lastScanAt":"2026-08-24T16:00:00Z"
       }

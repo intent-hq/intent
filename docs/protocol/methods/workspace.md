@@ -2808,7 +2808,7 @@ omissions is tabulated under **List-row slimming** in the `Workspace` payload no
 
 **TokenUsage** — `{ byAgentId: { [agentId]: TokenUsageTotals }, totals: TokenUsageTotals,
 byModel: { [modelName]: TokenUsageTotals }, byAgentModel?: TokenUsageCrossFilterRow[],
-lastScanAt: string | null }`, where
+agentNames?: { [agentId]: string }, lastScanAt: string | null }`, where
 **TokenUsageTotals** is the consumption counters plus an optional cost —
 `{ inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, thoughtTokens?,
 cost?: { amount: number, currency: string } }`. `byAgentId` keys are
@@ -2835,6 +2835,21 @@ counts from `byAgentId` and `byModel`. Loading an old persisted snapshot does no
 the read path. The next end-of-turn usage accounting update that commits a changed snapshot, or
 the next reconciliation pass that commits one, materializes the field. A transcript write alone
 does not materialize the field or publish `workspace:tokenUsage-changed`.
+
+**Additive agent names.** `agentNames` maps an `agentId` to that agent session's display
+name, so a client can label every usage row, including retired agents, delegated agents it
+has not loaded, and agents in their delete grace window. Clients use these names only as a
+fallback after the names of agents they have loaded, and never show a raw `agentId`. Every
+key is also a `byAgentId` key. A session with a missing or empty name is omitted, and so is
+a key absent from `byAgentId`. The daemon writes the map from the same `agent_session` rows
+it already reads when it materializes the snapshot, so `workspace.getTokenUsage` and
+`workspace:tokenUsage-changed` serve it without an extra query. An empty map is omitted
+from the wire. A client therefore cannot tell an empty map apart from an older daemon or
+persisted snapshot, and handles both by falling back to its own label for unnamed rows.
+Names follow the rules for materialized fields: a rename alone does not publish
+`workspace:tokenUsage-changed`. The next committed end-of-turn materialization or
+reconciliation pass in that workspace writes the current names, and a name change by
+itself counts as a snapshot change for that commit.
 
 **Safe rollout order.** Land this additive canonical contract first in
 [intent-hq/intent#4376](https://github.com/intent-hq/intent/pull/4376), then the daemon
@@ -2951,6 +2966,7 @@ not fall through to the legacy per-message usage fallback.
     { "agentId":"agent-123","model":"sonnet-4.6","totals":{ "inputTokens":1000,"outputTokens":400,"cacheReadTokens":500,"cacheCreationTokens":100,"cost":{ "amount":0.15,"currency":"USD" } },"humanMessages":1,"agentMessages":1 },
     { "agentId":"agent-456","model":"opus-4.8","totals":{ "inputTokens":4000,"outputTokens":1000,"cacheReadTokens":3500,"cacheCreationTokens":500,"cost":{ "amount":0.40,"currency":"USD" } },"humanMessages":2,"agentMessages":3 }
   ],
+  "agentNames":{ "agent-123":"Coordinator","agent-456":"PR reviewer" },
   "totals":{ "inputTokens":12000,"outputTokens":3400,"cacheReadTokens":8000,"cacheCreationTokens":1200,"cost":{ "amount":1.25,"currency":"USD" } },
   "lastScanAt":"2026-06-17T12:00:00Z" } } }
 ```
