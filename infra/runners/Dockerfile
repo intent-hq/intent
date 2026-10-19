@@ -27,8 +27,9 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       bison build-essential ca-certificates curl file git git-lfs iproute2 jq libssl-dev lsof \
       lsb-release pkg-config procps python3 python3-pip python3-venv rsync shellcheck \
-      tzdata unzip xz-utils zip zstd \
- && rm -rf /var/lib/apt/lists/*
+      tzdata unzip xz-utils zip zstd
+# Package lists stay in the image, as on hosted runners: jobs simulate
+# installs (`apt-get install -s`, e.g. playwright install-deps --dry-run).
 
 # Same user name and uid as GitHub-hosted runners. No sudo: jobs run
 # unprivileged; anything they need from apt belongs in this image.
@@ -41,7 +42,6 @@ RUN curl -fsSL -o runner.tgz "https://github.com/actions/runner/releases/downloa
  && echo "${RUNNER_SHA256}  runner.tgz" | sha256sum -c - \
  && tar xzf runner.tgz && rm runner.tgz \
  && ./bin/installdependencies.sh \
- && rm -rf /var/lib/apt/lists/* \
  && chown -R runner:runner /home/runner/actions-runner
 
 # Node lives in /opt/node owned by runner, so `corepack enable` and
