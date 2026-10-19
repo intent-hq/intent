@@ -369,7 +369,7 @@ main() {
   ACTIONS_RUNNER_INPUT_JITCONFIG="$jit" docker run --rm --init --name "$name" --hostname "$RUNNER_NAME_PREFIX-$slot" \
     --network "$RUNNER_NETWORK" --cgroup-parent runners.slice \
     --cpus "$(cpuset_count "$cpuset")" --cpuset-cpus "$cpuset" --memory "$memory" --memory-swap "$memory" \
-    --pids-limit "${pids:-4096}" --shm-size "${shm:-64m}" --ulimit nofile=65536:65536 \
+    --pids-limit "${pids:-4096}" --shm-size "${shm:-64m}" --ulimit nofile=65536:65536 --ulimit core=0:0 \
     --cap-drop ALL --security-opt no-new-privileges \
     --label "intent.runner.pool=$pool" --label "intent.runner.slot=$slot" --label "intent.runner.id=$runner_id" \
     --log-opt "tag=$name" --stop-timeout 30 \

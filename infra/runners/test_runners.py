@@ -206,7 +206,10 @@ class Supervisor(Stubbed):
                      ['--cpus', '8'], ['--cpuset-cpus', '0-3,12-15'], ['--memory', '48g'], ['--memory-swap', '48g'],
                      ['--pids-limit', '16384'],
                      ['--cgroup-parent', 'runners.slice'], ['--cap-drop', 'ALL'],
-                     ['--security-opt', 'no-new-privileges'], ['--env', 'ACTIONS_RUNNER_INPUT_JITCONFIG']):
+                     ['--security-opt', 'no-new-privileges'], ['--env', 'ACTIONS_RUNNER_INPUT_JITCONFIG'],
+                     # No core files: the host core_pattern is relative, so a crash
+                     # would drop a multi-GB core into the checkout.
+                     ['--ulimit', 'core=0:0']):
             self.assertIn(' '.join(flag), ' '.join(argv))
         self.assertEqual(argv[-1], 'intent-gh-runner:current')
         for forbidden in ('-p', '--publish', '--privileged', '-v', '--volume', '--mount', '/var/run/docker.sock'):
@@ -703,6 +706,17 @@ class Static(unittest.TestCase):
             self.assertIn(needle, text)
         code = '\n'.join(l for l in text.splitlines() if not l.lstrip().startswith('#'))
         self.assertNotRegex(code, r'\bsudo\b')
+
+    def test_smoke_checks_core_dumps_and_apt_lists(self):
+        text = (HERE.parents[1] / '.github/workflows/intent-cache-smoke.yml').read_text()
+        self.assertIn('[ "$(ulimit -c)" = 0 ]', text)
+        self.assertIn('apt-get install -s', text)
+
+    def test_image_keeps_apt_package_lists(self):
+        # Hosted ubuntu-24.04 keeps them; `apt-get install -s` (playwright
+        # install-deps --dry-run) fails without them.
+        text = (HERE / 'Dockerfile').read_text()
+        self.assertNotIn('/var/lib/apt/lists', text)
 
     def test_image_has_tools_routed_jobs_call_without_setup(self):
         text = (HERE / 'Dockerfile').read_text()

@@ -68,6 +68,16 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/venv"
           corepack enable && pnpm --version
           gh --version | head -n 1; node --version; pwsh --version
+      - name: No core dumps, apt lists present
+        run: |
+          set -euo pipefail
+          # A crash must not drop a core file into the checkout (the host's
+          # core_pattern is relative), and simulated installs need apt lists.
+          [ "$(ulimit -c)" = 0 ] || { echo "::error::ulimit -c is $(ulimit -c), expected 0"; exit 1; }
+          [ "$(ulimit -Hc)" = 0 ] || { echo "::error::hard core limit is $(ulimit -Hc), expected 0"; exit 1; }
+          apt-get install -s --no-install-recommends libasound2t64 libnss3 >/dev/null \
+            || { echo "::error::apt-get install -s failed (package lists missing?)"; exit 1; }
+          echo "core limit 0; apt simulate ok"
       - name: Egress reaches the internet and the cache, not private networks
         run: |
           set -euo pipefail

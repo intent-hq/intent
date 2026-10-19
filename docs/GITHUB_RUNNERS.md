@@ -91,7 +91,10 @@ unzip, xz, zstd, rsync, file, dpkg-deb, python3 with pip and venv, Node with
 npm and corepack (in `/opt/node`, owned by `runner`, so `corepack enable` and
 `npm install -g` work without sudo), PowerShell (`pwsh`), and rustup with the
 pinned Rust toolchain. Other versions of Node, Python and Rust come from the
-usual setup actions. Pins and checksums are the `ARG`s at the top of the
+usual setup actions. The apt package lists are kept, as on hosted runners, so
+`apt-get install -s` (for example `playwright install-deps --dry-run`) works.
+Core dumps are off (`--ulimit core=0:0`): the host's relative `core_pattern`
+would otherwise write multi-GB core files into the checkout. Pins and checksums are the `ARG`s at the top of the
 `Dockerfile`; add a tool there when a routed job needs it.
 
 ## Not supported in jobs
