@@ -72,6 +72,16 @@ narrowed Codex pin break no client because no component implemented the
 prepared contract. `agentWorkers: 1` still gates the complete contract. No shipped
 numeric version is claimed here.
 
+Also within 15.0 (additive always-present response fields; no method-catalog change,
+so no version bump): **`system.status` `idleUpdateCheck` counts running command
+scripts** (§5.7 "`busyAgents` + `idleUpdateCheck`"). `runningScripts` is the number of
+command-mode `script.*` runs in flight, and `restartDeferredUntil` (RFC 3339 or `null`)
+is when a pending staged restart held by those runs stops waiting. A running command
+script now counts as busy for the idle update handshake: no idle check is requested while
+one runs, and a staged restart waits for them for at most 90 minutes (agent turns are
+still waited for without a cap). Service-mode scripts never count. Older daemons omit
+both keys; clients must detect them by presence.
+
 **PR workspace lookup (additive, prepared).** The
 [PR workspace lookup](./methods/workspace.md#pull-request-workspace-lookup) reserves
 the read-only router method `workspace.findByPullRequest`, bringing the documented
