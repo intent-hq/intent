@@ -2820,17 +2820,19 @@ the reconciliation pass (`null` before the first). Updated values are pushed via
 **Additive agent names** *(additive, [intent-hq/intent#7334](https://github.com/intent-hq/intent/pull/7334))*.
 `agentNames` maps an `agentId` to that agent session's display name, so a client can label
 every usage row, including retired agents, delegated agents it has not loaded, and agents in
-their delete grace window. Its keys are a subset of the `byAgentId` keys. A session whose name
+their delete grace window. Its keys are a subset of the `byAgentId` keys: only agents whose
+`byAgentId` bucket reports usage (a non-zero counter or a cost) are named. A session whose name
 is empty after trimming whitespace is omitted, and an empty map is omitted from the wire. An
 absent field can therefore mean an empty map, an older daemon, or a persisted snapshot that
 predates the field. Clients handle all three the same way: prefer the name of an agent they
 have loaded, then `agentNames`, then their own generic label. They never show a raw `agentId`.
 
-Names are materialized with the rest of the snapshot and carry the same freshness: they are
-the session names at the last committed materialization. A rename alone does not trigger a
-materialization. When the next end-of-turn usage accounting update or reconciliation pass in
-that workspace recomputes the snapshot, a changed name is a snapshot change: that pass
-commits and publishes `workspace:tokenUsage-changed` even if no counter moved. A persisted
+Names are materialized with the rest of the snapshot: they are the session names at the last
+committed materialization. A name change is a snapshot change, so a recompute that finds one
+commits and publishes `workspace:tokenUsage-changed` even if no counter moved. An applied
+`agent.rename`, or an `agent.update` that sets `name`, recomputes the snapshot when the stored
+snapshot already has a `byAgentId` bucket for that agent, so a rename of an agent with usage
+publishes the new name right away; renaming a usage-less agent writes nothing. A persisted
 snapshot without the field is not backfilled on the read path. The first reconciliation
 pass after a daemon upgrade recomputes every workspace it sweeps, so each swept workspace
 that has a named agent commits and publishes once. A workspace the pass does not sweep, or
