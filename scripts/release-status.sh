@@ -24,7 +24,7 @@
 #                            publishes, so a tag newer than the newest release
 #                            is reported as "not published yet"
 #   pin                      intentd.version on intent-hq/cloudlands-fe main
-#   unshipped                compare <newest git tag>...main on each source repo
+#   unshipped                compare <newest release>...main on each source repo
 #   auto-cut decision        `gh run view --log` of the newest completed
 #                            auto-cut-alpha.yml runs (up to 5, newest first)
 #
@@ -102,43 +102,61 @@ if best:
 ' "$1" 2>/dev/null || true
 }
 
-# component <key> <source repo> <release repo>: the newest published release,
-# the newest git tag (it exists while its release build is still running),
-# unshipped commits since that tag, release-train PRs and the auto-cut
+# Newest vX.Y.Z release from a `gh release list --json tagName,publishedAt` file.
+newest_release() {
+  py '
+import json, re, sys
+for release in json.load(open(sys.argv[1])):
+    if re.match(r"^v\d+\.\d+\.\d+", release["tagName"]):
+        print(release["tagName"])
+        break
+' "$1" 2>/dev/null || true
+}
+
+# component <key> <source repo> <release repo> <PR head prefixes>: the newest
+# published release, the newest git tag (it exists while its release build is
+# still running), unshipped commits since the newest published release (the
+# git tag when releases are unreadable), release-train PRs and the auto-cut
 # decision -- each chain in the background.
 component() {
-  local key=$1 repo=$2 releases=$3 tag number id
-  fetch "$key.releases" release list --repo "$releases" --limit 30 --exclude-drafts \
-    --json tagName,publishedAt &
+  local key=$1 repo=$2 releases=$3 prefixes=$4 tag base prefix index id
   {
-    fetch "$key.tags" api "repos/$repo/tags?per_page=30"
-    if ok "$key.tags"; then
-      tag=$(newest_git_tag "$work/$key.tags.out")
-      if [[ -n "$tag" ]]; then
-        echo "$tag" >"$work/$key.gittag"
-        fetch "$key.tagcommit" api "repos/$repo/commits/$tag" &
-        fetch "$key.compare" api "repos/$repo/compare/$tag...main?per_page=1" &
-        wait
+    fetch "$key.releases" release list --repo "$releases" --limit 30 --exclude-drafts \
+      --json tagName,publishedAt &
+    {
+      fetch "$key.tags" api "repos/$repo/tags?per_page=30"
+      if ok "$key.tags"; then
+        tag=$(newest_git_tag "$work/$key.tags.out")
+        if [[ -n "$tag" ]]; then
+          echo "$tag" >"$work/$key.gittag"
+          fetch "$key.tagcommit" api "repos/$repo/commits/$tag"
+        fi
       fi
+    } &
+    wait
+    base=""
+    if ok "$key.releases"; then
+      base=$(newest_release "$work/$key.releases.out")
+    fi
+    if [[ -z "$base" && -f "$work/$key.gittag" ]]; then
+      base=$(<"$work/$key.gittag")
+    fi
+    if [[ -n "$base" ]]; then
+      echo "$base" >"$work/$key.base"
+      fetch "$key.compare" api "repos/$repo/compare/$base...main?per_page=1"
     fi
   } &
   {
-    fetch "$key.prs" pr list --repo "$repo" --state open --limit 100 \
-      --json number,headRefName
-    if ok "$key.prs"; then
-      py '
-import json, re, sys
-for pr in json.load(open(sys.argv[1])):
-    if re.match(r"^(release-plz-|release-please--branches--main|auto/intentd-pin$)", pr["headRefName"]):
-        print(pr["number"])
-' "$work/$key.prs.out" >"$work/$key.prnums" 2>/dev/null || : >"$work/$key.prnums"
-      while IFS= read -r number; do
-        [[ -n "$number" ]] || continue
-        fetch "$key.pr.$number" pr view "$number" --repo "$repo" \
-          --json number,title,url,headRefName,isDraft,mergeable,mergeStateStatus,statusCheckRollup,commits &
-      done <"$work/$key.prnums"
-      wait
-    fi
+    # `head:` search is a branch-name prefix match, so each search returns
+    # only release-train PRs (with every field), however many PRs are open.
+    index=0
+    for prefix in $prefixes; do
+      fetch "$key.prs.$index" pr list --repo "$repo" --state open --limit 20 \
+        --search "head:$prefix" \
+        --json number,title,url,headRefName,isDraft,mergeable,mergeStateStatus,statusCheckRollup,commits &
+      index=$((index + 1))
+    done
+    wait
   } &
   {
     fetch "$key.runs" run list --repo "$repo" --workflow auto-cut-alpha.yml \
@@ -187,8 +205,8 @@ with open(sys.argv[1], errors="replace") as log:
 print(last)
 '
 
-component intentd "$intentd_repo" "$intentd_repo" &
-component cloudlands-fe "$fe_repo" "$fe_dist" &
+component intentd "$intentd_repo" "$intentd_repo" "release-plz-" &
+component cloudlands-fe "$fe_repo" "$fe_dist" "release-please--branches--main auto/intentd-pin" &
 for channel in alpha beta stable; do
   fetch "intentd.channel.$channel" release download "channel-$channel" --repo "$intentd_dist" \
     --pattern "$channel.json" --output - &
@@ -273,17 +291,23 @@ def load_json(text, section):
         return None
 
 
+FAILING = ("FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE")
+
+
 def ci_gate(rollup):
-    gate, failing = None, 0
+    """CI Gate state (the most recently started CI Gate run wins) and the
+    number of failing checks in a statusCheckRollup."""
+    gate, gate_started, failing = None, "", 0
     for check in rollup or []:
         name = check.get("name") or check.get("context") or ""
-        state = check.get("conclusion") or check.get("state") or check.get("status") or ""
+        state = (check.get("conclusion") or check.get("state") or check.get("status") or "").upper()
         if check.get("status") and check.get("status") != "COMPLETED":
-            state = check["status"]
-        if state.upper() in ("FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED"):
+            state = check["status"].upper()
+        if state in FAILING:
             failing += 1
-        if name == "CI Gate":
-            gate = state.upper() or None
+        started = check.get("startedAt") or check.get("createdAt") or ""
+        if name == "CI Gate" and (gate is None or started >= gate_started):
+            gate, gate_started = state or None, started
     return gate, failing
 
 
@@ -338,18 +362,24 @@ def component(key):
                     errors.append({"section": "cloudlands-fe.channels." + channel,
                                    "message": "latest-mac.yml has no version"})
 
+    data["unshippedSince"] = (read(key + ".base") or "").strip() or None
     text = result(key + ".compare", key + ".unshippedCommits")
     compare = load_json(text, key + ".unshippedCommits") if text is not None else None
     if compare is not None:
         data["unshippedCommits"] = compare.get("ahead_by")
 
-    if result(key + ".prs", key + ".releasePrs") is not None:
-        numbers = [line for line in (read(key + ".prnums") or "").split() if line]
-        for number in numbers:
-            text = result("%s.pr.%s" % (key, number), key + ".releasePrs")
-            pr = load_json(text, key + ".releasePrs") if text is not None else None
-            if pr is None:
+    seen = set()
+    index = 0
+    while read("%s.prs.%d.rc" % (key, index)) is not None:
+        text = result("%s.prs.%d" % (key, index), key + ".releasePrs")
+        index += 1
+        prs = load_json(text, key + ".releasePrs") if text is not None else None
+        for pr in prs or []:
+            # Search is fuzzy; keep only exact release-train head refs.
+            if pr["number"] in seen or not re.match(
+                    r"^(release-plz-|release-please--branches--main|auto/intentd-pin$)", pr.get("headRefName", "")):
                 continue
+            seen.add(pr["number"])
             gate, failing = ci_gate(pr.get("statusCheckRollup"))
             commits = pr.get("commits") or []
             head_at = commits[-1].get("committedDate") if commits else None
@@ -406,7 +436,8 @@ for repo in ("intent", "intentd", "cloudlands-fe"):
     values = {var["name"]: var.get("value", "") for var in variables or []}
     for name in sorted(values):
         match = re.match(r"^CI_([A-Z0-9]+)_RUNNER_DISABLED$", name)
-        if match and values[name].strip().lower() == "true":
+        # Routing tests `=== 'true'` exactly (runner-route.yml), so must we.
+        if match and values[name] == "true":
             overrides.append({"repo": "intent-hq/" + repo, "platform": match.group(1).lower(),
                               "variable": name, "reason": values.get(name + "_REASON")})
 
@@ -439,7 +470,7 @@ for key, data in components.items():
             data["unreleasedTag"], fmt_age(data["newestGitTagAgeMinutes"]))
     if data["unshippedCommits"] is not None:
         head += ", %d unshipped commit%s on main since %s" % (
-            data["unshippedCommits"], "" if data["unshippedCommits"] == 1 else "s", data["newestGitTag"])
+            data["unshippedCommits"], "" if data["unshippedCommits"] == 1 else "s", data["unshippedSince"])
     elif section_failed(key + ".unshippedCommits"):
         head += ", unshipped " + unavailable(key + ".unshippedCommits")
     out.append("%-14s %s" % (key, head))
@@ -466,7 +497,9 @@ for key, data in components.items():
         bits.append("head %s old" % fmt_age(pr["headAgeMinutes"]))
         if pr["isDraft"]:
             bits.append("draft")
-        if pr["mergeable"] and pr["mergeable"] != "MERGEABLE":
+        if pr["mergeable"] == "UNKNOWN":
+            bits.append("mergeable=UNKNOWN (GitHub still computing)")
+        elif pr["mergeable"] and pr["mergeable"] != "MERGEABLE":
             bits.append("mergeable=%s" % pr["mergeable"])
         elif pr["mergeStateStatus"] and pr["mergeStateStatus"] not in ("CLEAN", "UNSTABLE", "HAS_HOOKS"):
             bits.append("mergeState=%s" % pr["mergeStateStatus"])

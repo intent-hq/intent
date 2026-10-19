@@ -30,17 +30,17 @@ done
 cat >"$bin_dir/gh" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$GH_TEST_LOG"
-repo=""
+repo="" search=""
 args=("$@")
 for ((i = 0; i < ${#args[@]}; i++)); do
   [[ "${args[i]}" == --repo ]] && repo=${args[i + 1]#intent-hq/}
+  [[ "${args[i]}" == --search ]] && search=${args[i + 1]//\//__}
 done
 case "$1 $2" in
   "auth status") [[ -f "$GH_STUB_DIR/unauth" ]] && { echo "not logged in" >&2; exit 1; }; exit 0 ;;
   "release list") path="releases/$repo.json" ;;
   "release download") path="download/$repo/$3" ;;
-  "pr list") path="prs/$repo.json" ;;
-  "pr view") path="pr/$repo/$3.json" ;;
+  "pr list") path="prs/$repo/$search.json" ;;
   "run list") path="runs/$repo.json" ;;
   "run view") path="logs/$repo/$3.log" ;;
   "variable list") path="vars/$repo.json" ;;
@@ -92,23 +92,23 @@ J
   echo '{"ahead_by":1,"status":"ahead"}' | put 'api/cloudlands-fe__compare__v2.221.0...main?per_page=1'
   printf '# Exact intentd version bundled as the sidecar\n0.11.10\n' |
     put 'api/cloudlands-fe__contents__intentd.version?ref=main'
-  echo '[{"number":7,"headRefName":"feat/x"}]' | put prs/intentd.json
-  put prs/cloudlands-fe.json <<'J'
-[{"number":3517,"headRefName":"auto/intentd-pin"},
- {"number":3512,"headRefName":"release-please--branches--main--components--intent"},
- {"number":3000,"headRefName":"feat/release-please-docs"}]
-J
-  put pr/cloudlands-fe/3512.json <<'J'
-{"number":3512,"title":"chore(release): 2.222.0","url":"https://example/3512","headRefName":"release-please--branches--main--components--intent",
+  # Search is fuzzy: a near-miss head ref is filtered out.
+  echo '[{"number":7,"headRefName":"feat/release-plz-docs","title":"x"}]' | put 'prs/intentd/head:release-plz-.json'
+  put 'prs/cloudlands-fe/head:release-please--branches--main.json' <<'J'
+[{"number":3512,"title":"chore(release): 2.222.0","url":"https://example/3512","headRefName":"release-please--branches--main--components--intent",
  "isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN",
- "statusCheckRollup":[{"name":"CI Gate","status":"COMPLETED","conclusion":"SUCCESS"},{"name":"lint","status":"COMPLETED","conclusion":"FAILURE"}],
- "commits":[{"committedDate":"2026-10-19T12:00:00Z"},{"committedDate":"2026-10-19T12:43:00Z"}]}
+ "statusCheckRollup":[{"name":"CI Gate","status":"COMPLETED","conclusion":"FAILURE","startedAt":"2026-10-19T12:10:00Z"},
+                      {"name":"CI Gate","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-10-19T12:44:00Z"},
+                      {"name":"lint","status":"COMPLETED","conclusion":"STARTUP_FAILURE"},
+                      {"context":"legacy","state":"SUCCESS"}],
+ "commits":[{"committedDate":"2026-10-19T12:00:00Z"},{"committedDate":"2026-10-19T12:43:00Z"}]}]
 J
-  put pr/cloudlands-fe/3517.json <<'J'
-{"number":3517,"title":"fix: bump intentd sidecar to v0.11.11","url":"https://example/3517","headRefName":"auto/intentd-pin",
+  put 'prs/cloudlands-fe/head:auto__intentd-pin.json' <<'J'
+[{"number":3517,"title":"fix: bump intentd sidecar to v0.11.11","url":"https://example/3517","headRefName":"auto/intentd-pin",
  "isDraft":false,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN",
  "statusCheckRollup":[{"name":"CI Gate","status":"IN_PROGRESS","conclusion":""}],
- "commits":[{"committedDate":"2026-10-19T11:00:00Z"}]}
+ "commits":[{"committedDate":"2026-10-19T11:00:00Z"}]},
+ {"number":3512,"title":"duplicate hit","headRefName":"release-please--branches--main--components--intent"}]
 J
   put runs/intentd.json <<'J'
 [{"databaseId":102,"status":"in_progress","conclusion":"","createdAt":"2026-10-19T12:58:00Z","event":"schedule","url":"https://example/102"},
@@ -135,7 +135,8 @@ L
   put vars/intentd.json <<'J'
 [{"name":"CI_MACOS_RUNNER_DISABLED","value":"true"},
  {"name":"CI_MACOS_RUNNER_DISABLED_REASON","value":"2026-10-14: m1mac too slow"},
- {"name":"CI_WINDOWS_RUNNER_DISABLED","value":"false"},
+ {"name":"CI_WINDOWS_RUNNER_DISABLED","value":"True"},
+ {"name":"CI_LINUX_RUNNER_DISABLED","value":" true"},
  {"name":"OTHER","value":"true"}]
 J
   echo '[{"name":"CI_LINUX_RUNNER_DISABLED","value":"true"}]' | put vars/cloudlands-fe.json
@@ -182,8 +183,8 @@ intentd        v0.11.11 (1h00m ago), 3 unshipped commits on main since v0.11.11
 cloudlands-fe  v2.221.0 (3h00m ago), 1 unshipped commit on main since v2.221.0
   channels     alpha 2.221.0 · beta 2.219.8 · stable 2.219.1
   daemon pin   intentd 0.11.10 (behind intentd alpha 0.11.11)
-  release PRs  #3512 chore(release): 2.222.0 — CI Gate SUCCESS, 1 failing check, head 17m old
-               #3517 [pin-bump] fix: bump intentd sidecar to v0.11.11 — CI Gate IN_PROGRESS, head 2h00m old, mergeable=UNKNOWN
+  release PRs  #3512 chore(release): 2.222.0 — CI Gate SUCCESS, 2 failing checks, head 17m old
+               #3517 [pin-bump] fix: bump intentd sidecar to v0.11.11 — CI Gate IN_PROGRESS, head 2h00m old, mergeable=UNKNOWN (GitHub still computing)
   auto-cut     Pin-bump PR #3517 (auto/intentd-pin) is open; deferring the alpha cut until the new sidecar pin lands [run 201, schedule, 30m ago]
 runner overrides (CI_*_RUNNER_DISABLED)
   intentd        macos    2026-10-14: m1mac too slow
@@ -192,8 +193,8 @@ T
 )
 [[ "$stdout" == "$expected" ]] || fail "happy-path text differs:"$'\n'"--- got:"$'\n'"$stdout"$'\n'"--- expected:"$'\n'"$expected"
 # Unrelated PRs are never viewed; the in-progress run's log is not fetched.
-! grep -q '^pr view 3000' "$temp_dir/gh.log" || fail "a non-release PR was viewed"
-! grep -q '^pr view 7' "$temp_dir/gh.log" || fail "a non-release intentd PR was viewed"
+! grep -q '^pr view' "$temp_dir/gh.log" || fail "release PRs were viewed one by one"
+[[ "$(grep -c '^pr list' "$temp_dir/gh.log")" -eq 3 ]] || fail "expected one PR search per head prefix"
 ! grep -q '^run view 102' "$temp_dir/gh.log" || fail "an in-progress run log was fetched"
 grep -q '^run view 202' "$temp_dir/gh.log" || fail "the newest completed fe run log was not read"
 grep -q '^run view 201' "$temp_dir/gh.log" || fail "the walk-back to run 201 did not happen"
@@ -238,24 +239,23 @@ for line in \
 done
 
 # --- a tag newer than the newest release: its build has not published yet,
-# and unshipped commits count from it
+# so its commits still count as unshipped (since the published release)
 reset_stub
 echo '[{"name":"v0.11.11"},{"name":"v0.11.12"}]' | put 'api/intentd__tags?per_page=30'
 echo '{"commit":{"committer":{"date":"2026-10-19T12:46:00Z"}}}' | put api/intentd__commits__v0.11.12
-echo '{"ahead_by":0,"status":"identical"}' | put 'api/intentd__compare__v0.11.12...main?per_page=1'
 json="" run_script
-expect_line "intentd        v0.11.11 (1h00m ago); v0.11.12 tagged 14m ago, release not published yet, 0 unshipped commits on main since v0.11.12"
+expect_line "intentd        v0.11.11 (1h00m ago); v0.11.12 tagged 14m ago, release not published yet, 3 unshipped commits on main since v0.11.11"
 json=1 run_script
 expect_json 'r["components"]["intentd"]["unreleasedTag"]' '"v0.11.12"'
 
-# --- tags lookup fails: unshipped is unavailable, the release still shows
+# --- tags lookup fails: the release and unshipped count still show
 reset_stub
 echo 'HTTP 502: Server Error' | put 'api/cloudlands-fe__tags?per_page=30.fail'
 json="" run_script
-expect_line "cloudlands-fe  v2.221.0 (3h00m ago)"
+expect_line "cloudlands-fe  v2.221.0 (3h00m ago), 1 unshipped commit on main since v2.221.0"
 json=1 run_script
 expect_json '[e["section"] for e in r["errors"]]' '["cloudlands-fe.newestGitTag"]'
-expect_json 'r["components"]["cloudlands-fe"]["unshippedCommits"]' 'null'
+expect_json 'r["components"]["cloudlands-fe"]["newestGitTag"]' 'null'
 
 # --- pin matches alpha; channel and run lookups fail independently
 reset_stub
@@ -276,8 +276,8 @@ expect_json 'r["fePin"]["behindAlpha"]' 'false'
 expect_json 'r["components"]["cloudlands-fe"]["autoCut"]' 'null'
 expect_json '[e["section"] for e in r["errors"]]' '["intentd.channels.beta", "cloudlands-fe.autoCut", "runnerOverrides.intent"]'
 
-# --- release list failure: the release and fe alpha are unavailable, but
-# unshipped commits still count from the git tag
+# --- release list failure: the release and fe alpha are unavailable, and
+# unshipped commits fall back to counting from the git tag
 reset_stub
 echo 'error connecting to api.github.com' | put releases/cloudlands-releases.json.fail
 json="" run_script

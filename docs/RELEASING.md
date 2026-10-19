@@ -15,7 +15,7 @@ cloudlands-fe).
 
 | Question | Run |
 |---|---|
-| Where is the release train? Latest tags and ages, alpha/beta/stable versions, the fe daemon pin, open Release and pin-bump PRs with CI Gate state, unshipped commits, the last auto-cut decision line, runner maintenance overrides | `make release-status` (`STATUS_JSON=1` for JSON; `scripts/release-status.sh --no-logs` skips the run-log fetch) |
+| Where is the release train? Latest tags and ages, alpha/beta/stable versions, the fe daemon pin, open Release and pin-bump PRs with CI Gate state, unshipped commits, the last auto-cut decision line, runner maintenance overrides | `make release-status` (`STATUS_JSON=1` for JSON; `NO_LOGS=1` skips the run-log fetch) |
 | Which alpha carries my commit? | `make shipped-in COMPONENT=<intentd\|cloudlands-fe> SHA=<sha>` (hooks call `scripts/shipped-in.sh` for its exit codes) |
 
 ## Guarded direct release merges
