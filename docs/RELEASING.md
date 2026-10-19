@@ -136,6 +136,17 @@ suite is `python3 -S -B -m unittest -v scripts.test_cleanup_prereleases`.
   contents:write on `intent-hq/cloudlands-fe`) and is fail-soft: a missing secret or
   failed dispatch logs a warning and never fails the publish — the fe crons then act
   as the backstop.
+- Windows validation is post-merge only. intentd PRs and merge-queue runs never use
+  a Windows runner. Every push to `main` runs the native Windows check, Clippy,
+  runtime and lifecycle proofs, release build, `install-ps1` and Windows Pi legs, and
+  that push run's CI Gate requires them. A Windows-only regression therefore lands
+  on `main` and holds releases instead of merges. Before merging the Release PR,
+  `auto-cut-alpha.yml` reads the latest push-event `ci.yml` run on the Release PR's
+  base (the `main` tip being released). A green run proceeds. A queued or running
+  one waits within the CI budget, then the hourly cron retries. Any other conclusion
+  (failed, cancelled, timed out) skips the cut. To unblock, re-run the
+  failed jobs on that `main` run or land a fix; the next attempt cuts. A human
+  merging the Release PR by hand bypasses this gate on purpose.
 - Stable is promotion-only and beta-first: dispatch `promote-stable.yml` with the
   `version` input, then verify `stable.json` on the `channel-stable` release. A guard
   checks the current beta channel version (`beta.json` on the fixed `channel-beta`
