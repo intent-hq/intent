@@ -81,6 +81,19 @@ runner output, tagged `github-runner-<pool>-<n>`).
   `runner-route` probe also counts every online `self-hosted`/`Linux`/`X64`
   runner, from either pool, as Linux fleet capacity unless the repository
   variable `CI_LINUX_RUNNER_DISABLED` is `true`.
+- **Slot fitting.** The probe hands out at most as many slots per run as a
+  pool has free: online slots (capped by `THRESHOLD` / `SMALL_THRESHOLD`)
+  minus jobs queued or running on that pool. A workflow lists the pooled jobs
+  that start together (`slot_jobs` input of `runner-route.yml`, or `SLOT_JOBS`
+  in an inline probe); each reads `outputs.slots[key]`. Free slots go to
+  Rust-compiling jobs first (`"rust": true`, they reuse the slot's local
+  cache), then the longest (`minutes`), then list order; `shards: N` gives
+  each matrix leg its own key (`key-1`..`key-N`) and `events` keeps a job that
+  skips the event from holding a slot. Every other listed job gets its hosted
+  label, and unlisted jobs use the pool only while a slot is still free.
+  Two runs probing at the same moment can claim the same free slot, so a pool
+  may briefly run a job or two past its slot count; that job waits for the
+  next free slot.
 
 ## Preinstalled tools
 

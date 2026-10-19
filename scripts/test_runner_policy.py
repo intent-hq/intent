@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Reject workload cloud pins while allowing only named infrastructure exceptions."""
 from pathlib import Path
+import json
 import re
 import subprocess
 import unittest
@@ -53,13 +54,69 @@ def violations(text, filename):
             continue
         if runner.startswith('[self-hosted,') and (filename, job) in MAINTENANCE:
             continue
-        routed = re.fullmatch(r"\$\{\{ fromJSON\(needs\.(route|runner-route)\.outputs\.(runners|linux_labels|check_labels).*\}\}", runner)
+        routed = re.fullmatch(r"\$\{\{ fromJSON\(needs\.(route|runner-route)\.outputs\.(runners|slots|linux_labels|check_labels).*\}\}", runner)
         if not routed and not (runner == '${{ matrix.os }}' and 'needs.route.outputs.' in body):
             errors.append(job)
     return errors
 
 
+POOLED = {'gh-linux-8x', 'gh-linux-16x', 'ubuntu-22.04', 'ubuntu-24.04'}
+SLOT_READ = re.compile(r"outputs\.slots \|\| '\{\}'\)\[(?:'([\w-]+)'|format\('([\w-]+)-\{0\}', matrix\.shard\))\] \|\| fromJSON\('\[\"([\w.-]+)\"\]'\)")
+
+
+def slot_list(text):
+    """The workflow's slot_jobs / SLOT_JOBS list, or None when it lists no jobs."""
+    match = re.search(r'^( +)(?:slot_jobs|SLOT_JOBS): >-\n((?:\1 +[^\n]*\n)+)', text, re.M)
+    return json.loads(match[2]) if match else None
+
+
+def slot_violations(text):
+    """Listed jobs and the jobs reading outputs.slots must match one to one."""
+    listed = slot_list(text) or []
+    errors, used = [], set()
+    by_key = {entry['key']: entry for entry in listed}
+    if len(by_key) != len(listed):
+        errors.append('duplicate slot key')
+    for entry in listed:
+        if entry.get('label') not in POOLED:
+            errors.append(f"{entry['key']}: {entry.get('label')} is not an intent-cache pool label")
+    for job, body in jobs(text).items():
+        runner = re.search(r'^    runs-on: (.+)$', body, re.M)
+        if not runner or 'outputs.slots' not in runner[1]:
+            continue
+        read = SLOT_READ.search(runner[1])
+        key = read and (read[1] or read[2])
+        entry = by_key.get(key)
+        if not entry:
+            errors.append(f'{job}: reads an unlisted slot')
+            continue
+        used.add(key)
+        if entry['label'] != read[3]:
+            errors.append(f"{job}: fallback {read[3]} differs from listed {entry['label']}")
+        if bool(read[2]) != bool(entry.get('shards')):
+            errors.append(f'{job}: matrix shards and the slot list disagree')
+        only = re.search(r"^    if: github\.event_name == '(\w+)'$", body, re.M)
+        if only and entry.get('events') != [only[1]]:
+            errors.append(f'{job}: runs only on {only[1]} but lists events {entry.get("events")}')
+    errors += [f'{key}: listed but no job reads it' for key in by_key.keys() - used]
+    return errors
+
+
 class RunnerPolicy(unittest.TestCase):
+    def test_slot_lists_match_their_jobs(self):
+        for path in (ROOT / '.github/workflows').glob('*.yml'):
+            with self.subTest(workflow=path.name):
+                self.assertEqual(slot_violations(path.read_text()), [])
+
+    def test_slot_list_checks(self):
+        job = "  a:\n    if: github.event_name == 'merge_group'\n    runs-on: ${{ fromJSON(needs.route.outputs.slots || '{}')['a'] || fromJSON('[\"ubuntu-24.04\"]') }}\n"
+        listing = '    with:\n      slot_jobs: >-\n        [{{"key":"a","label":"{}"{}}}]\njobs:\n'
+        self.assertEqual(slot_violations(listing.format('ubuntu-24.04', ',"events":["merge_group"]') + job), [])
+        self.assertEqual(len(slot_violations(listing.format('ubuntu-24.04', '') + job)), 1)
+        self.assertEqual(len(slot_violations(listing.format('gh-linux-8x', ',"events":["merge_group"]') + job)), 1)
+        self.assertEqual(len(slot_violations(listing.format('windows-2025', ',"events":["merge_group"]') + job)), 2)
+        self.assertEqual(slot_violations('jobs:\n' + job), ['a: reads an unlisted slot'])
+
     def test_all_workloads_are_routed(self):
         for path in (ROOT / '.github/workflows').glob('*.yml'):
             with self.subTest(workflow=path.name):

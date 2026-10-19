@@ -71,7 +71,7 @@ async function route(fixture = {}) {
     },
     { env },
   );
-  return { outputs, runners: JSON.parse(outputs.runners), queried, messages };
+  return { outputs, runners: JSON.parse(outputs.runners), slots: JSON.parse(outputs.slots), queried, messages };
 }
 test('healthy matching fleet is preferred for every workload size', async () => {
   const r = await route();
@@ -239,7 +239,7 @@ test('the fast pool routes standard labels and bursts independently of the heavy
   const job = (id, labels = SMALL) => ({ id, status: 'in_progress', labels, created_at: new Date().toISOString() });
   const five = await route({ jobs: Array.from({ length: 5 }, (_, i) => job(i + 3)) });
   assert.deepEqual(five.runners['ubuntu-24.04'], SMALL);
-  assert.ok(five.messages.some((m) => m.includes('small routing: burst=false (queue depth=5 threshold=6 online=6)')));
+  assert.ok(five.messages.some((m) => m.includes('small routing: burst=false (queue depth=5 threshold=6 online=6 free=1)')));
   const six = await route({ jobs: Array.from({ length: 6 }, (_, i) => job(i + 3)) });
   assert.deepEqual(six.runners['ubuntu-24.04'], ['ubuntu-24.04']);
   assert.deepEqual(six.runners['gh-linux-8x'], CACHE);
@@ -267,11 +267,96 @@ test('both pools carry the generic labels, so capacity and demand are counted pe
   // Six running fast jobs fill the small pool but leave both heavy slots free.
   const job = (id) => ({ id, status: 'in_progress', labels: SMALL, created_at: new Date().toISOString() });
   const r = await route({ jobs: Array.from({ length: 6 }, (_, i) => job(i + 3)) });
-  assert.ok(r.messages.some((m) => m.includes('linux routing: burst=false (queue depth=0 threshold=2 online=2)')));
+  assert.ok(r.messages.some((m) => m.includes('linux routing: burst=false (queue depth=0 threshold=2 online=2 free=2)')));
   // A routed job's labels always include its pool label, so the other pool cannot take it.
   const healthy = await route({});
   assert.ok(healthy.runners['gh-linux-8x'].includes('intent-cache'));
   assert.ok(!healthy.runners['gh-linux-8x'].includes('intent-cache-small'));
   assert.ok(healthy.runners['ubuntu-24.04'].includes('intent-cache-small'));
   assert.ok(!healthy.runners['ubuntu-24.04'].includes('intent-cache'));
+});
+// Per-job slot fitting: a run gets self-hosted labels for at most as many jobs as a pool has free slots.
+const heavyJob = (id, status = 'in_progress') => ({ id, status, labels: CACHE, created_at: new Date().toISOString() });
+const UNIT = { key: 'test', label: 'gh-linux-8x', minutes: 13, shards: 4 };
+const slotEnv = (jobs, env = {}) => ({ SLOT_JOBS: JSON.stringify(jobs), ...env });
+const onSlots = (r, labels) => Object.keys(r.slots).filter((k) => JSON.stringify(r.slots[k]) === JSON.stringify(labels)).sort();
+test('2 free heavy slots and 4 heavy jobs: exactly 2 self-hosted, 2 hosted', async () => {
+  const r = await route({ env: slotEnv([UNIT]) });
+  assert.deepEqual(Object.keys(r.slots).sort(), ['test-1', 'test-2', 'test-3', 'test-4']);
+  assert.equal(onSlots(r, CACHE).length, 2);
+  assert.equal(onSlots(r, ['gh-linux-8x']).length, 2);
+  // Matrix shards get different runners; list order breaks ties.
+  assert.deepEqual(onSlots(r, CACHE), ['test-1', 'test-2']);
+  // The listed jobs used every free slot, so unlisted heavy jobs go hosted too.
+  assert.deepEqual(r.runners['gh-linux-8x'], ['gh-linux-8x']);
+  assert.equal(r.outputs.linux_burst, 'true');
+  assert.ok(r.messages.some((m) => m.includes('linux routing: burst=true (queue depth=0 threshold=2 online=2 free=2 granted=2)')));
+  // One running heavy job elsewhere leaves a single free slot.
+  const one = await route({ env: slotEnv([UNIT]), jobs: [heavyJob(3)] });
+  assert.deepEqual(onSlots(one, CACHE), ['test-1']);
+});
+test('0 free heavy slots: every listed job goes hosted', async () => {
+  const r = await route({ env: slotEnv([UNIT, { key: 'check', label: 'gh-linux-8x', rust: true }]), jobs: [heavyJob(3), heavyJob(4)] });
+  for (const labels of Object.values(r.slots)) assert.deepEqual(labels, ['gh-linux-8x']);
+  assert.equal(Object.keys(r.slots).length, 5);
+});
+test('the kill switch, a fork, a probe failure, and an unreadable list send listed jobs hosted', async () => {
+  const jobs = [UNIT, { key: 'lint', label: 'ubuntu-24.04' }];
+  for (const f of [
+    { env: slotEnv(jobs, { LINUX_RUNNER_DISABLED: 'true' }) },
+    { env: slotEnv(jobs), event: 'pull_request', payload: { pull_request: { head: { repo: { full_name: 'outside/fork' } } } } },
+    { env: slotEnv(jobs), error: true },
+  ]) {
+    const r = await route(f);
+    assert.equal(Object.keys(r.slots).length, 5);
+    for (const [key, labels] of Object.entries(r.slots)) assert.deepEqual(labels, [key === 'lint' ? 'ubuntu-24.04' : 'gh-linux-8x']);
+  }
+  const bad = await route({ env: { SLOT_JOBS: '[not json' } });
+  assert.deepEqual(bad.slots, {});
+  assert.ok(bad.messages.some((m) => m.includes('slot list unreadable')));
+});
+test('Rust-compiling jobs get slots first, then the longest jobs', async () => {
+  const r = await route({
+    env: slotEnv([
+      { key: 'lint', label: 'gh-linux-8x', minutes: 30 },
+      { key: 'coverage', label: 'gh-linux-16x', rust: true, minutes: 13 },
+      { key: 'unit', label: 'gh-linux-8x', minutes: 14 },
+      { key: 'check', label: 'gh-linux-8x', rust: true, minutes: 20 },
+    ]),
+  });
+  assert.deepEqual(onSlots(r, CACHE), ['check', 'coverage']);
+  assert.deepEqual(r.slots.lint, ['gh-linux-8x']);
+  assert.deepEqual(r.slots.unit, ['gh-linux-8x']);
+  const one = await route({ env: slotEnv([{ key: 'a', label: 'gh-linux-8x', minutes: 4 }, { key: 'b', label: 'gh-linux-8x', minutes: 14 }]), jobs: [heavyJob(3)] });
+  assert.deepEqual(onSlots(one, CACHE), ['b']);
+});
+test('jobs that skip this event do not take a slot', async () => {
+  const jobs = [
+    { key: 'build-web', label: 'gh-linux-8x', minutes: 40, events: ['merge_group'] },
+    { key: 'checks', label: 'gh-linux-8x', minutes: 14 },
+    { key: 'unit', label: 'gh-linux-8x', minutes: 13 },
+  ];
+  const pr = await route({ env: slotEnv(jobs), event: 'pull_request', payload: { pull_request: { head: { repo: { full_name: 'intent-hq/cloudlands-fe' } } } } });
+  assert.deepEqual(onSlots(pr, CACHE), ['checks', 'unit']);
+  assert.deepEqual(pr.slots['build-web'], ['gh-linux-8x']);
+  const queue = await route({ env: slotEnv(jobs), event: 'merge_group' });
+  assert.deepEqual(onSlots(queue, CACHE), ['build-web', 'checks']);
+});
+test('each pool fits its own jobs and keeps its own labels', async () => {
+  const small = Array.from({ length: 8 }, (_, i) => ({ key: `s${i}`, label: 'ubuntu-24.04', minutes: i }));
+  const r = await route({ env: slotEnv([...small, UNIT]), jobs: [heavyJob(3), { ...heavyJob(4), labels: SMALL }] });
+  // Small pool: 6 slots, 1 busy -> 5 granted, longest first.
+  assert.deepEqual(onSlots(r, SMALL), ['s3', 's4', 's5', 's6', 's7']);
+  assert.deepEqual(onSlots(r, ['ubuntu-24.04']), ['s0', 's1', 's2']);
+  // Heavy pool: 2 slots, 1 busy -> 1 granted.
+  assert.deepEqual(onSlots(r, CACHE), ['test-1']);
+  assert.equal(r.outputs.linux_burst, 'true');
+  assert.deepEqual(r.runners['ubuntu-24.04'], ['ubuntu-24.04']);
+  // A pool with slots left after its listed jobs still serves unlisted jobs.
+  const spare = await route({ env: slotEnv([{ key: 'lint', label: 'ubuntu-24.04' }]) });
+  assert.deepEqual(spare.slots.lint, SMALL);
+  assert.deepEqual(spare.runners['ubuntu-24.04'], SMALL);
+  // Native fleets are not slot-fitted.
+  const win = await route({ env: slotEnv([{ key: 'win', label: 'windows-2025' }]) });
+  assert.deepEqual(win.slots.win, ['windows-2025']);
 });
