@@ -58,13 +58,13 @@ load_config() {
   RUNNER_POOLS="heavy small"
   HEAVY_SLOTS=2
   HEAVY_LABELS=self-hosted,linux,x64,intent-cache
-  HEAVY_CPUSETS="0-7 8-15"
+  HEAVY_CPUSETS="0-3,12-15 4-7,16-19"
   HEAVY_MEMORY=48g
   HEAVY_PIDS=16384
   HEAVY_SHM=1g
   SMALL_SLOTS=6
   SMALL_LABELS=self-hosted,linux,x64,intent-cache-small
-  SMALL_CPUSETS="16 17 18 19 20 21"
+  SMALL_CPUSETS="8 9 10 20 21 22"
   SMALL_MEMORY=3g
   SMALL_PIDS=4096
   SMALL_SHM=256m
@@ -180,11 +180,12 @@ remove_stale() {
     api GET "/orgs/$GITHUB_ORG/actions/runners?per_page=100&page=$page"
     [ "$api_status" = 200 ] || { log "warning: listing runners failed (HTTP $api_status); skipping stale cleanup"; return 0; }
     ids="$(jq -r --arg p "$RUNNER_NAME_PREFIX-$slot-" '.runners[] | select((.name | startswith($p)) and .status == "offline") | .id' <<<"$api_body")"
+    # Read the page size before the DELETE calls overwrite api_body.
+    count="$(jq '.runners | length' <<<"$api_body")"
     for id in $ids; do
       api DELETE "/orgs/$GITHUB_ORG/actions/runners/$id"
       log "removed stale runner registration $id (HTTP $api_status)"
     done
-    count="$(jq '.runners | length' <<<"$api_body")"
     [ "$count" -ge 100 ] || return 0
     page=$((page + 1))
   done

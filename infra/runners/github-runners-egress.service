@@ -7,6 +7,7 @@ After=docker.service
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/local/lib/github-runners/egress.sh apply gh-runners0
+ExecReload=/usr/local/lib/github-runners/egress.sh apply gh-runners0
 
 [Install]
 WantedBy=multi-user.target

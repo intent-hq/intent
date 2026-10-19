@@ -5,10 +5,10 @@ also runs org-wide GitHub Actions Linux runners for `intent-hq`, in two pools:
 
 | Pool | Slots | Label | Per slot |
 |---|---|---|---|
-| heavy | 2 | `intent-cache` | 8 CPUs (pinned 0-7, 8-15), 48 GB |
-| small | 6 | `intent-cache-small` | 1 CPU (pinned 16-21, one each), 3 GB |
+| heavy | 2 | `intent-cache` | 8 CPUs = 4 whole cores (pinned 0-3,12-15 and 4-7,16-19), 48 GB |
+| small | 6 | `intent-cache-small` | 1 CPU (pinned 8, 9, 10, 20, 21, 22, one each), 3 GB |
 
-CPUs 22-23 are left to the cache and the system.
+CPUs 11 and 23 (one whole core) are left to the cache and the system.
 
 Each slot runs one job in a fresh Docker container, then starts another. Everything needed to
 rebuild them lives in [`infra/runners/`](../infra/runners/).
@@ -64,14 +64,15 @@ runner output, tagged `github-runner-<pool>-<n>`).
   `os.availableParallelism()` report 8 on a heavy slot and 1 on a small one.
   Memory has no swap: 48 GB (heavy) and 3 GB (small), 2 × 48 + 6 × 3 = 114 GB,
   leaving about 11 GB of the 125 GB for the system and page cache. Processes:
-  16384 / 4096; `/dev/shm`: 1 GB / 256 MB. Caddy, rclone and the system are not pinned;
-  CPUs 22-23 are never given to a slot, and on the others the cache wins CPU
-  and IO contention (weight 1000 inside
-  `system.slice`, which outweighs `runners.slice` 10 to 1). The box has 12
-  cores with two threads each (CPU *n* and *n*+12 share a core), so with every
-  slot busy the pools share physical cores; for whole-core isolation set the
-  CPU sets to sibling pairs, e.g. `HEAVY_CPUSETS=0-3,12-15 4-7,16-19` and the
-  small pool on 8-10 and 20-22. Job disk lives in the container layer on the
+  16384 / 4096; `/dev/shm`: 1 GB / 256 MB. The box has 12 cores with two
+  threads each (CPU *n* and *n*+12 share a core), so the CPU sets follow
+  sibling pairs: each heavy slot owns 4 whole cores, the small pool shares
+  cores 8-10, and no heavy slot shares a core with another slot. Caddy, rclone
+  and the system are not pinned: core 11 (CPUs 11 and 23) is never given to a
+  slot, and on the others the cache wins CPU and IO contention (weight 1000
+  inside `system.slice`, which outweighs `runners.slice` 10 to 1). Check
+  siblings with `cat /sys/devices/system/cpu/cpu*/topology/thread_siblings_list`
+  before changing the sets on other hardware. Job disk lives in the container layer on the
   root NVMe (`/var/lib/docker`), separate from the cache disk, and disappears
   with the container.
 - **Labels.** `self-hosted`, `Linux`, `X64` (GitHub adds these itself) plus
@@ -177,10 +178,19 @@ systemctl stop 'github-runner@*'        # all slots
 ```
 
 An idle slot deregisters and stops within seconds. A slot running a job waits
-for that job (up to 6 hours, `TimeoutStopSec`), then exits; systemd kills
-anything still running after that. A job assigned in the second between the
-idle check and the stop fails and must be re-run. `systemctl start` brings a
-slot back; `systemctl disable --now` keeps it off across reboots.
+for that job (up to 6 hours, `TimeoutStopSec`), then exits. If the job runs
+longer, systemd kills the supervisor and `ExecStopPost` removes the container
+and its disk (the container lives in `runners.slice`, outside the unit's
+cgroup); the next start deletes the leftover registration. A job assigned in
+the second between the idle check and the stop fails and must be re-run.
+`systemctl start` brings a slot back; `systemctl disable --now` keeps it off
+across reboots.
+
+Re-running the installer never restarts a slot: new limits and a new image
+apply from each slot's next job. To apply them at once, restart the slots
+(busy ones drain first). Restart them one at a time (`systemctl restart
+github-runner@heavy-1`, then the next), because one `systemctl restart` across
+several units holds the idle ones down until the busy ones finish.
 
 ## Upgrade the runner
 

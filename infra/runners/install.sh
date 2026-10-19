@@ -117,8 +117,10 @@ install_files() {
     install -m 0644 "$here/runners.env" "$etc_dir/runners.env"
   fi
   systemctl daemon-reload
-  systemctl enable github-runners-egress.service >/dev/null
-  systemctl restart github-runners-egress.service
+  # Start, then reload to reapply the rules; never restart, which would
+  # also restart every slot that depends on the unit.
+  systemctl enable --now github-runners-egress.service >/dev/null
+  systemctl reload github-runners-egress.service
 }
 
 create_network() {

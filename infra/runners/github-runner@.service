@@ -4,7 +4,10 @@
 Description=GitHub Actions runner slot %i (ephemeral container)
 Documentation=https://github.com/intent-hq/intent/blob/main/docs/GITHUB_RUNNERS.md
 After=docker.service github-runners-egress.service network-online.target
-Requires=docker.service github-runners-egress.service
+# Wants, not Requires: restarting the egress unit must not restart (and so
+# drain) every slot. The supervisor refuses to start a job without the rules.
+Requires=docker.service
+Wants=github-runners-egress.service
 Wants=network-online.target
 StartLimitIntervalSec=0
 
@@ -13,10 +16,13 @@ Type=simple
 ExecStart=/usr/local/lib/github-runners/supervisor.sh %i
 Restart=always
 RestartSec=5
-# SIGTERM reaches only the supervisor, which drains; everything is killed
-# if a job outlives TimeoutStopSec.
+# SIGTERM reaches only the supervisor, which drains. If a job outlives
+# TimeoutStopSec the supervisor is killed; the container lives in
+# runners.slice, outside this unit's cgroup, so ExecStopPost removes it (and
+# its disk). It is a no-op after a normal exit, when --rm already removed it.
 KillMode=mixed
 TimeoutStopSec=6h
+ExecStopPost=-/usr/bin/docker rm -f gh-runner-%i
 SyslogIdentifier=github-runner-%i
 
 [Install]

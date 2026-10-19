@@ -50,8 +50,7 @@ with open(os.environ['STUB_LOG'], 'a') as log:
     log.write(json.dumps({'cmd': 'curl', 'method': method, 'path': path, 'auth': auth,
                           'body': body, 'argv': sys.argv[1:]}) + '\n')
 responses = json.load(open(os.environ['STUB_RESPONSES']))
-key = method + ' ' + path.split('?')[0]
-status, payload = responses.get(key, [404, {'message': 'Not Found'}])
+status, payload = responses.get(method + ' ' + path) or responses.get(method + ' ' + path.split('?')[0], [404, {'message': 'Not Found'}])
 open(out, 'w').write(json.dumps(payload))
 sys.stdout.write(str(status))
 '''
@@ -190,7 +189,7 @@ class Supervisor(Stubbed):
         argv = run['argv']
         self.assertNotIn(JIT, ' '.join(argv))
         for flag in (['--rm'], ['--init'], ['--name', 'gh-runner-heavy-1'], ['--network', 'gh-runners'],
-                     ['--cpus', '8'], ['--cpuset-cpus', '0-7'], ['--memory', '48g'], ['--memory-swap', '48g'],
+                     ['--cpus', '8'], ['--cpuset-cpus', '0-3,12-15'], ['--memory', '48g'], ['--memory-swap', '48g'],
                      ['--pids-limit', '16384'],
                      ['--cgroup-parent', 'runners.slice'], ['--cap-drop', 'ALL'],
                      ['--security-opt', 'no-new-privileges'], ['--env', 'ACTIONS_RUNNER_INPUT_JITCONFIG']):
@@ -203,6 +202,21 @@ class Supervisor(Stubbed):
         self.assertEqual((self.dir / 'egress.log').read_text(), 'egress check gh-runners0\n')
         self.assert_no_secret(out, err)
 
+    def test_stale_cleanup_reads_every_page(self):
+        page1 = [{'id': 1000 + i, 'name': f'other-{i}', 'status': 'online'} for i in range(99)]
+        page1.append({'id': 11, 'name': 'intent-cache-heavy-1-100', 'status': 'offline'})
+        self.responses['GET /orgs/example-org/actions/runners?per_page=100&page=1'] = [200, {'runners': page1}]
+        self.responses['GET /orgs/example-org/actions/runners?per_page=100&page=2'] = [200, {'runners': [
+            {'id': 21, 'name': 'intent-cache-heavy-1-300', 'status': 'offline'}]}]
+        self.responses['DELETE /orgs/example-org/actions/runners/21'] = [204, {}]
+        rc, out, err = self.run_supervisor('heavy-1')
+        self.assertEqual(rc, 0, err)
+        api = [(c['method'], c['path']) for c in self.calls('curl')]
+        self.assertIn(('GET', '/orgs/example-org/actions/runners?per_page=100&page=2'), api)
+        self.assertIn(('DELETE', '/orgs/example-org/actions/runners/11'), api)
+        self.assertIn(('DELETE', '/orgs/example-org/actions/runners/21'), api)
+        self.assertNotIn(('GET', '/orgs/example-org/actions/runners?per_page=100&page=3'), api)
+
     def test_small_pool_slot(self):
         rc, out, err = self.run_supervisor('small-3')
         self.assertEqual(rc, 0, err)
@@ -210,7 +224,7 @@ class Supervisor(Stubbed):
         self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache-small'])
         self.assertRegex(body['name'], r'^intent-cache-small-3-\d+$')
         argv = ' '.join([c for c in self.calls('docker') if c['argv'][0] == 'run'][0]['argv'])
-        for flag in ('--name gh-runner-small-3', '--cpus 1 ', '--cpuset-cpus 18 ', '--memory 3g',
+        for flag in ('--name gh-runner-small-3', '--cpus 1 ', '--cpuset-cpus 10 ', '--memory 3g',
                      '--pids-limit 4096', '--shm-size 256m'):
             self.assertIn(flag, argv)
 
@@ -425,7 +439,9 @@ class Installer(Stubbed):
         self.assertEqual(stat.S_IMODE((self.prefix / 'etc/github-runners').stat().st_mode), 0o700)
         self.assertEqual(self.env_file.read_bytes(), (HERE / 'runners.env').read_bytes())
         self.assertIn(['restart', 'docker'], self.systemctl())
-        self.assertIn(['restart', 'github-runners-egress.service'], self.systemctl())
+        self.assertIn(['reload', 'github-runners-egress.service'], self.systemctl())
+        self.assertFalse([a for a in self.systemctl() if a[0] == 'restart' and a[1] != 'docker'],
+                         'the installer never restarts the egress unit or a slot, which would drain running jobs')
         docker = [c['argv'] for c in self.calls('docker')]
         create = [a for a in docker if a[:2] == ['network', 'create']][0]
         self.assertIn('com.docker.network.bridge.enable_icc=false', create)
@@ -537,8 +553,14 @@ class Static(unittest.TestCase):
     def test_unit_drains_on_stop(self):
         text = (HERE / 'github-runner@.service').read_text()
         self.assertIn('KillMode=mixed', text)
+        # The container lives in runners.slice, outside the service cgroup, so
+        # a stop that times out must remove it explicitly.
+        self.assertIn('ExecStopPost=-/usr/bin/docker rm -f gh-runner-%i', text)
         self.assertIn('Restart=always', text)
-        self.assertIn('Requires=docker.service github-runners-egress.service', text)
+        self.assertIn('Requires=docker.service\n', text)
+        self.assertIn('Wants=github-runners-egress.service', text)
+        self.assertNotRegex(text, r'Requires=.*egress', 'a Requires= on the egress unit restarts every slot with it')
+        self.assertIn('ExecReload=', (HERE / 'github-runners-egress.service').read_text())
 
     def test_slice_sits_at_the_cgroup_root(self):
         # systemd nests a slice named a-b.slice under a.slice, where its low
@@ -554,6 +576,14 @@ class Static(unittest.TestCase):
         for key in ('CPUWeight', 'IOWeight'):
             self.assertGreaterEqual(weight(prio, key), 10 * weight(slice_text, key))
 
+    @staticmethod
+    def expand(entry):
+        out = []
+        for part in entry.split(','):
+            a, _, b = part.partition('-')
+            out += range(int(a), int(b or a) + 1)
+        return out
+
     def test_default_pools_fit_the_box(self):
         env = dict(line.split('=', 1) for line in (HERE / 'runners.env').read_text().splitlines()
                    if line and not line.startswith('#'))
@@ -567,7 +597,12 @@ class Static(unittest.TestCase):
                     cpus += list(range(int(a), int(b or a) + 1))
             memory += int(env[f'{p}_SLOTS']) * int(env[f'{p}_MEMORY'].rstrip('g'))
         self.assertEqual(len(cpus), len(set(cpus)), 'slots must not share CPUs')
-        self.assertEqual(sorted(cpus), list(range(22)), 'CPUs 22-23 stay unpinned for the cache and system')
+        self.assertEqual(sorted(cpus), [c for c in range(24) if c not in (11, 23)],
+                         'core 11 (CPUs 11 and 23) stays unpinned for the cache and system')
+        heavy = [set(self.expand(e)) for e in env['HEAVY_CPUSETS'].split()]
+        for cpu_set in heavy:
+            self.assertEqual(cpu_set, {c + 12 for c in cpu_set if c < 12} | {c for c in cpu_set if c < 12},
+                             'each heavy slot owns whole cores (CPU n with its sibling n+12)')
         self.assertEqual(memory, 2 * 48 + 6 * 3)
         self.assertLessEqual(memory, 125 - 10, 'leave about 11 GB of the 125 GB for the system and page cache')
         slice_max = int(re.search(r'^MemoryMax=(\d+)G$', (HERE / 'runners.slice').read_text(), re.M)[1])
