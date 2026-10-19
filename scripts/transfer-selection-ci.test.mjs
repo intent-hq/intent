@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -109,6 +109,8 @@ test('toolchain setup failures propagate from every required tool', (t) => {
   mkdirSync(path.join(f.root, 'packages/intentd'), { recursive: true });
   writeFileSync(path.join(f.root, 'packages/intentd/rust-toolchain.toml'), '[toolchain]\nchannel = "1.96.0"\n');
   const command = body(step(workflow, 'Prepare the connected test toolchains'));
+  // OpenSSL headers missing, so the sudo install path runs.
+  writeFileSync(path.join(f.root, 'bin', 'pkg-config'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
   for (const failedTool of ['rustup', 'sudo', 'corepack']) {
     for (const tool of ['rustup', 'sudo', 'corepack']) {
       writeFileSync(path.join(f.root, 'bin', tool), '#!/bin/sh\nexit ' + (tool === failedTool ? 23 : 0) + '\n', { mode: 0o755 });
@@ -116,6 +118,19 @@ test('toolchain setup failures propagate from every required tool', (t) => {
     const result = spawnSync('bash', ['-eo', 'pipefail', '-c', command], { cwd: f.root, env: f.env, encoding: 'utf8' });
     assert.equal(result.status, 23, failedTool + ': ' + result.stderr);
   }
+});
+
+test('preinstalled OpenSSL headers never call sudo (unprivileged runners)', (t) => {
+  const f = fixture(t);
+  mkdirSync(path.join(f.root, 'packages/intentd'), { recursive: true });
+  writeFileSync(path.join(f.root, 'packages/intentd/rust-toolchain.toml'), '[toolchain]\nchannel = "1.96.0"\n');
+  const command = body(step(workflow, 'Prepare the connected test toolchains'));
+  writeFileSync(path.join(f.root, 'bin', 'pkg-config'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  for (const tool of ['rustup', 'corepack']) writeFileSync(path.join(f.root, 'bin', tool), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  writeFileSync(path.join(f.root, 'bin', 'sudo'), '#!/bin/sh\necho sudo >> "$RUNNER_TEMP/tools"\nexit 23\n', { mode: 0o755 });
+  const result = spawnSync('bash', ['-eo', 'pipefail', '-c', command], { cwd: f.root, env: f.env, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(existsSync(path.join(f.root, 'tools')), false);
 });
 
 test('standalone jobs acquire main once and print the actual full contract SHA', (t) => {

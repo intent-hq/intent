@@ -59,6 +59,15 @@ sourceWorkspaceId }` on the event for the workspace it creates; every other crea
 it. The field is daemon-set only: `workspace.create` params do not accept it and the row
 does not persist it.
 
+Also within 15.0 (additive optional row fields; presence-detected; no method-catalog
+change, so no version bump): **`agent.list` rows mark shortened previews** (§5.5
+list-row preview cap). A list-shaped `AgentLite` row carries
+`lastAgentResponseTruncated` / `lastUserMessageTruncated` / `digestTruncated` and
+`metadata.completionReportTruncated` / `metadata.attentionRequestReasonTruncated`
+(`true` only, omitted otherwise) when the list cap shortened that field, so clients
+can mark the text as a prefix or read the uncapped value with `agent.get`. Older daemons
+omit the flags; clients must not read their absence as proof a value is complete.
+
 **PR workspace lookup (additive, prepared).** The
 [PR workspace lookup](./methods/workspace.md#pull-request-workspace-lookup) reserves
 the read-only router method `workspace.findByPullRequest`, bringing the documented

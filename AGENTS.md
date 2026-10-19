@@ -249,9 +249,10 @@ with no rollback.
 - **Merging**: agents must **NEVER merge a PR, arm auto-merge, or add a PR to the
   merge queue — in this repo or any submodule repo — without explicit permission from
   a human**. Approved + green checks is not enough. Repo-owned automation is exempt
-  (auto-bump-submodules, auto-pin-intentd, auto-cut-alpha, and the release PR
-  workflows merge their own rolling PRs). Ordinary `main` PRs in all three repos
-  use a **merge queue**: after human permission, `gh pr merge --squash` enqueues
+  (auto-bump-submodules, auto-pin-intentd, intentd's auto-pin-acp-adapters — the Codex
+  and Claude ACP adapter pins, formerly auto-pin-codex-acp — auto-cut-alpha, and the
+  release PR workflows merge their own rolling PRs). Ordinary `main` PRs in
+  all three repos use a **merge queue**: after human permission, `gh pr merge --squash` enqueues
   them until the queue's gate passes. Component auto-cut may directly merge
   validated release metadata under the approved CI exemption and existing
   readiness guards ([details](docs/RELEASING.md#guarded-direct-release-merges)).
@@ -313,13 +314,13 @@ with no rollback.
   settings (`GATE_FORCE=1` ignores them). To continue past a
   known flake, `RESUME=1 NO_FAIL_FAST=1 make test-changed` (or `make test`) runs the rest
   to completion, records them, and exits non-zero if anything failed ([intent-hq/intent#5645](https://github.com/intent-hq/intent/issues/5645)).
-- Run long gates as saved command-mode `ws.script` entries (`ws.script.start`, a
-  self-checking `ws.hook.schedule` on `ws.script.status`, then `ws.script.output`).
-  The hook must dispatch on `s.status === "exited" && s.exitCode !== undefined` — never
-  on "not running": `starting` is live, and anything else fired a false wake on the
-  validation run ([intent-hq/intent#4858](https://github.com/intent-hq/intent/issues/4858)).
-  `exitCode === -1` means the supervisor could not observe the exit (process lost, or a
-  command script running when the daemon stopped) — read `s.error` and treat as failure.
+- Run long gates as saved command-mode `ws.script` entries: `ws.script.start`, then
+  `ws.script.monitor(scriptId, { ttlMs, runId })` with the start reply's `runId` and a TTL
+  of expected runtime plus margin. End the turn only once registration succeeds; on a
+  `run-finished` refusal, read the result right away. After the wake, read
+  `ws.script.output` and `ws.script.status`: `exitCode === -1` means the supervisor could
+  not observe the exit (process lost, or a command script running when the daemon
+  stopped) — read `s.error` and treat it as failure. Details: `ws.help("script")`.
   `ws.script.run` rejects `timeoutSeconds` above budget − 5s (25s default). Saved scripts
   are PTY-backed, so use the `make` targets (no progress bars or pagers; `make list-tests`
   for nextest discovery) — bare `cargo`/`git`/`gh` without `--no-pager` or that env
@@ -333,9 +334,8 @@ guardrails) lives in [docs/RELEASING.md](./docs/RELEASING.md). The agent-facing 
 - Releases are per-component and channel-based: merging a release PR publishes to the
   rolling **alpha** channel automatically; **beta** and **stable** are manual
   promotions of existing releases (no new build).
-- The pipeline is event-chained (intentd alpha publish → cloudlands-fe pin bump →
-  fe alpha cut), with cron backstops: hourly pin bumps and ten-minute frontend
-  cut attempts, subject to the automated hourly release floor.
+- The pipeline is event-chained (intentd alpha publish → fe pin bump → fe alpha cut),
+  with hourly pin-bump and ten-minute cut crons under the hourly release floor.
 - **Never file routine pin-bump PRs** — the workflows own pin advancement (the monorepo
   `submodule-pins` check enforces this; see Phase 2 above). The one sanctioned exception
   is the cloudlands-fe `intentd.version` pin under the emergency-release procedure
@@ -344,7 +344,8 @@ guardrails) lives in [docs/RELEASING.md](./docs/RELEASING.md). The agent-facing 
   done when the PRs merge — monitor until the work ships in a cloudlands-fe alpha, then
   set the final workspace status message to the carrying version (e.g. "Shipped in
   cloudlands-fe vX.Y.Z (alpha)."; intentd-only changes ride the chained fe alpha, so the
-  version is always the cloudlands-fe tag). `scripts/shipped-in.sh <component> <sha>...`
+  version is always the cloudlands-fe tag). `make release-status` (`STATUS_JSON=1`)
+  prints the whole train, including why auto-cut last skipped. `scripts/shipped-in.sh <component> <sha>...`
   (one or more pairs; or `make shipped-in COMPONENT=... SHA=...` /
   `PAIRS="intentd:<sha> cloudlands-fe:<sha>"`) is the canonical detector: it prints the
   first [intent-hq/cloudlands-releases](https://github.com/intent-hq/cloudlands-releases)

@@ -5,8 +5,9 @@
 This is a **prepared contract** for named configurations of an installed Codex or
 Claude Code CLI. It is not implemented by the current pins. Each profile has a
 stable identity, a display name, a base provider and environment overrides. A
-profile shares its base provider's installation, executable path, enablement and
-Fast mode preference. The original configuration stays available as **Default**
+profile shares its base provider's installation, executable path and enablement.
+Each profile has its own Fast mode preference (see
+[References in settings](#references-in-settings)). The original configuration stays available as **Default**
 and is not a profile. Hosts with no profiles keep their current behavior.
 
 Fallback chains are out of scope. This contract defines no chain schema. A later
@@ -42,9 +43,11 @@ The reference travels in the **existing provider fields**. No parallel
 - `models.list` `providerId` and `ModelInfo.provider` (§5.30)
 - `host.providerAuthStatus` and `host.providerTestPrompt` `providerId` (§5.14)
 
-`providers.enabled`, `providers.paths`, `providers.fastMode` and the access-token
-settings stay keyed by the base provider id. Qualified references are rejected
-there; a profile inherits those values from its base provider.
+`providers.enabled`, `providers.paths` and the access-token settings stay keyed by
+the base provider id. Qualified references are rejected there; a profile inherits
+those values from its base provider. `providers.fastMode` is the exception: its keys
+also accept profile references, and a profile never inherits its base provider's
+entry (see [References in settings](#references-in-settings)).
 
 **Why one field.** The call-site survey found these properties at the pins:
 
@@ -133,7 +136,8 @@ redaction applies. Deleting the file removes every profile.
 Environment values never enter `config.toml`, the profile file, the ordinary
 `providers.*` map, the settings database, `settings.list`, `settings:changed`,
 catalogs, model rows, events, agent-visible metadata or logs. Deleting a profile
-removes both records and prunes its `model.providerDefaults` entry (see
+removes both records and prunes its `model.providerDefaults` and `providers.fastMode`
+entries (see
 [References in settings](#references-in-settings)). The daemon never rewrites
 client-owned `quickActions.providerSettings` snapshots; a snapshot keyed by a
 deleted reference stays inert.
@@ -146,10 +150,47 @@ deleted reference stays inert.
   whole value, so validation compares with the stored map. Only a key that is new,
   or whose value changed, must name a saved profile. An unchanged stored key
   round-trips without error even if its profile is gone.
-- `providers.profiles.delete` removes the profile's `model.providerDefaults` key in
-  the same commit. That emits `settings:changed` with the new settings revision, as
-  well as `providers:profiles-changed`.
+- `providers.fastMode` keys accept references; see
+  [Per-profile Fast mode](#per-profile-fast-mode).
+- `providers.profiles.delete` removes the profile's `model.providerDefaults` key and
+  its `providers.fastMode` key in the same commit. That emits one `settings:changed`
+  with the new settings revision, as well as `providers:profiles-changed`.
 - `quickActions.providerSettings` stays client-owned and unvalidated.
+
+##### Per-profile Fast mode
+
+Each profile has its own Fast mode (Claude Code) or service tier (Codex)
+preference, stored in the existing [`providers.fastMode`](settings.md) map under
+the profile's `providerRef`:
+
+```jsonc
+{"changes": [{"path": "providers.fastMode", "value": {
+  "claude-code": true,
+  "claude-code@p3k9x2m4q7t1a": false,
+  "codex@p7m2q9x4k1t3b": true
+}}]}
+```
+
+- **No inheritance.** A profile with no entry is **off**. The bare base key
+  (`claude-code`, `codex`) applies only to the Default configuration and never to a
+  profile, in either direction.
+- **Application.** The daemon reads the entry for the selected reference: on each
+  new turn and in one-shot prompts (the [application boundary](settings.md) is
+  unchanged). A turn on `codex@…` reads only `providers.fastMode["codex@…"]`.
+- **Validation.** A qualified key must be well formed (see
+  [Identity and provider references](#identity-and-provider-references)) and its
+  base must advertise `supportsFastMode: true`; otherwise `settings.update` returns
+  `-32602` as for any unknown key. The map is a whole-value write, so, as for
+  `model.providerDefaults`, validation compares with the stored map: a qualified key
+  that is new, or whose value changed, must name a saved profile, else `-32602` with
+  `data.code: "provider-profile-not-found"`. An unchanged stored key round-trips
+  without error even if its profile is gone. The whole batch is rejected before
+  persistence.
+- **Delete.** `providers.profiles.delete` prunes the profile's key in the same commit
+  (above).
+- **Clients.** Show the control per profile only when the base row advertises both
+  `supportsProfiles` and `supportsFastMode`. Preserve every other key, including
+  other profiles' keys, when changing one toggle.
 
 #### Methods
 
@@ -191,7 +232,17 @@ interface ProfileActivation {
 - **Env semantics.** `set` applies the literal value; `""` differs from `unset`.
   `unset` removes the variable even if it is inherited from the daemon or the captured
   login shell. A key that is absent inherits normally. Values are never shell-expanded
-  or executed. Profile entries override inherited values for the same key.
+  or executed, with the one exception below. Profile entries override inherited
+  values for the same key.
+- **Home expansion.** For `CLAUDE_CONFIG_DIR` and `CODEX_HOME` only (compared
+  ignoring ASCII case), a `set` value that is exactly `~` or starts with `~/` is
+  expanded to the daemon user's home directory when the profile environment is
+  resolved. `~/.claude-work` becomes `<home>/.claude-work`. Expansion happens
+  before account-home lookup, isolation and fingerprinting, so auth checks, model
+  catalogs and launched sessions all see the same path. The stored value is
+  unchanged and reads still return it masked. `~user/…`, `$HOME`, `${…}` and a `~`
+  anywhere else stay literal, and every other key is used exactly as typed. If the
+  daemon cannot determine its home directory, the value stays literal.
 - **Update.** `env`, when present, is the complete new list. Keys left out are removed,
   which restores inheritance. `keep` preserves a saved entry's kind and value without
   echoing the secret, so a masked field stays unchanged. Omitting `env` leaves all
@@ -381,3 +432,6 @@ Clients detect support through `supportsProfiles` and must not send qualified
 references or call `providers.profiles.*` when it is absent. Older clients ignore the
 new fields and show an unrecognized reference as a raw provider id. They preserve it
 on write.
+A daemon that advertises `supportsProfiles` but predates per-profile Fast mode
+rejects a qualified `providers.fastMode` key with `-32602`; the whole update fails and
+the stored map is unchanged, so clients surface the error rather than retrying.

@@ -33,7 +33,7 @@ jobs:
 
   bump:
     needs: [runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       # Fail-soft: without the token, warn and end the run successfully
       # (mirrors INTENTD_RELEASES_TOKEN / MONOREPO_ISSUES_TOKEN handling).

@@ -15,7 +15,10 @@ curl --fail --location --silent --show-error --retry 3 \
   tar -xzf bash.tar.gz
   cd bash-3.2.57
   ./configure --prefix="$prefix" --without-bash-malloc --disable-nls > configure.log 2>&1 || { cat configure.log; exit 1; }
-  make -j2 > build.log 2>&1 || { cat build.log; exit 1; }
+  # Bash 3.2's readline Makefile races under parallel make (ar runs before
+  # histsearch.o exists), so build serially and ignore inherited job flags.
+  unset MAKEFLAGS MFLAGS GNUMAKEFLAGS
+  make -j1 > build.log 2>&1 || { cat build.log; exit 1; }
   install -m 755 bash "$prefix/bash"
 )
 version=$("$prefix/bash" -c 'printf "%s.%s" "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1]}"')

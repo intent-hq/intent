@@ -66,7 +66,9 @@ name: Consumer checks
 on:
   workflow_call:
     secrets:
-      DEPOT_TOKEN:
+      # Self-hosted sccache token; used only when the caller's
+      # INTENT_SCCACHE_ENDPOINT variable is set (otherwise uncached).
+      INTENT_SCCACHE_TOKEN:
         required: false
       CI_QUEUE_READ_TOKEN:
         required: false
@@ -97,7 +99,7 @@ jobs:
 
   consumer-checks:
     needs: [runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04-8'] || fromJSON('["depot-ubuntu-24.04-8"]') }}
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['gh-linux-8x'] || fromJSON('["gh-linux-8x"]') }}
     timeout-minutes: 45
     permissions:
       contents: read
@@ -208,16 +210,21 @@ jobs:
           [[ "$channel" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo '::error::invalid Rust release channel'; exit 1; }
           rustup toolchain install "$channel" --profile minimal
           echo "RUSTUP_TOOLCHAIN=$channel" >> "$GITHUB_ENV"
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends libssl-dev pkg-config
+          # intent-cache runner images ship the headers and have no sudo.
+          if ! command -v pkg-config >/dev/null || ! pkg-config --exists openssl; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends libssl-dev pkg-config
+          fi
           corepack enable
 
-      - name: Configure Depot managed compiler cache
+      - name: Configure the self-hosted compiler cache
         if: github.event_name == 'merge_group' && steps.monorepo.outcome == 'success'
         shell: bash
         env:
-          DEPOT_SCCACHE_TOKEN: ${{ secrets.DEPOT_TOKEN }}
-        run: python3 scripts/setup-depot-sccache.py
+          INTENT_SCCACHE_ENDPOINT: ${{ vars.INTENT_SCCACHE_ENDPOINT }}
+          INTENT_SCCACHE_TOKEN: ${{ secrets.INTENT_SCCACHE_TOKEN }}
+          INTENT_SCCACHE_MODE: ${{ vars.INTENT_SCCACHE_MODE }}
+        run: python3 scripts/setup-sccache.py
       - name: Install the selected renderer dependencies
         if: github.event_name == 'merge_group' && steps.monorepo.outcome == 'success'
         working-directory: packages/cloudlands-fe

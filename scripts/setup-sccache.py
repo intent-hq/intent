@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""Install pinned sccache without Actions caching and select Depot's WebDAV backend.
+"""Install pinned sccache without Actions caching and select the WebDAV cache.
 
-Depot supplies its job-scoped endpoint. Other runners may supply DEPOT_TOKEN
-through DEPOT_SCCACHE_TOKEN. Missing credentials leave compilation uncached.
+When INTENT_SCCACHE_ENDPOINT is set, the self-hosted cache is used with
+INTENT_SCCACHE_TOKEN and INTENT_SCCACHE_MODE (READ_WRITE by default). It
+overwrites any SCCACHE_WEBDAV_* values the runner environment already carries.
+Without the variable or a token (for example fork pull requests) compilation
+is uncached.
 """
 import hashlib
 import os
@@ -12,6 +15,7 @@ import socket
 import subprocess
 import tarfile
 import tempfile
+import urllib.parse
 import urllib.request
 
 VERSION = "0.17.0"
@@ -24,19 +28,43 @@ ASSETS = {
 }
 
 
-def configuration(env):
-    result = {}
-    endpoint = env.get("SCCACHE_WEBDAV_ENDPOINT")
-    token = env.get("SCCACHE_WEBDAV_TOKEN") or env.get("DEPOT_SCCACHE_TOKEN")
-    if not endpoint and token:
-        result["SCCACHE_WEBDAV_ENDPOINT"] = "https://cache.depot.dev"
-        endpoint = result["SCCACHE_WEBDAV_ENDPOINT"]
+MODES = ("READ_WRITE", "READ_ONLY")
+# Inherited runner values that would otherwise leak into the self-hosted
+# configuration. Present ones are blanked; the endpoint and token are replaced.
+INHERITED_WEBDAV = ("SCCACHE_WEBDAV_KEY_PREFIX", "SCCACHE_WEBDAV_USERNAME", "SCCACHE_WEBDAV_PASSWORD")
+WRAPPER = {"SCCACHE_GHA_ENABLED": "false", "CARGO_INCREMENTAL": "0", "RUSTC_WRAPPER": "sccache"}
+
+
+def self_hosted_endpoint(env):
+    endpoint = (env.get("INTENT_SCCACHE_ENDPOINT") or "").strip()
     if not endpoint:
-        return {}
-    if token and not env.get("SCCACHE_WEBDAV_TOKEN"):
-        result["SCCACHE_WEBDAV_TOKEN"] = token
-    result.update(SCCACHE_GHA_ENABLED="false", CARGO_INCREMENTAL="0", RUSTC_WRAPPER="sccache")
-    return result
+        return ""
+    parts = urllib.parse.urlsplit(endpoint)
+    loopback = parts.hostname in ("127.0.0.1", "localhost", "::1")
+    if not parts.hostname or not (parts.scheme == "https" or (parts.scheme == "http" and loopback)):
+        raise ValueError("INTENT_SCCACHE_ENDPOINT must be an https:// URL")
+    return endpoint
+
+
+def select(env):
+    """Return (backend, mode, values); backend is self-hosted or uncached."""
+    endpoint = self_hosted_endpoint(env)
+    if not endpoint:
+        return "uncached", None, {}
+    token = (env.get("INTENT_SCCACHE_TOKEN") or "").strip()
+    if not token:
+        return "uncached-self-hosted", None, {}
+    mode = (env.get("INTENT_SCCACHE_MODE") or "READ_WRITE").strip().upper()
+    if mode not in MODES:
+        raise ValueError("INTENT_SCCACHE_MODE must be READ_WRITE or READ_ONLY")
+    result = {key: "" for key in INHERITED_WEBDAV if key in env}
+    result.update(SCCACHE_WEBDAV_ENDPOINT=endpoint, SCCACHE_WEBDAV_TOKEN=token, SCCACHE_WEBDAV_RW_MODE=mode)
+    result.update(WRAPPER)
+    return "self-hosted", mode, result
+
+
+def configuration(env):
+    return select(env)[2]
 
 
 def install(directory):
@@ -63,14 +91,18 @@ def install(directory):
 
 
 def main():
-    values = configuration(os.environ)
+    backend, mode, values = select(os.environ)
     # The local WebDAV fixture smoke test needs the pinned binary even without
     # managed credentials. It supplies its own isolated cache configuration.
     directory = install(Path(os.environ["RUNNER_TEMP"]) / "intent-sccache")
     with open(os.environ["GITHUB_PATH"], "a", encoding="utf-8") as output:
         output.write(str(directory) + "\n")
+    if backend == "uncached-self-hosted":
+        print("::notice::INTENT_SCCACHE_ENDPOINT is set but INTENT_SCCACHE_TOKEN is empty "
+              "(for example a fork pull request); Rust compilation is uncached.")
+        return
     if not values:
-        print("::notice::No Depot cache credentials configured; Rust compilation is uncached.")
+        print("::notice::INTENT_SCCACHE_ENDPOINT is not set; Rust compilation is uncached.")
         return
     # A self-hosted machine may already have an unrelated sccache server.
     # Isolate this job so it cannot inherit that server's backend or token.
@@ -86,7 +118,8 @@ def main():
             if "\n" in value or "\r" in value:
                 raise ValueError("Invalid cache configuration")
             output.write(f"{key}={value}\n")
-    print("Rust compilation uses Depot managed sccache.")
+    host = urllib.parse.urlsplit(values["SCCACHE_WEBDAV_ENDPOINT"]).hostname
+    print(f"Rust compilation uses self-hosted sccache at {host} ({mode}).")
 
 
 if __name__ == "__main__":

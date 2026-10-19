@@ -146,7 +146,7 @@ jobs:
       (github.event.action != 'labeled' ||
        contains(fromJSON('["bug", "enhancement"]'), github.event.label.name))
     needs: [runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -484,7 +484,7 @@ jobs:
   needs-info-reply:
     if: github.event_name == 'issue_comment' && !github.event.issue.pull_request
     needs: [runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -617,7 +617,7 @@ jobs:
     if: >-
       (github.event_name == 'issues' && github.event.action == 'opened') ||
       github.event_name == 'workflow_dispatch'
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['depot-ubuntu-24.04'] || fromJSON('["depot-ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
     continue-on-error: true
     steps:
       - uses: actions/checkout@v7

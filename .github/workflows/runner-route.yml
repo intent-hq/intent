@@ -28,7 +28,7 @@ permissions:
   actions: read
 jobs:
   probe:
-    runs-on: depot-ubuntu-24.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       runners: ${{ steps.decide.outputs.runners }}
@@ -43,7 +43,12 @@ jobs:
       - id: decide
         uses: actions/github-script@v9
         env:
-          THRESHOLD: '8'
+          # Slot counts of the two Linux pools; each bursts to its hosted label
+          # once this many of its jobs are queued or running. Raise them when
+          # slots are added. Heavy jobs ride larger-runner labels (intent-cache);
+          # fast jobs ride standard labels (intent-cache-small).
+          THRESHOLD: '2'
+          SMALL_THRESHOLD: '6'
           LINUX_RUNNER_DISABLED: ${{ vars.CI_LINUX_RUNNER_DISABLED }}
           WINDOWS_RUNNER_DISABLED: ${{ vars.CI_WINDOWS_RUNNER_DISABLED }}
           MACOS_RUNNER_DISABLED: ${{ vars.CI_MACOS_RUNNER_DISABLED }}
@@ -53,7 +58,10 @@ jobs:
             // No checkout: routing never executes code from a pull request.
             // Org runners with these labels must be in groups shared with all three CI repos.
             const fleets = {
-              linux: ['self-hosted', 'Linux', 'X64'],
+              // Heavy jobs (compile Rust or run over ~5 minutes): 8 cores / 48 GB per slot.
+              linux: ['self-hosted', 'linux', 'x64', 'intent-cache'],
+              // Fast jobs: 1 core / 3 GB per slot.
+              small: ['self-hosted', 'linux', 'x64', 'intent-cache-small'],
               arm: ['self-hosted', 'Linux', 'ARM64'],
               windows: ['self-hosted', 'Windows', 'X64'],
               macos: ['self-hosted', 'macOS', 'ARM64'],
@@ -61,6 +69,7 @@ jobs:
             };
             const disabled = {
               linux: process.env.LINUX_RUNNER_DISABLED === 'true',
+              small: process.env.LINUX_RUNNER_DISABLED === 'true',
               arm: process.env.LINUX_RUNNER_DISABLED === 'true',
               windows: process.env.WINDOWS_RUNNER_DISABLED === 'true',
               macos: process.env.MACOS_RUNNER_DISABLED === 'true',
@@ -80,10 +89,10 @@ jobs:
                 runners = await github.paginate(github.rest.actions.listSelfHostedRunnersForRepo, {...context.repo, per_page: 100});
               }
               const online = Object.fromEntries(Object.entries(fleets).map(([key, labels]) => [key,
-                runners.filter(r => r.status === 'online' && labels.every(l => (r.labels || []).some(x => ['macos', 'intel'].includes(key) ? x.name?.toLowerCase() === l.toLowerCase() : x.name === l))),
+                runners.filter(r => r.status === 'online' && labels.every(l => (r.labels || []).some(x => x.name?.toLowerCase() === l.toLowerCase()))),
               ]));
               const jobs = [];
-              // A missing sibling view is unknown demand, not zero demand. Fail open to Depot.
+              // A missing sibling view is unknown demand, not zero demand. Fail open to GitHub-hosted runners.
               if (Object.values(online).some(rs => rs.length)) {
                 for (const repo of new Set(['intent', 'intentd', 'cloudlands-fe', context.repo.repo])) {
                   const seen = new Set();
@@ -97,43 +106,40 @@ jobs:
                   }
                 }
               }
-              const threshold = Number(process.env.THRESHOLD || '8');
-              if (!Number.isInteger(threshold) || threshold < 0) throw new Error('invalid queue threshold');
+              const thresholds = {linux: Number(process.env.THRESHOLD || '2'), small: Number(process.env.SMALL_THRESHOLD || '6')};
+              if (Object.values(thresholds).some(n => !Number.isInteger(n) || n < 0)) throw new Error('invalid queue threshold');
               for (const [key, labels] of Object.entries(fleets)) {
-                const demand = jobs.filter(j => ['queued', 'in_progress'].includes(j.status) && labels.every(l => (j.labels || []).includes(l)));
+                const demand = jobs.filter(j => ['queued', 'in_progress'].includes(j.status) && labels.every(l => (j.labels || []).some(x => x.toLowerCase() === l.toLowerCase())));
                 const stale = demand.some(j => j.status === 'queued' && (!Number.isFinite(Date.parse(j.created_at)) || Date.parse(j.created_at) < Date.now() - 15 * 60 * 1000));
-                const native = key !== 'linux';
+                const native = !(key in thresholds);
                 const capacity = native ? online[key].filter(r => r.busy === false).length : online[key].length;
-                const limit = native ? capacity - 1 : Math.min(threshold, capacity);
+                const limit = native ? capacity - 1 : Math.min(thresholds[key], capacity);
                 const depth = native ? demand.filter(j => j.status === 'queued').length : demand.length;
-                burst[key] = disabled[key] || capacity === 0 || stale || depth > limit;
+                burst[key] = disabled[key] || capacity === 0 || stale || (native ? depth > limit : depth >= limit);
                 reasons[key] = disabled[key] ? 'disabled for maintenance' : capacity === 0 ? 'no available compatible runner' : stale ? 'stalled or unknown-age queue' : `queue depth=${depth} threshold=${limit} online=${online[key].length}`;
               }
             } catch (error) {
               for (const key of Object.keys(fleets)) reasons[key] = `probe failed (${error.message})`;
             }
+            // Keys are the GitHub-hosted fallback labels jobs ask for; values are
+            // the self-hosted fleet labels, or the key itself when the fleet bursts.
+            const hosted = {
+              // Larger runners carry the heavy jobs; standard runners the fast ones.
+              linux: ['gh-linux-8x', 'gh-linux-16x'],
+              small: ['ubuntu-22.04', 'ubuntu-24.04'],
+              arm: ['ubuntu-24.04-arm', 'gh-linux-arm64-8x'],
+              windows: ['windows-2022', 'windows-2025', 'gh-windows-16x'],
+              macos: ['macos-26-xlarge'],
+              intel: ['macos-latest-large'],
+            };
             const mapping = {};
-            for (const version of ['22.04', '24.04']) {
-              for (const size of ['', '-4', '-8', '-16', '-32', '-64']) {
-                for (const arch of ['', '-arm']) {
-                  const label = `depot-ubuntu-${version}${arch}${size}`;
-                  const key = arch ? 'arm' : 'linux';
-                  mapping[label] = burst[key] ? [label] : fleets[key];
-                }
-              }
+            for (const [key, labels] of Object.entries(hosted)) {
+              for (const label of labels) mapping[label] = burst[key] ? [label] : fleets[key];
             }
-            for (const version of ['2022', '2025']) {
-              for (const size of ['', '-4', '-8', '-16', '-32', '-64']) {
-                const label = `depot-windows-${version}${size}`;
-                mapping[label] = burst.windows ? [label] : fleets.windows;
-              }
-            }
-            mapping['depot-macos-latest'] = burst.macos ? ['depot-macos-latest'] : fleets.macos;
-            mapping['macos-latest-large'] = burst.intel ? ['macos-latest-large'] : fleets.intel;
             for (const key of Object.keys(fleets)) core.info(`${key} routing: burst=${burst[key]} (${reasons[key]})`);
             core.setOutput('runners', JSON.stringify(mapping));
-            core.setOutput('linux_labels', JSON.stringify(mapping[`depot-ubuntu-24.04-${process.env.LINUX_SIZE || '8'}`]));
-            core.setOutput('check_labels', JSON.stringify(mapping['depot-ubuntu-24.04-8']));
-            core.setOutput('windows_labels', JSON.stringify(mapping['depot-windows-2022-16']));
-            core.setOutput('macos_labels', JSON.stringify(mapping['depot-macos-latest']));
+            core.setOutput('linux_labels', JSON.stringify(mapping[`gh-linux-${process.env.LINUX_SIZE || '8'}x`]));
+            core.setOutput('check_labels', JSON.stringify(mapping['gh-linux-8x']));
+            core.setOutput('windows_labels', JSON.stringify(mapping['gh-windows-16x']));
+            core.setOutput('macos_labels', JSON.stringify(mapping['macos-26-xlarge']));
             for (const key of ['linux', 'windows', 'macos']) core.setOutput(`${key}_burst`, String(burst[key]));

@@ -11,6 +11,13 @@ each triggered by a manual workflow dispatch (`promote-beta.yml` /
 `promote-stable.yml` on intentd, `promote-beta.yml` / `release-stable.yml` on
 cloudlands-fe).
 
+## Where to look
+
+| Question | Run |
+|---|---|
+| Where is the release train? Latest tags and ages, alpha/beta/stable versions, the fe daemon pin, open Release and pin-bump PRs with CI Gate state, unshipped commits, the last auto-cut decision line, runner maintenance overrides | `make release-status` (`STATUS_JSON=1` for JSON; `NO_LOGS=1` skips the run-log fetch) |
+| Which alpha carries my commit? | `make shipped-in COMPONENT=<intentd\|cloudlands-fe> SHA=<sha>` (hooks call `scripts/shipped-in.sh` for its exit codes) |
+
 ## Guarded direct release merges
 
 Both components' `auto-cut-alpha.yml` workflows can squash-merge a verified
@@ -39,6 +46,23 @@ The merge uses `--squash --admin --match-head-commit <assessed-head-sha>`; the
 head match prevents a refreshed, unchecked PR head from being merged using the
 earlier decision. Queue submission is not evidence of a completed merge or a
 published alpha; confirm the PR's merged state and the release artifacts.
+
+In intentd, the release PR's own CI is shortened the same way. When the PR's
+`release-fast-path` job reports a metadata-only diff, `check` and
+`coverage-changed` are skipped on that PR. CI Gate accepts the skip only when
+that job succeeded. Main's tip already passed both jobs in the merge queue, and
+every other PR and every merge-queue run still runs them. The classifier runs
+only on `release-plz-*` branches, and its own failure falls back to full CI. It
+also rejects a version bump whose `Cargo.lock` does not carry the new version.
+Without this, each release-plz refresh needed about 8 minutes plus 14 minutes of
+CI. Main merged about every 15 minutes, so the v0.11.9 release PR (intentd#2493,
+2026-10-19) went through 13 CI runs over 4 hours and was never green on current
+main. Auto-cut also waits out two transient states on every run, cron included:
+it re-reads `mergeable=UNKNOWN` every 30 seconds for up to 2 minutes per
+episode. It also treats a missing CI Gate as running CI, with the full
+`AUTO_CUT_CI_WAIT_MINUTES` budget, while other CI jobs on the head are still
+queued or in progress and none has failed. CI Gate only reports after every
+other CI job finishes.
 
 The direct path uses the existing `intent-hq-ci` account exemption: User
 `335379076`, mode `always`, on the repository **Default** ruleset in intentd and
@@ -136,6 +160,17 @@ suite is `python3 -S -B -m unittest -v scripts.test_cleanup_prereleases`.
   contents:write on `intent-hq/cloudlands-fe`) and is fail-soft: a missing secret or
   failed dispatch logs a warning and never fails the publish — the fe crons then act
   as the backstop.
+- Windows validation is post-merge only. intentd PRs and merge-queue runs never use
+  a Windows runner. Every push to `main` runs the native Windows check, Clippy,
+  runtime and lifecycle proofs, release build, `install-ps1` and Windows Pi legs, and
+  that push run's CI Gate requires them. A Windows-only regression therefore lands
+  on `main` and holds releases instead of merges. Before merging the Release PR,
+  `auto-cut-alpha.yml` reads the latest push-event `ci.yml` run on the Release PR's
+  base (the `main` tip being released). A green run proceeds. A queued or running
+  one waits within the CI budget, then the hourly cron retries. Any other conclusion
+  (failed, cancelled, timed out) skips the cut. To unblock, re-run the
+  failed jobs on that `main` run or land a fix; the next attempt cuts. A human
+  merging the Release PR by hand bypasses this gate on purpose.
 - Stable is promotion-only and beta-first: dispatch `promote-stable.yml` with the
   `version` input, then verify `stable.json` on the `channel-stable` release. A guard
   checks the current beta channel version (`beta.json` on the fixed `channel-beta`
@@ -637,31 +672,57 @@ promotions of deleted prereleases are not preserved by this retention policy.
 ## CI runner routing
 
 Jobs in intent, intentd and cloudlands-fe prefer compatible self-hosted runners.
-Each repository has a reusable `runner-route.yml`; its small Depot probe runs
-without checkout so it remains available during a self-hosted outage. Existing
-component CI route jobs use the same tested probe. Utility jobs, consumer checks,
-browser suites and release matrices all consume its decisions. Original Depot
-labels remain fallback keys, preserving the workload's CPU/memory class.
+intent and intentd share one probe: each has a reusable `runner-route.yml`, and
+intentd's CI route job is an inline copy. The probe runs on GitHub-hosted `ubuntu-24.04` without checkout,
+so it stays available during a self-hosted outage. intentd and cloudlands-fe pull
+requests also run intent's probe through `consumer-checks.yml`. Utility jobs,
+consumer checks, browser suites and release matrices consume its decisions.
+GitHub-hosted labels are the fallback keys, preserving the workload's CPU/memory
+class: standard `ubuntu-24.04`, `windows-2022` and `windows-2025`, the organization
+larger runners `gh-linux-8x`, `gh-linux-16x`, `gh-linux-arm64-8x` and `gh-windows-16x`,
+`macos-26-xlarge` for Apple Silicon and `macos-latest-large` for Intel Macs. The larger
+runners must stay in a runner group shared with all three repositories, with
+**Allow public repositories** enabled: intent, intentd and cloudlands-fe are public,
+and without that setting their larger-runner jobs queue until they time out.
+Release builds are not routed: cloudlands-fe's signed desktop Mac builds name
+`macos-15-xlarge` directly (not the routed `macos-26-xlarge` fallback), because
+electron-builder's keychain step fails on macOS 26 images. cloudlands-fe routes
+its own Linux jobs with a separate, simpler probe in `intent-pr.yml` that uses the same Linux labels, slot counts and `CI_LINUX_RUNNER_DISABLED` override.
 
-The probe checks online runners and paginated queued/running jobs across all
-three repositories. Linux x64 accepts queue depth up to the smaller of eight and
-the online slot count. Other platforms require explicitly idle runners with room
+The self-hosted Linux x64 fleet is two pools of runner slots on the cache box, both
+unprivileged ephemeral containers (no sudo, no Docker socket):
+
+| Pool | Labels | Slots | Takes jobs that ask for |
+|---|---|---|---|
+| heavy | `[self-hosted, linux, x64, intent-cache]` | 2, about 8 CPUs / 48 GB each | larger-runner labels (`gh-linux-8x`, `gh-linux-16x`) |
+| fast | `[self-hosted, linux, x64, intent-cache-small]` | 6, 1 CPU / 3 GB each | standard labels (`ubuntu-24.04`, `ubuntu-22.04`) |
+
+A job is heavy when it compiles Rust or its recent median duration is over about
+5 minutes; that cut-off is a tunable choice. Heavy jobs ask for a larger-runner label
+and fast jobs for a standard one, so the fallback label also picks the pool. No other
+self-hosted Linux runner carries these labels. Jobs that need sudo, Docker, or more
+than a slot offers stay on a hosted label, and the policy tests list each with its
+reason.
+
+The shared probe checks online runners and paginated queued/running jobs across all
+three repositories. Each Linux pool bursts once its queued plus running jobs reach
+the smaller of its slot count (`THRESHOLD`, 2, and `SMALL_THRESHOLD`, 6, in
+`runner-route.yml`; raise them when slots are added) and its online slot count. Other platforms require explicitly idle runners with room
 for queued demand. Queued jobs older than 15 minutes, missing compatible runners,
-unreadable capacity (including sibling queues), or maintenance overrides select
-Depot; each platform logs its reason. `CI_LINUX_RUNNER_DISABLED`,
-`CI_WINDOWS_RUNNER_DISABLED` and `CI_MACOS_RUNNER_DISABLED` disable the relevant
-self-hosted pool when set to `true`. Fork PRs never select persistent runners.
+unreadable capacity (including sibling queues), or
+[maintenance overrides](#maintenance-overrides) select the hosted fallback; each
+platform logs its reason. Fork PRs never select persistent runners.
 
 `CI_QUEUE_READ_TOKEN` needs organization Self-hosted runners read and Actions read
 on all three repositories. The probe falls back to repository runner listing if
-organization listing fails, and to Depot when it cannot establish capacity. Keep
+organization listing fails, and to GitHub-hosted runners when it cannot establish capacity. Keep
 matching organization runner groups accessible to all three repositories; the
 label probe does not prove group access. Reusable callers explicitly pass the
 queue token and Actions read permission through each level. A probe-runner outage
 can still fail routing itself; affected workflows require a rerun.
 
 Infrastructure exceptions are mechanically allowlisted: routing probes run on
-Depot, Depot cache smoke tests exercise Depot, and the manual packaged macOS
+GitHub-hosted Linux, and the manual packaged macOS
 smoke journey requires a disposable hosted machine. The frontend and intentd queue-retirement
 cleanup jobs and intentd read-only credential probe remain on independent GitHub-hosted
 Linux, preserving their upstream queue-recovery contract. Host maintenance stays bound
@@ -670,15 +731,87 @@ uses its hosted fallback (including GitHub's native Intel Mac image where used).
 Browser shards retain their worker counts and browser identities, with per-runner
 browser caches and dependency installation for persistent machines.
 
-Run `python3 -S -B scripts/test_runner_policy.py` in each repository to exercise
+Run `python3 -S -B scripts/test_runner_policy.py` in intent and intentd to exercise
 routing fixtures and reject accidental cloud pins. The frontend's existing
-Depot runner Vitest suite and backend/monorepo runner tests invoke it in CI.
+hosted-runner Vitest suite and backend/monorepo runner tests invoke it in CI, and
+`scripts/test_hosted_runners.py` rejects any reintroduced `depot-*` label.
 
-Rust compiler caching uses Depot Cache through sccache’s WebDAV backend, using
-the short-lived configuration inherited from the runner. Enable automatic Depot
-Cache access in the Depot organization settings. Compiler hit statistics, rather
-than a restored Actions archive, are the evidence of reuse. The setup script
-installs checksum-verified sccache directly; no Rust cache actions remain.
-Self-hosted and GitHub Intel runners use the `DEPOT_TOKEN` Actions secret when
-available (otherwise they compile uncached). Local build configuration is in
-[CONTRIBUTING.md](../CONTRIBUTING.md#local-managed-rust-compiler-cache).
+### Maintenance overrides
+
+Each override is an Actions variable. Setting it to `true` sends that platform's
+routed jobs to the GitHub-hosted fallback, whatever the machine's state. Any other value, or no
+variable, restores self-hosted preference. The shared probe reads the variables of
+the repository whose workflow run is executing. For a called workflow, that is the
+caller: consumer checks on a cloudlands-fe pull request read cloudlands-fe's
+variables. So when a machine is unhealthy, set the override in intent, intentd and
+cloudlands-fe; cloudlands-fe's own `intent-pr.yml` routing reads the same Linux override.
+
+| Variable | Runner labels covered | Route log reason when set |
+|---|---|---|
+| `CI_LINUX_RUNNER_DISABLED` | both intent-cache pools and `self-hosted, Linux, ARM64` | `linux routing: burst=true (disabled for maintenance)`; the fast pool logs as `small routing`, ARM64 as `arm routing` |
+| `CI_WINDOWS_RUNNER_DISABLED` | `self-hosted, Windows, X64` | `windows routing: burst=true (disabled for maintenance)` |
+| `CI_MACOS_RUNNER_DISABLED` | `self-hosted, macOS, ARM64` and `self-hosted, macOS, X64` | `macos routing: burst=true (disabled for maintenance)`; X64 logs as `intel routing` |
+
+When the probe itself fails (fork PRs, or runner or job listing errors), every
+platform instead logs `burst=true (probe failed (...))`, with or without an
+override. Read the reason from a same-repository run.
+
+Overrides only affect routed jobs. Workflows that name a machine directly keep
+targeting it: intentd's `macos-prune.yml`, `m1mac-smoke.yml`
+and `provision-m1mac.yml`. `windows-prune.yml` is mixed: its `prune` job names
+5090pc, but it needs the routed `safety-tests` job to pass first. While the Windows
+override is on, those tests run on GitHub-hosted Windows, so a passing run proves nothing about
+5090pc. Once the override is off, the tests run on 5090pc, and a failure there skips
+the disk cleanup.
+
+Turning an override on: in each repository it should cover, set the variable and
+`CI_<PLATFORM>_RUNNER_DISABLED_REASON`. The reason is one line with the UTC date,
+what is wrong and an evidence link (a failed run or PR). GitHub variables have no
+description field, so `gh variable list` showing the two together is the only record
+of why a platform is on the hosted fallback:
+
+```bash
+gh variable set CI_LINUX_RUNNER_DISABLED --repo intent-hq/<repo> --body true
+gh variable set CI_LINUX_RUNNER_DISABLED_REASON --repo intent-hq/<repo> \
+  --body "<YYYY-MM-DD>: <what is wrong>; see <run or PR URL>"
+```
+
+Turning it off:
+1. Check the requirements below on the machine itself. Maintenance workflows may run
+   their checks on GitHub-hosted runners while the override is on.
+2. Delete both variables in every repository where they are set.
+3. Watch the next pull request and merge-queue runs:
+   - The route log reason must no longer be `disabled for maintenance`.
+   - Routed jobs must land on the machine and pass.
+   - Linux shows `burst=false` when the queue has room. Windows and macOS still show
+     `burst=true` with a queue-depth reason whenever their single slot is busy.
+4. Restore the override at the first runner-caused failure.
+
+#### Self-hosted machine requirements
+
+These are lasting facts about each machine. Current reasons belong in the
+`*_REASON` variables, not here.
+
+| Machine | Slots | Requirements and known limits |
+|---|---|---|
+| intent-cache (Linux x64) | 2 heavy (`intent-cache`, about 8 CPUs / 48 GB) and 6 fast (`intent-cache-small`, 1 CPU / 3 GB) ephemeral containers, shared by all three repositories | A fresh container per job: no state survives between jobs, so per-job caches come from the compiler cache and `actions/cache`. Runs as `runner` with no sudo or Docker; the runner image carries the build tools, OpenSSL headers, shellcheck, bison, Python 3, Node, `gh` and PowerShell. |
+| 5090pc (Windows x64) | 1 | `windows-prune.yml` keeps 40 GiB free; a full disk failed Rust toolchain installs (`os error 112`). Its safety tests need PowerShell 7 (`pwsh`); without it they fail with `pwsh: command not found` and the cleanup is skipped ([run 38896319862](https://github.com/intent-hq/intentd/actions/runs/38896319862)). |
+| m1mac (macOS ARM64) | 1 | Too slow for intentd's merge-queue `build (aarch64-apple-darwin)` job, even with the compiler cache: over 60 minutes cold and over 26 minutes on an unchanged rerun, against about 8 minutes on a Depot Mac with Depot's managed cache, before the move to GitHub-hosted runners ([run 39120530357](https://github.com/intent-hq/intentd/actions/runs/39120530357), [run 39124725329](https://github.com/intent-hq/intentd/actions/runs/39124725329)). Clippy compiles are not cacheable by sccache, and cache keys include the checkout path, so hosted runners' entries do not match. `actions/setup-python` cannot install there (`mkdir: /Users/runner: Permission denied`); the system Python is 3.9.6. |
+
+A single-slot machine runs its routed jobs one after another, so the combined time
+of a run's jobs on that platform must fit the merge-queue timeout.
+
+Rust compiler caching uses the self-hosted sccache WebDAV cache
+([runbook](SCCACHE_SERVER.md)) when the organization Actions variable
+`INTENT_SCCACHE_ENDPOINT` (an `https://` URL) is set. `scripts/setup-sccache.py`
+installs checksum-verified sccache directly (no Rust cache actions remain), then
+uses the `INTENT_SCCACHE_TOKEN` secret and the optional `INTENT_SCCACHE_MODE`
+variable (`READ_WRITE` by default, or `READ_ONLY`), overwriting any
+`SCCACHE_WEBDAV_*` values the runner already carries. Every run that receives
+secrets (main, releases, the cache producer and same-repo pull requests) writes.
+Without the variable, or when the token is empty as in fork pull requests,
+compilation is uncached. Compiler hit statistics, rather than a restored Actions
+archive, are the evidence of reuse. The job log names the chosen backend and
+mode, never the token. Reusable workflows such as `consumer-checks.yml` accept
+`INTENT_SCCACHE_TOKEN` as an optional secret. Local build configuration is in
+[CONTRIBUTING.md](../CONTRIBUTING.md#local-rust-compiler-cache).
