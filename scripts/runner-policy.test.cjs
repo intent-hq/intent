@@ -11,11 +11,16 @@ const script = workflow
   .map((l) => l.slice(12))
   .join('\n');
 const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
-const runner = (os, arch, busy = false) => ({
+const runner = (os, arch, busy = false, extra = []) => ({
   status: 'online',
   busy,
-  labels: ['self-hosted', os, arch].map((name) => ({ name })),
+  labels: ['self-hosted', os, arch, ...extra].map((name) => ({ name })),
 });
+// intent-cache slots register with GitHub's default labels plus `intent-cache`.
+const cacheSlot = (busy = false) => runner('Linux', 'X64', busy, ['intent-cache']);
+const CACHE = ['self-hosted', 'linux', 'x64', 'intent-cache'];
+const smallSlot = (busy = false) => runner('Linux', 'X64', busy, ['intent-cache-small']);
+const SMALL = ['self-hosted', 'linux', 'x64', 'intent-cache-small'];
 async function route(fixture = {}) {
   const outputs = {},
     queried = [],
@@ -38,7 +43,9 @@ async function route(fixture = {}) {
       if (method === 'org' || method === 'repo')
         return (
           fixture.runners ?? [
-            runner('Linux', 'X64'),
+            cacheSlot(),
+            cacheSlot(),
+            ...Array.from({ length: 6 }, () => smallSlot()),
             runner('Windows', 'X64'),
             runner('macOS', 'ARM64'),
             runner('Linux', 'ARM64'),
@@ -48,10 +55,11 @@ async function route(fixture = {}) {
         queried.push(params.repo);
         return [{ id: 2 }];
       }
-      return fixture.jobs ?? [];
+      // Fixture jobs belong to one repository so depth counts each job once.
+      return params.repo === 'cloudlands-fe' ? (fixture.jobs ?? []) : [];
     },
   };
-  const env = { THRESHOLD: '8', LINUX_SIZE: '8', ...fixture.env };
+  const env = { THRESHOLD: '2', SMALL_THRESHOLD: '6', LINUX_SIZE: '8', ...fixture.env };
   await new AsyncFunction('core', 'github', 'context', 'process', script)(
     { setOutput: (k, v) => (outputs[k] = v), info: (m) => messages.push(m) },
     github,
@@ -67,14 +75,15 @@ async function route(fixture = {}) {
 }
 test('healthy matching fleet is preferred for every workload size', async () => {
   const r = await route();
-  for (const label of ['ubuntu-22.04', 'ubuntu-24.04', 'gh-linux-8x', 'gh-linux-16x'])
-    assert.deepEqual(r.runners[label], ['self-hosted', 'Linux', 'X64']);
+  // Larger-runner labels carry heavy jobs; standard labels carry fast jobs.
+  for (const label of ['gh-linux-8x', 'gh-linux-16x']) assert.deepEqual(r.runners[label], CACHE);
+  for (const label of ['ubuntu-22.04', 'ubuntu-24.04']) assert.deepEqual(r.runners[label], SMALL);
   for (const label of ['ubuntu-24.04-arm', 'gh-linux-arm64-8x'])
     assert.deepEqual(r.runners[label], ['self-hosted', 'Linux', 'ARM64']);
   assert.deepEqual(r.runners['macos-26-xlarge'], ['self-hosted', 'macOS', 'ARM64']);
   for (const label of ['windows-2022', 'windows-2025', 'gh-windows-16x'])
     assert.deepEqual(r.runners[label], ['self-hosted', 'Windows', 'X64']);
-  assert.deepEqual(JSON.parse(r.outputs.linux_labels), ['self-hosted', 'Linux', 'X64']);
+  assert.deepEqual(JSON.parse(r.outputs.linux_labels), CACHE);
   assert.deepEqual([...new Set(r.queried)].sort(), ['cloudlands-fe', 'intent', 'intentd']);
 });
 test('offline, invisible, API failure, and unreadable sibling capacity burst', async () => {
@@ -103,11 +112,11 @@ test('queued demand and stalled jobs trigger fallback; hosted jobs do not', asyn
   const queued = {
     id: 3,
     status: 'queued',
-    labels: ['self-hosted', 'Linux', 'X64'],
+    labels: CACHE,
     created_at: new Date().toISOString(),
   };
   assert.equal(
-    (await route({ jobs: Array.from({ length: 9 }, (_, i) => ({ ...queued, id: i + 3 })) })).outputs
+    (await route({ jobs: Array.from({ length: 2 }, (_, i) => ({ ...queued, id: i + 3 })) })).outputs
       .linux_burst,
     'true',
   );
@@ -174,4 +183,95 @@ test('native busy occupancy is not counted twice, and queued native demand burst
     ).outputs.macos_burst,
     'true',
   );
+});
+test('only intent-cache slots serve Linux; generic self-hosted Linux runners are ignored', async () => {
+  const generic = await route({ runners: [runner('Linux', 'X64'), runner('Linux', 'X64')] });
+  assert.equal(generic.outputs.linux_burst, 'true');
+  assert.deepEqual(generic.runners['ubuntu-24.04'], ['ubuntu-24.04']);
+  assert.deepEqual(JSON.parse(generic.outputs.linux_labels), ['gh-linux-8x']);
+  assert.ok(generic.messages.some((m) => m.includes('linux routing: burst=true (no available compatible runner)')));
+  for (const label of JSON.parse(generic.outputs.linux_labels)) assert.notEqual(label, 'self-hosted');
+  // Jobs requesting the generic fleet do not occupy intent-cache slots.
+  const generic_jobs = Array.from({ length: 5 }, (_, i) => ({
+    id: i + 3,
+    status: 'in_progress',
+    labels: ['self-hosted', 'Linux', 'X64'],
+  }));
+  assert.equal((await route({ jobs: generic_jobs })).outputs.linux_burst, 'false');
+});
+test('Linux bursts exactly when every intent-cache slot is occupied', async () => {
+  const job = (id, status = 'in_progress') => ({
+    id,
+    status,
+    labels: CACHE,
+    created_at: new Date().toISOString(),
+  });
+  const one = await route({ jobs: [job(3)] });
+  assert.equal(one.outputs.linux_burst, 'false');
+  assert.ok(one.messages.some((m) => m.includes('queue depth=1 threshold=2 online=2')));
+  // Label case differs between runs-on and runner registration; GitHub matches case-insensitively.
+  const two = await route({ jobs: [job(3), { ...job(4), labels: ['self-hosted', 'Linux', 'X64', 'intent-cache'] }] });
+  assert.equal(two.outputs.linux_burst, 'true');
+  assert.deepEqual(JSON.parse(two.outputs.linux_labels), ['gh-linux-8x']);
+  // One slot between jobs (ephemeral runner re-registering) halves capacity.
+  const single = await route({ runners: [cacheSlot(), smallSlot()], jobs: [job(3)] });
+  assert.equal(single.outputs.linux_burst, 'true');
+  // Slots can grow by raising THRESHOLD alone.
+  const grown = await route({
+    env: { THRESHOLD: '4' },
+    runners: [cacheSlot(), cacheSlot(), cacheSlot(), cacheSlot()],
+    jobs: [job(3), job(4), job(5)],
+  });
+  assert.equal(grown.outputs.linux_burst, 'false');
+});
+test('the Linux kill switch sends every Linux job to the hosted fallback', async () => {
+  const r = await route({ env: { LINUX_RUNNER_DISABLED: 'true' } });
+  assert.equal(r.outputs.linux_burst, 'true');
+  for (const label of ['ubuntu-22.04', 'ubuntu-24.04', 'gh-linux-8x', 'gh-linux-16x'])
+    assert.deepEqual(r.runners[label], [label]);
+  assert.ok(r.messages.some((m) => m.includes('linux routing: burst=true (disabled for maintenance)')));
+  assert.equal(r.outputs.windows_burst, 'false');
+});
+test('the probe never names tinybox', () => {
+  assert.doesNotMatch(workflow, /tinybox/i);
+});
+test('the fast pool routes standard labels and bursts independently of the heavy pool', async () => {
+  const job = (id, labels = SMALL) => ({ id, status: 'in_progress', labels, created_at: new Date().toISOString() });
+  const five = await route({ jobs: Array.from({ length: 5 }, (_, i) => job(i + 3)) });
+  assert.deepEqual(five.runners['ubuntu-24.04'], SMALL);
+  assert.ok(five.messages.some((m) => m.includes('small routing: burst=false (queue depth=5 threshold=6 online=6)')));
+  const six = await route({ jobs: Array.from({ length: 6 }, (_, i) => job(i + 3)) });
+  assert.deepEqual(six.runners['ubuntu-24.04'], ['ubuntu-24.04']);
+  assert.deepEqual(six.runners['gh-linux-8x'], CACHE);
+  // A full heavy pool leaves fast jobs on their slots.
+  const heavy = await route({ jobs: [job(3, CACHE), job(4, CACHE)] });
+  assert.deepEqual(heavy.runners['gh-linux-8x'], ['gh-linux-8x']);
+  assert.deepEqual(heavy.runners['ubuntu-24.04'], SMALL);
+  // Heavy slots alone never serve fast jobs, and vice versa.
+  const heavyOnly = await route({ runners: [cacheSlot(), cacheSlot()] });
+  assert.deepEqual(heavyOnly.runners['ubuntu-24.04'], ['ubuntu-24.04']);
+  assert.deepEqual(heavyOnly.runners['gh-linux-8x'], CACHE);
+  const grown = await route({
+    env: { SMALL_THRESHOLD: '8' },
+    runners: Array.from({ length: 8 }, () => smallSlot()),
+    jobs: Array.from({ length: 7 }, (_, i) => job(i + 3)),
+  });
+  assert.deepEqual(grown.runners['ubuntu-24.04'], SMALL);
+});
+test('both pools carry the generic labels, so capacity and demand are counted per pool label', async () => {
+  // GitHub adds self-hosted/Linux/X64 to every slot; only the pool label separates them.
+  const smallOnly = await route({ runners: Array.from({ length: 6 }, () => smallSlot()) });
+  assert.deepEqual(smallOnly.runners['gh-linux-8x'], ['gh-linux-8x']);
+  assert.deepEqual(smallOnly.runners['ubuntu-24.04'], SMALL);
+  assert.ok(smallOnly.messages.some((m) => m.includes('linux routing: burst=true (no available compatible runner)')));
+  // Six running fast jobs fill the small pool but leave both heavy slots free.
+  const job = (id) => ({ id, status: 'in_progress', labels: SMALL, created_at: new Date().toISOString() });
+  const r = await route({ jobs: Array.from({ length: 6 }, (_, i) => job(i + 3)) });
+  assert.ok(r.messages.some((m) => m.includes('linux routing: burst=false (queue depth=0 threshold=2 online=2)')));
+  // A routed job's labels always include its pool label, so the other pool cannot take it.
+  const healthy = await route({});
+  assert.ok(healthy.runners['gh-linux-8x'].includes('intent-cache'));
+  assert.ok(!healthy.runners['gh-linux-8x'].includes('intent-cache-small'));
+  assert.ok(healthy.runners['ubuntu-24.04'].includes('intent-cache-small'));
+  assert.ok(!healthy.runners['ubuntu-24.04'].includes('intent-cache'));
 });

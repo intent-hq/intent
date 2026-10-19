@@ -651,11 +651,27 @@ runners must stay in a runner group shared with all three repositories, with
 and without that setting their larger-runner jobs queue until they time out. During
 the move off Depot, intentd, cloudlands-fe and ios still fall back to `depot-*`
 labels until their own migration PRs land. cloudlands-fe routes its own Linux jobs with a separate, simpler probe in
-`intent-pr.yml`: a fixed queue threshold of eight and no maintenance overrides.
+`intent-pr.yml` that uses the same Linux labels, slot counts and `CI_LINUX_RUNNER_DISABLED` override.
+
+The self-hosted Linux x64 fleet is two pools of runner slots on the cache box, both
+unprivileged ephemeral containers (no sudo, no Docker socket):
+
+| Pool | Labels | Slots | Takes jobs that ask for |
+|---|---|---|---|
+| heavy | `[self-hosted, linux, x64, intent-cache]` | 2, about 8 CPUs / 48 GB each | larger-runner labels (`gh-linux-8x`, `gh-linux-16x`, `depot-ubuntu-24.04-8`/`-16`) |
+| fast | `[self-hosted, linux, x64, intent-cache-small]` | 6, 1 CPU / 3 GB each | standard labels (`ubuntu-24.04`, `ubuntu-22.04`, `depot-ubuntu-24.04`) |
+
+A job is heavy when it compiles Rust or its recent median duration is over about
+5 minutes; that cut-off is a tunable choice. Heavy jobs ask for a larger-runner label
+and fast jobs for a standard one, so the fallback label also picks the pool. No other
+self-hosted Linux runner carries these labels. Jobs that need sudo, Docker, or more
+than a slot offers stay on a hosted label, and the policy tests list each with its
+reason.
 
 The shared probe checks online runners and paginated queued/running jobs across all
-three repositories. Linux x64 accepts queue depth up to the smaller of eight and
-the online slot count. Other platforms require explicitly idle runners with room
+three repositories. Each Linux pool bursts once its queued plus running jobs reach
+the smaller of its slot count (`THRESHOLD`, 2, and `SMALL_THRESHOLD`, 6, in
+`runner-route.yml`; raise them when slots are added) and its online slot count. Other platforms require explicitly idle runners with room
 for queued demand. Queued jobs older than 15 minutes, missing compatible runners,
 unreadable capacity (including sibling queues), or
 [maintenance overrides](#maintenance-overrides) select the hosted fallback; each
@@ -691,15 +707,12 @@ routed jobs to the GitHub-hosted fallback, whatever the machine's state. Any oth
 variable, restores self-hosted preference. The shared probe reads the variables of
 the repository whose workflow run is executing. For a called workflow, that is the
 caller: consumer checks on a cloudlands-fe pull request read cloudlands-fe's
-variables. So when a machine is unhealthy, set the override in intent and intentd,
-and in cloudlands-fe to cover its consumer checks. cloudlands-fe's own
-`intent-pr.yml` routing ignores overrides. It selects `gh-linux-8x` only when no tinybox
-runner is online, so stop the tinybox runner services to keep its jobs off a broken
-machine that is still online.
+variables. So when a machine is unhealthy, set the override in intent, intentd and
+cloudlands-fe; cloudlands-fe's own `intent-pr.yml` routing reads the same Linux override.
 
 | Variable | Runner labels covered | Route log reason when set |
 |---|---|---|
-| `CI_LINUX_RUNNER_DISABLED` | `self-hosted, Linux, X64` and `self-hosted, Linux, ARM64` | `linux routing: burst=true (disabled for maintenance)`; ARM64 logs as `arm routing` |
+| `CI_LINUX_RUNNER_DISABLED` | both intent-cache pools and `self-hosted, Linux, ARM64` | `linux routing: burst=true (disabled for maintenance)`; the fast pool logs as `small routing`, ARM64 as `arm routing` |
 | `CI_WINDOWS_RUNNER_DISABLED` | `self-hosted, Windows, X64` | `windows routing: burst=true (disabled for maintenance)` |
 | `CI_MACOS_RUNNER_DISABLED` | `self-hosted, macOS, ARM64` and `self-hosted, macOS, X64` | `macos routing: burst=true (disabled for maintenance)`; X64 logs as `intel routing` |
 
@@ -708,7 +721,7 @@ platform instead logs `burst=true (probe failed (...))`, with or without an
 override. Read the reason from a same-repository run.
 
 Overrides only affect routed jobs. Workflows that name a machine directly keep
-targeting it: intentd's `tinybox-prune.yml`, `macos-prune.yml`, `m1mac-smoke.yml`
+targeting it: intentd's `macos-prune.yml`, `m1mac-smoke.yml`
 and `provision-m1mac.yml`. `windows-prune.yml` is mixed: its `prune` job names
 5090pc, but it needs the routed `safety-tests` job to pass first. While the Windows
 override is on, those tests run on GitHub-hosted Windows, so a passing run proves nothing about
@@ -745,7 +758,7 @@ These are lasting facts about each machine. Current reasons belong in the
 
 | Machine | Slots | Requirements and known limits |
 |---|---|---|
-| tinybox (Linux x64) | 8 (`tinybox` to `tinybox-8`), shared by all three repositories | `tinybox-prune.yml` aims to keep 100 GiB free on `/raid` but stops when it runs out of eligible files; a full `/raid` crashed queue runs ([intentd#2421](https://github.com/intent-hq/intentd/pull/2421)). Node is not installed system-wide, so every job that runs Node must use `actions/setup-node` first ([intentd#2467](https://github.com/intent-hq/intentd/pull/2467) adds a routing-policy test for this). Git is 2.34.1. |
+| intent-cache (Linux x64) | 2 heavy (`intent-cache`, about 8 CPUs / 48 GB) and 6 fast (`intent-cache-small`, 1 CPU / 3 GB) ephemeral containers, shared by all three repositories | A fresh container per job: no state survives between jobs, so per-job caches come from the compiler cache and `actions/cache`. Runs as `runner` with no sudo or Docker; the runner image carries the build tools, OpenSSL headers, shellcheck, bison, Python 3, Node, `gh` and PowerShell. |
 | 5090pc (Windows x64) | 1 | `windows-prune.yml` keeps 40 GiB free; a full disk failed Rust toolchain installs (`os error 112`). Its safety tests need PowerShell 7 (`pwsh`); without it they fail with `pwsh: command not found` and the cleanup is skipped ([run 38896319862](https://github.com/intent-hq/intentd/actions/runs/38896319862)). |
 | m1mac (macOS ARM64) | 1 | Too slow for intentd's merge-queue `build (aarch64-apple-darwin)` job, even with the compiler cache: over 60 minutes cold and over 26 minutes on an unchanged rerun, against about 8 minutes on a Depot Mac with Depot's managed cache, before the move to GitHub-hosted runners ([run 39120530357](https://github.com/intent-hq/intentd/actions/runs/39120530357), [run 39124725329](https://github.com/intent-hq/intentd/actions/runs/39124725329)). Clippy compiles are not cacheable by sccache, and cache keys include the checkout path, so hosted runners' entries do not match. `actions/setup-python` cannot install there (`mkdir: /Users/runner: Permission denied`); the system Python is 3.9.6. |
 
