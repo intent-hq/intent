@@ -25,8 +25,8 @@ ARG PWSH_SHA256=6f6015203c47806c5cc444c19d8ed019695e610fbd948154264bf9ca8e157561
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      bison build-essential ca-certificates curl file git git-lfs jq libssl-dev \
-      lsb-release pkg-config python3 python3-pip python3-venv rsync shellcheck \
+      bison build-essential ca-certificates curl file git git-lfs iproute2 jq libssl-dev lsof \
+      lsb-release pkg-config procps python3 python3-pip python3-venv rsync shellcheck \
       tzdata unzip xz-utils zip zstd \
  && rm -rf /var/lib/apt/lists/*
 

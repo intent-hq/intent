@@ -519,6 +519,15 @@ class Static(unittest.TestCase):
         code = '\n'.join(l for l in text.splitlines() if not l.lstrip().startswith('#'))
         self.assertNotRegex(code, r'\bsudo\b')
 
+    def test_image_has_tools_routed_jobs_call_without_setup(self):
+        text = (HERE / 'Dockerfile').read_text()
+        packages = text.split('apt-get install -y --no-install-recommends')[1].split('&&')[0].split()
+        for package in ('bison', 'build-essential', 'git', 'iproute2', 'jq', 'lsof', 'procps', 'python3-pip', 'python3-venv',
+                        'rsync', 'shellcheck', 'unzip', 'xz-utils', 'zip', 'zstd'):
+            self.assertIn(package, packages)
+        for tool in ('GH', 'NODE', 'PWSH'):
+            self.assertIn(f'ARG {tool}_VERSION=', text)
+
     def test_egress_blocks_private_and_tailnet(self):
         text = (HERE / 'egress.sh').read_text()
         for net in ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '100.64.0.0/10', '169.254.0.0/16', 'fc00::/7'):

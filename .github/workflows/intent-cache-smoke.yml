@@ -62,7 +62,7 @@ jobs:
       - name: Preinstalled tools
         run: |
           set -euo pipefail
-          for tool in gh jq git curl make gcc bison yacc shellcheck zip unzip xz zstd rsync tar file python3 pip3 node npm corepack pwsh pkg-config dpkg-deb sha256sum sha512sum cargo rustc; do
+          for tool in ps pgrep pkill ss lsof gh jq git curl make gcc bison yacc shellcheck zip unzip xz zstd rsync tar file python3 pip3 node npm corepack pwsh pkg-config dpkg-deb sha256sum sha512sum cargo rustc; do
             command -v "$tool" >/dev/null || { echo "::error::$tool missing"; exit 1; }
           done
           python3 -m venv "$RUNNER_TEMP/venv"
