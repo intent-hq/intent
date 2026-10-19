@@ -666,9 +666,10 @@ larger runners `gh-linux-8x`, `gh-linux-16x`, `gh-linux-arm64-8x` and `gh-window
 runners must stay in a runner group shared with all three repositories, with
 **Allow public repositories** enabled: intent, intentd and cloudlands-fe are public,
 and without that setting their larger-runner jobs queue until they time out.
-cloudlands-fe's signed desktop Mac builds use `macos-15-xlarge`, because
-electron-builder's keychain step fails on macOS 26 images. cloudlands-fe routes its own Linux jobs with a separate, simpler probe in
-`intent-pr.yml` that uses the same Linux labels, slot counts and `CI_LINUX_RUNNER_DISABLED` override.
+Release builds are not routed: cloudlands-fe's signed desktop Mac builds name
+`macos-15-xlarge` directly (not the routed `macos-26-xlarge` fallback), because
+electron-builder's keychain step fails on macOS 26 images. cloudlands-fe routes
+its own Linux jobs with a separate, simpler probe in `intent-pr.yml` that uses the same Linux labels, slot counts and `CI_LINUX_RUNNER_DISABLED` override.
 
 The self-hosted Linux x64 fleet is two pools of runner slots on the cache box, both
 unprivileged ephemeral containers (no sudo, no Docker socket):

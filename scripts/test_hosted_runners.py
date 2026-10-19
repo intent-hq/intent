@@ -19,7 +19,7 @@ class HostedRunners(unittest.TestCase):
 
     def test_no_depot_token_contract(self):
         # Depot Cache is retired; no workflow declares or passes its token.
-        for path in (ROOT / '.github/workflows').glob('*.yml'):
+        for path in [*(ROOT / '.github').rglob('*.yml'), *(ROOT / '.github').rglob('*.yaml')]:
             self.assertNotIn('DEPOT_TOKEN', path.read_text(), str(path))
 
     def test_connected_compilation_uses_self_hosted_cache(self):

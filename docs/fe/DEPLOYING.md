@@ -197,12 +197,11 @@ The rollback workflow will restore a previous versioned release to a channel's r
 
 ## Platform Builds and Runners
 
-The dual-architecture workflow produces five platform/architecture builds in parallel jobs in `release-alpha.yml`:
+The release workflow produces four platform/architecture builds in parallel jobs in `release-alpha.yml` (macOS is Apple Silicon only):
 
 | Platform      | Runner                                                         | Artifacts                                           | Feed file                |
 | ------------- | -------------------------------------------------------------- | --------------------------------------------------- | ------------------------ |
 | macOS (arm64) | `macos-15-xlarge` (signed builds stay off macOS 26 images) | `.dmg`, `.zip` (+ blockmaps)                        | `latest-mac.yml`         |
-| macOS (x64)   | self-hosted macOS X64 → `macos-latest-large`                               | `.dmg`, `.zip` (+ blockmaps)                        | `latest-mac.yml` (shared) |
 | Windows (x64) | `gh-windows-16x` (Windows Server 2022)                     | NSIS installer `.exe`, portable `.exe` (+ blockmap) | `latest.yml`             |
 | Linux (x64)   | `gh-linux-8x`                                              | AppImage, `.deb`                                    | `latest-linux.yml`       |
 | Linux (arm64) | `gh-linux-arm64-8x`                                        | AppImage only (`deb:arm64` temporarily disabled)    | `latest-linux-arm64.yml` |
