@@ -253,9 +253,9 @@ with no rollback.
   and Claude ACP adapter pins, formerly auto-pin-codex-acp — auto-cut-alpha, and the
   release PR workflows merge their own rolling PRs). Ordinary `main` PRs in
   all three repos use a **merge queue**: after human permission, `gh pr merge --squash` enqueues
-  them until the queue's gate passes. Component auto-cut may directly merge
-  validated release metadata under the approved CI exemption and existing
-  readiness guards ([details](docs/RELEASING.md#guarded-direct-release-merges)).
+  them until the queue's gate passes. Component auto-cut and fe auto-pin may
+  directly merge validated release metadata or sidecar pins under the approved CI
+  exemption and existing readiness guards ([details](docs/RELEASING.md#guarded-direct-release-merges)).
   Main rules are committed in `.github/rulesets/*.main.json`; the bypass contract
   in `.github/rulesets/*.bypass.json` allows `intent-hq-ci` on the two component
   Default rulesets only (none for the monorepo or organization). Rules are
