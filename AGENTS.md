@@ -249,9 +249,9 @@ with no rollback.
 - **Merging**: agents must **NEVER merge a PR, arm auto-merge, or add a PR to the
   merge queue — in this repo or any submodule repo — without explicit permission from
   a human**. Approved + green checks is not enough. Repo-owned automation is exempt
-  (auto-bump-submodules, auto-pin-intentd, auto-cut-alpha, and the release PR
-  workflows merge their own rolling PRs). Ordinary `main` PRs in all three repos
-  use a **merge queue**: after human permission, `gh pr merge --squash` enqueues
+  (auto-bump-submodules, auto-pin-intentd, intentd's auto-pin-codex-acp, auto-cut-alpha,
+  and the release PR workflows merge their own rolling PRs). Ordinary `main` PRs in
+  all three repos use a **merge queue**: after human permission, `gh pr merge --squash` enqueues
   them until the queue's gate passes. Component auto-cut may directly merge
   validated release metadata under the approved CI exemption and existing
   readiness guards ([details](docs/RELEASING.md#guarded-direct-release-merges)).
