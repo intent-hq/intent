@@ -307,6 +307,14 @@ jobs:
           bash -n infra/sccache/bootstrap.sh
           command -v shellcheck >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q shellcheck; }
           shellcheck infra/sccache/*.sh
+      # GitHub runner slots (infra/runners): supervisor and installer against
+      # stubbed curl/docker/systemctl.
+      - name: runner slots test
+        run: |
+          set -euo pipefail
+          python3 -S -B infra/runners/test_runners.py -v
+          command -v shellcheck >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q shellcheck; }
+          shellcheck infra/runners/*.sh
 
   # shellcheck over scripts/*.sh. Quoting and Bash-3 portability slips in the
   # repo scripts reached main because nothing linted them (intent-hq/intent#5638);
