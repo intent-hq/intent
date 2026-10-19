@@ -440,6 +440,9 @@ class Installer(Stubbed):
         self.assertEqual(self.env_file.read_bytes(), (HERE / 'runners.env').read_bytes())
         self.assertIn(['restart', 'docker'], self.systemctl())
         self.assertIn(['reload', 'github-runners-egress.service'], self.systemctl())
+        self.assertNotIn(['enable', '--now', 'docker'], self.systemctl(),
+                         'a start job on running docker queues behind draining slots')
+        self.assertNotIn(['start', 'docker'], self.systemctl(), 'docker is already active (stub)')
         self.assertFalse([a for a in self.systemctl() if a[0] == 'restart' and a[1] != 'docker'],
                          'the installer never restarts the egress unit or a slot, which would drain running jobs')
         docker = [c['argv'] for c in self.calls('docker')]

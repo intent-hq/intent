@@ -91,13 +91,21 @@ put() {
   return 0
 }
 
+# Enable a unit and start it only if it is not already running. A start job
+# on a running unit still queues behind pending jobs, such as a slot draining
+# a job for hours.
+ensure_started() {
+  systemctl enable "$1" >/dev/null
+  systemctl is-active --quiet "$1" || systemctl start "$1"
+}
+
 configure_docker() {
   install -d -m 0755 "$(dirname "$docker_conf")"
   if put 0644 "$here/daemon.json" "$docker_conf"; then
     log "docker daemon config changed; restarting docker"
     systemctl restart docker
   fi
-  systemctl enable --now docker >/dev/null
+  ensure_started docker
 }
 
 install_files() {
@@ -119,7 +127,7 @@ install_files() {
   systemctl daemon-reload
   # Start, then reload to reapply the rules; never restart, which would
   # also restart every slot that depends on the unit.
-  systemctl enable --now github-runners-egress.service >/dev/null
+  ensure_started github-runners-egress.service
   systemctl reload github-runners-egress.service
 }
 
