@@ -50,7 +50,7 @@ read_kv() {
 # shellcheck disable=SC2034
 load_config() {
   GITHUB_ORG=intent-hq
-  RUNNER_GROUP_ID=1
+  RUNNER_GROUP=intent-cache
   RUNNER_NAME_PREFIX=intent-cache
   RUNNER_IMAGE=intent-gh-runner:current
   RUNNER_NETWORK=gh-runners
@@ -69,11 +69,11 @@ load_config() {
   SMALL_PIDS=4096
   SMALL_SHM=256m
   if [ -f "$config_file" ]; then
-    read_kv "$config_file" "GITHUB_ORG RUNNER_GROUP_ID RUNNER_NAME_PREFIX RUNNER_IMAGE RUNNER_NETWORK RUNNER_BRIDGE RUNNER_POOLS" \
+    read_kv "$config_file" "GITHUB_ORG RUNNER_GROUP RUNNER_NAME_PREFIX RUNNER_IMAGE RUNNER_NETWORK RUNNER_BRIDGE RUNNER_POOLS" \
       "^[A-Z][A-Z0-9]*_($POOL_KEYS)\$"
   fi
   [[ "$GITHUB_ORG" =~ ^[A-Za-z0-9-]+$ ]] || die "GITHUB_ORG is invalid"
-  [[ "$RUNNER_GROUP_ID" =~ ^[0-9]+$ ]] || die "RUNNER_GROUP_ID must be a number"
+  [[ "$RUNNER_GROUP" =~ ^[A-Za-z0-9._\ -]+$ ]] || die "RUNNER_GROUP is invalid"
   [[ "$RUNNER_NAME_PREFIX" =~ ^[A-Za-z0-9-]+$ ]] || die "RUNNER_NAME_PREFIX is invalid"
   [[ "$RUNNER_POOLS" =~ ^[a-z][a-z0-9]*( [a-z][a-z0-9]*)*$ ]] || die "RUNNER_POOLS must be space-separated lowercase names"
 }
@@ -174,21 +174,32 @@ mint_token() {
 }
 
 # Delete offline registrations this slot left behind (crash, reboot, kill).
+# Delete offline registrations this slot left behind (crash, reboot, kill).
+# Every page is listed before anything is deleted: a deletion shifts later
+# runners into pages already read.
 remove_stale() {
-  local page=1 count ids id
+  local page=1 count ids="" id
   while :; do
     api GET "/orgs/$GITHUB_ORG/actions/runners?per_page=100&page=$page"
     [ "$api_status" = 200 ] || { log "warning: listing runners failed (HTTP $api_status); skipping stale cleanup"; return 0; }
-    ids="$(jq -r --arg p "$RUNNER_NAME_PREFIX-$slot-" '.runners[] | select((.name | startswith($p)) and .status == "offline") | .id' <<<"$api_body")"
-    # Read the page size before the DELETE calls overwrite api_body.
+    ids+=" $(jq -r --arg p "$RUNNER_NAME_PREFIX-$slot-" '.runners[] | select((.name | startswith($p)) and .status == "offline") | .id' <<<"$api_body" | tr '\n' ' ')"
     count="$(jq '.runners | length' <<<"$api_body")"
-    for id in $ids; do
-      api DELETE "/orgs/$GITHUB_ORG/actions/runners/$id"
-      log "removed stale runner registration $id (HTTP $api_status)"
-    done
-    [ "$count" -ge 100 ] || return 0
+    [ "$count" -ge 100 ] || break
     page=$((page + 1))
   done
+  for id in $ids; do
+    api DELETE "/orgs/$GITHUB_ORG/actions/runners/$id"
+    log "removed stale runner registration $id (HTTP $api_status)"
+  done
+}
+
+# Sets group_id from the RUNNER_GROUP name. Never falls back to Default: a
+# missing group stops the slot instead of exposing it to every repository.
+resolve_group() {
+  api GET "/orgs/$GITHUB_ORG/actions/runner-groups?per_page=100"
+  [ "$api_status" = 200 ] || die "listing runner groups failed (HTTP $api_status)"
+  group_id="$(jq -r --arg n "$RUNNER_GROUP" '[.runner_groups[] | select(.name == $n) | .id][0] // empty' <<<"$api_body")"
+  [ -n "$group_id" ] || die "runner group '$RUNNER_GROUP' not found in $GITHUB_ORG (see docs/GITHUB_RUNNERS.md, Runner group)"
 }
 
 deregister() {
@@ -245,11 +256,12 @@ main() {
   docker rm -f "$name" >/dev/null 2>&1 || true
 
   mint_token
+  resolve_group
   remove_stale
 
   local runner_name body jit
   runner_name="$RUNNER_NAME_PREFIX-$slot-$(date +%s)"
-  body="$(jq -nc --arg name "$runner_name" --argjson group "$RUNNER_GROUP_ID" --arg labels "$labels" --arg work "$work_folder" \
+  body="$(jq -nc --arg name "$runner_name" --argjson group "$group_id" --arg labels "$labels" --arg work "$work_folder" \
     '{name: $name, runner_group_id: $group, labels: ($labels | split(",")), work_folder: $work}')"
   api POST "/orgs/$GITHUB_ORG/actions/runners/generate-jitconfig" "$body"
   if [ "$api_status" != 201 ]; then

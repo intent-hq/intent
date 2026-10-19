@@ -51,7 +51,7 @@ with open(os.environ['STUB_LOG'], 'a') as log:
                           'body': body, 'argv': sys.argv[1:]}) + '\n')
 responses = json.load(open(os.environ['STUB_RESPONSES']))
 status, payload = responses.get(method + ' ' + path) or responses.get(method + ' ' + path.split('?')[0], [404, {'message': 'Not Found'}])
-open(out, 'w').write(json.dumps(payload))
+open(out, 'w').write('' if payload is None else json.dumps(payload))
 sys.stdout.write(str(status))
 '''
 
@@ -141,11 +141,13 @@ class Supervisor(Stubbed):
                 {'id': 13, 'name': 'intent-cache-heavy-2-100', 'status': 'offline'},
                 {'id': 14, 'name': 'intent-cache-heavy-10-100', 'status': 'offline'},
             ]}],
-            'DELETE /orgs/example-org/actions/runners/11': [204, {}],
+            'GET /orgs/example-org/actions/runner-groups': [200, {'runner_groups': [
+                {'id': 1, 'name': 'Default'}, {'id': 3, 'name': 'intent-cache'}]}],
+            'DELETE /orgs/example-org/actions/runners/11': [204, None],
             'POST /orgs/example-org/actions/runners/generate-jitconfig': [201, {
                 'runner': {'id': 42, 'name': 'intent-cache-heavy-1-x'}, 'encoded_jit_config': JIT}],
             'GET /orgs/example-org/actions/runners/42': [200, {'id': 42, 'busy': False}],
-            'DELETE /orgs/example-org/actions/runners/42': [204, {}],
+            'DELETE /orgs/example-org/actions/runners/42': [204, None],
         }
         self.env.update(RUNNERS_CONFIG=str(self.config), RUNNERS_CREDENTIALS=str(self.creds),
                         RUNNERS_EGRESS=str(self.egress), RUNNERS_RETRY_DELAY='0',
@@ -171,6 +173,7 @@ class Supervisor(Stubbed):
         self.assertEqual(rc, 0, err)
         api = [(c['method'], c['path']) for c in self.calls('curl')]
         self.assertEqual(api, [
+            ('GET', '/orgs/example-org/actions/runner-groups?per_page=100'),
             ('GET', '/orgs/example-org/actions/runners?per_page=100&page=1'),
             ('DELETE', '/orgs/example-org/actions/runners/11'),
             ('POST', '/orgs/example-org/actions/runners/generate-jitconfig'),
@@ -179,9 +182,9 @@ class Supervisor(Stubbed):
         for call in self.calls('curl'):
             self.assertEqual(call['auth'], PAT)
             self.assertNotIn(PAT, ' '.join(call['argv']))
-        body = json.loads(self.calls('curl')[2]['body'])
+        body = json.loads([c for c in self.calls('curl') if c['method'] == 'POST'][0]['body'])
         self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache'])
-        self.assertEqual(body['runner_group_id'], 1)
+        self.assertEqual(body['runner_group_id'], 3, 'registers into the intent-cache group, never Default')
         self.assertEqual(body['work_folder'], '/home/runner/work')
         self.assertRegex(body['name'], r'^intent-cache-heavy-1-\d+$')
         run = [c for c in self.calls('docker') if c['argv'][0] == 'run'][0]
@@ -208,14 +211,31 @@ class Supervisor(Stubbed):
         self.responses['GET /orgs/example-org/actions/runners?per_page=100&page=1'] = [200, {'runners': page1}]
         self.responses['GET /orgs/example-org/actions/runners?per_page=100&page=2'] = [200, {'runners': [
             {'id': 21, 'name': 'intent-cache-heavy-1-300', 'status': 'offline'}]}]
-        self.responses['DELETE /orgs/example-org/actions/runners/21'] = [204, {}]
+        self.responses['DELETE /orgs/example-org/actions/runners/21'] = [204, None]
         rc, out, err = self.run_supervisor('heavy-1')
         self.assertEqual(rc, 0, err)
         api = [(c['method'], c['path']) for c in self.calls('curl')]
+        # Deleting shifts later runners into pages already read, so every page
+        # is listed before anything is deleted.
+        lists = [i for i, call in enumerate(api) if call[1].startswith('/orgs/example-org/actions/runners?')]
+        deletes = [i for i, call in enumerate(api) if call[0] == 'DELETE']
+        self.assertLess(max(lists), min(deletes))
         self.assertIn(('GET', '/orgs/example-org/actions/runners?per_page=100&page=2'), api)
         self.assertIn(('DELETE', '/orgs/example-org/actions/runners/11'), api)
         self.assertIn(('DELETE', '/orgs/example-org/actions/runners/21'), api)
         self.assertNotIn(('GET', '/orgs/example-org/actions/runners?per_page=100&page=3'), api)
+
+    def test_missing_runner_group_never_falls_back_to_default(self):
+        self.responses['GET /orgs/example-org/actions/runner-groups'] = [200, {'runner_groups': [{'id': 1, 'name': 'Default'}]}]
+        rc, out, err = self.run_supervisor('heavy-1')
+        self.assertNotEqual(rc, 0)
+        self.assertIn("runner group 'intent-cache' not found", err)
+        self.assertFalse([c for c in self.calls('curl') if c['method'] == 'POST'])
+        self.config.write_text('GITHUB_ORG=example-org\nRUNNER_GROUP=Default\n')
+        rc, out, err = self.run_supervisor('heavy-1')
+        self.assertEqual(rc, 0, err)
+        body = json.loads([c for c in self.calls('curl') if c['method'] == 'POST'][-1]['body'])
+        self.assertEqual(body['runner_group_id'], 1)
 
     def test_small_pool_slot(self):
         rc, out, err = self.run_supervisor('small-3')

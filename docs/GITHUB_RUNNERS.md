@@ -100,6 +100,26 @@ No `sudo` (install packages in the `Dockerfile` instead), no Docker
 (`container:` jobs, service containers and Docker actions fail), no access to
 private or tailnet addresses.
 
+## Runner group
+
+Every slot registers into the org runner group `intent-cache` (by name;
+`RUNNER_GROUP` in `runners.env`), never into Default. The group is limited to
+the selected repositories `intent-hq/intent`, `intent-hq/intentd` and
+`intent-hq/cloudlands-fe`, so other org repositories cannot target these
+runners. "Allow public repositories" is on because those three are public.
+Workflows from forks of them can still request the labels, so keep fork
+pull-request workflows behind maintainer approval in the repository settings.
+If the group is missing, slots stop registering rather than fall back to
+Default. To recreate it (with the same credential, or as an org owner in
+**Settings → Actions → Runner groups**):
+
+```bash
+gh api -X POST orgs/intent-hq/actions/runner-groups -f name=intent-cache \
+  -f visibility=selected -F allows_public_repositories=true \
+  -F 'selected_repository_ids[]=<intent id>' -F 'selected_repository_ids[]=<intentd id>' \
+  -F 'selected_repository_ids[]=<cloudlands-fe id>'
+```
+
 ## Credential
 
 The supervisor registers runners through the org API, which needs a credential
@@ -149,7 +169,7 @@ build for configuration-only changes.
 
 Slot settings live in `/etc/github-runners/runners.env` (not secret; the
 installer copies [`runners.env`](../infra/runners/runners.env) once and never
-overwrites it): `GITHUB_ORG`, `RUNNER_GROUP_ID` (1 = Default), `RUNNER_POOLS`,
+overwrites it): `GITHUB_ORG`, `RUNNER_GROUP` (name, default `intent-cache`), `RUNNER_POOLS`,
 and per pool `<POOL>_SLOTS`, `_LABELS`, `_CPUSETS` (one entry per slot,
 space-separated), `_MEMORY`, `_PIDS`, `_SHM`. Limits apply from each slot's
 next job.
@@ -210,9 +230,10 @@ release, so bump the pin at least monthly:
 |---|---|
 | Slot restarts every few seconds | `journalctl -u github-runner@heavy-1 -n 50`: credential missing or not 600, egress rules missing (`systemctl restart github-runners-egress`), image missing (re-run the installer) |
 | `JIT registration failed (HTTP 401/403)` | The credential expired or lacks **Self-hosted runners: read and write** on the org |
-| `JIT registration failed (HTTP 409/422)` | Name conflict or bad `RUNNER_GROUP_ID`/labels in `runners.env` |
+| `JIT registration failed (HTTP 409/422)` | Name conflict or bad labels in `runners.env` |
+| `runner group 'intent-cache' not found` | The group was renamed or deleted; recreate it (see Runner group) or fix `RUNNER_GROUP` |
 | `is not a configured slot` | The unit's instance is not in `supervisor.sh --plan`; re-run the installer |
-| Jobs stay queued | `gh api orgs/intent-hq/actions/runners` (needs the same permission): runners online with the expected labels; the runner group allows the repository; `docker ps` shows `gh-runner-<pool>-<n>` |
+| Jobs stay queued | `gh api orgs/intent-hq/actions/runners` (needs the same permission): runners online with the expected labels; the `intent-cache` runner group lists the repository; `docker ps` shows `gh-runner-<pool>-<n>` |
 | Offline `intent-cache-<pool>-<n>-*` runners in the org list | Left by a crash or reboot; the slot deletes its own on its next start |
 | A job cannot reach a host | Private and tailnet addresses are blocked on purpose; `iptables -t raw -S GH-RUNNERS-EGRESS` lists them |
 | Cache slow while jobs run | `cat /sys/fs/cgroup/runners.slice/cpu.weight` (10) and `/sys/fs/cgroup/system.slice/caddy.service/cpu.weight` (1000); fewer slots or smaller CPU sets |
