@@ -745,37 +745,48 @@ These are lasting facts about each machine. Current reasons belong in the
 
 | Machine | Slots | Requirements and known limits |
 |---|---|---|
-| tinybox (Linux x64) | 8 (`tinybox` to `tinybox-8`), shared by all three repositories | `tinybox-prune.yml` aims to keep 100 GiB free on `/raid` but stops when it runs out of eligible files; a full `/raid` crashed queue runs ([intentd#2421](https://github.com/intent-hq/intentd/pull/2421)). Node is not installed system-wide, so every job that runs Node must use `actions/setup-node` first ([intentd#2467](https://github.com/intent-hq/intentd/pull/2467) adds a routing-policy test for this). `actions/setup-python` installs builds whose interpreter looks for `libpython` only under `/opt/hostedtoolcache/Python/<version>/x64/lib`, so every slot must use `/opt/hostedtoolcache` as its Python tool cache ([setup](#tinybox-python-tool-cache)). In a slot whose cache is still under `_work/_tool`, Python starts only through the `LD_LIBRARY_PATH` that setup-python exports, and a child started with an allowlisted environment exits 127 with `libpython3.11.so.1.0: cannot open shared object file` ([intentd#2490](https://github.com/intent-hq/intentd/pull/2490); [intentd#2492](https://github.com/intent-hq/intentd/pull/2492) adds a policy test for this). Git is 2.34.1. |
+| tinybox (Linux x64) | 8 (`tinybox` to `tinybox-8`), shared by all three repositories | `tinybox-prune.yml` aims to keep 100 GiB free on `/raid` but stops when it runs out of eligible files; a full `/raid` crashed queue runs ([intentd#2421](https://github.com/intent-hq/intentd/pull/2421)). Node is not installed system-wide, so every job that runs Node must use `actions/setup-node` first ([intentd#2467](https://github.com/intent-hq/intentd/pull/2467) adds a routing-policy test for this). `actions/setup-python` installs builds whose interpreter looks for `libpython` only under `/opt/hostedtoolcache/Python/<version>/x64/lib`, so each slot's `_work/_tool/Python` must be a symlink to the shared `/opt/hostedtoolcache/Python` ([setup](#tinybox-python-tool-cache)). In a slot where it is a plain directory, Python starts only through the `LD_LIBRARY_PATH` that setup-python exports, and a child started with an allowlisted environment exits 127 with `libpython3.11.so.1.0: cannot open shared object file` ([intentd#2490](https://github.com/intent-hq/intentd/pull/2490); [intentd#2492](https://github.com/intent-hq/intentd/pull/2492) adds a policy test for this). Git is 2.34.1. |
 | 5090pc (Windows x64) | 1 | `windows-prune.yml` keeps 40 GiB free; a full disk failed Rust toolchain installs (`os error 112`). Its safety tests need PowerShell 7 (`pwsh`); without it they fail with `pwsh: command not found` and the cleanup is skipped ([run 38896319862](https://github.com/intent-hq/intentd/actions/runs/38896319862)). |
 | m1mac (macOS ARM64) | 1 | Too slow for intentd's merge-queue `build (aarch64-apple-darwin)` job, even with the compiler cache: over 60 minutes cold and over 26 minutes on an unchanged rerun, against about 8 minutes on a Depot Mac with Depot's managed cache, before the move to GitHub-hosted runners ([run 39120530357](https://github.com/intent-hq/intentd/actions/runs/39120530357), [run 39124725329](https://github.com/intent-hq/intentd/actions/runs/39124725329)). Clippy compiles are not cacheable by sccache, and cache keys include the checkout path, so hosted runners' entries do not match. `actions/setup-python` cannot install there (`mkdir: /Users/runner: Permission denied`); the system Python is 3.9.6. |
 
 ##### tinybox Python tool cache
 
-This needs someone with access to tinybox. All eight slots share one cache, owned by
-the user the runners run as.
+This needs someone with access to tinybox. Only Python is shared: each slot keeps its own
+tool cache (`_work/_tool`) for Node and everything else, and its `Python` entry points at
+one shared directory, so the path baked into the interpreter exists. Do not set
+`AGENT_TOOLSDIRECTORY` or `RUNNER_TOOL_CACHE` in the runner `.env`: the runner reads both
+and would move every tool cache, not just Python's.
 
-1. Create the cache: `sudo install -d -o <runner-user> -g <runner-group> -m 0755 /opt/hostedtoolcache`.
-2. Add `AGENT_TOOLSDIRECTORY=/opt/hostedtoolcache` to `.env` in each
-   `/raid/runners/actions-runner-intenthq-*` directory. setup-python uses it as its tool
-   cache. Leave `RUNNER_TOOL_CACHE` alone, so the other setup actions keep their
-   per-slot caches.
-3. Restart each slot while it is idle: `sudo ./svc.sh stop && sudo ./svc.sh start` in its
-   directory.
-4. Install each Python version that CI uses before a job needs it. As the runner user,
-   extract that version's `actions/python-versions` `linux-24.04-x64` tarball into an empty
-   directory and run `AGENT_TOOLSDIRECTORY=/opt/hostedtoolcache ./setup.sh` there (it
-   upgrades pip, so it needs network access). Then
-   `env -i /opt/hostedtoolcache/Python/<version>/x64/bin/python3 -c 'print(1)'` must print
-   `1`. Repeat this for each new patch release: when a version is missing, the first job to
-   need it installs it, and the installer deletes and recopies the version's folder, which
-   can break a job on another slot that is already using it.
-5. Confirm with a tinybox-routed intentd `release-scripts` run: its setup-python step must
-   show a `/opt/hostedtoolcache/Python/` path, not `_work/_tool`.
+1. Check that every slot runs as the same user:
+   `stat -c %U /raid/runners/actions-runner-intenthq-*/_work` must print one name.
+2. Stop all eight runner services (`sudo ./svc.sh stop` in each
+   `/raid/runners/actions-runner-intenthq-*` directory), waiting for running jobs to finish.
+3. Create the shared directory, seeded from one slot's existing installs:
+   `sudo install -d -o <runner-user> -g <runner-group> -m 0755 /opt/hostedtoolcache`, then
+   `mv /raid/runners/actions-runner-intenthq-1/_work/_tool/Python /opt/hostedtoolcache/Python`
+   as the runner user. If that slot has no `Python` directory, create an empty one instead.
+4. In every slot, replace `_work/_tool/Python` with the link:
+   `rm -rf _work/_tool/Python && ln -s /opt/hostedtoolcache/Python _work/_tool/Python`.
+5. Start the services again (`sudo ./svc.sh start`), then confirm with
+   `env -i /raid/runners/actions-runner-intenthq-2/_work/_tool/Python/3.11.*/x64/bin/python3 -c 'print(1)'`,
+   which must print `1` without `LD_LIBRARY_PATH`. Then check a tinybox-routed intentd
+   `release-scripts` run: it must pass, and its setup-python step must report
+   `Found in cache`.
 
-`tinybox-prune.yml` only deletes inside `/raid/ci-target` and `$HOME/ci-target`, so it
-never removes this cache. Old versions (100 to 200 MB each) stay on the root volume until
-someone removes them. To undo the setup, remove the `.env` line, restart the slots and
-delete `/opt/hostedtoolcache`.
+setup-python installs a version only when no cached build of the requested version
+exists (CI asks for `3.11` and, in cloudlands-fe, `3.12`, without `check-latest`). The
+installer deletes and recopies that version's folder, which can break a job on another
+slot using it. To add a version safely, install it once from any slot before jobs ask
+for it: extract the `actions/python-versions` tarball for the host's Ubuntu release
+(`linux-$(lsb_release -rs)-x64`) into an empty directory and run
+`RUNNER_TOOL_CACHE=/raid/runners/actions-runner-intenthq-1/_work/_tool ./setup.sh`
+there as the runner user (it upgrades pip, so it needs network access).
+
+`tinybox-prune.yml` never deletes under `/opt` or `_work/_tool`. Old versions (100 to
+200 MB each) stay on the root volume until someone removes them. To undo the setup,
+stop the services, replace each link with an empty `_work/_tool/Python` directory
+(setup-python reinstalls per slot), start the services, and only then delete
+`/opt/hostedtoolcache`.
 
 A single-slot machine runs its routed jobs one after another, so the combined time
 of a run's jobs on that platform must fit the merge-queue timeout.
