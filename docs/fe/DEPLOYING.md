@@ -201,7 +201,7 @@ The dual-architecture workflow produces five platform/architecture builds in par
 
 | Platform      | Runner                                                         | Artifacts                                           | Feed file                |
 | ------------- | -------------------------------------------------------------- | --------------------------------------------------- | ------------------------ |
-| macOS (arm64) | self-hosted macOS ARM64 → `macos-15-xlarge`                                 | `.dmg`, `.zip` (+ blockmaps)                        | `latest-mac.yml`         |
+| macOS (arm64) | self-hosted macOS ARM64 → `macos-26-xlarge`                                 | `.dmg`, `.zip` (+ blockmaps)                        | `latest-mac.yml`         |
 | macOS (x64)   | self-hosted macOS X64 → `macos-latest-large`                               | `.dmg`, `.zip` (+ blockmaps)                        | `latest-mac.yml` (shared) |
 | Windows (x64) | self-hosted Windows X64 → `gh-windows-16x`              | NSIS installer `.exe`, portable `.exe` (+ blockmap) | `latest.yml`             |
 | Linux (x64)   | self-hosted Linux X64 → `gh-linux-8x`            | AppImage, `.deb`                                    | `latest-linux.yml`       |

@@ -71,7 +71,7 @@ test('healthy matching fleet is preferred for every workload size', async () => 
     assert.deepEqual(r.runners[label], ['self-hosted', 'Linux', 'X64']);
   for (const label of ['ubuntu-24.04-arm', 'gh-linux-arm64-8x'])
     assert.deepEqual(r.runners[label], ['self-hosted', 'Linux', 'ARM64']);
-  assert.deepEqual(r.runners['macos-15-xlarge'], ['self-hosted', 'macOS', 'ARM64']);
+  assert.deepEqual(r.runners['macos-26-xlarge'], ['self-hosted', 'macOS', 'ARM64']);
   for (const label of ['windows-2022', 'windows-2025', 'gh-windows-16x'])
     assert.deepEqual(r.runners[label], ['self-hosted', 'Windows', 'X64']);
   assert.deepEqual(JSON.parse(r.outputs.linux_labels), ['self-hosted', 'Linux', 'X64']);
@@ -83,7 +83,7 @@ test('offline, invisible, API failure, and unreadable sibling capacity burst', a
     for (const label of Object.keys(r.runners)) assert.deepEqual(r.runners[label], [label]);
     assert.deepEqual(JSON.parse(r.outputs.check_labels), ['gh-linux-8x']);
     assert.deepEqual(JSON.parse(r.outputs.windows_labels), ['gh-windows-16x']);
-    assert.deepEqual(JSON.parse(r.outputs.macos_labels), ['macos-15-xlarge']);
+    assert.deepEqual(JSON.parse(r.outputs.macos_labels), ['macos-26-xlarge']);
     assert.ok(r.messages.some((m) => m.includes('burst=true')));
   }
 });

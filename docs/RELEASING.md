@@ -645,7 +645,7 @@ consumer checks, browser suites and release matrices consume its decisions.
 GitHub-hosted labels are the fallback keys, preserving the workload's CPU/memory
 class: standard `ubuntu-24.04`, `windows-2022` and `windows-2025`, the organization
 larger runners `gh-linux-8x`, `gh-linux-16x`, `gh-linux-arm64-8x` and `gh-windows-16x`,
-`macos-15-xlarge` for Apple Silicon and `macos-latest-large` for Intel Macs. The larger
+`macos-26-xlarge` for Apple Silicon and `macos-latest-large` for Intel Macs. The larger
 runners must stay in a runner group shared with all three repositories, with
 **Allow public repositories** enabled: intent, intentd and cloudlands-fe are public,
 and without that setting their larger-runner jobs queue until they time out. During
