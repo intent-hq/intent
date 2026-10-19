@@ -95,11 +95,14 @@ A plain pin bump already takes the CI fast path, so the queue only added wait.
 it pushed. `scripts/auto-pin-merge-route.mjs`, run from the workflow's trusted
 checkout of main, then allows a direct merge only when all of these hold:
 
-- `CI Gate` succeeded on that exact head.
-- The head contains live main's tip, because `--admin` skips the up-to-date rule.
-- The main..head diff matches `release-pr-fast-path.mjs --pin-only`: only
+- `CI Gate` succeeded on that exact head, with no change request and no
+  unresolved review thread (`--admin` would otherwise skip them).
+- The PR's own diff matches `release-pr-fast-path.mjs --pin-only`: only
   `intentd.version` and the regenerated `source-pin` line, with regular file modes.
   A `CURRENT_PROTOCOL_VERSION` change is a protocol bump, so it takes the queue.
+- Main has not changed either pin file since the PR's base. Main may otherwise
+  have moved: the cloudlands-fe ruleset does not require up-to-date branches, and
+  a queued pin takes the same CI fast path, so the queue would not retest it.
 
 The merge uses `--squash --admin --match-head-commit <tested-head-sha>`. Any failed,
 timed-out or unreadable guard arms auto-merge through the queue instead. A rolling
