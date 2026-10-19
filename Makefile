@@ -130,7 +130,7 @@ CDP_PORT ?= $(call dev_port_value,CDP_PORT)
 # An explicit INTENTD_SOCKET always takes precedence.
 BRIDGE_PLATFORM ?= $(shell uname -s)
 
-.PHONY: check-app-ui-targets check-note-pagination-contract check-agent-worker-contract test-transfer-selection-contract check-transfer-selection-contract check-backend-keychain-contract ports status consumer-checks docs-check check-protocol-catalog check-mcp-bindings mcp-bindings-doc check-makefile-targets check-protocol-field-parity check-rulesets event-catalog-check shipped-in rpc
+.PHONY: check-app-ui-targets check-note-pagination-contract check-agent-worker-contract test-transfer-selection-contract check-transfer-selection-contract check-backend-keychain-contract ports status consumer-checks docs-check check-protocol-catalog check-mcp-bindings mcp-bindings-doc check-makefile-targets check-protocol-field-parity check-rulesets event-catalog-check shipped-in release-status rpc
 ports: ## Print this worktree's resolved development ports
 	@set -- .dev/sandbox/*.json; if [ -e "$$1" ]; then \
 		echo "[ports] Note: these ports are for the next start; read running ports from 'make sandbox-status' or .dev/sandbox/<mode>.json." >&2; \
@@ -241,6 +241,12 @@ shipped-in: ## Print the first cloudlands-releases tag carrying COMPONENT=intent
 		esac; \
 	done; \
 	scripts/shipped-in.sh "$$@" $(if $(LIMIT),--limit "$(LIMIT)",)
+
+# Read-only release train snapshot for intentd and cloudlands-fe; every lookup
+# is fail-soft (a failed one prints `unavailable`). See docs/RELEASING.md →
+# Where to look.
+release-status: ## Print the release train: latest tags, channel versions, fe daemon pin, release PRs with CI state, unshipped commits, last auto-cut decision, runner overrides (STATUS_JSON=1 for JSON; NO_LOGS=1 skips the slow run-log fetch)
+	@STATUS_JSON="$(STATUS_JSON)" scripts/release-status.sh $(if $(NO_LOGS),--no-logs,)
 
 # Build-artifact GC (cargo-sweep). Rust target/ dirs grow without bound as
 # deps and toolchains churn; `sweep` prunes artifacts older than SWEEP_DAYS
