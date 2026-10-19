@@ -12,7 +12,6 @@ EXCEPTIONS = {('runner-route.yml', 'probe'), ('manual-signed-build.yml', 'smoke-
 # socket), so jobs that need either stay on a hosted runner.
 HOSTED_ONLY = {
     ('bootstrap-install.yml', 'bootstrap-install'): 'runs sudo docker',
-    ('ci.yml', 'shell-tests-bash3'): 'installs bison with sudo apt-get',
 }
 EXCEPTIONS |= set(HOSTED_ONLY)
 MAINTENANCE = {('m1mac-smoke.yml', 'smoke'), ('provision-m1mac.yml', 'provision'), ('provision-m1mac.yml', 'verify'), ('macos-prune.yml', 'prune'), ('windows-prune.yml', 'prune')}
