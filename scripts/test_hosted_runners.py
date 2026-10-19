@@ -17,6 +17,11 @@ class HostedRunners(unittest.TestCase):
         for path in [*(ROOT / '.github').rglob('*.yml'), *(ROOT / '.github').rglob('*.yaml')]:
             self.assertEqual(re.findall(r'depot-(?:ubuntu|windows|macos)[\w.-]*', path.read_text()), [], str(path))
 
+    def test_no_depot_token_contract(self):
+        # Depot Cache is retired; no workflow declares or passes its token.
+        for path in [*(ROOT / '.github').rglob('*.yml'), *(ROOT / '.github').rglob('*.yaml')]:
+            self.assertNotIn('DEPOT_TOKEN', path.read_text(), str(path))
+
     def test_connected_compilation_uses_self_hosted_cache(self):
         workflow = (ROOT / '.github/workflows/consumer-checks.yml').read_text()
         self.assertIn('run: python3 scripts/setup-sccache.py', workflow)

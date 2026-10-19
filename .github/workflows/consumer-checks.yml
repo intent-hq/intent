@@ -66,10 +66,6 @@ name: Consumer checks
 on:
   workflow_call:
     secrets:
-      # Unused. Kept only so callers that still pass it do not fail; remove
-      # once intentd and cloudlands-fe stop passing DEPOT_TOKEN.
-      DEPOT_TOKEN:
-        required: false
       # Self-hosted sccache token; used only when the caller's
       # INTENT_SCCACHE_ENDPOINT variable is set (otherwise uncached).
       INTENT_SCCACHE_TOKEN:
