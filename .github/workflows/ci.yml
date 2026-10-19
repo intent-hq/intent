@@ -334,10 +334,11 @@ jobs:
 
   # Keep stock macOS Bash 3.2 compatibility without renting a Mac for shell tests.
   # A pinned Linux build runs the same suites; REQUIRE_BASH3 forbids silent skips.
+  # Hosted only: building Bash 3.2 needs bison from apt, and the unprivileged
+  # intent-cache runner containers have no sudo.
   shell-tests-bash3:
     if: github.event_name == 'merge_group'
-    needs: [runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
         with:
