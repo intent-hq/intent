@@ -6,12 +6,16 @@
 # Read-only. For each component: the newest vX.Y.Z release and its age, the
 # alpha/beta/stable channel versions, commits on main since that tag, open
 # release-train PRs (release-plz / release-please Release PRs and the fe
-# `auto/intentd-pin` pin-bump PR) with CI Gate state and head age, and the
-# last auto-cut-alpha.yml decision line -- the reason a cut skipped, deferred
-# or merged, which otherwise exists only in raw run logs. Also: the daemon
-# version cloudlands-fe main pins (intentd.version) against the intentd alpha,
-# and active CI_*_RUNNER_DISABLED maintenance overrides with their reasons on
-# intent, intentd and cloudlands-fe.
+# `auto/intentd-pin` pin-bump PR) with CI Gate state, head age and merge
+# queue position, what the head of the main merge queue is waiting on (the
+# whole queue waits behind it), and the last auto-cut-alpha.yml decision line
+# -- the reason a cut skipped, deferred or merged, which otherwise exists only
+# in raw run logs. Also: the daemon version cloudlands-fe main pins
+# (intentd.version) against the intentd alpha, the last cloudlands-fe
+# auto-pin-intentd.yml run with its failure streak and one-line failure
+# reason (e.g. GH006 when the queued pin branch is locked), and active
+# CI_*_RUNNER_DISABLED maintenance overrides with their reasons on intent,
+# intentd and cloudlands-fe.
 #
 # Sources:
 #   intentd releases         intent-hq/intentd releases; channels from
@@ -25,16 +29,25 @@
 #                            is reported as "not published yet"
 #   pin                      intentd.version on intent-hq/cloudlands-fe main
 #   unshipped                compare <newest release>...main on each source repo
+#   merge queue              GraphQL repository.mergeQueue(branch: "main"):
+#                            entry positions/states/enqueue times, and the head
+#                            entry's merge-group check rollup
+#   auto-pin                 `gh run list` of cloudlands-fe auto-pin-intentd.yml;
+#                            when the newest completed run failed, its
+#                            `gh run view --log-failed` (first ::error::
+#                            annotation, else GHnnn push rejection, else git
+#                            fatal:/error:, else the failing step's exit code)
 #   auto-cut decision        `gh run view --log` of the newest completed
 #                            auto-cut-alpha.yml runs (up to 5, newest first):
 #                            the structured `auto-cut-decision: <outcome>
 #                            <reason> <detail>` line both workflows print once
 #                            per run, else (older runs) a free-text match
 #
-# --no-logs skips the log fetch (the slowest part); the auto-cut section then
-# shows only the newest run. Every lookup is independent and fail-soft: one
-# that fails shows `unavailable: <gh error>` (JSON: `errors[]`) and the rest of
-# the report still prints. Exit codes: 0 = report printed; 1 = gh missing or
+# --no-logs skips the log fetches (the slowest part); the auto-cut section then
+# shows only the newest run, and the auto-pin section no failure reason. Every
+# lookup is independent and fail-soft: one that fails shows
+# `unavailable: <gh error>` (JSON: `errors[]`) and the rest of the report
+# still prints. Exit codes: 0 = report printed; 1 = gh missing or
 # not authenticated; 2 = usage error. RELEASE_STATUS_NOW=<ISO-8601> pins the
 # clock (tests).
 
@@ -69,6 +82,12 @@ fe_repo=intent-hq/cloudlands-fe
 fe_dist=intent-hq/cloudlands-releases
 monorepo=intent-hq/intent
 max_runs=5
+max_pin_runs=10
+# auto-pin-intentd.yml run conclusions, shared by the log-fetch picker below
+# and the report: a failed run, and runs that decide nothing (a cancelled or
+# skipped run is passed over so it cannot hide a failure streak).
+pin_failed="failure timed_out startup_failure"
+pin_ignored="cancelled skipped"
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -161,6 +180,9 @@ component() {
     done
     wait
   } &
+  # The main merge queue: every entry's position/state, plus the head
+  # entry's merge-group checks (what the whole queue is waiting on).
+  fetch "$key.queue" api graphql -f query="$queue_query" -f owner="${repo%%/*}" -f name="${repo#*/}" &
   {
     fetch "$key.runs" run list --repo "$repo" --workflow auto-cut-alpha.yml \
       --limit "$max_runs" --json databaseId,status,conclusion,createdAt,event,url
@@ -220,7 +242,57 @@ if found:
     print(json.dumps(found))
 '
 
+queue_query='query($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+    mergeQueue(branch: "main") {
+      url
+      entries(first: 100) {
+        totalCount
+        nodes {
+          position state enqueuedAt estimatedTimeToMerge
+          pullRequest { number title headRefName }
+        }
+      }
+      head: entries(first: 1) {
+        nodes {
+          headCommit {
+            statusCheckRollup {
+              state
+              contexts(first: 100) {
+                nodes {
+                  __typename
+                  ... on CheckRun { name status conclusion startedAt }
+                  ... on StatusContext { context state createdAt }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}'
+
 component intentd "$intentd_repo" "$intentd_repo" "release-plz-" &
+# cloudlands-fe auto-pin-intentd.yml: the newest runs, and the failed-step log
+# of the newest completed run when it failed (its one-line reason).
+{
+  fetch fe.pinruns run list --repo "$fe_repo" --workflow auto-pin-intentd.yml \
+    --limit "$max_pin_runs" --json databaseId,status,conclusion,createdAt,event,url
+  if ((fetch_logs)) && ok fe.pinruns; then
+    id=$(py '
+import json, sys
+for run in json.load(open(sys.argv[1])):
+    if run["status"] == "completed" and run["conclusion"] not in sys.argv[3].split():
+        if run["conclusion"] in sys.argv[2].split():
+            print(run["databaseId"])
+        break
+' "$work/fe.pinruns.out" "$pin_failed" "$pin_ignored" 2>/dev/null || true)
+    if [[ -n "$id" ]]; then
+      fetch "fe.pinlog.$id" run view "$id" --repo "$fe_repo" --log-failed
+    fi
+  fi
+} &
 component cloudlands-fe "$fe_repo" "$fe_dist" "release-please--branches--main auto/intentd-pin" &
 for channel in alpha beta stable; do
   fetch "intentd.channel.$channel" release download "channel-$channel" --repo "$intentd_dist" \
@@ -237,10 +309,13 @@ for repo in "$monorepo" "$intentd_repo" "$fe_repo"; do
 done
 wait
 
-python3 - "$work" "${STATUS_JSON:-}" "${RELEASE_STATUS_NOW:-}" "$fetch_logs" <<'PY'
+python3 - "$work" "${STATUS_JSON:-}" "${RELEASE_STATUS_NOW:-}" "$fetch_logs" "$max_pin_runs" \
+  "$pin_failed" "$pin_ignored" <<'PY'
 import datetime, json, os, re, sys
 
 work, as_json, now_arg, fetch_logs = sys.argv[1], sys.argv[2] == "1", sys.argv[3], sys.argv[4] == "1"
+MAX_PIN_RUNS = int(sys.argv[5])
+PIN_FAILED, PIN_IGNORED = sys.argv[6].split(), sys.argv[7].split()
 UTC = datetime.timezone.utc
 
 
@@ -309,21 +384,157 @@ def load_json(text, section):
 FAILING = ("FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE")
 
 
+def classify(check):
+    """(name, state, pending, failing) for one statusCheckRollup entry: a
+    CheckRun (status + conclusion) or a commit StatusContext (state)."""
+    name = check.get("name") or check.get("context") or ""
+    status = (check.get("status") or "").upper()
+    if status and status != "COMPLETED":
+        return name, status, True, False
+    state = (check.get("conclusion") or check.get("state") or status).upper()
+    return name, state, state in ("PENDING", "EXPECTED"), state in FAILING
+
+
 def ci_gate(rollup):
     """CI Gate state (the most recently started CI Gate run wins) and the
     number of failing checks in a statusCheckRollup."""
     gate, gate_started, failing = None, "", 0
     for check in rollup or []:
-        name = check.get("name") or check.get("context") or ""
-        state = (check.get("conclusion") or check.get("state") or check.get("status") or "").upper()
-        if check.get("status") and check.get("status") != "COMPLETED":
-            state = check["status"].upper()
-        if state in FAILING:
+        name, state, _, is_failing = classify(check)
+        if is_failing:
             failing += 1
         started = check.get("startedAt") or check.get("createdAt") or ""
         if name == "CI Gate" and (gate is None or started >= gate_started):
             gate, gate_started = state or None, started
     return gate, failing
+
+
+def merge_queue(key):
+    """The main merge queue: entries in position order (the first 100), and
+    what the head entry's merge-group commit is still waiting on. None when
+    unreadable."""
+    section = key + ".mergeQueue"
+    text = result(key + ".queue", section)
+    payload = load_json(text, section) if text is not None else None
+    if payload is None:
+        return None
+    if payload.get("errors"):
+        errors.append({"section": section, "message": str(payload["errors"][0].get("message"))})
+        return None
+    queue = ((payload.get("data") or {}).get("repository") or {}).get("mergeQueue")
+    if queue is None:
+        return {"enabled": False, "url": None, "length": 0, "truncated": False, "entries": [], "head": None}
+    nodes = sorted((queue.get("entries") or {}).get("nodes") or [], key=lambda n: n.get("position") or 0)
+    entries = [{"position": node.get("position"), "number": (node.get("pullRequest") or {}).get("number"),
+                "title": (node.get("pullRequest") or {}).get("title"),
+                "headRef": (node.get("pullRequest") or {}).get("headRefName"),
+                "state": node.get("state"), "enqueuedAt": node.get("enqueuedAt"),
+                "enqueuedAgeMinutes": age_minutes(node.get("enqueuedAt"))} for node in nodes]
+    length = (queue.get("entries") or {}).get("totalCount", len(entries))
+    head = None
+    if entries:
+        commit = ((queue.get("head") or {}).get("nodes") or [{}])[0].get("headCommit")
+        rollup = (commit or {}).get("statusCheckRollup") or {}
+        contexts = (rollup.get("contexts") or {}).get("nodes") or []
+        pending, failing, pending_started = [], [], []
+        for check in contexts:
+            name, _, is_pending, is_failing = classify(check)
+            if is_pending:
+                pending.append(name or "?")
+                started = check.get("startedAt") or check.get("createdAt")
+                if started:
+                    pending_started.append(started)
+            elif is_failing:
+                failing.append(name or "?")
+        started = min(pending_started) if pending_started else None
+        head = dict(entries[0], hasMergeGroup=commit is not None, reportedChecks=len(contexts),
+                    rollupState=rollup.get("state"), pendingChecks=pending, failingChecks=failing,
+                    checksStartedAt=started, checksAgeMinutes=age_minutes(started),
+                    estimatedTimeToMergeSeconds=nodes[0].get("estimatedTimeToMerge"))
+    return {"enabled": True, "url": queue.get("url"), "length": length,
+            "truncated": length > len(entries), "entries": entries, "head": head}
+
+
+def failure_reason(log):
+    """One line saying why a run failed, from its `gh run view --log-failed`
+    output: an explicit ::error:: annotation, else a `remote: error: GHnnn`
+    push rejection with its `remote:` explanation, else a git fatal:/error:
+    line, else the step's exit code. Echoed script source never counts."""
+    lines = []
+    for raw in log.splitlines():
+        if "\x1b[36;1m" in raw:
+            continue
+        # job <TAB> step <TAB> timestamp text; the text may hold tabs itself.
+        parts = raw.split("\t", 2)
+        step = parts[1] if len(parts) == 3 else ""
+        text = re.sub(r"^\d{4}-\d\d-\d\dT[\d:.]+Z ", "", parts[-1].lstrip("\ufeff")).strip()
+        lines.append((step, text))
+    annotations, pushes, git_errors, exits = [], [], [], []
+    for index, (step, text) in enumerate(lines):
+        match = re.match(r"^(?:##\[error\]|::error[^:]*::)(.*)$", text)
+        if match:
+            message = match.group(1).strip()
+            code = re.match(r"^Process completed with exit code (\d+)", message)
+            if code:
+                named = step and step != "UNKNOWN STEP"
+                exits.append("%s exited %s" % ("step '%s'" % step if named else "a step", code.group(1)))
+            elif message:
+                annotations.append(message)
+            continue
+        match = re.match(r"^remote: error: (GH\d+: .*)$", text)
+        if match:
+            detail = []
+            # The remote's explanation follows until git's push result;
+            # git's own stdout can interleave, so other lines are skipped.
+            for _, follow in lines[index + 1:]:
+                if re.match(r"^(To |! \[|##\[|::|error: |fatal: |remote: error: )", follow):
+                    break
+                more = re.match(r"^remote:(.*)$", follow)
+                if more and more.group(1).strip():
+                    detail.append(more.group(1).strip().lstrip("-").strip())
+            pushes.append(match.group(1).strip() + (" (%s)" % " ".join(detail) if detail else ""))
+            continue
+        if re.match(r"^(fatal|error): ", text):
+            git_errors.append(text)
+    for group in (annotations, pushes, git_errors, exits):
+        if group:
+            return group[0]
+    return None
+
+
+def auto_pin():
+    """The newest decisive (completed, not cancelled/skipped) cloudlands-fe
+    auto-pin-intentd.yml run, its failure streak, and why it failed."""
+    section = "cloudlands-fe.autoPin"
+    text = result("fe.pinruns", section)
+    runs = load_json(text, section) if text is not None else None
+    if not runs:
+        return None
+    completed = [run for run in runs if run.get("status") == "completed"]
+    decisive = [run for run in completed if run.get("conclusion") not in PIN_IGNORED]
+    chosen = (decisive or completed or runs)[0]
+    streak = 0
+    for run in decisive:
+        if run.get("conclusion") not in PIN_FAILED:
+            break
+        streak += 1
+    reason, log_fetched = None, False
+    if chosen in decisive and chosen.get("conclusion") in PIN_FAILED and fetch_logs:
+        log = result("fe.pinlog.%s" % chosen["databaseId"], section + ".log")
+        if log is not None:
+            log_fetched = True
+            reason = failure_reason(log)
+    # Cancelled/skipped runs newer than the chosen one, newest first.
+    passed_over = completed[:completed.index(chosen)] if chosen in completed else []
+    return {"runId": chosen["databaseId"], "url": chosen.get("url"), "event": chosen.get("event"),
+            "status": chosen.get("status"), "conclusion": chosen.get("conclusion"),
+            "createdAt": chosen.get("createdAt"), "ageMinutes": age_minutes(chosen.get("createdAt")),
+            "failedStreak": streak,
+            "failedStreakCapped": bool(streak) and streak == len(decisive) and len(runs) >= MAX_PIN_RUNS,
+            "failureReason": reason, "failureLogRead": log_fetched,
+            "newerIgnoredRuns": [{"runId": run["databaseId"], "conclusion": run.get("conclusion")}
+                                 for run in passed_over],
+            "newestRunId": runs[0]["databaseId"], "newestRunStatus": runs[0].get("status")}
 
 
 def component(key):
@@ -383,6 +594,8 @@ def component(key):
     if compare is not None:
         data["unshippedCommits"] = compare.get("ahead_by")
 
+    data["mergeQueue"] = queue = merge_queue(key)
+    queued = {entry["number"]: entry for entry in (queue or {}).get("entries", [])}
     seen = set()
     index = 0
     while read("%s.prs.%d.rc" % (key, index)) is not None:
@@ -405,7 +618,10 @@ def component(key):
                 "headRef": head, "isDraft": pr.get("isDraft"),
                 "mergeable": pr.get("mergeable"), "mergeStateStatus": pr.get("mergeStateStatus"),
                 "ciGate": gate, "failingChecks": failing,
-                "headCommittedAt": head_at, "headAgeMinutes": age_minutes(head_at)})
+                "headCommittedAt": head_at, "headAgeMinutes": age_minutes(head_at),
+                "mergeQueue": {key_: queued[pr["number"]][key_] for key_ in
+                               ("position", "state", "enqueuedAt", "enqueuedAgeMinutes")}
+                if pr["number"] in queued else None})
         data["releasePrs"].sort(key=lambda pr: (pr["kind"] != "release", pr["number"]))
 
     text = result(key + ".runs", key + ".autoCut")
@@ -434,6 +650,8 @@ def component(key):
             "decision": decision, "outcome": found.get("outcome"), "reason": found.get("reason"),
             "decisionSource": found.get("source"), "completedRunsScanned": len(completed) if fetch_logs else 0,
             "newestRunId": runs[0]["databaseId"], "newestRunStatus": runs[0].get("status")}
+    if key == "cloudlands-fe":
+        data["autoPin"] = auto_pin()
     return data
 
 
@@ -480,6 +698,33 @@ def clip(text, width=150):
     return text if len(text) <= width else text[: width - 1] + "…"
 
 
+def auto_pin_line(pin_run):
+    if not pin_run:
+        if section_failed("cloudlands-fe.autoPin"):
+            return unavailable("cloudlands-fe.autoPin")
+        return "no auto-pin-intentd.yml runs"
+    where = "run %s, %s, %s ago" % (pin_run["runId"], pin_run["event"] or "?", fmt_age(pin_run["ageMinutes"]))
+    line = pin_run["conclusion"] or pin_run["status"]
+    if pin_run["failedStreak"] > 1:
+        line += " (%d%s runs in a row)" % (pin_run["failedStreak"], "+" if pin_run["failedStreakCapped"] else "")
+    if pin_run["conclusion"] in PIN_FAILED:
+        if pin_run["failureReason"]:
+            line += ": " + clip(pin_run["failureReason"], 160)
+        elif not fetch_logs:
+            line += ": logs skipped (--no-logs)"
+        elif section_failed("cloudlands-fe.autoPin.log"):
+            line += ": " + unavailable("cloudlands-fe.autoPin.log")
+        else:
+            line += ": no error line in the failed-step log"
+    line += " [%s]" % where
+    if pin_run["newerIgnoredRuns"]:
+        line += " (newer: %s)" % ", ".join(
+            "run %s %s" % (run["runId"], run["conclusion"]) for run in pin_run["newerIgnoredRuns"])
+    if pin_run["newestRunId"] != pin_run["runId"] and pin_run["newestRunStatus"] != "completed":
+        line += " (run %s %s)" % (pin_run["newestRunId"], pin_run["newestRunStatus"])
+    return line
+
+
 out = ["Release train at %s" % now.strftime("%Y-%m-%d %H:%MZ")]
 for key, data in components.items():
     if data["latestTag"]:
@@ -518,15 +763,53 @@ for key, data in components.items():
         bits.append("head %s old" % fmt_age(pr["headAgeMinutes"]))
         if pr["isDraft"]:
             bits.append("draft")
-        if pr["mergeable"] == "UNKNOWN":
-            bits.append("mergeable=UNKNOWN (GitHub still computing)")
-        elif pr["mergeable"] and pr["mergeable"] != "MERGEABLE":
-            bits.append("mergeable=%s" % pr["mergeable"])
-        elif pr["mergeStateStatus"] and pr["mergeStateStatus"] not in ("CLEAN", "UNSTABLE", "HAS_HOOKS"):
-            bits.append("mergeState=%s" % pr["mergeStateStatus"])
+        entry, queue = pr["mergeQueue"], data["mergeQueue"]
+        if entry:
+            # A queued PR's mergeable/mergeState reflect the queue (often
+            # UNKNOWN or BLOCKED), so the queue entry replaces them.
+            bits.append("in merge queue #%s of %s (%s, %s)" % (
+                entry["position"], queue["length"], entry["state"], fmt_age(entry["enqueuedAgeMinutes"])))
+        else:
+            if queue and queue["truncated"]:
+                bits.append("merge queue position unknown (not in the first %d of %d)" % (
+                    len(queue["entries"]), queue["length"]))
+            elif queue and queue["enabled"]:
+                bits.append("not in merge queue")
+            if pr["mergeable"] == "UNKNOWN":
+                bits.append("mergeable=UNKNOWN (GitHub still computing)")
+            elif pr["mergeable"] and pr["mergeable"] != "MERGEABLE":
+                bits.append("mergeable=%s" % pr["mergeable"])
+            elif pr["mergeStateStatus"] and pr["mergeStateStatus"] not in ("CLEAN", "UNSTABLE", "HAS_HOOKS"):
+                bits.append("mergeState=%s" % pr["mergeStateStatus"])
         label = "release PRs" if index == 0 else ""
         kind = "" if pr["kind"] == "release" else "[pin-bump] "
         out.append("  %-12s #%s %s%s — %s" % (label, pr["number"], kind, clip(pr["title"] or "", 60), ", ".join(bits)))
+    queue = data["mergeQueue"]
+    if queue is None:
+        out.append("  %-12s %s" % ("merge queue", unavailable(key + ".mergeQueue")))
+    elif not queue["enabled"]:
+        out.append("  %-12s %s" % ("merge queue", "none on main"))
+    elif not queue["head"]:
+        out.append("  %-12s %s" % ("merge queue", "empty"))
+    else:
+        head = queue["head"]
+        line = "%d queued; head #%s %s — %s, enqueued %s ago" % (
+            queue["length"], head["number"], clip(head["title"] or "", 50), head["state"],
+            fmt_age(head["enqueuedAgeMinutes"]))
+        if head["pendingChecks"]:
+            names = head["pendingChecks"]
+            line += ", waiting on %d check%s (%s%s) running %s" % (
+                len(names), "" if len(names) == 1 else "s", ", ".join(names[:3]),
+                ", …" if len(names) > 3 else "", fmt_age(head["checksAgeMinutes"]))
+        elif not head["hasMergeGroup"]:
+            line += ", no merge-group checks started yet"
+        elif not head["reportedChecks"]:
+            line += ", no merge-group checks reported yet"
+        if head["failingChecks"]:
+            names = head["failingChecks"]
+            line += ", %d failing check%s (%s%s)" % (
+                len(names), "" if len(names) == 1 else "s", ", ".join(names[:3]), ", …" if len(names) > 3 else "")
+        out.append("  %-12s %s" % ("merge queue", line))
     cut = data["autoCut"]
     if cut:
         where = "run %s, %s, %s ago" % (cut["runId"], cut["event"] or "?", fmt_age(cut["ageMinutes"]))
@@ -546,6 +829,8 @@ for key, data in components.items():
     else:
         line = "no auto-cut-alpha.yml runs"
     out.append("  %-12s %s" % ("auto-cut", line))
+    if key == "cloudlands-fe":
+        out.append("  %-12s %s" % ("auto-pin", auto_pin_line(data["autoPin"])))
 
 if overrides:
     out.append("runner overrides (CI_*_RUNNER_DISABLED)")
