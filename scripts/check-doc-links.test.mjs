@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { checkRepository, findInputs, headingSlug, inspectRepository } from './check-doc-links.mjs';
+import { checkRepository, findInputs, headingAnchors, headingSlug, inspectRepository } from './check-doc-links.mjs';
 
 async function fixture(t, files, directories = []) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'check-doc-links-'));
@@ -126,9 +126,10 @@ test('reports an anchor whose heading was renamed', async (t) => {
       source: 'docs/a.md',
       line: 1,
       target: 'methods/scripts.md#saved-scripts-and-one-off-history-1011-implemented-candidate',
-      resolved: 'docs/methods/scripts.md#saved-scripts-and-one-off-history-1011-implemented-candidate',
+      resolved: 'docs/methods/scripts.md',
+      anchor: 'saved-scripts-and-one-off-history-1011-implemented-candidate',
     },
-    { source: 'docs/b.md', line: 3, target: '#manager-issues', resolved: 'docs/b.md#manager-issues' },
+    { source: 'docs/b.md', line: 3, target: '#manager-issues', resolved: 'docs/b.md', anchor: 'manager-issues' },
   ]);
 });
 
@@ -137,7 +138,7 @@ test('numbers duplicate headings like GitHub', async (t) => {
     'docs/guide.md': '## Problem\n## Problem\n[first](#problem) [second](#problem-1) [missing](#problem-2)\n',
   });
   assert.deepEqual(await checkRepository(root), [
-    { source: 'docs/guide.md', line: 3, target: '#problem-2', resolved: 'docs/guide.md#problem-2' },
+    { source: 'docs/guide.md', line: 3, target: '#problem-2', resolved: 'docs/guide.md', anchor: 'problem-2' },
   ]);
 });
 
@@ -198,4 +199,67 @@ test('slugs headings like GitHub', () => {
   assert.equal(headingSlug('Problem: "Cannot find module" errors in tests'), 'problem-cannot-find-module-errors-in-tests');
   assert.equal(headingSlug('See [the guide](docs/x.md) & <code>snake_case</code>'), 'see-the-guide--snake_case');
   assert.equal(headingSlug('Closing a workspace — ergonomics retrospective'), 'closing-a-workspace--ergonomics-retrospective');
+});
+
+test('slugs rendered heading text, keeping code spans literal', () => {
+  assert.equal(headingSlug('`Option<T>` handling'), 'optiont-handling');
+  assert.equal(headingSlug('`<a id="x">` inline'), 'a-idx-inline');
+  assert.equal(headingSlug('The _foo_ option and __init__ with snake_case'), 'the-foo-option-and-init-with-snake_case');
+  assert.equal(headingSlug('A &amp; B &#38; C'), 'a--b--c');
+  assert.equal(headingSlug('See [x][ref] and <em>y</em>'), 'see-x-and-y');
+});
+
+test('numbers colliding duplicate slugs like github-slugger', () => {
+  const anchors = headingAnchors('## Release-1\n## Release\n## Release\n');
+  assert.deepEqual([...anchors], ['release-1', 'release', 'release-2']);
+});
+
+test('reads multi-line setext and blockquote headings', () => {
+  const anchors = headingAnchors('Para line one\nline two\n---\n\n> ## Note\n\n- item\ncontinued\n---\n');
+  assert.deepEqual([...anchors], ['para-line-one-line-two', 'note']);
+});
+
+test('takes explicit anchors from any tag but not from code spans', () => {
+  const anchors = headingAnchors('Text `<a id="ex">` here\n<h2 id="custom">Custom</h2>\n<section name="named"></section>\n');
+  assert.deepEqual([...anchors], ['custom', 'named']);
+});
+
+test('does not check anchors of example links in code or comments', async (t) => {
+  const root = await fixture(t, {
+    'docs/guide.md': [
+      '```md',
+      '[see](#fenced-example)',
+      '```',
+      '`[x](#inline-example)`',
+      '<!-- [y](#commented-example) -->',
+      '[real](#missing)',
+    ].join('\n'),
+  });
+  assert.deepEqual(
+    (await checkRepository(root)).map((failure) => failure.target),
+    ['#missing'],
+  );
+});
+
+test('checks directory anchors against the README GitHub renders', async (t) => {
+  const root = await fixture(t, {
+    'AGENTS.md': '[ok](docs/protocol/#present) [stale](docs/protocol/#renamed-section)',
+    'docs/protocol/README.md': '# Present\n',
+  });
+  assert.deepEqual(await checkRepository(root), [
+    {
+      source: 'AGENTS.md',
+      line: 1,
+      target: 'docs/protocol/#renamed-section',
+      resolved: 'docs/protocol/README.md',
+      anchor: 'renamed-section',
+    },
+  ]);
+});
+
+test('reports an encoded hash in a missing path as a missing path', async (t) => {
+  const root = await fixture(t, { 'docs/guide.md': '[notes](notes%23v2.md)' });
+  const [failure] = await checkRepository(root);
+  assert.equal(failure.resolved, 'docs/notes#v2.md');
+  assert.equal(failure.anchor, undefined);
 });

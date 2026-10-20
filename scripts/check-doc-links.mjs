@@ -7,12 +7,15 @@
 // Bare paths resolve against the source directory, monorepo root, and component repositories.
 // References requiring an uninitialized submodule are skipped as unverifiable.
 //
-// Markdown links with an anchor (`file.md#anchor` or `#anchor`) whose target is a
-// Markdown file must also name a heading in it, slugged like GitHub: inline markup
-// dropped, lowercased, punctuation removed, spaces turned into hyphens, `-1`, `-2`, ...
-// appended to repeated slugs. Headings inside code fences are ignored; explicit
-// `<a id>` / `<a name>` anchors count. Anchors GitHub generates at runtime (comment
-// and review anchors, `L12` line anchors) and anchors on other file types are not checked.
+// Markdown links with an anchor (`file.md#anchor`, `dir/#anchor` or `#anchor`) whose
+// target is a Markdown file (or a directory's README.md) must also name a heading in
+// it, slugged like GitHub's github-slugger: the rendered heading text (code spans kept
+// literal, other markup dropped), lowercased, punctuation removed, spaces turned into
+// hyphens, and `-1`, `-2`, ... appended to repeated slugs. ATX, setext and blockquote
+// headings count; headings inside code fences do not; explicit `id` / `name` attributes
+// count. Example links inside code or HTML comments, anchors GitHub generates at runtime
+// (comment and review anchors, `L12` line anchors), and anchors on other file types are
+// not checked.
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -23,10 +26,19 @@ const MARKDOWN_LINK = /\[[^\]]*\]\(\s*(<?[^\s)>]+>?)/g;
 const REPO_PATH = /`((?:docs|scripts|\.github)\/[A-Za-z0-9._/-]+)`/g;
 const RUNTIME_ANCHOR = /^(?:issuecomment-|discussion_r|discussioncomment-|pullrequestreview-|L\d+(?:-L\d+)?$)/;
 const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+const BLOCKQUOTE = /^(?: {0,3}> ?)+/;
 const ATX_HEADING = /^ {0,3}#{1,6}(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/;
 const SETEXT_UNDERLINE = /^ {0,3}(?:=+|-+)[ \t]*$/;
-const NOT_SETEXT_TEXT = /^ {0,3}(?:[-*+>]\s|\d+[.)]\s|#|<|\||$)/;
-const HTML_ANCHOR = /<a\s[^>]*?\b(?:id|name)\s*=\s*["']([^"']+)["']/gi;
+const BLOCK_START = /^ {0,3}(?:[-*+][ \t]|\d+[.)][ \t]|<|\|)/;
+const INDENTED_CODE = /^(?: {4}|\t)/;
+const CODE_SPAN = /(`+)(?!`)(.*?[^`])\1(?!`)/g;
+const HTML_COMMENT = /<!--[\s\S]*?-->/g;
+const HTML_TAG = /<\/?[A-Za-z][^>]*>/g;
+const HTML_ID = /<[A-Za-z][^>]*?\s(?:id|name)\s*=\s*["']([^"']+)["']/gi;
+const INLINE_LINK = /!?\[([^\]]*)\](?:\([^)]*\)|\[[^\]]*\])/g;
+const EMPHASIS = /(^|[^\p{L}\p{N}_])(_{1,2})(?=\S)(.+?)(?<=\S)\2(?![\p{L}\p{N}_])/gu;
+const ENTITY = /&(?:#(\d+)|#x([\da-f]+)|([a-z]+));/gi;
+const NAMED_ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
 
 async function isFile(filePath) {
   try {
@@ -36,12 +48,11 @@ async function isFile(filePath) {
   }
 }
 
-async function exists(filePath) {
+async function statOf(filePath) {
   try {
-    await fs.access(filePath);
-    return true;
+    return await fs.stat(filePath);
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -94,62 +105,128 @@ async function submodules(root) {
   const paths = [...config.matchAll(/^\s*path\s*=\s*(.+?)\s*$/gm)].map((match) => path.resolve(root, match[1]));
   const modules = [];
   for (const submodulePath of paths) {
-    modules.push({ path: submodulePath, initialized: await exists(path.join(submodulePath, '.git')) });
+    modules.push({ path: submodulePath, initialized: Boolean(await statOf(path.join(submodulePath, '.git'))) });
   }
   return modules;
 }
 
+function renderedText(markdown) {
+  return markdown
+    .replace(HTML_COMMENT, '')
+    .replace(INLINE_LINK, '$1')
+    .replace(HTML_TAG, '')
+    .replace(EMPHASIS, '$1$3')
+    .replace(ENTITY, (whole, decimal, hex, name) => {
+      if (decimal) return String.fromCodePoint(Number(decimal));
+      if (hex) return String.fromCodePoint(Number.parseInt(hex, 16));
+      return NAMED_ENTITIES[name.toLowerCase()] ?? whole;
+    });
+}
+
 export function headingSlug(text) {
-  return text
-    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
-    .replace(/<[^>]*>/g, '')
+  let plain = '';
+  let last = 0;
+  for (const match of text.matchAll(CODE_SPAN)) {
+    plain += renderedText(text.slice(last, match.index)) + match[2];
+    last = match.index + match[0].length;
+  }
+  plain += renderedText(text.slice(last));
+  return plain
     .trim()
     .toLowerCase()
     .replace(/[^\p{L}\p{M}\p{N}\p{Pc}\- ]/gu, '')
     .replace(/ /g, '-');
 }
 
-export function headingAnchors(content) {
-  const anchors = new Set();
-  const occurrences = new Map();
-  const addHeading = (text) => {
-    const slug = headingSlug(text);
-    const count = occurrences.get(slug) ?? 0;
-    anchors.add(count === 0 ? slug : `${slug}-${count}`);
-    occurrences.set(slug, count + 1);
-  };
-
-  const lines = content.split(/\r?\n/);
+// Yields each line with its offset, its text without blockquote markers, and whether
+// it belongs to a fenced code block (fence delimiters included).
+function* markdownLines(content) {
   let fence = null;
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    const fenceMatch = line.match(FENCE);
+  let start = 0;
+  for (const raw of content.split('\n')) {
+    const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
+    const body = line.replace(BLOCKQUOTE, '');
+    const fenceMatch = body.match(FENCE);
+    let fenced = false;
     if (fence) {
+      fenced = true;
       const closes =
         fenceMatch &&
         fenceMatch[1][0] === fence[0] &&
         fenceMatch[1].length >= fence.length &&
-        line.trim() === fenceMatch[1];
+        body.trim() === fenceMatch[1];
       if (closes) fence = null;
-      continue;
-    }
-    if (fenceMatch) {
+    } else if (fenceMatch) {
       fence = fenceMatch[1];
+      fenced = true;
+    }
+    yield { line, body, fenced, start };
+    start += raw.length + 1;
+  }
+}
+
+export function headingAnchors(content) {
+  const anchors = new Set();
+  const occurrences = new Map();
+  const addHeading = (text) => {
+    const original = headingSlug(text);
+    let slug = original;
+    while (occurrences.has(slug)) {
+      const count = occurrences.get(original) + 1;
+      occurrences.set(original, count);
+      slug = `${original}-${count}`;
+    }
+    occurrences.set(slug, 0);
+    anchors.add(slug);
+  };
+
+  let paragraph = [];
+  let inContainer = false;
+  for (const { body, fenced } of markdownLines(content)) {
+    if (fenced) {
+      paragraph = [];
       continue;
     }
-    for (const match of line.matchAll(HTML_ANCHOR)) anchors.add(match[1]);
-    const atx = line.match(ATX_HEADING);
+    for (const match of body.replace(CODE_SPAN, '').replace(HTML_COMMENT, '').matchAll(HTML_ID)) {
+      anchors.add(match[1]);
+    }
+    if (paragraph.length > 0 && SETEXT_UNDERLINE.test(body)) {
+      addHeading(paragraph.join(' '));
+      paragraph = [];
+      continue;
+    }
+    const atx = body.match(ATX_HEADING);
     if (atx) {
       addHeading(atx[1] ?? '');
-      continue;
-    }
-    const next = lines[index + 1];
-    if (next !== undefined && SETEXT_UNDERLINE.test(next) && !NOT_SETEXT_TEXT.test(line) && line.trim()) {
-      addHeading(line);
-      index += 1;
+      paragraph = [];
+      inContainer = false;
+    } else if (!body.trim()) {
+      paragraph = [];
+      inContainer = false;
+    } else if (BLOCK_START.test(body)) {
+      paragraph = [];
+      inContainer = true;
+    } else if (!inContainer && (paragraph.length > 0 || !INDENTED_CODE.test(body))) {
+      paragraph.push(body.trim());
     }
   }
   return anchors;
+}
+
+// Offsets of fenced code, inline code spans and HTML comments, where links are examples.
+function literalRanges(content) {
+  const ranges = [];
+  for (const { line, fenced, start } of markdownLines(content)) {
+    if (fenced) {
+      ranges.push([start, start + line.length]);
+      continue;
+    }
+    for (const match of line.matchAll(CODE_SPAN)) {
+      ranges.push([start + match.index, start + match.index + match[0].length]);
+    }
+  }
+  for (const match of content.matchAll(HTML_COMMENT)) ranges.push([match.index, match.index + match[0].length]);
+  return ranges;
 }
 
 function unwrapTarget(raw) {
@@ -210,8 +287,12 @@ function anchorReader() {
   };
 }
 
-function needsAnchorCheck(anchor, filePath) {
-  return Boolean(anchor) && !RUNTIME_ANCHOR.test(anchor) && filePath.endsWith('.md');
+// The Markdown file whose headings an anchor on `found` refers to, if any.
+async function anchorDocument(found, stat) {
+  if (stat.isFile()) return found.endsWith('.md') ? found : null;
+  if (!stat.isDirectory()) return null;
+  const readme = path.join(found, 'README.md');
+  return (await statOf(readme))?.isFile() ? readme : null;
 }
 
 export async function inspectRepository(root) {
@@ -224,15 +305,18 @@ export async function inspectRepository(root) {
   for (const source of inputs) {
     const content = await fs.readFile(source, 'utf8');
     const references = [];
+    const literal = literalRanges(content);
+    const isExample = (index) => literal.some(([start, end]) => index >= start && index < end);
     for (const match of content.matchAll(MARKDOWN_LINK)) {
       if (!isLocalLink(match[1])) continue;
       const target = cleanTarget(match[1]);
+      const anchor = isExample(match.index) ? null : anchorOf(match[1]);
       references.push({
         raw: match[1],
-        target: target === '' ? path.basename(source) : target,
-        anchor: anchorOf(match[1]),
+        target: target === '' ? source : target,
+        anchor: anchor && !RUNTIME_ANCHOR.test(anchor) ? anchor : null,
         index: match.index,
-        bases: uniquePaths([path.dirname(source), root]),
+        bases: target === '' ? [path.dirname(source)] : uniquePaths([path.dirname(source), root]),
       });
     }
     for (const match of content.matchAll(REPO_PATH)) {
@@ -251,17 +335,20 @@ export async function inspectRepository(root) {
       const isUnverifiable = (candidate) =>
         modules.some((module) => !module.initialized && isWithin(candidate, module.path));
       const verifiable = insideRoot.filter((candidate) => !isUnverifiable(candidate));
-      const present = await Promise.all(verifiable.map((candidate) => exists(candidate)));
-      const found = verifiable.find((_, index) => present[index]);
-      if (found) {
-        if (!needsAnchorCheck(reference.anchor, found) || !(await isFile(found))) continue;
-        const anchors = await anchorsIn(found);
+      const stats = await Promise.all(verifiable.map(statOf));
+      const foundIndex = stats.findIndex(Boolean);
+      if (foundIndex >= 0) {
+        if (!reference.anchor) continue;
+        const document = await anchorDocument(verifiable[foundIndex], stats[foundIndex]);
+        if (!document) continue;
+        const anchors = await anchorsIn(document);
         if (anchors.has(reference.anchor) || anchors.has(reference.anchor.toLowerCase())) continue;
         failures.push({
           source: path.relative(root, source),
           line: lineAt(content, reference.index),
           target: reference.raw,
-          resolved: `${path.relative(root, found)}#${reference.anchor}`,
+          resolved: path.relative(root, document),
+          anchor: reference.anchor,
         });
         continue;
       }
@@ -295,11 +382,9 @@ async function main() {
     return;
   }
   for (const failure of failures) {
-    const hash = failure.resolved.indexOf('#');
-    const detail =
-      hash < 0
-        ? `missing ${failure.target} (${failure.resolved})`
-        : `missing heading ${failure.resolved.slice(hash)} in ${failure.resolved.slice(0, hash)}`;
+    const detail = failure.anchor
+      ? `missing heading #${failure.anchor} in ${failure.resolved}`
+      : `missing ${failure.target} (${failure.resolved})`;
     console.error(`${failure.source}:${failure.line}: ${detail}`);
   }
   if (skipped > 0) console.log(`Skipped ${skipped} unverifiable reference${skipped === 1 ? '' : 's'}.`);
