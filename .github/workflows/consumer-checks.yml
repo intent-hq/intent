@@ -108,7 +108,7 @@ jobs:
       COMPONENT_REPOSITORY: ${{ inputs.self-test && format('intent-hq/{0}', inputs.component) || github.repository }}
       HEAD_SHA: ${{ inputs.head-sha || github.sha }}
     steps:
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
       - name: Validate the component input

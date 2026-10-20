@@ -138,7 +138,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
       - run: make test-scripts
@@ -287,7 +287,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
       - run: git submodule update --init --depth=1 packages/intentd
@@ -377,7 +377,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
       - run: git submodule update --init --depth=1 packages/intentd
@@ -542,7 +542,7 @@ jobs:
     runs-on: ${{ fromJSON(needs.runner-route.outputs.slots || '{}')['ci-policy'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
       - run: python3 -m pip install 'PyYAML==6.0.3'
