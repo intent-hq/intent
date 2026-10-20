@@ -2954,33 +2954,35 @@ class TransferFixtureSelectionTests(unittest.TestCase):
     def test_hermetic_runs_keep_separate_resume_credit(self):
         """`make test HERMETIC=1` (no provider CLIs) never shares passes with
         an ordinary run, and ordinary keys are unchanged by the feature."""
-        captured = []
-        dumps = json.dumps
-
-        def capture(value, **kwargs):
-            if isinstance(value, dict) and "source-root" in value:
-                captured.append(value)
-            return dumps(value, **kwargs)
-
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(
             gate, "worktree_tree", return_value="tree"
         ), mock.patch.object(gate, "submodule_heads", return_value=[]), mock.patch.object(
             gate, "required_hash", return_value="hash"
         ), mock.patch.object(gate, "run", return_value="version"), mock.patch.object(
             gate, "build_settings", return_value={}
-        ), mock.patch.object(gate.json, "dumps", side_effect=capture):
+        ):
             root = Path(directory)
-            keys = {}
-            for mode, env in (("ordinary", {}), ("off", {"INTENT_GATE_HERMETIC": "0"}),
-                              ("hermetic", {"INTENT_GATE_HERMETIC": "1"}),
-                              ("hide-node", {"INTENT_GATE_HERMETIC": "1", "HIDE_NODE": "1"})):
+            modes = {
+                "ordinary": {},
+                "off": {"INTENT_GATE_HERMETIC": "0", "HIDE_NODE": "1"},
+                "hermetic": {"INTENT_GATE_HERMETIC": "1"},
+                "hide-node": {"INTENT_GATE_HERMETIC": "1", "HIDE_NODE": "1"},
+                "unchecked": {"INTENT_GATE_HERMETIC": "1", "SKIP_SELF_CHECK": "1"},
+            }
+            keys, inputs = {}, {}
+            for mode, env in modes.items():
                 with mock.patch.dict(os.environ, env, clear=True):
                     keys[mode] = gate.tree_key(root, root)
+                    inputs[mode] = gate.tree_inputs(root, root)
             self.assertEqual(keys["ordinary"], keys["off"])
-            self.assertEqual(len({keys["ordinary"], keys["hermetic"], keys["hide-node"]}), 3)
-            self.assertNotIn("hermetic", captured[0])
-            self.assertEqual(captured[2]["hermetic"], {"HIDE_NODE": False})
-            self.assertEqual(captured[3]["hermetic"], {"HIDE_NODE": True})
+            self.assertNotIn("hermetic", inputs["ordinary"])
+            self.assertEqual(len({keys[m] for m in modes if m != "off"}), 4)
+            self.assertEqual(inputs["hermetic"]["hermetic"],
+                             {"HIDE_NODE": False, "SKIP_SELF_CHECK": False})
+            self.assertEqual(inputs["hide-node"]["hermetic"],
+                             {"HIDE_NODE": True, "SKIP_SELF_CHECK": False})
+            self.assertEqual(inputs["unchecked"]["hermetic"],
+                             {"HIDE_NODE": False, "SKIP_SELF_CHECK": True})
 
 
 class CoverageReconciliationTests(unittest.TestCase):

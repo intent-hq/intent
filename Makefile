@@ -303,10 +303,21 @@ GATE_CACHE_DIR ?= $(HOME)/.cache/intent/gate-runs
 # (codex, claude, opencode, ...) in a private mount namespace, so a test that
 # only passes because the host has them fails here instead of on CI
 # (intentd#2462). Linux only; needs bwrap. Node stays visible, as on CI;
-# HIDE_NODE=1 hides it too. Resume records are kept separate per mode.
+# HIDE_NODE=1 hides it too. Resume records are kept separate per mode. The
+# wrapper's discovery self-check builds with $(BUILD_JOBS) jobs.
 HERMETIC ?= 0
-HERMETIC_WRAP := $(if $(filter 1,$(HERMETIC)),env INTENT_GATE_HERMETIC=1 bash "$(INTENTD_DIR)/scripts/test-without-provider-clis.sh",)
-HERMETIC_RUNNER_WRAP := $(if $(filter 1,$(HERMETIC)),env INTENT_GATE_HERMETIC=1 bash "$$INTENTD_DIR/scripts/test-without-provider-clis.sh" ,)
+ifneq ($(filter-out 0 1,$(HERMETIC)),)
+$(error HERMETIC must be 0 or 1, got '$(HERMETIC)')
+endif
+HERMETIC_WRAP := $(if $(filter 1,$(HERMETIC)),env INTENT_GATE_HERMETIC=1 CARGO_BUILD_JOBS=$(BUILD_JOBS) bash "$(INTENTD_DIR)/scripts/test-without-provider-clis.sh",)
+HERMETIC_RUNNER_WRAP := $(if $(filter 1,$(HERMETIC)),env INTENT_GATE_HERMETIC=1 CARGO_BUILD_JOBS=$(BUILD_JOBS) bash "$$INTENTD_DIR/scripts/test-without-provider-clis.sh" ,)
+# Fail before planning or building when HERMETIC=1 cannot run here, and say
+# which mode the run uses (also under DRY_RUN=1).
+HERMETIC_PREFLIGHT = if [ "$(HERMETIC)" = 1 ]; then \
+		[ "$$(uname -s 2>/dev/null)" = Linux ] || { echo "[$@] ERROR: HERMETIC=1 is Linux only (it hides provider CLIs in a bwrap mount namespace)" >&2; exit 1; }; \
+		command -v bwrap >/dev/null 2>&1 || { echo "[$@] ERROR: HERMETIC=1 needs bwrap; run make doctor (Debian/Ubuntu: sudo apt-get install bubblewrap)" >&2; exit 1; }; \
+		echo "[$@] HERMETIC=1: tests run with every provider CLI hidden ($(INTENTD_DIR)/scripts/test-without-provider-clis.sh)"; \
+	fi
 
 # Node heap ceiling (MB) for the FE production build. The renderer's vite build
 # OOMs at Node's default heap (~2-4 GB) and often still OOMs at 8 GB on this
@@ -593,6 +604,7 @@ test-intentd: ensure-intentd-submodule | check-transfer-fixture
 		echo "[test-intentd] ERROR: cargo-nextest is not installed — run 'cargo install cargo-nextest --locked'"; \
 		exit 1; \
 	}
+	@$(HERMETIC_PREFLIGHT)
 	@bash "$(INTENTD_DIR)/scripts/with-test-policy.sh" $(HERMETIC_WRAP) python3 scripts/resumable_nextest.py \
 		--repo-root "$(CURDIR)" \
 		--intentd-dir "$(INTENTD_DIR)" \
@@ -629,6 +641,7 @@ test-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd br
 	@if [ -n "$(DRY_RUN)" ] && [ "$(DRY_RUN)" != 0 ] && [ "$(NO_FAIL_FAST)" = 1 ]; then \
 		echo "[test-changed] NO_FAIL_FAST=1: nextest runs with --no-fail-fast"; \
 	fi
+	@$(HERMETIC_PREFLIGHT)
 	@INTENTD_DIR="$(INTENTD_DIR)" BASE="$(BASE)" DRY_RUN="$(DRY_RUN)" \
 		BUILD_JOBS="$(BUILD_JOBS)" TEST_THREADS="$(TEST_THREADS)" \
 		GATE_REPO_ROOT="$(CURDIR)" GATE_CACHE_DIR="$(GATE_CACHE_DIR)" \
