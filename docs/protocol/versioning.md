@@ -28,6 +28,17 @@ Released frontends still cap registered-root reads at major 15 until
 [cloudlands-fe#3478](https://github.com/intent-hq/cloudlands-fe/pull/3478) ships,
 so the daemon must not advertise major 16 before a carrying frontend release.
 
+Also within 15.0 (additive optional response fields; presence-detected; no method-catalog
+change, so no version bump): **merge-queue position and estimated merge time**
+(§5.27 `GithubPullRequest`, §5.42 `MergeRequirements` and `lastSnapshot`, §5.7
+`ws.pr.snapshot`). A queued PR's `github.pulls.get` result and monitor checklist gain
+`mergeQueue?: MergeQueueEntry` — `{ position, queueSize?, state?, enqueuedAt?,
+estimatedMergeAt? }` read from GitHub GraphQL `PullRequest.mergeQueueEntry` in the same
+folded read as `isInMergeQueue`, with `estimatedMergeAt` the absolute projection of the
+host's seconds-to-merge estimate. It is informational only: the monitor never diffs it,
+so queue movement wakes no agent. Workspace `PullRequestInfo` rows do not carry it.
+Older daemons and hosts without merge queues omit it; clients detect it by presence.
+
 Also within 15.0 (additive optional event field; presence-detected; no method-catalog
 change, so no version bump): **`workspace:created` carries `origin?`** (§6.5 workspace
 row). `ws.workspace.applyProposal` stamps `{ kind: "proposal", proposalId, agentId,
