@@ -70,7 +70,7 @@ honored just because creation succeeded. Gate lifecycle controls/options on this
 capability, independently of numeric version.
 
 **Worker observations (prepared additive extension).**
-`server.capabilities.agentWorkers: 1` advertises the read-only list/subscription
+`server.capabilities.agentWorkers: 1` advertises the list/subscription/stop
 contract in [§5.5b](./agent-workers.md), not process liveness or exit evidence.
 Provider-session support is reported independently; older daemons omit this flag.
 

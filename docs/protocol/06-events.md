@@ -798,7 +798,7 @@ The `events.subscribe` firehose (§6.1) carries every bus event; a thin client t
 **Worker observations (prepared).** `agent.workers.subscribe` takes required
 `workspaceId` and `agentId`, then sends seq-0 and increasing-seq complete
 `WorkerSnapshot` replacements using `kind: "snapshot"`. It does not use entity
-deltas; teardown is `events.unsubscribe`. Evidence age survives every snapshot;
+deltas; teardown is `events.unsubscribe`. Observation times survive every snapshot;
 see [§5.5b](./methods/agent-workers.md) for bounds, fallback and ordering.
 
 **Frame shapes.** Every push is a JSON-RPC notification with method `subscription.push`:

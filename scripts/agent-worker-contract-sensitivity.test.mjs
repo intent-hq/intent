@@ -18,7 +18,14 @@ const mutations = [
   ['recreation loses tombstones', 'seen: new Set(c.seen)', 'seen: new Set()'],
   ['unacknowledged subscription accepts push', 'if (!validId(this.subscriptionId)) return false;', '// broken active subscription guard'],
   ['malformed acknowledgement replaces binding', 'if (!validId(id)) return false;', '// broken acknowledgement guard'],
-  ['freshness boundary', 'now >= row.freshUntil', 'now > row.freshUntil'],
+  ['disconnect keeps running', "out.status = continuity === 'continuous' ? 'running' : 'unknown';", "out.status = 'running';"],
+  ['subagent admitted as worker', "SUBAGENT_TASK_TYPES.has(taskType)) return false;", "false) return false;"],
+  ['codex admits non-shell', "return provider === 'codex' ? taskType === 'shell' : true;", 'return true;'],
+  ['stop ignores canStop', "if (row.providerState !== 'running' || row.canStop !== true) return { result };", "if (row.providerState !== 'running') return { result };"],
+  ['stop while disconnected', "if (this.support.status !== 'supported' || this.continuity !== 'continuous') return { result };", "if (this.support.status !== 'supported') return { result };"],
+  ['stop without control authority', 'this.authorize(request, authority.canControl);', 'this.authorize(request, true);'],
+  ['loose stop answer', 'stopped: response?.stopped === true', 'stopped: Boolean(response?.stopped)'],
+  ['adapter allowlist', "adapterVersion !== adapter.adapterVersion ? { status: 'unsupported', reason: 'adapter-version' }", "false ? { status: 'unsupported', reason: 'adapter-version' }"],
 ];
 for (const [name, before, after] of mutations) test(`regressions reject ${name}`, (t) => {
   assert.ok(model.includes(before), `mutation anchor missing: ${name}`);

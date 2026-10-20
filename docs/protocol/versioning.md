@@ -19,7 +19,7 @@ the frontend's Legacy Import settings. Already imported daemon workspaces remain
 available; source directories and persisted import markers are not deleted.
 The 9.0 removal and 9.1 restoration entries below remain historical records.
 Protocol 14.1 added the startup readiness observations described below.
-The documented surface, including prepared additions, has **451 / 394 / 57**
+The documented surface, including prepared additions, has **456 / 399 / 57**
 dispatchable / router / fast-path methods. Follow [issue #4082](https://github.com/intent-hq/intent/issues/4082)'s
 removal order: frontend callers first, daemon removal second, then these docs
 after the automatic pin advance. Clients gate on capabilities or a minimum
@@ -57,6 +57,15 @@ list-row preview cap). A list-shaped `AgentLite` row carries
 (`true` only, omitted otherwise) when the list cap shortened that field, so clients
 can mark the text as a prefix or read the uncapped value with `agent.get`. Older daemons
 omit the flags; clients must not read their absence as proof a value is complete.
+
+**Worker observation stop and Claude support (additive, prepared).** The
+[worker observation contract (§5.5b)](./methods/agent-workers.md) reserves the router
+method `agent.workers.stop`, bringing the documented surface to **456 / 399 / 57**
+(dispatchable / router / fast path). It also allowlists claude-agent-acp 0.81.1 and
+codex-acp 2.2.2, adds `taskType` and `canStop` row fields, and drops the unimplemented
+60-second staleness rule (`freshnessMs`, `freshUntil`, `stale`). Nothing implemented
+that rule, so no client changes. `agentWorkers: 1` still gates the complete contract.
+No shipped numeric version is claimed here.
 
 **PR workspace lookup (additive, prepared).** The
 [PR workspace lookup](./methods/workspace.md#pull-request-workspace-lookup) reserves
