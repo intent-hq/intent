@@ -1100,6 +1100,11 @@ that workspace. Already admitted operations finish before teardown; duplicate
 deletes serialize for the same workspace. Other workspaces have independent
 admission. Before removing session data, the daemon tears down live runtime state:
 
+- stop the workspace's running scripts with `script.stop` semantics (no supervisor
+  respawns or reopens a log afterwards), then delete its on-disk script output
+  folder (`<data_dir>/script-output/<workspaceId>/`, best-effort; the startup orphan
+  sweep retries a failed delete — see [Script output persistence](scripts.md#script-output-persistence-new-in-intentd-unreleased));
+
 - list session summaries (IDs and names, without loading transcripts); a store
   error propagates instead of skipping teardown;
 - `AgentManager::stop_many` stops the turn workers, drops session handles, clears

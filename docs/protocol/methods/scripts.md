@@ -37,13 +37,18 @@ across daemon restarts. No wire shape changes.
 - **Latest run only.** `script.output` returns the latest run's log; starting a new run of
   the same `scriptId` replaces what it returns. There is no per-run history API.
 - **Per-run cap.** A log keeps at most `scripts.outputMaxBytesPerRun` bytes (default 50 MiB,
-  range 64 KiB to 1 GiB, read when the run starts). Past the cap the newest bytes are kept and
+  range 64 KiB to 1 GiB, read each time a run's log is opened, so a change applies to the
+  next run or reopen, not to a run that is already writing). Past the cap the newest bytes are kept and
   the oldest dropped.
-- **Age sweep.** Logs older than `scripts.outputRetentionHours` (default `168`, one week) are
-  deleted; `0` disables the age sweep. `INTENTD_SCRIPT_OUTPUT_RETENTION_HOURS` overrides the
-  file value. Both keys are read live (§5.12).
-- **Removal.** `script.remove` deletes the script's logs, and deleting a workspace deletes
-  all of its script logs. `script.archive` keeps them.
+- **Age sweep.** An hourly sweep deletes logs whose last write is older than
+  `scripts.outputRetentionHours` (default `168`, one week); `0` disables the age sweep.
+  The current log of a running script is never deleted (a service auto-restart appends to
+  it); once the script stops, an expired log goes on the next sweep. At startup the sweep
+  also deletes the folders of workspaces that no longer exist.
+  `INTENTD_SCRIPT_OUTPUT_RETENTION_HOURS` overrides the file value. Both keys are read live
+  (§5.12).
+- **Removal.** `script.remove` deletes the script's logs. `workspace.delete` stops the
+  workspace's scripts, then deletes all of its script logs. `script.archive` keeps them.
 - **Empty output.** With no run yet, or an empty log, `script.output` returns `"No output yet."`.
 - **Live attach.** A script PTY keeps only a 64 KiB in-memory scrollback for late live
   attaches; exited script PTY sessions are released. Use `script.output` for the full output.
