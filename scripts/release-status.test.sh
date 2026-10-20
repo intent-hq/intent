@@ -144,10 +144,11 @@ L
   put graphql/cloudlands-fe.json <<'J'
 {"data":{"repository":{"mergeQueue":{"url":"https://example/fe-queue","entries":{"totalCount":2,"nodes":[
  {"position":2,"state":"QUEUED","enqueuedAt":"2026-10-19T10:00:00Z","estimatedTimeToMerge":2400,
-  "pullRequest":{"number":3517,"title":"fix: bump intentd sidecar to v0.11.11","headRefName":"auto/intentd-pin"},"headCommit":null},
+  "pullRequest":{"number":3517,"title":"fix: bump intentd sidecar to v0.11.11","headRefName":"auto/intentd-pin"}},
  {"position":1,"state":"AWAITING_CHECKS","enqueuedAt":"2026-10-19T09:55:00Z","estimatedTimeToMerge":1100,
-  "pullRequest":{"number":3537,"title":"feat: slow queue head","headRefName":"feat/slow"},
-  "headCommit":{"statusCheckRollup":{"state":"PENDING","contexts":{"nodes":[
+  "pullRequest":{"number":3537,"title":"feat: slow queue head","headRefName":"feat/slow"}}]},
+ "head":{"nodes":[
+  {"headCommit":{"statusCheckRollup":{"state":"PENDING","contexts":{"nodes":[
    {"__typename":"CheckRun","name":"Build (web)","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-10-19T12:39:00Z"},
    {"__typename":"CheckRun","name":"Unit Tests (shard 1/4)","status":"IN_PROGRESS","conclusion":null,"startedAt":"2026-10-19T12:45:00Z"},
    {"__typename":"CheckRun","name":"Type Check & Lint","status":"QUEUED","conclusion":null,"startedAt":"2026-10-19T12:40:00Z"},
@@ -232,7 +233,7 @@ cloudlands-fe  v2.221.0 (3h00m ago), 1 unshipped commit on main since v2.221.0
   daemon pin   intentd 0.11.10 (behind intentd alpha 0.11.11)
   release PRs  #3512 chore(release): 2.222.0 — CI Gate SUCCESS, 2 failing checks, head 17m old, not in merge queue
                #3517 [pin-bump] fix: bump intentd sidecar to v0.11.11 — CI Gate IN_PROGRESS, head 2h00m old, in merge queue #2 of 2 (QUEUED, 3h00m)
-  merge queue  2 queued; head #3537 feat: slow queue head — AWAITING_CHECKS for 3h05m, waiting on 3 checks (Unit Tests (shard 1/4), Type Check & Lint, legacy) running 20m, 1 failing check (lint)
+  merge queue  2 queued; head #3537 feat: slow queue head — AWAITING_CHECKS, enqueued 3h05m ago, waiting on 3 checks (Unit Tests (shard 1/4), Type Check & Lint, legacy) running 20m, 1 failing check (lint)
   auto-cut     Pin-bump PR #3517 (auto/intentd-pin) is open; deferring the alpha cut until the new sidecar pin lands [run 201, schedule, 30m ago]
   auto-pin     failure (2 runs in a row): GH006: Protected branch update failed for refs/heads/auto/intentd-pin. (A pull request for this branch has been added to a merge queue. Branches that are queue… [run 302, schedule, 1h00m ago] (run 303 in_progress)
 runner overrides (CI_*_RUNNER_DISABLED)
@@ -273,7 +274,7 @@ expect_json 'r["components"]["cloudlands-fe"]["autoCut"]["decision"]' '"Pin-bump
 expect_json 'r["fePin"]' '{"version": "0.11.10", "intentdAlpha": "0.11.11", "behindAlpha": true}'
 expect_json 'r["runnerOverrides"][0]["variable"]' '"CI_MACOS_RUNNER_DISABLED"'
 expect_json 'r["runnerOverrides"][1]["reason"]' 'null'
-expect_json 'r["components"]["intentd"]["mergeQueue"]' '{"enabled": true, "url": "https://example/queue", "length": 0, "entries": [], "head": null}'
+expect_json 'r["components"]["intentd"]["mergeQueue"]' '{"enabled": true, "url": "https://example/queue", "length": 0, "truncated": false, "entries": [], "head": null}'
 expect_json 'r["components"]["intentd"].get("autoPin", "absent")' '"absent"'
 expect_json 'r["components"]["cloudlands-fe"]["releasePrs"][0]["mergeQueue"]' 'null'
 expect_json 'r["components"]["cloudlands-fe"]["releasePrs"][1]["mergeQueue"]' '{"position": 2, "state": "QUEUED", "enqueuedAt": "2026-10-19T10:00:00Z", "enqueuedAgeMinutes": 180}'
@@ -432,27 +433,62 @@ reset_stub
 echo '{"data":{"repository":{"mergeQueue":null}}}' | put graphql/intentd.json
 put graphql/cloudlands-fe.json <<'J'
 {"data":{"repository":{"mergeQueue":{"url":"u","entries":{"totalCount":1,"nodes":[
- {"position":1,"state":"QUEUED","enqueuedAt":"2026-10-19T12:58:00Z","pullRequest":{"number":3517,"title":"fix: bump intentd sidecar to v0.11.11"},"headCommit":null}]}}}}}
+ {"position":1,"state":"QUEUED","enqueuedAt":"2026-10-19T12:58:00Z","pullRequest":{"number":3517,"title":"fix: bump intentd sidecar to v0.11.11"}}]},
+ "head":{"nodes":[{"headCommit":null}]}}}}}
 J
 json="" run_script
 expect_line "  merge queue  none on main"
-expect_line "  merge queue  1 queued; head #3517 fix: bump intentd sidecar to v0.11.11 — QUEUED for 2m, no merge-group checks started yet"
+expect_line "  merge queue  1 queued; head #3517 fix: bump intentd sidecar to v0.11.11 — QUEUED, enqueued 2m ago, no merge-group checks started yet"
 expect_line "               #3517 [pin-bump] fix: bump intentd sidecar to v0.11.11 — CI Gate IN_PROGRESS, head 2h00m old, in merge queue #1 of 1 (QUEUED, 2m)"
 json=1 run_script
 expect_json 'r["components"]["intentd"]["mergeQueue"]["enabled"]' 'false'
 expect_json 'r["components"]["cloudlands-fe"]["mergeQueue"]["head"]["hasMergeGroup"]' 'false'
 expect_json 'r["errors"]' '[]'
 
+# --- a merge group with no checks reported yet; a queue longer than the
+# entries read cannot place a PR missing from them
+reset_stub
+put graphql/cloudlands-fe.json <<'J'
+{"data":{"repository":{"mergeQueue":{"url":"u","entries":{"totalCount":101,"nodes":[
+ {"position":1,"state":"AWAITING_CHECKS","enqueuedAt":"2026-10-19T12:50:00Z","pullRequest":{"number":9,"title":"feat: x"}}]},
+ "head":{"nodes":[{"headCommit":{"statusCheckRollup":null}}]}}}}}
+J
+json="" run_script
+expect_line "  merge queue  101 queued; head #9 feat: x — AWAITING_CHECKS, enqueued 10m ago, no merge-group checks reported yet"
+expect_line "               #3517 [pin-bump] fix: bump intentd sidecar to v0.11.11 — CI Gate IN_PROGRESS, head 2h00m old, merge queue position unknown (not in the first 1 of 101), mergeable=UNKNOWN (GitHub still computing)"
+json=1 run_script
+expect_json 'r["components"]["cloudlands-fe"]["mergeQueue"]["truncated"]' 'true'
+expect_json 'r["components"]["cloudlands-fe"]["mergeQueue"]["head"]["reportedChecks"]' '0'
+
+# --- a cancelled (concurrency-superseded) or skipped run newer than the
+# failures neither hides the streak nor the reason
+reset_stub
+put runs/cloudlands-fe.auto-pin-intentd.json <<'J'
+[{"databaseId":305,"status":"completed","conclusion":"cancelled","createdAt":"2026-10-19T12:50:00Z","event":"repository_dispatch","url":"u"},
+ {"databaseId":304,"status":"completed","conclusion":"skipped","createdAt":"2026-10-19T12:40:00Z","event":"schedule","url":"u"},
+ {"databaseId":302,"status":"completed","conclusion":"failure","createdAt":"2026-10-19T12:00:00Z","event":"schedule","url":"u"},
+ {"databaseId":303,"status":"completed","conclusion":"cancelled","createdAt":"2026-10-19T11:30:00Z","event":"schedule","url":"u"},
+ {"databaseId":301,"status":"completed","conclusion":"failure","createdAt":"2026-10-19T11:00:00Z","event":"schedule","url":"u"}]
+J
+json="" run_script
+expect_line "  auto-pin     failure (2 runs in a row): GH006: Protected branch update failed for refs/heads/auto/intentd-pin. (A pull request for this branch has been added to a merge queue. Branches that are queue… [run 302, schedule, 1h00m ago] (newer: run 305 cancelled, run 304 skipped)"
+grep -q '^run view 302 .*--log-failed' "$temp_dir/gh.log" || fail "the cancelled run hid the failed run's log"
+! grep -q '^run view 30[345]' "$temp_dir/gh.log" || fail "a cancelled/skipped run's log was fetched"
+json=1 run_script
+expect_json 'r["components"]["cloudlands-fe"]["autoPin"]["failedStreak"]' '2'
+expect_json 'r["components"]["cloudlands-fe"]["autoPin"]["newerIgnoredRuns"]' '[{"runId": 305, "conclusion": "cancelled"}, {"runId": 304, "conclusion": "skipped"}]'
+
 # --- auto-pin failure reasons: an explicit ::error:: annotation wins; a log
 # with only the exit code names the step; a log with nothing says so
 reset_stub
 {
-  printf 'pin\tSync protocol version\t2026-10-19T12:00:10.0Z ##[error]scripts/sync-intentd-protocol-version.mjs cannot parse PROTOCOL_VERSION for intentd 0.11.11\n'
+  # The message text holds a tab of its own.
+  printf 'pin\tSync protocol version\t2026-10-19T12:00:10.0Z ##[error]scripts/sync-intentd-protocol-version.mjs cannot parse PROTOCOL_VERSION\tfor intentd 0.11.11\n'
   printf 'pin\tSync protocol version\t2026-10-19T12:00:11.0Z remote: error: GH006: Protected branch update failed\n'
   printf 'pin\tSync protocol version\t2026-10-19T12:00:12.0Z ##[error]Process completed with exit code 1.\n'
 } | put logs/cloudlands-fe/302.log
 json=1 run_script
-expect_json 'r["components"]["cloudlands-fe"]["autoPin"]["failureReason"]' '"scripts/sync-intentd-protocol-version.mjs cannot parse PROTOCOL_VERSION for intentd 0.11.11"'
+expect_json 'r["components"]["cloudlands-fe"]["autoPin"]["failureReason"]' '"scripts/sync-intentd-protocol-version.mjs cannot parse PROTOCOL_VERSION\tfor intentd 0.11.11"'
 printf 'pin\tFetch manifest\t2026-10-19T12:00:12.0Z ##[error]Process completed with exit code 22.\n' | put logs/cloudlands-fe/302.log
 json=1 run_script
 expect_json 'r["components"]["cloudlands-fe"]["autoPin"]["failureReason"]' "\"step 'Fetch manifest' exited 22\""

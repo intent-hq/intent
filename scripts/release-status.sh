@@ -83,6 +83,11 @@ fe_dist=intent-hq/cloudlands-releases
 monorepo=intent-hq/intent
 max_runs=5
 max_pin_runs=10
+# auto-pin-intentd.yml run conclusions, shared by the log-fetch picker below
+# and the report: a failed run, and runs that decide nothing (a cancelled or
+# skipped run is passed over so it cannot hide a failure streak).
+pin_failed="failure timed_out startup_failure"
+pin_ignored="cancelled skipped"
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -241,11 +246,15 @@ queue_query='query($owner: String!, $name: String!) {
   repository(owner: $owner, name: $name) {
     mergeQueue(branch: "main") {
       url
-      entries(first: 50) {
+      entries(first: 100) {
         totalCount
         nodes {
           position state enqueuedAt estimatedTimeToMerge
           pullRequest { number title headRefName }
+        }
+      }
+      head: entries(first: 1) {
+        nodes {
           headCommit {
             statusCheckRollup {
               state
@@ -274,11 +283,11 @@ component intentd "$intentd_repo" "$intentd_repo" "release-plz-" &
     id=$(py '
 import json, sys
 for run in json.load(open(sys.argv[1])):
-    if run["status"] == "completed":
-        if run["conclusion"] in ("failure", "timed_out", "startup_failure"):
+    if run["status"] == "completed" and run["conclusion"] not in sys.argv[3].split():
+        if run["conclusion"] in sys.argv[2].split():
             print(run["databaseId"])
         break
-' "$work/fe.pinruns.out" 2>/dev/null || true)
+' "$work/fe.pinruns.out" "$pin_failed" "$pin_ignored" 2>/dev/null || true)
     if [[ -n "$id" ]]; then
       fetch "fe.pinlog.$id" run view "$id" --repo "$fe_repo" --log-failed
     fi
@@ -300,11 +309,13 @@ for repo in "$monorepo" "$intentd_repo" "$fe_repo"; do
 done
 wait
 
-python3 - "$work" "${STATUS_JSON:-}" "${RELEASE_STATUS_NOW:-}" "$fetch_logs" "$max_pin_runs" <<'PY'
+python3 - "$work" "${STATUS_JSON:-}" "${RELEASE_STATUS_NOW:-}" "$fetch_logs" "$max_pin_runs" \
+  "$pin_failed" "$pin_ignored" <<'PY'
 import datetime, json, os, re, sys
 
 work, as_json, now_arg, fetch_logs = sys.argv[1], sys.argv[2] == "1", sys.argv[3], sys.argv[4] == "1"
 MAX_PIN_RUNS = int(sys.argv[5])
+PIN_FAILED, PIN_IGNORED = sys.argv[6].split(), sys.argv[7].split()
 UTC = datetime.timezone.utc
 
 
@@ -373,16 +384,24 @@ def load_json(text, section):
 FAILING = ("FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE")
 
 
+def classify(check):
+    """(name, state, pending, failing) for one statusCheckRollup entry: a
+    CheckRun (status + conclusion) or a commit StatusContext (state)."""
+    name = check.get("name") or check.get("context") or ""
+    status = (check.get("status") or "").upper()
+    if status and status != "COMPLETED":
+        return name, status, True, False
+    state = (check.get("conclusion") or check.get("state") or status).upper()
+    return name, state, state in ("PENDING", "EXPECTED"), state in FAILING
+
+
 def ci_gate(rollup):
     """CI Gate state (the most recently started CI Gate run wins) and the
     number of failing checks in a statusCheckRollup."""
     gate, gate_started, failing = None, "", 0
     for check in rollup or []:
-        name = check.get("name") or check.get("context") or ""
-        state = (check.get("conclusion") or check.get("state") or check.get("status") or "").upper()
-        if check.get("status") and check.get("status") != "COMPLETED":
-            state = check["status"].upper()
-        if state in FAILING:
+        name, state, _, is_failing = classify(check)
+        if is_failing:
             failing += 1
         started = check.get("startedAt") or check.get("createdAt") or ""
         if name == "CI Gate" and (gate is None or started >= gate_started):
@@ -391,8 +410,9 @@ def ci_gate(rollup):
 
 
 def merge_queue(key):
-    """The main merge queue: entries in position order, and what the head
-    entry's merge-group commit is still waiting on. None when unreadable."""
+    """The main merge queue: entries in position order (the first 100), and
+    what the head entry's merge-group commit is still waiting on. None when
+    unreadable."""
     section = key + ".mergeQueue"
     text = result(key + ".queue", section)
     payload = load_json(text, section) if text is not None else None
@@ -403,44 +423,36 @@ def merge_queue(key):
         return None
     queue = ((payload.get("data") or {}).get("repository") or {}).get("mergeQueue")
     if queue is None:
-        return {"enabled": False, "url": None, "length": 0, "entries": [], "head": None}
+        return {"enabled": False, "url": None, "length": 0, "truncated": False, "entries": [], "head": None}
     nodes = sorted((queue.get("entries") or {}).get("nodes") or [], key=lambda n: n.get("position") or 0)
     entries = [{"position": node.get("position"), "number": (node.get("pullRequest") or {}).get("number"),
                 "title": (node.get("pullRequest") or {}).get("title"),
                 "headRef": (node.get("pullRequest") or {}).get("headRefName"),
                 "state": node.get("state"), "enqueuedAt": node.get("enqueuedAt"),
                 "enqueuedAgeMinutes": age_minutes(node.get("enqueuedAt"))} for node in nodes]
+    length = (queue.get("entries") or {}).get("totalCount", len(entries))
     head = None
-    if nodes:
-        node = nodes[0]
-        rollup = ((node.get("headCommit") or {}).get("statusCheckRollup") or {})
+    if entries:
+        commit = ((queue.get("head") or {}).get("nodes") or [{}])[0].get("headCommit")
+        rollup = (commit or {}).get("statusCheckRollup") or {}
+        contexts = (rollup.get("contexts") or {}).get("nodes") or []
         pending, failing, pending_started = [], [], []
-        for check in (rollup.get("contexts") or {}).get("nodes") or []:
-            name = check.get("name") or check.get("context") or "?"
-            started = check.get("startedAt") or check.get("createdAt")
-            if check.get("__typename") == "StatusContext":
-                state = (check.get("state") or "").upper()
-                is_pending, is_failing = state in ("PENDING", "EXPECTED"), state in ("FAILURE", "ERROR")
-            else:
-                is_pending = (check.get("status") or "").upper() != "COMPLETED"
-                is_failing = not is_pending and (check.get("conclusion") or "").upper() in FAILING
+        for check in contexts:
+            name, _, is_pending, is_failing = classify(check)
             if is_pending:
-                pending.append(name)
+                pending.append(name or "?")
+                started = check.get("startedAt") or check.get("createdAt")
                 if started:
                     pending_started.append(started)
             elif is_failing:
-                failing.append(name)
+                failing.append(name or "?")
         started = min(pending_started) if pending_started else None
-        head = dict(entries[0], hasMergeGroup=node.get("headCommit") is not None,
+        head = dict(entries[0], hasMergeGroup=commit is not None, reportedChecks=len(contexts),
                     rollupState=rollup.get("state"), pendingChecks=pending, failingChecks=failing,
                     checksStartedAt=started, checksAgeMinutes=age_minutes(started),
-                    estimatedTimeToMergeSeconds=node.get("estimatedTimeToMerge"))
-    return {"enabled": True, "url": queue.get("url"),
-            "length": (queue.get("entries") or {}).get("totalCount", len(entries)),
-            "entries": entries, "head": head}
-
-
-PIN_FAILED = ("failure", "timed_out", "startup_failure")
+                    estimatedTimeToMergeSeconds=nodes[0].get("estimatedTimeToMerge"))
+    return {"enabled": True, "url": queue.get("url"), "length": length,
+            "truncated": length > len(entries), "entries": entries, "head": head}
 
 
 def failure_reason(log):
@@ -452,9 +464,10 @@ def failure_reason(log):
     for raw in log.splitlines():
         if "\x1b[36;1m" in raw:
             continue
-        parts = raw.split("\t")
-        step = parts[1] if len(parts) >= 3 else ""
-        text = re.sub(r"^\d{4}-\d\d-\d\dT[\d:.]+Z ", "", parts[-1].lstrip("﻿")).strip()
+        # job <TAB> step <TAB> timestamp text; the text may hold tabs itself.
+        parts = raw.split("\t", 2)
+        step = parts[1] if len(parts) == 3 else ""
+        text = re.sub(r"^\d{4}-\d\d-\d\dT[\d:.]+Z ", "", parts[-1].lstrip("\ufeff")).strip()
         lines.append((step, text))
     annotations, pushes, git_errors, exits = [], [], [], []
     for index, (step, text) in enumerate(lines):
@@ -490,32 +503,37 @@ def failure_reason(log):
 
 
 def auto_pin():
-    """The newest completed cloudlands-fe auto-pin-intentd.yml run, its
-    failure streak, and why it failed."""
+    """The newest decisive (completed, not cancelled/skipped) cloudlands-fe
+    auto-pin-intentd.yml run, its failure streak, and why it failed."""
     section = "cloudlands-fe.autoPin"
     text = result("fe.pinruns", section)
     runs = load_json(text, section) if text is not None else None
     if not runs:
         return None
     completed = [run for run in runs if run.get("status") == "completed"]
-    chosen = (completed or runs)[0]
+    decisive = [run for run in completed if run.get("conclusion") not in PIN_IGNORED]
+    chosen = (decisive or completed or runs)[0]
     streak = 0
-    for run in completed:
+    for run in decisive:
         if run.get("conclusion") not in PIN_FAILED:
             break
         streak += 1
     reason, log_fetched = None, False
-    if chosen.get("status") == "completed" and chosen.get("conclusion") in PIN_FAILED and fetch_logs:
+    if chosen in decisive and chosen.get("conclusion") in PIN_FAILED and fetch_logs:
         log = result("fe.pinlog.%s" % chosen["databaseId"], section + ".log")
         if log is not None:
             log_fetched = True
             reason = failure_reason(log)
+    # Cancelled/skipped runs newer than the chosen one, newest first.
+    passed_over = completed[:completed.index(chosen)] if chosen in completed else []
     return {"runId": chosen["databaseId"], "url": chosen.get("url"), "event": chosen.get("event"),
             "status": chosen.get("status"), "conclusion": chosen.get("conclusion"),
             "createdAt": chosen.get("createdAt"), "ageMinutes": age_minutes(chosen.get("createdAt")),
             "failedStreak": streak,
-            "failedStreakCapped": bool(streak) and streak == len(completed) and len(runs) >= MAX_PIN_RUNS,
+            "failedStreakCapped": bool(streak) and streak == len(decisive) and len(runs) >= MAX_PIN_RUNS,
             "failureReason": reason, "failureLogRead": log_fetched,
+            "newerIgnoredRuns": [{"runId": run["databaseId"], "conclusion": run.get("conclusion")}
+                                 for run in passed_over],
             "newestRunId": runs[0]["databaseId"], "newestRunStatus": runs[0].get("status")}
 
 
@@ -680,6 +698,33 @@ def clip(text, width=150):
     return text if len(text) <= width else text[: width - 1] + "…"
 
 
+def auto_pin_line(pin_run):
+    if not pin_run:
+        if section_failed("cloudlands-fe.autoPin"):
+            return unavailable("cloudlands-fe.autoPin")
+        return "no auto-pin-intentd.yml runs"
+    where = "run %s, %s, %s ago" % (pin_run["runId"], pin_run["event"] or "?", fmt_age(pin_run["ageMinutes"]))
+    line = pin_run["conclusion"] or pin_run["status"]
+    if pin_run["failedStreak"] > 1:
+        line += " (%d%s runs in a row)" % (pin_run["failedStreak"], "+" if pin_run["failedStreakCapped"] else "")
+    if pin_run["conclusion"] in PIN_FAILED:
+        if pin_run["failureReason"]:
+            line += ": " + clip(pin_run["failureReason"], 160)
+        elif not fetch_logs:
+            line += ": logs skipped (--no-logs)"
+        elif section_failed("cloudlands-fe.autoPin.log"):
+            line += ": " + unavailable("cloudlands-fe.autoPin.log")
+        else:
+            line += ": no error line in the failed-step log"
+    line += " [%s]" % where
+    if pin_run["newerIgnoredRuns"]:
+        line += " (newer: %s)" % ", ".join(
+            "run %s %s" % (run["runId"], run["conclusion"]) for run in pin_run["newerIgnoredRuns"])
+    if pin_run["newestRunId"] != pin_run["runId"] and pin_run["newestRunStatus"] != "completed":
+        line += " (run %s %s)" % (pin_run["newestRunId"], pin_run["newestRunStatus"])
+    return line
+
+
 out = ["Release train at %s" % now.strftime("%Y-%m-%d %H:%MZ")]
 for key, data in components.items():
     if data["latestTag"]:
@@ -724,16 +769,18 @@ for key, data in components.items():
             # UNKNOWN or BLOCKED), so the queue entry replaces them.
             bits.append("in merge queue #%s of %s (%s, %s)" % (
                 entry["position"], queue["length"], entry["state"], fmt_age(entry["enqueuedAgeMinutes"])))
-        elif queue and queue["enabled"]:
-            bits.append("not in merge queue")
-        if entry:
-            pass
-        elif pr["mergeable"] == "UNKNOWN":
-            bits.append("mergeable=UNKNOWN (GitHub still computing)")
-        elif pr["mergeable"] and pr["mergeable"] != "MERGEABLE":
-            bits.append("mergeable=%s" % pr["mergeable"])
-        elif pr["mergeStateStatus"] and pr["mergeStateStatus"] not in ("CLEAN", "UNSTABLE", "HAS_HOOKS"):
-            bits.append("mergeState=%s" % pr["mergeStateStatus"])
+        else:
+            if queue and queue["truncated"]:
+                bits.append("merge queue position unknown (not in the first %d of %d)" % (
+                    len(queue["entries"]), queue["length"]))
+            elif queue and queue["enabled"]:
+                bits.append("not in merge queue")
+            if pr["mergeable"] == "UNKNOWN":
+                bits.append("mergeable=UNKNOWN (GitHub still computing)")
+            elif pr["mergeable"] and pr["mergeable"] != "MERGEABLE":
+                bits.append("mergeable=%s" % pr["mergeable"])
+            elif pr["mergeStateStatus"] and pr["mergeStateStatus"] not in ("CLEAN", "UNSTABLE", "HAS_HOOKS"):
+                bits.append("mergeState=%s" % pr["mergeStateStatus"])
         label = "release PRs" if index == 0 else ""
         kind = "" if pr["kind"] == "release" else "[pin-bump] "
         out.append("  %-12s #%s %s%s — %s" % (label, pr["number"], kind, clip(pr["title"] or "", 60), ", ".join(bits)))
@@ -746,7 +793,7 @@ for key, data in components.items():
         out.append("  %-12s %s" % ("merge queue", "empty"))
     else:
         head = queue["head"]
-        line = "%d queued; head #%s %s — %s for %s" % (
+        line = "%d queued; head #%s %s — %s, enqueued %s ago" % (
             queue["length"], head["number"], clip(head["title"] or "", 50), head["state"],
             fmt_age(head["enqueuedAgeMinutes"]))
         if head["pendingChecks"]:
@@ -756,6 +803,8 @@ for key, data in components.items():
                 ", …" if len(names) > 3 else "", fmt_age(head["checksAgeMinutes"]))
         elif not head["hasMergeGroup"]:
             line += ", no merge-group checks started yet"
+        elif not head["reportedChecks"]:
+            line += ", no merge-group checks reported yet"
         if head["failingChecks"]:
             names = head["failingChecks"]
             line += ", %d failing check%s (%s%s)" % (
@@ -780,31 +829,8 @@ for key, data in components.items():
     else:
         line = "no auto-cut-alpha.yml runs"
     out.append("  %-12s %s" % ("auto-cut", line))
-    if key != "cloudlands-fe":
-        continue
-    pin_run = data["autoPin"]
-    if pin_run:
-        where = "run %s, %s, %s ago" % (pin_run["runId"], pin_run["event"] or "?", fmt_age(pin_run["ageMinutes"]))
-        line = pin_run["conclusion"] or pin_run["status"]
-        if pin_run["failedStreak"] > 1:
-            line += " (%d%s runs in a row)" % (pin_run["failedStreak"], "+" if pin_run["failedStreakCapped"] else "")
-        if pin_run["conclusion"] in PIN_FAILED:
-            if pin_run["failureReason"]:
-                line += ": " + clip(pin_run["failureReason"], 160)
-            elif not fetch_logs:
-                line += ": logs skipped (--no-logs)"
-            elif section_failed("cloudlands-fe.autoPin.log"):
-                line += ": " + unavailable("cloudlands-fe.autoPin.log")
-            else:
-                line += ": no error line in the failed-step log"
-        line += " [%s]" % where
-        if pin_run["newestRunId"] != pin_run["runId"] and pin_run["newestRunStatus"] != "completed":
-            line += " (run %s %s)" % (pin_run["newestRunId"], pin_run["newestRunStatus"])
-    elif section_failed("cloudlands-fe.autoPin"):
-        line = unavailable("cloudlands-fe.autoPin")
-    else:
-        line = "no auto-pin-intentd.yml runs"
-    out.append("  %-12s %s" % ("auto-pin", line))
+    if key == "cloudlands-fe":
+        out.append("  %-12s %s" % ("auto-pin", auto_pin_line(data["autoPin"])))
 
 if overrides:
     out.append("runner overrides (CI_*_RUNNER_DISABLED)")
