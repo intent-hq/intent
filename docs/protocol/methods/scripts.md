@@ -22,9 +22,36 @@ adds optional `healthUrl` / `readyPattern` definition inputs and `ready` /
 | script.start | workspaceId (req), scriptId (req) | { ok, scriptId } — the runtime status is flipped to `starting` (new in intentd, within v9.12 — intent-hq/intent#4858) **before the reply**, atomically with the supervisor's registration and with the previous run's terminal fields (`pid`, `startedAt`, `exitCode`, `stoppedAt`, `error`, `detectedUrl`) cleared, so a `script.status` read after the reply never observes the pre-launch `idle`; the owned launch task publishes the `starting` transition as `script:state` strictly ahead of the spawn's `running` (or `exited` + `error` on a launch failure). A script already `running` or `starting` is a no-op |
 | script.stop | workspaceId (req), scriptId (req) | { ok, scriptId } — stops an active run; resetting a finished script from `exited` to `idle` emits a `script:state` snapshot (§6.5; prepared event-authority extension below). On a **non-running** script that carries the was-running marker this is the **dismiss** affordance: it clears the marker (`previouslyRunning` on a service row, the hydrated `lost` reading on a command row; in memory plus a best-effort row write), emits the cleared runtime snapshot, and returns ok instead of erroring. Stopping an already idle, unmarked script is a no-op with no state event |
 | script.restart | workspaceId (req), scriptId (req) | { ok, scriptId } |
-| script.output | workspaceId (req), scriptId (req), maxLines? | output buffer text |
+| script.output | workspaceId (req), scriptId (req), maxLines? | output text of the latest run, read from its on-disk log (see *Script output persistence*) |
 | script.status | workspaceId (req), scriptId (req) | { status, restartCount, pid?, exitCode?, startedAt?, stoppedAt?, error?, detectedUrl?, previouslyRunning?, ready?, readiness? } — the `ScriptRuntimeState` snapshot; `status` and `restartCount` are always present, every other field is **omitted when unset** (never `null` — a cleared `exitCode` is absent, so hooks test `exitCode !== undefined`); `status` is one of `idle \| starting \| running \| restarting \| exited`. `exited` **always** carries `exitCode` (new in intentd, unreleased): when the real status was not observable it is the sentinel `-1` together with an `error` naming the cause — see the total exit contract note below. `starting` (new in intentd, within v9.12 — intent-hq/intent#4858) is the `script.start` launch window: set synchronously before `script.start` replies, with the previous run's terminal fields cleared, and held until the spawn's `running` (or `exited` on a launch failure), so a poll issued right after `start` never reads the pre-launch `idle` or a stale `exitCode`. `restarting` (new in intentd, monorepo#1318) is the transient restart-in-flight state between an exit and the next spawn attempt — the service auto-restart backoff window and the `script.restart` stop→start gap — so a poll taken mid-restart never reads as a final `exited`/`idle`; the respawn flips it back to `running`. `previouslyRunning?: true` (new in intentd, within v5.1) marks a **service** script that was running when the daemon last stopped; a command script in the same situation hydrates as `exited` / `exitCode: -1` / `error` instead — see the was-running marker note below |
 | script.run | workspaceId (req), scriptId (req), maxLines?, timeoutSeconds? (alias timeout?) | { exitCode?, output, timedOut?, warning? } — `exitCode` follows the same total exit contract as the runtime state (new in intentd, unreleased): `-1` when the exit was unobservable — see the total exit contract note below |
+
+#### Script output persistence (new in intentd, unreleased)
+
+Every byte a script run writes to its PTY is copied, in order, to an on-disk log at
+`<data_dir>/script-output/<workspaceId>/<scriptId>/<runId>.log`. `script.output` and
+`script.run`'s `output` read that log, not the PTY scrollback, so a script's output stays
+readable after its process exits, after the PTY session is released, after archive, and
+across daemon restarts. No wire shape changes.
+
+- **Latest run only.** `script.output` returns the latest run's log; starting a new run of
+  the same `scriptId` replaces what it returns. There is no per-run history API.
+- **Per-run cap.** A log keeps at most `scripts.outputMaxBytesPerRun` bytes (default 50 MiB,
+  range 64 KiB to 1 GiB, read each time a run's log is opened, so a change applies to the
+  next run or reopen, not to a run that is already writing). Past the cap the newest bytes are kept and
+  the oldest dropped.
+- **Age sweep.** An hourly sweep deletes logs whose last write is older than
+  `scripts.outputRetentionHours` (default `168`, one week); `0` disables the age sweep.
+  The current log of a running script is never deleted (a service auto-restart appends to
+  it); once the script stops, an expired log goes on the next sweep. At startup the sweep
+  also deletes the folders of workspaces that no longer exist.
+  `INTENTD_SCRIPT_OUTPUT_RETENTION_HOURS` overrides the file value. Both keys are read live
+  (§5.12).
+- **Removal.** `script.remove` deletes the script's logs. `workspace.delete` stops the
+  workspace's scripts, then deletes all of its script logs. `script.archive` keeps them.
+- **Empty output.** With no run yet, or an empty log, `script.output` returns `"No output yet."`.
+- **Live attach.** A script PTY keeps only a 64 KiB in-memory scrollback for late live
+  attaches; exited script PTY sessions are released. Use `script.output` for the full output.
 
 #### Active-only compact lists (prepared breaking contract)
 
@@ -123,8 +150,9 @@ A selected archived script needs **only its known ID**: use existing
 `script.output({workspaceId, scriptId, maxLines?})` and, when displaying runtime,
 `script.status({workspaceId, scriptId})`. Preserve selected tab labels from
 selection/events, or display the ID after reconnect. No archive definition get
-is necessary. Existing buffer lifetime is unchanged: after restart/removal
-output may be empty/unavailable and is not a monitor run's historical log.
+is necessary. Output follows *Script output persistence*: the latest run's log
+survives restart and archive, is deleted on removal, and is not a monitor run's
+historical log.
 An archived output tab is not an editable definition. Explicit known-ID archive,
 restore/start controls retain their existing semantics; they never enumerate
 archives merely to implement an action.
@@ -501,8 +529,8 @@ The generated MCP index remains pin-owned and is not edited for this preparation
 **Historical baseline.** The archive list/history UI and recovery enumeration
 rules in this section apply only through protocol 13. Protocol 14 supersedes
 them with active-only lists and known-ID status/output above. Definition
-retention, targeted recovery, run identity, archive/restore mutations and output
-buffer lifetime remain unchanged. The lifecycle fixtures retain this old-host
+retention, targeted recovery, run identity and archive/restore mutations remain
+unchanged; output lifetime follows *Script output persistence*. The lifecycle fixtures retain this old-host
 baseline; compact/active-monitor fixtures define v14.
 
 The complete extension is implemented and independently verified in intentd
@@ -740,9 +768,10 @@ retained row/ID outside the active-list filter or resolve it with `archive: "all
 do not close a tab, clear selection/output, or treat an absent active-list row
 as deleted. On reconnect, recover archived open IDs through the all/history
 view. Restore makes the entry visible without opening a new process/tab.
-PTY scrollback remains transient and may be empty after daemon restart; an empty
-buffer is not success. Rerun, replacement and explicit removal retain their
-existing output lifetime limits. Hooks track the current run of an ID, not an
+Output is read from the latest run's on-disk log and survives daemon restart and
+archive; `"No output yet."` is not success. A rerun replaces the output that
+`script.output` returns, explicit removal deletes it, and the age sweep and per-run
+cap apply (see *Script output persistence*). Hooks track the current run of an ID, not an
 immutable run ledger: callers needing independent completion watches must use
 distinct IDs or finish observing the preceding run before reusing its ID.
 

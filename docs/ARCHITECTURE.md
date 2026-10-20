@@ -112,7 +112,7 @@ bus — never on the transport or on each other directly.
 | intent-sourcecontrol | SourceControl trait + GitHubSourceControl (octocrab): PR/issue/review/check-run/mergeability, retry | core |
 | intent-git | status/stage/commit/branches, worktree create + lock, CoW reflink probe/clone (macOS `clonefile(2)` whole-tree fast path with best-effort walk fallback, Linux `ioctl(FICLONE)`) for CoW workspace checkouts and per-agent sandboxes, hidden repo cache (`repo_cache`) of read-only GitHub clones backing cache-hydrated workspace creation | core |
 | intent-context | ContextEngine trait + AuggieContextEngine + discovery | core |
-| intent-pty | unified portable-pty host for terminals **and** scripts: scrollback ring buffers, multi-client attach, service/command modes, auto-restart, URL/port detection | core |
+| intent-pty | unified portable-pty host for terminals **and** scripts: scrollback ring buffers (script output is also copied by an output sink to per-run logs under `<data_dir>/script-output/`, which `script.output` reads, so it survives restart and archive), multi-client attach, service/command modes, auto-restart, URL/port detection | core |
 | intent-search | BE-owned `search.*`: ripgrep-equivalent content search (grep + ignore + globset), path/glob search, adapters over persisted sessions/events/memories/notes/codebase; per-request cancellation | core, store |
 | intent-js | QuickJS-based JavaScript engine for agent-supplied code: async host bindings, wall-clock timeouts | (none — leaf) |
 | intent-linear | LinearEngine + DTOs for the `linear.*` surface (typed GraphQL over reqwest) | core |
