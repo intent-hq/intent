@@ -1,0 +1,20 @@
+files:
+  - blockMapSize: 123
+    sha2: 276c98e7f563b77354e3bc0de981016eb69870d2e221274ef2997228460c7dfc
+    sha512: NXfAdyG+6Z5CaevhkHDpW4FQhr6aAJHQjYg2abpr2BPYgmIiLEMwicdxfYnBcbmHa2GuLOXm/EI7LqCdJMCSbA==
+    size: 33
+    url: https://github.com/intent-hq/cloudlands-releases/releases/download/v1.0.23/Intent-1.0.23-x64-mac.zip
+  - blockMapSize: 123
+    sha2: 22e93e0a7208349dd6b85e349972a6a5919995ca56aedf61d61bc7ddfd64dbdb
+    sha512: Cil2/BXpzP9+bEFQ3VU3bn/nbeoh8NMrW71uYO8eQ/moQojoy8ZS4QAGAn7XpneNhH/5JrEnIsYVaHhyxEHH/A==
+    size: 35
+    url: https://github.com/intent-hq/cloudlands-releases/releases/download/v1.0.23/Intent-1.0.23-arm64-mac.zip
+minimumSystemVersion: 13.0.0
+path: https://github.com/intent-hq/cloudlands-releases/releases/download/v1.0.23/Intent-1.0.23-x64-mac.zip
+releaseName: Intel and Apple Silicon
+releaseNotes: Signed native builds
+sha2: 276c98e7f563b77354e3bc0de981016eb69870d2e221274ef2997228460c7dfc
+sha512: NXfAdyG+6Z5CaevhkHDpW4FQhr6aAJHQjYg2abpr2BPYgmIiLEMwicdxfYnBcbmHa2GuLOXm/EI7LqCdJMCSbA==
+size: 33
+stagingPercentage: 50
+version: 1.0.23

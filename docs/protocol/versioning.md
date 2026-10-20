@@ -8,8 +8,138 @@ capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `13.8` — prepared checkout configuration extension; not a shipped-version claim.
+**Documented version:** `15.0` — legacy workspace import removal; not a shipped-version claim.
 Other prepared extensions retain their independent support gates.
+
+**Version 15.0 — legacy workspace import removal (breaking).**
+Removes the UDS-only `system.importLegacy` fast-path method. Calls on either UDS
+or WSS now return `-32601 Method not found`. Also removes `intentd import`,
+`intentd import-legacy`, first-boot discovery of legacy Electron workspaces, and
+the frontend's Legacy Import settings. Already imported daemon workspaces remain
+available; source directories and persisted import markers are not deleted.
+The 9.0 removal and 9.1 restoration entries below remain historical records.
+Protocol 14.1 added the startup readiness observations described below.
+The documented surface, including prepared additions, has **451 / 394 / 57**
+dispatchable / router / fast-path methods. Follow [issue #4082](https://github.com/intent-hq/intent/issues/4082)'s
+removal order: frontend callers first, daemon removal second, then these docs
+after the automatic pin advance. Clients gate on capabilities or a minimum
+version, never a maximum (see the [compatibility policy](#compatibility-policy)).
+Released frontends still cap registered-root reads at major 15 until
+[cloudlands-fe#3478](https://github.com/intent-hq/cloudlands-fe/pull/3478) ships,
+so the daemon must not advertise major 16 before a carrying frontend release.
+
+Also within 15.0 (additive optional response fields; presence-detected; no method-catalog
+change, so no version bump): **merge-queue position and estimated merge time**
+(§5.27 `GithubPullRequest`, §5.42 `MergeRequirements` and `lastSnapshot`, §5.7
+`ws.pr.snapshot`). A queued PR's `github.pulls.get` result and monitor checklist gain
+`mergeQueue?: MergeQueueEntry` — `{ position, queueSize?, state?, enqueuedAt?,
+estimatedTimeToMerge? }` read from GitHub GraphQL `PullRequest.mergeQueueEntry` in the same
+folded read as `isInMergeQueue`; `estimatedTimeToMerge` is the host's duration estimate in
+seconds, passed through as reported. It is informational only: the monitor never diffs it,
+so queue movement wakes no agent. Workspace `PullRequestInfo` rows do not carry it.
+Older daemons and hosts without merge queues omit it; clients detect it by presence.
+The same change adds the UI-only event **`prMonitor:refreshed`** (§6.5 prMonitor row):
+emitted when a poll changed only the `mergeQueue` entry, so clients re-read
+`prMonitor.list`; it is never a wake and agent-owned subscriptions cannot request it.
+
+Also within 15.0 (additive optional event field; presence-detected; no method-catalog
+change, so no version bump): **`workspace:created` carries `origin?`** (§6.5 workspace
+row). `ws.workspace.applyProposal` stamps `{ kind: "proposal", proposalId, agentId,
+sourceWorkspaceId }` on the event for the workspace it creates; every other create omits
+it. The field is daemon-set only: `workspace.create` params do not accept it and the row
+does not persist it.
+
+Also within 15.0 (additive optional row fields; presence-detected; no method-catalog
+change, so no version bump): **`agent.list` rows mark shortened previews** (§5.5
+list-row preview cap). A list-shaped `AgentLite` row carries
+`lastAgentResponseTruncated` / `lastUserMessageTruncated` / `digestTruncated` and
+`metadata.completionReportTruncated` / `metadata.attentionRequestReasonTruncated`
+(`true` only, omitted otherwise) when the list cap shortened that field, so clients
+can mark the text as a prefix or read the uncapped value with `agent.get`. Older daemons
+omit the flags; clients must not read their absence as proof a value is complete.
+
+**PR workspace lookup (additive, prepared).** The
+[PR workspace lookup](./methods/workspace.md#pull-request-workspace-lookup) reserves
+the read-only router method `workspace.findByPullRequest`, bringing the documented
+surface to **451 / 394 / 57** (dispatchable / router / fast path). The server hello
+capability `prWorkspaceLookup: 1` gates support. No shipped numeric version is
+claimed here.
+
+**Startup readiness (additive, prepared).** The [startup contract](./startup-readiness.md)
+reserves `system.startupStatus` and numeric error `-32012`, with exact
+`startupStatus: 1` support detection. It does not make ordinary hello usable before
+Store or grant guest access to owner progress. Coordinate the additive minor at
+implementation; no shipped numeric version is claimed here. Before the legacy-import removal, counts including this addition were
+**451 / 393 / 58** (dispatchable / router / fast path); the version-specific counts below describe their original deltas.
+
+**Version 14.0 — active-only script and monitor lists (breaking, prepared).**
+The [replacement contract](./methods/scripts.md#active-only-compact-lists-prepared-breaking-contract)
+adds script.get and scriptMonitor.get, optional bounded summary pages, and removes
+archived list selection and terminal monitor storage/history reads. Exact gates
+are `scriptActiveLists: 1` and `scriptMonitors: 2`. Earlier unshipped 13.11 /
+scriptListSummary reservations are withdrawn. Full list JSON shapes survive,
+but default membership, accepted filters, completed registration retries and
+monitor mutation results change; this is a major, not an additive minor.
+The documented surface remains **449 / 393 / 56** (dispatchable / router / fast
+path). No implementation/release is implied. An older client can reach the new
+semantics; current clients do not universally reject future majors, though
+installed builds with a protocol-major cap do. New clients must require the
+relevant capability, never fall back to archived/history reads.
+
+**Rollout ordering.** New get method catalog reservations may land docs-first.
+Prepared v14 sections can coexist with explicitly historical v13 contracts;
+they must not claim that current pins implement removals. Daemon semantic/storage
+removals land first (with explicit human authorization), then the automatic
+monorepo pin bump, then removal of obsolete baseline documentation if desired.
+Never remove currently implemented method/catalog entries docs-first. No router
+method is retired here: archive/restore remain known-ID operations. Withdrawn
+unshipped summary/history reservations need no production removal. Daemon before
+frontend merge and a coordinated carrying release are required. An older daemon remains unsupported for these new list features;
+known-ID status/output may still be used. This draft grants no merge permission.
+
+**Prepared generic stream recovery (independently gated additive extension).**
+[`eventStreamRecovery: 1`](./event-stream-recovery.md) adds an opt-in/ack to
+`events.subscribe`, the socket-private `events.lost` notification and the
+`events.fence` fast-path method. The prepared surface is **451 / 393 / 58**
+(dispatchable / router / fast path); domain event catalog and current advertised
+protocol version are unchanged.
+Exact capability and lease negotiation gate adoption, including bounded recovery
+and fail-closed membership watcher loss; older peers retain their legacy shapes.
+
+**Version 13.10 — cancellable note deletion (additive, prepared).**
+The [grace deletion contract](./note-delete-grace.md) adds `note.deleteSchedule`,
+`note.deleteCancel`, `note.deleteStatus` and `note:delete-operation`, gated by exact
+integer `noteDeleteGrace: 1`. It preserves original data during cancellable grace,
+uses guarded deletion at expiry and does not implement postcommit restore.
+Immediate `note.delete` and the independently gated 13.9 reading contract remain
+unchanged. The documented surface is **447 / 391 / 56** (dispatchable / router /
+fast path). Result objects are bounded independently of existing transport frames;
+unknown outcomes and restart require reconciliation, not automatic deletion retry.
+
+**Version 13.9 — read-only note paging (additive, prepared).**
+[Revision-safe note pages](./methods/notes-tasks.md#revision-safe-note-pages-prepared-additive-contract)
+reserve this minor after the 13.8 selected checkout configuration extension. Exactly integer
+`notePagingRead: 1` plus a valid `server.capabilities.notePagingBackendId` gates the
+complete source/context/metadata/task-ID paging and bounded pageState subscription
+contract. `noteAnnotations: 1` separately requires the complete independent-epoch
+annotation extension alongside read paging. Numeric version, catalog presence and
+partial implementation do not establish support. Neither capability is advertised
+until its complete declared contract passes component validation.
+The prepared `markdownDocument` source owner supplies indexed omitted separator
+mappings without widening paragraph/heading ranges or changing the implicit native
+root. It uses the same canonicalNote v1 profile and read capability; component
+validation must include separator-only context discovery and exact source coverage.
+
+The earlier prepared `notePaging` promised partial writes and staged operations;
+it remains absent and is not repurposed. Those eight unshipped method reservations
+are withdrawn. Paging extends existing methods with no new event names; the
+combined catalog is **444 / 388 / 56** (dispatchable / router / fast path).
+Editing explicitly loads full source and reuses existing complete-document editors.
+Full drafts save through existing `note.update` with the loaded `expectedVersion`
+and strict stale refusal. Legacy `note.setContent` retains its separate sanitation
+and merge behavior; no new write API or mutation capability is introduced.
+This is not a shipped-version or product-enablement claim. Recheck competing minor
+allocations before merging the implementation.
 
 **Version 13.8 — selected checkout configuration (additive, prepared).**
 Adds `sourceControl.checkout.repoConfig` and `gitlabCheckoutRepoConfig: 1` for a
@@ -26,7 +156,8 @@ adds optional `includeOwnerAvatar` to checkout capture and optional
 legacy captures retain the previous shape, and new clients omit the input on
 older daemons. Metadata comes from the matching owning namespace in the existing
 project response, with no additional provider read. No method, event, authority,
-or catalog count changes: the documented surface remains **443 / 387 / 56**.
+or catalog count changes. At its reservation, the documented surface was
+**443 / 387 / 56**.
 
 **Version 13.6 — onboarding adapter preparation (additive, prepared).**
 [`host.prepareProviderAdapters`](./05-method-catalog.md#hostprepareprovideradapters-136-prepared)
@@ -41,6 +172,7 @@ daemons; no new capability flag is required. Existing prepared extensions retain
 their independent gates, and discovery remains unchanged. The documented surface
 is now **443 / 387 / 56** (dispatchable / router / fast path). This reservation
 does not advertise runtime implementation or change the pinned daemon version.
+Read-only note paging has its own independent capability gate.
 
 **Version 13.5 — GitLab project checkout (additive, prepared).**
 [Pre-workspace checkout](./methods/repository-checkout.md) adds six router methods:
@@ -143,17 +275,15 @@ and local-daemon forwarding behavior are unchanged. `git.commit` is not part
 of this retirement.
 
 **Installed frontend compatibility.** Registered-root `file.read` and
-`file.readChunk` retain their v11.1 contract in protocol 12 and 13. The updated
-frontend guard in [cloudlands-fe PR #3114](https://github.com/intent-hq/cloudlands-fe/pull/3114)
-accepts known 11.1+ versions within major 11 and known majors 12 and 13. It rejects
-missing, malformed, older, and unknown future-major support (including 14) before
-sending a scoped read.
-
-Installed frontends with the original exact-major-11 guard reject scoped reads
-against protocol 12 or 13. Versions with only the earlier major-12 allowance still
-reject protocol 13. Both require a frontend carrying the updated major-13 guard;
-the PR link and daemon documentation do not establish that the installed desktop
-contains it. Unscoped reads keep their existing behavior. See the
+`file.readChunk` retain their v11.1 contract in protocol 12 and later. Clients
+must accept any well-formed version at or above 11.1 and reject missing,
+malformed or older versions before sending a scoped read. Frontends have capped
+the accepted major (exact-major 11, then up to 12, 13, 14 and 15, as in
+[cloudlands-fe PR #3114](https://github.com/intent-hq/cloudlands-fe/pull/3114));
+[cloudlands-fe#3478](https://github.com/intent-hq/cloudlands-fe/pull/3478)
+removes the cap. Installed copies of capped builds still reject scoped reads on
+later majors.
+Unscoped reads keep their existing behavior. See the
 [registered-root support gate](./methods/files-terminal-browser.md).
 
 The daemon removal landed in [intentd PR #2240](https://github.com/intent-hq/intentd/pull/2240).
@@ -208,6 +338,23 @@ Enrollment is private, excluded from public method and workspace-routing catalog
 These additive docs precede consumer merges/contract acceptance; authorized local
 development and draft preparation may proceed in parallel. Static fixtures do not
 qualify a listener, fresh-workspace source, provider or ready/ACK behavior.
+
+**Prepared read-only note paging contract (additive, reserved in 13.9).**
+[§5.2](./methods/notes-tasks.md#revision-safe-note-pages-prepared-additive-contract)
+defines the exhaustive read/annotation/subscription allowlist. Source, context,
+metadata and ordered task-ID pages extend `note.get`; annotation pages and bounded
+pageState projections extend existing methods. Exact integer `notePagingRead: 1`
+and valid `notePagingBackendId` are required; `noteAnnotations: 1` gates the complete
+annotation extension. Old clients retain complete-note APIs and events. New clients
+validate discriminants and never pass page content to full-document writers.
+Capability loss on reconnect preserves drafts and surfaces incompatibility.
+
+Additive docs land before dependent component opt-in. Withdrawn prepared write
+entries must be removed from component catalogs/consumers before a consumer check
+can pass against this reduced contract; do not weaken the checker to hide a pending
+component mismatch. Daemon support lands before frontend opt-in, with human merge
+authorization. Automated pin advancement remains unchanged. Controlled fixtures
+validate contract examples and bounds, not production storage or shipped support.
 
 **Prepared command-default change — recommended 11.0, not shipped.**
 [Script creation defaults (§5.8)](./methods/scripts.md#command-creation-defaults-prepared-breaking-change)
@@ -555,5 +702,24 @@ above describe the former method, not a durability guarantee for current commits
 
 - **Additive changes** (new methods, new optional fields, new event types) bump the **minor** version (e.g., 2.0 → 2.1).
 - **Breaking changes** (removed methods, changed signatures, renamed fields) bump the **major** version (e.g., 2.0 → 3.0).
+- **Clients never cap the protocol version.** A client gates a feature on an advertised capability or on a minimum version (`>= major.minor`), never on a maximum, an exact major or an allowlist of known majors: the major moves for unrelated changes, and a cap silently disables working features on every newer daemon (script monitors and script lists on protocol 15, [intent-hq/intent#7206](https://github.com/intent-hq/intent/issues/7206), [#7248](https://github.com/intent-hq/intent/issues/7248)). Capability values are different: each value names one contract, so clients compare them exactly (`scriptMonitors === 2`). A breaking change to a method's semantics must therefore change something an old client checks: a new capability value (e.g. `scriptMonitors: 1` → `2`) or a new method name. A feature gated only by version (no capability) gains a capability before its first breaking change. Removing a method answers `-32601 Method not found`, which clients treat as "unsupported", not as a crash.
 
 The method surface is enforced by golden tests in `crates/intent-transport/src/catalog.rs`. Any drift (added, removed, or renamed methods) causes CI failure with the instruction: "Update ROUTER_METHODS in catalog.rs, update docs/protocol/05-method-catalog.md, and bump the protocol version." Additive response fields on an existing method (e.g., the optional `system.status` resource fields, §5 fast-path notes) do not change the golden-test-enforced catalog and ship within the current version; clients must detect them by **presence**, not by protocol version.
+
+### Staged row fields (app adoption pending)
+
+A new optional field on a row the frontend types (`AgentLite` → `AgentSession`,
+`Workspace` → `Workspace`) ships daemon-first, so the daemon emits it before the
+pinned cloudlands-fe declares it. List such a field here in the docs PR that documents
+it, which lands before the intentd PR (docs lead the pin). **Row** is the Rust struct
+(`AgentLite`, `Workspace`), **Field** the wire name, **Contract** a Markdown link to the
+field's contract, and **App adoption** the cloudlands-fe PR or issue that declares it.
+`make check-protocol-field-parity` reads this table. A listed field the frontend
+type lacks is a warning instead of an error. An unlisted emitted field still fails,
+and so does a malformed table. Once the frontend pin declares the field, the check
+warns that the row is stale; remove it then. Fields the frontend never reads stay in
+the `ignore` map of `scripts/check-protocol-field-parity.mjs`, not here.
+
+| Row | Field | Contract | App adoption |
+|---|---|---|---|
+| `Workspace` | `attentionReminder` | [Workspace reminder projection (§5.1)](methods/workspace.md) | [cloudlands-fe#3308](https://github.com/intent-hq/cloudlands-fe/pull/3308) |

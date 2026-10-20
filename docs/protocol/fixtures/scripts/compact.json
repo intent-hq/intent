@@ -1,0 +1,211 @@
+{
+  "status": "prepared-not-executed",
+  "capability": {
+    "scriptActiveLists": 1,
+    "scriptMonitors": 2
+  },
+  "page": {
+    "defaultLimit": 100,
+    "maxLimit": 200,
+    "order": "createdAt-desc-id-desc"
+  },
+  "presentation": {
+    "initialPagesPerVisibleCollection": 1,
+    "nextPage": "explicit-load-more",
+    "completeWhen": "nextCursor-absent",
+    "automaticTraversal": "explicit-full-data-operation-only",
+    "serverScriptFilters": [
+      "unarchived-only"
+    ],
+    "purposeDisplay": "loaded-rows-only"
+  },
+  "examples": [
+    {
+      "kind": "script",
+      "full": {
+        "id": "check",
+        "workspaceId": "ws-a",
+        "name": "Check",
+        "command": "npm test",
+        "mode": "command",
+        "source": "user",
+        "createdAt": "2026-10-01T00:00:00Z",
+        "purpose": "saved",
+        "cwd": "packages/app",
+        "env": {
+          "EXAMPLE": "synthetic"
+        },
+        "runtime": {
+          "status": "idle",
+          "restartCount": 0
+        }
+      },
+      "summary": {
+        "id": "check",
+        "workspaceId": "ws-a",
+        "name": "Check",
+        "mode": "command",
+        "source": "user",
+        "createdAt": "2026-10-01T00:00:00Z",
+        "purpose": "saved",
+        "commandPreview": "npm test",
+        "commandTruncated": false,
+        "runtime": {
+          "status": "idle",
+          "restartCount": 0
+        }
+      }
+    },
+    {
+      "kind": "monitor",
+      "full": {
+        "monitorId": "monitor-a",
+        "workspaceId": "ws-a",
+        "agentId": "agent-a",
+        "scriptId": "check",
+        "runId": "run-a",
+        "scriptName": "Check",
+        "mode": "command",
+        "state": "active",
+        "createdAt": "2026-10-01T00:00:00Z",
+        "expiresAt": "2026-10-01T01:00:00Z",
+        "outputPattern": "^ok",
+        "lineCount": 10
+      },
+      "summary": {
+        "monitorId": "monitor-a",
+        "workspaceId": "ws-a",
+        "agentId": "agent-a",
+        "scriptId": "check",
+        "runId": "run-a",
+        "scriptName": "Check",
+        "mode": "command",
+        "state": "active",
+        "createdAt": "2026-10-01T00:00:00Z",
+        "expiresAt": "2026-10-01T01:00:00Z",
+        "outputPatternPreview": "^ok",
+        "outputPatternTruncated": false,
+        "lineCount": 10
+      }
+    }
+  ],
+  "componentScenarios": [
+    {
+      "id": "initial-visible-page-only",
+      "expect": "Initial hydration, refresh and reconnect read exactly one summary page per visible collection; no cursor drain, detail fanout or unconditional full list read."
+    },
+    {
+      "id": "active-scripts-load-more",
+      "expect": "With more than limit active scripts, show the first page as partial and Load more; one next-page read per explicit action, no automatic refill after local grouping."
+    },
+    {
+      "id": "active-monitors-load-more",
+      "expect": "With 250 active monitors across 50 owners and limit100, first read shows100 and Load more; separate actions reveal100 then50, and only the final response marks complete."
+    },
+    {
+      "id": "partial-purpose-group",
+      "expect": "A first active page of100 oneOff rows may hide older saved rows; retain purpose metadata and collection Load more, show only loaded counts, do not claim saved is empty globally or fetch more automatically."
+    },
+    {
+      "id": "partial-agent-group",
+      "expect": "An empty local agent group on a partial workspace monitor page does not prove that agent has no active monitors; keep workspace Load more available."
+    },
+    {
+      "id": "explicit-full-data-operation",
+      "expect": "Only an explicit user-requested full-data operation such as export may traverse all cursors without individual Load more actions; routine hydration and badge refresh may not."
+    },
+    {
+      "id": "legacy-client-new-daemon",
+      "expect": "Full shapes/order survive, but only unarchived scripts/active monitors; archive all/archived and state all/terminal fail -32602 before selection. Protocol14 breaks old history assumptions."
+    },
+    {
+      "id": "new-client-old-daemon",
+      "expect": "Require protocol14 and exact feature capability; unsupported is explicit, with no archive/history/full-list fallback."
+    },
+    {
+      "id": "ignored-view",
+      "expect": "Missing summary discriminator invalidates support; do not accept ignored cursor or loop."
+    },
+    {
+      "id": "foreign-cursor",
+      "expect": "Reject method/workspace/filter mismatch; authorize every page independently."
+    },
+    {
+      "id": "foreign-detail",
+      "expect": "Unknown and foreign IDs indistinguishable after workspace authorization; MCP monitor detail remains owner-scoped."
+    },
+    {
+      "id": "deleted-cursor-row",
+      "expect": "Deleting the boundary or an earlier row does not skip surviving rows on the next page."
+    },
+    {
+      "id": "archive-during-page-read",
+      "expect": "Live pages deduplicate IDs and reconcile events; omission from a partial page never deletes or reseeds."
+    },
+    {
+      "id": "stale-detail-after-definition-event",
+      "expect": "Older get reply cannot overwrite newer full script:changed or script:state snapshots."
+    },
+    {
+      "id": "terminal-event-before-list",
+      "expect": "Delayed active summary cannot revive a settled canonical monitor."
+    },
+    {
+      "id": "badge-read-budget",
+      "expect": "Read only the first active monitor page on initial badge hydration; zero full script-list, get, output or monitorDetails reads for collapsed badges, including on script events."
+    },
+    {
+      "id": "expand-one-monitor",
+      "expect": "At most one monitor detail and one referenced script get; no bulk detail hydration."
+    },
+    {
+      "id": "edit-copy-save",
+      "expect": "Complete selected definitions preserve env/cwd; never execute, compare, copy or persist preview text as a command."
+    },
+    {
+      "id": "archived-open-output",
+      "expect": "Selected archived script uses only known-ID script.output(maxLines) and optional script.status; no get, enumeration, restore or restart."
+    },
+    {
+      "id": "removed-script-monitor",
+      "expect": "Active monitor detail remains available until its terminal deletion; afterward get is InvalidParams. Output is not historical run output."
+    },
+    {
+      "id": "lifecycle-events-stay-full",
+      "expect": "Full script and monitor lifecycle event snapshots survive; monitor terminal mutations return receipts, never stored finished rows."
+    },
+    {
+      "id": "overdue-active-read",
+      "expect": "Summary/list/get do not settle active monitors, renew TTL or change ownership; terminal rows are deleted by lifecycle arbitration."
+    },
+    {
+      "id": "no-archive-materialization",
+      "expect": "Assert storage/registry selection excludes archived keys before loading definition bodies in every list view; obsolete filter validation performs no query."
+    },
+    {
+      "id": "terminal-storage-deleted",
+      "expect": "After completed/triggered/expired/cancelled commit, monitor storage/list/get contain no terminal row; notification work survives separately."
+    },
+    {
+      "id": "known-id-only-output-reconnect",
+      "expect": "Reconnect a selected archived ID with output/status only, preserving its tab and not editing a preview."
+    },
+    {
+      "id": "quick-exit-no-wait",
+      "expect": "start returns run-a; it exits before monitor(runId:run-a); run-finished refuses with run-a and no monitor/wake. Caller handles status/output immediately instead of ending turn to wait."
+    },
+    {
+      "id": "quick-exit-successor-before-output",
+      "expect": "A successor run-b starts after run-a refusal. Initial status run-b prevents output attribution and prevents blind registration without runId."
+    },
+    {
+      "id": "quick-exit-successor-during-output",
+      "expect": "Status before output says run-a, status after says run-b. Discard refused-run output attribution; no retry/rearm or archive enumeration."
+    },
+    {
+      "id": "quick-exit-no-run-identity",
+      "expect": "Missing runId in refusal/status is unsupported for run-specific attribution, not permission to read a different run or wait for a fabricated monitor."
+    }
+  ],
+  "protocolMajor": 14
+}

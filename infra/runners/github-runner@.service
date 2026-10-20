@@ -1,0 +1,31 @@
+# One GitHub Actions runner slot (%i = <pool>-<n>): a fresh container per job, then restart.
+# `systemctl stop` drains (waits for a running job). See docs/GITHUB_RUNNERS.md.
+[Unit]
+Description=GitHub Actions runner slot %i (ephemeral container)
+Documentation=https://github.com/intent-hq/intent/blob/main/docs/GITHUB_RUNNERS.md
+# No ordering against the egress unit and no Requires on it: systemd orders a
+# job on that unit behind every draining slot (for hours) and every slot start
+# behind that job. The supervisor refuses to start a job without the rules,
+# and Restart= retries until they exist.
+After=docker.service network-online.target
+Requires=docker.service
+Wants=github-runners-egress.service
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/local/lib/github-runners/supervisor.sh %i
+Restart=always
+RestartSec=5
+# SIGTERM reaches only the supervisor, which drains. If a job outlives
+# TimeoutStopSec the supervisor is killed; the container lives in
+# runners.slice, outside this unit's cgroup, so ExecStopPost removes it (and
+# its disk). It is a no-op after a normal exit, when --rm already removed it.
+KillMode=mixed
+TimeoutStopSec=6h
+ExecStopPost=-/usr/bin/docker rm -f gh-runner-%i
+SyslogIdentifier=github-runner-%i
+
+[Install]
+WantedBy=multi-user.target

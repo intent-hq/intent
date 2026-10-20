@@ -32,6 +32,7 @@ ws.agent.removeQueuedMessage(agentId, messageId) → { ok, agentId, messageId }
 ws.agent.reportBlocker(reason) → { ok, kind, reason, savedAt }
 ws.agent.reportToParent(report) → { ok, ... }
 ws.agent.requestDiscussion(reason) → { ok, kind, reason, savedAt }
+ws.agent.resolveBlocker(reason) → { ok, resolved, reason }
 ws.agent.retire(reason?) → { ok, agentId, retired, retiredAt, reason? }
 ws.agent.send(agentId, message, priority?) → { ok, agentId, delivery?, ... }
 ws.agent.sendToTask(taskNoteId, message, priority?) → { ok, taskNoteId, delivery?, ... }
@@ -54,6 +55,27 @@ ws.app.agents.list({ workspaceId?, includeCompleted?, limit?, cursor? }?) → { 
 ws.app.agents.readConversation(workspaceId, agentId, { lastN?, startTurn?, endTurn?, includeToolCalls? }?) → { workspaceId, workspaceTitle, agentId, agentName, totalMessages, returnedMessages, startTurn, endTurn, includeToolCalls, taskNoteId?, messages }
 ws.app.agents.send(agentId, message, priority?) → { ok, agentId, agentName, workspaceId, sourceMessageId, sourceUrl, ...sendOutcome }
 ws.app.agents.waitFor({ agentIds, waitMode? }) → { ok, waitMode, results }
+```
+
+### ws.app.chats
+
+```text
+ws.app.chats.cancelDelete(agentId) → { cancelled }
+ws.app.chats.delete(agentId) → { success, scheduled, deleteAt }
+ws.app.chats.getMessageBlock(agentId, messageId, blockId) → { block }
+ws.app.chats.list({ limit?, cursor? }?) → { chats, total, returned, nextCursor? }
+ws.app.chats.readConversation(agentId, { lastN?, startTurn?, endTurn?, includeToolCalls? }?) → { agentId, agentName, totalMessages, returnedMessages, startTurn, endTurn, messages, ... }
+ws.app.chats.rename(agentId, name) → { success, name }
+```
+
+### ws.app.mcp
+
+```text
+ws.app.mcp.createServer(config) → { server, status }
+ws.app.mcp.getServerStatus(serverId) → { status }
+ws.app.mcp.listServers() → { servers }
+ws.app.mcp.setServerEnabled(serverId, enabled) → { status }
+ws.app.mcp.updateServer(serverId, config) → { server, status }
 ```
 
 ### ws.app.proposal
@@ -192,7 +214,7 @@ ws.mcp.listTools(serverId) → { tools: [...] }
 ```text
 ws.mr.monitor(prNumber, { repo? }) → { ok, monitor, requirements, pausedUntil?, adoptedFrom? }
 ws.mr.monitors() → [monitors]
-ws.mr.snapshot(prNumber, { repo? }?) → { repo, prNumber, title, url, state, isDraft, isMerged, isClosed, headSha, updatedAt, mergeable, mergeableState, mergeBlockedReason, checks: { total, passed, failed, pending, failedNames }, reviews: { decision, approvals, changesRequested }, comments: { conversationCount, reviewCommentCount, unresolvedThreadCount?, totalCount }, requirements: { state, isDraft, hasConflicts, isBehind, ancestry, branchUpdateRequired?, mergeable?, checks: { total, passed, failed, pending, items, failingRequired, pendingRequired, requiredKnown }, approvals: { decision, have, needed?, changesRequested }, threads: { unresolved?, resolutionRequired? }, mergeStateStatus?, mergeBlockedReason?, isInMergeQueue?, mergeQueueEjection?, rulesKnown }, pausedUntil? }
+ws.mr.snapshot(prNumber, { repo? }?) → { repo, prNumber, title, url, state, isDraft, isMerged, isClosed, headSha, updatedAt, mergeable, mergeableState, mergeBlockedReason, checks: { total, passed, failed, pending, failedNames }, reviews: { decision, approvals, changesRequested }, comments: { conversationCount, reviewCommentCount, unresolvedThreadCount?, totalCount }, requirements: { state, isDraft, hasConflicts, isBehind, ancestry, branchUpdateRequired?, mergeable?, checks: { total, passed, failed, pending, items, failingRequired, pendingRequired, requiredKnown }, approvals: { decision, have, needed?, changesRequested }, threads: { unresolved?, resolutionRequired? }, mergeStateStatus?, mergeBlockedReason?, isInMergeQueue?, mergeQueue?, mergeQueueEjection?, rulesKnown }, pausedUntil? }
 ws.mr.unmonitor(prNumber, { repo? }) → { ok, monitor }
 ```
 
@@ -218,7 +240,7 @@ ws.note.updateMetadata(id, { title?, tags? }) → { ... }
 ```text
 ws.pr.monitor(prNumber, { repo? }) → { ok, monitor, requirements, pausedUntil?, adoptedFrom? }
 ws.pr.monitors() → [monitors]
-ws.pr.snapshot(prNumber, { repo? }?) → { repo, prNumber, title, url, state, isDraft, isMerged, isClosed, headSha, updatedAt, mergeable, mergeableState, mergeBlockedReason, checks: { total, passed, failed, pending, failedNames }, reviews: { decision, approvals, changesRequested }, comments: { conversationCount, reviewCommentCount, unresolvedThreadCount?, totalCount }, requirements: { state, isDraft, hasConflicts, isBehind, ancestry, branchUpdateRequired?, mergeable?, checks: { total, passed, failed, pending, items, failingRequired, pendingRequired, requiredKnown }, approvals: { decision, have, needed?, changesRequested }, threads: { unresolved?, resolutionRequired? }, mergeStateStatus?, mergeBlockedReason?, isInMergeQueue?, mergeQueueEjection?, rulesKnown }, pausedUntil? }
+ws.pr.snapshot(prNumber, { repo? }?) → { repo, prNumber, title, url, state, isDraft, isMerged, isClosed, headSha, updatedAt, mergeable, mergeableState, mergeBlockedReason, checks: { total, passed, failed, pending, failedNames }, reviews: { decision, approvals, changesRequested }, comments: { conversationCount, reviewCommentCount, unresolvedThreadCount?, totalCount }, requirements: { state, isDraft, hasConflicts, isBehind, ancestry, branchUpdateRequired?, mergeable?, checks: { total, passed, failed, pending, items, failingRequired, pendingRequired, requiredKnown }, approvals: { decision, have, needed?, changesRequested }, threads: { unresolved?, resolutionRequired? }, mergeStateStatus?, mergeBlockedReason?, isInMergeQueue?, mergeQueue?, mergeQueueEjection?, rulesKnown }, pausedUntil? }
 ws.pr.unmonitor(prNumber, { repo? }) → { ok, monitor }
 ```
 
@@ -236,9 +258,13 @@ ws.primitive.addReference(noteId, semanticId, description, snapshot?) → { ok, 
 ```text
 ws.script.archive(scriptIds) → { archived, skipped }
 ws.script.create(name, command, mode, { cwd?, env?, category?, autoStart?, scriptId?, purpose? }) → { id }
+ws.script.get(scriptId) → script
 ws.script.list({ archive? }?) → [scripts]
-ws.script.monitor(scriptId, { ttlMs, runId?, outputPattern?, lineCount? }) → { ok, monitor?, ...ownerRefusal }
+ws.script.listPage({ archive?, limit?, cursor? }?) → { view: "summary", scripts, nextCursor? }
+ws.script.monitor(scriptId, { ttlMs, runId?, outputPattern?, lineCount? }) → { ok, monitor?, ...refusal }
+ws.script.monitorDetails(monitorId) → monitor
 ws.script.monitors() → ScriptMonitor[]
+ws.script.monitorsPage({ state?, limit?, cursor? }?) → { view: "summary", monitors, nextCursor? }
 ws.script.output(scriptId, maxLines?) → string
 ws.script.remove(scriptId) → { ok, scriptId }
 ws.script.restart(scriptId) → { ok, scriptId, runId? }
@@ -247,7 +273,7 @@ ws.script.run(scriptId, { maxLines?, timeoutSeconds? }) → { exitCode?, output,
 ws.script.start(scriptId) → { ok, scriptId, runId? }
 ws.script.status(scriptId) → status
 ws.script.stop(scriptId) → { ok, scriptId }
-ws.script.unmonitor(monitorId) → { ok, monitor }
+ws.script.unmonitor(monitorId) → { ok, monitorId }
 ```
 
 ### ws.task

@@ -173,7 +173,9 @@ function job(source, name) {
 test('CI prepares every event and exercises the local workflow only when selected', () => {
   const ci = readFileSync(path.join(ROOT, '.github/workflows/ci.yml'), 'utf8');
   const prep = job(ci, 'consumer-checks-prepare');
-  assert.doesNotMatch(prep, /^\s+(if|needs|continue-on-error):/m);
+  assert.doesNotMatch(prep, /^\s+(if|continue-on-error):/m);
+  assert.match(prep, /^    needs: \[runner-route\]$/m);
+  assert.doesNotMatch(job(ci, 'runner-route'), /^    if:/m);
   assert.match(prep, /fetch-depth: 0/);
   assert.match(prep, /ref: \$\{\{ github.sha \}\}/);
   assert.match(prep, /submodules: false/);
@@ -184,12 +186,14 @@ test('CI prepares every event and exercises the local workflow only when selecte
   }
   const exercise = job(ci, 'consumer-checks-exercise');
   assert.match(exercise, /needs: consumer-checks-prepare/);
-  assert.match(exercise, /if: needs.consumer-checks-prepare.outputs.selected == 'true'/);
+  assert.match(exercise, /if: github.event_name == 'merge_group' && needs.consumer-checks-prepare.outputs.selected == 'true'/);
   assert.match(exercise, /uses: \.\/\.github\/workflows\/consumer-checks.yml/);
   assert.match(exercise, /component: intentd/);
   assert.match(exercise, /head-sha: \$\{\{ needs.consumer-checks-prepare.outputs.intentd-sha \}\}/);
   assert.match(exercise, /self-test: true/);
-  assert.doesNotMatch(exercise, /secrets:|continue-on-error:/);
+  assert.doesNotMatch(exercise, /continue-on-error:/);
+  assert.match(exercise, /CI_QUEUE_READ_TOKEN: \$\{\{ secrets.CI_QUEUE_READ_TOKEN \}\}/);
+  assert.match(exercise, /actions: read/);
   assert.match(ci, /node --test .*scripts\/consumer-checks-ci.test.mjs/);
   assert.doesNotMatch(ci.split('\njobs:')[0], /paths(-ignore)?:/);
 });

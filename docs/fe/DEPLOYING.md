@@ -11,6 +11,20 @@ auto-update validation on each CPU. Follow the
 
 ## Release Channels
 
+**Pending rollout:** optional Intel and `latest-arm64-mac.yml` require the
+companion component releases and both cleanup-source pin updates to the actual
+merged root fix. This documentation does not enable them. The current shared-feed
+behavior is documented below; see the
+[coordinated Intel policy](../RELEASING.md#intel-mac-release-policy--pending-rollout)
+for the rollout order and the [release verification differences](./RELEASING.md#overview).
+After rollout, native ARM clients use `latest-arm64-mac.yml`, while legacy and
+Intel clients keep `latest-mac.yml`. On Intel omission that legacy feed retains
+each destination channel's own last compatible version with immutable asset URLs;
+the new ARM feed advances independently. Complete dual releases refresh both.
+Old shared-feed ARM clients may need a manual ARM installation or wait for a dual
+release carrying new routing. A fifth feed does not migrate already-installed
+clients by itself.
+
 Intent uses a channel-based update model:
 
 - **`beta`** — Rolling release tag for beta testing; auto-updater pulls from `https://github.com/intent-hq/cloudlands-releases/releases/download/beta/`
@@ -126,8 +140,10 @@ Release workflows require the following secrets configured on `intent-hq/cloudla
 - `RELEASE_PAT` — Personal access token with `repo` scope on `cloudlands-fe` + `cloudlands-releases` (also used by release-please, which needs contents + pull-requests + issues write; `repo` scope covers all three)
 - `INTENTD_READ_PAT` — Personal access token with read-only access to `intent-hq/intentd` (used to download the pinned intentd release assets while the repo is private)
 
-Windows builds require no signing secrets — they ship **unsigned** (see
-[Platform builds and runners](#platform-builds-and-runners)).
+Production Windows releases require no Windows signing secrets because they remain
+**unsigned** (see [Platform builds and runners](#platform-builds-and-runners)).
+Optional manual Azure-signed builds require the separate configuration described
+under [Manual Signed Build](#manual-signed-build-pr-test-builds).
 
 ## Alpha Release Workflow
 
@@ -181,21 +197,20 @@ The rollback workflow will restore a previous versioned release to a channel's r
 
 ## Platform Builds and Runners
 
-The dual-architecture workflow produces five platform/architecture builds in parallel jobs in `release-alpha.yml`:
+The release workflow produces four platform/architecture builds in parallel jobs in `release-alpha.yml` (macOS is Apple Silicon only):
 
 | Platform      | Runner                                                         | Artifacts                                           | Feed file                |
 | ------------- | -------------------------------------------------------------- | --------------------------------------------------- | ------------------------ |
-| macOS (arm64) | `macos-15-xlarge` (GitHub-hosted)                              | `.dmg`, `.zip` (+ blockmaps)                        | `latest-mac.yml`         |
-| macOS (x64)   | `macos-15-large` (GitHub-hosted)                               | `.dmg`, `.zip` (+ blockmaps)                        | `latest-mac.yml` (shared) |
-| Windows (x64) | `gh-windows-16x` (org-hosted, Windows Server 2022 image)       | NSIS installer `.exe`, portable `.exe` (+ blockmap) | `latest.yml`             |
-| Linux (x64)   | self-hosted `tinybox` (`[self-hosted, Linux, X64, tinybox]`)   | AppImage, `.deb`                                    | `latest-linux.yml`       |
-| Linux (arm64) | self-hosted `comfy` (`[self-hosted, Linux, ARM64, comfy]`)     | AppImage only (`deb:arm64` temporarily disabled)    | `latest-linux-arm64.yml` |
+| macOS (arm64) | `macos-15-xlarge` (signed builds stay off macOS 26 images) | `.dmg`, `.zip` (+ blockmaps)                        | `latest-mac.yml`         |
+| Windows (x64) | `gh-windows-16x` (Windows Server 2022)                     | NSIS installer `.exe`, portable `.exe` (+ blockmap) | `latest.yml`             |
+| Linux (x64)   | `gh-linux-8x`                                              | AppImage, `.deb`                                    | `latest-linux.yml`       |
+| Linux (arm64) | `gh-linux-arm64-8x`                                        | AppImage only (`deb:arm64` temporarily disabled)    | `latest-linux-arm64.yml` |
 
 Notes:
 
-- **Self-hosted runner dependency**: both Linux jobs require their self-hosted runners (`tinybox` for x64 — monorepo#1340, `comfy` for arm64) to be online; a release run queues (and eventually fails) if one is unavailable. macOS uses a GitHub-hosted runner and Windows an org-hosted runner.
+- **Runner routing**: release builds run directly on the GitHub-hosted labels above. PR and merge-queue checks prefer compatible self-hosted capacity and use GitHub-hosted runners when the fleet is busy, unavailable, under maintenance, or cannot be inspected. The probe stays hosted. See [CI runner routing](../RELEASING.md#ci-runner-routing) for credentials, platform matching, and the disposable smoke-test exception.
 - **Linux arm64 temporarily ships AppImage-only**: electron-builder's bundled fpm fails to spawn on the arm64 runner, so `deb:arm64` is disabled until the runner issue is resolved (monorepo#1286).
-- **Windows builds are unsigned** (first iteration). The `scripts/windows-sign.cjs` sign hook silently skips signing when `INTENT_WINDOWS_ENABLE_INTEGRATED_SIGNING` is unset; DigiCert integrated signing in releases is a follow-up. Expect SmartScreen warnings on install.
+- **Production Windows releases remain unsigned.** Expect SmartScreen warnings on install. Azure Artifact Signing is available only through the explicit manual build configuration; production enablement and native Windows installation/update acceptance remain pending. The retired DigiCert flag `INTENT_WINDOWS_ENABLE_INTEGRATED_SIGNING` must stay unset; enabling it fails the build.
 - **Linux packages are unsigned** (standard for AppImage/deb distributed outside a package repository). Snap is not built or published.
 - macOS remains signed + notarized as before.
 
@@ -265,23 +280,30 @@ Apple Silicon to request it explicitly; a different CPU target fails early.
 `.github/workflows/manual-signed-build.yml` ("Manual Signed Build") is dispatch-only
 and builds any branch/ref — e.g. a PR branch — into platform installers for manual
 testing. Platforms are opt-in (`build_macos` / `build_windows` / `build_linux`);
-`sign` defaults to true (macOS Developer ID + notarization, Windows DigiCert).
+`sign` defaults to true (macOS Developer ID + notarization, Windows Azure Artifact Signing).
+For a manual Windows build, `build_windows=true` selects the platform and
+`sign=false` selects an unsigned build.
 Installers are uploaded as short-lived workflow artifacts (7-day retention),
 version-suffixed `-manual.<run_number>`; nothing is published to
 `intent-hq/cloudlands-releases` and no auto-updater feed is uploaded.
 
-`build_macos=true` enables Mac builds. The optional `macos_arch` choice selects
-`both` (default), `arm64` (Apple Silicon only), or `x64` (Intel only). Omitting
-`macos_arch` keeps both native Mac jobs; selecting one architecture starts only
-that architecture's build job. `macos_arch` has no effect when `build_macos=false`.
+Manual Azure signing requires an approved Azure signing account, certificate
+profile and matching publisher identity. Configure repository variables
+`INTENT_WINDOWS_AZURE_ENDPOINT`, `INTENT_WINDOWS_AZURE_ACCOUNT_NAME`,
+`INTENT_WINDOWS_AZURE_CERTIFICATE_PROFILE_NAME`, `INTENT_WINDOWS_PUBLISHER_NAME`,
+`INTENT_WINDOWS_PUBLISHER_SUBJECT` (the full certificate subject), `AZURE_TENANT_ID`
+and `AZURE_CLIENT_ID`, plus the `AZURE_CLIENT_SECRET` repository secret. The separate
+`intent-manual-windows-build.yml` workflow uses `integrated_signing=true` to request
+Azure signing and defaults to unsigned. Artifact verification does not establish
+that Azure provisioning, native Windows trust, installation or unsigned-to-signed
+updates have passed acceptance.
 
-Download the selected architecture's artifact from the run:
-
-| `macos_arch` | Mac artifacts |
-| --- | --- |
-| `both` (default) | `manual-macos-dmg-arm64` and `manual-macos-dmg-x64` |
-| `arm64` | `manual-macos-dmg-arm64` |
-| `x64` | `manual-macos-dmg-x64` |
+For Mac testing, select `build_macos=true` and explicitly set `macos_arch=arm64`.
+Download `manual-macos-dmg-arm64` from the run. This selection works with the
+current workflow and the pending release-only Intel policy. The current workflow
+also supports `both` (its default) and `x64`; the companion rollout removes those
+selections, defaults to `arm64`, and rejects Intel/universal manual requests.
+`macos_arch` has no effect when `build_macos=false`.
 
 Each artifact contains only its DMG; ZIPs are built and checked but not uploaded
 by this manual workflow. The summary reports success/downloads only after build,
@@ -289,23 +311,15 @@ verification and upload succeed. `sign=false` keeps architecture checks but
 skips signature, Gatekeeper and stapled-ticket checks.
 
 ```bash
-# Both architectures (default; equivalent to -f macos_arch=both)
-gh workflow run manual-signed-build.yml --repo intent-hq/cloudlands-fe \
-  --ref <feature-branch> -f build_macos=true -f sign=true
-
 # Apple Silicon only
 gh workflow run manual-signed-build.yml --repo intent-hq/cloudlands-fe \
   --ref <feature-branch> -f build_macos=true -f macos_arch=arm64 -f sign=true
-
-# Intel only
-gh workflow run manual-signed-build.yml --repo intent-hq/cloudlands-fe \
-  --ref <feature-branch> -f build_macos=true -f macos_arch=x64 -f sign=true
 ```
 
 Add `-f smoke_macos=true` to run packaged fixture journeys on a separate
 disposable Mac runner; this requires `build_macos=true` and `sign=true`. Smoke
-runs once on Apple Silicon using `manual-macos-dmg-arm64` for `both` or `arm64`,
-or on Intel using `manual-macos-dmg-x64` for `x64`. `smoke_macos_scope` defaults
+runs once on Apple Silicon using `manual-macos-dmg-arm64` with the selection
+above. `smoke_macos_scope` defaults
 to `full`; `fixture-correction` runs only the mock-provider/worktree-capture
 follow-up. Results and process receipts are uploaded as `packaged-macos-smoke`
 with 7-day retention.

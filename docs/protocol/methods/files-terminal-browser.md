@@ -29,21 +29,21 @@ Routing-only `workspaceId?` additions below are [prepared contract fields](../wo
 
 **Client support gate.** Before sending either reader with a nonblank
 `gitRootId`, clients must establish support from the **connected daemon's**
-advertised `client.hello.protocolVersion`: a well-formed, supported protocol
-version: `11.1` or later within major 11, or known major 12 or 13. Missing,
-malformed, older, or otherwise unknown support
-must fail closed before sending the scoped text or chunk request. Re-establish
-support after reconnecting or switching daemons; a previous daemon's result is
-not evidence for the current connection. Documentation version headers and
+advertised `client.hello.protocolVersion`: a well-formed protocol version
+`11.1` or later, with no upper bound (see the
+[compatibility policy](../versioning.md#compatibility-policy)). Missing,
+malformed or older versions must fail closed before sending the scoped text or
+chunk request. Re-establish support after reconnecting or switching daemons; a
+previous daemon's result is not evidence for the current connection. Documentation version headers and
 unrelated capability flags do not establish support. Older daemons can ignore
 the unknown selector and successfully return a same-named primary-workspace
 file, so neither a trial scoped read nor retrying without `gitRootId` is a safe
 fallback. Ordinary reads without a selector keep their existing behavior. Older
-installed frontends with an exact-major-11 guard reject scoped reads against
-protocol 12 and 13; those with only a major-12 allowance still reject 13. They
-need a frontend carrying the known-major-13 guard. Unknown future majors,
-including 14, remain unsupported; see the [installed-client compatibility
-notice](../versioning.md#protocol-version--compatibility).
+installed frontends capped the accepted major and reject scoped reads on later
+protocols; see the [installed-client compatibility
+notice](../versioning.md#protocol-version--compatibility). This gate has no
+capability flag: a future breaking change to `gitRootId` reads must add one
+first (see the compatibility policy).
 
 `file.read` and `file.readChunk` accept an additive optional `gitRootId` request
 field. With a nonblank selector, the daemon resolves the root registered to `workspaceId`
@@ -525,12 +525,16 @@ API gains root support; all other file APIs retain their existing scope.
 >   opener, emulated (sizing invariant unchanged), returned by `listTabs` (with
 >   `visibility: 'hidden'`), and its webview renders offscreen — with **no panel
 >   mount and no focus or active-tab change**. `visible: true` on a **fresh** open
->   opts into opening directly into the panel layout: the tab is mounted per the
->   requested `position` (`adjacent`, `same`, or the new-tab fallback of `replace`)
->   **and activated in its panel** (made the panel's active tab in the saved
->   layout) **without** moving panel/keyboard focus on **every** placement, and the
->   action's `result` carries an **optional `displayed?: boolean`** (the same
->   layout meaning as `listTabs`, read from the layout after the open): **present
+>   inserts the tab **immediately behind the current panel's active tab** (below
+>   it in the panel content menu), preserving active content, keyboard focus, and
+>   forward history. This background insertion is **pending the companion frontend
+>   release**; older frontends activate fresh visible opens. It applies to every
+>   new-tab `position` (`adjacent`, `same`, or the fallback of `replace`). Replacing
+>   an existing owned tab keeps its existing behavior. In an empty panel the new
+>   tab becomes active. User-initiated opens are unchanged. The action's `result`
+>   carries an **optional `displayed?: boolean`** (normally `false` for an insertion
+>   behind an active tab; the same layout meaning as `listTabs`, read from the
+>   layout after the open): **present
 >   only when the FE confirmed the tab's layout state** from a fresh tab list;
 >   **absent when that state is unknown** (stale or unavailable list, tab not
 >   listed) — absence means *unknown*, never `false`, and the caller re-reads it
@@ -543,6 +547,16 @@ API gains root support; all other file APIs retain their existing scope.
 >   visible. A dedupe hit under `visible: true` carries the same optional
 >   `displayed?` for the reused tab (`false` for a hidden tab when confirmed,
 >   absent when unknown). Revealing an existing tab is **`showTab`-only**.
+>   A successful open returns `{ action: "openTab", success: true, result:
+>   { tabId, url, ... } }`. The companion frontend update adds `url` to fresh-open
+>   results; reused-open results already carry it. It is the resolved URL submitted
+>   to the browser, not a guarantee of the eventual page URL after redirects.
+>   Existing `requestedUrl` / `finalUrl` rewrite echoes are unchanged. The daemon
+>   forwards these fields unchanged. Address subsequent actions by the returned
+>   `tabId`, because background insertion does not change the active tab. The
+>   accompanying chat UI turns successful opens with a tab ID and URL into a
+>   clickable **Browsing hostname** badge (including a non-default port) that
+>   reveals the existing tab; this UI also requires the companion frontend release.
 > - **`showTab { tabId, focus? }`** — **activates** an owned tab in a visible panel:
 >   reveals a hidden tab, or brings a visible-but-inactive tab to the front of its
 >   panel; **owner-only** (on a tab the caller does not own it returns the

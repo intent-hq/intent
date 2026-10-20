@@ -1,0 +1,13 @@
+# Keeps runner containers off private, tailnet and link-local networks.
+[Unit]
+Description=Egress filter for GitHub runner containers
+After=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/lib/github-runners/egress.sh apply gh-runners0
+ExecReload=/usr/local/lib/github-runners/egress.sh apply gh-runners0
+
+[Install]
+WantedBy=multi-user.target

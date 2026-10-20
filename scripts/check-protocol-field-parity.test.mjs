@@ -13,12 +13,15 @@ import { promisify } from 'node:util';
 
 import {
   PAIRS,
+  STAGED_DOC,
+  STAGED_HEADING,
   comparePair,
   extractRustFields,
   extractTsKeys,
   formatDiagnostic,
   formatRefBanner,
   formatRefOffPinWarning,
+  parseStagedFields,
   runChecks,
   toCamelCase,
 } from './check-protocol-field-parity.mjs';
@@ -315,10 +318,20 @@ test('comparePair surfaces flatten and rename_all errors instead of comparing', 
   assert.match(errors[0].message, /flatten/);
 });
 
+// The staged daemon-first field table as docs/protocol/versioning.md carries
+// it; `rows` are `[row, field, contract, adoption]` cell strings.
+function stagedDoc(rows = []) {
+  const body = rows.map((cells) => `| ${cells.join(' | ')} |\n`).join('');
+  return `# Versioning\n\n### ${STAGED_HEADING}\n\nProse.\n\n| Row | Field | Contract | App adoption |\n|---|---|---|---|\n${body}\n## Next\n`;
+}
+
+// Every fixture root carries an empty staged table unless `files` names
+// STAGED_DOC; `null` leaves the file out.
 async function fixture(t, files) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'check-protocol-field-parity-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  for (const [name, content] of Object.entries(files)) {
+  for (const [name, content] of Object.entries({ [STAGED_DOC]: stagedDoc(), ...files })) {
+    if (content === null) continue;
     const filePath = path.join(root, name);
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, content);
@@ -346,6 +359,117 @@ test('runChecks skips a pair whose submodule is not initialized and checks the r
 });
 
 const FIXTURE_PAIR = { rust: { file: 'packages/intentd/model.rs', struct: 'Row' }, ts: { file: 'packages/cloudlands-fe/types.ts', type: 'Row' }, ignore: {} };
+
+test('parseStagedFields reads rows keyed by struct and strips backticks', () => {
+  const { staged, errors } = parseStagedFields(stagedDoc([['`Row`', '`lastActivity`', LINK, 'cloudlands-fe#1']]), STAGED_DOC, [pair()]);
+  assert.deepEqual(errors, []);
+  assert.deepEqual([...staged.get('Row')], [['lastActivity', { file: STAGED_DOC, line: 9, adoption: 'cloudlands-fe#1' }]]);
+});
+
+test('parseStagedFields accepts an empty table', () => {
+  const { staged, errors } = parseStagedFields(stagedDoc(), STAGED_DOC, [pair()]);
+  assert.deepEqual(errors, []);
+  assert.equal(staged.size, 0);
+});
+
+const LINK = '[§5.5](./methods/agents.md)';
+
+test('parseStagedFields fails closed on a malformed table', () => {
+  const cases = [
+    ['# Versioning\n\nNo table here.\n', 1, /heading not found/],
+    [`### ${STAGED_HEADING}\n\nProse only.\n\n## Next\n`, 1, /no table follows the heading/],
+    [`### ${STAGED_HEADING}\n\n| Row | Field |\n|---|---|\n`, 3, /table columns are Row \| Field; expected Row \| Field \| Contract \| App adoption/],
+    [`### ${STAGED_HEADING}\n\n| Row | Field | Contract | App adoption |\n| Row | x | y | z |\n`, 4, /separator row/],
+    [stagedDoc([['`Row`', '`a`', LINK]]), 9, /row has 3 cell\(s\); expected 4/],
+    [stagedDoc([['`Row`', 'two words', LINK, 'a']]), 9, /Row and Field must each be one name, in balanced backticks or none/],
+    [stagedDoc([['`Row`', '`a', LINK, 'a']]), 9, /Row and Field must each be one name, in balanced backticks or none \(got `Row` \/ `a\)/],
+    [stagedDoc([['`Row`', '`a`', LINK, '']]), 9, /Row\.a needs a Markdown link to its Contract and the App adoption/],
+    [stagedDoc([['`Row`', '`a`', 'TBD', 'later']]), 9, /Row\.a needs a Markdown link to its Contract/],
+    [stagedDoc([['`Other`', '`a`', LINK, 'a']]), 9, /Row Other is not a checked Rust row struct \(Row\); name the Rust struct, not the frontend type/],
+    [stagedDoc([['`Row`', '`kind`', LINK, 'a']]), 9, /Row\.kind is also a PAIRS ignore entry/],
+    [stagedDoc([['`Row`', '`a`', LINK, 'a'], ['`Row`', '`a`', LINK, 'b']]), 10, /Row\.a is listed twice \(first at line 9\)/],
+  ];
+  for (const [doc, line, re] of cases) {
+    const { errors } = parseStagedFields(doc, STAGED_DOC, [pair({ ignore: { kind: 'never read' } })]);
+    assert.equal(errors.length, 1, doc);
+    assert.equal(errors[0].line, line, doc);
+    assert.equal(errors[0].severity, undefined);
+    assert.match(formatDiagnostic(errors[0]), re);
+  }
+});
+
+test('parseStagedFields keeps escaped pipes inside a cell', () => {
+  const { staged, errors } = parseStagedFields(stagedDoc([['`Row`', '`a`', `${LINK} \`string \\| null\``, 'cloudlands-fe#1']]), STAGED_DOC, [pair()]);
+  assert.deepEqual(errors, []);
+  assert.ok(staged.get('Row').has('a'));
+});
+
+test('parseStagedFields accepts a serde-renamed wire name that is not an identifier', () => {
+  const { staged, errors } = parseStagedFields(stagedDoc([['`Row`', '`x-trace-id`', LINK, 'cloudlands-fe#1']]), STAGED_DOC, [pair()]);
+  assert.deepEqual(errors, []);
+  assert.ok(staged.get('Row').has('x-trace-id'));
+});
+
+test('parseStagedFields ignores an example section inside a code fence', () => {
+  const fenced = `# Versioning\n\n\`\`\`md\n### ${STAGED_HEADING}\n\n| Row | Field | Contract | App adoption |\n|---|---|---|---|\n| \`Row\` | \`example\` | ${LINK} | cloudlands-fe#0 |\n\`\`\`\n\n`;
+  const doc = fenced + stagedDoc([['`Row`', '`real`', LINK, 'cloudlands-fe#1']]).replace('# Versioning\n\n', '');
+  const { staged, errors } = parseStagedFields(doc, STAGED_DOC, [pair()]);
+  assert.deepEqual(errors, []);
+  assert.deepEqual([...staged.get('Row').keys()], ['real']);
+});
+
+test('parseStagedFields ends the table at the first non-table line', () => {
+  const doc = stagedDoc([['`Row`', '`a`', LINK, 'cloudlands-fe#1']]).replace('\n## Next\n', '\nProse.\n| `Row` | `b` | x | y |\n');
+  const { staged, errors } = parseStagedFields(doc, STAGED_DOC, [pair()]);
+  assert.deepEqual(errors, []);
+  assert.deepEqual([...staged.get('Row').keys()], ['a']);
+});
+
+const stagedEntry = (field) => new Map([[field, { file: STAGED_DOC, line: 9, adoption: 'cloudlands-fe#1' }]]);
+
+test('comparePair downgrades a staged daemon-first field to a warning', () => {
+  const ts = TS_FULL.replace('  lastActivity?: string;\n', '');
+  const diags = comparePair(pair(), RUST, ts, stagedEntry('lastActivity'));
+  assert.equal(diags.length, 1);
+  assert.equal(diags[0].severity, 'warning');
+  assert.match(formatDiagnostic(diags[0]), /^model\.rs:10: warning: Row → Row: staged daemon-first field Row\.lastActivity \(Rust last_activity\) is not in Row yet \(types\.ts:2-9\); app adoption pending: cloudlands-fe#1 \(docs\/protocol\/versioning\.md:9\)$/);
+});
+
+test('comparePair still fails an unstaged missing field next to a staged one', () => {
+  const ts = TS_FULL.replace('  lastActivity?: string;\n', '').replace('  kind: number;\n', '');
+  const diags = comparePair(pair(), RUST, ts, stagedEntry('lastActivity'));
+  assert.deepEqual(diags.map((d) => [d.severity ?? 'error', d.message.match(/field Row\.(\w+)/)[1]]), [['warning', 'lastActivity'], ['error', 'kind']]);
+});
+
+test('comparePair warns when the TS type already declares a staged field', () => {
+  const diags = comparePair(pair(), RUST, TS_FULL, stagedEntry('kind'));
+  assert.equal(diags.length, 1);
+  assert.match(formatDiagnostic(diags[0]), /^docs\/protocol\/versioning\.md:9: warning: Row → Row: stale staged field kind — Row now declares it \(types\.ts:6\); remove the row from the "Staged row fields \(app adoption pending\)" table$/);
+});
+
+test('comparePair warns when a staged field is not emitted (docs leading the pin)', () => {
+  const diags = comparePair(pair(), RUST, TS_FULL, stagedEntry('upcoming'));
+  assert.equal(diags.length, 1);
+  assert.match(formatDiagnostic(diags[0]), /^docs\/protocol\/versioning\.md:9: warning: Row → Row: staged field upcoming is not emitted by Row; expected while its intentd change has not reached this checkout \(docs lead the pin\), otherwise remove the row \(or fix a misspelled Field\)$/);
+});
+
+test('runChecks fails when the staged table document is missing', async (t) => {
+  const root = await fixture(t, {
+    [STAGED_DOC]: null,
+    'packages/intentd/.git': 'gitdir: x\n',
+    'packages/intentd/model.rs': RUST,
+    'packages/cloudlands-fe/.git': 'gitdir: x\n',
+    'packages/cloudlands-fe/types.ts': TS_FULL,
+  });
+  const result = await runChecks(root, [FIXTURE_PAIR]);
+  assert.deepEqual(result.errors.map(formatDiagnostic), ['docs/protocol/versioning.md:1: error: cannot read the staged daemon-first field table: ENOENT']);
+});
+
+test('the real staged table parses against the real manifest', async () => {
+  const doc = await fs.readFile(fileURLToPath(new URL(`../${STAGED_DOC}`, import.meta.url)), 'utf8');
+  assert.deepEqual(parseStagedFields(doc).errors, []);
+});
+
 
 test('runChecks separates stale-ignore warnings from errors', async (t) => {
   const root = await fixture(t, {
@@ -409,29 +533,47 @@ ${memberCount ? '  memberCount: number;\n' : ''}${canManage ? '  canManage?: boo
   return files;
 }
 
-test('CLI: Workspace.canManage allows daemon-first adoption with the pinned frontend', async (t) => {
+const STAGED_CAN_MANAGE = ['`Workspace`', '`canManage`', '[membership](./methods/shared-host-membership.md)', 'cloudlands-fe#2911'];
+
+test('CLI: an undocumented daemon-first field fails against the pinned frontend', async (t) => {
   const root = await fixture(t, workspaceCapabilityFixtureFiles());
+  const { code, stderr } = await runCli(root);
+  assert.equal(code, 1);
+  assert.match(stderr, /: error: Workspace → Workspace: emitted field Workspace\.canManage \(Rust can_manage\) is missing from Workspace .*stage a daemon-first field in the "Staged row fields \(app adoption pending\)" table of docs\/protocol\/versioning\.md/);
+  assert.match(stderr, /check-protocol-field-parity: 1 error\(s\)/);
+});
+
+test('CLI: a staged daemon-first field warns instead of failing, with no checker edit', async (t) => {
+  const root = await fixture(t, { ...workspaceCapabilityFixtureFiles(), [STAGED_DOC]: stagedDoc([STAGED_CAN_MANAGE]) });
   const { code, stdout, stderr } = await runCli(root);
   assert.equal(code, 0, stderr);
   assert.match(stdout, /Protocol field parity holds .*Workspace → Workspace/);
-  assert.doesNotMatch(stderr, /: error: |stale ignore entry canManage/);
+  assert.match(stderr, /: warning: Workspace → Workspace: staged daemon-first field Workspace\.canManage \(Rust can_manage\) is not in Workspace yet .*app adoption pending: cloudlands-fe#2911 \(docs\/protocol\/versioning\.md:9\)/);
+  assert.doesNotMatch(stderr, /: error: /);
 });
 
-test('CLI: staged Workspace.canManage adoption still rejects other missing workspace fields', async (t) => {
-  const root = await fixture(t, workspaceCapabilityFixtureFiles({ memberCount: false }));
+test('CLI: a staged field does not excuse other missing workspace fields', async (t) => {
+  const root = await fixture(t, { ...workspaceCapabilityFixtureFiles({ memberCount: false }), [STAGED_DOC]: stagedDoc([STAGED_CAN_MANAGE]) });
   const { code, stderr } = await runCli(root);
   assert.equal(code, 1);
-  assert.match(stderr, /emitted field Workspace\.memberCount \(Rust member_count\) is missing from Workspace/);
+  assert.match(stderr, /: error: .*emitted field Workspace\.memberCount \(Rust member_count\) is missing from Workspace/);
   assert.match(stderr, /check-protocol-field-parity: 1 error\(s\)/);
-  assert.doesNotMatch(stderr, /emitted field Workspace\.canManage/);
+  assert.doesNotMatch(stderr, /: error: .*Workspace\.canManage/);
 });
 
-test('CLI: frontend canManage adoption succeeds and warns to retire its manifest entry', async (t) => {
-  const root = await fixture(t, workspaceCapabilityFixtureFiles({ canManage: true }));
+test('CLI: frontend adoption of a staged field succeeds and warns to remove its docs row', async (t) => {
+  const root = await fixture(t, { ...workspaceCapabilityFixtureFiles({ canManage: true }), [STAGED_DOC]: stagedDoc([STAGED_CAN_MANAGE]) });
   const { code, stderr } = await runCli(root);
   assert.equal(code, 0, stderr);
-  assert.match(stderr, /: warning: Workspace → Workspace: stale ignore entry canManage .*Workspace now declares it; remove the entry from PAIRS/);
+  assert.match(stderr, /^docs\/protocol\/versioning\.md:9: warning: Workspace → Workspace: stale staged field canManage — Workspace now declares it \(packages\/cloudlands-fe\/src\/shared\/types\.ts:4\); remove the row from the "Staged row fields \(app adoption pending\)" table$/m);
   assert.doesNotMatch(stderr, /: error: /);
+});
+
+test('CLI: a malformed staged table fails the check', async (t) => {
+  const root = await fixture(t, { ...workspaceCapabilityFixtureFiles({ canManage: true }), [STAGED_DOC]: stagedDoc([['`Workspace`', '`canManage`', '', '']]) });
+  const { code, stderr } = await runCli(root);
+  assert.equal(code, 1);
+  assert.match(stderr, /^docs\/protocol\/versioning\.md:9: error: Staged row fields \(app adoption pending\): Workspace\.canManage needs a Markdown link to its Contract and the App adoption/m);
 });
 
 function scriptMonitorFixtureFiles({ scriptMonitors = false, prMonitors = true } = {}) {
@@ -499,7 +641,7 @@ test('CLI: a missing field still exits 1 with an error', async (t) => {
   assert.equal(code, 1);
   const [{ rust, ts }] = PAIRS;
   assert.match(stderr, new RegExp(`^${rust.file.replace(/[./]/g, '\\$&')}:4: error: ${rust.struct} → ${ts.type}: emitted field ${rust.struct}\\.parentAgentId \\(Rust parent_agent_id\\) is missing from ${ts.type}`, 'm'));
-  assert.match(stderr, new RegExp(`^check-protocol-field-parity: 1 error\\(s\\), ${staleCount} warning\\(s\\): stale ignore entries$`, 'm'));
+  assert.match(stderr, new RegExp(`^check-protocol-field-parity: 1 error\\(s\\), ${staleCount} warning\\(s\\): stale ignore entries or staged daemon-first fields$`, 'm'));
 });
 
 test('runChecks treats a submodule directory without .git as uninitialized', async (t) => {

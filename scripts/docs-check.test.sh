@@ -121,6 +121,14 @@ grep -q 'legacy guidance is forbidden (browser-rewritten local port)' <<<"$check
   fail "client-local port failure did not retain its human-readable label"
 
 : >"$temp_dir/README.md"
+printf '%s\n' 'Wait with a self-checking `ws.hook.schedule` on `ws.script.status`.' >>"$temp_dir/README.md"
+if run_check; then
+  fail "script completion polling hook guidance was accepted"
+fi
+grep -q 'legacy guidance is forbidden (script completion polling hook)' <<<"$check_output" ||
+  fail "script completion polling hook failure did not retain its human-readable label"
+
+: >"$temp_dir/README.md"
 printf '%s\n' 'Set SANDBOX_ONLY_KNOB=1 for runner diagnostics.' >>"$temp_dir/packages/cloudlands-fe/AGENTS.md"
 if run_check; then
   fail "undeclared sandbox knob was accepted"

@@ -158,12 +158,26 @@ may remain in its own provider snapshot for a later switch back; it must not app
 applied choice. Hydration and partial `settings:changed` reconciliation must handle the new
 fields without replacing unaffected siblings or writing defaults back over saved values.
 
+**Provider profile references (prepared).** `model.defaultProvider` and
+`model.providerDefaults` keys also accept a [provider profile reference](provider-profiles.md#identity-and-provider-references)
+(`<baseProviderId>@<profileId>`). `settings.update` rejects a missing-profile
+reference in `model.defaultProvider`, or in a `model.providerDefaults` key that is
+new or whose value changed. Unchanged stored keys round-trip, and deleting a profile
+prunes its key ([rules](provider-profiles.md#references-in-settings)). `providers.enabled`, `providers.paths` and the
+access-token paths stay keyed by base provider id. `providers.fastMode` keys also
+accept profile references, with no inheritance from the base entry
+([per-profile Fast mode](provider-profiles.md#per-profile-fast-mode)). Profile metadata and environment
+values are managed only through `providers.profiles.*`, never through `settings.*`.
+
 **Provider Fast mode preference.**
 
 `providers.fastMode` is a non-sensitive, TOML-backed `object` setting in category
 `providers`, with `defaultValue: {}`. It is a daemon-global map of canonical provider
-ids to booleans, initially supporting `claude-code` and `codex`. Missing entries mean
-**off**, independently for each provider. The preference survives daemon restart and
+ids to booleans, initially supporting `claude-code` and `codex`. Keys may also be
+provider profile references (`<baseProviderId>@<profileId>`) of saved profiles; see
+[per-profile Fast mode](provider-profiles.md#per-profile-fast-mode). Missing entries mean
+**off**, independently for each provider and each profile; a profile never falls back
+to its base provider's entry. The preference survives daemon restart and
 is shared by every workspace and client connected to that daemon; it is not an agent,
 workspace, model, or reasoning-effort override.
 
@@ -173,7 +187,10 @@ workspace, model, or reasoning-effort override.
 ```
 
 The value must be an object whose members name providers advertising
-`supportsFastMode: true` in `providers.catalog` (§5.38), and whose values are booleans.
+`supportsFastMode: true` in `providers.catalog` (§5.38), or profile references of
+such providers, and whose values are booleans. A profile-reference key that is new or
+whose value changed must name a saved profile (`-32602`,
+`data.code: "provider-profile-not-found"`); an unchanged stored key round-trips.
 Arrays, null, non-booleans, aliases, unknown ids, and unsupported providers are
 `-32602`; validation rejects the entire update batch before persistence. This is a
 whole-value replacement, not a deep merge: clients preserve the other provider's

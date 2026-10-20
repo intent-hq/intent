@@ -4,12 +4,34 @@ Routing-only `workspaceId?` additions below are [prepared contract fields](../wo
 
 ### 5.17 `client.hello` handshake & stable client identity
 
+**Startup readiness (prepared).** Exact integer
+`server.capabilities.startupStatus: 1` advertises the full
+[startup contract](../startup-readiness.md). During bootstrap, hello returns
+structured `-32012` instead of persisting identity or returning a partial success.
+Recognize this before legacy hello-error fallback; poll the restricted status
+method, then reconnect and complete ordinary hello before application hydration.
+
 **Shared-host extension (10.9).** [§5.49](./shared-host-membership.md) adds server
 capability flags `hostMembership: 1`, `collaborationIdentity: 1`,
 `personalPairing: 1`, `authenticatedDevices: 1`. Each means full support for its
 contract, not caller authority. The legacy examples below remain valid for older
 daemons. On each connection, read `principal.me` before activating member controls;
 never infer the role from this client's capabilities or its saved registry category.
+
+**Scoped workspace membership invalidations (additive, docs first).**
+`server.capabilities.workspaceMembershipEvents: 1` guarantees the committed,
+workspace-scoped `workspace:updated` `changes.members: true` invalidations in
+[§6](../06-events.md#shared-host-delivery-and-invalidation-109), including offline
+host promotions with unchanged roster/count and delivery to remaining authorized
+guests. The server advertises support independently of locality, caller authority,
+or client-supplied capabilities; it grants no additional access. Only exact integer
+`1` enables removal of presence-to-membership refreshes. Missing, malformed or
+unknown versions retain the legacy presence-driven membership refresh; never infer
+support from daemon version, `hostMembership`, or seeing one membership event.
+Read this flag per admitted connection/backend and discard it on reconnect until
+hello completes. Initial hydration and reconnect/event-gap recovery remain required.
+A bundled daemon upgrade does not upgrade older remote hosts. This capability
+does not change experimental Multiplayer readiness.
 
 **Submission correlation (prepared).**
 `server.capabilities.submissionCorrelation: 1` gates the complete
@@ -26,6 +48,12 @@ a running target and cancelling its wake sources. Clients enable the retirement 
 only when this capability is present; older daemons omit it. This is a server support
 flag, independent of the model's `agentFeatures.peerAgents` gate, and does not grant
 caller authority: workspace lifecycle permissions still apply.
+
+**PR workspace lookup (prepared).** `server.capabilities.prWorkspaceLookup: 1`
+advertises [§5.1 `workspace.findByPullRequest`](./workspace.md#pull-request-workspace-lookup)
+and the PR-to-workspace link recording behind it. Clients offer the
+"Open in Original Workspace" link action only for exact integer `1`; older daemons
+omit it. Read it per connection.
 
 The daemon supports a **stable, client-supplied identity** that survives reconnects; the ephemeral
 per-connection id used internally for subscription bookkeeping is retained purely for transport
@@ -73,7 +101,7 @@ absence means unavailable, not permission to infer support from version numbers.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| client.hello | clientId?, name?, capabilities?, hostname? *(v9.9)*, prettyHostname? *(v9.9)*, deviceKind? *(v9.9)* | { clientId, protocolVersion, server: { locality, hasDisplay, osArch, version, buildCommit?, protocolVersion, capabilities } } |
+| client.hello | clientId?, connectionRole? *(prepared; see attachment contract below)*, name?, capabilities?, hostname? *(v9.9)*, prettyHostname? *(v9.9)*, deviceKind? *(v9.9)* | { clientId, connectionRole? *(prepared attachment acknowledgement only)*, protocolVersion, server: { locality, hasDisplay, osArch, version, buildCommit?, protocolVersion, capabilities } } |
 | client.list *(v9.9)* | workspaceId? | { clients: [{ clientId, name?, hostname?, prettyHostname?, deviceKind?, capabilities, connections, transports, connectedAt }] } — the **live, hello'd** connections grouped by logical `clientId`; see the `client.list` block below |
 
 - **Global handshake.** `client.hello` does **not** require `workspaceId` (§3.6); it is the
@@ -123,8 +151,50 @@ absence means unavailable, not permission to infer support from version numbers.
 ```
 
 **Errors.** A malformed `clientId` (non-string) → `-32602`; a persistence failure → `-32603`.
-The handshake is idempotent: re-sending `client.hello` on the same connection updates `name` /
+The ordinary handshake is idempotent: re-sending `client.hello` on the same connection updates `name` /
 `capabilities` / host identification and re-returns the same `server` block.
+
+#### Qualified monitor attachment (prepared, not advertised)
+
+The first supported `server.capabilities.reviewMonitoring: 1` includes the
+[qualified recipient contract](pr.md#planned-qualified-review-monitoring-not-yet-advertised)
+and this attachment handshake. Production advertisement remains disabled until
+all native recipients, intermediaries and consumers are qualified.
+
+A document opens a separate physical connection to the original host only after
+its captured successful ordinary hello advertises integer `reviewMonitoring >= 1`.
+It presents exactly the canonical `clientId` from that acknowledgement:
+
+```json
+{ "jsonrpc":"2.0", "id":1, "method":"client.hello", "params":{
+  "clientId":"cli-7f3a", "connectionRole":"review-monitor",
+  "capabilities":{ "reviewMonitoring":1 } } }
+```
+
+Success echoes `connectionRole: "review-monitor"` and the same canonical
+`clientId`, alongside the existing `protocolVersion` and `server` result fields.
+Missing or mismatched role/id requires teardown, never an ordinary-hello fallback.
+An older host receives no attachment request. No second server capability exists.
+
+The role and client id grant no authority. Admission requires the same authenticated
+principal and exactly one live acknowledged ordinary source connection with that
+canonical id. Absent, foreign, unacknowledged or ambiguous sources are refused
+before profile, presence or browser side effects. The attachment retains that
+physical source and hello generation; it never selects a replacement by client id.
+Multiple document attachments to one source remain independent.
+
+Attachments do not create/update logical profiles, override name/host/capabilities,
+become browser reverse targets, change workspace browser pins, or keep a departed
+ordinary device online. Their consumer support never upgrades pooled connections,
+other documents or grouped client capabilities. Repository/account/workspace
+authority remains independently required for private content.
+
+Source retirement/rehello, attachment rehello failure/withdrawal/close, and document
+retirement invalidate affected receipts and dependent queued output/subscriptions.
+An established ordinary socket cannot become an attachment, and an established
+attachment cannot become ordinary through a missing, changed or unknown role.
+Unknown/malformed roles and unsupported attachment transitions fail closed.
+Ordinary hellos retain their existing profile-update behavior.
 
 #### GitLab checkout capability
 
@@ -410,3 +480,35 @@ has `isAdministrator: false`; cached roles are refreshed on reconnect and
 `host:members-changed`. The principal ID remains immutable while effective host
 role is current. [§5.49](./shared-host-membership.md#authority-and-discovery) gives
 the fail-closed compatibility rules when fields/capabilities are missing.
+
+#### Planned review monitoring capability
+
+`server.capabilities.reviewMonitoring: 1` is reserved for the complete
+[qualified monitoring contract](pr.md#planned-qualified-review-monitoring-not-yet-advertised).
+It is **not yet advertised** by the declaration wave. Absence or zero means no
+addressed/GitLab monitoring support; existing GitHub calls remain compatible.
+Do not derive support from repository reads, MR aliases, a daemon version, or the
+GitLab connection being configured. Feature gates and current original-host
+authorization remain separate from this support flag.
+
+The planned review-monitor extension also requires **recipient** support:
+`client.hello.params.capabilities.reviewMonitoring: 1` opts only the current live
+connection into qualified output. Missing/malformed support remains legacy; a server
+flag alone never authorizes qualified data to an old desktop. Remote forwarding must
+intersect the end consumer and decoding intermediaries, not substitute proxy support.
+Agent recipients use a trusted versioned harness/session receipt, not client identity
+or model-supplied parameters. Reconnect/replacement invalidates cached support.
+The [planned recipient/output policy](pr.md#planned-qualified-review-monitoring-not-yet-advertised)
+defines unchanged legacy GitHub projection, qualified suppression, direct-call errors,
+and whole-envelope wake/history replay gating. Neither side advertises support yet.
+
+### Generic event stream recovery capability
+
+**Prepared additive contract.** `server.capabilities.eventStreamRecovery: 1`
+(exact integer) advertises the complete [generic loss contract](../event-stream-recovery.md).
+It also guarantees `events.fence` raw-bus/bulk-lane boundaries for recovery reads.
+Each recovering `events.subscribe` lease must separately request and acknowledge
+`lossRecovery: 1`. Missing/unknown capability or an old request retains legacy
+shapes and reconnect/explicit-refresh fallback; discovery alone does not opt in.
+The capability does not promise durable replay, typed-channel recovery or product
+readiness. It is advertised only after the transport and membership-loss cases pass.

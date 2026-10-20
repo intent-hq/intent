@@ -6,6 +6,7 @@ from urllib.parse import parse_qs, urlsplit
 from datetime import datetime, timedelta, timezone
 import importlib.util
 import io
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -27,6 +28,11 @@ def release(number, age=60, **fields):
              "created_at": (NOW - timedelta(days=age + 1)).isoformat()}
     value.update(fields)
     return value
+
+
+def feed_text(value):
+    text = (Path(__file__).parent / "fixtures/cleanup-mac-feeds/arm64.yml").read_text()
+    return text.replace("1.0.24", value)
 
 
 class FakeGitHub:
@@ -152,7 +158,7 @@ class PlanTests(unittest.TestCase):
         for i in range(1, 25):
             self.gh.pins[f"v1.0.{i}"] = "9.0.0"
         self.gh.inventory[FE_MIRROR].append(release(99, tag_name="stable"))
-        self.gh.assets[FE_MIRROR, "stable"] = {"latest-mac.yml": "version: '1.0.23'\n", "latest-linux.yml": "version: 1.0.24\n"}
+        self.gh.assets[FE_MIRROR, "stable"] = {"latest-mac.yml": feed_text("1.0.23"), "latest-linux.yml": feed_text("1.0.24")}
         rows = self.plan()["releases"]
         self.assertFalse(any(r["action"] == "delete" and r["repo"] in (FE, FE_MIRROR) and r["tag"] in ("v1.0.23", "v1.0.24") for r in rows))
 
@@ -204,6 +210,256 @@ class PlanTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertIn("already-removed", [r["outcome"] for r in result["outcomes"]])
         self.assertEqual(cleanup.apply_plan(self.gh, plan, "intentd", NOW)["ok"], True)
+
+
+class MacFeedProtectionTests(unittest.TestCase):
+    # Emitted by cloudlands-fe prepareMacChannelFeeds at aedbbd3057e4482632b02508e179e332731455d9
+    # with ARM 1.0.24, dual-CPU history 1.0.23, and absent history respectively.
+    fixtures = Path(__file__).parent / "fixtures/cleanup-mac-feeds"
+
+    def setUp(self):
+        self.gh = FakeGitHub()
+        for repo in cleanup.REPOSITORIES:
+            self.gh.inventory[repo] = [release(i, 40 + i) for i in range(1, 25)]
+        self.gh.pins.update({f"v1.0.{i}": f"1.0.{i}" for i in range(1, 25)})
+        self.gh.inventory[FE_MIRROR].append(release(99, tag_name="alpha"))
+        self.feeds = self.gh.assets[FE_MIRROR, "alpha"] = {
+            "latest-mac.yml": (self.fixtures / "legacy.yml").read_text(),
+            "latest-arm64-mac.yml": (self.fixtures / "arm64.yml").read_text(),
+        }
+
+    def test_actual_desktop_feeds_protect_both_immutable_versions_and_daemons(self):
+        rows = cleanup.build_plan(self.gh, NOW)["releases"]
+        for repo in cleanup.REPOSITORIES:
+            for tag in ("v1.0.23", "v1.0.24"):
+                row = next(r for r in rows if r["repo"] == repo and r["tag"] == tag)
+                self.assertEqual(row["action"], "retain", (repo, tag))
+                self.assertIn("frontend-channel" if repo in (FE, FE_MIRROR)
+                              else "frontend-tag-pin", row["reasons"])
+
+    def test_actual_empty_legacy_feed_has_no_release_dependency(self):
+        self.feeds["latest-mac.yml"] = (self.fixtures / "empty.yml").read_text()
+        rows = cleanup.build_plan(self.gh, NOW)["releases"]
+        for repo in (FE, FE_MIRROR):
+            self.assertEqual(next(r["action"] for r in rows if r["repo"] == repo
+                                  and r["tag"] == "v1.0.24"), "retain")
+            self.assertEqual(next(r["action"] for r in rows if r["repo"] == repo
+                                  and r["tag"] == "v1.0.23"), "delete")
+
+    def test_malformed_sentinels_and_unknown_arm_versions_fail_closed(self):
+        empty = (self.fixtures / "empty.yml").read_text()
+        bad = ["version: 0.0.0\n", "version: v0.0.0\nfiles: []\n",
+               "version: 0.0.0\nfiles: null\n", "version: 0.0.0\nfiles: {}\n",
+               "version: 0.0.0\nfiles:\n",
+               "version: 0.0.0\nfiles:\n - url: old.zip\n",
+               empty + "path: old.zip\n", empty + "sha512: hash\n",
+               empty + "releaseDate: 2026-10-13\n", empty + "extra: {}\n",
+               empty + "files: []\n", empty + "version: 1.0.23\n",
+               empty + "---\nversion: 1.0.23\n", "version: 0.0.0\nfiles: &empty []\n"]
+        for text in bad:
+            with self.subTest(text=text), self.assertRaises(cleanup.CleanupError):
+                cleanup.feed_version(text, allow_empty=True)
+        for name, text in [("latest-arm64-mac.yml", empty),
+                           ("latest-arm64-mac.yml", "version: 99.0.0\n")]:
+            with self.subTest(name=name, text=text):
+                self.feeds[name] = text
+                self.gh.pins["v99.0.0"] = cleanup.CleanupError("missing historical pin")
+                with self.assertRaises(cleanup.CleanupError):
+                    cleanup.build_plan(self.gh, NOW)
+                self.assertEqual(self.gh.deleted, [])
+
+    def test_exact_sentinel_mapping_accepts_key_order_and_scalar_quotes(self):
+        for text in ["files: []\nversion: 0.0.0\n", "version: '0.0.0'\nfiles: []\n",
+                     'version: "0.0.0"\r\nfiles: []\r\n']:
+            self.assertIsNone(cleanup.feed_version(text, allow_empty=True))
+            with self.assertRaises(cleanup.CleanupError):
+                cleanup.feed_version(text)
+
+    def test_missing_legacy_feed_aborts_but_pre_migration_arm_absence_is_valid(self):
+        arm = self.feeds.pop("latest-arm64-mac.yml")
+        cleanup.build_plan(self.gh, NOW)
+        self.feeds["latest-arm64-mac.yml"] = arm
+        del self.feeds["latest-mac.yml"]
+        with self.assertRaises(cleanup.CleanupError):
+            cleanup.build_plan(self.gh, NOW)
+
+    def test_missing_legacy_release_and_unreadable_tag_pin_aborts(self):
+        for repo in (FE, FE_MIRROR):
+            self.gh.inventory[repo] = [r for r in self.gh.inventory[repo] if r["tag_name"] != "v1.0.23"]
+        self.gh.pins["v1.0.23"] = cleanup.CleanupError("HTTP 404")
+        with self.assertRaises(cleanup.CleanupError):
+            cleanup.build_plan(self.gh, NOW)
+        self.assertEqual(self.gh.deleted, [])
+
+    def test_malformed_whole_documents_fail_before_apply_deletes(self):
+        valid = self.feeds["latest-arm64-mac.yml"]
+        bad = [
+            "version: 1.0.24\nfiles: [unterminated\n",
+            "version: 1.0.24\nfiles: []\nfiles: []\n",
+            "version: 1.0.24\nfiles: *missing\n",
+            "version: 1.0.24\n---\nfiles: []\n",
+            valid + "files: []\n", valid + "---\n", valid + "...\n",
+            valid.replace("size: 35", "size: 35\n    size: 36"),
+            valid.replace("files:", "files: &aliased"),
+            valid.replace("size: 35", "size: [35"),
+            valid.replace("size: 35", "size: -1"),
+            valid.replace("size: 35", "size: true"),
+            valid.replace("path: Intent", "path: 'Intent"),
+            valid + "releaseDate: 'not-a-date'\n",
+            valid.replace("    size: 35\n", ""),
+            valid.replace("sha512: xzSdmx", "sha512: bad!xzSdmx"),
+            valid + "unknown: permitted?\n",
+            "version: 1.0.24\n", "version: 1.0.24\nfiles: []\n",
+        ]
+        plan = cleanup.build_plan(self.gh, NOW)
+        for text in bad:
+            with self.subTest(text=text):
+                self.feeds["latest-arm64-mac.yml"] = text
+                with self.assertRaises(cleanup.CleanupError):
+                    cleanup.build_plan(self.gh, NOW)
+                self.assertFalse(cleanup.apply_plan(self.gh, plan, "cloudlands-fe", NOW)["ok"])
+                self.assertEqual(self.gh.deleted, [])
+
+    def test_invalid_control_characters_never_form_a_sentinel(self):
+        for control in ("\x00", "\x0b", "\x0c", "\x1b", "\x7f", "\x85", "\r"):
+            for text in ("version: 0.0.0\nfiles: []" + control,
+                         self.feeds["latest-arm64-mac.yml"] + control):
+                with self.subTest(control=repr(control)), self.assertRaises(cleanup.CleanupError):
+                    cleanup.feed_version(text, allow_empty=True)
+
+    def test_plain_mapping_delimiters_abort_but_quoted_metadata_and_urls_work(self):
+        valid = self.feeds["latest-arm64-mac.yml"]
+        plan = cleanup.build_plan(self.gh, NOW)
+        for key in ("releaseName", "releaseNotes", "minimumSystemVersion"):
+            for scalar in ("Notes:", "Notes:   ", "Notes: details"):
+                with self.subTest(key=key, scalar=scalar):
+                    self.feeds["latest-arm64-mac.yml"] = valid + f"{key}: {scalar}\n"
+                    with self.assertRaises(cleanup.CleanupError):
+                        cleanup.build_plan(self.gh, NOW)
+                    self.assertFalse(cleanup.apply_plan(self.gh, plan, "cloudlands-fe", NOW)["ok"])
+                    self.assertEqual(self.gh.deleted, [])
+            for scalar in ("'Notes:'", '"Notes:"', "'Notes: details'", "https://example.com/notes"):
+                with self.subTest(key=key, scalar=scalar):
+                    text = valid + f"{key}: {scalar}\n"
+                    self.feeds["latest-arm64-mac.yml"] = text
+                    self.assertEqual(cleanup.feed_version(text), "1.0.24")
+                    self.assertEqual(cleanup.build_plan(self.gh, NOW)["releases"], plan["releases"])
+
+    def test_immutable_references_must_match_version_in_path_and_each_file(self):
+        valid = self.feeds["latest-mac.yml"]
+        old = "https://github.com/intent-hq/cloudlands-releases/releases/download/v1.0.23/"
+        bad = [valid.replace("version: 1.0.23", "version: 1.0.24")]
+        for prefix in ("path: ", "    url: "):
+            for replacement in (old.replace("v1.0.23/", "v1.0.24/"),
+                                old.replace("v1.0.23/", "alpha/"),
+                                old.replace("github.com/", "example.com/"),
+                                old.replace("cloudlands-releases/", "intentd-releases/"),
+                                "../v1.0.23/", "//github.com/releases/", "file:///tmp/"):
+                bad.append(valid.replace(prefix + old, prefix + replacement, 1))
+        bad += [valid.replace("-x64-mac.zip", "-x64-mac.zip?version=other", 1),
+                valid.replace("-x64-mac.zip", "-x64-mac.zip#fragment", 1),
+                valid.replace("v1.0.23/Intent", "v1.0.23/%2e%2e/Intent", 1)]
+        plan = cleanup.build_plan(self.gh, NOW)
+        for text in bad:
+            with self.subTest(text=text):
+                self.feeds["latest-mac.yml"] = text
+                with self.assertRaises(cleanup.CleanupError):
+                    cleanup.build_plan(self.gh, NOW)
+                self.assertFalse(cleanup.apply_plan(self.gh, plan, "cloudlands-fe", NOW)["ok"])
+                self.assertEqual(self.gh.deleted, [])
+
+    def test_released_desktop_feed_shapes_remain_supported(self):
+        # Downloaded read-only from cloudlands-releases on 2026-10-13:
+        # alpha/latest-mac.yml, stable/latest.yml, beta/latest-linux.yml,
+        # and v2.0.13/latest-mac.yml. Include both sorted and unsorted emitters.
+        for name, value in [("mac-2.216.2", "2.216.2"), ("windows-2.212.1", "2.212.1"),
+                            ("linux-2.212.1", "2.212.1"), ("arm-2.0.13", "2.0.13")]:
+            with self.subTest(name=name):
+                text = (self.fixtures / f"released-{name}.yml").read_text()
+                self.assertEqual(cleanup.feed_version(text), value)
+
+    def test_legacy_path_only_and_quoted_scalars_remain_supported(self):
+        digest = base64.b64encode(b"x" * 64).decode()
+        for path in ("Intent-1.0.23-mac.zip",
+                     f"https://github.com/{FE}/releases/download/v1.0.23/Intent-1.0.23-mac.zip"):
+            text = f'version: "1.0.23"\npath: "{path}"\nsha512: \'{digest}\'\n'
+            self.assertEqual(cleanup.feed_version(text), "1.0.23")
+            with self.assertRaises(cleanup.CleanupError):
+                cleanup.feed_version(text.replace('version: "1.0.23"', 'version: "1.0.24"')
+                                     .replace(path, f"https://github.com/{FE}/releases/download/v1.0.23/old.zip"))
+
+    def test_typed_scalars_do_not_become_download_names_or_sizes(self):
+        valid = self.feeds["latest-arm64-mac.yml"]
+        plan = cleanup.build_plan(self.gh, NOW)
+        bad = [valid.replace("Intent-1.0.24-arm64-mac.zip", scalar)
+               for scalar in ("null", "Null", "~", "true", "FALSE", "2026", "1.23", "1e3", "0x10",
+                              "null ", " true ", "2026 ", "1.23 ")]
+        bad += [valid.replace("size: 35", f"size: {scalar}")
+                for scalar in ('"35"', "'35'", "true", "null", "35.0")]
+        for text in bad:
+            with self.subTest(text=text):
+                self.feeds["latest-arm64-mac.yml"] = text
+                with self.assertRaises(cleanup.CleanupError):
+                    cleanup.build_plan(self.gh, NOW)
+                self.assertFalse(cleanup.apply_plan(self.gh, plan, "cloudlands-fe", NOW)["ok"])
+                self.assertEqual(self.gh.deleted, [])
+
+    def test_producer_preserved_metadata_has_supported_scalar_types(self):
+        # Actual prepareMacChannelFeeds output using the metadata supported by
+        # cloudlands-fe/scripts/mac-update-feed.test.ts, plus per-file SHA-256.
+        for name, value in [("metadata-arm64", "1.0.24"), ("metadata-legacy", "1.0.23")]:
+            text = (self.fixtures / f"{name}.yml").read_text()
+            self.assertEqual(cleanup.feed_version(text), value)
+            for bad in [text.replace("stagingPercentage: 50", 'stagingPercentage: "50"'),
+                        text.replace("stagingPercentage: 50", "stagingPercentage: true"),
+                        text.replace("stagingPercentage: 50", "stagingPercentage: 101"),
+                        text.replace("releaseName: Intel and Apple Silicon", "releaseName: true"),
+                        text.replace("releaseNotes: Signed native builds", "releaseNotes: *missing"),
+                        text.replace("minimumSystemVersion: 13.0.0", "minimumSystemVersion: 13"),
+                        text.replace("blockMapSize: 123", 'blockMapSize: "123"')]:
+                with self.subTest(text=bad), self.assertRaises(cleanup.CleanupError):
+                    cleanup.feed_version(bad)
+
+    def test_real_sha512_alphabet_quoting_and_padding(self):
+        valid = self.feeds["latest-arm64-mac.yml"]
+        original = cleanup.feed_document(valid)["sha512"]
+        hashes = {}
+        for seed in range(1024):
+            archive = f"archive {seed}".encode()
+            digest = base64.b64encode(hashlib.sha512(archive).digest()).decode()
+            hashes.setdefault(digest[0], (digest, len(archive)))
+        self.assertEqual(set(hashes), set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"))
+        for prefix, (digest, size) in hashes.items():
+            for scalar in (digest, f"'{digest}'", f'"{digest}"', digest + " "):
+                with self.subTest(prefix=prefix, scalar=scalar):
+                    text = valid.replace(original, scalar).replace("size: 35", f"size: {size}")
+                    self.assertEqual(cleanup.feed_version(text), "1.0.24")
+        for digest in (hashes["+"][0], hashes["/"][0]):
+            for invalid in (digest[:-1], digest + "=", digest[:-2] + "!!", digest[:-3] + "B==",
+                            digest[:20] + " " + digest[20:]):
+                with self.subTest(invalid=invalid), self.assertRaises(cleanup.CleanupError):
+                    cleanup.feed_version(valid.replace(original, invalid))
+
+    def test_missing_frontend_records_still_protect_both_daemon_dependencies(self):
+        for repo in (FE, FE_MIRROR):
+            self.gh.inventory[repo] = [r for r in self.gh.inventory[repo]
+                                       if r["tag_name"] not in ("v1.0.23", "v1.0.24")]
+        rows = cleanup.build_plan(self.gh, NOW)["releases"]
+        for repo in (DAEMON, DAEMON_MIRROR):
+            for tag in ("v1.0.23", "v1.0.24"):
+                row = next(r for r in rows if (r["repo"], r["tag"]) == (repo, tag))
+                self.assertEqual(row["action"], "retain")
+                self.assertIn("frontend-tag-pin", row["reasons"])
+
+    @patch.object(cleanup.GitHub, "request")
+    def test_arm_feed_is_downloaded_and_failed_read_aborts(self, request):
+        arm = self.feeds["latest-arm64-mac.yml"]
+        request.side_effect = [[{"id": 8, "name": "latest-arm64-mac.yml"}], arm]
+        self.assertEqual(cleanup.GitHub().asset_texts(FE_MIRROR, release(99, tag_name="alpha")),
+                         {"latest-arm64-mac.yml": arm})
+        request.side_effect = [[{"id": 8, "name": "latest-arm64-mac.yml"}], cleanup.CleanupError("HTTP 403")]
+        with self.assertRaises(cleanup.CleanupError):
+            cleanup.GitHub().asset_texts(FE_MIRROR, release(99, tag_name="alpha"))
 
 
 class GitHubTests(unittest.TestCase):
@@ -518,7 +774,7 @@ class RaceTests(unittest.TestCase):
 
     def test_frontend_channel_missing_version_record_still_protects_pin(self):
         self.gh.inventory[FE_MIRROR].append(release(99, tag_name="alpha"))
-        self.gh.assets[FE_MIRROR, "alpha"] = {"latest-mac.yml": "version: 2.0.1\n"}
+        self.gh.assets[FE_MIRROR, "alpha"] = {"latest-mac.yml": feed_text("2.0.1")}
         self.gh.pins["v2.0.1"] = "1.0.24"
         self.assertFalse(any(r["tag"] == "v1.0.24" and r["action"] == "delete" for r in self.plan()["releases"]))
 

@@ -1,0 +1,7 @@
+self-hosted-runner:
+  labels:
+    # Org larger runners (GitHub-hosted); standard GitHub labels are built in.
+    - gh-linux-8x
+    - gh-linux-16x
+    - gh-linux-arm64-8x
+    - gh-windows-16x

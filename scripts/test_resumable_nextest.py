@@ -169,6 +169,23 @@ class AttemptReceiptTests(unittest.TestCase):
         return {str(p.relative_to(directory)): (p.stat().st_ino, p.read_bytes())
                 for p in directory.rglob("*") if p.is_file()}
 
+    def test_latest_attempt_does_not_depend_on_filesystem_timestamp_resolution(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            args = make_args(root, resume="1")
+            harness = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+            self.assertEqual(harness.execute(args), 0)
+            self.assertEqual(harness.execute(args), 0)
+            scope = self.scope(root, args.plan)
+            attempts = list((scope / "attempts").iterdir())
+            for attempt in attempts:
+                os.utime(attempt, ns=(1_000_000_000, 1_000_000_000))
+            expected = Path(harness.output_lines[-1].split("record: ", 1)[1])
+            # Reverse directory order to make a timestamp tie pick the wrong receipt.
+            ordered = [attempt for attempt in attempts if attempt != expected] + [expected]
+            with mock.patch.object(Path, "iterdir", return_value=iter(ordered)):
+                self.assertEqual(latest_attempt(scope), expected)
+
     def test_repeated_and_completed_resume_invocations_preserve_all_artifacts(self):
         for plans in ([], ["-p alpha --test one"]):
             with self.subTest(plans=plans), tempfile.TemporaryDirectory() as temp:
@@ -293,8 +310,36 @@ with mock.patch.object(gate, "callback_fixture_identity", return_value=None), mo
             self.assertEqual((legacy.stat().st_ino, legacy.read_bytes()), before)
 
 
+REPORTED_ATTEMPTS = {}
+
+
+def track_record_output(*args, **kwargs):
+    """Observe the real receipt identity while preserving the runner's output."""
+    if len(args) == 1 and isinstance(args[0], str) and args[0].startswith("[") and "] record: " in args[0]:
+        attempt = Path(args[0].split("] record: ", 1)[1])
+        REPORTED_ATTEMPTS[attempt.parent.parent] = attempt
+    print(*args, **kwargs)
+
+
+gate.print = track_record_output
+
+
 def latest_attempt(scope):
-    return max((scope / "attempts").iterdir(), key=lambda path: path.stat().st_mtime_ns)
+    # Directory mtimes can tie on fast runners. Use the reported identity.
+    if scope in REPORTED_ATTEMPTS:
+        return REPORTED_ATTEMPTS[scope]
+    attempts = list((scope / "attempts").iterdir())
+    if len(attempts) != 1:
+        raise AssertionError("multiple attempts require the runner's reported receipt path")
+    return attempts[0]
+
+
+def attempt_from_output(stdout, scope):
+    record = next(line for line in reversed(stdout.splitlines()) if "] record: " in line)
+    attempt = Path(record.split("] record: ", 1)[1])
+    if attempt.parent != scope / "attempts":
+        raise AssertionError(f"receipt is outside expected scope: {attempt}")
+    return attempt
 
 
 class RealChildReceiptTests(unittest.TestCase):
@@ -456,7 +501,7 @@ with mock.patch.object(gate, 'tree_key', return_value=KEY), \\
                     resumed = self.spawn(root, plans, 'resume')
                     stdout, stderr = self.finish(resumed)
                     self.assertEqual(resumed.returncode, 0, stderr)
-                    current = latest_attempt(scope)
+                    current = attempt_from_output(stdout, scope)
                     self.assertNotIn(current, frozen)
                     for directory, snapshot in frozen.items():
                         self.assertEqual(self.snapshot(directory), snapshot)
@@ -498,11 +543,15 @@ class CallbackPreflightTests(unittest.TestCase):
                 record.mkdir(parents=True)
                 (record / "complete").write_text("complete\n")
                 (record / "passed.jsonl").write_text(gate.record_line("alpha::one", "passes", "ok"))
-                with mock.patch.dict(os.environ, {"INTENT_ACP_CALLBACK_ADAPTER_FIXTURE": ""}), mock.patch.object(
+                # A temporary HOME has no verified cache, so nothing is auto-prepared.
+                with mock.patch.dict(os.environ, {"INTENT_ACP_CALLBACK_ADAPTER_FIXTURE": "",
+                                                  "HOME": str(root / "home")}), mock.patch.object(
                     gate, "isolated_output_args", return_value=[]
                 ) as cargo, mock.patch.object(gate, "tree_key", return_value=KEY) as key:
-                    with self.assertRaisesRegex(RuntimeError, "INTENT_ACP_CALLBACK_ADAPTER_FIXTURE"):
+                    with self.assertRaisesRegex(RuntimeError, "INTENT_ACP_CALLBACK_ADAPTER_FIXTURE") as refused:
                         gate.run_nextest(make_args(root, plan=plans, resume="1"))
+                    self.assertIn("CONTRIBUTING.md#linux-x64-callback-gates", str(refused.exception))
+                    self.assertIn("existing authorized Linux x64 host", str(refused.exception))
                     cargo.assert_not_called()
                     key.assert_not_called()
 
@@ -577,6 +626,29 @@ class CallbackValidatorTests(unittest.TestCase):
         self.assertEqual(absolute["root"], str(self.fixture.payload))
         self.assertEqual(absolute["node-sha256"], self.validator.digest(self.node))
 
+    def test_host_node_options_are_cleared_only_for_validation(self):
+        injected = "--require /opt/datadog-packages/dd-trace/init.js"
+        os.environ["NODE_OPTIONS"] = injected
+        seen = []
+        check = self.validator.platform_check
+        with mock.patch.object(self.validator, "platform_check",
+                               side_effect=lambda: (seen.append(os.environ.get("NODE_OPTIONS")), check())[1]):
+            self.assertEqual(self.identity()["root"], str(self.fixture.payload))
+        self.assertEqual(seen, [None])
+        self.assertEqual(os.environ["NODE_OPTIONS"], injected)
+
+    def test_fixture_runs_drop_host_node_options(self):
+        os.environ["NODE_OPTIONS"] = "--require /opt/datadog-packages/dd-trace/init.js"
+        harness = PlannedRunHarness(self.root, [([event("ok", "alpha::one$passes")], 0)])
+        self.assertEqual(harness.execute(make_args(self.root, plan=["-p intent-acp --lib"])), 0)
+        self.assertNotIn("NODE_OPTIONS", harness.run_environments[0])
+        self.assertIn("NODE_OPTIONS", os.environ)
+
+    def test_ready_prefix_matches_component_prepare(self):
+        source = (SCRIPT.parents[1] / "packages/intentd/scripts/prepare-acp-callback-fixture.py").read_text()
+        self.assertIn(f'key = "{gate.CALLBACK_READY_PREFIX}" + descriptor["manifest"]["sha256"]', source,
+                      "prepare() renamed its ready entry; update CALLBACK_READY_PREFIX")
+
     def test_cli_loads_canonical_verifier_and_checks_real_node_version_offline(self):
         # The child interpreter does not inherit the in-process platform mock.
         if self.host_machine not in ("x86_64", "amd64"):
@@ -589,7 +661,8 @@ class CallbackValidatorTests(unittest.TestCase):
         shutil.copy(self.fixture.descriptor_path, config / "claude-callback-adapter.json")
         for name in ("delta.patch", "files.json"):
             shutil.copy(self.root / name, config)
-        self.node.write_text(f"#!{sys.executable}\nprint('v24.21.0')\n")
+        # The verifier sanitizes loader paths; the version stub needs no Python runtime.
+        self.node.write_text("#!/bin/sh\nprintf '%s\\n' 'v24.21.0'\n")
         self.node.chmod(0o755)
         env = {**os.environ, "PATH": str(self.root) + os.pathsep + os.environ["PATH"]}
         command = [sys.executable, "-S", "-B", str(SCRIPT),
@@ -597,7 +670,7 @@ class CallbackValidatorTests(unittest.TestCase):
         valid = subprocess.run(command, env=env, capture_output=True, text=True, timeout=10)
         self.assertEqual(valid.returncode, 0, valid.stderr)
         self.assertIn('"event": "node-tool"', valid.stderr)
-        self.node.write_text(f"#!{sys.executable}\nprint('v0.0.0')\n")
+        self.node.write_text("#!/bin/sh\nprintf '%s\\n' 'v0.0.0'\n")
         invalid = subprocess.run(command, env=env, capture_output=True, text=True, timeout=10)
         self.assertEqual(invalid.returncode, 2, invalid.stderr)
         self.assertIn("Node version mismatch", invalid.stderr)
@@ -627,7 +700,7 @@ class CallbackValidatorTests(unittest.TestCase):
         source.parent.mkdir(parents=True)
         source.write_text("// baseline\n")
         (self.component / "Cargo.toml").write_text("[workspace]\n")
-        self.node.write_text(f"#!{sys.executable}\nprint('v24.21.0')\n")
+        self.node.write_text("#!/bin/sh\nprintf '%s\\n' 'v24.21.0'\n")
         self.node.chmod(0o755)
         env = {**os.environ, "PATH": str(self.root) + os.pathsep + os.environ["PATH"],
                "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
@@ -777,15 +850,40 @@ with mock.patch.object(gate, 'transfer_fixture_identity', return_value=None):
         with mock.patch.object(self.validator.platform, "machine", return_value="aarch64"):
             with self.assertRaisesRegex(RuntimeError, "Linux x64"):
                 self.identity()
-        with mock.patch.dict(os.environ, {"NODE_OPTIONS": "--require unexpected"}):
-            with self.assertRaisesRegex(RuntimeError, "NODE_OPTIONS"):
-                self.identity()
+        # Host NODE_OPTIONS are hidden from validation rather than refused:
+        # see test_host_node_options_are_cleared_only_for_validation.
         self.node_patch.stop()
         with mock.patch.object(self.validator.shutil, "which", return_value=str(self.node)), mock.patch.object(
             self.validator, "command", return_value="v0.0.0"
         ):
             with self.assertRaisesRegex(RuntimeError, "Node version mismatch"):
                 self.identity()
+
+    def test_unsupported_host_points_to_linux_recipe_before_cargo_or_resume(self):
+        # Diagnostic coverage through the real launcher/platform check, not a
+        # native macOS runtime test. Synthetic payloads never reach Node.
+        record = self.root / "cache" / KEY
+        record.mkdir(parents=True)
+        (record / "complete").write_text("complete\n")
+        passed = gate.record_line("alpha::one", "passes", "ok")
+        (record / "passed.jsonl").write_text(passed)
+        with mock.patch.object(self.validator.sys, "platform", "darwin"), mock.patch.object(
+            self.validator.platform, "machine", return_value="arm64"
+        ), mock.patch.object(gate, "isolated_output_args") as cargo, mock.patch.object(
+            gate, "tree_key", return_value=KEY
+        ) as key:
+            with self.assertRaisesRegex(RuntimeError, "Linux x64") as refused:
+                gate.run_nextest(make_args(self.root, plan=["-p intent-acp --lib"], resume="1"))
+            self.assertIn("CONTRIBUTING.md#linux-x64-callback-gates", str(refused.exception))
+            self.assertIn("existing authorized Linux x64 host", str(refused.exception))
+            self.assertIn("macOS is not supported", str(refused.exception))
+            cargo.assert_not_called()
+            key.assert_not_called()
+            self.validator.prepare.assert_not_called()
+            self.validator.urllib.request.urlopen.assert_not_called()
+            self.validator.node_tool.assert_not_called()
+        self.assertEqual((record / "passed.jsonl").read_text(), passed)
+        self.assertEqual(list(record.glob("attempts/*")), [])
 
     def test_corruption_after_success_cannot_get_complete_resume_credit(self):
         harness = PlannedRunHarness(self.root, [([event("ok", "alpha::one$passes")], 0)])
@@ -866,6 +964,24 @@ with mock.patch.object(gate, 'transfer_fixture_identity', return_value=None):
             self.assertEqual(argv[:2], ["--cache-dir", str(self.root / "user's home/.cache/intent/acp-callback-fixture")])
             self.assertEqual(argv[2], route)
 
+
+    def test_setup_help_names_injected_node_options_only_when_set(self):
+        component = self.root / "component"
+        blocker = "NODE_OPTIONS is set in this shell"
+        with mock.patch.dict(os.environ, {"NODE_OPTIONS": "--require /opt/dd-trace/init.js"}):
+            help_text = gate.callback_setup_help(component)
+        first = help_text.splitlines()[0]
+        self.assertIn(blocker, first)
+        self.assertIn("env -u NODE_OPTIONS", first)
+        self.assertNotIn("dd-trace", help_text, "the preload value is never echoed")
+        for value in (None, ""):
+            env = {k: v for k, v in os.environ.items() if k != "NODE_OPTIONS"}
+            if value is not None:
+                env["NODE_OPTIONS"] = value
+            with mock.patch.dict(os.environ, env, clear=True):
+                unchanged = gate.callback_setup_help(component)
+            self.assertNotIn(blocker, unchanged)
+            self.assertEqual(unchanged, "\n".join(help_text.splitlines()[1:]))
 
 class CallbackValidatorPortabilityTests(unittest.TestCase):
     def test_synthetic_suite_on_arm64_keeps_checks_and_skips_only_native_cli(self):
@@ -2603,6 +2719,7 @@ class StackSettingResumeTests(unittest.TestCase):
         harness.transfer = {"root": str(root / "transfer"), "contract.json": "verified"}
         dumps = json.dumps
         real_popen = subprocess.Popen
+        python_loader_env = {k: os.environ[k] for k in ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH") if k in os.environ}
 
         def capture_inputs(value, **kwargs):
             if isinstance(value, dict) and "root-tree" in value:
@@ -2638,6 +2755,9 @@ for name in tests:
     print(json.dumps({"type": "test", "event": "ok", "name": "alpha::one$" + name}))
 sys.exit(101 if interrupted == "1" else 0)
 '''
+            # Preserve only interpreter loading paths; the controlled Rust
+            # environment and stack assertions remain unchanged.
+            kwargs["env"] = {**kwargs["env"], **python_loader_env}
             process = real_popen(
                 [sys.executable, "-S", "-c", code, config, str(harness.children),
                  "1" if harness.interrupt else "0"], **kwargs

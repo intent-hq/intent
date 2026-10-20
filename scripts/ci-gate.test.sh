@@ -26,7 +26,8 @@ fail() {
   exit 1
 }
 
-always_on="bridge-test python-tests docs-check event-catalog-check shell-tests shell-lint shell-tests-bash3 repo-hygiene ruleset-check triage-parser-test consumer-checks-prepare"
+always_on="runner-route docs-check event-catalog-check shell-lint repo-hygiene ruleset-check triage-parser-test consumer-checks-prepare ci-policy"
+queue_only="bridge-test python-tests shell-tests shell-tests-bash3 bootstrap-install"
 pr_only="pr-title breaking-token submodule-pins"
 path_selected="consumer-checks-exercise"
 
@@ -38,10 +39,13 @@ path_selected="consumer-checks-exercise"
 needs_json() {
   local event=$1 job result override out="{" sep=$'\n'
   shift
-  for job in $always_on $pr_only $path_selected; do
+  for job in $always_on $pr_only $queue_only $path_selected; do
     result=success
     case " $pr_only " in
       *" $job "*) [ "$event" = pull_request ] || result=skipped ;;
+    esac
+    case " $queue_only $path_selected " in
+      *" $job "*) [ "$event" = merge_group ] || result=skipped ;;
     esac
     for override in "$@"; do
       [ "${override%%=*}" = "$job" ] || continue
@@ -93,25 +97,24 @@ expect_pass "a result key nested inside outputs is ignored" pull_request "$neste
 
 # ---- selected jobs require the exact expected result on both events --------
 
-for event in pull_request merge_group; do
-  GATE_TEST_SELECTION=false expect_pass "docs-only skip on $event" "$event" \
-    "$(needs_json "$event" consumer-checks-exercise=skipped)"
-  for result in failure cancelled skipped "" -; do
-    expect_fail "selected exercise $result on $event" "$event" \
-      "$(needs_json "$event" "consumer-checks-exercise=$result")" "ci-gate: consumer-checks-exercise"
-  done
-  for result in success failure cancelled "" -; do
-    GATE_TEST_SELECTION=false expect_fail "unselected exercise $result on $event" "$event" \
-      "$(needs_json "$event" "consumer-checks-exercise=$result")" "ci-gate: consumer-checks-exercise"
-  done
-  for selection in "" TRUE FALSE null 1 "false "; do
-    GATE_TEST_SELECTION="$selection" expect_fail "invalid selection '$selection' on $event" "$event" \
-      "$(needs_json "$event" consumer-checks-exercise=skipped)" "ci-gate: invalid consumer-checks selection"
-  done
-  GATE_TEST_SELECTION=false expect_fail "failed preparation cannot look like docs-only on $event" "$event" \
-    "$(needs_json "$event" consumer-checks-prepare=failure consumer-checks-exercise=skipped)" \
-    "ci-gate: consumer-checks-prepare did not succeed"
+event=merge_group
+GATE_TEST_SELECTION=false expect_pass "docs-only skip on $event" "$event" \
+  "$(needs_json "$event" consumer-checks-exercise=skipped)"
+for result in failure cancelled skipped "" -; do
+  expect_fail "selected exercise $result on $event" "$event" \
+    "$(needs_json "$event" "consumer-checks-exercise=$result")" "ci-gate: consumer-checks-exercise"
 done
+for result in success failure cancelled "" -; do
+  GATE_TEST_SELECTION=false expect_fail "unselected exercise $result on $event" "$event" \
+    "$(needs_json "$event" "consumer-checks-exercise=$result")" "ci-gate: consumer-checks-exercise"
+done
+for selection in "" TRUE FALSE null 1 "false "; do
+  GATE_TEST_SELECTION="$selection" expect_fail "invalid selection '$selection' on $event" "$event" \
+    "$(needs_json "$event" consumer-checks-exercise=skipped)" "ci-gate: invalid consumer-checks selection"
+done
+GATE_TEST_SELECTION=false expect_fail "failed preparation cannot look like docs-only on $event" "$event" \
+  "$(needs_json "$event" consumer-checks-prepare=failure consumer-checks-exercise=skipped)" \
+  "ci-gate: consumer-checks-prepare did not succeed"
 
 # ---- PR-only jobs are event-aware -------------------------------------------
 
@@ -124,6 +127,16 @@ for job in $pr_only; do
     "ci-gate: $job must be success on pull_request (result: 'failure')"
   expect_fail "$job failure on merge_group" merge_group "$(needs_json merge_group "$job=failure")" \
     "ci-gate: $job must be skipped on merge_group (result: 'failure')"
+done
+
+# Queue suites must really run in the queue and stay skipped on PRs.
+for job in $queue_only $path_selected; do
+  for result in success failure cancelled "" -; do
+    expect_fail "$job unexpected $result on PR" pull_request "$(needs_json pull_request "$job=$result")" "$job"
+  done
+  for result in skipped failure cancelled "" -; do
+    expect_fail "$job required $result in queue" merge_group "$(needs_json merge_group "$job=$result")" "$job"
+  done
 done
 
 # ---- always-on jobs must succeed on every event -----------------------------
@@ -144,8 +157,8 @@ done
 # One bad job never masks another: every offender is named in one run.
 expect_fail "several offenders are all named" merge_group \
   "$(needs_json merge_group "bridge-test=failure" "shell-tests=cancelled" "pr-title=success")" \
-  "ci-gate: bridge-test did not succeed (result: 'failure')" \
-  "ci-gate: shell-tests did not succeed (result: 'cancelled')" \
+  "ci-gate: bridge-test must be success on merge_group (result: 'failure')" \
+  "ci-gate: shell-tests must be success on merge_group (result: 'cancelled')" \
   "ci-gate: pr-title must be skipped on merge_group (result: 'success')"
 # A green job elsewhere in the run is not reported.
 grep -q "docs-check" <<<"$gate_output" && fail "a green job was reported: $gate_output"
@@ -168,7 +181,7 @@ expect_fail "unknown jobs do not stand in for known ones" pull_request \
 listed_jobs=$(cd "$repo_root" && "$script_bash" scripts/ci-gate.sh --list-jobs)
 printf 'list-jobs\n%s\n' "$listed_jobs" >>"$transcript"
 # shellcheck disable=SC2086  # the job lists are space-separated words; splitting is the point
-expected_listed=$(printf '%s\n' $always_on $pr_only $path_selected)
+expected_listed=$(printf '%s\n' $always_on $pr_only $queue_only $path_selected)
 [ "$listed_jobs" = "$expected_listed" ] ||
   fail "--list-jobs does not match the job lists this suite covers:"$'\n'"$listed_jobs"
 

@@ -1,6 +1,11 @@
 # Intent Backend — JSON-RPC Protocol
 
-**Documented Protocol Version:** `13.8` (prepared checkout configuration extension; not a shipped-version claim; the protocol-12 and protocol-13.0 retirements remain in force — see [compatibility and installed-frontend limits](./versioning.md#protocol-version--compatibility)). [GitLab checkout](./methods/repository-checkout.md) requires exactly integer `gitlabCheckout: 1`; optional owner images additionally require `gitlabCheckoutOwnerAvatar: 1` and an opted-in capture; submission correlation retains its independent `submissionCorrelation: 1` gate. The single-node platform launch remains prepared and capability-gated; its earlier 11.2 reservation does not imply implementation (daemon 11.2 carries script lifecycle snapshots). Other prepared extensions retain their own rollout status and capability gates, including the [shared-host capability contract](./methods/shared-host-membership.md#authority-and-discovery). The higher minor version does not imply implementation of the separately prepared Home 13.2, GitLab 13.3 or submission-correlation 13.4 additions.
+**Documented Protocol Version:** `14.0` (prepared active-only script and monitor lists; not a shipped-version claim; the protocol-12 and protocol-13.0 retirements remain in force — see [compatibility and installed-frontend limits](./versioning.md#protocol-version--compatibility)). [GitLab checkout](./methods/repository-checkout.md) requires exactly integer `gitlabCheckout: 1`; optional owner images additionally require `gitlabCheckoutOwnerAvatar: 1` and an opted-in capture; submission correlation retains its independent `submissionCorrelation: 1` gate. The single-node platform launch remains prepared and capability-gated; its earlier 11.2 reservation does not imply implementation (daemon 11.2 carries script lifecycle snapshots). Other prepared extensions retain their own rollout status and capability gates, including the [shared-host capability contract](./methods/shared-host-membership.md#authority-and-discovery). The prepared major version does not imply implementation of the separately prepared Home 13.2, GitLab 13.3 or submission-correlation 13.4 additions.
+
+The [compact script list contract](./methods/scripts.md#active-only-compact-lists-prepared-breaking-contract)
+requires `scriptActiveLists: 1` and `scriptMonitors: 2`; archived lists and terminal monitor history are removed. Known-ID output and full lifecycle events remain available.
+
+The [cancellable note deletion contract](./note-delete-grace.md) requires `noteDeleteGrace: 1`; it preserves the independent reading capabilities and immediate deletion behavior.
 
 The [onboarding adapter preparation request](./05-method-catalog.md#hostprepareprovideradapters-136-prepared) adds an owner-only, best-effort background optimization. Clients tolerate an unsupported method; it adds no capability flag and does not establish support for the independently gated extensions above.
 
@@ -11,6 +16,10 @@ OS/architecture constraints, one named multi-agent node, durable capacity/launch
 and safe model discovery. Its [static fixtures](./fixtures/nodes/platform-routing.test.mjs)
 do not qualify runtime scheduling. Private lifecycle/capture formats are unchanged.
 
+The [generic stream loss contract](./event-stream-recovery.md) is a prepared,
+independently negotiated extension with bounded client recovery and canonical
+wire fixtures. It is not a shipped-version claim.
+
 ## Section → file map
 
 | Section | File |
@@ -19,6 +28,7 @@ do not qualify runtime scheduling. Private lifecycle/capture formats are unchang
 | §1 Transport (1.1–1.4) | [01-transport.md](./01-transport.md) |
 | §2 Authentication (2.1–2.3) | [02-authentication.md](./02-authentication.md) |
 | §3 Message Envelope (JSON-RPC 2.0) (3.1–3.6) | [03-envelope.md](./03-envelope.md) |
+| Startup readiness and indexing progress (prepared) | [startup-readiness.md](./startup-readiness.md) |
 | §4 Heartbeat & Lifecycle | [04-heartbeat.md](./04-heartbeat.md) |
 | §5 Method Catalog — intro, router/fast-path method tables, aliases, client-served reverse RPCs | [05-method-catalog.md](./05-method-catalog.md) |
 | Workspace routing preparation — exact method/variant inventory, compatibility and resource lifetimes | [workspace-routing.md](./workspace-routing.md) |
@@ -110,6 +120,7 @@ structural integrity only, not executed native capture or durable ACK acceptance
 | §5.51 Desktop control (prepared) | [methods/desktop.md](./methods/desktop.md) |
 | §5.52 Explicit GitLab resource reads (prepared) | [methods/repository-resources.md](./methods/repository-resources.md) |
 | §5.53 GitLab project checkout (prepared) | [methods/repository-checkout.md](./methods/repository-checkout.md) |
+| §5.54 Provider profiles (prepared) | [methods/provider-profiles.md](./methods/provider-profiles.md) |
 | MCP `ws.*` binding signature index (generated; not wire-routable) | [methods/mcp-bindings.md](./methods/mcp-bindings.md) |
 
 `make check-protocol-catalog` (run by CI's `docs-check` job) enforces that the [05-method-catalog.md](./05-method-catalog.md) tables, the method tables in `methods/*.md`, and intentd's `intent-transport` catalog stay in sync (read from the `packages/intentd` checkout; like `check-event-catalog` and `check-protocol-field-parity`, the run names the checkout and the recorded pin on stdout and warns on stderr when they differ): every method documented in a `methods/*.md` table must appear in the catalog, and every method the pinned intentd catalog dispatches must have a catalog entry. The docs lead the pin: document a new method here first — a `methods/*.md` table row plus its catalog entry in one monorepo change; the checker only warns while the pinned `catalog.rs` does not carry it yet — then merge the intentd PR, and the automatic submodule bump passes once both exist. The reverse order fails: a pinned method with no docs row is a CI error, and once the `CI Gate` check is required it holds the rolling bump PR at the merge queue until the docs row lands. The same checks also run upstream: every intentd and cloudlands-fe PR calls the monorepo's reusable `.github/workflows/consumer-checks.yml` (`monorepo-consumer-checks`) with its own head in place of the pin, so a missing docs row is red on that PR before it merges, not on the bump afterwards.
