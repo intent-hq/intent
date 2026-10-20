@@ -33,9 +33,9 @@ change, so no version bump): **merge-queue position and estimated merge time**
 (§5.27 `GithubPullRequest`, §5.42 `MergeRequirements` and `lastSnapshot`, §5.7
 `ws.pr.snapshot`). A queued PR's `github.pulls.get` result and monitor checklist gain
 `mergeQueue?: MergeQueueEntry` — `{ position, queueSize?, state?, enqueuedAt?,
-estimatedMergeAt? }` read from GitHub GraphQL `PullRequest.mergeQueueEntry` in the same
-folded read as `isInMergeQueue`, with `estimatedMergeAt` the absolute projection of the
-host's seconds-to-merge estimate. It is informational only: the monitor never diffs it,
+estimatedTimeToMerge? }` read from GitHub GraphQL `PullRequest.mergeQueueEntry` in the same
+folded read as `isInMergeQueue`; `estimatedTimeToMerge` is the host's duration estimate in
+seconds, passed through as reported. It is informational only: the monitor never diffs it,
 so queue movement wakes no agent. Workspace `PullRequestInfo` rows do not carry it.
 Older daemons and hosts without merge queues omit it; clients detect it by presence.
 

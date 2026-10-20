@@ -409,7 +409,7 @@ interface MergeQueueEntry { // shared with the §5.42 `MergeRequirements.mergeQu
   queueSize?: number;       // entries currently in the queue, this one included (`mergeQueue.entries.totalCount`)
   state?: string;           // the host's raw entry state word, lowercased — GitHub: `queued` | `awaiting_checks` | `mergeable` | `unmergeable` | `locked`
   enqueuedAt?: string;      // RFC 3339 — when the PR entered the queue
-  estimatedMergeAt?: string; // RFC 3339 (whole-second, UTC) — the daemon's absolute projection of GitHub's `estimatedTimeToMerge` (seconds from the read): read time + seconds, so a cached serve does not drift; omitted while the host has no estimate
+  estimatedTimeToMerge?: number; // the host's estimate, in whole seconds, of how long until this entry merges (GitHub GraphQL `MergeQueueEntry.estimatedTimeToMerge`), passed through as reported — GitHub recomputes it on queue events rather than counting it down, so it is a duration estimate, not a deadline; omitted while the host has no estimate
 }
 
 interface GithubIssue {
