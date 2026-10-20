@@ -7,8 +7,9 @@ on:
       # JSON list of the caller's pooled jobs that start together once routing
       # finishes: [{"key", "label", "rust"?, "minutes"?, "events"?, "shards"?}].
       # `label` is the job's hosted fallback; `events` lists the events the job
-      # runs on (default: all); `shards: N` expands to keys key-1..key-N for a
-      # matrix. Each listed job reads its labels from outputs.slots[key].
+      # runs on (default: all); `shards: N` expands to keys key-1..key-N and
+      # `legs: [a, b]` to key-a, key-b, one per matrix leg. Each listed job
+      # reads its labels from outputs.slots[key].
       slot_jobs:
         type: string
         required: false
@@ -153,12 +154,12 @@ jobs:
             // Free slots go to the caller's listed jobs one at a time: Rust-compiling
             // jobs first (they reuse the slot's local cache), then the longest, then
             // list order. Listed jobs that do not fit, or that skip this event, get
-            // their hosted label directly; matrix shards are ranked separately.
+            // their hosted label directly; matrix legs are ranked separately.
             // Concurrent runs read the same free count before either job is queued,
             // so a pool may briefly run a job or two over its slot count.
             let requests = [];
             try {
-              requests = JSON.parse(process.env.SLOT_JOBS || '[]').flatMap(j => j.shards ? Array.from({length: j.shards}, (_, n) => ({...j, key: `${j.key}-${n + 1}`})) : [j]);
+              requests = JSON.parse(process.env.SLOT_JOBS || '[]').flatMap(j => (j.legs || (j.shards ? Array.from({length: j.shards}, (_, n) => n + 1) : null))?.map(leg => ({...j, key: `${j.key}-${leg}`})) ?? [j]);
             } catch (error) {
               core.info(`slot list unreadable (${error.message}); listed jobs use hosted labels`);
             }

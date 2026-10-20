@@ -55,13 +55,15 @@ def violations(text, filename):
         if runner.startswith('[self-hosted,') and (filename, job) in MAINTENANCE:
             continue
         routed = re.fullmatch(r"\$\{\{ fromJSON\(needs\.(route|runner-route)\.outputs\.(runners|slots|linux_labels|check_labels).*\}\}", runner)
+        # Matrix legs that may take a pool read their own slot first.
+        routed = routed or re.fullmatch(r"\$\{\{ [^|]+ && fromJSON\(needs\.(route|runner-route)\.outputs\.slots \|\| '\{\}'\)\[format\('[\w-]+-\{0\}', matrix\.\w+\)\] \|\| fromJSON\(needs\.(route|runner-route)\.outputs\.runners \|\| '\{\}'\)\[matrix\.(\w+)\] \|\| matrix\.\3 \}\}", runner)
         if not routed and not (runner == '${{ matrix.os }}' and 'needs.route.outputs.' in body):
             errors.append(job)
     return errors
 
 
 POOLED = {'gh-linux-8x', 'gh-linux-16x', 'ubuntu-22.04', 'ubuntu-24.04'}
-SLOT_READ = re.compile(r"outputs\.slots \|\| '\{\}'\)\[(?:'([\w-]+)'|format\('([\w-]+)-\{0\}', matrix\.shard\))\] \|\| fromJSON\('\[\"([\w.-]+)\"\]'\)")
+SLOT_READ = re.compile(r"outputs\.slots \|\| '\{\}'\)\[(?:'([\w-]+)'|format\('([\w-]+)-\{0\}', matrix\.\w+\))\] \|\| (?:fromJSON\('\[\"([\w.-]+)\"\]'\)|fromJSON\(needs\.[\w-]+\.outputs\.runners \|\| '\{\}'\)\[matrix\.(\w+)\])")
 
 
 def slot_list(text):
@@ -91,10 +93,12 @@ def slot_violations(text):
             errors.append(f'{job}: reads an unlisted slot')
             continue
         used.add(key)
-        if entry['label'] != read[3]:
+        if read[3] and entry['label'] != read[3]:
             errors.append(f"{job}: fallback {read[3]} differs from listed {entry['label']}")
-        if bool(read[2]) != bool(entry.get('shards')):
-            errors.append(f'{job}: matrix shards and the slot list disagree')
+        if read[4] and entry['label'] not in body:
+            errors.append(f"{job}: no matrix leg asks for the listed {entry['label']}")
+        if bool(read[2]) != bool(entry.get('shards') or entry.get('legs')):
+            errors.append(f'{job}: matrix legs and the slot list disagree')
         only = re.search(r"^    if: github\.event_name == '(\w+)'$", body, re.M)
         if only and entry.get('events') != [only[1]]:
             errors.append(f'{job}: runs only on {only[1]} but lists events {entry.get("events")}')
@@ -102,7 +106,67 @@ def slot_violations(text):
     return errors
 
 
+POOL_OF = {'gh-linux-8x': 'heavy', 'gh-linux-16x': 'heavy', 'ubuntu-22.04': 'small', 'ubuntu-24.04': 'small'}
+QUEUE_HOSTED = set()
+
+def pool_reads(body):
+    """(pool, several legs?) for a job reading a pool-level mapping, else None."""
+    runner = re.search(r'^    runs-on: (.+)$', body, re.M)
+    runner = runner[1] if runner else ''
+    legs = '    strategy:' in body
+    fixed = re.search(r"outputs\.runners \|\| '\{\}'\)\['([\w.-]+)'\]", runner)
+    if fixed:
+        return (POOL_OF[fixed[1]], legs) if fixed[1] in POOL_OF else None
+    if re.search(r'outputs\.(linux_labels|check_labels)', runner):
+        return ('heavy', legs)
+    by_leg = re.search(r"outputs\.runners \|\| '\{\}'\)\[matrix\.(\w+)\]", runner)
+    if by_leg and 'outputs.slots' not in runner and not re.search(r"contains\(matrix\.\w+, 'linux'\)\) && matrix\.", runner):
+        labels = [label for label in POOL_OF if label in body]
+        return (POOL_OF[labels[0]], True) if labels else None
+    return None
+
+
+def parallel_pool_violations(text, filename):
+    """Pooled jobs that can run together must take per-job slots, not the shared mapping."""
+    found = jobs(text)
+    needs = {}
+    for job, body in found.items():
+        # `needs: a`, `needs: [a, b]` (possibly on the next line), or a `- a` list.
+        match = re.search(r'^    needs:\s*(?:\[([^\]]*)\]|(\S+)$|((?:\n      - [\w-]+)+))', body, re.M)
+        names = (match[1] or match[2] or match[3]) if match else ''
+        needs[job] = {n.strip(' -\n') for n in re.split(r',|\n', names) if n.strip(' -\n')}
+    def after(job, other, seen=()):
+        return other in needs[job] or any(after(n, other, seen + (job,)) for n in needs[job] if n in needs and n not in seen)
+    readers = {}
+    for job, body in found.items():
+        read = pool_reads(body)
+        if read and (filename, job) not in QUEUE_HOSTED:
+            readers.setdefault(read[0], []).append((job, read[1]))
+    errors = []
+    for pool, members in readers.items():
+        for i, (job, legs) in enumerate(members):
+            if legs:
+                errors.append(f'{job}: several matrix legs share the {pool} pool mapping')
+            for other, _ in members[i + 1:]:
+                if not after(job, other) and not after(other, job):
+                    errors.append(f'{job} and {other} can run together on the {pool} pool mapping')
+    return errors
+
+
 class RunnerPolicy(unittest.TestCase):
+    def test_parallel_pooled_jobs_take_per_job_slots(self):
+        for path in (ROOT / '.github/workflows').glob('*.yml'):
+            with self.subTest(workflow=path.name):
+                self.assertEqual(parallel_pool_violations(path.read_text(), path.name), [])
+
+    def test_parallel_pool_detection(self):
+        read = """    needs: [{}]\n    runs-on: ${{{{ fromJSON(needs.route.outputs.runners || '{{}}')['gh-linux-16x'] || fromJSON('["gh-linux-16x"]') }}}}\n"""
+        two = 'jobs:\n  a:\n' + read.format('route') + '  b:\n' + read.format('route')
+        self.assertEqual(len(parallel_pool_violations(two, 'x.yml')), 1)
+        self.assertEqual(parallel_pool_violations('jobs:\n  a:\n' + read.format('route') + '  b:\n' + read.format('route, a'), 'x.yml'), [])
+        legs = 'jobs:\n  a:\n    strategy:\n      matrix:\n        os: [ubuntu-24.04]\n        node: [22, 24]\n    runs-on: ${{ fromJSON(needs.route.outputs.runners || \'{}\')[matrix.os] || matrix.os }}\n'
+        self.assertEqual(parallel_pool_violations(legs, 'x.yml'), ['a: several matrix legs share the small pool mapping'])
+
     def test_slot_lists_match_their_jobs(self):
         for path in (ROOT / '.github/workflows').glob('*.yml'):
             with self.subTest(workflow=path.name):

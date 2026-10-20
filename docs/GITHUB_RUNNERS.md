@@ -87,10 +87,14 @@ runner output, tagged `github-runner-<pool>-<n>`).
   that start together (`slot_jobs` input of `runner-route.yml`, or `SLOT_JOBS`
   in an inline probe); each reads `outputs.slots[key]`. Free slots go to
   Rust-compiling jobs first (`"rust": true`, they reuse the slot's local
-  cache), then the longest (`minutes`), then list order; `shards: N` gives
-  each matrix leg its own key (`key-1`..`key-N`) and `events` keeps a job that
-  skips the event from holding a slot. Every other listed job gets its hosted
-  label, and unlisted jobs use the pool only while a slot is still free.
+  cache), then the longest (`minutes`), then list order; `shards: N` or
+  `legs: [a, b]` gives each matrix leg its own key (`key-1`..`key-N`, or
+  `key-a`, `key-b`) and `events` keeps a job that skips the event from holding
+  a slot. Every other listed job gets its hosted label, and unlisted jobs use
+  the pool only while a slot is still free. Any unreadable runner list or job
+  count sends every job hosted. `scripts/test_runner_policy.py` fails a
+  workflow whose unlisted pooled jobs (or matrix legs) can run at the same
+  time, so they must be listed.
   Two runs probing at the same moment can claim the same free slot, so a pool
   may briefly run a job or two past its slot count; that job waits for the
   next free slot.

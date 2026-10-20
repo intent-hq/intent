@@ -21,6 +21,11 @@ const cacheSlot = (busy = false) => runner('Linux', 'X64', busy, ['intent-cache'
 const CACHE = ['self-hosted', 'linux', 'x64', 'intent-cache'];
 const smallSlot = (busy = false) => runner('Linux', 'X64', busy, ['intent-cache-small']);
 const SMALL = ['self-hosted', 'linux', 'x64', 'intent-cache-small'];
+// Per-job slot fitting: a run gets self-hosted labels for at most as many jobs as a pool has free slots.
+const heavyJob = (id, status = 'in_progress') => ({ id, status, labels: CACHE, created_at: new Date().toISOString() });
+const UNIT = { key: 'test', label: 'gh-linux-8x', minutes: 13, shards: 4 };
+const slotEnv = (jobs, env = {}) => ({ SLOT_JOBS: JSON.stringify(jobs), ...env });
+const onSlots = (r, labels) => Object.keys(r.slots).filter((k) => JSON.stringify(r.slots[k]) === JSON.stringify(labels)).sort();
 async function route(fixture = {}) {
   const outputs = {},
     queried = [],
@@ -87,8 +92,10 @@ test('healthy matching fleet is preferred for every workload size', async () => 
   assert.deepEqual([...new Set(r.queried)].sort(), ['cloudlands-fe', 'intent', 'intentd']);
 });
 test('offline, invisible, API failure, and unreadable sibling capacity burst', async () => {
-  for (const f of [{ runners: [] }, { error: true }, { unreadable: 'intent' }]) {
-    const r = await route(f);
+  for (const f of [{ runners: [] }, { error: true }, { unreadable: 'intent' }, { unreadable: 'intentd' }]) {
+    const r = await route({ ...f, env: slotEnv([UNIT, { key: 'lint', label: 'ubuntu-24.04' }]) });
+    // Unknown demand on any repo sends every listed job hosted.
+    assert.ok(Object.values(r.slots).every((labels) => labels.length === 1 && !labels[0].startsWith('self-hosted')));
     for (const label of Object.keys(r.runners)) assert.deepEqual(r.runners[label], [label]);
     assert.deepEqual(JSON.parse(r.outputs.check_labels), ['gh-linux-8x']);
     assert.deepEqual(JSON.parse(r.outputs.windows_labels), ['gh-windows-16x']);
@@ -275,11 +282,6 @@ test('both pools carry the generic labels, so capacity and demand are counted pe
   assert.ok(healthy.runners['ubuntu-24.04'].includes('intent-cache-small'));
   assert.ok(!healthy.runners['ubuntu-24.04'].includes('intent-cache'));
 });
-// Per-job slot fitting: a run gets self-hosted labels for at most as many jobs as a pool has free slots.
-const heavyJob = (id, status = 'in_progress') => ({ id, status, labels: CACHE, created_at: new Date().toISOString() });
-const UNIT = { key: 'test', label: 'gh-linux-8x', minutes: 13, shards: 4 };
-const slotEnv = (jobs, env = {}) => ({ SLOT_JOBS: JSON.stringify(jobs), ...env });
-const onSlots = (r, labels) => Object.keys(r.slots).filter((k) => JSON.stringify(r.slots[k]) === JSON.stringify(labels)).sort();
 test('2 free heavy slots and 4 heavy jobs: exactly 2 self-hosted, 2 hosted', async () => {
   const r = await route({ env: slotEnv([UNIT]) });
   assert.deepEqual(Object.keys(r.slots).sort(), ['test-1', 'test-2', 'test-3', 'test-4']);
@@ -356,6 +358,9 @@ test('each pool fits its own jobs and keeps its own labels', async () => {
   const spare = await route({ env: slotEnv([{ key: 'lint', label: 'ubuntu-24.04' }]) });
   assert.deepEqual(spare.slots.lint, SMALL);
   assert.deepEqual(spare.runners['ubuntu-24.04'], SMALL);
+  // `legs` gives each named matrix leg its own key.
+  const legs = await route({ env: slotEnv([{ key: 'pin', label: 'ubuntu-24.04', legs: ['codex', 'claude-code'] }]), jobs: Array.from({ length: 5 }, (_, i) => ({ ...heavyJob(i + 3), labels: SMALL })) });
+  assert.deepEqual(legs.slots, { 'pin-codex': SMALL, 'pin-claude-code': ['ubuntu-24.04'] });
   // Native fleets are not slot-fitted.
   const win = await route({ env: slotEnv([{ key: 'win', label: 'windows-2025' }]) });
   assert.deepEqual(win.slots.win, ['windows-2025']);
