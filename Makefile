@@ -519,12 +519,15 @@ lint-shell: ## Run shellcheck over scripts/*.sh (needs shellcheck; make bootstra
 # Bash 3.2 for the scripts/*.test.sh compatibility passes (stock macOS bash is
 # 3.2). CI builds it only for the merge queue, so build it once here and the
 # suites' shared lookup (scripts/find-bash3.sh) finds this cache on its own.
-# Export BASH3_CACHE_DIR to move it; the suites read the same variable.
+# The no-op check pins the full 3.2.57 version so a pin change rebuilds.
+# Export BASH3_CACHE_DIR (absolute) to move it; the suites read the same variable.
 BASH3_CACHE_DIR ?= $(or $(XDG_CACHE_HOME),$(HOME)/.cache)/intent-bash3
 
 bash3: ## Build Bash 3.2 for the shell suites' 3.2 pass into BASH3_CACHE_DIR (default ~/.cache/intent-bash3; no-op once built; needs gcc, make, bison)
-	@if "$(BASH3_CACHE_DIR)/bash" -c '[ "$${BASH_VERSINFO[0]}.$${BASH_VERSINFO[1]}" = 3.2 ]' >/dev/null 2>&1; then \
+	@if "$(BASH3_CACHE_DIR)/bash" -c '[ "$${BASH_VERSION%%(*}" = 3.2.57 ]' >/dev/null 2>&1; then \
 		echo "bash3: $(BASH3_CACHE_DIR)/bash is already built"; \
+	elif /bin/bash -c '[ "$${BASH_VERSINFO[0]}" -eq 3 ]' >/dev/null 2>&1; then \
+		echo "bash3: /bin/bash is already Bash 3 (stock macOS); the suites use it, nothing to build"; \
 	else \
 		echo "bash3: building Bash 3.2.57 into $(BASH3_CACHE_DIR) (a few minutes)"; \
 		env -u GITHUB_ENV bash scripts/install-ci-bash3.sh "$(BASH3_CACHE_DIR)"; \

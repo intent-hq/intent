@@ -114,6 +114,13 @@ class CachedBash3(unittest.TestCase):
             result = run_lookup(lookup_env(XDG_CACHE_HOME=str(Path(temp) / 'xdg'), BASH3_BIN=str(explicit)))
             self.assertEqual(result.stdout.strip(), str(explicit))
 
+    def test_lookup_skips_a_cached_binary_that_is_not_bash3(self):
+        with tempfile.TemporaryDirectory() as temp:
+            stub = self.make_cache(Path(temp))
+            stub.write_text('#!/bin/sh\nexit 1\n')
+            result = run_lookup(lookup_env(XDG_CACHE_HOME=str(Path(temp) / 'xdg')))
+            self.assertNotEqual(result.stdout.strip(), str(stub))
+
     def test_missing_hint_names_the_target(self):
         with tempfile.TemporaryDirectory() as temp:
             result = run_lookup(lookup_env(XDG_CACHE_HOME=temp), 'bash3_missing_hint')
@@ -142,6 +149,8 @@ class CachedBash3(unittest.TestCase):
                 stub = cache / 'bash'
                 stub.write_text('#!/bin/sh\n[ "$1" = -c ] && exit 0\nexit 1\n')
                 stub.chmod(0o755)
+            elif subprocess.run(['/bin/bash', '-c', '[ "${BASH_VERSINFO[0]}" -eq 3 ]']).returncode == 0:
+                self.skipTest('stock /bin/bash is Bash 3; the target builds nothing here')
             env = {k: v for k, v in os.environ.items()
                    if k not in {'MAKEFLAGS', 'MFLAGS', 'MAKELEVEL'}}
             env.update(BASH3_CACHE_DIR=str(cache), GITHUB_ENV=str(root / 'github-env'))

@@ -431,8 +431,11 @@ REQUIRE_BASH3=1 bash scripts/consumer-checks.test.sh
 
 `make bash3` builds the same pinned interpreter into
 `${XDG_CACHE_HOME:-~/.cache}/intent-bash3` and does nothing once it is built.
-Export `BASH3_CACHE_DIR` to move the cache. The suites find it through the
-shared lookup in `scripts/find-bash3.sh`, so `BASH3_BIN` is only needed for an
-interpreter elsewhere. Without `REQUIRE_BASH3`, a missing interpreter is a skip
-notice rather than a failure. The interpreter is isolated; the build does not
-replace the system shell.
+Export `BASH3_CACHE_DIR` (an absolute path) to move the cache. The suites find
+the cache through the shared lookup in `scripts/find-bash3.sh`, so `BASH3_BIN`
+is only needed for an interpreter elsewhere. On macOS the stock `/bin/bash` is
+already 3.2, so the target builds nothing. Without `REQUIRE_BASH3`, a missing interpreter is a skip
+notice rather than a failure. `scripts/dev-sandbox.test.sh` has no lookup and
+must be started by the interpreter itself, as CI does:
+`REQUIRE_BASH3=1 DEV_SANDBOX_TEST_STARTUP_ONLY=1 ~/.cache/intent-bash3/bash scripts/dev-sandbox.test.sh`.
+The interpreter is isolated; the build does not replace the system shell.
