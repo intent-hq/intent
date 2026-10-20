@@ -697,7 +697,9 @@ The method surface is enforced by golden tests in `crates/intent-transport/src/c
 A new optional field on a row the frontend types (`AgentLite` → `AgentSession`,
 `Workspace` → `Workspace`) ships daemon-first, so the daemon emits it before the
 pinned cloudlands-fe declares it. List such a field here in the docs PR that documents
-it, which lands before the intentd PR (docs lead the pin).
+it, which lands before the intentd PR (docs lead the pin). **Row** is the Rust struct
+(`AgentLite`, `Workspace`), **Field** the wire name, **Contract** a Markdown link to the
+field's contract, and **App adoption** the cloudlands-fe PR or issue that declares it.
 `make check-protocol-field-parity` reads this table. A listed field the frontend
 type lacks is a warning instead of an error. An unlisted emitted field still fails,
 and so does a malformed table. Once the frontend pin declares the field, the check

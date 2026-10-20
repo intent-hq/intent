@@ -53,67 +53,90 @@ export const PAIRS = [
 export const STAGED_DOC = 'docs/protocol/versioning.md';
 export const STAGED_HEADING = 'Staged row fields (app adoption pending)';
 const STAGED_COLUMNS = ['Row', 'Field', 'Contract', 'App adoption'];
-const STAGED_NAME_RE = /^`?([A-Za-z_][A-Za-z0-9_]*)`?$/;
+// One wire name per cell, wrapped in a balanced pair of backticks or none.
+const STAGED_NAME_RE = /^(`?)([^`\s|]+)\1$/;
+const MD_LINK_RE = /\[[^\]]+\]\([^)\s]+\)/;
+const FENCE_RE = /^\s*(```|~~~)/;
+const HEADING_RE = /^#{1,6}\s+(.*?)\s*#*\s*$/;
 
-function tableCells(line) {
-  const body = line.trim().replace(/^\|/, '').replace(/\|$/, '');
-  return body.split('|').map((c) => c.trim());
+// Cells of a `|`-led table row, honoring `\|` escapes (same rule as
+// tableCells in scripts/check-protocol-catalog.mjs); null for any other line.
+function tableCells(raw) {
+  if (!raw.trim().startsWith('|')) return null;
+  const cells = [...raw.trim().matchAll(/\|((?:[^|\\]|\\.)*)/g)].map((m) => m[1].trim());
+  if (cells.at(-1) === '') cells.pop();
+  return cells;
 }
 
 /**
- * Parse the staged daemon-first field table under `### <STAGED_HEADING>` in
- * `markdown`. Returns `{ staged, errors }`: `staged` maps a Rust struct name to
- * a Map of wire field → `{ file, line, adoption }`. Every row must name a
- * manifest struct, a field, a contract and the app adoption that retires it.
+ * Parse the staged daemon-first field table under the `<STAGED_HEADING>`
+ * heading in `markdown` (fenced code blocks are skipped). Returns
+ * `{ staged, errors }`: `staged` maps a Rust struct name to a Map of wire
+ * field → `{ file, line, adoption }`. Every row must name a manifest Rust
+ * struct, a wire field, a Markdown link to the contract and the app adoption
+ * (cloudlands-fe PR or issue) that retires it.
  */
 export function parseStagedFields(markdown, file = STAGED_DOC, pairs = PAIRS) {
   const staged = new Map();
   const errors = [];
   const fail = (line, message) => errors.push({ file, line, message: `${STAGED_HEADING}: ${message}` });
   const lines = markdown.split('\n');
-  const headingRe = /^#{1,6}\s+(.*?)\s*$/;
-  const start = lines.findIndex((l) => l.match(headingRe)?.[1] === STAGED_HEADING);
+  const section = [];
+  let inFence = false;
+  let start = -1;
+  for (let i = 0; i < lines.length; i += 1) {
+    if (FENCE_RE.test(lines[i])) inFence = !inFence;
+    if (inFence || FENCE_RE.test(lines[i])) continue;
+    const heading = lines[i].match(HEADING_RE)?.[1];
+    if (start === -1) {
+      if (heading === STAGED_HEADING) start = i;
+      continue;
+    }
+    if (heading !== undefined) break;
+    section.push(i);
+  }
   if (start === -1) {
     fail(1, `heading not found; restore the section (with its ${STAGED_COLUMNS.join(' | ')} table) in ${file}`);
     return { staged, errors };
   }
-  let i = start + 1;
-  while (i < lines.length && !headingRe.test(lines[i]) && !lines[i].trim().startsWith('|')) i += 1;
-  if (i >= lines.length || !lines[i].trim().startsWith('|')) {
+  const first = section.findIndex((i) => tableCells(lines[i]) !== null);
+  if (first === -1) {
     fail(start + 1, `no table follows the heading; expected columns ${STAGED_COLUMNS.join(' | ')}`);
     return { staged, errors };
   }
-  const header = tableCells(lines[i]);
+  const headerAt = section[first];
+  const header = tableCells(lines[headerAt]);
   if (header.join('|') !== STAGED_COLUMNS.join('|')) {
-    fail(i + 1, `table columns are ${header.join(' | ')}; expected ${STAGED_COLUMNS.join(' | ')}`);
+    fail(headerAt + 1, `table columns are ${header.join(' | ')}; expected ${STAGED_COLUMNS.join(' | ')}`);
     return { staged, errors };
   }
-  if (!/^\s*\|?[\s:|-]*-[\s:|-]*$/.test(lines[i + 1] ?? '')) {
-    fail(i + 2, 'the header row must be followed by a | --- | separator row');
+  if (!/^\s*\|?[\s:|-]*-[\s:|-]*$/.test(lines[headerAt + 1] ?? '')) {
+    fail(headerAt + 2, 'the header row must be followed by a | --- | separator row');
     return { staged, errors };
   }
   const structs = new Map(pairs.map((p) => [p.rust.struct, p]));
-  for (i += 2; i < lines.length && lines[i].trim().startsWith('|'); i += 1) {
-    const line = i + 1;
+  for (let i = headerAt + 2; i < lines.length; i += 1) {
     const cells = tableCells(lines[i]);
+    if (cells === null) break;
+    const line = i + 1;
     if (cells.length !== STAGED_COLUMNS.length) {
       fail(line, `row has ${cells.length} cell(s); expected ${STAGED_COLUMNS.length}`);
       continue;
     }
     const [rowCell, fieldCell, contract, adoption] = cells;
-    const row = rowCell.match(STAGED_NAME_RE)?.[1];
-    const field = fieldCell.match(STAGED_NAME_RE)?.[1];
+    const row = rowCell.match(STAGED_NAME_RE)?.[2];
+    const field = fieldCell.match(STAGED_NAME_RE)?.[2];
     if (!row || !field) {
-      fail(line, `Row and Field must be single identifiers (got ${rowCell || '(empty)'} / ${fieldCell || '(empty)'})`);
+      fail(line, `Row and Field must each be one name, in balanced backticks or none (got ${rowCell || '(empty)'} / ${fieldCell || '(empty)'})`);
       continue;
     }
-    if (!contract || !adoption) {
-      fail(line, `${row}.${field} needs a Contract link and the App adoption (cloudlands-fe PR or issue) that retires it`);
+    if (!MD_LINK_RE.test(contract) || !adoption) {
+      fail(line, `${row}.${field} needs a Markdown link to its Contract and the App adoption (cloudlands-fe PR or issue) that retires it`);
       continue;
     }
     const pair = structs.get(row);
     if (!pair) {
-      fail(line, `Row ${row} is not a checked row struct (${[...structs.keys()].join(', ')}); add a pair to PAIRS in scripts/check-protocol-field-parity.mjs first`);
+      fail(line, `Row ${row} is not a checked Rust row struct (${[...structs.keys()].join(', ')}); name the Rust struct, not the frontend type, or add a pair to PAIRS in scripts/check-protocol-field-parity.mjs`);
       continue;
     }
     if (Object.hasOwn(pair.ignore, field)) {
@@ -611,7 +634,7 @@ export function comparePair(pair, rustSource, tsSource, staged = new Map()) {
   }
   for (const [wire, entry] of staged) {
     if (!emitted.has(wire)) {
-      errors.push({ file: entry.file, line: entry.line, severity: 'warning', message: `${label}: staged field ${wire} is not emitted by ${pair.rust.struct}; expected while its intentd change has not reached this checkout (docs lead the pin), otherwise remove the row` });
+      errors.push({ file: entry.file, line: entry.line, severity: 'warning', message: `${label}: staged field ${wire} is not emitted by ${pair.rust.struct}; expected while its intentd change has not reached this checkout (docs lead the pin), otherwise remove the row (or fix a misspelled Field)` });
     } else if (tsKeys.has(wire)) {
       errors.push({ file: entry.file, line: entry.line, severity: 'warning', message: `${label}: stale staged field ${wire} — ${pair.ts.type} now declares it (${tsFile}:${tsKeys.get(wire)}); remove the row from the "${STAGED_HEADING}" table` });
     }
