@@ -302,9 +302,11 @@ GATE_CACHE_DIR ?= $(HOME)/.cache/intent/gate-runs
 # intentd's scripts/test-without-provider-clis.sh hides every provider CLI
 # (codex, claude, opencode, ...) in a private mount namespace, so a test that
 # only passes because the host has them fails here instead of on CI
-# (intentd#2462). Linux only; needs bwrap. Node stays visible, as on CI;
-# HIDE_NODE=1 hides it too. Resume records are kept separate per mode. The
-# wrapper's discovery self-check builds with $(BUILD_JOBS) jobs.
+# (intentd#2462). Linux only; needs bwrap. Node stays visible, as on CI: the
+# gates' fixture checks need it, so HIDE_NODE=1 is refused here (run the
+# script directly around cargo nextest for a Node-free run). Resume records
+# are kept separate per mode. The wrapper's discovery self-check builds with
+# $(BUILD_JOBS) jobs.
 HERMETIC ?= 0
 ifneq ($(filter-out 0 1,$(HERMETIC)),)
 $(error HERMETIC must be 0 or 1, got '$(HERMETIC)')
@@ -316,6 +318,7 @@ HERMETIC_RUNNER_WRAP := $(if $(filter 1,$(HERMETIC)),env INTENT_GATE_HERMETIC=1 
 HERMETIC_PREFLIGHT = if [ "$(HERMETIC)" = 1 ]; then \
 		[ "$$(uname -s 2>/dev/null)" = Linux ] || { echo "[$@] ERROR: HERMETIC=1 is Linux only (it hides provider CLIs in a bwrap mount namespace)" >&2; exit 1; }; \
 		command -v bwrap >/dev/null 2>&1 || { echo "[$@] ERROR: HERMETIC=1 needs bwrap; run make doctor (Debian/Ubuntu: sudo apt-get install bubblewrap)" >&2; exit 1; }; \
+		[ "$${HIDE_NODE:-0}" != 1 ] || { echo "[$@] ERROR: HIDE_NODE=1 is not supported with HERMETIC=1: the gates' callback and transfer fixture checks need Node. For a Node-free run use $(INTENTD_DIR)/scripts/test-without-provider-clis.sh around cargo nextest" >&2; exit 1; }; \
 		echo "[$@] HERMETIC=1: tests run with every provider CLI hidden ($(INTENTD_DIR)/scripts/test-without-provider-clis.sh)"; \
 	fi
 

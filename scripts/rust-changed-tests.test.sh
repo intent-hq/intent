@@ -243,6 +243,12 @@ else
   [[ "$(<"$temp_dir/planner.log.makeflags")" == *"HERMETIC=1"* ]] \
     || fail "$case_name: MAKEFLAGS were: $(<"$temp_dir/planner.log.makeflags")"
 
+  case_name="test-changed recipe refuses HIDE_NODE=1 with HERMETIC=1 before planning"
+  run_make test-changed HERMETIC=1 HIDE_NODE=1
+  [[ "$status" -ne 0 ]] || fail "$case_name: make exited 0"
+  [[ "$stderr" == *"[test-changed] ERROR: HIDE_NODE=1 is not supported with HERMETIC=1"* ]] || fail "$case_name: stderr: $stderr"
+  [[ -z "$planner_log" ]] || fail "$case_name: planner ran: $planner_log"
+
   case_name="test-changed recipe refuses HERMETIC=1 without bwrap before planning"
   rm -f "$bin_dir/bwrap"
   run_make test-changed HERMETIC=1
