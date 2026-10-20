@@ -420,11 +420,19 @@ expect a low hit rate unless your path matches a CI runner's.
 
 The `shell-tests-bash3` CI job runs on GitHub-hosted Linux with a checksum-verified
 Bash 3.2.57 build. It tests the shell language compatibility needed by macOS
-users without consuming a macOS runner. To reproduce on Linux:
+users without consuming a macOS runner. CI runs the shell suites only in the
+merge queue, so a local run is the only check before a 3.2-only breakage ejects
+the PR. Run it before opening a PR that touches `scripts/*.sh`:
 
 ```bash
-bash scripts/install-ci-bash3.sh /tmp/intent-bash3
-BASH3_BIN=/tmp/intent-bash3/bash REQUIRE_BASH3=1 bash scripts/consumer-checks.test.sh
+make bash3   # one-time build (a few minutes; needs gcc, make and bison)
+REQUIRE_BASH3=1 bash scripts/consumer-checks.test.sh
 ```
 
-The interpreter is isolated; the installer does not replace the system shell.
+`make bash3` builds the same pinned interpreter into
+`${XDG_CACHE_HOME:-~/.cache}/intent-bash3` and does nothing once it is built.
+Export `BASH3_CACHE_DIR` to move the cache. The suites find it through the
+shared lookup in `scripts/find-bash3.sh`, so `BASH3_BIN` is only needed for an
+interpreter elsewhere. Without `REQUIRE_BASH3`, a missing interpreter is a skip
+notice rather than a failure. The interpreter is isolated; the build does not
+replace the system shell.

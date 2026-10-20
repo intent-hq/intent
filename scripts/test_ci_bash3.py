@@ -68,5 +68,104 @@ class Bash3(unittest.TestCase):
                              ['args=-j1', 'MAKEFLAGS=unset', 'MFLAGS=unset', 'GNUMAKEFLAGS=unset'])
             self.assertTrue((root / 'install/bash').exists())
 
+SUITES = ('ci-gate', 'consumer-checks', 'docs-check', 'lint-fixed-sleeps',
+          'release-status', 'rust-changed-tests', 'shipped-in')
+STUB_BASH3 = '#!/bin/sh\nexit 0\n'
+
+
+def lookup_env(**extra):
+    env = {k: v for k, v in os.environ.items()
+           if k not in {'BASH3_BIN', 'BASH3_CACHE_DIR', 'XDG_CACHE_HOME'}}
+    env.update(extra)
+    return env
+
+
+def run_lookup(env, body='find_bash3'):
+    return subprocess.run(['bash', '-c', f'source "$1"; {body}', 'bash', str(ROOT / 'scripts/find-bash3.sh')],
+                          env=env, capture_output=True, text=True)
+
+
+class CachedBash3(unittest.TestCase):
+    """`make bash3` builds into a persistent cache the suites find on their own."""
+
+    def make_cache(self, root):
+        cache = root / 'xdg' / 'intent-bash3'
+        cache.mkdir(parents=True)
+        stub = cache / 'bash'
+        stub.write_text(STUB_BASH3)
+        stub.chmod(0o755)
+        return stub
+
+    def test_lookup_finds_the_cache_without_bash3_bin(self):
+        with tempfile.TemporaryDirectory() as temp:
+            stub = self.make_cache(Path(temp))
+            result = run_lookup(lookup_env(XDG_CACHE_HOME=str(Path(temp) / 'xdg')))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), str(stub))
+
+    def test_cache_dir_override_and_bash3_bin_precedence(self):
+        with tempfile.TemporaryDirectory() as temp:
+            stub = self.make_cache(Path(temp))
+            moved = run_lookup(lookup_env(BASH3_CACHE_DIR=str(stub.parent), XDG_CACHE_HOME=str(Path(temp) / 'none')))
+            self.assertEqual(moved.stdout.strip(), str(stub))
+            explicit = Path(temp) / 'explicit-bash'
+            explicit.write_text(STUB_BASH3)
+            explicit.chmod(0o755)
+            result = run_lookup(lookup_env(XDG_CACHE_HOME=str(Path(temp) / 'xdg'), BASH3_BIN=str(explicit)))
+            self.assertEqual(result.stdout.strip(), str(explicit))
+
+    def test_missing_hint_names_the_target(self):
+        with tempfile.TemporaryDirectory() as temp:
+            result = run_lookup(lookup_env(XDG_CACHE_HOME=temp), 'bash3_missing_hint')
+            self.assertIn("run 'make bash3'", result.stdout)
+            self.assertIn(f'{temp}/intent-bash3', result.stdout)
+
+    def test_every_suite_uses_the_shared_lookup(self):
+        for suite in SUITES:
+            text = (ROOT / f'scripts/{suite}.test.sh').read_text()
+            with self.subTest(suite=suite):
+                self.assertIn('source "$repo_root/scripts/find-bash3.sh"', text)
+                self.assertNotIn('find_bash3() {', text)
+                self.assertNotIn('(set BASH3_BIN)', text)
+                self.assertEqual(text.count('$(bash3_missing_hint)'), 2)
+
+    def run_target(self, cached):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / 'scripts').mkdir()
+            log = root / 'installer.log'
+            installer = root / 'scripts/install-ci-bash3.sh'
+            installer.write_text(f'printf "%s\\n" "$1" "${{GITHUB_ENV-unset}}" > {log}\n')
+            cache = root / 'cache'
+            if cached:
+                cache.mkdir()
+                stub = cache / 'bash'
+                stub.write_text('#!/bin/sh\n[ "$1" = -c ] && exit 0\nexit 1\n')
+                stub.chmod(0o755)
+            env = {k: v for k, v in os.environ.items()
+                   if k not in {'MAKEFLAGS', 'MFLAGS', 'MAKELEVEL'}}
+            env.update(BASH3_CACHE_DIR=str(cache), GITHUB_ENV=str(root / 'github-env'))
+            result = subprocess.run(['make', '--no-print-directory', '-f', str(ROOT / 'Makefile'), 'bash3'],
+                                    cwd=root, env=env, capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            return result.stdout, (log.read_text().splitlines() if log.exists() else None), cache
+
+    def test_target_builds_into_the_cache_when_empty(self):
+        stdout, installer_args, cache = self.run_target(cached=False)
+        self.assertEqual(installer_args, [str(cache), 'unset'])
+        self.assertIn('building Bash 3.2.57', stdout)
+
+    def test_target_is_a_no_op_once_built(self):
+        stdout, installer_args, cache = self.run_target(cached=True)
+        self.assertIsNone(installer_args)
+        self.assertIn(f'{cache}/bash is already built', stdout)
+
+    def test_contributing_points_at_the_target(self):
+        text = (ROOT / 'CONTRIBUTING.md').read_text()
+        section = text.split('### Bash 3 compatibility checks', 1)[1].split('\n#', 1)[0]
+        self.assertIn('make bash3', section)
+        self.assertNotIn('/tmp', section)
+
+
 if __name__ == '__main__':
     unittest.main()

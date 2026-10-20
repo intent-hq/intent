@@ -310,7 +310,7 @@ FE_BUILD_HEAP_MB ?= 16384
 	ensure-fe-toolchain \
 	update \
 	build build-intentd build-sidecar gate test test-intentd test-scripts test-changed list-tests coverage-changed coverage-e2e coverage-all \
-	fmt clippy lint-sources lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child lint-shell-sleeps lint-shell check clean clean-dev \
+	fmt clippy lint-sources lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child lint-shell-sleeps lint-shell bash3 check clean clean-dev \
 	sweep sweep-all seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
 	run-intentd dev-ui dev-sandbox-ui dev-sandbox-app dev-sandbox-stack dev-fe fe-launch \
 	sandbox-status sandbox-stop \
@@ -515,6 +515,20 @@ lint-shell: ## Run shellcheck over scripts/*.sh (needs shellcheck; make bootstra
 	@command -v shellcheck >/dev/null 2>&1 || { \
 		echo "[missing]  shellcheck: required by make lint-shell; run make bootstrap-dev-host" >&2; exit 1; }
 	@shellcheck -x scripts/*.sh
+
+# Bash 3.2 for the scripts/*.test.sh compatibility passes (stock macOS bash is
+# 3.2). CI builds it only for the merge queue, so build it once here and the
+# suites' shared lookup (scripts/find-bash3.sh) finds this cache on its own.
+# Export BASH3_CACHE_DIR to move it; the suites read the same variable.
+BASH3_CACHE_DIR ?= $(or $(XDG_CACHE_HOME),$(HOME)/.cache)/intent-bash3
+
+bash3: ## Build Bash 3.2 for the shell suites' 3.2 pass into BASH3_CACHE_DIR (default ~/.cache/intent-bash3; no-op once built; needs gcc, make, bison)
+	@if "$(BASH3_CACHE_DIR)/bash" -c '[ "$${BASH_VERSINFO[0]}.$${BASH_VERSINFO[1]}" = 3.2 ]' >/dev/null 2>&1; then \
+		echo "bash3: $(BASH3_CACHE_DIR)/bash is already built"; \
+	else \
+		echo "bash3: building Bash 3.2.57 into $(BASH3_CACHE_DIR) (a few minutes)"; \
+		env -u GITHUB_ENV bash scripts/install-ci-bash3.sh "$(BASH3_CACHE_DIR)"; \
+	fi
 
 RUST_CHECK_TARGETS := check-makefile-targets check-protocol-field-parity lint-shell-sleeps fmt clippy lint-sources
 
