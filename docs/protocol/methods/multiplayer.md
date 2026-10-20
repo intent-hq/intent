@@ -307,6 +307,9 @@ and does not replace the private-conversation gate.
 | discussion.list | workspaceId (req), conversationId? (default `"default"`), beforeSequence? (positive integer, exclusive), afterSequence? (nonnegative integer, exclusive; mutually exclusive with beforeSequence), limit? (integer 1–100, default 50) | `{ messages: DiscussionMessage[], hasMore: boolean, conversation: DiscussionConversation }` |
 | discussion.send | workspaceId (req), conversationId? (default `"default"` when neither target field is supplied), recipientPrincipalIds? (1–31 distinct other current workspace members; mutually exclusive with conversationId), messageId (req, nonblank string, at most 128 UTF-8 bytes), body (req, nonblank string, at most 16384 UTF-8 bytes), replyToMessageId? (existing message in the same conversation; requires `discussionMessageActions: 1`), recipientAgentIds? (up to 31 distinct explicit agent recipients; requires `discussionAgentMessaging: 1`, see below) | `{ message: DiscussionMessage, conversation: DiscussionConversation }` |
 | discussion.react | workspaceId (req), conversationId? (default `"default"`), messageId (req, server message ID), reaction (req, `"👍"` or `"🙂"`), active (req, boolean desired state) | `{ messageId, reactions: DiscussionReaction[], reactionVersion }`; requires `discussionMessageActions: 1` |
+| discussion.stopAgent | workspaceId (req), conversationId? (default `"default"`), messageId (req, committed server ID), agentId (req), attempt (req, positive integer) | `{ activity: DiscussionAgentActivity }`; requires `discussionAgentActivity: 1`; human participant only |
+| discussion.retryAgent | workspaceId (req), conversationId? (default `"default"`), messageId (req, committed server ID), agentId (req), attempt (req, positive integer) | `{ activity: DiscussionAgentActivity }`; requires `discussionAgentActivity: 1`; human participant only |
+
 
 `DiscussionConversation` is `{ id, workspaceId, kind, participants, createdAt }`.
 `kind` is `"workspace"`, `"direct"`, or `"group"`. The reserved ID `"default"`
@@ -410,6 +413,53 @@ Workspace references may be represented by existing canonical workspace links
 in the plain-text body and rendered as navigable chips. The client must preserve
 the target workspace/backend and validate link kinds; reference text is never
 HTML, executable code, or permission to invoke an agent.
+
+#### Correlated agent activity and controls (prepared)
+
+Exactly integer `discussionAgentActivity: 1` on hello and `system.capabilities`
+adds durable activity and selected mention snapshots to the unreleased Multiplayer
+Labs discussion feature. Every message includes `agentActivity: []` and
+`agentMentions: []`, including ordinary/private messages. Old delivered messages
+without a trustworthy invocation receipt have empty activity, not invented status.
+
+`DiscussionAgentActivity` is `{ agentId, attempt, version, state, updatedAt, error }`.
+`attempt` is a positive integer identifying this recipient's invocation of the
+committed discussion message. `version` is a positive monotonically increasing
+integer across all transitions and retries for that message/recipient pair.
+`state` is `queued`, `working`, `completed`, `failed`, or `stopped`; `updatedAt`
+is RFC-3339 and `error` is a string or null. These describe this request, never
+an agent-wide status. Completed means the invocation ended; only an explicit
+`discussion.send` creates an agent reply. Stopping retains already produced text.
+A daemon restart marks interrupted work stopped; queued deliveries remain queued.
+
+Human members with current instruction authority may Stop or Retry in the default
+workspace-wide discussion. Agent callers and private discussions cannot use these
+controls. Stop cancels only the matching invocation, or removes its queued delivery;
+it must not stop another active request. Generic queue editing/removal refuses discussion
+requests; use this correlated Stop control. Regenerating an unrelated agent chat
+retains pending discussion requests. Retry applies only to failed/stopped
+attempts, creates the next attempt, and never inserts another human discussion
+message. The expected `attempt` is a compare-and-swap fence: a repeated or stale
+request returns current activity without applying again; a future or zero attempt
+is invalid. A retry may finish its already-committed queue handoff after reconnect,
+but never reconstruct completed work. Normal retirement and instruction-revocation
+gates still apply.
+
+Transient `discussion:activity` events carry
+`{ workspaceId, conversationId, messageId, activity }`. Delivery uses the same
+human membership/private-conversation gates as discussion messages; agents cannot
+subscribe. `discussion.list` restores the durable projection on reconnect. Clients
+merge by message ID plus agent ID and accept only newer `version` values, including
+when a request response races an event or a history page.
+
+`discussion.send` additionally accepts `agentMentions?: { agentId, name, start, end }[]`.
+Offsets are UTF-16 code units into `body`; each ordered, non-overlapping span must
+be exactly `@` plus its nonblank name, and its agent must be in `recipientAgentIds`.
+The maximum is 100 spans and 256 UTF-8 bytes per name. Spans may repeat a recipient.
+The daemon persists these immutable presentation snapshots and includes them in
+retry identity. They never grant delivery or access independently of recipients.
+Import preserves mention text as historical attribution but clears activity and
+does not restore invocation receipts, grants, or pending addressed work.
 
 #### Explicit agent messaging (prepared)
 

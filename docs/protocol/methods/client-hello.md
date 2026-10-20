@@ -532,3 +532,8 @@ Each recovering `events.subscribe` lease must separately request and acknowledge
 shapes and reconnect/explicit-refresh fallback; discovery alone does not opt in.
 The capability does not promise durable replay, typed-channel recovery or product
 readiness. It is advertised only after the transport and membership-loss cases pass.
+
+Exactly integer `discussionAgentActivity: 1`, on hello and `system.capabilities`,
+adds request-correlated discussion activity, immutable selected mention spans,
+and human `discussion.stopAgent` / `discussion.retryAgent` controls. This is a
+prepared Multiplayer Labs extension; see [the activity contract](./multiplayer.md#correlated-agent-activity-and-controls-prepared).
