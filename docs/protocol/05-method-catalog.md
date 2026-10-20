@@ -13,7 +13,7 @@ The prepared [node execution contract (§5.50)](./methods/nodes.md) reserves nin
 additional router methods ahead of implementation. Its capability flags, not
 catalog presence, establish support; per-agent CoW entries remain during rollout.
 
-The 10.11 [script lifecycle candidate (§5.8)](./methods/scripts.md#saved-scripts-and-one-off-history-1011-implemented-candidate)
+The 10.11 [script lifecycle candidate (§5.8)](./methods/scripts.md#saved-scripts-and-one-off-history-protocol-13-baseline)
 implements archive/restore ahead of the monorepo pin; `scriptLifecycle: 1`
 advertises complete support, not catalog presence or a numeric version alone.
 

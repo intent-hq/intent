@@ -389,7 +389,7 @@ merge. Automation owns subsequent pins and the generated MCP index. This change
 neither upgrades clients nor reclassifies existing workspace definitions.
 
 **Version 10.11 — script lifecycle (additive, implemented candidate).** The
-[script lifecycle extension (§5.8)](./methods/scripts.md#saved-scripts-and-one-off-history-1011-implemented-candidate)
+[script lifecycle extension (§5.8)](./methods/scripts.md#saved-scripts-and-one-off-history-protocol-13-baseline)
 adds two router methods (`script.archive`, `script.restore`) and additive
 purpose/archive/latest-result fields, taking the combined documented surface to
 **419 / 359 / 58** (dispatchable / router / fast path), with no new event names.
