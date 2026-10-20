@@ -54,6 +54,8 @@ The workflow is triggered by a `v*.*.*` tag push (created by release-please when
 
 `auto-cut-alpha.yml` directly merges verified release metadata PRs after their
 existing CI and release guards pass, using the CI account's ruleset exemption.
+`auto-pin-intentd.yml` does the same for verified sidecar pin PRs
+([Direct sidecar pin merges](../RELEASING.md#direct-sidecar-pin-merges)).
 Other PRs retain the merge queue. See
 [Guarded direct release merges](../RELEASING.md#guarded-direct-release-merges)
 for metadata eligibility, tested-head matching and the required token identity.

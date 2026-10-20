@@ -22,9 +22,11 @@ cloudlands-fe).
 
 Both components' `auto-cut-alpha.yml` workflows can squash-merge a verified
 release metadata PR directly, avoiding a second CI run in the merge queue.
-Ordinary PRs, frontend sidecar pin PRs, and monorepo submodule bump PRs continue
-through the queue. A release PR whose diff does not match the metadata shape
-uses the ordinary guarded queue path too.
+cloudlands-fe's `auto-pin-intentd.yml` merges a verified sidecar pin PR directly
+the same way ([Direct sidecar pin merges](#direct-sidecar-pin-merges)). Ordinary
+PRs and monorepo submodule bump PRs continue through the queue. A release or pin
+PR whose diff does not match its verified shape uses the ordinary guarded queue
+path too.
 
 Direct merging requires the existing release guards to pass: the expected
 same-repository release branch and author, no draft or `hold-release`, acceptable
@@ -41,7 +43,8 @@ intentd permits independent crate version changes, matching local dependency
 requirements and workspace-package lockfile versions, plus harmless TOML
 formatting/comments; cloudlands-fe permits the package version and matching
 release-please manifest update. Source, workflow, external dependency and sidecar
-pin changes do not qualify. A classification failure cannot enable direct merging.
+pin changes do not qualify for this release route. A classification failure cannot
+enable direct merging.
 The merge uses `--squash --admin --match-head-commit <assessed-head-sha>`; the
 head match prevents a refreshed, unchecked PR head from being merged using the
 earlier decision. Queue submission is not evidence of a completed merge or a
@@ -81,6 +84,31 @@ episode. It also treats a missing CI Gate as running CI, with the full
 `AUTO_CUT_CI_WAIT_MINUTES` budget, while other CI jobs on the head are still
 queued or in progress and none has failed. CI Gate only reports after every
 other CI job finishes.
+
+### Direct sidecar pin merges
+
+The cloudlands-fe merge queue builds one entry at a time, and an ordinary entry
+takes about 45 minutes. On 2026-10-19 pin PR cloudlands-fe#3535 waited more than
+3 hours behind other entries, and auto-cut deferred the alpha the whole time.
+A plain pin bump already takes the CI fast path, so the queue only added wait.
+`auto-pin-intentd.yml` therefore waits up to 10 minutes for `CI Gate` on the head
+it pushed. `scripts/auto-pin-merge-route.mjs`, run from the workflow's trusted
+checkout of main, then allows a direct merge only when all of these hold:
+
+- `CI Gate` succeeded on that exact head, with no change request and no
+  unresolved review thread (`--admin` would otherwise skip them).
+- The PR's own diff matches `release-pr-fast-path.mjs --pin-only`: only
+  `intentd.version` and the regenerated `source-pin` line, with regular file modes.
+  A `CURRENT_PROTOCOL_VERSION` change is a protocol bump, so it takes the queue.
+- Main has not changed either pin file since the PR's base. Main may otherwise
+  have moved: the cloudlands-fe ruleset does not require up-to-date branches, and
+  a queued pin takes the same CI fast path, so the queue would not retest it.
+
+The merge uses `--squash --admin --match-head-commit <tested-head-sha>`. Any failed,
+timed-out or unreadable guard arms auto-merge through the queue instead. A rolling
+PR already in the queue locks its branch, so the run skips with a notice; the next
+run after it lands advances the pin. A direct merge moves main under the queue, so
+GitHub rebuilds the entry being tested at that moment, as release direct merges do.
 
 The direct path uses the existing `intent-hq-ci` account exemption: User
 `335379076`, mode `always`, on the repository **Default** ruleset in intentd and
