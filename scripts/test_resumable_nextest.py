@@ -965,6 +965,24 @@ with mock.patch.object(gate, 'transfer_fixture_identity', return_value=None):
             self.assertEqual(argv[2], route)
 
 
+    def test_setup_help_names_injected_node_options_only_when_set(self):
+        component = self.root / "component"
+        blocker = "NODE_OPTIONS is set in this shell"
+        with mock.patch.dict(os.environ, {"NODE_OPTIONS": "--require /opt/dd-trace/init.js"}):
+            help_text = gate.callback_setup_help(component)
+        first = help_text.splitlines()[0]
+        self.assertIn(blocker, first)
+        self.assertIn("env -u NODE_OPTIONS", first)
+        self.assertNotIn("dd-trace", help_text, "the preload value is never echoed")
+        for value in (None, ""):
+            env = {k: v for k, v in os.environ.items() if k != "NODE_OPTIONS"}
+            if value is not None:
+                env["NODE_OPTIONS"] = value
+            with mock.patch.dict(os.environ, env, clear=True):
+                unchanged = gate.callback_setup_help(component)
+            self.assertNotIn(blocker, unchanged)
+            self.assertEqual(unchanged, "\n".join(help_text.splitlines()[1:]))
+
 class CallbackValidatorPortabilityTests(unittest.TestCase):
     def test_synthetic_suite_on_arm64_keeps_checks_and_skips_only_native_cli(self):
         path = SCRIPT.parents[1] / "packages/intentd/scripts/test-prepare-acp-callback-fixture.py"

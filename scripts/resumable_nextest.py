@@ -283,7 +283,14 @@ def callback_setup_help(intentd_dir: Path) -> str:
     command = ["env", "-u", "NODE_OPTIONS", sys.executable, "-I", "-B", "-S",
                str(intentd_dir / "scripts/prepare-acp-callback-fixture.py"),
                "--cache-dir", str(callback_cache_dir())]
-    lines = [
+    lines = []
+    if os.environ.get("NODE_OPTIONS"):
+        # Name the host preload as the blocker for the manual route; the value
+        # is not echoed (it may carry host paths or tokens).
+        lines.append("NODE_OPTIONS is set in this shell (often a host preload such as a monitoring "
+                     "tracer); the prepare script refuses it, so run the commands below as "
+                     "printed (they start with env -u NODE_OPTIONS).")
+    lines += [
         f"Set {CALLBACK_FIXTURE_ENV} to a verified fixture (Linux x64, descriptor-pinned Node).",
         "Native macOS is not supported by this fixture. Use an existing authorized Linux x64 host.",
         "Complete checkout, tools and gate recipe: CONTRIBUTING.md#linux-x64-callback-gates",

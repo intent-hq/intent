@@ -401,6 +401,7 @@ if is_test:
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("INTENT_ACP_CALLBACK_ADAPTER_FIXTURE is unset or empty", result.stderr)
                 self.assertIn("env -u NODE_OPTIONS", result.stderr)
+                self.assertIn("NODE_OPTIONS is set in this shell", result.stderr)
                 self.assertNotIn("prepared offline", result.stderr)
                 self.assertFalse(any(c["test"] for c in calls), calls)
 

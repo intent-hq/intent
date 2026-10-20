@@ -225,14 +225,16 @@ command -v npm
 callback_run=$(mktemp -d "$HOME/intent-callback-gates.XXXXXX")
 callback_cache="$callback_run/cache"
 printf 'Keep setup logs and test receipts under %s\n' "$callback_run"
-INTENT_ACP_CALLBACK_ADAPTER_FIXTURE=$(python3 -I -B -S \
+# env -u NODE_OPTIONS: the provisioner refuses host Node preloads (e.g. a
+# monitoring tracer injected into every shell); the gates clear it themselves.
+INTENT_ACP_CALLBACK_ADAPTER_FIXTURE=$(env -u NODE_OPTIONS python3 -I -B -S \
   packages/intentd/scripts/prepare-acp-callback-fixture.py \
   --cache-dir "$callback_cache" --build-from-source \
   2>"$callback_run/source-build.log")
 export INTENT_ACP_CALLBACK_ADAPTER_FIXTURE
 
 # Revalidate the same cache without acquisition; stdout is only the fixture path.
-callback_offline=$(python3 -I -B -S \
+callback_offline=$(env -u NODE_OPTIONS python3 -I -B -S \
   packages/intentd/scripts/prepare-acp-callback-fixture.py \
   --cache-dir "$callback_cache" --offline \
   2>"$callback_run/offline.log")
