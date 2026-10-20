@@ -245,7 +245,7 @@ shipped-in: ## Print the first cloudlands-releases tag carrying COMPONENT=intent
 # Read-only release train snapshot for intentd and cloudlands-fe; every lookup
 # is fail-soft (a failed one prints `unavailable`). See docs/RELEASING.md →
 # Where to look.
-release-status: ## Print the release train: latest tags, channel versions, fe daemon pin, release PRs with CI state, unshipped commits, last auto-cut decision, runner overrides (STATUS_JSON=1 for JSON; NO_LOGS=1 skips the slow run-log fetch)
+release-status: ## Print the release train: latest tags, channel versions, fe daemon pin, release PRs with CI and merge-queue state, merge queue head, unshipped commits, last auto-cut decision, last auto-pin run, runner overrides (STATUS_JSON=1 for JSON; NO_LOGS=1 skips the slow run-log fetch)
 	@STATUS_JSON="$(STATUS_JSON)" scripts/release-status.sh $(if $(NO_LOGS),--no-logs,)
 
 # Build-artifact GC (cargo-sweep). Rust target/ dirs grow without bound as

@@ -28,6 +28,20 @@ Released frontends still cap registered-root reads at major 15 until
 [cloudlands-fe#3478](https://github.com/intent-hq/cloudlands-fe/pull/3478) ships,
 so the daemon must not advertise major 16 before a carrying frontend release.
 
+Also within 15.0 (additive optional response fields; presence-detected; no method-catalog
+change, so no version bump): **merge-queue position and estimated merge time**
+(§5.27 `GithubPullRequest`, §5.42 `MergeRequirements` and `lastSnapshot`, §5.7
+`ws.pr.snapshot`). A queued PR's `github.pulls.get` result and monitor checklist gain
+`mergeQueue?: MergeQueueEntry` — `{ position, queueSize?, state?, enqueuedAt?,
+estimatedTimeToMerge? }` read from GitHub GraphQL `PullRequest.mergeQueueEntry` in the same
+folded read as `isInMergeQueue`; `estimatedTimeToMerge` is the host's duration estimate in
+seconds, passed through as reported. It is informational only: the monitor never diffs it,
+so queue movement wakes no agent. Workspace `PullRequestInfo` rows do not carry it.
+Older daemons and hosts without merge queues omit it; clients detect it by presence.
+The same change adds the UI-only event **`prMonitor:refreshed`** (§6.5 prMonitor row):
+emitted when a poll changed only the `mergeQueue` entry, so clients re-read
+`prMonitor.list`; it is never a wake and agent-owned subscriptions cannot request it.
+
 Also within 15.0 (additive optional event field; presence-detected; no method-catalog
 change, so no version bump): **`workspace:created` carries `origin?`** (§6.5 workspace
 row). `ws.workspace.applyProposal` stamps `{ kind: "proposal", proposalId, agentId,
@@ -691,3 +705,20 @@ above describe the former method, not a durability guarantee for current commits
 - **Clients never cap the protocol version.** A client gates a feature on an advertised capability or on a minimum version (`>= major.minor`), never on a maximum, an exact major or an allowlist of known majors: the major moves for unrelated changes, and a cap silently disables working features on every newer daemon (script monitors and script lists on protocol 15, [intent-hq/intent#7206](https://github.com/intent-hq/intent/issues/7206), [#7248](https://github.com/intent-hq/intent/issues/7248)). Capability values are different: each value names one contract, so clients compare them exactly (`scriptMonitors === 2`). A breaking change to a method's semantics must therefore change something an old client checks: a new capability value (e.g. `scriptMonitors: 1` → `2`) or a new method name. A feature gated only by version (no capability) gains a capability before its first breaking change. Removing a method answers `-32601 Method not found`, which clients treat as "unsupported", not as a crash.
 
 The method surface is enforced by golden tests in `crates/intent-transport/src/catalog.rs`. Any drift (added, removed, or renamed methods) causes CI failure with the instruction: "Update ROUTER_METHODS in catalog.rs, update docs/protocol/05-method-catalog.md, and bump the protocol version." Additive response fields on an existing method (e.g., the optional `system.status` resource fields, §5 fast-path notes) do not change the golden-test-enforced catalog and ship within the current version; clients must detect them by **presence**, not by protocol version.
+
+### Staged row fields (app adoption pending)
+
+A new optional field on a row the frontend types (`AgentLite` → `AgentSession`,
+`Workspace` → `Workspace`) ships daemon-first, so the daemon emits it before the
+pinned cloudlands-fe declares it. List such a field here in the docs PR that documents
+it, which lands before the intentd PR (docs lead the pin). **Row** is the Rust struct
+(`AgentLite`, `Workspace`), **Field** the wire name, **Contract** a Markdown link to the
+field's contract, and **App adoption** the cloudlands-fe PR or issue that declares it.
+`make check-protocol-field-parity` reads this table. A listed field the frontend
+type lacks is a warning instead of an error. An unlisted emitted field still fails,
+and so does a malformed table. Once the frontend pin declares the field, the check
+warns that the row is stale; remove it then. Fields the frontend never reads stay in
+the `ignore` map of `scripts/check-protocol-field-parity.mjs`, not here.
+
+| Row | Field | Contract | App adoption |
+|---|---|---|---|

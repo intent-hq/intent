@@ -119,6 +119,7 @@
     "prMonitor:changed",
     "prMonitor:completed",
     "prMonitor:emitted",
+    "prMonitor:refreshed",
     "prMonitor:registered",
     "presence:changed",
     "principal:identity-changed",
