@@ -38,6 +38,9 @@ folded read as `isInMergeQueue`; `estimatedTimeToMerge` is the host's duration e
 seconds, passed through as reported. It is informational only: the monitor never diffs it,
 so queue movement wakes no agent. Workspace `PullRequestInfo` rows do not carry it.
 Older daemons and hosts without merge queues omit it; clients detect it by presence.
+The same change adds the UI-only event **`prMonitor:refreshed`** (§6.5 prMonitor row):
+emitted when a poll changed only the `mergeQueue` entry, so clients re-read
+`prMonitor.list`; it is never a wake and agent-owned subscriptions cannot request it.
 
 Also within 15.0 (additive optional event field; presence-detected; no method-catalog
 change, so no version bump): **`workspace:created` carries `origin?`** (§6.5 workspace
