@@ -19,7 +19,7 @@ the frontend's Legacy Import settings. Already imported daemon workspaces remain
 available; source directories and persisted import markers are not deleted.
 The 9.0 removal and 9.1 restoration entries below remain historical records.
 Protocol 14.1 added the startup readiness observations described below.
-The documented surface, including prepared additions, has **456 / 399 / 57**
+The documented surface, including prepared additions, has **456 / 398 / 58**
 dispatchable / router / fast-path methods. Follow [issue #4082](https://github.com/intent-hq/intent/issues/4082)'s
 removal order: frontend callers first, daemon removal second, then these docs
 after the automatic pin advance. Clients gate on capabilities or a minimum
@@ -60,8 +60,10 @@ omit the flags; clients must not read their absence as proof a value is complete
 
 **Worker observation stop and Claude support (prepared amendment).** The
 [worker observation contract (§5.5b)](./methods/agent-workers.md) reserves the router
-method `agent.workers.stop`, bringing the documented surface to **456 / 399 / 57**
-(dispatchable / router / fast path). It allowlists claude-agent-acp 0.81.1 and replaces
+method `agent.workers.stop` and reclassifies `agent.workers.subscribe` from a router
+method to a fast-path method (it holds per-connection subscription state, like
+`events.subscribe`), bringing the documented surface to **456 / 398 / 58** (dispatchable /
+router / fast path). It allowlists claude-agent-acp 0.81.1 and replaces
 the Codex pin 1.13.1 with 2.2.2, so a 1.13.1 session now reports
 `unsupported/adapter-version`. It adds `taskType` and `canStop` row fields and
 **removes** the 60-second staleness rule: the `freshnessMs` snapshot field, the

@@ -79,7 +79,7 @@ observations explain the deliberately limited claims below.
 | Method | Params | Result |
 | --- | --- | --- |
 | agent.workers.list | workspaceId (req), agentId (req) | `WorkerSnapshot` below; memory-only read, no provider calls |
-| agent.workers.subscribe | workspaceId (req), agentId (req) | `{ subscriptionId }`, then `subscription.push` complete snapshots |
+| agent.workers.subscribe | workspaceId (req), agentId (req) | `{ subscriptionId }`, then `subscription.push` complete snapshots; a fast-path method (per-connection state), not a router method |
 | agent.workers.stop | workspaceId (req), agentId (req), connectionGeneration (req), asyncTaskId (req) | `{ asyncTaskId, stopped }`; see Stop below |
 
 List and subscribe require existing workspace-read authority and an agent
