@@ -2951,6 +2951,37 @@ class TransferFixtureSelectionTests(unittest.TestCase):
             self.assertEqual(keys[-1], gate.tree_key(
                 root, root, fixture_identity=callbacks[-1], transfer_identity=identities[-1]))
 
+    def test_hermetic_runs_keep_separate_resume_credit(self):
+        """`make test HERMETIC=1` (no provider CLIs) never shares passes with
+        an ordinary run, and ordinary keys are unchanged by the feature."""
+        captured = []
+        dumps = json.dumps
+
+        def capture(value, **kwargs):
+            if isinstance(value, dict) and "source-root" in value:
+                captured.append(value)
+            return dumps(value, **kwargs)
+
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            gate, "worktree_tree", return_value="tree"
+        ), mock.patch.object(gate, "submodule_heads", return_value=[]), mock.patch.object(
+            gate, "required_hash", return_value="hash"
+        ), mock.patch.object(gate, "run", return_value="version"), mock.patch.object(
+            gate, "build_settings", return_value={}
+        ), mock.patch.object(gate.json, "dumps", side_effect=capture):
+            root = Path(directory)
+            keys = {}
+            for mode, env in (("ordinary", {}), ("off", {"INTENT_GATE_HERMETIC": "0"}),
+                              ("hermetic", {"INTENT_GATE_HERMETIC": "1"}),
+                              ("hide-node", {"INTENT_GATE_HERMETIC": "1", "HIDE_NODE": "1"})):
+                with mock.patch.dict(os.environ, env, clear=True):
+                    keys[mode] = gate.tree_key(root, root)
+            self.assertEqual(keys["ordinary"], keys["off"])
+            self.assertEqual(len({keys["ordinary"], keys["hermetic"], keys["hide-node"]}), 3)
+            self.assertNotIn("hermetic", captured[0])
+            self.assertEqual(captured[2]["hermetic"], {"HIDE_NODE": False})
+            self.assertEqual(captured[3]["hermetic"], {"HIDE_NODE": True})
+
 
 class CoverageReconciliationTests(unittest.TestCase):
     setUp = AttemptReceiptTests.setUp

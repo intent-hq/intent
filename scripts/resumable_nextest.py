@@ -518,6 +518,11 @@ def tree_key(repo_root: Path, intentd_dir: Path, output_args: list[str] | None =
         "test-policy": {"INTENTD_ASSERT_BOUND_CALLER": os.environ.get("INTENTD_ASSERT_BOUND_CALLER")},
         "test-stack": test_stack_identity(nextest_env() if child_env is None else child_env),
     }
+    # `make test HERMETIC=1` runs inside intentd's no-provider-CLI sandbox:
+    # its passes must not credit an ordinary run, or the reverse. Added only
+    # for sandboxed runs so ordinary records keep their existing keys.
+    if os.environ.get("INTENT_GATE_HERMETIC") == "1":
+        inputs["hermetic"] = {"HIDE_NODE": os.environ.get("HIDE_NODE") == "1"}
     encoded = json.dumps(inputs, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
 
