@@ -534,13 +534,16 @@ shellcheck_ready() {
   shellcheck_version >/dev/null
 }
 
-# The first line of actionlint --version is the bare version.
+# The first line of actionlint --version is the version: bare for release
+# archives, v-prefixed for a `go install ...@vX.Y.Z` build.
 actionlint_version() {
   command -v actionlint >/dev/null 2>&1 || return 1
   local output
   output=$(actionlint --version 2>/dev/null) || return 1
+  output=${output%%$'\n'*}
+  output=${output#v}
   [[ -n "$output" ]] || return 1
-  printf '%s\n' "${output%%$'\n'*}"
+  printf '%s\n' "$output"
 }
 
 # Exact pin, so a local run matches the cloudlands-fe CI result.
@@ -644,7 +647,10 @@ installable_gap_exists() {
   gh_ready || return 0
   jq_ready || return 0
   shellcheck_ready || return 0
-  actionlint_ready || return 0
+  # Without a pinned archive for this host bootstrap cannot close the gap.
+  if actionlint_platform >/dev/null; then
+    actionlint_ready || return 0
+  fi
   if [[ "$WITH_COVERAGE" == 1 ]]; then
     coverage_tooling_ready || return 0
   fi
@@ -846,7 +852,7 @@ check_all() {
     missing "actionlint $ACTIONLINT_VERSION: required by cloudlands-fe pnpm run lint:workflows; run make bootstrap-dev-host"
   elif ! actionlint_found=$(actionlint_version); then
     missing "actionlint: $(command -v actionlint) is on PATH but actionlint --version fails; reinstall it (run make bootstrap-dev-host)"
-  elif ! actionlint_ready; then
+  elif [[ "$actionlint_found" != "$ACTIONLINT_VERSION" ]]; then
     missing "actionlint: found $actionlint_found; cloudlands-fe pins $ACTIONLINT_VERSION; run make bootstrap-dev-host"
   else
     ok "actionlint: $actionlint_found"
@@ -1173,7 +1179,10 @@ install_actionlint() {
   fi
 
   local platform expected actual
-  platform=$(actionlint_platform) || { echo "ERROR: no actionlint $ACTIONLINT_VERSION release archive for $(uname -s) $(uname -m); install it from $ACTIONLINT_INSTALL_URL" >&2; exit 1; }
+  if ! platform=$(actionlint_platform); then
+    echo "[warn] no actionlint $ACTIONLINT_VERSION release archive for $(uname -s) $(uname -m); build it from $ACTIONLINT_INSTALL_URL"
+    return
+  fi
   expected=$(actionlint_sha256 "$platform") || exit 1
   command -v curl >/dev/null 2>&1 || { echo "ERROR: curl is required to install actionlint" >&2; exit 1; }
   echo "[install] actionlint $ACTIONLINT_VERSION from its release archive"
@@ -1191,7 +1200,7 @@ install_actionlint() {
   rm -f -- "$TEMP_FILE"
   TEMP_FILE=""
   hash -r
-  actionlint_ready || { echo "ERROR: actionlint $ACTIONLINT_VERSION is still not first on PATH after installing to $CARGO_HOME/bin; remove the other actionlint ($(command -v actionlint || echo none))" >&2; exit 1; }
+  actionlint_ready || { echo "ERROR: $CARGO_HOME/bin/actionlint does not report version $ACTIONLINT_VERSION after installation (found: $(actionlint_version || echo unrunnable))" >&2; exit 1; }
 }
 
 install_frontend() {
