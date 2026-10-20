@@ -275,7 +275,7 @@ model` tooltip), with no warning, fallback action, model mutation or toast.
 
 During the desktop-control rollout, retain the original `public-sessions.json`
 byte-for-byte for daemon harnesses without a version declaration. The feature
-harness commits `scripts/transfer-selection-expectation.json` containing exactly
+harness commits `packages/intentd/scripts/transfer-selection-expectation.json` containing exactly
 `{"version":"desktop-control-v1"}` and uses the shared validator's
 `resolveGoldenPath({ fixtureRoot, intentdRoot })` to select
 `public-sessions.desktop-control-v1.json`. The declaration selects a fixed known
