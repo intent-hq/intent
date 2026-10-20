@@ -369,3 +369,42 @@ test('provider stop answers map only an exact stopped:true and never end the wor
   ingest(p, terminal('stopped'), 2000);
   assert.equal(row(p, 2000).status, 'stopped');
 });
+
+test('stop is fenced to the row generation so a reused provider task ID cannot stop a different worker', () => {
+  const p = configured(); ingest(p, spawn());
+  assert.throws(() => p.stop({ ...scope, connectionGeneration: 'generation-old', asyncTaskId: 'worker-A' }), /not-found/);
+  for (const connectionGeneration of [undefined, '', 7]) assert.throws(() => p.stop({ ...scope, connectionGeneration, asyncTaskId: 'worker-A' }), /invalid-params/);
+  assert.ok(p.stop({ ...scope, asyncTaskId: 'worker-A' }).forward);
+});
+test('provider profiles inherit their base provider support and task-type rules', () => {
+  const claudeProfile = { ...scope, provider: 'claude-code@work' };
+  const c = new WorkerProjection(claudeProfile, { adapterVersion: '0.81.1', negotiated: true });
+  assert.deepEqual(c.list(claudeProfile, 0).support, { status: 'supported' });
+  assert.equal(c.ingest(withUpdate(spawn(), { taskType: 'workflow' }), { ...claudeProfile, receivedAt: 1000, origin: 'live' }), true);
+  assert.equal(c.list(claudeProfile, 1000).workers[0].source, 'claude-air');
+  assert.equal(c.list(claudeProfile, 1000).workers[0].identity.provider, 'claude-code@work');
+  const codexProfile = { ...scope, provider: 'codex@p2' };
+  const x = new WorkerProjection(codexProfile, { adapterVersion: '2.2.2', negotiated: true });
+  assert.equal(x.ingest(withUpdate(spawn(), { taskType: 'workflow' }), { ...codexProfile, receivedAt: 1000, origin: 'live' }), false);
+  assert.equal(x.ingest(spawn(), { ...codexProfile, receivedAt: 1000, origin: 'live' }), true);
+  const wrong = { ...scope, provider: 'codex@p2' };
+  assert.equal(new WorkerProjection(wrong, { adapterVersion: '0.81.1', negotiated: true }).list(wrong, 0).support.reason, 'adapter-version');
+});
+test('task types are judged after sanitizing, so disguised subagents and blank types are rejected', () => {
+  for (const [id, taskType] of [['a', 'agent\n'], ['b', ' local_agent'], ['c', '\u0001'], ['d', '\t\n'], ['e', 'local_agent\u007f']]) {
+    const p = claude(); assert.equal(claudeIngest(p, withUpdate(spawn(id), { taskType })), false, JSON.stringify(taskType));
+    assert.equal(p.checkpoint().seen.length, 0);
+  }
+  const p = claude(); claudeIngest(p, withUpdate(spawn(), { taskType: ' shell\n' }));
+  assert.equal(p.list(claudeScope, 1000).workers[0].taskType, 'shell');
+  const codexSpaced = configured(); assert.equal(ingest(codexSpaced, withUpdate(spawn(), { taskType: 'shell ' })), true);
+});
+test('row overflow evicts the oldest ended row before any running worker', () => {
+  const p = configured({ maxRows: 2, maxSeen: 10 });
+  ingest(p, spawn('dev-server')); ingest(p, spawn('short'), 2000); ingest(p, terminal('completed', 'short'), 3000);
+  ingest(p, spawn('next'), 4000);
+  assert.deepEqual(p.list(scope, 4000).workers.map((w) => w.identity.asyncTaskId), ['dev-server', 'next']);
+  assert.equal(p.list(scope, 4000).truncated, true);
+  ingest(p, spawn('third'), 5000);
+  assert.deepEqual(p.list(scope, 5000).workers.map((w) => w.identity.asyncTaskId), ['next', 'third'], 'only running rows left: oldest goes');
+});

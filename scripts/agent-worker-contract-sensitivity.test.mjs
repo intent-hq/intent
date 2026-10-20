@@ -19,12 +19,16 @@ const mutations = [
   ['unacknowledged subscription accepts push', 'if (!validId(this.subscriptionId)) return false;', '// broken active subscription guard'],
   ['malformed acknowledgement replaces binding', 'if (!validId(id)) return false;', '// broken acknowledgement guard'],
   ['disconnect keeps running', "out.status = continuity === 'continuous' ? 'running' : 'unknown';", "out.status = 'running';"],
-  ['subagent admitted as worker', "SUBAGENT_TASK_TYPES.has(taskType)) return false;", "false) return false;"],
-  ['codex admits non-shell', "return provider === 'codex' ? taskType === 'shell' : true;", 'return true;'],
+  ['subagent admitted as worker', "if (!type || SUBAGENT_TASK_TYPES.has(type)) return undefined;", 'if (!type) return undefined;'],
+  ['codex admits non-shell', "if (baseProvider(provider) === 'codex' && type !== 'shell') return undefined;", '// broken codex shell rule'],
   ['stop ignores canStop', "if (row.providerState !== 'running' || row.canStop !== true) return { result };", "if (row.providerState !== 'running') return { result };"],
   ['stop while disconnected', "if (this.support.status !== 'supported' || this.continuity !== 'continuous') return { result };", "if (this.support.status !== 'supported') return { result };"],
   ['stop without control authority', 'this.authorize(request, authority.canControl);', 'this.authorize(request, true);'],
   ['loose stop answer', 'stopped: response?.stopped === true', 'stopped: Boolean(response?.stopped)'],
+  ['stop generation fence', "if (request.connectionGeneration !== this.scope.connectionGeneration) throw new Error('-32602 not-found');", '// broken generation fence'],
+  ['eviction drops running first', ".find(([, r]) => TERMINAL.has(r.providerState))?.[0] ??", '?.[0] ??'],
+  ['profile ignored', "export const baseProvider = (provider) => provider.split('@')[0];", 'export const baseProvider = (provider) => provider;'],
+  ['unsanitized subagent check', "const type = bounded(taskType, 64)?.trim();", "const type = typeof taskType === 'string' && taskType.trim() ? taskType : undefined;"],
   ['adapter allowlist', "adapterVersion !== adapter.adapterVersion ? { status: 'unsupported', reason: 'adapter-version' }", "false ? { status: 'unsupported', reason: 'adapter-version' }"],
 ];
 for (const [name, before, after] of mutations) test(`regressions reject ${name}`, (t) => {

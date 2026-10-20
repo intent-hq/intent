@@ -31,6 +31,10 @@ requested in ACP initialize:
 | `codex` | `@agentclientprotocol/codex-acp` | **2.2.2** | `codex-air` |
 | `claude-code` | `@agentclientprotocol/claude-agent-acp` | **0.81.1** | `claude-air` |
 
+The table matches the **base** provider ID: a provider profile reference such as
+`claude-code@work` uses the part before `@` for support, source and task-type
+rules, while row identity and the snapshot keep the full reference.
+
 ```json
 {"clientCapabilities":{"_meta":{"jetbrains":{"air":{"version":1,"capabilities":["asyncTasks"]}}}}}
 ```
@@ -76,7 +80,7 @@ observations explain the deliberately limited claims below.
 | --- | --- | --- |
 | agent.workers.list | workspaceId (req), agentId (req) | `WorkerSnapshot` below; memory-only read, no provider calls |
 | agent.workers.subscribe | workspaceId (req), agentId (req) | `{ subscriptionId }`, then `subscription.push` complete snapshots |
-| agent.workers.stop | workspaceId (req), agentId (req), asyncTaskId (req) | `{ asyncTaskId, stopped }`; see Stop below |
+| agent.workers.stop | workspaceId (req), agentId (req), connectionGeneration (req), asyncTaskId (req) | `{ asyncTaskId, stopped }`; see Stop below |
 
 List and subscribe require existing workspace-read authority and an agent
 belonging to that workspace. Stop requires the same authority as `agent.stop`
@@ -124,20 +128,24 @@ read, replay, stop decision or unrelated ACP event does not emit a worker change
 #### Stop
 
 `agent.workers.stop` asks the provider to stop one worker without cancelling the
-agent's turn. After authorization (above), an unknown `asyncTaskId` in the
-current generation yields `-32602` with `data.code: "not-found"`. The daemon
-then decides without changing any row:
+agent's turn. The caller passes the row's `identity.connectionGeneration`
+because a provider may reuse a task ID in a new generation: after authorization
+(above), a generation other than the current one, or an unknown `asyncTaskId`
+in it, yields `-32602` with `data.code: "not-found"`, so a stale row can never
+stop a different worker. The daemon then decides without changing any row:
 
 - It answers `{ asyncTaskId, stopped: false }` **without a provider call** when
   support is not `supported`, continuity is not `continuous`, the row's
   providerState is not `running`, or the row's `canStop` is false.
 - Otherwise it sends exactly one ACP request
-  `_session/async_task/stop { sessionId, asyncTaskId }` on the bound session's
-  connection and answers `{ asyncTaskId, stopped }`, where `stopped` is true
-  only for an exact provider `{ stopped: true }`; any other well-formed answer
-  is `false`.
-- A provider JSON-RPC error, timeout or connection loss during the request
-  yields `-32603` with `data.code: "provider-error"`; the row is unchanged.
+  `_session/async_task/stop { sessionId, asyncTaskId }` on the connection of
+  the generation it decided on and answers `{ asyncTaskId, stopped }`, where
+  `stopped` is true only for an exact provider `{ stopped: true }`; any other
+  answer, including a malformed one, is `false`.
+- If that connection has disconnected or been replaced before the request is
+  written, the daemon sends nothing. That case, and a provider JSON-RPC error,
+  timeout or connection loss during the request, yields `-32603` with
+  `data.code: "provider-error"`; the row is unchanged.
 
 The stop answer is not worker evidence: only the provider's own
 `async_task_state_update` ends a row, normally `stopped`, which both reviewed
@@ -170,7 +178,7 @@ Each `WorkerObservation` contains:
 | identity | `{ workspaceId, agentId, provider, acpSessionId, connectionGeneration, asyncTaskId }` — the full tuple is the key |
 | toolCallId? | Optional exact originating tool correlation within this same scope; never a daemon terminal or script ID |
 | name? | Untrusted plain-text label, control characters replaced by spaces and UTF-8 truncated to at most 512 bytes on a codepoint boundary |
-| taskType? | Untrusted plain-text provider task type from the spawn (`shell` for Codex; e.g. `shell`, `workflow`, `monitor` for Claude), same sanitizing, at most 64 bytes; absent on a terminal-only row |
+| taskType? | Untrusted plain-text provider task type from the spawn (`shell` for Codex; e.g. `shell`, `workflow`, `monitor` for Claude): control characters replaced by spaces, truncated to 64 bytes, then trimmed; absent on a terminal-only row |
 | canStop | Boolean; true only when the spawn carried exactly `canStop: true`; false for terminal-only rows |
 | firstObservedAt | Receipt time of the first accepted frame for this identity; clients show "started X ago" from it |
 | observedAt | Receipt time of its last **accepted distinct state**; duplicates and snapshots preserve it |
@@ -193,9 +201,10 @@ Timestamps are nonnegative safe integers; reject anything else.
 
 At the live, authenticated receiving boundary, accept only the bound session's
 `async_task_spawned` (providerState running) and `async_task_state_update` with
-state completed/failed/stopped. A Codex spawn must carry `taskType: "shell"`. A
-Claude spawn must carry a nonblank string `taskType` other than `agent` or
-`local_agent` (subagents are agent sessions, not workers). Non-terminal state
+state completed/failed/stopped. Judge `taskType` only after sanitizing it as in
+the row table: a Codex spawn's must be `shell`; a Claude spawn's must be nonblank
+and neither `agent` nor `local_agent` (subagents are agent sessions, not
+workers). Non-terminal state
 updates (`running`, `paused`) and `async_task_progress` are not supported by this
 slice and change nothing. Reject cross-session frames, including unknown child
 sessions, even when asyncTaskId has a plausible `threadId:itemId` prefix.
@@ -224,6 +233,12 @@ lost, with that continuity as unknownReason. Provider terminal rows retain their
 reported status, always with worker exit unknown. Clients may show how long ago
 the worker started (firstObservedAt) but must not present it as a liveness check.
 
+The accepted cost of no staleness: a worker whose end report never arrives (for
+example a lost Codex terminal-list reconciliation) stays `running` until the
+provider connection ends. Codex's own list reconciliation and Claude's task
+level normally end such rows, a Stop on one returns `stopped: false` from the
+provider, and a new generation clears it. No daemon-side process scan is added.
+
 Retain a nondecreasing daemon projection clock; clock rollback cannot rewind
 asOf or observation times. View remount, refetch, same-generation frontend
 reconnect, subscription snapshot and successful unchanged reconciliation cannot
@@ -248,8 +263,9 @@ That checkpoint is internal model state, not an additional wire/persistence API.
 Daemon restart requires a real new initialization; no cached old row becomes live.
 
 Each scoped generation admits at most **1024 distinct asyncTaskIds**, retaining
-at most **256 rows**. On row overflow, evict the oldest admitted row regardless of
-state; never claim its process ended. Retain its seen-ID tombstone until generation
+at most **256 rows**. On row overflow, evict the oldest admitted row whose
+providerState is terminal; only when no retained row has ended, evict the oldest
+running row. Never claim an evicted worker's process ended. Retain its seen-ID tombstone until generation
 end, so repeated spawn or terminal frames cannot recreate it. When the ledger
 fills, reject unseen IDs and latch truncated; existing retained running rows can
 still receive their terminal transition. A new generation atomically clears old

@@ -58,14 +58,17 @@ list-row preview cap). A list-shaped `AgentLite` row carries
 can mark the text as a prefix or read the uncapped value with `agent.get`. Older daemons
 omit the flags; clients must not read their absence as proof a value is complete.
 
-**Worker observation stop and Claude support (additive, prepared).** The
+**Worker observation stop and Claude support (prepared amendment).** The
 [worker observation contract (§5.5b)](./methods/agent-workers.md) reserves the router
 method `agent.workers.stop`, bringing the documented surface to **456 / 399 / 57**
-(dispatchable / router / fast path). It also allowlists claude-agent-acp 0.81.1 and
-codex-acp 2.2.2, adds `taskType` and `canStop` row fields, and drops the unimplemented
-60-second staleness rule (`freshnessMs`, `freshUntil`, `stale`). Nothing implemented
-that rule, so no client changes. `agentWorkers: 1` still gates the complete contract.
-No shipped numeric version is claimed here.
+(dispatchable / router / fast path). It allowlists claude-agent-acp 0.81.1 and replaces
+the Codex pin 1.13.1 with 2.2.2, so a 1.13.1 session now reports
+`unsupported/adapter-version`. It adds `taskType` and `canStop` row fields and
+**removes** the 60-second staleness rule: the `freshnessMs` snapshot field, the
+`freshUntil` row field and the `stale` unknown reason. These removals and the
+narrowed Codex pin break no client because no component implemented the
+prepared contract. `agentWorkers: 1` still gates the complete contract. No shipped
+numeric version is claimed here.
 
 **PR workspace lookup (additive, prepared).** The
 [PR workspace lookup](./methods/workspace.md#pull-request-workspace-lookup) reserves

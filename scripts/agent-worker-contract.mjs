@@ -28,10 +28,15 @@ function bounded(value, maxBytes) {
   return result;
 }
 const boundedTitle = (value) => bounded(value, 512);
-// Codex reports only shell workers; Claude also reports workflows and monitors. Subagents are never workers.
+// Provider profiles (`claude-code@work`) share their base provider's adapter and rules.
+export const baseProvider = (provider) => provider.split('@')[0];
+// Sanitize first, then judge the sanitized value. Codex reports only shell workers;
+// Claude also reports workflows and monitors. Subagents are never workers.
 function acceptedTaskType(provider, taskType) {
-  if (typeof taskType !== 'string' || taskType.trim() === '' || SUBAGENT_TASK_TYPES.has(taskType)) return false;
-  return provider === 'codex' ? taskType === 'shell' : true;
+  const type = bounded(taskType, 64)?.trim();
+  if (!type || SUBAGENT_TASK_TYPES.has(type)) return undefined;
+  if (baseProvider(provider) === 'codex' && type !== 'shell') return undefined;
+  return type;
 }
 // Running means "the provider announced it and has not reported an end". There is no
 // upstream heartbeat, so evidence age never demotes a row; only lost continuity does.
@@ -53,7 +58,8 @@ export class WorkerProjection {
     assert.ok(Number.isInteger(maxSeen) && maxSeen >= maxRows && maxSeen <= MAX_SEEN);
     this.scope = Object.fromEntries(SCOPE_KEYS.map((k) => [k, scope[k]]));
     this.options = { adapterVersion, negotiated, maxRows, maxSeen };
-    const adapter = Object.hasOwn(SUPPORTED_ADAPTERS, scope.provider) ? SUPPORTED_ADAPTERS[scope.provider] : undefined;
+    const base = noSession && !validId(scope.provider) ? undefined : baseProvider(scope.provider);
+    const adapter = base !== undefined && Object.hasOwn(SUPPORTED_ADAPTERS, base) ? SUPPORTED_ADAPTERS[base] : undefined;
     this.source = adapter?.source;
     this.support = noSession ? { status: 'unavailable', reason: 'no-session' } : !adapter ? { status: 'unsupported', reason: 'provider' }
       : adapterVersion !== adapter.adapterVersion ? { status: 'unsupported', reason: 'adapter-version' }
@@ -73,7 +79,8 @@ export class WorkerProjection {
     if (frame?.sessionId !== this.scope.acpSessionId) return false;
     const u = frame.update;
     if (!u || !validId(u.asyncTaskId) || (u.toolCallId !== undefined && !validId(u.toolCallId))) return false;
-    const spawned = u.sessionUpdate === 'async_task_spawned' && acceptedTaskType(this.scope.provider, u.taskType);
+    const taskType = u.sessionUpdate === 'async_task_spawned' ? acceptedTaskType(this.scope.provider, u.taskType) : undefined;
+    const spawned = taskType !== undefined;
     const ended = u.sessionUpdate === 'async_task_state_update' && TERMINAL.has(u.state);
     if (!spawned && !ended) return false;
     if (!time(context.receivedAt)) return false;
@@ -90,7 +97,9 @@ export class WorkerProjection {
       if (this.seen.size >= this.options.maxSeen) { this.truncated = true; return false; }
       this.seen.add(u.asyncTaskId);
       if (this.rows.size >= this.options.maxRows) {
-        this.rows.delete(this.rows.keys().next().value);
+        // Running rows never expire, so evict the oldest ended row first and a running row only when none ended.
+        const victim = [...this.rows].find(([, r]) => TERMINAL.has(r.providerState))?.[0] ?? this.rows.keys().next().value;
+        this.rows.delete(victim);
         this.truncated = true;
       }
       row = { identity: { ...this.scope, asyncTaskId: u.asyncTaskId }, firstObservedAt: at };
@@ -99,7 +108,7 @@ export class WorkerProjection {
       if (title !== undefined) row.name = title;
       // A terminal-only row was never announced as stoppable.
       row.canStop = spawned && u.canStop === true;
-      if (spawned) row.taskType = bounded(u.taskType, 64);
+      if (spawned) row.taskType = taskType;
     }
     row.providerState = spawned ? 'running' : u.state;
     row.observedAt = at;
@@ -127,8 +136,10 @@ export class WorkerProjection {
   // forwards exactly one provider request. The row is never changed here: only the
   // provider's own terminal frame ends it, and the stop answer is not worker evidence.
   stop(request, authority = { canControl: true }) {
-    if (!validId(request.asyncTaskId)) throw new Error('-32602 invalid-params');
+    if (!validId(request.asyncTaskId) || !validId(request.connectionGeneration)) throw new Error('-32602 invalid-params');
     this.authorize(request, authority.canControl);
+    // A provider may reuse a task ID in a new generation: a stale row must never stop a different worker.
+    if (request.connectionGeneration !== this.scope.connectionGeneration) throw new Error('-32602 not-found');
     const row = this.rows.get(request.asyncTaskId);
     if (!row) throw new Error('-32602 not-found');
     const result = { asyncTaskId: request.asyncTaskId, stopped: false };
