@@ -177,7 +177,7 @@ Each `WorkerObservation` contains:
 | --- | --- |
 | identity | `{ workspaceId, agentId, provider, acpSessionId, connectionGeneration, asyncTaskId }` — the full tuple is the key |
 | toolCallId? | Optional exact originating tool correlation within this same scope; never a daemon terminal or script ID |
-| name? | Untrusted plain-text label, control characters replaced by spaces and UTF-8 truncated to at most 512 bytes on a codepoint boundary |
+| name? | Untrusted plain-text label (for a shell, usually its command line, which the transcript's tool call already shows), control characters replaced by spaces and UTF-8 truncated to at most 512 bytes on a codepoint boundary |
 | taskType? | Untrusted plain-text provider task type from the spawn (`shell` for Codex; e.g. `shell`, `workflow`, `monitor` for Claude): control characters replaced by spaces, truncated to 64 bytes, then trimmed; absent on a terminal-only row |
 | canStop | Boolean; true only when the spawn carried exactly `canStop: true`; false for terminal-only rows |
 | firstObservedAt | Receipt time of the first accepted frame for this identity; clients show "started X ago" from it |
@@ -204,7 +204,9 @@ At the live, authenticated receiving boundary, accept only the bound session's
 state completed/failed/stopped. Judge `taskType` only after sanitizing it as in
 the row table: a Codex spawn's must be `shell`; a Claude spawn's must be nonblank
 and neither `agent` nor `local_agent` (subagents are agent sessions, not
-workers). Non-terminal state
+workers). A spawn whose type is not admitted creates no row but tombstones its
+ID (within the ledger bound below), so a later end report for it cannot create a
+terminal-only row. Non-terminal state
 updates (`running`, `paused`) and `async_task_progress` are not supported by this
 slice and change nothing. Reject cross-session frames, including unknown child
 sessions, even when asyncTaskId has a plausible `threadId:itemId` prefix.
