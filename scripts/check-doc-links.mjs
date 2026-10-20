@@ -6,6 +6,13 @@
 // only path characters. Globs, placeholders, whitespace, and ellipses are ignored.
 // Bare paths resolve against the source directory, monorepo root, and component repositories.
 // References requiring an uninitialized submodule are skipped as unverifiable.
+//
+// Markdown links with an anchor (`file.md#anchor` or `#anchor`) whose target is a
+// Markdown file must also name a heading in it, slugged like GitHub: inline markup
+// dropped, lowercased, punctuation removed, spaces turned into hyphens, `-1`, `-2`, ...
+// appended to repeated slugs. Headings inside code fences are ignored; explicit
+// `<a id>` / `<a name>` anchors count. Anchors GitHub generates at runtime (comment
+// and review anchors, `L12` line anchors) and anchors on other file types are not checked.
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -14,6 +21,12 @@ import { fileURLToPath } from 'node:url';
 
 const MARKDOWN_LINK = /\[[^\]]*\]\(\s*(<?[^\s)>]+>?)/g;
 const REPO_PATH = /`((?:docs|scripts|\.github)\/[A-Za-z0-9._/-]+)`/g;
+const RUNTIME_ANCHOR = /^(?:issuecomment-|discussion_r|discussioncomment-|pullrequestreview-|L\d+(?:-L\d+)?$)/;
+const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+const ATX_HEADING = /^ {0,3}#{1,6}(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/;
+const SETEXT_UNDERLINE = /^ {0,3}(?:=+|-+)[ \t]*$/;
+const NOT_SETEXT_TEXT = /^ {0,3}(?:[-*+>]\s|\d+[.)]\s|#|<|\||$)/;
+const HTML_ANCHOR = /<a\s[^>]*?\b(?:id|name)\s*=\s*["']([^"']+)["']/gi;
 
 async function isFile(filePath) {
   try {
@@ -86,8 +99,73 @@ async function submodules(root) {
   return modules;
 }
 
+export function headingSlug(text) {
+  return text
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/<[^>]*>/g, '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{M}\p{N}\p{Pc}\- ]/gu, '')
+    .replace(/ /g, '-');
+}
+
+export function headingAnchors(content) {
+  const anchors = new Set();
+  const occurrences = new Map();
+  const addHeading = (text) => {
+    const slug = headingSlug(text);
+    const count = occurrences.get(slug) ?? 0;
+    anchors.add(count === 0 ? slug : `${slug}-${count}`);
+    occurrences.set(slug, count + 1);
+  };
+
+  const lines = content.split(/\r?\n/);
+  let fence = null;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const fenceMatch = line.match(FENCE);
+    if (fence) {
+      const closes =
+        fenceMatch &&
+        fenceMatch[1][0] === fence[0] &&
+        fenceMatch[1].length >= fence.length &&
+        line.trim() === fenceMatch[1];
+      if (closes) fence = null;
+      continue;
+    }
+    if (fenceMatch) {
+      fence = fenceMatch[1];
+      continue;
+    }
+    for (const match of line.matchAll(HTML_ANCHOR)) anchors.add(match[1]);
+    const atx = line.match(ATX_HEADING);
+    if (atx) {
+      addHeading(atx[1] ?? '');
+      continue;
+    }
+    const next = lines[index + 1];
+    if (next !== undefined && SETEXT_UNDERLINE.test(next) && !NOT_SETEXT_TEXT.test(line) && line.trim()) {
+      addHeading(line);
+      index += 1;
+    }
+  }
+  return anchors;
+}
+
 function unwrapTarget(raw) {
   return raw.startsWith('<') && raw.endsWith('>') ? raw.slice(1, -1) : raw;
+}
+
+function anchorOf(raw) {
+  const unwrapped = unwrapTarget(raw);
+  const hash = unwrapped.indexOf('#');
+  if (hash < 0) return null;
+  const anchor = unwrapped.slice(hash + 1);
+  try {
+    return decodeURIComponent(anchor);
+  } catch {
+    return anchor;
+  }
 }
 
 function cleanTarget(raw) {
@@ -109,7 +187,6 @@ function lineAt(content, index) {
 function isLocalLink(raw) {
   const target = unwrapTarget(raw);
   return (
-    !target.startsWith('#') &&
     !target.startsWith('//') &&
     !/^[a-z][a-z0-9+.-]*:/i.test(target) &&
     !/[{}*]/.test(target) &&
@@ -125,8 +202,21 @@ function isWithin(candidate, directory) {
   return candidate === directory || candidate.startsWith(`${directory}${path.sep}`);
 }
 
+function anchorReader() {
+  const cache = new Map();
+  return (filePath) => {
+    if (!cache.has(filePath)) cache.set(filePath, fs.readFile(filePath, 'utf8').then(headingAnchors));
+    return cache.get(filePath);
+  };
+}
+
+function needsAnchorCheck(anchor, filePath) {
+  return Boolean(anchor) && !RUNTIME_ANCHOR.test(anchor) && filePath.endsWith('.md');
+}
+
 export async function inspectRepository(root) {
   root = path.resolve(root);
+  const anchorsIn = anchorReader();
   const [inputs, modules] = await Promise.all([findInputs(root), submodules(root)]);
   const failures = [];
   let skipped = 0;
@@ -136,9 +226,11 @@ export async function inspectRepository(root) {
     const references = [];
     for (const match of content.matchAll(MARKDOWN_LINK)) {
       if (!isLocalLink(match[1])) continue;
+      const target = cleanTarget(match[1]);
       references.push({
         raw: match[1],
-        target: cleanTarget(match[1]),
+        target: target === '' ? path.basename(source) : target,
+        anchor: anchorOf(match[1]),
         index: match.index,
         bases: uniquePaths([path.dirname(source), root]),
       });
@@ -159,8 +251,20 @@ export async function inspectRepository(root) {
       const isUnverifiable = (candidate) =>
         modules.some((module) => !module.initialized && isWithin(candidate, module.path));
       const verifiable = insideRoot.filter((candidate) => !isUnverifiable(candidate));
-      const found = (await Promise.all(verifiable.map((candidate) => exists(candidate)))).some(Boolean);
-      if (found) continue;
+      const present = await Promise.all(verifiable.map((candidate) => exists(candidate)));
+      const found = verifiable.find((_, index) => present[index]);
+      if (found) {
+        if (!needsAnchorCheck(reference.anchor, found) || !(await isFile(found))) continue;
+        const anchors = await anchorsIn(found);
+        if (anchors.has(reference.anchor) || anchors.has(reference.anchor.toLowerCase())) continue;
+        failures.push({
+          source: path.relative(root, source),
+          line: lineAt(content, reference.index),
+          target: reference.raw,
+          resolved: `${path.relative(root, found)}#${reference.anchor}`,
+        });
+        continue;
+      }
 
       const unverifiable = insideRoot.some(isUnverifiable);
       if (unverifiable) {
@@ -191,7 +295,12 @@ async function main() {
     return;
   }
   for (const failure of failures) {
-    console.error(`${failure.source}:${failure.line}: missing ${failure.target} (${failure.resolved})`);
+    const hash = failure.resolved.indexOf('#');
+    const detail =
+      hash < 0
+        ? `missing ${failure.target} (${failure.resolved})`
+        : `missing heading ${failure.resolved.slice(hash)} in ${failure.resolved.slice(0, hash)}`;
+    console.error(`${failure.source}:${failure.line}: ${detail}`);
   }
   if (skipped > 0) console.log(`Skipped ${skipped} unverifiable reference${skipped === 1 ? '' : 's'}.`);
   process.exitCode = 1;
