@@ -55,6 +55,13 @@ JQ_INSTALL_URL="https://jqlang.github.io/jq/download/"
 # make lint-shell runs shellcheck over scripts/*.sh.
 SHELLCHECK_INSTALL_URL="https://github.com/koalaman/shellcheck#installing"
 
+# cloudlands-fe pnpm run lint:workflows runs actionlint over its GitHub
+# workflows. Exact pin: keep the version and checksums equal to
+# packages/cloudlands-fe/scripts/check-workflows.mjs (from the release's
+# actionlint_<version>_checksums.txt).
+ACTIONLINT_VERSION="1.7.12"
+ACTIONLINT_INSTALL_URL="https://github.com/rhysd/actionlint/releases/tag/v$ACTIONLINT_VERSION"
+
 # Instrumented coverage (make coverage-e2e / coverage-all) needs cargo-llvm-cov
 # plus the llvm-tools-preview rustup component. Neither is required by make
 # test, so the doctor reports them as [optional] and bootstrap installs them
@@ -527,6 +534,54 @@ shellcheck_ready() {
   shellcheck_version >/dev/null
 }
 
+# The first line of actionlint --version is the bare version.
+actionlint_version() {
+  command -v actionlint >/dev/null 2>&1 || return 1
+  local output
+  output=$(actionlint --version 2>/dev/null) || return 1
+  [[ -n "$output" ]] || return 1
+  printf '%s\n' "${output%%$'\n'*}"
+}
+
+# Exact pin, so a local run matches the cloudlands-fe CI result.
+actionlint_ready() {
+  [[ "$(actionlint_version)" == "$ACTIONLINT_VERSION" ]]
+}
+
+# actionlint_platform: the release archive suffix for this host, or failure.
+actionlint_platform() {
+  case "$(uname -s):$(uname -m)" in
+    Linux:x86_64|Linux:amd64) echo linux_amd64 ;;
+    Linux:aarch64|Linux:arm64) echo linux_arm64 ;;
+    Darwin:x86_64) echo darwin_amd64 ;;
+    Darwin:arm64) echo darwin_arm64 ;;
+    *) return 1 ;;
+  esac
+}
+
+actionlint_sha256() {
+  case "$1" in
+    linux_amd64) echo 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8 ;;
+    linux_arm64) echo 325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6 ;;
+    darwin_amd64) echo 5b44c3bc2255115c9b69e30efc0fecdf498fdb63c5d58e17084fd5f16324c644 ;;
+    darwin_arm64) echo aba9ced2dee8d27fecca3dc7feb1a7f9a52caefa1eb46f3271ea66b6e0e6953f ;;
+    *) return 1 ;;
+  esac
+}
+
+# sha256_of FILE: the hex digest with sha256sum (Linux) or shasum (macOS).
+sha256_of() {
+  local output
+  if command -v sha256sum >/dev/null 2>&1; then
+    output=$(sha256sum "$1") || return 1
+  elif command -v shasum >/dev/null 2>&1; then
+    output=$(shasum -a 256 "$1") || return 1
+  else
+    return 1
+  fi
+  printf '%s\n' "${output%% *}"
+}
+
 # Probed through cargo like the nextest check (not command -v), so a stale
 # cargo-llvm-cov binary that no longer runs counts as absent.
 llvm_cov_version() {
@@ -589,6 +644,7 @@ installable_gap_exists() {
   gh_ready || return 0
   jq_ready || return 0
   shellcheck_ready || return 0
+  actionlint_ready || return 0
   if [[ "$WITH_COVERAGE" == 1 ]]; then
     coverage_tooling_ready || return 0
   fi
@@ -783,6 +839,17 @@ check_all() {
     missing "shellcheck: $(command -v shellcheck) is on PATH but shellcheck --version fails; reinstall it (run make bootstrap-dev-host)"
   else
     ok "shellcheck: $(shellcheck_version)"
+  fi
+
+  local actionlint_found
+  if ! command -v actionlint >/dev/null 2>&1; then
+    missing "actionlint $ACTIONLINT_VERSION: required by cloudlands-fe pnpm run lint:workflows; run make bootstrap-dev-host"
+  elif ! actionlint_found=$(actionlint_version); then
+    missing "actionlint: $(command -v actionlint) is on PATH but actionlint --version fails; reinstall it (run make bootstrap-dev-host)"
+  elif ! actionlint_ready; then
+    missing "actionlint: found $actionlint_found; cloudlands-fe pins $ACTIONLINT_VERSION; run make bootstrap-dev-host"
+  else
+    ok "actionlint: $actionlint_found"
   fi
 
   if command -v sccache >/dev/null 2>&1; then
@@ -1097,6 +1164,36 @@ install_shellcheck() {
   hash -r
 }
 
+# The pinned release binary goes to $CARGO_HOME/bin, which this script already
+# puts on PATH; the archive is verified against the pinned checksum first.
+install_actionlint() {
+  if actionlint_ready; then
+    echo "[skip] actionlint $ACTIONLINT_VERSION already installed"
+    return
+  fi
+
+  local platform expected actual
+  platform=$(actionlint_platform) || { echo "ERROR: no actionlint $ACTIONLINT_VERSION release archive for $(uname -s) $(uname -m); install it from $ACTIONLINT_INSTALL_URL" >&2; exit 1; }
+  expected=$(actionlint_sha256 "$platform") || exit 1
+  command -v curl >/dev/null 2>&1 || { echo "ERROR: curl is required to install actionlint" >&2; exit 1; }
+  echo "[install] actionlint $ACTIONLINT_VERSION from its release archive"
+  TEMP_FILE=$(mktemp "${TMPDIR:-/tmp}/actionlint.XXXXXX") || exit 1
+  curl --proto '=https' --tlsv1.2 -LsSf \
+    "https://github.com/rhysd/actionlint/releases/download/v$ACTIONLINT_VERSION/actionlint_${ACTIONLINT_VERSION}_$platform.tar.gz" \
+    -o "$TEMP_FILE" || exit 1
+  actual=$(sha256_of "$TEMP_FILE") || { echo "ERROR: sha256sum or shasum is required to verify actionlint" >&2; exit 1; }
+  if [[ "$actual" != "$expected" ]]; then
+    echo "ERROR: actionlint archive SHA-256 mismatch (expected $expected, got $actual)" >&2
+    exit 1
+  fi
+  mkdir -p "$CARGO_HOME/bin" || exit 1
+  tar -xzf "$TEMP_FILE" -C "$CARGO_HOME/bin" actionlint || exit 1
+  rm -f -- "$TEMP_FILE"
+  TEMP_FILE=""
+  hash -r
+  actionlint_ready || { echo "ERROR: actionlint $ACTIONLINT_VERSION is still not first on PATH after installing to $CARGO_HOME/bin; remove the other actionlint ($(command -v actionlint || echo none))" >&2; exit 1; }
+}
+
 install_frontend() {
   if ! command -v corepack >/dev/null 2>&1; then
     command -v npm >/dev/null 2>&1 || { echo "ERROR: npm is required to install Corepack" >&2; exit 1; }
@@ -1171,6 +1268,7 @@ install_frontend
 install_gh
 install_jq
 install_shellcheck
+install_actionlint
 
 echo
 check_all

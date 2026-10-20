@@ -360,6 +360,73 @@ expect_line "[missing]  shellcheck: $bin_dir/shellcheck is on PATH but shellchec
 reject_line "[ok]       shellcheck:"
 rm -f "$bin_dir/shellcheck"
 
+# cloudlands-fe lint:workflows pins actionlint exactly; absent, unrunnable, or
+# another version is one required gap each, and only the pin is ready.
+run_doctor
+expect_line "[missing]  actionlint 1.7.12: required by cloudlands-fe pnpm run lint:workflows; run make bootstrap-dev-host"
+reject_line "[ok]       actionlint:"
+gaps_without_actionlint=$(sed -n 's/^Doctor found \([0-9][0-9]*\) required gap(s)\.$/\1/p' "$output")
+[[ -n "$gaps_without_actionlint" ]] || fail "expected a gap summary without actionlint"
+write_launcher actionlint '[ "$1" = --version ] && { printf "1.7.12\ninstalled by downloading from release page\n"; exit 0; }; exit 1'
+run_doctor
+expect_line "[ok]       actionlint: 1.7.12"
+reject_line "[missing]  actionlint"
+gaps_with_actionlint=$(sed -n 's/^Doctor found \([0-9][0-9]*\) required gap(s)\.$/\1/p' "$output")
+[[ "$gaps_with_actionlint" == "$((gaps_without_actionlint - 1))" ]] \
+  || fail "actionlint did not count as one required gap: $gaps_without_actionlint without vs $gaps_with_actionlint with"
+write_launcher actionlint '[ "$1" = --version ] && { echo 1.7.11; exit 0; }; exit 1'
+run_doctor
+expect_line "[missing]  actionlint: found 1.7.11; cloudlands-fe pins 1.7.12; run make bootstrap-dev-host"
+reject_line "[ok]       actionlint:"
+write_launcher actionlint 'echo "cannot execute" >&2; exit 1'
+run_doctor
+expect_line "[missing]  actionlint: $bin_dir/actionlint is on PATH but actionlint --version fails"
+reject_line "[ok]       actionlint:"
+rm -f "$bin_dir/actionlint"
+
+# install_actionlint downloads the pinned archive, refuses a checksum mismatch,
+# and extracts the binary into $CARGO_HOME/bin; a ready pin is left alone.
+actionlint_funcs="$temp_dir/actionlint-funcs.sh"
+sed '/^if \[\[ "\$MODE" == check \]\]; then$/,$d' "$script" >"$actionlint_funcs"
+grep -q '^install_actionlint() {' "$actionlint_funcs" || fail "could not extract install_actionlint"
+actionlint_log="$temp_dir/actionlint.log"
+case "$(uname -s):$(uname -m)" in
+  Linux:x86_64|Linux:amd64) actionlint_digest=8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8 ;;
+  Linux:aarch64|Linux:arm64) actionlint_digest=325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6 ;;
+  Darwin:x86_64) actionlint_digest=5b44c3bc2255115c9b69e30efc0fecdf498fdb63c5d58e17084fd5f16324c644 ;;
+  Darwin:arm64) actionlint_digest=aba9ced2dee8d27fecca3dc7feb1a7f9a52caefa1eb46f3271ea66b6e0e6953f ;;
+  *) fail "no actionlint fixture digest for $(uname -s) $(uname -m)" ;;
+esac
+ln -s "$(command -v mkdir)" "$bin_dir/mkdir"
+ln -s "$(command -v chmod)" "$bin_dir/chmod"
+write_launcher curl 'echo "curl $*" >>"$TOOL_LOG"; while [ $# -gt 0 ]; do [ "$1" = -o ] && { : >"$2"; break; }; shift; done'
+write_launcher sha256sum 'echo "$ACTIONLINT_FIXTURE_DIGEST  $1"'
+write_launcher tar 'echo "tar $*" >>"$TOOL_LOG"; printf "#!/usr/bin/env bash\necho 1.7.12\n" >"$4/actionlint"; chmod +x "$4/actionlint"'
+run_install_actionlint() {
+  : >"$actionlint_log"
+  rm -rf "$temp_dir/home/.cargo/bin/actionlint"
+  PATH="$bin_dir" HOME="$temp_dir/home" INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
+    CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT='' MAKELEVEL='' TOOL_LOG="$actionlint_log" \
+    ACTIONLINT_FIXTURE_DIGEST="$1" \
+    bash -c 'funcs=$1; set --; source "$funcs"; install_actionlint' bash "$actionlint_funcs" >"$output" 2>&1
+}
+run_install_actionlint "$actionlint_digest" || fail "install_actionlint failed with a matching checksum"
+expect_line "[install] actionlint 1.7.12"
+grep -q "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_" "$actionlint_log" \
+  || fail "install_actionlint did not download the pinned release: $(cat "$actionlint_log")"
+grep -q "^tar -xzf .* -C $temp_dir/home/.cargo/bin actionlint$" "$actionlint_log" \
+  || fail "install_actionlint did not extract into CARGO_HOME/bin: $(cat "$actionlint_log")"
+! run_install_actionlint 0000000000000000000000000000000000000000000000000000000000000000 \
+  || fail "install_actionlint accepted a checksum mismatch"
+expect_line "ERROR: actionlint archive SHA-256 mismatch"
+grep -q '^tar ' "$actionlint_log" && fail "install_actionlint extracted an archive that failed verification"
+write_launcher actionlint '[ "$1" = --version ] && { echo 1.7.12; exit 0; }; exit 1'
+run_install_actionlint "$actionlint_digest" || fail "install_actionlint failed on a ready host"
+expect_line "[skip] actionlint 1.7.12 already installed"
+[[ ! -s "$actionlint_log" ]] || fail "ready actionlint was reinstalled: $(cat "$actionlint_log")"
+rm -f "$bin_dir/actionlint" "$bin_dir/curl" "$bin_dir/sha256sum" "$bin_dir/tar" "$bin_dir/mkdir" "$bin_dir/chmod"
+rm -rf "$temp_dir/home/.cargo/bin/actionlint"
+
 # A caller cargo that does not run the pinned toolchain draws a warning naming
 # the binary and both versions, without counting as a gap.
 printf '[toolchain]\nchannel = "1.96.0"\ncomponents = ["rustfmt", "clippy"]\n' >"$intentd_dir/rust-toolchain.toml"
@@ -563,7 +630,7 @@ run_nextest_gap() {
   PATH="$bin_dir" HOME="$temp_dir/home" INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
     CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT='' MAKELEVEL='' \
     bash -c 'funcs=$1; set --; source "$funcs"
-      for name in required_submodules_ready load_versions python_ready openssl_dev_ready rust_toolchain_ready active_toolchain_ready node_ready pnpm_ready frontend_dependencies_ready gh_ready jq_ready shellcheck_ready; do
+      for name in required_submodules_ready load_versions python_ready openssl_dev_ready rust_toolchain_ready active_toolchain_ready node_ready pnpm_ready frontend_dependencies_ready gh_ready jq_ready shellcheck_ready actionlint_ready; do
         eval "$name() { return 0; }"
       done
       installable_gap_exists' bash "$bootstrap_funcs" >"$output" 2>&1
