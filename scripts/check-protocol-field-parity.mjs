@@ -10,6 +10,12 @@
 // ignore entry (field no longer emitted, or now present in the TS type) is a
 // warning, not an error, so an FE PR that declares a previously ignored field
 // is not deadlocked against the monorepo entry (intent-hq/intent#5497).
+// A daemon-first field the FE has not adopted yet is not an ignore entry: it
+// is a row of the "Staged row fields (app adoption pending)" table in
+// docs/protocol/versioning.md, which lands with the field's docs before the
+// intentd PR (docs lead the pin). A staged field missing from the TS type is a
+// warning; a row the FE has adopted, or whose field is not emitted, warns too.
+// A malformed table fails closed (intent-hq/intent#7233 needed checker edits).
 // Attributes the scanner cannot interpret but that may change the wire shape
 // (`cfg_attr`, `cfg`, unknown serde arguments) fail closed. A pair whose
 // submodule is not initialized is skipped; a manifest path missing from an
@@ -33,26 +39,122 @@ export const PAIRS = [
       contextUsage: 'not consumed by the FE today (no reader of the row field)',
       contextReferences: 'read untyped through the agent-session slice (DETAIL_ONLY_SESSION_FIELDS in agent-session-slice.ts); accepted FE typing debt, not declared on the type',
       fileBlocks: 'read untyped through the agent-session slice (DETAIL_ONLY_SESSION_FIELDS and data.fileBlocks in agent-session-slice.ts); accepted FE typing debt, not declared on the type',
-      lastAgentResponseTruncated: 'documented optional list-row truncation flag (§5.5); staged daemon-first adoption before the cloudlands-fe attention-reason truncation PR; remove once the monorepo frontend pin includes it',
-      lastUserMessageTruncated: 'documented optional list-row truncation flag (§5.5); staged daemon-first adoption before the cloudlands-fe attention-reason truncation PR; remove once the monorepo frontend pin includes it',
-      digestTruncated: 'documented optional list-row truncation flag (§5.5); staged daemon-first adoption before the cloudlands-fe attention-reason truncation PR; remove once the monorepo frontend pin includes it',
-      usingEarlierProfileSettings: 'documented optional provider-profile field (§5.54); staged daemon-first adoption before https://github.com/intent-hq/cloudlands-fe/pull/3457; remove once the monorepo frontend pin includes that PR',
-      providerReplacementRequired: 'documented optional provider-profile field (§5.54); staged daemon-first adoption before https://github.com/intent-hq/cloudlands-fe/pull/3457; remove once the monorepo frontend pin includes that PR',
     },
   },
   {
     rust: { file: MODEL_RS, struct: 'Workspace' },
     ts: { file: 'packages/cloudlands-fe/src/shared/types.ts', type: 'Workspace' },
     ignore: {
-      lastContentActivity: 'documented optional content timestamp; staged daemon-first adoption before https://github.com/intent-hq/cloudlands-fe/pull/3124; remove once the monorepo frontend pin includes that PR',
-      canManage: 'documented optional capability; staged daemon-first adoption before https://github.com/intent-hq/cloudlands-fe/pull/2911; remove once the monorepo frontend pin includes that PR',
       tokenUsage: 'read via workspace.getTokenUsage and the workspace:tokenUsage-changed event into the token-usage slice, not from the row',
     },
   },
 ];
 
+export const STAGED_DOC = 'docs/protocol/versioning.md';
+export const STAGED_HEADING = 'Staged row fields (app adoption pending)';
+const STAGED_COLUMNS = ['Row', 'Field', 'Contract', 'App adoption'];
+// One wire name per cell, wrapped in a balanced pair of backticks or none.
+const STAGED_NAME_RE = /^(`?)([^`\s|]+)\1$/;
+const MD_LINK_RE = /\[[^\]]+\]\([^)\s]+\)/;
+const FENCE_RE = /^\s*(```|~~~)/;
+const HEADING_RE = /^#{1,6}\s+(.*?)\s*#*\s*$/;
+
+// Cells of a `|`-led table row, honoring `\|` escapes (same rule as
+// tableCells in scripts/check-protocol-catalog.mjs); null for any other line.
+function tableCells(raw) {
+  if (!raw.trim().startsWith('|')) return null;
+  const cells = [...raw.trim().matchAll(/\|((?:[^|\\]|\\.)*)/g)].map((m) => m[1].trim());
+  if (cells.at(-1) === '') cells.pop();
+  return cells;
+}
+
+/**
+ * Parse the staged daemon-first field table under the `<STAGED_HEADING>`
+ * heading in `markdown` (fenced code blocks are skipped). Returns
+ * `{ staged, errors }`: `staged` maps a Rust struct name to a Map of wire
+ * field → `{ file, line, adoption }`. Every row must name a manifest Rust
+ * struct, a wire field, a Markdown link to the contract and the app adoption
+ * (cloudlands-fe PR or issue) that retires it.
+ */
+export function parseStagedFields(markdown, file = STAGED_DOC, pairs = PAIRS) {
+  const staged = new Map();
+  const errors = [];
+  const fail = (line, message) => errors.push({ file, line, message: `${STAGED_HEADING}: ${message}` });
+  const lines = markdown.split('\n');
+  const section = [];
+  let inFence = false;
+  let start = -1;
+  for (let i = 0; i < lines.length; i += 1) {
+    if (FENCE_RE.test(lines[i])) inFence = !inFence;
+    if (inFence || FENCE_RE.test(lines[i])) continue;
+    const heading = lines[i].match(HEADING_RE)?.[1];
+    if (start === -1) {
+      if (heading === STAGED_HEADING) start = i;
+      continue;
+    }
+    if (heading !== undefined) break;
+    section.push(i);
+  }
+  if (start === -1) {
+    fail(1, `heading not found; restore the section (with its ${STAGED_COLUMNS.join(' | ')} table) in ${file}`);
+    return { staged, errors };
+  }
+  const first = section.findIndex((i) => tableCells(lines[i]) !== null);
+  if (first === -1) {
+    fail(start + 1, `no table follows the heading; expected columns ${STAGED_COLUMNS.join(' | ')}`);
+    return { staged, errors };
+  }
+  const headerAt = section[first];
+  const header = tableCells(lines[headerAt]);
+  if (header.join('|') !== STAGED_COLUMNS.join('|')) {
+    fail(headerAt + 1, `table columns are ${header.join(' | ')}; expected ${STAGED_COLUMNS.join(' | ')}`);
+    return { staged, errors };
+  }
+  if (!/^\s*\|?[\s:|-]*-[\s:|-]*$/.test(lines[headerAt + 1] ?? '')) {
+    fail(headerAt + 2, 'the header row must be followed by a | --- | separator row');
+    return { staged, errors };
+  }
+  const structs = new Map(pairs.map((p) => [p.rust.struct, p]));
+  for (let i = headerAt + 2; i < lines.length; i += 1) {
+    const cells = tableCells(lines[i]);
+    if (cells === null) break;
+    const line = i + 1;
+    if (cells.length !== STAGED_COLUMNS.length) {
+      fail(line, `row has ${cells.length} cell(s); expected ${STAGED_COLUMNS.length}`);
+      continue;
+    }
+    const [rowCell, fieldCell, contract, adoption] = cells;
+    const row = rowCell.match(STAGED_NAME_RE)?.[2];
+    const field = fieldCell.match(STAGED_NAME_RE)?.[2];
+    if (!row || !field) {
+      fail(line, `Row and Field must each be one name, in balanced backticks or none (got ${rowCell || '(empty)'} / ${fieldCell || '(empty)'})`);
+      continue;
+    }
+    if (!MD_LINK_RE.test(contract) || !adoption) {
+      fail(line, `${row}.${field} needs a Markdown link to its Contract and the App adoption (cloudlands-fe PR or issue) that retires it`);
+      continue;
+    }
+    const pair = structs.get(row);
+    if (!pair) {
+      fail(line, `Row ${row} is not a checked Rust row struct (${[...structs.keys()].join(', ')}); name the Rust struct, not the frontend type, or add a pair to PAIRS in scripts/check-protocol-field-parity.mjs`);
+      continue;
+    }
+    if (Object.hasOwn(pair.ignore, field)) {
+      fail(line, `${row}.${field} is also a PAIRS ignore entry; keep one: the ignore entry for a field the FE never reads, the staged row for pending adoption`);
+      continue;
+    }
+    if (!staged.has(row)) staged.set(row, new Map());
+    if (staged.get(row).has(field)) {
+      fail(line, `${row}.${field} is listed twice (first at line ${staged.get(row).get(field).line})`);
+      continue;
+    }
+    staged.get(row).set(field, { file, line, adoption });
+  }
+  return { staged, errors };
+}
+
 // A diagnostic is `{ file, line, message, severity? }`; `severity` is
-// `'warning'` for stale ignore entries and absent for errors.
+// `'warning'` for stale ignore entries and staged fields, absent for errors.
 export function formatDiagnostic({ file, line, message, severity }) {
   return `${file}:${line}: ${severity ?? 'error'}: ${message}`;
 }
@@ -491,9 +593,10 @@ export function extractTsKeys(source, typeName) {
 /**
  * Compare one pair's emitted fields with its TS keys; returns diagnostics
  * (`{ file, line, message, severity? }`). Missing fields and parse failures are
- * errors; stale ignore entries carry `severity: 'warning'`.
+ * errors; stale ignore entries and staged fields carry `severity: 'warning'`.
+ * `staged` is this pair's Map from `parseStagedFields` (wire → `{ file, line, adoption }`).
  */
-export function comparePair(pair, rustSource, tsSource) {
+export function comparePair(pair, rustSource, tsSource, staged = new Map()) {
   const label = pairLabel(pair);
   const rustFile = pair.rust.file;
   const tsFile = pair.ts.file;
@@ -513,11 +616,28 @@ export function comparePair(pair, rustSource, tsSource) {
   const emitted = new Map(rust.fields.map((f) => [f.wire, f]));
   for (const f of rust.fields) {
     if (tsKeys.has(f.wire) || Object.hasOwn(pair.ignore, f.wire)) continue;
+    const entry = staged.get(f.wire);
+    if (entry) {
+      errors.push({
+        file: rustFile,
+        line: f.line,
+        severity: 'warning',
+        message: `${label}: staged daemon-first field ${pair.rust.struct}.${f.wire} (Rust ${f.rustName}) is not in ${pair.ts.type} yet (${tsRange}); app adoption pending: ${entry.adoption} (${entry.file}:${entry.line})`,
+      });
+      continue;
+    }
     errors.push({
       file: rustFile,
       line: f.line,
-      message: `${label}: emitted field ${pair.rust.struct}.${f.wire} (Rust ${f.rustName}) is missing from ${pair.ts.type} (${tsRange}); add it to the TS type (and normalizer if needed) or add an ignore entry with a reason in scripts/check-protocol-field-parity.mjs`,
+      message: `${label}: emitted field ${pair.rust.struct}.${f.wire} (Rust ${f.rustName}) is missing from ${pair.ts.type} (${tsRange}); add it to the TS type (and normalizer if needed), stage a daemon-first field in the "${STAGED_HEADING}" table of ${STAGED_DOC}, or add an ignore entry with a reason in scripts/check-protocol-field-parity.mjs for a field the FE never reads`,
     });
+  }
+  for (const [wire, entry] of staged) {
+    if (!emitted.has(wire)) {
+      errors.push({ file: entry.file, line: entry.line, severity: 'warning', message: `${label}: staged field ${wire} is not emitted by ${pair.rust.struct}; expected while its intentd change has not reached this checkout (docs lead the pin), otherwise remove the row (or fix a misspelled Field)` });
+    } else if (tsKeys.has(wire)) {
+      errors.push({ file: entry.file, line: entry.line, severity: 'warning', message: `${label}: stale staged field ${wire} — ${pair.ts.type} now declares it (${tsFile}:${tsKeys.get(wire)}); remove the row from the "${STAGED_HEADING}" table` });
+    }
   }
   for (const [wire, reason] of Object.entries(pair.ignore)) {
     if (!emitted.has(wire)) {
@@ -585,9 +705,10 @@ async function readManifestFile(root, { file, sub, dir, explicit }) {
 
 /**
  * Run every manifest pair against `root`; returns `{ errors, warnings, checked, skipped, refs }`.
- * `warnings` are the stale ignore entries; only `errors` fail the check. `refs` holds one submodule
- * ref per distinct component a compared file was read from, in first-read order.
- * Optional `intentdDir` / `feDir` select roots relative to `root` (or absolute);
+ * `warnings` are stale ignore entries and staged daemon-first fields; only `errors` fail the check.
+ * The staged table is read from `root`'s `STAGED_DOC` (monorepo docs, never a component root).
+ * `refs` holds one submodule ref per distinct component a compared file was read from, in
+ * first-read order. Optional `intentdDir` / `feDir` select roots relative to `root` (or absolute);
  * unlike absent default submodules, explicitly selected missing roots fail.
  */
 export async function runChecks(root, pairs = PAIRS, { intentdDir, feDir } = {}) {
@@ -596,6 +717,14 @@ export async function runChecks(root, pairs = PAIRS, { intentdDir, feDir } = {})
   const checked = [];
   const skipped = [];
   const refs = new Map();
+  let stagedSource = '';
+  try {
+    stagedSource = await fs.readFile(path.resolve(root, STAGED_DOC), 'utf8');
+  } catch (error) {
+    errors.push({ file: STAGED_DOC, line: 1, message: `cannot read the staged daemon-first field table: ${error.code}` });
+  }
+  const { staged, errors: stagedErrors } = stagedSource ? parseStagedFields(stagedSource, STAGED_DOC, pairs) : { staged: new Map(), errors: [] };
+  errors.push(...stagedErrors);
   const dirs = { 'packages/intentd': intentdDir, 'packages/cloudlands-fe': feDir };
   for (const pair of pairs) {
     const sources = [selectFile(pair.rust.file, dirs), selectFile(pair.ts.file, dirs)];
@@ -611,7 +740,7 @@ export async function runChecks(root, pairs = PAIRS, { intentdDir, feDir } = {})
     for (const { sub, dir } of sources) {
       if (sub && !refs.has(sub)) refs.set(sub, describeCheckout(root, dir, { pinDir: sub }));
     }
-    for (const d of comparePair(selectedPair, rust.source, ts.source)) (d.severity === 'warning' ? warnings : errors).push(d);
+    for (const d of comparePair(selectedPair, rust.source, ts.source, staged.get(pair.rust.struct))) (d.severity === 'warning' ? warnings : errors).push(d);
     checked.push(pairLabel(pair));
   }
   return { errors, warnings, checked, skipped, refs: [...refs.values()] };
@@ -635,9 +764,9 @@ async function main() {
   }
   for (const s of skipped) console.log(s);
   for (const w of warnings) console.error(formatDiagnostic(w));
-  const warningSummary = warnings.length > 0 ? `${warnings.length} warning(s): stale ignore entries` : '';
+  const warningSummary = warnings.length > 0 ? `${warnings.length} warning(s): stale ignore entries or staged daemon-first fields` : '';
   if (errors.length === 0) {
-    const suffix = warningSummary ? ` ${warningSummary}; remove them from PAIRS.` : '';
+    const suffix = warningSummary ? ` ${warningSummary}; see the warnings above.` : '';
     console.log(`Protocol field parity holds for ${checked.length} pair(s): ${checked.join('; ')}.${suffix}`);
     return;
   }
