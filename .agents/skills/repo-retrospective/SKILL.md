@@ -87,7 +87,7 @@ Implementation notes:
 - <Essential code locations and linked evidence for the observed problem.>
 - <Chosen enforcement rung and why stronger rungs are infeasible.>
 - <Check to run and the expected result.>
-- <Sibling workspaces and issue searches checked, with any related results.>
+- <Sibling workspaces, open issues, merged PRs, and recent commits checked, with results.>
 ```
 
 For example, the opening for the database finding can be:
@@ -103,9 +103,15 @@ that will make future database changes easier to check.
 
 ## Where it goes
 
-Before accepting a finding, deduplicate it against sibling workspaces with
-`ws.crossWorkspace.listSiblings` and open `intent-hq/intent` issues. Record both checks
-in the template, including related work that narrows or supersedes the proposal.
+Before accepting a finding, deduplicate it with four checks: sibling workspaces
+(`ws.crossWorkspace.listSiblings`), open `intent-hq/intent` issues, recently merged PRs
+(`gh pr list --repo <owner/repo> --state merged --search "<keywords>"` on
+`intent-hq/intent`, plus `intent-hq/intentd` or `intent-hq/cloudlands-fe` when the
+finding names their files), and recent commits to the named files
+(`git log --since=<incident date> -- <files>` in the repo or submodule that owns them).
+If merged work already covers the finding, narrow it to the remaining gap or drop it.
+Record all four checks in the template, including related work that narrows or
+supersedes the proposal.
 
 For each accepted, non-duplicate finding, a foreground top-level agent proposes one
 follow-up workspace with `ws.workspace.proposeSibling({ title, initialPrompt })`. Use a

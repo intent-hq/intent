@@ -269,15 +269,35 @@ def needs_callback_fixture(plans: list[list[str]]) -> bool:
     return False
 
 
+# Ready-entry prefix prepare() publishes; test_resumable_nextest pins it to the component.
+CALLBACK_READY_PREFIX = "callback-fixture-v1-linux-x64-"
+
+
+def callback_cache_dir() -> Path:
+    return Path.home() / ".cache/intent/acp-callback-fixture"
+
+
 def callback_setup_help(intentd_dir: Path) -> str:
-    command = [sys.executable, "-I", "-B", "-S",
+    # The prepare script refuses inherited NODE_OPTIONS (e.g. a Datadog host
+    # preload), so every recipe clears it for that one command.
+    command = ["env", "-u", "NODE_OPTIONS", sys.executable, "-I", "-B", "-S",
                str(intentd_dir / "scripts/prepare-acp-callback-fixture.py"),
-               "--cache-dir", str(Path.home() / ".cache/intent/acp-callback-fixture")]
-    lines = [
+               "--cache-dir", str(callback_cache_dir())]
+    lines = []
+    if os.environ.get("NODE_OPTIONS"):
+        # Name the host preload as the blocker for the manual route; the value
+        # is not echoed (it may carry host paths or tokens).
+        lines.append("NODE_OPTIONS is set in this shell (often a host preload such as a monitoring "
+                     "tracer); the prepare script refuses it, so run the commands below as "
+                     "printed (they start with env -u NODE_OPTIONS).")
+    lines += [
         f"Set {CALLBACK_FIXTURE_ENV} to a verified fixture (Linux x64, descriptor-pinned Node).",
         "Native macOS is not supported by this fixture. Use an existing authorized Linux x64 host.",
         "Complete checkout, tools and gate recipe: CONTRIBUTING.md#linux-x64-callback-gates",
-        "No downloads or repairs were attempted. On that Linux host, prepare explicitly, then retry:",
+        f"With the variable unset, make test, test-changed and gate prepare a ready cache under "
+        f"{callback_cache_dir()} offline; a rejected cache must be rebuilt, never edited.",
+        "No downloads or repairs were attempted. On that Linux host, prepare explicitly, then retry",
+        "(env -u NODE_OPTIONS clears host Node preloads, which the prepare script refuses):",
     ]
     for description, flags in (
         ("Existing cache, offline", ["--offline"]),
@@ -304,19 +324,79 @@ def load_callback_validator(intentd_dir: Path):
     return module
 
 
-def callback_fixture_identity(intentd_dir: Path) -> dict[str, str]:
-    """Verify explicit content on every affected launch; never call prepare().
+@contextlib.contextmanager
+def without_node_options():
+    """Hide host NODE_OPTIONS from the in-process component checks only.
 
+    Host agents (e.g. Datadog's dd-trace preload) inject NODE_OPTIONS into every
+    shell, and the component's platform_check refuses it. The validator runs its
+    own Node children with NODE_OPTIONS="", and fixture-gated nextest runs drop
+    it (run_nextest), so hiding it here loses no protection.
+    """
+    saved = os.environ.pop("NODE_OPTIONS", None)
+    try:
+        yield
+    finally:
+        if saved is not None:
+            os.environ["NODE_OPTIONS"] = saved
+
+
+def prepare_cached_callback_fixture(intentd_dir: Path) -> str | None:
+    """Prepare from an existing verified cache offline, or return None.
+
+    Only the component's own --offline route runs: it re-verifies the ready
+    cache entry by entry and never downloads, builds or repairs anything.
+    """
+    script = intentd_dir / "scripts/prepare-acp-callback-fixture.py"
+    if not script.is_file():
+        return None
+    validator = load_callback_validator(intentd_dir)
+    try:
+        with without_node_options():
+            validator.platform_check()
+    except validator.InvalidFixture:
+        # Unsupported host: keep the plain unset-variable error and recipe.
+        return None
+    try:
+        descriptor, _manifest = validator.configuration(validator.DEFAULT_DESCRIPTOR)
+    except validator.InvalidFixture as error:
+        raise RuntimeError(str(error)) from error
+    cache = callback_cache_dir()
+    ready = cache / (CALLBACK_READY_PREFIX + descriptor["manifest"]["sha256"])
+    if not ready.is_dir():
+        return None
+    env = {name: value for name, value in os.environ.items() if name != "NODE_OPTIONS"}
+    result = subprocess.run(
+        [sys.executable, "-I", "-B", "-S", str(script), "--offline", "--cache-dir", str(cache)],
+        env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=900)
+    root = result.stdout.strip()
+    if result.returncode != 0 or not root:
+        detail = (result.stderr.strip().splitlines() or [f"exit {result.returncode}"])[-1]
+        detail = detail.removeprefix("callback fixture: ")
+        raise RuntimeError(f"verified cache {ready} could not be prepared offline: {detail}")
+    print(f"[gate] callback fixture: prepared offline from verified cache {root}",
+          file=sys.stderr, flush=True)
+    return root
+
+
+def callback_fixture_identity(intentd_dir: Path) -> dict[str, str]:
+    """Verify explicit or offline-cached content on every affected launch.
+
+    With the fixture variable unset, only an existing verified cache is used,
+    through the component's offline prepare route (no downloads or repairs).
     The component owns all inventory, lock, descriptor and runtime validation.
     Validation precedes Cargo metadata and all resume reads, even fast resumes.
     """
     try:
         value = os.environ.get(CALLBACK_FIXTURE_ENV)
         if not value:
+            value = prepare_cached_callback_fixture(intentd_dir)
+        if not value:
             raise RuntimeError(f"{CALLBACK_FIXTURE_ENV} is unset or empty")
         validator = load_callback_validator(intentd_dir)
         try:
-            validator.platform_check()
+            with without_node_options():
+                validator.platform_check()
             descriptor, manifest = validator.configuration(validator.DEFAULT_DESCRIPTOR)
             # Resolve relative inputs against the Cargo invocation directory;
             # pass the absolute path onward because nextest uses each crate cwd.
@@ -1256,6 +1336,11 @@ def run_nextest(args: argparse.Namespace) -> int:
     env = nextest_env()
     if fixture_identity is not None:
         env[CALLBACK_FIXTURE_ENV] = fixture_identity["root"]
+        # Keep the guarantee the refused-NODE_OPTIONS preflight gave: fixture
+        # runs never carry a host Node preload, so resume evidence stays comparable.
+        if env.pop("NODE_OPTIONS", None):
+            print(f"[{label}] callback fixture: NODE_OPTIONS cleared for this test run",
+                  file=sys.stderr, flush=True)
     if transfer_identity is not None:
         env[TRANSFER_FIXTURE_ENV] = transfer_identity["root"]
     if cargo_config:

@@ -8,12 +8,12 @@ capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `14.2` — prepared scoped repository pages and GitLab child Git policy; not a shipped-version claim.
+**Documented version:** `15.1` — prepared scoped repository pages and GitLab child Git policy; not a shipped-version claim.
 Other prepared extensions retain their independent support gates.
 
-**Version 14.2 — scoped repository pages and GitLab child Git policy (additive, prepared).**
-This extension builds on protocol 14.1 without replacing startup readiness or
-protocol 14.0 script and monitor list semantics. The [scoped resource-read contract](./methods/repository-resources.md#prepared-project-pages-and-discussions)
+**Version 15.1 — scoped repository pages and GitLab child Git policy (additive, prepared).**
+This extension builds on protocol 15.0 without restoring legacy workspace import
+or replacing startup readiness and script or monitor list semantics. The [scoped resource-read contract](./methods/repository-resources.md#prepared-project-pages-and-discussions)
 adds six operations: `sourceControl.read.captureScoped`,
 `sourceControl.read.detailScoped`, `sourceControl.read.releaseScoped`,
 `sourceControl.read.resolveKnownRepository`, `sourceControl.read.list` and
@@ -23,13 +23,13 @@ adds `sourceControl.gitlab.childGit.get` and `sourceControl.gitlab.childGit.set`
 Require exactly `repositoryResourcePages: 1` or `gitlabChildGitPolicy: 1`, as
 appropriate, on the original physical connection. The existing
 `repositoryResourceRead: 1` and workspace-only capture/detail/release contract
-remain unchanged. Neither protocol 14.1 nor the legacy read capability implies
-support for the new operations; protocol 14.2 alone is not an authority grant.
+remain unchanged. Neither protocol 15.0 nor the legacy read capability implies
+support for the new operations; protocol 15.1 alone is not an authority grant.
 Scoped reads retain their original caller, account, full instance and lifetime,
 including the private invalidation/retirement feed. Child Git policy retains its
 owner-only binding and defaults; native Git remains independent of that policy.
 
-These eight router operations extend the documented surface to **459 / 401 / 58**
+These eight router operations extend the documented surface to **463 / 406 / 57**
 (dispatchable / router / fast path), including other independently prepared
 additions. The private `sourceControl.read.invalidated` notification shares the
 original resource-read retirement feed; it is not a global event subscription.
@@ -38,16 +38,66 @@ or enable either capability on an older daemon. The existing 14.0 script and
 monitor semantics, 14.1 startup readiness and their separate rollout obligations
 remain unchanged.
 
-**Version 14.1 — startup readiness (additive, implemented upstream).** The
-[startup contract](./startup-readiness.md) adds `system.startupStatus` and numeric
-error `-32012`, with exact `startupStatus: 1` support detection.
-[Daemon source at `8ce3de73`](https://github.com/intent-hq/intentd/blob/8ce3de736b814e43eeb6419148554086d8450c79/crates/intent-transport/src/protocol.rs#L747)
-advertises protocol 14.1 for this contract. It does not make ordinary hello usable
-before Store or grant guest access to owner progress. This source observation does
-not identify a carrying desktop release or advance the recorded component pins.
-Current documented counts including independently prepared additions are
-**459 / 401 / 58** (dispatchable / router / fast path); the version-specific counts
-below describe their original deltas.
+**Version 15.0 — legacy workspace import removal (breaking).**
+Removes the UDS-only `system.importLegacy` fast-path method. Calls on either UDS
+or WSS now return `-32601 Method not found`. Also removes `intentd import`,
+`intentd import-legacy`, first-boot discovery of legacy Electron workspaces, and
+the frontend's Legacy Import settings. Already imported daemon workspaces remain
+available; source directories and persisted import markers are not deleted.
+The 9.0 removal and 9.1 restoration entries below remain historical records.
+Protocol 14.1 added the startup readiness observations described below.
+The documented surface, including prepared additions, has **451 / 394 / 57**
+dispatchable / router / fast-path methods. Follow [issue #4082](https://github.com/intent-hq/intent/issues/4082)'s
+removal order: frontend callers first, daemon removal second, then these docs
+after the automatic pin advance. Clients gate on capabilities or a minimum
+version, never a maximum (see the [compatibility policy](#compatibility-policy)).
+Released frontends still cap registered-root reads at major 15 until
+[cloudlands-fe#3478](https://github.com/intent-hq/cloudlands-fe/pull/3478) ships,
+so the daemon must not advertise major 16 before a carrying frontend release.
+
+Also within 15.0 (additive optional response fields; presence-detected; no method-catalog
+change, so no version bump): **merge-queue position and estimated merge time**
+(§5.27 `GithubPullRequest`, §5.42 `MergeRequirements` and `lastSnapshot`, §5.7
+`ws.pr.snapshot`). A queued PR's `github.pulls.get` result and monitor checklist gain
+`mergeQueue?: MergeQueueEntry` — `{ position, queueSize?, state?, enqueuedAt?,
+estimatedTimeToMerge? }` read from GitHub GraphQL `PullRequest.mergeQueueEntry` in the same
+folded read as `isInMergeQueue`; `estimatedTimeToMerge` is the host's duration estimate in
+seconds, passed through as reported. It is informational only: the monitor never diffs it,
+so queue movement wakes no agent. Workspace `PullRequestInfo` rows do not carry it.
+Older daemons and hosts without merge queues omit it; clients detect it by presence.
+The same change adds the UI-only event **`prMonitor:refreshed`** (§6.5 prMonitor row):
+emitted when a poll changed only the `mergeQueue` entry, so clients re-read
+`prMonitor.list`; it is never a wake and agent-owned subscriptions cannot request it.
+
+Also within 15.0 (additive optional event field; presence-detected; no method-catalog
+change, so no version bump): **`workspace:created` carries `origin?`** (§6.5 workspace
+row). `ws.workspace.applyProposal` stamps `{ kind: "proposal", proposalId, agentId,
+sourceWorkspaceId }` on the event for the workspace it creates; every other create omits
+it. The field is daemon-set only: `workspace.create` params do not accept it and the row
+does not persist it.
+
+Also within 15.0 (additive optional row fields; presence-detected; no method-catalog
+change, so no version bump): **`agent.list` rows mark shortened previews** (§5.5
+list-row preview cap). A list-shaped `AgentLite` row carries
+`lastAgentResponseTruncated` / `lastUserMessageTruncated` / `digestTruncated` and
+`metadata.completionReportTruncated` / `metadata.attentionRequestReasonTruncated`
+(`true` only, omitted otherwise) when the list cap shortened that field, so clients
+can mark the text as a prefix or read the uncapped value with `agent.get`. Older daemons
+omit the flags; clients must not read their absence as proof a value is complete.
+
+**PR workspace lookup (additive, prepared).** The
+[PR workspace lookup](./methods/workspace.md#pull-request-workspace-lookup) reserves
+the read-only router method `workspace.findByPullRequest`, bringing the documented
+surface to **451 / 394 / 57** (dispatchable / router / fast path). The server hello
+capability `prWorkspaceLookup: 1` gates support. No shipped numeric version is
+claimed here.
+
+**Startup readiness (additive, prepared).** The [startup contract](./startup-readiness.md)
+reserves `system.startupStatus` and numeric error `-32012`, with exact
+`startupStatus: 1` support detection. It does not make ordinary hello usable before
+Store or grant guest access to owner progress. Coordinate the additive minor at
+implementation; no shipped numeric version is claimed here. Before the legacy-import removal, counts including this addition were
+**451 / 393 / 58** (dispatchable / router / fast path); the version-specific counts below describe their original deltas.
 
 **Version 14.0 — active-only script and monitor lists (breaking, prepared).**
 The [replacement contract](./methods/scripts.md#active-only-compact-lists-prepared-breaking-contract)
@@ -59,10 +109,9 @@ but default membership, accepted filters, completed registration retries and
 monitor mutation results change; this is a major, not an additive minor.
 The documented surface remains **449 / 393 / 56** (dispatchable / router / fast
 path). No implementation/release is implied. An older client can reach the new
-semantics; current clients do not universally reject future majors. New clients
-must require the relevant capability, never fall back to archived/history reads.
-Update the frontend's registered-root protocol-major guard for 14 as part of the
-coordinated compatible renderer change; merely changing hello is insufficient.
+semantics; current clients do not universally reject future majors, though
+installed builds with a protocol-major cap do. New clients must require the
+relevant capability, never fall back to archived/history reads.
 
 **Rollout ordering.** New get method catalog reservations may land docs-first.
 Prepared v14 sections can coexist with explicitly historical v13 contracts;
@@ -72,14 +121,13 @@ monorepo pin bump, then removal of obsolete baseline documentation if desired.
 Never remove currently implemented method/catalog entries docs-first. No router
 method is retired here: archive/restore remain known-ID operations. Withdrawn
 unshipped summary/history reservations need no production removal. Daemon before
-frontend merge, coordinated carrying release and frontend major guard updates
-are required. An older daemon remains unsupported for these new list features;
+frontend merge and a coordinated carrying release are required. An older daemon remains unsupported for these new list features;
 known-ID status/output may still be used. This draft grants no merge permission.
 
 **Prepared generic stream recovery (independently gated additive extension).**
 [`eventStreamRecovery: 1`](./event-stream-recovery.md) adds an opt-in/ack to
 `events.subscribe`, the socket-private `events.lost` notification and the
-`events.fence` fast-path method. The prepared surface is **459 / 401 / 58**
+`events.fence` fast-path method. The prepared surface is **451 / 393 / 58**
 (dispatchable / router / fast path); domain event catalog and current advertised
 protocol version are unchanged.
 Exact capability and lease negotiation gate adoption, including bounded recovery
@@ -254,17 +302,15 @@ and local-daemon forwarding behavior are unchanged. `git.commit` is not part
 of this retirement.
 
 **Installed frontend compatibility.** Registered-root `file.read` and
-`file.readChunk` retain their v11.1 contract in protocol 12 and 13. The updated
-frontend guard in [cloudlands-fe PR #3114](https://github.com/intent-hq/cloudlands-fe/pull/3114)
-accepts known 11.1+ versions within major 11 and known majors 12 and 13. It rejects
-missing, malformed, older, and unknown future-major support (including 14) before
-sending a scoped read.
-
-Installed frontends with the original exact-major-11 guard reject scoped reads
-against protocol 12 or 13. Versions with only the earlier major-12 allowance still
-reject protocol 13. Both require a frontend carrying the updated major-13 guard;
-the PR link and daemon documentation do not establish that the installed desktop
-contains it. Unscoped reads keep their existing behavior. See the
+`file.readChunk` retain their v11.1 contract in protocol 12 and later. Clients
+must accept any well-formed version at or above 11.1 and reject missing,
+malformed or older versions before sending a scoped read. Frontends have capped
+the accepted major (exact-major 11, then up to 12, 13, 14 and 15, as in
+[cloudlands-fe PR #3114](https://github.com/intent-hq/cloudlands-fe/pull/3114));
+[cloudlands-fe#3478](https://github.com/intent-hq/cloudlands-fe/pull/3478)
+removes the cap. Installed copies of capped builds still reject scoped reads on
+later majors.
+Unscoped reads keep their existing behavior. See the
 [registered-root support gate](./methods/files-terminal-browser.md).
 
 The daemon removal landed in [intentd PR #2240](https://github.com/intent-hq/intentd/pull/2240).
@@ -683,5 +729,23 @@ above describe the former method, not a durability guarantee for current commits
 
 - **Additive changes** (new methods, new optional fields, new event types) bump the **minor** version (e.g., 2.0 → 2.1).
 - **Breaking changes** (removed methods, changed signatures, renamed fields) bump the **major** version (e.g., 2.0 → 3.0).
+- **Clients never cap the protocol version.** A client gates a feature on an advertised capability or on a minimum version (`>= major.minor`), never on a maximum, an exact major or an allowlist of known majors: the major moves for unrelated changes, and a cap silently disables working features on every newer daemon (script monitors and script lists on protocol 15, [intent-hq/intent#7206](https://github.com/intent-hq/intent/issues/7206), [#7248](https://github.com/intent-hq/intent/issues/7248)). Capability values are different: each value names one contract, so clients compare them exactly (`scriptMonitors === 2`). A breaking change to a method's semantics must therefore change something an old client checks: a new capability value (e.g. `scriptMonitors: 1` → `2`) or a new method name. A feature gated only by version (no capability) gains a capability before its first breaking change. Removing a method answers `-32601 Method not found`, which clients treat as "unsupported", not as a crash.
 
 The method surface is enforced by golden tests in `crates/intent-transport/src/catalog.rs`. Any drift (added, removed, or renamed methods) causes CI failure with the instruction: "Update ROUTER_METHODS in catalog.rs, update docs/protocol/05-method-catalog.md, and bump the protocol version." Additive response fields on an existing method (e.g., the optional `system.status` resource fields, §5 fast-path notes) do not change the golden-test-enforced catalog and ship within the current version; clients must detect them by **presence**, not by protocol version.
+
+### Staged row fields (app adoption pending)
+
+A new optional field on a row the frontend types (`AgentLite` → `AgentSession`,
+`Workspace` → `Workspace`) ships daemon-first, so the daemon emits it before the
+pinned cloudlands-fe declares it. List such a field here in the docs PR that documents
+it, which lands before the intentd PR (docs lead the pin). **Row** is the Rust struct
+(`AgentLite`, `Workspace`), **Field** the wire name, **Contract** a Markdown link to the
+field's contract, and **App adoption** the cloudlands-fe PR or issue that declares it.
+`make check-protocol-field-parity` reads this table. A listed field the frontend
+type lacks is a warning instead of an error. An unlisted emitted field still fails,
+and so does a malformed table. Once the frontend pin declares the field, the check
+warns that the row is stale; remove it then. Fields the frontend never reads stay in
+the `ignore` map of `scripts/check-protocol-field-parity.mjs`, not here.
+
+| Row | Field | Contract | App adoption |
+|---|---|---|---|

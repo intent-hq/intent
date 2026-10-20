@@ -319,7 +319,7 @@ unknown resource links are likewise not converted into issue detail requests.
 
 ### Prepared project pages and discussions
 
-This separate, prepared [protocol 14.2 extension](../versioning.md) adds bounded
+This separate, prepared [protocol 15.1 extension](../versioning.md) adds bounded
 project lists and complete conversation reads. It requires
 `repositoryResourcePages: 1` on the original connection in addition to the existing
 detail-read contract. It defines scoped capture, detail and release alongside

@@ -2,6 +2,28 @@
 
 Thanks for your interest in Intent!
 
+## CI before and inside the merge queue
+
+PRs run Linux metadata, formatting, static consumer contracts and workflow-policy
+checks, plus each component's fast Linux correctness checks: intentd's `check`
+(clippy, source lints, `cargo shear`) and `coverage-changed` (the PR's changed tests),
+and the frontend's type/lint checks and unit tests. The queue reruns those on the
+merged tree and adds the rest: native builds, full instrumented coverage, frontend
+builds and integration tests, browser suites, and native runtime checks. In
+particular, daemon lifecycle (Linux/macOS/Windows), Pi (Linux/Windows and both
+supported Node versions), and PowerShell installer tests do not run on PR updates.
+
+The frontend's path-selected browser and macOS fixture suites run in the queue;
+validated release-only diffs keep their existing exemptions. Shared consumer checks
+run static contracts on PRs and the connected Rust/frontend proof in the queue.
+Monorepo runtime script suites and relevant clean-host bootstrap installation are
+also queue checks. Manual diagnostics and scheduled maintenance remain available.
+
+`CI Gate` remains required and rejects failed, cancelled, missing, or unexpectedly
+skipped checks. A green PR gate means the code compiles, passes lint and passes its
+changed or unit tests, and is ready for queued validation; it does not mean runtime
+validation has completed.
+
 ## Contribution posture
 
 <!-- This section states the current posture. When the project opens up to
@@ -203,14 +225,16 @@ command -v npm
 callback_run=$(mktemp -d "$HOME/intent-callback-gates.XXXXXX")
 callback_cache="$callback_run/cache"
 printf 'Keep setup logs and test receipts under %s\n' "$callback_run"
-INTENT_ACP_CALLBACK_ADAPTER_FIXTURE=$(python3 -I -B -S \
+# env -u NODE_OPTIONS: the provisioner refuses host Node preloads (e.g. a
+# monitoring tracer injected into every shell); the gates clear it themselves.
+INTENT_ACP_CALLBACK_ADAPTER_FIXTURE=$(env -u NODE_OPTIONS python3 -I -B -S \
   packages/intentd/scripts/prepare-acp-callback-fixture.py \
   --cache-dir "$callback_cache" --build-from-source \
   2>"$callback_run/source-build.log")
 export INTENT_ACP_CALLBACK_ADAPTER_FIXTURE
 
 # Revalidate the same cache without acquisition; stdout is only the fixture path.
-callback_offline=$(python3 -I -B -S \
+callback_offline=$(env -u NODE_OPTIONS python3 -I -B -S \
   packages/intentd/scripts/prepare-acp-callback-fixture.py \
   --cache-dir "$callback_cache" --offline \
   2>"$callback_run/offline.log")
@@ -230,9 +254,13 @@ exit status. With `set -euo pipefail`, preparation or gate failure stops the rec
 and remains a failure even through `tee`. Inspect the retained log before retrying.
 
 For later runs, reuse the saved `callback_cache` path with `--offline`, assign and
-export its returned fixture path, and rerun preflight. An empty offline cache
+export its returned fixture path, and rerun preflight. With the fixture variable
+unset, `make test`, `make test-changed` and `make gate` do this themselves for a
+ready cache under `~/.cache/intent/acp-callback-fixture`, and gate preflight hides
+host `NODE_OPTIONS` (such as a Datadog preload) from its checks. An empty offline cache
 refuses; it never downloads. Corrupt caches, mismatched manifests/Node and injected
-`NODE_OPTIONS` refuse too. Do not bypass validation or edit a ready cache to make it
+`NODE_OPTIONS` refuse too when you run the prepare script directly, so prefix it with
+`env -u NODE_OPTIONS` on such hosts. Do not bypass validation or edit a ready cache to make it
 pass. The optional `--bundle /path/to/pinned-bundle.tar.gz` route requires an
 independently supplied matching local bundle; no published download URL exists.
 
@@ -362,13 +390,16 @@ Please do not report security vulnerabilities through public issues — see
 By contributing, you agree that your contributions will be licensed under the
 [Apache License 2.0](LICENSE).
 
-### Local managed Rust compiler cache
+### Local Rust compiler cache
 
-Install sccache 0.17 or newer and export your Depot cache settings in your shell:
+Install sccache 0.17 or newer and point it at the team's self-hosted cache
+([runbook](docs/SCCACHE_SERVER.md)) with the **read-only** token, which a
+maintainer shares with you out of band:
 
 ```bash
-export SCCACHE_WEBDAV_ENDPOINT=https://cache.depot.dev
-export SCCACHE_WEBDAV_TOKEN=<your-depot-organization-token>
+export SCCACHE_WEBDAV_ENDPOINT=https://172.96.141.217
+export SCCACHE_WEBDAV_TOKEN=<read-only-cache-token>
+export SCCACHE_WEBDAV_RW_MODE=READ_ONLY
 make build
 ```
 
@@ -378,9 +409,16 @@ takes precedence. Keep tokens out of tracked files. If changing the endpoint
 or credentials while a local sccache server is running, stop that server first
 with `sccache --stop-server` so the next build picks up the new environment.
 
+CI writes to the same cache with its own read-write token (see
+[docs/RELEASING.md](docs/RELEASING.md)); its `INTENT_SCCACHE_*` settings apply
+only to CI jobs. Local builds get the read-only token so developer machines
+cannot write into the shared cache. sccache keys include absolute
+paths, so a local build only hits entries compiled at the same checkout path;
+expect a low hit rate unless your path matches a CI runner's.
+
 ### Bash 3 compatibility checks
 
-The `shell-tests-bash3` CI job runs on Depot Linux with a checksum-verified
+The `shell-tests-bash3` CI job runs on GitHub-hosted Linux with a checksum-verified
 Bash 3.2.57 build. It tests the shell language compatibility needed by macOS
 users without consuming a macOS runner. To reproduce on Linux:
 

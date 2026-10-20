@@ -38,7 +38,7 @@ class RustTestPolicyTests(unittest.TestCase):
             ("CARGO_", "RUST", "NEXTEST_", "INTENTD_")) and k not in {
                 "MAKEFLAGS", "MFLAGS", "MAKELEVEL", "COMPACT", "BASE", "DRY_RUN",
                 "GATE_CACHE_DIR", "RESUME", "GATE_FORCE", "NO_FAIL_FAST", "PYTHONPATH",
-                "TRANSFER_SELECTION_FIXTURE_ROOT"}}
+                "TRANSFER_SELECTION_FIXTURE_ROOT", "NODE_OPTIONS"}}
         self.env.update(PATH=str(self.bin) + os.pathsep + os.environ["PATH"],
                         HOME=temporary.name, POLICY_LOG=str(self.log),
                         GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
@@ -75,12 +75,15 @@ class RustTestPolicyTests(unittest.TestCase):
         # Isolate policy/wrapper behavior from the Linux-only fixture payload.
         # Canonical inventory validation is exercised in CallbackValidatorTests.
         (self.component / "scripts/prepare-acp-callback-fixture.py").write_text('''
+import os
 from pathlib import Path
 DEFAULT_DESCRIPTOR = Path(__file__)
 class InvalidFixture(Exception):
     pass
 def platform_check():
-    pass
+    # Mirror the component: host NODE_OPTIONS injection is refused.
+    if os.environ.get("NODE_OPTIONS"):
+        raise InvalidFixture("NODE_OPTIONS injection is not supported")
 def configuration(path):
     return {"manifest": {"sha256": "verified"}}, {}
 def validate_fixture(root, descriptor, manifest):
@@ -92,6 +95,28 @@ def node_tool(descriptor, work, env):
     return Path(__file__)
 def digest(path):
     return "verified"
+def main():
+    import json, sys
+    args = sys.argv[1:]
+    log = os.environ.get("PREPARE_LOG")
+    if log:
+        with open(log, "a") as handle:
+            handle.write(json.dumps({"args": args, "node_options": os.environ.get("NODE_OPTIONS")}) + "\\n")
+    try:
+        if args[:1] != ["--offline"] or args[1:2] != ["--cache-dir"] or len(args) != 3:
+            raise InvalidFixture("synthetic prepare supports only --offline --cache-dir DIR")
+        platform_check()
+        ready = Path(args[2]) / "callback-fixture-v1-linux-x64-verified" / "fixture"
+        if not ready.is_dir():
+            raise InvalidFixture("verified fixture cache missing; supply --bundle or --build-from-source")
+        validate_fixture(ready, None, None)
+    except InvalidFixture as error:
+        print(f"callback fixture: {error}", file=sys.stderr)
+        return 1
+    print(ready.resolve())
+    return 0
+if __name__ == "__main__":
+    raise SystemExit(main())
 ''')
         for name, content in {
             "Cargo.toml": '[workspace]\n', "Cargo.lock": "lock\n",
@@ -315,6 +340,70 @@ if is_test:
         self.assertIn('invalid synthetic fixture', result.stderr)
         self.assertEqual([c['args'] for c in calls], [['nextest', '--version']])
         self.assertNotIn('resumed: skipped', result.stdout)
+
+    def cached_fixture(self):
+        ready = (Path(self.env["HOME"]) / ".cache/intent/acp-callback-fixture"
+                 / "callback-fixture-v1-linux-x64-verified" / "fixture")
+        ready.mkdir(parents=True)
+        (ready / "valid").touch()
+        return ready.resolve()
+
+    def change_callback_crate(self):
+        path = self.component / "crates/intent-acp/src/lib.rs"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("// changed\n")
+
+    def injected_node_options(self):
+        # Like the host's Datadog preload: harmless for Node children that keep it.
+        # NODE_OPTIONS splits on spaces, so keep this path out of the spaced HOME.
+        directory = tempfile.TemporaryDirectory(prefix="dd-trace-")
+        self.addCleanup(directory.cleanup)
+        preload = Path(directory.name) / "init.js"
+        preload.write_text("")
+        return "--require " + str(preload)
+
+    def test_verified_cache_is_prepared_offline_despite_node_options(self):
+        ready = self.cached_fixture()
+        self.change_callback_crate()
+        prepare_log = Path(self.env["HOME"]) / "prepare.jsonl"
+        env = {"INTENT_ACP_CALLBACK_ADAPTER_FIXTURE": "", "PREPARE_LOG": str(prepare_log),
+               "NODE_OPTIONS": self.injected_node_options()}
+        for target in ("test-changed", "test", "gate"):
+            with self.subTest(target=target):
+                prepare_log.unlink(missing_ok=True)
+                result, calls = self.make(target, override="0", env=env)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("prepared offline from verified cache", result.stderr)
+                runs = [c for c in calls if c["args"][:2] == ["nextest", "run"]]
+                self.assertTrue(runs, calls)
+                # gate's source-lint tests need no fixture and inherit the unset value.
+                for call in runs if target == "gate" else [c for c in calls if c["test"]]:
+                    self.assertEqual(call["fixture"], str(ready), call)
+                    self.assertEqual(call["policy"], "1", call)
+                prepared = [json.loads(line) for line in prepare_log.read_text().splitlines()]
+                self.assertTrue(prepared, result.stderr)
+                for call in prepared:
+                    self.assertEqual(call["args"][:2], ["--offline", "--cache-dir"], call)
+                    self.assertIsNone(call["node_options"], call)
+
+    def test_explicit_fixture_passes_preflight_despite_node_options(self):
+        result, calls = self.make("test", override="0",
+                                  env={"NODE_OPTIONS": self.injected_node_options()})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assert_policy(calls, inherited="0")
+
+    def test_missing_cache_keeps_error_and_recipe_clears_node_options(self):
+        self.change_callback_crate()
+        env = {"INTENT_ACP_CALLBACK_ADAPTER_FIXTURE": "", "NODE_OPTIONS": self.injected_node_options()}
+        for target in ("test-changed", "test"):
+            with self.subTest(target=target):
+                result, calls = self.make(target, override="0", env=env)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("INTENT_ACP_CALLBACK_ADAPTER_FIXTURE is unset or empty", result.stderr)
+                self.assertIn("env -u NODE_OPTIONS", result.stderr)
+                self.assertIn("NODE_OPTIONS is set in this shell", result.stderr)
+                self.assertNotIn("prepared offline", result.stderr)
+                self.assertFalse(any(c["test"] for c in calls), calls)
 
     def test_mixed_gate_goals_preflight_before_cargo(self):
         for fixture in ('missing', 'invalid'):

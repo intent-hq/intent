@@ -197,19 +197,18 @@ The rollback workflow will restore a previous versioned release to a channel's r
 
 ## Platform Builds and Runners
 
-The dual-architecture workflow produces five platform/architecture builds in parallel jobs in `release-alpha.yml`:
+The release workflow produces four platform/architecture builds in parallel jobs in `release-alpha.yml` (macOS is Apple Silicon only):
 
 | Platform      | Runner                                                         | Artifacts                                           | Feed file                |
 | ------------- | -------------------------------------------------------------- | --------------------------------------------------- | ------------------------ |
-| macOS (arm64) | `macos-15-xlarge` (GitHub-hosted)                              | `.dmg`, `.zip` (+ blockmaps)                        | `latest-mac.yml`         |
-| macOS (x64)   | `macos-15-large` (GitHub-hosted)                               | `.dmg`, `.zip` (+ blockmaps)                        | `latest-mac.yml` (shared) |
-| Windows (x64) | `gh-windows-16x` (org-hosted, Windows Server 2022 image)       | NSIS installer `.exe`, portable `.exe` (+ blockmap) | `latest.yml`             |
-| Linux (x64)   | self-hosted `tinybox` (`[self-hosted, Linux, X64, tinybox]`)   | AppImage, `.deb`                                    | `latest-linux.yml`       |
-| Linux (arm64) | self-hosted `comfy` (`[self-hosted, Linux, ARM64, comfy]`)     | AppImage only (`deb:arm64` temporarily disabled)    | `latest-linux-arm64.yml` |
+| macOS (arm64) | `macos-15-xlarge` (signed builds stay off macOS 26 images) | `.dmg`, `.zip` (+ blockmaps)                        | `latest-mac.yml`         |
+| Windows (x64) | `gh-windows-16x` (Windows Server 2022)                     | NSIS installer `.exe`, portable `.exe` (+ blockmap) | `latest.yml`             |
+| Linux (x64)   | `gh-linux-8x`                                              | AppImage, `.deb`                                    | `latest-linux.yml`       |
+| Linux (arm64) | `gh-linux-arm64-8x`                                        | AppImage only (`deb:arm64` temporarily disabled)    | `latest-linux-arm64.yml` |
 
 Notes:
 
-- **Self-hosted runner dependency**: both Linux jobs require their self-hosted runners (`tinybox` for x64 — monorepo#1340, `comfy` for arm64) to be online; a release run queues (and eventually fails) if one is unavailable. macOS uses a GitHub-hosted runner and Windows an org-hosted runner.
+- **Runner routing**: release builds run directly on the GitHub-hosted labels above. PR and merge-queue checks prefer compatible self-hosted capacity and use GitHub-hosted runners when the fleet is busy, unavailable, under maintenance, or cannot be inspected. The probe stays hosted. See [CI runner routing](../RELEASING.md#ci-runner-routing) for credentials, platform matching, and the disposable smoke-test exception.
 - **Linux arm64 temporarily ships AppImage-only**: electron-builder's bundled fpm fails to spawn on the arm64 runner, so `deb:arm64` is disabled until the runner issue is resolved (monorepo#1286).
 - **Production Windows releases remain unsigned.** Expect SmartScreen warnings on install. Azure Artifact Signing is available only through the explicit manual build configuration; production enablement and native Windows installation/update acceptance remain pending. The retired DigiCert flag `INTENT_WINDOWS_ENABLE_INTEGRATED_SIGNING` must stay unset; enabling it fails the build.
 - **Linux packages are unsigned** (standard for AppImage/deb distributed outside a package repository). Snap is not built or published.

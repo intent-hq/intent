@@ -49,6 +49,12 @@ only when this capability is present; older daemons omit it. This is a server su
 flag, independent of the model's `agentFeatures.peerAgents` gate, and does not grant
 caller authority: workspace lifecycle permissions still apply.
 
+**PR workspace lookup (prepared).** `server.capabilities.prWorkspaceLookup: 1`
+advertises [§5.1 `workspace.findByPullRequest`](./workspace.md#pull-request-workspace-lookup)
+and the PR-to-workspace link recording behind it. Clients offer the
+"Open in Original Workspace" link action only for exact integer `1`; older daemons
+omit it. Read it per connection.
+
 The daemon supports a **stable, client-supplied identity** that survives reconnects; the ephemeral
 per-connection id used internally for subscription bookkeeping is retained purely for transport
 bookkeeping and never crosses the wire.
@@ -319,7 +325,7 @@ These are client integration obligations, not a shipped frontend guarantee;
 documentation alone does not establish deployed availability.
 
 The separate [prepared project-page and discussion extension](repository-resources.md#prepared-project-pages-and-discussions)
-is additive in protocol 14.2 and uses `repositoryResourcePages: 1`. Keep
+is additive in protocol 15.1 and uses `repositoryResourcePages: 1`. Keep
 `repositoryResourceRead: 1` unchanged for
 detail-only clients; it does not imply support for the new operations. Detect
 the page capability on the same physical connection that supplies the read
@@ -331,7 +337,7 @@ catalog entry does not replace the exact capability check.
 
 #### GitLab child Git policy capability (prepared)
 
-The protocol 14.2 capability `result.server.capabilities.gitlabChildGitPolicy: 1`
+The protocol 15.1 capability `result.server.capabilities.gitlabChildGitPolicy: 1`
 gates the separate
 [owner-only policy control](settings.md#prepared-gitlab-child-git-credential-policy).
 An absent or unsupported value means the control is unsupported, not disabled.

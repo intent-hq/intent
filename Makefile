@@ -130,7 +130,7 @@ CDP_PORT ?= $(call dev_port_value,CDP_PORT)
 # An explicit INTENTD_SOCKET always takes precedence.
 BRIDGE_PLATFORM ?= $(shell uname -s)
 
-.PHONY: check-app-ui-targets check-note-pagination-contract check-agent-worker-contract test-transfer-selection-contract check-transfer-selection-contract check-backend-keychain-contract ports status consumer-checks docs-check check-protocol-catalog check-mcp-bindings mcp-bindings-doc check-makefile-targets check-protocol-field-parity check-rulesets event-catalog-check shipped-in rpc
+.PHONY: check-app-ui-targets check-note-pagination-contract check-agent-worker-contract test-transfer-selection-contract check-transfer-selection-contract check-backend-keychain-contract ports status consumer-checks docs-check check-protocol-catalog check-mcp-bindings mcp-bindings-doc check-makefile-targets check-protocol-field-parity check-rulesets event-catalog-check shipped-in release-status rpc
 ports: ## Print this worktree's resolved development ports
 	@set -- .dev/sandbox/*.json; if [ -e "$$1" ]; then \
 		echo "[ports] Note: these ports are for the next start; read running ports from 'make sandbox-status' or .dev/sandbox/<mode>.json." >&2; \
@@ -241,6 +241,12 @@ shipped-in: ## Print the first cloudlands-releases tag carrying COMPONENT=intent
 		esac; \
 	done; \
 	scripts/shipped-in.sh "$$@" $(if $(LIMIT),--limit "$(LIMIT)",)
+
+# Read-only release train snapshot for intentd and cloudlands-fe; every lookup
+# is fail-soft (a failed one prints `unavailable`). See docs/RELEASING.md →
+# Where to look.
+release-status: ## Print the release train: latest tags, channel versions, fe daemon pin, release PRs with CI and merge-queue state, merge queue head, unshipped commits, last auto-cut decision, last auto-pin run, runner overrides (STATUS_JSON=1 for JSON; NO_LOGS=1 skips the slow run-log fetch)
+	@STATUS_JSON="$(STATUS_JSON)" scripts/release-status.sh $(if $(NO_LOGS),--no-logs,)
 
 # Build-artifact GC (cargo-sweep). Rust target/ dirs grow without bound as
 # deps and toolchains churn; `sweep` prunes artifacts older than SWEEP_DAYS
@@ -470,7 +476,7 @@ update: ## git pull --rebase monorepo + each submodule onto its .gitmodules bran
 build: build-intentd ## Build the Rust workspace (packages/intentd)
 
 build-intentd: ensure-intentd-submodule
-	cd $(INTENTD_DIR) && bash "$(CURDIR)/scripts/with-depot-sccache.sh" cargo build --workspace --jobs $(BUILD_JOBS)
+	cd $(INTENTD_DIR) && bash "$(CURDIR)/scripts/with-sccache.sh" cargo build --workspace --jobs $(BUILD_JOBS)
 
 fmt: ensure-intentd-submodule ## cargo fmt --check
 	cd "$(INTENTD_DIR)" && cargo fmt --check
@@ -513,7 +519,7 @@ lint-shell: ## Run shellcheck over scripts/*.sh (needs shellcheck; make bootstra
 RUST_CHECK_TARGETS := check-makefile-targets check-protocol-field-parity lint-shell-sleeps fmt clippy lint-sources
 
 .PHONY: check-callback-fixture
-check-callback-fixture: ensure-intentd-submodule ## Validate the explicit callback test fixture offline before Rust gates
+check-callback-fixture: ensure-intentd-submodule ## Validate the callback test fixture offline (explicit, or prepared from a ready ~/.cache entry) before Rust gates
 	@python3 scripts/check_watch_capacity.py --quiet
 	@python3 scripts/resumable_nextest.py --check-callback-fixture "$(INTENTD_DIR)"
 
@@ -956,7 +962,7 @@ build-sidecar: ensure-intentd-submodule ensure-fe-submodule ## Build intentd rel
 	# the sidecar step.
 	@$(FE_DEPS_FRESH) || (echo "[build-sidecar] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && pnpm install)
 	@echo "[build-sidecar] Building intentd release binary..."
-	cd $(INTENTD_DIR) && bash "$(CURDIR)/scripts/with-depot-sccache.sh" cargo build --release --workspace
+	cd $(INTENTD_DIR) && bash "$(CURDIR)/scripts/with-sccache.sh" cargo build --release --workspace
 	@echo "[build-sidecar] Staging sidecar binary for FE packaging..."
 	cd $(FE_DIR) && node scripts/copy-sidecar.cjs
 
@@ -1013,7 +1019,7 @@ dev: ensure-intentd-submodule ensure-fe-submodule ## One-command dev: launch the
 	#     would otherwise scan the shared ~/intent/workspaces root.
 	@$(FE_DEPS_FRESH) || (echo "[dev] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && pnpm install)
 	@echo "[dev] Building intentd release binary (no-op if already fresh)..."
-	cd $(INTENTD_DIR) && bash "$(CURDIR)/scripts/with-depot-sccache.sh" cargo build --release --workspace
+	cd $(INTENTD_DIR) && bash "$(CURDIR)/scripts/with-sccache.sh" cargo build --release --workspace
 	@mkdir -p "$(DEV_DATA_DIR)"
 	@echo "[dev] Launching FE with sidecar mode enabled (INTENTD_SIDECAR=1)"
 	@echo "[dev]   INTENTD_BIN=$(CURDIR)/$(INTENTD_DIR)/target/release/intentd"

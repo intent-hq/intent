@@ -315,15 +315,17 @@ grep -qF '          repository: ${{ inputs.self-test && github.repository || job
   fail "monorepo checkout must use the caller locally and workflow repository downstream:"$'\n'"$checkout_block"
 
 # Workflow contract the callers rely on: a `workflow_call` trigger and nothing
-# else, `contents: read` as the only permission (the callers pass no secrets
-# and the job never writes), and the fail-soft monorepo checkout — the
+# else, `contents: read` for the consumer job (only the routing probe
+# adds Actions read), and the fail-soft monorepo checkout — the
 # checkout continues on error, a guard step warns when it did not succeed,
 # and every later step is gated on its success so a monorepo outage yields a
 # green job with a ::warning:: instead of a red caller PR.
 triggers=$(awk '/^on:/ { on = 1; next } /^jobs:/ { on = 0 } on && /^  [a-z_]+:/ { sub(/^  /, ""); sub(/:.*/, ""); print }' "$workflow")
 [ "$triggers" = "workflow_call" ] || fail "consumer-checks.yml must be triggered by workflow_call only; found: $triggers"
 permissions=$(awk '
-  /^[[:blank:]]*permissions:/ {
+  /^  consumer-checks:/ { consumer = 1; next }
+  /^  [a-z-]+:/ { consumer = 0 }
+  consumer && /^    permissions:/ {
     indent = match($0, /[^ ]/)
     in_block = 1
     if ($0 !~ /permissions:[[:blank:]]*$/) print "inline " $0
@@ -334,7 +336,7 @@ permissions=$(awk '
   }
 ' "$workflow")
 [ "$permissions" = "contents: read" ] ||
-  fail "consumer-checks.yml must grant exactly 'permissions: contents: read'; found:"$'\n'"${permissions:-<none>}"
+  fail "consumer job must grant exactly 'permissions: contents: read'; found:"$'\n'"${permissions:-<none>}"
 grep -q '^        continue-on-error: true$' <<<"$checkout_block" ||
   fail "monorepo checkout step lost continue-on-error: true (the job must stay green when the monorepo cannot be checked out):"$'\n'"$checkout_block"
 guard_name='Skip when the monorepo checkout failed'
@@ -367,7 +369,8 @@ guard_output=$(SELF_TEST=true MONOREPO_REF=0123456789abcdef0123456789abcdef01234
 grep -q '^::error::consumer-checks:' <<<"$guard_output" ||
   fail "self-test checkout failure did not emit an error:"$'\n'"$guard_output"
 
-downstream_gates=$(awk -v gate="$gate_line" -v guard="- name: $guard_name" '
+queue_gate_line="        if: github.event_name == 'merge_group' && steps.monorepo.outcome == 'success'"
+downstream_gates=$(awk -v queue_gate="$queue_gate_line" -v gate="$gate_line" -v guard="- name: $guard_name" '
   function flush() { if (after_guard && name != "") print (gated ? "gated " : "ungated ") name }
   /^      - / {
     flush()
@@ -378,7 +381,7 @@ downstream_gates=$(awk -v gate="$gate_line" -v guard="- name: $guard_name" '
     if (index($0, guard)) guard_seen = 1
     next
   }
-  $0 == gate { gated = 1 }
+  $0 == gate || $0 == queue_gate { gated = 1 }
   END { flush() }
 ' "$workflow")
 grep -q '^ungated ' <<<"$downstream_gates" &&

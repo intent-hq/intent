@@ -24,6 +24,7 @@ unchanged. Host-administration virtual workspaces retain their existing boundary
 | Method | Params | Result |
 | --- | --- | --- |
 | workspace.list | includeArchived?: boolean (default false) | { workspaces: Workspace[] } — triggers background backfill: existing workspaces with a repositoryPath but missing repositoryOwner/Name are enriched from the origin remote URL (same GitHub derivation as workspace.create, non-blocking spawn, deduped per workspace per daemon lifecycle, skips non-GitHub remotes, persists updates, emits workspace:updated with changed fields). **Membership-narrowed** for a non-administrator caller: only workspaces the bound principal is a member of are returned, and every `Workspace` row carries `myRole` (`"owner"` \| `"collaborator"`), `memberCount` and `openInviteCount` (§5.48) |
+| workspace.findByPullRequest *(prepared; `prWorkspaceLookup: 1`)* | url (req): string — a GitHub-form pull-request URL, `https://<host>/<owner>/<repo>/pull/<number>` (trailing path, query or fragment ignored). No `workspaceId`: daemon-global | { workspaces: PullRequestWorkspace[] } — every workspace the daemon has linked to that PR, most recently linked first; `[]` when none. Archived workspaces are included; deleted and remote workspaces never are. Membership-narrowed like `workspace.list`. `-32602 { code: "invalid-params" }` when `url` is missing or not a pull-request URL. See [PR workspace lookup](#pull-request-workspace-lookup) |
 | workspace.get | workspaceId (req) | { workspace: Workspace } — -32602 if not found, **or** if the caller is not a member of it (same `{ code: "not-found" }`, indistinguishable by design; §5.48) |
 | workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipIsolation? (canonical; deprecated alias skipWorktree?), githubUrl?, repositoryCheckout? (prepared GitLab selection; see [GitLab project checkout](#gitlab-project-checkout)), clonePath?, isNewRepo?, progressId? (string — arms the unified provisioning progress stream; see notes), contextLinks? (ContextLink[] — issue/PR context links persisted on the row; a pr-kind link additionally makes the create **PR-aware** — an omitted `branch`/`baseRef` defaults to the PR's head/base branch — see the `contextLinks` and PR-aware create notes below)); optional initialAgent: { prompt? *(a blank/whitespace-only prompt reads as absent; the agent is still created — see "Initial-agent orchestration" in the notes)*, name?, model?, reasoningEffort? (string — creation-time effort; omitted inherits, blank clears; see notes), specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks? *(within v7.4, monorepo#3338: entries may carry an attachment-registry `attachmentId` reference instead of inline `data`, under the same exactly-one-of validation + registry check and daemon-side prompt-assembly resolution as `agent.sendMessage` — §5.5; a bad reference rejects `-32602` pre-side-effect)*, fileBlocks? *(v6.12; attachment references only since v10.0 — same per-entry validation as `agent.sendMessage`: every entry must carry a non-empty `attachmentId`, an entry carrying inline `data` or missing `attachmentId` is `-32602` naming the block index — §5.5)*, metadata? } — no `agentId`: agent IDs are server-assigned, and a request carrying `initialAgent.agentId` is rejected with `-32602` (see notes). Every `-32602` rejection is validated before any side effect (see "Pre-side-effect validation" in the notes) | { workspace: Workspace, initialAgent?: AgentLite } — the created agent's server-minted id is `initialAgent.id`; daemon-owned orchestration inside one idempotent op (see notes: clone → checkout (worktree or CoW) → spec seed → initial agent). |
 | workspace.update | workspaceId (req) + fields to change — the skip toggle uses the same wire names as create: skipIsolation? (canonical; deprecated alias skipWorktree?, either set ⇒ same behavior); the `workspace:updated { changes }` delta serializes it under the canonical skipIsolation name; `statusImageAssetId?: string \| null` is clearable (missing = untouched, `null` = clear, string = set — see the `statusImageAssetId` notes below). A **collaborator** member may change only `title`, `tags`, `statusMessage`, `statusImageAssetId` — any other key is `-32003 { code: "forbidden", detail }` (§5.48). **Archive lifecycle delegation** ([intent-hq/intentd#2066](https://github.com/intent-hq/intentd/pull/2066)): the generic row write never touches `archived` / `archivedAt` and holds `status` while the row is archived — lifecycle state moves only through `workspace.archive` / `workspace.unarchive`. An update carrying `archived` and/or `status: "Archived"` / `"Active"` applies the other fields first, then delegates the flip to those paths: `archived: true` or `status: "Archived"` runs the full `workspace.archive` teardown (guests detached, open invites revoked, hooks / monitors / turns torn down); `archived: false`, or a non-archived `status` on an archived row, runs `workspace.unarchive`. The delegated path publishes the `{ archived, status, archivedAt }` delta itself (`archivedAt` is set by the archive/unarchive path, never by a generic update field), so the update's own `workspace:updated` delta has `archived` and `status` removed from it — both arrive only in the delegated lifecycle delta — and is skipped entirely when nothing else changed. A contradictory pair (e.g. `archived: true` + `status: "Active"`) is `-32602 { code: "invalid-params" }` and nothing is written | { workspace: Workspace } |
@@ -204,6 +205,21 @@ including repository-selection fields, are rejected; repository identity and pat
 from the caller workspace. An omitted `baseRef` uses the repository default. A named ref
 must exist; an unresolved ref is warned before Apply and fails through the existing
 `workspace.create` structured error without fallback.
+
+The checkout kind follows the caller repository's `origin`. When `origin` names the
+caller row's own `github.com` repository (HTTPS or SSH; `repositoryOwner` /
+`repositoryName` compared case-insensitively), `payload.params` carries the canonical
+`githubUrl: "https://github.com/<owner>/<repo>"` and **no** `repositoryPath` /
+`clonePath`, so Apply provisions a standalone checkout hydrated from the repo cache
+(`checkoutMode` `cow` or `direct`) — the same request shape as picking a GitHub
+repository — and `preview.workspaceCreate.repoType` is `"github"`. The row identity is
+required because the clone no longer shares `repositoryPath`, leaving owner/name as the
+`crossWorkspace.*` sibling link. Otherwise (no `origin`, a non-GitHub or different
+`origin`, a row without GitHub identity, or a base ref — named or the default branch —
+that resolves locally but has no `refs/remotes/origin/<ref>`, which a clone would lack)
+the params carry `repositoryPath` and Apply provisions a linked worktree (or a CoW copy
+under `workspace.cowIsolation`); the local-only base ref case adds a preview warning
+naming the ref. Unpushed local work is never carried into a cache-hydrated clone.
 
 The result is the existing `workspace-create` proposal resource with
 `preview.workspaceCreate.mode: "sibling"`, plus a top-level `proposalId` (additive,
@@ -1533,7 +1549,7 @@ included) and the monitored PRs feed them through the monitor signals
 workspace's PRs are. `workspace.get` serves the **same merged pool** (workspace + git-root +
 monitor entries, same source priority / URL dedup / lifecycle rules) **uncapped** and with no
 `pullRequestsTotal`, while the list emit paths (`workspace.list`, the workspace channel's
-seq-0 rows and deltas) carry that pool capped at the **5** most recent
+seq-0 rows and deltas) carry that pool capped at **5** entries, prioritizing draft/open PRs before merged/closed PRs
 (`WORKSPACE_LIST_PR_CAP`) with `pullRequestsTotal` when truncated — so `workspace.get` is
 the recovery surface for the full pool (see the detail-only table below). Everything else is
 unchanged: the stored `workspace.pull_requests` column keeps its workspace-repo semantics
@@ -1629,7 +1645,7 @@ keeps serving every field. The list-only omissions are:
 | `contextLinks` | `workspace.get` | Consumed once, when a client opens the workspace and seeds its layout from the linked pages |
 | `diskUsage` (absent), `diffSummary.files` (`[]` when a `diffSummary` is present) | `workspace.diskUsage`, path-scoped `git.diffs` / `git.numstat` (§5.6) | Never populated on the list path anyway; cleared so the guarantee holds by construction (`diffSummary` totals stay) |
 | `activePullRequest` / `pullRequests[]` entry fields `headSha`, `author` | `workspace.get` | Hover-tooltip data; list contexts (sidebar PR dropdown, card status, delete warning) need `number` / `url` / `title` / `status` / `isDraft` and the timestamps used for ordering, which stay. `mergeable` / `mergeableState` also stay on list entries: the client derives the PR lifecycle display status from them off list rows |
-| `pullRequests[]` entries beyond the **5** most recent (`WORKSPACE_LIST_PR_CAP`) | `workspace.get` (the full **merged** pool — the workspace's own entries plus the git-root and PR-monitor entries the emit-path merge folds in, same source priority / URL dedup / lifecycle rules as the list rows — uncapped, in merge order: stored entries, then git-root, then monitor-derived) | The pool's length is unbounded in production (unlike the active row's `agentSummary`, which is deliberately left uncapped, it is cheap to bound), and the row budget was sized from a five-entry pool. Survivors are ordered by `updatedAt` descending (`number` descending on ties); the entry matching `activePullRequest` (by exact repository-qualified `url` — `id` / `number` collide across the repositories the merged pool spans; an entry without a URL never stands in for an active PR that has one, and `number` decides only between an active PR and an entry that both lack a URL) is always retained, counts toward the 5 and leads the survivors. A pool of 5 or fewer is left as stored (no reorder). `activePullRequest` itself is never removed (its entry is slimmed like the pool's) |
+| `pullRequests[]` entries beyond the **5** highest-priority candidates (`WORKSPACE_LIST_PR_CAP`) | `workspace.get` (the full **merged** pool — the workspace's own entries plus the git-root and PR-monitor entries the emit-path merge folds in, same source priority / URL dedup / lifecycle rules as the list rows — uncapped, in merge order: stored entries, then git-root, then monitor-derived) | The pool's length is unbounded in production (unlike the active row's `agentSummary`, which is deliberately left uncapped, it is cheap to bound), and the row budget was sized from a five-entry pool. Survivors are ordered by lifecycle: draft, open (including queued/conflicted), merged, then closed. Within each lifecycle state, the entry matching `activePullRequest` (by exact repository-qualified `url` — `id` / `number` collide across the repositories the merged pool spans; an entry without a URL never stands in for an active PR that has one, and `number` decides only between an active PR and an entry that both lack a URL) leads, followed by `updatedAt` descending and `number` descending on ties. A terminal active PR cannot displace unfinished PRs in the capped pool; it remains available separately as `activePullRequest`. A pool of 5 or fewer is left as stored (no reorder). `activePullRequest` itself is never removed (its entry is slimmed like the pool's) |
 
 **`pullRequestsTotal?: number`** is the one **list-only** key: present on a `workspace.list` /
 lite `workspace.subscribe` seq-0 row only when the cap above truncated `pullRequests`, carrying
@@ -2115,6 +2131,54 @@ successful `updateContext` emits `workspace:context-changed` with the persisted 
 // ← response (emits workspace:context-changed)
 { "jsonrpc":"2.0","id":10,"result":{ "items":[ /* same list */ ] } }
 ```
+
+#### Pull request workspace lookup
+
+*(prepared, additive)* The daemon records which workspaces a pull request belongs
+to, so a client can offer to open the workspace behind a PR link. Support is gated
+by the server hello capability `prWorkspaceLookup: 1`; clients must not call the
+method, or offer the action, without it.
+
+**Recording.** Whenever the daemon persists a changed PR snapshot for a local
+workspace (its `prUrl`, `activePullRequest` or `pullRequests` pool) or for one of its
+registered git roots (§5.6), it links every PR in that snapshot to the workspace. A
+PR is identified by its canonical URL without the scheme (so `http` and `https` links
+match): host lowercased with a leading `www.` removed and any port kept, owner and
+repository lowercased, and the number without leading zeros. Only
+GitHub-form `/<owner>/<repo>/pull/<number>` URLs are recorded or recognized in this
+revision; GitLab merge requests are out of scope. Each workspace gets its own link,
+so several workspaces can be linked to one PR. A link keeps the time it was first
+recorded (`linkedAt`); later sightings by the same workspace do not change it.
+Links survive the PR leaving the pool, the workspace being archived and the git
+root being unregistered, and they ride workspace transfers with their original
+`linkedAt`. Deleting the workspace removes its links. Remote
+workspace rows are not recorded. Recording starts with the implementing daemon
+release; snapshots persisted earlier are linked only once they next change.
+
+**`workspace.findByPullRequest`**
+
+```jsonc
+// request
+{ "url": "https://github.com/intent-hq/intentd/pull/2100/files" }
+// result
+{
+  "workspaces": [
+    {
+      "id": "detect-prs",
+      "title": "Link PRs to workspaces",
+      "archived": false,
+      "linkedAt": "2026-10-18T04:40:00.000Z" // RFC 3339
+    }
+  ]
+}
+```
+
+`PullRequestWorkspace` is `{ id: string, title: string, archived: boolean,
+linkedAt: string }`. Results are ordered by `linkedAt` descending (the most recently
+linked workspace first), ties broken by `id` ascending. The method is daemon-global
+(no `workspaceId`) and read-only; it emits no events. A non-administrator caller
+only sees workspaces it is a member of (§5.48). A missing `url`, or one that is not
+a pull-request URL, is rejected with `-32602 { code: "invalid-params" }`.
 
 #### Human authorship in workspace transfers
 
@@ -2744,7 +2808,7 @@ omissions is tabulated under **List-row slimming** in the `Workspace` payload no
 
 **TokenUsage** — `{ byAgentId: { [agentId]: TokenUsageTotals }, totals: TokenUsageTotals,
 byModel: { [modelName]: TokenUsageTotals }, byAgentModel?: TokenUsageCrossFilterRow[],
-lastScanAt: string | null }`, where
+agentNames?: { [agentId]: string }, lastScanAt: string | null }`, where
 **TokenUsageTotals** is the consumption counters plus an optional cost —
 `{ inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, thoughtTokens?,
 cost?: { amount: number, currency: string } }`. `byAgentId` keys are
@@ -2752,6 +2816,29 @@ cost?: { amount: number, currency: string } }`. `byAgentId` keys are
 the RFC-3339 timestamp of the last committed materialization by end-of-turn usage accounting or
 the reconciliation pass (`null` before the first). Updated values are pushed via
 `workspace:tokenUsage-changed` (§6.5).
+
+**Additive agent names** *(additive, [intent-hq/intent#7334](https://github.com/intent-hq/intent/pull/7334))*.
+`agentNames` maps an `agentId` to that agent session's display name, so a client can label
+every usage row, including retired agents, delegated agents it has not loaded, and agents in
+their delete grace window. Its keys are a subset of the `byAgentId` keys: only agents whose
+`byAgentId` bucket reports usage (a non-zero counter or a cost) are named. A session whose name
+is empty after trimming whitespace is omitted, and an empty map is omitted from the wire. An
+absent field can therefore mean an empty map, an older daemon, or a persisted snapshot that
+predates the field. Clients handle all three the same way: prefer the name of an agent they
+have loaded, then `agentNames`, then their own generic label. They never show a raw `agentId`.
+
+Names are materialized with the rest of the snapshot: they are the session names at the last
+committed materialization. A name change is a snapshot change, so a recompute that finds one
+commits and publishes `workspace:tokenUsage-changed` even if no counter moved. An applied
+`agent.rename`, or an `agent.update` that sets `name`, recomputes the snapshot when the stored
+snapshot already has a `byAgentId` bucket for that agent, so a rename of an agent with usage
+publishes the new name right away; renaming a usage-less agent writes nothing. A persisted
+snapshot without the field is not backfilled on the read path. The first reconciliation
+pass after a daemon upgrade recomputes every workspace it sweeps, so each swept workspace
+that has a named agent commits and publishes once. A workspace the pass does not sweep, or
+one whose recompute is declined, keeps serving its stored names (or none) until its next
+committed materialization. Ship order: this contract, then the intentd implementation, then
+the cloudlands-fe consumer; the auto-bump advances the pins.
 
 **Additive cross-filter rows.** `byAgentModel` is the sparse, materialized agent × model
 projection. One **TokenUsageCrossFilterRow** has the exact shape
@@ -2887,6 +2974,7 @@ not fall through to the legacy per-message usage fallback.
     { "agentId":"agent-123","model":"sonnet-4.6","totals":{ "inputTokens":1000,"outputTokens":400,"cacheReadTokens":500,"cacheCreationTokens":100,"cost":{ "amount":0.15,"currency":"USD" } },"humanMessages":1,"agentMessages":1 },
     { "agentId":"agent-456","model":"opus-4.8","totals":{ "inputTokens":4000,"outputTokens":1000,"cacheReadTokens":3500,"cacheCreationTokens":500,"cost":{ "amount":0.40,"currency":"USD" } },"humanMessages":2,"agentMessages":3 }
   ],
+  "agentNames":{ "agent-123":"Coordinator","agent-456":"PR reviewer" },
   "totals":{ "inputTokens":12000,"outputTokens":3400,"cacheReadTokens":8000,"cacheCreationTokens":1200,"cost":{ "amount":1.25,"currency":"USD" } },
   "lastScanAt":"2026-06-17T12:00:00Z" } } }
 ```

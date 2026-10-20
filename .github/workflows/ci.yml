@@ -1,13 +1,13 @@
 name: CI
-# CI is tiered by event. pull_request runs all applicable jobs; merge_group
-# runs the same jobs on the actual merged tree before the queue lands it, except the
+# PRs run static contracts, metadata, lint and CI-policy regressions. Runtime
+# suites and clean-host installation run on the queued tree. The
 # three PR-metadata checks (pr-title / breaking-token / submodule-pins),
 # which read `github.event.pull_request.*` / `github.head_ref` /
 # `github.base_ref` — none of which exist on merge_group — and already
 # covered the identical diff on the PR run, so they stay pull_request-only.
 # The `gate` job (CI Gate) aggregates every job into the one context the
 # main ruleset requires and is event-aware about those skips. The reusable
-# consumer workflow exercise is selected by changed paths on both events.
+# consumer workflow exercise is selected by changed paths in the queue.
 #
 # Incident: intent-hq/intent#5433 and #5446 were each green alone but broke
 # shell-tests together on every PR (intent-hq/intent#5455) for ~14 h — the
@@ -25,11 +25,42 @@ permissions:
   pull-requests: read
 
 jobs:
-  # pr-title is seconds-long, so it runs directly on a GitHub-hosted
-  # runner — no tinybox routing. pull_request-only: it validates the PR
+  runner-route:
+    uses: ./.github/workflows/runner-route.yml
+    with:
+      # Fast jobs that start together once routing finishes; each reads
+      # outputs.slots[key]. Typical minutes from merge-queue runs rank the free
+      # small-pool slots; `events` keeps skipped jobs from holding one. The
+      # gate starts after them and keeps the pool-level `runners` mapping.
+      slot_jobs: >-
+        [
+        {"key":"shell-tests","label":"ubuntu-24.04","minutes":4,"events":["merge_group"]},
+        {"key":"shell-tests-bash3","label":"ubuntu-24.04","minutes":3,"events":["merge_group"]},
+        {"key":"python-tests","label":"ubuntu-24.04","minutes":1,"events":["merge_group"]},
+        {"key":"docs-check","label":"ubuntu-24.04","minutes":1},
+        {"key":"pr-title","label":"ubuntu-24.04","events":["pull_request"]},
+        {"key":"bridge-test","label":"ubuntu-24.04","events":["merge_group"]},
+        {"key":"consumer-checks-prepare","label":"ubuntu-24.04"},
+        {"key":"event-catalog-check","label":"ubuntu-24.04"},
+        {"key":"shell-lint","label":"ubuntu-24.04"},
+        {"key":"repo-hygiene","label":"ubuntu-24.04"},
+        {"key":"ruleset-check","label":"ubuntu-24.04"},
+        {"key":"breaking-token","label":"ubuntu-24.04","events":["pull_request"]},
+        {"key":"submodule-pins","label":"ubuntu-24.04","events":["pull_request"]},
+        {"key":"triage-parser-test","label":"ubuntu-24.04"},
+        {"key":"ci-policy","label":"ubuntu-24.04"}
+        ]
+    permissions:
+      contents: read
+      actions: read
+    secrets:
+      CI_QUEUE_READ_TOKEN: ${{ secrets.CI_QUEUE_READ_TOKEN }}
+
+  # pull_request-only: this validates the PR
   # title, which merge_group does not carry; the gate accepts its skip there.
   pr-title:
-    runs-on: depot-ubuntu-24.04
+    needs: [runner-route]
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.slots || '{}')['pr-title'] || fromJSON('["ubuntu-24.04"]') }}
     if: github.event_name == 'pull_request'
     steps:
       # Intermittent TLS failures reaching api.github.com can kill this action
@@ -72,10 +103,15 @@ jobs:
 
   # The UDS→WS bridge shim (scripts/uds-ws-bridge.mjs) and the UDS JSON-RPC
   # probe (scripts/uds-rpc.mjs) are zero-dependency Node, so their node:test
-  # suites are also seconds-long and run directly on a GitHub-hosted runner —
-  # no tinybox routing, no submodules needed.
+  # suites need no submodules and use the shared runner routing policy.
+  # The breaking-token and submodule-pins unit suites also run here: their
+  # own jobs are pull_request-only, so without this the queue never re-tests
+  # them on the merged tree. scripts/test-ci-event-policy.py fails CI when a
+  # scripts/*.test.{mjs,cjs} suite is not reached from a merge_group job.
   bridge-test:
-    runs-on: depot-ubuntu-24.04
+    if: github.event_name == 'merge_group'
+    needs: [runner-route]
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.slots || '{}')['bridge-test'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -85,17 +121,23 @@ jobs:
           node-version: 22
       - run: node --test scripts/uds-ws-bridge.test.mjs
       - run: node --test scripts/uds-rpc.test.mjs
+      - run: node --test scripts/check-breaking-token.test.mjs scripts/check-submodule-pins.test.mjs
 
   # Standard-library-only Python suites run without submodules. Use the same
   # entry point locally and in CI; tomllib requires Python 3.11 or newer.
   # Includes offline prerelease retention/deletion tests and a functional check
   # that their failures fail this target. No cleanup credentials or live scan.
   python-tests:
-    runs-on: depot-ubuntu-24.04
+    if: github.event_name == 'merge_group'
+    needs: [runner-route]
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.slots || '{}')['python-tests'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
@@ -105,7 +147,8 @@ jobs:
   # tested tree as the local reusable call; a failed diff/read must fail CI,
   # not turn into an intentional path skip.
   consumer-checks-prepare:
-    runs-on: depot-ubuntu-24.04
+    needs: [runner-route]
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.slots || '{}')['consumer-checks-prepare'] || fromJSON('["ubuntu-24.04"]') }}
     outputs:
       selected: ${{ steps.select.outputs.selected }}
       intentd-sha: ${{ steps.select.outputs.intentd-sha }}
@@ -127,7 +170,14 @@ jobs:
   # references and setup fail before merge. Keep the full connected exercise.
   consumer-checks-exercise:
     needs: consumer-checks-prepare
-    if: needs.consumer-checks-prepare.outputs.selected == 'true'
+    if: github.event_name == 'merge_group' && needs.consumer-checks-prepare.outputs.selected == 'true'
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    secrets:
+      CI_QUEUE_READ_TOKEN: ${{ secrets.CI_QUEUE_READ_TOKEN }}
+      INTENT_SCCACHE_TOKEN: ${{ secrets.INTENT_SCCACHE_TOKEN }}
     uses: ./.github/workflows/consumer-checks.yml
     with:
       component: intentd
@@ -152,7 +202,8 @@ jobs:
   # monorepo file(s) to update; the upstream intentd / cloudlands-fe consumer
   # job runs the same script, so the two lists cannot drift.
   docs-check:
-    runs-on: depot-ubuntu-24.04
+    needs: [runner-route]
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.slots || '{}')['docs-check'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -164,12 +215,24 @@ jobs:
       - run: node --test scripts/submodule-ref.test.mjs
       - run: node --test scripts/check-protocol-catalog.test.mjs
       - run: node --test docs/protocol/fixtures/scripts/readiness.test.mjs
+      - run: >-
+          node --test
+          docs/protocol/fixtures/desktop-control/contract.test.mjs
+          docs/protocol/fixtures/event-stream-recovery/contract.test.mjs
+          docs/protocol/fixtures/nodes/checkpoint-capture.test.mjs
+          docs/protocol/fixtures/nodes/enrollment.test.mjs
+          docs/protocol/fixtures/nodes/local-source.test.mjs
+          docs/protocol/fixtures/nodes/platform-routing.test.mjs
+          docs/protocol/fixtures/scripts/active-monitors.test.mjs
+          docs/protocol/fixtures/scripts/compact.test.mjs
+          docs/protocol/fixtures/startup/contract.test.mjs
       - run: node --test scripts/check-mcp-bindings.test.mjs
       - run: node --test scripts/check-makefile-targets.test.mjs
       - run: node --test scripts/check-protocol-field-parity.test.mjs
       - run: node --test scripts/check-transfer-selection-contract.test.mjs scripts/test-transfer-selection-contract.test.mjs scripts/transfer-selection-ci.test.mjs
       - run: node --test scripts/backend-keychain-contract.test.mjs
       - run: make check-agent-worker-contract
+      - run: node --test scripts/check-app-ui-targets.test.mjs
       - run: node --test scripts/consumer-checks-ci.test.mjs
       - run: make consumer-checks
 
@@ -179,7 +242,8 @@ jobs:
   # gitlink via the API with SUBMODULE_BUMP_TOKEN when present and skipped with
   # a warning otherwise (mirrors auto-bump-submodules.yml's ios handling).
   event-catalog-check:
-    runs-on: depot-ubuntu-24.04
+    needs: [runner-route]
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.slots || '{}')['event-catalog-check'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -213,20 +277,28 @@ jobs:
   # public intentd submodule at its pin (shallow, the same way
   # event-catalog-check does); packages/ios stays `update = none`.
   shell-tests:
-    runs-on: depot-ubuntu-24.04
+    if: github.event_name == 'merge_group'
+    needs: [runner-route]
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.slots || '{}')['shell-tests'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
       - run: git submodule update --init --depth=1 packages/intentd
       - run: |
           echo "shell tests: host-specific daemon and pnpm behavior is stubbed"
           bash scripts/auto-bump-submodules.test.sh
           bash scripts/bootstrap-dev-host.test.sh
           bash scripts/ci-gate.test.sh
-          python3 -S -B scripts/test_depot_runners.py
+          python3 -S -B scripts/test_hosted_runners.py
           python3 -S -B scripts/test_ci_bash3.py
-          python3 -S -B scripts/test_setup_depot_sccache.py
+          python3 -S -B scripts/test_setup_sccache.py
           python3 -S -B scripts/test_local_sccache.py
           bash scripts/consumer-checks.test.sh
           bash scripts/dev-ports.test.sh
@@ -238,30 +310,87 @@ jobs:
           bash scripts/rust-changed-tests.test.sh
           python3 -S -B scripts/test_rust_test_policy.py
           bash scripts/shipped-in.test.sh
+          bash scripts/release-status.test.sh
           bash scripts/lint-fixed-sleeps.sh
+      # sccache cache server (infra/sccache): real Caddy + rclone on loopback,
+      # pinned and checksum-verified, so the token access matrix never skips here.
+      - name: sccache server test
+        run: |
+          set -euo pipefail
+          bin="$RUNNER_TEMP/sccache-server-bin"
+          mkdir -p "$bin" && cd "$bin"
+          curl -sSfL -o caddy.tgz https://github.com/caddyserver/caddy/releases/download/v2.10.2/caddy_2.10.2_linux_amd64.tar.gz
+          echo "747df7ee74de188485157a383633a1a963fd9233b71fbb4a69ddcbcc589ce4e2cc82dacf5dbbe136cb51d17e14c59daeb5d9bc92487610b0f3b93680b2646546  caddy.tgz" | sha512sum -c -
+          tar xzf caddy.tgz caddy
+          curl -sSfL -o rclone.zip https://downloads.rclone.org/v1.71.1/rclone-v1.71.1-linux-amd64.zip
+          echo "417e3da236f3a12d292da4e7287d67b1df558b8c2b280d092e563958ed724be7  rclone.zip" | sha256sum -c -
+          python3 -I -c "import zipfile,shutil; z=zipfile.ZipFile('rclone.zip'); shutil.copyfileobj(z.open('rclone-v1.71.1-linux-amd64/rclone'), open('rclone','wb'))"
+          chmod +x caddy rclone
+          cd "$GITHUB_WORKSPACE"
+          CADDY_BIN="$bin/caddy" RCLONE_BIN="$bin/rclone" python3 -S -B infra/sccache/test_server.py -v
+          bash -n infra/sccache/bootstrap.sh
+          command -v shellcheck >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q shellcheck; }
+          shellcheck infra/sccache/*.sh
+      # GitHub runner slots (infra/runners): supervisor and installer against
+      # stubbed curl/docker/systemctl.
+      - name: runner slots test
+        run: |
+          set -euo pipefail
+          python3 -S -B infra/runners/test_runners.py -v
+          command -v shellcheck >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q shellcheck; }
+          shellcheck infra/runners/*.sh
 
   # shellcheck over scripts/*.sh. Quoting and Bash-3 portability slips in the
   # repo scripts reached main because nothing linted them (intent-hq/intent#5638);
   # `make lint-shell` runs the pinned rule set from .shellcheckrc against the
-  # `shellcheck` binary ubuntu-latest ships.
+  # ShellCheck binary, installed explicitly when absent.
   shell-lint:
-    runs-on: depot-ubuntu-24.04
+    needs: [runner-route]
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.slots || '{}')['shell-lint'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: false
+      - name: Install ShellCheck when absent
+        run: |
+          if ! command -v shellcheck >/dev/null; then
+            for attempt in 1 2 3; do
+              if sudo -n apt-get -o DPkg::Lock::Timeout=300 update -qq; then break; fi
+              if [ "$attempt" -eq 3 ]; then exit 1; fi
+              sleep $((attempt * 15))
+            done
+            sudo -n apt-get -o DPkg::Lock::Timeout=300 install -y -qq shellcheck
+          fi
       - run: shellcheck --version
       - run: make lint-shell
 
   # Keep stock macOS Bash 3.2 compatibility without renting a Mac for shell tests.
   # A pinned Linux build runs the same suites; REQUIRE_BASH3 forbids silent skips.
   shell-tests-bash3:
-    runs-on: depot-ubuntu-24.04
+    if: github.event_name == 'merge_group'
+    needs: [runner-route]
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.slots || '{}')['shell-tests-bash3'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
       - run: git submodule update --init --depth=1 packages/intentd
+      - name: Install Bash build prerequisites when absent
+        run: |
+          if ! command -v yacc >/dev/null || ! command -v gcc >/dev/null; then
+            for attempt in 1 2 3; do
+              if sudo -n apt-get -o DPkg::Lock::Timeout=300 update -qq; then break; fi
+              if [ "$attempt" -eq 3 ]; then exit 1; fi
+              sleep $((attempt * 15))
+            done
+            sudo -n apt-get -o DPkg::Lock::Timeout=300 install -y -qq build-essential bison
+          fi
       - name: Install pinned Bash 3.2
         run: bash scripts/install-ci-bash3.sh "$RUNNER_TEMP/bash3"
       - run: |
@@ -273,11 +402,13 @@ jobs:
           REQUIRE_BASH3=1 bash scripts/lint-fixed-sleeps.test.sh
           REQUIRE_BASH3=1 bash scripts/rust-changed-tests.test.sh
           REQUIRE_BASH3=1 bash scripts/shipped-in.test.sh
+          REQUIRE_BASH3=1 bash scripts/release-status.test.sh
 
   # Agent-facing documentation links and root hygiene are checked without
-  # dependencies or initialized submodules, directly on GitHub hosting.
+  # dependencies or initialized submodules.
   repo-hygiene:
-    runs-on: depot-ubuntu-24.04
+    needs: [runner-route]
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.slots || '{}')['repo-hygiene'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -307,7 +438,8 @@ jobs:
   # ruleset-drift.yml also covers the rules daily, since a ruleset edit on
   # GitHub triggers no PR.
   ruleset-check:
-    runs-on: depot-ubuntu-24.04
+    needs: [runner-route]
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.slots || '{}')['ruleset-check'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -325,7 +457,8 @@ jobs:
   # pull_request-only: reads the PR body, labels and base_ref, none of which
   # exist on merge_group; the gate accepts its skip there.
   breaking-token:
-    runs-on: depot-ubuntu-24.04
+    needs: [runner-route]
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.slots || '{}')['breaking-token'] || fromJSON('["ubuntu-24.04"]') }}
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v7
@@ -351,7 +484,8 @@ jobs:
   # pull_request-only: reads head_ref, base_ref and PR labels, none of which
   # exist on merge_group; the gate accepts its skip there.
   submodule-pins:
-    runs-on: depot-ubuntu-24.04
+    needs: [runner-route]
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.slots || '{}')['submodule-pins'] || fromJSON('["ubuntu-24.04"]') }}
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v7
@@ -372,7 +506,8 @@ jobs:
   # The issue-triage body parser (.github/scripts/issue-triage/) is also
   # zero-dependency Node with a fixture-driven node:test suite.
   triage-parser-test:
-    runs-on: depot-ubuntu-24.04
+    needs: [runner-route]
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.slots || '{}')['triage-parser-test'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -394,12 +529,32 @@ jobs:
   # exercise must match its path selection (success or intentional skip).
   # The self-test diffs the script's job list against this needs list,
   # so keep both in step.
+  bootstrap-install:
+    if: github.event_name == 'merge_group'
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/bootstrap-install.yml
+    secrets: inherit
+
+  ci-policy:
+    needs: [runner-route]
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.slots || '{}')['ci-policy'] || fromJSON('["ubuntu-24.04"]') }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - run: python3 -m pip install 'PyYAML==6.0.3'
+      - run: bash scripts/ci-gate.test.sh
+      - run: python3 -I -B scripts/test-ci-event-policy.py
+
   gate:
     name: CI Gate
-    runs-on: depot-ubuntu-24.04
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
     permissions: {}
     if: always()
-    needs: [pr-title, bridge-test, python-tests, docs-check, event-catalog-check, shell-tests, shell-lint, shell-tests-bash3, repo-hygiene, ruleset-check, breaking-token, submodule-pins, triage-parser-test, consumer-checks-prepare, consumer-checks-exercise]
+    needs: [ci-policy, bootstrap-install, pr-title, bridge-test, python-tests, docs-check, event-catalog-check, shell-tests, shell-lint, shell-tests-bash3, repo-hygiene, ruleset-check, breaking-token, submodule-pins, triage-parser-test, consumer-checks-prepare, consumer-checks-exercise, runner-route]
     steps:
       - uses: actions/checkout@v7
         with:

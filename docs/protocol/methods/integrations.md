@@ -400,6 +400,7 @@ interface GithubPullRequest {
   mergeable?: boolean | null;
   mergeableState?: string;  // the forge's raw merge-state word; a merge-queued PR reads `"clean"` here (REST never reports `"queued"`) — read `isInMergeQueue` instead
   isInMergeQueue?: boolean; // present only when the host reported the merge-queue state (GitHub GraphQL `isInMergeQueue`); absent (never `null`) when unknown — REST-only fallback, older GHES
+  mergeQueue?: MergeQueueEntry; // additive, presence-detected: the PR's place in the host's merge queue — present only alongside `isInMergeQueue: true` when the host reported the entry (GitHub GraphQL `PullRequest.mergeQueueEntry`); absent (never `null`) otherwise
   labels: string[];
   assignees?: GithubUser[];
   comments: number;
@@ -410,6 +411,14 @@ interface GithubPullRequest {
   changedFiles: number;
   owner?: string;          // repository owner — present on `github.pulls.search` items (v10.1); names the hit's own repo
   repo?: string;           // repository name — present on `github.pulls.search` items (v10.1)
+}
+
+interface MergeQueueEntry { // shared with the §5.42 `MergeRequirements.mergeQueue`; every key but `position` is presence-detected (omitted, never `null`)
+  position: number;         // 1-based place in the queue (GitHub GraphQL `MergeQueueEntry.position`); 1 = next to merge
+  queueSize?: number;       // entries currently in the queue, this one included (`mergeQueue.entries.totalCount`)
+  state?: string;           // the host's raw entry state word, lowercased — GitHub: `queued` | `awaiting_checks` | `mergeable` | `unmergeable` | `locked`
+  enqueuedAt?: string;      // RFC 3339 — when the PR entered the queue
+  estimatedTimeToMerge?: number; // the host's estimate, in whole seconds, of how long until this entry merges (GitHub GraphQL `MergeQueueEntry.estimatedTimeToMerge`), passed through as reported — GitHub recomputes it on queue events rather than counting it down, so it is a duration estimate, not a deadline; omitted while the host has no estimate
 }
 
 interface GithubIssue {
