@@ -420,3 +420,10 @@ test('a rejected spawn tombstones its ID so a later end report creates no row', 
   const x = configured(); ingest(x, withUpdate(spawn('wf'), { taskType: 'workflow' })); ingest(x, terminal('completed', 'wf'), 2000);
   assert.deepEqual(x.list(scope, 2000).workers, []);
 });
+test('an invalid receipt time is rejected before a rejected spawn can record a tombstone', () => {
+  const p = claude();
+  for (const receivedAt of [-1, 0.5, NaN]) {
+    assert.equal(p.ingest(withUpdate(spawn('sub'), { taskType: 'agent' }), { ...claudeScope, receivedAt, origin: 'live' }), false);
+  }
+  assert.deepEqual(p.checkpoint().seen, []);
+});

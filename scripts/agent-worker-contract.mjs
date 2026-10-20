@@ -80,6 +80,7 @@ export class WorkerProjection {
     const u = frame.update;
     if (!u || !validId(u.asyncTaskId) || (u.toolCallId !== undefined && !validId(u.toolCallId))) return false;
     const taskType = u.sessionUpdate === 'async_task_spawned' ? acceptedTaskType(this.scope.provider, u.taskType) : undefined;
+    if (!time(context.receivedAt)) return false;
     if (u.sessionUpdate === 'async_task_spawned' && taskType === undefined) {
       // Not a worker (subagent, Codex non-shell): tombstone so a later end report cannot create a row.
       if (!this.seen.has(u.asyncTaskId) && this.seen.size < this.options.maxSeen) this.seen.add(u.asyncTaskId);
@@ -88,7 +89,6 @@ export class WorkerProjection {
     const spawned = taskType !== undefined;
     const ended = u.sessionUpdate === 'async_task_state_update' && TERMINAL.has(u.state);
     if (!spawned && !ended) return false;
-    if (!time(context.receivedAt)) return false;
     const at = context.receivedAt;
     this.clock(at);
     let row = this.rows.get(u.asyncTaskId);

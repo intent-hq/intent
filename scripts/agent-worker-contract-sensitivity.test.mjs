@@ -30,6 +30,7 @@ const mutations = [
   ['profile ignored', "export const baseProvider = (provider) => provider.split('@')[0];", 'export const baseProvider = (provider) => provider;'],
   ['unsanitized subagent check', "const type = bounded(taskType, 64)?.trim();", "const type = typeof taskType === 'string' && taskType.trim() ? taskType : undefined;"],
   ['rejected spawn not tombstoned', "if (!this.seen.has(u.asyncTaskId) && this.seen.size < this.options.maxSeen) this.seen.add(u.asyncTaskId);", '// broken rejected-spawn tombstone'],
+  ['tombstone before timestamp check', "    if (!time(context.receivedAt)) return false;\n    if (u.sessionUpdate === 'async_task_spawned' && taskType === undefined) {", "    if (u.sessionUpdate === 'async_task_spawned' && taskType === undefined) {"],
   ['adapter allowlist', "adapterVersion !== adapter.adapterVersion ? { status: 'unsupported', reason: 'adapter-version' }", "false ? { status: 'unsupported', reason: 'adapter-version' }"],
 ];
 for (const [name, before, after] of mutations) test(`regressions reject ${name}`, (t) => {
