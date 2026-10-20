@@ -27,6 +27,29 @@ permissions:
 jobs:
   runner-route:
     uses: ./.github/workflows/runner-route.yml
+    with:
+      # Fast jobs that start together once routing finishes; each reads
+      # outputs.slots[key]. Typical minutes from merge-queue runs rank the free
+      # small-pool slots; `events` keeps skipped jobs from holding one. The
+      # gate starts after them and keeps the pool-level `runners` mapping.
+      slot_jobs: >-
+        [
+        {"key":"shell-tests","label":"ubuntu-24.04","minutes":4,"events":["merge_group"]},
+        {"key":"shell-tests-bash3","label":"ubuntu-24.04","minutes":3,"events":["merge_group"]},
+        {"key":"python-tests","label":"ubuntu-24.04","minutes":1,"events":["merge_group"]},
+        {"key":"docs-check","label":"ubuntu-24.04","minutes":1},
+        {"key":"pr-title","label":"ubuntu-24.04","events":["pull_request"]},
+        {"key":"bridge-test","label":"ubuntu-24.04","events":["merge_group"]},
+        {"key":"consumer-checks-prepare","label":"ubuntu-24.04"},
+        {"key":"event-catalog-check","label":"ubuntu-24.04"},
+        {"key":"shell-lint","label":"ubuntu-24.04"},
+        {"key":"repo-hygiene","label":"ubuntu-24.04"},
+        {"key":"ruleset-check","label":"ubuntu-24.04"},
+        {"key":"breaking-token","label":"ubuntu-24.04","events":["pull_request"]},
+        {"key":"submodule-pins","label":"ubuntu-24.04","events":["pull_request"]},
+        {"key":"triage-parser-test","label":"ubuntu-24.04"},
+        {"key":"ci-policy","label":"ubuntu-24.04"}
+        ]
     permissions:
       contents: read
       actions: read
@@ -37,7 +60,7 @@ jobs:
   # title, which merge_group does not carry; the gate accepts its skip there.
   pr-title:
     needs: [runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.slots || '{}')['pr-title'] || fromJSON('["ubuntu-24.04"]') }}
     if: github.event_name == 'pull_request'
     steps:
       # Intermittent TLS failures reaching api.github.com can kill this action
@@ -88,7 +111,7 @@ jobs:
   bridge-test:
     if: github.event_name == 'merge_group'
     needs: [runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.slots || '{}')['bridge-test'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -107,7 +130,7 @@ jobs:
   python-tests:
     if: github.event_name == 'merge_group'
     needs: [runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.slots || '{}')['python-tests'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -125,7 +148,7 @@ jobs:
   # not turn into an intentional path skip.
   consumer-checks-prepare:
     needs: [runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.slots || '{}')['consumer-checks-prepare'] || fromJSON('["ubuntu-24.04"]') }}
     outputs:
       selected: ${{ steps.select.outputs.selected }}
       intentd-sha: ${{ steps.select.outputs.intentd-sha }}
@@ -180,7 +203,7 @@ jobs:
   # job runs the same script, so the two lists cannot drift.
   docs-check:
     needs: [runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.slots || '{}')['docs-check'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -220,7 +243,7 @@ jobs:
   # a warning otherwise (mirrors auto-bump-submodules.yml's ios handling).
   event-catalog-check:
     needs: [runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.slots || '{}')['event-catalog-check'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -256,7 +279,7 @@ jobs:
   shell-tests:
     if: github.event_name == 'merge_group'
     needs: [runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.slots || '{}')['shell-tests'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -323,7 +346,7 @@ jobs:
   # ShellCheck binary, installed explicitly when absent.
   shell-lint:
     needs: [runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.slots || '{}')['shell-lint'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -346,7 +369,7 @@ jobs:
   shell-tests-bash3:
     if: github.event_name == 'merge_group'
     needs: [runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.slots || '{}')['shell-tests-bash3'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -385,7 +408,7 @@ jobs:
   # dependencies or initialized submodules.
   repo-hygiene:
     needs: [runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.slots || '{}')['repo-hygiene'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -416,7 +439,7 @@ jobs:
   # GitHub triggers no PR.
   ruleset-check:
     needs: [runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.slots || '{}')['ruleset-check'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -435,7 +458,7 @@ jobs:
   # exist on merge_group; the gate accepts its skip there.
   breaking-token:
     needs: [runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.slots || '{}')['breaking-token'] || fromJSON('["ubuntu-24.04"]') }}
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v7
@@ -462,7 +485,7 @@ jobs:
   # exist on merge_group; the gate accepts its skip there.
   submodule-pins:
     needs: [runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.slots || '{}')['submodule-pins'] || fromJSON('["ubuntu-24.04"]') }}
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v7
@@ -484,7 +507,7 @@ jobs:
   # zero-dependency Node with a fixture-driven node:test suite.
   triage-parser-test:
     needs: [runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.slots || '{}')['triage-parser-test'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -516,7 +539,7 @@ jobs:
 
   ci-policy:
     needs: [runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.slots || '{}')['ci-policy'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
