@@ -315,7 +315,7 @@ FE_BUILD_HEAP_MB ?= 16384
 .PHONY: all help doctor bootstrap-dev-host ensure-submodules ensure-intentd-submodule ensure-fe-submodule ensure-ios-submodule \
 	ensure-fe-toolchain \
 	update \
-	build build-intentd build-sidecar gate test test-intentd test-scripts test-changed list-tests coverage-changed coverage-e2e coverage-all \
+	build build-intentd build-sidecar gate test test-intentd test-scripts test-scripts-changed test-changed list-tests coverage-changed coverage-e2e coverage-all \
 	fmt clippy lint-sources lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child lint-shell-sleeps lint-shell bash3 check clean clean-dev \
 	sweep sweep-all seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
 	run-intentd dev-ui dev-sandbox-ui dev-sandbox-app dev-sandbox-stack dev-fe fe-launch \
@@ -572,6 +572,11 @@ test: test-intentd ## Run Rust tests; after interruption use RESUME=1 (GATE_FORC
 
 test-scripts: ## Run the Python script unit tests (Python 3.11+, no submodules needed)
 	python3 -S -B -m unittest -v scripts.test_resumable_nextest scripts.test_compact_gate scripts.test_rust_test_policy scripts.test_seed_dev_providers scripts.test_seed_dev_workspaces scripts.test_cleanup_prereleases scripts.test_script_test_target scripts.test_watch_capacity
+
+# The script checks CI would run for this change (lint-shell, the ci.yml
+# shell-tests suites, node:test for changed scripts/*.mjs); see CONTRIBUTING.md.
+test-scripts-changed: ## Run CI's script checks for files changed vs BASE (default origin/main; DRY_RUN=1 prints the plan)
+	@BASE="$(BASE)" DRY_RUN="$(DRY_RUN)" bash scripts/changed-script-tests.sh
 
 # Runs under nextest so local full-suite runs pick up the same
 # .config/nextest.toml protections CI uses (timing-serial test group,
