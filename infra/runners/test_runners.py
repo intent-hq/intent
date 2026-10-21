@@ -399,6 +399,27 @@ class Supervisor(Stubbed):
             'saturation': 0.3, 'mem_peak_bytes': 900, 'pids_peak': 10, 'io_read_bytes': 10,
             'io_write_bytes': 20, 'oom_kills': 0, 'samples': 10})
 
+    def test_cores_avg_agrees_with_rounded_cpu_s(self):
+        # cores_avg is computed from the unrounded CPU time and rounded once;
+        # cpu_s is rounded to 0.1 s, so a reader recomputing cpu_s / wall_s can
+        # differ by up to 0.005 + 0.05 / wall_s. Pairs on rounding boundaries,
+        # the first being the merge-queue failure (3.79 vs 3.80).
+        pairs = [(1.5, 5_684_000), (1.5, 5_649_999), (1.4, 5_350_000), (2.0, 7_949_999),
+                 (0.7, 2_750_000), (600.0, 2_399_950_000), (3.3, 26_349_999)]
+        strict_misses = 0
+        for wall, usage in pairs:
+            with self.subTest(wall=wall, usage=usage):
+                (self.dir / 'samples').write_text(f'0 0 0 0 0 0 0\n{int(wall * 1e6)} {usage} 0 0 0 0 0\n')
+                r = self.bash('summarize_samples "$1" 8 "$2"', str(self.dir / 'samples'), str(wall))
+                self.assertEqual(r.returncode, 0, r.stderr)
+                m = json.loads(r.stdout)
+                # jq rounds halves away from zero (Python's round() goes to even).
+                self.assertEqual(m['cpu_s'], (usage + 50_000) // 100_000 / 10)
+                self.assertAlmostEqual(m['cores_avg'], usage / 1e6 / wall, delta=0.005 + 1e-9)
+                self.assertAlmostEqual(m['cores_avg'], m['cpu_s'] / wall, delta=0.005 + 0.05 / wall + 1e-9)
+                strict_misses += abs(m['cores_avg'] - m['cpu_s'] / wall) > 0.01 - 1e-9
+        self.assertGreater(strict_misses, 0, 'the pairs must include a case the old 0.01 check rejected')
+
     def test_sampler_reads_a_cgroup(self):
         cg = self.dir / 'cg'
         cg.mkdir()
@@ -424,17 +445,18 @@ class Supervisor(Stubbed):
         def run(seconds):
             out = self.dir / f'samples-{seconds}'
             before = os.times()
-            r = self.bash(f'sleep {seconds} & sample_job gh-runner-heavy-1 $! "$1"', str(out),
-                          RUNNERS_SAMPLE_INTERVAL='0.1')
+            # find_cgroup runs once per job (a docker call until the cgroup
+            # exists); stub it so only the steady sampling loop is measured.
+            r = self.bash(f'cgdir="$2"; find_cgroup() {{ echo "$cgdir"; }}; sleep {seconds} & sample_job gh-runner-heavy-1 $! "$1"',
+                          str(out), str(cg), RUNNERS_SAMPLE_INTERVAL='0.1')
             after = os.times()
             self.assertEqual(r.returncode, 0, r.stderr)
             cpu = (after.children_user - before.children_user) + (after.children_system - before.children_system)
             return cpu, len(out.read_text().splitlines())
-        # The difference between a short and a long run cancels the one-off
-        # start-up (bash, the docker stub that finds the cgroup).
+        # The difference between a short and a long run cancels bash start-up.
         cpu1, n1 = run(2)
         cpu2, n2 = run(6)
-        self.assertGreater(n2 - n1, 15)
+        self.assertGreater(n2 - n1, 25)
         per_sample = max(cpu2 - cpu1, 0) / (n2 - n1)
         # Projected to the real 2-second interval.
         self.assertLess(per_sample / 2.0, 0.01, f'{per_sample * 1000:.2f} ms CPU per sample')
