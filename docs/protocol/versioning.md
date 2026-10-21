@@ -148,6 +148,16 @@ unshipped summary/history reservations need no production removal. Daemon before
 frontend merge and a coordinated carrying release are required. An older daemon remains unsupported for these new list features;
 known-ID status/output may still be used. This draft grants no merge permission.
 
+**Prepared truncated note reads (independently gated additive extension).**
+[Truncated note reads](./methods/notes-tasks.md#truncated-note-reads-prepared-additive-contract)
+add the optional `maxContentBytes` param to `note.get` and `note.subscribe`, the
+`contentTruncated` / `contentBytes` response markers and the `baseContentBytes`
+whole-content write guard (`-32602` `content-base-mismatch`).
+Exact integer `noteTruncatedRead: 1` gates the contract.
+The method catalog, event catalog, surface counts and documented protocol version
+are unchanged; requests without the new params are byte-identical.
+Catalog inclusion does not identify a carrying release.
+
 **Prepared generic stream recovery (independently gated additive extension).**
 [`eventStreamRecovery: 1`](./event-stream-recovery.md) adds an opt-in/ack to
 `events.subscribe`, the socket-private `events.lost` notification and the

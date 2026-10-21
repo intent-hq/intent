@@ -123,6 +123,15 @@ structured `data.code` values for node placement, checkpoints and uncertain RPC
 outcomes using existing numeric codes. No new numeric error is introduced.
 These errors are future contracts; current CoW errors remain until retirement.
 
+### Prepared truncated note read errors
+
+The opt-in [truncated note read contract](./methods/notes-tasks.md#truncated-note-reads-prepared-additive-contract)
+keys its write refusal on the existing `-32602` code.
+
+| Numeric code | data.code | Meaning / client action |
+| --- | --- | --- |
+| -32602 | content-base-mismatch | A whole-content write's `baseContentBytes` does not match the resolved base, or the base is unknown. `data` adds `baseContentBytes` and `contentBytes` (base size or `null`). Nothing was written; re-read the full note before writing. |
+
 ### Prepared note paging errors
 
 Only the opt-in [read-only note paging contract](./methods/notes-tasks.md#revision-safe-note-pages-prepared-additive-contract)
