@@ -6,6 +6,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import { checkRepository, findInputs, headingAnchors, headingSlug, inspectRepository } from './check-doc-links.mjs';
 
@@ -20,6 +21,8 @@ async function fixture(t, files, directories = []) {
   }
   return root;
 }
+
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 test('finds only the configured agent-facing Markdown inputs', async (t) => {
   const root = await fixture(t, {
@@ -90,6 +93,125 @@ test('resolves bare paths found only in an initialized submodule', async (t) => 
     'packages/product/scripts/release.mjs': '',
   });
   assert.deepEqual(await checkRepository(root), []);
+});
+
+const PRIVATE_MODULES =
+  '[submodule "packages/public"]\n\tpath = packages/public\n\tbranch = main\n' +
+  '[submodule "packages/private"]\n\tpath = packages/private\n\tupdate = none\n';
+
+test('reports missing bare paths when the only absent submodule is update = none', async (t) => {
+  const root = await fixture(
+    t,
+    {
+      '.gitmodules': PRIVATE_MODULES,
+      'docs/guide.md': 'Run `scripts/missing.mjs` and `scripts/shared.mjs`.',
+      'packages/public/.git': 'gitdir: elsewhere',
+      'packages/public/scripts/shared.mjs': '',
+    },
+    ['packages/private'],
+  );
+  assert.deepEqual(await inspectRepository(root), {
+    failures: [{ source: 'docs/guide.md', line: 1, target: 'scripts/missing.mjs', resolved: 'docs/scripts/missing.mjs' }],
+    skipped: 0,
+  });
+});
+
+test('does not resolve bare paths in an update = none submodule even when it is initialized', async (t) => {
+  const root = await fixture(t, {
+    '.gitmodules': PRIVATE_MODULES,
+    'docs/guide.md': 'Run `scripts/ios-only.sh`.',
+    'packages/public/.git': 'gitdir: elsewhere',
+    'packages/private/.git': 'gitdir: elsewhere',
+    'packages/private/scripts/ios-only.sh': '',
+  });
+  const { failures } = await inspectRepository(root);
+  assert.deepEqual(failures.map((failure) => failure.target), ['scripts/ios-only.sh']);
+});
+
+test('still skips explicit links into an absent update = none submodule', async (t) => {
+  const root = await fixture(
+    t,
+    {
+      '.gitmodules': PRIVATE_MODULES,
+      'docs/guide.md': '[build](../packages/private/scripts/build.sh) [notes](../packages/private/AGENTS.md#setup)',
+    },
+    ['packages/private'],
+  );
+  assert.deepEqual(await inspectRepository(root), { failures: [], skipped: 2 });
+});
+
+test('the repository declares packages/ios as the only update = none submodule', async () => {
+  const gitmodules = await fs.readFile(path.join(REPO, '.gitmodules'), 'utf8');
+  const optIn = gitmodules
+    .split(/^\s*\[/m)
+    .filter((section) => /^\s*update\s*=\s*none\s*$/m.test(section))
+    .map((section) => section.match(/^\s*path\s*=\s*(.+?)\s*$/m)?.[1]);
+  assert.deepEqual(optIn, ['packages/ios']);
+});
+
+function makeGraph(makefile) {
+  const rules = new Map();
+  let current = null;
+  for (const line of makefile.split('\n')) {
+    const rule = line.match(/^([A-Za-z0-9_.-]+(?:[ \t]+[A-Za-z0-9_.-]+)*)[ \t]*:(?!=)([^#]*)/);
+    if (rule && !line.startsWith('\t')) {
+      const prerequisites = rule[2].split(/\s+/).filter((name) => name && !name.includes('$') && name !== '|');
+      current = rule[1].split(/\s+/);
+      for (const target of current) {
+        const entry = rules.get(target) ?? { prerequisites: [], recipe: '' };
+        entry.prerequisites.push(...prerequisites);
+        rules.set(target, entry);
+      }
+    } else if (line.startsWith('\t') && current) {
+      for (const target of current) rules.get(target).recipe += `${line}\n`;
+    } else if (line.trim() !== '') {
+      current = null;
+    }
+  }
+  return rules;
+}
+
+function reachable(rules, roots) {
+  const seen = new Set();
+  const stack = [...roots];
+  while (stack.length > 0) {
+    const target = stack.pop();
+    if (seen.has(target) || !rules.has(target)) continue;
+    seen.add(target);
+    stack.push(...rules.get(target).prerequisites);
+  }
+  return seen;
+}
+
+// Incident: docs/protocol/README.md named an intentd script that existed only on an
+// unmerged branch for ~3 weeks because CI ran the checker only without submodules.
+// The docs-check job checks out intentd and cloudlands-fe at their pins, so it also
+// runs the checker; component PRs must not (monorepo docs would fail them).
+test('the docs-check CI job runs the checker after initializing the component submodules', async () => {
+  const workflow = await fs.readFile(path.join(REPO, '.github/workflows/ci.yml'), 'utf8');
+  const job = workflow.match(/^ {2}docs-check:\n([\s\S]*?)(?=^ {2}[\w-]+:\n)/m)?.[1];
+  assert.ok(job, 'ci.yml has a docs-check job');
+  const steps = job.split(/^ {6}- /m).slice(1);
+  const init = steps.findIndex((step) => /git submodule update --init\b.*packages\/cloudlands-fe.*packages\/intentd/.test(step));
+  const check = steps.findIndex((step) => /\bnode scripts\/check-doc-links\.mjs\b/.test(step));
+  assert.ok(init >= 0, 'docs-check initializes cloudlands-fe and intentd');
+  assert.ok(check > init, 'docs-check runs check-doc-links.mjs after the submodule init step');
+});
+
+test('component consumer checks never run the doc-link checker', async () => {
+  const rules = makeGraph(await fs.readFile(path.join(REPO, 'Makefile'), 'utf8'));
+  const consumerChecks = await fs.readFile(path.join(REPO, 'scripts/consumer-checks.sh'), 'utf8');
+  const listed = consumerChecks.match(/^checks="([^"]+)"/m)?.[1].split(/\s+/);
+  assert.ok(listed?.includes('docs-check'), 'consumer-checks.sh lists its make targets');
+  const targets = reachable(rules, listed);
+  assert.ok(targets.has('event-catalog-check'), 'docs-check prerequisites are followed');
+  for (const target of targets) {
+    assert.notEqual(target, 'check-doc-links', 'consumer checks must not depend on check-doc-links');
+    assert.doesNotMatch(rules.get(target).recipe, /check-doc-links/, `make ${target} must not run the doc-link checker`);
+  }
+  for (const script of ['scripts/consumer-checks.sh', 'scripts/docs-check.sh']) {
+    assert.doesNotMatch(await fs.readFile(path.join(REPO, script), 'utf8'), /check-doc-links/, `${script} must not run it`);
+  }
 });
 
 test('reports links that escape the repository', async (t) => {

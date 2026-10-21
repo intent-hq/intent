@@ -6,6 +6,10 @@
 // only path characters. Globs, placeholders, whitespace, and ellipses are ignored.
 // Bare paths resolve against the source directory, monorepo root, and component repositories.
 // References requiring an uninitialized submodule are skipped as unverifiable.
+// Bare paths are never looked up in a submodule that .gitmodules marks `update = none`
+// (the private packages/ios, which CI never checks out): otherwise every missing bare
+// path would have a candidate there and be skipped instead of failing. Explicit links
+// into such a submodule are still skipped while it is absent.
 //
 // Markdown links with an anchor (`file.md#anchor`, `dir/#anchor` or `#anchor`) whose
 // target is a Markdown file (or a directory's README.md) must also name a heading in
@@ -102,10 +106,17 @@ async function submodules(root) {
   } catch {
     return [];
   }
-  const paths = [...config.matchAll(/^\s*path\s*=\s*(.+?)\s*$/gm)].map((match) => path.resolve(root, match[1]));
   const modules = [];
-  for (const submodulePath of paths) {
-    modules.push({ path: submodulePath, initialized: Boolean(await statOf(path.join(submodulePath, '.git'))) });
+  for (const section of config.split(/^\s*\[/m)) {
+    const setting = (name) => section.match(new RegExp(`^\\s*${name}\\s*=\\s*(.+?)\\s*$`, 'm'))?.[1];
+    const submodulePath = setting('path');
+    if (!submodulePath) continue;
+    const resolved = path.resolve(root, submodulePath);
+    modules.push({
+      path: resolved,
+      initialized: Boolean(await statOf(path.join(resolved, '.git'))),
+      optIn: setting('update') === 'none',
+    });
   }
   return modules;
 }
@@ -299,6 +310,7 @@ export async function inspectRepository(root) {
   root = path.resolve(root);
   const anchorsIn = anchorReader();
   const [inputs, modules] = await Promise.all([findInputs(root), submodules(root)]);
+  const bareBases = modules.filter((module) => !module.optIn).map((module) => module.path);
   const failures = [];
   let skipped = 0;
 
@@ -325,7 +337,7 @@ export async function inspectRepository(root) {
         raw: match[1],
         target: cleanTarget(match[1]),
         index: match.index,
-        bases: uniquePaths([path.dirname(source), root, ...modules.map((module) => module.path)]),
+        bases: uniquePaths([path.dirname(source), root, ...bareBases]),
       });
     }
 

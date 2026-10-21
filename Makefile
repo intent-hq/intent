@@ -159,7 +159,7 @@ check-transfer-selection-contract: ## Validate transfer-selection fixtures and p
 check-app-ui-targets: ## Check Assistant navigation against the frontend registry
 	@node scripts/check-app-ui-targets.mjs
 
-check-doc-links: ## Check agent-facing Markdown links, paths, and heading anchors (CI runs this in repo-hygiene without submodules)
+check-doc-links: ## Check agent-facing Markdown links, paths, and heading anchors (CI: repo-hygiene without submodules, docs-check with the component pins)
 	@node --test scripts/check-doc-links.test.mjs
 	@node scripts/check-doc-links.mjs
 
