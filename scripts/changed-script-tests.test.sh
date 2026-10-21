@@ -137,6 +137,24 @@ case "$output" in
   *) fail "passing run output: $output" ;;
 esac
 
+reset_fixture
+
+# A selected node:test file name with a space or shell metacharacters reaches
+# node as one argument and is never interpreted by the shell.
+odd_name='scripts/odd name;touch pwned.test.mjs'
+printf "import test from 'node:test';\ntest('odd', () => {});\n" >"$fixture/$odd_name"
+output=$(cd "$fixture" && BASE=main "$script_bash" scripts/changed-script-tests.sh 2>&1) ||
+  fail "odd node:test file name run exited non-zero: $output"
+if [ -e "$fixture/pwned.test.mjs" ] || [ -e "$fixture/pwned" ]; then
+  fail "odd node:test file name was interpreted by the shell: $output"
+fi
+case "$output" in
+  *"all selected checks passed"*) echo "ok - odd node:test file name stays one argument" ;;
+  *) fail "odd node:test file name output: $output" ;;
+esac
+reset_fixture
+
+printf '# edit\n' >>"$fixture/scripts/alpha.test.sh"
 printf 'exit 7\n' >>"$fixture/scripts/alpha.test.sh"
 status=0
 output=$(cd "$fixture" && BASE=main "$script_bash" scripts/changed-script-tests.sh 2>&1) || status=$?

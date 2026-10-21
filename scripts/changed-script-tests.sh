@@ -88,7 +88,8 @@ if [ "$run_all_shell" = 1 ]; then
 fi
 if [ -n "$node_tests" ]; then
   while IFS= read -r test_file; do
-    [ -n "$test_file" ] && steps="${steps}node --test $test_file"$'\n'
+    # Steps run through `bash -c`; quote the path so it stays one argument.
+    [ -n "$test_file" ] && steps="${steps}node --test $(printf '%q' "$test_file")"$'\n'
   done <<EOF
 $(printf '%s' "$node_tests" | LC_ALL=C sort -u)
 EOF
