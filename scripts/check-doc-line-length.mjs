@@ -53,7 +53,8 @@ export const BASELINE_HEADER = [
 const FIX_HINT =
   "split it into one sentence or bullet per line; for a long table row, keep the row's result shape and move its prose into a details block under the table";
 
-async function markdownFilesBelow(root, relative) {
+/** Every `*.md` below `root/relative`, failing closed on a symlink or an unreadable directory. */
+export async function markdownFilesBelow(root, relative) {
   const entries = await fs.readdir(path.join(root, relative), { withFileTypes: true });
   const files = [];
   for (const entry of entries) {
