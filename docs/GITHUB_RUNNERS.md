@@ -9,19 +9,20 @@ targeting a label runs on whichever host has a free slot.
 | Host | Location | Hardware | Pools (slots) | Labels | Name prefix | Config |
 |---|---|---|---|---|---|---|
 | intent-cache | ReliableSite, Los Angeles | Ryzen 9 3900X, 12 cores / 24 threads, 128 GB | heavy (2), small (6) | `intent-cache`, `intent-cache-small` | `intent-cache` | [`runners.env`](../infra/runners/runners.env) |
-| intent-ci1 | ReliableSite, Los Angeles | EPYC 4545P, 16 cores / 32 threads, 128 GB | xl (1), heavy (1) | `intent-cache-xl`, `intent-cache` | `intent-ci1` | [`hosts/intent-ci1.env`](../infra/runners/hosts/intent-ci1.env) |
+| intent-ci1 | ReliableSite, Los Angeles | EPYC 4545P, 16 cores / 32 threads, 128 GB | xl (1), heavy (2) | `intent-cache-xl`, `intent-cache` | `intent-ci1` | [`hosts/intent-ci1.env`](../infra/runners/hosts/intent-ci1.env) |
 
 | Pool | Label | Hosted fallback | Per slot |
 |---|---|---|---|
-| heavy | `intent-cache` | `gh-linux-8x` | 8 CPUs = 4 whole cores; 48 GB on intent-cache, 32 GB on an EPYC host |
-| xl | `intent-cache-xl` | `gh-linux-16x` | 16 CPUs = 8 whole cores (one CCD), 60 GB |
+| heavy | `intent-cache` | `gh-linux-8x` | 8 CPUs = 4 whole cores; 48 GB on intent-cache, 30 GB on intent-ci1, 32 GB in the three-heavy EPYC layout |
+| xl | `intent-cache-xl` | `gh-linux-16x` | 16 CPUs = 8 whole cores (one CCD), 52 GB |
 | small | `intent-cache-small` | — | 1 CPU, 3 GB (intent-cache only) |
 
 On intent-cache the heavy slots are pinned to 0-3,12-15 and 4-7,16-19, the
 small ones to 8, 9, 10, 20, 21 and 22, and CPUs 11 and 23 (one whole core) are
 left to the cache and the system. On intent-ci1 the xl slot owns cores 0-7
-(CPUs 0-7,16-23), the heavy slot cores 8-11 (8-11,24-27), and cores 12-15 are
-left to the system and Docker. [`hosts/epyc-4545p-3heavy.env`](../infra/runners/hosts/epyc-4545p-3heavy.env)
+(CPUs 0-7,16-23, 52 GB) and the two heavy slots split CCD 1: cores 8-11
+(8-11,24-27) and 12-15 (12-15,28-31), 30 GB each. Every core is pinned; about
+13 GB stays with the system and Docker. [`hosts/epyc-4545p-3heavy.env`](../infra/runners/hosts/epyc-4545p-3heavy.env)
 is the other EPYC layout: three heavy slots (cores 0-3, 4-7, 8-11), 32 GB each.
 
 The routing probe (`runner-route.yml`) caps how many jobs it sends to each
@@ -54,7 +55,7 @@ github-runner@<pool>-<n>.service ─ supervisor.sh <pool>-<n> ─┬─ GitHub A
 | `runners.slice` | `/etc/systemd/system/` | Parent cgroup of the containers at the cgroup root: CPU and IO weight 10 (`system.slice`: 100); `runners.slice.d/memory.conf` caps it at the host's RAM minus 9 GiB (116G on a 128 GB box) |
 | `cache-priority.conf` | `/etc/systemd/system/{caddy,sccache-webdav}.service.d/runners-priority.conf` | CPU and IO weight 1000 for the cache services (skipped where a service is not installed) |
 | `egress.sh`, `github-runners-egress.service` | `/usr/local/lib/github-runners/`, `/etc/systemd/system/` | Blocks containers from private, tailnet and link-local addresses |
-| `daemon.json` | `/etc/docker/daemon.json` | User-namespace remapping, journald logs, no inter-container traffic, no-new-privileges |
+| `daemon.json` | `/etc/docker/daemon.json` | User-namespace remapping, journald logs, no inter-container traffic, no-new-privileges, three public DNS resolvers |
 | `install.sh` | — | Idempotent installer for all of the above and the slot count |
 | `test_runners.py` | — | Supervisor and installer tests with stubbed system commands (monorepo CI `shell-tests`) |
 
@@ -83,6 +84,9 @@ runner output, tagged `github-runner-<pool>-<n>`).
   inter-container traffic off; the egress filter drops traffic to
   10/8, 172.16/12, 192.168/16, 100.64/10 (tailnet), 169.254/16 and IPv6 ULA and
   link-local in the `raw` table, which Docker, Tailscale and ufw never reorder.
+  Docker's embedded DNS forwards container lookups to three public resolvers
+  (1.1.1.1, 8.8.8.8, 9.9.9.9, set in `daemon.json`) rather than the host's
+  single link resolver, so one resolver miss does not fail a job.
   The supervisor refuses to start a job if those rules are missing. No container
   publishes a port, so Docker never opens anything past ufw.
 - **Pinned CPUs and limits.** Each slot is pinned to its own CPU set
@@ -261,8 +265,9 @@ host's RAM minus 9 GiB: 116G on a 128 GB box).
    its cores, threads and RAM, and read its SMT layout:
    `cat /sys/devices/system/cpu/cpu*/topology/thread_siblings_list`.
 2. **Lock down SSH to Tailscale.** Join the tailnet (`tailscale up --ssh`
-   with a tagged auth key), then close public SSH: `ufw default deny incoming`,
-   `ufw allow in on tailscale0`, `ufw enable`, and confirm
+   with a tagged auth key), then close public SSH: `apt-get install -y ufw`
+   (a minimal image may not ship it), `ufw default deny incoming`,
+   `ufw allow in on tailscale0 to any port 22 proto tcp`, `ufw enable`, and confirm
    `ssh root@<host>` works over the tailnet before ending the provider's
    console session. Runner jobs never reach the tailnet (the egress filter
    drops 100.64/10).
