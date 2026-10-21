@@ -747,6 +747,8 @@ class Installer(Stubbed):
         daemon = json.loads((self.prefix / 'etc/docker/daemon.json').read_text())
         self.assertEqual(daemon['userns-remap'], 'default')
         self.assertFalse(daemon['icc'])
+        self.assertEqual(daemon['dns'], ['1.1.1.1', '8.8.8.8', '9.9.9.9'],
+                         'containers resolve through three public resolvers, not the host link DNS')
         self.assertEqual(stat.S_IMODE((self.prefix / 'etc/github-runners').stat().st_mode), 0o700)
         self.assertEqual(self.env_file.read_bytes(), (HERE / 'runners.env').read_bytes())
         self.assertIn(['restart', 'docker'], self.systemctl())
@@ -953,6 +955,20 @@ class Static(unittest.TestCase):
         xl = text.split('  isolation-xl:')[1].split('\n  fresh:')[0]
         self.assertIn("if: github.event_name == 'workflow_dispatch' && inputs.xl", xl,
                       'the xl check runs only on request: with no xl runner online it would wait in the queue')
+
+    def test_docker_dns_is_public_and_not_filtered(self):
+        # Docker's embedded DNS forwards to these instead of the host's single
+        # link resolver; the egress filter must not drop them.
+        import ipaddress
+        servers = json.loads((HERE / 'daemon.json').read_text())['dns']
+        self.assertGreaterEqual(len(servers), 3)
+        egress = (HERE / 'egress.sh').read_text()
+        dropped = [ipaddress.ip_network(n) for n in re.findall(r'\b(\d+\.\d+\.\d+\.\d+/\d+)\b', egress)]
+        self.assertTrue(dropped, 'egress.sh lists the IPv4 ranges it drops')
+        for server in servers:
+            address = ipaddress.ip_address(server)
+            self.assertTrue(address.is_global, server)
+            self.assertFalse(any(address in net for net in dropped), f'{server} is dropped by the egress filter')
 
     def test_image_keeps_apt_package_lists(self):
         # Hosted ubuntu-24.04 keeps them; `apt-get install -s` (playwright
