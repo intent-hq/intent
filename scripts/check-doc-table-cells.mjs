@@ -58,7 +58,9 @@ export function mismatchedRows(text) {
   let header = null;
   lines.forEach((raw, i) => {
     const line = i + 1;
-    const run = raw.match(FENCE_RE)?.[1];
+    const opener = raw.match(FENCE_RE);
+    // A backtick fence's info string cannot contain a backtick (inline code such as ```x```).
+    const run = opener && !(opener[1][0] === '`' && raw.slice(opener[0].length).includes('`')) ? opener[1] : undefined;
     if (fence) {
       if (run && run[0] === fence[0] && run.length >= fence.length && raw.trim() === run) fence = null;
       return;
@@ -66,6 +68,12 @@ export function mismatchedRows(text) {
     if (run) {
       fence = run;
       header = null;
+      return;
+    }
+    if (header?.delimiterLine === line) {
+      // The delimiter row is part of the table even when it looks like a list item (`- | -`).
+      const cells = rowCells(raw).length;
+      if (cells !== header.cells) found.push({ line, cells, header: header.cells, headerLine: header.line });
       return;
     }
     if (header) {
@@ -77,7 +85,7 @@ export function mismatchedRows(text) {
       }
     }
     if (/^ {0,3}\S/.test(raw) && UNESCAPED_PIPE_RE.test(strip(raw)) && isDelimiterRow(lines[i + 1])) {
-      header = { cells: rowCells(raw).length, line };
+      header = { cells: rowCells(raw).length, line, delimiterLine: line + 1 };
     }
   });
   return found;

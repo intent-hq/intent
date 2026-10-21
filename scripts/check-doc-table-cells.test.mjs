@@ -74,6 +74,18 @@ test('another block start ends the table body', () => {
   }
 });
 
+test('a delimiter row that looks like a list item still opens the body', () => {
+  assert.deepEqual(mismatchedRows(['a | b', '- | -', '1 | 2 | hidden'].join('\n')), [
+    { line: 3, cells: 3, header: 2, headerLine: 1 },
+  ]);
+});
+
+test('an inline triple-backtick span is not a fence and does not hide later tables', () => {
+  const text = ['```example``` is inline code, not a fence.', '', table('| a | b | hidden |')].join('\n');
+  assert.deepEqual(mismatchedRows(text), [{ line: 5, cells: 3, header: 2, headerLine: 3 }]);
+  assert.deepEqual(mismatchedRows(['~~~ info `with` ticks', '| a | b |', '| - | - |', '| 1 | 2 | 3 |', '~~~'].join('\n')), []);
+});
+
 test('a pipe-free line before a dash line is not a table header', () => {
   assert.deepEqual(mismatchedRows('Title\n---\n| a | b | c |\n'), []);
 });
