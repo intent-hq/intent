@@ -266,16 +266,16 @@ makes a network check only when none is recorded for today:
   (default 120 s), the daemon signals the sitter (`SIGUSR2`, at most every
   `updates.idleCheckIntervalMinutes`, default 60) and restarts into the staged
   version the next moment no turn is in flight. That idle request makes no
-  network check unless one is due. If the staged version is still not running
-  24 h after staging, a tick forces a graceful restart.
+  network check unless one is due. If the staged version is still not running,
+  the first tick after it has waited 24 h forces a graceful restart.
 
 A new stable release therefore reaches a running install in two separate steps.
 **Discovery** can take up to about a day: an install that checked just before a
 publish does not look again until the next UTC day, and the 50–70 min tick jitter
 adds up to about an hour after the rollover. **Activation** of the staged version
 then happens at the next idle moment, so an idle install switches within about an
-hour; a continuously busy daemon waits for the forced restart up to 24 h after
-staging. In the worst case a busy install runs the new stable release about two
+hour; a continuously busy daemon waits for the forced restart on the first tick
+after the staged version has waited 24 h (up to roughly another hour). In the worst case a busy install runs the new stable release about two
 days after it is published.
 
 **Alpha and beta — unchanged.**
