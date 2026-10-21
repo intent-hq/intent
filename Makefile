@@ -527,7 +527,7 @@ lint-shell: ## Run shellcheck over scripts/*.sh (needs shellcheck; make bootstra
 # Export BASH3_CACHE_DIR (absolute) to move it; the suites read the same variable.
 BASH3_CACHE_DIR ?= $(or $(XDG_CACHE_HOME),$(HOME)/.cache)/intent-bash3
 
-bash3: ## Build Bash 3.2 for the shell suites' 3.2 pass into BASH3_CACHE_DIR (default ~/.cache/intent-bash3; no-op once built; needs gcc, make, bison)
+bash3: ## Build Bash 3.2 for the shell suites' 3.2 pass into BASH3_CACHE_DIR (default ~/.cache/intent-bash3; no-op once built; make bootstrap-dev-host installs its build tools)
 	@if "$(BASH3_CACHE_DIR)/bash" -c '[ "$${BASH_VERSION%%(*}" = 3.2.57 ]' >/dev/null 2>&1; then \
 		echo "bash3: $(BASH3_CACHE_DIR)/bash is already built"; \
 	elif /bin/bash -c '[ "$${BASH_VERSINFO[0]}" -eq 3 ]' >/dev/null 2>&1; then \

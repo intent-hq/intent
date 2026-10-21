@@ -534,6 +534,28 @@ shellcheck_ready() {
   shellcheck_version >/dev/null
 }
 
+# make bash3 compiles the pinned Bash 3.2 (scripts/install-ci-bash3.sh) for the
+# shell suites' compatibility pass, which needs a C compiler, make and a yacc
+# (bison). Stock macOS /bin/bash is already 3.2, so make bash3 builds nothing
+# there and the tools are not needed.
+bash3_build_tools_needed() {
+  [[ "$(uname -s)" != Darwin ]]
+}
+
+# Prints the missing tools (space separated), or nothing when all are present.
+bash3_build_tools_missing() {
+  local gaps=""
+  command -v gcc >/dev/null 2>&1 || command -v cc >/dev/null 2>&1 || gaps="$gaps gcc"
+  command -v make >/dev/null 2>&1 || gaps="$gaps make"
+  command -v bison >/dev/null 2>&1 || command -v yacc >/dev/null 2>&1 || gaps="$gaps bison"
+  printf '%s\n' "${gaps# }"
+}
+
+bash3_build_tools_ready() {
+  bash3_build_tools_needed || return 0
+  [[ -z "$(bash3_build_tools_missing)" ]]
+}
+
 # The first line of actionlint --version is the version: bare for release
 # archives, v-prefixed for a `go install ...@vX.Y.Z` build.
 actionlint_version() {
@@ -647,6 +669,7 @@ installable_gap_exists() {
   gh_ready || return 0
   jq_ready || return 0
   shellcheck_ready || return 0
+  bash3_build_tools_ready || return 0
   # Without a pinned archive for this host bootstrap cannot close the gap.
   if actionlint_platform >/dev/null; then
     actionlint_ready || return 0
@@ -845,6 +868,14 @@ check_all() {
     missing "shellcheck: $(command -v shellcheck) is on PATH but shellcheck --version fails; reinstall it (run make bootstrap-dev-host)"
   else
     ok "shellcheck: $(shellcheck_version)"
+  fi
+
+  if ! bash3_build_tools_needed; then
+    ok "Bash 3.2 build tools: not needed (stock /bin/bash is already Bash 3.2)"
+  elif bash3_build_tools_ready; then
+    ok "Bash 3.2 build tools: C compiler, make, bison"
+  else
+    missing "Bash 3.2 build tools: $(bash3_build_tools_missing) not found; required by make bash3 (the shell suites' 3.2 pass); run make bootstrap-dev-host"
   fi
 
   local actionlint_found
@@ -1170,6 +1201,41 @@ install_shellcheck() {
   hash -r
 }
 
+# Installs the tools make bash3 needs to compile Bash 3.2 (see
+# bash3_build_tools_ready); macOS needs none.
+install_bash3_build_tools() {
+  if ! bash3_build_tools_needed; then
+    echo "[skip] Bash 3.2 build tools: stock /bin/bash is already Bash 3.2"
+    return
+  fi
+  if bash3_build_tools_ready; then
+    echo "[skip] Bash 3.2 build tools (C compiler, make, bison) already installed"
+    return
+  fi
+
+  echo "[install] Bash 3.2 build tools for make bash3 (missing: $(bash3_build_tools_missing))"
+  case "$(uname -s)" in
+    Linux)
+      if command -v apt-get >/dev/null 2>&1; then
+        as_root apt-get install -y build-essential bison || exit 1
+      elif command -v dnf >/dev/null 2>&1; then
+        as_root dnf install -y gcc make bison || exit 1
+      elif command -v yum >/dev/null 2>&1; then
+        as_root yum install -y gcc make bison || exit 1
+      else
+        echo "ERROR: unsupported Linux package manager; install a C compiler, make and bison, then re-run" >&2
+        exit 1
+      fi
+      ;;
+    *) echo "ERROR: only Linux and macOS are supported; install a C compiler, make and bison, then re-run" >&2; exit 1 ;;
+  esac
+  hash -r
+  bash3_build_tools_ready || {
+    echo "ERROR: Bash 3.2 build tools still missing after install: $(bash3_build_tools_missing)" >&2
+    exit 1
+  }
+}
+
 # The pinned release binary goes to $CARGO_HOME/bin, which this script already
 # puts on PATH; the archive is verified against the pinned checksum first.
 install_actionlint() {
@@ -1277,6 +1343,7 @@ install_frontend
 install_gh
 install_jq
 install_shellcheck
+install_bash3_build_tools
 install_actionlint
 
 echo
