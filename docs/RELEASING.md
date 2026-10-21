@@ -206,11 +206,14 @@ suite is `python3 -S -B -m unittest -v scripts.test_cleanup_prereleases`.
   contents:write on `intent-hq/cloudlands-fe`) and is fail-soft: a missing secret or
   failed dispatch logs a warning and never fails the publish — the fe crons then act
   as the backstop.
-- Windows validation is post-merge only. intentd PRs and merge-queue runs never use
-  a Windows runner. Every push to `main` runs the native Windows check, Clippy,
-  runtime and lifecycle proofs, release build, `install-ps1` and Windows Pi legs, and
-  that push run's CI Gate requires them. A Windows-only regression therefore lands
-  on `main` and holds releases instead of merges. Before merging the Release PR,
+- Windows lint runs in the merge queue; the rest of Windows validation is post-merge
+  only. intentd PRs never use a Windows runner. Each merge-queue run has a required
+  `windows-lint` job (native Windows `cargo check` and target-gated Clippy), so a
+  Windows-only compile or lint error is ejected from the queue instead of landing.
+  Every push to `main` runs the Windows runtime and lifecycle proofs, release build,
+  `install-ps1` and Windows Pi legs, and that push run's CI Gate requires them. A
+  Windows-only runtime regression therefore lands on `main` and holds releases instead
+  of merges. Before merging the Release PR,
   `auto-cut-alpha.yml` reads the latest push-event `ci.yml` run on `main`'s live tip,
   which the Release PR head must contain (see
   [Guarded direct release merges](#guarded-direct-release-merges)). A green run proceeds. A queued or running
