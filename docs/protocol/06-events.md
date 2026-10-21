@@ -436,6 +436,10 @@ row clear old values; absent `script` retains legacy invalidation/refetch.
 The prepared guest-role extension adds optional `purpose: "saved" | "oneOff"`
 from the deleted definition, allowing saved-script removal delivery to Managers
 after the row no longer exists. Older consumers can ignore this additive field.
+When a saved command becomes one-off, a preceding
+`{ scriptId, action: "guest-access-revoked" }` invalidates Managers' cached row,
+output and pending reads without exposing the one-off definition. Full-authority
+clients ignore this scoped action and apply the ordinary `updated` snapshot.
 New snapshot consumers make no event-triggered list call, preserve archived output
 views, and fence pending list responses against newer changes/runtime/removals.
 Stopping a finished script publishes its `exited` to `idle` transition as a
