@@ -456,3 +456,239 @@ test('collectDocumentedMethods reads rows, annotated rows, headings, and skips f
   assert.deepEqual(methodNamesInFirstCell('No decidable default (`model.defaultProvider` unset)'), []);
   assert.deepEqual(methodNamesInFirstCell('`model.defaultProvider` unset — falls through'), []);
 });
+
+test('collectDocumentedMethods reads fences the way GitHub does', () => {
+  const row = '| hidden.method | Result. |';
+  for (const doc of [
+    `\`\`\`md\n~~~\n${row}\n\`\`\``,
+    `\`\`\`\`md\n\`\`\`\n${row}\n\`\`\`\``,
+    `\`\`\`\n\`\`\` x\n${row}\n\`\`\``,
+    `~~~\n${row}`,
+  ]) assert.deepEqual(collectDocumentedMethods(doc), [], doc);
+  for (const doc of [
+    '```inline``` code is not a fence.\n\n| shown.method | Result. |',
+    '    ```\n| shown.method | Result. |\n    ```',
+  ]) assert.deepEqual(collectDocumentedMethods(doc), [{ name: 'shown.method', line: doc.split('\n').indexOf('| shown.method | Result. |') + 1 }], doc);
+});
+
+test('Layer 1: explicit field tables do not declare methods or change catalog comparisons', async () => {
+  const doc = `${METHODS_DOC}\n| Field | Qualified response |\n| --- | --- |\n| \`details.source\`, \`details.target\` | Confirmed branch identities. |\n`;
+  const result = await runChecks(await makeRoot({ methods: { 'fields.md': doc } }));
+  assert.deepEqual(messages(result), []);
+  assert.deepEqual(warningMessages(result), []);
+  assert.equal(result.layer2Ran, true);
+});
+
+test('collectDocumentedMethods recognizes field headers with alignment and escaped pipes', () => {
+  for (const table of [
+    '| Field | Meaning |\n| --- | --- |',
+    '| field | Meaning |\n| :--- | ---: |',
+    '| Field | Meaning |\n| - | -- |',
+    '| FIELD | Meaning | Type |\n| :---: | --- | ---: |',
+    '| Field | Meaning \\| notes |\n| --- | --- |',
+    '| Field | Meaning\n| --- | ---',
+  ]) {
+    const extra = table.includes('| Type |') ? ' text |' : '';
+    const doc = `${table}\n| source | Simple field. |${extra}\n| details.source | Nested field. |${extra}\n| \`details.target\`, details.branch *(v1)* | More fields \\| alternatives. |${extra}`;
+    assert.deepEqual(collectDocumentedMethods(doc), [], table);
+  }
+});
+
+for (const [shape, row] of [
+  ['short', '| details.source |'],
+  ['excess', '| details.source | Known source. | Extra cell. |'],
+]) {
+  test(`collectDocumentedMethods retains field context after ${shape} body rows`, () => {
+    const doc = `| Field | Meaning |\n| --- | --- |\n${row}\n| details.target | Known target. |`;
+    assert.deepEqual(collectDocumentedMethods(doc), []);
+    assert.deepEqual(collectDocumentedMethods(`${doc}\n| Method | Result |\n| --- | --- |\n| unknown.method | Result. |`), [
+      { name: 'unknown.method', line: 7 },
+    ]);
+  });
+}
+
+for (const [position, prefix] of [
+  ['first', ''],
+  ['later', '| details.branch | Known branch. |\n'],
+]) {
+  test(`collectDocumentedMethods retains field context with a hyphen in the ${position} body row`, () => {
+    const doc = `| Field | Meaning |\n| --- | --- |\n${prefix}| details.source | - |\n| details.target | Known target. |`;
+    assert.deepEqual(collectDocumentedMethods(doc), []);
+    const next = `${doc}\n| Unknown | Result |\n| --- | --- |\n| unknown.method | Result. |`;
+    assert.deepEqual(collectDocumentedMethods(next), [
+      { name: 'unknown.method', line: next.split('\n').length },
+    ]);
+  });
+}
+
+for (const target of ['details.target', 'target']) {
+  test(`collectDocumentedMethods retains mixed field names before a hyphen on ${target}`, () => {
+    const doc = `| Field | Meaning |\n| --- | --- |\n| source | Source. |\n| ${target} | - |\n| details.id | Id. |`;
+    assert.deepEqual(collectDocumentedMethods(doc), []);
+  });
+}
+
+test('collectDocumentedMethods field-body combinations preserve data and later method boundaries', () => {
+  for (const name of ['target', 'details.target']) {
+    for (const prefix of ['', '| source | Source. |\n', '| details.source | Source. |\n']) {
+      for (const cells of ['', ' - |', ' - | Extra cell. |']) {
+        const doc = `| Field | Meaning |\n| --- | --- |\n${prefix}| ${name} |${cells}\n| details.id | Id. |`;
+        assert.deepEqual(collectDocumentedMethods(doc), [], doc);
+        for (const boundary of ['\n', '| Method | Result |\n| --- | --- |\n', '| Unknown | Result |\n| --- | --- |\n']) {
+          const next = `${doc}\n${boundary}| unknown.method | Result. |`;
+          assert.deepEqual(collectDocumentedMethods(next), [
+            { name: 'unknown.method', line: next.split('\n').length },
+          ], next);
+        }
+      }
+    }
+  }
+});
+
+test('collectDocumentedMethods preserves unknown methods under unknown or malformed headers', () => {
+  for (const header of [
+    '| Method | Result |\n| --- | --- |',
+    '| Method | Result |',
+    '| Method | Result |\n| invalid | --- |',
+    '| Unknown | Result |\n| --- | --- |',
+    '| Field names | Result |\n| --- | --- |',
+    '| Field | Meaning |',
+    '| Field | Meaning |\n\n| --- | --- |',
+    '| Field | Meaning |\n| --- | invalid |',
+    '| Field | Meaning |\n| invalid | --- |',
+    '| Field | Meaning |\n| ---:--- | --- |',
+    '| Field | Meaning |\n| : | --- |',
+    '| Field | Meaning |\n| --- |',
+    '| Field | Meaning |\n| --- | --- | --- |',
+    '| Field | |\n| --- | --- |',
+    '| Field | Meaning |\nnot a separator',
+  ]) {
+    for (const prefix of ['', '| Field | Meaning |\n| --- | --- |\n| details.source | Field. |\n']) {
+      const doc = `${prefix}${header}\n| \`unknown.method\`, unknown.other *(v2)* | Result. |`;
+      const line = doc.split('\n').length;
+      assert.deepEqual(collectDocumentedMethods(doc), [
+        { name: 'unknown.method', line }, { name: 'unknown.other', line },
+      ], doc);
+    }
+  }
+});
+
+test('collectDocumentedMethods ends field context at table and non-table boundaries', () => {
+  for (const boundary of [
+    '',
+    'Some prose.',
+    '### Another table',
+    '| Method | Result |\n| --- | --- |',
+    '| Unknown | Result |\n| --- | --- |',
+    '| Field | Meaning |\n| --- | invalid |',
+    '\n| Unknown | Result |\n| invalid | --- |',
+    '```text\n| Field | Result |\n| --- | --- |\n```',
+    '~~~text\n| ignored.method | Result |\n~~~',
+  ]) {
+    const doc = `| Field | Meaning |\n| --- | --- |\n| details.source | Field. |\n${boundary}\n| unknown.method | Result. |`;
+    assert.deepEqual(collectDocumentedMethods(doc), [
+      { name: 'unknown.method', line: doc.split('\n').length },
+    ], boundary);
+  }
+});
+
+test('collectDocumentedMethods needs a boundary before an ambiguous malformed unknown table', async () => {
+  const fields = '| Field | Meaning |\n| --- | --- |\n| details.source | Field. |';
+  const rows = '| Unknown | Result |\n| invalid | --- |\n| unknown.method | Result. |';
+  assert.deepEqual(collectDocumentedMethods(`${fields}\n${rows}`), []);
+  for (const [doc, line] of [[rows, 3], [`${fields}\n\n${rows}`, 7]]) {
+    const result = await runChecks(await makeRoot({ methods: { 'fields.md': doc } }));
+    assert.deepEqual(messages(result), [
+      `docs/protocol/methods/fields.md:${line}: error: unknown.method is documented here but missing from docs/protocol/05-method-catalog.md`,
+    ]);
+  }
+});
+
+test('collectDocumentedMethods restarts field context for an adjacent field table', () => {
+  const doc = '| Field | Meaning |\n| --- | --- |\n| details.source | Field. |\n| Field | Type | Meaning |\n| --- | --- | --- |\n| details.target | string | Field. |';
+  assert.deepEqual(collectDocumentedMethods(doc), []);
+});
+
+test('Layer 1: field table boundaries preserve heading and row file:line diagnostics', async () => {
+  const doc = '| Field | Meaning |\n| --- | --- |\n| details.source | Field. |\n### `unknown.heading`\n| unknown.legacy | Result. |\n| Unknown | Result |\n| --- | --- |\n| unknown.table | Result. |';
+  const result = await runChecks(await makeRoot({ methods: { 'fields.md': doc } }));
+  assert.deepEqual(messages(result), [
+    'docs/protocol/methods/fields.md:4: error: unknown.heading is documented here but missing from docs/protocol/05-method-catalog.md',
+    'docs/protocol/methods/fields.md:5: error: unknown.legacy is documented here but missing from docs/protocol/05-method-catalog.md',
+    'docs/protocol/methods/fields.md:8: error: unknown.table is documented here but missing from docs/protocol/05-method-catalog.md',
+  ]);
+});
+
+const PROTOCOL_DIR = new URL('../docs/protocol/', import.meta.url);
+const SUBSCRIPTION_NAMES = ['note', 'task', 'agent', 'workspace', 'comment', 'chat', 'note.presence', 'presence.focus']
+  .flatMap((channel) => [`${channel}.subscribe`, `${channel}.unsubscribe`]);
+
+async function routingRows() {
+  const text = await fs.readFile(new URL('workspace-routing.md', PROTOCOL_DIR), 'utf8');
+  return text.split('\n').filter((line) => /\| (Add|Propagate|Exclude) \|/.test(line)).map((line) => {
+    const [, cell, disposition, field, variant] = line.split('|').map((s) => s.trim());
+    const names = methodNamesInFirstCell(cell);
+    assert.ok(names.length > 0, `routing inventory must use exact names: ${line}`);
+    assert.ok(variant, `routing inventory must explain the variant: ${line}`);
+    if (disposition === 'Add') assert.equal(field, '`workspaceId`');
+    if (disposition === 'Propagate') assert.ok(['`workspaceId`', '`targetWorkspaceId`'].includes(field), line);
+    if (disposition === 'Exclude') assert.equal(field, '—');
+    return { names, disposition, field, variant };
+  });
+}
+
+test('workspace routing inventory covers every catalog name, alias, reverse RPC and snapshot channel exactly by variant', async () => {
+  const catalog = parseCatalog(await fs.readFile(new URL('05-method-catalog.md', PROTOCOL_DIR), 'utf8'));
+  const expected = new Set([
+    ...catalog.routerRows.flatMap((row) => tokenizeRowSuffixes(row.cell).tokens.map((suffix) => `${row.ns}.${suffix}`)),
+    ...catalog.fastPath.names,
+    ...catalog.aliases.pairs.flatMap(({ alias, canonical }) => [alias, canonical]),
+    ...catalog.reverse.names.map(({ name }) => name),
+    ...SUBSCRIPTION_NAMES,
+  ]);
+  const rows = await routingRows();
+  const actual = new Set(rows.flatMap(({ names }) => names));
+  assert.deepEqual([...expected].filter((name) => !actual.has(name)), [], 'missing routing classifications');
+  assert.deepEqual([...actual].filter((name) => !expected.has(name)), [], 'unknown or abbreviated method names');
+  const variants = rows.flatMap(({ names, variant }) => names.map((name) => `${name}: ${variant}`));
+  assert.equal(new Set(variants).size, variants.length, 'duplicate method/variant rows');
+
+  // The channels are intercepted before router.rs and absent from most catalog constants.
+  // Check their current classifier as well when intentd is initialized (CI initializes it).
+  const source = await fs.readFile(new URL('../packages/intentd/crates/intent-transport/src/subscriptions.rs', import.meta.url), 'utf8')
+    .catch((error) => { if (error.code === 'ENOENT') return null; throw error; });
+  if (source !== null) {
+    const classify = source.split('pub(crate) fn classify')[1].split('/// Validate')[0];
+    const names = [...classify.matchAll(/"([a-z]+(?:\.[a-z]+)*\.(?:subscribe|unsubscribe))"/g)].map((m) => m[1]);
+    // Additive channel docs land before the component pin, like router methods.
+    // Every implemented channel must be documented; extra documented channels
+    // remain checked against the complete routing inventory above.
+    assert.deepEqual([...new Set(names)].filter((name) => !SUBSCRIPTION_NAMES.includes(name)), [],
+      'implemented subscription channels missing from the documented routing inventory');
+  }
+});
+
+test('routing inventory preserves source export, target reads and scope-sensitive method variants', async () => {
+  const rows = await routingRows();
+  const forMethod = (name) => rows.filter((row) => row.names.includes(name));
+  const dispositions = (name) => [...new Set(forMethod(name).map((row) => row.disposition))].sort();
+  assert.deepEqual(dispositions('workspace.export.start'), ['Propagate']);
+  for (const method of ['workspace.export.read', 'workspace.export.finalize', 'workspace.export.abort']) {
+    assert.deepEqual(dispositions(method), ['Add']);
+    assert.match(forMethod(method)[0].variant, /Source workspace/);
+  }
+  for (const method of ['crossWorkspace.readNote', 'crossWorkspace.listNotes']) {
+    assert.equal(forMethod(method)[0].field, '`targetWorkspaceId`');
+  }
+  for (const method of ['mcp.servers.toggle', 'search.messages', 'search.events', 'events.subscribe', 'rules.list', 'rules.get']) {
+    assert.deepEqual(dispositions(method), ['Exclude', 'Propagate']);
+  }
+  for (const method of ['specialist.create', 'specialist.edit', 'specialist.delete', 'events.unsubscribe', 'search.cancel']) {
+    assert.deepEqual(dispositions(method), ['Add', 'Exclude']);
+  }
+  assert.deepEqual(dispositions('agent.unsubscribe'), ['Exclude', 'Propagate']);
+  assert.match(forMethod('agent.subscribe').find((row) => /Collection-channel/.test(row.variant)).variant, /events\.unsubscribe/);
+  for (const method of ['workspace.import.begin', 'workspace.import.chunk', 'workspace.import.commit', 'workspace.import.abort', 'system.shutdown']) {
+    assert.deepEqual(dispositions(method), ['Exclude']);
+  }
+});

@@ -1,1 +1,9 @@
-{}
+{
+  "Repository intent-hq/intentd ruleset Default": [
+    {
+      "actor_id": 335379076,
+      "actor_type": "User",
+      "bypass_mode": "always"
+    }
+  ]
+}

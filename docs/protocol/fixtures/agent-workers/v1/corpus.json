@@ -1,0 +1,915 @@
+{
+  "version": 1,
+  "provenance": "synthetic-contract-examples-not-provider-captures",
+  "scenarios": [
+    {
+      "id": "running-until-terminal-replayed",
+      "scope": {
+        "workspaceId": "ws-A",
+        "agentId": "agent-A",
+        "provider": "codex",
+        "acpSessionId": "session-A",
+        "connectionGeneration": "generation-A"
+      },
+      "options": {
+        "adapterVersion": "2.2.2",
+        "negotiated": true
+      },
+      "steps": [
+        {
+          "op": "ingest",
+          "at": 1000,
+          "frame": {
+            "sessionId": "session-A",
+            "update": {
+              "sessionUpdate": "async_task_spawned",
+              "asyncTaskId": "worker-A",
+              "toolCallId": "call-A",
+              "taskType": "shell",
+              "name": "synthetic command",
+              "canStop": true,
+              "showInTranscript": false
+            }
+          }
+        },
+        {
+          "op": "list",
+          "at": 1000
+        },
+        {
+          "op": "list",
+          "at": 3601000
+        },
+        {
+          "op": "ingest",
+          "at": 3602000,
+          "frame": {
+            "sessionId": "session-A",
+            "update": {
+              "sessionUpdate": "async_task_spawned",
+              "asyncTaskId": "worker-A",
+              "toolCallId": "call-A",
+              "taskType": "shell",
+              "name": "synthetic command",
+              "canStop": true,
+              "showInTranscript": false
+            }
+          }
+        },
+        {
+          "op": "list",
+          "at": 3602000
+        },
+        {
+          "op": "ingest",
+          "at": 3603000,
+          "frame": {
+            "sessionId": "session-A",
+            "update": {
+              "sessionUpdate": "async_task_state_update",
+              "asyncTaskId": "worker-A",
+              "toolCallId": "call-A",
+              "state": "completed"
+            }
+          }
+        },
+        {
+          "op": "list",
+          "at": 3603000
+        }
+      ],
+      "expected": [
+        {
+          "workspaceId": "ws-A",
+          "agentId": "agent-A",
+          "provider": "codex",
+          "acpSessionId": "session-A",
+          "connectionGeneration": "generation-A",
+          "support": {
+            "status": "supported"
+          },
+          "continuity": "continuous",
+          "asOf": 1000,
+          "truncated": false,
+          "workers": [
+            {
+              "identity": {
+                "workspaceId": "ws-A",
+                "agentId": "agent-A",
+                "provider": "codex",
+                "acpSessionId": "session-A",
+                "connectionGeneration": "generation-A",
+                "asyncTaskId": "worker-A"
+              },
+              "firstObservedAt": 1000,
+              "toolCallId": "call-A",
+              "name": "synthetic command",
+              "canStop": true,
+              "taskType": "shell",
+              "providerState": "running",
+              "observedAt": 1000,
+              "source": "codex-air",
+              "cause": "unavailable",
+              "exitEvidence": {
+                "kind": "unknown"
+              },
+              "status": "running"
+            }
+          ]
+        },
+        {
+          "workspaceId": "ws-A",
+          "agentId": "agent-A",
+          "provider": "codex",
+          "acpSessionId": "session-A",
+          "connectionGeneration": "generation-A",
+          "support": {
+            "status": "supported"
+          },
+          "continuity": "continuous",
+          "asOf": 3601000,
+          "truncated": false,
+          "workers": [
+            {
+              "identity": {
+                "workspaceId": "ws-A",
+                "agentId": "agent-A",
+                "provider": "codex",
+                "acpSessionId": "session-A",
+                "connectionGeneration": "generation-A",
+                "asyncTaskId": "worker-A"
+              },
+              "firstObservedAt": 1000,
+              "toolCallId": "call-A",
+              "name": "synthetic command",
+              "canStop": true,
+              "taskType": "shell",
+              "providerState": "running",
+              "observedAt": 1000,
+              "source": "codex-air",
+              "cause": "unavailable",
+              "exitEvidence": {
+                "kind": "unknown"
+              },
+              "status": "running"
+            }
+          ]
+        },
+        {
+          "workspaceId": "ws-A",
+          "agentId": "agent-A",
+          "provider": "codex",
+          "acpSessionId": "session-A",
+          "connectionGeneration": "generation-A",
+          "support": {
+            "status": "supported"
+          },
+          "continuity": "continuous",
+          "asOf": 3602000,
+          "truncated": false,
+          "workers": [
+            {
+              "identity": {
+                "workspaceId": "ws-A",
+                "agentId": "agent-A",
+                "provider": "codex",
+                "acpSessionId": "session-A",
+                "connectionGeneration": "generation-A",
+                "asyncTaskId": "worker-A"
+              },
+              "firstObservedAt": 1000,
+              "toolCallId": "call-A",
+              "name": "synthetic command",
+              "canStop": true,
+              "taskType": "shell",
+              "providerState": "running",
+              "observedAt": 1000,
+              "source": "codex-air",
+              "cause": "unavailable",
+              "exitEvidence": {
+                "kind": "unknown"
+              },
+              "status": "running"
+            }
+          ]
+        },
+        {
+          "workspaceId": "ws-A",
+          "agentId": "agent-A",
+          "provider": "codex",
+          "acpSessionId": "session-A",
+          "connectionGeneration": "generation-A",
+          "support": {
+            "status": "supported"
+          },
+          "continuity": "continuous",
+          "asOf": 3603000,
+          "truncated": false,
+          "workers": [
+            {
+              "identity": {
+                "workspaceId": "ws-A",
+                "agentId": "agent-A",
+                "provider": "codex",
+                "acpSessionId": "session-A",
+                "connectionGeneration": "generation-A",
+                "asyncTaskId": "worker-A"
+              },
+              "firstObservedAt": 1000,
+              "toolCallId": "call-A",
+              "name": "synthetic command",
+              "canStop": true,
+              "taskType": "shell",
+              "providerState": "completed",
+              "observedAt": 3603000,
+              "source": "codex-air",
+              "cause": "unavailable",
+              "exitEvidence": {
+                "kind": "unknown"
+              },
+              "status": "completed"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "synthetic-failed",
+      "scope": {
+        "workspaceId": "ws-A",
+        "agentId": "agent-A",
+        "provider": "codex",
+        "acpSessionId": "session-A",
+        "connectionGeneration": "generation-A"
+      },
+      "options": {
+        "adapterVersion": "2.2.2",
+        "negotiated": true
+      },
+      "steps": [
+        {
+          "op": "ingest",
+          "at": 1000,
+          "frame": {
+            "sessionId": "session-A",
+            "update": {
+              "sessionUpdate": "async_task_spawned",
+              "asyncTaskId": "worker-A",
+              "toolCallId": "call-A",
+              "taskType": "shell",
+              "name": "synthetic command",
+              "canStop": true,
+              "showInTranscript": false
+            }
+          }
+        },
+        {
+          "op": "ingest",
+          "at": 2000,
+          "frame": {
+            "sessionId": "session-A",
+            "update": {
+              "sessionUpdate": "async_task_state_update",
+              "asyncTaskId": "worker-A",
+              "toolCallId": "call-A",
+              "state": "failed"
+            }
+          }
+        },
+        {
+          "op": "list",
+          "at": 2000
+        }
+      ],
+      "expected": [
+        {
+          "workspaceId": "ws-A",
+          "agentId": "agent-A",
+          "provider": "codex",
+          "acpSessionId": "session-A",
+          "connectionGeneration": "generation-A",
+          "support": {
+            "status": "supported"
+          },
+          "continuity": "continuous",
+          "asOf": 2000,
+          "truncated": false,
+          "workers": [
+            {
+              "identity": {
+                "workspaceId": "ws-A",
+                "agentId": "agent-A",
+                "provider": "codex",
+                "acpSessionId": "session-A",
+                "connectionGeneration": "generation-A",
+                "asyncTaskId": "worker-A"
+              },
+              "firstObservedAt": 1000,
+              "toolCallId": "call-A",
+              "name": "synthetic command",
+              "canStop": true,
+              "taskType": "shell",
+              "providerState": "failed",
+              "observedAt": 2000,
+              "source": "codex-air",
+              "cause": "unavailable",
+              "exitEvidence": {
+                "kind": "unknown"
+              },
+              "status": "failed"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "terminal-before-spawn",
+      "scope": {
+        "workspaceId": "ws-A",
+        "agentId": "agent-A",
+        "provider": "codex",
+        "acpSessionId": "session-A",
+        "connectionGeneration": "generation-A"
+      },
+      "options": {
+        "adapterVersion": "2.2.2",
+        "negotiated": true
+      },
+      "steps": [
+        {
+          "op": "ingest",
+          "at": 1000,
+          "frame": {
+            "sessionId": "session-A",
+            "update": {
+              "sessionUpdate": "async_task_state_update",
+              "asyncTaskId": "worker-A",
+              "toolCallId": "call-A",
+              "state": "stopped"
+            }
+          }
+        },
+        {
+          "op": "ingest",
+          "at": 2000,
+          "frame": {
+            "sessionId": "session-A",
+            "update": {
+              "sessionUpdate": "async_task_spawned",
+              "asyncTaskId": "worker-A",
+              "toolCallId": "call-A",
+              "taskType": "shell",
+              "name": "synthetic command",
+              "canStop": true,
+              "showInTranscript": false
+            }
+          }
+        },
+        {
+          "op": "list",
+          "at": 2000
+        }
+      ],
+      "expected": [
+        {
+          "workspaceId": "ws-A",
+          "agentId": "agent-A",
+          "provider": "codex",
+          "acpSessionId": "session-A",
+          "connectionGeneration": "generation-A",
+          "support": {
+            "status": "supported"
+          },
+          "continuity": "continuous",
+          "asOf": 2000,
+          "truncated": false,
+          "workers": [
+            {
+              "identity": {
+                "workspaceId": "ws-A",
+                "agentId": "agent-A",
+                "provider": "codex",
+                "acpSessionId": "session-A",
+                "connectionGeneration": "generation-A",
+                "asyncTaskId": "worker-A"
+              },
+              "firstObservedAt": 1000,
+              "toolCallId": "call-A",
+              "canStop": false,
+              "providerState": "stopped",
+              "observedAt": 1000,
+              "source": "codex-air",
+              "cause": "unavailable",
+              "exitEvidence": {
+                "kind": "unknown"
+              },
+              "status": "stopped"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "capacity-no-recreation",
+      "scope": {
+        "workspaceId": "ws-A",
+        "agentId": "agent-A",
+        "provider": "codex",
+        "acpSessionId": "session-A",
+        "connectionGeneration": "generation-A"
+      },
+      "options": {
+        "adapterVersion": "2.2.2",
+        "negotiated": true,
+        "maxRows": 1,
+        "maxSeen": 2
+      },
+      "steps": [
+        {
+          "op": "ingest",
+          "at": 1000,
+          "frame": {
+            "sessionId": "session-A",
+            "update": {
+              "sessionUpdate": "async_task_spawned",
+              "asyncTaskId": "first",
+              "toolCallId": "call-A",
+              "taskType": "shell",
+              "name": "synthetic command",
+              "canStop": true,
+              "showInTranscript": false
+            }
+          }
+        },
+        {
+          "op": "ingest",
+          "at": 2000,
+          "frame": {
+            "sessionId": "session-A",
+            "update": {
+              "sessionUpdate": "async_task_spawned",
+              "asyncTaskId": "second",
+              "toolCallId": "call-A",
+              "taskType": "shell",
+              "name": "synthetic command",
+              "canStop": true,
+              "showInTranscript": false
+            }
+          }
+        },
+        {
+          "op": "ingest",
+          "at": 70000,
+          "frame": {
+            "sessionId": "session-A",
+            "update": {
+              "sessionUpdate": "async_task_spawned",
+              "asyncTaskId": "first",
+              "toolCallId": "call-A",
+              "taskType": "shell",
+              "name": "synthetic command",
+              "canStop": true,
+              "showInTranscript": false
+            }
+          }
+        },
+        {
+          "op": "ingest",
+          "at": 71000,
+          "frame": {
+            "sessionId": "session-A",
+            "update": {
+              "sessionUpdate": "async_task_spawned",
+              "asyncTaskId": "third",
+              "toolCallId": "call-A",
+              "taskType": "shell",
+              "name": "synthetic command",
+              "canStop": true,
+              "showInTranscript": false
+            }
+          }
+        },
+        {
+          "op": "list",
+          "at": 71000
+        }
+      ],
+      "expected": [
+        {
+          "workspaceId": "ws-A",
+          "agentId": "agent-A",
+          "provider": "codex",
+          "acpSessionId": "session-A",
+          "connectionGeneration": "generation-A",
+          "support": {
+            "status": "supported"
+          },
+          "continuity": "continuous",
+          "asOf": 71000,
+          "truncated": true,
+          "workers": [
+            {
+              "identity": {
+                "workspaceId": "ws-A",
+                "agentId": "agent-A",
+                "provider": "codex",
+                "acpSessionId": "session-A",
+                "connectionGeneration": "generation-A",
+                "asyncTaskId": "second"
+              },
+              "firstObservedAt": 2000,
+              "toolCallId": "call-A",
+              "name": "synthetic command",
+              "canStop": true,
+              "taskType": "shell",
+              "providerState": "running",
+              "observedAt": 2000,
+              "source": "codex-air",
+              "cause": "unavailable",
+              "exitEvidence": {
+                "kind": "unknown"
+              },
+              "status": "running"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "unsupported",
+      "scope": {
+        "workspaceId": "ws-A",
+        "agentId": "agent-A",
+        "provider": "auggie",
+        "acpSessionId": "session-A",
+        "connectionGeneration": "generation-A"
+      },
+      "options": {
+        "adapterVersion": "2.2.2",
+        "negotiated": true
+      },
+      "steps": [
+        {
+          "op": "ingest",
+          "at": 1000,
+          "frame": {
+            "sessionId": "session-A",
+            "update": {
+              "sessionUpdate": "async_task_spawned",
+              "asyncTaskId": "worker-A",
+              "toolCallId": "call-A",
+              "taskType": "shell",
+              "name": "synthetic command",
+              "canStop": true,
+              "showInTranscript": false
+            }
+          }
+        },
+        {
+          "op": "list",
+          "at": 1000
+        }
+      ],
+      "expected": [
+        {
+          "workspaceId": "ws-A",
+          "agentId": "agent-A",
+          "provider": "auggie",
+          "acpSessionId": "session-A",
+          "connectionGeneration": "generation-A",
+          "support": {
+            "status": "unsupported",
+            "reason": "provider"
+          },
+          "continuity": "continuous",
+          "asOf": 1000,
+          "truncated": false,
+          "workers": []
+        }
+      ]
+    },
+    {
+      "id": "claude-tasks-disconnect",
+      "scope": {
+        "workspaceId": "ws-A",
+        "agentId": "agent-A",
+        "provider": "claude-code",
+        "acpSessionId": "session-A",
+        "connectionGeneration": "generation-A"
+      },
+      "options": {
+        "adapterVersion": "0.81.1",
+        "negotiated": true
+      },
+      "steps": [
+        {
+          "op": "ingest",
+          "at": 1000,
+          "frame": {
+            "sessionId": "session-A",
+            "update": {
+              "sessionUpdate": "async_task_spawned",
+              "asyncTaskId": "bash-1",
+              "toolCallId": "toolu-1",
+              "taskType": "shell",
+              "name": "npm run dev",
+              "canStop": true,
+              "showInTranscript": false
+            }
+          }
+        },
+        {
+          "op": "ingest",
+          "at": 2000,
+          "frame": {
+            "sessionId": "session-A",
+            "update": {
+              "sessionUpdate": "async_task_spawned",
+              "asyncTaskId": "workflow-1",
+              "taskType": "workflow",
+              "name": "Nightly check",
+              "canStop": false,
+              "showInTranscript": false
+            }
+          }
+        },
+        {
+          "op": "ingest",
+          "at": 3000,
+          "frame": {
+            "sessionId": "session-A",
+            "update": {
+              "sessionUpdate": "async_task_spawned",
+              "asyncTaskId": "agent-1",
+              "toolCallId": "call-A",
+              "taskType": "local_agent",
+              "name": "subagent",
+              "canStop": true,
+              "showInTranscript": false
+            }
+          }
+        },
+        {
+          "op": "list",
+          "at": 3000
+        },
+        {
+          "op": "disconnect"
+        },
+        {
+          "op": "list",
+          "at": 4000
+        }
+      ],
+      "expected": [
+        {
+          "workspaceId": "ws-A",
+          "agentId": "agent-A",
+          "provider": "claude-code",
+          "acpSessionId": "session-A",
+          "connectionGeneration": "generation-A",
+          "support": {
+            "status": "supported"
+          },
+          "continuity": "continuous",
+          "asOf": 3000,
+          "truncated": false,
+          "workers": [
+            {
+              "identity": {
+                "workspaceId": "ws-A",
+                "agentId": "agent-A",
+                "provider": "claude-code",
+                "acpSessionId": "session-A",
+                "connectionGeneration": "generation-A",
+                "asyncTaskId": "bash-1"
+              },
+              "firstObservedAt": 1000,
+              "toolCallId": "toolu-1",
+              "name": "npm run dev",
+              "canStop": true,
+              "taskType": "shell",
+              "providerState": "running",
+              "observedAt": 1000,
+              "source": "claude-air",
+              "cause": "unavailable",
+              "exitEvidence": {
+                "kind": "unknown"
+              },
+              "status": "running"
+            },
+            {
+              "identity": {
+                "workspaceId": "ws-A",
+                "agentId": "agent-A",
+                "provider": "claude-code",
+                "acpSessionId": "session-A",
+                "connectionGeneration": "generation-A",
+                "asyncTaskId": "workflow-1"
+              },
+              "firstObservedAt": 2000,
+              "name": "Nightly check",
+              "canStop": false,
+              "taskType": "workflow",
+              "providerState": "running",
+              "observedAt": 2000,
+              "source": "claude-air",
+              "cause": "unavailable",
+              "exitEvidence": {
+                "kind": "unknown"
+              },
+              "status": "running"
+            }
+          ]
+        },
+        {
+          "workspaceId": "ws-A",
+          "agentId": "agent-A",
+          "provider": "claude-code",
+          "acpSessionId": "session-A",
+          "connectionGeneration": "generation-A",
+          "support": {
+            "status": "supported"
+          },
+          "continuity": "disconnected",
+          "asOf": 4000,
+          "truncated": false,
+          "workers": [
+            {
+              "identity": {
+                "workspaceId": "ws-A",
+                "agentId": "agent-A",
+                "provider": "claude-code",
+                "acpSessionId": "session-A",
+                "connectionGeneration": "generation-A",
+                "asyncTaskId": "bash-1"
+              },
+              "firstObservedAt": 1000,
+              "toolCallId": "toolu-1",
+              "name": "npm run dev",
+              "canStop": true,
+              "taskType": "shell",
+              "providerState": "running",
+              "observedAt": 1000,
+              "source": "claude-air",
+              "cause": "unavailable",
+              "exitEvidence": {
+                "kind": "unknown"
+              },
+              "status": "unknown",
+              "unknownReason": "disconnected"
+            },
+            {
+              "identity": {
+                "workspaceId": "ws-A",
+                "agentId": "agent-A",
+                "provider": "claude-code",
+                "acpSessionId": "session-A",
+                "connectionGeneration": "generation-A",
+                "asyncTaskId": "workflow-1"
+              },
+              "firstObservedAt": 2000,
+              "name": "Nightly check",
+              "canStop": false,
+              "taskType": "workflow",
+              "providerState": "running",
+              "observedAt": 2000,
+              "source": "claude-air",
+              "cause": "unavailable",
+              "exitEvidence": {
+                "kind": "unknown"
+              },
+              "status": "unknown",
+              "unknownReason": "disconnected"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "stop-decisions",
+      "scope": {
+        "workspaceId": "ws-A",
+        "agentId": "agent-A",
+        "provider": "claude-code",
+        "acpSessionId": "session-A",
+        "connectionGeneration": "generation-A"
+      },
+      "options": {
+        "adapterVersion": "0.81.1",
+        "negotiated": true
+      },
+      "steps": [
+        {
+          "op": "ingest",
+          "at": 1000,
+          "frame": {
+            "sessionId": "session-A",
+            "update": {
+              "sessionUpdate": "async_task_spawned",
+              "asyncTaskId": "stoppable",
+              "toolCallId": "toolu-1",
+              "taskType": "shell",
+              "name": "synthetic command",
+              "canStop": true,
+              "showInTranscript": false
+            }
+          }
+        },
+        {
+          "op": "ingest",
+          "at": 1000,
+          "frame": {
+            "sessionId": "session-A",
+            "update": {
+              "sessionUpdate": "async_task_spawned",
+              "asyncTaskId": "locked",
+              "toolCallId": "toolu-2",
+              "taskType": "shell",
+              "name": "synthetic command",
+              "canStop": false,
+              "showInTranscript": false
+            }
+          }
+        },
+        {
+          "op": "ingest",
+          "at": 1000,
+          "frame": {
+            "sessionId": "session-A",
+            "update": {
+              "sessionUpdate": "async_task_spawned",
+              "asyncTaskId": "ended",
+              "toolCallId": "toolu-3",
+              "taskType": "shell",
+              "name": "synthetic command",
+              "canStop": true,
+              "showInTranscript": false
+            }
+          }
+        },
+        {
+          "op": "ingest",
+          "at": 2000,
+          "frame": {
+            "sessionId": "session-A",
+            "update": {
+              "sessionUpdate": "async_task_state_update",
+              "asyncTaskId": "ended",
+              "toolCallId": "call-A",
+              "state": "completed"
+            }
+          }
+        },
+        {
+          "op": "stop",
+          "asyncTaskId": "stoppable"
+        },
+        {
+          "op": "stop",
+          "asyncTaskId": "locked"
+        },
+        {
+          "op": "stop",
+          "asyncTaskId": "ended"
+        },
+        {
+          "op": "disconnect"
+        },
+        {
+          "op": "stop",
+          "asyncTaskId": "stoppable"
+        }
+      ],
+      "expected": [
+        {
+          "forward": {
+            "method": "_session/async_task/stop",
+            "params": {
+              "sessionId": "session-A",
+              "asyncTaskId": "stoppable"
+            }
+          }
+        },
+        {
+          "result": {
+            "asyncTaskId": "locked",
+            "stopped": false
+          }
+        },
+        {
+          "result": {
+            "asyncTaskId": "ended",
+            "stopped": false
+          }
+        },
+        {
+          "result": {
+            "asyncTaskId": "stoppable",
+            "stopped": false
+          }
+        }
+      ]
+    }
+  ]
+}

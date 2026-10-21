@@ -1,0 +1,672 @@
+{
+  "schemaVersion": 1,
+  "nodeProtocol": 3,
+  "checkpointFormat": 1,
+  "qualification": "prepared-data-and-static-integrity-only",
+  "sourceRevision": "2dec750fcbf2a4533d18a1b0efe30d0debae3967",
+  "examples": [
+    {
+      "id": "clean-detached",
+      "artifacts": [],
+      "prepare": {
+        "scope": {
+          "requestId": "00000000-0000-4000-8000-000000000200",
+          "agentId": "agent-capture",
+          "workspaceId": "ws-capture",
+          "method": "checkpoint.prepare",
+          "timeoutMs": 120000,
+          "idempotencyKey": "00000000-0000-4000-8000-000000000101"
+        },
+        "params": {
+          "manifestSha256": "ca2f6390d7513ce97db1043255a57d088a2ad74aa61ab7a2fb152360d640238f",
+          "manifestJson": "{\"formatVersion\":1,\"checkpointId\":\"00000000-0000-4000-8000-000000000101\",\"workspaceId\":\"ws-capture\",\"agentId\":\"agent-capture\",\"leaseId\":\"lease-capture\",\"incarnation\":\"00000000-0000-4000-8000-000000000102\",\"runId\":\"00000000-0000-4000-8000-000000000103\",\"assignmentEpoch\":\"7\",\"captureRevision\":\"9\",\"capturedAt\":\"2026-10-01T00:00:00Z\",\"journalSeq\":\"42\",\"repos\":[{\"repoKey\":\"repo-root\",\"path\":\".\",\"forkBase\":\"1111111111111111111111111111111111111111\",\"objectFormat\":\"sha1\",\"head\":\"1111111111111111111111111111111111111111\",\"index\":\"2222222222222222222222222222222222222222\",\"submodules\":[]}],\"session\":{\"provider\":\"test-provider\",\"mode\":\"history\",\"throughSeq\":\"42\",\"files\":[]},\"attachments\":[]}",
+          "repositories": [
+            {
+              "repoKey": "repo-root",
+              "objectBytes": "1048576"
+            }
+          ],
+          "attachments": []
+        },
+        "result": {
+          "checkpointId": "00000000-0000-4000-8000-000000000101",
+          "manifestSha256": "ca2f6390d7513ce97db1043255a57d088a2ad74aa61ab7a2fb152360d640238f",
+          "expiresAtMs": "1790813400000"
+        }
+      },
+      "commit": {
+        "scope": {
+          "requestId": "00000000-0000-4000-8000-000000000210",
+          "agentId": "agent-capture",
+          "workspaceId": "ws-capture",
+          "method": "checkpoint.commit",
+          "timeoutMs": 120000,
+          "idempotencyKey": "00000000-0000-4000-8000-000000000101"
+        },
+        "params": {
+          "checkpointId": "00000000-0000-4000-8000-000000000101",
+          "runId": "00000000-0000-4000-8000-000000000103",
+          "assignmentEpoch": "7",
+          "captureRevision": "9",
+          "manifestSha256": "ca2f6390d7513ce97db1043255a57d088a2ad74aa61ab7a2fb152360d640238f"
+        },
+        "result": {
+          "checkpointId": "00000000-0000-4000-8000-000000000101",
+          "outcome": "advanced",
+          "currentCheckpointId": "00000000-0000-4000-8000-000000000101"
+        }
+      },
+      "stageBindings": [
+        {
+          "repoKey": "repo-root",
+          "service": "checkpoint-stage",
+          "method": "git.receivePack",
+          "checkpoint": {
+            "checkpointId": "00000000-0000-4000-8000-000000000101",
+            "manifestSha256": "ca2f6390d7513ce97db1043255a57d088a2ad74aa61ab7a2fb152360d640238f",
+            "runId": "00000000-0000-4000-8000-000000000103",
+            "assignmentEpoch": "7",
+            "captureRevision": "9",
+            "snapshot": {
+              "objectFormat": "sha1",
+              "head": "1111111111111111111111111111111111111111",
+              "index": "2222222222222222222222222222222222222222"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "dirty-with-submodule",
+      "artifacts": [],
+      "prepare": {
+        "scope": {
+          "requestId": "00000000-0000-4000-8000-000000000201",
+          "agentId": "agent-capture",
+          "workspaceId": "ws-capture",
+          "method": "checkpoint.prepare",
+          "timeoutMs": 120000,
+          "idempotencyKey": "00000000-0000-4000-8000-000000000104"
+        },
+        "params": {
+          "manifestSha256": "c7020136f593a9ec751f1a36cd566a17b4194fddef00323e23d2a69509005051",
+          "manifestJson": "{\"formatVersion\":1,\"checkpointId\":\"00000000-0000-4000-8000-000000000104\",\"workspaceId\":\"ws-capture\",\"agentId\":\"agent-capture\",\"leaseId\":\"lease-capture\",\"incarnation\":\"00000000-0000-4000-8000-000000000102\",\"runId\":\"00000000-0000-4000-8000-000000000103\",\"assignmentEpoch\":\"7\",\"captureRevision\":\"10\",\"capturedAt\":\"2026-10-01T00:00:00Z\",\"journalSeq\":\"42\",\"repos\":[{\"repoKey\":\"repo-root\",\"path\":\".\",\"forkBase\":\"1111111111111111111111111111111111111111\",\"objectFormat\":\"sha1\",\"head\":\"1111111111111111111111111111111111111111\",\"index\":\"2222222222222222222222222222222222222222\",\"wip\":\"3333333333333333333333333333333333333333\",\"branch\":\"refs/heads/task\",\"submodules\":[{\"path\":\"child\",\"repoKey\":\"repo-child\"}]},{\"repoKey\":\"repo-child\",\"path\":\"child\",\"forkBase\":\"1111111111111111111111111111111111111111\",\"objectFormat\":\"sha1\",\"head\":\"1111111111111111111111111111111111111111\",\"index\":\"2222222222222222222222222222222222222222\",\"submodules\":[]}],\"session\":{\"provider\":\"test-provider\",\"mode\":\"history\",\"throughSeq\":\"42\",\"files\":[]},\"attachments\":[]}",
+          "repositories": [
+            {
+              "repoKey": "repo-root",
+              "objectBytes": "1048576"
+            },
+            {
+              "repoKey": "repo-child",
+              "objectBytes": "1048576"
+            }
+          ],
+          "attachments": []
+        },
+        "result": {
+          "checkpointId": "00000000-0000-4000-8000-000000000104",
+          "manifestSha256": "c7020136f593a9ec751f1a36cd566a17b4194fddef00323e23d2a69509005051",
+          "expiresAtMs": "1790813400000"
+        }
+      },
+      "commit": {
+        "scope": {
+          "requestId": "00000000-0000-4000-8000-000000000211",
+          "agentId": "agent-capture",
+          "workspaceId": "ws-capture",
+          "method": "checkpoint.commit",
+          "timeoutMs": 120000,
+          "idempotencyKey": "00000000-0000-4000-8000-000000000104"
+        },
+        "params": {
+          "checkpointId": "00000000-0000-4000-8000-000000000104",
+          "runId": "00000000-0000-4000-8000-000000000103",
+          "assignmentEpoch": "7",
+          "captureRevision": "10",
+          "manifestSha256": "c7020136f593a9ec751f1a36cd566a17b4194fddef00323e23d2a69509005051"
+        },
+        "result": {
+          "checkpointId": "00000000-0000-4000-8000-000000000104",
+          "outcome": "advanced",
+          "currentCheckpointId": "00000000-0000-4000-8000-000000000104"
+        }
+      },
+      "stageBindings": [
+        {
+          "repoKey": "repo-root",
+          "service": "checkpoint-stage",
+          "method": "git.receivePack",
+          "checkpoint": {
+            "checkpointId": "00000000-0000-4000-8000-000000000104",
+            "manifestSha256": "c7020136f593a9ec751f1a36cd566a17b4194fddef00323e23d2a69509005051",
+            "runId": "00000000-0000-4000-8000-000000000103",
+            "assignmentEpoch": "7",
+            "captureRevision": "10",
+            "snapshot": {
+              "objectFormat": "sha1",
+              "head": "1111111111111111111111111111111111111111",
+              "index": "2222222222222222222222222222222222222222",
+              "wip": "3333333333333333333333333333333333333333",
+              "branch": "refs/heads/task"
+            }
+          }
+        },
+        {
+          "repoKey": "repo-child",
+          "service": "checkpoint-stage",
+          "method": "git.receivePack",
+          "checkpoint": {
+            "checkpointId": "00000000-0000-4000-8000-000000000104",
+            "manifestSha256": "c7020136f593a9ec751f1a36cd566a17b4194fddef00323e23d2a69509005051",
+            "runId": "00000000-0000-4000-8000-000000000103",
+            "assignmentEpoch": "7",
+            "captureRevision": "10",
+            "snapshot": {
+              "objectFormat": "sha1",
+              "head": "1111111111111111111111111111111111111111",
+              "index": "2222222222222222222222222222222222222222"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "current-store-attachment",
+      "artifacts": [
+        {
+          "id": "attachment-1",
+          "utf8": "prepared attachment\n",
+          "sha256": "df553a64d4146572c3cb76e6c0a7e6dc4a8b08ac2ad41d4ebd409c8b310bee04",
+          "bytes": "20"
+        }
+      ],
+      "prepare": {
+        "scope": {
+          "requestId": "00000000-0000-4000-8000-000000000202",
+          "agentId": "agent-capture",
+          "workspaceId": "ws-capture",
+          "method": "checkpoint.prepare",
+          "timeoutMs": 120000,
+          "idempotencyKey": "00000000-0000-4000-8000-000000000105"
+        },
+        "params": {
+          "manifestSha256": "e3dac72bfc3056e6218a53f4211db512a30c57a9165d6c01a14d0e8822601c01",
+          "manifestJson": "{\"formatVersion\":1,\"checkpointId\":\"00000000-0000-4000-8000-000000000105\",\"workspaceId\":\"ws-capture\",\"agentId\":\"agent-capture\",\"leaseId\":\"lease-capture\",\"incarnation\":\"00000000-0000-4000-8000-000000000102\",\"runId\":\"00000000-0000-4000-8000-000000000103\",\"assignmentEpoch\":\"7\",\"captureRevision\":\"11\",\"capturedAt\":\"2026-10-01T00:00:00Z\",\"journalSeq\":\"42\",\"repos\":[{\"repoKey\":\"repo-root\",\"path\":\".\",\"forkBase\":\"1111111111111111111111111111111111111111\",\"objectFormat\":\"sha1\",\"head\":\"1111111111111111111111111111111111111111\",\"index\":\"2222222222222222222222222222222222222222\",\"submodules\":[]}],\"session\":{\"provider\":\"test-provider\",\"mode\":\"history\",\"throughSeq\":\"42\",\"files\":[]},\"attachments\":[{\"attachmentId\":\"attachment-1\",\"sha256\":\"df553a64d4146572c3cb76e6c0a7e6dc4a8b08ac2ad41d4ebd409c8b310bee04\"}]}",
+          "repositories": [
+            {
+              "repoKey": "repo-root",
+              "objectBytes": "1048576"
+            }
+          ],
+          "attachments": [
+            {
+              "id": "attachment-1",
+              "sha256": "df553a64d4146572c3cb76e6c0a7e6dc4a8b08ac2ad41d4ebd409c8b310bee04",
+              "bytes": "20"
+            }
+          ]
+        },
+        "result": {
+          "checkpointId": "00000000-0000-4000-8000-000000000105",
+          "manifestSha256": "e3dac72bfc3056e6218a53f4211db512a30c57a9165d6c01a14d0e8822601c01",
+          "expiresAtMs": "1790813400000"
+        }
+      },
+      "commit": {
+        "scope": {
+          "requestId": "00000000-0000-4000-8000-000000000212",
+          "agentId": "agent-capture",
+          "workspaceId": "ws-capture",
+          "method": "checkpoint.commit",
+          "timeoutMs": 120000,
+          "idempotencyKey": "00000000-0000-4000-8000-000000000105"
+        },
+        "params": {
+          "checkpointId": "00000000-0000-4000-8000-000000000105",
+          "runId": "00000000-0000-4000-8000-000000000103",
+          "assignmentEpoch": "7",
+          "captureRevision": "11",
+          "manifestSha256": "e3dac72bfc3056e6218a53f4211db512a30c57a9165d6c01a14d0e8822601c01"
+        },
+        "result": {
+          "checkpointId": "00000000-0000-4000-8000-000000000105",
+          "outcome": "advanced",
+          "currentCheckpointId": "00000000-0000-4000-8000-000000000105"
+        }
+      },
+      "stageBindings": [
+        {
+          "repoKey": "repo-root",
+          "service": "checkpoint-stage",
+          "method": "git.receivePack",
+          "checkpoint": {
+            "checkpointId": "00000000-0000-4000-8000-000000000105",
+            "manifestSha256": "e3dac72bfc3056e6218a53f4211db512a30c57a9165d6c01a14d0e8822601c01",
+            "runId": "00000000-0000-4000-8000-000000000103",
+            "assignmentEpoch": "7",
+            "captureRevision": "11",
+            "snapshot": {
+              "objectFormat": "sha1",
+              "head": "1111111111111111111111111111111111111111",
+              "index": "2222222222222222222222222222222222222222"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "invalidRequests": [
+    {
+      "id": "outer-unknown",
+      "prepareJson": "{\"manifestSha256\":\"ca2f6390d7513ce97db1043255a57d088a2ad74aa61ab7a2fb152360d640238f\",\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000101\\\",\\\"workspaceId\\\":\\\"ws-capture\\\",\\\"agentId\\\":\\\"agent-capture\\\",\\\"leaseId\\\":\\\"lease-capture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000102\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000103\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"9\\\",\\\"capturedAt\\\":\\\"2026-10-01T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"index\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"test-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[]}\",\"repositories\":[{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"}],\"attachments\":[],\"extra\":true}",
+      "executedRuntime": false,
+      "expectedStaticResult": "reject"
+    },
+    {
+      "id": "outer-null",
+      "prepareJson": "{\"manifestSha256\":\"ca2f6390d7513ce97db1043255a57d088a2ad74aa61ab7a2fb152360d640238f\",\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000101\\\",\\\"workspaceId\\\":\\\"ws-capture\\\",\\\"agentId\\\":\\\"agent-capture\\\",\\\"leaseId\\\":\\\"lease-capture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000102\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000103\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"9\\\",\\\"capturedAt\\\":\\\"2026-10-01T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"index\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"test-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[]}\",\"repositories\":[{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"}],\"attachments\":null}",
+      "executedRuntime": false,
+      "expectedStaticResult": "reject"
+    },
+    {
+      "id": "outer-byte-number",
+      "prepareJson": "{\"manifestSha256\":\"ca2f6390d7513ce97db1043255a57d088a2ad74aa61ab7a2fb152360d640238f\",\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000101\\\",\\\"workspaceId\\\":\\\"ws-capture\\\",\\\"agentId\\\":\\\"agent-capture\\\",\\\"leaseId\\\":\\\"lease-capture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000102\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000103\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"9\\\",\\\"capturedAt\\\":\\\"2026-10-01T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"index\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"test-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[]}\",\"repositories\":[{\"repoKey\":\"repo-root\",\"objectBytes\":1}],\"attachments\":[]}",
+      "executedRuntime": false,
+      "expectedStaticResult": "reject"
+    },
+    {
+      "id": "noncanonical-count",
+      "prepareJson": "{\"manifestSha256\":\"ca2f6390d7513ce97db1043255a57d088a2ad74aa61ab7a2fb152360d640238f\",\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000101\\\",\\\"workspaceId\\\":\\\"ws-capture\\\",\\\"agentId\\\":\\\"agent-capture\\\",\\\"leaseId\\\":\\\"lease-capture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000102\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000103\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"9\\\",\\\"capturedAt\\\":\\\"2026-10-01T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"index\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"test-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[]}\",\"repositories\":[{\"repoKey\":\"repo-root\",\"objectBytes\":\"01\"}],\"attachments\":[]}",
+      "executedRuntime": false,
+      "expectedStaticResult": "reject"
+    },
+    {
+      "id": "u64-overflow",
+      "prepareJson": "{\"manifestSha256\":\"ca2f6390d7513ce97db1043255a57d088a2ad74aa61ab7a2fb152360d640238f\",\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000101\\\",\\\"workspaceId\\\":\\\"ws-capture\\\",\\\"agentId\\\":\\\"agent-capture\\\",\\\"leaseId\\\":\\\"lease-capture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000102\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000103\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"9\\\",\\\"capturedAt\\\":\\\"2026-10-01T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"index\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"test-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[]}\",\"repositories\":[{\"repoKey\":\"repo-root\",\"objectBytes\":\"18446744073709551616\"}],\"attachments\":[]}",
+      "executedRuntime": false,
+      "expectedStaticResult": "reject"
+    },
+    {
+      "id": "repository-limit",
+      "prepareJson": "{\"manifestSha256\":\"ca2f6390d7513ce97db1043255a57d088a2ad74aa61ab7a2fb152360d640238f\",\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000101\\\",\\\"workspaceId\\\":\\\"ws-capture\\\",\\\"agentId\\\":\\\"agent-capture\\\",\\\"leaseId\\\":\\\"lease-capture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000102\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000103\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"9\\\",\\\"capturedAt\\\":\\\"2026-10-01T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"index\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"test-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[]}\",\"repositories\":[{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"},{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"}],\"attachments\":[]}",
+      "executedRuntime": false,
+      "expectedStaticResult": "reject"
+    },
+    {
+      "id": "missing-repo",
+      "prepareJson": "{\"manifestSha256\":\"ca2f6390d7513ce97db1043255a57d088a2ad74aa61ab7a2fb152360d640238f\",\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000101\\\",\\\"workspaceId\\\":\\\"ws-capture\\\",\\\"agentId\\\":\\\"agent-capture\\\",\\\"leaseId\\\":\\\"lease-capture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000102\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000103\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"9\\\",\\\"capturedAt\\\":\\\"2026-10-01T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"index\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"test-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[]}\",\"repositories\":[],\"attachments\":[]}",
+      "executedRuntime": false,
+      "expectedStaticResult": "reject"
+    },
+    {
+      "id": "wrong-hash",
+      "prepareJson": "{\"manifestSha256\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000101\\\",\\\"workspaceId\\\":\\\"ws-capture\\\",\\\"agentId\\\":\\\"agent-capture\\\",\\\"leaseId\\\":\\\"lease-capture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000102\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000103\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"9\\\",\\\"capturedAt\\\":\\\"2026-10-01T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"index\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"test-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[]}\",\"repositories\":[{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"}],\"attachments\":[]}",
+      "executedRuntime": false,
+      "expectedStaticResult": "reject"
+    },
+    {
+      "id": "numeric-format-string",
+      "prepareJson": "{\"manifestSha256\":\"2ea3e9b813367b1d74a5894c4cbbf2c3b4e616afd49b2dd899bfcf67eae48ca4\",\"manifestJson\":\"{\\\"formatVersion\\\":\\\"1\\\",\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000101\\\",\\\"workspaceId\\\":\\\"ws-capture\\\",\\\"agentId\\\":\\\"agent-capture\\\",\\\"leaseId\\\":\\\"lease-capture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000102\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000103\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"9\\\",\\\"capturedAt\\\":\\\"2026-10-01T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"index\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"test-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[]}\",\"repositories\":[{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"}],\"attachments\":[]}",
+      "executedRuntime": false,
+      "expectedStaticResult": "reject"
+    },
+    {
+      "id": "null-wip",
+      "prepareJson": "{\"manifestSha256\":\"22c55f7b5d2250162361c62485dfee6151f037e47f3dfb7999a66a968e4878da\",\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000101\\\",\\\"workspaceId\\\":\\\"ws-capture\\\",\\\"agentId\\\":\\\"agent-capture\\\",\\\"leaseId\\\":\\\"lease-capture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000102\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000103\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"9\\\",\\\"capturedAt\\\":\\\"2026-10-01T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"index\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"submodules\\\":[],\\\"wip\\\":null}],\\\"session\\\":{\\\"provider\\\":\\\"test-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[]}\",\"repositories\":[{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"}],\"attachments\":[]}",
+      "executedRuntime": false,
+      "expectedStaticResult": "reject"
+    },
+    {
+      "id": "unknown-snapshot",
+      "prepareJson": "{\"manifestSha256\":\"cf8050c6a0bfae0c3db23d2136372341a228a350f73af2653dcb026f1fdab106\",\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000101\\\",\\\"workspaceId\\\":\\\"ws-capture\\\",\\\"agentId\\\":\\\"agent-capture\\\",\\\"leaseId\\\":\\\"lease-capture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000102\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000103\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"9\\\",\\\"capturedAt\\\":\\\"2026-10-01T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"index\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"submodules\\\":[],\\\"extra\\\":1}],\\\"session\\\":{\\\"provider\\\":\\\"test-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[]}\",\"repositories\":[{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"}],\"attachments\":[]}",
+      "executedRuntime": false,
+      "expectedStaticResult": "reject"
+    },
+    {
+      "id": "numeric-timestamp",
+      "prepareJson": "{\"manifestSha256\":\"d819e3c3a75ad0afb556057f8b6de111ada4bb70cf3f4e2e31b0ed69911acf8a\",\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000101\\\",\\\"workspaceId\\\":\\\"ws-capture\\\",\\\"agentId\\\":\\\"agent-capture\\\",\\\"leaseId\\\":\\\"lease-capture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000102\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000103\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"9\\\",\\\"capturedAt\\\":1,\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"index\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"test-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[]}\",\"repositories\":[{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"}],\"attachments\":[]}",
+      "executedRuntime": false,
+      "expectedStaticResult": "reject"
+    },
+    {
+      "id": "portable-mode",
+      "prepareJson": "{\"manifestSha256\":\"5cd7d47e6c6ff6cc21db846b1d29cf81cc348523bfb58237561bea54c12df956\",\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000101\\\",\\\"workspaceId\\\":\\\"ws-capture\\\",\\\"agentId\\\":\\\"agent-capture\\\",\\\"leaseId\\\":\\\"lease-capture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000102\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000103\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"9\\\",\\\"capturedAt\\\":\\\"2026-10-01T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"index\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"test-provider\\\",\\\"mode\\\":\\\"load\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[]}\",\"repositories\":[{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"}],\"attachments\":[]}",
+      "executedRuntime": false,
+      "expectedStaticResult": "reject"
+    },
+    {
+      "id": "history-files",
+      "prepareJson": "{\"manifestSha256\":\"e1a367df8ed57b1437aaa9626bae4b2a01ded2f420396116a6812b8d4d60daed\",\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000101\\\",\\\"workspaceId\\\":\\\"ws-capture\\\",\\\"agentId\\\":\\\"agent-capture\\\",\\\"leaseId\\\":\\\"lease-capture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000102\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000103\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"9\\\",\\\"capturedAt\\\":\\\"2026-10-01T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"index\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"test-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[{\\\"path\\\":\\\"session\\\",\\\"sha256\\\":\\\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\\",\\\"bytes\\\":1}]},\\\"attachments\\\":[]}\",\"repositories\":[{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"}],\"attachments\":[]}",
+      "executedRuntime": false,
+      "expectedStaticResult": "reject"
+    },
+    {
+      "id": "history-cut",
+      "prepareJson": "{\"manifestSha256\":\"a1b04888ac6867c3c540fdd8c7cdc5a1432f7ca0dc28ec199c92091a1c7081fa\",\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000101\\\",\\\"workspaceId\\\":\\\"ws-capture\\\",\\\"agentId\\\":\\\"agent-capture\\\",\\\"leaseId\\\":\\\"lease-capture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000102\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000103\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"9\\\",\\\"capturedAt\\\":\\\"2026-10-01T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"index\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"test-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"41\\\",\\\"files\\\":[]},\\\"attachments\\\":[]}\",\"repositories\":[{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"}],\"attachments\":[]}",
+      "executedRuntime": false,
+      "expectedStaticResult": "reject"
+    },
+    {
+      "id": "inner-attachment-id",
+      "prepareJson": "{\"manifestSha256\":\"a33cc6681f6cd62f4f7ddfa6074b38e2b65b5fdf8116e95486d3af3f26d34655\",\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000101\\\",\\\"workspaceId\\\":\\\"ws-capture\\\",\\\"agentId\\\":\\\"agent-capture\\\",\\\"leaseId\\\":\\\"lease-capture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000102\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000103\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"9\\\",\\\"capturedAt\\\":\\\"2026-10-01T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"index\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"test-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[{\\\"id\\\":\\\"a\\\",\\\"sha256\\\":\\\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\\"}]}\",\"repositories\":[{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"}],\"attachments\":[]}",
+      "executedRuntime": false,
+      "expectedStaticResult": "reject"
+    },
+    {
+      "id": "unmatched-descriptor",
+      "prepareJson": "{\"manifestSha256\":\"12aa81305624cadefdde6249ce6c7950ada2cf8794778a6dbc0ffded5483481e\",\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000101\\\",\\\"workspaceId\\\":\\\"ws-capture\\\",\\\"agentId\\\":\\\"agent-capture\\\",\\\"leaseId\\\":\\\"lease-capture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000102\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000103\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"9\\\",\\\"capturedAt\\\":\\\"2026-10-01T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"index\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"test-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[{\\\"attachmentId\\\":\\\"a\\\",\\\"sha256\\\":\\\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\\"}]}\",\"repositories\":[{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"}],\"attachments\":[]}",
+      "executedRuntime": false,
+      "expectedStaticResult": "reject"
+    },
+    {
+      "id": "duplicate-outer",
+      "prepareJson": "{\"manifestSha256\":\"ca2f6390d7513ce97db1043255a57d088a2ad74aa61ab7a2fb152360d640238f\",\"manifestSha256\":\"ca2f6390d7513ce97db1043255a57d088a2ad74aa61ab7a2fb152360d640238f\",\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000101\\\",\\\"workspaceId\\\":\\\"ws-capture\\\",\\\"agentId\\\":\\\"agent-capture\\\",\\\"leaseId\\\":\\\"lease-capture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000102\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000103\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"9\\\",\\\"capturedAt\\\":\\\"2026-10-01T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"index\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"test-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[]}\",\"repositories\":[{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"}],\"attachments\":[]}",
+      "executedRuntime": false,
+      "expectedStaticResult": "reject"
+    },
+    {
+      "id": "escaped-duplicate-inner",
+      "prepareJson": "{\"manifestSha256\":\"2e04ca480ba08ee1894bac883063f43706268f5d288b2ba0d28864869c150ea5\",\"manifestJson\":\"{\\\"format\\\\u0056ersion\\\":1,\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000101\\\",\\\"workspaceId\\\":\\\"ws-capture\\\",\\\"agentId\\\":\\\"agent-capture\\\",\\\"leaseId\\\":\\\"lease-capture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000102\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000103\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"9\\\",\\\"capturedAt\\\":\\\"2026-10-01T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"index\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"test-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[]}\",\"repositories\":[{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"}],\"attachments\":[]}",
+      "executedRuntime": false,
+      "expectedStaticResult": "reject"
+    },
+    {
+      "id": "noncanonical-manifest-bytes",
+      "prepareJson": "{\"manifestSha256\":\"6fb08e6d079563db0f1356430e03198cb959f19e22d83a8ec21087a9bbc38e26\",\"manifestJson\":\" {\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000101\\\",\\\"workspaceId\\\":\\\"ws-capture\\\",\\\"agentId\\\":\\\"agent-capture\\\",\\\"leaseId\\\":\\\"lease-capture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000102\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000103\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"9\\\",\\\"capturedAt\\\":\\\"2026-10-01T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"index\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"test-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[]}\",\"repositories\":[{\"repoKey\":\"repo-root\",\"objectBytes\":\"1048576\"}],\"attachments\":[]}",
+      "executedRuntime": false,
+      "expectedStaticResult": "reject"
+    }
+  ],
+  "runtimeScenarios": [
+    {
+      "id": "version2-capture",
+      "when": "version2 peer sends prepare or commit",
+      "required": "deny without new effects",
+      "executed": false
+    },
+    {
+      "id": "version3-carry-forward",
+      "when": "version3 uses lifecycle/read methods",
+      "required": "explicit supported gate and old closed schemas",
+      "executed": false
+    },
+    {
+      "id": "future-version",
+      "when": "future private version attempts lifecycle or capture",
+      "required": "deny; never >=2",
+      "executed": false
+    },
+    {
+      "id": "register-durable",
+      "when": "prepare crosses metadata fsync boundary",
+      "required": "success only after complete owned attachment retention",
+      "executed": false
+    },
+    {
+      "id": "register-duplicate",
+      "when": "same full intent retried",
+      "required": "join or replay original expiry",
+      "executed": false
+    },
+    {
+      "id": "changed-revision",
+      "when": "same agent epoch revision with different UUID/hash",
+      "required": "reject even if older historical capture",
+      "executed": false
+    },
+    {
+      "id": "changed-descriptor",
+      "when": "same UUID/hash with changed lengths or object bounds",
+      "required": "reject full-intent conflict",
+      "executed": false
+    },
+    {
+      "id": "store-missing",
+      "when": "declared attachment missing in current Store",
+      "required": "fail without omission",
+      "executed": false
+    },
+    {
+      "id": "inherited-only",
+      "when": "bytes only in prior checkpoint",
+      "required": "unsupported; no forged target owner",
+      "executed": false
+    },
+    {
+      "id": "local-only",
+      "when": "bytes only on node",
+      "required": "unsupported; no new upload",
+      "executed": false
+    },
+    {
+      "id": "two-repo-closure",
+      "when": "nested initialized dirty repository",
+      "required": "stage and verify complete exact graph before commit",
+      "executed": false
+    },
+    {
+      "id": "ordinary-git",
+      "when": "ordinary Receive or Upload asks to stage",
+      "required": "deny without fallback",
+      "executed": false
+    },
+    {
+      "id": "replay-framing",
+      "when": "completed Stage receipt lost",
+      "required": "after actual prior settlement full exchange with charged scratch",
+      "executed": false
+    },
+    {
+      "id": "replay-no-import",
+      "when": "same Stage replay verified",
+      "required": "same original receipt; no second durable import/ref/event",
+      "executed": false
+    },
+    {
+      "id": "replay-active",
+      "when": "prior stream/native task uncertain",
+      "required": "busy; no second importer",
+      "executed": false
+    },
+    {
+      "id": "replay-capacity",
+      "when": "retained closure plus retry scratch exceeds budget",
+      "required": "fail before advertisement",
+      "executed": false
+    },
+    {
+      "id": "replay-budget",
+      "when": "fourth physical attempt",
+      "required": "deny; initial counts toward three",
+      "executed": false
+    },
+    {
+      "id": "replay-cleanup",
+      "when": "scratch disposal fails",
+      "required": "retain task/native/charge and do not admit retry",
+      "executed": false
+    },
+    {
+      "id": "replay-content",
+      "when": "new upload differs from original binding/closure",
+      "required": "reject before durable import",
+      "executed": false
+    },
+    {
+      "id": "head-aggregate",
+      "when": "multiple connections/runs consume head budget",
+      "required": "same finite owner quota",
+      "executed": false
+    },
+    {
+      "id": "node-aggregate",
+      "when": "multiple runs fill node spool metadata",
+      "required": "defer before next revision/spool effects",
+      "executed": false
+    },
+    {
+      "id": "pack-expansion",
+      "when": "compressed pack exceeds reserved allocation",
+      "required": "bounded failure; charge uncertainty",
+      "executed": false
+    },
+    {
+      "id": "recovery-quota",
+      "when": "restart with pending/temp files",
+      "required": "reaccount or quarantine, never free by expiry",
+      "executed": false
+    },
+    {
+      "id": "tombstone-cap",
+      "when": "dedup rows occupy record limit",
+      "required": "deny capacity until safe retirement proof",
+      "executed": false
+    },
+    {
+      "id": "same-stage-task",
+      "when": "stage caller dropped during child process",
+      "required": "retained supervisor joins same handle/result",
+      "executed": false
+    },
+    {
+      "id": "same-commit-task",
+      "when": "commit waiter dropped after effect",
+      "required": "retain actual task/result and decision",
+      "executed": false
+    },
+    {
+      "id": "stop-during-write",
+      "when": "Stop after native write starts",
+      "required": "preserve StartedWrite fence; no rollback",
+      "executed": false
+    },
+    {
+      "id": "reply-guard",
+      "when": "response queued after durable DB decision",
+      "required": "hold typed policy/permit through actual socket write",
+      "executed": false
+    },
+    {
+      "id": "journal-lag",
+      "when": "journal ACK below manifest cut",
+      "required": "incomplete; no checkpoint acceptance",
+      "executed": false
+    },
+    {
+      "id": "same-watermark",
+      "when": "later revision shares journalSeq",
+      "required": "numeric freshness controls pointer",
+      "executed": false
+    },
+    {
+      "id": "historical-receipt",
+      "when": "older valid upload finishes later",
+      "required": "historical without pointer/alias regression",
+      "executed": false
+    },
+    {
+      "id": "lost-commit",
+      "when": "DB decision succeeds reply lost",
+      "required": "same UUID/hash original three fields; no new event",
+      "executed": false
+    },
+    {
+      "id": "unknown-outcome",
+      "when": "disconnect while decision uncertain",
+      "required": "reconcile original owner, no new revision",
+      "executed": false
+    },
+    {
+      "id": "duplicate-receipt",
+      "when": "same durable receipt delivered twice",
+      "required": "do not release spool twice",
+      "executed": false
+    },
+    {
+      "id": "wrong-correlation",
+      "when": "raw receipt matches UUID but wrong pending run/hash",
+      "required": "deny scheduler acceptance",
+      "executed": false
+    },
+    {
+      "id": "barrier-sync-write",
+      "when": "mkdir unlink or Drop still mutates",
+      "required": "retain same common barrier",
+      "executed": false
+    },
+    {
+      "id": "barrier-later-write",
+      "when": "initialization settled but future API lacks guard",
+      "required": "deny handoff",
+      "executed": false
+    },
+    {
+      "id": "barrier-normal",
+      "when": "all owned mutations joined and later APIs guarded",
+      "required": "atomic permit handoff then stable capture",
+      "executed": false
+    },
+    {
+      "id": "spool-lock",
+      "when": "upload waits remotely",
+      "required": "immutable spool owner; no exclusive capture lock held",
+      "executed": false
+    },
+    {
+      "id": "expiry",
+      "when": "original deadline passed",
+      "required": "no new uploads; receipt reconciliation only fresh exact scope",
+      "executed": false
+    },
+    {
+      "id": "old-run",
+      "when": "reconnect lacks current run authorization",
+      "required": "head-local reconciliation only",
+      "executed": false
+    },
+    {
+      "id": "restart",
+      "when": "intact manifest survives restart",
+      "required": "data/dedup not execution authority",
+      "executed": false
+    }
+  ],
+  "errorExamples": [
+    {
+      "error": {
+        "code": -32602,
+        "message": "Checkpoint operation failed",
+        "data": {
+          "code": "invalid-params"
+        }
+      }
+    },
+    {
+      "error": {
+        "code": -32003,
+        "message": "Checkpoint operation failed",
+        "data": {
+          "code": "stale-checkpoint-owner"
+        }
+      }
+    },
+    {
+      "error": {
+        "code": -32005,
+        "message": "Checkpoint operation failed",
+        "data": {
+          "code": "checkpoint-busy"
+        }
+      }
+    },
+    {
+      "error": {
+        "code": -32603,
+        "message": "Checkpoint operation failed",
+        "data": {
+          "code": "rpc-outcome-unknown"
+        }
+      }
+    }
+  ]
+}

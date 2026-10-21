@@ -1,14 +1,34 @@
 > Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.1 `workspace.*` · §5.23 Usage metrics · §5.25 Worktree setup scripts.
 
+Routing-only `workspaceId?` additions below are [prepared contract fields](../workspace-routing.md), optional on direct daemons and required for future forwarded workspace calls; existing scope and results are unchanged.
+
 ### 5.1 `workspace.*`
+
+**Shared-host extension (10.9).** [§5.49](./shared-host-membership.md#effective-workspace-membership)
+adds `canManage: boolean` to every caller-relative Workspace projection, including
+mutation results and subscription snapshots/deltas. The primary and active host
+members manage ordinary workspaces; a retained explicit workspace owner also has
+scoped management, subject to each method's transport and service checks. Ordinary
+workspace collaborators retain the restricted baseline below. `canManage` grants
+neither host creation/administration nor access to guest-denied methods or events.
+Members see all current/future ordinary workspaces and can create even on an empty
+host; creation/import still assigns ownership to the primary. `myRole` preserves
+the direct role when present, with `collaborator` supplied by inherited membership
+otherwise; `ownerPrincipalId` names the real owner. Roster `Member.role` separately
+remains primary-only `owner`, as specified in §5.49. Effective roster/count fields
+deduplicate inherited and direct membership and exclude host members from guest-seat usage. Archive
+removes workspace guests but preserves inherited host membership. The incremental
+delete response, partial-progress/retry behavior and terminal events below remain
+unchanged. Host-administration virtual workspaces retain their existing boundary.
 
 | Method | Params | Result |
 | --- | --- | --- |
 | workspace.list | includeArchived?: boolean (default false) | { workspaces: Workspace[] } — triggers background backfill: existing workspaces with a repositoryPath but missing repositoryOwner/Name are enriched from the origin remote URL (same GitHub derivation as workspace.create, non-blocking spawn, deduped per workspace per daemon lifecycle, skips non-GitHub remotes, persists updates, emits workspace:updated with changed fields). **Membership-narrowed** for a non-administrator caller: only workspaces the bound principal is a member of are returned, and every `Workspace` row carries `myRole` (`"owner"` \| `"collaborator"`), `memberCount` and `openInviteCount` (§5.48) |
+| workspace.findByPullRequest *(prepared; `prWorkspaceLookup: 1`)* | url (req): string — a GitHub-form pull-request URL, `https://<host>/<owner>/<repo>/pull/<number>` (trailing path, query or fragment ignored). No `workspaceId`: daemon-global | { workspaces: PullRequestWorkspace[] } — every workspace the daemon has linked to that PR, most recently linked first; `[]` when none. Archived workspaces are included; deleted and remote workspaces never are. Membership-narrowed like `workspace.list`. `-32602 { code: "invalid-params" }` when `url` is missing or not a pull-request URL. See [PR workspace lookup](#pull-request-workspace-lookup) |
 | workspace.get | workspaceId (req) | { workspace: Workspace } — -32602 if not found, **or** if the caller is not a member of it (same `{ code: "not-found" }`, indistinguishable by design; §5.48) |
-| workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipIsolation? (canonical; deprecated alias skipWorktree?), githubUrl?, clonePath?, isNewRepo?, progressId? (string — arms the unified provisioning progress stream; see notes), contextLinks? (ContextLink[] — issue/PR context links persisted on the row; a pr-kind link additionally makes the create **PR-aware** — an omitted `branch`/`baseRef` defaults to the PR's head/base branch — see the `contextLinks` and PR-aware create notes below)); optional initialAgent: { prompt? *(a blank/whitespace-only prompt reads as absent; the agent is still created — see "Initial-agent orchestration" in the notes)*, name?, model?, specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks? *(within v7.4, monorepo#3338: entries may carry an attachment-registry `attachmentId` reference instead of inline `data`, under the same exactly-one-of validation + registry check and daemon-side prompt-assembly resolution as `agent.sendMessage` — §5.5; a bad reference rejects `-32602` pre-side-effect)*, fileBlocks? *(v6.12; attachment references only since v10.0 — same per-entry validation as `agent.sendMessage`: every entry must carry a non-empty `attachmentId`, an entry carrying inline `data` or missing `attachmentId` is `-32602` naming the block index — §5.5)*, metadata? } — no `agentId`: agent IDs are server-assigned, and a request carrying `initialAgent.agentId` is rejected with `-32602` (see notes). Every `-32602` rejection is validated before any side effect (see "Pre-side-effect validation" in the notes) | { workspace: Workspace, initialAgent?: AgentLite } — the created agent's server-minted id is `initialAgent.id`; daemon-owned orchestration inside one idempotent op (see notes: clone → checkout (worktree or CoW) → spec seed → initial agent). |
+| workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipIsolation? (canonical; deprecated alias skipWorktree?), githubUrl?, repositoryCheckout? (prepared GitLab selection; see [GitLab project checkout](#gitlab-project-checkout)), clonePath?, isNewRepo?, progressId? (string — arms the unified provisioning progress stream; see notes), contextLinks? (ContextLink[] — issue/PR context links persisted on the row; a pr-kind link additionally makes the create **PR-aware** — an omitted `branch`/`baseRef` defaults to the PR's head/base branch — see the `contextLinks` and PR-aware create notes below)); optional initialAgent: { prompt? *(a blank/whitespace-only prompt reads as absent; the agent is still created — see "Initial-agent orchestration" in the notes)*, name?, model?, reasoningEffort? (string — creation-time effort; omitted inherits, blank clears; see notes), specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks? *(within v7.4, monorepo#3338: entries may carry an attachment-registry `attachmentId` reference instead of inline `data`, under the same exactly-one-of validation + registry check and daemon-side prompt-assembly resolution as `agent.sendMessage` — §5.5; a bad reference rejects `-32602` pre-side-effect)*, fileBlocks? *(v6.12; attachment references only since v10.0 — same per-entry validation as `agent.sendMessage`: every entry must carry a non-empty `attachmentId`, an entry carrying inline `data` or missing `attachmentId` is `-32602` naming the block index — §5.5)*, metadata? } — no `agentId`: agent IDs are server-assigned, and a request carrying `initialAgent.agentId` is rejected with `-32602` (see notes). Every `-32602` rejection is validated before any side effect (see "Pre-side-effect validation" in the notes) | { workspace: Workspace, initialAgent?: AgentLite } — details below the table. |
 | workspace.update | workspaceId (req) + fields to change — the skip toggle uses the same wire names as create: skipIsolation? (canonical; deprecated alias skipWorktree?, either set ⇒ same behavior); the `workspace:updated { changes }` delta serializes it under the canonical skipIsolation name; `statusImageAssetId?: string \| null` is clearable (missing = untouched, `null` = clear, string = set — see the `statusImageAssetId` notes below). A **collaborator** member may change only `title`, `tags`, `statusMessage`, `statusImageAssetId` — any other key is `-32003 { code: "forbidden", detail }` (§5.48). **Archive lifecycle delegation** ([intent-hq/intentd#2066](https://github.com/intent-hq/intentd/pull/2066)): the generic row write never touches `archived` / `archivedAt` and holds `status` while the row is archived — lifecycle state moves only through `workspace.archive` / `workspace.unarchive`. An update carrying `archived` and/or `status: "Archived"` / `"Active"` applies the other fields first, then delegates the flip to those paths: `archived: true` or `status: "Archived"` runs the full `workspace.archive` teardown (guests detached, open invites revoked, hooks / monitors / turns torn down); `archived: false`, or a non-archived `status` on an archived row, runs `workspace.unarchive`. The delegated path publishes the `{ archived, status, archivedAt }` delta itself (`archivedAt` is set by the archive/unarchive path, never by a generic update field), so the update's own `workspace:updated` delta has `archived` and `status` removed from it — both arrive only in the delegated lifecycle delta — and is skipped entirely when nothing else changed. A contradictory pair (e.g. `archived: true` + `status: "Active"`) is `-32602 { code: "invalid-params" }` and nothing is written | { workspace: Workspace } |
-| workspace.delete | workspaceId (req), undoDelayMs? *(v6.7)* | { success: true } — fast-ack: returns immediately after deleting the database row and emitting `workspace:deleted`, while filesystem cleanup runs in a background task — only the git-metadata phase (worktree-registration prune + rename of the checkout to a trash path + guarded branch delete; a CoW or `direct` checkout — a standalone clone with no registration in the source repo and a branch living only inside the clone — gets just the rename, no prune and no source-repo branch delete, and **only when it sits in the daemon-owned `<root>/<workspaceId>/<repo-slug>` layout**: a standalone checkout outside that layout — the `isNewRepo` direct shape, where the checkout IS the user's chosen repository folder (§5.1) — is left untouched, deletion removes only the workspace row) holds the per-repository lock; the recursive `remove_dir_all` of the renamed trash directory runs afterwards outside the lock. **Delete grace window (v6.7, [intent-hq/intentd#1096](https://github.com/intent-hq/intentd/pull/1096)):** `undoDelayMs > 0` (non-negative integer; a non-integer value is `-32602`; values above the 60 000 ms cap are silently clamped, never rejected — `deleteAt` reflects the clamped value) schedules an **in-memory** pending deletion instead of committing — returns `{ success: true, scheduled: true, deleteAt }` (ISO commit deadline), emits `workspace:delete-scheduled { workspaceId, deleteAt }` (§6.5), and serves `pendingDeleteAt` on the row until the deadline commits the real delete (which then runs the full teardown above) or `workspace.cancelDelete` cancels it. Absent, `null`, or `0` keeps the immediate-delete behavior byte-identical. Pending deletions are never persisted (a daemon restart drops them; the workspace survives); re-scheduling is idempotent under the registry lock (returns the existing deadline, no second timer); a committed workspace delete supersedes pending agent deletes inside the workspace |
+| workspace.delete | workspaceId (req), undoDelayMs? *(v6.7)* | { success: true } — details below the table. |
 | workspace.cancelDelete *(v6.7)* | workspaceId (req) | { cancelled: boolean } — cancels a pending (grace-window) deletion scheduled by `workspace.delete` with `undoDelayMs`. `true` clears the pending deletion, emits `workspace:delete-cancelled { workspaceId }` (§6.5), and drops `pendingDeleteAt` from the row; `false` is the race-safe non-error when no deletion is pending (never scheduled, already cancelled, or already committed) |
 | workspace.archive | workspaceId (req) | { workspace: Workspace } — returns the refreshed record with `archived: true` / `status: "Archived"` / `archivedAt` set, so callers do not need to follow up with `workspace.get`. Emits `workspace:updated` with the full applied delta `changes: { archived: true, status: "Archived", archivedAt: <ts> }` where `<ts>` is the same ISO timestamp persisted on the row (§6.5). **Archive stops active work** ([intent-hq/intentd#896](https://github.com/intent-hq/intentd/pull/896); PR monitors: [intent-hq/intentd#1067](https://github.com/intent-hq/intentd/pull/1067)): in-flight agent turns are gracefully interrupted, ACTIVE background hooks and ACTIVE PR monitors (§5.42) are cancelled, and queued messages/wakes park while the workspace stays archived — see the archive active-work teardown block below. **Archive removes guests** ([intent-hq/intentd#2066](https://github.com/intent-hq/intentd/pull/2066)): the archived flip, the detach of every `collaborator` membership and the revocation of every open invite commit in **one** store transaction — atomic, so a store failure fails the call with the workspace still active — and are announced before the `archived` delta: one `workspace:updated { changes: { members: true, removedPrincipalId, memberCount } }` per detached collaborator (its queued messages dropped, as for `workspace.members.remove`), then one `{ invites: true }` when at least one invite was revoked (§5.48). The returned record's `memberCount` / `openInviteCount` are the post-sweep values. -32602 if not found. |
 | workspace.unarchive | workspaceId (req) | { workspace: Workspace } — mirror of `workspace.archive`; returns the refreshed record with `archived: false` / `status: "Active"` and `archivedAt` cleared. Emits `workspace:updated` with `changes: { archived: false, status: "Active", archivedAt: null }` — an explicit JSON `null` so clients clear the field (§6.5). Re-kicks the queue drains parked by the archived gates so parked messages deliver without a manual kick; cancelled hooks and PR monitors are NOT resurrected, and neither are the collaborators and open invites the archive removed — the owner is the sole member afterwards and brings a guest back explicitly, via `workspace.members.add` or a fresh invite (see the archive active-work teardown block below). The same delta shape is also emitted by the turn-start **auto-unarchive** (see the auto-unarchive block below), which additionally stamps the additive `autoUnarchive` field into `changes` — the stamp is never present on this manual path (or `workspace.restore`). -32602 if not found. |
@@ -22,15 +42,77 @@
 | workspace.setBrowserClient *(v9.9)* | workspaceId (req), clientId (req): string \| null | same `{ browserClient }` shape as `workspace.getBrowserClient`, built from the committed state — pins agent `browser.exec` for this workspace to the logical `clientId` (§5.17), or **clears** the pin when `clientId` is JSON `null` (the field is required: omitted → -32602 `Missing required parameter: clientId (string \| null)`; a non-string non-null or an empty/whitespace string → -32602 `Invalid parameter: clientId must be a non-empty string or null`). Persists across daemon restarts, emits `workspace:updated` with `changes: { browserClientId: string \| null }` (§6.5; `null` spells the clear) and, when setting, re-homes every **claimed** tab of the workspace to the new pin (§5.45 driving-client switch — one `browser:tab-updated { changes: { hostClientId } }` per moved tab; clearing moves nothing). -32602 on a missing workspace, the virtual Chief workspace, or a `clientId` the daemon has never seen complete `client.hello` (a client row minted only by anonymous `drafts.*` traffic is not pinnable); an **offline but known** client is accepted. |
 | workspace.diskUsage *(v4.2)* | workspaceId (req) | { diskUsage?: { bytes, fileCount, computedAt, breakdown }, refreshing: boolean } — on-demand poll of the workspace's cached whole-directory disk footprint (see the workspace-disk-usage block below for the payload shape and cache semantics). `diskUsage` is **omitted** (absent, never `null`) until the first walk completes and for non-qualifying rows; `refreshing: true` means a background walk is in flight (stale or first-ever poll — poll again shortly). Non-qualifying workspaces — remote, skip-isolation, the virtual Chief workspace, or a never-provisioned directory — answer `{ refreshing: false }` with the field omitted, without arming a walk. -32602 if the workspace is absent. |
 | workspace.localChanges *(v9.7)* | workspaceId (req) | { roots: LocalChangesRoot[], hasUnpushedCommits: boolean, hasUncommittedChanges: boolean } — the local git work that archiving or deleting the workspace would lose or orphan, aggregated over the primary worktree and every registered secondary git root in one round-trip (see the workspace-local-changes block below for the row shape and evaluation rules). Each `roots[]` row is `{ kind: "primary" \| "secondary", gitRootId?, path, branch?, hasRemoteRefs, unpushedCount, uncommittedCount, error? }`; the two booleans are ORs over the rows' counts. `unpushedCount` is **remote-ref-relative** — commits reachable from `HEAD` but from no `refs/remotes/*` ref, saturating at 1000 (exact for never-pushed branches; commits behind a pruned squash-merged branch still count; a repo with no remote refs reports its whole history with `hasRemoteRefs: false`). Root 0 is the primary worktree when evaluated (skipped when there is no daemon-owned checkout — `isRemote` or `skipWorktree` — or the worktree is not a git repository), followed by every `gitRoot.list` root in list order — secondary roots are **always** evaluated. Per-root failures are fail-soft (`error` on that row, counts `0`; a primary whose `.git` exists but cannot be read is an `error` row, not skipped); a workspace with nothing evaluable answers `{ roots: [], hasUnpushedCommits: false, hasUncommittedChanges: false }`. -32602 if the workspace is absent. |
-| workspace.transfer.plan *(v6.6)* | workspaceId (req) | { plan: TransferPlan } — read-only transfer preview for the Transfer/Download feature ([intent-hq/intentd#1092](https://github.com/intent-hq/intentd/pull/1092)): `plan.manifest` is the versioned export manifest — `{ formatVersion, creatingIntentdVersion, workspaceId, createdAt, tables: [{ name, rowCount, approxBytes }], assets: [{ id, sizeBytes }], git: { hasRepository, branch?, dirtyFiles, sandboxBranches, submodules } }`, where `formatVersion` is `TRANSFER_FORMAT_VERSION` (currently 1; the import side refuses archives whose format version it does not understand), `creatingIntentdVersion` is the exact daemon version (`CARGO_PKG_VERSION`; import gates on exact match), `tables` covers every workspace-scoped table with the `event` table deliberately excluded (event history stays on the source; `approxBytes` sums column byte lengths cast to BLOB — a serialized-payload estimate, not on-disk size), and `git.branch?` is omitted when unresolvable — plus the additive `git.submodules: [{ name, path, commitSha, branch?, carried, published }]` list (unpublished-submodule support, [intent-hq/intentd#1727](https://github.com/intent-hq/intentd/pull/1727); absent/empty in older manifests): one entry per initialized submodule (nested ones recursed) whose checked-out commit is reachable from **no** `refs/remotes/*` ref of that submodule (no remote refs at all counts as unpublished), scanned on the worktree and on every live sandbox path and deduped by `(path, commitSha)`; a submodule is listed only when its gitlink is recorded at the **containing tip** — for a top-level submodule the superproject **index** (what the WIP snapshot commits, so a staged removal — `git rm --cached sub` with the checkout left on disk — is skipped), for a nested one its parent checkout's **HEAD tree** with a gitlink equal to the nested checkout's `HEAD` (the parent is bundled as-is, never snapshotted, so a nested checkout whose commit the parent's HEAD does not record is skipped together with its own subtree); skipped checkouts are never bundled — `name` is the raw `submodule.<name>` key in its own superproject, `path` is worktree-relative with forward slashes (nested paths composed, `sub/inner`, parents listed before children), `commitSha` the checkout's full `HEAD` sha, `branch?` the attached branch (omitted when detached), `carried: true` for worktree findings (the export bundles them — see `workspace.export.start`) and `false` for sandbox-only findings (reported, never bundled), and `published: true` (default `false`) marks a published ancestor of a nested unpublished submodule that is carried anyway so the nested checkout can be hydrated offline — plus the additive `attachments: [{ id, fileName, sizeBytes, exists }]` manifest list (attachment-transfer support): one entry per `attachments`-registry row (§5.9), probing the stored file in the workspace's canonical `.intent/attachments/` store at plan time — `exists: false` (with `sizeBytes: 0`) marks a row whose file was already deleted (deleted-is-deleted is a first-class state: the row transfers, no file rides, and a missing file never fails a plan or an export) — plus the size estimate `totalSizeBytes = dbRowBytes + assetBytes + attachmentBytes + estimatedGitBundleBytes` (bundle estimated via `git rev-list --disk-usage`; `estimatedGitBundleBytes` covers the superproject bundle **plus** every `carried` submodule bundle, each estimated the same way in the submodule's repository; each addend also served — `attachmentBytes` sums only the attachment files the archive will actually carry) and the non-blocking pre-flight `warnings: [{ code, message }]` (`code` machine-readable and stable — e.g. agents running, uncommitted changes, unmerged sandboxes, and `submodule-unpublished-commits`: **exactly one** per plan whenever `git.submodules` is non-empty, listing entries as `<path> @ <sha7> (<branch>)` (`(<branch>)` omitted when detached) — `N submodule(s) point at commits not on any remote and will ride in the archive (~<size>): <carried unpublished list>. Transfer will not push them; publish the branches yourself when ready.` when at least one unpublished entry is carried (`~<size>` is the human-readable sum of the carried submodule bundle estimates), or only `N submodule(s) point at commits not on any remote.` when every finding is sandbox-only; `N` counts only the entries in the list that follows it — the carried unpublished entries in the first form, the sandbox-only entries in the second; either form is followed by the optional clauses ` Also bundled so the nested submodule(s) can be checked out: <list>.` (the `published: true` ancestors, never counted in `N`) and ` Not carried (sandbox only): <list>.` (the `carried: false` entries)). No side effects; the virtual Chief workspace is rejected. -32602 if the workspace is absent |
+| workspace.transfer.plan *(v6.6)* | workspaceId (req) | { plan: TransferPlan } — details below the table. |
 | workspace.import.begin *(v6.9)* | manifest (req, object), archiveSizeBytes (req, u64), archiveSha256 (req) — no workspaceId (the target id lives inside the manifest) | { importId, maxChunkBytes } — opens a staged workspace import of a transfer zip archive ([intent-hq/intentd#1101](https://github.com/intent-hq/intentd/pull/1101); the target-side counterpart of `workspace.transfer.plan`). Validates the manifest header BEFORE any bytes are staged: `formatVersion` must be understood, `creatingIntentdVersion` must match this daemon's `CARGO_PKG_VERSION` **exactly** (the error names both versions), the virtual Chief workspace is rejected, and the manifest's workspace id must not collide with an existing row OR another pending import. Staging lives under `<workspaces_root>/.import-staging/<importId>/`; `maxChunkBytes` is the per-chunk decoded cap (16 MiB, under the 40 MiB frame cap) |
 | workspace.import.chunk *(v6.9)* | importId (req), seq (req, u64), data (req, base64) | { importId, seq, receivedBytes } — stages one seq-numbered slice of the archive as a per-seq file. Chunks may arrive in any order; retrying a seq is **idempotent** (per-seq overwrite, no double-count); the declared `archiveSizeBytes` guards against over-staging |
-| workspace.import.commit *(v6.9)* | importId (req) | { workspace, importedRows, interruptedAgents, rehydrated } — reassembles the staged chunks → verifies the SHA-256 against `begin`'s `archiveSha256` → unzips (zip-slip-safe extract) → checks the embedded manifest equals the `begin` manifest → applies row transforms (path rewrite against the target `workspaces_root`, agent sessions forced to stopped with `interrupted_agent` rows for in-flight agents, `event` rows skipped) → git materialization (clone `git/repo.bundle` at the workspace branch, then — **before** the base ref, sandbox provisioning and WIP unwind, while the checkout is still at the bundled tip — hydrate each `git/refs.json` `submodules[]` entry in list order (parents first) from its `bundleEntry`, **offline** (no network; `GIT_LFS_SKIP_SMUDGE=1`): the untrusted entry is validated (full-hex `commitSha`, plain forward-slash `path` components, `bundleEntry` under `git/`, `submodule.<name>.path` in the containing tip's `.gitmodules` must equal the entry's path relative to that containing repository (the last component of a nested path), and the containing tip's gitlink must equal `commitSha`; the containing repository of a nested entry is the already-hydrated parent entry, so a nested entry whose parent was not bundled — legacy or hand-crafted archives — fails with an explicit error), the submodule is `submodule update --init`-ed from the bundle, `HEAD` is checked against `commitSha`, `branch?` is recreated at that commit (detached otherwise), and `submodule.<name>.url` plus the module's `remote.origin.url` are restored to `originUrl?` (unset / origin removed when absent) so no staging path persists; sandbox checkouts provisioned afterwards inherit the hydrated modules through the CoW copy (the plain-clone fallback on a non-CoW filesystem does not — its gitlinks stay uninitialized); **any** hydration failure fails the commit with the submodule path in the error and rolls back the whole import; archives without `submodules` behave exactly as before, and published submodules with no unpublished descendant are never bundled and are untouched by materialization) → attachment materialization (each `attachments/<attachmentId>` archive entry lands at the `stored_path` its registry row records, resolved against the materialized checkout with the within-workspace containment guard — an escaping `stored_path` fails the commit — dropping the ignore-all `.gitignore` marker in the store dir; a registry row with no archive entry is the deleted-is-deleted state and imports as a row without a file; a later failure unwinds every placed file) → single-transaction row insert + asset placement → boot-style rehydration (hooks, event subscriptions, PR monitors). **Atomic:** nothing is visible in `workspace.list` until commit succeeds |
+| workspace.import.commit *(v6.9)* | importId (req) | { workspace, importedRows, interruptedAgents, rehydrated } — details below the table. |
 | workspace.import.abort *(v6.9)* | importId (req) | { importId, aborted } — deletes the staged session and its staging directory; idempotent (`aborted: false` when the session no longer exists, not an error) |
-| workspace.export.start *(v6.11)* | workspaceId (req) | { exportId, maxChunkBytes } — opens the source-side export of the FE-mediated workspace transfer ([intent-hq/intentd#1118](https://github.com/intent-hq/intentd/pull/1118); the source counterpart of the v6.9 `workspace.import.*` surface) and kicks off the background archive build — the result returns immediately, and progress/outcome travel on the `workspace:transfer:*` events (§6.5). Build stages (each emits `workspace:transfer:progress` before it runs): `stopping-agents` — in-flight agents are captured as pending `interrupted_agent` rows BEFORE the stop (they ride the archive as the target's resumption offers, and equally cover the source if the export is aborted; durable queues untouched) — then `exporting-rows` — the manifest (built by the `workspace.transfer.plan` op; the copy embedded in the zip byte-matches the one the `:ready` event carries) plus the row export — then `bundling-git` (skipped when the workspace has no repository; a dirty worktree and live sandboxes are snapshotted as WIP commits that stay in place while the archive is served and are unwound when the export settles) — then `writing-archive` (zip sealed + SHA-256 hashed). Archive layout (shared with the import side): `manifest.json`, `rows/<table>.jsonl` (only tables with rows), `assets/<assetId>`, `attachments/<attachmentId>` (the registered attachment files that still exist in the git-ignored `.intent/attachments/` store — they never ride the git bundle, so the archive carries them explicitly; a registry row whose file was deleted rides the rows payload with no file entry, and a file that vanishes between plan and write is skipped with a warning, never an export failure), and — when the workspace has a repository — `git/repo.bundle` + `git/refs.json`, plus one **self-contained** `git/submodules/<n>.bundle` per `carried` entry of `manifest.git.submodules` (`n` = the entry's index in `refs.json`'s `submodules` list, parents before nested children; sandbox-only findings never produce a bundle). Each submodule bundle is created from the submodule's own repository after the WIP snapshot (so it anchors the gitlink that actually travels), carries `HEAD` at the recorded commit plus a temporary `refs/intent/transfer/<wsId>/submodule/<n>` ref, is `git bundle verify`-checked, and the temporary ref is deleted from the source submodule afterwards, success or failure. `git/refs.json` accordingly gains the additive `submodules: [{ name, path, commitSha, branch?, originUrl?, bundleEntry, bundleRef, published }]` list (absent/empty in archives from older daemons and whenever nothing is unpublished — the archive layout is then unchanged): `bundleEntry` is the archive entry (`git/submodules/<n>.bundle`), `bundleRef` the ref inside it (outside `refs/heads/*` — importers rely on `HEAD` == `commitSha`), `originUrl?` the checkout's `remote.origin.url` with credentials stripped so the source's secrets never travel (an `http(s)://` URL loses its entire userinfo — tokens ride there as the username; any other `scheme://` URL loses only the `:password`, keeping the user part ssh needs, e.g. `ssh://git@host/o/r.git`; scheme-less scp-like `git@host:path` URLs and local paths pass through unchanged) — restored on import in that stripped form — and the remaining fields carry the `manifest.git.submodules` values. Staging lives under `<workspaces_root>/.export-staging/<exportId>/`; sessions are **in-memory only** (a daemon restart drops them; the boot/lazy sweep clears orphaned staging dirs). `maxChunkBytes` is the per-chunk pre-base64 cap (16 MiB, matching the import side so the FE can pipe `read` chunks straight into `workspace.import.chunk`; the encoded frame stays under the 40 MiB cap, §1.3). -32602 on the virtual Chief workspace, an unknown workspaceId, or a second concurrent export of the same workspace (the error names the in-flight exportId) |
-| workspace.export.read *(v6.11)* | exportId (req), seq (req, u64) — no workspaceId (the export session, addressed by `exportId`, already binds the workspace) | { exportId, seq, totalChunks, data } — serves one seq-numbered chunk of the sealed archive as base64. **Idempotent**: any seq may be re-requested in any order (same seq, same bytes). -32602 while the session is still building (wait for `workspace:transfer:ready`), on an out-of-range seq (the error names the chunk count), or on an unknown exportId |
-| workspace.export.finalize *(v6.11)* | exportId (req), archiveSource? (bool, default false), finalStatusMessage? (string) — no workspaceId (export-session-scoped, like `workspace.export.read`) | { exportId, finalized: true, workspace } — settles the source after a successful relay: applies the optional final status message, archives the workspace when `archiveSource: true` (otherwise it stays active), then unwinds the WIP snapshot commits and deletes staging. The workspace mutations run BEFORE the session is retired, so a failed mutation leaves the export intact and finalize can be retried. Only valid on a ready session — -32602 while still building or on an unknown exportId |
-| workspace.export.abort *(v6.11)* | exportId (req) — no workspaceId (export-session-scoped, like `workspace.export.read`) | { exportId, aborted } — cancels an export: a still-building session is flagged and the build task cleans up when it next checks between stages (quiet — no `workspace:transfer:failed`); a ready session is cleaned up inline (WIP snapshots unwound, staging deleted). **Idempotent** — an unknown exportId returns `{ aborted: false }`, not an error. The workspace stays usable; agents stay stopped (the user restarts them) |
+| workspace.export.start *(v6.11)* | workspaceId (req) | { exportId, maxChunkBytes } — details below the table. |
+| workspace.export.read *(v6.11)* | exportId (req), seq (req, u64), workspaceId? | { exportId, seq, totalChunks, data } — serves one seq-numbered chunk of the sealed archive as base64. **Idempotent**: any seq may be re-requested in any order (same seq, same bytes). -32602 while the session is still building (wait for `workspace:transfer:ready`), on an out-of-range seq (the error names the chunk count), or on an unknown exportId |
+| workspace.export.finalize *(v6.11)* | exportId (req), archiveSource? (bool, default false), finalStatusMessage? (string), workspaceId? | { exportId, finalized: true, workspace } — settles the source after a successful relay: applies the optional final status message, archives the workspace when `archiveSource: true` (otherwise it stays active), then unwinds the WIP snapshot commits and deletes staging. The workspace mutations run BEFORE the session is retired, so a failed mutation leaves the export intact and finalize can be retried. Only valid on a ready session — -32602 while still building or on an unknown exportId |
+| workspace.export.abort *(v6.11)* | exportId (req), workspaceId? | { exportId, aborted } — cancels an export: a still-building session is flagged and the build task cleans up when it next checks between stages (quiet — no `workspace:transfer:failed`); a ready session is cleaned up inline (WIP snapshots unwound, staging deleted). **Idempotent** — an unknown exportId returns `{ aborted: false }`, not an error. The workspace stays usable; agents stay stopped (the user restarts them) |
+
+**`workspace.create` details.**
+
+the created agent's server-minted id is `initialAgent.id`; daemon-owned orchestration inside one idempotent op (see notes: clone → checkout (worktree or CoW) → spec seed → initial agent).
+
+**`workspace.delete` details.**
+
+- waits for incremental database cleanup and the final workspace-row/tombstone commit, then emits `workspace:deleted` and returns while filesystem cleanup runs in a background task (see “Incremental deletion” below for partial-progress and retry semantics) — only the git-metadata phase (worktree-registration prune + rename of the checkout to a trash path + guarded branch delete; a CoW or `direct` checkout — a standalone clone with no registration in the source repo and a branch living only inside the clone — gets just the rename, no prune and no source-repo branch delete, and **only when it sits in the daemon-owned `<root>/<workspaceId>/<repo-slug>` layout**: a standalone checkout outside that layout — the `isNewRepo` direct shape, where the checkout IS the user's chosen repository folder (§5.1) — is left untouched, deletion removes only the workspace row) holds the per-repository lock; the recursive `remove_dir_all` of the renamed trash directory runs afterwards outside the lock.
+- **Delete grace window (v6.7, [intent-hq/intentd#1096](https://github.com/intent-hq/intentd/pull/1096)):** `undoDelayMs > 0` (non-negative integer; a non-integer value is `-32602`; values above the 60 000 ms cap are silently clamped, never rejected — `deleteAt` reflects the clamped value) schedules an **in-memory** pending deletion instead of committing — returns `{ success: true, scheduled: true, deleteAt }` (ISO commit deadline), emits `workspace:delete-scheduled { workspaceId, deleteAt }` (§6.5), and serves `pendingDeleteAt` on the row until the deadline commits the real delete (which then runs the full teardown above) or `workspace.cancelDelete` cancels it.
+  Absent, `null`, or `0` keeps the immediate-delete behavior byte-identical.
+  Pending deletions are never persisted (a daemon restart drops them; the workspace survives); re-scheduling is idempotent under the registry lock (returns the existing deadline, no second timer); a committed workspace delete supersedes pending agent deletes inside the workspace
+
+**`workspace.transfer.plan` details.**
+
+read-only transfer preview for the Transfer/Download feature ([intent-hq/intentd#1092](https://github.com/intent-hq/intentd/pull/1092)): `plan.manifest` is the versioned export manifest — `{ formatVersion, creatingIntentdVersion, workspaceId, createdAt, tables: [{ name, rowCount, approxBytes }], assets: [{ id, sizeBytes }], git: { hasRepository, branch?, dirtyFiles, sandboxBranches, submodules } }`, where `formatVersion` is `TRANSFER_FORMAT_VERSION` (2 for author-preserving exports under the [transfer authorship contract](#human-authorship-in-workspace-transfers), previously 1; the import side refuses unsupported versions), `creatingIntentdVersion` is the exact daemon version (`CARGO_PKG_VERSION`; import gates on exact match), `tables` covers every workspace-scoped table with the `event` table deliberately excluded (event history stays on the source; `approxBytes` sums column byte lengths cast to BLOB — a serialized-payload estimate, not on-disk size), and `git.branch?` is omitted when unresolvable — plus the additive `git.submodules: [{ name, path, commitSha, branch?, carried, published }]` list (unpublished-submodule support, [intent-hq/intentd#1727](https://github.com/intent-hq/intentd/pull/1727); absent/empty in older manifests): one entry per initialized submodule (nested ones recursed) whose checked-out commit is reachable from **no** `refs/remotes/*` ref of that submodule (no remote refs at all counts as unpublished), scanned on the worktree and on every live sandbox path and deduped by `(path, commitSha)`;
+a submodule is listed only when its gitlink is recorded at the **containing tip** — for a top-level submodule the superproject **index** (what the WIP snapshot commits, so a staged removal — `git rm --cached sub` with the checkout left on disk — is skipped), for a nested one its parent checkout's **HEAD tree** with a gitlink equal to the nested checkout's `HEAD` (the parent is bundled as-is, never snapshotted, so a nested checkout whose commit the parent's HEAD does not record is skipped together with its own subtree);
+skipped checkouts are never bundled — `name` is the raw `submodule.<name>` key in its own superproject, `path` is worktree-relative with forward slashes (nested paths composed, `sub/inner`, parents listed before children), `commitSha` the checkout's full `HEAD` sha, `branch?` the attached branch (omitted when detached), `carried: true` for worktree findings (the export bundles them — see `workspace.export.start`) and `false` for sandbox-only findings (reported, never bundled), and `published: true` (default `false`) marks a published ancestor of a nested unpublished submodule that is carried anyway so the nested checkout can be hydrated offline — plus the additive `attachments: [{ id, fileName, sizeBytes, exists }]` manifest list (attachment-transfer support): one entry per `attachments`-registry row (§5.9), probing the stored file in the workspace's canonical `.intent/attachments/` store at plan time — `exists: false` (with `sizeBytes: 0`) marks a row whose file was already deleted (deleted-is-deleted is a first-class state: the row transfers, no file rides, and a missing file never fails a plan or an export) — plus the size estimate `totalSizeBytes = dbRowBytes + assetBytes + attachmentBytes + estimatedGitBundleBytes` (bundle estimated via `git rev-list --disk-usage`;
+`estimatedGitBundleBytes` covers the superproject bundle **plus** every `carried` submodule bundle, each estimated the same way in the submodule's repository;
+each addend also served — `attachmentBytes` sums only the attachment files the archive will actually carry) and the non-blocking pre-flight `warnings: [{ code, message }]` (`code` machine-readable and stable — e.g. agents running, uncommitted changes, unmerged sandboxes, and `submodule-unpublished-commits`: **exactly one** per plan whenever `git.submodules` is non-empty, listing entries as `<path> @ <sha7> (<branch>)` (`(<branch>)` omitted when detached) — `N submodule(s) point at commits not on any remote and will ride in the archive (~<size>): <carried unpublished list>. Transfer will not push them; publish the branches yourself when ready.` when at least one unpublished entry is carried (`~<size>` is the human-readable sum of the carried submodule bundle estimates), or only `N submodule(s) point at commits not on any remote.` when every finding is sandbox-only;
+`N` counts only the entries in the list that follows it — the carried unpublished entries in the first form, the sandbox-only entries in the second;
+either form is followed by the optional clauses ` Also bundled so the nested submodule(s) can be checked out: <list>.` (the `published: true` ancestors, never counted in `N`) and ` Not carried (sandbox only): <list>.` (the `carried: false` entries)).
+No side effects; the virtual Chief workspace is rejected. -32602 if the workspace is absent
+
+**`workspace.import.commit` details.**
+
+- reassembles the staged chunks → verifies the SHA-256 against `begin`'s `archiveSha256` → unzips (zip-slip-safe extract) → checks the embedded manifest equals the `begin` manifest → applies row transforms (path rewrite against the target `workspaces_root`, agent sessions forced to stopped with `interrupted_agent` rows for in-flight agents, `event` rows skipped) → git materialization (clone `git/repo.bundle` at the workspace branch, then — **before** the base ref, sandbox provisioning and WIP unwind, while the checkout is still at the bundled tip — hydrate each `git/refs.json` `submodules[]` entry in list order (parents first) from its `bundleEntry`, **offline** (no network;
+  `GIT_LFS_SKIP_SMUDGE=1`): the untrusted entry is validated (full-hex `commitSha`, plain forward-slash `path` components, `bundleEntry` under `git/`, `submodule.<name>.path` in the containing tip's `.gitmodules` must equal the entry's path relative to that containing repository (the last component of a nested path), and the containing tip's gitlink must equal `commitSha`;
+  the containing repository of a nested entry is the already-hydrated parent entry, so a nested entry whose parent was not bundled — legacy or hand-crafted archives — fails with an explicit error), the submodule is `submodule update --init`-ed from the bundle, `HEAD` is checked against `commitSha`, `branch?` is recreated at that commit (detached otherwise), and `submodule.<name>.url` plus the module's `remote.origin.url` are restored to `originUrl?` (unset / origin removed when absent) so no staging path persists;
+  sandbox checkouts provisioned afterwards inherit the hydrated modules through the CoW copy (the plain-clone fallback on a non-CoW filesystem does not — its gitlinks stay uninitialized);
+  **any** hydration failure fails the commit with the submodule path in the error and rolls back the whole import;
+  archives without `submodules` behave exactly as before, and published submodules with no unpublished descendant are never bundled and are untouched by materialization) → attachment materialization (each `attachments/<attachmentId>` archive entry lands at the `stored_path` its registry row records, resolved against the materialized checkout with the within-workspace containment guard — an escaping `stored_path` fails the commit — dropping the ignore-all `.gitignore` marker in the store dir;
+  a registry row with no archive entry is the deleted-is-deleted state and imports as a row without a file;
+  a later failure unwinds every placed file) → single-transaction row insert + asset placement → boot-style rehydration (hooks, event subscriptions, PR monitors).
+- **Atomic:** nothing is visible in `workspace.list` until commit succeeds
+
+**`workspace.export.start` details.**
+
+opens the source-side export of the FE-mediated workspace transfer ([intent-hq/intentd#1118](https://github.com/intent-hq/intentd/pull/1118); the source counterpart of the v6.9 `workspace.import.*` surface) and kicks off the background archive build — the result returns immediately, and progress/outcome travel on the `workspace:transfer:*` events (§6.5).
+Build stages (each emits `workspace:transfer:progress` before it runs): `stopping-agents` — in-flight agents are captured as pending `interrupted_agent` rows BEFORE the stop (they ride the archive as the target's resumption offers, and equally cover the source if the export is aborted; durable queues untouched) — then `exporting-rows` — the manifest (built by the `workspace.transfer.plan` op; the copy embedded in the zip byte-matches the one the `:ready` event carries) plus the row export — then `bundling-git` (skipped when the workspace has no repository; a dirty worktree and live sandboxes are snapshotted as WIP commits that stay in place while the archive is served and are unwound when the export settles) — then `writing-archive` (zip sealed + SHA-256 hashed).
+Archive layout (shared with the import side): `manifest.json`, `rows/<table>.jsonl` (only tables with rows), `assets/<assetId>`, `attachments/<attachmentId>` (the registered attachment files that still exist in the git-ignored `.intent/attachments/` store — they never ride the git bundle, so the archive carries them explicitly; a registry row whose file was deleted rides the rows payload with no file entry, and a file that vanishes between plan and write is skipped with a warning, never an export failure), and — when the workspace has a repository — `git/repo.bundle` + `git/refs.json`, plus one **self-contained** `git/submodules/<n>.bundle` per `carried` entry of `manifest.git.submodules` (`n` = the entry's index in `refs.json`'s `submodules` list, parents before nested children; sandbox-only findings never produce a bundle).
+Each submodule bundle is created from the submodule's own repository after the WIP snapshot (so it anchors the gitlink that actually travels), carries `HEAD` at the recorded commit plus a temporary `refs/intent/transfer/<wsId>/submodule/<n>` ref, is `git bundle verify`-checked, and the temporary ref is deleted from the source submodule afterwards, success or failure.
+`git/refs.json` accordingly gains the additive `submodules: [{ name, path, commitSha, branch?, originUrl?, bundleEntry, bundleRef, published }]` list (absent/empty in archives from older daemons and whenever nothing is unpublished — the archive layout is then unchanged): `bundleEntry` is the archive entry (`git/submodules/<n>.bundle`), `bundleRef` the ref inside it (outside `refs/heads/*` — importers rely on `HEAD` == `commitSha`), `originUrl?` the checkout's `remote.origin.url` with credentials stripped so the source's secrets never travel (an `http(s)://` URL loses its entire userinfo — tokens ride there as the username; any other `scheme://` URL loses only the `:password`, keeping the user part ssh needs, e.g. `ssh://git@host/o/r.git`; scheme-less scp-like `git@host:path` URLs and local paths pass through unchanged) — restored on import in that stripped form — and the remaining fields carry the `manifest.git.submodules` values.
+Staging lives under `<workspaces_root>/.export-staging/<exportId>/`; sessions are **in-memory only** (a daemon restart drops them; the boot/lazy sweep clears orphaned staging dirs).
+`maxChunkBytes` is the per-chunk pre-base64 cap (16 MiB, matching the import side so the FE can pipe `read` chunks straight into `workspace.import.chunk`; the encoded frame stays under the 40 MiB cap, §1.3). -32602 on the virtual Chief workspace, an unknown workspaceId, or a second concurrent export of the same workspace (the error names the in-flight exportId)
+
+For the [prepared source export lifecycle](../workspace-routing.md#source-workspace-export-lifecycle), capture `workspaceId` at start and retain it with `exportId` through read retries, finalize, abort and late cleanup. Subscribe to `workspace:transfer:*` using that same source workspace and retain it for `events.unsubscribe`. The new follow-up fields stay optional on direct calls; this does not prepare import destination routing or transfer orchestration.
+
+Human message history follows the [transfer authorship contract](#human-authorship-in-workspace-transfers) below.
+
+**Private review-monitor history in workspace transfers.** Workspace-manager
+permission does not authorize exporting a monitor's original forge account data.
+Until transfer has that independent admission, `workspace.export.start` refuses
+workspaces containing qualified private monitor envelopes, including retained
+messages and completed or cancelled monitor records. The refusal uses the existing
+error flow without disclosing the target, account, or message body. It preserves
+the original history and pending monitor state; cancelling a monitor does not make
+retained private history transferable. No rows are silently omitted. Known refusals
+occur before stopping agents or creating export artifacts. The builder also checks
+the exact archive row snapshot, so a concurrent insertion cannot produce a sealed
+archive or readable chunk; failures after preflight use normal export cleanup.
+Ordinary history and proven legacy GitHub monitor transfers retain their existing
+behavior.
 
 **Root Git remote state in workspace transfers** (`workspace.export.start` /
 `workspace.import.commit`; [intent-hq/intent#4438](https://github.com/intent-hq/intent/issues/4438),
@@ -152,9 +234,11 @@ whole reachable history as unpushed, capped at 1000. Missing upstream/push field
 do not invent settings. For legacy remote metadata without `trackingRefs[].bundleRef`,
 the bundle source is `refName` itself, still namespace-validated and checked against
 `sha`; missing `fetchRefspecs` has the legacy default described above. These field
-defaults do **not** relax the import header gate: `formatVersion` remains 1 and
-`creatingIntentdVersion` must still match the importing daemon's exact version.
-Neither the protocol version policy nor the daemon-version policy changes.
+defaults do **not** relax the import header gate: the reader must support the
+archive's `formatVersion`, and `creatingIntentdVersion` must still match the
+importing daemon's exact version. Remote metadata itself required no format bump;
+the [human-authorship contract](#human-authorship-in-workspace-transfers) below
+requires version 2 for new author-preserving exports.
 Already-imported workspaces that lost their remotes are not repaired automatically;
 reconnecting/fetching such a workspace is a separate, explicitly authorized action.
 
@@ -165,6 +249,21 @@ including repository-selection fields, are rejected; repository identity and pat
 from the caller workspace. An omitted `baseRef` uses the repository default. A named ref
 must exist; an unresolved ref is warned before Apply and fails through the existing
 `workspace.create` structured error without fallback.
+
+The checkout kind follows the caller repository's `origin`. When `origin` names the
+caller row's own `github.com` repository (HTTPS or SSH; `repositoryOwner` /
+`repositoryName` compared case-insensitively), `payload.params` carries the canonical
+`githubUrl: "https://github.com/<owner>/<repo>"` and **no** `repositoryPath` /
+`clonePath`, so Apply provisions a standalone checkout hydrated from the repo cache
+(`checkoutMode` `cow` or `direct`) — the same request shape as picking a GitHub
+repository — and `preview.workspaceCreate.repoType` is `"github"`. The row identity is
+required because the clone no longer shares `repositoryPath`, leaving owner/name as the
+`crossWorkspace.*` sibling link. Otherwise (no `origin`, a non-GitHub or different
+`origin`, a row without GitHub identity, or a base ref — named or the default branch —
+that resolves locally but has no `refs/remotes/origin/<ref>`, which a clone would lack)
+the params carry `repositoryPath` and Apply provisions a linked worktree (or a CoW copy
+under `workspace.cowIsolation`); the local-only base ref case adds a preview warning
+naming the ref. Unpushed local work is never carried into a cache-hydrated clone.
 
 The result is the existing `workspace-create` proposal resource with
 `preview.workspaceCreate.mode: "sibling"`, plus a top-level `proposalId` (additive,
@@ -671,7 +770,7 @@ client-supplied `initialAgent.agentId`), a compound `initialAgent.model`, `initi
 attachment blocks (`fileBlocks` / `imageBlocks` shape and attachment-reference checks),
 `initialAgent.specialist` canonicalization, the provider/model checks (unknown, disabled,
 or not-authenticated provider; no resolvable default provider; a bare model owned by
-another provider), the specialist- or model-option-derived reasoning-effort check, and
+another provider), the explicit or specialist-derived reasoning-effort check, and
 `contextLinks` — is validated before any workspace row, worktree, spec seed,
 `workspace:created` event, or agent session is persisted, so a rejected create never
 leaves a partially created workspace behind. The per-field notes below inherit this
@@ -679,7 +778,7 @@ invariant rather than restating it.
 
 **Initial-agent orchestration (`workspace.create`).** When `initialAgent` is supplied the
 daemon **always** creates and persists the agent session (honoring `name`/`model`/
-`specialist`/`provider`/`behaviorPrompt`/`agentType`/`imageBlocks`/`fileBlocks`/
+`reasoningEffort`/`specialist`/`provider`/`behaviorPrompt`/`agentType`/`imageBlocks`/`fileBlocks`/
 `metadata`), emits `agent:created` (after `workspace:created`), and returns it as the
 result's `initialAgent` — regardless of whether a prompt was supplied. Session creation
 is distinct from starting the first provider turn:
@@ -715,11 +814,35 @@ with `-32602` naming `initialAgent.model`
 specialist canonicalization and the provider/model/reasoning-effort checks that
 `agent.create` applies at session creation (§5.5) run here pre-side-effect, as part of
 the validation invariant above.
+`initialAgent.reasoningEffort` is an optional string with the same creation-time
+semantics as `agent.create`: a non-blank explicit value wins; an empty or
+whitespace-only string explicitly clears effort and suppresses inherited defaults.
+Omitted or JSON `null` follows the existing specialist model-option effort → specialist
+frontmatter effort → Settings `model.defaultReasoningEffort` → unset chain. The Settings
+rung applies only when the model itself resolved from Settings; an explicitly supplied
+model does not inherit that effort automatically. An explicit level is rejected with
+`-32602` when the resolved model's cached `effortLevels` prove it unsupported (no catalog
+evidence means pass-through, as for `agent.create`). Resolution and validation precede
+workspace provisioning; the resolved effort is persisted before any prompt or attachment
+starts the first turn and echoed in the response's `initialAgent.reasoningEffort`.
+An unset effort is omitted from that `AgentLite` response. No post-create `agent.update`
+is needed to apply the initial effort.
+Manual workspace initial agents accept optional `initialAgent.rememberSpecialist`
+and `initialAgent.nameExplicitlySet` booleans. Omitted/null values preserve the
+existing defaults: no specialist memory opt-in, and a supplied name is explicit.
+The manual UI sends `rememberSpecialist: true` and `nameExplicitlySet: false` for
+its generated specialist name. A successful initial-agent insertion atomically
+remembers the canonical specialist (null for General) for the new workspace;
+failed preflight validation creates neither a workspace nor preference. Existing
+background/agent-created exclusions apply. An explicit custom name stays protected
+when `nameExplicitlySet` is omitted or true. Non-boolean non-null values are
+rejected before provisioning. See [manual specialist memory](./agents.md#manual-specialist-memory).
+
 When `initialAgent.name` is omitted but a `specialist` is supplied, the agent's name
 defaults to the specialist's resolved display name (frontmatter `name`, 3-tier
-project > user > bundled — e.g. "Coordinator" for `spec-writer`) and counts as
-explicitly set (it survives the agent's guarded opening-turn self-rename, same
-rename-guard semantics as `agent.create` §5.5); an UNKNOWN `specialist` — one that
+project > user > bundled — e.g. "Coordinator" for `spec-writer`) and remains a
+generated name eligible for the opening-turn self-rename (same rename-guard
+semantics as `agent.create` §5.5); an UNKNOWN `specialist` — one that
 resolves to no known id or alias — is rejected with `-32602` naming the id and the
 known catalog ids (monorepo#3497; same strict validation as `agent.create` §5.5),
 while a known specialist whose display-name resolution fails still never fails the
@@ -810,8 +933,8 @@ workspace's guests and open invites, which archive removes:
   an agent is an explicit resurrection signal; automatic machinery is not. Since
   [intent-hq/intentd#1587](https://github.com/intent-hq/intentd/pull/1587) (behavior
   only, no wire-shape change; fixes intent-hq/intent#3883) the exemption has two
-  refinements. **Combined flush of parked archive notices**: under the `"all"` flush
-  mode (§5.5 Queued-message flush), a user `agent.sendMessage` into an archived
+  refinements. **Combined flush of parked archive notices**: with automatic batching
+  (§5.5 Queued-message flush), a user `agent.sendMessage` into an archived
   workspace whose queue holds parked ready-to-send entries (the consolidated
   `workspace_archive_wake` notice for cancelled hooks / PR monitors — see the two
   teardown bullets below — parked automatic sends) no longer runs a DIRECT turn
@@ -822,19 +945,29 @@ workspace's guests and open invites, which archive removes:
   turn as the user message, with the one-shot unarchive prompt notice trailing —
   so the model learns its hooks were cancelled in the same turn it is resumed,
   not in confusing later turns. The conversion is skipped when nothing is parked
-  (the common empty-queue direct send is untouched), under `"systemOnly"`/`"off"`
-  (no combined turn exists to carry the parked entries), and for a session parked
+  (the common empty-queue direct send is untouched) and for a session parked
   in `Error` (whose documented recovery is the direct fresh send). **The drain-gate
-  exemption is time-tightened**: only a ready user-origin entry queued at or after
-  the archive (`queuedAt >= archivedAt`) releases the archived gate — a user entry
-  parked by a busy race BEFORE archival is not a post-archive user action and stays
-  parked with everything else (without the cut, the interrupted worker's end-of-turn
-  re-kick would find that older entry and immediately unarchive a freshly archived
-  workspace); pre-archive parked entries flush only on manual `workspace.unarchive`
-  or by riding the combined turn of a NEW post-archive user message. An entry with
-  an unparseable `queuedAt` never matches; a row missing or with an unparseable
-  `archivedAt` (legacy data) fails open to the untimed user-origin check. The parked
-  send's internal result carries the additive `archivedParked: true` marker alongside
+  exemption is time-tightened**: only a ready user-origin entry carrying a trusted
+  human submission at or after the archive releases the archived gate. The daemon
+  compares the entry's durable **latest human-submission time** against `archivedAt`;
+  it uses original `queuedAt` when the optional separate timestamp is absent,
+  including on fresh unmerged and legacy entries. A present malformed timestamp
+  never falls back. The signal is server-assigned on fresh human enqueue, advances
+  on human append, and
+  survives coalescing, failure/interrupt handback and restart without being refreshed
+  by automatic recovery. Edits and duplicate pending-message retries preserve it;
+  automatic input cannot supply or advance it. See
+  [§5.5 shared pending human queue](./agents.md#shared-pending-human-queue).
+  A1 queued before archival and same-author A2 appended afterward remain one entry
+  with A1's original identity and `queuedAt`; A2's durable human-submission time lets
+  that entry release the archive gate once ready. An entry with only pre-archive
+  human input stays parked even after automatic activity or recovery (without that
+  cut, the interrupted worker's end-of-turn re-kick could immediately unarchive a
+  freshly archived workspace). Such entries flush on manual `workspace.unarchive`
+  or ride the combined turn of fresh post-archive human input. An unparseable
+  effective human-submission timestamp never matches; a row missing or with an
+  unparseable `archivedAt` (legacy data) fails open to the untimed user-origin check.
+  The parked send's internal result carries the additive `archivedParked: true` marker alongside
   `queued: true` (surfaced through the MCP send bindings, so an agent can tell an
   archived park from an ordinary busy-queue fallback). The virtual chief workspace
   skips the row read (never archived), and a row-lookup error fails open so a transient
@@ -1004,30 +1137,38 @@ failure is logged and the turn proceeds):
   release, so a claim whose turn never builds a prompt (e.g. a pre-spawn persist
   failure) cannot leak the notice into a later, non-triggering turn.
 
-**Delete cascade (`workspace.delete`).** Before the store cascade drops the
-workspace's `agent_session` rows, the daemon sweeps every live in-memory piece of
-per-session state so recreating a workspace with the same slug never surfaces ghost agents
-whose workers are still draining or whose completion watches are still firing:
+**Incremental deletion (`workspace.delete`).** Owner authorization and the virtual
+Chief workspace's no-op success are unchanged. For an ordinary workspace, deletion
+closes admission to new agents, messages and related data-producing operations in
+that workspace. Already admitted operations finish before teardown; duplicate
+deletes serialize for the same workspace. Other workspaces have independent
+admission. Before removing session data, the daemon tears down live runtime state:
 
-- list the workspace's sessions via `store.list_agent_sessions` (a store error is
-  propagated with `?` — a partial teardown is worse than a failed delete);
-- per session, `AgentManager::stop` aborts the in-flight turn worker, drops the
-  session handle (which calls `kill_child_tree` on the ACP child on drop),
-  clears the busy flag + the `agent_ws` workspace mapping, and deregisters the
-  process from the LRU registry;
+- stop the workspace's running scripts with `script.stop` semantics (no supervisor
+  respawns or reopens a log afterwards), then delete its on-disk script output
+  folder (`<data_dir>/script-output/<workspaceId>/`, best-effort; the startup orphan
+  sweep retries a failed delete — see [Script output persistence](scripts.md#script-output-persistence-new-in-intentd-unreleased));
+
+- list session summaries (IDs and names, without loading transcripts); a store
+  error propagates instead of skipping teardown;
+- `AgentManager::stop_many` stops the turn workers, drops session handles, clears
+  busy flags and workspace mappings, and deregisters processes. ACP process trees
+  share one shutdown grace period, and a fence blocks respawns through deletion;
 - drop the session's live-turn slot and pending message-queue entry in
   `Services` (both are `HashMap::remove` calls, not a drain);
 - sweep the daemon-global subscription registry: completion watches whose
   **parent** session lives in the deleted workspace and delegation groups
-  anchored there are dropped outright. Cross-workspace watches (a `__chief__`
+  anchored there are dropped. Persisted parent-watch rows are removed before
+  their in-memory entries, outside the registry lock; a failed removal propagates
+  and leaves the entries available for retry. Cross-workspace watches (a `__chief__`
   parent elsewhere watching a child here) are instead **consumed
   deterministically**: per swept session the daemon delivers the synthetic
   `agent:deleted` completion directly and synchronously (not via the bus, and
-  before the store cascade removes the `agent_session` rows) — waking the chief
+  before store cleanup removes the `agent_session` rows) — waking the chief
   parent exactly once and recording grouped children as deleted — then
   backstop-sweeps any surviving watch whose `child_workspace_id` is the deleted
-  workspace (in-memory entries and persisted `completion_watch` rows), so no
-  watch can reference the deleted workspace as child afterwards. Each parent
+  workspace (in-memory entries, with best-effort removal of persisted
+  `completion_watch` rows). Each parent
   affected by the backstop sweep gets a refreshed `agent:subscriptions-changed`
   (§6.5) so clients converge on the shrunken watch set without polling;
 - eagerly abort the workspace's live background-hook scheduler tasks
@@ -1040,10 +1181,45 @@ whose workers are still draining or whose completion watches are still firing:
 
 Best-effort teardown recovers from poisoned mutexes via `into_inner()` — this is
 the last chance to unlink the workspace-scoped state, so recovery beats a panic.
-The daemon emits **one `agent:deleted` per swept session BEFORE** the terminal
-`workspace:deleted`, so subscribers see the per-session teardown first and can
-retire agent-scoped UI (chat panes, banners) before the workspace row disappears
-(§6.5).
+
+Database cleanup removes sessions one at a time, deleting each session's payloads,
+messages and dependent data in bounded batches (currently up to 500 rows per
+batch). Notes and their histories, comments attached to notes, browser tabs, drafts
+and other growing workspace children are also swept in batches before the final
+workspace-row deletion. The writer connection is released between batches and
+sessions so unrelated writes and event persistence can progress. These steps still
+acquire SQLite write locks; the operation is not one transaction covering all
+workspace data.
+
+Completed batches remain committed. A failure or interruption can leave the
+workspace row present with some sessions, histories or other data already removed,
+and runtime teardown may already have emitted `agent:deleted` and settled watches.
+Retrying `workspace.delete` cleans up what remains and tolerates already removed
+rows; it does not restore removed data. A database cleanup error propagates
+without falling back to a workspace-wide history cascade, returning terminal
+success, or emitting `workspace:deleted`. Cancellation is not an atomic stop:
+already-started database work can finish, including a browser batch and its overlay
+eviction or the final transaction. A caller interrupted before receiving a response
+must recheck the workspace or retry rather than assume the row survived.
+
+The **final workspace-row deletion and deleted-ID tombstone commit together**;
+the tombstone prevents that workspace ID from being recycled. On the normal
+immediate-delete path, `{ success: true }` follows that commit and publication of
+`workspace:deleted`; it does not wait for asynchronous filesystem cleanup. The
+daemon emits **one `agent:deleted` per swept session before** the terminal workspace
+event (§6.5). Those earlier agent events alone do not mean the workspace deletion
+finished. An authorized retry when the row is already gone is idempotent success
+without a new terminal workspace event.
+
+The existing grace window still delays the start of deletion: a response with
+`scheduled: true` confirms scheduling, not database cleanup. `workspace.cancelDelete`
+only cancels a still-pending timer; it cannot undo committed cleanup. Filesystem
+ownership protections, guarded branch deletion and background directory removal
+remain as described in the method table. The existing sequential bulk-delete UI is
+best-effort: it can continue with another workspace after one request fails. A
+failure neither rolls back prior successful deletions nor restores partial cleanup
+of the failed workspace; that workspace can be retried independently. No bulk API
+or request/response fields are added.
 
 **Workspace status fields (new in intentd).** Three BE-owned fields appear on `Workspace`
 objects returned by `workspace.*` — lightweight status metadata, **not** a notification store —
@@ -1170,28 +1346,24 @@ wins** (deliberate tie-break: the FE puts the primary link first). Semantics, in
   the PR's **base branch** — so ahead/behind and diffs reflect the merge target — and
   `prStatus` + the `activePullRequest` snapshot (+ `pullRequests`) fill from the lookup.
   **Explicit `branch`/`baseRef` params always win** over the PR-derived values.
-- **Graceful fallback.** A failed or timed-out lookup — or no source-control provider —
-  is **non-fatal** (warn log only): the create proceeds without the PR-derived git setup,
-  keeping the `prNumber`/`prUrl` linkage from the link (the PR-refresh sweep heals status
-  later). Non-PR creates (no links, or issue-kind only) are byte-for-byte unchanged.
-- **Checkout.** The PR-derived head branch is treated as an EXISTING branch (no slug
-  generation, no uniquification — see Branch naming above); a head existing only as a
-  remote-tracking ref is materialized at the remote tip with upstream tracking (see
-  Worktree provisioning above — the materialization applies across worktree / CoW /
-  direct modes).
-- **`baseCommitSha` = merge-base boundary.** A PR-derived branch checks out at the PR
-  head, not the base, so the row records the **merge-base** of the checked-out HEAD with
-  `baseRef` — preserving the contract that `baseCommitSha` is the base boundary — falling
-  back to the checked-out tip when the boundary cannot be resolved (e.g. the head
-  degraded to a fresh branch at the base commit, where tip = boundary anyway).
-- **Fork-hosted heads degrade loudly.** `PullRequest` carries no head-repo info, so a
-  head living in a fork has no `refs/remotes/<remote>/<branch>` in the base-repo clone —
-  the checkout falls back to a **fresh branch at the base commit** (named like the head,
-  without its commits) while `prNumber`/`prUrl` keep the linkage. The same applies to a
-  never-fetched branch on a local-repo create (provisioning does no network fetch;
-  cache-hydrated creates are fine — the cache refresh fetches). The daemon WARNs before
-  provisioning when a PR-derived head has no local or remote-tracking ref, so the
-  degradation is visible.
+- **Lookup failure.** Registry-only rows retain best-effort linkage. A real checkout
+  requires a resolved head branch (from the lookup or an explicit caller prefill);
+  otherwise creation fails instead of generating a branch at the base commit.
+- **Canonical PR checkout.** For a derived head or an explicit branch matching the PR
+  head, the daemon fetches `refs/pull/<number>/head` from the selected base-repository
+  remote (default `origin`). This supports fork heads without fetching a fork remote.
+  Fetch failure is fatal; there is no fallback to base commits. When the forge supplies
+  a head SHA, a moved head is rejected with a refresh-and-retry error.
+- **Local work is preserved.** The requested head branch name is retained. An existing
+  local branch at a different commit causes an explicit error, including a fork head
+  named `main` that conflicts with local `main`; local branches are never overwritten.
+  Preparation and provisioning share the repository lock. Skipped isolation or supplied
+  checkout paths are refused for PR starts. An explicit branch differing from a
+  successfully resolved PR head retains the existing caller-override semantics.
+- **`baseCommitSha` = merge-base boundary.** The checkout uses the PR head while
+  `baseRef` remains the diff target. `baseCommitSha` records the merge-base boundary,
+  falling back to the checked-out tip only when that boundary cannot be resolved.
+  Non-PR and issue-only creates are unchanged.
 
 **`statusImageAssetId` (new in intentd, migration `0062`).** An agent-authored workspace
 status screenshot reference (intent-hq/monorepo#997). The value is a content-addressed
@@ -1242,8 +1414,8 @@ to, written by `workspace.setBrowserClient` and cleared by passing `clientId: nu
 **Omitted** (never `null`) from `Workspace` payloads (`workspace.list` / `workspace.get` / the
 `workspace` subscription snapshot, §6.9) while the workspace is unpinned — the driving client
 is then resolved live (§5.9: the host of the workspace's claimed tabs, else the
-first-connected eligible client). The pin is a persisted row column that only
-`workspace.setBrowserClient` writes: a general `workspace.update` never touches it, and the
+first-connected eligible client). The pin is a persisted row column written by
+`workspace.setBrowserClient`: a general `workspace.update` never touches it, and the
 `workspace:updated { changes }` delta the setter emits carries `browserClientId` as the
 committed string or an explicit `null` for a clear (§6.5). The pin is **daemon-local**: a
 `workspace.duplicate` copy starts unpinned, and although the transfer export carries the
@@ -1252,6 +1424,46 @@ daemon (the `client` table never transfers), so an imported workspace starts unp
 Reading the pin **together with** the live resolution is `workspace.getBrowserClient`; the
 candidates a picker offers are `client.list` (§5.17). The virtual Chief workspace cannot be
 pinned (-32602) and never carries the field.
+
+**Prepared desktop-consent addition:** [desktop control](./desktop.md#unassigned-workspace-consent-claims-the-primary)
+uses the same `browserClientId` column, setter authorization boundaries and committed
+workspace delta. First authenticated same-owner Allow atomically claims it only
+when there is no saved pin, active desktop or agent-owned browser host; the
+first-connected browser fallback alone does not count as assigned. Explicit setter
+and agent-tab ownership changes serialize against the claim and invalidate stale
+candidate requests. A saved/offline pin is never replaced by candidate consent.
+The sidebar always offers Set primary client; its machine label appears only for
+active desktop control or agent-owned tabs (including hidden tabs), not an idle pin
+or user-only tabs. See the desktop contract for exact targeting, consent races and
+activity-label rules. This is a prepared addition, not shipped behavior at the pins.
+
+**`lastContentActivity` (optional, read-only).** `Workspace.lastContentActivity` is
+the latest **recorded content activity**: the maximum valid timestamp from
+user/assistant message `timestamp` (stored `created_at`) and note `updatedAt` values, compared as instants
+(including timezone offsets and fractional seconds). System/tool messages,
+workspace/session metadata edits, PR refreshes, and token-usage scans do not advance
+it. Notes include agent-authored and automatically created notes; this is not a
+claim that a human edited the workspace. It is absent, never `null`, when no valid
+content timestamp is known, on older daemons, and on the virtual Assistant workspace.
+
+The daemon materializes this field transactionally when content is written and
+reads the stored column on list/get and the lite subscription snapshot: no transcript
+hydration or history scan on these hot reads. It is a high-water mark; deleting or
+replacing content does not move it backwards. Schema upgrade seeds it from retained
+messages/notes only, excluding the possibly polluted workspace `updatedAt`, stored
+`lastActivity`, and session `updatedAt`. It does **not** reconstruct historical
+metadata edits or deleted pre-upgrade content, and does not repair those older
+columns. Archive transfers preserve the recorded mark; imported retained content
+can advance it. Ordinary `workspace.update` cannot set it.
+
+Clients may use it for a **conversation/note activity** label or sort. They must not
+present it as the exact last workspace edit. If absent, use `createdAt` with a
+**Created** label or show content activity as unavailable. An explicitly separate
+**Workspace metadata activity** fallback may use legacy `lastActivity`, but must
+explain that it includes automated maintenance and is not evidence of recent work;
+it must not stand in for content activity in filters or recency claims. Absence
+alone does not distinguish older daemons from an upgraded workspace without content.
+Existing content events can prompt a fresh list/get; no new push cadence is added.
 
 **`lastActivity` (BE-derived, always populated).** `Workspace.lastActivity` is the
 authoritative "most recent thing that happened in this workspace" timestamp. The daemon
@@ -1386,7 +1598,7 @@ included) and the monitored PRs feed them through the monitor signals
 workspace's PRs are. `workspace.get` serves the **same merged pool** (workspace + git-root +
 monitor entries, same source priority / URL dedup / lifecycle rules) **uncapped** and with no
 `pullRequestsTotal`, while the list emit paths (`workspace.list`, the workspace channel's
-seq-0 rows and deltas) carry that pool capped at the **5** most recent
+seq-0 rows and deltas) carry that pool capped at **5** entries, prioritizing draft/open PRs before merged/closed PRs
 (`WORKSPACE_LIST_PR_CAP`) with `pullRequestsTotal` when truncated — so `workspace.get` is
 the recovery surface for the full pool (see the detail-only table below). Everything else is
 unchanged: the stored `workspace.pull_requests` column keeps its workspace-repo semantics
@@ -1482,7 +1694,7 @@ keeps serving every field. The list-only omissions are:
 | `contextLinks` | `workspace.get` | Consumed once, when a client opens the workspace and seeds its layout from the linked pages |
 | `diskUsage` (absent), `diffSummary.files` (`[]` when a `diffSummary` is present) | `workspace.diskUsage`, path-scoped `git.diffs` / `git.numstat` (§5.6) | Never populated on the list path anyway; cleared so the guarantee holds by construction (`diffSummary` totals stay) |
 | `activePullRequest` / `pullRequests[]` entry fields `headSha`, `author` | `workspace.get` | Hover-tooltip data; list contexts (sidebar PR dropdown, card status, delete warning) need `number` / `url` / `title` / `status` / `isDraft` and the timestamps used for ordering, which stay. `mergeable` / `mergeableState` also stay on list entries: the client derives the PR lifecycle display status from them off list rows |
-| `pullRequests[]` entries beyond the **5** most recent (`WORKSPACE_LIST_PR_CAP`) | `workspace.get` (the full **merged** pool — the workspace's own entries plus the git-root and PR-monitor entries the emit-path merge folds in, same source priority / URL dedup / lifecycle rules as the list rows — uncapped, in merge order: stored entries, then git-root, then monitor-derived) | The pool's length is unbounded in production (unlike the active row's `agentSummary`, which is deliberately left uncapped, it is cheap to bound), and the row budget was sized from a five-entry pool. Survivors are ordered by `updatedAt` descending (`number` descending on ties); the entry matching `activePullRequest` (by exact repository-qualified `url` — `id` / `number` collide across the repositories the merged pool spans; an entry without a URL never stands in for an active PR that has one, and `number` decides only between an active PR and an entry that both lack a URL) is always retained, counts toward the 5 and leads the survivors. A pool of 5 or fewer is left as stored (no reorder). `activePullRequest` itself is never removed (its entry is slimmed like the pool's) |
+| `pullRequests[]` entries beyond the **5** highest-priority candidates (`WORKSPACE_LIST_PR_CAP`) | `workspace.get` (the full **merged** pool — the workspace's own entries plus the git-root and PR-monitor entries the emit-path merge folds in, same source priority / URL dedup / lifecycle rules as the list rows — uncapped, in merge order: stored entries, then git-root, then monitor-derived) | The pool's length is unbounded in production (unlike the active row's `agentSummary`, which is deliberately left uncapped, it is cheap to bound), and the row budget was sized from a five-entry pool. Survivors are ordered by lifecycle: draft, open (including queued/conflicted), merged, then closed. Within each lifecycle state, the entry matching `activePullRequest` (by exact repository-qualified `url` — `id` / `number` collide across the repositories the merged pool spans; an entry without a URL never stands in for an active PR that has one, and `number` decides only between an active PR and an entry that both lack a URL) leads, followed by `updatedAt` descending and `number` descending on ties. A terminal active PR cannot displace unfinished PRs in the capped pool; it remains available separately as `activePullRequest`. A pool of 5 or fewer is left as stored (no reorder). `activePullRequest` itself is never removed (its entry is slimmed like the pool's) |
 
 **`pullRequestsTotal?: number`** is the one **list-only** key: present on a `workspace.list` /
 lite `workspace.subscribe` seq-0 row only when the cap above truncated `pullRequests`, carrying
@@ -1969,6 +2181,632 @@ successful `updateContext` emits `workspace:context-changed` with the persisted 
 { "jsonrpc":"2.0","id":10,"result":{ "items":[ /* same list */ ] } }
 ```
 
+#### Pull request workspace lookup
+
+*(prepared, additive)* The daemon records which workspaces a pull request belongs
+to, so a client can offer to open the workspace behind a PR link. Support is gated
+by the server hello capability `prWorkspaceLookup: 1`; clients must not call the
+method, or offer the action, without it.
+
+**Recording.** Whenever the daemon persists a changed PR snapshot for a local
+workspace (its `prUrl`, `activePullRequest` or `pullRequests` pool) or for one of its
+registered git roots (§5.6), it links every PR in that snapshot to the workspace. A
+PR is identified by its canonical URL without the scheme (so `http` and `https` links
+match): host lowercased with a leading `www.` removed and any port kept, owner and
+repository lowercased, and the number without leading zeros. Only
+GitHub-form `/<owner>/<repo>/pull/<number>` URLs are recorded or recognized in this
+revision; GitLab merge requests are out of scope. Each workspace gets its own link,
+so several workspaces can be linked to one PR. A link keeps the time it was first
+recorded (`linkedAt`); later sightings by the same workspace do not change it.
+Links survive the PR leaving the pool, the workspace being archived and the git
+root being unregistered, and they ride workspace transfers with their original
+`linkedAt`. Deleting the workspace removes its links. Remote
+workspace rows are not recorded. Recording starts with the implementing daemon
+release; snapshots persisted earlier are linked only once they next change.
+
+**`workspace.findByPullRequest`**
+
+```jsonc
+// request
+{ "url": "https://github.com/intent-hq/intentd/pull/2100/files" }
+// result
+{
+  "workspaces": [
+    {
+      "id": "detect-prs",
+      "title": "Link PRs to workspaces",
+      "archived": false,
+      "linkedAt": "2026-10-18T04:40:00.000Z" // RFC 3339
+    }
+  ]
+}
+```
+
+`PullRequestWorkspace` is `{ id: string, title: string, archived: boolean,
+linkedAt: string }`. Results are ordered by `linkedAt` descending (the most recently
+linked workspace first), ties broken by `id` ascending. The method is daemon-global
+(no `workspaceId`) and read-only; it emits no events. A non-administrator caller
+only sees workspaces it is a member of (§5.48). A missing `url`, or one that is not
+a pull-request URL, is rejected with `-32602 { code: "invalid-params" }`.
+
+#### Human authorship in workspace transfers
+
+*10.9 contract; docs lead implementation.*
+
+The existing export/import flow preserves historical human message authorship
+through import, restart and re-export. Before export, tag previously untagged
+historical human messages from trustworthy **source** provenance. Transfer the
+history and its attribution; do not transfer workspace sharing configuration,
+memberships, invitations, credentials or authority. This extends
+[§5.48's human-message attribution](./multiplayer.md#attribution--who-wrote-a-human-message)
+without changing who may export, import, send messages or access a workspace.
+
+**Archive compatibility.** New author-preserving exports use **`formatVersion: 2`**.
+Keep the existing manifest fields, archive layout, RPCs, table exclusions and
+exact `creatingIntentdVersion` gate. A version-1 reader rejects version 2 at
+`workspace.import.begin`, even when both daemons report the same package version;
+it must not accept the archive and silently discard the authorship contract.
+New readers support version-1 imports subject to the existing exact daemon-version
+gate, but cannot treat a future reserved key in a version-1 archive as trusted
+server attribution. Where source provenance is irrecoverable, import explicitly
+unknown human history as described below. This archive format bump does not add
+an RPC, capability, grant or separate JSON-RPC protocol version.
+
+**Stored historical author.** The reserved message metadata key `humanAuthor`
+contains only this safe snapshot:
+
+```typescript
+{
+  login: string | null;
+  displayName: string | null;
+  avatarUrl: string | null;
+  identity?: Identity;          // { provider, host, externalUserId }
+  sourcePrincipalId?: string;   // inert source provenance, never a local binding
+}
+```
+
+A valid trusted record's presence suppresses local principal lookup and workspace
+fallback, including `{ login: null, displayName: null, avatarUrl: null }` for
+unknown attribution. Omit `identity` when unavailable; never fabricate a forge
+identity. Only the complete canonical `Identity` triple is portable person
+identity. `sourcePrincipalId` is optional source-local provenance, not a lookup
+key, synthetic principal, account-linking hint or source of permissions. Presence
+of an arbitrary pre-upgrade client-supplied `humanAuthor` is not proof that the
+record is trusted.
+
+**Preserving supported legacy metadata.** Genuine historical human messages and
+queued payloads can already contain non-object JSON metadata. Preserve that
+supported history by normalizing it to an object with root `humanAuthor` and an
+inert `humanAuthorOriginalMetadata` member holding the original JSON value.
+Strings, numbers, booleans, arrays and JSON `null`, including nested values, remain
+recoverable exactly as JSON values; do not stringify or discard them. SQL NULL
+or absent metadata has no original JSON payload and need not acquire the
+preservation member. This explicitly changes the root metadata type to an object;
+lossless preservation means the original JSON value remains recoverable.
+
+For example, an old import with unknown authorship and array metadata becomes:
+
+```json
+{
+  "humanAuthor": { "login": null, "displayName": null, "avatarUrl": null },
+  "humanAuthorOriginalMetadata": ["legacy", null, { "humanAuthor": "inert data" }]
+}
+```
+
+Original object metadata keeps its unrelated keys and values; only already-reserved
+attribution keys follow the existing sanitation rules. A preexisting object member
+named `humanAuthorOriginalMetadata` remains inert data, unchanged. Its name or
+contents are never evidence that the object was wrapped or has trusted authorship.
+Never unpack it, merge it into root metadata, or use nested reserved keys as
+attribution. Only root validated/server-produced `humanAuthor` controls historical
+author status. The preservation member grants no identity, local binding, sender
+status, queue readiness/ownership or authority. Raw live, legacy or v1 preservation
+data cannot acquire trust through this name. Existing live input validation stays
+in force.
+
+Re-export preserves the normalized object and original value without another
+wrapper. New readers importing valid non-object human metadata from v1 use the
+same preservation member plus explicit unknown attribution when source provenance
+is unavailable; such supported legacy values are not malformed author envelopes.
+Malformed v2 author envelopes still fail import atomically. Queued explicit send,
+failed-send restoration and re-export retain the original value alongside the
+unchanged trusted snapshot. Nonhuman behavior is unchanged. This uses the existing
+metadata column and format version 2; no additional migration, SQL field/table,
+RPC, adoption workflow or imported permission is introduced.
+
+**Trust boundary and upgrade.** Before activating this guarantee, one data-only
+migration removes the previously unreserved `humanAuthor` key from stored message
+and queued-payload metadata. Preserve text, IDs, timestamps and every unrelated
+metadata key; retain existing migrations and add no table or column. The migration
+does not recover an identity that was already lost. The supported `Store::open`
+newer-ledger rejection is the downgrade fence: an older binary must refuse a
+database with migrations it does not know, rather than reopen it and accept
+unreserved author keys again.
+
+Live sends/mutations, queue ingress, history replacement (including
+`agent.replaceMessages`), legacy history import and version-1 archive ingress
+sanitize or authoritatively overwrite reserved attribution metadata. Client
+copies cannot establish or override trusted `humanAuthor`. Only server-produced
+or validated version-2 historical snapshots enter the trusted path; a snapshot
+accepted as imported history is still not proof of a current authenticated caller.
+The source's trusted prior snapshot, including explicit unknown, survives future
+export unchanged. The new archive version prevents an old reader from silently
+accepting such snapshots; the ledger fence protects the upgraded local store.
+
+**Source attribution.** Preserve an already recorded portable historical author
+first when it is trusted, including an explicit unknown author. Otherwise preserve
+the message's actual source author from its reliable creation stamp and trusted
+source identity. Only an untagged historical human message may use the source
+workspace's
+durable `legacy_author_principal_id`, then `owner_principal_id`, resolved from
+trusted source state in the **same WAL snapshot** as the exported messages.
+Batch distinct principal resolutions; do not replace this with one query per
+message. A stamped but unresolvable contributor stays unknown and is never
+reassigned to the owner. The member who initiates export is not thereby the
+author of prior messages. Neither the source's shared execution account nor the
+receiving account replaces a known contributor. An ordinary source-owned legacy
+workspace must tag its human history before it leaves; this requirement cannot
+be skipped merely because those messages predate per-message author stamps.
+
+Portable identity uses the canonical safe `Identity` triple
+`{ provider, host, externalUserId }`. Labels are presentation; a source-local
+principal ID is scoped to its source. Equal handles, equal external IDs on
+different providers or canonical instances, or equal local principal strings on
+different hosts do not establish the same person. An unlinked source author keeps
+the known source attribution without acquiring a fabricated forge identity or a
+destination principal binding.
+
+**Unknown imported history.** An older archive may lack enough source provenance
+to recover its historical human authors. Keep that history explicitly unknown
+using a trusted all-null `humanAuthor` through reads, restart and later transfers.
+Do not resolve an imported source principal ID against a coincidentally matching
+destination principal, guess from a display handle, or use the receiving workspace
+owner as the missing author. This differs from preparing a new export of an
+ordinary source-owned legacy workspace: source provenance must be captured while it is still available.
+
+**Durable round trips.** Imported attribution is durable with the message before
+the workspace becomes visible. Subsequent profile changes, identity unlinking,
+membership removal, restart and re-export must not rewrite an already preserved
+historical author or replace explicit unknown attribution. A's original messages
+remain A's after A → B → A; messages B and other contributors add later retain
+their own authors. Every existing full/slim transcript read, session projection,
+subscription and message echo agrees on the same historical attribution, while
+ordinary local messages retain the existing batched serve-time resolution.
+
+The imported `MessageAuthor` projection has **`principalId: null`**, with the safe
+snapshot's `login`, `displayName`, `avatarUrl` and optional `identity`; do not
+project `sourcePrincipalId` as a current principal. Current-local authors keep
+`principalId: string`. Clients render historical human authors independently of
+current membership, presence and local principal lookup. An all-null snapshot
+renders an unknown human author, never the receiving owner. Historical authors
+must not match an own-user/preamble/queue-author comparison against a local
+principal ID. Consumers that currently require a string principal ID need to
+accept this explicit historical variant; storing the metadata alone is not
+sufficient for correct rendering.
+
+Transferred comments retain their original labels and recorded safe
+`authorIdentity`. Omit a foreign `authorPrincipalId` on imported comment and
+latest-author projections; source provenance may be retained internally but is
+not a destination binding. Do not infer it again from the safe identity, a label
+or a matching destination principal. Unknown legacy comments still omit the
+metadata, following §5.3.
+
+**History is not admission.** Imported attribution does not create or link a
+principal/account, add a member, authenticate a caller, grant queue ownership or
+select execution credentials. Current access and live sends remain derived from
+the destination's admitted caller. Copied historical fields on an ordinary send
+cannot impersonate a person. Keep the existing single-snapshot export and atomic
+import guarantees.
+
+**Imported human queues.** Actual-human queued records with a trusted snapshot
+and no current-local binding remain durable but are **not automatically ready**.
+Drain, idle, startup, restart and recovery paths cannot deliver them automatically.
+Their authorship/authorization classification is `UnknownHuman`, independently of
+the preserved safe author profile. Strip or quarantine foreign `fromPrincipalId`
+stamps; never resolve them locally or fall back to the receiving owner. The
+[shared queue read policy](./agents.md#shared-pending-human-queue) makes these
+entries visible to authorized workspace participants. Missing local authorship
+grants no edit or merge authority and does not release their delivery hold.
+
+The current destination host owner may explicitly send the unchanged captured
+content with `agent.sendQueuedMessageNow`. Removal with
+`agent.removeQueuedMessage` follows the shared queue's workspace-owner or
+host-owner moderation rule. Existing author-only editing restrictions remain.
+An explicit send requires affirmative current destination-owner authorization
+**inside the existing atomic queue pop**, alongside normal admission and current
+role/credential revalidation. Absence of a per-entry gate is not authorization:
+agent, daemon, unbound and automatic paths cannot bypass the imported-human rule
+merely because that gate is `None`. Runtime-manager and store-only paths enforce
+the same rule. Failed-send restoration and retry preserve the complete entry and
+its original `humanAuthor`, without losing content or restamping it as the owner.
+Current-local and nonhuman queues retain their normal behavior. No new RPC,
+expiring hold, timer or queue-adoption workflow is introduced.
+
+Only historical human messages receive source-human attribution. Do not relabel
+assistant, tool or system rows, or agent/automatic-origin messages, as human.
+Message content and other recorded authors remain unchanged. This transfer-scoped
+source tagging does not authorize guessing or mass-backfilling unknown legacy
+[comment authors (§5.3)](./notes-tasks.md#qualified-human-comment-attribution-109-additive-docs-lead-implementation).
+
+#### GitLab project checkout
+
+**Prepared additive contract, protocol 13.5.** `workspace.create` accepts optional
+`repositoryCheckout` under the
+[`gitlabCheckout: 1` contract](repository-checkout.md#warming-and-exact-checkout).
+It contains the original `checkoutId` and `revision`, full `projectPath`, exact
+selected `branch` and `commitSha`, and `mode: "direct" | "cached"`. It is mutually
+exclusive with `clonePath`, `githubUrl`, `repositoryPath`, `repositoryOwner`,
+`repositoryName`, `worktreePath`, `baseRef`, `baseCommitSha`, `remote` and `path`.
+Setting `isRemote`, `isNewRepo` or `skipIsolation` to `true` is also refused;
+`skipWorktree` remains the alias for `skipIsolation`. The selection is not a
+caller-provided clone URL or a workspace authorization placeholder.
+
+`scope` remains permitted workspace metadata. Optional top-level `branch` names
+the new **local workspace branch** and must be a valid Git branch name. It does
+not override `repositoryCheckout.branch` or `repositoryCheckout.commitSha`:
+the local branch starts at that exact selected commit. Omit it to use the
+existing workspace branch-naming behavior. `environmentConfig` is not a field
+of this create contract.
+
+Both modes must check out the commit selected from the source branch or refuse.
+An unavailable default never becomes an assumed `main`/`master`; a merge-request
+URL selects its target project and chosen or actual default branch, not the
+source fork/head.
+The daemon revalidates original host/caller/socket and repository-connection
+authority before native creation. A warmed cache is not an authorization grant;
+known denial or retired credentials prevent using private cached branches and
+contents, including late work from a previous account.
+
+Existing workspace metadata, initial-agent and progress behavior remains part of
+creation. Show failures without declaring an incomplete checkout ready. Existing
+GitHub PR-aware creation and local/SSH paths retain their own semantics; the
+GitHub cache behavior above does not authorize the new GitLab selection path.
+
+#### Repository context
+
+| Method | Params | Result |
+| --- | --- | --- |
+| workspace.repositoryContext.capture | workspaceId, gitRootId? | Original connection's read lifetime, scope, coverage and retirement cursor |
+| workspace.repositoryContext | workspaceId, gitRootId?, repositoryLifetimeId | RepositoryContext |
+| workspace.repositoryContext.release | workspaceId, gitRootId?, repositoryLifetimeId | {released: true} |
+
+**Prepared additive contract.** Detect
+[`server.capabilities.repositoryContext: 1`](client-hello.md#repository-context-capability)
+on the original physical connection before using it.
+
+These three operations read authorized local repository facts without an Agent,
+MCP session, selected forge or provider login. They do not create a workspace,
+persist a selection, authorize provider calls, or prepare/execute writes.
+
+- **Capture:** `workspace.repositoryContext.capture` takes
+  `{workspaceId, gitRootId?}` and returns
+  `{lifetimeId, scope, coverage, retirementSequence, expiresAfterMs}`.
+- **Read:** `workspace.repositoryContext` takes
+  `{workspaceId, gitRootId?, repositoryLifetimeId}` and returns the existing
+  `RepositoryContext` shape below, with no response wrapper.
+- **Release:** `workspace.repositoryContext.release` takes the same bound
+  parameters as read and returns `{released: true}`.
+
+`workspaceId`, `gitRootId` and `repositoryLifetimeId` are strings; the first and
+last are required for read/release. All three parameter objects reject unknown
+fields. Omitted or `null` `gitRootId` means workspace inventory; a present string
+selects one stored registered root belonging to that workspace. Read/release must
+keep the captured workspace and root filter. IDs identify lookups and invalidation;
+they are not caller-supplied authority, filesystem paths, or transferable grants.
+
+The lifetime belongs only to the physical connection on which capture ran.
+Matching bearer, principal, logical `clientId`, workspace/root IDs or daemon name
+on another connection cannot reuse it. Release of a missing/expired reference is
+idempotent on a usable original feed and never releases another connection's
+reference. An unavailable original feed still refuses the call.
+
+For example, a capture and its response on one connection:
+
+```json
+{"jsonrpc":"2.0","id":101,"method":"workspace.repositoryContext.capture","params":{"workspaceId":"ws-example"}}
+```
+
+```json
+{"jsonrpc":"2.0","id":101,"result":{"lifetimeId":"lease-example","scope":{"daemonId":"daemon-example","authorityScopeId":"scope-example","authorityGeneration":"1"},"coverage":{"kind":"workspaceInventory","workspaceId":"ws-example"},"retirementSequence":"0","expiresAfterMs":300000}}
+```
+
+Coverage is exactly one of `{kind: "workspaceInventory", workspaceId}` (the
+primary root plus the actual registered-root inventory) or
+`{kind: "registeredRoot", workspaceId, gitRootId}` (one exact stored root).
+Submitted and returned IDs must agree. Coverage permits only this local context
+read; it grants neither provider access nor writes. It is distinct from a response
+root's identity, whose `kind` is `"primary"` or `"registered"`.
+
+**Unchanged response types.** The notation below describes JSON objects; `?`
+means an optional field is omitted when unavailable, never replaced with `null`.
+Arrays remain arrays, including when empty. `decimal` means a canonical unsigned
+64-bit decimal **string** (`"0"` through `"18446744073709551615"`), not a JSON
+number, signed value or zero-padded spelling.
+
+```text
+RepositoryContext = {revision: Revision, scope: ExecutionScope, roots: RootContext[]}
+Revision = {epoch: string, sequence: decimal}
+ExecutionScope = {daemonId: string, authorityScopeId: string, authorityGeneration: decimal}
+RootContext = {root: RootId, branch?: string, headSha?: string,
+               remotes: Remote[], targets: TargetContext[], reviewSelection: Selection}
+RootId = {workspaceId: string, kind: "primary"}
+       | {workspaceId: string, kind: "registered", gitRootId: string}
+Remote = {name: string, fetch: Endpoint[], push: Endpoint[]}
+Endpoint = {url: string, resolution: EndpointResolution}
+EndpointResolution = {state: "resolved", target: Target}
+                   | {state: "unresolved", reason: "unknown-instance" | "unsupported-transport"
+                                                | "ambiguous-mapping" | "invalid-remote"}
+Target = {provider: "github" | "gitlab", instanceBaseUrl: string, projectPath: string}
+TargetContext = {target: Target, providerProjectId?: string, connection?: ConnectionScope,
+                 availability: "connected" | "disconnected" | "disabled" | "unsupported" | "unknown",
+                 capabilities: Capability[]}
+ConnectionScope = {connectionId: string, accountId: string, connectionGeneration: decimal}
+Capability = {operation: "read-review" | "read-issue" | "create-review" | "clone" | "fetch" | "push",
+              state: "available" | "unavailable" | "unknown"}
+Selection = {saved: SavedSelection, noRemotes: boolean, outcome: SelectionOutcome}
+SavedSelection = {mode: "automatic"}
+               | {mode: "explicit-remote", remoteName: string}
+               | {mode: "migrated-canonical", target: Target, provenance: HistoricalProvenance}
+               | {mode: "unresolved-historical", source?: HistoricalSource, recordId?: string}
+HistoricalSource = "workspace-metadata" | "registered-root-metadata"
+HistoricalProvenance = {source: HistoricalSource, recordId: string,
+                       resolverVersion: string, evidenceId: string}
+SelectionOutcome = {state: "resolved", target: Target,
+                    source: "automatic" | "explicit-call" | "explicit-remote" | "migrated-canonical"}
+                 | {state: "selection-required", reason: "ambiguous-targets" | "unresolved-candidates"
+                                                       | "missing-selected-remote" | "unresolved-historical-choice"}
+                 | {state: "repository-unavailable", reason: "no-remote", selectionRequired: boolean}
+```
+
+Target identity includes provider, logical instance base URL (including effective
+port and installation prefix), and the provider's canonical project path, without
+client case folding or namespace truncation. `providerProjectId` is optional
+corroboration, not a replacement identity. Remote URLs are sanitized. Unresolved
+endpoints remain visible; only fetch destinations participate in implicit target
+selection. Neither push destinations nor a remote named `origin` establish intent.
+`unresolved-historical` retains only the source/record facts actually known; missing
+facts remain omitted. A new, renamed or uniquely matching remote does not repair
+that history. `unknown` availability/capability is not evidence of absence or denial.
+The full DTO permits the variants above; an individual context need not populate
+every optional field or establish any operation as available.
+
+The epoch in a native context revision is its captured `lifetimeId`. The first
+observation has sequence `"1"`; identical observations retain it. Changed original
+observations retire that lease rather than refreshing its authority. Compare
+revision sequences only within equal execution scopes and epochs. Scope generations,
+connection generations, revisions and retirement cursors preserve all integer bits;
+IDs, counters and the numeric `expiresAfterMs: 300000` are not permission.
+
+A read of a local repository with no remotes can return:
+
+```json
+{"jsonrpc":"2.0","id":102,"method":"workspace.repositoryContext","params":{"workspaceId":"ws-example","repositoryLifetimeId":"lease-example"}}
+```
+
+```json
+{"jsonrpc":"2.0","id":102,"result":{"revision":{"epoch":"lease-example","sequence":"1"},"scope":{"daemonId":"daemon-example","authorityScopeId":"scope-example","authorityGeneration":"1"},"roots":[{"root":{"workspaceId":"ws-example","kind":"primary"},"branch":"main","remotes":[],"targets":[],"reviewSelection":{"saved":{"mode":"automatic"},"noRemotes":true,"outcome":{"state":"repository-unavailable","reason":"no-remote","selectionRequired":false}}}]}}
+```
+
+**Permissions and final validation.** Local facts use the durable workspace member
+check: a host Owner is admitted; a host Member can read an existing ordinary
+workspace but not the Chief workspace; a Guest needs an existing workspace grant.
+Host account/connection metadata additionally requires the original native
+administrator role. Non-administrators receive authorized local facts with that
+identity omitted and availability/capabilities `"unknown"` where no separately
+authorized fact exists. This path does not call `sourceControl.authStatus` or make
+provider requests. Capturing no account metadata cannot acquire it later.
+
+The server validates the original caller/credential, durable membership, stored
+root/selection, local Git, settings and captured connection facts at entry and at
+the consuming reply. Stale or busy captured facts refuse delivery; a delayed
+notification does not bypass those checks. Unavailable, retired, foreign or final
+refusals use the sanitized error below. Strict malformed parameters use `-32602`;
+other transport/error handling remains as described in [Errors](../09-error-codes.md).
+
+```json
+{"jsonrpc":"2.0","id":102,"error":{"code":-32003,"message":"Forbidden","data":{"code":"forbidden","detail":"Repository context unavailable"}}}
+```
+
+**Finite limits.** Per original connection: 64 outstanding leases, 128 inventory
+roots including primary, 64 queued retirement notices, and two owned local blocking
+jobs. Each lease permits 64 sequential reads; concurrent reads are refused. Lease
+expiry is 300 seconds; acquisition has a 5-second deadline; read and final validation
+have 10-second deadlines each; a queued frame expires after 15 seconds before
+service execution; control-notice send has a 5-second deadline. These are resource
+and rejection bounds. Canceled acquisition does not publish a late lease, and
+cancellation does not mean a running blocking Git worker has stopped or released
+its locks.
+
+Follow the [original-connection client ordering](../10-thin-client.md#repository-context-lifecycle)
+and [private retirement notice](../06-events.md#private-repository-context-retirement),
+including reconciliation while capture awaits. Release uses that same connection:
+
+```json
+{"jsonrpc":"2.0","id":103,"method":"workspace.repositoryContext.release","params":{"workspaceId":"ws-example","repositoryLifetimeId":"lease-example"}}
+```
+
+```json
+{"jsonrpc":"2.0","id":103,"result":{"released":true}}
+```
+
+#### Repository selection
+
+| Method | Params | Result |
+| --- | --- | --- |
+| workspace.repositorySelection.capture | workspaceId, gitRootId? | SelectionCapture |
+| workspace.repositorySelection.save | workspaceId, gitRootId?, selectionId, choice | SelectionAttempt |
+| workspace.repositorySelection.reset | workspaceId, gitRootId?, selectionId | SelectionAttempt |
+| workspace.repositorySelection.reconcile | workspaceId, gitRootId?, selectionId | Original SelectionAttempt, without another write |
+| workspace.repositorySelection.release | workspaceId, gitRootId?, selectionId | {released: true} |
+
+**Prepared additive contract.** Detect
+[`server.capabilities.repositorySelection: 1`](client-hello.md#repository-selection-capability)
+on the original confirmed physical connection before use. Availability and permission must be checked on that connection.
+
+These operations persist local Intent selection intent. They do not edit Git,
+authorize provider calls or repository reads, or prepare/create a review. A
+repository context read lease or inventory result is not selection write authority.
+The native Wire connection owns the editing operation; Agent, MCP and Daemon
+callers cannot enter it.
+
+- **Capture:** `workspace.repositorySelection.capture` takes
+  `{workspaceId, gitRootId?}` and returns `SelectionCapture` below.
+- **Save:** `workspace.repositorySelection.save` takes
+  `{workspaceId, gitRootId?, selectionId, choice}` and returns `SelectionAttempt`.
+- **Reset:** `workspace.repositorySelection.reset` takes
+  `{workspaceId, gitRootId?, selectionId}` and returns `SelectionAttempt`.
+- **Reconcile:** `workspace.repositorySelection.reconcile` takes the same bound
+  parameters as reset and returns the original `SelectionAttempt` without writing.
+- **Release:** `workspace.repositorySelection.release` takes the same bound
+  parameters and returns `{released: true}`.
+
+All parameter objects reject unknown fields. `workspaceId`, `gitRootId` and
+`selectionId` are strings; workspace and selection IDs are required except that
+capture has no selection ID. Omitted or `null` `gitRootId` means **exactly Primary**,
+not the workspace inventory used by context capture. A present string selects the
+registered root in that workspace. Later calls must keep the captured workspace,
+root and selection ID. Paths, caller/scope fields, revisions and client-created
+snapshots are not accepted as authority parameters. A matching bearer, logical
+`clientId` or root on another socket cannot adopt the operation.
+
+Save accepts only `{mode: "automatic"}` or
+`{mode: "explicit-remote", remoteName: string}`. The remote name must be nonempty,
+at most 1024 UTF-8 bytes, already trimmed and contain no control characters. It need
+not currently exist in Git; this operation neither executes Git nor infers a target
+from a remote name. Reset has its own method. Historical/migrated saved forms are
+read observations, not new write choices.
+
+**Response shapes.** The following notation describes JSON. `decimal` is a
+canonical unsigned 64-bit decimal **string**, preserving values through
+`"18446744073709551615"`; compare without JavaScript `Number` rounding. The expiry
+is instead the JSON number `300000`. `ExecutionScope`, `RootId` and `SavedSelection`
+are the unchanged types defined in the repository context section above.
+
+```text
+SelectionCapture = {selectionId: string, scope: ExecutionScope, root: RootId,
+                    snapshot: SelectionSnapshot, retirementSequence: decimal,
+                    expiresAfterMs: 300000}
+SelectionSnapshot = {root: RootId, rootIncarnation: decimal,
+                     selectionRevision: decimal, selection: StoredSelection}
+StoredSelection = {kind: "neverSaved"}
+                | {kind: "reset"}
+                | {kind: "saved", value: SavedSelection}
+SelectionAttempt = {selectionId: string, root: RootId, attempt: AttemptState}
+AttemptState = {status: "notStarted"}
+             | {status: "pending"}
+             | {status: "settled", receipt: SelectionReceipt}
+SelectionReceipt = {result: SelectionResult, persistence: SelectionPersistence}
+SelectionResult = {kind: "applied" | "unchanged" | "conflict", snapshot: SelectionSnapshot}
+                | {kind: "missingRoot"}
+                | {kind: "failed", code: SelectionFailure}
+SelectionFailure = "admission-retired" | "authority-unavailable"
+                 | "storage-failed" | "completion-unobserved"
+SelectionPersistence = {kind: "notAttempted"}
+                     | {kind: "noEffect"}
+                     | {kind: "committed", selectionRevision: decimal}
+                     | {kind: "unknown"}
+```
+
+Never saved, explicit reset and saved Automatic are distinct states. This Store
+projects saved Automatic, explicit remote or unresolved historical intent; it does
+not manufacture the existing DTO's `migrated-canonical` variant. Unresolved history
+retains only known `source` and `recordId`; unknown fields are omitted, not `null`.
+The source tags remain `workspace-metadata` and `registered-root-metadata`. No
+remote discovery, rename or unique match repairs historical intent automatically.
+
+Core's public `RepositorySelectionSnapshot` is a serializable observation. Store's
+same-named type is a separate private, nonclone, nonserializable owner of the
+original compare-and-set snapshot. Clients cannot reconstruct it from the public
+fields. The public Rust connection carrier `capture_selection` returns
+`Option<Arc<dyn RepositoryReadRequestScope>>`, defaulting to `None`; unsupported
+owners cannot supply admission. Boxing a settled receipt adds no JSON wrapper.
+
+A capture of Primary on one original connection:
+
+```json
+{"jsonrpc":"2.0","id":201,"method":"workspace.repositorySelection.capture","params":{"workspaceId":"ws-example"}}
+```
+
+```json
+{"jsonrpc":"2.0","id":201,"result":{"selectionId":"selection-example","scope":{"daemonId":"daemon-example","authorityScopeId":"scope-example","authorityGeneration":"1"},"root":{"workspaceId":"ws-example","kind":"primary"},"snapshot":{"root":{"workspaceId":"ws-example","kind":"primary"},"rootIncarnation":"1","selectionRevision":"1","selection":{"kind":"neverSaved"}},"retirementSequence":"0","expiresAfterMs":300000}}
+```
+
+For a registered root, capture includes `gitRootId: "root-example"`; both returned
+root objects then have this shape, and later calls retain that same `gitRootId`:
+
+```json
+{"workspaceId":"ws-example","kind":"registered","gitRootId":"root-example"}
+```
+
+**One original command and its receipt.** Capture the server editing snapshot
+**before user confirmation**, on the connection/root used for later calls. Never
+silently replace an older edit with a fresh capture. Save or reset claims one
+immutable command synchronously before queueing. Identical repeats only observe
+its original pending/settled attempt and consume the observation budget; a changed
+command is invalid. A conflict consumes that operation and requires a fresh
+explicit user action, not automatic recapture or replay.
+
+`result` and `persistence` describe independent facts. Applied, unchanged and
+conflict carry the snapshot from that historical attempt, not a promise about the
+current saved selection. `noEffect` requires an observed no-write/rollback
+completion. Failed projection or settlement may coexist with committed persistence,
+and unknown persistence is never proof of rollback. For example, a retained receipt
+can truthfully report:
+
+```json
+{"jsonrpc":"2.0","id":202,"result":{"selectionId":"selection-example","root":{"workspaceId":"ws-example","kind":"primary"},"attempt":{"status":"settled","receipt":{"result":{"kind":"failed","code":"completion-unobserved"},"persistence":{"kind":"committed","selectionRevision":"9007199254740993"}}}}}
+```
+
+Reconcile observes only the original socket's retained operation under its current
+disclosure checks. It never writes, revives admission or discovers a receipt on a
+replacement connection. Preserve known receipts independently of whether current
+UI state may apply them. Loss of the original socket/process before a known receipt
+remains uncertain: reading current selection after reconnect is not reconciliation.
+No durable cross-connection receipt lookup is promised.
+
+Release is idempotent original-reference retirement on a usable original feed.
+It does not cancel an admitted Store worker or erase its pending/retained receipt.
+An unavailable original feed still refuses. A canceled or timed-out waiter cannot
+replace the admitted worker; its capacity stays charged until actual completion,
+including after socket loss. Release late capture results only through their
+original connection, never through the client's newly selected host.
+
+**Permissions and final disclosure.** The unchanged workspace-manager policy
+admits a host Owner; a host Member on ordinary non-chief workspaces; or a Guest
+with the actual workspace Owner role, not Collaborator. Durable original Wire,
+caller/credential and root authority checks also apply. Read/inventory permission
+does not authorize this write. Authority is compared before acquisition/mutation
+and inside both Store comparison transactions. Selection invalidation does not
+retire the operation's own write authority; unrelated root, permission, database
+or credential retirement does.
+
+Final reply disclosure separately rechecks original authority and root incarnation
+at the consuming output slot. A committed effect does not guarantee that the
+receipt may still be disclosed. An RPC error, timeout or later retirement cannot
+rewrite a known commit as rollback. Follow the
+[client ordering and uncertainty rules](../10-thin-client.md#repository-selection-lifecycle)
+and the [private retirement feed](../06-events.md#private-repository-selection-retirement).
+
+Malformed strict parameters or a changed command use `-32602` with
+`data.code: "invalid-params"`. Existing workspace non-disclosure uses `-32602`
+with `data.code: "not-found"`. Unavailable, retired, foreign-ownership or capacity
+refusals use the sanitized envelope below; sanitized receipt failure codes remain
+result data and contain no raw Store/SQL/provider diagnostics.
+
+```json
+{"jsonrpc":"2.0","id":203,"error":{"code":-32003,"message":"Forbidden","data":{"code":"forbidden","detail":"Repository selection unavailable"}}}
+```
+
+**Finite limits.** There are 64 retained records per original connection, 256 per
+Services instance and two actual Store workers per Services instance. Each handle
+permits one client operation in flight and at most 64 reconcile/identical-repeat
+observations. Capture has a 5-second deadline, queued frames a 15-second lifetime,
+and admission/final checks 10-second deadlines. An unclaimed handle lasts 300
+seconds; a settled receipt is retained for 300 seconds from original settlement,
+without renewal. The private notice queue holds 64 notices and forwarding has a
+5-second timeout. Incomplete workers retain charged capacity beyond ordinary
+expiry; the server refuses new work instead of forgetting an unfinished effect.
+
 ### 5.23 Usage metrics — `workspace.getTokenUsage`
 
 The backend owns token/credit **usage accounting**. Usage is sourced **live from ACP**: at the end
@@ -2018,13 +2856,124 @@ omissions is tabulated under **List-row slimming** in the `Workspace` payload no
 | workspace.getTokenUsage | workspaceId (req) | { tokenUsage: TokenUsage } — -32602 if the workspace is not found |
 
 **TokenUsage** — `{ byAgentId: { [agentId]: TokenUsageTotals }, totals: TokenUsageTotals,
-byModel: { [modelName]: TokenUsageTotals }, lastScanAt: string | null }`, where
+byModel: { [modelName]: TokenUsageTotals }, byAgentModel?: TokenUsageCrossFilterRow[],
+agentNames?: { [agentId]: string }, lastScanAt: string | null }`, where
 **TokenUsageTotals** is the consumption counters plus an optional cost —
 `{ inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, thoughtTokens?,
 cost?: { amount: number, currency: string } }`. `byAgentId` keys are
 `agent-{uuid}`; `byModel` keys are the effective model name (`"unknown"` fallback); `lastScanAt` is
-the RFC-3339 timestamp of the last recompute — a live turn-end update or a reconciliation pass
-(`null` before the first). Updated values are pushed via `workspace:tokenUsage-changed` (§6.5).
+the RFC-3339 timestamp of the last committed materialization by end-of-turn usage accounting or
+the reconciliation pass (`null` before the first). Updated values are pushed via
+`workspace:tokenUsage-changed` (§6.5).
+
+**Additive agent names** *(additive, [intent-hq/intent#7334](https://github.com/intent-hq/intent/pull/7334))*.
+`agentNames` maps an `agentId` to that agent session's display name, so a client can label
+every usage row, including retired agents, delegated agents it has not loaded, and agents in
+their delete grace window. Its keys are a subset of the `byAgentId` keys: only agents whose
+`byAgentId` bucket reports usage (a non-zero counter or a cost) are named. A session whose name
+is empty after trimming whitespace is omitted, and an empty map is omitted from the wire. An
+absent field can therefore mean an empty map, an older daemon, or a persisted snapshot that
+predates the field. Clients handle all three the same way: prefer the name of an agent they
+have loaded, then `agentNames`, then their own generic label. They never show a raw `agentId`.
+
+Names are materialized with the rest of the snapshot: they are the session names at the last
+committed materialization. A name change is a snapshot change, so a recompute that finds one
+commits and publishes `workspace:tokenUsage-changed` even if no counter moved. An applied
+`agent.rename`, or an `agent.update` that sets `name`, recomputes the snapshot when the stored
+snapshot already has a `byAgentId` bucket for that agent, so a rename of an agent with usage
+publishes the new name right away; renaming a usage-less agent writes nothing. A persisted
+snapshot without the field is not backfilled on the read path. The first reconciliation
+pass after a daemon upgrade recomputes every workspace it sweeps, so each swept workspace
+that has a named agent commits and publishes once. A workspace the pass does not sweep, or
+one whose recompute is declined, keeps serving its stored names (or none) until its next
+committed materialization. Ship order: this contract, then the intentd implementation, then
+the cloudlands-fe consumer; the auto-bump advances the pins.
+
+**Additive cross-filter rows.** `byAgentModel` is the sparse, materialized agent × model
+projection. One **TokenUsageCrossFilterRow** has the exact shape
+`{ agentId: string, model: string, totals: TokenUsageTotals, humanMessages: number,
+agentMessages: number }`. The two counts are non-negative integers. The four base counters in
+`totals` are always present; `thoughtTokens` and `cost` keep the optional rules below. Rows are
+unique by `(agentId, model)` and are ordered by `agentId`, then `model`, in ascending byte order.
+A row is present when that cell has a non-zero token counter, a reported cost, or at least one
+counted message. An all-zero, cost-less, message-less cell is omitted.
+
+The field is presence-detected and additive. A new daemon writes `byAgentModel` on every new or
+recomputed snapshot. It writes `[]` when the workspace has no contributing cell. An **absent**
+field means that the persisted snapshot predates this projection; it does not mean an
+authoritative empty projection. Old clients ignore the field. A new client that receives an
+absent field must keep its legacy, non-cross-filter view and must not invent cells or message
+counts from `byAgentId` and `byModel`. Loading an old persisted snapshot does not backfill it on
+the read path. The next end-of-turn usage accounting update that commits a changed snapshot, or
+the next reconciliation pass that commits one, materializes the field. A transcript write alone
+does not materialize the field or publish `workspace:tokenUsage-changed`.
+
+**Safe rollout order.** Land this additive canonical contract first in
+[intent-hq/intent#4376](https://github.com/intent-hq/intent/pull/4376), then the daemon
+implementation in [intent-hq/intentd#1719](https://github.com/intent-hq/intentd/pull/1719), then
+the frontend consumer in [intent-hq/cloudlands-fe#2154](https://github.com/intent-hq/cloudlands-fe/pull/2154).
+Publishing the contract does not make the projection available at runtime: clients must still
+presence-detect `byAgentModel` and preserve the absent-versus-empty behavior above. Canonical
+docs may lead the pinned implementation; repository-owned `auto-bump-submodules` automation
+advances the gitlinks after the component merges. Do not advance the gitlinks manually or gate
+this additive documentation on a pin advance.
+
+**Projection invariants and scopes.** The existing `totals`, `byAgentId`, and `byModel` fields
+stay required and unchanged. For a snapshot that has `byAgentModel`, the daemon derives all four
+projections from the same cells:
+
+- workspace scope = all rows;
+- agent scope = rows whose `agentId` matches;
+- model scope = rows whose `model` matches;
+- agent × model scope = the one row whose pair matches;
+- token-category scope = the selected counter in the rows of the current scope.
+
+Counter reduction uses saturating sums. Reducing row totals by `agentId`, by `model`, or across
+the workspace must reproduce the corresponding existing counters exactly. Cost reduction uses
+the existing currency rule below, not a currency conversion. Message counts reduce with ordinary
+integer sums. They do not affect cost or token totals. `inputTokens` stays the provider-reported,
+aggregate **In** counter at every scope. It is never split or estimated by human or agent origin.
+`humanMessages` and `agentMessages` are message counts, not token counts, and a client must label
+them separately from token units.
+
+**Exact message-origin rules.** Counts describe the current persisted transcript, not a history
+of events. One qualifying message row contributes at most one count, regardless of its number of
+content blocks:
+
+- A persisted `user` row with user-origin provenance contributes one `humanMessages` count.
+- A persisted `assistant` row contributes one `agentMessages` count.
+- A persisted `user` row with agent-origin delivery provenance contributes one
+  `agentMessages` count. Agent-origin delivery includes an agent-attributed queued or direct
+  delivery, such as a row whose trusted metadata carries a non-empty `fromAgentId`.
+- A `system` or `tool` row contributes to neither count. An automatic system delivery that has no
+  agent-origin provenance also contributes to neither count.
+
+The provenance written by the daemon is authoritative; caller-supplied metadata cannot change
+the classification. For a legacy `user` row that has no persisted origin marker, the stable
+fallback is: a non-empty trusted `messageMetadata.fromAgentId` means agent origin; otherwise the
+row means human origin. Legacy `assistant`, `system`, and `tool` rows follow the role rules above.
+This fallback is applied only during daemon-owned materialization. It is never applied by a
+client and never requires message-body hydration on `workspace.getTokenUsage`.
+
+Each token, cost, and message contribution is assigned to its agent and to the effective model
+that the daemon persists with that contribution. For a legacy contribution that has no persisted
+model provenance, the stable fallback is the owning agent session's effective model at
+materialization time. A missing or empty model is normalized to the literal `"unknown"`, the same
+sentinel used by `byModel`; an empty-string model is never sent. A model change can therefore
+produce more than one row for one agent. ACP session recreation preserves existing cells and
+counts; it does not count a message again. Transcript append, queue drain, agent-to-agent
+delivery, replace, delete, and agent/session delete operations change the source rows. The next
+end-of-turn usage accounting materialization or reconciliation pass makes the snapshot describe
+only the rows that still exist.
+
+**Performance contract.** `byAgentModel` and both message counts use the derived-field write
+rung: the daemon materializes them during end-of-turn usage accounting and the existing
+off-read-path reconciliation pass. Transcript writes only change the source rows; they do not
+publish an immediate usage snapshot. `workspace.getTokenUsage` reads the durable workspace
+snapshot only, and `workspace:tokenUsage-changed` carries that same snapshot. Neither path may
+hydrate a transcript, read message bodies, scan a full transcript, or issue one query per agent
+or row. A reconciliation implementation may use one bounded indexed projection, but it runs
+outside the RPC read path.
 
 **Cost** is sourced from the ACP `usage_update` session notification's `cost` object
 (`{ amount, currency }`, `currency` an ISO 4217 code) and is therefore present **only for
@@ -2036,8 +2985,8 @@ recreate folds it into the same internal baseline as the counters (no reset-to-z
 double count). The two reports are independent: a turn carrying only a cost never zeroes the
 counters, and a turn carrying only counters never drops a cost already reported. Aggregation
 sums amounts per currency within each bucket (`totals`, each `byAgentId` entry, each `byModel`
-entry); in the pathological case of a bucket mixing currencies, the currency with the largest
-sum wins — the daemon never converts between currencies.
+entry, and each `byAgentModel` cell); in the pathological case of a bucket mixing currencies, the
+currency with the largest sum wins — the daemon never converts between currencies.
 
 **`thoughtTokens`** *(additive within v6.0, [intent-hq/intentd#973](https://github.com/intent-hq/intentd/pull/973))*
 is the cumulative reasoning ("thought") token count, sourced from the end-of-turn ACP
@@ -2050,8 +2999,9 @@ subset shape (no backfill).
 It is a `u64` in camelCase, **omitted when zero or unreported** (never a fabricated `0`, never
 `null`), so clients written against the pre-`thoughtTokens` shape are unaffected. It aggregates
 exactly like the other counters — saturating sum into `totals` / each `byAgentId` entry / each
-`byModel` entry, saturating subtraction for the per-turn delta against the previous cumulative
-snapshot (clamped ≥ 0), and folded into the ACP-session-recreate baseline the same way. A tally
+`byModel` entry / each `byAgentModel` cell, saturating subtraction for the per-turn delta against
+the previous cumulative snapshot (clamped ≥ 0), and folded into the ACP-session-recreate baseline
+the same way. A tally
 whose ONLY non-zero counter is `thoughtTokens` still counts as a real token report, so it does
 not fall through to the legacy per-message usage fallback.
 
@@ -2060,11 +3010,29 @@ not fall through to the legacy per-message usage fallback.
 { "jsonrpc":"2.0","id":62,"method":"workspace.getTokenUsage","params":{ "workspaceId":"ws-abc" } }
 // ← response (pushed again as workspace:tokenUsage-changed whenever the tally changes — at turn end or after a reconciliation pass)
 { "jsonrpc":"2.0","id":62,"result":{ "tokenUsage":{
-  "byAgentId":{ "agent-123":{ "inputTokens":12000,"outputTokens":3400,"cacheReadTokens":8000,"cacheCreationTokens":1200,"cost":{ "amount":1.25,"currency":"USD" } } },
-  "byModel":{ "opus-4.8":{ "inputTokens":12000,"outputTokens":3400,"cacheReadTokens":8000,"cacheCreationTokens":1200,"cost":{ "amount":1.25,"currency":"USD" } } },
+  "byAgentId":{
+    "agent-123":{ "inputTokens":8000,"outputTokens":2400,"cacheReadTokens":4500,"cacheCreationTokens":700,"cost":{ "amount":0.85,"currency":"USD" } },
+    "agent-456":{ "inputTokens":4000,"outputTokens":1000,"cacheReadTokens":3500,"cacheCreationTokens":500,"cost":{ "amount":0.40,"currency":"USD" } }
+  },
+  "byModel":{
+    "opus-4.8":{ "inputTokens":11000,"outputTokens":3000,"cacheReadTokens":7500,"cacheCreationTokens":1100,"cost":{ "amount":1.10,"currency":"USD" } },
+    "sonnet-4.6":{ "inputTokens":1000,"outputTokens":400,"cacheReadTokens":500,"cacheCreationTokens":100,"cost":{ "amount":0.15,"currency":"USD" } }
+  },
+  "byAgentModel":[
+    { "agentId":"agent-123","model":"opus-4.8","totals":{ "inputTokens":7000,"outputTokens":2000,"cacheReadTokens":4000,"cacheCreationTokens":600,"cost":{ "amount":0.70,"currency":"USD" } },"humanMessages":3,"agentMessages":4 },
+    { "agentId":"agent-123","model":"sonnet-4.6","totals":{ "inputTokens":1000,"outputTokens":400,"cacheReadTokens":500,"cacheCreationTokens":100,"cost":{ "amount":0.15,"currency":"USD" } },"humanMessages":1,"agentMessages":1 },
+    { "agentId":"agent-456","model":"opus-4.8","totals":{ "inputTokens":4000,"outputTokens":1000,"cacheReadTokens":3500,"cacheCreationTokens":500,"cost":{ "amount":0.40,"currency":"USD" } },"humanMessages":2,"agentMessages":3 }
+  ],
+  "agentNames":{ "agent-123":"Coordinator","agent-456":"PR reviewer" },
   "totals":{ "inputTokens":12000,"outputTokens":3400,"cacheReadTokens":8000,"cacheCreationTokens":1200,"cost":{ "amount":1.25,"currency":"USD" } },
   "lastScanAt":"2026-06-17T12:00:00Z" } } }
 ```
+
+For this example, workspace message scope is `humanMessages = 6` and
+`agentMessages = 8`; `agent-123` scope is `4` and `5`; `opus-4.8` scope is `5` and `7`;
+and the `agent-123` × `sonnet-4.6` scope is `1` and `1`. Selecting the aggregate In
+category for that last scope reads `totals.inputTokens = 1000`; it does not divide those tokens
+between the two message origins.
 
 ### 5.25 Worktree setup scripts — `workspace.getSetupScript` / `workspace.saveSetupScript` / `workspace.detectProjectType` / `workspace.generateSetupScript`
 
@@ -2117,3 +3085,28 @@ script's exit code (§5.1).
   "projectType":"rust","updatedAt":1750000000000,"generatedBy":"agent" } } }
 ```
 
+### Prepared agent placement default
+
+[§5.50](./nodes.md#placement-and-creation) specifies the future optional
+`Workspace.defaultAgentPlacement` field, manager-only `workspace.update` writes
+(null clears), and `workspace.create.initialAgent.placement`. It does not change
+workspace `checkoutMode`, its CoW/reflink implementation, or current creation
+behavior before the node capabilities are advertised.
+
+The [11.2 platform extension](../model-platform-routing.md) widens that whole
+object with optional os/arch under agentPlatformRouting 1. An initial agent uses
+the outer workspace idempotency key and a derived initial-agent identity; no
+second independent workspace retry is created. Omission retains legacy behavior unless
+an existing specialist/workspace default applies; no manual dialog is required.
+
+For an effective placed initial agent under agentPlatformRouting 1, the
+[per-method launch response contract](../model-platform-routing.md#per-method-launch-responses)
+is the precise extension to initial-agent orchestration above: successful replies
+still require the real initialAgent and add a sibling initialAgentLaunch.
+If initial-agent admission is pending, uncertain or fails after workspace commit,
+return -32603 with the real workspaceId, outer idempotencyKey and derived child
+launch in error.data; never a post-effect -32602 or a fabricated AgentLite.
+The existing global workspace-create idempotency scope remains: parent retries
+reconcile the same workspace/initial-agent owner and never re-provision or resend.
+Terminal responses replay unchanged. All -32602 workspace rejections remain
+pre-side-effect; later capacity failure is diagnostic data inside the -32603.

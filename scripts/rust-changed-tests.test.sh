@@ -12,6 +12,9 @@ set -euo pipefail
 # BASE=HEAD or DRY_RUN=1 exported would change every expected argv).
 unset BASE DRY_RUN INTENTD_DIR BUILD_JOBS TEST_THREADS NEXTEST_SHOW_PROGRESS CARGO_TERM_PROGRESS_WHEN
 unset NEXTEST_RUNNER RESUME GATE_FORCE NO_FAIL_FAST GATE_CACHE_DIR NEXTEST_HIDE_PROGRESS_BAR MAKEFLAGS MFLAGS
+unset TRANSFER_SELECTION_FIXTURE_ROOT
+unset INTENT_ACP_CALLBACK_ADAPTER_FIXTURE NODE_OPTIONS
+unset COMPACT CARGO_INCREMENTAL CARGO_PROFILE_DEV_DEBUG CARGO_PROFILE_TEST_DEBUG
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 intentd_script="$repo_root/packages/intentd/scripts/changed-tests.sh"
@@ -33,7 +36,7 @@ fail() {
   || fail "$intentd_script is missing; initialize the intentd submodule (git submodule update --init packages/intentd)"
 
 ln -s "$script_bash" "$bin_dir/bash"
-for command in dirname mktemp rm sort; do
+for command in dirname mktemp rm sort grep; do
   ln -s "$(command -v "$command")" "$bin_dir/$command"
 done
 # python3 runs the real record-writing runner in the end-to-end cases below;
@@ -41,6 +44,7 @@ done
 python3=$(command -v python3 2>/dev/null) || python3=""
 [[ -z "$python3" ]] || ln -s "$python3" "$bin_dir/python3"
 ln -s "$(command -v git)" "$bin_dir/git"
+ln -s "$(command -v node)" "$bin_dir/node"
 
 # Stub cargo: every invocation is appended to CARGO_TEST_LOG as "<cwd>: <argv>";
 # the subcommand named by CARGO_STUB_MISSING fails like an uninstalled cargo
@@ -60,6 +64,7 @@ chmod +x "$bin_dir/cargo"
 cat >"$bin_dir/make-stub" <<'SH'
 #!/usr/bin/env bash
 { echo "make:"; printf '%s\n' "$@"; } >>"$PLANNER_TEST_LOG"
+printf '%s\n' "${MAKEFLAGS-}" >"$PLANNER_TEST_LOG.makeflags"
 SH
 chmod +x "$bin_dir/make-stub"
 
@@ -81,6 +86,7 @@ export GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@example.invalid
 mk="$temp_dir/reviewer's checkout"
 mkdir -p "$mk/scripts" "$mk/packages/intentd/scripts" "$mk/packages/intentd/.git"
 cp "$repo_root/Makefile" "$mk/Makefile"
+cp "$repo_root/scripts/check_watch_capacity.py" "$mk/scripts/"
 cat >"$mk/packages/intentd/scripts/changed-tests.sh" <<'SH'
 #!/usr/bin/env bash
 {
@@ -205,6 +211,64 @@ else
   expect_make_ok
   [[ -z "$cargo_log" ]] || fail "$case_name: cargo was invoked: $cargo_log"
   expect_planner "--instrumented" "" 1 -2 -2 none never
+
+  # HERMETIC=1 wraps the runner in intentd's no-provider-CLI sandbox script
+  # (intentd#2551), after a Linux + bwrap preflight that runs before planning.
+  printf '#!/usr/bin/env bash\necho Linux\n' >"$bin_dir/uname"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$bin_dir/bwrap"
+  chmod +x "$bin_dir/uname" "$bin_dir/bwrap"
+  hermetic_line="[test-changed] HERMETIC=1: tests run with every provider CLI hidden (packages/intentd/scripts/test-without-provider-clis.sh)"
+
+  case_name="test-changed recipe wraps the runner under HERMETIC=1"
+  run_make test-changed HERMETIC=1 BUILD_JOBS=3
+  expect_make_ok
+  [[ "$stdout" == *"$hermetic_line"* ]] || fail "$case_name: mode not announced: $stdout"
+  expected="runner:"$'\n'"env"$'\n'"INTENT_GATE_HERMETIC=1"$'\n'"CARGO_BUILD_JOBS=3"$'\n'"bash"$'\n'"packages/intentd/scripts/test-without-provider-clis.sh"$'\n'"python3"$'\n'"scripts/resumable_nextest.py"$'\n'"--repo-root"$'\n'"$mk"
+  [[ "$planner_log" == *"$expected"* ]] || fail "$case_name: runner argv was"$'\n'"$planner_log"
+
+  case_name="test-changed recipe leaves the runner unwrapped by default"
+  run_make test-changed
+  expect_make_ok
+  [[ "$planner_log" == *"runner:"$'\n'"python3"$'\n'* && "$stdout" != *"HERMETIC=1"* ]] \
+    || fail "$case_name: runner argv was"$'\n'"$planner_log"
+
+  case_name="test-changed recipe announces HERMETIC=1 under DRY_RUN=1"
+  run_make test-changed HERMETIC=1 DRY_RUN=1
+  expect_make_ok
+  [[ "$stdout" == *"$hermetic_line"* ]] || fail "$case_name: stdout: $stdout"
+
+  case_name="test-changed recipe carries HERMETIC=1 into the full make test fallback"
+  PLANNER_STUB_EXIT=3 run_make test-changed HERMETIC=1 MAKE="$bin_dir/make-stub"
+  expect_make_ok
+  [[ "$(<"$temp_dir/planner.log.makeflags")" == *"HERMETIC=1"* ]] \
+    || fail "$case_name: MAKEFLAGS were: $(<"$temp_dir/planner.log.makeflags")"
+
+  case_name="test-changed recipe refuses HIDE_NODE=1 with HERMETIC=1 before planning"
+  run_make test-changed HERMETIC=1 HIDE_NODE=1
+  [[ "$status" -ne 0 ]] || fail "$case_name: make exited 0"
+  [[ "$stderr" == *"[test-changed] ERROR: HIDE_NODE=1 is not supported with HERMETIC=1"* ]] || fail "$case_name: stderr: $stderr"
+  [[ -z "$planner_log" ]] || fail "$case_name: planner ran: $planner_log"
+
+  case_name="test-changed recipe refuses HERMETIC=1 without bwrap before planning"
+  rm -f "$bin_dir/bwrap"
+  run_make test-changed HERMETIC=1
+  [[ "$status" -ne 0 ]] || fail "$case_name: make exited 0"
+  [[ "$stderr" == *"[test-changed] ERROR: HERMETIC=1 needs bwrap"* ]] || fail "$case_name: stderr: $stderr"
+  [[ -z "$planner_log" ]] || fail "$case_name: planner ran: $planner_log"
+
+  case_name="test-changed recipe refuses HERMETIC=1 off Linux before planning"
+  printf '#!/usr/bin/env bash\necho Darwin\n' >"$bin_dir/uname"
+  run_make test-changed HERMETIC=1
+  [[ "$status" -ne 0 ]] || fail "$case_name: make exited 0"
+  [[ "$stderr" == *"[test-changed] ERROR: HERMETIC=1 is Linux only"* ]] || fail "$case_name: stderr: $stderr"
+  [[ -z "$planner_log" ]] || fail "$case_name: planner ran: $planner_log"
+  rm -f "$bin_dir/uname"
+
+  case_name="HERMETIC accepts only 0 or 1"
+  run_make test-changed HERMETIC=true
+  [[ "$status" -ne 0 ]] || fail "$case_name: make exited 0"
+  [[ "$stderr" == *"HERMETIC must be 0 or 1, got 'true'"* ]] || fail "$case_name: stderr: $stderr"
+  [[ -z "$planner_log" ]] || fail "$case_name: planner ran: $planner_log"
 fi
 
 # End to end through the real `make test-changed`: intentd's changed-tests.sh
@@ -216,14 +280,14 @@ fi
 # packages/intentd as a symlink to the fixture checkout so the runner's
 # --intentd-dir resolves as the Makefile passes it. A fake cargo answers
 # `nextest list` with a canned suite listing and `nextest run` with libtest
-# `test ok` events for those tests (after checking the --tool-config-file the
-# runner wrote exists); rustc/cargo version stubs feed the tree key.
+# events and JUnit for those tests (using the runner's tool config and profile
+# to resolve the native JUnit destination); rustc/cargo stubs feed the tree key.
 if [[ -z "$python3" || -z "$make_bin" ]]; then
   echo "rust-changed-tests tests: python3 or make not found; record/resume end-to-end cases skipped"
 else
   e2e_bin="$temp_dir/e2e-bin"
-  repo="$temp_dir/e2e/intentd"
   mono="$temp_dir/e2e/mono"
+  repo="$mono/packages/intentd"
   cache="$temp_dir/gate runs"
   mkdir -p "$e2e_bin" "$repo/scripts" "$repo/crates/alpha/src" "$repo/crates/alpha/tests" "$mono/packages" "$mono/scripts"
   printf '[workspace]\n' >"$repo/Cargo.toml"
@@ -233,6 +297,8 @@ else
     printf '%s\n' "$file" >"$repo/$file"
   done
   ln -s "$intentd_script" "$repo/scripts/changed-tests.sh"
+  ln -s "$repo_root/packages/intentd/scripts/with-test-policy.sh" "$repo/scripts/with-test-policy.sh"
+  cp "$repo_root/packages/intentd/Makefile" "$repo/Makefile"
   g() {
     git -C "$repo" "$@"
   }
@@ -243,54 +309,195 @@ else
   g checkout -q -b feature
   cp "$repo_root/Makefile" "$mono/Makefile"
   cp "$repo_root/scripts/resumable_nextest.py" "$mono/scripts/resumable_nextest.py"
-  ln -s "$repo" "$mono/packages/intentd"
+  cp "$repo_root/scripts/check_watch_capacity.py" "$mono/scripts/"
+  cp "$repo_root/scripts/check-transfer-selection-contract.mjs" "$mono/scripts/"
+  mkdir -p "$mono/docs/protocol/fixtures"
+  cp -R "$repo_root/docs/protocol/fixtures/transfer-selection" "$mono/docs/protocol/fixtures/"
+  cp -R "$repo_root/scripts/_vendor" "$mono/scripts/_vendor"
   printf '[submodule "packages/intentd"]\n\tpath = packages/intentd\n\turl = https://example.invalid/intentd.git\n' >"$mono/.gitmodules"
   git -C "$mono" init -q
-  git -C "$mono" add -A
+  git -c advice.addEmbeddedRepo=false -C "$mono" add -A
   git -C "$mono" commit -q -m mono
-  printf '%s\n' '{"rust-suites":{"alpha::one":{"package-name":"alpha","binary-name":"one","binary-id":"alpha::one","testcases":{"passes":{},"also_passes":{}}}}}' >"$temp_dir/listing.json"
-  printf '%s\n' '{"type":"suite","event":"started","test_count":2}' \
+  printf '%s\n' '{"rust-suites":{"alpha::one":{"package-name":"alpha","binary-name":"one","binary-id":"alpha::one","testcases":{"passes":{"ignored":false,"filter-match":{"status":"matches"}},"also_passes":{"ignored":false,"filter-match":{"status":"matches"}}}}}}' >"$temp_dir/listing.json"
+  printf '%s\n' '{"type":"suite","event":"started","test_count":2,"nextest":{"crate":"alpha","test_binary":"one","kind":"test"}}' \
     '{"type":"test","event":"started","name":"alpha::one$passes"}' \
     '{"type":"test","event":"ok","name":"alpha::one$passes"}' \
+    '{"type":"test","event":"started","name":"alpha::one$also_passes"}' \
     '{"type":"test","event":"ok","name":"alpha::one$also_passes"}' \
-    '{"type":"suite","event":"ok","passed":2,"failed":0,"ignored":0}' >"$temp_dir/events.jsonl"
+    '{"type":"suite","event":"ok","passed":2,"failed":0,"ignored":0,"nextest":{"crate":"alpha","test_binary":"one","kind":"test"}}' >"$temp_dir/events.jsonl"
   export NEXTEST_STUB_LISTING="$temp_dir/listing.json" NEXTEST_STUB_EVENTS="$temp_dir/events.jsonl"
+  export CARGO_COMPACT_LOG="$temp_dir/compact.log"
   printf '#!/usr/bin/env bash\necho "rustc 1.99.0 (stub)"\n' >"$e2e_bin/rustc"
   cat >"$e2e_bin/cargo" <<'SH'
 #!/usr/bin/env bash
+set -euo pipefail
 printf '%s: %s\n' "$PWD" "$*" >>"$CARGO_TEST_LOG"
+printf '%s: incremental=%s flags=%s encoded=%s\n' "$*" "${CARGO_INCREMENTAL-}" "${RUSTFLAGS-}" "${CARGO_ENCODED_RUSTFLAGS-}" >>"$CARGO_COMPACT_LOG"
 if [[ "$1" == -V ]]; then echo "cargo 1.99.0 (stub)"; exit 0; fi
+if [[ "$1" == metadata ]]; then
+  python3 -c 'import json, os; print(json.dumps({"target_directory": os.path.join(os.getcwd(), "target")}))'
+  exit 0
+fi
 [[ "$1" == nextest ]] || { echo "cargo stub: unexpected argv: $*" >&2; exit 99; }
 case "$2" in
   --version) echo "cargo-nextest 0.9.99 (stub)" ;;
-  list) while IFS= read -r line; do printf '%s\n' "$line"; done <"$NEXTEST_STUB_LISTING" ;;
+  list)
+    [[ "${NEXTEST_STUB_LIST_EXIT:-0}" == 0 ]] || exit "$NEXTEST_STUB_LIST_EXIT"
+    while IFS= read -r line; do printf '%s\n' "$line"; done <"$NEXTEST_STUB_LISTING" ;;
   run)
+    [[ "${INTENTD_ASSERT_BOUND_CALLER-}" == 1 ]] || { echo "cargo stub: caller policy is not armed" >&2; exit 97; }
     config=""
     for arg in "$@"; do
       case "$arg" in intent-gate:*) config=${arg#intent-gate:} ;; esac
     done
     [[ -n "$config" && -f "$config" ]] || { echo "cargo stub: --tool-config-file is missing: '$config'" >&2; exit 98; }
-    while IFS= read -r line; do printf '%s\n' "$line"; done <"$NEXTEST_STUB_EVENTS"
+    python3 - "$config" "$@" <<'PY'
+import json, os, sys, tomllib
+from pathlib import Path
+from xml.etree import ElementTree as ET
+
+config = tomllib.loads(Path(sys.argv[1]).read_text())
+profile = sys.argv[sys.argv.index('--profile') + 1]
+settings = config['profile'][profile]
+# These cases execute the entire selection or take the completed shortcut.
+assert 'default-filter' not in settings, settings
+junit = Path(config['store']['dir']) / profile / settings['junit']['path']
+failed = os.environ.get('NEXTEST_STUB_EXIT', '0') != '0'
+root = ET.Element('testsuites')
+suite = ET.SubElement(root, 'testsuite', name='alpha::one', tests='2', failures=str(int(failed)))
+for line in Path(os.environ['NEXTEST_STUB_EVENTS']).read_text().splitlines():
+    event = json.loads(line)
+    if failed and event.get('name') == 'alpha::one$also_passes' and event['event'] == 'ok':
+        event['event'] = 'failed'
+    if failed and event['type'] == 'suite' and event['event'] == 'ok':
+        event.update(event='failed', passed=1, failed=1)
+    if event['type'] == 'test' and event['event'] in ('ok', 'failed'):
+        case = ET.SubElement(suite, 'testcase', name=event['name'].split('$', 1)[1])
+        if event['event'] == 'failed':
+            ET.SubElement(case, 'failure', message='controlled test failure')
+    print(json.dumps(event), flush=True)
+ET.ElementTree(root).write(junit, encoding='utf-8', xml_declaration=True)
+PY
+    exit "${NEXTEST_STUB_EXIT:-0}"
     ;;
   *) echo "cargo stub: unexpected argv: $*" >&2; exit 99 ;;
 esac
 SH
   chmod +x "$e2e_bin/rustc" "$e2e_bin/cargo"
 
+  # Snapshot every historical attempt before each invocation. A later resume,
+  # force, failure or full run must not rewrite, replace or add receipt files.
+  cat >"$temp_dir/check-immutable.py" <<'PY'
+import hashlib, json, sys
+from pathlib import Path
+
+def snapshot(directory):
+    return {str(path.relative_to(directory)): [path.stat().st_ino,
+            hashlib.sha256(path.read_bytes()).hexdigest()]
+            for path in directory.rglob('*') if path.is_file()}
+
+cache, saved = map(Path, sys.argv[2:])
+if sys.argv[1] == 'save':
+    directories = (path for path in cache.rglob('*')
+                   if path.is_dir() and path.parent.name == 'attempts')
+    saved.write_text(json.dumps({str(path): snapshot(path) for path in directories}))
+else:
+    for path, before in json.loads(saved.read_text()).items():
+        assert snapshot(Path(path)) == before, f'historical receipt changed: {path}'
+PY
+
+  cat >"$temp_dir/check-receipt.py" <<'PY'
+import json, re, sys
+from pathlib import Path
+
+directory, cache, saved = map(Path, sys.argv[1:])
+assert str(directory) not in json.loads(saved.read_text()), 'invocation reused an attempt'
+receipt = json.loads((directory / 'run.json').read_text())
+proof = json.loads((directory / 'coverage.json').read_text())
+identities = [['alpha::one', 'also_passes'], ['alpha::one', 'passes']]
+assert re.fullmatch(r'[0-9a-f]{32}', directory.name), directory
+scope = directory.parent.parent
+tree = cache / receipt['tree_key']
+expected_scope = tree / 'changed' / receipt['plan_key'] if receipt['plan_key'] else tree
+assert scope == expected_scope and directory.parent.name == 'attempts', directory
+assert receipt['attempt_id'] == proof['attempt_id'] == directory.name
+assert proof['tree_key'] == receipt['tree_key'] and proof['plan_key'] == receipt['plan_key']
+assert receipt['exit_code'] == 0 and receipt['started_at'] and receipt['finished_at']
+assert proof['complete'] and proof['membership_complete'] and not proof['errors'], proof
+assert proof['active'] == identities and proof['inactive_filtered'] == []
+assert receipt['selection_membership'] == [identities]
+assert proof['kind'] == receipt['kind']
+assert not (directory / 'complete').exists()
+shortcut = receipt['kind'] == 'completed-resume'
+category = 'resumed-passed' if shortcut else 'executed-passed'
+assert proof['categories'] == {key: identities if key == category else [] for key in
+    ('executed-passed', 'resumed-passed', 'ignored', 'failed', 'unfinished')}, proof
+if shortcut:
+    source = scope / 'attempts' / receipt['resume_source_attempt']
+    assert source != directory and str(source) in json.loads(saved.read_text())
+    assert proof['source_attempt'] == str(source.relative_to(tree))
+    assert receipt['results'] == [] and receipt['passed'] == receipt['failed'] == receipt['ignored'] == 0
+    assert receipt['skipped_resumed'] == 2 and receipt['resumed_tests'] == identities
+    assert receipt['resume_requested'] and not receipt['force']
+    assert (directory / 'listing-1.json').read_bytes() == (source / 'listing-1.json').read_bytes()
+    assert not list(directory.glob('events-*')) and not list(directory.glob('junit*'))
+    original = json.loads((source / 'coverage.json').read_text())
+    assert proof['selections'] == original['selections'], 'shortcut must retain source evidence provenance'
+    refs = proof['resume_sources']
+    assert sorted([[row['binary_id'], row['test']] for row in refs]) == identities
+    journal = [json.loads(line) for line in (tree / 'passed.jsonl').read_text().splitlines()]
+    events = (source / 'events-1.jsonl').read_text().splitlines()
+    for row in refs:
+        assert row in journal and row['attempt'] == proof['source_attempt'] and row['selection_index'] == 1
+        event = json.loads(events[row['event_line'] - 1])
+        assert event['event'] == 'ok' and event['name'] == row['binary_id'] + '$' + row['test']
+else:
+    source = directory
+    assert receipt['kind'] == 'execution' and receipt['resume_source_attempt'] is None
+    assert receipt['passed'] == 2 and receipt['failed'] == receipt['ignored'] == receipt['skipped_resumed'] == 0
+    assert receipt['resumed_tests'] == proof['resume_sources'] == []
+    assert len(receipt['results']) == 1
+    result = receipt['results'][0]
+    assert result['exit_code'] == result['native_exit_code'] == 0
+    assert result['started_at'] and result['finished_at'] and result['selection_index'] == 1
+    assert result['junit'] == ('junit-1.xml' if receipt['plan_key'] else 'junit.xml')
+    assert (directory / result['junit']).is_file()
+assert (scope / 'complete').read_text().strip() == source.name, 'shortcut must not replace execution pointer'
+assert len(proof['selections']) == 1
+selection = proof['selections'][0]
+assert selection['evidence_attempt'] == source.name and selection['selection_index'] == 1
+assert selection['junit'] == 'validated' and selection['native_exit_code'] == 0
+assert selection['active'] == identities and selection['unfinished'] == []
+assert [row['identity'] for row in selection['outcomes']] == identities
+for row in selection['outcomes']:
+    assert row['outcome'] == 'ok' and row['source'] == 'raw'
+    assert len(row['events']) == 1 and row['events'][0]['outcome'] == 'ok'
+PY
+
   # $1 = RESUME, $2 = GATE_FORCE. CARGO_BIN_DIR puts the e2e stubs ahead of the
   # plain ones on the recipe's PATH.
   e2e_make() {
+    local resume=$1 force=$2
+    shift 2
     : >"$temp_dir/cargo.log"
+    : >"$temp_dir/compact.log"
+    "$python3" "$temp_dir/check-immutable.py" save "$cache" "$temp_dir/receipts.json"
     set +e
     PATH="$bin_dir" CARGO_TEST_LOG="$temp_dir/cargo.log" \
-      "$make_bin" -C "$mono" --no-print-directory test-changed CARGO_BIN_DIR="$e2e_bin" RUSTUP_CARGO= \
-      GATE_CACHE_DIR="$cache" RESUME="$1" GATE_FORCE="$2" BUILD_JOBS=2 TEST_THREADS=1 \
+      "$make_bin" -C "${E2E_CWD:-$mono}" --no-print-directory "${E2E_GOAL:-test-changed}" CARGO_BIN_DIR="$e2e_bin" RUSTUP_CARGO= \
+      GATE_CACHE_DIR="$cache" RESUME="$resume" GATE_FORCE="$force" BUILD_JOBS=2 TEST_THREADS=1 "$@" \
       >"$temp_dir/stdout" 2>"$temp_dir/stderr" </dev/null
     status=$?
     set -e
     stdout=$(<"$temp_dir/stdout")
     stderr=$(<"$temp_dir/stderr")
     cargo_log=$(<"$temp_dir/cargo.log")
+    "$python3" "$temp_dir/check-immutable.py" check "$cache" "$temp_dir/receipts.json" \
+      || fail "$case_name: historical receipt bytes or inodes changed"
+    if [[ "$status" -eq 0 && "$stdout" == *"] record: "* ]]; then
+      "$python3" "$temp_dir/check-receipt.py" "${stdout##*"] record: "}" "$cache" "$temp_dir/receipts.json" \
+        || fail "$case_name: receipt/coverage contract mismatch"
+    fi
   }
   expect_ok() {
     [[ "$status" -eq 0 ]] || fail "$case_name: exited $status: $stderr"
@@ -302,15 +509,18 @@ SH
     [[ "$stdout" == *"[test-changed] cargo nextest run -p alpha --test one --build-jobs 2 --test-threads 1"$'\n'* ]] || fail "$case_name: plan line missing: $stdout"
     [[ "$stdout" == *$'\n'"$summary_line"$'\n'"[test-changed] record: $cache/"* ]] || fail "$case_name: summary/record lines missing: $stdout"
     record_dir=${stdout##*"[test-changed] record: "}
-    [[ "$record_dir" == "$cache"/*/changed/* && -d "$record_dir" ]] || fail "$case_name: record dir '$record_dir' is not <cache>/<tree-key>/changed/<plan-key>"
-    [[ "$cargo_log" == *"$repo: nextest list -p alpha --test one --build-jobs 2 --message-format json"$'\n'"$repo: nextest run -p alpha --test one --build-jobs 2 --test-threads 1 --tool-config-file intent-gate:$record_dir/nextest-1.toml --profile "*" --message-format libtest-json-plus --message-format-version 0.1"* ]] || fail "$case_name: cargo argv was"$'\n'"$cargo_log"
+    [[ "$record_dir" == "$cache"/*/changed/*/attempts/* && -d "$record_dir" ]] || fail "$case_name: record dir '$record_dir' is not <cache>/<tree-key>/changed/<plan-key>/attempts/<attempt-id>"
+    cargo_output_args=$("$python3" -c 'import json, sys; print(" ".join(json.load(open(sys.argv[1]))["args"]))' "$record_dir/cargo-outputs.json")
+    [[ "$cargo_output_args" == "--target-dir $repo/target/intent-gates/"* ]] || fail "$case_name: missing isolated Cargo output: $cargo_output_args"
+    [[ "$cargo_log" == *"$repo: metadata --no-deps --format-version 1"* ]] || fail "$case_name: Cargo metadata was not queried"
+    [[ "$cargo_log" == *"$repo: nextest list -p alpha --test one --build-jobs 2 --message-format json $cargo_output_args"$'\n'"$repo: nextest run -p alpha --test one --build-jobs 2 --test-threads 1 --tool-config-file intent-gate:$record_dir/nextest-1.toml --profile "*" --message-format libtest-json-plus --message-format-version 0.1 $cargo_output_args"* ]] || fail "$case_name: cargo argv was"$'\n'"$cargo_log"
   }
 
   case_name="end to end: first run writes the plan record"
   echo "// changed" >>"$repo/crates/alpha/tests/one.rs"
   e2e_make 0 0
   expect_recorded_run
-  for file in run.json summary.txt complete nextest-1.toml; do
+  for file in run.json summary.txt coverage.json listing-1.json events-1.jsonl nextest-1.toml junit-1.xml; do
     [[ -f "$record_dir/$file" ]] || fail "$case_name: $record_dir/$file is missing"
   done
   grep -q '^path = "junit-1.xml"$' "$record_dir/nextest-1.toml" || fail "$case_name: junit-1.xml is not configured: $(<"$record_dir/nextest-1.toml")"
@@ -319,6 +529,8 @@ SH
     grep -qF "$field" "$record_dir/run.json" || fail "$case_name: run.json lacks $field: $(<"$record_dir/run.json")"
   done
   tree_dir=${record_dir%/changed/*}
+  scope_dir=${record_dir%/attempts/*}
+  [[ "$(<"$scope_dir/complete")" == "${record_dir##*/}" && ! -e "$record_dir/complete" ]] || fail "$case_name: completion marker must point to the execution attempt from its scope"
   [[ ! -e "$tree_dir/complete" ]] || fail "$case_name: a planned run wrote the full-suite complete marker"
   [[ "$(grep -c . "$tree_dir/passed.jsonl")" -eq 2 ]] || fail "$case_name: passed.jsonl: $(<"$tree_dir/passed.jsonl")"
   first_record=$record_dir
@@ -326,7 +538,7 @@ SH
   case_name="end to end: RESUME=1 on the unchanged tree skips the run"
   e2e_make 1 0
   expect_ok
-  [[ "$stdout" == *"[test-changed] cargo nextest run -p alpha --test one"*$'\n'"resumed: skipped 2 tests already passed for this tree" ]] || fail "$case_name: stdout: $stdout"
+  [[ "$stdout" == *"[test-changed] cargo nextest run -p alpha --test one"*$'\n'"resumed: skipped 2 tests already passed for this tree"$'\n'"[test-changed] record: $scope_dir/attempts/"* ]] || fail "$case_name: stdout: $stdout"
   [[ "$cargo_log" != *"nextest list"* && "$cargo_log" != *"nextest run"* ]] || fail "$case_name: cargo was invoked: $cargo_log"
 
   case_name="end to end: RESUME=1 after a tracked edit runs the plan again"
@@ -334,14 +546,141 @@ SH
   e2e_make 1 0
   expect_recorded_run
   [[ "$stdout" == *"[test-changed] no passed-test record for this tree; running every planned test"* ]] || fail "$case_name: stdout: $stdout"
-  [[ "$record_dir" != "$first_record" ]] || fail "$case_name: the record dir did not change with the tree"
+  [[ "${record_dir%/changed/*}" != "${first_record%/changed/*}" ]] || fail "$case_name: the tree identity did not change after a tracked edit"
   changed_record=$record_dir
 
   case_name="end to end: GATE_FORCE=1 ignores the matching record"
   e2e_make 1 1
   expect_recorded_run
   [[ "$stdout" == *"[test-changed] GATE_FORCE=1: running every planned test"* ]] || fail "$case_name: stdout: $stdout"
-  [[ "$record_dir" == "$changed_record" ]] || fail "$case_name: record dir moved on an unchanged tree: $record_dir"
+  [[ "$record_dir" != "$changed_record" && "${record_dir%/attempts/*}" == "${changed_record%/attempts/*}" ]] || fail "$case_name: force must create a new attempt in the same scope: $record_dir"
+
+  case_name="compact changed run never resumes a default record"
+  e2e_make 1 0 COMPACT=1
+  expect_ok
+  [[ "$stdout" == *"COMPACT=1"* && "$stdout" == *"no passed-test record"* ]] || fail "$case_name: $stdout"
+  [[ "$cargo_log" == *"nextest list -p alpha --test one"* && "$cargo_log" == *"nextest run -p alpha --test one"* ]] || fail "$case_name: $cargo_log"
+  [[ "$(grep -c -- '^nextest .*--config profile.dev.debug=0' "$temp_dir/compact.log")" -eq 2 ]] || fail "$case_name: list/run missing profile overrides"
+  [[ "$(grep -c '^nextest .*incremental=0' "$temp_dir/compact.log")" -eq 2 ]] || fail "$case_name: list/run missing incremental override"
+  compact_record=${stdout##*"[test-changed] record: "}
+  [[ "${compact_record%/changed/*}" != "${changed_record%/changed/*}" ]] || fail "$case_name: default/compact tree identities collide"
+
+  case_name="compact changed resume skips matching record through the real component forwarder"
+  E2E_CWD="$mono/packages/intentd" e2e_make 1 0 COMPACT=1
+  expect_ok
+  [[ "$stdout" == *"resumed: skipped 2 tests"* && "$cargo_log" != *"nextest run"* ]] || fail "$case_name: $stdout $cargo_log"
+
+  case_name="compact force and no-fail-fast survive forwarder and runner"
+  E2E_CWD="$mono/packages/intentd" e2e_make 1 1 COMPACT=1 NO_FAIL_FAST=1
+  expect_ok
+  [[ "$stdout" == *"GATE_FORCE=1"* && "$cargo_log" == *"--no-fail-fast"* ]] || fail "$case_name: $stdout $cargo_log"
+
+  case_name="compact list compiler failure is preserved"
+  NEXTEST_STUB_LIST_EXIT=101 e2e_make 1 1 COMPACT=1
+  [[ "$status" -ne 0 && "$stderr" == *"Error 101"* && "$cargo_log" != *"nextest run"* ]] || fail "$case_name: $stdout $stderr $cargo_log"
+
+  case_name="compact test failure is preserved"
+  NEXTEST_STUB_EXIT=100 e2e_make 1 1 COMPACT=1
+  [[ "$status" -ne 0 && "$stderr" == *"Error 100"* ]] || fail "$case_name: $stdout $stderr"
+  "$python3" - "${stdout##*"[test-changed] record: "}" <<'PY'
+import json, sys
+from pathlib import Path
+directory = Path(sys.argv[1])
+receipt = json.loads((directory / 'run.json').read_text())
+proof = json.loads((directory / 'coverage.json').read_text())
+assert receipt['exit_code'] == receipt['results'][0]['native_exit_code'] == 100
+assert not proof['complete'] and proof['errors'] == []
+assert proof['categories'] == {'executed-passed': [['alpha::one', 'passes']],
+    'failed': [['alpha::one', 'also_passes']], 'unfinished': [], 'ignored': [], 'resumed-passed': []}
+assert proof['selections'][0]['junit'] == 'validated'
+assert not (directory.parent.parent / 'complete').exists()
+PY
+
+  case_name="COMPACT=0 still resumes the default record"
+  e2e_make 1 0 COMPACT=0
+  expect_ok
+  [[ "$stdout" == *"resumed: skipped 2 tests"* && "$cargo_log" != *"nextest run"* ]] || fail "$case_name: $stdout $cargo_log"
+
+  # Affected plans fail before any compiling Cargo command; dry-run/no-change
+  # planning must not inspect the fixture at all.
+  g checkout -- crates/alpha/tests/one.rs
+  case_name="no-change plan needs no callback fixture"
+  e2e_make 0 0
+  expect_ok
+  [[ "$stdout" == *"nothing to test"* ]] || fail "$case_name: $stdout"
+  mkdir -p "$repo/crates/intent-acp/src"
+  echo "// callback change" >"$repo/crates/intent-acp/src/lib.rs"
+  case_name="affected selected library rejects missing fixture before compiling"
+  e2e_make 1 0
+  [[ "$status" -ne 0 && "$stderr" == *"INTENT_ACP_CALLBACK_ADAPTER_FIXTURE"* ]] || fail "$case_name: $stdout $stderr"
+  [[ "$cargo_log" != *"nextest list"* && "$cargo_log" != *"nextest run"* && "$cargo_log" != *"metadata"* ]] || fail "$case_name: $cargo_log"
+  case_name="affected selected dry run needs no fixture"
+  e2e_make 0 0 DRY_RUN=1
+  expect_ok
+  [[ "$stdout" == *"-p intent-acp --lib --bins --tests"* && "$cargo_log" != *"nextest list"* ]] || fail "$case_name: $stdout $cargo_log"
+  rm -rf "$repo/crates/intent-acp"
+  echo "changed lockfile" >>"$repo/Cargo.lock"
+  case_name="full fallback rejects missing fixture before compiling"
+  e2e_make 1 0
+  [[ "$status" -ne 0 && "$stderr" == *"INTENT_ACP_CALLBACK_ADAPTER_FIXTURE"* ]] || fail "$case_name: $stdout $stderr"
+  [[ "$stdout" == *"falling back to the full 'make test'"* && "$cargo_log" != *"nextest list"* && "$cargo_log" != *"metadata"* ]] || fail "$case_name: $stdout $cargo_log"
+  case_name="full fallback dry run needs no fixture"
+  e2e_make 0 0 DRY_RUN=1
+  [[ "$status" -eq 0 && "$stdout" == *"DRY_RUN: would fall back"* && "$cargo_log" != *"nextest list"* ]] || fail "$case_name: $stdout $stderr $cargo_log"
+  for goal in test test-intentd gate; do
+    case_name="$goal rejects missing fixture before compiling, including parallel gate"
+    E2E_GOAL="$goal" e2e_make 0 0 -j4 -o check
+    [[ "$status" -ne 0 && "$stderr" == *"INTENT_ACP_CALLBACK_ADAPTER_FIXTURE"* ]] || fail "$case_name: $stdout $stderr"
+    [[ "$cargo_log" != *"nextest list"* && "$cargo_log" != *"metadata"* ]] || fail "$case_name: $cargo_log"
+  done
+
+  # Only the launch plumbing is under test here. Canonical integrity/runtime
+  # checks have real-verifier coverage in test_resumable_nextest.py.
+  cat >"$repo/scripts/prepare-acp-callback-fixture.py" <<'PY_STUB'
+from pathlib import Path
+DEFAULT_DESCRIPTOR = Path(__file__)
+class InvalidFixture(Exception):
+    pass
+def platform_check():
+    pass
+def configuration(path):
+    return {"manifest": {"sha256": "stub"}}, {}
+def validate_fixture(root, descriptor, manifest):
+    assert root.is_dir()
+def environment(work):
+    return {}
+def node_tool(descriptor, work, env):
+    return Path(__file__)
+def digest(path):
+    return "stub"
+PY_STUB
+  export INTENT_ACP_CALLBACK_ADAPTER_FIXTURE="$repo"
+  case_name="lockfile full fallback retains compact settings and full selection"
+  echo "changed lockfile" >>"$repo/Cargo.lock"
+  e2e_make 0 0 COMPACT=1
+  [[ "$status" -eq 0 && "$stderr" == *"build-wide change(s)"* ]] || fail "$case_name: $stdout $stderr"
+  [[ "$stdout" == *"falling back to the full 'make test'"* ]] || fail "$case_name: $stdout"
+  [[ "$cargo_log" == *"nextest list --workspace"* && "$cargo_log" == *"nextest run --workspace"* && "$cargo_log" == *"--config profile.test.debug=0"* ]] || fail "$case_name: $cargo_log"
+  [[ "$(grep -c '^nextest .*incremental=0' "$temp_dir/compact.log")" -eq 2 ]] || fail "$case_name: recursive make lost compact settings"
+
+  for goal in test test-intentd gate; do
+    case_name="compact $goal runs the full suite (gate recursively invokes test)"
+    E2E_GOAL="$goal" e2e_make 0 0 COMPACT=1 -o check
+    expect_ok
+    [[ "$cargo_log" == *"nextest run --workspace"* && "$cargo_log" == *"--config profile.test.debug=0"* ]] || fail "$case_name: $cargo_log"
+  done
+
+  case_name="root mixed goals reject compact coverage before any Cargo, even in parallel"
+  E2E_GOAL="test" e2e_make 0 0 COMPACT=1 coverage-changed -j4
+  [[ "$status" -ne 0 && "$stderr" == *"COMPACT=1 is incompatible with coverage"* ]] || fail "$case_name: $stdout $stderr"
+  [[ -z "$cargo_log" ]] || fail "$case_name: $cargo_log"
+
+  # Older component forwarders may run test before forwarding coverage-changed;
+  # combined-goal forwarders reject both at root parse time, before any Cargo.
+  case_name="forwarded coverage rejects before instrumentation (earlier forwarded goals may run)"
+  E2E_CWD="$mono/packages/intentd" E2E_GOAL=test e2e_make 0 0 COMPACT=1 coverage-changed
+  [[ "$status" -ne 0 && "$stderr" == *"COMPACT=1 is incompatible with coverage"* ]] || fail "$case_name: $stdout $stderr"
+  [[ "$cargo_log" != *"llvm-cov"* ]] || fail "$case_name: $cargo_log"
 fi
 
 echo "rust-changed-tests tests passed under $("$script_bash" -c 'echo "bash $BASH_VERSION"')"
@@ -349,8 +688,8 @@ echo "rust-changed-tests tests passed under $("$script_bash" -c 'echo "bash $BAS
 
 # Stock macOS /bin/bash is 3.2 (intent-hq/intent#4706). `bash -n` alone
 # accepts Bash 4+ builtins and expansions, so reject them by pattern too,
-# then rerun the fixtures under a real Bash 3 when one can be found (same
-# lookup as shipped-in.test.sh). intentd's script has its own Bash 3 gate in
+# then rerun the fixtures under a real Bash 3 when one can be found (shared
+# lookup in find-bash3.sh; `make bash3` builds one). intentd's script has its own Bash 3 gate in
 # scripts/test-changed-tests.sh; this suite's rerun feeds it a Bash 3 through
 # $bin_dir/bash. A missing Bash 3 is a skip notice by default; set
 # REQUIRE_BASH3 to a non-empty value (CI) to make it a failure instead.
@@ -384,27 +723,15 @@ gate_sample miss '# mapfile is unavailable on Bash 3'
 gate_hits=$(gate_matches "${BASH_SOURCE[0]}")
 [[ -z "$gate_hits" ]] || fail "Bash 4+ constructs found (stock macOS bash is 3.2):"$'\n'"$gate_hits"
 
-find_bash3() {
-  local candidate resolved brew_prefix
-  brew_prefix=$(brew --prefix bash@3 2>/dev/null) || brew_prefix=""
-  for candidate in "${BASH3_BIN:-}" bash3 "${brew_prefix:+$brew_prefix/bin/bash}" \
-    /opt/homebrew/opt/bash@3/bin/bash /usr/local/opt/bash@3/bin/bash /bin/bash; do
-    [[ -n "$candidate" ]] || continue
-    resolved=$(command -v "$candidate" 2>/dev/null) || continue
-    [[ -x "$resolved" ]] || continue
-    "$resolved" -c '[[ "${BASH_VERSINFO[0]}" -eq 3 ]]' 2>/dev/null || continue
-    printf '%s\n' "$resolved"
-    return 0
-  done
-  return 1
-}
+# shellcheck source=scripts/find-bash3.sh
+source "$repo_root/scripts/find-bash3.sh"
 
 if [[ "${BASH_VERSINFO[0]}" -eq 3 ]]; then
   : # the fixtures above already ran under Bash 3
 elif bash3=$(find_bash3); then
   RUST_CHANGED_TESTS_TEST_BASH="$bash3" "$bash3" "${BASH_SOURCE[0]}"
 elif [[ -n "${REQUIRE_BASH3:-}" ]]; then
-  fail "no Bash 3 interpreter found and REQUIRE_BASH3 is set (point BASH3_BIN at one, or unset REQUIRE_BASH3 to skip the real 3.2 run)"
+  fail "no Bash 3 interpreter found and REQUIRE_BASH3 is set ($(bash3_missing_hint); or unset REQUIRE_BASH3 to skip the real 3.2 run)"
 else
-  echo "rust-changed-tests tests: no Bash 3 interpreter found (set BASH3_BIN); real 3.2 run skipped, static gate only"
+  echo "rust-changed-tests tests: no Bash 3 interpreter found ($(bash3_missing_hint)); real 3.2 run skipped, static gate only"
 fi

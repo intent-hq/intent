@@ -2,20 +2,63 @@
 
 This document describes the end-to-end release process for Intent (cloudlands-fe).
 
+The dual-architecture Mac steps describe the source-reviewed workflow at
+[cloudlands-fe f32df299](https://github.com/intent-hq/cloudlands-fe/commit/f32df299fa33e3f269c72cfea7dc8f33d796a38c).
+For each release, record signed native build results for both Mac CPUs and
+full feature-gate results, separately from physical installation and actual
+auto-update validation on each CPU. Follow the
+[Mac validation checklist](#mac-validation-before-release).
+
 ## Overview
+
+**Pending companion rollout:** the overview and shared-feed verification below
+describe the currently deployed dual-Mac workflow. Optional Intel and the new ARM
+feed are implemented in companion work but are not enabled by this docs change.
+The [coordinated Intel policy](../RELEASING.md#intel-mac-release-policy--pending-rollout)
+defines the root-first cleanup prerequisite, required platforms and migration
+limit. Use the following differences only once those companions are released:
+
+- ARM, Windows and Linux must succeed. Intel is attempted only for a tagged
+  release with the exact pinned daemon's Intel archive/checksum, and only complete
+  validated Intel DMG/ZIP/blockmaps publish. Intel omission creates no new Intel
+  download link and is not a publication failure.
+- Verify five feeds: `latest-arm64-mac.yml`, `latest-mac.yml`, `latest.yml`,
+  `latest-linux.yml`, `latest-linux-arm64.yml`. The ARM and non-Mac feeds identify
+  the selected release. The legacy Mac feed can truthfully identify an older
+  compatible release; verify its immutable URLs and retained versioned assets,
+  rather than requiring its version to equal the release manifest.
+- For beta/stable promotion, verify the destination channel's prepared legacy
+  feed against its own prior compatible history, not alpha's versioned legacy
+  feed. Compare uploaded feeds with the workflow's prepared files; the legacy
+  versioned-versus-channel `cmp` below is only valid for a complete dual release.
+  Promotion guards read the ARM feed, falling back to legacy for old releases.
+- Old shared-feed ARM clients can wait for a compatible dual release carrying
+  the migration or install an ARM build manually. Test both old and new clients;
+  a successful ARM-only build does not prove deployed ARM clients will update.
+  The no-compatible-history sentinel and manual-check display limitation are
+  described in the coordinated policy. Manual test builds use Apple Silicon;
+  see the [manual build procedure](./DEPLOYING.md#manual-signed-build-pr-test-builds).
 
 Releases are built and published by the **Release Alpha** workflow in GitHub Actions. The `intentd` sidecar is **not built from source** — it is downloaded from the pinned `intent-hq/intentd` GitHub Release recorded in the `intentd.version` file (intentd releases on its own cycle). The workflow:
 
 1. Reads the pinned intentd version from `intentd.version` and fetches the matching release asset via `scripts/fetch-sidecar.cjs` (sha256-verified, staged at `resources/sidecar/intentd`); it fails fast if the pinned release or its assets don't exist
-2. Builds the app for all four platforms in parallel jobs — macOS (arm64), Windows (x64), Linux (x64), Linux (arm64) — each with its staged `intentd` sidecar
-3. Signs and notarizes the macOS app using Apple Developer ID certificates (Windows and Linux artifacts are unsigned)
+2. Builds five platform/architecture combinations in parallel jobs — macOS (arm64 and x64), Windows (x64), Linux (x64), Linux (arm64) — each with its matching staged `intentd` sidecar
+3. Signs and notarizes each native macOS app using Apple Developer ID certificates, then verifies packaged architectures, signatures, Gatekeeper assessment and stapled tickets (Windows and Linux artifacts are unsigned)
 4. Generates release notes from the `cloudlands-fe` commit range; the intentd section lists the intentd commit delta between the previous release's pin (recovered from the previous release's `release-manifest.json` asset) and the current pin — falling back to a pin-only link when the previous pin can't be recovered, or to the pin line + compare link without a commit list when the intentd compare API is unavailable
 5. Publishes artifacts to `intent-hq/cloudlands-releases` on GitHub, including:
-   - macOS DMG installer + ZIP archive (+ blockmaps), Windows NSIS + portable `.exe` (+ blockmap), Linux AppImage/`.deb`
-   - Four auto-updater feed files: `latest-mac.yml`, `latest.yml`, `latest-linux.yml`, `latest-linux-arm64.yml`
+   - Separate Intel (`x64`) and Apple Silicon (`arm64`) macOS DMG installers + ZIP archives (+ blockmaps), Windows NSIS + portable `.exe` (+ blockmap), Linux AppImage/`.deb`
+   - Four auto-updater feed files: one combined `latest-mac.yml` for both Mac CPUs, `latest.yml`, `latest-linux.yml`, `latest-linux-arm64.yml`
    - `release-manifest.json` — metadata capturing the fe tag/SHA and the pinned `intentdVersion`
 
 The workflow is triggered by a `v*.*.*` tag push (created by release-please when its Release PR is merged) — it does not bump versions, create tags, or open version-bump PRs itself.
+
+`auto-cut-alpha.yml` directly merges verified release metadata PRs after their
+existing CI and release guards pass, using the CI account's ruleset exemption.
+`auto-pin-intentd.yml` does the same for verified sidecar pin PRs
+([Direct sidecar pin merges](../RELEASING.md#direct-sidecar-pin-merges)).
+Other PRs retain the merge queue. See
+[Guarded direct release merges](../RELEASING.md#guarded-direct-release-merges)
+for metadata eligibility, tested-head matching and the required token identity.
 
 No tags are pushed to `intent-hq/intentd`. To ship a newer intentd, update the `intentd.version` pin on `main` via a normal PR before cutting the release.
 
@@ -69,7 +112,7 @@ The following secrets must be configured in the `intent-hq/cloudlands-fe` reposi
    # View the release
    gh release view "v${VERSION}" --repo intent-hq/cloudlands-releases
 
-   # Check assets (should include the macOS DMG/ZIP + blockmaps, Windows .exe installers + blockmap,
+   # Check assets (should include BOTH x64 and arm64 macOS DMG/ZIP + blockmaps, Windows .exe installers + blockmap,
    # Linux AppImage/.deb, the four feed files — latest-mac.yml, latest.yml, latest-linux.yml,
    # latest-linux-arm64.yml — and release-manifest.json)
    gh release view "v${VERSION}" --repo intent-hq/cloudlands-releases --json assets --jq '.assets[].name'
@@ -81,6 +124,13 @@ The following secrets must be configured in the `intent-hq/cloudlands-fe` reposi
    # Inspect the release manifest (captures fe tag/SHA and the pinned intentdVersion)
    curl -sL "https://github.com/intent-hq/cloudlands-releases/releases/download/v${VERSION}/release-manifest.json" | jq .
    ```
+
+   Mac assets must include `Intent-${VERSION}-x64.dmg`,
+   `Intent-${VERSION}-x64-mac.zip`, the corresponding `arm64` pair and all four
+   `.blockmap` files. The publish assembler validates both per-job feeds before
+   flattening them into a single `latest-mac.yml`. Inspect both CPUs' `files`
+   entries; the top-level legacy `path`/`sha512` covers only the Intel ZIP.
+   See [native Mac builds and shared feed](./DEPLOYING.md#native-mac-builds-and-shared-update-feed).
 
 4. **Verify the rolling beta channel**
 
@@ -95,6 +145,14 @@ The following secrets must be configured in the `intent-hq/cloudlands-fe` reposi
 ## Promoting to Stable
 
 After verifying a beta release, promote it to the stable channel using the **Release Stable** workflow:
+
+Before the first dual-architecture stable promotion, complete the
+[Mac validation checklist](#mac-validation-before-release) and verify the
+website offers explicit Intel and Apple Silicon downloads. A selector that
+chooses the first `.dmg` can send either CPU to the wrong installer. Check
+`src/pages/index.astro`, `src/components/Navigation.astro` and
+`src/pages/docs.astro` in `intent-hq/intentapp.dev`; keep a release-page fallback
+when the requested CPU's asset is absent. Website changes need their own PR.
 
 1. **Trigger the workflow**
 
@@ -113,7 +171,7 @@ After verifying a beta release, promote it to the stable channel using the **Rel
    - Downloads all assets from the versioned release `v{VERSION}`
    - Uploads new assets to the rolling `stable` release tag with `--clobber` (versioned assets first, then `latest-mac.yml` last for atomic feed switch)
    - Deletes old versioned assets from the previous stable promotion (only after new assets are uploaded and live)
-   - Verifies the `sha512` hash in `latest-mac.yml` matches the versioned release (with retries for CDN propagation)
+   - Compares each complete promoted feed with its versioned release feed (with retries for CDN propagation); checking only the legacy Mac `sha512` would miss changed ARM metadata
    - Generates a leading summary section (`scripts/generate-stable-summary.mjs`): promoted version, previous stable, and a consolidated intentd delta spanning the previous stable's pin → the promoted version's pin (pins recovered from each release's `release-manifest.json`, commit list from the intentd compare API via `INTENTD_READ_PAT`)
    - Aggregates release notes from all versions in the range `(prevStable, VERSION]`, prefixed by the summary section
    - Updates the stable release body with the aggregated notes
@@ -131,15 +189,17 @@ After verifying a beta release, promote it to the stable channel using the **Rel
    # latest-linux.yml, latest-linux-arm64.yml)
    curl -sL https://github.com/intent-hq/cloudlands-releases/releases/download/stable/latest-mac.yml | grep version
 
-   # Verify the ZIP sha512 matches the versioned release
-   VERSIONED_SHA=$(curl -sL "https://github.com/intent-hq/cloudlands-releases/releases/download/v${VERSION}/latest-mac.yml" | awk '/^sha512:/{print $2; exit}')
-   STABLE_SHA=$(curl -sL "https://github.com/intent-hq/cloudlands-releases/releases/download/stable/latest-mac.yml" | awk '/^sha512:/{print $2; exit}')
-
-   if [ "$VERSIONED_SHA" = "$STABLE_SHA" ]; then
-     echo "✓ Stable feed matches versioned release"
-   else
-     echo "✗ Mismatch detected"
-   fi
+   # Compare the whole feed, including both Mac architectures; fail on empty/failing fetches
+   (
+     set -e
+     feed_dir=$(mktemp -d)
+     trap 'rm -rf "$feed_dir"' EXIT
+     curl -fsSL "https://github.com/intent-hq/cloudlands-releases/releases/download/v${VERSION}/latest-mac.yml" > "$feed_dir/versioned.yml"
+     curl -fsSL "https://github.com/intent-hq/cloudlands-releases/releases/download/stable/latest-mac.yml" > "$feed_dir/stable.yml"
+     test -s "$feed_dir/versioned.yml"
+     test -s "$feed_dir/stable.yml"
+     cmp "$feed_dir/versioned.yml" "$feed_dir/stable.yml"
+   )
 
    # View aggregated release notes
    gh release view stable --repo intent-hq/cloudlands-releases
@@ -276,18 +336,12 @@ If the automated **Release Stable** workflow fails and cannot be fixed by re-run
      done
    ```
 
-3. **Verify sha512 hash**
+3. **Verify the complete feeds**
 
-   ```bash
-   VERSIONED_SHA=$(curl -sL "https://github.com/intent-hq/cloudlands-releases/releases/download/v${VERSION}/latest-mac.yml" | awk '/^sha512:/{print $2; exit}')
-   STABLE_SHA=$(curl -sL "https://github.com/intent-hq/cloudlands-releases/releases/download/stable/latest-mac.yml" | awk '/^sha512:/{print $2; exit}')
-
-   if [ "$VERSIONED_SHA" = "$STABLE_SHA" ]; then
-     echo "✓ Stable feed matches versioned release"
-   else
-     echo "✗ Mismatch detected — wait for CDN propagation or check assets"
-   fi
-   ```
+   Run the full-feed comparison from step 3 of [Promoting to Stable](#promoting-to-stable)
+   for each available feed. A mismatch requires checking CDN propagation and
+   assets; the top-level Mac `sha512` alone cannot validate both CPUs. Older
+   ARM-only releases remain valid promotion sources.
 
 4. **Update stable release notes manually (optional)**
 
@@ -297,6 +351,27 @@ If the automated **Release Stable** workflow fails and cannot be fixed by re-run
    ```
 
 After a manual promotion, step 4 of [Promoting to Stable](#promoting-to-stable) (the website release notes PR) still applies.
+
+## Mac Validation Before Release
+
+Record the frontend SHA, workflow run/artifact links, tested macOS version and
+hardware, source/target app versions, and results for each CPU. Keep these
+evidence categories separate:
+
+| Validation | Required evidence |
+| --- | --- |
+| Source and automated gates | Native packaging/feed/workflow behavioral tests, full applicable feature gates and independent review at the named commit. |
+| Native signed CI build | Both Mac jobs pass architecture checks, signing, notarization, Gatekeeper assessment and stapled-ticket validation; link each CPU's uploaded DMG. |
+| Installed app on physical hardware | Install the matching DMG on Intel and Apple Silicon; launch/relaunch, confirm daemon startup, open an interactive terminal (node-pty), exercise a tunnel (tailcat), speech and keychain helpers. Record failures and the macOS version tested. |
+| Actual update | Using a controlled test feed and two correctly ordered versions, update the installed app on each CPU, confirm the matching ZIP was downloaded, restart and repeat the runtime checks. Preserve the production channel; manual DMG artifacts alone do not test this path. |
+
+Use the [manual signed build procedure](./DEPLOYING.md#manual-signed-build-pr-test-builds)
+for native installer evidence. Its `build_macos` input builds both CPUs and
+uploads only their DMGs; a separate controlled feed with both ZIPs and their
+blockmaps is needed for the update exercise. Signed CI packaging is not
+physical Intel runtime/update proof. Name any outstanding hardware test
+explicitly, and do not promise additional older macOS versions without testing
+the complete app and helpers there.
 
 ## Channel Switching in the App
 

@@ -1,0 +1,809 @@
+{
+  "qualification": "prepared-data-and-static-integrity-only",
+  "representation": "Illustrative static model only; not a wire DTO, persistence format, capability or executed runtime trace.",
+  "unchangedFormats": {
+    "checkpointFormat": 1,
+    "journalFormat": 1
+  },
+  "limits": {
+    "messages": 4096,
+    "blocks": 16384,
+    "historyBytes": 1048576,
+    "repositories": 64,
+    "manifestBytes": 1048576,
+    "stageRepositoryBytes": 268435456,
+    "stageTotalBytes": 1073741824,
+    "backingBytes": 4294967296,
+    "backingInodes": 262144
+  },
+  "examples": [
+    {
+      "id": "running-parent-committed-prefix",
+      "owner": {
+        "parentAgentId": "agent-00000000-0000-4000-8000-000000000101",
+        "workspaceId": "workspace-local-source",
+        "leaseId": "local-source-lease",
+        "incarnation": "00000000-0000-4000-8000-000000000103",
+        "runId": "00000000-0000-4000-8000-000000000104",
+        "assignmentEpoch": "7",
+        "captureRevision": "2"
+      },
+      "history": {
+        "rowsJson": "[{\"messageId\":\"msg-user-10\",\"storeSeq\":\"10\",\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Inspect the committed source; preserve café and λ.\"}],\"attribution\":{\"origin\":\"user\"}},{\"messageId\":\"msg-assistant-11\",\"storeSeq\":\"11\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I will inspect the committed source.\"},{\"type\":\"toolResult\",\"text\":\"HEAD: committed; no edits.\"}],\"attribution\":{\"origin\":\"provider\"}},{\"messageId\":\"msg-user-12\",\"storeSeq\":\"12\",\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Create a fresh child with its own instruction.\"}],\"attribution\":{\"origin\":\"user\"}}]",
+        "sha256": "79cca2a6b5e7342fd8c29a41dc6975058b4a9063ba41cae16a2828427d512934",
+        "bytes": 591,
+        "rowCount": 3,
+        "blockCount": 4,
+        "storeCut": {
+          "messageId": "msg-user-12",
+          "seq": "12"
+        },
+        "excludedEnvelope": "msg-current-uncommitted",
+        "mapping": [
+          {
+            "localSeq": "1",
+            "messageId": "msg-user-10",
+            "storeSeq": "10",
+            "rowSha256": "092524b0fff0103583be7e794beb36f0e501be2557949bbeb819ed97a7baa136"
+          },
+          {
+            "localSeq": "2",
+            "messageId": "msg-assistant-11",
+            "storeSeq": "11",
+            "rowSha256": "d6bb32a9e776fcc747585d3ac24cc3dd85f55b2e80bdf6b675c7b7f25ebb0234"
+          },
+          {
+            "localSeq": "3",
+            "messageId": "msg-user-12",
+            "storeSeq": "12",
+            "rowSha256": "f09b96d024111a8b2bbe58e511a4f3a663ce09f41f7aacc0cc768bd8f1e2b223"
+          }
+        ]
+      },
+      "cut": {
+        "importId": "00000000-0000-4000-8000-000000000106",
+        "checkpointId": "00000000-0000-4000-8000-000000000105",
+        "throughSeq": "3",
+        "historySha256": "79cca2a6b5e7342fd8c29a41dc6975058b4a9063ba41cae16a2828427d512934",
+        "expiresAt": "2026-10-01T15:32:00Z"
+      },
+      "manifestJson": "{\"formatVersion\":1,\"checkpointId\":\"00000000-0000-4000-8000-000000000105\",\"workspaceId\":\"workspace-local-source\",\"agentId\":\"agent-00000000-0000-4000-8000-000000000101\",\"leaseId\":\"local-source-lease\",\"incarnation\":\"00000000-0000-4000-8000-000000000103\",\"runId\":\"00000000-0000-4000-8000-000000000104\",\"assignmentEpoch\":\"7\",\"captureRevision\":\"2\",\"capturedAt\":\"2026-10-01T15:30:00Z\",\"journalSeq\":\"3\",\"repos\":[{\"repoKey\":\"fixture-root\",\"path\":\".\",\"forkBase\":\"1111111111111111111111111111111111111111\",\"objectFormat\":\"sha1\",\"head\":\"1111111111111111111111111111111111111111\",\"index\":\"2222222222222222222222222222222222222222\",\"submodules\":[]}],\"session\":{\"provider\":\"claude-code\",\"mode\":\"history\",\"throughSeq\":\"3\",\"files\":[]},\"attachments\":[]}",
+      "manifestSha256": "79fd3d4bd73e722310d580464448e5b3d89055d241d8c3a0c383711ce53170e8",
+      "receipt": {
+        "checkpointId": "00000000-0000-4000-8000-000000000105",
+        "manifestSha256": "79fd3d4bd73e722310d580464448e5b3d89055d241d8c3a0c383711ce53170e8",
+        "journalSeq": "3"
+      },
+      "target": {
+        "agentId": "agent-00000000-0000-4000-8000-000000000102",
+        "workspaceId": "workspace-local-source",
+        "leaseId": "remote-target-lease",
+        "runId": "00000000-0000-4000-8000-000000000107",
+        "assignmentEpoch": "9",
+        "inheritedCheckpointId": "00000000-0000-4000-8000-000000000105",
+        "mergeTargetAgentId": "agent-00000000-0000-4000-8000-000000000101"
+      },
+      "freshPrompt": {
+        "blocks": [
+          {
+            "type": "text",
+            "text": "Reply with exactly NODE_TRIAL_OK."
+          }
+        ]
+      },
+      "backing": {
+        "byteLimit": 4294967296,
+        "inodeLimit": 262144,
+        "covered": [
+          "immutableSource",
+          "captureScratch",
+          "stagePending",
+          "stageFinal",
+          "hub",
+          "localLog",
+          "metadata",
+          "databaseWal"
+        ],
+        "charges": [
+          {
+            "resource": "history",
+            "bytes": 591,
+            "inodes": 3
+          },
+          {
+            "resource": "copies-and-uncertainty",
+            "bytes": 8192,
+            "inodes": 16
+          }
+        ]
+      },
+      "trace": [
+        {
+          "phase": "reserved",
+          "importId": "00000000-0000-4000-8000-000000000106",
+          "historySha256": "79cca2a6b5e7342fd8c29a41dc6975058b4a9063ba41cae16a2828427d512934",
+          "throughSeq": "3",
+          "retainedBytes": 591,
+          "chargedBytes": 8783,
+          "chargedInodes": 19
+        },
+        {
+          "phase": "sealed",
+          "importId": "00000000-0000-4000-8000-000000000106",
+          "historySha256": "79cca2a6b5e7342fd8c29a41dc6975058b4a9063ba41cae16a2828427d512934",
+          "throughSeq": "3",
+          "retainedBytes": 591,
+          "chargedBytes": 8783,
+          "chargedInodes": 19
+        },
+        {
+          "phase": "headDecided",
+          "importId": "00000000-0000-4000-8000-000000000106",
+          "historySha256": "79cca2a6b5e7342fd8c29a41dc6975058b4a9063ba41cae16a2828427d512934",
+          "throughSeq": "3",
+          "retainedBytes": 591,
+          "chargedBytes": 8783,
+          "chargedInodes": 19
+        },
+        {
+          "phase": "confirmed",
+          "importId": "00000000-0000-4000-8000-000000000106",
+          "historySha256": "79cca2a6b5e7342fd8c29a41dc6975058b4a9063ba41cae16a2828427d512934",
+          "throughSeq": "3",
+          "retainedBytes": 591,
+          "chargedBytes": 8783,
+          "chargedInodes": 19
+        },
+        {
+          "phase": "committed",
+          "importId": "00000000-0000-4000-8000-000000000106",
+          "historySha256": "79cca2a6b5e7342fd8c29a41dc6975058b4a9063ba41cae16a2828427d512934",
+          "throughSeq": "3",
+          "retainedBytes": 591,
+          "chargedBytes": 8783,
+          "chargedInodes": 19
+        },
+        {
+          "phase": "closedRetained",
+          "importId": "00000000-0000-4000-8000-000000000106",
+          "historySha256": "79cca2a6b5e7342fd8c29a41dc6975058b4a9063ba41cae16a2828427d512934",
+          "throughSeq": "3",
+          "retainedBytes": 591,
+          "chargedBytes": 8783,
+          "chargedInodes": 19
+        }
+      ]
+    },
+    {
+      "id": "proven-empty-committed-prefix",
+      "owner": {
+        "parentAgentId": "agent-00000000-0000-4000-8000-000000000101",
+        "workspaceId": "workspace-local-source",
+        "leaseId": "local-source-lease",
+        "incarnation": "00000000-0000-4000-8000-000000000103",
+        "runId": "00000000-0000-4000-8000-000000000104",
+        "assignmentEpoch": "7",
+        "captureRevision": "2"
+      },
+      "history": {
+        "rowsJson": "[]",
+        "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "bytes": 2,
+        "rowCount": 0,
+        "blockCount": 0,
+        "storeCut": null,
+        "excludedEnvelope": "msg-current-uncommitted",
+        "mapping": []
+      },
+      "cut": {
+        "importId": "00000000-0000-4000-8000-000000000106",
+        "checkpointId": "00000000-0000-4000-8000-000000000105",
+        "throughSeq": "0",
+        "historySha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "expiresAt": "2026-10-01T15:32:00Z"
+      },
+      "manifestJson": "{\"formatVersion\":1,\"checkpointId\":\"00000000-0000-4000-8000-000000000105\",\"workspaceId\":\"workspace-local-source\",\"agentId\":\"agent-00000000-0000-4000-8000-000000000101\",\"leaseId\":\"local-source-lease\",\"incarnation\":\"00000000-0000-4000-8000-000000000103\",\"runId\":\"00000000-0000-4000-8000-000000000104\",\"assignmentEpoch\":\"7\",\"captureRevision\":\"2\",\"capturedAt\":\"2026-10-01T15:30:00Z\",\"journalSeq\":\"0\",\"repos\":[{\"repoKey\":\"fixture-root\",\"path\":\".\",\"forkBase\":\"1111111111111111111111111111111111111111\",\"objectFormat\":\"sha1\",\"head\":\"1111111111111111111111111111111111111111\",\"index\":\"2222222222222222222222222222222222222222\",\"submodules\":[]}],\"session\":{\"provider\":\"claude-code\",\"mode\":\"history\",\"throughSeq\":\"0\",\"files\":[]},\"attachments\":[]}",
+      "manifestSha256": "ba15a372dc22c48362b2b38215314a07df3ddff12c732799f16deff3d11c3f74",
+      "receipt": {
+        "checkpointId": "00000000-0000-4000-8000-000000000105",
+        "manifestSha256": "ba15a372dc22c48362b2b38215314a07df3ddff12c732799f16deff3d11c3f74",
+        "journalSeq": "0"
+      },
+      "target": {
+        "agentId": "agent-00000000-0000-4000-8000-000000000102",
+        "workspaceId": "workspace-local-source",
+        "leaseId": "remote-target-lease",
+        "runId": "00000000-0000-4000-8000-000000000107",
+        "assignmentEpoch": "9",
+        "inheritedCheckpointId": "00000000-0000-4000-8000-000000000105",
+        "mergeTargetAgentId": "agent-00000000-0000-4000-8000-000000000101"
+      },
+      "freshPrompt": {
+        "blocks": [
+          {
+            "type": "text",
+            "text": "Reply with exactly NODE_TRIAL_OK."
+          }
+        ]
+      },
+      "backing": {
+        "byteLimit": 4294967296,
+        "inodeLimit": 262144,
+        "covered": [
+          "immutableSource",
+          "captureScratch",
+          "stagePending",
+          "stageFinal",
+          "hub",
+          "localLog",
+          "metadata",
+          "databaseWal"
+        ],
+        "charges": [
+          {
+            "resource": "history",
+            "bytes": 2,
+            "inodes": 3
+          },
+          {
+            "resource": "copies-and-uncertainty",
+            "bytes": 8192,
+            "inodes": 16
+          }
+        ]
+      },
+      "trace": [
+        {
+          "phase": "reserved",
+          "importId": "00000000-0000-4000-8000-000000000106",
+          "historySha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "throughSeq": "0",
+          "retainedBytes": 2,
+          "chargedBytes": 8194,
+          "chargedInodes": 19
+        },
+        {
+          "phase": "sealed",
+          "importId": "00000000-0000-4000-8000-000000000106",
+          "historySha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "throughSeq": "0",
+          "retainedBytes": 2,
+          "chargedBytes": 8194,
+          "chargedInodes": 19
+        },
+        {
+          "phase": "headDecided",
+          "importId": "00000000-0000-4000-8000-000000000106",
+          "historySha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "throughSeq": "0",
+          "retainedBytes": 2,
+          "chargedBytes": 8194,
+          "chargedInodes": 19
+        },
+        {
+          "phase": "confirmed",
+          "importId": "00000000-0000-4000-8000-000000000106",
+          "historySha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "throughSeq": "0",
+          "retainedBytes": 2,
+          "chargedBytes": 8194,
+          "chargedInodes": 19
+        },
+        {
+          "phase": "committed",
+          "importId": "00000000-0000-4000-8000-000000000106",
+          "historySha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "throughSeq": "0",
+          "retainedBytes": 2,
+          "chargedBytes": 8194,
+          "chargedInodes": 19
+        },
+        {
+          "phase": "closedRetained",
+          "importId": "00000000-0000-4000-8000-000000000106",
+          "historySha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "throughSeq": "0",
+          "retainedBytes": 2,
+          "chargedBytes": 8194,
+          "chargedInodes": 19
+        }
+      ]
+    }
+  ],
+  "invalidExamples": [
+    {
+      "id": "history-bytes-changed",
+      "base": "running-parent-committed-prefix",
+      "replace": {
+        "path": [
+          "history",
+          "rowsJson"
+        ],
+        "value": "[{\"messageId\":\"msg-user-10\",\"storeSeq\":\"10\",\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Inspect the committed source; preserve café and λ.\"}],\"attribution\":{\"origin\":\"user\"}},{\"messageId\":\"msg-assistant-11\",\"storeSeq\":\"11\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I will inspect the committed source.\"},{\"type\":\"toolResult\",\"text\":\"HEAD: committed; no edits.\"}],\"attribution\":{\"origin\":\"provider\"}},{\"messageId\":\"msg-user-12\",\"storeSeq\":\"12\",\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Create a fresh child with its own instruction.\"}],\"attribution\":{\"origin\":\"user\"}}] "
+      }
+    },
+    {
+      "id": "history-size-counts-characters",
+      "base": "running-parent-committed-prefix",
+      "replace": {
+        "path": [
+          "history",
+          "bytes"
+        ],
+        "value": 589
+      }
+    },
+    {
+      "id": "missing-full-history",
+      "base": "running-parent-committed-prefix",
+      "replace": {
+        "path": [
+          "history",
+          "rowsJson"
+        ],
+        "value": "[]"
+      }
+    },
+    {
+      "id": "false-row-count",
+      "base": "running-parent-committed-prefix",
+      "replace": {
+        "path": [
+          "history",
+          "rowCount"
+        ],
+        "value": 2
+      }
+    },
+    {
+      "id": "false-block-count",
+      "base": "running-parent-committed-prefix",
+      "replace": {
+        "path": [
+          "history",
+          "blockCount"
+        ],
+        "value": 3
+      }
+    },
+    {
+      "id": "changed-store-cut",
+      "base": "running-parent-committed-prefix",
+      "replace": {
+        "path": [
+          "history",
+          "storeCut",
+          "seq"
+        ],
+        "value": "11"
+      }
+    },
+    {
+      "id": "pending-envelope-imported",
+      "base": "running-parent-committed-prefix",
+      "replace": {
+        "path": [
+          "history",
+          "excludedEnvelope"
+        ],
+        "value": "msg-assistant-11"
+      }
+    },
+    {
+      "id": "noncontiguous-local-sequence",
+      "base": "running-parent-committed-prefix",
+      "replace": {
+        "path": [
+          "history",
+          "mapping",
+          1,
+          "localSeq"
+        ],
+        "value": "3"
+      }
+    },
+    {
+      "id": "foreign-original-row",
+      "base": "running-parent-committed-prefix",
+      "replace": {
+        "path": [
+          "history",
+          "mapping",
+          0,
+          "messageId"
+        ],
+        "value": "other-message"
+      }
+    },
+    {
+      "id": "false-provenance-hash",
+      "base": "running-parent-committed-prefix",
+      "replace": {
+        "path": [
+          "history",
+          "mapping",
+          0,
+          "rowSha256"
+        ],
+        "value": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "id": "invented-cut",
+      "base": "running-parent-committed-prefix",
+      "replace": {
+        "path": [
+          "cut",
+          "throughSeq"
+        ],
+        "value": "0"
+      }
+    },
+    {
+      "id": "foreign-cut-history",
+      "base": "running-parent-committed-prefix",
+      "replace": {
+        "path": [
+          "cut",
+          "historySha256"
+        ],
+        "value": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "id": "zero-source-epoch",
+      "base": "running-parent-committed-prefix",
+      "replace": {
+        "path": [
+          "owner",
+          "assignmentEpoch"
+        ],
+        "value": "0"
+      }
+    },
+    {
+      "id": "zero-source-revision",
+      "base": "running-parent-committed-prefix",
+      "replace": {
+        "path": [
+          "owner",
+          "captureRevision"
+        ],
+        "value": "0"
+      }
+    },
+    {
+      "id": "source-is-target-run",
+      "base": "running-parent-committed-prefix",
+      "replace": {
+        "path": [
+          "target",
+          "runId"
+        ],
+        "value": "00000000-0000-4000-8000-000000000104"
+      }
+    },
+    {
+      "id": "source-is-target-agent",
+      "base": "running-parent-committed-prefix",
+      "replace": {
+        "path": [
+          "target",
+          "agentId"
+        ],
+        "value": "agent-00000000-0000-4000-8000-000000000101"
+      }
+    },
+    {
+      "id": "wrong-merge-parent",
+      "base": "running-parent-committed-prefix",
+      "replace": {
+        "path": [
+          "target",
+          "mergeTargetAgentId"
+        ],
+        "value": "agent-00000000-0000-4000-8000-000000000199"
+      }
+    },
+    {
+      "id": "wrong-inherited-checkpoint",
+      "base": "running-parent-committed-prefix",
+      "replace": {
+        "path": [
+          "target",
+          "inheritedCheckpointId"
+        ],
+        "value": "00000000-0000-4000-8000-000000000199"
+      }
+    },
+    {
+      "id": "foreign-target-workspace",
+      "base": "running-parent-committed-prefix",
+      "replace": {
+        "path": [
+          "target",
+          "workspaceId"
+        ],
+        "value": "other-workspace"
+      }
+    },
+    {
+      "id": "receipt-cut-substituted",
+      "base": "running-parent-committed-prefix",
+      "replace": {
+        "path": [
+          "receipt",
+          "journalSeq"
+        ],
+        "value": "4"
+      }
+    },
+    {
+      "id": "receipt-digest-substituted",
+      "base": "running-parent-committed-prefix",
+      "replace": {
+        "path": [
+          "receipt",
+          "manifestSha256"
+        ],
+        "value": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "id": "uncovered-wal",
+      "base": "running-parent-committed-prefix",
+      "replace": {
+        "path": [
+          "backing",
+          "covered"
+        ],
+        "value": [
+          "immutableSource",
+          "captureScratch",
+          "stagePending",
+          "stageFinal",
+          "hub",
+          "localLog",
+          "metadata"
+        ]
+      }
+    },
+    {
+      "id": "byte-cap-exceeded",
+      "base": "running-parent-committed-prefix",
+      "replace": {
+        "path": [
+          "backing",
+          "charges",
+          1,
+          "bytes"
+        ],
+        "value": 4294967296
+      }
+    },
+    {
+      "id": "inode-cap-exceeded",
+      "base": "running-parent-committed-prefix",
+      "replace": {
+        "path": [
+          "backing",
+          "charges",
+          1,
+          "inodes"
+        ],
+        "value": 262144
+      }
+    },
+    {
+      "id": "negative-charge",
+      "base": "running-parent-committed-prefix",
+      "replace": {
+        "path": [
+          "backing",
+          "charges",
+          0,
+          "bytes"
+        ],
+        "value": -1
+      }
+    },
+    {
+      "id": "confirmation-without-head-decision",
+      "base": "running-parent-committed-prefix",
+      "replace": {
+        "path": [
+          "trace",
+          2,
+          "phase"
+        ],
+        "value": "confirmed"
+      }
+    },
+    {
+      "id": "confirmation-foreign-import",
+      "base": "running-parent-committed-prefix",
+      "replace": {
+        "path": [
+          "trace",
+          3,
+          "importId"
+        ],
+        "value": "00000000-0000-4000-8000-000000000199"
+      }
+    },
+    {
+      "id": "confirmation-reclaims-history",
+      "base": "running-parent-committed-prefix",
+      "replace": {
+        "path": [
+          "trace",
+          3,
+          "retainedBytes"
+        ],
+        "value": 0
+      }
+    },
+    {
+      "id": "close-refunds-charge",
+      "base": "running-parent-committed-prefix",
+      "replace": {
+        "path": [
+          "trace",
+          5,
+          "chargedBytes"
+        ],
+        "value": 0
+      }
+    },
+    {
+      "id": "close-refunds-inodes",
+      "base": "running-parent-committed-prefix",
+      "replace": {
+        "path": [
+          "trace",
+          5,
+          "chargedInodes"
+        ],
+        "value": 0
+      }
+    },
+    {
+      "id": "ordinary-ack-path",
+      "base": "running-parent-committed-prefix",
+      "replace": {
+        "path": [
+          "trace",
+          3,
+          "phase"
+        ],
+        "value": "remoteAcknowledge"
+      }
+    },
+    {
+      "id": "fresh-child-history",
+      "base": "running-parent-committed-prefix",
+      "replace": {
+        "path": [
+          "freshPrompt",
+          "history"
+        ],
+        "value": {
+          "text": "parent replay"
+        }
+      }
+    },
+    {
+      "id": "fresh-child-resume",
+      "base": "running-parent-committed-prefix",
+      "replace": {
+        "path": [
+          "freshPrompt",
+          "resumeAttemptId"
+        ],
+        "value": "00000000-0000-4000-8000-000000000199"
+      }
+    }
+  ],
+  "runtimeScenarios": [
+    {
+      "id": "actual-running-model-parent",
+      "executed": false,
+      "required": "Invoke real fresh model create while its tool turn remains pending; preserve actual caller and distinct child."
+    },
+    {
+      "id": "stable-committed-prefix",
+      "executed": false,
+      "required": "Use one bounded Store snapshot; concurrent commits remain outside the exact cut."
+    },
+    {
+      "id": "pruned-store-retained-history",
+      "executed": false,
+      "required": "Prune original Store payload after import; retained full semantic history remains byte-exact."
+    },
+    {
+      "id": "history-overflow",
+      "executed": false,
+      "required": "Reject row/block/decoded-byte bounds and missing payload without truncation."
+    },
+    {
+      "id": "atomic-capture-purpose",
+      "executed": false,
+      "required": "Observe no ordinary execution/routing interval before capture-only purpose is durable."
+    },
+    {
+      "id": "parent-routing-after-close",
+      "executed": false,
+      "required": "Parent remains locally routable while capture-only source closes and retains backing."
+    },
+    {
+      "id": "real-positive-revision",
+      "executed": false,
+      "required": "Allocate real positive source epoch/revision; failed revisions cannot be reused."
+    },
+    {
+      "id": "durable-prefix-seal",
+      "executed": false,
+      "required": "Seal actual contiguous append prefix; no post-seal append enters the cut."
+    },
+    {
+      "id": "full-head-decision",
+      "executed": false,
+      "required": "Prove FULL durable decision and same-cut fsynced local confirmation across crash points."
+    },
+    {
+      "id": "retention-only-reopen",
+      "executed": false,
+      "required": "No ordinary reclaiming open/ACK/replay path on LOCAL recovery; mismatch quarantines."
+    },
+    {
+      "id": "byte-enforcement-all-writers",
+      "executed": false,
+      "required": "Exercise actual byte quota exhaustion in every copy/native/stage/hub/log/DB-WAL destination."
+    },
+    {
+      "id": "inode-enforcement-all-writers",
+      "executed": false,
+      "required": "Exercise inode quota and destination-escape denial before effects."
+    },
+    {
+      "id": "missing-enforcement",
+      "executed": false,
+      "required": "Return unavailable without writes/pins/assignment when any backing coverage is absent."
+    },
+    {
+      "id": "native-stop-disposal",
+      "executed": false,
+      "required": "Close fences issuance independently; SAME handles/results/charges survive pending or failed native disposal."
+    },
+    {
+      "id": "typed-local-alias",
+      "executed": false,
+      "required": "Use genuine local native/ref admission with no forged physical generation."
+    },
+    {
+      "id": "unknown-commit-reconciliation",
+      "executed": false,
+      "required": "Lost result reconciles original UUID/hash, preserving pins and no duplicate child."
+    },
+    {
+      "id": "unsupported-dirty-attachments",
+      "executed": false,
+      "required": "Reject unsupported dirty/unresolved/unbacked attachment input without silently losing contents."
+    },
+    {
+      "id": "fresh-prompt-only",
+      "executed": false,
+      "required": "No provider replay for a fresh child; resolved required history/resume rejects explicitly."
+    },
+    {
+      "id": "dependent-source-retention",
+      "executed": false,
+      "required": "Retain bytes/pins/charges through child dependencies; no ACK/timeout/Drop disposal."
+    },
+    {
+      "id": "immutable-source-race",
+      "executed": false,
+      "required": "Concurrent parent tree changes do not alter the selected retained committed closure or mutate live parent files."
+    }
+  ]
+}

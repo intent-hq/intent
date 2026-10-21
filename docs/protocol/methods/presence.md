@@ -16,22 +16,25 @@ Ephemeral who-is-here state for shared (multi-principal) workspaces ([intent-hq/
 The note-presence channel pair is a §6.9 subscription channel (intercepted on the subscription fast-path like `note.subscribe` / `chat.subscribe`, so it is outside the dispatchable-name count of §5):
 
 - `note.presence.subscribe` — params `workspaceId` (req), `noteId` (req), `replaceGroup?` → `{ subscriptionId }`, then a seq-0 `{ viewers: NoteViewer[] }` snapshot (the subscriber included) and `{ kind, viewer }` deltas.
-- `note.presence.unsubscribe` — params `subscriptionId` (req) → `{ success }`; releases the lease, and the viewer's `left` is published when it was the principal's last lease on the note.
+- `note.presence.unsubscribe` — params `subscriptionId` (req), `workspaceId?` ([prepared routing context](../workspace-routing.md), optional for direct callers) → `{ success }`; releases the lease, and the viewer's `left` is published when it was the principal's last lease on the note. Workspace clients retain the source workspace through cleanup; the field does not change connection or lease ownership.
 
 #### Shapes
 
 ```jsonc
-// PresenceMember — one online member of the workspace (presence:changed / presence.snapshot)
+// PresenceMember — one online member (presence:changed / presence.snapshot); optional identity since 10.9
 { "principalId": "p-…", "login": "octocat", "displayName": "Octo Cat", "avatarUrl": "https://…",
+  "identity": { "provider": "github", "host": "github.com", "externalUserId": "583231" },
   "focus":  [ { "workspaceId": "ws-1", "agentId": "agent-…" }, { "workspaceId": "ws-1", "noteId": "spec" } ],
   "typing": [ { "source": "ts-…", "agentId": "agent-…", "since": "2026-09-14T12:00:00Z", "pulse": 7 } ] }
 
-// NoteViewer — one viewer of a note (note.presence.subscribe snapshot rows and delta `viewer`)
+// NoteViewer — one viewer (note.presence.subscribe snapshot rows and delta `viewer`); optional identity since 10.9
 { "principalId": "p-…", "login": "octocat", "displayName": "Octo Cat", "avatarUrl": "https://…",
+  "identity": { "provider": "github", "host": "github.com", "externalUserId": "583231" },
   "cursor": { "rev": 12, "anchor": 40, "head": 52 } }
 ```
 
 - `principalId` is stamped by the daemon from the connection's bound principal — never a wire parameter. `login` / `displayName` / `avatarUrl` are the principal's stored profile fields; each key is **always present** and `null` when the profile has no value. The profile is read from the store once per principal and cached while the principal is present.
+- **Qualified identity (10.9, additive; docs lead implementation).** Both `PresenceMember` and `NoteViewer` also carry optional `identity: Identity`, the safe `{ provider, host, externalUserId }` triple defined in [§5.48](./multiplayer.md#identity-model), from that same principal's trusted profile. It is omitted, never `null`, while unlinked or unresolved. Apply the same shape to `presence.snapshot`, `presence:changed`, and `note.presence.subscribe` snapshot/delta viewers. Client-supplied profile/identity fields cannot choose a person. Use the existing profile cache and profile-change invalidation/reprojection; this is current ephemeral presence, not a persisted author snapshot. Equal handles across providers/instances remain distinct by qualified identity and host-scoped principal ID. Missing identity does not imply owner status; the metadata grants no authority and exposes no credentials.
 - `focus` is the member's focus items **in this workspace only**, deduplicated across all of the principal's connections; `agentId` / `noteId` are present only when the client set them (never `null`).
 - `typing` holds **one entry per typing connection** — two clients of one person stay two entries, keyed by `source` (that connection's `typingSource`); entries are sorted by `source`. `since` is the episode start (RFC-3339), kept while the same connection keeps naming the same agent; `pulse` is a per-connection counter that advances on **every** `presence.update` naming a typing agent. Freshness is `(source, pulse)`: a receiver restarts its expiry timer when it sees a pair it has not seen before, and never compares wall clocks — a roster re-emitted for an unrelated reason (a hello, another connection's focus change) re-projects the entry unchanged, pulse included.
 - `cursor` is **always present** on a viewer row: `null` until the principal's first `note.presence.update` on the note, then `{ rev, anchor, head }` (the note `rev` the offsets are relative to, §4; `anchor` / `head` are the selection ends). The `left` delta carries `cursor: null`.
@@ -68,3 +71,90 @@ The note-presence channel pair is a §6.9 subscription channel (intercepted on t
 
 - The **writes and the join** are client-connection concerns: `presence.update`, `note.presence.subscribe` and `note.presence.update` resolve the principal from the connection's bound wire caller; an agent / daemon caller or an unbound request is refused with `-32003 Forbidden` (`data { code: "forbidden", detail }`, e.g. `"presence.update is only available to client connections"` / `"…: no caller is bound"`). **`presence.snapshot`** carries no such restriction — it is an ordinary Member+ read (`require_member`), so a bound agent or daemon caller passing the membership gate reads the roster like any other workspace read, and an unbound request fails that gate. **`note.presence.unsubscribe`** is connection-local subscription cleanup (the generic registry remove, `{ success: boolean }` — `false` for an unknown or foreign `subscriptionId`) and resolves no principal.
 - All five names are callable by collaborator (non-administrator) connections; `presence:changed` and `note:presence` are workspace-scoped events deliverable to collaborators, so the membership gate narrows them like any other row. No profile field is exposed here that a member cannot already read from the workspace's member list.
+
+### Effective host membership *(10.9)*
+
+With the [§5.49](./shared-host-membership.md#effective-workspace-membership)
+contract, presence and note-viewer membership use the owner + active host members
++ direct workspace guests, deduplicated by principal ID. `PresenceMember` and
+`NoteViewer` add `hostRole: "owner" | "member" | "guest"`. Device connections still
+aggregate into a single person. Removing a direct guest grant keeps the existing
+lease/focus teardown; removing host membership removes its effective leases across
+workspaces and invalidates delivery before later frames. Workspace guests cannot
+see hidden workspaces or unrelated people through presence or subscriptions.
+
+### Authorized person focus channel
+
+`presence.focus.subscribe` / `presence.focus.unsubscribe` add a targeted §6.9
+channel for following a known member to a workspace whose tab is closed locally.
+They do not change the workspace-scoped `PresenceMember.focus` roster.
+
+- `presence.focus.subscribe` — params `workspaceId` (req, source workspace),
+  `principalId` (req, stable source member), `replaceGroup?` → `{ subscriptionId }`,
+  followed by replacement snapshots below.
+- `presence.focus.unsubscribe` — params `subscriptionId` (req), `workspaceId?`
+  (source routing hint) → `{ success: boolean }`, connection-local cleanup.
+
+Like `note.presence`, this pair is outside the dispatchable-name count of §5.
+
+Each `subscription.push` has `kind: "snapshot"`, `seq` (0 initially, then strictly
+increasing within that subscription), and this full replacement `snapshot`:
+
+```jsonc
+{ "workspaceId": "source", "principalId": "person", "target": null }
+// or, only when both viewer and person can access the destination:
+{ "workspaceId": "source", "principalId": "person",
+  "target": { "workspaceId": "destination", "agentId": "agent-id" } }
+```
+
+A target is a bare workspace, an agent (`agentId`), or a note (`noteId`); agent
+and note selectors are mutually exclusive. It contains no title or profile.
+A consumer may fetch display information with ordinary authorized scoped reads
+only after receiving a target, and must fence their results against its current
+subscription and sequence. No destination identifier, title or route is included
+when `target` is null, including in refusal errors.
+
+Authorization uses the admitted wire principal and current effective membership,
+including inherited host membership and direct guests. The viewer and person must
+both be source members; unknown source, forbidden source, unknown person and
+unrelated person all return the same `-32602`, `data.code: "not-found"`, message
+`"not found: presence focus"`, with no subscription. Agent/daemon/unbound callers get
+`-32003` Forbidden. Missing or empty required strings are `-32602` invalid params.
+A successful well-shaped subscription and initial snapshot prove support. Older
+daemons can return `-32601` to administrators or `-32003` from a collaborator
+allowlist; either refusal leaves navigation inert, but Forbidden does not prove
+lack of support.
+
+The daemon collects current hello-connection focus for this person, then checks
+source membership, viewer and person destination membership, workspace existence,
+and agent/note ownership in one database snapshot. Invalid, deleted, inaccessible
+or mismatched resource candidates are omitted. Empty/offline/hidden focus yields
+`target: null`. A valid accessible source-workspace focus is preferred. Otherwise selection is
+deterministic lexicographic order of workspace ID,
+then kind (agent, note, bare workspace), then resource ID, deduplicating equivalent
+views across connections. This does **not** claim which view was focused latest.
+
+The channel attaches invalidation before its first read and recomputes on focus
+moves, disconnects, membership changes and resource deletion, including changes
+outside the source workspace. Raw internal invalidation payloads never travel on
+this channel. A changed target replaces the previous snapshot; loss of source or
+person authorization sends a final snapshot `{ workspaceId, principalId, target: null,
+closed: true }` and ends forwarding. Normal snapshots omit `closed`. Read failure,
+invalidation-bus closure and guarded forwarder panic also emit this terminal snapshot
+before ending while the transport remains writable. Explicit unsubscribe, replacement
+and disconnect abort the channel and are already known locally. Writer capacity is
+reserved before reading current authorization; invalidations overtaking a pending read discard it.
+Bus lag causes a fresh read rather than replaying potentially stale focus.
+
+Unsubscribe, `replaceGroup` replacement and connection close dispose the channel.
+Reconnect starts a fresh subscription; no snapshot survives a backend/principal
+change. A terminal `closed: true` snapshot, connection loss, failed/malformed response,
+initial-snapshot timeout or replacement clears the target and disables navigation.
+A quiet valid channel needs no idle timeout or polling. Consumers reject old
+subscription generations and older sequences, clear pending navigation on replacement/null/disconnect, and never merge snapshots.
+For a click, use a fresh subscription with the same replacement group to recheck
+the target. If asynchronous workspace/view loading is needed, perform the final
+replacement after loading and compare the target before changing tabs; any newer
+sequence or generation cancels the pending click. This is event-driven plus a
+bounded action-time recheck, not polling or a per-workspace scan. The normal
+scoped navigation methods retain their own authorization boundaries.

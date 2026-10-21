@@ -13,12 +13,15 @@ import { promisify } from 'node:util';
 
 import {
   PAIRS,
+  STAGED_DOC,
+  STAGED_HEADING,
   comparePair,
   extractRustFields,
   extractTsKeys,
   formatDiagnostic,
   formatRefBanner,
   formatRefOffPinWarning,
+  parseStagedFields,
   runChecks,
   toCamelCase,
 } from './check-protocol-field-parity.mjs';
@@ -315,10 +318,20 @@ test('comparePair surfaces flatten and rename_all errors instead of comparing', 
   assert.match(errors[0].message, /flatten/);
 });
 
+// The staged daemon-first field table as docs/protocol/versioning.md carries
+// it; `rows` are `[row, field, contract, adoption]` cell strings.
+function stagedDoc(rows = []) {
+  const body = rows.map((cells) => `| ${cells.join(' | ')} |\n`).join('');
+  return `# Versioning\n\n### ${STAGED_HEADING}\n\nProse.\n\n| Row | Field | Contract | App adoption |\n|---|---|---|---|\n${body}\n## Next\n`;
+}
+
+// Every fixture root carries an empty staged table unless `files` names
+// STAGED_DOC; `null` leaves the file out.
 async function fixture(t, files) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'check-protocol-field-parity-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  for (const [name, content] of Object.entries(files)) {
+  for (const [name, content] of Object.entries({ [STAGED_DOC]: stagedDoc(), ...files })) {
+    if (content === null) continue;
     const filePath = path.join(root, name);
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, content);
@@ -347,6 +360,149 @@ test('runChecks skips a pair whose submodule is not initialized and checks the r
 
 const FIXTURE_PAIR = { rust: { file: 'packages/intentd/model.rs', struct: 'Row' }, ts: { file: 'packages/cloudlands-fe/types.ts', type: 'Row' }, ignore: {} };
 
+test('parseStagedFields reads rows keyed by struct and strips backticks', () => {
+  const { staged, errors } = parseStagedFields(stagedDoc([['`Row`', '`lastActivity`', LINK, 'cloudlands-fe#1']]), STAGED_DOC, [pair()]);
+  assert.deepEqual(errors, []);
+  assert.deepEqual([...staged.get('Row')], [['lastActivity', { file: STAGED_DOC, line: 9, adoption: 'cloudlands-fe#1' }]]);
+});
+
+test('parseStagedFields accepts an empty table', () => {
+  const { staged, errors } = parseStagedFields(stagedDoc(), STAGED_DOC, [pair()]);
+  assert.deepEqual(errors, []);
+  assert.equal(staged.size, 0);
+});
+
+const LINK = '[§5.5](./methods/agents.md)';
+
+test('parseStagedFields fails closed on a malformed table', () => {
+  const cases = [
+    ['# Versioning\n\nNo table here.\n', 1, /heading not found/],
+    [`### ${STAGED_HEADING}\n\nProse only.\n\n## Next\n`, 1, /no table follows the heading/],
+    [`### ${STAGED_HEADING}\n\n| Row | Field |\n|---|---|\n`, 3, /table columns are Row \| Field; expected Row \| Field \| Contract \| App adoption/],
+    [`### ${STAGED_HEADING}\n\n| Row | Field | Contract | App adoption |\n| Row | x | y | z |\n`, 4, /separator row/],
+    [stagedDoc([['`Row`', '`a`', LINK]]), 9, /row has 3 cell\(s\); expected 4/],
+    [stagedDoc([['`Row`', 'two words', LINK, 'a']]), 9, /Row and Field must each be one name, in balanced backticks or none/],
+    [stagedDoc([['`Row`', '`a', LINK, 'a']]), 9, /Row and Field must each be one name, in balanced backticks or none \(got `Row` \/ `a\)/],
+    [stagedDoc([['`Row`', '`a`', LINK, '']]), 9, /Row\.a needs a Markdown link to its Contract and the App adoption/],
+    [stagedDoc([['`Row`', '`a`', 'TBD', 'later']]), 9, /Row\.a needs a Markdown link to its Contract/],
+    [stagedDoc([['`Other`', '`a`', LINK, 'a']]), 9, /Row Other is not a checked Rust row struct \(Row\); name the Rust struct, not the frontend type/],
+    [stagedDoc([['`Row`', '`kind`', LINK, 'a']]), 9, /Row\.kind is also a PAIRS ignore entry/],
+    [stagedDoc([['`Row`', '`a`', LINK, 'a'], ['`Row`', '`a`', LINK, 'b']]), 10, /Row\.a is listed twice \(first at line 9\)/],
+  ];
+  for (const [doc, line, re] of cases) {
+    const { errors } = parseStagedFields(doc, STAGED_DOC, [pair({ ignore: { kind: 'never read' } })]);
+    assert.equal(errors.length, 1, doc);
+    assert.equal(errors[0].line, line, doc);
+    assert.equal(errors[0].severity, undefined);
+    assert.match(formatDiagnostic(errors[0]), re);
+  }
+});
+
+test('parseStagedFields keeps escaped pipes inside a cell', () => {
+  const { staged, errors } = parseStagedFields(stagedDoc([['`Row`', '`a`', `${LINK} \`string \\| null\``, 'cloudlands-fe#1']]), STAGED_DOC, [pair()]);
+  assert.deepEqual(errors, []);
+  assert.ok(staged.get('Row').has('a'));
+});
+
+test('parseStagedFields accepts a serde-renamed wire name that is not an identifier', () => {
+  const { staged, errors } = parseStagedFields(stagedDoc([['`Row`', '`x-trace-id`', LINK, 'cloudlands-fe#1']]), STAGED_DOC, [pair()]);
+  assert.deepEqual(errors, []);
+  assert.ok(staged.get('Row').has('x-trace-id'));
+});
+
+test('parseStagedFields ignores an example section inside a code fence', () => {
+  const fenced = `# Versioning\n\n\`\`\`md\n### ${STAGED_HEADING}\n\n| Row | Field | Contract | App adoption |\n|---|---|---|---|\n| \`Row\` | \`example\` | ${LINK} | cloudlands-fe#0 |\n\`\`\`\n\n`;
+  const doc = fenced + stagedDoc([['`Row`', '`real`', LINK, 'cloudlands-fe#1']]).replace('# Versioning\n\n', '');
+  const { staged, errors } = parseStagedFields(doc, STAGED_DOC, [pair()]);
+  assert.deepEqual(errors, []);
+  assert.deepEqual([...staged.get('Row').keys()], ['real']);
+});
+
+test('parseStagedFields ends the table at the first non-table line', () => {
+  const doc = stagedDoc([['`Row`', '`a`', LINK, 'cloudlands-fe#1']]).replace('\n## Next\n', '\nProse.\n| `Row` | `b` | x | y |\n');
+  const { staged, errors } = parseStagedFields(doc, STAGED_DOC, [pair()]);
+  assert.deepEqual(errors, []);
+  assert.deepEqual([...staged.get('Row').keys()], ['a']);
+});
+
+test('parseStagedFields reads the table the way GitHub renders it', () => {
+  const row = (field) => `| \`Row\` | \`${field}\` | ${LINK} | cloudlands-fe#1 |`;
+  const doc = (...body) => stagedDoc().replace('|---|---|---|---|\n', `|---|---|---|---|\n${body.join('\n')}\n`);
+  // A lazy line right after the table is a row on GitHub, so it is checked (and fails) instead of ending the table.
+  const lazy = parseStagedFields(doc(row('a'), 'Trailing prose.'), STAGED_DOC, [pair()]);
+  assert.deepEqual(lazy.errors.map((e) => [e.line, e.message.match(/row has \d+ cell\(s\)/)?.[0]]), [[10, 'row has 1 cell(s)']]);
+  // A tab-indented line is indented code on GitHub: it ends the table and is not a row.
+  const tabbed = parseStagedFields(doc(row('a'), `\t${row('b')}`), STAGED_DOC, [pair()]);
+  assert.deepEqual(tabbed.errors, []);
+  assert.deepEqual([...tabbed.staged.get('Row').keys()], ['a']);
+  // A backslash before an escaped pipe still escapes it (cmark-gfm), so the cell does not split.
+  const escaped = parseStagedFields(doc(`| \`Row\` | \`a\` | ${LINK} \`x\\\\|y\` | cloudlands-fe#1 |`), STAGED_DOC, [pair()]);
+  assert.deepEqual(escaped.errors, []);
+  // A tilde line inside a backtick fence does not close it, so the example heading stays hidden.
+  const fenced = `# Versioning\n\n\`\`\`md\n~~~\n### ${STAGED_HEADING}\n\`\`\`\n\n${stagedDoc([['`Row`', '`real`', LINK, 'cloudlands-fe#1']]).replace('# Versioning\n\n', '')}`;
+  const hidden = parseStagedFields(fenced, STAGED_DOC, [pair()]);
+  assert.deepEqual(hidden.errors, []);
+  assert.deepEqual([...hidden.staged.get('Row').keys()], ['real']);
+});
+
+test('parseStagedFields names a separator row with the wrong cell count', () => {
+  const doc = `### ${STAGED_HEADING}\n\n| Row | Field | Contract | App adoption |\n|---|---|---|\n`;
+  const { errors } = parseStagedFields(doc, STAGED_DOC, [pair()]);
+  assert.deepEqual(errors.map((e) => [e.line, e.message]), [[4, `${STAGED_HEADING}: the | --- | separator row has 3 cell(s); expected 4 (GitHub renders a mismatched table as plain text)`]]);
+});
+
+test('parseStagedFields ends the section at a setext heading', () => {
+  const doc = `### ${STAGED_HEADING}\n\nProse only.\n\nNext section\n------------\n\n| Row | Field | Contract | App adoption |\n|---|---|---|---|\n`;
+  const { errors } = parseStagedFields(doc, STAGED_DOC, [pair()]);
+  assert.deepEqual(errors.map((e) => [e.line, e.message.match(/no table follows the heading/)?.[0]]), [[1, 'no table follows the heading']]);
+});
+
+const stagedEntry = (field) => new Map([[field, { file: STAGED_DOC, line: 9, adoption: 'cloudlands-fe#1' }]]);
+
+test('comparePair downgrades a staged daemon-first field to a warning', () => {
+  const ts = TS_FULL.replace('  lastActivity?: string;\n', '');
+  const diags = comparePair(pair(), RUST, ts, stagedEntry('lastActivity'));
+  assert.equal(diags.length, 1);
+  assert.equal(diags[0].severity, 'warning');
+  assert.match(formatDiagnostic(diags[0]), /^model\.rs:10: warning: Row → Row: staged daemon-first field Row\.lastActivity \(Rust last_activity\) is not in Row yet \(types\.ts:2-9\); app adoption pending: cloudlands-fe#1 \(docs\/protocol\/versioning\.md:9\)$/);
+});
+
+test('comparePair still fails an unstaged missing field next to a staged one', () => {
+  const ts = TS_FULL.replace('  lastActivity?: string;\n', '').replace('  kind: number;\n', '');
+  const diags = comparePair(pair(), RUST, ts, stagedEntry('lastActivity'));
+  assert.deepEqual(diags.map((d) => [d.severity ?? 'error', d.message.match(/field Row\.(\w+)/)[1]]), [['warning', 'lastActivity'], ['error', 'kind']]);
+});
+
+test('comparePair warns when the TS type already declares a staged field', () => {
+  const diags = comparePair(pair(), RUST, TS_FULL, stagedEntry('kind'));
+  assert.equal(diags.length, 1);
+  assert.match(formatDiagnostic(diags[0]), /^docs\/protocol\/versioning\.md:9: warning: Row → Row: stale staged field kind — Row now declares it \(types\.ts:6\); remove the row from the "Staged row fields \(app adoption pending\)" table$/);
+});
+
+test('comparePair warns when a staged field is not emitted (docs leading the pin)', () => {
+  const diags = comparePair(pair(), RUST, TS_FULL, stagedEntry('upcoming'));
+  assert.equal(diags.length, 1);
+  assert.match(formatDiagnostic(diags[0]), /^docs\/protocol\/versioning\.md:9: warning: Row → Row: staged field upcoming is not emitted by Row; expected while its intentd change has not reached this checkout \(docs lead the pin\), otherwise remove the row \(or fix a misspelled Field\)$/);
+});
+
+test('runChecks fails when the staged table document is missing', async (t) => {
+  const root = await fixture(t, {
+    [STAGED_DOC]: null,
+    'packages/intentd/.git': 'gitdir: x\n',
+    'packages/intentd/model.rs': RUST,
+    'packages/cloudlands-fe/.git': 'gitdir: x\n',
+    'packages/cloudlands-fe/types.ts': TS_FULL,
+  });
+  const result = await runChecks(root, [FIXTURE_PAIR]);
+  assert.deepEqual(result.errors.map(formatDiagnostic), ['docs/protocol/versioning.md:1: error: cannot read the staged daemon-first field table: ENOENT']);
+});
+
+test('the real staged table parses against the real manifest', async () => {
+  const doc = await fs.readFile(fileURLToPath(new URL(`../${STAGED_DOC}`, import.meta.url)), 'utf8');
+  assert.deepEqual(parseStagedFields(doc).errors, []);
+});
+
+
 test('runChecks separates stale-ignore warnings from errors', async (t) => {
   const root = await fixture(t, {
     'packages/intentd/.git': 'gitdir: x\n',
@@ -364,9 +520,9 @@ test('runChecks separates stale-ignore warnings from errors', async (t) => {
 });
 
 const run = promisify(execFile);
-async function runCli(root) {
+async function runCli(root, ...args) {
   try {
-    const { stdout, stderr } = await run(process.execPath, [SCRIPT, root], { env: cleanNodeEnv() });
+    const { stdout, stderr } = await run(process.execPath, [SCRIPT, root, ...args], { env: cleanNodeEnv() });
     return { code: 0, stdout, stderr };
   } catch (err) {
     return { code: err.code, stdout: err.stdout, stderr: err.stderr };
@@ -388,6 +544,117 @@ function cliFixtureFiles(extraRust = '') {
   return { files, staleCount };
 }
 
+function workspaceCapabilityFixtureFiles({ canManage = false, memberCount = true } = {}) {
+  const { files } = cliFixtureFiles();
+  const { rust, ts } = PAIRS.find((p) => p.rust.struct === 'Workspace');
+  files[rust.file] = files[rust.file].replace(
+    'pub struct Workspace {\n',
+    'pub struct Workspace {\n    #[serde(default, flatten, skip_serializing_if = "Option::is_none")]\n    pub membership: Option<WorkspaceMembership>,\n',
+  );
+  files[rust.file] += `#[serde(rename_all = "camelCase")]
+pub struct WorkspaceMembership {
+    #[serde(default)]
+    pub can_manage: bool,
+    pub member_count: u64,
+}
+`;
+  files[ts.file] = `export interface Workspace {
+  id: string;
+${memberCount ? '  memberCount: number;\n' : ''}${canManage ? '  canManage?: boolean;\n' : ''}}
+`;
+  return files;
+}
+
+const STAGED_CAN_MANAGE = ['`Workspace`', '`canManage`', '[membership](./methods/shared-host-membership.md)', 'cloudlands-fe#2911'];
+
+test('CLI: an undocumented daemon-first field fails against the pinned frontend', async (t) => {
+  const root = await fixture(t, workspaceCapabilityFixtureFiles());
+  const { code, stderr } = await runCli(root);
+  assert.equal(code, 1);
+  assert.match(stderr, /: error: Workspace → Workspace: emitted field Workspace\.canManage \(Rust can_manage\) is missing from Workspace .*stage a daemon-first field in the "Staged row fields \(app adoption pending\)" table of docs\/protocol\/versioning\.md/);
+  assert.match(stderr, /check-protocol-field-parity: 1 error\(s\)/);
+});
+
+test('CLI: a staged daemon-first field warns instead of failing, with no checker edit', async (t) => {
+  const root = await fixture(t, { ...workspaceCapabilityFixtureFiles(), [STAGED_DOC]: stagedDoc([STAGED_CAN_MANAGE]) });
+  const { code, stdout, stderr } = await runCli(root);
+  assert.equal(code, 0, stderr);
+  assert.match(stdout, /Protocol field parity holds .*Workspace → Workspace/);
+  assert.match(stderr, /: warning: Workspace → Workspace: staged daemon-first field Workspace\.canManage \(Rust can_manage\) is not in Workspace yet .*app adoption pending: cloudlands-fe#2911 \(docs\/protocol\/versioning\.md:9\)/);
+  assert.doesNotMatch(stderr, /: error: /);
+});
+
+test('CLI: a staged field does not excuse other missing workspace fields', async (t) => {
+  const root = await fixture(t, { ...workspaceCapabilityFixtureFiles({ memberCount: false }), [STAGED_DOC]: stagedDoc([STAGED_CAN_MANAGE]) });
+  const { code, stderr } = await runCli(root);
+  assert.equal(code, 1);
+  assert.match(stderr, /: error: .*emitted field Workspace\.memberCount \(Rust member_count\) is missing from Workspace/);
+  assert.match(stderr, /check-protocol-field-parity: 1 error\(s\)/);
+  assert.doesNotMatch(stderr, /: error: .*Workspace\.canManage/);
+});
+
+test('CLI: frontend adoption of a staged field succeeds and warns to remove its docs row', async (t) => {
+  const root = await fixture(t, { ...workspaceCapabilityFixtureFiles({ canManage: true }), [STAGED_DOC]: stagedDoc([STAGED_CAN_MANAGE]) });
+  const { code, stderr } = await runCli(root);
+  assert.equal(code, 0, stderr);
+  assert.match(stderr, /^docs\/protocol\/versioning\.md:9: warning: Workspace → Workspace: stale staged field canManage — Workspace now declares it \(packages\/cloudlands-fe\/src\/shared\/types\.ts:4\); remove the row from the "Staged row fields \(app adoption pending\)" table$/m);
+  assert.doesNotMatch(stderr, /: error: /);
+});
+
+test('CLI: a malformed staged table fails the check', async (t) => {
+  const root = await fixture(t, { ...workspaceCapabilityFixtureFiles({ canManage: true }), [STAGED_DOC]: stagedDoc([['`Workspace`', '`canManage`', '', '']]) });
+  const { code, stderr } = await runCli(root);
+  assert.equal(code, 1);
+  assert.match(stderr, /^docs\/protocol\/versioning\.md:9: error: Staged row fields \(app adoption pending\): Workspace\.canManage needs a Markdown link to its Contract and the App adoption/m);
+});
+
+function scriptMonitorFixtureFiles({ scriptMonitors = false, prMonitors = true } = {}) {
+  const { files } = cliFixtureFiles(`    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub waiting_on_script_monitors: Vec<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub waiting_on_pr_monitors: Vec<serde_json::Value>,
+`);
+  const { ts } = PAIRS.find((p) => p.rust.struct === 'AgentLite');
+  files[ts.file] = `export interface AgentSession {
+  id: string;
+${prMonitors ? '  waitingOnPrMonitors?: { monitorId: string }[];\n' : ''}${scriptMonitors ? '  waitingOnScriptMonitors?: { monitorId: string; scriptId: string; runId: string; scriptName: string; expiresAt: string }[];\n' : ''}}
+`;
+  return files;
+}
+
+test('CLI: missing AgentLite.waitingOnScriptMonitors is rejected after frontend adoption', async (t) => {
+  const root = await fixture(t, scriptMonitorFixtureFiles());
+  const { code, stderr } = await runCli(root);
+  assert.equal(code, 1, stderr);
+  assert.match(stderr, /emitted field AgentLite\.waitingOnScriptMonitors \(Rust waiting_on_script_monitors\) is missing from AgentSession/);
+  assert.match(stderr, /check-protocol-field-parity: 1 error\(s\)/);
+});
+
+test('CLI: adopted script monitors still reject another missing optional agent field', async (t) => {
+  const root = await fixture(t, scriptMonitorFixtureFiles({ scriptMonitors: true, prMonitors: false }));
+  const { code, stderr } = await runCli(root);
+  assert.equal(code, 1);
+  assert.match(stderr, /emitted field AgentLite\.waitingOnPrMonitors \(Rust waiting_on_pr_monitors\) is missing from AgentSession/);
+  assert.match(stderr, /check-protocol-field-parity: 1 error\(s\)/);
+  assert.doesNotMatch(stderr, /emitted field AgentLite\.waitingOnScriptMonitors/);
+});
+
+test('CLI: adopted script monitors pass without a retired manifest warning', async (t) => {
+  const root = await fixture(t, scriptMonitorFixtureFiles({ scriptMonitors: true }));
+  const { code, stdout, stderr } = await runCli(root);
+  assert.equal(code, 0, stderr);
+  assert.match(stdout, /Protocol field parity holds .*AgentLite → AgentSession/);
+  assert.doesNotMatch(stderr, /: error: |stale ignore entry waitingOnScriptMonitors/);
+});
+
+test('CLI: daemon without script monitors has no retired manifest warning', async (t) => {
+  const { files } = cliFixtureFiles();
+  const root = await fixture(t, files);
+  const { code, stderr } = await runCli(root);
+  assert.equal(code, 0, stderr);
+  assert.doesNotMatch(stderr, /: error: |stale ignore entry waitingOnScriptMonitors/);
+});
+
 test('CLI: stale ignore entries print warnings to stderr and exit 0', async (t) => {
   const { files, staleCount } = cliFixtureFiles();
   const root = await fixture(t, files);
@@ -406,7 +673,7 @@ test('CLI: a missing field still exits 1 with an error', async (t) => {
   assert.equal(code, 1);
   const [{ rust, ts }] = PAIRS;
   assert.match(stderr, new RegExp(`^${rust.file.replace(/[./]/g, '\\$&')}:4: error: ${rust.struct} → ${ts.type}: emitted field ${rust.struct}\\.parentAgentId \\(Rust parent_agent_id\\) is missing from ${ts.type}`, 'm'));
-  assert.match(stderr, new RegExp(`^check-protocol-field-parity: 1 error\\(s\\), ${staleCount} warning\\(s\\): stale ignore entries$`, 'm'));
+  assert.match(stderr, new RegExp(`^check-protocol-field-parity: 1 error\\(s\\), ${staleCount} warning\\(s\\): stale ignore entries or staged daemon-first fields$`, 'm'));
 });
 
 test('runChecks treats a submodule directory without .git as uninitialized', async (t) => {
@@ -490,6 +757,199 @@ async function makeGitRoot(t) {
 }
 
 const bannerOf = (dir, checkout, pin) => `check-protocol-field-parity: ${path.basename(dir)} sources from ${dir} checkout ${checkout.slice(0, 7)} (recorded pin ${pin.slice(0, 7)})`;
+
+// Copy the real entry point and its script dependencies, not a stand-in recipe.
+async function makeRoutingRoot(t) {
+  const setup = await makeGitRoot(t);
+  await fs.mkdir(path.join(setup.root, 'scripts/lib'), { recursive: true });
+  for (const file of ['Makefile', 'scripts/check-protocol-field-parity.mjs', 'scripts/submodule-ref.mjs', 'scripts/lib/markdown-tables.mjs']) {
+    await fs.copyFile(fileURLToPath(new URL(`../${file}`, import.meta.url)), path.join(setup.root, file));
+  }
+  return setup;
+}
+
+async function runMake(root, ...args) {
+  try {
+    const { stdout, stderr } = await run('make', ['--no-print-directory', 'check-protocol-field-parity', ...args], {
+      cwd: root, env: { ...cleanNodeEnv(), MAKEFLAGS: '', MFLAGS: '', MAKEOVERRIDES: '' },
+    });
+    return { code: 0, stdout, stderr };
+  } catch (err) {
+    return { code: err.code, stdout: err.stdout, stderr: err.stderr };
+  }
+}
+
+test('real Makefile routes INTENTD_DIR to the selected daemon worktree', async (t) => {
+  const { root } = await makeRoutingRoot(t);
+  const baseline = await runMake(root);
+  assert.equal(baseline.code, 0, baseline.stderr);
+  assert.match(baseline.stdout, /Protocol field parity holds for 2 pair\(s\)/);
+  const selected = '.intent/worktrees/daemon-candidate';
+  git(path.join(root, 'packages/intentd'), 'worktree', 'add', '--detach', path.join(root, selected), 'HEAD');
+  const rustFile = path.join(selected, path.relative('packages/intentd', PAIRS[0].rust.file));
+  const source = await fs.readFile(path.join(root, rustFile), 'utf8');
+  await fs.writeFile(path.join(root, rustFile), source.replace('    pub id: String,', '    pub id: String,\n    pub candidate_only: String,'));
+  const result = await runMake(root, `INTENTD_DIR=${selected}`);
+  assert.equal(result.code, 2, `selected daemon must fail instead of checking the valid default pair:\n${result.stdout}\n${result.stderr}`);
+  assert.ok(result.stderr.includes(`${rustFile}:4: error:`), result.stderr);
+  assert.match(result.stderr, /emitted field AgentLite\.candidateOnly/);
+});
+
+const COMPONENTS = [
+  { sub: 'packages/intentd', flag: '--intentd-dir', variable: 'INTENTD_DIR', side: 'rust' },
+  { sub: 'packages/cloudlands-fe', flag: '--fe-dir', variable: 'FE_DIR', side: 'ts' },
+];
+
+for (const { sub, flag, side } of COMPONENTS) {
+  for (const absolute of [false, true]) {
+    test(`CLI selects ${absolute ? 'absolute' : 'relative'} ${sub} worktrees with canonical pin provenance`, async (t) => {
+      const { root, pins, staleCount } = await makeGitRoot(t);
+      const relative = `.intent/worktrees/${side}-candidate`;
+      const selected = absolute ? path.join(root, relative) : relative;
+      const worktree = path.resolve(root, selected);
+      git(path.join(root, sub), 'worktree', 'add', '--detach', worktree, 'HEAD');
+      assert.ok((await fs.stat(path.join(worktree, '.git'))).isFile(), 'a genuine git worktree uses a .git file');
+      const expectedBanner = (head, dirty) => `check-protocol-field-parity: ${path.basename(sub)} sources from ${selected} checkout ${head.slice(0, 7)}${dirty ? ' (dirty)' : ''} (recorded pin ${pins[sub].slice(0, 7)})`;
+      const baseline = await runCli(root, flag, selected);
+      assert.equal(baseline.code, 0, baseline.stderr);
+      assert.ok(baseline.stdout.split('\n').includes(expectedBanner(pins[sub], false)), baseline.stdout);
+      assert.equal(baseline.stderr.match(/stale ignore entry/g)?.length, staleCount);
+      assert.doesNotMatch(baseline.stderr, /is off the recorded pin|uncommitted changes/);
+
+      const file = path.join(selected, path.relative(sub, PAIRS[0][side].file));
+      const source = await fs.readFile(path.resolve(root, file), 'utf8');
+      await fs.writeFile(path.resolve(root, file), side === 'rust'
+        ? source.replace('    pub id: String,', '    pub id: String,\n    pub candidate_only: String,')
+        : source.replace('  id: string;\n', ''));
+      const dirty = await runCli(root, flag, selected);
+      assert.equal(dirty.code, 1, dirty.stderr);
+      assert.ok(dirty.stdout.split('\n').includes(expectedBanner(pins[sub], true)), dirty.stdout);
+      const remedy = `Run git submodule update --checkout ${sub} and rerun without component overrides to compare against the pin.`;
+      assert.ok(dirty.stderr.split('\n').includes(`warning: ${selected} checkout ${pins[sub].slice(0, 7)} has uncommitted changes; results reflect the working tree, not the recorded pin ${pins[sub].slice(0, 7)}. ${remedy}`), dirty.stderr);
+      if (side === 'rust') {
+        assert.ok(dirty.stderr.includes(`${file}:4: error: AgentLite → AgentSession: emitted field AgentLite.candidateOnly`), dirty.stderr);
+        assert.ok(dirty.stderr.includes(`(${PAIRS[0].ts.file}:1-3)`), dirty.stderr);
+        assert.ok(dirty.stderr.includes(`${file}:2: warning: AgentLite → AgentSession: stale ignore entry`), dirty.stderr);
+      } else {
+        assert.ok(dirty.stderr.includes(`${PAIRS[0].rust.file}:3: error: AgentLite → AgentSession: emitted field AgentLite.id`), dirty.stderr);
+        assert.ok(dirty.stderr.includes(`(${file}:1-2)`), dirty.stderr);
+      }
+      assert.doesNotMatch(dirty.stdout, /skipped:/);
+      assert.equal((await runCli(root)).code, 0, 'the valid default pair was not modified');
+
+      git(worktree, 'commit', '-q', '-am', 'candidate sources');
+      const head = git(worktree, 'rev-parse', 'HEAD');
+      assert.notEqual(head, pins[sub]);
+      const committed = await runCli(root, flag, selected);
+      assert.equal(committed.code, 1, committed.stderr);
+      assert.ok(committed.stdout.split('\n').includes(expectedBanner(head, false)), committed.stdout);
+      assert.ok(committed.stderr.split('\n').includes(`warning: ${selected} checkout ${head.slice(0, 7)} is off the recorded pin ${pins[sub].slice(0, 7)}; results reflect the checkout, not the pin. ${remedy}`), committed.stderr);
+      assert.ok(!committed.stderr.includes(`git submodule update --checkout ${selected}`), committed.stderr);
+    });
+  }
+}
+
+test('real Makefile routes FE_DIR and both selected roots, including paths with spaces', async (t) => {
+  const { root } = await makeRoutingRoot(t);
+  const intentd = '.intent/worktrees/daemon candidate';
+  const fe = path.join(root, '.intent/worktrees/frontend candidate');
+  for (const [sub, selected] of [['packages/intentd', intentd], ['packages/cloudlands-fe', fe]]) {
+    git(path.join(root, sub), 'worktree', 'add', '--detach', path.resolve(root, selected), 'HEAD');
+  }
+  const rustFile = path.resolve(root, intentd, path.relative('packages/intentd', PAIRS[0].rust.file));
+  const tsFile = path.join(fe, path.relative('packages/cloudlands-fe', PAIRS[0].ts.file));
+  const rustSource = await fs.readFile(rustFile, 'utf8');
+  const tsSource = await fs.readFile(tsFile, 'utf8');
+  await fs.writeFile(tsFile, tsSource.replace('  id: string;\n', ''));
+  const frontendOnly = await runMake(root, `FE_DIR=${fe}`);
+  assert.equal(frontendOnly.code, 2, frontendOnly.stdout);
+  assert.ok(frontendOnly.stderr.includes(`(${tsFile}:1-2)`), frontendOnly.stderr);
+  await fs.writeFile(rustFile, rustSource.replace('    pub id: String,', '    pub id: String,\n    pub candidate_only: String,'));
+  await fs.writeFile(tsFile, tsSource.replace('  id: string;', '  id: string;\n  candidateOnly: string;'));
+  assert.equal((await runMake(root, `INTENTD_DIR=${intentd}`)).code, 2);
+  const both = await runMake(root, `INTENTD_DIR=${intentd}`, `FE_DIR=${fe}`);
+  assert.equal(both.code, 0, both.stderr);
+  assert.match(both.stdout, /Protocol field parity holds for 2 pair\(s\)/);
+});
+
+for (const { sub, flag, variable, side } of COMPONENTS) {
+  for (const metadata of ['dangling', 'corrupt', 'unborn', 'wrong-root']) {
+    test(`explicit ${sub} rejects ${metadata} Git metadata through CLI and Make`, async (t) => {
+      const { root } = await makeRoutingRoot(t);
+      const selected = `.intent/worktrees/${side}-${metadata}`;
+      const selectedRoot = path.join(root, selected);
+      await fs.mkdir(selectedRoot, { recursive: true });
+      for (const file of new Set(PAIRS.map((pair) => pair[side].file))) {
+        const dest = path.join(selectedRoot, path.relative(sub, file));
+        await fs.mkdir(path.dirname(dest), { recursive: true });
+        await fs.copyFile(path.join(root, file), dest);
+      }
+      if (metadata === 'unborn') {
+        git(selectedRoot, 'init', '-q', '-b', 'main');
+        assert.throws(() => git(selectedRoot, 'rev-parse', 'HEAD'));
+      } else if (metadata === 'wrong-root') {
+        const canonical = path.join(root, sub);
+        git(canonical, 'config', 'core.worktree', canonical);
+        await fs.writeFile(path.join(selectedRoot, '.git'), `gitdir: ${canonical}/.git\n`);
+        assert.equal(git(selectedRoot, 'rev-parse', '--show-toplevel'), canonical);
+      } else {
+        const marker = metadata === 'dangling' ? `gitdir: ${root}/nonexistent-git-dir\n` : 'not valid Git metadata\n';
+        await fs.writeFile(path.join(selectedRoot, '.git'), marker);
+        assert.throws(() => git(selectedRoot, 'rev-parse', 'HEAD'));
+      }
+      // Run both entry points before asserting so the red evidence covers both.
+      const cli = await runCli(root, flag, selected);
+      const make = await runMake(root, `${variable}=${selected}`);
+      assert.deepEqual([cli.code, make.code], [1, 2], `invalid selected ${sub} must fail both entry points:\n${cli.stdout}\n${make.stdout}`);
+      for (const result of [cli, make]) {
+        assert.ok(result.stderr.includes(`selected ${sub} root ${selected} is not a repository root with a readable HEAD`), result.stderr);
+        assert.doesNotMatch(result.stdout, /skipped:|Protocol field parity holds/);
+      }
+      assert.equal((await runCli(root)).code, 0, 'omitted overrides still check the valid default pair');
+    });
+  }
+
+  test(`explicit invalid or missing ${sub} roots fail instead of skipping or falling back`, async (t) => {
+    const { root } = await makeRoutingRoot(t);
+    const plain = '.intent/not-a-checkout';
+    await fs.mkdir(path.join(root, plain), { recursive: true });
+    const regularFile = '.intent/not-a-directory';
+    await fs.writeFile(path.join(root, regularFile), 'not a directory');
+    for (const selected of ['', '.intent/missing', plain, regularFile]) {
+      const cli = await runCli(root, flag, selected);
+      assert.equal(cli.code, 1, `${flag}=${selected}: ${cli.stdout}`);
+      assert.ok(cli.stderr.includes(`selected ${sub} root`), cli.stderr);
+      assert.doesNotMatch(cli.stdout, /skipped:|Protocol field parity holds/);
+      const make = await runMake(root, `${variable}=${selected}`);
+      assert.equal(make.code, 2, `${variable}=${selected}: ${make.stdout}`);
+      assert.doesNotMatch(make.stdout, /Protocol field parity holds/);
+    }
+    // A chosen checkout can exist while the manifest source is missing or unreadable.
+    const selected = `.intent/worktrees/${side}-incomplete`;
+    git(path.join(root, sub), 'worktree', 'add', '--detach', path.join(root, selected), 'HEAD');
+    const file = path.join(selected, path.relative(sub, PAIRS[0][side].file));
+    await fs.rm(path.join(root, file));
+    const missing = await runCli(root, flag, selected);
+    assert.equal(missing.code, 1);
+    assert.ok(missing.stderr.includes(`${file}:1: error: manifest path ${file} does not exist`), missing.stderr);
+    assert.doesNotMatch(missing.stdout, /skipped:|Protocol field parity holds/);
+    assert.equal((await runMake(root, `${variable}=${selected}`)).code, 2);
+    await fs.mkdir(path.join(root, file));
+    const invalidFile = await runCli(root, flag, selected);
+    assert.equal(invalidFile.code, 1);
+    assert.ok(invalidFile.stderr.includes(`${file}:1: error: cannot read manifest path ${file}: EISDIR`), invalidFile.stderr);
+
+    // Explicitly selecting the absent canonical checkout is an error too; only
+    // omission of the override retains the optional-submodule skip behavior.
+    await fs.rm(path.join(root, sub), { recursive: true });
+    const defaults = await runCli(root);
+    assert.equal(defaults.code, 0, defaults.stderr);
+    assert.match(defaults.stdout, /skipped:.*submodule not initialized/);
+    const explicitDefault = await runCli(root, flag, sub);
+    assert.equal(explicitDefault.code, 1);
+    assert.doesNotMatch(explicitDefault.stdout, /skipped:|Protocol field parity holds/);
+  });
+}
 
 test('fixtures outside any git repository yield unknown refs: no banner, no warning', async (t) => {
   const root = await fixture(t, {

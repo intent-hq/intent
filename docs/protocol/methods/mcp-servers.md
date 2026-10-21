@@ -1,5 +1,7 @@
 > Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.22 `mcp.servers.*`.
 
+Routing-only `workspaceId?` additions below are [prepared contract fields](../workspace-routing.md), optional on direct daemons and required for future forwarded workspace calls; existing scope and results are unchanged.
+
 ### 5.22 `mcp.servers.*`
 
 The **external** MCP-server lifecycle/config surface, backed by the `mcp.servers` setting
@@ -38,7 +40,7 @@ and lifecycle transitions are pushed via `mcp.servers:status-changed` (§6.5).
 | mcp.servers.delete | serverId (req) | { success: true } |
 | mcp.servers.toggle | serverId (req), enabled (req): boolean, workspaceId? | { status: McpServerStatus } — enable starts the server, disable stops it (replaces start/stop). With `workspaceId` the toggle is workspace-scoped instead and returns { status, workspaceDisabled } (see "Per-workspace disable") |
 | mcp.servers.restart | serverId (req) | { status: McpServerStatus } — authoritative stop-then-start: reset the current connection/session, then perform a fresh launch or remote probe |
-| mcp.servers.getStatus | serverId (req) | { status: McpServerStatus } — optional point read; live updates arrive via `mcp.servers:status-changed` |
+| mcp.servers.getStatus | serverId (req), workspaceId? | { status: McpServerStatus } — optional point read; live updates arrive via `mcp.servers:status-changed` |
 
 - **McpServerConfig** — `{ id, name, transport: "stdio"|"http"|"sse", command?, args?: string[],
   env?: object, url?, headers?: object, enabled: boolean, scope?: "user"|"workspace" }`. `command`
@@ -101,9 +103,13 @@ and lifecycle transitions are pushed via `mcp.servers:status-changed` (§6.5).
     consecutive-failure count (there is no process to restart, only status to flip);
     `mcp.servers:status-changed` (§6.5) is emitted only on an actual state transition, with
     `startedAt` preserved across consecutive `running` probes. `mcp.servers.update` restarts
-    any **tracked** server (running, or a remote in `error` or `auth_required`) so a failed remote
-    re-probes the updated URL/credentials immediately instead of keeping the old config until the
-    next sweep; `restart` is authoritative and resets a remote server before a fresh probe.
+    an **eligible enabled** server, including one without a tracked runtime after creation or a
+    failed launch, so the saved URL/credentials are applied immediately. Eligibility requires
+    `config.enabled`, `mcp.enableUserServers`, and absence from `mcp.disabledServers`; a save
+    stops any tracked runtime when one of those gates disables it. The saved definition and
+    server id are preserved even if the new endpoint fails its probe. This governs the daemon
+    connection, not provider-native MCP sessions configured at agent launch. `restart` remains
+    an authoritative reset before a fresh probe. No method names or wire fields change.
 
 ```json
 // → request — enable (start) an MCP server

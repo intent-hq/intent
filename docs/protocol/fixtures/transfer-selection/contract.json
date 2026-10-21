@@ -1,0 +1,838 @@
+{
+  "formatVersion": 1,
+  "normalizationVersion": 1,
+  "destinationDefaults": {
+    "provider": "codex",
+    "model": "gpt-6-astra",
+    "reasoningEffort": "high"
+  },
+  "enabledProviders": {
+    "auggie": true
+  },
+  "providersCatalog": {
+    "providers": [
+      {
+        "id": "auggie",
+        "displayName": "Augment Auggie",
+        "shortName": "Auggie",
+        "command": "auggie",
+        "canBeDisabled": true,
+        "visible": true
+      },
+      {
+        "id": "codex",
+        "displayName": "OpenAI Codex",
+        "shortName": "Codex",
+        "command": "codex-acp",
+        "canBeDisabled": true,
+        "visible": true
+      }
+    ]
+  },
+  "models": {
+    "auggie": [
+      {
+        "id": "gpt6-astra",
+        "provider": "auggie",
+        "name": "GPT6 Astra Auggie",
+        "isDefault": true,
+        "effortLevels": [
+          "low",
+          "high"
+        ]
+      }
+    ],
+    "codex": [
+      {
+        "id": "gpt-6-astra",
+        "provider": "codex",
+        "name": "GPT-6 Astra Codex",
+        "isDefault": true,
+        "effortLevels": [
+          "low",
+          "high"
+        ]
+      }
+    ]
+  },
+  "expectations": {
+    "explicit": {
+      "selection": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoningEffort": "low"
+      },
+      "firstTurn": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoningEffort": "low"
+      },
+      "renderer": {
+        "label": "GPT6 Astra Auggie",
+        "auto": false,
+        "warning": false,
+        "fallbackAction": false,
+        "modelMutation": false,
+        "toast": false
+      }
+    },
+    "auto": {
+      "selection": {
+        "provider": "auggie",
+        "model": null,
+        "reasoningEffort": null
+      },
+      "firstTurn": {
+        "provider": "auggie",
+        "model": null,
+        "reasoningEffort": null
+      },
+      "renderer": {
+        "label": "Default model",
+        "auto": true,
+        "warning": false,
+        "fallbackAction": false,
+        "modelMutation": false,
+        "toast": false
+      }
+    }
+  },
+  "cases": [
+    {
+      "id": "auggie:direct:codex=true",
+      "sourceProvider": "auggie",
+      "mode": "direct",
+      "codexEnabled": true,
+      "input": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "auggie",
+        "last_turn_model": "gpt6-astra"
+      },
+      "expectation": "explicit",
+      "expectedPersistedSelection": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low"
+      },
+      "expectedRawHistory": {
+        "last_turn_provider": "auggie",
+        "last_turn_model": "gpt6-astra"
+      }
+    },
+    {
+      "id": "auggie:direct:codex=false",
+      "sourceProvider": "auggie",
+      "mode": "direct",
+      "codexEnabled": false,
+      "input": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "auggie",
+        "last_turn_model": "gpt6-astra"
+      },
+      "expectation": "explicit",
+      "expectedPersistedSelection": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low"
+      },
+      "expectedRawHistory": {
+        "last_turn_provider": "auggie",
+        "last_turn_model": "gpt6-astra"
+      }
+    },
+    {
+      "id": "auggie:history:codex=true",
+      "sourceProvider": "auggie",
+      "mode": "history",
+      "codexEnabled": true,
+      "input": {
+        "provider": null,
+        "model": "gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "auggie",
+        "last_turn_model": "gpt6-astra"
+      },
+      "expectation": "explicit",
+      "expectedPersistedSelection": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low"
+      },
+      "expectedRawHistory": {
+        "last_turn_provider": "auggie",
+        "last_turn_model": "gpt6-astra"
+      }
+    },
+    {
+      "id": "auggie:history:codex=false",
+      "sourceProvider": "auggie",
+      "mode": "history",
+      "codexEnabled": false,
+      "input": {
+        "provider": null,
+        "model": "gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "auggie",
+        "last_turn_model": "gpt6-astra"
+      },
+      "expectation": "explicit",
+      "expectedPersistedSelection": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low"
+      },
+      "expectedRawHistory": {
+        "last_turn_provider": "auggie",
+        "last_turn_model": "gpt6-astra"
+      }
+    },
+    {
+      "id": "auggie:prefix:codex=true",
+      "sourceProvider": "auggie",
+      "mode": "prefix",
+      "codexEnabled": true,
+      "input": {
+        "provider": null,
+        "model": "auggie:gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "auggie",
+        "last_turn_model": "gpt6-astra"
+      },
+      "expectation": "explicit",
+      "expectedPersistedSelection": {
+        "provider": "auggie",
+        "model": "auggie:gpt6-astra",
+        "reasoning_effort": "low"
+      },
+      "expectedRawHistory": {
+        "last_turn_provider": "auggie",
+        "last_turn_model": "gpt6-astra"
+      }
+    },
+    {
+      "id": "auggie:prefix:codex=false",
+      "sourceProvider": "auggie",
+      "mode": "prefix",
+      "codexEnabled": false,
+      "input": {
+        "provider": null,
+        "model": "auggie:gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "auggie",
+        "last_turn_model": "gpt6-astra"
+      },
+      "expectation": "explicit",
+      "expectedPersistedSelection": {
+        "provider": "auggie",
+        "model": "auggie:gpt6-astra",
+        "reasoning_effort": "low"
+      },
+      "expectedRawHistory": {
+        "last_turn_provider": "auggie",
+        "last_turn_model": "gpt6-astra"
+      }
+    },
+    {
+      "id": "auggie:auto:codex=true",
+      "sourceProvider": "auggie",
+      "mode": "auto",
+      "codexEnabled": true,
+      "input": {
+        "provider": "auggie",
+        "model": null,
+        "reasoning_effort": null,
+        "last_turn_provider": "auggie",
+        "last_turn_model": null
+      },
+      "expectation": "auto",
+      "expectedPersistedSelection": {
+        "provider": "auggie",
+        "model": null,
+        "reasoning_effort": null
+      },
+      "expectedRawHistory": {
+        "last_turn_provider": "auggie",
+        "last_turn_model": null
+      }
+    },
+    {
+      "id": "auggie:auto:codex=false",
+      "sourceProvider": "auggie",
+      "mode": "auto",
+      "codexEnabled": false,
+      "input": {
+        "provider": "auggie",
+        "model": null,
+        "reasoning_effort": null,
+        "last_turn_provider": "auggie",
+        "last_turn_model": null
+      },
+      "expectation": "auto",
+      "expectedPersistedSelection": {
+        "provider": "auggie",
+        "model": null,
+        "reasoning_effort": null
+      },
+      "expectedRawHistory": {
+        "last_turn_provider": "auggie",
+        "last_turn_model": null
+      }
+    },
+    {
+      "id": "acp:direct:codex=true",
+      "sourceProvider": "acp",
+      "mode": "direct",
+      "codexEnabled": true,
+      "input": {
+        "provider": "acp",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "acp",
+        "last_turn_model": "gpt6-astra"
+      },
+      "expectation": "explicit",
+      "expectedPersistedSelection": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low"
+      },
+      "expectedRawHistory": {
+        "last_turn_provider": "acp",
+        "last_turn_model": "gpt6-astra"
+      }
+    },
+    {
+      "id": "acp:direct:codex=false",
+      "sourceProvider": "acp",
+      "mode": "direct",
+      "codexEnabled": false,
+      "input": {
+        "provider": "acp",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "acp",
+        "last_turn_model": "gpt6-astra"
+      },
+      "expectation": "explicit",
+      "expectedPersistedSelection": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low"
+      },
+      "expectedRawHistory": {
+        "last_turn_provider": "acp",
+        "last_turn_model": "gpt6-astra"
+      }
+    },
+    {
+      "id": "acp:history:codex=true",
+      "sourceProvider": "acp",
+      "mode": "history",
+      "codexEnabled": true,
+      "input": {
+        "provider": null,
+        "model": "gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "acp",
+        "last_turn_model": "gpt6-astra"
+      },
+      "expectation": "explicit",
+      "expectedPersistedSelection": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low"
+      },
+      "expectedRawHistory": {
+        "last_turn_provider": "acp",
+        "last_turn_model": "gpt6-astra"
+      }
+    },
+    {
+      "id": "acp:history:codex=false",
+      "sourceProvider": "acp",
+      "mode": "history",
+      "codexEnabled": false,
+      "input": {
+        "provider": null,
+        "model": "gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "acp",
+        "last_turn_model": "gpt6-astra"
+      },
+      "expectation": "explicit",
+      "expectedPersistedSelection": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low"
+      },
+      "expectedRawHistory": {
+        "last_turn_provider": "acp",
+        "last_turn_model": "gpt6-astra"
+      }
+    },
+    {
+      "id": "acp:prefix:codex=true",
+      "sourceProvider": "acp",
+      "mode": "prefix",
+      "codexEnabled": true,
+      "input": {
+        "provider": null,
+        "model": "acp:gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "acp",
+        "last_turn_model": "gpt6-astra"
+      },
+      "expectation": "explicit",
+      "expectedPersistedSelection": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low"
+      },
+      "expectedRawHistory": {
+        "last_turn_provider": "acp",
+        "last_turn_model": "gpt6-astra"
+      }
+    },
+    {
+      "id": "acp:prefix:codex=false",
+      "sourceProvider": "acp",
+      "mode": "prefix",
+      "codexEnabled": false,
+      "input": {
+        "provider": null,
+        "model": "acp:gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "acp",
+        "last_turn_model": "gpt6-astra"
+      },
+      "expectation": "explicit",
+      "expectedPersistedSelection": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low"
+      },
+      "expectedRawHistory": {
+        "last_turn_provider": "acp",
+        "last_turn_model": "gpt6-astra"
+      }
+    },
+    {
+      "id": "acp:auto:codex=true",
+      "sourceProvider": "acp",
+      "mode": "auto",
+      "codexEnabled": true,
+      "input": {
+        "provider": "acp",
+        "model": null,
+        "reasoning_effort": null,
+        "last_turn_provider": "acp",
+        "last_turn_model": null
+      },
+      "expectation": "auto",
+      "expectedPersistedSelection": {
+        "provider": "auggie",
+        "model": null,
+        "reasoning_effort": null
+      },
+      "expectedRawHistory": {
+        "last_turn_provider": "acp",
+        "last_turn_model": null
+      }
+    },
+    {
+      "id": "acp:auto:codex=false",
+      "sourceProvider": "acp",
+      "mode": "auto",
+      "codexEnabled": false,
+      "input": {
+        "provider": "acp",
+        "model": null,
+        "reasoning_effort": null,
+        "last_turn_provider": "acp",
+        "last_turn_model": null
+      },
+      "expectation": "auto",
+      "expectedPersistedSelection": {
+        "provider": "auggie",
+        "model": null,
+        "reasoning_effort": null
+      },
+      "expectedRawHistory": {
+        "last_turn_provider": "acp",
+        "last_turn_model": null
+      }
+    },
+    {
+      "id": "augment:direct:codex=true",
+      "sourceProvider": "augment",
+      "mode": "direct",
+      "codexEnabled": true,
+      "input": {
+        "provider": "augment",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "augment",
+        "last_turn_model": "gpt6-astra"
+      },
+      "expectation": "explicit",
+      "expectedPersistedSelection": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low"
+      },
+      "expectedRawHistory": {
+        "last_turn_provider": "augment",
+        "last_turn_model": "gpt6-astra"
+      }
+    },
+    {
+      "id": "augment:direct:codex=false",
+      "sourceProvider": "augment",
+      "mode": "direct",
+      "codexEnabled": false,
+      "input": {
+        "provider": "augment",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "augment",
+        "last_turn_model": "gpt6-astra"
+      },
+      "expectation": "explicit",
+      "expectedPersistedSelection": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low"
+      },
+      "expectedRawHistory": {
+        "last_turn_provider": "augment",
+        "last_turn_model": "gpt6-astra"
+      }
+    },
+    {
+      "id": "augment:history:codex=true",
+      "sourceProvider": "augment",
+      "mode": "history",
+      "codexEnabled": true,
+      "input": {
+        "provider": null,
+        "model": "gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "augment",
+        "last_turn_model": "gpt6-astra"
+      },
+      "expectation": "explicit",
+      "expectedPersistedSelection": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low"
+      },
+      "expectedRawHistory": {
+        "last_turn_provider": "augment",
+        "last_turn_model": "gpt6-astra"
+      }
+    },
+    {
+      "id": "augment:history:codex=false",
+      "sourceProvider": "augment",
+      "mode": "history",
+      "codexEnabled": false,
+      "input": {
+        "provider": null,
+        "model": "gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "augment",
+        "last_turn_model": "gpt6-astra"
+      },
+      "expectation": "explicit",
+      "expectedPersistedSelection": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low"
+      },
+      "expectedRawHistory": {
+        "last_turn_provider": "augment",
+        "last_turn_model": "gpt6-astra"
+      }
+    },
+    {
+      "id": "augment:prefix:codex=true",
+      "sourceProvider": "augment",
+      "mode": "prefix",
+      "codexEnabled": true,
+      "input": {
+        "provider": null,
+        "model": "augment:gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "augment",
+        "last_turn_model": "gpt6-astra"
+      },
+      "expectation": "explicit",
+      "expectedPersistedSelection": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low"
+      },
+      "expectedRawHistory": {
+        "last_turn_provider": "augment",
+        "last_turn_model": "gpt6-astra"
+      }
+    },
+    {
+      "id": "augment:prefix:codex=false",
+      "sourceProvider": "augment",
+      "mode": "prefix",
+      "codexEnabled": false,
+      "input": {
+        "provider": null,
+        "model": "augment:gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "augment",
+        "last_turn_model": "gpt6-astra"
+      },
+      "expectation": "explicit",
+      "expectedPersistedSelection": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low"
+      },
+      "expectedRawHistory": {
+        "last_turn_provider": "augment",
+        "last_turn_model": "gpt6-astra"
+      }
+    },
+    {
+      "id": "augment:auto:codex=true",
+      "sourceProvider": "augment",
+      "mode": "auto",
+      "codexEnabled": true,
+      "input": {
+        "provider": "augment",
+        "model": null,
+        "reasoning_effort": null,
+        "last_turn_provider": "augment",
+        "last_turn_model": null
+      },
+      "expectation": "auto",
+      "expectedPersistedSelection": {
+        "provider": "auggie",
+        "model": null,
+        "reasoning_effort": null
+      },
+      "expectedRawHistory": {
+        "last_turn_provider": "augment",
+        "last_turn_model": null
+      }
+    },
+    {
+      "id": "augment:auto:codex=false",
+      "sourceProvider": "augment",
+      "mode": "auto",
+      "codexEnabled": false,
+      "input": {
+        "provider": "augment",
+        "model": null,
+        "reasoning_effort": null,
+        "last_turn_provider": "augment",
+        "last_turn_model": null
+      },
+      "expectation": "auto",
+      "expectedPersistedSelection": {
+        "provider": "auggie",
+        "model": null,
+        "reasoning_effort": null
+      },
+      "expectedRawHistory": {
+        "last_turn_provider": "augment",
+        "last_turn_model": null
+      }
+    },
+    {
+      "id": "default:direct:codex=true",
+      "sourceProvider": "default",
+      "mode": "direct",
+      "codexEnabled": true,
+      "input": {
+        "provider": "default",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "default",
+        "last_turn_model": "gpt6-astra"
+      },
+      "expectation": "explicit",
+      "expectedPersistedSelection": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low"
+      },
+      "expectedRawHistory": {
+        "last_turn_provider": "default",
+        "last_turn_model": "gpt6-astra"
+      }
+    },
+    {
+      "id": "default:direct:codex=false",
+      "sourceProvider": "default",
+      "mode": "direct",
+      "codexEnabled": false,
+      "input": {
+        "provider": "default",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "default",
+        "last_turn_model": "gpt6-astra"
+      },
+      "expectation": "explicit",
+      "expectedPersistedSelection": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low"
+      },
+      "expectedRawHistory": {
+        "last_turn_provider": "default",
+        "last_turn_model": "gpt6-astra"
+      }
+    },
+    {
+      "id": "default:history:codex=true",
+      "sourceProvider": "default",
+      "mode": "history",
+      "codexEnabled": true,
+      "input": {
+        "provider": null,
+        "model": "gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "default",
+        "last_turn_model": "gpt6-astra"
+      },
+      "expectation": "explicit",
+      "expectedPersistedSelection": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low"
+      },
+      "expectedRawHistory": {
+        "last_turn_provider": "default",
+        "last_turn_model": "gpt6-astra"
+      }
+    },
+    {
+      "id": "default:history:codex=false",
+      "sourceProvider": "default",
+      "mode": "history",
+      "codexEnabled": false,
+      "input": {
+        "provider": null,
+        "model": "gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "default",
+        "last_turn_model": "gpt6-astra"
+      },
+      "expectation": "explicit",
+      "expectedPersistedSelection": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low"
+      },
+      "expectedRawHistory": {
+        "last_turn_provider": "default",
+        "last_turn_model": "gpt6-astra"
+      }
+    },
+    {
+      "id": "default:prefix:codex=true",
+      "sourceProvider": "default",
+      "mode": "prefix",
+      "codexEnabled": true,
+      "input": {
+        "provider": null,
+        "model": "default:gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "default",
+        "last_turn_model": "gpt6-astra"
+      },
+      "expectation": "explicit",
+      "expectedPersistedSelection": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low"
+      },
+      "expectedRawHistory": {
+        "last_turn_provider": "default",
+        "last_turn_model": "gpt6-astra"
+      }
+    },
+    {
+      "id": "default:prefix:codex=false",
+      "sourceProvider": "default",
+      "mode": "prefix",
+      "codexEnabled": false,
+      "input": {
+        "provider": null,
+        "model": "default:gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "default",
+        "last_turn_model": "gpt6-astra"
+      },
+      "expectation": "explicit",
+      "expectedPersistedSelection": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low"
+      },
+      "expectedRawHistory": {
+        "last_turn_provider": "default",
+        "last_turn_model": "gpt6-astra"
+      }
+    },
+    {
+      "id": "default:auto:codex=true",
+      "sourceProvider": "default",
+      "mode": "auto",
+      "codexEnabled": true,
+      "input": {
+        "provider": "default",
+        "model": null,
+        "reasoning_effort": null,
+        "last_turn_provider": "default",
+        "last_turn_model": null
+      },
+      "expectation": "auto",
+      "expectedPersistedSelection": {
+        "provider": "auggie",
+        "model": null,
+        "reasoning_effort": null
+      },
+      "expectedRawHistory": {
+        "last_turn_provider": "default",
+        "last_turn_model": null
+      }
+    },
+    {
+      "id": "default:auto:codex=false",
+      "sourceProvider": "default",
+      "mode": "auto",
+      "codexEnabled": false,
+      "input": {
+        "provider": "default",
+        "model": null,
+        "reasoning_effort": null,
+        "last_turn_provider": "default",
+        "last_turn_model": null
+      },
+      "expectation": "auto",
+      "expectedPersistedSelection": {
+        "provider": "auggie",
+        "model": null,
+        "reasoning_effort": null
+      },
+      "expectedRawHistory": {
+        "last_turn_provider": "default",
+        "last_turn_model": null
+      }
+    }
+  ]
+}

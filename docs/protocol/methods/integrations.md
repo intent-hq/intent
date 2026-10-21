@@ -1,5 +1,7 @@
 > Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.26 Future integrations & observability · §5.27 `github.*` · §5.28 `linear.*` · §5.29 `sentry.*`.
 
+Routing-only `workspaceId?` additions below are [prepared contract fields](../workspace-routing.md), optional on direct daemons and required for future forwarded workspace calls; existing scope and results are unchanged.
+
 ### 5.26 Future integrations & observability *(design notes — NOT v1 wire surface)*
 
 > **Future integrations (design stubs — NOT v1).** Of the original design stubs, **Sandbox /
@@ -26,9 +28,8 @@
 >
 > **Namespace split.** Local git operations stay on `git.*` (§5.6). Everything
 > that hits `api.github.com` — repo/PR/issue browse, PR review comments + threads — plus GitHub
-> **auth** and GitHub-**derived identity** live on `github.*`. The surviving `pr.*` methods (§5.7 —
-> `pr.status` / `pr.refresh` since the v5.0 removal) are deliberately **workspace/active-PR scoped**
-> (`ws` → owner/repo/number) and are left **untouched**;
+> **auth** and GitHub-**derived identity** live on `github.*`. The surviving `pr.refresh` method (§5.7) is deliberately **workspace scoped**
+> and discovers or repairs the workspace’s PR link;
 > `github.*` is the **explicit-addressing** surface — every data method takes `(owner, repo[, number])`
 > rather than resolving from the workspace.
 >
@@ -95,24 +96,24 @@ GitHub/service failure → `-32603` with a descriptive `message`
 
 | Method | Params | Result |
 | --- | --- | --- |
-| github.repos.list | limit?, nextToken? | { repos: GithubRepo[], nextToken? } — the authenticated user's repositories (`GET /user/repos`) |
-| github.repos.search | query (req), limit?, nextToken? | { repos: GithubRepo[], nextToken? } — `GET /search/repositories` (FE rewrites `owner/name` → `name user:owner`, sorted by stars) |
-| github.repos.get | owner (req), repo (req) | { repo: GithubRepo \| null } — `GET /repos/{owner}/{repo}` (repo metadata incl. `defaultBranch`) |
-| github.branches.list | owner (req), repo (req), prefix?, limit?, nextToken? | { branches: string[], nextToken? } — **remote** branch names. Absent or blank `prefix` → the unfiltered listing (`GET /repos/{owner}/{repo}/branches`), paged upstream exactly as before. A non-blank `prefix` → server-side prefix search via the git refs API (`GET /repos/{owner}/{repo}/git/matching-refs/heads/{prefix}`; slashes in the prefix preserved as path separators, other characters percent-encoded), mapping `refs/heads/<name>` onto branch names — GitHub ignores `per_page`/`page` on that endpoint and returns the entire match set, so the daemon applies the `(limit, nextToken)` window client-side (an exactly-full final page ends with no `nextToken`; pages past the end are empty). Response shape is unchanged either way (prefix intentd#1081) |
-| github.branches.listCached | owner (req), repo (req) | { cached: boolean, source?: "cache" \| "ls-remote", branches: string[], defaultBranch? } — **cached-first with a one-shot ls-remote fallback**: a warm cache serves branch names from the daemon's local repo cache (`.repo-cache/{owner}/{repo}`) with no network I/O — remote-tracking names (`refs/remotes/origin/*`, the `HEAD` symref excluded), sorted, as `{ cached: true, source: "cache", … }`; `defaultBranch` derives from the `origin/HEAD` symref — recorded at clone time and re-resolved on every cache refresh (`git remote set-head origin --auto`), so it tracks upstream default-branch changes — and is **omitted when unresolvable**. A cold cache or foreign-origin repo falls back to a single `git ls-remote --symref` against the GitHub remote (token offered via env like the clone pipeline, never argv; intentd#1072) → `{ cached: false, source: "ls-remote", branches, defaultBranch? }` — branch short names sorted, `defaultBranch` from the remote `HEAD` symref (omitted when not advertised). A failed fallback (offline, missing repo, no access) → `{ cached: false, branches: [] }` with `source` omitted — graceful, **never an error** (an explicit exception to the namespace's error conventions above, like `github.repoConfig.get`); invalid `owner`/`repo` path segments → `-32602`. FE consumption is cached-first: the branch picker renders a warm-cache result instantly, and the fallback means a cold cache still paints real branches; `github.branches.list` (and the repo's `defaultBranch`) remain the paged authoritative read (v6.2; fallback + additive `source` field intentd#1072) |
-| github.repoConfig.get | owner (req), repo (req), ref? | { config: RepoConfig \| null, exists: boolean } — the repo's `.intent/config.json` fetched via the contents API (`GET /repos/{owner}/{repo}/contents/.intent/config.json`, no clone; `ref` defaults to the default branch). A missing file (or missing repo/ref) → `{ config: null, exists: false }` — an **explicit exception** to the namespace's 404→`-32602` convention above: all 404s are graceful "no config" outcomes, never errors (transport/auth failures still surface as `-32603` like the other `github.*` methods). A present but invalid/mis-shaped file folds **tolerantly** to `{ config: {}, exists: true }` (mirrors the `repoConfig.get` §5.33 parse semantics). Same camelCase `RepoConfig` shape as §5.33, unknown keys preserved (v2.4) |
-| github.relatedRepos.list | owner (req), repo (req), ref? | { repos: { owner: string, repo: string, path: string }[] } — `owner` / `repo` must be GitHub slugs (owner `[A-Za-z0-9-]` ≤ 39 chars; repo `[A-Za-z0-9._-]` ≤ 100 chars, not `.` / `..`), else `-32602` naming the param — the same rule as the `github.*.search` methods. Returns the GitHub repositories the repo's `.gitmodules` references, fetched via the contents API (`GET /repos/{owner}/{repo}/contents/.gitmodules`, no clone; `ref` defaults to the default branch). One entry per `[submodule]` section carrying both a `path` and a GitHub `url` — accepted forms: `https://github.com/o/r(.git)`, `git@github.com:o/r(.git)`, `ssh://git@github.com/o/r(.git)`, bare `github.com/o/r`; non-GitHub hosts and relative `./` / `../` URLs are skipped — in `.gitmodules` order, deduplicated by case-insensitive repo identity (first occurrence wins), the parent `{ owner, repo }` itself excluded (case-insensitive), **capped at 5**; `owner` / `repo` keep the casing written in the URL and `path` is the submodule path verbatim. A missing `.gitmodules` (or missing repo/ref) or unparsable/mis-shaped content → `{ repos: [] }` — never an error, the same **explicit exception** to the namespace's 404→`-32602` convention as `github.repoConfig.get` (transport/auth failures still surface as `-32603`). Backs the FE's context-search widening without any client-side git/GitHub parsing (v10.1) |
+| github.repos.list | limit?, nextToken?, workspaceId? | { repos: GithubRepo[], nextToken? } — the authenticated user's repositories (`GET /user/repos`) |
+| github.repos.search | query (req), limit?, nextToken?, workspaceId? | { repos: GithubRepo[], nextToken? } — `GET /search/repositories` (FE rewrites `owner/name` → `name user:owner`, sorted by stars) |
+| github.repos.get | owner (req), repo (req), workspaceId? | { repo: GithubRepo \| null } — `GET /repos/{owner}/{repo}` (repo metadata incl. `defaultBranch`) |
+| github.branches.list | owner (req), repo (req), prefix?, limit?, nextToken?, workspaceId? | { branches: string[], nextToken? } — **remote** branch names. Absent or blank `prefix` → the unfiltered listing (`GET /repos/{owner}/{repo}/branches`), paged upstream exactly as before. A non-blank `prefix` → server-side prefix search via the git refs API (`GET /repos/{owner}/{repo}/git/matching-refs/heads/{prefix}`; slashes in the prefix preserved as path separators, other characters percent-encoded), mapping `refs/heads/<name>` onto branch names — GitHub ignores `per_page`/`page` on that endpoint and returns the entire match set, so the daemon applies the `(limit, nextToken)` window client-side (an exactly-full final page ends with no `nextToken`; pages past the end are empty). Response shape is unchanged either way (prefix intentd#1081) |
+| github.branches.listCached | owner (req), repo (req), workspaceId? | { cached: boolean, source?: "cache" \| "ls-remote", branches: string[], defaultBranch? } — **cached-first with a one-shot ls-remote fallback**: a warm cache serves branch names from the daemon's local repo cache (`.repo-cache/{owner}/{repo}`) with no network I/O — remote-tracking names (`refs/remotes/origin/*`, the `HEAD` symref excluded), sorted, as `{ cached: true, source: "cache", … }`; `defaultBranch` derives from the `origin/HEAD` symref — recorded at clone time and re-resolved on every cache refresh (`git remote set-head origin --auto`), so it tracks upstream default-branch changes — and is **omitted when unresolvable**. A cold cache or foreign-origin repo falls back to a single `git ls-remote --symref` against the GitHub remote (token offered via env like the clone pipeline, never argv; intentd#1072) → `{ cached: false, source: "ls-remote", branches, defaultBranch? }` — branch short names sorted, `defaultBranch` from the remote `HEAD` symref (omitted when not advertised). A failed fallback (offline, missing repo, no access) → `{ cached: false, branches: [] }` with `source` omitted — graceful, **never an error** (an explicit exception to the namespace's error conventions above, like `github.repoConfig.get`); invalid `owner`/`repo` path segments → `-32602`. FE consumption is cached-first: the branch picker renders a warm-cache result instantly, and the fallback means a cold cache still paints real branches; `github.branches.list` (and the repo's `defaultBranch`) remain the paged authoritative read (v6.2; fallback + additive `source` field intentd#1072) |
+| github.repoConfig.get | owner (req), repo (req), ref?, workspaceId? | { config: RepoConfig \| null, exists: boolean } — the repo's `.intent/config.json` fetched via the contents API (`GET /repos/{owner}/{repo}/contents/.intent/config.json`, no clone; `ref` defaults to the default branch). A missing file (or missing repo/ref) → `{ config: null, exists: false }` — an **explicit exception** to the namespace's 404→`-32602` convention above: all 404s are graceful "no config" outcomes, never errors (transport/auth failures still surface as `-32603` like the other `github.*` methods). A present but invalid/mis-shaped file folds **tolerantly** to `{ config: {}, exists: true }` (mirrors the `repoConfig.get` §5.33 parse semantics). Same camelCase `RepoConfig` shape as §5.33, unknown keys preserved (v2.4) |
+| github.relatedRepos.list | owner (req), repo (req), ref?, workspaceId? | { repos: { owner: string, repo: string, path: string }[] } — `owner` / `repo` must be GitHub slugs (owner `[A-Za-z0-9-]` ≤ 39 chars; repo `[A-Za-z0-9._-]` ≤ 100 chars, not `.` / `..`), else `-32602` naming the param — the same rule as the `github.*.search` methods. Returns the GitHub repositories the repo's `.gitmodules` references, fetched via the contents API (`GET /repos/{owner}/{repo}/contents/.gitmodules`, no clone; `ref` defaults to the default branch). One entry per `[submodule]` section carrying both a `path` and a GitHub `url` — accepted forms: `https://github.com/o/r(.git)`, `git@github.com:o/r(.git)`, `ssh://git@github.com/o/r(.git)`, bare `github.com/o/r`; non-GitHub hosts and relative `./` / `../` URLs are skipped — in `.gitmodules` order, deduplicated by case-insensitive repo identity (first occurrence wins), the parent `{ owner, repo }` itself excluded (case-insensitive), **capped at 5**; `owner` / `repo` keep the casing written in the URL and `path` is the submodule path verbatim. A missing `.gitmodules` (or missing repo/ref) or unparsable/mis-shaped content → `{ repos: [] }` — never an error, the same **explicit exception** to the namespace's 404→`-32602` convention as `github.repoConfig.get` (transport/auth failures still surface as `-32603`). Backs the FE's context-search widening without any client-side git/GitHub parsing (v10.1) |
 
 #### Auth & identity
 
 | Method | Params | Result |
 | --- | --- | --- |
-| github.authStatus | — | { isConfigured, oauthUrl, configuredButNeedsUpdate, updatedScopes, deviceFlow } — `isConfigured` = a token resolves **and** `GET /user` succeeds. `deviceFlow` is `null` when no flow is in flight, else `{ status: "pending"\|"expired"\|"denied"\|"error", userCode, verificationUri, expiresIn, interval }`; while a flow is live `oauthUrl` carries the `verificationUri` (FE shape parity). `configuredButNeedsUpdate` is `false` and `updatedScopes` is `""` (kept for FE shape parity) |
+| github.authStatus | workspaceId? | { isConfigured, oauthUrl, configuredButNeedsUpdate, updatedScopes, deviceFlow } — `isConfigured` = a token resolves **and** `GET /user` succeeds. `deviceFlow` is `null` when no flow is in flight, else `{ status: "pending"\|"expired"\|"denied"\|"error", userCode, verificationUri, expiresIn, interval }`; while a flow is live `oauthUrl` carries the `verificationUri` (FE shape parity). `configuredButNeedsUpdate` is `false` and `updatedScopes` is `""` (kept for FE shape parity) |
 | github.connect | — | { ok: true, userCode, verificationUri, expiresIn, interval, flowId } — starts the OAuth **device flow** (or returns the SAME codes while one is pending — idempotent). `flowId` is an **opaque string** identifying the **flow, not the caller**: unique per started flow within the daemon process (it is not a device code and never sensitive — administrator-only surface). The daemon holds a single flow, so a concurrent connect that adopts the resident live flow **shares** it — same codes, same `flowId` — and can therefore cancel it too. Callers SHOULD hand the id back to `github.cancelAuth { flowId }`: what it prevents is a caller cancelling a *newer* flow it did not start (the late-cleanup case of cloudlands-fe#2794). The daemon polls GitHub in the background; terminal transitions arrive as `github:auth-changed` events (§6.5). A missing/empty `sourceControl.github.oauthClientId` or an unreachable login host → `-32603` |
 | github.cancelAuth | flowId? | { ok: true, cancelled } — aborts a pending device flow (`cancelled: true` iff one was pending; idempotent no-op otherwise). **Flow-scoped when `flowId` is present**: the pending flow is aborted only if its id equals the `flowId` a `github.connect` returned; a stale or unknown id ⇒ `{ ok: true, cancelled: false }` and nothing else is touched — the pending flow keeps polling and `github.authStatus` still reports it. The id identifies the flow, not the caller: every client whose connect returned that id (including one that adopted the live flow) can cancel it; what a scoped cancel cannot do is abort a *newer* flow the caller did not start. An **omitted** `flowId` is the **legacy unscoped call** (aborts whatever flow is pending), kept for compatibility; clients SHOULD pass the `flowId` they received — the no-stale-cancel guarantee holds among clients that do. A non-string `flowId` → `-32602`; "nothing pending" is never an error |
 | github.revoke | — | { ok: true } — deletes the **stored** `sourceControl.github.token` and aborts any in-flight flow; emits `github:auth-changed { status: "revoked" }`. Idempotent; env / `gh` fallbacks are untouched. Also best-effort logs a locally installed `gh` out of github.com, but **only** when gh's active token exactly matches the token being revoked — i.e. the login the authorize-side sync created; any other gh login is never touched, and a logout failure never affects the revoke (behavior-only, no wire-shape change) |
-| github.getUser | — | { user: GithubUser \| null } — authenticated identity from `GET /user`; never includes the token. A GitHub **rate limit** on the probe (primary quota exhausted or a secondary limit — any cause the daemon classifies as `RateLimited`) is `-32603 { code: "rate-limited" }` (§9): the stored token is present and valid, so clients wait for the limit to lift and retry after a backoff instead of treating it as "not connected" or prompting a reconnect |
-| github.users.search | query (req), limit? | { users: { id, login, avatarUrl, htmlUrl }[] } — **administrator-only** login-prefix user search over `GET /search/users` for the collaborator picker (v10.3). Missing `query` → `-32602`; a blank query, or one with no leading run of login characters (ASCII alphanumerics and `-`), answers `{ users: [] }` without a forge call — only that leading run reaches GitHub's search parser, so qualifiers / booleans typed after it are dropped. `limit` defaults to **8** and is clamped into `[1, 10]` |
+| github.getUser | workspaceId? | { user: GithubUser \| null } — authenticated identity from `GET /user`; never includes the token. A GitHub **rate limit** on the probe (primary quota exhausted or a secondary limit — any cause the daemon classifies as `RateLimited`) is `-32603 { code: "rate-limited" }` (§9): the stored token is present and valid, so clients wait for the limit to lift and retry after a backoff instead of treating it as "not connected" or prompting a reconnect |
+| github.users.search | query (req), limit?, workspaceId? | { users: { id, login, avatarUrl, htmlUrl }[] } — **administrator-only** login-prefix user search over `GET /search/users` for the collaborator picker (v10.3). Missing `query` → `-32602`; a blank query, or one with no leading run of login characters (ASCII alphanumerics and `-`), answers `{ users: [] }` without a forge call — only that leading run reaches GitHub's search parser, so qualifiers / booleans typed after it are dropped. `limit` defaults to **8** and is clamped into `[1, 10]` |
 | github.identityProof.create | nonce (req), hostLabel (req) | { gistId, login } — the **guest half** of the invite identity proof (§5.48 "The identity proof"; [intent-hq/intentd#1965](https://github.com/intent-hq/intentd/pull/1965), within v10.3): publishes the host-issued `nonce` in a **secret gist** created with the **stored** device-flow token (env / `gh` fallbacks do not count) — one file `intent-join-proof.txt` whose first line is the nonce and second names `hostLabel` — and returns the gist id and the account's `login` for the guest's `invite.prove`. Both params are trimmed, non-empty, free of control characters (`-32602`). **Administrator-only** (the guest's own daemon). Typed refusals `-32603 { code: "github-not-connected" \| "github-scope-missing" \| "github-unreachable" \| "rate-limited" }` (no stored token or GitHub rejected it; the token lacks the `gist` scope — re-run `github.connect`; transport failure; the guest's **own** daemon is rate-limited by GitHub — primary quota or secondary limit, §9 — the remedy is to wait for the limit to lift and retry after a backoff, not to sign in again). Never returns the token. Since v10.8 an alias of `sourceControl.identityProof.create { provider: "github" }` (below) |
 | github.identityProof.delete | gistId (req) | { ok: true } — deletes a proof gist `create` made; **idempotent** (an already-deleted gist is `ok`). The gist is read back first and must be a proof gist (exactly one file, `intent-join-proof.txt`) — any other gist of the account is refused `-32602` and nothing is deleted. Same typed refusals as `create`, the `gist`-scope check included. **Administrator-only**. Since v10.8 an alias of `sourceControl.identityProof.delete { provider: "github" }` |
 
@@ -126,6 +127,13 @@ row — the additive `sourceControl.*` fields (`provider`, `host`, `method`, `us
 forwarded with `provider: "github"`; the result projected to the documented `github.*` shape).
 
 #### Provider-generic auth — `sourceControl.*` *(v10.5)*
+
+The [prepared GitLab checkout surface (§5.53)](repository-checkout.md) uses the
+selected destination's repository connection before a workspace exists. Its
+full instance identity, original host/caller/socket authority and cache rules
+are distinct from the `github.*` browse contracts and collaboration identity
+proof. It does not add another simultaneously connected GitLab account or infer
+repository access from a guest's identity.
 
 > **Auth model.** One connection model for every forge: an **OAuth device grant** run by the daemon
 > (GitHub's device flow; GitLab's device authorization grant — introduced in GitLab 17.2 behind a
@@ -165,11 +173,11 @@ with a descriptive `message`.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| sourceControl.authStatus | provider (req), host? | { isConfigured, oauthUrl, configuredButNeedsUpdate, updatedScopes, deviceFlow, provider, host, method, user?, deviceGrantSupported } — the `github.authStatus` shape **plus** additive fields. `isConfigured` = a credential resolves for `(provider, host)` **and** the host's user probe succeeds (`GET /user` on GitHub, `GET /api/v4/user` on GitLab); `deviceFlow` / `oauthUrl` / `configuredButNeedsUpdate` / `updatedScopes` exactly as the `github.authStatus` row (device-grant state of *this* provider+host). `provider` echoes the param; `host` is the resolved host (`"github.com"` for github; the requested or configured instance for gitlab). `method` is the provenance of the credential in use — `"device"` (device grant), `"pat"` (in-band PAT, or a token written straight to `sourceControl.<provider>.token` / stored before v10.5), `"env"` (env-var / CLI fallback, nothing stored) — or `null` when not configured. `user` is present **iff** `isConfigured`: `SourceControlUser` (below). `deviceGrantSupported` is `true` when a device-grant client id resolves for the host and the host has not reported the grant unsupported; the FE renders device-first when `true`, PAT-first when `false` |
+| sourceControl.authStatus | provider (req), host?, workspaceId? | { isConfigured, oauthUrl, configuredButNeedsUpdate, updatedScopes, deviceFlow, provider, host, method, user?, deviceGrantSupported } — the `github.authStatus` shape **plus** additive fields. `isConfigured` = a credential resolves for `(provider, host)` **and** the host's user probe succeeds (`GET /user` on GitHub, `GET /api/v4/user` on GitLab); `deviceFlow` / `oauthUrl` / `configuredButNeedsUpdate` / `updatedScopes` exactly as the `github.authStatus` row (device-grant state of *this* provider+host). `provider` echoes the param; `host` is the resolved host (`"github.com"` for github; the requested or configured instance for gitlab). `method` is the provenance of the credential in use — `"device"` (device grant), `"pat"` (in-band PAT, or a token written straight to `sourceControl.<provider>.token` / stored before v10.5), `"env"` (env-var / CLI fallback, nothing stored) — or `null` when not configured. `user` is present **iff** `isConfigured`: `SourceControlUser` (below). `deviceGrantSupported` is `true` when a device-grant client id resolves for the host and the host has not reported the grant unsupported; the FE renders device-first when `true`, PAT-first when `false` |
 | sourceControl.connect | provider (req), host?, method? ("device" \| "pat", default "device"), token? | `method: "device"` → { ok: true, userCode, verificationUri, expiresIn, interval } — starts the device grant for `(provider, host)` (or returns the SAME codes while one is pending — idempotent, like `github.connect`); the daemon polls the host in the background and terminal transitions arrive as `sourceControl:auth-changed` (§6.5). A host without device support → `device-grant-unsupported`. `method: "pat"` (`token` **req**, non-empty; `token` with `method: "device"` → `-32602`) → { ok: true, method: "pat" } — validates the token against the host's user probe, persists it under `sourceControl.<provider>.token` (and the host under `sourceControl.gitlab.host`), emits `sourceControl:auth-changed { status: "authorized" }` and returns; a rejected token → `source-control-unauthorized` and nothing is stored. In v10.5 the PAT method is accepted for `gitlab` only — `provider: "github", method: "pat"` → `-32602` (`settings.update` on `sourceControl.github.token` remains the GitHub PAT path, §5.12). A PAT connect also aborts any pending device grant for the same provider+host |
 | sourceControl.cancelAuth | provider (req), host? | { ok: true, cancelled } — aborts the pending device grant for exactly `(provider, host)` (`cancelled: true` iff one was pending). **Host-scoped and idempotent**: no pending flow for that pair ⇒ `{ ok: true, cancelled: false }`, nothing else is touched. `-32602` only for malformed params (invalid `host` syntax), never for "nothing pending" |
 | sourceControl.revoke | provider (req), host? | { ok: true } — **host-scoped and idempotent.** When a connection is bound for `(provider, host)` (for gitlab: `host` equals the bound `sourceControl.gitlab.host`), deletes the **stored** `sourceControl.<provider>.token` and emits `sourceControl:auth-changed { status: "revoked" }` for that host (plus `github:auth-changed` for github). When **no** connection is bound for `(provider, host)` it is a **successful no-op**: it never deletes another host's token and never emits `revoked` for a host that was not connected. Independently, a device grant pending for exactly that `(provider, host)` is aborted (same effect as `cancelAuth`) and the resulting status change is published as usual. `-32602` is reserved for malformed params (invalid `host` syntax), not for "not connected". Env / CLI fallbacks are untouched. The github alias keeps its best-effort `gh` logout behavior |
-| sourceControl.getUser | provider (req), host? | { user: SourceControlUser \| null } — the authenticated identity from the host's user probe; `null` when no credential resolves; a rejected credential → `source-control-unauthorized`. Never includes the token |
+| sourceControl.getUser | provider (req), host?, workspaceId? | { user: SourceControlUser \| null } — the authenticated identity from the host's user probe; `null` when no credential resolves; a rejected credential → `source-control-unauthorized`. Never includes the token |
 
 ```ts
 interface SourceControlUser {  // derived identity — never carries a token
@@ -183,6 +191,82 @@ interface SourceControlUser {  // derived identity — never carries a token
 `SourceControlUser` is deliberately narrower than `GithubUser` (no `htmlUrl`); `github.getUser` keeps
 returning `GithubUser`.
 
+#### Full-instance GitLab authentication (prepared v13.5)
+
+This prepared extension accompanies [GitLab checkout](repository-checkout.md);
+it is not a claim that older or published daemons accept the new field. It keeps
+the existing host-only request forms above and adds optional `instanceBaseUrl`
+to `sourceControl.authStatus`, `sourceControl.connect`, `sourceControl.cancelAuth`,
+`sourceControl.revoke` and `sourceControl.getUser` for `provider: "gitlab"`.
+These public auth operations require administrator permission; checkout browsing
+by a host member does not grant credential-management permission.
+
+Before sending `instanceBaseUrl`, require exactly integer
+`server.capabilities.gitlabCheckout: 1` in the original connection's
+`client.hello` result. This includes auth-status reads and connection setup.
+Without that capability, retain only the daemon's historical bare-host behavior;
+do not send the new field to an older parser or strip a requested prefix and
+treat success as full-instance authorization.
+
+`instanceBaseUrl` is the canonical HTTPS logical root, including any port and
+case-sensitive installation prefix. `host` remains an optional bare authority;
+when both fields are supplied, their authorities must agree. The root rejects
+userinfo, query strings, fragments, traversal and non-HTTPS schemes. Invalid
+roots, mismatched authorities or the new field with `provider: "github"` are
+invalid params (`-32602`). Omitting the new field preserves existing host
+resolution, including the configured full root when the requested host is the
+configured authority. `sourceControl.gitlab.apiBaseUrl` remains a transport
+override and cannot change logical identity.
+
+```json
+{"jsonrpc":"2.0","id":311,"method":"sourceControl.authStatus","params":{"provider":"gitlab","host":"gitlab.example:8443","instanceBaseUrl":"https://gitlab.example:8443/Forge"}}
+```
+
+The GitLab auth-status result adds `instanceBaseUrl` for the resolved full root;
+`host` still reports only its authority. Successful PAT or device connection
+publishes the selected `sourceControl.gitlab.host` and
+`sourceControl.gitlab.instanceBaseUrl` together through the original connection
+operation. A client must not split this transition into independent settings
+writes or replace a prefix-bearing identity with a bare host.
+
+Cancellation uses the same full root as connection setup. Its result remains
+`{ok: true, cancelled: boolean}`. `cancelled: true` includes an original pending
+PAT reservation retired before its first credential effect, as well as pending
+device startup or polling. If PAT validation is still awaiting HTTP when its
+reservation is cancelled, a late validation response cannot install that PAT.
+Once PAT persistence has begun or settled, that PAT is no longer cancellable:
+with no other pending auth work, the result is `cancelled: false`. A false result
+also covers nothing pending; it does not identify success, failure or rollback.
+Keep the actual connect result and connection status visible instead of treating
+closing a dialog or a successful cancel RPC as proof that no credential changed.
+
+```json
+{"jsonrpc":"2.0","id":312,"method":"sourceControl.cancelAuth","params":{"provider":"gitlab","instanceBaseUrl":"https://gitlab.example:8443/Forge"}}
+```
+
+Cancellation for another prefix on the same authority does not retire this
+operation. Revoke and identity reads also resolve the selected full root; they
+must not borrow a different instance's credential. Reconnection requires a fresh
+checkout capture; it cannot revive a reference held by an earlier auth flow.
+
+The existing `sourceControl:auth-changed` event data remains
+`{provider, host, status}`. `host` is only the bare authority; there is no
+`instanceBaseUrl` in this event. Treat a matching event as invalidation, not
+authorization for `/Forge`, `/forge` or any other prefix. In an authorized auth
+view, re-read `sourceControl.authStatus` for the originally selected full
+`instanceBaseUrl` on its original connection, and discard the result if that
+context changed while awaiting it. The event cannot choose a new instance or
+revive a checkout reference.
+
+The [prepared child Git credential policy](settings.md#prepared-gitlab-child-git-credential-policy)
+is a separate owner-controlled grant for the current account and full instance.
+A successful connection, status read or native checkout does not enable it.
+Credential refresh for the same identity preserves the explicit choice;
+replacement identity cannot inherit it. The bare-host auth event remains an
+invalidation signal, not proof that a particular prefix's helper grant is on or
+off. Retain the actual policy operation result rather than interpreting auth
+cancellation, revocation or a closed dialog as a successful policy update.
+
 #### Identity proof — `sourceControl.identityProof.*` *(v10.8)*
 
 The **guest half** of the invite identity proof (§5.48 "The identity proof"), generalized over the
@@ -195,8 +279,17 @@ rows they generalize. Never returns a token.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| sourceControl.identityProof.create | provider (req), host?, nonce (req), hostLabel (req) | { proofId, login, provider, host, externalUserId, avatarUrl, gistId? } — publishes `nonce` (first line of the proof file; `hostLabel` names the inviting host on the second, as `github.identityProof.create`) under the stored credential for `(provider, host)`. **github**: a **secret gist** with the single file `intent-join-proof.txt`, exactly the `github.identityProof.create` gist; the result also carries `gistId` (= `proofId`) for compatibility. **gitlab**: a **public personal snippet** (`POST /api/v4/snippets`, `visibility: "public"`, title naming Intent, one file whose first line is the nonce) — public because the host verifies it by an anonymous read; the guest's token must carry the `api` scope (the device grant requests it; PAT instructions say so). `login` is the account's GitHub `login` / GitLab `username`, the value the guest passes as `invite.prove.login`; `externalUserId` is **always present**, `string \| null`: for **gitlab** the snippet author's account id as a string (the `externalUserId` of the identity triple the host keys the guest by, §5.48); for **github** `null` — the gist engine is unchanged and the host resolves the GitHub identity server-side from `gistId` / `login` during `invite.prove`, so clients must not depend on it for GitHub. `avatarUrl` is **always present**, `string \| null` (`null` when the forge reports none). Typed refusals are `-32603 { code }`, keyed **per provider**: **github** keeps `"github-not-connected"` \| `"github-scope-missing"` \| `"github-unreachable"`; **gitlab** answers `"gitlab-not-connected"` \| `"gitlab-scope-missing"` \| `"gitlab-unreachable"` (no stored credential for `(provider, host)`; the credential lacks the scope the proof needs — `gist` on GitHub, `api` on GitLab; the forge unreachable); either provider additionally answers the provider-neutral `"rate-limited"` (the guest's **own** daemon is rate-limited by the forge — primary quota or secondary limit, §9 — wait for the limit to lift and retry after a backoff; signing in again does not help) |
+| sourceControl.identityProof.create | provider (req), host?, nonce (req), hostLabel (req) | { proofId, login, provider, host, externalUserId, avatarUrl, gistId? } — details below the table. |
 | sourceControl.identityProof.delete | provider (req), host?, proofId (req) | { ok: true } — deletes the proof `create` published; **idempotent** (a proof already gone — GitHub 404, GitLab 404 — is `ok`). The proof is read back first and must be a proof of this shape (GitHub: exactly one file `intent-join-proof.txt`; GitLab: a snippet whose single file is the proof file) — anything else of the account is refused `-32602` and nothing is deleted. Same per-provider typed refusals as `create` |
+
+**`sourceControl.identityProof.create` details.**
+
+- publishes `nonce` (first line of the proof file; `hostLabel` names the inviting host on the second, as `github.identityProof.create`) under the stored credential for `(provider, host)`.
+- **github**: a **secret gist** with the single file `intent-join-proof.txt`, exactly the `github.identityProof.create` gist; the result also carries `gistId` (= `proofId`) for compatibility.
+- **gitlab**: a **public personal snippet** (`POST /api/v4/snippets`, `visibility: "public"`, title naming Intent, one file whose first line is the nonce) — public because the host verifies it by an anonymous read; the guest's token must carry the `api` scope (the device grant requests it; PAT instructions say so).
+  `login` is the account's GitHub `login` / GitLab `username`, the value the guest passes as `invite.prove.login`; `externalUserId` is **always present**, `string | null`: for **gitlab** the snippet author's account id as a string (the `externalUserId` of the identity triple the host keys the guest by, §5.48); for **github** `null` — the gist engine is unchanged and the host resolves the GitHub identity server-side from `gistId` / `login` during `invite.prove`, so clients must not depend on it for GitHub.
+  `avatarUrl` is **always present**, `string | null` (`null` when the forge reports none).
+  Typed refusals are `-32603 { code }`, keyed **per provider**: **github** keeps `"github-not-connected"` | `"github-scope-missing"` | `"github-unreachable"`; **gitlab** answers `"gitlab-not-connected"` | `"gitlab-scope-missing"` | `"gitlab-unreachable"` (no stored credential for `(provider, host)`; the credential lacks the scope the proof needs — `gist` on GitHub, `api` on GitLab; the forge unreachable); either provider additionally answers the provider-neutral `"rate-limited"` (the guest's **own** daemon is rate-limited by the forge — primary quota or secondary limit, §9 — wait for the limit to lift and retry after a backoff; signing in again does not help)
 
 `github.identityProof.create { nonce, hostLabel }` ≡ `sourceControl.identityProof.create { provider: "github", nonce, hostLabel }` projected to `{ gistId, login }` (the alias does **not** gain `externalUserId` / `avatarUrl`), and `github.identityProof.delete { gistId }` ≡ `sourceControl.identityProof.delete { provider: "github", proofId: gistId }` — the aliases keep their documented shapes byte-identical (§5.48 flow, step 2 and 4).
 
@@ -207,22 +300,86 @@ FE's "bypass the buggy backend" behavior for same-repo branches.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| github.pulls.create | owner (req), repo (req), title (req), body (req), head (req), base (req), draft? | { pull: GithubPullRequest \| null } — `POST /repos/{owner}/{repo}/pulls` (head verbatim) |
-| github.pulls.get | owner (req), repo (req), number (req) | { pull: GithubPullRequest \| null } — `GET /repos/{owner}/{repo}/pulls/{number}`. **Served from the shared daemon PR cache** ([intent-hq/intent#5610](https://github.com/intent-hq/intent/issues/5610)): the daemon keeps one in-memory PR cache — keyed by `(owner, repo, number)`, holding each PR's last full read — that this method, `ws.pr.snapshot` (§5.7) and the §5.42 monitor loop all read from and write to. When the cached entry is younger than `prCache.maxAgeSeconds` (§5.12, default 60s) the response is answered from it with **no forge call**; otherwise the PR is refreshed from the forge — **one folded read** (the GraphQL PR observation of §5.42 "Per-poll forge cost", falling back to the REST per-signal reads), the same read the monitor performs — and the result is cached. A monitor poll therefore refreshes what the next hover-card read serves, and a read of an unmonitored PR seeds the entry the next read (and a later `ws.pr.snapshot`) serves. The `pull` carries the additive `isInMergeQueue?` (below) when that read reported the merge-queue state; on the REST-only fallback the key is absent and `mergeableState` reads `"clean"` for a queued PR. **Side effect (behavior only, no wire-shape change; [intent-hq/intentd#1923](https://github.com/intent-hq/intentd/pull/1923))**: the served snapshot is also folded into the daemon-owned PR state of every **non-archived, non-remote** workspace, and every secondary git root belonging to such a workspace (§5.1 / §5.6), that already references the PR **by URL** — the linked `prUrl` or a `pullRequests` pool entry (archived and remote workspaces, and their roots, are never touched). The two write sets differ: a referencing **workspace** gets its `pullRequests` pool entry upserted (added when absent — a workspace referencing the PR only through its linked `prUrl` gains the entry) and, when the PR is the linked one, its `prStatus` / `prUrl` / `activePullRequest` scalars updated; a referencing **git root** only updates a pool entry that **already exists** (no entry is created when absent) and, when the PR is the linked one, its `prStatus` / `prUrl` (roots carry no `activePullRequest`). Either way a hover-card read after a merge refreshes the sidebar without waiting for the next background sweep. **The fold runs on every serve, cache hit or miss** ([intent-hq/intent#5654](https://github.com/intent-hq/intent/issues/5654)) — the same fold `ws.pr.snapshot` (§5.7) performs, since both read through the shared cache: a read that reached the forge folds the fresh record; a cache hit is a **projection**: it writes **only** `isInMergeQueue`, onto a referencing row's persisted copy that is on the **same known `headSha`** as the served snapshot and whose signal differs (so a queue signal seeded into the cache by a snapshot or a monitor poll lands on the pool at the next hover instead of being skipped as a hit), and it never writes anything else — a REST sweep may have refreshed the pool between the cache fill and the hit, so a hit never re-persists the older cached REST-only fields (title, `updatedAt`, `mergeableState`, status); a hit whose signal agrees with the persisted copy writes nothing, a hit whose head differs from the persisted copy (or is unknown on either side) writes nothing, and a hit never costs a forge call. Persisted deltas emit the ordinary `pr:updated` (workspace) / `gitRoot:updated` (git root) plus a `workspace:displayStatus-changed` recompute (§6.5); nothing changed means nothing persisted and nothing emitted. The fold is **passive** — no relink discovery, no stale-unlink, no PR-monitor baseline write, no extra forge call (the one serve answers both the response and the fold) — and **fail-soft**: a fold failure is logged and never fails the RPC, which still answers `{ pull }` |
-| github.pulls.list | owner (req), repo (req), state?: "open"\|"closed"\|"all", head?, base?, sort?: "created"\|"updated"\|"popularity"\|"long-running", direction?: "asc"\|"desc", limit?, nextToken? | { pulls: GithubPullRequest[], nextToken? } — `GET /repos/{owner}/{repo}/pulls` |
-| github.pulls.search | owner (req), repo (req), filter?: "all"\|"assigned"\|"created"\|"review-requested"\|"involves", state?: "open"\|"closed", query?, repos?: { owner, repo }[], limit?, nextToken? | { pulls: (GithubPullRequest & { owner, repo })[], nextToken? } — `GET /search/issues?q=is:pr repo:{o}/{r} is:{state} {author\|assignee\|review-requested\|involves}:@me {query}`; `query` is free text (trimmed; blank == absent; qualifier/boolean tokens are quoted into literals so the `repo:` scope cannot widen); `filter:"all"`+`state:"open"` with no `query` delegates to `github.pulls.list`. **`repos` (v10.1, multi-repo search)**: optional extra repositories to search alongside the addressed one, each entry an object whose `owner` and `repo` are GitHub slugs — owner `[A-Za-z0-9-]` (≤ 39 chars), repo `[A-Za-z0-9._-]` (≤ 100 chars, not `.` / `..`), the same rule enforced on the addressed `owner` / `repo` so no value can smuggle extra qualifiers into `q` (any other shape → `-32602` naming the offending `repos[{i}].owner` / `.repo`); entries naming the addressed repo and repeats are dropped (case-insensitive repo identity, first occurrence wins, order kept), and the whole search may span **at most 6** repositories — addressed + extras — else `-32602`, engine untouched. A non-empty `repos` always routes through the search API as ONE request whose `q` carries one `repo:` qualifier per repository (`repo:{o}/{r} repo:{o2}/{r2} …`, no per-repo fan-out) with `sort=updated`, so the page is a single updated-desc blend across repos, and every item's `owner` / `repo` names ITS OWN hit's repository (derived from the hit's `html_url` and echoed with the caller's casing for a scoped repo) rather than the request params. A multi-repo scope naming a repo the token cannot read (GitHub rejects the whole search with 422 "… cannot be searched …"; other 422s surface as-is) is tolerated: each scoped repo is probed once (`GET /repos/{o}/{r}`), the not-found/forbidden ones are dropped, and the search is retried once over the readable remainder — a scope with nothing droppable surfaces the original `-32603`. **Quota**: a non-empty `repos` always routes through `GET /search/issues` — including the blank-query listing the single-repo path serves from `/pulls` — which draws on GitHub's search-API limit (30 requests/min per token) rather than the 5000/h REST budget, so clients should debounce and cache multi-repo calls. Absent/empty `repos` keeps the pre-10.1 single-repo routing unchanged; the only shape change is that every item now carries the additive `owner` / `repo` keys (echoing the addressed repo on the single-repo path) |
-| github.pulls.merge | owner (req), repo (req), number (req), mergeMethod?: "merge"\|"squash"\|"rebase", commitTitle?, commitMessage? | { merged, message, sha? } — `PUT /repos/{owner}/{repo}/pulls/{number}/merge` |
-| github.pulls.updateBranch | owner (req), repo (req), number (req), expectedHeadSha? | { message, url? } — `PUT /repos/{owner}/{repo}/pulls/{number}/update-branch` |
+| github.pulls.create | owner (req), repo (req), title (req), body (req), head (req), base (req), draft?, workspaceId? | { pull: GithubPullRequest \| null } — `POST /repos/{owner}/{repo}/pulls` (head verbatim) |
+| github.pulls.checks | owner (req), repo (req), number (req), workspaceId? | { headSha: string, checks: CheckRun[] } — read the current PR head, then its complete bounded check-run collection. `CheckRun = { name: string, state: "pending" ∣ "success" ∣ "failure" ∣ "neutral" ∣ "cancelled", url: string ∣ null }`. The returned SHA identifies the check snapshot; a missing SHA or incomplete/unreadable provider collection fails rather than reporting success/empty checks. No PR cache fold or workspace mutation. |
+| github.pulls.reviews | owner (req), repo (req), number (req), limit?, nextToken?, workspaceId? | { reviews: PullRequestReview[], nextToken: string ∣ null } — one bounded forge page. `PullRequestReview = { id: number, author: string, state: string, body: string ∣ null, submittedAt: string ∣ null, url: string ∣ null }`. Preserve forge states including `PENDING` and `DISMISSED`; author is empty when the account is absent. |
+| github.pulls.files | owner (req), repo (req), number (req), limit?, nextToken?, expectedHeadSha?, workspaceId? | { headSha: string, truncated: boolean, files: PullRequestFile[], nextToken: string ∣ null } — one bounded forge page. `PullRequestFile = { filename: string, previousFilename: string ∣ null, status: string, additions: number, deletions: number, changes: number, patch: string ∣ null, url: string ∣ null }`. Missing/binary/forge-omitted patches stay null; an available patch may still be truncated by the forge. `url` is the forge blob URL when available. GitHub limits this endpoint to 3,000 files; reaching that boundary conservatively returns `truncated: true` and `nextToken: null` rather than claiming completeness. |
+| github.pulls.get | owner (req), repo (req), number (req), workspaceId? | { pull: GithubPullRequest \| null } — details below the table. |
+| github.pulls.list | owner (req), repo (req), state?: "open"\|"closed"\|"all", head?, base?, sort?: "created"\|"updated"\|"popularity"\|"long-running", direction?: "asc"\|"desc", limit?, nextToken?, workspaceId? | { pulls: GithubPullRequest[], nextToken? } — `GET /repos/{owner}/{repo}/pulls` |
+| github.pulls.search | org? (exclusive with owner/repo/repos), owner (req unless org), repo (req unless org), filter?: "all"\|"assigned"\|"created"\|"review-requested"\|"involves", state?: "open"\|"closed", query?, repos?: { owner, repo }[], limit?, nextToken?, workspaceId? | { pulls: (GithubPullRequest & { owner, repo })[], nextToken? } — details below the table. |
+| github.pulls.merge | owner (req), repo (req), number (req), mergeMethod?: "merge"\|"squash"\|"rebase", commitTitle?, commitMessage?, workspaceId? | { merged, message, sha? } — `PUT /repos/{owner}/{repo}/pulls/{number}/merge` |
+| github.pulls.updateBranch | owner (req), repo (req), number (req), expectedHeadSha?, workspaceId? | { message, url? } — `PUT /repos/{owner}/{repo}/pulls/{number}/update-branch` |
+
+**`github.pulls.get` details.**
+
+- `GET /repos/{owner}/{repo}/pulls/{number}`.
+  **Served from the shared daemon PR cache** ([intent-hq/intent#5610](https://github.com/intent-hq/intent/issues/5610)): the daemon keeps one in-memory PR cache — keyed by `(owner, repo, number)`, holding each PR's last full read — that this method, `ws.pr.snapshot` (§5.7) and the §5.42 monitor loop all read from and write to.
+  When the cached entry is younger than `prCache.maxAgeSeconds` (§5.12, default 60s) the response is answered from it with **no forge call**; otherwise the PR is refreshed from the forge — **one folded read** (the GraphQL PR observation of §5.42 "Per-poll forge cost", falling back to the REST per-signal reads), the same read the monitor performs — and the result is cached.
+  A monitor poll therefore refreshes what the next hover-card read serves, and a read of an unmonitored PR seeds the entry the next read (and a later `ws.pr.snapshot`) serves.
+  The `pull` carries the additive `isInMergeQueue?` (below) when that read reported the merge-queue state; on the REST-only fallback the key is absent and `mergeableState` reads `"clean"` for a queued PR.
+- **Side effect (behavior only, no wire-shape change; [intent-hq/intentd#1923](https://github.com/intent-hq/intentd/pull/1923))**: the served snapshot is also folded into the daemon-owned PR state of every **non-archived, non-remote** workspace, and every secondary git root belonging to such a workspace (§5.1 / §5.6), that already references the PR **by URL** — the linked `prUrl` or a `pullRequests` pool entry (archived and remote workspaces, and their roots, are never touched).
+  The two write sets differ: a referencing **workspace** gets its `pullRequests` pool entry upserted (added when absent — a workspace referencing the PR only through its linked `prUrl` gains the entry) and, when the PR is the linked one, its `prStatus` / `prUrl` / `activePullRequest` scalars updated; a referencing **git root** only updates a pool entry that **already exists** (no entry is created when absent) and, when the PR is the linked one, its `prStatus` / `prUrl` (roots carry no `activePullRequest`).
+  Either way a hover-card read after a merge refreshes the sidebar without waiting for the next background sweep.
+  **The fold runs on every serve, cache hit or miss** ([intent-hq/intent#5654](https://github.com/intent-hq/intent/issues/5654)) — the same fold `ws.pr.snapshot` (§5.7) performs, since both read through the shared cache: a read that reached the forge folds the fresh record; a cache hit is a **projection**: it writes **only** `isInMergeQueue`, onto a referencing row's persisted copy that is on the **same known `headSha`** as the served snapshot and whose signal differs (so a queue signal seeded into the cache by a snapshot or a monitor poll lands on the pool at the next hover instead of being skipped as a hit), and it never writes anything else — a REST sweep may have refreshed the pool between the cache fill and the hit, so a hit never re-persists the older cached REST-only fields (title, `updatedAt`, `mergeableState`, status); a hit whose signal agrees with the persisted copy writes nothing, a hit whose head differs from the persisted copy (or is unknown on either side) writes nothing, and a hit never costs a forge call.
+  Persisted deltas emit the ordinary `pr:updated` (workspace) / `gitRoot:updated` (git root) plus a `workspace:displayStatus-changed` recompute (§6.5); nothing changed means nothing persisted and nothing emitted.
+  The fold is **passive** — no relink discovery, no stale-unlink, no PR-monitor baseline write, no extra forge call (the one serve answers both the response and the fold) — and **fail-soft**: a fold failure is logged and never fails the RPC, which still answers `{ pull }`
+
+**`github.pulls.search` details.**
+
+- `GET /search/issues?q=is:pr repo:{o}/{r} is:{state} {author|assignee|review-requested|involves}:@me {query}`; `query` is free text (trimmed; blank == absent; qualifier/boolean tokens are quoted into literals so the `repo:` scope cannot widen); `filter:"all"`+`state:"open"` with no `query` delegates to `github.pulls.list`.
+- **`repos` (v10.1, multi-repo search)**: optional extra repositories to search alongside the addressed one, each entry an object whose `owner` and `repo` are GitHub slugs — owner `[A-Za-z0-9-]` (≤ 39 chars), repo `[A-Za-z0-9._-]` (≤ 100 chars, not `.` / `..`), the same rule enforced on the addressed `owner` / `repo` so no value can smuggle extra qualifiers into `q` (any other shape → `-32602` naming the offending `repos[{i}].owner` / `.repo`); entries naming the addressed repo and repeats are dropped (case-insensitive repo identity, first occurrence wins, order kept), and the whole search may span **at most 6** repositories — addressed + extras — else `-32602`, engine untouched.
+  A non-empty `repos` always routes through the search API as ONE request whose `q` carries one `repo:` qualifier per repository (`repo:{o}/{r} repo:{o2}/{r2} …`, no per-repo fan-out) with `sort=updated`, so the page is a single updated-desc blend across repos, and every item's `owner` / `repo` names ITS OWN hit's repository (derived from the hit's `html_url` and echoed with the caller's casing for a scoped repo) rather than the request params.
+  A multi-repo scope naming a repo the token cannot read (GitHub rejects the whole search with 422 "… cannot be searched …"; other 422s surface as-is) is tolerated: each scoped repo is probed once (`GET /repos/{o}/{r}`), the not-found/forbidden ones are dropped, and the search is retried once over the readable remainder — a scope with nothing droppable surfaces the original `-32603`.
+- **Quota**: a non-empty `repos` always routes through `GET /search/issues` — including the blank-query listing the single-repo path serves from `/pulls` — which draws on GitHub's search-API limit (30 requests/min per token) rather than the 5000/h REST budget, so clients should debounce and cache multi-repo calls.
+  Absent/empty `repos` keeps the pre-10.1 single-repo routing unchanged; the only shape change is that every item now carries the additive `owner` / `repo` keys (echoing the addressed repo on the single-repo path)
+
+PR detail reads are read-only and use the same owner/host authorization boundary as
+`github.pulls.get`. Review and file pages default to 50 entries, capped at 100,
+with opaque `nextToken` cursors. `expectedHeadSha` on files rejects a stale head
+with `-32005` (`current.headSha`); a head change during the file read also rejects
+the page. Unsupported providers fail explicitly. These additions require the
+13.2 backend; documentation does not establish a shipped release.
 
 #### Issues
 
 | Method | Params | Result |
 | --- | --- | --- |
-| github.issues.get | owner (req), repo (req), number (req) | { issue: GithubIssue } — `GET /repos/{owner}/{repo}/issues/{number}` (v9.6; the issue counterpart of `github.pulls.get`, backing the FE's GitHub link hover card). Missing `number` → `-32602` per the namespace conventions above. **Served from a daemon issue cache** ([intent-hq/intent#5610](https://github.com/intent-hq/intent/issues/5610)): the daemon keeps an in-memory issue cache next to the shared PR cache — keyed by `(owner, repo, number)`, holding each issue's last read — governed by the same `prCache.maxAgeSeconds` (§5.12, default 60s): a cached entry younger than that answers the response with **no forge call**; otherwise the issue is fetched once and the result is cached for the next read. Errors (quota exhaustion included) propagate as before and are never cached. Retention mirrors the PR cache's unmonitored policy (10 minutes idle expiry, 256-entry cap, oldest fetch evicted, enforced on every write); in-memory only — a restart starts cold. Result shape unchanged |
-| github.issues.list | owner (req), repo (req), state?: "open"\|"closed"\|"all", assignee?, creator?, labels?, sort?: "created"\|"updated"\|"comments", direction?: "asc"\|"desc", limit?, nextToken? | { issues: GithubIssue[], nextToken? } — `GET /repos/{owner}/{repo}/issues` (items carrying `pull_request` are filtered out) |
-| github.issues.search | owner (req), repo (req), filter?: "all"\|"assigned"\|"created"\|"involves", state?: "open"\|"closed", query?, repos?: { owner, repo }[], limit?, nextToken? | { issues: GithubIssue[], nextToken? } — `GET /search/issues?q=is:issue repo:{o}/{r} [state:{state}] {query}`; `query` is free text (trimmed; blank == absent; qualifier/boolean tokens are quoted into literals so the `repo:` scope cannot widen); `filter` is validated (invalid → `-32603`) but — unlike `github.pulls.search` — adds **no** `@me` qualifier yet (v1 limitation: the engine cannot express issue involvement), so only a non-blank `query` **or a non-empty `repos`** routes through `GET /search/issues`; without either the method delegates to the repo-issue listing (`GET /repos/{o}/{r}/issues`) filtered by state, regardless of `filter`. **`repos` (v10.1)**: the same multi-repo contract as `github.pulls.search` — `[{ owner, repo }]` extras (each a GitHub slug pair; malformed entry → `-32602`), addressed repo and repeats dropped, **at most 6** repositories in total (else `-32602`), ONE search request with one `repo:` qualifier per repository and `sort=updated`, unreadable scoped repos probed-and-dropped with one retry, and each item's `owner` / `repo` names its own hit's repository (from `html_url`); the same **search-API quota** caveat applies — a non-empty `repos` turns even the blank-query listing into a `GET /search/issues` call (30 requests/min per token), so clients should debounce and cache; absent/empty `repos` keeps the single-repo behavior byte-identical |
+| github.issues.get | owner (req), repo (req), number (req), workspaceId? | { issue: GithubIssue } — `GET /repos/{owner}/{repo}/issues/{number}` (v9.6; the issue counterpart of `github.pulls.get`, backing the FE's GitHub link hover card). Missing `number` → `-32602` per the namespace conventions above. **Served from a daemon issue cache** ([intent-hq/intent#5610](https://github.com/intent-hq/intent/issues/5610)): the daemon keeps an in-memory issue cache next to the shared PR cache — keyed by `(owner, repo, number)`, holding each issue's last read — governed by the same `prCache.maxAgeSeconds` (§5.12, default 60s): a cached entry younger than that answers the response with **no forge call**; otherwise the issue is fetched once and the result is cached for the next read. Errors (quota exhaustion included) propagate as before and are never cached. Retention mirrors the PR cache's unmonitored policy (10 minutes idle expiry, 256-entry cap, oldest fetch evicted, enforced on every write); in-memory only — a restart starts cold. Result shape unchanged |
+| github.issues.list | owner (req), repo (req), state?: "open"\|"closed"\|"all", assignee?, creator?, labels?, sort?: "created"\|"updated"\|"comments", direction?: "asc"\|"desc", limit?, nextToken?, workspaceId? | { issues: GithubIssue[], nextToken? } — `GET /repos/{owner}/{repo}/issues` (items carrying `pull_request` are filtered out) |
+| github.issues.search | owner (req), repo (req), filter?: "all"\|"assigned"\|"created"\|"involves", state?: "open"\|"closed", query?, repos?: { owner, repo }[], limit?, nextToken?, workspaceId? | { issues: GithubIssue[], nextToken? } — `GET /search/issues?q=is:issue repo:{o}/{r} [state:{state}] {query}`; `query` is free text (trimmed; blank == absent; qualifier/boolean tokens are quoted into literals so the `repo:` scope cannot widen); `filter` is validated (invalid → `-32603`) but — unlike `github.pulls.search` — adds **no** `@me` qualifier yet (v1 limitation: the engine cannot express issue involvement), so only a non-blank `query` **or a non-empty `repos`** routes through `GET /search/issues`; without either the method delegates to the repo-issue listing (`GET /repos/{o}/{r}/issues`) filtered by state, regardless of `filter`. **`repos` (v10.1)**: the same multi-repo contract as `github.pulls.search` — `[{ owner, repo }]` extras (each a GitHub slug pair; malformed entry → `-32602`), addressed repo and repeats dropped, **at most 6** repositories in total (else `-32602`), ONE search request with one `repo:` qualifier per repository and `sort=updated`, unreadable scoped repos probed-and-dropped with one retry, and each item's `owner` / `repo` names its own hit's repository (from `html_url`); the same **search-API quota** caveat applies — a non-empty `repos` turns even the blank-query listing into a `GET /search/issues` call (30 requests/min per token), so clients should debounce and cache; absent/empty `repos` keeps the single-repo behavior byte-identical |
 
 #### Review comments & threads
+
+**Owner-wide PR search (additive, presence-selected).**
+`github.pulls.search({ org: "intent-hq", query?, filter?, state?, limit?, nextToken?, workspaceId? })`
+searches across all repositories owned by that login and visible to the authenticated
+GitHub account, including repositories absent from Home's sidebar and all workspace
+records. The `org` parameter names a Home owner group: it accepts both organization
+accounts (for example `intent-hq`) and personal accounts (for example `Wattenberger`).
+It issues **one** `GET /search/issues` request per page with `is:pr user:intent-hq`,
+`sort=updated`, and `order=desc`; it never enumerates local repositories or falls back
+to a single repository, even with a blank query. The normal involvement filters and
+free-text sanitization apply. State defaults to `open`; `closed`, `merged`, and `all`
+are also accepted (`all` omits the state qualifier). Each returned PR's `owner` / `repo`
+comes from its own URL, and `nextToken` uses the existing opaque cursor contract.
+
+`org` must be a nonempty GitHub owner slug (`[A-Za-z0-9-]`, at most 39 characters).
+If the key is present, null/non-string/invalid values or **any** simultaneous
+`owner`, `repo`, or `repos` key (even null/empty) return `-32602` before the forge call.
+Omitting `org` preserves the existing repository-scoped contract above exactly.
+An older daemon rejects the org-only form for missing `owner`; clients must expose
+unsupported owner-wide search rather than quietly searching only sidebar repos.
+`github.repos.search({ query: "user:intent-hq", ... })` is an older-API enumeration
+alternative, but it still needs explicit per-repo search batching and a client-side
+merged pagination strategy; it is not equivalent to one owner-wide PR page.
+
+Owner-wide search uses GitHub's search quota and visibility/indexing rules. GitHub
+limits each query to 1,000 retrievable hits and up to 4,000 searched repositories;
+a page outside that window surfaces GitHub's error. A response marked
+`incomplete_results` is rejected with `-32603` asking the caller to retry or narrow
+the query, instead of presenting the partial page as complete. Clients should debounce,
+cache, and describe these as GitHub search results, not an exhaustive inventory.
+See [GitHub's search limits](https://docs.github.com/en/rest/search/search#about-search).
 
 Review **comments** are the REST inline comments (`/pulls/{n}/comments`); review **threads** are the
 GraphQL `pullRequest.reviewThreads` with resolve state — `resolveThread` / `unresolveThread` map to
@@ -231,11 +388,11 @@ the GraphQL `resolveReviewThread` / `unresolveReviewThread` mutations (parity wi
 
 | Method | Params | Result |
 | --- | --- | --- |
-| github.listReviewComments | owner (req), repo (req), number (req), limit?, nextToken? | { comments: ReviewComment[], nextToken? } — `GET /repos/{owner}/{repo}/pulls/{number}/comments` |
-| github.replyReviewComment | owner (req), repo (req), number (req), commentId (req), body (req) | { comment: ReviewComment } — `POST /repos/{owner}/{repo}/pulls/{number}/comments` (`inReplyToId = commentId`) |
-| github.getReviewThreads | owner (req), repo (req), number (req), limit?, nextToken? | { threads: ReviewThread[], nextToken? } — GraphQL `pullRequest.reviewThreads` |
-| github.resolveThread | threadId (req) | { isResolved: true } — GraphQL `resolveReviewThread` |
-| github.unresolveThread | threadId (req) | { isResolved: false } — GraphQL `unresolveReviewThread` |
+| github.listReviewComments | owner (req), repo (req), number (req), limit?, nextToken?, workspaceId? | { comments: ReviewComment[], nextToken? } — `GET /repos/{owner}/{repo}/pulls/{number}/comments` |
+| github.replyReviewComment | owner (req), repo (req), number (req), commentId (req), body (req), workspaceId? | { comment: ReviewComment } — `POST /repos/{owner}/{repo}/pulls/{number}/comments` (`inReplyToId = commentId`) |
+| github.getReviewThreads | owner (req), repo (req), number (req), limit?, nextToken?, workspaceId? | { threads: ReviewThread[], nextToken? } — GraphQL `pullRequest.reviewThreads` |
+| github.resolveThread | threadId (req), workspaceId? | { isResolved: true } — GraphQL `resolveReviewThread` |
+| github.unresolveThread | threadId (req), workspaceId? | { isResolved: false } — GraphQL `unresolveReviewThread` |
 
 #### DTO schemas
 
@@ -275,6 +432,7 @@ interface GithubPullRequest {
   mergeable?: boolean | null;
   mergeableState?: string;  // the forge's raw merge-state word; a merge-queued PR reads `"clean"` here (REST never reports `"queued"`) — read `isInMergeQueue` instead
   isInMergeQueue?: boolean; // present only when the host reported the merge-queue state (GitHub GraphQL `isInMergeQueue`); absent (never `null`) when unknown — REST-only fallback, older GHES
+  mergeQueue?: MergeQueueEntry; // additive, presence-detected: the PR's place in the host's merge queue — present only alongside `isInMergeQueue: true` when the host reported the entry (GitHub GraphQL `PullRequest.mergeQueueEntry`); absent (never `null`) otherwise
   labels: string[];
   assignees?: GithubUser[];
   comments: number;
@@ -285,6 +443,14 @@ interface GithubPullRequest {
   changedFiles: number;
   owner?: string;          // repository owner — present on `github.pulls.search` items (v10.1); names the hit's own repo
   repo?: string;           // repository name — present on `github.pulls.search` items (v10.1)
+}
+
+interface MergeQueueEntry { // shared with the §5.42 `MergeRequirements.mergeQueue`; every key but `position` is presence-detected (omitted, never `null`)
+  position: number;         // 1-based place in the queue (GitHub GraphQL `MergeQueueEntry.position`); 1 = next to merge
+  queueSize?: number;       // entries currently in the queue, this one included (`mergeQueue.entries.totalCount`)
+  state?: string;           // the host's raw entry state word, lowercased — GitHub: `queued` | `awaiting_checks` | `mergeable` | `unmergeable` | `locked`
+  enqueuedAt?: string;      // RFC 3339 — when the PR entered the queue
+  estimatedTimeToMerge?: number; // the host's estimate, in whole seconds, of how long until this entry merges (GitHub GraphQL `MergeQueueEntry.estimatedTimeToMerge`), passed through as reported — GitHub recomputes it on queue events rather than counting it down, so it is a duration estimate, not a deadline; omitted while the host has no estimate
 }
 
 interface GithubIssue {
@@ -430,7 +596,7 @@ descriptive `message` (e.g. `"Linear is not configured."`). There are **no** cus
 
 | Method | Params | Result |
 | --- | --- | --- |
-| linear.authStatus | — | { authenticated, login?, scopes } — `authenticated` = env key resolves **and** the GraphQL `viewer { id name email }` probe succeeds; `login` is the viewer's name/email; `scopes` is always `[]` (Linear's `viewer` returns no key scopes). Never includes the key. |
+| linear.authStatus | workspaceId? | { authenticated, login?, scopes } — `authenticated` = env key resolves **and** the GraphQL `viewer { id name email }` probe succeeds; `login` is the viewer's name/email; `scopes` is always `[]` (Linear's `viewer` returns no key scopes). Never includes the key. |
 
 #### Issues
 
@@ -444,9 +610,9 @@ but completes the read surface.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| linear.listIssues | filter?: "assigned"\|"created"\|"subscribed"\|"team"\|"all" (default "assigned"), limit?, nextToken? | { issues: LinearIssueResult[], nextToken } — the authenticated viewer's issues for the typed `filter`; `nextToken` is an opaque base64 string when another page exists, else `null` |
-| linear.searchIssues | query (req), limit?, nextToken? | { issues: LinearIssueResult[], nextToken } — full-text issue search, same cursor semantics |
-| linear.getIssue | id \| identifier (one required — UUID `id` or `ENG-123`-style `identifier`) | LinearIssueResult — one flattened issue |
+| linear.listIssues | filter?: "assigned"\|"created"\|"subscribed"\|"team"\|"all" (default "assigned"), limit?, nextToken?, workspaceId? | { issues: LinearIssueResult[], nextToken } — the authenticated viewer's issues for the typed `filter`; `nextToken` is an opaque base64 string when another page exists, else `null` |
+| linear.searchIssues | query (req), limit?, nextToken?, workspaceId? | { issues: LinearIssueResult[], nextToken } — full-text issue search, same cursor semantics |
+| linear.getIssue | id \| identifier (one required — UUID `id` or `ENG-123`-style `identifier`), workspaceId? | LinearIssueResult — one flattened issue |
 
 #### Viewer & catalogs
 
@@ -457,11 +623,11 @@ forward-looking surface for a future create/edit UI.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| linear.viewer | — | LinearUser — the authenticated user |
-| linear.listTeams | limit? | LinearTeam[] |
-| linear.listWorkflowStates | limit? | LinearWorkflowState[] |
-| linear.listProjects | limit? | LinearProject[] |
-| linear.listLabels | limit? | LinearLabel[] |
+| linear.viewer | workspaceId? | LinearUser — the authenticated user |
+| linear.listTeams | limit?, workspaceId? | LinearTeam[] |
+| linear.listWorkflowStates | limit?, workspaceId? | LinearWorkflowState[] |
+| linear.listProjects | limit?, workspaceId? | LinearProject[] |
+| linear.listLabels | limit?, workspaceId? | LinearLabel[] |
 
 #### DTO schemas
 
@@ -596,8 +762,8 @@ fails the `viewer` probe** ("not configured"), and any other Linear/service fail
 
 | Method | Params | Result |
 | --- | --- | --- |
-| linear.createIssue | title (req), teamId (req), description?, assigneeId?, stateId?, priority?, labelIds? | LinearIssueResult — the created issue, flattened |
-| linear.updateIssue | issueId (req), title?, description?, assigneeId?, stateId?, priority? | LinearIssueResult — the updated issue, flattened |
+| linear.createIssue | title (req), teamId (req), description?, assigneeId?, stateId?, priority?, labelIds?, workspaceId? | LinearIssueResult — the created issue, flattened |
+| linear.updateIssue | issueId (req), title?, description?, assigneeId?, stateId?, priority?, workspaceId? | LinearIssueResult — the updated issue, flattened |
 
 ##### DTO schemas
 
@@ -731,7 +897,7 @@ configured"), and any other Sentry/service failure → `-32603` with a descripti
 
 | Method | Params | Result |
 | --- | --- | --- |
-| sentry.authStatus | — | { authenticated, organization?, error? } — `authenticated` = env credential pair resolves **and** the `GET /organizations/{org}/` probe succeeds; `organization` is the resolved org slug (derived identity only — never the token); `error` is a descriptive failure string when the probe fails. Never includes the token. |
+| sentry.authStatus | workspaceId? | { authenticated, organization?, error? } — `authenticated` = env credential pair resolves **and** the `GET /organizations/{org}/` probe succeeds; `organization` is the resolved org slug (derived identity only — never the token); `error` is a descriptive failure string when the probe fails. Never includes the token. |
 
 #### Issues
 
@@ -743,9 +909,9 @@ above): pass the returned `nextToken` back as a param to fetch the next page.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| sentry.listIssues | project?, status?: "unresolved"\|"resolved"\|"ignored"\|"all" (default "unresolved"; any other value → `-32602`), query?, limit?, nextToken? | { issues: SentryIssueResult[], nextToken } — issues matching the typed `is:<status>` clause (combined with optional `project` slug and free-text `query`); `nextToken` is an opaque base64 string when another page exists, else `null` |
-| sentry.searchIssues | query (req — missing → `-32602`), project?, limit?, nextToken? | { issues: SentryIssueResult[], nextToken } — full-text issue search, same cursor semantics |
-| sentry.getIssue | id \| shortId (one required — UUID/numeric `id` or `WEB-1`-style `shortId`; both missing → `-32602`) | SentryIssueResult — one flattened issue |
+| sentry.listIssues | project?, status?: "unresolved"\|"resolved"\|"ignored"\|"all" (default "unresolved"; any other value → `-32602`), query?, limit?, nextToken?, workspaceId? | { issues: SentryIssueResult[], nextToken } — issues matching the typed `is:<status>` clause (combined with optional `project` slug and free-text `query`); `nextToken` is an opaque base64 string when another page exists, else `null` |
+| sentry.searchIssues | query (req — missing → `-32602`), project?, limit?, nextToken?, workspaceId? | { issues: SentryIssueResult[], nextToken } — full-text issue search, same cursor semantics |
+| sentry.getIssue | id \| shortId (one required — UUID/numeric `id` or `WEB-1`-style `shortId`; both missing → `-32602`), workspaceId? | SentryIssueResult — one flattened issue |
 
 #### Projects (P1)
 
@@ -755,7 +921,7 @@ consumed by the FE today — forward-looking surface for a future project picker
 
 | Method | Params | Result |
 | --- | --- | --- |
-| sentry.listProjects | limit? | SentryProject[] |
+| sentry.listProjects | limit?, workspaceId? | SentryProject[] |
 
 #### Writes — P2 (resolve / ignore / assign)
 
@@ -768,9 +934,9 @@ that is **absent or fails the org probe** ("not configured"), and any other Sent
 
 | Method | Params | Result |
 | --- | --- | --- |
-| sentry.resolveIssue | id (req) | SentryIssueResult — the issue with `status: "resolved"` |
-| sentry.ignoreIssue | id (req) | SentryIssueResult — the issue with `status: "ignored"` |
-| sentry.assignIssue | id (req), assignedTo? (absent = unassign) | SentryIssueResult — the issue after (un)assignment |
+| sentry.resolveIssue | id (req), workspaceId? | SentryIssueResult — the issue with `status: "resolved"` |
+| sentry.ignoreIssue | id (req), workspaceId? | SentryIssueResult — the issue with `status: "ignored"` |
+| sentry.assignIssue | id (req), assignedTo? (absent = unassign), workspaceId? | SentryIssueResult — the issue after (un)assignment |
 
 #### DTO schemas
 
@@ -921,3 +1087,27 @@ interface SentryIssueResult {     // flattened UI shape — matches the FE verba
 { "jsonrpc":"2.0","id":81,"error":{ "code":-32602,"message":"Missing required parameter: id" } }
 ```
 
+### Collaboration-only identity credentials *(10.9)*
+
+[§5.49](./shared-host-membership.md#collaboration-credential-purpose) defines the
+separate `identity.authStatus`, `identity.connect`, `identity.cancelAuth`,
+`identity.revoke`, `identity.getUser` and `identity.select` methods. They reuse the
+forge engines above with an isolated collaboration credential purpose; they never
+write repository tokens or feed Git/child-process credential resolution. The old
+`sourceControl.*` auth methods and GitHub aliases retain their repository purpose.
+
+The generic proof methods above accept optional `purpose: "repository" |
+"collaboration"` (default repository); collaboration creation also requires
+`expectedIdentity` with the exact provider/instance/stable-ID triple. Results and
+legacy aliases retain their shapes. Send the new purpose only after the local
+daemon advertises `collaborationIdentity: 1`; do not send it optimistically to an
+older daemon that might ignore it. GitHub collaboration authorization requests
+gist permission, not repo/workflow merely for a join; GitLab public-snippet proof
+still requires api. Report actual granted scopes, including unknown, accurately.
+
+Repository connect/revoke and ordinary profile refresh no longer re-key or unlink
+an established person under this contract. Explicit selection remains fenced
+against stale credential/identity work, and stored Intent membership/sessions
+survive repository account changes. Invite issuance uses Intent owner/member
+authority without a working-forge/profile prerequisite; restricted pin/proof reads
+still fail with the existing actionable `identity-unverifiable` discriminator.

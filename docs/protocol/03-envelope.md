@@ -29,7 +29,7 @@ All application messages are **JSON-RPC 2.0** text frames. The handler is transp
 { "jsonrpc": "2.0", "id": 1, "error": { "code": -32602, "message": "Missing required parameter: noteId", "data": { "code": "invalid-params" } } }
 ```
 
-`error.data` is optional and carries extra context — for `-32603` it may carry the original internal error message (not guaranteed: many shims pass the underlying message through as `message` directly — §9), and some errors attach a structured machine-readable payload (e.g. the `-32005` conflict object, or the `workspace.create` base-ref failure data). **All** `-32602` errors carry an `error.data.code` discriminator: `"not-found"` (the addressed entity does not exist) or `"invalid-params"` (bad/missing parameters), except errors that already attach a more specific code (`base-ref-unresolvable`, `path-invalid`, `destination-exists-non-empty`, `not-a-file`), which keep theirs. Fast-path connection-scope methods handled before the dispatcher (subscriptions, `drafts.*`, `forward.*`, `host.*`, `browser.exec`, `client.hello`) always emit `"invalid-params"`. **Client rule:** the deleted-entity flow requires `error.data.code === "not-found"`; only that code may be treated as "entity deleted" — see §9. See §9 for the code table.
+`error.data` is optional and carries extra context — for `-32603` it may carry the original internal error message (not guaranteed: many shims pass the underlying message through as `message` directly — §9), and some errors attach a structured machine-readable payload (e.g. the `-32005` conflict object, or the `workspace.create` base-ref failure data). **All** `-32602` errors carry an `error.data.code` discriminator: `"not-found"` (the addressed entity does not exist) or `"invalid-params"` (bad/missing parameters), except errors that already attach a more specific code (`base-ref-unresolvable`, `path-invalid`, `destination-exists-non-empty`, `not-a-file`), which keep theirs. Fast-path connection-scope methods handled before the dispatcher (subscriptions, `drafts.*`, `host.*`, `browser.exec`, `client.hello`) always emit `"invalid-params"`. **Client rule:** the deleted-entity flow requires `error.data.code === "not-found"`; only that code may be treated as "entity deleted" — see §9. See §9 for the code table.
 
 ### 3.4 Notifications (no response)
 
@@ -46,5 +46,15 @@ The server processes **one JSON-RPC object per WebSocket text frame**. JSON-RPC 
 
 ### 3.6 `workspaceId` scoping
 
-Most methods operate within a workspace. `workspaceId` is read from `params.workspaceId`, fallingback to a connection-level context value if the transport provides one. If neither is present, themethod returns `-32602 "workspaceId is required"`. The workspace/repo/specialist/global methods(e.g. `workspace.list`, `repo.list`, `specialist.list`, `agent.getModels`) do not require it.
+Most workspace methods read `params.workspaceId` explicitly; a required field
+cannot be replaced by connection focus. Required, optional and semantic context
+are method-specific: see the method tables and the
+[workspace routing inventory](./workspace-routing.md). Cross-workspace target
+reads use `params.targetWorkspaceId` instead.
 
+The routing preparation adds optional `workspaceId` to selected workspace calls,
+including daemon-wide reads and resource follow-ups. It preserves direct callers
+that omit those new fields and all existing filters, storage scope, permissions
+and connection ownership. A future forwarded workspace call must carry its real
+originating context; the preparation does not implement an aggregator or change
+direct global/admin calls.

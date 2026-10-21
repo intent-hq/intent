@@ -1,0 +1,622 @@
+> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.8a Script run monitors (prepared active-only replacement).
+
+### 5.8a Script run monitors
+
+#### Active-only monitors (prepared protocol 14)
+
+**This section supersedes protocol-13 history/retention and fast-final retry
+semantics below.** Exact integer `scriptMonitors: 2` gates the whole replacement,
+including storage migration, queue fences and recovery. `scriptMonitors: 1` is
+not sufficient. Do not expose the new capability until all boundaries work.
+
+**Read contract.** `scriptMonitor.list`, full/omitted and summary views, returns
+only active rows. The storage table contains **only active monitors**; no
+completed, triggered, expired or cancelled rows remain after a committed
+transition. `scriptMonitor.get`/`ws.script.monitorDetails` retrieves a known
+active ID only; finished/unknown/foreign IDs yield `-32602` after workspace and
+MCP-owner authorization. No history endpoint, terminal cache or retention TTL.
+Read calls remain read-only (an overdue active row may await maintenance).
+Use the [shared active-only paging contract](./scripts.md#active-only-compact-lists-prepared-breaking-contract).
+`agentId?` remains the wire owner filter; MCP fixes it to the caller. Optional
+`state` accepts only `active` in either view; reject all/terminal/null/invalid
+values before any row fetch. Active filtering must occur in storage selection,
+not after materializing old terminal records.
+
+`ScriptMonitorSummary` contains only `monitorId`, `workspaceId`, `agentId`,
+`scriptId`, `runId`, `scriptName`, `mode`, `state: "active"`, `createdAt`,
+`expiresAt`, optional `lineCount`; if configured, `outputPatternPreview`
+(≤160 UTF-8 bytes) and `outputPatternTruncated` (boolean). Omit outputPattern,
+settledAt, reason, result and trigger. Full active detail retains the complete
+pattern but has no terminal fields. Never fetch details to render collapsed
+badges. There is no matched-line history read: terminal notification/event
+snapshots carry the existing bounded matched line, and script.output reads the
+available process buffer by known script ID, not by monitor ID or past run ID.
+
+**Registration and retries.** TTL/options/ownership/run checks and at most one
+active monitor per workspace/script remain unchanged. Same-owner retries of an
+active registration return that row unchanged; another owner is refused.
+Registration of an already-final latest run returns
+`{ ok: false, refused: true, reason: "run-finished", scriptId, runId }`, creates
+nothing and sends no wake. Call status/output for that known ID. A supplied stale
+run ID still fails `-32602`. Under the definition lock and monitor lane, either
+registration sees a final run and refuses, or it durably inserts an active
+monitor before completion deletes it and queues the one wake. The success
+response is the captured active registration snapshot even if completion wins
+before transmission; subscribe/journal events to avoid resurrecting it.
+There is deliberately no completed-registration retry cache: a retry after
+retirement refuses a finished run; after expiry/trigger/unmonitor while the run
+still lives it may register a fresh monitor with a fresh deadline. A lost reply
+cannot promise idempotency across deletion; clients must not blindly rearm.
+
+**Quick-exit caller guidance.** Callers must inspect the registration result before ending a turn
+to wait. Carry the nonempty runId returned by start into monitor registration.
+On `run-finished`, its scriptId/runId identify the already-finished run: do not
+wait for a wake or retry without runId (that could watch a successor). On an
+owner refusal, follow its owner instruction; it also promises no wake to this
+caller. Cancellation receipts end this wait and must not be interpreted as a
+terminal monitor whose history can be fetched.
+
+Output is still a current script buffer, not an atomic run-specific read. Before
+attributing output to the refused run, read status and require its runId to
+match, read output, then read status again and require the same runId. A missing
+ID, changed run, read failure or removed script makes that attribution
+unavailable; do not label a successor's output as the refused run's result and
+do not silently rearm. An empty available buffer is valid. This conservative
+three-read sequence is for an explicitly selected finished run, never list
+hydration. No new output parameter or permanent historical output is introduced.
+
+Update both tool-help variants in intent-acp/src/mcp_server/tools.rs (including
+SCRIPT_RUN_MONITOR_RECIPE and its exact-recipe tests), bindings/script.rs run
+budget error guidance, and all bundled workspace-agent instruction versions
+(v1, v1.1, v2.2). They currently teach start → monitor → end turn unconditionally,
+which would strand waiting agents on a quick-exit refusal. Tests must exercise
+completion before registration, a successor before registration, before output
+and during output, missing identity, and active-success waiting. The success
+case alone permits waiting; no refusal manufactures a terminal monitor.
+
+**Mutation receipts.** `scriptMonitor.cancel` / `ws.script.unmonitor` return
+`{ ok: true, monitorId }`, never a finished row. `scriptMonitor.cancelRun`
+returns `{ ok: true, monitorId, runStopped: boolean }`. Unknown/deleted IDs on
+entry fail `-32602`; owner mismatch remains indistinguishable at owner-scoped
+helpers. If this operation observed an active row but another terminal decision
+wins arbitration, return the receipt (`runStopped: false` for cancelRun), not a
+history fetch. CancelRun keeps definition/run locks, persists cancel intent
+before stopping, releases it on stop failure, and never stops a successor run.
+The reserved cancellation wins over later output callbacks. Successful stop
+uses the matching final result and notifies once; silent unmonitor does not.
+Disconnect cannot abandon an already accepted cancellation. No mutation
+response retains terminal detail merely to make old retry logic work.
+
+**Atomic retirement and delivery.** A successful terminal decision is a single
+store transaction: conditionally delete the matching active monitor (guarded
+by workspace, owner, monitorId and runId), and insert one private delivery job
+for completed/expired/triggered outcomes. Cancellation/lifecycle suppression
+deletes without a job. A unique stable wake key `script-monitor:<monitorId>`
+prevents duplicate jobs. Zero affected rows means another decision won: emit
+nothing, enqueue nothing. Rollback leaves the active row and no job/event;
+keep the existing captured-decision retry arbitration for transient failures.
+No terminal row is written to the monitor table, even temporarily.
+
+A delivery job is **pending notification work, not a monitor record**. Its
+minimal schema is wakeId, workspaceId, agentId, scriptId, runId, notification
+metadata/body, phase (`pending` or `message-persisted`) and createdAt. Metadata
+contains only the existing wake payload: scriptName/mode, reason, timestamps,
+result or bounded trigger data as applicable. Do not copy full definitions,
+output buffers, monitor configuration or row_json. Jobs have no list/get RPC,
+no history UI, and no delivered/suppressed retention period. Keep them only
+until durable delivery ownership transfers or lifecycle suppression commits.
+
+The queue must deduplicate on wakeId and authorize enqueue, durable transcript
+append, drain and actual worker admission against the job plus live owner and
+workspace eligibility, **never a finished monitor row**. Message persistence
+sets phase to message-persisted; it does not discard delivery authority before
+the queued worker can start. Atomically transfer ownership to a durable queued
+turn/admission receipt (ordinary queue/transcript state keyed by wakeId), then
+delete the job. That receipt must record whether admission is pending/accepted
+and support recovery before execution; do not equate "message exists" with
+"worker was admitted". Repeated guards for the same admitted turn remain valid,
+but stale queue snapshots cannot create a new turn once ownership transferred.
+The existing transcript ID/pruned-message tombstone deduplicates the message.
+Completion of ordinary queue delivery removes its pending receipt; ordinary
+transcript history is unchanged. No permanent monitor-delivery ledger is added.
+
+Crashes before retirement leave an active row to reconcile against durable run
+identity/result/cancel intent; after retirement recover the job, without
+re-emitting the terminal transition. Crashes after message append but before
+admission must continue that same wake; after durable admission resume the
+ordinary queued turn instead of enqueueing a second one. This promises one
+durable wake/message and idempotent queue admission; it does not promise
+exactly-once external effects of an agent turn across process crashes. Export
+holds, human questions and temporary delivery errors park the job/queue;
+retry with its stable identity, never reinsert a finished monitor. Pending-job
+checks replace script_monitor wake_state checks used by completion deferral.
+
+Full lifecycle event snapshots (`scriptMonitor:completed`, `:expired`,
+`:triggered`, `:cancelled`) are built from the captured active row and winning
+decision, then published after commit. Registered events stay full active rows.
+Do not reduce the existing full event payload or turn event replay/transcripts
+into a monitor-history query. As in the current post-commit publication path,
+an abrupt crash can lose a live event; reconnect resets the loaded collection
+to its first active page. It does not infer deletion of off-page IDs; selected
+detail is checked lazily and explicit Load more remains available. Durable owner wake delivery must not depend on event success.
+
+**Lifecycle suppression and bounds.** Owner retirement/deletion or workspace
+archive/deletion atomically deletes active monitors, removes pending jobs and
+purges queued monitor wakes, including jobs whose monitor was already removed.
+Recheck lifecycle at worker admission. Superseded queue snapshots must be
+rejected even after restore/unarchive; no delayed summary wake is resurrected.
+Preserve already delivered transcript messages. Compute affected owners from
+both active rows and delivery work, not just monitors. Maintain the existing
+per-owner cap of five active monitors; replace the old 1000-history cap with
+1000 outstanding reservations per workspace (active monitors plus untransferred
+delivery jobs). Every accepted monitor reserves one slot for its possible wake;
+retirement transfers that slot, it never evicts an undelivered notification.
+At capacity reject new registration normally; permit same-active retry. A
+migration backlog above the cap remains deliverable; refuse new registrations
+until it falls below the cap. No seven-day eviction of pending work.
+
+**Upgrade cleanup (implementation must be transactional).** Migration 0142
+currently uses terminal script_monitor rows as its outbox. Before serving v2,
+replace its message/queue admission and lifecycle triggers, and move outstanding
+notification obligations into the private jobs/ordinary queue receipts under
+the same transaction as deleting every terminal monitor row. Pending wakes
+without a transcript become pending jobs; existing stable transcript messages
+(including pruned tombstones) suppress duplicate append, but an unadmitted
+queued delivery still needs a job/receipt. For delivered legacy rows, inspect
+queue/admission state: preserve queued/unadmitted obligations without appending
+a second message; rows with no pending delivery can be discarded. Legacy
+`wake_state=delivered` proves only transcript append: the old worker admission
+lane/commit_queue_history overlay is not a durable admission receipt. When a
+legacy delivered row has a message but no queued obligation, do not invent a
+new wake to resolve that ambiguity; preserve the transcript and let ordinary
+agent retry/recovery handle an interrupted turn. The new admission guarantee
+applies to v2 deliveries, not retroactively to unrecorded old execution. Tests
+must pin this no-replay migration rule. Suppressed
+or ineligible jobs/queues are removed silently. Active rows, cancel intent,
+deadline and run identity survive intact. Tighten the monitor table constraint
+to active-only. Migration is idempotent, all-or-nothing and restart-safe; never
+run a blanket DELETE before moving pending delivery, never synthesize new
+wakes for already delivered history. An implementation must demonstrate the
+durable queue/admission fence, not infer it from an in-memory lane alone.
+
+**Audited implementation dependencies.** `intent-store/migrations/0142_script_monitors.sql`
+requires monitor wake_state in BEFORE message/queue insert triggers and changes
+it after message append; these must move together. `script_monitor_repo.rs`
+settle/pending/prune/cleanup and `script_ops/monitors.rs` registration,
+commit_monitor, cancel/recovery must change together. `script_monitor.rs`
+dispatch/admission/maintenance and `agent_manager.rs` persist_user/worker guards
+currently load the monitor row. `agent_ops.rs`, `agent_subscriptions.rs` and
+service completion checks use pending_for_agent. Deleting the row without
+rewiring these boundaries loses wakes. Keep existing output framing, run
+identity, cancel priority and owner isolation tests, and add real-store fault,
+migration/restart and queue-race tests matching `active-monitors.test.mjs`.
+The portable model is a specification oracle, not proof that SQL is atomic.
+Because implementation changes SQLite schema, run migration/restart tests only
+against isolated test databases. Do not use the manual signed-install test
+route, which would migrate a tester's real database without rollback.
+
+#### Historical protocol-13 contract
+
+The sections below preserve the implemented old-host contract and its framing
+fixtures. Their terminal storage, history reads, terminal-returning mutations,
+completed-registration idempotency and retention rules are superseded by v14
+above; they are not permitted implementation fallbacks. Output framing and
+unmodified run/ownership semantics still apply.
+
+**Historical protocol-13 baseline (superseded where stated above).** Advertise
+`client.hello.server.capabilities.scriptMonitors: 1` only when the entire contract,
+including durable identity, output triggers, lifecycle cleanup, queue deduplication
+and MCP helpers, is implemented. Allocate the next additive minor against daemon main then.
+This flag is independent of `scriptLifecycle` and `scriptReadiness`. Without it,
+clients hide monitor controls and do not call these methods. Unexpected `-32601`
+also disables them for that connection. Existing script operations and explicit
+polling hooks remain available; do not silently install a hook as a fallback.
+
+#### Protocol-13 baseline: surfaces and authority
+
+Registration is agent-authored, MCP-only, following §6.8; no wire registration
+method or client-supplied owner is added. All helpers use the caller's workspace
+and authenticated agent identity, including chief callers (no scope escape).
+
+| Agent helper | Result |
+| --- | --- |
+| `ws.script.monitor(scriptId, { ttlMs, runId?, outputPattern?, lineCount? })` | `{ ok: true, monitor }` or the refusal below; nonblocking registration, never starts or waits for a process |
+| `ws.script.monitors()` | `ScriptMonitor[]`, caller's active and retained terminal rows |
+| `ws.script.unmonitor(monitorId)` | `{ ok: true, monitor }`; stops observation silently, never the process |
+
+`ttlMs` is **required**, an integer in `[1, 86400000]` (at most 24 hours).
+Missing, null, fractional, zero, negative, nonnumeric or larger values fail
+with `-32602`; no clamping/default. `runId`, when provided, is a nonempty opaque
+string. Validation precedes any mutation, including on an idempotent retry.
+A valid retry never changes the original deadline, run binding, output window or
+options. Optional `outputPattern` and `lineCount` are validated before retries
+too; their exact syntax, limits and framing are defined below.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| scriptMonitor.list | workspaceId (req), agentId?, view? (`full` \| `summary`), state? (`active` only in v14), limit?, cursor? | Full `{ monitors: ScriptMonitor[] }` by default; prepared summary extension below |
+| scriptMonitor.get | workspaceId (req), monitorId (req) | Prepared: full active `ScriptMonitor`; `scriptMonitors: 2` required |
+| scriptMonitor.cancel | workspaceId (req), monitorId (req) | `{ ok: true, monitor }`; stop observation silently, same transition as the owner helper |
+| scriptMonitor.cancelRun | workspaceId (req), monitorId (req) | `{ ok: true, monitor, runStopped: boolean }`; stop only the active monitor's bound run and notify its owner |
+
+List requires workspace read authority; both mutations require the existing
+workspace script-control authority. A monitor belongs to exactly one workspace;
+foreign IDs are indistinguishable from unknown IDs (`-32602`). The agent helper
+can cancel only its own monitor; otherwise `-32602` names the existing owner.
+Wire callers may control another agent's monitor within their authorized
+workspace, like existing hook/PR controls. Unknown owners in list filters return
+an empty list; no agent metadata from another workspace is exposed.
+
+A fresh registration requires an existing, nondeleted, nonretired owner in an
+active workspace. A failed/inert owner cannot register. A temporarily busy,
+question-held or idle owner is eligible. Lifecycle/read/persistence errors fail
+closed; never return success for a memory-only registration. There is one active
+monitor per **(workspaceId, scriptId)**, irrespective of runId. Registration and
+retirement enforce this atomically, including concurrent calls and recovery.
+Same-owner registration returns the existing active row, with no extra event or
+wake; an explicitly different runId is rejected (`-32602`), never rebound.
+A different owner's request returns this ordinary result, without a second row:
+
+```json
+{"ok":false,"refused":true,"reason":"already-monitored","ownerAgentId":"agent-a","ownerAgentName":"Builder","monitorId":"monitor-a","workspaceId":"ws-a","scriptId":"check","runId":"run-a","instruction":"Ask the owner to relay results or stop monitoring before registering."}
+```
+
+`ownerAgentName` is omitted when unknown. All other keys above are required;
+`instruction` is human-readable, not a discriminator. There is **no adoption or
+parent takeover** in v1, unlike PR monitors: lifecycle cleanup releases ownership.
+A different script ID or workspace does not contend for this ownership slot.
+
+#### Run identity and fast completion
+
+Add `runId?: string` to `script.start` / `script.restart` replies and to
+`ScriptRuntimeState` (`script.status`, list runtime, `script:state`). Supporting
+daemons always return runId when a run is accepted or an already-live start is
+a no-op. Runtime carries the latest accepted runId until definition replacement
+or removal; it remains present after exit, stop, archive and marker dismissal.
+A never-started definition omits it. Add `runId?` to `lastRun` for newly settled
+command runs; do not invent IDs for legacy results. Unset fields are omitted,
+never null. No existing status, lastRun outcome or script.run response changes.
+
+A runId is a durable, nonreused opaque token allocated **before acceptance**, not
+a pid, startedAt timestamp, daemon boot ID or in-memory generation. Persist the
+latest admitted token for both command and service scripts. The current command
+admission token can be reused; services need equivalent durable admission.
+In-memory generation checks still fence supervisors and definition replacements.
+The logical run includes its launch reservation, startup and teardown. For a
+service it includes every automatic respawn under the same supervisor; a brief
+`exited` event before automatic backoff is not a final result. Readiness never
+settles a monitor. Output may consume a monitor through its explicit optional
+triggers below; that does not end the run. A **run-finished**
+result settles only when the supervisor has made its final retry decision and
+released process ownership (including exhausted/too-fast exits).
+
+An explicit manual restart settles the old run before admitting a **new** token;
+if the predecessor is unfinished its outcome is `cancelled`, otherwise retain its
+already-recorded result. A no-op start on a live run retains its token. Service
+restoration after daemon restart admits a new run, never continues the old one.
+Upsert/remove settle any unfinished predecessor as `cancelled` with an error
+naming replacement/removal before discarding its definition. Ordinary script
+archive/restore does not change a run or monitor; workspace archive is different.
+
+Registration without runId binds atomically to the **latest accepted run** at
+registration, including a retained final result after a fast exit or stop. It
+must not infer completion from status `idle` alone. A never-run script, a legacy
+result without a token, or an unavailable explicit run fails `-32602` with no
+monitor. To avoid binding a concurrent successor, pass runId from start/restart.
+An explicit ID must be the current/latest retained run, or the caller's retained
+completed monitor binding (returned idempotently); no historical run lookup
+service is added. Once bound, a monitor
+keeps its own identity/result even if the definition is removed or replaced.
+
+A fresh registration against an already-final run durably creates and completes
+one monitor immediately, queues its one wake, and returns that terminal row.
+While retained, repeating registration for the same owner/run whose monitor
+**completed** returns that row without another wake. Active ownership is checked
+first, so another owner's active monitor is still refused. After `expired`, `triggered` or
+`cancelled`, explicit registration creates a fresh watch with a fresh TTL and
+new-output window; this
+is the intentional re-arm boundary, not an extension of the old watch. A missing
+runId cannot recover an older run after a successor is admitted. Retained-row
+idempotency ends when that row is pruned; it is not permanent request deduplication.
+
+List reads and valid same-owner active registration retries return stored state,
+without terminal reconciliation. They may briefly return an overdue active row
+while its timer is pending; retries never renew expiresAt, change options or reset
+the output window. This read-only exception does not apply to either cancellation
+control: those reconcile a previously durable result, then TTL, before considering
+the new cancellation as specified below.
+
+#### Canonical row and terminal result
+
+`ScriptMonitor` is the identical full object returned by legacy helpers, full
+wire reads, mutations and lifecycle events. Full list order is ascending
+`(createdAt, monitorId)`. The separately gated summary extension below is the
+only exception; it never changes a lifecycle event or wake.
+
+The protocol-14 summary projection is specified above. This section describes
+full event snapshots and the older protocol-13 row shape, not retained v14 history.
+
+| Field | Type and meaning |
+| --- | --- |
+| monitorId, workspaceId, agentId, scriptId, runId | Required nonempty strings; immutable identity and owner |
+| scriptName | Required string; name captured at registration, for display even after removal |
+| mode | Required `command` or `service`, captured at registration |
+| state | Required `active`, `completed`, `expired`, `triggered`, or `cancelled` |
+| outputPattern, lineCount | Optional immutable trigger configuration, present only when supplied and validated below |
+| createdAt, expiresAt | Required RFC 3339 UTC timestamps; expiresAt = createdAt + accepted ttlMs |
+| settledAt | RFC 3339 UTC timestamp; required on terminal rows, absent on active rows |
+| reason | Required on terminal rows: `finished` for completed, `ttl-expired` for expired; triggered uses `output-match` or `line-count`; cancelled uses `unmonitored`, `owner-deleted`, `owner-retired`, `workspace-archived`, or `workspace-deleted`; absent while active |
+| result | Required only on completed rows: compact `ScriptMonitorResult` below; omitted otherwise |
+| trigger | Required only on triggered rows: `{ observedLineCount, matchedLine? }`; observedLineCount is an integer, matchedLine is required (including empty string) only for output-match and omitted for line-count |
+
+`ScriptMonitorResult` has required `outcome` (`succeeded`, `failed`, `cancelled`,
+`interrupted`) and `stoppedAt`, and optional `exitCode`, `startedAt`, `error`.
+Times are RFC 3339 UTC. This is the existing compact command lastRun meaning,
+also available for services, without a run history/output ledger. `succeeded`
+requires exitCode 0 and no error; nonzero process exit is `failed`. A spawn failure
+is `failed` with exitCode -1 and error. A lost exit/daemon interruption is
+`interrupted` with exitCode -1 and error. The sentinel -1 is never an observed
+process code. Cancellation before launch omits startedAt and exitCode; after
+launch preserve the observed code if any, never fabricate 0 or -1 for cancellation.
+Cancellation includes an error describing user stop, timeout, replacement or
+removal. A completed monitor can therefore have result.outcome `cancelled`;
+monitor state `cancelled` means observation ended without a result wake.
+Completion/TTL/cancellation rows and wakes contain no output. The sole output
+exception is one bounded `trigger.matchedLine` on an opt-in regex trigger, also
+present in its lifecycle snapshot; it is untrusted script text. No full stdout,
+stderr, output buffer, command text, environment, cwd or scrollback is included. Read output explicitly via script.output;
+existing output lifetimes still apply and bytes may belong to a newer run.
+
+#### Optional output triggers and line framing
+
+`outputPattern?: string` is a **single-line regular expression**, not a substring
+or JavaScript regex object. `lineCount?: integer` is in `[1, 1000000]`. Either or
+both may be supplied. They are OR conditions alongside run completion/failure and
+mandatory TTL; the **first qualifying event consumes the monitor**, wakes once,
+and leaves the script running. To continue observation explicitly register again.
+No polling, callback code, repeat flag, readiness latch or recurring wake is added.
+
+Reject null/wrong types, an empty pattern, patterns over **1024 UTF-8 bytes**,
+literal CR/LF in a pattern, invalid regex syntax, unsupported constructs and
+out-of-range/noninteger lineCount with `-32602` before mutation. Use the Rust
+`regex` crate's Unicode, case-sensitive syntax with its normal inline flags;
+lookaround and backreferences are unsupported. Match/search the normalized whole
+line, never concatenate lines; anchors refer to that one line. Compilation must
+use a **1 MiB compiled-size limit, 1 MiB DFA cache limit and nesting limit 128**;
+limit failures reject registration. Use a finite-automata, nonbacktracking engine
+with bounded compilation; do not run user regexes in JavaScript's backtracking
+engine or shell tools. Regex compile diagnostics must not include script output.
+`^$` may match an empty line; an unanchored pattern searches within a line.
+
+**Fresh window.** Observe the PTY's combined stdout/stderr bytes **accepted by the
+daemon after registration**, scoped to workspace, definition generation, runId
+and process attempt. Establish the cursor atomically with registration under the
+run's output/admission ordering. Do not replay existing scrollback, attachment
+backlogs or bytes already admitted but waiting for processing. If a logical line
+was already in progress, discard its remainder through the next delimiter; its
+suffix neither matches nor counts. If registration is at a line boundary, the
+next empty or nonempty line qualifies. An active same-owner retry preserves the
+window/count; after a trigger, rearming resets the count to zero and starts a new
+window with the same boundary rule. Service automatic respawns stay in the run,
+but reset the decoder/partial-line state between attempts, never join attempts'
+fragments. Supervisor separator/status messages are not process output.
+
+**Normalization.** Use a streaming UTF-8 decoder across chunks; replace invalid
+sequences with U+FFFD; preserve U+FEFF as ordinary text. Strip ANSI CSI sequences (ESC `[` through final byte
+0x40–0x7e), OSC (ESC `]` through BEL or ST), and DCS/SOS/PM/APC (ESC `P`/`X`/`^`/`_`
+through ST, ESC followed by backslash). Preserve decoder/control state across
+chunk boundaries. Strip other ESC sequences and C0/C1 controls except HT, CR and
+LF; preserve HT. Do not simulate cursor motion or backspace editing. Strip control
+strings incrementally without retaining their contents; incomplete controls are
+discarded at EOF. Control bytes inside an ANSI string do not delimit text lines.
+
+CR or LF ends a logical line; a CRLF pair is **one delimiter**, even split across
+chunks. Consecutive nonpaired delimiters produce empty lines. Bare CR progress
+updates therefore count as separate lines. Delimiters are not in matchedLine.
+Only complete logical lines are evaluated while the process is live; do not fire
+on a partial match. At each process attempt's actual EOF, flush one **nonempty**
+normalized trailing partial line before that attempt's final-exit decision. There
+is no extra line after a trailing delimiter and no flush on TTL, unmonitor,
+lifecycle cleanup, output loss, or rearm. After EOF, never accept late bytes from
+that attempt; automatic respawn starts clean. A cancel-run intent that has already
+won arbitration suppresses competing output, including an EOF partial flush.
+
+**Bounds and loss.** Retain at most **4096 normalized UTF-8 bytes per line** plus
+constant-sized decoder/control state. An overlong line is discarded for regex
+matching (never match a truncated prefix), but counts as one observed line at
+its delimiter/EOF. Do not retain an output ledger. Count normalized logical lines,
+including empty/overlong ones, from zero, saturating at 2147483647; thresholds
+are at most one million, so count-trigger wakes report exactly lineCount. Regex
+wakes report the count at the matching line, including that line. A stream gap or
+lag discards the current partial line and skips through the next delimiter to
+regain framing; previously counted complete lines remain counted. Missing lines
+are not invented, and buffered scrollback never fills the gap: observedLineCount
+is the count actually observed, not the process's total. No match may bridge a gap.
+
+Process at most 16 KiB of input or 64 framed lines per scheduling slice, then
+yield while preserving order. Use the existing bounded PTY stream, not an
+unbounded per-monitor queue; handle its lag indication as the gap rule above.
+An overlong control string needs only parser state, not a growing buffer.
+Completion/TTL/cleanup must remain schedulable under sustained output. A monitor
+without either output option does not accumulate line text or count.
+
+Example agent use (prepared helper, same mandatory TTL in every case):
+
+```javascript
+const { scriptId, runId } = await ws.script.start("checks");
+await ws.script.monitor(scriptId, { ttlMs: 600000, runId, outputPattern: "^Ready on .+$", lineCount: 200 });
+```
+
+A regex trigger produces state `triggered`, reason `output-match`, and
+`trigger: { observedLineCount: 7, matchedLine: "Ready on port 3000" }`.
+A threshold trigger produces state `triggered`, reason `line-count`, and
+`trigger: { observedLineCount: 200 }`. Neither has result/exitCode or asserts that
+the script finished. Both release ownership and active waiting state. The FE may
+show the configured conditions and winning reason; output remains opt-in except
+for the requested single matching line.
+
+#### Terminal arbitration and safe cancellation
+
+Completion, output triggers, expiry, observation cancellation and run cancellation
+serialize against run admission/replacement and lifecycle teardown. They compete for one
+persisted active-to-terminal transition. Duplicate callbacks, restart recovery,
+reconnects and repeated cancel requests cannot emit a second logical wake.
+Terminal mutations return the retained row unchanged; `cancelRun` then reports
+runStopped false and does not touch any process (including a run still live after
+TTL expiry or an output trigger). To stop that process use explicit script
+controls or re-arm first.
+
+Expiry examines the bound run in the same arbitration step. If its final result
+was already durably recorded, completion wins; otherwise at/after expiresAt the
+monitor expires and wakes once, **leaving the script running**. No renewed TTL or
+automatic re-registration. A delayed timer cannot replace an already-final row.
+All mutating run inputs/control operations enter one serialization order, not UI/event-bus
+arrival order. Before considering a new input: apply lifecycle fencing, honor an
+already-reserved cancellation/terminal transition, then use any **previously
+durable** final result, then expire if now is at/after expiresAt. At the exact TTL
+boundary, newly considered output/completion/cancel inputs therefore lose to TTL;
+an earlier durable result still wins. Before the deadline, process admitted output
+in byte/line order. On the **same line**, regex wins over lineCount; otherwise the
+first qualifying line wins. Flush an eligible EOF partial before considering a
+new final-run result, so an EOF match wins over that completion. User cancel and
+other inputs compete by this same admission order; a committed cancellation
+intent excludes later output/expiry. These priorities are deterministic for a
+given ordered input stream, independent of how chunks or UI events are delivered.
+
+`cancelRun` must atomically compare the bound durable token and definition
+generation **before** requesting stop under the same admission exclusion used by
+restart/upsert/remove. Never implement it as status-read followed by script.stop.
+It cancels startup reservations as well as spawned processes, disables service
+auto-restart, waits for the owned teardown, then returns the settled completed
+monitor with a cancelled result and runStopped true. Persist cancellation intent
+before side effects so a crash cannot lose the run binding or later stop a
+successor. Once that intent wins arbitration it reserves the terminal decision:
+expiry and exit callbacks cannot substitute another outcome during teardown.
+On a stop failure, release/reconcile that reservation without claiming success.
+If natural completion won first, return its result and runStopped false.
+A stale binding reconciles its predecessor's captured result (or `interrupted`
+with -1 and an explanatory error if it was lost), returns runStopped false, and
+never signals the replacement. A stop failure must not claim cancellation:
+return an RPC error and retain/reconcile the watch. The user can retry safely.
+When owner unmonitor or wire cancel wins arbitration, it stops observation only,
+silently, even if a process is still running; it releases ownership and waiting-state
+deferrals. If a prior durable result or elapsed TTL wins instead, return that
+completed/expired row and retain its one wake; cancellation cannot suppress it.
+
+#### Events, wake queue and agent waiting state
+
+New event types: `scriptMonitor:registered`, `scriptMonitor:completed`,
+`scriptMonitor:expired`, `scriptMonitor:triggered`, `scriptMonitor:cancelled`. Use the §6.3 workspace envelope,
+actor `system`, and **data `{ monitor: ScriptMonitor }`** with the full committed
+row. Registration emits once (active snapshot); fast completion follows it with
+the completed snapshot. Every successful terminal transition emits exactly one
+corresponding event, including silent cleanup (workspace deletion may drop events
+with the workspace). No per-line progress event is introduced; triggered is one terminal snapshot. Subscribe with
+`scriptMonitor:*`; do not add this family to the agent bare-`*` expansion.
+
+Completed/expired/triggered transitions enqueue one automatic, noninterrupting
+owner wake.
+Its messageMetadata is exactly this shape (optional fields omitted):
+
+```json
+{"type":"script_monitor_wake","source":"system","monitorId":"monitor-a","workspaceId":"ws-a","agentId":"agent-a","scriptId":"check","runId":"run-a","scriptName":"Checks","mode":"command","reason":"finished","expiresAt":"2026-10-02T10:01:00Z","settledAt":"2026-10-02T10:00:02Z","result":{"outcome":"succeeded","exitCode":0,"startedAt":"2026-10-02T10:00:00Z","stoppedAt":"2026-10-02T10:00:02Z"}}
+```
+
+For expiry reason is `ttl-expired` and result is omitted. For output reasons
+`output-match` / `line-count`, result is omitted and the same `trigger` object as
+on the row is required. All other identity/timing keys in the example remain
+required; only output-match carries matchedLine. Human-readable text states the
+script/run and winning condition, that monitoring ended, and how to read output
+or re-arm. Only a regex wake includes the matched line, clearly marked as
+untrusted script output; other reasons contain no output. Do not set a user-origin attribution
+or wake/create a different agent. Busy/question-held owners receive a queued
+wake through normal automatic-delivery rules, not an interrupt.
+
+Persist terminal state and a stable wake identity derived from monitorId as one
+recoverable transition (transactional outbox or equivalent). Queue admission and
+conversation delivery use that same identity to deduplicate retries; crash after
+enqueue/before retirement must not duplicate the user message. Events are UI
+observations, never the source of truth for wake dispatch. A process/model turn
+cannot be guaranteed to execute exactly once across a crash; the promise is one
+logical notification and one durable message, not exactly-once model execution.
+Do not copy PR monitor's best-effort send-after-persist path for this guarantee.
+
+Add `waitingOnScriptMonitors?: [{ monitorId, scriptId, runId, scriptName, expiresAt }]`
+to AgentLite (agent.list/get), diagnostics rows, agent:idle, and monitoring-idle
+completion-watch advisories. Omit when empty, never null. Only active rows count.
+As with hooks, an idle owner with an active script monitor is externally waiting:
+completion watches/after_all defer and may send their existing one-per-waiting-
+period advisory (`watchStillArmed: true`, `childExternallyWaiting: true`). Terminal
+retirement re-evaluates deferred settlement; a queued wake keeps the owner pending
+until delivered. Silent cancellation must also re-evaluate settlement.
+
+The FE reconciles rows by monitorId after reconnect/list and subscribes before
+its initial read; do not let a pending list overwrite newer terminal events.
+Rows in the chat monitoring controls expose existing pane/bottom-panel script
+navigation plus separate stop-monitoring and cancel-run actions. Opening is
+script-scoped, not historical run output. Disable open when the definition is
+gone and explain that a rerun may have replaced the buffer. Never translate the
+monitor cancel-run control into an unguarded script.stop call.
+
+#### Lifecycle, recovery and bounded retention
+
+Owner deletion/retirement and workspace archive/delete silently cancel active
+watches, release ownership/waiting state and remove **all undelivered script
+monitor wakes**, including output-match/line-count wakes for already-terminal rows. No cancellation wake
+and no post-unarchive/restore summary of these watches. Preserve already-delivered
+conversation history. Deleting/retiring an owner adds no new script-stop policy. Workspace teardown keeps its existing script shutdown
+behavior; cancel/suppress watches before those stops can publish completion.
+
+Guard registration, terminal transition, enqueue, queue drain and actual worker
+admission against owner/workspace lifecycle. Cleanup and admission share a fence:
+a completion enqueued immediately before cleanup is removed; one arriving after
+cleanup is suppressed. Generic archived/retired queue parking is insufficient.
+Fail closed on lifecycle-read errors. These guards and suppression are durable;
+recovery, unarchive, agent restoration or a delete undo never resurrect cancelled
+watches or pending wakes. Do not delete unrelated queued user/agent messages.
+
+Persist accepted run identity, deadlines, monitor configuration/state/result or
+trigger (including the one matched line), cancellation intent and pending wake
+identity. In-flight decoder fragments/counts need not persist: prior-boot runs
+settle on recovery, never resume their output window or replay scrollback.
+At recovery, first apply lifecycle cleanup,
+then reconcile each active binding: replay a persisted final result; otherwise
+a run from a prior daemon boot becomes `interrupted` (-1 plus error). It cannot
+attach to an autostart/restored service's new token. If expiresAt has already
+passed and no final result was durably recorded before recovery, expire the
+monitor instead; do not synthesize a success, stop a successor or reset TTL.
+Recovering a persisted cancel intent reconciles only its recorded run and never
+signals a replacement. A persisted final row's pending wake is delivered with its
+stable identity after lifecycle checks, without re-emitting terminal transitions.
+
+Retain only the latest admitted run token and compact result per script; a new
+admission overwrites that slot **after** capturing any predecessor result needed
+by its monitors. Monitor rows pin their own small result or trigger (at most one 4096-byte matched
+line), not PTYs or output buffers.
+V1 limits are five active monitors per owner and **1000 total retained monitor
+rows per workspace**, including pending wake/cancellation records and their bounded trigger payloads. Before a fresh
+registration prune oldest terminal rows whose wake is durably delivered or
+suppressed, retaining at most seven days from settledAt and evicting such rows
+earlier if needed for capacity (order settledAt, monitorId). Never evict an active
+row or undelivered wake to admit a new monitor: refuse `-32602` naming the exhausted
+limit instead. A same-owner retry is checked before limits and consumes no slot.
+This bounds monitor-specific backlog without imposing a new transcript retention
+policy or dropping promised wakes for a busy agent. Sweep eligible aged rows on
+startup and at least hourly. Cancel/lookup after pruning returns unknown ID,
+never resolves an ID to a newer run. No retention work touches script.output.
+
+#### Verification boundary
+
+[Monitor fixtures](../fixtures/scripts/monitors.json) and their
+[executable model/tests](../fixtures/scripts/monitors.test.mjs) specify boundary
+values, identity, ownership, terminal races, output framing/OR triggers, cleanup and recovery. Run
+`node --test docs/protocol/fixtures/scripts/monitors.test.mjs` (also in
+`make consumer-checks`). They are synthetic contract tests, **not proof of daemon
+locking, SQL durability, queue delivery or frontend integration**. Component unit
+and real WSS tests must execute the same cases with controlled admission, exit,
+persistence, cancellation, cleanup and delivery barriers; include actual service
+backoff, script.run reservations, before-spawn cancellation, Rust-regex compile limits, split UTF-8/ANSI/CRLF,
+overlong lines, output gaps, fresh rearm windows, storage failures and
+crashes before/after terminal commit and queue admission. FE interaction tests
+must cover capability absence, both navigation placements, owner rows and stale
+cancel clicks after restart, plus reconnect/list/event races.

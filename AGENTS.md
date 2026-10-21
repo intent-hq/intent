@@ -2,6 +2,20 @@
 
 Instructions for AI agents working in this monorepo.
 
+**Assistant app guide:** When adding, changing, moving, renaming, or removing a
+user-facing feature, update the affected section of
+[`packages/intentd/crates/intent-services/resources/assistant-app-guide.md`](packages/intentd/crates/intent-services/resources/assistant-app-guide.md)
+in the same change (coordinate the companion intentd change for frontend work).
+Keep this single bundled guide concise; replace obsolete paths, labels, and prerequisites.
+Keep the guide and user-facing help focused on features ready for users. Do not promote
+unfinished, experimental, Labs-only, internal, or unreleased features as normal options;
+code or tool availability is not proof of readiness. When explicitly asked about such
+a feature, or assigned to develop or test it, discuss it honestly and label its status.
+Update the guide and its source pointers when readiness or UI behavior changes.
+Before opening a PR, record the affected guide section (and companion intentd PR
+for frontend changes), or explain why the change has no user-help impact. Coordinate
+companion releases; this checkpoint does not require simultaneous cross-repo merges.
+
 ## Repository Structure
 
 This monorepo references the Intent component repositories as git
@@ -138,10 +152,10 @@ Submodule pins are advanced automatically by the `auto-bump-submodules` workflow
 (`.github/workflows/auto-bump-submodules.yml`): it detects submodule tips ahead of the
 recorded pins and lands the bump via a single rolling PR on the `auto/submodule-bump`
 branch with auto-merge armed; repeat runs update that PR instead of opening new ones.
-The workflow is triggered three ways: each submodule repo notifies the monorepo on push
-to `main` via a `repository_dispatch` event (`submodule-update` type), so bumps normally
-land within about a minute of a submodule merge; a cron run every 30 minutes acts as a
-backstop; and manual `workflow_dispatch` is available for urgent bumps. The
+Each submodule repo triggers the workflow via `repository_dispatch` (`submodule-update`)
+on push to its `main`. Monorepo `main` pushes that change submodule gitlinks trigger a
+continuation to pick up deferred tips after a queued bump merges. A cron run every
+30 minutes is the backstop; manual `workflow_dispatch` handles urgent bumps. The
 `repository_dispatch` notifications are sent by the submodule repos using the
 `MONOREPO_DISPATCH_TOKEN` secret (stored in each submodule repo; a fine-grained PAT with
 contents:write on `intent-hq/intent`), and are fail-soft: when the secret is absent
@@ -235,15 +249,17 @@ with no rollback.
 - **Merging**: agents must **NEVER merge a PR, arm auto-merge, or add a PR to the
   merge queue — in this repo or any submodule repo — without explicit permission from
   a human**. Approved + green checks is not enough. Repo-owned automation is exempt
-  (auto-bump-submodules, auto-pin-intentd, auto-cut-alpha, and the release PR
-  workflows merge their own rolling PRs). All three repos (monorepo, intentd,
-  cloudlands-fe) route `main` merges through a **merge queue**: once a human has
-  given permission, `gh pr merge --squash` adds the PR to the queue, and the PR lands
-  when the queue's gate passes — no update-branch/re-check treadmill. The expected
-  `main` rules of all three repos (required `CI Gate` check, thread resolution,
-  merge-queue settings) are the committed contract in `.github/rulesets/*.main.json`,
-  and their allowed bypass actors (none by default) in `.github/rulesets/*.bypass.json`,
-  compared with the live rules by the `ruleset-check` CI job and daily by
+  (auto-bump-submodules, auto-pin-intentd, intentd's auto-pin-acp-adapters — the Codex
+  and Claude ACP adapter pins, formerly auto-pin-codex-acp — auto-cut-alpha, and the
+  release PR workflows merge their own rolling PRs). Ordinary `main` PRs in
+  all three repos use a **merge queue**: after human permission, `gh pr merge --squash` enqueues
+  them until the queue's gate passes. Component auto-cut and fe auto-pin may
+  directly merge validated release metadata or sidecar pins under the approved CI
+  exemption and existing readiness guards ([details](docs/RELEASING.md#guarded-direct-release-merges)).
+  Main rules are committed in `.github/rulesets/*.main.json`; the bypass contract
+  in `.github/rulesets/*.bypass.json` allows `intent-hq-ci` on the two component
+  Default rulesets only (none for the monorepo or organization). Rules are
+  compared with the live configuration by `ruleset-check` CI and daily by
   `ruleset-drift.yml`; after an intended ruleset change, run
   `make check-rulesets UPDATE=1` and commit the result in the same PR. The bypass
   half needs the `RULESET_ADMIN_TOKEN` secret (a fine-grained PAT with administration
@@ -286,25 +302,27 @@ with no rollback.
 
 - `make gate` runs `make check` then the full nextest suite; `make test` is
   test-only (resume records apply only to nextest — `gate` always reruns the lints).
-- When the full suite is impractical, run `make test-changed` before enqueueing:
-  intentd's `scripts/changed-tests.sh` picks the nextest targets changed vs
-  `origin/main` (`BASE=<ref>`; `DRY_RUN=1` prints the plan) and falls back to the
-  full suite on manifest/lockfile/nextest-config changes. `make coverage-changed`
-  runs it under llvm-cov — the local equivalent of the PR `coverage-changed` job.
-- `make test` / `make test-changed` write a resume record (junit + passed-test stream
-  in `$HOME/.cache/intent/gate-runs`, 7-day expiry) and print its `record:` path when
-  tests ran (a fully resumed run prints only a skip count). `RESUME=1` skips tests
-  recorded as passed for the same worktree (tracked and untracked), submodule pointers,
-  toolchain, lockfile and nextest config (`GATE_FORCE=1` ignores it). To continue past a
+- When the full suite is impractical, run `make test-changed` before enqueueing: it
+  runs the nextest targets intentd's `scripts/changed-tests.sh` picks vs `origin/main`
+  (`BASE=<ref>`; `DRY_RUN=1` prints the plan), falling back to the full suite on
+  manifest/lockfile/nextest-config changes; `make coverage-changed` runs it under
+  llvm-cov like the PR `coverage-changed` job. To iterate on a few tests use
+  `make test-select E='<nextest filterset>'`, not raw `cargo nextest`, which skips the
+  fixture setup so fixture tests fail in bulk (95 bogus failures, intentd#2559).
+- `make test` / `test-changed` / `test-select` print a unique `record:` attempt path, including
+  fully resumed runs. [Receipt and coverage details](CONTRIBUTING.md#test-attempt-receipts-and-resume-coverage)
+  explain evidence, interruption and seven-day tree retention. `RESUME=1` skips verified
+  passes for the same worktree, submodule pointers, toolchain, lockfile and effective
+  settings (`GATE_FORCE=1` ignores them). To continue past a
   known flake, `RESUME=1 NO_FAIL_FAST=1 make test-changed` (or `make test`) runs the rest
   to completion, records them, and exits non-zero if anything failed ([intent-hq/intent#5645](https://github.com/intent-hq/intent/issues/5645)).
-- Run long gates as saved command-mode `ws.script` entries (`ws.script.start`, a
-  self-checking `ws.hook.schedule` on `ws.script.status`, then `ws.script.output`).
-  The hook must dispatch on `s.status === "exited" && s.exitCode !== undefined` — never
-  on "not running": `starting` is live, and anything else fired a false wake on the
-  validation run ([intent-hq/intent#4858](https://github.com/intent-hq/intent/issues/4858)).
-  `exitCode === -1` means the supervisor could not observe the exit (process lost, or a
-  command script running when the daemon stopped) — read `s.error` and treat as failure.
+- Run long gates as saved command-mode `ws.script` entries: `ws.script.start`, then
+  `ws.script.monitor(scriptId, { ttlMs, runId })` with the start reply's `runId` and a TTL
+  of expected runtime plus margin. End the turn only once registration succeeds; on a
+  `run-finished` refusal, read the result right away. After the wake, read
+  `ws.script.output` and `ws.script.status`: `exitCode === -1` means the supervisor could
+  not observe the exit (process lost, or a command script running when the daemon
+  stopped) — read `s.error` and treat it as failure. Details: `ws.help("script")`.
   `ws.script.run` rejects `timeoutSeconds` above budget − 5s (25s default). Saved scripts
   are PTY-backed, so use the `make` targets (no progress bars or pagers; `make list-tests`
   for nextest discovery) — bare `cargo`/`git`/`gh` without `--no-pager` or that env
@@ -318,9 +336,8 @@ guardrails) lives in [docs/RELEASING.md](./docs/RELEASING.md). The agent-facing 
 - Releases are per-component and channel-based: merging a release PR publishes to the
   rolling **alpha** channel automatically; **beta** and **stable** are manual
   promotions of existing releases (no new build).
-- The pipeline is fully automated and event-chained (intentd alpha publish →
-  cloudlands-fe pin bump → chained fe alpha cut), with hourly crons as fail-soft
-  backstops when an event link is missed.
+- The pipeline is event-chained (intentd alpha publish → fe pin bump → fe alpha cut),
+  with hourly pin-bump and ten-minute cut crons under the hourly release floor.
 - **Never file routine pin-bump PRs** — the workflows own pin advancement (the monorepo
   `submodule-pins` check enforces this; see Phase 2 above). The one sanctioned exception
   is the cloudlands-fe `intentd.version` pin under the emergency-release procedure
@@ -329,7 +346,8 @@ guardrails) lives in [docs/RELEASING.md](./docs/RELEASING.md). The agent-facing 
   done when the PRs merge — monitor until the work ships in a cloudlands-fe alpha, then
   set the final workspace status message to the carrying version (e.g. "Shipped in
   cloudlands-fe vX.Y.Z (alpha)."; intentd-only changes ride the chained fe alpha, so the
-  version is always the cloudlands-fe tag). `scripts/shipped-in.sh <component> <sha>...`
+  version is always the cloudlands-fe tag). `make release-status` (`STATUS_JSON=1`)
+  prints the whole train, including why auto-cut last skipped. `scripts/shipped-in.sh <component> <sha>...`
   (one or more pairs; or `make shipped-in COMPONENT=... SHA=...` /
   `PAIRS="intentd:<sha> cloudlands-fe:<sha>"`) is the canonical detector: it prints the
   first [intent-hq/cloudlands-releases](https://github.com/intent-hq/cloudlands-releases)
@@ -390,10 +408,10 @@ incident. Prefer mechanizing an existing prose rule over adding another.
 
 ## Filing Issues
 
-When you encounter a bug or limitation while working on the codebase (including while
-dogfooding intentd + cloudlands-fe for daily development work), file a GitHub issue on
-[intent-hq/intent](https://github.com/intent-hq/intent/issues) — the single tracker
-for all components.
+File issues on [intent-hq/intent](https://github.com/intent-hq/intent/issues), the single
+tracker for all components, only for problems affecting released builds. Do not file
+issues discovered during PR reviews. Every issue filed must include the affected
+released version and corresponding commit hash in its body.
 
 - **Type**: classification is the GitHub issue **Type** field — `Bug`, `Feature`,
   or `Task` — not a label. The `bug` and `enhancement` type labels are retired: do

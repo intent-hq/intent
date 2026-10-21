@@ -7,3 +7,10 @@
 - **Disconnect cleanup:** On `close` or socket `error`, the server removes the client and all ofits event subscriptions. Subscriptions are **per-connection** and do **not** survive reconnects.
 - **Reconnection guidance:** Clients should reconnect with backoff, re-authenticate on the newupgrade, and **re-establish all subscriptions** (re-send `events.subscribe`). Because canonicalstate lives in the backend, after reconnect a client should **re-fetch** the entities it caresabout (subscribe-then-fetch, §10) rather than assuming it missed nothing.
 
+
+The prepared [startup contract](./startup-readiness.md) keeps transport heartbeats
+alive during indexing but rejects normal RPCs with structured `-32012`. Early
+`/health` is 503 with a generic starting/failed body; it is not ready health.
+Bootstrap seats close with 1001 (`Startup complete; reconnect`), or UDS EOF,
+after full dispatch is installed. Reauthenticate and complete ordinary hello
+before replaying subscriptions or refreshing application data.

@@ -61,7 +61,7 @@ run_check() {
   return "$status"
 }
 
-all_checks="event-catalog-check check-mcp-bindings docs-check check-protocol-catalog check-makefile-targets check-protocol-field-parity"
+all_checks="event-catalog-check check-mcp-bindings docs-check check-protocol-catalog check-makefile-targets check-protocol-field-parity check-transfer-selection-contract check-backend-keychain-contract check-agent-worker-contract check-app-ui-targets check-note-pagination-contract"
 expect_all_ran() {
   local target
   for target in $all_checks; do
@@ -75,18 +75,18 @@ fi
 expect_all_ran "all-green run"
 grep -q -- '--no-print-directory RUSTUP_CARGO= -o event-catalog-check -o check-mcp-bindings docs-check$' "$stub_log" ||
   fail "docs-check was not invoked with its prerequisites assumed old: $(cat "$stub_log")"
-[ "$(grep -c . "$stub_log")" -eq 6 ] || fail "expected 6 make invocations: $(cat "$stub_log")"
+[ "$(grep -c . "$stub_log")" -eq 11 ] || fail "expected 11 make invocations: $(cat "$stub_log")"
 # The Makefile prepends the rust-toolchain.toml toolchain's bin/ to every
 # recipe's PATH; upstream that file is the caller's PR head, so every make
 # call must empty the probe on its command line (see the real-make run below).
-[ "$(grep -c -- '--no-print-directory RUSTUP_CARGO= ' "$stub_log")" -eq 6 ] ||
+[ "$(grep -c -- '--no-print-directory RUSTUP_CARGO= ' "$stub_log")" -eq 11 ] ||
   fail "not every make invocation carries the RUSTUP_CARGO= override: $(cat "$stub_log")"
 grep -q -- '--no-print-directory RUSTUP_CARGO= check-makefile-targets$' "$stub_log" ||
   fail "monorepo context did not run check-makefile-targets at the pinned gitlink: $(cat "$stub_log")"
 grep -q 'CHECK_MAKEFILE_TARGETS_GITLINK' "$stub_log" &&
   fail "monorepo context overrode the check-makefile-targets gitlink: $(cat "$stub_log")"
-[ "$(grep -c '^  [a-z-]*  *pass  ' <<<"$check_output")" -eq 6 ] ||
-  fail "summary table did not list 6 passing rows: $check_output"
+[ "$(grep -c '^  [a-z-]*  *pass  ' <<<"$check_output")" -eq 11 ] ||
+  fail "summary table did not list 11 passing rows: $check_output"
 grep -q '::warning::' <<<"$check_output" && fail "all-green run printed a warning: $check_output"
 grep -q '^Fix order:' <<<"$check_output" && fail "monorepo context printed the upstream fix-order line: $check_output"
 [ "$(tail -n 1 <<<"$check_output")" = "consumer-checks: all checks passed" ] ||
@@ -103,6 +103,36 @@ grep -q '^  event-catalog-check  *pass  *docs/protocol/event-types.json + docs/p
 grep -q '::warning::' <<<"$check_output" && fail "non-advisory failure printed a warning: $check_output"
 [ "$(tail -n 1 <<<"$check_output")" = "consumer-checks: FAILED" ] ||
   fail "failed run did not end with the FAILED line: $check_output"
+
+if run_check STUB_FAIL=check-transfer-selection-contract; then
+  fail "invalid transfer-selection fixture was accepted"
+fi
+expect_all_ran "transfer-selection fixture failure"
+grep -q '^  check-transfer-selection-contract  *FAIL  *docs/protocol/fixtures/transfer-selection/' <<<"$check_output" ||
+  fail "transfer-selection failure did not name its fixture path: $check_output"
+grep -q 'test-transfer-selection-contract' "$stub_log" &&
+  fail "lightweight checks invoked the Cargo/renderer proof"
+
+if run_check STUB_FAIL=check-note-pagination-contract; then
+  fail "invalid note paging fixture was accepted"
+fi
+expect_all_ran "note pagination fixture failure"
+grep -q '^  check-note-pagination-contract  *FAIL  *docs/protocol/fixtures/notes/' <<<"$check_output" ||
+  fail "note paging failure did not name its fixture path: $check_output"
+
+if run_check STUB_FAIL=check-agent-worker-contract; then
+  fail "worker contract failure must fail consumer checks"
+fi
+grep -q '^  check-agent-worker-contract  *FAIL  *docs/protocol/methods/agent-workers.md' <<<"$check_output" ||
+  fail "worker contract failure must name its canonical contract"
+expect_all_ran
+
+if run_check STUB_FAIL=check-backend-keychain-contract; then
+  fail "invalid backend Keychain fixture was accepted"
+fi
+expect_all_ran "backend Keychain fixture failure"
+grep -q '^  check-backend-keychain-contract  *FAIL  *docs/protocol/fixtures/backend-keychain/v1/' <<<"$check_output" ||
+  fail "backend Keychain failure did not name its fixture path: $check_output"
 
 if ! run_check STUB_FAIL=check-mcp-bindings --advisory=check-mcp-bindings; then
   fail "advisory failure changed the exit code: $check_output"
@@ -243,13 +273,26 @@ run_real_make env MAKE="$make_bin" "$script_bash" scripts/consumer-checks.sh --c
   fail "a caller-controlled toolchain executable ran under consumer-checks:"$'\n'"$(cat "$marker_log")"$'\n'"$real_output"
 grep -q '^trusted node scripts/check-protocol-catalog.mjs$' "$trusted_log" ||
   fail "the trusted node did not run check-protocol-catalog:"$'\n'"$(cat "$trusted_log")"
-[ "$(grep -c '^trusted node ' "$trusted_log")" -eq 5 ] ||
-  fail "expected the 5 node checks to run the trusted node:"$'\n'"$(cat "$trusted_log")"
+[ "$(grep -c '^trusted node ' "$trusted_log")" -eq 18 ] ||
+  fail "expected the 18 node invocations to run the trusted node:"$'\n'"$(cat "$trusted_log")"
+if ! grep -qFx 'trusted node scripts/check-doc-line-length.mjs' "$trusted_log" ||
+  ! grep -qFx 'trusted node --test scripts/check-doc-line-length.test.mjs' "$trusted_log"; then
+  fail "the protocol line-length ratchet and its tests did not run with the trusted node:"$'\n'"$(cat "$trusted_log")"
+fi
+if ! grep -qFx 'trusted node --test scripts/lib/markdown-tables.test.mjs' "$trusted_log" ||
+  ! grep -qFx 'trusted node scripts/check-doc-table-cells.mjs' "$trusted_log" ||
+  ! grep -qFx 'trusted node --test scripts/check-doc-table-cells.test.mjs' "$trusted_log"; then
+  fail "the shared Markdown table scanner tests and the protocol table cell-count check did not run with the trusted node:"$'\n'"$(cat "$trusted_log")"
+fi
+grep -qFx 'trusted node --test docs/protocol/fixtures/scripts/monitors.test.mjs docs/protocol/fixtures/scripts/contract.test.mjs' "$trusted_log" ||
+  fail "script monitor and compact contract tests did not run with the trusted node:"$'\n'"$(cat "$trusted_log")"
+grep -q '^trusted node --test docs/protocol/fixtures/submission-correlation/contract.test.mjs$' "$trusted_log" ||
+  fail "submission correlation contract tests did not run with the trusted node:"$'\n'"$(cat "$trusted_log")"
 grep -q '^trusted docs-check$' "$trusted_log" || fail "docs-check.sh did not run:"$'\n'"$(cat "$trusted_log")"
 grep -q '^  check-protocol-catalog  *FAIL  ' <<<"$real_output" ||
   fail "the trusted checker's failure did not reach the summary table:"$'\n'"$real_output"
-[ "$(grep -c '^  [a-z-]*  *pass  ' <<<"$real_output")" -eq 5 ] ||
-  fail "real-make run did not list the other 5 checks as pass:"$'\n'"$real_output"
+[ "$(grep -c '^  [a-z-]*  *pass  ' <<<"$real_output")" -eq 10 ] ||
+  fail "real-make run did not list the other 10 checks as pass:"$'\n'"$real_output"
 
 # The reusable workflow pipes the runner through `tee`, so its step must run
 # under GitHub's `shell: bash` (`bash --noprofile --norc -eo pipefail {0}`);
@@ -275,21 +318,23 @@ grep -nE '^[^#]*github\.job_workflow_(sha|ref)' "$workflow" &&
 checkout_block=$(workflow_step "Check out the monorepo at this workflow's commit")
 [[ -n "$checkout_block" ]] || fail "monorepo checkout step not found in $workflow"
 grep -q '^        id: monorepo$' <<<"$checkout_block" || fail "monorepo checkout step lost its id:"$'\n'"$checkout_block"
-grep -qE "^          ref: \\$\\{\\{ job\\.workflow_sha \\|\\| 'main' \\}\\}$" <<<"$checkout_block" ||
-  fail "monorepo checkout step must use ref: \${{ job.workflow_sha || 'main' }}:"$'\n'"$checkout_block"
-grep -qE "^          repository: \\$\\{\\{ job\\.workflow_repository \\|\\| 'intent-hq/intent' \\}\\}$" <<<"$checkout_block" ||
-  fail "monorepo checkout step must use repository: \${{ job.workflow_repository || 'intent-hq/intent' }}:"$'\n'"$checkout_block"
+grep -qF '          ref: ${{ inputs.self-test && github.sha || job.workflow_sha || '\''main'\'' }}' <<<"$checkout_block" ||
+  fail "monorepo checkout must use the tested tree locally and the workflow revision downstream:"$'\n'"$checkout_block"
+grep -qF '          repository: ${{ inputs.self-test && github.repository || job.workflow_repository || '\''intent-hq/intent'\'' }}' <<<"$checkout_block" ||
+  fail "monorepo checkout must use the caller locally and workflow repository downstream:"$'\n'"$checkout_block"
 
 # Workflow contract the callers rely on: a `workflow_call` trigger and nothing
-# else, `contents: read` as the only permission (the callers pass no secrets
-# and the job never writes), and the fail-soft monorepo checkout — the
+# else, `contents: read` for the consumer job (only the routing probe
+# adds Actions read), and the fail-soft monorepo checkout — the
 # checkout continues on error, a guard step warns when it did not succeed,
 # and every later step is gated on its success so a monorepo outage yields a
 # green job with a ::warning:: instead of a red caller PR.
 triggers=$(awk '/^on:/ { on = 1; next } /^jobs:/ { on = 0 } on && /^  [a-z_]+:/ { sub(/^  /, ""); sub(/:.*/, ""); print }' "$workflow")
 [ "$triggers" = "workflow_call" ] || fail "consumer-checks.yml must be triggered by workflow_call only; found: $triggers"
 permissions=$(awk '
-  /^[[:blank:]]*permissions:/ {
+  /^  consumer-checks:/ { consumer = 1; next }
+  /^  [a-z-]+:/ { consumer = 0 }
+  consumer && /^    permissions:/ {
     indent = match($0, /[^ ]/)
     in_block = 1
     if ($0 !~ /permissions:[[:blank:]]*$/) print "inline " $0
@@ -300,7 +345,7 @@ permissions=$(awk '
   }
 ' "$workflow")
 [ "$permissions" = "contents: read" ] ||
-  fail "consumer-checks.yml must grant exactly 'permissions: contents: read'; found:"$'\n'"${permissions:-<none>}"
+  fail "consumer job must grant exactly 'permissions: contents: read'; found:"$'\n'"${permissions:-<none>}"
 grep -q '^        continue-on-error: true$' <<<"$checkout_block" ||
   fail "monorepo checkout step lost continue-on-error: true (the job must stay green when the monorepo cannot be checked out):"$'\n'"$checkout_block"
 guard_name='Skip when the monorepo checkout failed'
@@ -308,8 +353,8 @@ guard_block=$(workflow_step "$guard_name")
 [[ -n "$guard_block" ]] || fail "workflow step '$guard_name' not found in $workflow"
 grep -q "^        if: steps\.monorepo\.outcome != 'success'$" <<<"$guard_block" ||
   fail "guard step must run when steps.monorepo.outcome != 'success':"$'\n'"$guard_block"
-grep -qE "^          MONOREPO_REF: \\$\\{\\{ job\\.workflow_sha \\|\\| 'main' \\}\\}$" <<<"$guard_block" ||
-  fail "guard step must name the same ref the checkout used (MONOREPO_REF: \${{ job.workflow_sha || 'main' }}):"$'\n'"$guard_block"
+grep -qF '          MONOREPO_REF: ${{ inputs.self-test && github.sha || job.workflow_sha || '\''main'\'' }}' <<<"$guard_block" ||
+  fail "guard step must name the same ref the checkout used:"$'\n'"$guard_block"
 guard_body=$(awk 'body { sub(/^          /, ""); print } /^        run: \|$/ { body = 1 }' <<<"$guard_block")
 [[ -n "$guard_body" ]] || fail "guard step has no run body:"$'\n'"$guard_block"
 grep -q '\${{' <<<"$guard_body" && fail "guard step run body has an unsubstituted expression:"$'\n'"$guard_body"
@@ -319,13 +364,22 @@ printf '%s\n' "$guard_body" >"$temp_dir/guard.sh"
 # resolved workflow sha and for the `main` fallback alike.
 for monorepo_ref in 0123456789abcdef0123456789abcdef01234567 main; do
   guard_status=0
-  guard_output=$(MONOREPO_REF="$monorepo_ref" bash --noprofile --norc -e "$temp_dir/guard.sh" 2>&1) || guard_status=$?
+  guard_output=$(SELF_TEST=false MONOREPO_REF="$monorepo_ref" "$script_bash" --noprofile --norc -e "$temp_dir/guard.sh" 2>&1) || guard_status=$?
   [ "$guard_status" -eq 0 ] || fail "guard step exited $guard_status for MONOREPO_REF=$monorepo_ref:"$'\n'"$guard_output"
   [ "$guard_output" = "::warning::consumer-checks: could not check out intent-hq/intent@${monorepo_ref:0:7}; skipping the monorepo consumer checks for this run." ] ||
     fail "guard step output for MONOREPO_REF=$monorepo_ref:"$'\n'"$guard_output"
 done
 gate_line="        if: steps.monorepo.outcome == 'success'"
-downstream_gates=$(awk -v gate="$gate_line" -v guard="- name: $guard_name" '
+guard_status=0
+guard_output=$(SELF_TEST=true MONOREPO_REF=0123456789abcdef0123456789abcdef01234567 \
+  "$script_bash" --noprofile --norc -e "$temp_dir/guard.sh" 2>&1) || guard_status=$?
+[ "$guard_status" -eq 1 ] ||
+  fail "self-test accepted a failed monorepo checkout (exit $guard_status):"$'\n'"$guard_output"
+grep -q '^::error::consumer-checks:' <<<"$guard_output" ||
+  fail "self-test checkout failure did not emit an error:"$'\n'"$guard_output"
+
+queue_gate_line="        if: github.event_name == 'merge_group' && steps.monorepo.outcome == 'success'"
+downstream_gates=$(awk -v queue_gate="$queue_gate_line" -v gate="$gate_line" -v guard="- name: $guard_name" '
   function flush() { if (after_guard && name != "") print (gated ? "gated " : "ungated ") name }
   /^      - / {
     flush()
@@ -336,13 +390,13 @@ downstream_gates=$(awk -v gate="$gate_line" -v guard="- name: $guard_name" '
     if (index($0, guard)) guard_seen = 1
     next
   }
-  $0 == gate { gated = 1 }
+  $0 == gate || $0 == queue_gate { gated = 1 }
   END { flush() }
 ' "$workflow")
 grep -q '^ungated ' <<<"$downstream_gates" &&
   fail "every step after the guard must carry \"$gate_line\":"$'\n'"$downstream_gates"
-[ "$(grep -c '^gated ' <<<"$downstream_gates")" -eq 4 ] ||
-  fail "expected 4 gated steps after the guard (component checkout, sibling submodule, setup-node, runner):"$'\n'"$downstream_gates"
+[ "$(grep -c '^gated ' <<<"$downstream_gates")" -eq 9 ] ||
+  fail "expected 9 gated steps after the guard (lightweight and connected checks):"$'\n'"$downstream_gates"
 
 step_name='Run the consumer checks (upstream context)'
 step_block=$(workflow_step "$step_name")
@@ -378,7 +432,8 @@ run_step() {
   step_status=0
   step_output=$(cd "$step_dir" && STUB_ARGS="$step_dir/args" STUB_STATUS="$1" STUB_RESULT="$2" \
     RUNNER_TEMP="$step_dir/tmp" GITHUB_STEP_SUMMARY="$summary" HEAD_SHA=0123456789abcdef \
-    bash --noprofile --norc -eo pipefail step.sh 2>&1) || step_status=$?
+    COMPONENT_REPOSITORY=intent-hq/intentd \
+    "$script_bash" --noprofile --norc -eo pipefail step.sh 2>&1) || step_status=$?
   step_summary=$(cat "$summary")
 }
 run_step 1 FAILED
@@ -403,9 +458,8 @@ echo "consumer-checks tests passed under $("$script_bash" -c 'echo "bash $BASH_V
 
 # Stock macOS /bin/bash is 3.2 (intent-hq/intent#4759). `bash -n` alone
 # accepts Bash 4+ builtins and expansions, so reject them by pattern too,
-# then rerun the fixtures under a real Bash 3 when one can be found (same
-# lookup as docs-check.test.sh: BASH3_BIN, bash3, Homebrew bash@3, 3.x
-# /bin/bash) and require a byte-identical transcript. A missing Bash 3 is a
+# then rerun the fixtures under a real Bash 3 when one can be found (shared
+# lookup in find-bash3.sh, which also checks the `make bash3` cache) and require a byte-identical transcript. A missing Bash 3 is a
 # skip notice by default; set REQUIRE_BASH3 to a non-empty value (CI) to make
 # it a failure instead.
 bash -n "$script" || fail "consumer-checks.sh does not parse"
@@ -419,20 +473,8 @@ gate_matches() {
 gate_hits=$(gate_matches "$script" "${BASH_SOURCE[0]}")
 [[ -z "$gate_hits" ]] || fail "Bash 4+ constructs found (stock macOS bash is 3.2):"$'\n'"$gate_hits"
 
-find_bash3() {
-  local candidate resolved brew_prefix
-  brew_prefix=$(brew --prefix bash@3 2>/dev/null) || brew_prefix=""
-  for candidate in "${BASH3_BIN:-}" bash3 "${brew_prefix:+$brew_prefix/bin/bash}" \
-    /opt/homebrew/opt/bash@3/bin/bash /usr/local/opt/bash@3/bin/bash /bin/bash; do
-    [[ -n "$candidate" ]] || continue
-    resolved=$(command -v "$candidate" 2>/dev/null) || continue
-    [[ -x "$resolved" ]] || continue
-    "$resolved" -c '[[ "${BASH_VERSINFO[0]}" -eq 3 ]]' 2>/dev/null || continue
-    printf '%s\n' "$resolved"
-    return 0
-  done
-  return 1
-}
+# shellcheck source=scripts/find-bash3.sh
+source "$repo_root/scripts/find-bash3.sh"
 
 if [[ "${BASH_VERSINFO[0]}" -eq 3 ]]; then
   : # the fixtures above already ran under Bash 3
@@ -444,7 +486,7 @@ elif bash3=$(find_bash3); then
     fail "consumer-checks.sh output differs between bash $BASH_VERSION and $bash3:"$'\n'"$(diff "$transcript" "$bash3_transcript" || true)"
   echo "consumer-checks.sh output is identical under bash $BASH_VERSION and $bash3"
 elif [[ -n "${REQUIRE_BASH3:-}" ]]; then
-  fail "no Bash 3 interpreter found and REQUIRE_BASH3 is set (point BASH3_BIN at one, or unset REQUIRE_BASH3 to skip the real 3.2 run)"
+  fail "no Bash 3 interpreter found and REQUIRE_BASH3 is set ($(bash3_missing_hint); or unset REQUIRE_BASH3 to skip the real 3.2 run)"
 else
-  echo "consumer-checks tests: no Bash 3 interpreter found (set BASH3_BIN); real 3.2 run skipped, static gate only"
+  echo "consumer-checks tests: no Bash 3 interpreter found ($(bash3_missing_hint)); real 3.2 run skipped, static gate only"
 fi

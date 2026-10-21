@@ -1,0 +1,60 @@
+# sccache WebDAV cache front end: TLS plus bearer-token check in front of
+# `rclone serve webdav` on loopback (see sccache-webdav.service).
+#
+# Values come from the environment (installed as /etc/sccache/caddy.env by
+# bootstrap.sh, never committed):
+#   SCCACHE_SITE      site address: the public IP (e.g. 172.96.141.217) or a
+#                     host name. Certificates come from Let's Encrypt's
+#                     `shortlived` profile, the only one that issues for IPs.
+#   SCCACHE_RW_TOKEN  read-write bearer token (CI: INTENT_SCCACHE_TOKEN)
+#   SCCACHE_RO_TOKEN  read-only bearer token (GET, HEAD, PROPFIND, OPTIONS)
+#   SCCACHE_UPSTREAM  rclone address, default 127.0.0.1:8080
+#   CADDY_ADMIN       admin endpoint, default localhost:2019 (`off` disables)
+#
+# Docs: docs/SCCACHE_SERVER.md.
+{
+	admin {$CADDY_ADMIN:localhost:2019}
+	# Clients send no SNI for IP addresses; serve the site's certificate anyway.
+	default_sni {$SCCACHE_SITE}
+	servers {
+		protocols h1 h2
+	}
+}
+
+{$SCCACHE_SITE} {
+	# Caddy would use its internal CA for an IP site; sccache needs a public
+	# certificate. Requires Caddy >= 2.10 (ACME profiles); bootstrap.sh checks.
+	tls {
+		issuer acme {
+			profile shortlived
+		}
+	}
+
+	@rw header Authorization "Bearer {$SCCACHE_RW_TOKEN}"
+	@ro {
+		header Authorization "Bearer {$SCCACHE_RO_TOKEN}"
+		method GET HEAD PROPFIND OPTIONS
+	}
+	@ro_write header Authorization "Bearer {$SCCACHE_RO_TOKEN}"
+
+	request_body {
+		max_size 2GB
+	}
+
+	route {
+		reverse_proxy @rw {$SCCACHE_UPSTREAM:127.0.0.1:8080} {
+			header_up -Authorization
+		}
+		reverse_proxy @ro {$SCCACHE_UPSTREAM:127.0.0.1:8080} {
+			header_up -Authorization
+		}
+		respond @ro_write "read-only token" 403
+		header WWW-Authenticate "Bearer"
+		respond "unauthorized" 401
+	}
+
+	log {
+		output stderr
+		format json
+	}
+}

@@ -10,11 +10,15 @@
 #     not carry) must be `success` on pull_request and job-`skipped` on
 #     merge_group — a skip on pull_request or a run on merge_group is a
 #     misconfiguration and fails;
+#   - queue-only jobs must be skipped on PRs and succeed on merge_group;
+#   - preparation must succeed; the consumer workflow exercise must succeed
+#     when selected in the queue and be skipped otherwise;
 #   - anything else — failure, cancelled, an empty or missing result, a job
 #     absent from the input, an event other than the two above — fails, naming
 #     the offending job or event.
 #
 # Inputs (environment):
+#   GATE_CONSUMER_CHECKS_SELECTED  preparation output: exactly true or false
 #   GATE_EVENT       `github.event_name`
 #   GATE_NEEDS_JSON  `toJSON(needs)`: an object keyed by job id, each value an
 #                    object with a string `result` (pretty-printed or compact).
@@ -27,11 +31,13 @@
 
 set -euo pipefail
 
-always_on_jobs="bridge-test docs-check event-catalog-check shell-tests shell-lint shell-tests-bash3 repo-hygiene ruleset-check triage-parser-test"
+always_on_jobs="runner-route docs-check event-catalog-check shell-lint repo-hygiene ruleset-check triage-parser-test consumer-checks-prepare ci-policy"
+queue_only_jobs="bridge-test python-tests shell-tests shell-tests-bash3 bootstrap-install"
 pull_request_only_jobs="pr-title breaking-token submodule-pins"
+path_selected_jobs="consumer-checks-exercise"
 
 if [ "${1:-}" = "--list-jobs" ]; then
-  for job in $always_on_jobs $pull_request_only_jobs; do
+  for job in $always_on_jobs $pull_request_only_jobs $queue_only_jobs $path_selected_jobs; do
     printf '%s\n' "$job"
   done
   exit 0
@@ -127,6 +133,37 @@ for job in $pull_request_only_jobs; do
     fail=1
   elif [ "$result" != "$pr_only_expected" ]; then
     echo "ci-gate: $job must be $pr_only_expected on $event (result: '$result')"
+    fail=1
+  fi
+done
+
+if [ "$event" = merge_group ]; then queue_expected=success; else queue_expected=skipped; fi
+for job in $queue_only_jobs; do
+  if ! result=$(result_of "$job"); then
+    echo "ci-gate: $job is missing from the needs results"
+    fail=1
+  elif [ "$result" != "$queue_expected" ]; then
+    echo "ci-gate: $job must be $queue_expected on $event (result: '$result')"
+    fail=1
+  fi
+done
+
+case "${GATE_CONSUMER_CHECKS_SELECTED:-}" in
+  true) exercise_expected=success ;;
+  false) exercise_expected=skipped ;;
+  *)
+    echo "ci-gate: invalid consumer-checks selection '${GATE_CONSUMER_CHECKS_SELECTED:-}' (expected true or false)"
+    exercise_expected=invalid
+    fail=1
+    ;;
+esac
+if [ "$event" = pull_request ]; then exercise_expected=skipped; fi
+for job in $path_selected_jobs; do
+  if ! result=$(result_of "$job"); then
+    echo "ci-gate: $job is missing from the needs results"
+    fail=1
+  elif [ "$result" != "$exercise_expected" ]; then
+    echo "ci-gate: $job must be $exercise_expected for the path selection on $event (result: '$result')"
     fail=1
   fi
 done

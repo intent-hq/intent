@@ -26,8 +26,10 @@ fail() {
   exit 1
 }
 
-always_on="bridge-test docs-check event-catalog-check shell-tests shell-lint shell-tests-bash3 repo-hygiene ruleset-check triage-parser-test"
+always_on="runner-route docs-check event-catalog-check shell-lint repo-hygiene ruleset-check triage-parser-test consumer-checks-prepare ci-policy"
+queue_only="bridge-test python-tests shell-tests shell-tests-bash3 bootstrap-install"
 pr_only="pr-title breaking-token submodule-pins"
+path_selected="consumer-checks-exercise"
 
 # needs_json <event> [<job>=<result> ...]: the `toJSON(needs)` object for a
 # fully green run of <event> (PR-only jobs `success` on pull_request, `skipped`
@@ -37,10 +39,13 @@ pr_only="pr-title breaking-token submodule-pins"
 needs_json() {
   local event=$1 job result override out="{" sep=$'\n'
   shift
-  for job in $always_on $pr_only; do
+  for job in $always_on $pr_only $queue_only $path_selected; do
     result=success
     case " $pr_only " in
       *" $job "*) [ "$event" = pull_request ] || result=skipped ;;
+    esac
+    case " $queue_only $path_selected " in
+      *" $job "*) [ "$event" = merge_group ] || result=skipped ;;
     esac
     for override in "$@"; do
       [ "${override%%=*}" = "$job" ] || continue
@@ -56,7 +61,8 @@ needs_json() {
 # run_gate <event> <json>: runs the gate, captures $gate_output, returns its status.
 run_gate() {
   local status=0
-  gate_output=$(cd "$repo_root" && GATE_EVENT="$1" GATE_NEEDS_JSON="$2" "$script_bash" scripts/ci-gate.sh 2>&1) || status=$?
+  gate_output=$(cd "$repo_root" && GATE_EVENT="$1" GATE_NEEDS_JSON="$2" \
+    GATE_CONSUMER_CHECKS_SELECTED="${GATE_TEST_SELECTION-true}" "$script_bash" scripts/ci-gate.sh 2>&1) || status=$?
   printf 'event %s\nexit %s\n%s\n' "$1" "$status" "$gate_output" >>"$transcript"
   return "$status"
 }
@@ -89,6 +95,27 @@ expect_pass "compact JSON is read like pretty-printed" merge_group "$compact"
 nested=$(needs_json pull_request | sed 's/"outputs": {}/"outputs": { "result": "failure", "note": "{}" }/')
 expect_pass "a result key nested inside outputs is ignored" pull_request "$nested"
 
+# ---- selected jobs require the exact expected result on both events --------
+
+event=merge_group
+GATE_TEST_SELECTION=false expect_pass "docs-only skip on $event" "$event" \
+  "$(needs_json "$event" consumer-checks-exercise=skipped)"
+for result in failure cancelled skipped "" -; do
+  expect_fail "selected exercise $result on $event" "$event" \
+    "$(needs_json "$event" "consumer-checks-exercise=$result")" "ci-gate: consumer-checks-exercise"
+done
+for result in success failure cancelled "" -; do
+  GATE_TEST_SELECTION=false expect_fail "unselected exercise $result on $event" "$event" \
+    "$(needs_json "$event" "consumer-checks-exercise=$result")" "ci-gate: consumer-checks-exercise"
+done
+for selection in "" TRUE FALSE null 1 "false "; do
+  GATE_TEST_SELECTION="$selection" expect_fail "invalid selection '$selection' on $event" "$event" \
+    "$(needs_json "$event" consumer-checks-exercise=skipped)" "ci-gate: invalid consumer-checks selection"
+done
+GATE_TEST_SELECTION=false expect_fail "failed preparation cannot look like docs-only on $event" "$event" \
+  "$(needs_json "$event" consumer-checks-prepare=failure consumer-checks-exercise=skipped)" \
+  "ci-gate: consumer-checks-prepare did not succeed"
+
 # ---- PR-only jobs are event-aware -------------------------------------------
 
 for job in $pr_only; do
@@ -100,6 +127,16 @@ for job in $pr_only; do
     "ci-gate: $job must be success on pull_request (result: 'failure')"
   expect_fail "$job failure on merge_group" merge_group "$(needs_json merge_group "$job=failure")" \
     "ci-gate: $job must be skipped on merge_group (result: 'failure')"
+done
+
+# Queue suites must really run in the queue and stay skipped on PRs.
+for job in $queue_only $path_selected; do
+  for result in success failure cancelled "" -; do
+    expect_fail "$job unexpected $result on PR" pull_request "$(needs_json pull_request "$job=$result")" "$job"
+  done
+  for result in skipped failure cancelled "" -; do
+    expect_fail "$job required $result in queue" merge_group "$(needs_json merge_group "$job=$result")" "$job"
+  done
 done
 
 # ---- always-on jobs must succeed on every event -----------------------------
@@ -120,8 +157,8 @@ done
 # One bad job never masks another: every offender is named in one run.
 expect_fail "several offenders are all named" merge_group \
   "$(needs_json merge_group "bridge-test=failure" "shell-tests=cancelled" "pr-title=success")" \
-  "ci-gate: bridge-test did not succeed (result: 'failure')" \
-  "ci-gate: shell-tests did not succeed (result: 'cancelled')" \
+  "ci-gate: bridge-test must be success on merge_group (result: 'failure')" \
+  "ci-gate: shell-tests must be success on merge_group (result: 'cancelled')" \
   "ci-gate: pr-title must be skipped on merge_group (result: 'success')"
 # A green job elsewhere in the run is not reported.
 grep -q "docs-check" <<<"$gate_output" && fail "a green job was reported: $gate_output"
@@ -144,7 +181,7 @@ expect_fail "unknown jobs do not stand in for known ones" pull_request \
 listed_jobs=$(cd "$repo_root" && "$script_bash" scripts/ci-gate.sh --list-jobs)
 printf 'list-jobs\n%s\n' "$listed_jobs" >>"$transcript"
 # shellcheck disable=SC2086  # the job lists are space-separated words; splitting is the point
-expected_listed=$(printf '%s\n' $always_on $pr_only)
+expected_listed=$(printf '%s\n' $always_on $pr_only $queue_only $path_selected)
 [ "$listed_jobs" = "$expected_listed" ] ||
   fail "--list-jobs does not match the job lists this suite covers:"$'\n'"$listed_jobs"
 
@@ -157,13 +194,21 @@ script_jobs=$(printf '%s\n' "$listed_jobs" | sort)
 [ "$workflow_jobs" = "$script_jobs" ] ||
   fail "the gate job's needs in ci.yml and the jobs in ci-gate.sh differ:"$'\n'"$(diff <(printf '%s\n' "$workflow_jobs") <(printf '%s\n' "$script_jobs") || true)"
 
-# ... and the gate job actually runs the script with both inputs.
+# Every workflow job must be aggregated, including conditional reusable calls.
+all_workflow_jobs=$(sed -n 's/^  \([a-z][a-z0-9-]*\):$/\1/p' "$workflow" |
+  grep -vE '^(pull_request|merge_group|gate)$' | sort)
+[ "$all_workflow_jobs" = "$script_jobs" ] ||
+  fail "the gate must aggregate every workflow job:"$'\n'"$all_workflow_jobs"
+
+# ... and the gate job actually runs the script with every input.
 grep -q '^    name: CI Gate$' <<<"$gate_job" || fail "the gate job is no longer named CI Gate"
 grep -q '^    if: always()$' <<<"$gate_job" || fail "the gate job lost its if: always()"
 grep -qE '^ +GATE_EVENT: \$\{\{ github\.event_name \}\}$' <<<"$gate_job" ||
   fail "the gate job does not pass GATE_EVENT from github.event_name"
 grep -qE '^ +GATE_NEEDS_JSON: \$\{\{ toJSON\(needs\) \}\}$' <<<"$gate_job" ||
   fail "the gate job does not pass GATE_NEEDS_JSON from toJSON(needs)"
+grep -qF 'GATE_CONSUMER_CHECKS_SELECTED: ${{ needs.consumer-checks-prepare.outputs.selected }}' <<<"$gate_job" ||
+  fail "the gate job does not pass the preparation job's selection output"
 grep -q '^        run: bash scripts/ci-gate.sh$' <<<"$gate_job" ||
   fail "the gate job does not run bash scripts/ci-gate.sh"
 
@@ -172,8 +217,8 @@ echo "ci-gate tests passed under $("$script_bash" -c 'echo "bash $BASH_VERSION"'
 
 # Stock macOS /bin/bash is 3.2 (intent-hq/intent#4759). `bash -n` alone
 # accepts Bash 4+ builtins and expansions, so reject them by pattern too, then
-# rerun the cases under a real Bash 3 when one can be found (same lookup as
-# docs-check.test.sh: BASH3_BIN, bash3, Homebrew bash@3, 3.x /bin/bash) and
+# rerun the cases under a real Bash 3 when one can be found (shared lookup
+# in find-bash3.sh, which also checks the `make bash3` cache) and
 # require a byte-identical transcript. A missing Bash 3 is a skip notice by
 # default; set REQUIRE_BASH3 to a non-empty value (CI) to make it a failure.
 bash -n "$script" || fail "ci-gate.sh does not parse"
@@ -191,20 +236,8 @@ gate_matches() {
 gate_hits=$(gate_matches "$script" "${BASH_SOURCE[0]}")
 [ -z "$gate_hits" ] || fail "Bash 4+ constructs found (stock macOS bash is 3.2):"$'\n'"$gate_hits"
 
-find_bash3() {
-  local candidate resolved brew_prefix
-  brew_prefix=$(brew --prefix bash@3 2>/dev/null) || brew_prefix=""
-  for candidate in "${BASH3_BIN:-}" bash3 "${brew_prefix:+$brew_prefix/bin/bash}" \
-    /opt/homebrew/opt/bash@3/bin/bash /usr/local/opt/bash@3/bin/bash /bin/bash; do
-    [ -n "$candidate" ] || continue
-    resolved=$(command -v "$candidate" 2>/dev/null) || continue
-    [ -x "$resolved" ] || continue
-    "$resolved" -c '[ "${BASH_VERSINFO[0]}" -eq 3 ]' 2>/dev/null || continue
-    printf '%s\n' "$resolved"
-    return 0
-  done
-  return 1
-}
+# shellcheck source=scripts/find-bash3.sh
+source "$repo_root/scripts/find-bash3.sh"
 
 if [ "${BASH_VERSINFO[0]}" -eq 3 ]; then
   : # the cases above already ran under Bash 3
@@ -216,7 +249,7 @@ elif bash3=$(find_bash3); then
     fail "ci-gate.sh output differs between bash $BASH_VERSION and $bash3:"$'\n'"$(diff "$transcript" "$bash3_transcript" || true)"
   echo "ci-gate.sh output is identical under bash $BASH_VERSION and $bash3"
 elif [ -n "${REQUIRE_BASH3:-}" ]; then
-  fail "no Bash 3 interpreter found and REQUIRE_BASH3 is set (point BASH3_BIN at one, or unset REQUIRE_BASH3 to skip the real 3.2 run)"
+  fail "no Bash 3 interpreter found and REQUIRE_BASH3 is set ($(bash3_missing_hint); or unset REQUIRE_BASH3 to skip the real 3.2 run)"
 else
-  echo "ci-gate tests: no Bash 3 interpreter found (set BASH3_BIN); real 3.2 run skipped, static gate only"
+  echo "ci-gate tests: no Bash 3 interpreter found ($(bash3_missing_hint)); real 3.2 run skipped, static gate only"
 fi

@@ -1,0 +1,40 @@
+{
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 305,
+    "method": "sourceControl.checkout.repoConfig",
+    "params": {
+      "checkoutId": "checkout-1",
+      "revision": "revision-1",
+      "projectPath": "team/sub/project",
+      "branch": "release/config",
+      "commitSha": "0123456789012345678901234567890123456789"
+    }
+  },
+  "ready": {
+    "status": "ready",
+    "value": {
+      "projectPath": "team/sub/project",
+      "branch": "release/config",
+      "commitSha": "0123456789012345678901234567890123456789",
+      "config": {
+        "setupScript": "npm ci"
+      },
+      "exists": true
+    }
+  },
+  "absent": {
+    "status": "ready",
+    "value": {
+      "projectPath": "team/sub/project",
+      "branch": "release/config",
+      "commitSha": "0123456789012345678901234567890123456789",
+      "config": null,
+      "exists": false
+    }
+  },
+  "unavailable": {
+    "status": "unavailable",
+    "reason": "branch-changed"
+  }
+}

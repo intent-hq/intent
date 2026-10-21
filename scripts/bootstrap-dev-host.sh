@@ -45,12 +45,22 @@ export CARGO_HOME PATH
 GH_MIN_VERSION="2.94.0"
 GH_INSTALL_URL="https://github.com/cli/cli#installation"
 
+# group() transports large resume exclusions without growing the command line.
+NEXTEST_MIN_VERSION="0.9.133"
+
 # jq: the release-notifier test suites parse GitHub API fixtures with it
 # (intentd scripts/test-notify-fixed-issues.sh via make test, cloudlands-fe pnpm test:unit).
 JQ_INSTALL_URL="https://jqlang.github.io/jq/download/"
 
 # make lint-shell runs shellcheck over scripts/*.sh.
 SHELLCHECK_INSTALL_URL="https://github.com/koalaman/shellcheck#installing"
+
+# cloudlands-fe pnpm run lint:workflows runs actionlint over its GitHub
+# workflows. Exact pin: keep the version and checksums equal to
+# packages/cloudlands-fe/scripts/check-workflows.mjs (from the release's
+# actionlint_<version>_checksums.txt).
+ACTIONLINT_VERSION="1.7.12"
+ACTIONLINT_INSTALL_URL="https://github.com/rhysd/actionlint/releases/tag/v$ACTIONLINT_VERSION"
 
 # Instrumented coverage (make coverage-e2e / coverage-all) needs cargo-llvm-cov
 # plus the llvm-tools-preview rustup component. Neither is required by make
@@ -253,8 +263,18 @@ node_ready() {
   node_version_supported "$version"
 }
 
+python_version() {
+  local line
+  line=$(python3 --version 2>/dev/null) || return 1
+  [[ "$line" =~ ^Python\ ([0-9]+\.[0-9]+\.[0-9]+) ]] || return 1
+  printf '%s\n' "${BASH_REMATCH[1]}"
+}
+
 python_ready() {
-  command -v python3 >/dev/null 2>&1
+  local version
+  version=$(python_version) || return 1
+  # Keep aligned with dev-status.sh, which uses str.removeprefix.
+  version_ge "$version" "3.9.0"
 }
 
 kill_process_tree() {
@@ -460,6 +480,24 @@ gh_ready() {
   [[ "$version" == "$base" || "$base" != "$GH_MIN_VERSION" ]]
 }
 
+nextest_version() {
+  command -v cargo >/dev/null 2>&1 || return 1
+  local output line
+  output=$(cargo nextest --version 2>/dev/null) || return 1
+  line=${output%%$'\n'*}
+  [[ "$line" =~ ^cargo-nextest[[:space:]]([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)([[:space:]]|$) ]] || return 1
+  printf '%s\n' "${BASH_REMATCH[1]}"
+}
+
+nextest_ready() {
+  local version base
+  version=$(nextest_version) || return 1
+  base=${version%%-*}
+  version_ge "$base" "$NEXTEST_MIN_VERSION" || return 1
+  # The minimum prerelease is not the supported stable release.
+  [[ "$version" == "$base" || "$base" != "$NEXTEST_MIN_VERSION" ]]
+}
+
 jq_version() {
   command -v jq >/dev/null 2>&1 || return 1
   local output
@@ -494,6 +532,79 @@ shellcheck_version() {
 # Like jq_ready: a shellcheck pathname on PATH that cannot run is not ready.
 shellcheck_ready() {
   shellcheck_version >/dev/null
+}
+
+# make bash3 compiles the pinned Bash 3.2 (scripts/install-ci-bash3.sh) for the
+# shell suites' compatibility pass, which needs a C compiler, make and a yacc
+# (bison). Stock macOS /bin/bash is already 3.2, so make bash3 builds nothing
+# there and the tools are not needed.
+bash3_build_tools_needed() {
+  [[ "$(uname -s)" != Darwin ]]
+}
+
+# Prints the missing tools (space separated), or nothing when all are present.
+bash3_build_tools_missing() {
+  local gaps=""
+  command -v gcc >/dev/null 2>&1 || command -v cc >/dev/null 2>&1 || gaps="$gaps gcc"
+  command -v make >/dev/null 2>&1 || gaps="$gaps make"
+  command -v bison >/dev/null 2>&1 || command -v yacc >/dev/null 2>&1 || gaps="$gaps bison"
+  printf '%s\n' "${gaps# }"
+}
+
+bash3_build_tools_ready() {
+  bash3_build_tools_needed || return 0
+  [[ -z "$(bash3_build_tools_missing)" ]]
+}
+
+# The first line of actionlint --version is the version: bare for release
+# archives, v-prefixed for a `go install ...@vX.Y.Z` build.
+actionlint_version() {
+  command -v actionlint >/dev/null 2>&1 || return 1
+  local output
+  output=$(actionlint --version 2>/dev/null) || return 1
+  output=${output%%$'\n'*}
+  output=${output#v}
+  [[ -n "$output" ]] || return 1
+  printf '%s\n' "$output"
+}
+
+# Exact pin, so a local run matches the cloudlands-fe CI result.
+actionlint_ready() {
+  [[ "$(actionlint_version)" == "$ACTIONLINT_VERSION" ]]
+}
+
+# actionlint_platform: the release archive suffix for this host, or failure.
+actionlint_platform() {
+  case "$(uname -s):$(uname -m)" in
+    Linux:x86_64|Linux:amd64) echo linux_amd64 ;;
+    Linux:aarch64|Linux:arm64) echo linux_arm64 ;;
+    Darwin:x86_64) echo darwin_amd64 ;;
+    Darwin:arm64) echo darwin_arm64 ;;
+    *) return 1 ;;
+  esac
+}
+
+actionlint_sha256() {
+  case "$1" in
+    linux_amd64) echo 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8 ;;
+    linux_arm64) echo 325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6 ;;
+    darwin_amd64) echo 5b44c3bc2255115c9b69e30efc0fecdf498fdb63c5d58e17084fd5f16324c644 ;;
+    darwin_arm64) echo aba9ced2dee8d27fecca3dc7feb1a7f9a52caefa1eb46f3271ea66b6e0e6953f ;;
+    *) return 1 ;;
+  esac
+}
+
+# sha256_of FILE: the hex digest with sha256sum (Linux) or shasum (macOS).
+sha256_of() {
+  local output
+  if command -v sha256sum >/dev/null 2>&1; then
+    output=$(sha256sum "$1") || return 1
+  elif command -v shasum >/dev/null 2>&1; then
+    output=$(shasum -a 256 "$1") || return 1
+  else
+    return 1
+  fi
+  printf '%s\n' "${output%% *}"
 }
 
 # Probed through cargo like the nextest check (not command -v), so a stale
@@ -550,7 +661,7 @@ installable_gap_exists() {
   openssl_dev_ready || return 0
   rust_toolchain_ready || return 0
   active_toolchain_ready || return 0
-  cargo nextest --version >/dev/null 2>&1 || return 0
+  nextest_ready || return 0
   node_ready || return 0
   command -v corepack >/dev/null 2>&1 || return 0
   pnpm_ready || return 0
@@ -558,6 +669,11 @@ installable_gap_exists() {
   gh_ready || return 0
   jq_ready || return 0
   shellcheck_ready || return 0
+  bash3_build_tools_ready || return 0
+  # Without a pinned archive for this host bootstrap cannot close the gap.
+  if actionlint_platform >/dev/null; then
+    actionlint_ready || return 0
+  fi
   if [[ "$WITH_COVERAGE" == 1 ]]; then
     coverage_tooling_ready || return 0
   fi
@@ -654,8 +770,18 @@ check_all() {
 
   if python_ready; then
     ok "Python: $(python3 --version 2>&1)"
+    # One allocation, immediately closed: detect an already exhausted host
+    # without changing sysctls or claiming headroom for a parallel test suite.
+    if ! python3 "$SCRIPT_DIR/check_watch_capacity.py" 2>&1; then
+      FAILURES=$((FAILURES + 1))
+    fi
   else
-    missing "Python 3: required to preflight development ports"
+    local python_found
+    if python_found=$(python_version); then
+      missing "Python 3.9+: found Python $python_found; install a newer python3 and put it on PATH"
+    else
+      missing "Python 3.9+: required for workspace status; install a newer python3 and put it on PATH"
+    fi
   fi
 
   if openssl_dev_ready; then
@@ -676,10 +802,13 @@ check_all() {
     missing "active Rust toolchain: expected $TOOLCHAIN at the repository root"
   fi
 
-  if command -v cargo >/dev/null 2>&1 && cargo nextest --version >/dev/null 2>&1; then
-    ok "cargo-nextest: $(cargo nextest --version 2>/dev/null | head -n 1)"
+  local nextest_found
+  if nextest_ready; then
+    ok "cargo-nextest: cargo-nextest $(nextest_version)"
+  elif nextest_found=$(nextest_version); then
+    missing "cargo-nextest >= $NEXTEST_MIN_VERSION: found $nextest_found; required for resumable test filters; run make bootstrap-dev-host"
   else
-    missing "cargo-nextest: required by make test"
+    missing "cargo-nextest >= $NEXTEST_MIN_VERSION: missing or unusable; required for resumable test filters; run make bootstrap-dev-host"
   fi
   report_coverage_tooling
 
@@ -712,11 +841,16 @@ check_all() {
     missing "GitHub CLI: gh $gh_found is below the required $GH_MIN_VERSION; run make bootstrap-dev-host (apt via https://cli.github.com/packages, dnf via gh-cli repo, or brew upgrade gh)"
   else
     gh_found=$(gh_version)
-    if gh auth status >/dev/null 2>&1; then
-      ok "GitHub CLI: gh $gh_found (>= $GH_MIN_VERSION), authenticated"
-    else
-      ok "GitHub CLI: gh $gh_found (>= $GH_MIN_VERSION)"
-      optional "GitHub CLI: not authenticated; PR reporting is disabled until gh auth login"
+    ok "GitHub CLI: gh $gh_found (>= $GH_MIN_VERSION)"
+    # Status already runs the shared classifier and reports its result. Avoid
+    # spending the same quota twice when it invokes this doctor as a child.
+    if [[ ${DEV_STATUS_SKIP_GITHUB:-0} != 1 ]]; then
+      local github_detail
+      if command -v python3 >/dev/null 2>&1 && github_detail=$(bash "$SCRIPT_DIR/github-readiness.sh" --human 2>/dev/null); then
+        optional "GitHub CLI: $github_detail"
+      else
+        optional "GitHub CLI: readiness unavailable"
+      fi
     fi
   fi
 
@@ -736,6 +870,34 @@ check_all() {
     ok "shellcheck: $(shellcheck_version)"
   fi
 
+  if ! bash3_build_tools_needed; then
+    ok "Bash 3.2 build tools: not needed (stock /bin/bash is already Bash 3.2)"
+  elif bash3_build_tools_ready; then
+    ok "Bash 3.2 build tools: C compiler, make, bison"
+  else
+    missing "Bash 3.2 build tools: $(bash3_build_tools_missing) not found; required by make bash3 (the shell suites' 3.2 pass); run make bootstrap-dev-host"
+  fi
+
+  local actionlint_found
+  if ! command -v actionlint >/dev/null 2>&1; then
+    missing "actionlint $ACTIONLINT_VERSION: required by cloudlands-fe pnpm run lint:workflows; run make bootstrap-dev-host"
+  elif ! actionlint_found=$(actionlint_version); then
+    missing "actionlint: $(command -v actionlint) is on PATH but actionlint --version fails; reinstall it (run make bootstrap-dev-host)"
+  elif [[ "$actionlint_found" != "$ACTIONLINT_VERSION" ]]; then
+    missing "actionlint: found $actionlint_found; cloudlands-fe pins $ACTIONLINT_VERSION; run make bootstrap-dev-host"
+  else
+    ok "actionlint: $actionlint_found"
+  fi
+
+  if [[ "$(uname -s)" == Linux ]]; then
+    if ! command -v bwrap >/dev/null 2>&1; then
+      optional "bubblewrap: not installed (only make test HERMETIC=1 needs it); Debian/Ubuntu: sudo apt-get install bubblewrap"
+    elif bwrap --dev-bind / / true >/dev/null 2>&1; then
+      optional "bubblewrap: installed (make test HERMETIC=1 hides provider CLIs like CI)"
+    else
+      optional "bubblewrap: $(command -v bwrap) cannot create a sandbox (unprivileged user namespaces blocked?), so make test HERMETIC=1 will fail"
+    fi
+  fi
   if command -v sccache >/dev/null 2>&1; then
     optional "sccache: installed"
   else
@@ -769,11 +931,11 @@ as_root() {
 
 install_python() {
   if python_ready; then
-    echo "[skip] Python 3 already installed"
+    echo "[skip] Python 3.9+ already installed"
     return
   fi
 
-  echo "[install] Python 3"
+  echo "[install] Python 3.9+"
   case "$(uname -s)" in
     Darwin)
       command -v brew >/dev/null 2>&1 || { echo "ERROR: Homebrew is required to install Python on macOS" >&2; exit 1; }
@@ -846,11 +1008,11 @@ install_rust() {
     echo "[skip] Rust $TOOLCHAIN already active"
   fi
 
-  if cargo nextest --version >/dev/null 2>&1; then
-    echo "[skip] cargo-nextest already installed"
+  if nextest_ready; then
+    echo "[skip] cargo-nextest $(nextest_version) already installed (minimum $NEXTEST_MIN_VERSION)"
   else
     command -v curl >/dev/null 2>&1 || { echo "ERROR: curl is required to install cargo-nextest" >&2; exit 1; }
-    echo "[install] cargo-nextest 0.9 from its official prebuilt archive"
+    echo "[install] cargo-nextest >= $NEXTEST_MIN_VERSION from its official prebuilt archive"
     case "$(uname -s):$(uname -m)" in
       Linux:x86_64) nextest_platform=linux ;;
       Linux:aarch64|Linux:arm64) nextest_platform=linux-arm ;;
@@ -864,6 +1026,7 @@ install_rust() {
     rm -f -- "$TEMP_FILE"
     TEMP_FILE=""
     hash -r
+    nextest_ready || { echo "ERROR: cargo-nextest >= $NEXTEST_MIN_VERSION is still unavailable after installation; check Cargo's PATH or run cargo install cargo-nextest --locked" >&2; exit 1; }
   fi
 }
 
@@ -1047,6 +1210,74 @@ install_shellcheck() {
   hash -r
 }
 
+# Installs the tools make bash3 needs to compile Bash 3.2 (see
+# bash3_build_tools_ready); macOS needs none.
+install_bash3_build_tools() {
+  if ! bash3_build_tools_needed; then
+    echo "[skip] Bash 3.2 build tools: stock /bin/bash is already Bash 3.2"
+    return
+  fi
+  if bash3_build_tools_ready; then
+    echo "[skip] Bash 3.2 build tools (C compiler, make, bison) already installed"
+    return
+  fi
+
+  echo "[install] Bash 3.2 build tools for make bash3 (missing: $(bash3_build_tools_missing))"
+  case "$(uname -s)" in
+    Linux)
+      if command -v apt-get >/dev/null 2>&1; then
+        as_root apt-get install -y build-essential bison || exit 1
+      elif command -v dnf >/dev/null 2>&1; then
+        as_root dnf install -y gcc make bison || exit 1
+      elif command -v yum >/dev/null 2>&1; then
+        as_root yum install -y gcc make bison || exit 1
+      else
+        echo "ERROR: unsupported Linux package manager; install a C compiler, make and bison, then re-run" >&2
+        exit 1
+      fi
+      ;;
+    *) echo "ERROR: only Linux and macOS are supported; install a C compiler, make and bison, then re-run" >&2; exit 1 ;;
+  esac
+  hash -r
+  bash3_build_tools_ready || {
+    echo "ERROR: Bash 3.2 build tools still missing after install: $(bash3_build_tools_missing)" >&2
+    exit 1
+  }
+}
+
+# The pinned release binary goes to $CARGO_HOME/bin, which this script already
+# puts on PATH; the archive is verified against the pinned checksum first.
+install_actionlint() {
+  if actionlint_ready; then
+    echo "[skip] actionlint $ACTIONLINT_VERSION already installed"
+    return
+  fi
+
+  local platform expected actual
+  if ! platform=$(actionlint_platform); then
+    echo "[warn] no actionlint $ACTIONLINT_VERSION release archive for $(uname -s) $(uname -m); build it from $ACTIONLINT_INSTALL_URL"
+    return
+  fi
+  expected=$(actionlint_sha256 "$platform") || exit 1
+  command -v curl >/dev/null 2>&1 || { echo "ERROR: curl is required to install actionlint" >&2; exit 1; }
+  echo "[install] actionlint $ACTIONLINT_VERSION from its release archive"
+  TEMP_FILE=$(mktemp "${TMPDIR:-/tmp}/actionlint.XXXXXX") || exit 1
+  curl --proto '=https' --tlsv1.2 -LsSf \
+    "https://github.com/rhysd/actionlint/releases/download/v$ACTIONLINT_VERSION/actionlint_${ACTIONLINT_VERSION}_$platform.tar.gz" \
+    -o "$TEMP_FILE" || exit 1
+  actual=$(sha256_of "$TEMP_FILE") || { echo "ERROR: sha256sum or shasum is required to verify actionlint" >&2; exit 1; }
+  if [[ "$actual" != "$expected" ]]; then
+    echo "ERROR: actionlint archive SHA-256 mismatch (expected $expected, got $actual)" >&2
+    exit 1
+  fi
+  mkdir -p "$CARGO_HOME/bin" || exit 1
+  tar -xzf "$TEMP_FILE" -C "$CARGO_HOME/bin" actionlint || exit 1
+  rm -f -- "$TEMP_FILE"
+  TEMP_FILE=""
+  hash -r
+  actionlint_ready || { echo "ERROR: $CARGO_HOME/bin/actionlint does not report version $ACTIONLINT_VERSION after installation (found: $(actionlint_version || echo unrunnable))" >&2; exit 1; }
+}
+
 install_frontend() {
   if ! command -v corepack >/dev/null 2>&1; then
     command -v npm >/dev/null 2>&1 || { echo "ERROR: npm is required to install Corepack" >&2; exit 1; }
@@ -1121,6 +1352,8 @@ install_frontend
 install_gh
 install_jq
 install_shellcheck
+install_bash3_build_tools
+install_actionlint
 
 echo
 check_all

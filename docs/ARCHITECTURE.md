@@ -112,14 +112,120 @@ bus — never on the transport or on each other directly.
 | intent-sourcecontrol | SourceControl trait + GitHubSourceControl (octocrab): PR/issue/review/check-run/mergeability, retry | core |
 | intent-git | status/stage/commit/branches, worktree create + lock, CoW reflink probe/clone (macOS `clonefile(2)` whole-tree fast path with best-effort walk fallback, Linux `ioctl(FICLONE)`) for CoW workspace checkouts and per-agent sandboxes, hidden repo cache (`repo_cache`) of read-only GitHub clones backing cache-hydrated workspace creation | core |
 | intent-context | ContextEngine trait + AuggieContextEngine + discovery | core |
-| intent-pty | unified portable-pty host for terminals **and** scripts: scrollback ring buffers, multi-client attach, service/command modes, auto-restart, URL/port detection | core |
+| intent-pty | unified portable-pty host for terminals **and** scripts: scrollback ring buffers (script output is also copied by an output sink to per-run logs under `<data_dir>/script-output/`, which `script.output` reads, so it survives restart and archive), multi-client attach, service/command modes, auto-restart, URL/port detection | core |
 | intent-search | BE-owned `search.*`: ripgrep-equivalent content search (grep + ignore + globset), path/glob search, adapters over persisted sessions/events/memories/notes/codebase; per-request cancellation | core, store |
 | intent-js | QuickJS-based JavaScript engine for agent-supplied code: async host bindings, wall-clock timeouts | (none — leaf) |
 | intent-linear | LinearEngine + DTOs for the `linear.*` surface (typed GraphQL over reqwest) | core |
 | intent-sentry | SentryEngine + DTOs for the `sentry.*` surface (REST over reqwest) | core |
 | intent-transport | local (UDS on Unix, named pipe on Windows) + TCP listeners, TLS, bearer auth, origin allow-list, JSON-RPC router, heartbeat, lifecycle, `client.hello` handshake + live-connection→`clientId` map | core, services |
 
+## Phase 1 node execution (prepared architecture)
+
+The [node contract](protocol/methods/nodes.md), [private node link](protocol/node-link.md)
+and [checkpoint format](protocol/node-checkpoints.md) define the approved target;
+they are **not implemented at the current pins**. Phase 1 includes static remote
+nodes, the in-process local node, hub durability/recovery and full per-agent CoW
+retirement. Current sandbox behavior is recorded separately below until removal.
+
+Head owns durable orchestration: SQLite, transcripts, permissions, placement,
+leases, prompts, hub refs, notes/tasks, event delivery and explicit publication.
+Node owns everything touching a checkout or provider process: ACP and its
+fs/terminal callbacks, provider CLI, QuickJS workspace API, stdio MCP, scripts,
+process accounting, idle reap, journal and checkpoint capture. A remote agent
+never leaves a child handle or ACP connection in head's AgentHandle. Remote PIDs
+are never sampled by head's ProcessRegistry. The same installed intentd binary
+has a node composition root; phase 1 installs matching versions manually.
+
+The local node is a service composed in head's process over an in-memory link,
+without another daemon, listener or token. It implements the same admission,
+scope, journal, checkpoint and merge semantics. Default local/shared/worktree
+execution remains available; explicit isolated placement always creates its own
+checkout. clonefile/FICLONE accelerates that creation, with a standalone repo-cache
+Git clone fallback on unsupported filesystems. It never inherits the legacy
+sandbox's shared-checkout fallback. An isolated path on a multi-agent static host
+does not imply a security boundary; exclusive placement reserves a whole static
+node when requested.
+
+### Dependency-safe execution seams
+
+| Location | Future responsibility and boundary |
+| --- | --- |
+| intent-core | Transport-independent AgentRuntime/NodeLink interfaces, lease/placement/checkpoint DTOs and scoped caller envelope; no dependency on services or transport |
+| intent-services | Orchestration, placement, hub transactions, interruption/resume; consumes interfaces injected by the binary; never imports transport |
+| intent-acp + intent-js | Existing ACP/fs/terminal and QuickJS implementation runs on node; MCP bindings in `intent-acp/src/mcp_server/bindings` split operation routing through WorkspaceApi implementations, not a services-only proxy |
+| intent-git | Non-mutating checkpoint codec extracted from transfer WIP/index representation, local checkout creation, scoped hub refs and Git helper; no orchestration or socket ownership |
+| intent-store | Node/lease identities, journal ingestion identity/watermark, checkpoint pointer, stop/resume/publication operation records and idempotency |
+| intent-nodes (new) | Static/local provider adapters and node runtime composition helpers using core interfaces and lower-level acp/git/pty/providers; no services or transport import |
+| intent-transport | Concrete authenticated WSS multiplexing endpoints implementing core interfaces; persistence occurs through service interfaces, not direct store access |
+| intentd binary | Wires head and node composition roots, in-memory or TLS endpoints, local runtime implementation and CLI/helper entry points |
+
+The first extraction wraps today's `agent_manager` spawn/prompt/cancel/stop/reap
+and memory operations behind AgentRuntime without changing local semantics.
+Remote implementation uses the injected NodeLink, not `transport` types. Scope
+travels with each operation: a node's agent cannot acquire administrator/daemon
+authority by forwarding a call, including a hook. Preserve `intent-core::Caller`
+and shared-host membership checks rather than treating a lease token as a user.
+
+### Durable work and recovery
+
+Head's bare hub is keyed by forge host/provider/repo identity and borrows only
+head-local cache objects. Node has a separate cache and checkout; no head/node
+shared filesystem or remote alternates path exists. Git packs and verified blobs
+carry unpublished commits, dirty WIP, original index, submodule repositories and
+portable provider session state. Transfer's existing `snapshot_wip` mutates the
+live index/HEAD, so periodic capture must extract its format into a temporary-index
+codec with a proven capture barrier. A failed capture retains the last successful
+checkpoint and never reports new durability.
+
+Node fsyncs journal records before forwarding; head transactionally commits the
+dedup identity, transcript/events and contiguous ack watermark. Checkpoint success
+is separate: immutable Git/blob anchors are durable before the SQLite checkpoint
+pointer advances. Reconnect fences old connections, replays records, applies stop
+tombstones and reconciles one resume attempt before delivering any new prompt.
+Checkpoint advancement also compares a durable assignment epoch/capture revision;
+late older uploads cannot replace newer recovery state, even at the same journal
+watermark. Isolated children hydrate the parent's captured dirty contents through
+an immutable inherited baseline without editing the parent. Merge/publication
+exclude that baseline from the child's attributable delta; private synthetic
+ancestry is normalized away before a forge push, or publication is blocked.
+Loss notices state the successful checkpoint's actual capture time; the periodic
+five-minute attempt is not a loss bound during an outage or failed capture.
+
+Public `hub.publish` plus a bound node CLI command provides the explicit head-owned
+forge push. Agent state never creates forge branches implicitly. Existing MCP
+git helpers remain commit/root operations and PR helpers remain snapshot/monitor;
+PR creation uses `gh`, with a bounded argv/body bridge for node callers. No removed
+Git push or PR-create MCP binding is resurrected. Hub merge runs on the target
+node, protecting its actual dirty/index state and using the same completion
+semantics for local and remote parents.
+
+### Reconciliation and phase boundary
+
+The closed [microVM backend PR #873](https://github.com/intent-hq/intentd/pull/873)
+and [docs PR #5918](https://github.com/intent-hq/intent/pull/5918) used host-driven
+guest exec, execution-environment profiles and host/guest filesystem access.
+Those runtime/profile assumptions are not the phase 1 foundation. Useful VM
+lifecycle/image work may later implement NodeProvider with `intentd node` in the
+guest; head must not launch provider CLIs remotely or mount a guest checkout.
+The source proposal's read-only virtio-fs cache exception is also superseded:
+base objects come from each node's own cache/forge or hub transport, never shared
+head filesystem paths. Cloud adapters, images, Windows qualification, local Mac
+microVMs, freeze/fork, automatic sitter upgrades and credential administration
+are outside phase 1.
+
+Retirement order is additive docs → backend node/hub support and local parity →
+replacement frontend → backend per-agent CoW deletion → canonical catalog cleanup
+after automatic pins. Each merge requires human authorization. Keep workspace
+`checkoutMode: cow`, reflink primitives and repo-cache coverage throughout. Remove
+per-agent isolation selection and merge/discard routes without aliases or live
+sandbox migration; old sandbox files remain untouched for explicit recovery.
+
 ## Workspace checkouts & agent sandboxes (CoW)
+
+This section describes **current pinned behavior**. The per-agent sandbox portion
+is retired only after the replacement gates above; workspace CoW checkout creation
+is retained. In particular, the legacy shared fallback below is not allowed for
+future explicit isolated node placement.
 
 Wire contract: PROTOCOL.md §5.1 (`checkoutMode`, `cowSupported`), §5.5/§5.5a
 (sandboxes). Architectural split of responsibilities:
@@ -209,7 +315,19 @@ Wire contract: PROTOCOL.md §5.1 (`checkoutMode`, `cowSupported`), §5.5/§5.5a
   toggle on the capability RPC, so the toggle works with no workspace loaded;
   workspace payload consumers (e.g. isolation-mode resolution) still read the
   per-workspace aggregate.
-- **Deletion.** `workspace.delete`'s git-metadata phase is checkout-mode aware: a
+- **Deletion.** `workspace.delete` first closes data-producer admission for the
+  target workspace, waits for already admitted operations, and stops its runtime
+  writers. Store cleanup removes one session at a time and sweeps histories and
+  other growing dependent data in bounded batches, releasing the SQLite writer
+  between steps. Each batch commits independently: failure or interruption can
+  leave a live workspace row with partially removed data, and a retry finishes the
+  remaining cleanup. Cancellation does not roll back committed batches or guarantee
+  that already-started database work stops. Only the final workspace-row deletion
+  and deleted-ID tombstone share the terminal transaction. Normal immediate-delete
+  success and `workspace:deleted` follow that commit; filesystem cleanup stays
+  asynchronous. See [the deletion contract](protocol/methods/workspace.md) for
+  retry, grace-window and event semantics.
+  The git-metadata phase is checkout-mode aware: a
   worktree checkout gets registration prune + guarded branch delete + rename to a
   trash path, while a `cow` or `direct` checkout — a standalone clone with no
   registration in the source repo — goes through
@@ -478,10 +596,12 @@ via the MCP `ws.pr.monitor` binding (registration is MCP-only, like
 `ws.hook.schedule`; the FE wire surface is `prMonitor.list` / `cancel` /
 `flush`), and **one shared daemon loop** (`spawn_pr_monitor_loop`, wired in
 `main.rs` beside the PR-refresh sweep) ticks on the live
-`prMonitor.pollSeconds` cadence and polls the due monitors — each distinct PR
+`prMonitor.pollSeconds` cadence (default 60 seconds) and polls the due monitors —
+each distinct PR
 becomes due after an effective interval (the minimum time between two polls of
 one PR; the actual revisit lands on the first tick at or after it, i.e. rounds
-up to the next `pollSeconds` tick) planned as the larger of two cadences
+up to the next `pollSeconds` tick). The workspace idle policy is a floor on
+the global interval planned as the larger of two cadences
 (`effective_pr_monitor_interval_secs` / `plan_quota_cadence`): the
 hourly-budget cadence, stretched so the loop is modelled to spend at most the
 live `prMonitor.hourlyRequestBudget` forge calls per hour (default 1500,
@@ -490,8 +610,9 @@ minimum 60, maximum 5000; each PR poll costed at `PR_MONITOR_REQUESTS_PER_POLL`
 or blocked against it, and actual spend can differ — the 3-call unit is a
 single-page planning constant, so the folded observation spends less and
 paginated review lists / degraded-path REST fallbacks more), and the quota
-cadence (intentd#1948): each due-sweep tick spends one quota-free
-`rate_limit` probe and stretches the interval so the projected spend to the
+cadence (intentd#1948): due-sweep ticks consult the shared authoritative
+quota probe (at most once per 60 seconds, including failed probes) and stretch
+the interval so the projected spend to the
 window's reset (capped at 2h) stays within the live
 `prMonitor.quotaSharePercent` (default 50, minimum 1, maximum 100) of the
 forge's REMAINING quota — `allowed = floor(remaining × share / 100)` in
@@ -506,8 +627,29 @@ apart than one tick, the cap is zero until that spacing has elapsed since the
 newest `lastPolledAt`, so a stale backlog (restart, outage, quota stretch)
 drains within the planned budget — a hold measured from the persisted stamps,
 needing no spend counter, and keyed on the final interval alone, so a
-budget-derived stretch holds even with unknown or plentiful quota. On GitHub
-one poll is a single GraphQL `pr_observation` (PR record,
+budget-derived stretch holds even with unknown or plentiful quota.
+
+`workspace_check_cadence` adds a workspace floor of 120/300/600/900 seconds
+from 15 minutes/1 hour/6 hours/24 hours without meaningful content work.
+The default active interval is 60 seconds; explicit `pollSeconds` remains the
+active interval and floor. A bounded store projection reads `last_content_activity`
+(or creation time without content history), while live agent work restores active
+cadence. Note/conversation activity counts; polling, metadata and merely opening
+views do not. Missing, malformed or future clocks use active cadence. For a shared
+PR the fastest interested workspace wins, and the existing shared fetch updates
+all siblings. Idle delay never shortens global budget/quota limits or bypasses a
+pause. Registration, restart catch-up, explicit checks, debounce and terminal
+notification behavior remain unchanged.
+
+The same policy gates automatic `pr.refresh` calls and background linkage/root
+forge checks. `automatic_pr_refresh` reserves a workspace/root attempt before I/O,
+retaining failed and in-flight attempts across repeated callers and connections;
+deferred commands return persisted linkage. Provider-scoped discovery caches reuse
+results for the admitted interval, including suitable monitor observations.
+Explicit refreshes bypass idle admission but retain quota protection. Local git
+maintenance retains its independent 180-second active / 1800-second idle cadence.
+
+On GitHub one poll is a single GraphQL `pr_observation` (PR record,
 merge-requirement signals, reviews and review
 threads within bounded windows, conversation-comment count; `rateLimit.cost`
 1) plus a REST `branch_rules` read — 2 reads where the per-signal sequence
@@ -894,6 +1036,16 @@ self-described at the point of use in `DEFAULT_CONFIG_TEMPLATE`,
   total with the next sweep's headroom. The idle-reap sweep
   (`idleReapMinutes`) is independent of this rule and still drains idle
   trees on its own TTL.
+- **The idle-reap sweep keeps agents with running provider workers**
+  ([intent-hq/intentd#2573](https://github.com/intent-hq/intentd/pull/2573)).
+  An idle agent whose current connection is continuous and has a §5.5b worker
+  row still `running` (a `run_in_background` dev server, say) is skipped by
+  the TTL sweep, because killing its process would kill the worker with it. The
+  keep-alive is bounded by `WORKER_KEEPALIVE_CAP` (24 h past the TTL, for a
+  worker whose end report never arrives). Slot-cap admission and the
+  memory-budget drain can still evict such an agent, but only after every
+  idle agent without a running worker (`KeepAliveFn` in
+  `intent-services/src/agent_manager.rs`).
 - **`memoryBudgetMb` is a soft admission gate, not a ceiling**
   (monorepo#2063, validated end-to-end against real agents **under the strict
   policy** — the tree-only criterion that is now the fallback above; on a

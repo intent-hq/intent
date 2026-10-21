@@ -2,18 +2,39 @@
 
 Intent releases are published to GitHub Releases on the public `intent-hq/cloudlands-releases` repository. The desktop app's auto-updater (electron-updater) pulls from rolling channel tags (`beta`, `stable`) on that repo.
 
+The dual-architecture Mac procedures below describe the source-reviewed workflow
+at [cloudlands-fe f32df299](https://github.com/intent-hq/cloudlands-fe/commit/f32df299fa33e3f269c72cfea7dc8f33d796a38c).
+For each release, record signed native build results for both Mac CPUs and
+full feature-gate results, separately from physical installation and actual
+auto-update validation on each CPU. Follow the
+[Mac validation checklist](./RELEASING.md#mac-validation-before-release).
+
 ## Release Channels
+
+**Pending rollout:** optional Intel and `latest-arm64-mac.yml` require the
+companion component releases and both cleanup-source pin updates to the actual
+merged root fix. This documentation does not enable them. The current shared-feed
+behavior is documented below; see the
+[coordinated Intel policy](../RELEASING.md#intel-mac-release-policy--pending-rollout)
+for the rollout order and the [release verification differences](./RELEASING.md#overview).
+After rollout, native ARM clients use `latest-arm64-mac.yml`, while legacy and
+Intel clients keep `latest-mac.yml`. On Intel omission that legacy feed retains
+each destination channel's own last compatible version with immutable asset URLs;
+the new ARM feed advances independently. Complete dual releases refresh both.
+Old shared-feed ARM clients may need a manual ARM installation or wait for a dual
+release carrying new routing. A fifth feed does not migrate already-installed
+clients by itself.
 
 Intent uses a channel-based update model:
 
 - **`beta`** — Rolling release tag for beta testing; auto-updater pulls from `https://github.com/intent-hq/cloudlands-releases/releases/download/beta/`
 - **`stable`** — Rolling release tag for general availability; auto-updater pulls from `https://github.com/intent-hq/cloudlands-releases/releases/download/stable/`
 
-Each channel carries **four auto-updater feed files**, one per platform/arch:
+Each channel carries **four auto-updater feed files**; both Mac architectures share one feed:
 
 | Feed file                | Platform      |
 | ------------------------ | ------------- |
-| `latest-mac.yml`         | macOS (arm64) |
+| `latest-mac.yml`         | macOS (x64 + arm64) |
 | `latest.yml`             | Windows (x64) |
 | `latest-linux.yml`       | Linux (x64)   |
 | `latest-linux-arm64.yml` | Linux (arm64) |
@@ -36,18 +57,23 @@ version number by hand.
    that bumps `package.json` and regenerates `CHANGELOG.md` from the
    conventional commits since the last `v*` tag.
 2. The Release PR is auto-merged by `auto-cut-alpha.yml` when it is green —
-   that is the release timing gate. The workflow is event-chained with an
-   hourly cron backstop: a sidecar pin-bump squash merge (a push to `main`
-   touching `intentd.version`) chains straight into a cut run that polls
-   (30s interval, up to 15 min) for release-please to refresh the Release PR
-   and for CI Gate to go green, then merges — so a new intentd ships in the
-   same fe alpha cycle. The hourly cron at :30 is the backstop and the normal
-   path for fe-only changes (check-once-and-exit, no polling); every run type
-   defers the cut while an intentd release build is in flight (a semver tag on
+   that is the release timing gate. Any push to `main` starts an attempt
+   (except the cut's own release merge), and a ten-minute cron retries.
+   Push, cron, and manual runs check readiness once and exit without sleeps
+   or polling. No open Release PR means no cut. All automated attempts,
+   including sidecar-pin updates, defer while the latest frontend release
+   tag is less than 60 minutes old; manual `workflow_dispatch` retains its
+   throttle override. Existing tag/date lookup fail-open behavior is unchanged.
+   Scheduled retries also require the Release PR to carry main's current pin
+   and a head no older than the newest unshipped releasable commit. Release PR
+   freshness, pin checks, CI Gate, and other readiness guards must still pass.
+   Every run type defers the cut while an intentd release
+   build is in flight (a semver tag on
    `intent-hq/intentd` newer than the published alpha manifest and younger
    than 90 minutes; fails open on any lookup error). The `hold-release`
    label on the Release PR pauses the auto-cut; a human can still merge
-   early.
+   early. See the canonical [frontend release guards](../RELEASING.md#cloudlands-fe)
+   for the full eligibility checks and manual overrides.
 3. On the merge, release-please creates the `v{version}` tag and a GitHub
    Release on `cloudlands-fe`. The workflow authenticates with `RELEASE_PAT`
    (not the default `GITHUB_TOKEN`) so the pushed tag triggers downstream
@@ -114,8 +140,10 @@ Release workflows require the following secrets configured on `intent-hq/cloudla
 - `RELEASE_PAT` — Personal access token with `repo` scope on `cloudlands-fe` + `cloudlands-releases` (also used by release-please, which needs contents + pull-requests + issues write; `repo` scope covers all three)
 - `INTENTD_READ_PAT` — Personal access token with read-only access to `intent-hq/intentd` (used to download the pinned intentd release assets while the repo is private)
 
-Windows builds require no signing secrets — they ship **unsigned** (see
-[Platform builds and runners](#platform-builds-and-runners)).
+Production Windows releases require no Windows signing secrets because they remain
+**unsigned** (see [Platform builds and runners](#platform-builds-and-runners)).
+Optional manual Azure-signed builds require the separate configuration described
+under [Manual Signed Build](#manual-signed-build-pr-test-builds).
 
 ## Alpha Release Workflow
 
@@ -130,7 +158,7 @@ The alpha release workflow is defined in `.github/workflows/release-alpha.yml`.
 **What it does:**
 
 1. A resolve/validate job resolves the release tag (from the tag push, or the dispatch input), validates its format (supports prerelease suffixes like `v1.2.3-beta.1`), verifies the tag matches the `package.json` version at that commit (guards against tags not created by release-please), and fails if a `v{version}` release already exists on `intent-hq/cloudlands-releases` (duplicate-release protection)
-2. **Per-platform build jobs** run in parallel (see [Platform builds and runners](#platform-builds-and-runners) for runners and artifacts). Each job checks out the release tag, sets up pnpm and Node.js 22, installs frontend dependencies, reads the pinned intentd version from `intentd.version`, fetches the pinned intentd sidecar for its platform/arch via `scripts/fetch-sidecar.cjs` (sha256-verified, staged at `resources/sidecar/`; fails fast if the pinned release or its assets don't exist on `intent-hq/intentd`), then builds and packages the app. The macOS job additionally imports the code signing certificate into a temporary keychain and signs + notarizes the app via the `scripts/notarize.js` afterSign hook (the staged sidecar is signed by the `scripts/sign-sidecar.js` afterPack hook); Windows and Linux artifacts are unsigned
+2. **Per-platform build jobs** run in parallel (see [Platform builds and runners](#platform-builds-and-runners) for runners and artifacts). Each job checks out the release tag, sets up pnpm and Node.js 22, installs frontend dependencies, reads the pinned intentd version from `intentd.version`, fetches the pinned intentd sidecar for its platform/arch via `scripts/fetch-sidecar.cjs` (sha256-verified, staged at `resources/sidecar/`; fails fast if the pinned release or its assets don't exist on `intent-hq/intentd`), then builds and packages the app. Each macOS job additionally imports the code signing certificate into a temporary keychain and signs + notarizes the app via the `scripts/notarize.js` afterSign hook (the staged sidecar is signed by the `scripts/sign-sidecar.js` afterPack hook); Windows and Linux artifacts are unsigned
 3. A **publish job** runs only after **every** build job succeeds — any platform build failure fails the whole release; there is no partial publish. It generates release notes from the fe commit range (the intentd section lists the intentd commit delta from the previous release's pin, recovered from the previous release's `release-manifest.json` asset — falling back to a pin-only reference when the previous pin can't be recovered, or to the pin line + compare link without a commit list when the intentd compare API is unavailable) and publishes all platforms' artifacts to `intent-hq/cloudlands-releases`:
    - Creates immutable versioned release: `v{version}`
    - Updates rolling `beta` release tag (clobbers existing assets)
@@ -153,7 +181,7 @@ The promote-to-stable workflow:
 1. Validates the version and verifies the versioned release exists on `intent-hq/cloudlands-releases`
 2. **Beta-first guard**: checks the current beta channel version (read from the `beta` release's `latest-mac.yml` feed) is >= the promoted version — the invariant is that beta can never be behind stable (this does not prove the promoted version itself was ever on beta; e.g. beta 2.0.2 still permits promoting stable 2.0.1). Fails fast before any channel asset is downloaded or uploaded when the beta feed is missing or unparseable or the beta version is behind the promoted one. Dispatching with `skip_beta_check: true` bypasses the guard for emergency promotions, logged as a warning
 3. Reads the previous stable version from the stable channel's `latest-mac.yml` (tolerates a first promotion)
-4. Copies all artifacts from the versioned release to the `stable` rolling release tag — all feed files (`latest-mac.yml`, `latest.yml`, `latest-linux.yml`, `latest-linux-arm64.yml`) are uploaded **last** for an atomic feed switch — then deletes superseded assets and verifies each promoted feed's `sha512`. Promoting an older mac-only release still works: missing platform feeds produce warnings, not failures
+4. Copies all artifacts from the versioned release to the `stable` rolling release tag — all feed files (`latest-mac.yml`, `latest.yml`, `latest-linux.yml`, `latest-linux-arm64.yml`) are uploaded **last** for an atomic feed switch — then deletes superseded assets and compares each complete promoted feed with its versioned source. Promoting an older mac-only release still works: missing platform feeds produce warnings, not failures
 5. Builds aggregated release notes for the range `(prevStable, VERSION]`: a leading summary section (promoted version, previous stable, and a consolidated intentd pin delta recovered from the releases' `release-manifest.json` files and rendered from the intentd compare API via `scripts/generate-stable-summary.mjs`), followed by each version's release body
 6. Updates the `stable` release body with the aggregated notes
 
@@ -169,22 +197,54 @@ The rollback workflow will restore a previous versioned release to a channel's r
 
 ## Platform Builds and Runners
 
-Each release ships four platform builds, produced by parallel jobs in `release-alpha.yml`:
+The release workflow produces four platform/architecture builds in parallel jobs in `release-alpha.yml` (macOS is Apple Silicon only):
 
 | Platform      | Runner                                                         | Artifacts                                           | Feed file                |
 | ------------- | -------------------------------------------------------------- | --------------------------------------------------- | ------------------------ |
-| macOS (arm64) | `macos-15-xlarge` (GitHub-hosted)                              | `.dmg`, `.zip` (+ blockmaps)                        | `latest-mac.yml`         |
-| Windows (x64) | `gh-windows-16x` (org-hosted, Windows Server 2022 image)       | NSIS installer `.exe`, portable `.exe` (+ blockmap) | `latest.yml`             |
-| Linux (x64)   | self-hosted `tinybox` (`[self-hosted, Linux, X64, tinybox]`)   | AppImage, `.deb`                                    | `latest-linux.yml`       |
-| Linux (arm64) | self-hosted `comfy` (`[self-hosted, Linux, ARM64, comfy]`)     | AppImage only (`deb:arm64` temporarily disabled)    | `latest-linux-arm64.yml` |
+| macOS (arm64) | `macos-15-xlarge` (signed builds stay off macOS 26 images) | `.dmg`, `.zip` (+ blockmaps)                        | `latest-mac.yml`         |
+| Windows (x64) | `gh-windows-16x` (Windows Server 2022)                     | NSIS installer `.exe`, portable `.exe` (+ blockmap) | `latest.yml`             |
+| Linux (x64)   | `gh-linux-8x`                                              | AppImage, `.deb`                                    | `latest-linux.yml`       |
+| Linux (arm64) | `gh-linux-arm64-8x`                                        | AppImage only (`deb:arm64` temporarily disabled)    | `latest-linux-arm64.yml` |
 
 Notes:
 
-- **Self-hosted runner dependency**: both Linux jobs require their self-hosted runners (`tinybox` for x64 — monorepo#1340, `comfy` for arm64) to be online; a release run queues (and eventually fails) if one is unavailable. macOS uses a GitHub-hosted runner and Windows an org-hosted runner.
+- **Runner routing**: release builds run directly on the GitHub-hosted labels above. PR and merge-queue checks prefer compatible self-hosted capacity and use GitHub-hosted runners when the fleet is busy, unavailable, under maintenance, or cannot be inspected. The probe stays hosted. See [CI runner routing](../RELEASING.md#ci-runner-routing) for credentials, platform matching, and the disposable smoke-test exception.
 - **Linux arm64 temporarily ships AppImage-only**: electron-builder's bundled fpm fails to spawn on the arm64 runner, so `deb:arm64` is disabled until the runner issue is resolved (monorepo#1286).
-- **Windows builds are unsigned** (first iteration). The `scripts/windows-sign.cjs` sign hook silently skips signing when `INTENT_WINDOWS_ENABLE_INTEGRATED_SIGNING` is unset; DigiCert integrated signing in releases is a follow-up. Expect SmartScreen warnings on install.
+- **Production Windows releases remain unsigned.** Expect SmartScreen warnings on install. Azure Artifact Signing is available only through the explicit manual build configuration; production enablement and native Windows installation/update acceptance remain pending. The retired DigiCert flag `INTENT_WINDOWS_ENABLE_INTEGRATED_SIGNING` must stay unset; enabling it fails the build.
 - **Linux packages are unsigned** (standard for AppImage/deb distributed outside a package repository). Snap is not built or published.
 - macOS remains signed + notarized as before.
+
+### Native Mac builds and shared update feed
+
+Each Mac job builds on its matching CPU with Xcode 26 and native Node.js.
+Apple Silicon uses `INTENTD_TARGET=aarch64-apple-darwin`; Intel uses
+`INTENTD_TARGET=x86_64-apple-darwin`. Packaging stages the matching intentd,
+tailcat, Swift helpers and node-pty native module. Cross-architecture and
+universal packaging are rejected before staging; the runner must match the
+requested `--arm64` or `--x64` target.
+
+Each job signs and notarizes its app, then runs
+`bash scripts/verify-macos-build.sh <arch> true`. This checks packaged native
+binary architectures, requires one app/DMG/ZIP, and runs `codesign`, Gatekeeper
+(`spctl`) and stapled-ticket validation. It does not launch the installed app
+or exercise an update. Both runner labels must be available to the organization.
+An Intel build does not by itself establish support for older macOS versions.
+
+Artifacts are `Intent-<version>-x64.dmg` / `Intent-<version>-x64-mac.zip` and
+the corresponding `arm64` files, each with an external `.blockmap`. Actions
+retains the per-job feeds in `release-macos-x64` and `release-macos-arm64`.
+The publish job downloads them into separate directories and runs
+`scripts/assemble-release-assets.mjs` before publishing anything. Assembly
+requires matching versions, both DMG/ZIP pairs, verified archive sizes/hashes,
+nonempty regular blockmaps, unique asset names and all platform feeds.
+
+The resulting `latest-mac.yml` includes both CPUs in `files`; its legacy
+`path` and `sha512` refer to the Intel ZIP. The pinned updater chooses the
+matching ZIP, including Apple Silicon when running under Rosetta. Channel URLs
+stay unchanged. Beta/stable promotion copies all assets before the feeds and
+compares complete feed digests, so a changed ARM entry cannot hide behind an
+unchanged legacy Intel hash. Older ARM-only releases can still be promoted;
+promotion does not rerun the dual-architecture assembler.
 
 ## Manual Local Build (Development / Testing)
 
@@ -205,9 +265,13 @@ On Windows or Linux, use `pnpm run dist:win` or `pnpm run dist:linux` instead
 
 To build against a locally built intentd instead, point `INTENTD_BIN` at your
 `cargo build --release` output (or omit it in the monorepo, where
-`scripts/copy-sidecar.cjs` defaults to `packages/intentd/target/release`).
+`scripts/copy-sidecar.cjs` defaults to intentd's `target/release` build output).
 
 The packaged artifacts (`.dmg`/`.zip`, `.exe`, AppImage/`.deb`) will be in `dist-electron/`.
+
+On macOS, `dist:mac` defaults to the native host CPU. Use
+`pnpm run dist:mac -- --x64` on Intel or `pnpm run dist:mac -- --arm64` on
+Apple Silicon to request it explicitly; a different CPU target fails early.
 
 **Note:** Local builds will not be signed or notarized unless you configure the signing environment variables locally (`CLOUDLANDS_APPLE_ID`, `CLOUDLANDS_APPLE_APP_SPECIFIC_PASSWORD`, `CLOUDLANDS_APPLE_TEAM_ID`, or legacy `APPLE_*` equivalents).
 
@@ -216,10 +280,53 @@ The packaged artifacts (`.dmg`/`.zip`, `.exe`, AppImage/`.deb`) will be in `dist
 `.github/workflows/manual-signed-build.yml` ("Manual Signed Build") is dispatch-only
 and builds any branch/ref — e.g. a PR branch — into platform installers for manual
 testing. Platforms are opt-in (`build_macos` / `build_windows` / `build_linux`);
-`sign` defaults to true (macOS Developer ID + notarization, Windows DigiCert).
+`sign` defaults to true (macOS Developer ID + notarization, Windows Azure Artifact Signing).
+For a manual Windows build, `build_windows=true` selects the platform and
+`sign=false` selects an unsigned build.
 Installers are uploaded as short-lived workflow artifacts (7-day retention),
 version-suffixed `-manual.<run_number>`; nothing is published to
-`intent-hq/cloudlands-releases` and no auto-updater feed is produced.
+`intent-hq/cloudlands-releases` and no auto-updater feed is uploaded.
+
+Manual Azure signing requires an approved Azure signing account, certificate
+profile and matching publisher identity. Configure repository variables
+`INTENT_WINDOWS_AZURE_ENDPOINT`, `INTENT_WINDOWS_AZURE_ACCOUNT_NAME`,
+`INTENT_WINDOWS_AZURE_CERTIFICATE_PROFILE_NAME`, `INTENT_WINDOWS_PUBLISHER_NAME`,
+`INTENT_WINDOWS_PUBLISHER_SUBJECT` (the full certificate subject), `AZURE_TENANT_ID`
+and `AZURE_CLIENT_ID`, plus the `AZURE_CLIENT_SECRET` repository secret. The separate
+`intent-manual-windows-build.yml` workflow uses `integrated_signing=true` to request
+Azure signing and defaults to unsigned. Artifact verification does not establish
+that Azure provisioning, native Windows trust, installation or unsigned-to-signed
+updates have passed acceptance.
+
+For Mac testing, select `build_macos=true` and explicitly set `macos_arch=arm64`.
+Download `manual-macos-dmg-arm64` from the run. This selection works with the
+current workflow and the pending release-only Intel policy. The current workflow
+also supports `both` (its default) and `x64`; the companion rollout removes those
+selections, defaults to `arm64`, and rejects Intel/universal manual requests.
+`macos_arch` has no effect when `build_macos=false`.
+
+Each artifact contains only its DMG; ZIPs are built and checked but not uploaded
+by this manual workflow. The summary reports success/downloads only after build,
+verification and upload succeed. `sign=false` keeps architecture checks but
+skips signature, Gatekeeper and stapled-ticket checks.
+
+```bash
+# Apple Silicon only
+gh workflow run manual-signed-build.yml --repo intent-hq/cloudlands-fe \
+  --ref <feature-branch> -f build_macos=true -f macos_arch=arm64 -f sign=true
+```
+
+Add `-f smoke_macos=true` to run packaged fixture journeys on a separate
+disposable Mac runner; this requires `build_macos=true` and `sign=true`. Smoke
+runs once on Apple Silicon using `manual-macos-dmg-arm64` with the selection
+above. `smoke_macos_scope` defaults
+to `full`; `fixture-correction` runs only the mock-provider/worktree-capture
+follow-up. Results and process receipts are uploaded as `packaged-macos-smoke`
+with 7-day retention.
+
+Leave Windows and Linux inputs false for a Mac-only run. This dispatch creates
+test installers, not a public release or an end-to-end updater test. See the
+[Mac validation checklist](./RELEASING.md#mac-validation-before-release).
 
 **`intentd_ref` input:** empty (default) fetches the pinned intentd release from
 `intentd.version`, exactly like `release-alpha.yml`. Non-empty accepts any
@@ -229,6 +336,10 @@ sidecar **from source in-workflow** at that ref on every selected leg (macOS,
 Windows, and both Linux arches), staging it at the same `resources/sidecar/` path.
 The run summary reports the resolved intentd SHA. Expect extra build time: a cold
 cargo build adds roughly 15 minutes per leg (cached across repeat dispatches).
+
+Do not install a manual build whose intentd changes add or modify intent-store
+migrations: starting that daemon changes the tester's local database without
+a rollback path.
 
 ## Operational Notes
 

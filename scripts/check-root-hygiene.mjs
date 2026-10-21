@@ -22,6 +22,7 @@ export const ALLOWED_TOP_LEVEL_ENTRIES = new Set([
   'SECURITY.md',
   'cliff.toml',
   'docs',
+  'infra',
   'packages',
   'scripts',
 ]);

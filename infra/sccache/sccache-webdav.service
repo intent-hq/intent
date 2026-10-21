@@ -1,0 +1,30 @@
+# rclone WebDAV backend for the sccache cache. Listens on loopback only;
+# Caddy (Caddyfile) terminates TLS and checks bearer tokens in front of it.
+[Unit]
+Description=sccache WebDAV store (rclone serve webdav, loopback only)
+After=network.target local-fs.target
+RequiresMountsFor=/srv/sccache
+
+[Service]
+Type=simple
+User=sccache
+Group=sccache
+# The sccache user's home is the served tree; without this rclone creates
+# ~/.config/rclone there, visible over WebDAV and a prune target.
+Environment=RCLONE_CONFIG=/dev/null
+ExecStart=/usr/bin/rclone serve webdav /srv/sccache \
+  --addr 127.0.0.1:8080 \
+  --dir-cache-time 30s \
+  --poll-interval 0 \
+  --log-level NOTICE
+Restart=on-failure
+RestartSec=2s
+LimitNOFILE=65536
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/srv/sccache
+
+[Install]
+WantedBy=multi-user.target

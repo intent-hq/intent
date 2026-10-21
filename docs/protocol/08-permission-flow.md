@@ -2,6 +2,13 @@
 
 ## 8. Permission Flow
 
+The [workspace routing preparation](./workspace-routing.md) adds optional
+`workspaceId` to `agent.pendingPermissions { agentId?, workspaceId? }` and
+`agent.respondPermission { requestId, outcome, workspaceId? }`. Workspace clients
+capture the originating ID with the permission prompt and retain it across
+recovery and late responses. Direct callers may omit it. It selects no new
+snapshot filter and changes neither prompt authorization nor resolution behavior.
+
 When an agent's provider (e.g. auggie) wants to run a tool that requires approval, it sends an ACP`session/request_permission` request **to the backend** (over the provider's stdio channel, not theclient WebSocket). The backend mediates approval:
 
 1. **Bypass / auto-approve.** For non-interactive providers running in `bypassPermissions` mode (orwhen the provider can't set a mode), the backend auto-selects an "allow" option and respondsimmediately — no client involvement.
@@ -63,3 +70,76 @@ The frontend responds with the chosen outcome, which the backend forwards to the
 
 Outcomes: `{ "outcome": "selected", "optionId": "<id>" }`, or `{ "outcome": "cancelled" }`.Unanswered requests **time out after 5 minutes** and resolve as `cancelled`, unblocking the agent. The recoverability path (a reconnecting client re-fetching outstanding prompts via `agent.pendingPermissions` so a page refresh does not strand the agent) is **now wired** — see the implementation note above.
 
+### Authorization for shared-host permission prompts *(10.9)*
+
+Under [§5.49](./methods/shared-host-membership.md), prompt snapshots and answers use
+the target agent's current workspace management grant, reflected by `canManage`.
+The primary and active host members retain their management scope; a guest with a
+retained explicit workspace-owner row can read and answer only in that owned
+workspace. An ordinary collaborator or unrelated guest cannot. These guest RPCs
+are already transport-admitted, then scope-checked in the service; `canManage`
+does not admit other methods such as guest-denied WSS `script.*` calls.
+Enforce scope for `agent.pendingPermissions { agentId }`, the unfiltered aggregate
+`agent.pendingPermissions {}`, and
+`agent.respondPermission { requestId, outcome }`. Resolve the request's workspace
+server-side, never from a claimed client role or workspace ID.
+
+The aggregate filters before projecting requests; it cannot leak prompt IDs or
+content from unauthorized workspaces. A known but unauthorized prompt answer is
+Forbidden; a hidden workspace/agent retains the indistinguishable `not-found`
+policy. An absent/already-settled request keeps `{ resolved: false }`.
+
+`agent:permission:request` and `agent:permission:resolved` use the same current
+workspace management grant as snapshots and answers, including retained guest
+ownership. Live delivery rechecks that grant for every prompt event without a
+cached visibility verdict; durable queries, pagination, summaries and unscoped
+search exclude prompt rows from workspaces the caller cannot manage. This adds
+only permission events to the guest audience, not general host-management events.
+
+Clients establish their permission event subscription before taking one aggregate
+`agent.pendingPermissions {}` snapshot, then reconcile request/resolved events.
+A newly established subscription after a disconnect needs a fresh snapshot:
+`events.subscribe` does not replay historical permission events. Ordinary agent
+discovery needs no additional snapshot. Clients must discard stale snapshots and
+prevent late snapshot responses from resurrecting already-resolved prompts.
+
+Demotion or removal ends the corresponding scoped event/read/answer authority; exact
+credential revocation independently prevents admission even if a durable owner
+row remains. These changes do not cancel another person's running agent. Existing
+outcome shapes, timeout and first-resolution behavior are unchanged.
+
+### Prepared desktop consent
+
+[Desktop control (§5.51)](./methods/desktop.md#consent-and-lifecycle) defines a
+separate asynchronous consent flow. ACP AllowAll/bypass policies and generic Q&A
+answers never authorize desktop control. Its dedicated request IDs, authenticated
+assigned-primary or same-owner candidate decisions, remembered permission and
+grant-after-readiness wakes
+do not change the existing ACP permission methods or their pending snapshots.
+
+### Explicit resource-read authorization
+
+The [capability-gated GitLab resource-read contract](methods/repository-resources.md)
+uses native desktop read authorization, separate from the interactive tool
+permission flow above. The existing Host Owner/Member execution gate must admit
+the original caller, and the original workspace must still exist and admit that
+caller. Host Guests are refused. A workspace Guest row, visible resource URL,
+Git remote, public connected status or earlier receipt cannot grant this access.
+
+An eligible member may read an explicit project outside the workspace's selected
+review target through the connected host-approved account. The provider's primary
+resource read decides access to that project; a token-free instance descriptor
+does not. Capture binds the original physical socket, Services allocation, caller,
+credential and durable authorization/settings/connection revisions. The server
+revalidates before cache exposure, provider dispatch, cache installation and final
+protected reply transfer. Warm cache hits retain the same admission requirements.
+
+Expiry, cancellation, release, workspace/credential/account retirement and socket
+loss invalidate the original lifetime. Reconnecting or restoring equal-looking
+settings cannot revive it. Sanitized public refusal must not disclose private
+account or target facts. This grants no selection, Git/write, authentication
+setup or model/tool permission. The contract returns only connected,
+token-free instance descriptors; missing or unavailable capture facts yield
+sanitized `-32003 Forbidden`, not a descriptor fallback. Typed outcomes and limits
+follow the resource-read contract; this
+does not establish deployed support. Capability detection alone is insufficient.
