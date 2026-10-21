@@ -177,10 +177,14 @@ export function methodNamesInFirstCell(cell) {
   }
 }
 
-/** Markdown table cells of a `|`-led row (honours the `\|` escape), or null for a non-table line. */
+/**
+ * Markdown table cells of a `|`-led row, or null for a non-table line. As in
+ * GitHub's cmark-gfm, `\|` is an escaped pipe wherever it appears (even after
+ * another backslash or inside a code span); every other `|` splits the cell.
+ */
 export function tableCells(raw = '') {
   if (!raw.startsWith('|')) return null;
-  const cells = [...raw.matchAll(/\|((?:[^|\\]|\\.)*)/g)].map((m) => m[1].trim());
+  const cells = [...raw.matchAll(/\|((?:\\\||[^|])*)/g)].map((m) => m[1].trim());
   if (cells.at(-1) === '') cells.pop(); // Optional trailing pipe, not an extra column.
   return cells;
 }

@@ -49,6 +49,35 @@ test('an escaped pipe does not split the cell', () => {
   assert.deepEqual(mismatchedRows(table('| `outcome` | `{ status: "created"\\|"reused" }` |')), []);
 });
 
+test('a backslash before the escape still escapes the pipe, as in cmark-gfm', () => {
+  assert.deepEqual(mismatchedRows(table('| `a\\\\|b` | c |')), []);
+});
+
+test('a lazy line without a leading pipe after a table is a row and is counted', () => {
+  assert.deepEqual(mismatchedRows(table('| a | b |', 'x | y | hidden', 'x | y')), [
+    { line: 4, cells: 3, header: 2, headerLine: 1 },
+  ]);
+  assert.deepEqual(mismatchedRows(table('| a | b |', 'trailing prose')), [
+    { line: 4, cells: 1, header: 2, headerLine: 1 },
+  ]);
+});
+
+test('a header and delimiter without leading pipes still form a table', () => {
+  assert.deepEqual(mismatchedRows(['a | b', '--- | ---', '1 | 2 | 3'].join('\n')), [
+    { line: 3, cells: 3, header: 2, headerLine: 1 },
+  ]);
+});
+
+test('another block start ends the table body', () => {
+  for (const next of ['# Heading', '> quote | x | y', '- item | x | y', '1. item | x | y', '***', '<details>']) {
+    assert.deepEqual(mismatchedRows(table('| a | b |', next)), [], next);
+  }
+});
+
+test('a pipe-free line before a dash line is not a table header', () => {
+  assert.deepEqual(mismatchedRows('Title\n---\n| a | b | c |\n'), []);
+});
+
 test('the trailing pipe is optional on every row', () => {
   assert.deepEqual(mismatchedRows(['| a | b', '| --- | ---', '| 1 | 2 |', '| 3 | 4'].join('\n')), []);
 });

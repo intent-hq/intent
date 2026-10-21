@@ -9,11 +9,14 @@
 // methods/agents.md were invisible on GitHub this way. Write `\|` for a
 // literal pipe inside a cell.
 //
-// Scanned: every `docs/protocol/**/*.md`. A table is a `|`-led header row
-// followed by a delimiter row (`---`, `:--`, `--:`, `:-:` cells); its body is
-// every following `|`-led row. Fenced code blocks are skipped. Every delimiter
-// and body row must have exactly as many cells as the header. The walk fails
-// closed: an unreadable directory or a symlink is an error.
+// Scanned: every `docs/protocol/**/*.md`. A table is a header row holding an
+// unescaped `|` followed by a delimiter row (`---`, `:--`, `--:`, `:-:` cells
+// separated by `|`); its body is every following line up to a blank line or
+// the start of another block (fence, heading, blockquote, list item, thematic
+// break, HTML), so a lazy line without a leading pipe is a row too, as on
+// GitHub. Fenced code blocks are skipped. Every delimiter and body row must
+// have exactly as many cells as the header. The walk fails closed: an
+// unreadable directory or a symlink is an error.
 //
 // Usage:
 //   node scripts/check-doc-table-cells.mjs               # exit 1 on any finding
@@ -24,27 +27,28 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
+import { markdownFilesBelow } from './check-doc-line-length.mjs';
 import { tableCells } from './check-protocol-catalog.mjs';
 
 export const SCAN_DIR = 'docs/protocol';
 
 const DELIMITER_CELL_RE = /^:?-+:?$/;
 const FENCE_RE = /^ {0,3}(`{3,}|~{3,})/;
+const UNESCAPED_PIPE_RE = /(^|[^\\])\|/;
+// Block starts that end a table body (blank lines are handled separately).
+const BLOCK_START_RE = /^ {0,3}(#{1,6}(\s|$)|>|[-*+](\s|$)|\d{1,9}[.)](\s|$)|<|([-*_])(\s*\5){2,}\s*$)/;
 
-// GFM allows up to three spaces of indentation before a table row.
-const rowCells = (raw) => (raw === undefined ? null : tableCells(raw.replace(/\r$/, '').replace(/^ {0,3}/, '')));
-
-async function markdownFilesBelow(root, relative) {
-  const entries = await fs.readdir(path.join(root, relative), { withFileTypes: true });
-  const files = [];
-  for (const entry of entries) {
-    const child = `${relative}/${entry.name}`;
-    if (entry.isSymbolicLink()) throw new Error(`${child}: symlinks under ${SCAN_DIR} are not scanned; commit the file itself`);
-    if (entry.isDirectory()) files.push(...(await markdownFilesBelow(root, child)));
-    else if (entry.isFile() && entry.name.endsWith('.md')) files.push(child);
-  }
-  return files;
-}
+const strip = (raw) => raw.replace(/\r$/, '');
+// A table row's cells; the leading pipe is optional, as in GFM.
+const rowCells = (raw) => {
+  const text = strip(raw).trim();
+  return tableCells(text.startsWith('|') ? text : `|${text}`);
+};
+const isDelimiterRow = (raw) => {
+  if (raw === undefined || !/^ {0,3}\S/.test(raw) || !strip(raw).includes('|')) return false;
+  const cells = rowCells(raw);
+  return cells.length > 0 && cells.every((c) => DELIMITER_CELL_RE.test(c));
+};
 
 /** `[{ line, cells, header, headerLine }]` for every table row whose cell count differs from its header's. */
 export function mismatchedRows(text) {
@@ -64,17 +68,17 @@ export function mismatchedRows(text) {
       header = null;
       return;
     }
-    const cells = rowCells(raw);
-    if (!cells) {
-      header = null;
-      return;
-    }
     if (header) {
-      if (cells.length !== header.cells) found.push({ line, cells: cells.length, header: header.cells, headerLine: header.line });
-      return;
+      if (strip(raw).trim() === '' || BLOCK_START_RE.test(raw)) header = null;
+      else {
+        const cells = rowCells(raw).length;
+        if (cells !== header.cells) found.push({ line, cells, header: header.cells, headerLine: header.line });
+        return;
+      }
     }
-    const delimiter = rowCells(lines[i + 1]);
-    if (delimiter?.length > 0 && delimiter.every((c) => DELIMITER_CELL_RE.test(c))) header = { cells: cells.length, line };
+    if (/^ {0,3}\S/.test(raw) && UNESCAPED_PIPE_RE.test(strip(raw)) && isDelimiterRow(lines[i + 1])) {
+      header = { cells: rowCells(raw).length, line };
+    }
   });
   return found;
 }
