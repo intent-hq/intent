@@ -310,8 +310,10 @@ that daemon change; enable it for Codex only together with its AIR tool-call
 mapping. Only then land the frontend selected-agent rows, using dedicated
 subscriptions, explicit unsupported/loading/error/unknown states, started time,
 optional tool links and a Stop action shown only for running rows with
-`canStop`. Show “provider reported failed/stopped; worker exit unknown”; even
-completed is provider completion, never exit zero. A truncated or unavailable
+`canStop`. A client may hide provider terminal rows (the desktop chat card lists
+only running and unknown rows); one that shows them labels them “provider
+reported failed/stopped; worker exit unknown”, since even completed is provider
+completion, never exit zero. A truncated or unavailable
 view cannot make an exhaustive running-count claim. No runtime support is
 certified by these model tests.
 
