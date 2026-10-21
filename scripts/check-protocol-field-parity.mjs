@@ -27,6 +27,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
+import { scanMarkdown, splitRow } from './lib/markdown-tables.mjs';
 import { describeCheckout, formatBanner, formatOffPinWarning, submoduleOf } from './submodule-ref.mjs';
 
 const MODEL_RS = 'packages/intentd/crates/intent-core/src/model.rs';
@@ -56,21 +57,13 @@ const STAGED_COLUMNS = ['Row', 'Field', 'Contract', 'App adoption'];
 // One wire name per cell, wrapped in a balanced pair of backticks or none.
 const STAGED_NAME_RE = /^(`?)([^`\s|]+)\1$/;
 const MD_LINK_RE = /\[[^\]]+\]\([^)\s]+\)/;
-const FENCE_RE = /^\s*(```|~~~)/;
 const HEADING_RE = /^#{1,6}\s+(.*?)\s*#*\s*$/;
-
-// Cells of a `|`-led table row, honoring `\|` escapes (same rule as
-// tableCells in scripts/check-protocol-catalog.mjs); null for any other line.
-function tableCells(raw) {
-  if (!raw.trim().startsWith('|')) return null;
-  const cells = [...raw.trim().matchAll(/\|((?:[^|\\]|\\.)*)/g)].map((m) => m[1].trim());
-  if (cells.at(-1) === '') cells.pop();
-  return cells;
-}
 
 /**
  * Parse the staged daemon-first field table under the `<STAGED_HEADING>`
- * heading in `markdown` (fenced code blocks are skipped). Returns
+ * heading in `markdown`. Headings, fenced code and the table are read by the
+ * shared GFM scanner (scripts/lib/markdown-tables.mjs), so the rows are the
+ * ones GitHub renders. Returns
  * `{ staged, errors }`: `staged` maps a Rust struct name to a Map of wire
  * field → `{ file, line, adoption }`. Every row must name a manifest Rust
  * struct, a wire field, a Markdown link to the contract and the app adoption
@@ -80,45 +73,42 @@ export function parseStagedFields(markdown, file = STAGED_DOC, pairs = PAIRS) {
   const staged = new Map();
   const errors = [];
   const fail = (line, message) => errors.push({ file, line, message: `${STAGED_HEADING}: ${message}` });
-  const lines = markdown.split('\n');
-  const section = [];
-  let inFence = false;
+  const { lines, kinds, tables, brokenTables } = scanMarkdown(markdown);
   let start = -1;
+  let end = lines.length;
   for (let i = 0; i < lines.length; i += 1) {
-    if (FENCE_RE.test(lines[i])) inFence = !inFence;
-    if (inFence || FENCE_RE.test(lines[i])) continue;
-    const heading = lines[i].match(HEADING_RE)?.[1];
+    const heading = kinds[i] === 'heading' ? lines[i].trimStart().match(HEADING_RE)?.[1] : undefined;
+    if (heading === undefined) continue;
     if (start === -1) {
       if (heading === STAGED_HEADING) start = i;
       continue;
     }
-    if (heading !== undefined) break;
-    section.push(i);
+    end = i;
+    break;
   }
   if (start === -1) {
     fail(1, `heading not found; restore the section (with its ${STAGED_COLUMNS.join(' | ')} table) in ${file}`);
     return { staged, errors };
   }
-  const first = section.findIndex((i) => tableCells(lines[i]) !== null);
-  if (first === -1) {
+  const tableAt = (i) => tables.find((t) => t.headerLine === i + 1);
+  const headerAt = lines.findIndex((l, i) => i > start && i < end
+    && (tableAt(i) || brokenTables.some((t) => t.headerLine === i + 1) || (kinds[i] === 'paragraph' && /^\s*\|/.test(l))));
+  if (headerAt === -1) {
     fail(start + 1, `no table follows the heading; expected columns ${STAGED_COLUMNS.join(' | ')}`);
     return { staged, errors };
   }
-  const headerAt = section[first];
-  const header = tableCells(lines[headerAt]);
+  const table = tableAt(headerAt);
+  const header = table?.header ?? splitRow(lines[headerAt]);
   if (header.join('|') !== STAGED_COLUMNS.join('|')) {
     fail(headerAt + 1, `table columns are ${header.join(' | ')}; expected ${STAGED_COLUMNS.join(' | ')}`);
     return { staged, errors };
   }
-  if (!/^\s*\|?[\s:|-]*-[\s:|-]*$/.test(lines[headerAt + 1] ?? '')) {
+  if (!table) {
     fail(headerAt + 2, 'the header row must be followed by a | --- | separator row');
     return { staged, errors };
   }
   const structs = new Map(pairs.map((p) => [p.rust.struct, p]));
-  for (let i = headerAt + 2; i < lines.length; i += 1) {
-    const cells = tableCells(lines[i]);
-    if (cells === null) break;
-    const line = i + 1;
+  for (const { line, cells } of table.rows) {
     if (cells.length !== STAGED_COLUMNS.length) {
       fail(line, `row has ${cells.length} cell(s); expected ${STAGED_COLUMNS.length}`);
       continue;
