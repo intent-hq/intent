@@ -9,14 +9,12 @@
 // methods/agents.md were invisible on GitHub this way. Write `\|` for a
 // literal pipe inside a cell.
 //
-// Scanned: every `docs/protocol/**/*.md`. A table is a header row holding an
-// unescaped `|` followed by a delimiter row (`---`, `:--`, `--:`, `:-:` cells
-// separated by `|`); its body is every following line up to a blank line or
-// the start of another block (fence, heading, blockquote, list item, thematic
-// break, HTML), so a lazy line without a leading pipe is a row too, as on
-// GitHub. Fenced code blocks are skipped. Every delimiter and body row must
-// have exactly as many cells as the header. The walk fails closed: an
-// unreadable directory or a symlink is an error.
+// Scanned: every `docs/protocol/**/*.md`, read by the shared GFM scanner in
+// scripts/lib/markdown-tables.mjs, so tables, lazy rows, block boundaries and
+// fenced code are exactly the ones GitHub renders. Every body row must have as
+// many cells as its header. A delimiter row whose cell count differs from the
+// header is reported too: GitHub then renders the whole table as plain text.
+// The walk fails closed: an unreadable directory or a symlink is an error.
 //
 // Usage:
 //   node scripts/check-doc-table-cells.mjs               # exit 1 on any finding
@@ -28,67 +26,20 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import { markdownFilesBelow } from './check-doc-line-length.mjs';
-import { tableCells } from './check-protocol-catalog.mjs';
+import { scanMarkdown } from './lib/markdown-tables.mjs';
 
 export const SCAN_DIR = 'docs/protocol';
 
-const DELIMITER_CELL_RE = /^:?-+:?$/;
-const FENCE_RE = /^ {0,3}(`{3,}|~{3,})/;
-const UNESCAPED_PIPE_RE = /(^|[^\\])\|/;
-// Block starts that end a table body (blank lines are handled separately).
-const BLOCK_START_RE = /^ {0,3}(#{1,6}(\s|$)|>|[-*+](\s|$)|\d{1,9}[.)](\s|$)|<|([-*_])(\s*\5){2,}\s*$)/;
-
-const strip = (raw) => raw.replace(/\r$/, '');
-// A table row's cells; the leading pipe is optional, as in GFM.
-const rowCells = (raw) => {
-  const text = strip(raw).trim();
-  return tableCells(text.startsWith('|') ? text : `|${text}`);
-};
-const isDelimiterRow = (raw) => {
-  if (raw === undefined || !/^ {0,3}\S/.test(raw) || !strip(raw).includes('|')) return false;
-  const cells = rowCells(raw);
-  return cells.length > 0 && cells.every((c) => DELIMITER_CELL_RE.test(c));
-};
-
 /** `[{ line, cells, header, headerLine }]` for every table row whose cell count differs from its header's. */
 export function mismatchedRows(text) {
-  const found = [];
-  const lines = text.split('\n');
-  let fence = null;
-  let header = null;
-  lines.forEach((raw, i) => {
-    const line = i + 1;
-    const opener = raw.match(FENCE_RE);
-    // A backtick fence's info string cannot contain a backtick (inline code such as ```x```).
-    const run = opener && !(opener[1][0] === '`' && raw.slice(opener[0].length).includes('`')) ? opener[1] : undefined;
-    if (fence) {
-      if (run && run[0] === fence[0] && run.length >= fence.length && raw.trim() === run) fence = null;
-      return;
+  const { tables, brokenTables } = scanMarkdown(text);
+  const found = brokenTables.map((t) => ({ line: t.delimiterLine, cells: t.delimiter.length, header: t.header.length, headerLine: t.headerLine }));
+  for (const t of tables) {
+    for (const row of t.rows) {
+      if (row.cells.length !== t.header.length) found.push({ line: row.line, cells: row.cells.length, header: t.header.length, headerLine: t.headerLine });
     }
-    if (run) {
-      fence = run;
-      header = null;
-      return;
-    }
-    if (header?.delimiterLine === line) {
-      // The delimiter row is part of the table even when it looks like a list item (`- | -`).
-      const cells = rowCells(raw).length;
-      if (cells !== header.cells) found.push({ line, cells, header: header.cells, headerLine: header.line });
-      return;
-    }
-    if (header) {
-      if (strip(raw).trim() === '' || BLOCK_START_RE.test(raw)) header = null;
-      else {
-        const cells = rowCells(raw).length;
-        if (cells !== header.cells) found.push({ line, cells, header: header.cells, headerLine: header.line });
-        return;
-      }
-    }
-    if (/^ {0,3}\S/.test(raw) && UNESCAPED_PIPE_RE.test(strip(raw)) && isDelimiterRow(lines[i + 1])) {
-      header = { cells: rowCells(raw).length, line, delimiterLine: line + 1 };
-    }
-  });
-  return found;
+  }
+  return found.sort((x, y) => x.line - y.line);
 }
 
 /** Run the check against `root`; returns error strings (empty when every table is consistent). */

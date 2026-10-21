@@ -74,10 +74,25 @@ test('another block start ends the table body', () => {
   }
 });
 
-test('a delimiter row that looks like a list item still opens the body', () => {
-  assert.deepEqual(mismatchedRows(['a | b', '- | -', '1 | 2 | hidden'].join('\n')), [
+test('a `- | -` line is a list item, not a delimiter row, so no table opens (as on GitHub)', () => {
+  assert.deepEqual(mismatchedRows(['a | b', '- | -', '1 | 2 | hidden'].join('\n')), []);
+});
+
+test('a header without pipes still opens a table, as on GitHub', () => {
+  assert.deepEqual(mismatchedRows(['a', '| - |', '| 1 | 2 |'].join('\n')), [
+    { line: 3, cells: 2, header: 1, headerLine: 1 },
+  ]);
+});
+
+test('inline HTML at the start of a row does not end the table, as on GitHub', () => {
+  assert.deepEqual(mismatchedRows(table('<span>x</span> | y | hidden')), [
     { line: 3, cells: 3, header: 2, headerLine: 1 },
   ]);
+  assert.deepEqual(mismatchedRows(table('<span>', '| x | y | hidden |')), []);
+});
+
+test('a lone pipe ends the table, as on GitHub', () => {
+  assert.deepEqual(mismatchedRows(table('|', '| x | y | hidden |')), []);
 });
 
 test('an inline triple-backtick span is not a fence and does not hide later tables', () => {
