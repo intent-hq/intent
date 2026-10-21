@@ -3,8 +3,6 @@
 # Checked by `scripts/check-doc-line-length.mjs` (run from `make docs-check`). Entries only
 # ratchet down: split a long line into one sentence or bullet per line and the check names the
 # corrected line to write here. Regenerate with `node scripts/check-doc-line-length.mjs --print-counts`.
-docs/protocol/05-method-catalog.md 2 4247
 docs/protocol/06-events.md 18 80803
-docs/protocol/07-agent-streaming.md 4 13142
+docs/protocol/07-agent-streaming.md 2 8822
 docs/protocol/09-error-codes.md 2 7476
-docs/protocol/versioning.md 14 189543
