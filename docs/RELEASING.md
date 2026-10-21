@@ -246,24 +246,123 @@ suite is `python3 -S -B -m unittest -v scripts.test_cleanup_prereleases`.
 
 ### When a published daemon reaches running installs
 
-A sitter-supervised daemon (`intentd serve`) picks up a channel publish by one of two
-paths:
+A sitter-supervised daemon (`intentd serve`) picks up a channel publish on a
+schedule that depends on its channel. The sitter re-reads the channel at every tick
+and idle request, so `intentd sitter channel` switches the schedule on a running
+service.
+
+**Stable — at most one automatic check per UTC day.** The sitter records the UTC
+date of its last *successful* automatic check (`last_check_at` in `state.json`) and
+makes a network check only when none is recorded for today:
+
+- **Startup** checks only when due; when it has already checked today, the
+  installed version starts with no request.
+- **While running**, a local tick every 50–70 min makes the check once the UTC day
+  rolls over, so rollover checks spread over the first hour after midnight UTC. A
+  failed check (offline, every source down) is not recorded, so the next tick
+  retries.
+- A newer version is **staged** and handed to the daemon through the idle-restart
+  handshake: once no agent has had a turn in flight for `updates.idleGraceSeconds`
+  (default 120 s), the daemon signals the sitter (`SIGUSR2`, at most every
+  `updates.idleCheckIntervalMinutes`, default 60) and restarts into the staged
+  version the next moment no turn is in flight. That idle request makes no
+  network check unless one is due. If the staged version is still not running
+  24 h after staging, a tick forces a graceful restart.
+
+A new stable release can therefore take up to about a day to reach a running
+install.
+
+**Alpha and beta — unchanged.**
 
 - **Opportunistic, idle-triggered** — once no agent has had a turn in flight for
   `updates.idleGraceSeconds` (default 120 s), the daemon asks its sitter to check
   now (`SIGUSR2`), at most every `updates.idleCheckIntervalMinutes` (default 60).
   The sitter stages any newer version and the daemon restarts into it the next
   moment no turn is in flight, so an idle install updates within about an hour of
-  the publish without interrupting a running agent. `updates.checkOnIdle=false`
-  (live setting, no restart; see
-  [protocol/methods/settings.md](./protocol/methods/settings.md)) disables this path.
-- **Forced, periodic** — the sitter's randomized 12–24 h check, unchanged: it
-  installs a newer version (or one already staged) and restarts the daemon whether
-  or not a turn is in flight. This is the fallback for continuously busy installs and
-  the only path when `checkOnIdle` is off.
+  the publish without interrupting a running agent.
+- **Forced, periodic** — the sitter's randomized 12–24 h check: it installs a newer
+  version (or one already staged) and restarts the daemon whether or not a turn is
+  in flight. This is the fallback for continuously busy installs and the only path
+  when `checkOnIdle` is off.
 
-`intentd update` (`system.requestUpdate`, "Update now") still checks and restarts
-immediately.
+On every channel, `updates.checkOnIdle=false` (live setting, no restart; see
+[protocol/methods/settings.md](./protocol/methods/settings.md)) stops the daemon's
+idle requests. `intentd update` (`system.requestUpdate`, "Update now") always checks
+and restarts immediately, and a manual check never counts as the day's check.
+Failed-start re-checks still run on every channel.
+
+The desktop app follows the same rule for its own updates: on **stable** it checks
+at startup (10 s after launch) only if no check has succeeded that UTC day, and
+its hourly tick and focus/resume checks run only once the day has rolled over.
+Alpha and beta keep the startup check, the hourly check, and focus/resume checks
+after 4 h. "Check for updates" and channel switches always check immediately. A
+failed check is not recorded, so the next tick or focus retries.
+
+### Update-check statistics (`updates.intentapp.dev`)
+
+Both the sitter and the desktop app fetch their update feeds through
+`https://updates.intentapp.dev`, a separate Vercel project
+([intent-hq/intentd-updates](https://github.com/intent-hq/intentd-updates)). It
+counts the request and answers with a `302` to the same GitHub asset as before; it
+never serves a manifest or a feed itself, so GitHub stays the only source of
+updates.
+
+| | Sitter (standalone intentd) | Desktop app |
+|---|---|---|
+| Request | `/channel/<ch>.json` → `github.com/intent-hq/intentd-releases/releases/download/channel-<ch>/<ch>.json` | `/desktop/<ch>/<feed>.yml` and the installers it lists → `github.com/intent-hq/cloudlands-releases/releases/download/<ch>/<file>` |
+| `p` platform | target triple | `<platform>-<arch>` |
+| `v` version | sitter version | app version |
+| `src` install source | `brew`, `deb`, `script`, `windows`, `unknown` | `dmg`, `nsis`, `appimage`, `deb`, `unknown` |
+| `k` trigger | `startup`, `daily`, `idle`, `manual` | `startup`, `daily`, `periodic`, `focus`, `manual`, `channel` |
+| `d` daily flag | `1` on the first check of the UTC day (from a date in `state.json`) | same (from the `lastUpdateCheckDay` local pref) |
+| Opt-out | `DO_NOT_TRACK=1`, `INTENTD_DISABLE_TELEMETRY=1`, or `telemetry = false` in `<data-dir>/sitter/config.toml` (re-read on every check, kept when `intentd sitter channel` rewrites the file); `INTENTD_SITTER_MANIFEST_BASE_URL` also skips the endpoint | **Settings → General → Updates → Share anonymous update statistics** (on by default, `shareUpdateStatistics` local pref), `DO_NOT_TRACK=1`, or a custom `AUTO_UPDATE_URL` |
+
+No IDs, hostnames, usernames or paths are sent; the sitter's User-Agent is
+`intentd-sitter/<ver> (<triple>)`. The service allowlists every value (anything
+else is counted as `other`), passes Vercel only `user-agent` and `x-forwarded-for`
+so Vercel can derive the country, and never logs or stores the IP. With any opt-out
+the request goes straight to GitHub.
+
+**Fallback.** Any failure of the endpoint (down, 404, slow, or an unexpected
+redirect) falls back to GitHub, and that check is simply not counted:
+
+- The sitter gives the endpoint its own 10 s timeout, then tries the existing
+  `intent-hq/intentd-releases` → `intent-hq/intentd` GitHub bases.
+- The desktop app retries a failed or hung check once against the GitHub feed with
+  no user-visible error, then stays on GitHub for the rest of the session; a failed
+  download through the endpoint also moves the session to GitHub.
+
+**Redirect and host allowlists.**
+
+- The sitter's endpoint client accepts a first redirect only to exactly
+  `https://github.com/intent-hq/{intentd-releases,intentd}/releases/download/channel-<ch>/<ch>.json`
+  for the requested channel (no query, port or userinfo), then only https hops on
+  `*.githubusercontent.com`, at most 5 hops. A response that never left the endpoint
+  is refused, so a compromised Vercel project cannot serve a manifest.
+- The desktop app's updater session (`electron-updater` partition) cancels any
+  request outside `updates.intentapp.dev/desktop/`,
+  `github.com/intent-hq/cloudlands-releases/releases/download/` and
+  `*.githubusercontent.com` (plus a custom `AUTO_UPDATE_URL` prefix). The macOS
+  code-signature and Windows publisher checks remain the main protection.
+- electron-updater attaches its persistent per-installation `.updaterId` as an
+  `x-user-staging-id` header to feed requests. The app strips that header
+  (case-insensitively) from every request to `updates.intentapp.dev`, including
+  redirect hops back to it, so the endpoint never receives an installation ID.
+  Direct GitHub requests keep it, since staged rollouts are decided locally.
+
+**Reading the data.** Open the `updates.intentapp.dev` Vercel project →
+**Analytics → Events**. The Pro plan allows two properties per event:
+
+| Event | Properties |
+|---|---|
+| `intentd_update_check` / `desktop_update_check` | `platform`, `context` = `<ch>/<src>/<k>` (e.g. `stable/brew/idle`) |
+| `intentd_daily_active` / `desktop_daily_active` | `platform`, `version`; fired once per install per UTC day (`d=1`), so it approximates daily active installs |
+| `desktop_update_download` | `platform`, `version`, parsed from the artifact name; `.blockmap` files and range continuations are redirected but not counted |
+
+Country comes from Vercel's lookup of the forwarded IP. Only sitter and desktop versions
+released after this change go through the endpoint, and the desktop app's bundled
+daemon does not use the sitter, so the two sources never count the same install
+twice.
 
 ### Cutting a sitter release
 
