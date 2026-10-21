@@ -19,7 +19,7 @@ HOSTED_ONLY = {
 EXCEPTIONS |= set(HOSTED_ONLY)
 MAINTENANCE = {('m1mac-smoke.yml', 'smoke'), ('provision-m1mac.yml', 'provision'), ('provision-m1mac.yml', 'verify'), ('macos-prune.yml', 'prune'), ('windows-prune.yml', 'prune'),
                ('intent-cache-smoke.yml', 'isolation'), ('intent-cache-smoke.yml', 'fresh'), ('intent-cache-smoke.yml', 'cache-reader'),
-               ('intent-cache-smoke.yml', 'cache-reader-small')}
+               ('intent-cache-smoke.yml', 'cache-reader-small'), ('intent-cache-smoke.yml', 'isolation-xl')}
 
 
 def jobs(text):
