@@ -130,7 +130,7 @@ keys its write refusal on the existing `-32602` code.
 
 | Numeric code | data.code | Meaning / client action |
 | --- | --- | --- |
-| -32602 | content-base-mismatch | A whole-content write's `baseContentBytes` does not match the resolved base, or the base is unknown. `data` adds `baseContentBytes` and `contentBytes` (base size or `null`). Nothing was written; re-read the full note before writing. |
+| -32602 | content-base-mismatch | A whole-content write's `baseContentBytes` does not match the resolved base, or the base is unknown. `data` adds `baseContentBytes` and `resolvedBaseBytes` (base size or `null`; never copy it into `baseContentBytes`). Nothing was written; re-read the full note before writing. |
 
 ### Prepared note paging errors
 

@@ -15,6 +15,7 @@ function truncate(content, limit) {
   if (end === 0) {
     end = limit;
     while (end > 0 && (bytes[end] & 0xc0) === 0x80) end -= 1;
+    if (end > 0 && bytes[end - 1] === 0x0d && bytes[end] === 0x0a) end -= 1;
   }
   return { content: decoder.decode(bytes.subarray(0, end)), contentTruncated: true, contentBytes: bytes.length };
 }
@@ -51,6 +52,6 @@ test('docs name the capability, markers, guard and error code', () => {
   assert.equal(fixture.capability.noteTruncatedRead, 1);
   for (const needle of ['### Truncated note reads (prepared additive contract)', 'server.capabilities.noteTruncatedRead',
     '`maxContentBytes`', 'contentTruncated: true', '`contentBytes`', '`baseContentBytes`',
-    'content-base-mismatch', 'fixtures/notes/truncated-read.json'])
+    'content-base-mismatch', 'resolvedBaseBytes', '**Not covered.**', 'fixtures/notes/truncated-read.json'])
     assert.ok(docs.includes(needle), needle);
 });

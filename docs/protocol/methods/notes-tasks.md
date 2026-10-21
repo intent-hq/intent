@@ -199,6 +199,8 @@ Absent or `null` keeps responses byte-identical to a daemon without this contrac
 - If no line feed falls within the first `L` bytes, `content` is the longest prefix
   of `S` that is at most `L` bytes and ends on a UTF-8 character boundary.
   It may be empty when the first character is longer than `L`.
+  If that boundary falls between a `\r` and the `\n` that follows it, the cut steps
+  back one byte, so a `\r\n` pair is never split here either.
 - A truncated note adds `contentTruncated: true` and `contentBytes`, the full UTF-8
   size of the stored content.
   Both are omitted when the content is not truncated; `contentTruncated: false`
@@ -209,6 +211,16 @@ Every other `Note` field, including `rev`, is served as in the unbounded read.
 The vectors in
 [`fixtures/notes/truncated-read.json`](../fixtures/notes/truncated-read.json)
 freeze this rule, including multibyte, CRLF and no-line-feed cases.
+
+**Not covered.** The bound applies only to `note.get` and `note.subscribe`.
+These paths still carry the full `content` of a large note:
+
+- `task.subscribe` rows, which are full `Note` entities.
+- `note.list` with the default `full` projection.
+- The `oldContent` / `newContent` echo in the `note.setContent` result.
+
+A client that needs bounded loads must list notes with `note.list`
+`projection: "slim"` and must not rely on these paths for large notes.
 
 **Subscriptions.** `note.subscribe` validates `maxContentBytes` before the ack and
 fixes it for the subscription's lifetime.
@@ -227,9 +239,11 @@ writer started from.
 It is computed from the writer's own base text; a writer must never copy a
 response's `contentBytes` into it.
 A client that reads with `maxContentBytes` must send it on every whole-content write.
-For a full read it equals the stored size, so the write proceeds as before.
+For a full read it equals the size of the base the daemon resolves (below) as long as
+that base is the text the writer read, so the write proceeds as before.
 For a truncated read it is the size of the prefix, which is always smaller than the
 stored size, so the write is refused and the content after the cut survives.
+`baseContentBytes` is ignored on the metadata arm of `note.update` (no `content`).
 
 The daemon compares `baseContentBytes` with the UTF-8 size of the base it resolves:
 
@@ -237,14 +251,21 @@ The daemon compares `baseContentBytes` with the UTF-8 size of the base it resolv
   `expectedVersion` check (a stale value is still `-32005` first).
 - `note.setContent` with `expectedVersion` absent or equal to the current `rev`:
   the current stored content.
+  Without `expectedVersion`, a guarded write is therefore refused when a concurrent
+  writer changed the note's size after the read; this is intended, because the
+  daemon cannot tell that text from the writer's base.
+  Guarded writers should send `expectedVersion`, so a concurrent change goes through
+  the merge-base path below instead of being refused.
 - `note.setContent` with a stale `expectedVersion`: the retained snapshot the
   three-way merge would use as its base.
   When no snapshot survives for that rev the base is unknown, and a write that
   carries `baseContentBytes` is refused instead of degrading to last-writer-wins.
 
 A mismatch, or an unknown base, is `-32602` with
-`error.data = { code: "content-base-mismatch", baseContentBytes, contentBytes }`,
-where `contentBytes` is the size of the resolved base, or `null` when unknown.
+`error.data = { code: "content-base-mismatch", baseContentBytes, resolvedBaseBytes }`,
+where `resolvedBaseBytes` is the size of the resolved base, or `null` when unknown.
+It can be a merge snapshot's size rather than the stored note's, so a client must
+never copy it into `baseContentBytes`; re-read the note instead.
 The message is `Content base does not match the stored note; re-read the full note
 and retry.`
 The check runs once, before the first persist attempt and before any merge.
@@ -252,6 +273,14 @@ A refused write changes nothing: no row update, no version, no event, no
 `@@@task` conversion.
 Invalid values (negative, fractional or non-number) are `-32602`
 (`baseContentBytes must be a non-negative integer`).
+
+Precedence on a whole-content write, first failure wins:
+
+1. Parameter validation, `-32602` invalid params: missing or malformed params,
+   an invalid `baseContentBytes`, and the line-numbered `note.read` display rejection.
+2. The `expectedVersion` check, `-32005` Conflict: a stale value on `note.update`,
+   or a value above the current `rev` on `note.setContent`.
+3. The base check, `-32602` `content-base-mismatch`.
 Writes without `baseContentBytes` are unguarded, exactly as today.
 Surgical writes (`note.add`, `note.edit`, `note.editLines`) and `task.*` writes
 transform the stored content and take no base size.

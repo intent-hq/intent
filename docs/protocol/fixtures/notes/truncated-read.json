@@ -12,7 +12,9 @@
     { "id": "no-line-feed-ascii", "content": "abcdef\n", "maxContentBytes": 4, "expect": { "content": "abcd", "contentTruncated": true, "contentBytes": 7 } },
     { "id": "no-line-feed-multibyte", "content": "é😀x", "maxContentBytes": 4, "expect": { "content": "é", "contentTruncated": true, "contentBytes": 7 } },
     { "id": "first-char-longer-than-limit", "content": "😀", "maxContentBytes": 2, "expect": { "content": "", "contentTruncated": true, "contentBytes": 4 } },
-    { "id": "multibyte-lines", "content": "中文\n😀😀\n", "maxContentBytes": 12, "expect": { "content": "中文\n", "contentTruncated": true, "contentBytes": 16 } }
+    { "id": "multibyte-lines", "content": "中文\n😀😀\n", "maxContentBytes": 12, "expect": { "content": "中文\n", "contentTruncated": true, "contentBytes": 16 } },
+    { "id": "fallback-never-splits-crlf", "content": "abc\r\nd", "maxContentBytes": 4, "expect": { "content": "abc", "contentTruncated": true, "contentBytes": 6 } },
+    { "id": "fallback-never-splits-crlf-multibyte", "content": "é\r\nx", "maxContentBytes": 3, "expect": { "content": "é", "contentTruncated": true, "contentBytes": 5 } }
   ],
   "invalidMaxContentBytes": [0, -1, 1.5, "10", true],
   "invalidBaseContentBytes": [-1, 1.5, "10", true]
