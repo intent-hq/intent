@@ -273,11 +273,15 @@ run_real_make env MAKE="$make_bin" "$script_bash" scripts/consumer-checks.sh --c
   fail "a caller-controlled toolchain executable ran under consumer-checks:"$'\n'"$(cat "$marker_log")"$'\n'"$real_output"
 grep -q '^trusted node scripts/check-protocol-catalog.mjs$' "$trusted_log" ||
   fail "the trusted node did not run check-protocol-catalog:"$'\n'"$(cat "$trusted_log")"
-[ "$(grep -c '^trusted node ' "$trusted_log")" -eq 15 ] ||
-  fail "expected the 15 node invocations to run the trusted node:"$'\n'"$(cat "$trusted_log")"
+[ "$(grep -c '^trusted node ' "$trusted_log")" -eq 17 ] ||
+  fail "expected the 17 node invocations to run the trusted node:"$'\n'"$(cat "$trusted_log")"
 if ! grep -qFx 'trusted node scripts/check-doc-line-length.mjs' "$trusted_log" ||
   ! grep -qFx 'trusted node --test scripts/check-doc-line-length.test.mjs' "$trusted_log"; then
   fail "the protocol line-length ratchet and its tests did not run with the trusted node:"$'\n'"$(cat "$trusted_log")"
+fi
+if ! grep -qFx 'trusted node scripts/check-doc-table-cells.mjs' "$trusted_log" ||
+  ! grep -qFx 'trusted node --test scripts/check-doc-table-cells.test.mjs' "$trusted_log"; then
+  fail "the protocol table cell-count check and its tests did not run with the trusted node:"$'\n'"$(cat "$trusted_log")"
 fi
 grep -qFx 'trusted node --test docs/protocol/fixtures/scripts/monitors.test.mjs docs/protocol/fixtures/scripts/contract.test.mjs' "$trusted_log" ||
   fail "script monitor and compact contract tests did not run with the trusted node:"$'\n'"$(cat "$trusted_log")"

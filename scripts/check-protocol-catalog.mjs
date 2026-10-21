@@ -177,7 +177,8 @@ export function methodNamesInFirstCell(cell) {
   }
 }
 
-function tableCells(raw = '') {
+/** Markdown table cells of a `|`-led row (honours the `\|` escape), or null for a non-table line. */
+export function tableCells(raw = '') {
   if (!raw.startsWith('|')) return null;
   const cells = [...raw.matchAll(/\|((?:[^|\\]|\\.)*)/g)].map((m) => m[1].trim());
   if (cells.at(-1) === '') cells.pop(); // Optional trailing pipe, not an extra column.
