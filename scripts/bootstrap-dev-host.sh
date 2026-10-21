@@ -1201,8 +1201,8 @@ install_shellcheck() {
   hash -r
 }
 
-# The pinned release binary goes to $CARGO_HOME/bin, which this script already
-# puts on PATH; the archive is verified against the pinned checksum first.
+# Installs the tools make bash3 needs to compile Bash 3.2 (see
+# bash3_build_tools_ready); macOS needs none.
 install_bash3_build_tools() {
   if ! bash3_build_tools_needed; then
     echo "[skip] Bash 3.2 build tools: stock /bin/bash is already Bash 3.2"
@@ -1214,19 +1214,30 @@ install_bash3_build_tools() {
   fi
 
   echo "[install] Bash 3.2 build tools for make bash3 (missing: $(bash3_build_tools_missing))"
-  if command -v apt-get >/dev/null 2>&1; then
-    as_root apt-get install -y build-essential bison || exit 1
-  elif command -v dnf >/dev/null 2>&1; then
-    as_root dnf install -y gcc make bison || exit 1
-  elif command -v yum >/dev/null 2>&1; then
-    as_root yum install -y gcc make bison || exit 1
-  else
-    echo "ERROR: unsupported Linux package manager; install a C compiler, make and bison, then re-run" >&2
-    exit 1
-  fi
+  case "$(uname -s)" in
+    Linux)
+      if command -v apt-get >/dev/null 2>&1; then
+        as_root apt-get install -y build-essential bison || exit 1
+      elif command -v dnf >/dev/null 2>&1; then
+        as_root dnf install -y gcc make bison || exit 1
+      elif command -v yum >/dev/null 2>&1; then
+        as_root yum install -y gcc make bison || exit 1
+      else
+        echo "ERROR: unsupported Linux package manager; install a C compiler, make and bison, then re-run" >&2
+        exit 1
+      fi
+      ;;
+    *) echo "ERROR: only Linux and macOS are supported; install a C compiler, make and bison, then re-run" >&2; exit 1 ;;
+  esac
   hash -r
+  bash3_build_tools_ready || {
+    echo "ERROR: Bash 3.2 build tools still missing after install: $(bash3_build_tools_missing)" >&2
+    exit 1
+  }
 }
 
+# The pinned release binary goes to $CARGO_HOME/bin, which this script already
+# puts on PATH; the archive is verified against the pinned checksum first.
 install_actionlint() {
   if actionlint_ready; then
     echo "[skip] actionlint $ACTIONLINT_VERSION already installed"

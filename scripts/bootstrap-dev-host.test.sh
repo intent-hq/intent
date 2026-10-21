@@ -670,10 +670,20 @@ bash3_tools_log="$temp_dir/bash3-tools.log"
 run_install_bash3_tools() {
   : >"$bash3_tools_log"
   PATH="$bin_dir" HOME="$temp_dir/home" INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
-    CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT='' MAKELEVEL='' TOOL_LOG="$bash3_tools_log" \
+    CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT='' MAKELEVEL='' TOOL_LOG="$bash3_tools_log" BIN_DIR="$bin_dir" CHMOD_BIN="$(command -v chmod)" \
     bash -c 'funcs=$1; set --; source "$funcs"
-      as_root() { echo "as_root $*" >>"$TOOL_LOG"; }
+      as_root() {
+        echo "as_root $*" >>"$TOOL_LOG"
+        [ -n "${BASH3_TOOLS_INSTALL_FAILS:-}" ] && return 0
+        local tool
+        for tool in gcc make bison; do
+          printf "#!/bin/sh\nexit 0\n" >"$BIN_DIR/$tool"; "$CHMOD_BIN" +x "$BIN_DIR/$tool"
+        done
+      }
       install_bash3_build_tools' bash "$bootstrap_funcs" >"$output" 2>&1
+  local status=$?
+  rm -f "$bin_dir/gcc" "$bin_dir/make" "$bin_dir/bison"
+  return "$status"
 }
 grep -q '^install_bash3_build_tools() {' "$bootstrap_funcs" || fail "could not extract install_bash3_build_tools"
 rm -f "$bin_dir/uname"
@@ -689,6 +699,16 @@ run_install_bash3_tools || fail "install_bash3_build_tools failed with dnf"
 [[ "$(cat "$bash3_tools_log")" == "as_root dnf install -y gcc make bison" ]] \
   || fail "dnf hosts should install gcc, make and bison: $(cat "$bash3_tools_log")"
 rm -f "$bin_dir/dnf"
+write_launcher yum 'exit 0'
+write_launcher gcc 'exit 0'
+write_launcher make 'exit 0'
+run_install_bash3_tools || fail "install_bash3_build_tools failed with yum"
+expect_line "[install] Bash 3.2 build tools for make bash3 (missing: bison)"
+[[ "$(cat "$bash3_tools_log")" == "as_root yum install -y gcc make bison" ]] \
+  || fail "yum hosts should install gcc, make and bison: $(cat "$bash3_tools_log")"
+! BASH3_TOOLS_INSTALL_FAILS=1 run_install_bash3_tools || fail "install_bash3_build_tools passed although the tools are still missing"
+expect_line "ERROR: Bash 3.2 build tools still missing after install: gcc make bison"
+rm -f "$bin_dir/yum"
 ! run_install_bash3_tools || fail "install_bash3_build_tools succeeded without a package manager"
 expect_line "ERROR: unsupported Linux package manager; install a C compiler, make and bison"
 write_launcher apt-get 'exit 0'
@@ -698,7 +718,11 @@ write_launcher bison 'exit 0'
 run_install_bash3_tools || fail "install_bash3_build_tools failed on a ready host"
 expect_line "[skip] Bash 3.2 build tools (C compiler, make, bison) already installed"
 [[ ! -s "$bash3_tools_log" ]] || fail "a ready host ran an install: $(cat "$bash3_tools_log")"
-rm -f "$bin_dir/gcc" "$bin_dir/make" "$bin_dir/bison" "$bin_dir/uname"
+rm -f "$bin_dir/uname"
+write_launcher uname 'echo FreeBSD'
+! run_install_bash3_tools || fail "install_bash3_build_tools succeeded on an unsupported OS"
+expect_line "ERROR: only Linux and macOS are supported; install a C compiler, make and bison"
+rm -f "$bin_dir/uname"
 write_launcher uname 'echo Darwin'
 run_install_bash3_tools || fail "install_bash3_build_tools failed on macOS"
 expect_line "[skip] Bash 3.2 build tools: stock /bin/bash is already Bash 3.2"
