@@ -258,6 +258,15 @@ view, re-read `sourceControl.authStatus` for the originally selected full
 context changed while awaiting it. The event cannot choose a new instance or
 revive a checkout reference.
 
+The [prepared child Git credential policy](settings.md#prepared-gitlab-child-git-credential-policy)
+is a separate owner-controlled grant for the current account and full instance.
+A successful connection, status read or native checkout does not enable it.
+Credential refresh for the same identity preserves the explicit choice;
+replacement identity cannot inherit it. The bare-host auth event remains an
+invalidation signal, not proof that a particular prefix's helper grant is on or
+off. Retain the actual policy operation result rather than interpreting auth
+cancellation, revocation or a closed dialog as a successful policy update.
+
 #### Identity proof — `sourceControl.identityProof.*` *(v10.8)*
 
 The **guest half** of the invite identity proof (§5.48 "The identity proof"), generalized over the

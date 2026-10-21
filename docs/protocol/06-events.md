@@ -268,6 +268,31 @@ server's final reply-admission checks. Dispose pending UI consumers on retiremen
 and reject late success or error from an old scope; reconnect cannot adopt it.
 See the [client lifecycle](methods/repository-resources.md#client-lifecycle).
 
+#### Private resource-read invalidation (15.1)
+
+The scoped page contract adds `sourceControl.read.invalidated` on the same
+original physical connection. Its four parameters are `readLifetimeIds`,
+`sequence`, `repository` and `coverage`; the [complete coverage forms](methods/repository-resources.md#current-authority-and-retained-data)
+are project, resource and list-kind. For example:
+
+```json
+{"jsonrpc":"2.0","method":"sourceControl.read.invalidated","params":{"readLifetimeIds":["original-read-example"],"sequence":"2","repository":{"provider":"gitlab","instanceBaseUrl":"https://gitlab.example:8443/gitlab","projectPath":"group/subgroup/project"},"coverage":{"kind":"list","resourceKind":"merge-request"}}}
+```
+
+This is a socket-private control notice, not a global event or permission grant.
+It has no subscription ID, provider payload, account identifier or
+`event-types.json` entry. Require `repositoryResourcePages: 1`; the legacy
+detail-only capability does not imply this extension.
+
+Invalidation and retirement advance one shared canonical decimal sequence.
+Install handling for both before scoped capture and reconcile either across the
+capture await. The original queue, gap, terminal, send-budget and feed-loss
+rules above apply to both. Coverage invalidation makes matching observations
+unusable without itself releasing their lifetimes; connection-level credential
+rejection retires affected lifetimes. List-only denial does not erase
+independently readable details. Never move an observation or lifetime to a new
+connection, or treat a later unrelated success as recovery.
+
 ### 6.4 Filter semantics
 
 `eventTypes` is compiled to a type filter (and an optional `workspaceId` equality filter):
