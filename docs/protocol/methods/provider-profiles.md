@@ -454,11 +454,13 @@ today, and an agent with no eligible backup behaves as today.
   is sticky: later turns stay on the backup until the user selects another provider
   or model. The daemon never switches back on its own.
 - **Retry.** The backup starts a fresh provider process and native session with Intent
-  history replayed, as for any [switch](#agent-state-switches-and-replacement), and
-  the same user message is sent again. The user row is not persisted a second time.
-  This also applies when the quota failure arrives mid-turn, after partial output:
-  output already persisted from the failed attempt stays in the transcript, and the
-  backup redrives the turn from the same user message.
+  history replayed, as for any [switch](#agent-state-switches-and-replacement). The
+  replayed history contains the turn's original user message once, followed by the
+  failed attempt's partial assistant text and its tool calls and results from the
+  current turn. The prompt sent to the backup is a continuation instruction, not a
+  repeat of the user message. It remains the same user turn: no new user message is
+  persisted. This also applies when the quota failure arrives mid-turn, after partial
+  output; that output stays in the transcript.
 - **Session setup.** A quota failure during provider process or session setup
   (for example a quota-rejected `session/new`) fails over immediately, with no
   same-provider setup retries. Setup failures that are not quota failures keep
@@ -486,8 +488,8 @@ metadata = {
 The daemon emits the standard `agent:message` event (`role: "system"`). The row is
 transcript-only and never replayed: like `model_changed` ([§5.5](agents.md)), history
 replay excludes it and it never reaches a provider prompt. Clients render it from
-`metadata` as an inline notice, not as an error. A failover switch does not also
-produce a `model_changed` row.
+`metadata` as an inline notice, not as an error. A failover chain (A → B → C) writes
+one `provider_failover` row per switch and never a `model_changed` row.
 
 #### Events
 
