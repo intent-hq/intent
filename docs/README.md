@@ -97,6 +97,7 @@ migrated from `packages/cloudlands-fe/docs/` after an accuracy audit:
 - [fe/DEPLOYING.md](./fe/DEPLOYING.md) — deployment infrastructure, runners, and feeds
 - [SCCACHE_SERVER.md](./SCCACHE_SERVER.md) — self-hosted sccache WebDAV cache server: provisioning, tokens and rotation, prune tuning, health check, rollback (config in `infra/sccache/`)
 - [GITHUB_RUNNERS.md](./GITHUB_RUNNERS.md) — self-hosted GitHub Actions runner slots on the cache box: install, credential and rotation, slots, drain, runner upgrades, troubleshooting (config in `infra/runners/`)
+- [CI_JOB_SIZING.md](./CI_JOB_SIZING.md) — `scripts/ci-job-sizes.py`: per-job resource report from the runner job stats, size-class recommendations and estimated savings
 
 ## Initial porting phase — **COMPLETE (historical)**
 
