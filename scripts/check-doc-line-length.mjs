@@ -34,7 +34,7 @@ export const SCAN_DIR = 'docs/protocol';
 export const BASELINE_PATH = 'scripts/doc-line-length-baseline.txt';
 
 const FIX_HINT =
-  'split it into one sentence or bullet per line (a table row keeps its result shape and links to a details section under the table)';
+  "split it into one sentence or bullet per line; for a long table row, keep the row's result shape and move its prose into a details block under the table";
 
 async function markdownFilesBelow(root, relative) {
   let entries;
