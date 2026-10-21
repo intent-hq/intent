@@ -56,7 +56,14 @@ with open(os.environ['STUB_LOG'], 'a') as log:
     log.write(json.dumps({'cmd': 'curl', 'method': method, 'path': path, 'auth': auth,
                           'body': body, 'argv': sys.argv[1:]}) + '\n')
 responses = json.load(open(os.environ['STUB_RESPONSES']))
-status, payload = responses.get(method + ' ' + path) or responses.get(method + ' ' + path.split('?')[0], [404, {'message': 'Not Found'}])
+reply = responses.get(method + ' ' + path) or responses.get(method + ' ' + path.split('?')[0], [404, {'message': 'Not Found'}])
+if isinstance(reply, dict):
+    # {"seq": [first, second, ...]}: one reply per call, the last repeating.
+    counter = os.path.join(os.environ['STUB_DIR'], 'seq-' + (method + path).replace('/', '_'))
+    n = int(open(counter).read()) if os.path.exists(counter) else 0
+    open(counter, 'w').write(str(n + 1))
+    reply = reply['seq'][min(n, len(reply['seq']) - 1)]
+status, payload = reply
 open(out, 'w').write('' if payload is None else json.dumps(payload))
 sys.stdout.write(str(status))
 '''
@@ -452,6 +459,38 @@ class Supervisor(Stubbed):
         rc, _, err = self.run_supervisor('--job-stats', '--since', 'not a date')
         self.assertNotEqual(rc, 0)
         self.assertIn('--since', err)
+
+    def test_job_stats_survive_a_failed_deregistration(self):
+        # The final token refresh (for the deregistration) fails during a GitHub
+        # outage: the finished job's stats must already be on disk.
+        key = self.dir / 'app.pem'
+        subprocess.run(['openssl', 'genrsa', '-out', str(key), '2048'], check=True, capture_output=True)
+        self.creds.write_text(f'GITHUB_APP_ID=12345\nGITHUB_APP_INSTALLATION_ID=678\nGITHUB_APP_PRIVATE_KEY_FILE={key}\n')
+        self.responses['POST /app/installations/678/access_tokens'] = {'seq': [[201, {'token': APP_TOKEN}], [503, {}]]}
+        rc, out, err = self.run_supervisor('heavy-1', STUB_CGROUP=str(self.cgroup), STUB_RUN_SECONDS='0.5')
+        self.assertNotEqual(rc, 0)
+        self.assertIn('HTTP 503', err)
+        self.assertEqual(len(self.stats_lines()), 1)
+        self.assert_no_secret(out, err, (self.state / 'job-stats.jsonl').read_text())
+        self.assert_cleaned_up()
+
+    def test_job_stats_reader_sees_a_rotation_it_waited_for(self):
+        self.state.mkdir(mode=0o750)
+        current = self.state / 'job-stats.jsonl'
+        current.write_text('{"v":1,"ended_at":"2026-10-21T14:01:00Z","n":1}\n')
+        lock = open(self.state / 'job-stats.lock', 'w')
+        self.addCleanup(lock.close)
+        import fcntl
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        reader = self.start('--job-stats')
+        time.sleep(1.0)
+        # A writer rotates while the reader waits for the lock.
+        current.rename(self.state / 'job-stats.jsonl.1')
+        current.write_text('{"v":1,"ended_at":"2026-10-21T14:02:00Z","n":2}\n')
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        out, err = reader.communicate(timeout=30)
+        self.assertEqual(reader.returncode, 0, err)
+        self.assertEqual([json.loads(line)['n'] for line in out.splitlines()], [1, 2])
 
     def test_job_stats_with_no_file(self):
         rc, out, err = self.run_supervisor('--job-stats')

@@ -498,10 +498,12 @@ job_stats() {
   elif [ -n "${1:-}" ]; then
     die "usage: $0 --job-stats [--since <ISO 8601>]"
   fi
+  # Lock before listing the files: a rotation between the two would hide
+  # the rotated file.
+  if [ -r "$stats_dir/job-stats.lock" ]; then exec 9<"$stats_dir/job-stats.lock"; flock -s 9; fi
   while [ -f "$stats_file.$i" ]; do files=("$stats_file.$i" "${files[@]}"); i=$((i + 1)); done
   if [ -f "$stats_file" ]; then files+=("$stats_file"); fi
   [ "${#files[@]}" -gt 0 ] || return 0
-  if [ -r "$stats_dir/job-stats.lock" ]; then exec 9<"$stats_dir/job-stats.lock"; flock -s 9; fi
   cat -- "${files[@]}" | jq -c -R --arg since "$since" 'fromjson? | objects | select((.ended_at // "") >= $since)'
 }
 
@@ -624,10 +626,11 @@ main() {
   inspect="$(docker container inspect --size --format '{{.SizeRw}} {{.State.OOMKilled}}' "$name" 2>/dev/null)" || inspect=""
   docker rm -f "$name" >/dev/null 2>&1 || true
   container_name=""
-  deregister
+  # Before deregister, which can die on a failed token refresh.
   if [ "$idle_stopped" = 0 ]; then
     record_job_stats "$inspect" || log "warning: could not record job stats"
   fi
+  deregister
   if [ "$draining" = 1 ]; then log "drained"; fi
   exit 0
 }
