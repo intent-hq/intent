@@ -173,8 +173,10 @@ check-agent-worker-contract: ## Validate synthetic worker observation goldens, m
 check-backend-keychain-contract: ## Validate canonical backend Keychain fixtures and any adopted component mirrors without compilation
 	@node scripts/backend-keychain-contract.mjs check
 
-docs-check: event-catalog-check check-mcp-bindings ## Check documented development targets, knobs, and remote-host guidance
+docs-check: event-catalog-check check-mcp-bindings ## Check documented development targets, knobs, remote-host guidance, and protocol-doc line lengths
 	@scripts/docs-check.sh
+	@node scripts/check-doc-line-length.mjs
+	@node --test scripts/check-doc-line-length.test.mjs
 	@node --test docs/protocol/fixtures/scripts/monitors.test.mjs docs/protocol/fixtures/scripts/contract.test.mjs
 	@node --test docs/protocol/fixtures/submission-correlation/contract.test.mjs
 
