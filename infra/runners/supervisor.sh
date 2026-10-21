@@ -4,15 +4,19 @@
 # github-runner@<pool>-<n>.service restarts this for the next job.
 #
 # Slots belong to pools (default: heavy, 2 x 8 CPUs, 48 GB, label intent-cache;
-# small, 6 x 1 CPU, 3 GB, label intent-cache-small). Each slot is pinned to its own
-# CPU set from <POOL>_CPUSETS, so nproc and os.availableParallelism() inside
-# a job report that slot's CPU count.
+# small, 6 x 1 CPU, 3 GB, label intent-cache-small; other hosts may add xl,
+# 16 CPUs, label intent-cache-xl). Each slot is pinned to its own CPU set from
+# <POOL>_CPUSETS, so nproc and os.availableParallelism() inside a job report
+# that slot's CPU count. Runners are named <RUNNER_NAME_PREFIX>-<pool>-<n>-<time>;
+# each host has its own prefix, and every prefix in the fleet starts with
+# RUNNER_FLEET_PREFIX.
 #
 # SIGTERM (systemctl stop) drains: an idle runner is deregistered and its
 # container stopped at once; a busy runner finishes its job first.
 #
 # Usage: supervisor.sh <pool>-<n>     run one job in slot n of pool
 #        supervisor.sh --plan         validate the config, print every slot
+#        supervisor.sh --host-check   check the CPU sets against this host's CPUs
 #        supervisor.sh --group-apply  create or correct the runner group
 #        supervisor.sh --group-check  print the group and slot membership (JSON)
 # Config: /etc/github-runners/runners.env (RUNNERS_CONFIG overrides)
@@ -27,6 +31,7 @@ config_file="${RUNNERS_CONFIG:-/etc/github-runners/runners.env}"
 credentials_file="${RUNNERS_CREDENTIALS:-/etc/github-runners/credentials}"
 egress="${RUNNERS_EGRESS:-/usr/local/lib/github-runners/egress.sh}"
 api_url="${GITHUB_API_URL:-https://api.github.com}"
+cpu_sysfs="${RUNNERS_SYSFS_CPU:-/sys/devices/system/cpu}"
 work_folder=/home/runner/work
 
 log() { echo "runner-slot-${slot:-?}: $*"; }
@@ -55,6 +60,7 @@ load_config() {
   RUNNER_GROUP=intent-cache
   RUNNER_GROUP_REPOS=intent,intentd,cloudlands-fe
   RUNNER_NAME_PREFIX=intent-cache
+  RUNNER_FLEET_PREFIX=intent-
   RUNNER_IMAGE=intent-gh-runner:current
   RUNNER_NETWORK=gh-runners
   RUNNER_BRIDGE=gh-runners0
@@ -72,13 +78,15 @@ load_config() {
   SMALL_PIDS=4096
   SMALL_SHM=256m
   if [ -f "$config_file" ]; then
-    read_kv "$config_file" "GITHUB_ORG RUNNER_GROUP RUNNER_GROUP_REPOS RUNNER_NAME_PREFIX RUNNER_IMAGE RUNNER_NETWORK RUNNER_BRIDGE RUNNER_POOLS" \
+    read_kv "$config_file" "GITHUB_ORG RUNNER_GROUP RUNNER_GROUP_REPOS RUNNER_NAME_PREFIX RUNNER_FLEET_PREFIX RUNNER_IMAGE RUNNER_NETWORK RUNNER_BRIDGE RUNNER_POOLS" \
       "^[A-Z][A-Z0-9]*_($POOL_KEYS)\$"
   fi
   [[ "$GITHUB_ORG" =~ ^[A-Za-z0-9-]+$ ]] || die "GITHUB_ORG is invalid"
   [[ "$RUNNER_GROUP" =~ ^[A-Za-z0-9._\ -]+$ ]] || die "RUNNER_GROUP is invalid"
   [[ "$RUNNER_GROUP_REPOS" =~ ^[A-Za-z0-9._-]+(,[A-Za-z0-9._-]+)*$ ]] || die "RUNNER_GROUP_REPOS must be a comma-separated list of repository names"
   [[ "$RUNNER_NAME_PREFIX" =~ ^[A-Za-z0-9-]+$ ]] || die "RUNNER_NAME_PREFIX is invalid"
+  [[ "$RUNNER_FLEET_PREFIX" =~ ^[A-Za-z0-9-]+$ ]] || die "RUNNER_FLEET_PREFIX is invalid"
+  [[ "$RUNNER_NAME_PREFIX" == "$RUNNER_FLEET_PREFIX"* ]] || die "RUNNER_NAME_PREFIX must start with RUNNER_FLEET_PREFIX ($RUNNER_FLEET_PREFIX)"
   [[ "$RUNNER_POOLS" =~ ^[a-z][a-z0-9]*( [a-z][a-z0-9]*)*$ ]] || die "RUNNER_POOLS must be space-separated lowercase names"
 }
 
@@ -120,6 +128,36 @@ plan_pool() {
 plan() {
   local pool
   for pool in $RUNNER_POOLS; do plan_pool "$pool"; done
+}
+
+# Every CPU in cpuset list $1, one per line.
+cpuset_cpus() {
+  local part parts c
+  IFS=, read -ra parts <<<"$1"
+  for part in "${parts[@]}"; do
+    for ((c = ${part%-*}; c <= ${part#*-}; c++)); do echo "$c"; done
+  done
+}
+
+# Check the planned CPU sets against this host: every CPU exists, and a slot
+# with more than one CPU owns whole cores (each CPU's SMT siblings, from
+# topology/thread_siblings_list, are in the same slot). Run on the host itself
+# (install.sh does) before enabling slots on new hardware.
+host_check() {
+  local slot pool n sets cpus c sib planned
+  planned="$(plan)" || exit 1
+  for slot in $planned; do
+    pool="${slot%-*}"; n="${slot##*-}"
+    read -ra sets <<<"$(pool_value "$pool" CPUSETS)"
+    cpus=" $(cpuset_cpus "${sets[n - 1]}" | tr '\n' ' ')"
+    for c in $cpus; do
+      [ -r "$cpu_sysfs/cpu$c/topology/thread_siblings_list" ] || die "slot $slot: CPU $c does not exist on this host"
+      [ "$(cpuset_count "${sets[n - 1]}")" -gt 1 ] || continue
+      for sib in $(cpuset_cpus "$(cat "$cpu_sysfs/cpu$c/topology/thread_siblings_list")"); do
+        [[ "$cpus " == *" $sib "* ]] || die "slot $slot: CPU $c shares a core with CPU $sib, which is outside the slot (check thread_siblings_list)"
+      done
+    done
+  done
 }
 
 load_credentials() {
@@ -178,7 +216,6 @@ mint_token() {
 }
 
 # Delete offline registrations this slot left behind (crash, reboot, kill).
-# Delete offline registrations this slot left behind (crash, reboot, kill).
 # Every page is listed before anything is deleted: a deletion shifts later
 # runners into pages already read.
 remove_stale() {
@@ -186,7 +223,9 @@ remove_stale() {
   while :; do
     api GET "/orgs/$GITHUB_ORG/actions/runners?per_page=100&page=$page"
     [ "$api_status" = 200 ] || { log "warning: listing runners failed (HTTP $api_status); skipping stale cleanup"; return 0; }
-    ids+=" $(jq -r --arg p "$RUNNER_NAME_PREFIX-$slot-" '.runners[] | select((.name | startswith($p)) and .status == "offline") | .id' <<<"$api_body" | tr '\n' ' ')"
+    # Exactly <prefix>-<slot>-<time>: never another host's runners, even one
+    # whose prefix starts with this one.
+    ids+=" $(jq -r --arg p "^$RUNNER_NAME_PREFIX-$slot-[0-9]+\$" '.runners[] | select((.name | test($p)) and .status == "offline") | .id' <<<"$api_body" | tr '\n' ' ')"
     count="$(jq '.runners | length' <<<"$api_body")"
     [ "$count" -ge 100 ] || break
     page=$((page + 1))
@@ -229,7 +268,8 @@ deregister() {
 # repositories allowed, since the CI repositories are public), not restricted
 # to workflows. group_apply creates or corrects it; group_check prints the
 # live state (no secrets) and fails on any drift or on a slot runner outside
-# the group.
+# the group. group_check covers every host in the fleet: any runner named
+# <RUNNER_FLEET_PREFIX>...-<pool>-<n>-<time>.
 group_repo_ids() {
   local repo ids=()
   IFS=, read -ra repos <<<"$RUNNER_GROUP_REPOS"
@@ -288,7 +328,8 @@ group_check() {
   api GET "/orgs/$GITHUB_ORG/actions/runner-groups/$id"
   group="$api_body"
   repos="$(all_pages "/orgs/$GITHUB_ORG/actions/runner-groups/$id/repositories?" repositories)"
-  ours="$(all_pages "/orgs/$GITHUB_ORG/actions/runners?" runners | jq -c --arg p "$RUNNER_NAME_PREFIX-" '[.[] | select(.name | startswith($p)) | .name]')"
+  ours="$(all_pages "/orgs/$GITHUB_ORG/actions/runners?" runners \
+    | jq -c --arg p "^$RUNNER_FLEET_PREFIX([A-Za-z0-9-]*-)?[a-z][a-z0-9]*-[1-9][0-9]*-[0-9]+\$" '[.[] | select(.name | test($p)) | .name]')"
   members="$(all_pages "/orgs/$GITHUB_ORG/actions/runner-groups/$id/runners?" runners | jq -c '[.[].name]')"
   report="$(jq -n --argjson g "$group" --argjson r "$repos" --argjson o "$ours" --argjson m "$members" --arg want "$RUNNER_GROUP_REPOS" '{
     group: $g.name, id: $g.id, visibility: $g.visibility,
@@ -324,10 +365,11 @@ main() {
   slot="${1:-}"
   case "$slot" in
     --plan) slot=plan; load_config; plan; exit 0 ;;
+    --host-check) slot=host; load_config; host_check; exit 0 ;;
     --group-apply) slot=group; load_config; load_credentials; mint_token; group_apply; exit 0 ;;
     --group-check) slot=group; load_config; load_credentials; mint_token; group_check; exit 0 ;;
   esac
-  [[ "$slot" =~ ^[a-z][a-z0-9]*-[1-9][0-9]*$ ]] || { echo "usage: $0 <pool>-<n> | --plan | --group-apply | --group-check" >&2; exit 2; }
+  [[ "$slot" =~ ^[a-z][a-z0-9]*-[1-9][0-9]*$ ]] || { echo "usage: $0 <pool>-<n> | --plan | --host-check | --group-apply | --group-check" >&2; exit 2; }
   load_config
   local planned
   planned="$(plan)"

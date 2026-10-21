@@ -1,14 +1,39 @@
-# GitHub runner slots runbook (intent-cache)
+# GitHub runner slots runbook
 
-The `intent-cache` box (see [SCCACHE_SERVER.md](./SCCACHE_SERVER.md#the-box))
-also runs org-wide GitHub Actions Linux runners for `intent-hq`, in two pools:
+Org-wide GitHub Actions Linux runners for `intent-hq` run on a small fleet of
+hosts. The `intent-cache` box (see [SCCACHE_SERVER.md](./SCCACHE_SERVER.md#the-box))
+runs them next to the sccache server; runner-only hosts run nothing else. All
+of them register into one runner group and share the pool labels, so a job
+targeting a label runs on whichever host has a free slot.
 
-| Pool | Slots | Label | Per slot |
+| Host | Location | Hardware | Pools (slots) | Labels | Name prefix | Config |
+|---|---|---|---|---|---|---|
+| intent-cache | ReliableSite, Los Angeles | Ryzen 9 3900X, 12 cores / 24 threads, 128 GB | heavy (2), small (6) | `intent-cache`, `intent-cache-small` | `intent-cache` | [`runners.env`](../infra/runners/runners.env) |
+| intent-ci1 | ReliableSite, Los Angeles | EPYC 4545P, 16 cores / 32 threads, 128 GB | xl (1), heavy (1) | `intent-cache-xl`, `intent-cache` | `intent-ci1` | [`hosts/intent-ci1.env`](../infra/runners/hosts/intent-ci1.env) |
+
+| Pool | Label | Hosted fallback | Per slot |
 |---|---|---|---|
-| heavy | 2 | `intent-cache` | 8 CPUs = 4 whole cores (pinned 0-3,12-15 and 4-7,16-19), 48 GB |
-| small | 6 | `intent-cache-small` | 1 CPU (pinned 8, 9, 10, 20, 21, 22, one each), 3 GB |
+| heavy | `intent-cache` | `gh-linux-8x` | 8 CPUs = 4 whole cores; 48 GB on intent-cache, 32 GB on an EPYC host |
+| xl | `intent-cache-xl` | `gh-linux-16x` | 16 CPUs = 8 whole cores (one CCD), 60 GB |
+| small | `intent-cache-small` | — | 1 CPU, 3 GB (intent-cache only) |
 
-CPUs 11 and 23 (one whole core) are left to the cache and the system.
+On intent-cache the heavy slots are pinned to 0-3,12-15 and 4-7,16-19, the
+small ones to 8, 9, 10, 20, 21 and 22, and CPUs 11 and 23 (one whole core) are
+left to the cache and the system. On intent-ci1 the xl slot owns cores 0-7
+(CPUs 0-7,16-23), the heavy slot cores 8-11 (8-11,24-27), and cores 12-15 are
+left to the system and Docker. [`hosts/epyc-4545p-3heavy.env`](../infra/runners/hosts/epyc-4545p-3heavy.env)
+is the other EPYC layout: three heavy slots (cores 0-3, 4-7, 8-11), 32 GB each.
+
+The routing probe (`runner-route.yml`) caps how many jobs it sends to each
+pool with GitHub Actions variables (repository overrides organization), so a
+new host only adds capacity once its variable is raised:
+
+| Variable | Default | Pool |
+|---|---|---|
+| `CI_LINUX_HEAVY_SLOTS` | 2 | heavy |
+| `CI_LINUX_XL_SLOTS` | 0 (xl off) | xl |
+| `CI_LINUX_SMALL_SLOTS` | 6 | small |
+| `CI_LINUX_RUNNER_DISABLED` | unset | `true` sends every job, xl included, to hosted runners |
 
 Each slot runs one job in a fresh Docker container, then starts another. Everything needed to
 rebuild them lives in [`infra/runners/`](../infra/runners/).
@@ -22,11 +47,12 @@ github-runner@<pool>-<n>.service ─ supervisor.sh <pool>-<n> ─┬─ GitHub A
 | File | Installed as | Role |
 |---|---|---|
 | `Dockerfile`, `entrypoint.sh` | image `intent-gh-runner:current` | One image for both pools: Ubuntu 24.04, build tools, pinned and checksummed runner, rustup, gh, Node and PowerShell; Rust toolchain baked; user `runner` (uid 1001); no sudo |
-| `supervisor.sh` | `/usr/local/lib/github-runners/` | One slot, one job: JIT-register, run the pinned container, drain on stop, deregister; `--plan` validates the config and lists the slots |
-| `runners.env` | `/etc/github-runners/runners.env` (once) | Pools, slot counts, labels, CPU sets, memory (not secret) |
+| `supervisor.sh` | `/usr/local/lib/github-runners/` | One slot, one job: JIT-register, run the pinned container, drain on stop, deregister; `--plan` validates the config and lists the slots; `--host-check` checks the CPU sets against the host's cores |
+| `runners.env` | `/etc/github-runners/runners.env` (once) | intent-cache's pools, slot counts, labels, CPU sets, memory (not secret) |
+| `hosts/*.env` | `/etc/github-runners/runners.env` (once, `install.sh --config`) | The same for runner-only hosts, one file per layout |
 | `github-runner@.service` | `/etc/systemd/system/` | One instance per slot (`heavy-1`, `small-3`, …); restarts the supervisor after every job |
-| `runners.slice` | `/etc/systemd/system/` | Parent cgroup of the containers at the cgroup root: CPU and IO weight 10 (`system.slice`: 100), 116G cap |
-| `cache-priority.conf` | `/etc/systemd/system/{caddy,sccache-webdav}.service.d/runners-priority.conf` | CPU and IO weight 1000 for the cache services |
+| `runners.slice` | `/etc/systemd/system/` | Parent cgroup of the containers at the cgroup root: CPU and IO weight 10 (`system.slice`: 100); `runners.slice.d/memory.conf` caps it at the host's RAM minus 9 GiB (116G on a 128 GB box) |
+| `cache-priority.conf` | `/etc/systemd/system/{caddy,sccache-webdav}.service.d/runners-priority.conf` | CPU and IO weight 1000 for the cache services (skipped where a service is not installed) |
 | `egress.sh`, `github-runners-egress.service` | `/usr/local/lib/github-runners/`, `/etc/systemd/system/` | Blocks containers from private, tailnet and link-local addresses |
 | `daemon.json` | `/etc/docker/daemon.json` | User-namespace remapping, journald logs, no inter-container traffic, no-new-privileges |
 | `install.sh` | — | Idempotent installer for all of the above and the slot count |
@@ -72,18 +98,26 @@ runner output, tagged `github-runner-<pool>-<n>`).
   slot, and on the others the cache wins CPU and IO contention (weight 1000
   inside `system.slice`, which outweighs `runners.slice` 10 to 1). Check
   siblings with `cat /sys/devices/system/cpu/cpu*/topology/thread_siblings_list`
-  before changing the sets on other hardware. Job disk lives in the container layer on the
+  before changing the sets on other hardware; the installer runs
+  `supervisor.sh --host-check`, which refuses a slot whose CPUs do not exist or
+  that splits a core with another slot. On the EPYC 4545P CPU *n* and *n*+16
+  share a core. Job disk lives in the container layer on the
   root NVMe (`/var/lib/docker`), separate from the cache disk, and disappears
   with the container.
 - **Labels.** `self-hosted`, `Linux`, `X64` (GitHub adds these itself) plus
-  `intent-cache` (heavy) or `intent-cache-small` (small). Target a pool
-  explicitly, e.g. `runs-on: [self-hosted, intent-cache-small]`. The
+  `intent-cache` (heavy), `intent-cache-xl` (xl) or `intent-cache-small`
+  (small), whichever host the slot is on. Target a pool explicitly, e.g.
+  `runs-on: [self-hosted, intent-cache-small]`. The
   `runner-route` probe also counts every online `self-hosted`/`Linux`/`X64`
-  runner, from either pool, as Linux fleet capacity unless the repository
-  variable `CI_LINUX_RUNNER_DISABLED` is `true`.
+  runner, from any pool, as Linux fleet capacity unless the variable
+  `CI_LINUX_RUNNER_DISABLED` is `true`. A `gh-linux-16x` job takes a free xl
+  slot first, then a free heavy slot, then goes hosted; a `gh-linux-8x` job
+  never takes an xl slot.
 - **Slot fitting.** The probe hands out at most as many slots per run as a
-  pool has free: online slots (capped by `THRESHOLD` / `SMALL_THRESHOLD`)
-  minus jobs queued or running on that pool. A workflow lists the pooled jobs
+  pool has free: online slots (capped by the organization or repository
+  variables `CI_LINUX_HEAVY_SLOTS` / `CI_LINUX_XL_SLOTS` /
+  `CI_LINUX_SMALL_SLOTS`, defaults 2 / 0 / 6) minus jobs queued or running on
+  that pool. A workflow lists the pooled jobs
   that start together (`slot_jobs` input of `runner-route.yml`, or `SLOT_JOBS`
   in an inline probe); each reads `outputs.slots[key]`. Free slots go to
   Rust-compiling jobs first (`"rust": true`, they reuse the slot's local
@@ -142,7 +176,9 @@ ssh root@intent-cache
 ```
 
 `--group-check` prints the group's visibility, settings and repositories, plus
-every `intent-cache-*` runner that is outside the group. It never prints the
+every fleet runner that is outside the group. Fleet runners are the ones named
+`<prefix>-<pool>-<n>-<time>` where the prefix starts with `RUNNER_FLEET_PREFIX`
+(`intent-`), so the check on any host covers every host. It never prints the
 credential. To change the repositories, edit `RUNNER_GROUP_REPOS` and re-run the
 installer.
 
@@ -195,7 +231,10 @@ build for configuration-only changes.
 
 Slot settings live in `/etc/github-runners/runners.env` (not secret; the
 installer copies [`runners.env`](../infra/runners/runners.env) once and never
-overwrites it): `GITHUB_ORG`, `RUNNER_GROUP` (name, default `intent-cache`), `RUNNER_GROUP_REPOS`, `RUNNER_POOLS`,
+overwrites it; `--config FILE` seeds it from another file, such as one under
+`hosts/`): `GITHUB_ORG`, `RUNNER_GROUP` (name, default `intent-cache`), `RUNNER_GROUP_REPOS`,
+`RUNNER_NAME_PREFIX` (default `intent-cache`; unique per host),
+`RUNNER_FLEET_PREFIX` (default `intent-`; every host's prefix starts with it), `RUNNER_POOLS`,
 and per pool `<POOL>_SLOTS`, `_LABELS`, `_CPUSETS` (one entry per slot,
 space-separated), `_MEMORY`, `_PIDS`, `_SHM`. Limits apply from each slot's
 next job.
@@ -213,8 +252,48 @@ ssh root@intent-cache
 
 The installer enables exactly the planned slots and drains and disables the
 rest; an invalid file changes nothing. Keep CPU sets disjoint, leave a CPU or
-two unpinned, and keep the total memory at or below about 114 GB on this box
-(raise `MemoryMax` in `runners.slice` with it).
+two unpinned, and keep the total memory under the `runners.slice` cap (the
+host's RAM minus 9 GiB: 116G on a 128 GB box).
+
+## Add a runner host
+
+1. **Provision** an Ubuntu 24.04 box and pick its name (`intent-ci2`, …). Note
+   its cores, threads and RAM, and read its SMT layout:
+   `cat /sys/devices/system/cpu/cpu*/topology/thread_siblings_list`.
+2. **Lock down SSH to Tailscale.** Join the tailnet (`tailscale up --ssh`
+   with a tagged auth key), then close public SSH: `ufw default deny incoming`,
+   `ufw allow in on tailscale0`, `ufw enable`, and confirm
+   `ssh root@<host>` works over the tailnet before ending the provider's
+   console session. Runner jobs never reach the tailnet (the egress filter
+   drops 100.64/10).
+3. **Write its config.** Copy the closest file in `infra/runners/hosts/`, set
+   `RUNNER_NAME_PREFIX` to the host's name (it must start with `intent-` and be
+   unique in the fleet), and fit the CPU sets and memory to the host: whole
+   cores per multi-CPU slot, a few cores unpinned, total memory under the
+   host's RAM minus 9 GiB. Check it with
+   `RUNNERS_CONFIG=<file> infra/runners/supervisor.sh --plan`, add a test case
+   in `test_runners.py` if it is a new layout, and land it with a row in the
+   fleet table above.
+4. **Place the credential** at `/etc/github-runners/credentials` (see
+   Credential). Each host may use the same App or token; slots on every host
+   register into the `intent-cache` group.
+5. **Install:**
+
+   ```bash
+   scp -r infra/runners root@<host>:/root/infra/
+   ssh root@<host> /root/infra/runners/install.sh --config /root/infra/runners/hosts/<host>.env
+   ```
+
+   On a host without the cache services the installer skips their drop-ins.
+   It runs `supervisor.sh --host-check` and changes no slot if the CPU sets do
+   not fit the host.
+6. **Smoke test.** Run `supervisor.sh --group-check` (every fleet runner in the
+   group), then dispatch the
+   [smoke workflow](../.github/workflows/intent-cache-smoke.yml)
+   (`gh workflow run intent-cache-smoke.yml --repo intent-hq/intent`) and
+   check `journalctl -u 'github-runner@*'` on the new host shows it ran jobs.
+7. **Route jobs to it** by raising `CI_LINUX_HEAVY_SLOTS` / `CI_LINUX_XL_SLOTS`
+   to the fleet's total slots per pool (see the variables above).
 
 ## Drain and stop
 
@@ -260,7 +339,8 @@ release, so bump the pin at least monthly:
 | `runner group 'intent-cache' not found` | The group was renamed or deleted; recreate it (see Runner group) or fix `RUNNER_GROUP` |
 | `is not a configured slot` | The unit's instance is not in `supervisor.sh --plan`; re-run the installer |
 | Jobs stay queued | `gh api orgs/intent-hq/actions/runners` (needs the same permission): runners online with the expected labels; the `intent-cache` runner group lists the repository; `docker ps` shows `gh-runner-<pool>-<n>` |
-| Offline `intent-cache-<pool>-<n>-*` runners in the org list | Left by a crash or reboot; the slot deletes its own on its next start |
+| Offline `<prefix>-<pool>-<n>-*` runners in the org list | Left by a crash or reboot; the slot deletes its own (same prefix and slot only) on its next start |
+| `does not fit this host's CPUs` | `supervisor.sh --host-check` names the slot: a CPU the host lacks, or a slot that splits a core; fix the CPU sets for this host's `thread_siblings_list` |
 | A job cannot reach a host | Private and tailnet addresses are blocked on purpose; `iptables -t raw -S GH-RUNNERS-EGRESS` lists them |
 | Cache slow while jobs run | `cat /sys/fs/cgroup/runners.slice/cpu.weight` (10) and `/sys/fs/cgroup/system.slice/caddy.service/cpu.weight` (1000); fewer slots or smaller CPU sets |
 

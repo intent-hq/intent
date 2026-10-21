@@ -22,6 +22,11 @@ import unittest
 HERE = Path(__file__).resolve().parent
 SUPERVISOR = HERE / 'supervisor.sh'
 INSTALL = HERE / 'install.sh'
+HOSTS = HERE / 'hosts'
+INTENT_CI1 = HOSTS / 'intent-ci1.env'
+EPYC_3HEAVY = HOSTS / 'epyc-4545p-3heavy.env'
+# MemTotal of a 128 GB box (125 GiB after the kernel's share).
+MEMINFO_128G = 'MemTotal:       131890000 kB\nMemFree:        1000 kB\n'
 PAT = 'github_pat_' + 'p' * 40
 JIT = 'jit' + 'j' * 60
 APP_TOKEN = 'ghs_' + 'a' * 36
@@ -109,6 +114,30 @@ if args and args[0] in ('enable', 'disable'):
 def write_exe(path, text):
     path.write_text(text)
     path.chmod(0o755)
+
+
+def fake_cpus(root, cores, sibling_offset):
+    """A /sys/devices/system/cpu tree: `cores` cores, CPU n and n+offset siblings."""
+    shutil.rmtree(root, ignore_errors=True)
+    for core in range(cores):
+        for cpu in (core, core + sibling_offset):
+            topo = root / f'cpu{cpu}' / 'topology'
+            topo.mkdir(parents=True)
+            (topo / 'thread_siblings_list').write_text(f'{core},{core + sibling_offset}\n')
+    return root
+
+
+def read_env(path):
+    return dict(line.split('=', 1) for line in Path(path).read_text().splitlines()
+                if line and not line.startswith('#'))
+
+
+def expand(entry):
+    out = []
+    for part in entry.split(','):
+        a, _, b = part.partition('-')
+        out += range(int(a), int(b or a) + 1)
+    return out
 
 
 class Stubbed(unittest.TestCase):
@@ -530,6 +559,121 @@ class Supervisor(Stubbed):
         self.assert_no_secret(out, err)
 
 
+    def use_host_config(self, path):
+        self.config.write_text(path.read_text().replace('GITHUB_ORG=intent-hq', 'GITHUB_ORG=example-org'))
+
+    def test_committed_layouts_plan(self):
+        for path, slots in ((HERE / 'runners.env', ['heavy-1', 'heavy-2'] + [f'small-{n}' for n in range(1, 7)]),
+                            (INTENT_CI1, ['xl-1', 'heavy-1']),
+                            (EPYC_3HEAVY, ['heavy-1', 'heavy-2', 'heavy-3'])):
+            with self.subTest(config=path.name):
+                rc, out, err = self.run_supervisor('--plan', RUNNERS_CONFIG=str(path))
+                self.assertEqual((rc, out.split()), (0, slots), err)
+        self.assertEqual(self.calls(), [])
+
+    def test_intent_cache_config_matches_the_defaults(self):
+        # The committed intent-cache file and the built-in defaults describe
+        # the same slots, so hosts without RUNNER_NAME_PREFIX keep their names.
+        env = read_env(HERE / 'runners.env')
+        self.assertNotIn('RUNNER_NAME_PREFIX', env)
+        self.assertNotIn('RUNNER_FLEET_PREFIX', env)
+        text = SUPERVISOR.read_text()
+        for key, value in env.items():
+            self.assertRegex(text, rf'\n  {key}="?{re.escape(value)}"?\n', key)
+        self.assertIn('\n  RUNNER_NAME_PREFIX=intent-cache\n', text)
+
+    def test_xl_pool_slot(self):
+        self.use_host_config(INTENT_CI1)
+        self.responses['GET /orgs/example-org/actions/runners'] = [200, {'runners': []}]
+        rc, out, err = self.run_supervisor('xl-1')
+        self.assertEqual(rc, 0, err)
+        body = json.loads([c for c in self.calls('curl') if c['method'] == 'POST'][0]['body'])
+        self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache-xl'])
+        self.assertEqual(body['runner_group_id'], 3)
+        self.assertRegex(body['name'], r'^intent-ci1-xl-1-\d+$')
+        argv = ' '.join([c for c in self.calls('docker') if c['argv'][0] == 'run'][0]['argv'])
+        for flag in ('--name gh-runner-xl-1', '--hostname intent-ci1-xl-1', '--cpus 16 --cpuset-cpus 0-7,16-23 --memory 60g',
+                     '--memory-swap 60g', '--pids-limit 32768', '--shm-size 2g', '--cap-drop ALL',
+                     '--security-opt no-new-privileges', '--network gh-runners', '--label intent.runner.pool=xl'):
+            self.assertIn(flag, argv)
+        self.assertNotIn('--privileged', argv)
+        rc, out, err = self.run_supervisor('heavy-1')
+        self.assertEqual(rc, 0, err)
+        argv = ' '.join([c for c in self.calls('docker') if c['argv'][0] == 'run'][-1]['argv'])
+        self.assertIn('--cpus 8 --cpuset-cpus 8-11,24-27 --memory 32g', argv)
+
+    def test_stale_cleanup_only_takes_this_hosts_slot(self):
+        self.use_host_config(INTENT_CI1)
+        names = {
+            21: 'intent-ci1-heavy-1-100',              # this slot: removed
+            22: 'intent-cache-heavy-1-100',            # another host, same slot
+            23: 'intent-ci10-heavy-1-100',             # a host whose prefix extends this one
+            24: 'intent-ci1-heavy-1-heavy-1-100',      # host intent-ci1-heavy-1, slot heavy-1
+            25: 'intent-ci1-heavy-10-100',             # another slot
+            26: 'intent-ci1-xl-1-100',                 # another pool
+        }
+        self.responses['GET /orgs/example-org/actions/runners'] = [200, {'runners': [
+            {'id': i, 'name': n, 'status': 'offline'} for i, n in names.items()]}]
+        self.responses['DELETE /orgs/example-org/actions/runners/21'] = [204, None]
+        rc, out, err = self.run_supervisor('heavy-1')
+        self.assertEqual(rc, 0, err)
+        deletes = [c['path'] for c in self.calls('curl') if c['method'] == 'DELETE']
+        self.assertEqual(deletes, ['/orgs/example-org/actions/runners/21', '/orgs/example-org/actions/runners/42'])
+        body = json.loads([c for c in self.calls('curl') if c['method'] == 'POST'][0]['body'])
+        self.assertRegex(body['name'], r'^intent-ci1-heavy-1-\d+$')
+
+    def test_group_check_covers_every_fleet_host(self):
+        self.check_fixture(['intent-cache-heavy-1-1', 'intent-cache-small-1-1', 'intent-runner-1-heavy-3-9'])
+        self.responses['GET /orgs/example-org/actions/runners'] = [200, {'runners': [
+            {'name': n} for n in ('intent-cache-heavy-1-1', 'intent-cache-small-1-1', 'intent-ci1-xl-1-5',
+                                  'intent-runner-1-heavy-3-9', 'depot-x', 'intent-laptop', 'intent-ci1-xl-1')]}]
+        for config in ('GITHUB_ORG=example-org\n', 'GITHUB_ORG=example-org\nRUNNER_NAME_PREFIX=intent-ci1\n'):
+            with self.subTest(config=config):
+                self.config.write_text(config)
+                rc, out, _ = self.run_supervisor('--group-check')
+                self.assertEqual(rc, 1, 'one fleet runner is outside the group')
+                report = json.loads(out)
+                self.assertEqual((report['slot_runners'], report['in_group'], report['outside_group']),
+                                 (4, 3, ['intent-ci1-xl-1-5']))
+
+    def test_prefixes_are_validated(self):
+        for config, message in (('RUNNER_NAME_PREFIX=ci1\n', 'must start with RUNNER_FLEET_PREFIX'),
+                                ('RUNNER_FLEET_PREFIX=a.b\n', 'RUNNER_FLEET_PREFIX is invalid'),
+                                ('RUNNER_NAME_PREFIX=intent_ci1\n', 'RUNNER_NAME_PREFIX is invalid')):
+            with self.subTest(config=config):
+                self.config.write_text(config)
+                rc, _, err = self.run_supervisor('--plan')
+                self.assertNotEqual(rc, 0)
+                self.assertIn(message, err)
+        self.config.write_text('RUNNER_FLEET_PREFIX=acme-\nRUNNER_NAME_PREFIX=acme-ci1\n')
+        self.assertEqual(self.run_supervisor('--plan')[0], 0)
+
+    def test_host_check(self):
+        epyc = fake_cpus(self.dir / 'epyc', 16, 16)
+        ryzen = fake_cpus(self.dir / 'ryzen', 12, 12)
+        small = fake_cpus(self.dir / 'small', 8, 16)
+        for config, sysfs, message in (
+                (INTENT_CI1, epyc, None),
+                (EPYC_3HEAVY, epyc, None),
+                (HERE / 'runners.env', ryzen, None),
+                (HERE / 'runners.env', epyc, 'slot heavy-1: CPU 0 shares a core with CPU 16'),
+                (INTENT_CI1, ryzen, 'slot xl-1: CPU 0 shares a core with CPU 12'),
+                (EPYC_3HEAVY, ryzen, 'slot heavy-1: CPU 0 shares a core with CPU 12'),
+                (EPYC_3HEAVY, small, 'slot heavy-3: CPU 8 does not exist')):
+            with self.subTest(config=config.name, host=sysfs.name):
+                rc, _, err = self.run_supervisor('--host-check', RUNNERS_CONFIG=str(config), RUNNERS_SYSFS_CPU=str(sysfs))
+                if message is None:
+                    self.assertEqual(rc, 0, err)
+                else:
+                    self.assertNotEqual(rc, 0)
+                    self.assertIn(message, err)
+        self.config.write_text('HEAVY_SLOTS=3\n')
+        rc, _, err = self.run_supervisor('--host-check', RUNNERS_SYSFS_CPU=str(ryzen))
+        self.assertNotEqual(rc, 0)
+        self.assertIn('only 2 entries in CPUSETS', err)
+        self.assertEqual(self.calls(), [])
+
+
 @unittest.skipUnless(HAVE_TOOLS, 'needs bash, jq and openssl')
 class Installer(Stubbed):
     def setUp(self):
@@ -550,9 +694,17 @@ class Installer(Stubbed):
             'GET /orgs/intent-hq/actions/runner-groups': [200, {'runner_groups': [{'id': 3, 'name': 'intent-cache'}]}],
             'PATCH /orgs/intent-hq/actions/runner-groups/3': [200, {'id': 3}],
             'PUT /orgs/intent-hq/actions/runner-groups/3/repositories': [204, None]}))
+        self.meminfo = self.dir / 'meminfo'
+        self.meminfo.write_text(MEMINFO_128G)
+        # The cache box by default: its 12-core CPU and the cache services.
+        self.sysfs = fake_cpus(self.dir / 'cpu', 12, 12)
+        for unit in ('lib/systemd/system/caddy.service', 'etc/systemd/system/sccache-webdav.service'):
+            (self.prefix / unit).parent.mkdir(parents=True, exist_ok=True)
+            (self.prefix / unit).write_text('[Service]\n')
         self.env.update(INSTALL_PREFIX=str(self.prefix), OS_RELEASE=str(os_release),
                         INSTALL_OWNER_UID=str(os.getuid()), RUNNERS_OWNER_UID=str(os.getuid()),
-                        STUB_RESPONSES=str(responses),
+                        STUB_RESPONSES=str(responses), MEMINFO=str(self.meminfo),
+                        RUNNERS_SYSFS_CPU=str(self.sysfs),
                         STUB_DOCKER_FAIL='network inspect')
         self.creds = self.prefix / 'etc/github-runners/credentials'
         self.env_file = self.prefix / 'etc/github-runners/runners.env'
@@ -586,6 +738,8 @@ class Installer(Stubbed):
             self.assertEqual((units / name).read_bytes(), (HERE / name).read_bytes())
         for name in ('caddy.service', 'sccache-webdav.service'):
             self.assertEqual((units / f'{name}.d/runners-priority.conf').read_bytes(), (HERE / 'cache-priority.conf').read_bytes())
+        self.assertIn('\nMemoryMax=116G\n', (units / 'runners.slice.d/memory.conf').read_text(),
+                      'intent-cache (125 GiB) keeps its 116G cap')
         daemon = json.loads((self.prefix / 'etc/docker/daemon.json').read_text())
         self.assertEqual(daemon['userns-remap'], 'default')
         self.assertFalse(daemon['icc'])
@@ -677,6 +831,67 @@ class Installer(Stubbed):
         self.assertIn('mode 600', result.stderr)
         self.assertEqual(self.enabled(), [])
 
+    def test_runner_only_host(self):
+        for unit in ('lib/systemd/system/caddy.service', 'etc/systemd/system/sccache-webdav.service'):
+            (self.prefix / unit).unlink()
+        fake_cpus(self.sysfs, 16, 16)
+        self.place_credential()
+        result = self.install('--config', str(INTENT_CI1))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        units = self.prefix / 'etc/systemd/system'
+        for name in ('caddy.service', 'sccache-webdav.service'):
+            self.assertFalse((units / f'{name}.d').exists(), f'no drop-in for the absent {name}')
+            self.assertIn(f'no {name} on this host', result.stdout)
+        self.assertEqual(self.env_file.read_bytes(), INTENT_CI1.read_bytes())
+        self.assertEqual(self.enabled(), ['github-runner@heavy-1.service', 'github-runner@xl-1.service'])
+        self.assertIn('\nMemoryMax=116G\n', (units / 'runners.slice.d/memory.conf').read_text())
+        self.assertEqual((units / 'runners.slice').read_bytes(), (HERE / 'runners.slice').read_bytes())
+        self.assertTrue(any(a[0] == 'build' for a in [c['argv'] for c in self.calls('docker')]))
+        self.assertIn(['-w', '-t', 'raw', '-A', 'GH-RUNNERS-EGRESS', '-d', '100.64.0.0/10', '-j', 'DROP'],
+                      [c['argv'] for c in self.calls('iptables')], 'same egress filter as the cache box')
+        # --config only seeds: an existing file is kept.
+        result = self.install('--no-build', '--config', str(EPYC_3HEAVY))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.env_file.read_bytes(), INTENT_CI1.read_bytes())
+        self.assertIn('keeping existing', result.stdout)
+        self.assertEqual(self.enabled(), ['github-runner@heavy-1.service', 'github-runner@xl-1.service'])
+
+    def test_three_heavy_layout_on_an_epyc(self):
+        fake_cpus(self.sysfs, 16, 16)
+        self.place_credential()
+        result = self.install('--no-build', '--config', str(EPYC_3HEAVY))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.enabled(), [f'github-runner@heavy-{n}.service' for n in (1, 2, 3)])
+
+    def test_slice_memory_follows_host_ram(self):
+        units = self.prefix / 'etc/systemd/system'
+        for kb, cap in ((65_800_000, '53G'), (263_800_000, '242G'), (131_890_000, '116G')):
+            with self.subTest(kb=kb):
+                self.meminfo.write_text(f'MemTotal: {kb} kB\n')
+                result = self.install('--no-build')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(f'\nMemoryMax={cap}\n', (units / 'runners.slice.d/memory.conf').read_text())
+        self.assertNotRegex((units / 'runners.slice').read_text(), r'(?m)^MemoryMax=')
+        for text, message in (('MemFree: 1 kB\n', 'cannot read MemTotal'), ('MemTotal: 8000000 kB\n', 'host has 7 GiB')):
+            with self.subTest(meminfo=text):
+                self.meminfo.write_text(text)
+                result = self.install('--no-build')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+
+    def test_config_that_does_not_fit_the_cpus_changes_nothing(self):
+        self.place_credential()
+        self.assertEqual(self.install('--no-build').returncode, 0)
+        before = self.enabled()
+        self.assertEqual(len(before), 8)
+        fake_cpus(self.sysfs, 16, 16)  # the intent-cache layout splits cores on this topology
+        self.log.write_text('')
+        result = self.install('--no-build')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("does not fit this host's CPUs", result.stderr)
+        self.assertEqual(self.enabled(), before)
+        self.assertFalse(any(a[0] in ('disable', 'enable') and 'runner@' in a[-1] for a in self.systemctl()))
+
     def test_refuses_non_ubuntu_and_bad_args(self):
         other = self.dir / 'debian'
         other.write_text('ID=debian\n')
@@ -684,7 +899,7 @@ class Installer(Stubbed):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("expected Ubuntu, found 'debian'", result.stderr)
         self.assertEqual(self.calls(), [])
-        for args in (['--slots', '2'], ['--bogus']):
+        for args in (['--slots', '2'], ['--bogus'], ['--config']):
             with self.subTest(args=args):
                 self.assertEqual(self.install(*args).returncode, 2)
 
@@ -760,13 +975,12 @@ class Static(unittest.TestCase):
         for key in ('CPUWeight', 'IOWeight'):
             self.assertGreaterEqual(weight(prio, key), 10 * weight(slice_text, key))
 
+    expand = staticmethod(expand)
+
     @staticmethod
-    def expand(entry):
-        out = []
-        for part in entry.split(','):
-            a, _, b = part.partition('-')
-            out += range(int(a), int(b or a) + 1)
-        return out
+    def slice_cap(host_gib):
+        reserve = int(re.search(r'^slice_reserve_gib=(\d+)$', INSTALL.read_text(), re.M)[1])
+        return host_gib - reserve
 
     def test_default_pools_fit_the_box(self):
         env = dict(line.split('=', 1) for line in (HERE / 'runners.env').read_text().splitlines()
@@ -789,9 +1003,41 @@ class Static(unittest.TestCase):
                              'each heavy slot owns whole cores (CPU n with its sibling n+12)')
         self.assertEqual(memory, 2 * 48 + 6 * 3)
         self.assertLessEqual(memory, 125 - 10, 'leave about 11 GB of the 125 GB for the system and page cache')
-        slice_max = int(re.search(r'^MemoryMax=(\d+)G$', (HERE / 'runners.slice').read_text(), re.M)[1])
-        self.assertGreaterEqual(slice_max, memory)
-        self.assertLess(slice_max, 125)
+        self.assertEqual(self.slice_cap(125), 116, 'the installer keeps the 116G slice cap on intent-cache')
+        self.assertGreaterEqual(self.slice_cap(125), memory)
+
+    def test_host_configs_fit_an_epyc_4545p(self):
+        # 16 cores / 32 threads (CPU n and n+16 share a core), 128 GB (125 GiB).
+        configs = sorted(HOSTS.glob('*.env'))
+        self.assertEqual(configs, sorted([INTENT_CI1, EPYC_3HEAVY]))
+        shape = {'xl': (16, 'intent-cache-xl'), 'heavy': (8, 'intent-cache')}
+        for path in configs:
+            with self.subTest(config=path.name):
+                env = read_env(path)
+                self.assertRegex(env['RUNNER_NAME_PREFIX'], r'^intent-')
+                self.assertEqual(env['RUNNER_GROUP'], 'intent-cache')
+                cpus, memory = [], 0
+                for pool in env['RUNNER_POOLS'].split():
+                    p = pool.upper()
+                    cpus_per_slot, label = shape[pool]
+                    self.assertEqual(env[f'{p}_LABELS'], f'self-hosted,linux,x64,{label}')
+                    for entry in env[f'{p}_CPUSETS'].split()[:int(env[f'{p}_SLOTS'])]:
+                        cpu_set = set(expand(entry))
+                        self.assertEqual(len(cpu_set), cpus_per_slot, entry)
+                        self.assertEqual(cpu_set, {c % 16 for c in cpu_set} | {c % 16 + 16 for c in cpu_set},
+                                         f'{entry}: whole cores only')
+                        self.assertTrue(all(c % 16 < 8 for c in cpu_set) or all(c % 16 >= 8 for c in cpu_set),
+                                        f'{entry}: one CCD')
+                        cpus += cpu_set
+                    memory += int(env[f'{p}_SLOTS']) * int(env[f'{p}_MEMORY'].rstrip('g'))
+                self.assertEqual(len(cpus), len(set(cpus)), 'slots must not share CPUs')
+                self.assertTrue(all(c < 32 for c in cpus))
+                self.assertEqual(set(range(12, 16)) & {c % 16 for c in cpus}, set(), 'cores 12-15 stay unpinned')
+                self.assertLessEqual(memory, self.slice_cap(125))
+        ci1 = read_env(INTENT_CI1)
+        self.assertEqual((ci1['RUNNER_NAME_PREFIX'], ci1['RUNNER_POOLS'], ci1['XL_SLOTS'], ci1['HEAVY_SLOTS']),
+                         ('intent-ci1', 'xl heavy', '1', '1'))
+        self.assertEqual(read_env(EPYC_3HEAVY)['HEAVY_SLOTS'], '3')
 
 
 if __name__ == '__main__':

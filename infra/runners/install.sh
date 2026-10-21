@@ -6,9 +6,16 @@
 # sets, memory), draining and disabling any others.
 #
 # Usage (as root, from a checkout of this repo):
-#   infra/runners/install.sh [--no-build]
+#   infra/runners/install.sh [--no-build] [--config FILE]
 #
-#   --no-build   Skip the image build (config-only change).
+#   --no-build     Skip the image build (config-only change).
+#   --config FILE  Seed /etc/github-runners/runners.env from FILE instead of
+#                  runners.env (the intent-cache layout), e.g. a file under
+#                  hosts/. Like the default, used only if none exists yet.
+#
+# Runs on the cache box (intent-cache) or on a runner-only host: the cache
+# services get their priority drop-in only where they are installed. The
+# runners.slice memory cap follows the host's RAM.
 #
 # Installs Docker (official apt repo) with user-namespace remapping, the
 # runner image, an isolated bridge network with an egress filter, the
@@ -20,6 +27,7 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 prefix="${INSTALL_PREFIX:-}"
 os_release="${OS_RELEASE:-/etc/os-release}"
+meminfo="${MEMINFO:-/proc/meminfo}"
 etc_dir="$prefix/etc/github-runners"
 lib_dir="$prefix/usr/local/lib/github-runners"
 unit_dir="$prefix/etc/systemd/system"
@@ -31,17 +39,26 @@ network=gh-runners
 bridge=gh-runners0
 subnet=172.30.250.0/24
 image=intent-gh-runner
+# GiB of RAM kept outside runners.slice for the system, page cache and, on
+# intent-cache, the cache services (125 GiB box: 116G cap).
+slice_reserve_gib=9
 
 build=1
+seed_config="$here/runners.env"
 
 log() { echo "install: $*"; }
 die() { echo "install: error: $*" >&2; exit 1; }
-usage() { echo "usage: $0 [--no-build]" >&2; exit 2; }
+usage() { echo "usage: $0 [--no-build] [--config FILE]" >&2; exit 2; }
 
 parse_args() {
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --no-build) build=0 ;;
+      --config)
+        [ "$#" -ge 2 ] || usage
+        [ -f "$2" ] || die "--config: no such file $2"
+        seed_config="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"
+        shift ;;
       -h|--help) usage ;;
       *) echo "unknown argument: $1" >&2; usage ;;
     esac
@@ -99,6 +116,30 @@ ensure_started() {
   systemctl is-active --quiet "$1" || systemctl start "$1"
 }
 
+# A unit file installed by a package or by hand (systemd's search path).
+unit_exists() {
+  local dir
+  for dir in /etc/systemd/system /run/systemd/system /usr/local/lib/systemd/system /usr/lib/systemd/system /lib/systemd/system; do
+    [ -e "$prefix$dir/$1" ] && return 0
+  done
+  return 1
+}
+
+# runners.slice MemoryMax = host RAM (whole GiB) minus slice_reserve_gib.
+install_slice_memory() {
+  local kb gib tmp
+  kb="$(awk '$1 == "MemTotal:" { print $2 }' "$meminfo" 2>/dev/null || true)"
+  [[ "$kb" =~ ^[0-9]+$ ]] || die "cannot read MemTotal from $meminfo"
+  gib=$((kb / 1048576))
+  [ "$gib" -gt $((slice_reserve_gib * 2)) ] || die "host has ${gib} GiB of RAM; need more than $((slice_reserve_gib * 2))"
+  install -d -m 0755 "$unit_dir/runners.slice.d"
+  tmp="$(mktemp)"
+  printf '# Written by infra/runners/install.sh: host RAM (%s GiB) minus %s GiB.\n[Slice]\nMemoryMax=%sG\n' \
+    "$gib" "$slice_reserve_gib" "$((gib - slice_reserve_gib))" > "$tmp"
+  put 0644 "$tmp" "$unit_dir/runners.slice.d/memory.conf" || true
+  rm -f "$tmp"
+}
+
 configure_docker() {
   install -d -m 0755 "$(dirname "$docker_conf")"
   if put 0644 "$here/daemon.json" "$docker_conf"; then
@@ -118,11 +159,18 @@ install_files() {
     put 0644 "$here/$unit" "$unit_dir/$unit" || true
   done
   for unit in caddy.service sccache-webdav.service; do
+    if ! unit_exists "$unit"; then
+      log "no $unit on this host; skipping its priority drop-in"
+      continue
+    fi
     install -d -m 0755 "$unit_dir/$unit.d"
     put 0644 "$here/cache-priority.conf" "$unit_dir/$unit.d/runners-priority.conf" || true
   done
+  install_slice_memory
   if [ ! -f "$etc_dir/runners.env" ]; then
-    install -m 0644 "$here/runners.env" "$etc_dir/runners.env"
+    install -m 0644 "$seed_config" "$etc_dir/runners.env"
+  elif ! cmp -s "$seed_config" "$etc_dir/runners.env"; then
+    log "keeping existing $etc_dir/runners.env (differs from $seed_config)"
   fi
   systemctl daemon-reload
   # Reapply the rules directly rather than through a systemd job, which would
@@ -168,6 +216,8 @@ apply_slots() {
   local wanted n
   wanted="$(RUNNERS_CONFIG="$etc_dir/runners.env" "$lib_dir/supervisor.sh" --plan)" \
     || die "invalid $etc_dir/runners.env (see above)"
+  RUNNERS_CONFIG="$etc_dir/runners.env" "$lib_dir/supervisor.sh" --host-check \
+    || die "$etc_dir/runners.env does not fit this host's CPUs (see above)"
   for n in $(enabled_slots); do
     if ! grep -qx -- "$n" <<<"$wanted"; then
       log "draining and disabling slot $n"

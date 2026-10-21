@@ -736,13 +736,15 @@ Release builds are not routed: cloudlands-fe's signed desktop Mac builds name
 electron-builder's keychain step fails on macOS 26 images. cloudlands-fe routes
 its own Linux jobs with a separate, simpler probe in `intent-pr.yml` that uses the same Linux labels, slot counts and `CI_LINUX_RUNNER_DISABLED` override.
 
-The self-hosted Linux x64 fleet is two pools of runner slots on the cache box, both
+The self-hosted Linux x64 fleet is pools of runner slots on the cache box and on
+runner-only hosts ([GITHUB_RUNNERS.md](./GITHUB_RUNNERS.md)), all
 unprivileged ephemeral containers (no sudo, no Docker socket):
 
 | Pool | Labels | Slots | Takes jobs that ask for |
 |---|---|---|---|
-| heavy | `[self-hosted, linux, x64, intent-cache]` | 2, about 8 CPUs / 48 GB each | larger-runner labels (`gh-linux-8x`, `gh-linux-16x`) |
-| fast | `[self-hosted, linux, x64, intent-cache-small]` | 6, 1 CPU / 3 GB each | standard labels (`ubuntu-24.04`, `ubuntu-22.04`) |
+| heavy | `[self-hosted, linux, x64, intent-cache]` | 2 by default (`CI_LINUX_HEAVY_SLOTS`), 8 CPUs each | larger-runner labels (`gh-linux-8x`, `gh-linux-16x`) |
+| xl | `[self-hosted, linux, x64, intent-cache-xl]` | 0 by default (`CI_LINUX_XL_SLOTS`), 16 CPUs each | `gh-linux-16x` only |
+| fast | `[self-hosted, linux, x64, intent-cache-small]` | 6 by default (`CI_LINUX_SMALL_SLOTS`), 1 CPU / 3 GB each | standard labels (`ubuntu-24.04`, `ubuntu-22.04`) |
 
 A job is heavy when it compiles Rust or its recent median duration is over about
 5 minutes; that cut-off is a tunable choice. Heavy jobs ask for a larger-runner label
@@ -753,8 +755,11 @@ reason.
 
 The shared probe checks online runners and paginated queued/running jobs across all
 three repositories. Each Linux pool bursts once its queued plus running jobs reach
-the smaller of its slot count (`THRESHOLD`, 2, and `SMALL_THRESHOLD`, 6, in
-`runner-route.yml`; raise them when slots are added) and its online slot count. Other platforms require explicitly idle runners with room
+the smaller of its slot count (the organization or repository variables
+`CI_LINUX_HEAVY_SLOTS`, `CI_LINUX_XL_SLOTS` and `CI_LINUX_SMALL_SLOTS`, defaults
+2, 0 and 6; raise them when slots are added) and its online slot count. A
+`gh-linux-16x` job takes a free xl slot first, then a free heavy slot, then goes
+hosted; a `gh-linux-8x` job never takes an xl slot. Other platforms require explicitly idle runners with room
 for queued demand. Queued jobs older than 15 minutes, missing compatible runners,
 unreadable capacity (including sibling queues), or
 [maintenance overrides](#maintenance-overrides) select the hosted fallback; each
