@@ -399,6 +399,27 @@ class Supervisor(Stubbed):
             'saturation': 0.3, 'mem_peak_bytes': 900, 'pids_peak': 10, 'io_read_bytes': 10,
             'io_write_bytes': 20, 'oom_kills': 0, 'samples': 10})
 
+    def test_cores_avg_agrees_with_rounded_cpu_s(self):
+        # cores_avg is computed from the unrounded CPU time and rounded once;
+        # cpu_s is rounded to 0.1 s, so a reader recomputing cpu_s / wall_s can
+        # differ by up to 0.005 + 0.05 / wall_s. Pairs on rounding boundaries,
+        # the first being the merge-queue failure (3.79 vs 3.80).
+        pairs = [(1.5, 5_684_000), (1.5, 5_649_999), (1.4, 5_350_000), (2.0, 7_949_999),
+                 (0.7, 2_750_000), (600.0, 2_399_950_000), (3.3, 26_349_999)]
+        strict_misses = 0
+        for wall, usage in pairs:
+            with self.subTest(wall=wall, usage=usage):
+                (self.dir / 'samples').write_text(f'0 0 0 0 0 0 0\n{int(wall * 1e6)} {usage} 0 0 0 0 0\n')
+                r = self.bash('summarize_samples "$1" 8 "$2"', str(self.dir / 'samples'), str(wall))
+                self.assertEqual(r.returncode, 0, r.stderr)
+                m = json.loads(r.stdout)
+                # jq rounds halves away from zero (Python's round() goes to even).
+                self.assertEqual(m['cpu_s'], (usage + 50_000) // 100_000 / 10)
+                self.assertAlmostEqual(m['cores_avg'], usage / 1e6 / wall, delta=0.005 + 1e-9)
+                self.assertAlmostEqual(m['cores_avg'], m['cpu_s'] / wall, delta=0.005 + 0.05 / wall + 1e-9)
+                strict_misses += abs(m['cores_avg'] - m['cpu_s'] / wall) > 0.01 - 1e-9
+        self.assertGreater(strict_misses, 0, 'the pairs must include a case the old 0.01 check rejected')
+
     def test_sampler_reads_a_cgroup(self):
         cg = self.dir / 'cg'
         cg.mkdir()
