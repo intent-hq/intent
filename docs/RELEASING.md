@@ -269,8 +269,14 @@ makes a network check only when none is recorded for today:
   network check unless one is due. If the staged version is still not running
   24 h after staging, a tick forces a graceful restart.
 
-A new stable release can therefore take up to about a day to reach a running
-install.
+A new stable release therefore reaches a running install in two separate steps.
+**Discovery** can take up to about a day: an install that checked just after a
+publish does not look again until the next UTC day, and the 50–70 min tick jitter
+adds up to about an hour after the rollover. **Activation** of the staged version
+then happens at the next idle moment, so an idle install switches within about an
+hour; a continuously busy daemon waits for the forced restart up to 24 h after
+staging. In the worst case a busy install runs the new stable release about two
+days after it is published.
 
 **Alpha and beta — unchanged.**
 
@@ -296,7 +302,10 @@ at startup (10 s after launch) only if no check has succeeded that UTC day, and
 its hourly tick and focus/resume checks run only once the day has rolled over.
 Alpha and beta keep the startup check, the hourly check, and focus/resume checks
 after 4 h. "Check for updates" and channel switches always check immediately. A
-failed check is not recorded, so the next tick or focus retries.
+failed stable check is not recorded, so the app tries again, but automatic retries
+are throttled: startup, the hourly tick and focus/resume share one limit of one
+failed automatic attempt per hour, so the next focus after a failure does not
+necessarily retry at once. Manual checks and channel switches bypass this limit.
 
 ### Update-check statistics (`updates.intentapp.dev`)
 
@@ -314,7 +323,7 @@ updates.
 | `v` version | sitter version | app version |
 | `src` install source | `brew`, `deb`, `script`, `windows`, `unknown` | `dmg`, `nsis`, `appimage`, `deb`, `unknown` |
 | `k` trigger | `startup`, `daily`, `idle`, `manual` | `startup`, `daily`, `periodic`, `focus`, `manual`, `channel` |
-| `d` daily flag | `1` on the first check of the UTC day (from a date in `state.json`) | same (from the `lastUpdateCheckDay` local pref) |
+| `d` daily flag | `1` while no check has *succeeded* this UTC day (from a date in `state.json`) | same (from the `lastUpdateCheckDay` local pref) |
 | Opt-out | `DO_NOT_TRACK=1`, `INTENTD_DISABLE_TELEMETRY=1`, or `telemetry = false` in `<data-dir>/sitter/config.toml` (re-read on every check, kept when `intentd sitter channel` rewrites the file); `INTENTD_SITTER_MANIFEST_BASE_URL` also skips the endpoint | **Settings → General → Updates → Share anonymous update statistics** (on by default, `shareUpdateStatistics` local pref), `DO_NOT_TRACK=1`, or a custom `AUTO_UPDATE_URL` |
 
 No IDs, hostnames, usernames or paths are sent; the sitter's User-Agent is
@@ -324,7 +333,11 @@ so Vercel can derive the country, and never logs or stores the IP. With any opt-
 the request goes straight to GitHub.
 
 **Fallback.** Any failure of the endpoint (down, 404, slow, or an unexpected
-redirect) falls back to GitHub, and that check is simply not counted:
+redirect) falls back to GitHub. The endpoint records its events *before* it
+returns the redirect, so a check is counted whenever the request reached the
+service, even if the GitHub fetch that follows fails or the client then gives up
+and retries on GitHub. Only a request that never reached the service (endpoint
+down, DNS or TLS failure, opt-out) goes uncounted:
 
 - The sitter gives the endpoint its own 10 s timeout, then tries the existing
   `intent-hq/intentd-releases` → `intent-hq/intentd` GitHub bases.
@@ -356,7 +369,7 @@ redirect) falls back to GitHub, and that check is simply not counted:
 | Event | Properties |
 |---|---|
 | `intentd_update_check` / `desktop_update_check` | `platform`, `context` = `<ch>/<src>/<k>` (e.g. `stable/brew/idle`) |
-| `intentd_daily_active` / `desktop_daily_active` | `platform`, `version`; fired once per install per UTC day (`d=1`), so it approximates daily active installs |
+| `intentd_daily_active` / `desktop_daily_active` | `platform`, `version`; fired for every request with `d=1`. The day is recorded only after a successful fetch, so an install whose checks keep failing sends `d=1` (and is counted again) on each retry that day. Treat the count as an upper bound on daily active installs, not a distinct-install count |
 | `desktop_update_download` | `platform`, `version`, parsed from the artifact name; `.blockmap` files and range continuations are redirected but not counted |
 
 Country comes from Vercel's lookup of the forwarded IP. Only sitter and desktop versions
