@@ -927,6 +927,27 @@ class Static(unittest.TestCase):
         self.assertIn('[ "$(ulimit -c)" = 0 ]', text)
         self.assertIn('apt-get install -s', text)
 
+    def test_smoke_limits_cover_every_host_config(self):
+        text = (HERE.parents[1] / '.github/workflows/intent-cache-smoke.yml').read_text()
+        rows = re.findall(r'- \{label: ([\w-]+), cpus: (\d+), memory_min: (\d+), memory_max: (\d+)\}', text)
+        smoke = {label: (int(c), int(lo), int(hi)) for label, c, lo, hi in rows}
+        self.assertEqual(set(smoke), {'intent-cache', 'intent-cache-small', 'intent-cache-xl'})
+        units = {'k': 2 ** 10, 'm': 2 ** 20, 'g': 2 ** 30}
+        for path in [HERE / 'runners.env', *sorted(HOSTS.glob('*.env'))]:
+            env = read_env(path)
+            for pool in env['RUNNER_POOLS'].split():
+                p = pool.upper()
+                with self.subTest(config=path.name, pool=pool):
+                    label = env[f'{p}_LABELS'].split(',')[-1]
+                    cpus, lo, hi = smoke[label]
+                    memory = int(env[f'{p}_MEMORY'][:-1]) * units[env[f'{p}_MEMORY'][-1]]
+                    self.assertTrue(lo <= memory <= hi, f'{label}: {memory} outside {lo}..{hi}')
+                    for entry in env[f'{p}_CPUSETS'].split()[:int(env[f'{p}_SLOTS'])]:
+                        self.assertEqual(len(expand(entry)), cpus)
+        xl = text.split('  isolation-xl:')[1].split('\n  fresh:')[0]
+        self.assertIn("if: github.event_name == 'workflow_dispatch' && inputs.xl", xl,
+                      'the xl check runs only on request: with no xl runner online it would wait in the queue')
+
     def test_image_keeps_apt_package_lists(self):
         # Hosted ubuntu-24.04 keeps them; `apt-get install -s` (playwright
         # install-deps --dry-run) fails without them.

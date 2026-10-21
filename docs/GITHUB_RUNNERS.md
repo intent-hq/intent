@@ -290,8 +290,11 @@ host's RAM minus 9 GiB: 116G on a 128 GB box).
 6. **Smoke test.** Run `supervisor.sh --group-check` (every fleet runner in the
    group), then dispatch the
    [smoke workflow](../.github/workflows/intent-cache-smoke.yml)
-   (`gh workflow run intent-cache-smoke.yml --repo intent-hq/intent`) and
-   check `journalctl -u 'github-runner@*'` on the new host shows it ran jobs.
+   (`gh workflow run intent-cache-smoke.yml --repo intent-hq/intent`, plus
+   `-f xl=true` for a host with an xl slot) and check
+   `journalctl -u 'github-runner@*'` on the new host shows it ran jobs. The
+   smoke checks each pool's memory against a range that covers every host
+   config (heavy: 32-48 GiB); a new per-slot size needs the range widened.
 7. **Route jobs to it** by raising `CI_LINUX_HEAVY_SLOTS` / `CI_LINUX_XL_SLOTS`
    to the fleet's total slots per pool (see the variables above).
 
