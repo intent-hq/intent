@@ -64,6 +64,7 @@ chmod +x "$bin_dir/cargo"
 cat >"$bin_dir/make-stub" <<'SH'
 #!/usr/bin/env bash
 { echo "make:"; printf '%s\n' "$@"; } >>"$PLANNER_TEST_LOG"
+printf '%s\n' "${MAKEFLAGS-}" >"$PLANNER_TEST_LOG.makeflags"
 SH
 chmod +x "$bin_dir/make-stub"
 
@@ -210,6 +211,64 @@ else
   expect_make_ok
   [[ -z "$cargo_log" ]] || fail "$case_name: cargo was invoked: $cargo_log"
   expect_planner "--instrumented" "" 1 -2 -2 none never
+
+  # HERMETIC=1 wraps the runner in intentd's no-provider-CLI sandbox script
+  # (intentd#2551), after a Linux + bwrap preflight that runs before planning.
+  printf '#!/usr/bin/env bash\necho Linux\n' >"$bin_dir/uname"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$bin_dir/bwrap"
+  chmod +x "$bin_dir/uname" "$bin_dir/bwrap"
+  hermetic_line="[test-changed] HERMETIC=1: tests run with every provider CLI hidden (packages/intentd/scripts/test-without-provider-clis.sh)"
+
+  case_name="test-changed recipe wraps the runner under HERMETIC=1"
+  run_make test-changed HERMETIC=1 BUILD_JOBS=3
+  expect_make_ok
+  [[ "$stdout" == *"$hermetic_line"* ]] || fail "$case_name: mode not announced: $stdout"
+  expected="runner:"$'\n'"env"$'\n'"INTENT_GATE_HERMETIC=1"$'\n'"CARGO_BUILD_JOBS=3"$'\n'"bash"$'\n'"packages/intentd/scripts/test-without-provider-clis.sh"$'\n'"python3"$'\n'"scripts/resumable_nextest.py"$'\n'"--repo-root"$'\n'"$mk"
+  [[ "$planner_log" == *"$expected"* ]] || fail "$case_name: runner argv was"$'\n'"$planner_log"
+
+  case_name="test-changed recipe leaves the runner unwrapped by default"
+  run_make test-changed
+  expect_make_ok
+  [[ "$planner_log" == *"runner:"$'\n'"python3"$'\n'* && "$stdout" != *"HERMETIC=1"* ]] \
+    || fail "$case_name: runner argv was"$'\n'"$planner_log"
+
+  case_name="test-changed recipe announces HERMETIC=1 under DRY_RUN=1"
+  run_make test-changed HERMETIC=1 DRY_RUN=1
+  expect_make_ok
+  [[ "$stdout" == *"$hermetic_line"* ]] || fail "$case_name: stdout: $stdout"
+
+  case_name="test-changed recipe carries HERMETIC=1 into the full make test fallback"
+  PLANNER_STUB_EXIT=3 run_make test-changed HERMETIC=1 MAKE="$bin_dir/make-stub"
+  expect_make_ok
+  [[ "$(<"$temp_dir/planner.log.makeflags")" == *"HERMETIC=1"* ]] \
+    || fail "$case_name: MAKEFLAGS were: $(<"$temp_dir/planner.log.makeflags")"
+
+  case_name="test-changed recipe refuses HIDE_NODE=1 with HERMETIC=1 before planning"
+  run_make test-changed HERMETIC=1 HIDE_NODE=1
+  [[ "$status" -ne 0 ]] || fail "$case_name: make exited 0"
+  [[ "$stderr" == *"[test-changed] ERROR: HIDE_NODE=1 is not supported with HERMETIC=1"* ]] || fail "$case_name: stderr: $stderr"
+  [[ -z "$planner_log" ]] || fail "$case_name: planner ran: $planner_log"
+
+  case_name="test-changed recipe refuses HERMETIC=1 without bwrap before planning"
+  rm -f "$bin_dir/bwrap"
+  run_make test-changed HERMETIC=1
+  [[ "$status" -ne 0 ]] || fail "$case_name: make exited 0"
+  [[ "$stderr" == *"[test-changed] ERROR: HERMETIC=1 needs bwrap"* ]] || fail "$case_name: stderr: $stderr"
+  [[ -z "$planner_log" ]] || fail "$case_name: planner ran: $planner_log"
+
+  case_name="test-changed recipe refuses HERMETIC=1 off Linux before planning"
+  printf '#!/usr/bin/env bash\necho Darwin\n' >"$bin_dir/uname"
+  run_make test-changed HERMETIC=1
+  [[ "$status" -ne 0 ]] || fail "$case_name: make exited 0"
+  [[ "$stderr" == *"[test-changed] ERROR: HERMETIC=1 is Linux only"* ]] || fail "$case_name: stderr: $stderr"
+  [[ -z "$planner_log" ]] || fail "$case_name: planner ran: $planner_log"
+  rm -f "$bin_dir/uname"
+
+  case_name="HERMETIC accepts only 0 or 1"
+  run_make test-changed HERMETIC=true
+  [[ "$status" -ne 0 ]] || fail "$case_name: make exited 0"
+  [[ "$stderr" == *"HERMETIC must be 0 or 1, got 'true'"* ]] || fail "$case_name: stderr: $stderr"
+  [[ -z "$planner_log" ]] || fail "$case_name: planner ran: $planner_log"
 fi
 
 # End to end through the real `make test-changed`: intentd's changed-tests.sh

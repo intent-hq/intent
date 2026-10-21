@@ -494,6 +494,17 @@ def tree_key(repo_root: Path, intentd_dir: Path, output_args: list[str] | None =
              fixture_identity: dict[str, str] | None = None,
              transfer_identity: dict[str, str] | None = None,
              *, child_env: dict[str, str] | None = None) -> str:
+    inputs = tree_inputs(repo_root, intentd_dir, output_args, fixture_identity,
+                         transfer_identity, child_env=child_env)
+    encoded = json.dumps(inputs, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def tree_inputs(repo_root: Path, intentd_dir: Path, output_args: list[str] | None = None,
+                fixture_identity: dict[str, str] | None = None,
+                transfer_identity: dict[str, str] | None = None,
+                *, child_env: dict[str, str] | None = None) -> dict[str, object]:
+    """Everything a pass depends on; [`tree_key`] hashes it."""
     intentd_dir = intentd_dir.resolve()
     inputs = {
         "source-root": str(intentd_dir),
@@ -518,8 +529,17 @@ def tree_key(repo_root: Path, intentd_dir: Path, output_args: list[str] | None =
         "test-policy": {"INTENTD_ASSERT_BOUND_CALLER": os.environ.get("INTENTD_ASSERT_BOUND_CALLER")},
         "test-stack": test_stack_identity(nextest_env() if child_env is None else child_env),
     }
-    encoded = json.dumps(inputs, sort_keys=True, separators=(",", ":")).encode()
-    return hashlib.sha256(encoded).hexdigest()
+    # `make test HERMETIC=1` runs inside intentd's no-provider-CLI sandbox:
+    # its passes must not credit an ordinary run, or the reverse. Added only
+    # for sandboxed runs so ordinary records keep their existing keys.
+    # INTENT_GATE_HERMETIC is internal: only the Makefile's HERMETIC wrapper
+    # sets it. A run that skipped the sandbox self-check is a different mode.
+    if os.environ.get("INTENT_GATE_HERMETIC") == "1":
+        inputs["hermetic"] = {
+            "HIDE_NODE": os.environ.get("HIDE_NODE") == "1",
+            "SKIP_SELF_CHECK": os.environ.get("SKIP_SELF_CHECK") == "1",
+        }
+    return inputs
 
 
 def prune(cache_dir: Path, now: float | None = None) -> None:

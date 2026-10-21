@@ -889,6 +889,15 @@ check_all() {
     ok "actionlint: $actionlint_found"
   fi
 
+  if [[ "$(uname -s)" == Linux ]]; then
+    if ! command -v bwrap >/dev/null 2>&1; then
+      optional "bubblewrap: not installed (only make test HERMETIC=1 needs it); Debian/Ubuntu: sudo apt-get install bubblewrap"
+    elif bwrap --dev-bind / / true >/dev/null 2>&1; then
+      optional "bubblewrap: installed (make test HERMETIC=1 hides provider CLIs like CI)"
+    else
+      optional "bubblewrap: $(command -v bwrap) cannot create a sandbox (unprivileged user namespaces blocked?), so make test HERMETIC=1 will fail"
+    fi
+  fi
   if command -v sccache >/dev/null 2>&1; then
     optional "sccache: installed"
   else
