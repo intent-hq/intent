@@ -37,13 +37,13 @@ days before `--since` (so re-runs of older runs are found), with all attempts.
 
 A job key is (repo, workflow, job name, matrix leg); the leg is the trailing
 parenthesised part of the job name, so `Unit Tests (shard 1/4)` and `(shard 2/4)` are
-sized separately. Every attempt is a separate run, and retries are counted. Cancelled
+sized separately. Only stats records that started inside the window are used. Every attempt is a separate run, and retries are counted. Cancelled
 and skipped runs are not sized.
 
 | Measure | Definition |
 |---|---|
 | Busy cores p90 / p95 | Percentiles, across runs, of each run's p95 busy CPUs |
-| Saturation p90 | p90 of each run's share of samples at ≥ 90% of the slot's CPUs |
+| Saturation p90 | p90 of each run's share of samples at ≥ 90% of the slot's CPUs, also kept per slot size |
 | Memory p95, disk p95 | p95 of each run's peak memory and disk use (disk may be missing) |
 | CPU efficiency | Σ CPU seconds ÷ Σ (wall seconds × slot CPUs) |
 | Label | The most common runs-on label in the window |
@@ -58,8 +58,9 @@ The thresholds live in `SIZE_CLASSES` at the top of the script:
 | heavy | ≤ 8 | ≤ 32 GiB | gh-linux-8x |
 | xl | larger | larger | gh-linux-16x |
 
-A job whose p90 saturation is above 0.3 needs the class above its slot's class, so a
-saturated 8-CPU heavy slot means xl. A job with fewer than 5 sized runs shows
+Saturation is judged per slot size: when a slot size's runs have p90 saturation above
+0.3, the job needs the class above that slot's class, so a saturated 8-CPU heavy slot
+means xl and a saturated 1-CPU small slot means at least medium. A job with fewer than 5 sized runs shows
 **not enough samples** and no recommendation. Paid jobs with no stats at all (they only
 ever ran hosted) are listed the same way, so expensive unmeasured jobs stay visible.
 

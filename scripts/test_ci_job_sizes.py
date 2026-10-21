@@ -94,7 +94,9 @@ class ClassifyTests(unittest.TestCase):
         ]
         for cores, mem, sat, slot_cpus, want in cases:
             with self.subTest(cores=cores, mem=mem, sat=sat, slot=slot_cpus):
-                self.assertEqual(sizes.classify(cores, mem * GIB, sat, slot_cpus)["name"], want)
+                self.assertEqual(sizes.classify(cores, mem * GIB, {slot_cpus: sat})["name"], want)
+        self.assertEqual(sizes.classify(1.0, GIB, {})["name"], "small")
+        self.assertEqual(sizes.classify(1.0, GIB, {1: 0.9, 8: 0.31})["name"], "xl")
 
     def test_fallbacks_and_prices(self):
         by_name = {c["name"]: c["fallback"] for c in sizes.SIZE_CLASSES}
@@ -249,6 +251,28 @@ class ReportTests(unittest.TestCase):
         stats, jobs = measured("p", 5, "a | b (x|y)", job_kw={"workflow": "W|1"})
         markdown = sizes.render_markdown(build(stats, jobs))
         self.assertIn("| W\\|1 | a \\| b | x\\|y |", markdown)
+
+    def test_stats_outside_the_window_are_not_sized(self):
+        old = "2026-10-01T10:00:00Z"
+        stats, jobs = measured("old", 5, "check", stat_kw={"cores": 6.0, "started": old},
+                               job_kw={"started": old})
+        report = build(stats, jobs)
+        self.assertEqual(report["repos"], {})
+        self.assertEqual(report["unmatched"], [])
+        # A late window boundary excludes later stats too.
+        report = sizes.build_report(stats, jobs, sizes.parse_time("2026-09-01T00:00:00Z"),
+                                    sizes.parse_time("2026-09-30T00:00:00Z"))
+        self.assertEqual(report["repos"], {})
+
+    def test_saturation_is_judged_per_slot_size(self):
+        heavy_stats, heavy_jobs = measured("h", 6, "mixed", stat_kw={"cores": 1.0, "mem_gib": 1.0,
+                                                                     "saturation": 0.0, "slot_cpus": 8})
+        small_stats, small_jobs = measured("s", 5, "mixed", stat_kw={"cores": 0.95, "mem_gib": 1.0,
+                                                                     "saturation": 0.8, "slot_cpus": 1,
+                                                                     "pool": "small"})
+        e = entry(build(heavy_stats + small_stats, heavy_jobs + small_jobs), "intent-hq/intentd", "mixed")
+        self.assertEqual(e["class"], "medium")
+        self.assertEqual(e["saturation_by_slot"], {"1": 0.8, "8": 0.0})
 
 
 class InputTests(unittest.TestCase):

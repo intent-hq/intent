@@ -76,13 +76,15 @@ def _fits(size, cores, mem_gib):
     return cores <= size["max_cores"] and mem_gib <= size["max_mem_gib"]
 
 
-def classify(cores, mem_bytes, saturation, slot_cpus):
-    """The smallest class that fits; a saturated slot needs the class above the slot's own."""
+def classify(cores, mem_bytes, saturation_by_slot):
+    """The smallest class that fits; a slot size whose p90 saturation is over the limit
+    needs the class above that slot's own class. Saturation is judged per slot size."""
     mem_gib = mem_bytes / GIB
     index = next(i for i, size in enumerate(SIZE_CLASSES) if _fits(size, cores, mem_gib))
-    if saturation is not None and saturation > SATURATED and slot_cpus:
-        slot_index = next(i for i, size in enumerate(SIZE_CLASSES) if slot_cpus <= size["max_cores"])
-        index = max(index, min(slot_index + 1, len(SIZE_CLASSES) - 1))
+    for slot_cpus, saturation in saturation_by_slot.items():
+        if saturation is not None and saturation > SATURATED and slot_cpus:
+            slot_index = next(i for i, size in enumerate(SIZE_CLASSES) if slot_cpus <= size["max_cores"])
+            index = max(index, min(slot_index + 1, len(SIZE_CLASSES) - 1))
     return SIZE_CLASSES[index]
 
 
@@ -283,7 +285,8 @@ def _round(value, places=2):
 def build_report(stats, jobs, since, until, errors=()):
     days = max((until - since).total_seconds() / 86400, 1 / 24)
     window_jobs = [j for j in jobs if j.get("started_at") and since <= parse_time(j["started_at"]) < until]
-    matched, unmatched = match_stats(stats, jobs)
+    in_window = [r for r in stats if r.get("started_at") and since <= parse_time(r["started_at"]) < until]
+    matched, unmatched = match_stats(in_window, jobs)
 
     samples = defaultdict(list)
     for record, job in matched:
@@ -319,6 +322,10 @@ def build_report(stats, jobs, since, until, errors=()):
         disk95 = percentile([r.get("disk_bytes") for r in records], 95)
         sats = [r.get("saturation") for r in records]
         wall_cpu = sum((r.get("wall_s") or 0) * (r.get("slot_cpus") or 0) for r in records)
+        by_slot = defaultdict(list)
+        for r in records:
+            by_slot[r.get("slot_cpus")].append(r.get("saturation"))
+        saturation_by_slot = {cpus: percentile(values, 90) for cpus, values in by_slot.items()}
         slot_cpus = Counter(r.get("slot_cpus") for r in records).most_common(1)[0][0] if records else None
         labels = Counter(current_label(j.get("labels") or []) for j in api_jobs or [j for _, j in sized])
 
@@ -332,6 +339,8 @@ def build_report(stats, jobs, since, until, errors=()):
             "cores_p90": _round(percentile(cores, 90)),
             "cores_p95": _round(percentile(cores, 95)),
             "saturation_p90": _round(percentile(sats, 90), 3),
+            "saturation_by_slot": {str(cpus): _round(value, 3)
+                                   for cpus, value in sorted(saturation_by_slot.items(), key=lambda kv: kv[0] or 0)},
             "mem_p95_gib": None if mem95 is None else _round(mem95 / GIB),
             "disk_p95_gib": None if disk95 is None else _round(disk95 / GIB),
             "cpu_efficiency": _round(sum(r.get("cpu_s") or 0 for r in records) / wall_cpu, 3) if wall_cpu else None,
@@ -343,7 +352,7 @@ def build_report(stats, jobs, since, until, errors=()):
             "class": INSUFFICIENT, "fallback": None, "monthly_saving": None,
         }
         if len(records) >= MIN_RUNS and entry["cores_p90"] is not None and entry["mem_p95_gib"] is not None:
-            size = classify(percentile(cores, 90), mem95, percentile(sats, 90), slot_cpus)
+            size = classify(percentile(cores, 90), mem95, saturation_by_slot)
             fallback_price = price_per_minute([size["fallback"]]) or 0.0
             saving = sum(billed * (price - fallback_price) for billed, price in paid_jobs)
             entry.update({"class": size["name"], "fallback": size["fallback"],
@@ -354,7 +363,7 @@ def build_report(stats, jobs, since, until, errors=()):
         entries.sort(key=lambda e: (-(e["paid_per_day"] or 0), -e["runs"], e["workflow"], e["job"], e["leg"] or ""))
     return {
         "since": iso(since), "until": iso(until), "days": round(days, 2),
-        "stats_records": len(stats), "matched": len(matched),
+        "stats_records": len(in_window), "outside_window": len(stats) - len(in_window), "matched": len(matched),
         "repos": dict(sorted(repos.items())), "unmatched": unmatched,
         "unpriced_labels": sorted(unpriced), "errors": list(errors),
     }
@@ -377,7 +386,7 @@ def evidence(entry):
         return "no stats recorded"
     parts = [f"cores p90 {_fmt(entry['cores_p90'])}/p95 {_fmt(entry['cores_p95'])}",
              f"mem p95 {_fmt(entry['mem_p95_gib'])} GiB",
-             f"saturation p90 {_fmt(entry['saturation_p90'])} on {_fmt(entry['slot_cpus'])} CPUs"]
+             "saturation p90 " + ", ".join(f"{v} on {k} CPUs" for k, v in entry["saturation_by_slot"].items())]
     if entry["oom_kills"]:
         parts.append(f"{entry['oom_kills']} OOM kills")
     return "; ".join(parts)
@@ -388,7 +397,8 @@ def render_markdown(report):
         "# CI job sizes",
         "",
         f"Window {report['since']} → {report['until']} ({report['days']} days). "
-        f"{report['matched']} of {report['stats_records']} stats records matched a job. "
+        f"{report['matched']} of {report['stats_records']} stats records in the window matched a job"
+        f" ({report['outside_window']} outside it ignored). "
         f"Classes need {MIN_RUNS}+ completed runs; cores are p90 of each run's p95 busy CPUs, "
         "memory is p95 of peak. Saving = 30 days of today's paid hosted minutes repriced at the "
         "recommended class's hosted fallback (negative = upsizing costs more).",
@@ -401,7 +411,8 @@ def render_markdown(report):
         cores = "any" if math.isinf(size["max_cores"]) else f"{op} {size['max_cores']}"
         mem = "any" if math.isinf(size["max_mem_gib"]) else f"{op} {size['max_mem_gib']} GiB"
         lines.append(f"| {size['name']} | {cores} | {mem} | {size['fallback']} |")
-    lines.append(f"\nxl also takes any job with p90 saturation > {SATURATED} on a slot of 8 CPUs or fewer.")
+    lines.append(f"\nA slot size whose runs have p90 saturation > {SATURATED} needs the class above that slot's class "
+                 "(an 8-CPU slot → xl).")
     for repo, entries in report["repos"].items():
         lines += ["", f"## {repo}", "",
                   "| Workflow | Job | Leg | Class | Runs | Retries | Cores p90 | Cores p95 | Saturation p90 "
