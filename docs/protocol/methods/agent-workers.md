@@ -177,7 +177,7 @@ Each `WorkerObservation` contains:
 | --- | --- |
 | identity | `{ workspaceId, agentId, provider, acpSessionId, connectionGeneration, asyncTaskId }` — the full tuple is the key |
 | toolCallId? | Optional exact originating tool correlation within this same scope; never a daemon terminal or script ID |
-| name? | Untrusted plain-text label (for a shell, usually its command line, which the transcript's tool call already shows), control characters replaced by spaces and UTF-8 truncated to at most 512 bytes on a codepoint boundary |
+| name? | Untrusted plain-text label written by the provider. Claude sends a short task description (observed: `Run sleep 900 in background`), not the command line, so clients must not present it as a command; the command remains in the transcript's tool call. Control characters replaced by spaces and UTF-8 truncated to at most 512 bytes on a codepoint boundary |
 | taskType? | Untrusted plain-text provider task type from the spawn (`shell` for Codex; e.g. `shell`, `workflow`, `monitor` for Claude): control characters replaced by spaces, truncated to 64 bytes, then trimmed; absent on a terminal-only row |
 | canStop | Boolean; true only when the spawn carried exactly `canStop: true`; false for terminal-only rows |
 | firstObservedAt | Receipt time of the first accepted frame for this identity; clients show "started X ago" from it |
