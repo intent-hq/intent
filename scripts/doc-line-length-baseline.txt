@@ -6,14 +6,10 @@ docs/protocol/05-method-catalog.md 2
 docs/protocol/06-events.md 18
 docs/protocol/07-agent-streaming.md 4
 docs/protocol/09-error-codes.md 2
-docs/protocol/methods/agent-aux.md 4
 docs/protocol/methods/agents.md 22
 docs/protocol/methods/events-query.md 1
 docs/protocol/methods/git.md 1
 docs/protocol/methods/integrations.md 3
-docs/protocol/methods/multiplayer.md 2
 docs/protocol/methods/notes-tasks.md 3
-docs/protocol/methods/pr.md 6
-docs/protocol/methods/settings.md 7
 docs/protocol/methods/workspace.md 5
 docs/protocol/versioning.md 14
