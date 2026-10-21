@@ -62,7 +62,7 @@ bookkeeping and never crosses the wire.
 **Script lifecycle (10.11 implemented candidate).**
 `server.capabilities.scriptLifecycle: 1` advertises the complete saved/one-off,
 archive/restore, list filtering, result persistence and agent-binding contract
-in [§5.8](./scripts.md#saved-scripts-and-one-off-history-1011-implemented-candidate).
+in [§5.8](./scripts.md#saved-scripts-and-one-off-history-protocol-13-baseline).
 The verified candidate implements this capability; current pins and deployed
 clients are not thereby upgraded. Older daemons omit it; clients must not assume
 an unknown create option was
@@ -70,7 +70,7 @@ honored just because creation succeeded. Gate lifecycle controls/options on this
 capability, independently of numeric version.
 
 **Worker observations (prepared additive extension).**
-`server.capabilities.agentWorkers: 1` advertises the read-only list/subscription
+`server.capabilities.agentWorkers: 1` advertises the list/subscription/stop
 contract in [§5.5b](./agent-workers.md), not process liveness or exit evidence.
 Provider-session support is reported independently; older daemons omit this flag.
 

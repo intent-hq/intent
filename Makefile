@@ -130,7 +130,7 @@ CDP_PORT ?= $(call dev_port_value,CDP_PORT)
 # An explicit INTENTD_SOCKET always takes precedence.
 BRIDGE_PLATFORM ?= $(shell uname -s)
 
-.PHONY: check-app-ui-targets check-note-pagination-contract check-agent-worker-contract test-transfer-selection-contract check-transfer-selection-contract check-backend-keychain-contract ports status consumer-checks docs-check check-protocol-catalog check-mcp-bindings mcp-bindings-doc check-makefile-targets check-protocol-field-parity check-rulesets event-catalog-check shipped-in release-status rpc
+.PHONY: check-app-ui-targets check-doc-links check-note-pagination-contract check-agent-worker-contract test-transfer-selection-contract check-transfer-selection-contract check-backend-keychain-contract ports status consumer-checks docs-check check-protocol-catalog check-mcp-bindings mcp-bindings-doc check-makefile-targets check-protocol-field-parity check-rulesets event-catalog-check shipped-in release-status rpc
 ports: ## Print this worktree's resolved development ports
 	@set -- .dev/sandbox/*.json; if [ -e "$$1" ]; then \
 		echo "[ports] Note: these ports are for the next start; read running ports from 'make sandbox-status' or .dev/sandbox/<mode>.json." >&2; \
@@ -158,6 +158,10 @@ check-transfer-selection-contract: ## Validate transfer-selection fixtures and p
 
 check-app-ui-targets: ## Check Assistant navigation against the frontend registry
 	@node scripts/check-app-ui-targets.mjs
+
+check-doc-links: ## Check agent-facing Markdown links, paths, and heading anchors (CI runs this in repo-hygiene without submodules)
+	@node --test scripts/check-doc-links.test.mjs
+	@node scripts/check-doc-links.mjs
 
 check-note-pagination-contract: ## Validate prepared note paging examples (no component runtime/storage proof)
 	@node --test docs/protocol/fixtures/notes/*.test.mjs
@@ -310,7 +314,7 @@ FE_BUILD_HEAP_MB ?= 16384
 	ensure-fe-toolchain \
 	update \
 	build build-intentd build-sidecar gate test test-intentd test-scripts test-changed list-tests coverage-changed coverage-e2e coverage-all \
-	fmt clippy lint-sources lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child lint-shell-sleeps lint-shell check clean clean-dev \
+	fmt clippy lint-sources lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child lint-shell-sleeps lint-shell bash3 check clean clean-dev \
 	sweep sweep-all seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
 	run-intentd dev-ui dev-sandbox-ui dev-sandbox-app dev-sandbox-stack dev-fe fe-launch \
 	sandbox-status sandbox-stop \
@@ -515,6 +519,23 @@ lint-shell: ## Run shellcheck over scripts/*.sh (needs shellcheck; make bootstra
 	@command -v shellcheck >/dev/null 2>&1 || { \
 		echo "[missing]  shellcheck: required by make lint-shell; run make bootstrap-dev-host" >&2; exit 1; }
 	@shellcheck -x scripts/*.sh
+
+# Bash 3.2 for the scripts/*.test.sh compatibility passes (stock macOS bash is
+# 3.2). CI builds it only for the merge queue, so build it once here and the
+# suites' shared lookup (scripts/find-bash3.sh) finds this cache on its own.
+# The no-op check pins the full 3.2.57 version so a pin change rebuilds.
+# Export BASH3_CACHE_DIR (absolute) to move it; the suites read the same variable.
+BASH3_CACHE_DIR ?= $(or $(XDG_CACHE_HOME),$(HOME)/.cache)/intent-bash3
+
+bash3: ## Build Bash 3.2 for the shell suites' 3.2 pass into BASH3_CACHE_DIR (default ~/.cache/intent-bash3; no-op once built; needs gcc, make, bison)
+	@if "$(BASH3_CACHE_DIR)/bash" -c '[ "$${BASH_VERSION%%(*}" = 3.2.57 ]' >/dev/null 2>&1; then \
+		echo "bash3: $(BASH3_CACHE_DIR)/bash is already built"; \
+	elif /bin/bash -c '[ "$${BASH_VERSINFO[0]}" -eq 3 ]' >/dev/null 2>&1; then \
+		echo "bash3: /bin/bash is already Bash 3 (stock macOS); the suites use it, nothing to build"; \
+	else \
+		echo "bash3: building Bash 3.2.57 into $(BASH3_CACHE_DIR) (a few minutes)"; \
+		env -u GITHUB_ENV bash scripts/install-ci-bash3.sh "$(BASH3_CACHE_DIR)"; \
+	fi
 
 RUST_CHECK_TARGETS := check-makefile-targets check-protocol-field-parity lint-shell-sleeps fmt clippy lint-sources
 

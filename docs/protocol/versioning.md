@@ -29,7 +29,7 @@ Scoped reads retain their original caller, account, full instance and lifetime,
 including the private invalidation/retirement feed. Child Git policy retains its
 owner-only binding and defaults; native Git remains independent of that policy.
 
-These eight router operations extend the documented surface to **463 / 406 / 57**
+These eight router operations extend the documented surface to **464 / 406 / 58**
 (dispatchable / router / fast path), including other independently prepared
 additions. The private `sourceControl.read.invalidated` notification shares the
 original resource-read retirement feed; it is not a global event subscription.
@@ -46,7 +46,7 @@ the frontend's Legacy Import settings. Already imported daemon workspaces remain
 available; source directories and persisted import markers are not deleted.
 The 9.0 removal and 9.1 restoration entries below remain historical records.
 Protocol 14.1 added the startup readiness observations described below.
-The documented surface, including prepared additions, has **451 / 394 / 57**
+The documented surface, including prepared additions, has **456 / 398 / 58**
 dispatchable / router / fast-path methods. Follow [issue #4082](https://github.com/intent-hq/intent/issues/4082)'s
 removal order: frontend callers first, daemon removal second, then these docs
 after the automatic pin advance. Clients gate on capabilities or a minimum
@@ -84,6 +84,30 @@ list-row preview cap). A list-shaped `AgentLite` row carries
 (`true` only, omitted otherwise) when the list cap shortened that field, so clients
 can mark the text as a prefix or read the uncapped value with `agent.get`. Older daemons
 omit the flags; clients must not read their absence as proof a value is complete.
+
+**Worker observation stop and Claude support (prepared amendment).** The
+[worker observation contract (§5.5b)](./methods/agent-workers.md) reserves the router
+method `agent.workers.stop` and reclassifies `agent.workers.subscribe` from a router
+method to a fast-path method (it holds per-connection subscription state, like
+`events.subscribe`), bringing the documented surface to **456 / 398 / 58** (dispatchable /
+router / fast path). It allowlists claude-agent-acp 0.81.1 and replaces
+the Codex pin 1.13.1 with 2.2.2, so a 1.13.1 session now reports
+`unsupported/adapter-version`. It adds `taskType` and `canStop` row fields and
+**removes** the 60-second staleness rule: the `freshnessMs` snapshot field, the
+`freshUntil` row field and the `stale` unknown reason. These removals and the
+narrowed Codex pin break no client because no component implemented the
+prepared contract. `agentWorkers: 1` still gates the complete contract. No shipped
+numeric version is claimed here.
+
+Also within 15.0 (additive always-present response fields; no method-catalog change,
+so no version bump): **`system.status` `idleUpdateCheck` counts running command
+scripts** (§5.7 "`busyAgents` + `idleUpdateCheck`"). `runningScripts` is the number of
+command-mode `script.*` runs in flight, and `restartDeferredUntil` (RFC 3339 or `null`)
+is when a pending staged restart held by those runs stops waiting. A running command
+script now counts as busy for the idle update handshake: no idle check is requested while
+one runs, and a staged restart waits for them for at most 90 minutes (agent turns are
+still waited for without a cap). Service-mode scripts never count. Older daemons omit
+both keys; clients must detect them by presence.
 
 **PR workspace lookup (additive, prepared).** The
 [PR workspace lookup](./methods/workspace.md#pull-request-workspace-lookup) reserves
@@ -402,7 +426,7 @@ merge. Automation owns subsequent pins and the generated MCP index. This change
 neither upgrades clients nor reclassifies existing workspace definitions.
 
 **Version 10.11 — script lifecycle (additive, implemented candidate).** The
-[script lifecycle extension (§5.8)](./methods/scripts.md#saved-scripts-and-one-off-history-1011-implemented-candidate)
+[script lifecycle extension (§5.8)](./methods/scripts.md#saved-scripts-and-one-off-history-protocol-13-baseline)
 adds two router methods (`script.archive`, `script.restore`) and additive
 purpose/archive/latest-result fields, taking the combined documented surface to
 **419 / 359 / 58** (dispatchable / router / fast path), with no new event names.
