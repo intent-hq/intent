@@ -208,11 +208,14 @@ jobs:
           fi
           channel=$(sed -nE 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$toolchain")
           [[ "$channel" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo '::error::invalid Rust release channel'; exit 1; }
-          rustup toolchain install "$channel" --profile minimal
+          # A brief static.rust-lang.org or apt mirror blip must not eject a
+          # green PR from the merge queue (cloudlands-fe run 39606176278), so
+          # downloads get bounded retries; a failed rustup install rolls back.
+          scripts/retry.sh -- rustup toolchain install "$channel" --profile minimal
           echo "RUSTUP_TOOLCHAIN=$channel" >> "$GITHUB_ENV"
           # intent-cache runner images ship the headers and have no sudo.
           if ! command -v pkg-config >/dev/null || ! pkg-config --exists openssl; then
-            sudo apt-get update -qq
+            scripts/retry.sh -- sudo apt-get update -qq
             sudo apt-get install -y --no-install-recommends libssl-dev pkg-config
           fi
           corepack enable
