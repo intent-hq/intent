@@ -10,8 +10,11 @@ Each profile has its own Fast mode preference (see
 [References in settings](#references-in-settings)). The original configuration stays available as **Default**
 and is not a profile. Hosts with no profiles keep their current behavior.
 
-Fallback chains are out of scope. This contract defines no chain schema. A later
-chain can reference profiles through the provider references below.
+Profiles of one base provider have a saved order, and any of them can be marked as a
+**backup**. When a turn fails because its provider ran out of quota, the daemon
+retries it on the next backup profile of the same base provider (see
+[Backup failover](#backup-failover)). The Default configuration is never a backup
+and has no position in the order.
 
 #### Identity and provider references
 
@@ -99,7 +102,7 @@ select a model again after a downgrade.
 
 | Data | Location | Exposure |
 | --- | --- | --- |
-| `id`, `name`, `baseProviderId`, timestamps | Daemon-owned file `<data_dir>/provider-profiles.json` (mode `0600`, next to `config.toml`): `{ "version": 1, "profiles": [{ "id", "baseProvider", "name", "createdAt", "updatedAt" }] }` | Only through `providers.profiles.*`. Not a `settings.*` path: `settings.get` / `settings.reset` return `-32602`, and `settings.update` rejects it. |
+| `id`, `name`, `baseProviderId`, timestamps, `backup`, order | Daemon-owned file `<data_dir>/provider-profiles.json` (mode `0600`, next to `config.toml`): `{ "version": 1, "profiles": [{ "id", "baseProvider", "name", "createdAt", "updatedAt", "backup"? }] }` | Only through `providers.profiles.*`. Not a `settings.*` path: `settings.get` / `settings.reset` return `-32602`, and `settings.update` rejects it. |
 | Environment entries | Existing protected `SecretStore`, account `providerProfiles.<profileId>.env`, one JSON document per profile | Only through `providers.profiles.*` reads, masked |
 
 The metadata stays out of `config.toml` because `SettingsFile` denies unknown fields
@@ -126,6 +129,14 @@ redaction applies. Deleting the file removes every profile.
   - At startup, the daemon removes the secret entry only for recorded ids that have no
     metadata, then clears the list.
   - A secret orphaned some other way stays inert and is never swept.
+- **Order.** The order of one base provider's entries in the `profiles` array is that
+  base provider's saved order. Create appends. `reorder` permutes only that base
+  provider's entries and leaves other base providers' entries where they are.
+- **Backup flag.** `backup` is written only while `true`; an absent member reads as
+  `false`. The file `version` stays `1`, so files without the member load unchanged.
+- **Downgrade.** An older daemon ignores `backup` and keeps the array order. It drops
+  `backup` when it next rewrites the file, after any create, update or delete, so the
+  flags must be set again after an upgrade. It never fails over.
 - **Reads.** The daemon reads the file at startup and after its own writes. It does
   not watch for external edits; changes made outside the daemon apply after a restart.
   If the file is malformed or has an unknown `version`, the daemon still starts and
@@ -200,9 +211,10 @@ guests receive `-32003`. Each is daemon-global, with no `workspaceId` required.
 | Method | Params | Result |
 | --- | --- | --- |
 | providers.profiles.list | baseProviderId? | { profiles: ProviderProfile[], revision } |
-| providers.profiles.create | baseProviderId (req), name (req), env?: EnvEntryWrite[] | { profile: ProviderProfile, revision } |
-| providers.profiles.update | profileId (req), name?, env?: EnvEntryWrite[] | { profile: ProviderProfile, revision, activation: ProfileActivation } |
+| providers.profiles.create | baseProviderId (req), name (req), env?: EnvEntryWrite[], backup?: boolean | { profile: ProviderProfile, revision } |
+| providers.profiles.update | profileId (req), name?, env?: EnvEntryWrite[], backup?: boolean | { profile: ProviderProfile, revision, activation: ProfileActivation } |
 | providers.profiles.delete | profileId (req) | { profileId, revision } |
+| providers.profiles.reorder | baseProviderId (req), profileIds (req): string[] | { profiles: ProviderProfile[], revision } |
 
 ```ts
 interface ProviderProfile {
@@ -210,6 +222,7 @@ interface ProviderProfile {
   providerRef: string;        // "<baseProviderId>@<id>" — the value for every provider field
   baseProviderId: "codex" | "claude-code";
   name: string;               // trimmed display name
+  backup: boolean;            // quota failover may switch to this profile
   env: EnvEntryRead[];        // masked; in stored order
   settingsFingerprint: string; // opaque; changes whenever saved env changes; not derived from values alone
   createdAt: string;          // RFC 3339
@@ -247,6 +260,17 @@ interface ProfileActivation {
   which restores inheritance. `keep` preserves a saved entry's kind and value without
   echoing the secret, so a masked field stays unchanged. Omitting `env` leaves all
   entries unchanged. A rename never changes `id`, `providerRef` or routing.
+- **Backup.** `backup` defaults to `false` on create. On update, omitting it keeps the
+  saved value. A non-boolean value returns `-32602`. Changing only `backup` is not an
+  environment change: `envChanged` is `false` and running processes are unaffected.
+- **Order.** `list` returns profiles in file order, so each base provider's profiles
+  appear in that base provider's saved order. Catalog `profiles` uses the same order. Clients render this order and do not sort by name.
+- **Reorder.** `profileIds` is the complete new order for `baseProviderId`: every saved
+  profile of that base provider exactly once, and nothing else. The result `profiles`
+  lists that base provider's profiles in the new order. Every successful call commits,
+  increments `revision` and emits one `reordered` event, even when the order is
+  unchanged. A missing or non-array `profileIds`, or a non-string entry, returns
+  `-32602` without `fieldErrors`.
 - **Atomicity.** Each mutation validates fully before writing. It commits metadata
   and secrets together or changes nothing.
 - **`revision`** is a process-local, strictly increasing profile watermark with the
@@ -284,6 +308,12 @@ interface ProfileActivation {
 | `env[i].value` | `env-value-invalid` | No NUL characters, and at most 32 KiB of UTF-8. |
 | `env[i].value` | `env-value-placeholder` | A `set` value of `********` is rejected. Use `kind: "keep"`. |
 | `env[i].kind` | `env-keep-missing` | `keep` names a key with no saved entry, or appears on create. |
+| `profileIds[i]` | `profile-order-duplicate` | Reorder only. The id appears more than once. |
+| `profileIds[i]` | `profile-order-unknown` | Reorder only. The id is not a saved profile of `baseProviderId`. |
+| `profileIds` | `profile-order-incomplete` | Reorder only. A saved profile of `baseProviderId` is missing from the list. |
+
+Reorder also reports `base-provider-unsupported` on `baseProviderId`; it then checks
+nothing else. A failed reorder changes nothing.
 
 An unknown `profileId` returns `-32602` with `data.code: "not-found"`.
 
@@ -337,7 +367,7 @@ never removes external account directories.
   other rows. Absence means unsupported, including on older daemons. Clients offer
   **Add profile** only when it is `true`.
 - `providers.catalog` gains an additive top-level `profiles: ProviderProfileSummary[]`
-  (`{ id, providerRef, baseProviderId, name }`). It has no env and no counts, and
+  (`{ id, providerRef, baseProviderId, name, backup }`), in saved order. It has no env and no counts, and
   member reads may include it. `providers` rows stay one per provider type, so
   onboarding, which reads only `providers`, shows each type once. The `profiles` list
   reflects saved metadata at read time. `providers:profiles-changed` invalidates it.
@@ -405,24 +435,79 @@ never removes external account directories.
   intentd on the provider host. UDS locality alone does not mean the daemon is
   app-owned, and a client reconnect never counts as applying an edit.
 
+#### Backup failover
+
+A turn whose provider rejects it for quota retries on a backup profile instead of
+failing. "Quota" means exactly the failures that `agent:failed` reports with
+`errorCode: "quota-exceeded"` ([§6](../06-events.md)). Every other failure behaves as
+today, and an agent with no eligible backup behaves as today.
+
+- **Candidates.** The backups are the profiles with `backup: true` whose base provider
+  is the agent's base provider. They are taken in saved order. The current reference
+  may be the Default configuration or a profile. Failover never crosses base providers
+  (Codex and Claude Code stay separate) and never changes the model id.
+- **Choice.** The daemon takes the first candidate in saved order that has not been
+  tried for this user turn. The reference that just failed counts as tried. A profile
+  that no longer exists, or a base provider that is disabled, is skipped.
+- **Switch.** The daemon saves the backup reference as the agent's provider, as
+  `agent.setModel` would with the same model, and emits `agent:updated`. The switch
+  is sticky: later turns stay on the backup until the user selects another provider
+  or model. The daemon never switches back on its own.
+- **Retry.** The backup starts a fresh provider process and native session with Intent
+  history replayed, as for any [switch](#agent-state-switches-and-replacement), and
+  the same user message is sent again. The user row is not persisted a second time.
+  This also applies when the quota failure arrives mid-turn, after partial output:
+  output already persisted from the failed attempt stays in the transcript, and the
+  backup redrives the turn from the same user message.
+- **Swallowed attempt.** A failed attempt that leads to a retry emits no
+  `agent:failed` and persists no error row. The agent stays busy until the retried
+  turn ends.
+- **Exhaustion.** When no candidate is left, the turn fails with today's terminal
+  `agent:failed` and `errorCode: "quota-exceeded"`, unchanged. `providerId` names the
+  last reference tried, which is the agent's provider at that point.
+
+**Transcript notice.** Each switch persists one row before the retry starts:
+`role: "system"`, one text block naming both configurations, and
+
+```ts
+metadata = {
+  type: "provider_failover";
+  fromProvider: string;   // reference that hit its quota
+  toProvider: string;     // backup reference now running the turn
+  model: string | null;   // unchanged model id; null = provider default
+  reason: "quota-exceeded";
+}
+```
+
+The daemon emits the standard `agent:message` event (`role: "system"`). The row is
+transcript-only and never replayed: like `model_changed` ([§5.5](agents.md)), history
+replay excludes it and it never reaches a provider prompt. Clients render it from
+`metadata` as an inline notice, not as an error. A failover switch does not also
+produce a `model_changed` row.
+
 #### Events
 
 `providers:profiles-changed` is global (no `workspaceId`). The daemon emits exactly
 one event, with a `revision` one higher than the previous event, in two cases:
 
-- **A committed `providers.profiles.*` mutation.** Each mutation changes exactly one
-  profile. `change` is `"created"`, `"updated"` or `"deleted"`.
+- **A committed `providers.profiles.*` mutation.** Create, update and delete change
+  exactly one profile; `change` is `"created"`, `"updated"` or `"deleted"`. A reorder
+  has `change: "reordered"` and carries `baseProviderId` instead of `profileId` and
+  `profile`; clients re-run `providers.profiles.list` to read the new order.
 - **A change in one profile's `activation.runningProcesses`.** For example, a
   process on earlier settings exits or is recycled, or a new process starts.
   `change` is `"activation"`, and `profile` and `envChanged` are omitted. The event
   carries no count; clients re-run `providers.profiles.list` to read it.
 
-The daemon does not reload the profile file, so no event covers several profiles.
+The daemon does not reload the profile file. Only a reorder covers several profiles.
 The payload is
-`data = { revision, change: "created" | "updated" | "deleted" | "activation", profileId, profile?: ProviderProfileSummary, envChanged?: boolean }`.
-It never carries env keys or values. `profile` is omitted on delete and activation
-events. A client re-runs `providers.profiles.list` (or `providers.catalog`) when it
-sees an activation event, a revision gap, or a reconnect. A delete that prunes a `model.providerDefaults` key also emits
+`data = { revision, change: "created" | "updated" | "deleted" | "activation" | "reordered", profileId?, baseProviderId?, profile?: ProviderProfileSummary, envChanged?: boolean }`.
+It never carries env keys or values. `profileId` is present on every change except
+`reordered`, and `baseProviderId` only on `reordered`. `profile` is omitted on delete,
+activation and reorder events. A client re-runs `providers.profiles.list` (or
+`providers.catalog`) when it sees an activation or reorder event, a revision gap, or
+a reconnect. A failover switch changes no profile and emits no
+`providers:profiles-changed`. A delete that prunes a `model.providerDefaults` key also emits
 `settings:changed`, with its own settings revision.
 
 #### Compatibility
@@ -435,3 +520,9 @@ on write.
 A daemon that advertises `supportsProfiles` but predates per-profile Fast mode
 rejects a qualified `providers.fastMode` key with `-32602`; the whole update fails and
 the stored map is unchanged, so clients surface the error rather than retrying.
+
+Clients detect backup failover support by the presence of `backup` on
+`ProviderProfile` and `ProviderProfileSummary`. When it is absent, they hide the
+reorder and backup controls and never call `providers.profiles.reorder`. An older
+client ignores `backup`, the `reordered` change and the `provider_failover` row
+metadata, and still sees each switch's text row; failover runs without it.
