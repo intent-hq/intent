@@ -826,7 +826,7 @@ class Supervisor(Stubbed):
 
     def test_committed_layouts_plan(self):
         for path, slots in ((HERE / 'runners.env', ['heavy-1', 'heavy-2'] + [f'small-{n}' for n in range(1, 7)]),
-                            (INTENT_CI1, ['xl-1', 'heavy-1']),
+                            (INTENT_CI1, ['xl-1', 'heavy-1', 'heavy-2']),
                             (EPYC_3HEAVY, ['heavy-1', 'heavy-2', 'heavy-3'])):
             with self.subTest(config=path.name):
                 rc, out, err = self.run_supervisor('--plan', RUNNERS_CONFIG=str(path))
@@ -854,15 +854,19 @@ class Supervisor(Stubbed):
         self.assertEqual(body['runner_group_id'], 3)
         self.assertRegex(body['name'], r'^intent-ci1-xl-1-\d+$')
         argv = ' '.join([c for c in self.calls('docker') if c['argv'][0] == 'run'][0]['argv'])
-        for flag in ('--name gh-runner-xl-1', '--hostname intent-ci1-xl-1', '--cpus 16 --cpuset-cpus 0-7,16-23 --memory 60g',
-                     '--memory-swap 60g', '--pids-limit 32768', '--shm-size 2g', '--cap-drop ALL',
+        for flag in ('--name gh-runner-xl-1', '--hostname intent-ci1-xl-1', '--cpus 16 --cpuset-cpus 0-7,16-23 --memory 52g',
+                     '--memory-swap 52g', '--pids-limit 32768', '--shm-size 2g', '--cap-drop ALL',
                      '--security-opt no-new-privileges', '--network gh-runners', '--label intent.runner.pool=xl'):
             self.assertIn(flag, argv)
         self.assertNotIn('--privileged', argv)
         rc, out, err = self.run_supervisor('heavy-1')
         self.assertEqual(rc, 0, err)
         argv = ' '.join([c for c in self.calls('docker') if c['argv'][0] == 'run'][-1]['argv'])
-        self.assertIn('--cpus 8 --cpuset-cpus 8-11,24-27 --memory 32g', argv)
+        self.assertIn('--cpus 8 --cpuset-cpus 8-11,24-27 --memory 30g', argv)
+        rc, out, err = self.run_supervisor('heavy-2')
+        self.assertEqual(rc, 0, err)
+        argv = ' '.join([c for c in self.calls('docker') if c['argv'][0] == 'run'][-1]['argv'])
+        self.assertIn('--cpus 8 --cpuset-cpus 12-15,28-31 --memory 30g', argv)
 
     def test_stale_cleanup_only_takes_this_hosts_slot(self):
         self.use_host_config(INTENT_CI1)
@@ -1005,6 +1009,8 @@ class Installer(Stubbed):
         daemon = json.loads((self.prefix / 'etc/docker/daemon.json').read_text())
         self.assertEqual(daemon['userns-remap'], 'default')
         self.assertFalse(daemon['icc'])
+        self.assertEqual(daemon['dns'], ['1.1.1.1', '8.8.8.8', '9.9.9.9'],
+                         'containers resolve through three public resolvers, not the host link DNS')
         self.assertEqual(stat.S_IMODE((self.prefix / 'etc/github-runners').stat().st_mode), 0o700)
         self.assertEqual(self.env_file.read_bytes(), (HERE / 'runners.env').read_bytes())
         self.assertIn(['restart', 'docker'], self.systemctl())
@@ -1105,7 +1111,8 @@ class Installer(Stubbed):
             self.assertFalse((units / f'{name}.d').exists(), f'no drop-in for the absent {name}')
             self.assertIn(f'no {name} on this host', result.stdout)
         self.assertEqual(self.env_file.read_bytes(), INTENT_CI1.read_bytes())
-        self.assertEqual(self.enabled(), ['github-runner@heavy-1.service', 'github-runner@xl-1.service'])
+        self.assertEqual(self.enabled(), ['github-runner@heavy-1.service', 'github-runner@heavy-2.service',
+                                          'github-runner@xl-1.service'])
         self.assertIn('\nMemoryMax=116G\n', (units / 'runners.slice.d/memory.conf').read_text())
         self.assertEqual((units / 'runners.slice').read_bytes(), (HERE / 'runners.slice').read_bytes())
         self.assertTrue(any(a[0] == 'build' for a in [c['argv'] for c in self.calls('docker')]))
@@ -1116,7 +1123,8 @@ class Installer(Stubbed):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.env_file.read_bytes(), INTENT_CI1.read_bytes())
         self.assertIn('keeping existing', result.stdout)
-        self.assertEqual(self.enabled(), ['github-runner@heavy-1.service', 'github-runner@xl-1.service'])
+        self.assertEqual(self.enabled(), ['github-runner@heavy-1.service', 'github-runner@heavy-2.service',
+                                          'github-runner@xl-1.service'])
 
     def test_three_heavy_layout_on_an_epyc(self):
         fake_cpus(self.sysfs, 16, 16)
@@ -1209,6 +1217,20 @@ class Static(unittest.TestCase):
         xl = text.split('  isolation-xl:')[1].split('\n  fresh:')[0]
         self.assertIn("if: github.event_name == 'workflow_dispatch' && inputs.xl", xl,
                       'the xl check runs only on request: with no xl runner online it would wait in the queue')
+
+    def test_docker_dns_is_public_and_not_filtered(self):
+        # Docker's embedded DNS forwards to these instead of the host's single
+        # link resolver; the egress filter must not drop them.
+        import ipaddress
+        servers = json.loads((HERE / 'daemon.json').read_text())['dns']
+        self.assertGreaterEqual(len(servers), 3)
+        egress = (HERE / 'egress.sh').read_text()
+        dropped = [ipaddress.ip_network(n) for n in re.findall(r'\b(\d+\.\d+\.\d+\.\d+/\d+)\b', egress)]
+        self.assertTrue(dropped, 'egress.sh lists the IPv4 ranges it drops')
+        for server in servers:
+            address = ipaddress.ip_address(server)
+            self.assertTrue(address.is_global, server)
+            self.assertFalse(any(address in net for net in dropped), f'{server} is dropped by the egress filter')
 
     def test_image_keeps_apt_package_lists(self):
         # Hosted ubuntu-24.04 keeps them; `apt-get install -s` (playwright
@@ -1315,11 +1337,18 @@ class Static(unittest.TestCase):
                     memory += int(env[f'{p}_SLOTS']) * int(env[f'{p}_MEMORY'].rstrip('g'))
                 self.assertEqual(len(cpus), len(set(cpus)), 'slots must not share CPUs')
                 self.assertTrue(all(c < 32 for c in cpus))
-                self.assertEqual(set(range(12, 16)) & {c % 16 for c in cpus}, set(), 'cores 12-15 stay unpinned')
+                if path == INTENT_CI1:
+                    self.assertEqual(sorted(cpus), list(range(32)), 'intent-ci1 pins every core')
+                    self.assertEqual(memory, 52 + 2 * 30)
+                    self.assertGreaterEqual(125 - memory, 10, 'leave about 10 GB for the system and Docker')
+                else:
+                    self.assertEqual(set(range(12, 16)) & {c % 16 for c in cpus}, set(), 'cores 12-15 stay unpinned')
                 self.assertLessEqual(memory, self.slice_cap(125))
         ci1 = read_env(INTENT_CI1)
         self.assertEqual((ci1['RUNNER_NAME_PREFIX'], ci1['RUNNER_POOLS'], ci1['XL_SLOTS'], ci1['HEAVY_SLOTS']),
-                         ('intent-ci1', 'xl heavy', '1', '1'))
+                         ('intent-ci1', 'xl heavy', '1', '2'))
+        self.assertEqual(ci1['HEAVY_CPUSETS'].split(), ['8-11,24-27', '12-15,28-31'],
+                         'one heavy slot per half of CCD 1, both SMT siblings of each core')
         self.assertEqual(read_env(EPYC_3HEAVY)['HEAVY_SLOTS'], '3')
 
 
