@@ -42,11 +42,10 @@ These are **historical/aggregate read** helpers — distinct from live streaming
 | --- | --- | --- |
 | event.agentActivity | agentId?, minutesAgo? | activity events |
 | event.workspaceSummary | minutesAgo? | aggregated activity summary |
-| event.query | workspaceId (req), filter opts (eventType?, actorType?, actorId?, path?, minutesAgo?, limit?), paginate?: boolean, nextToken?: string | matching events — details below the table. |
+| event.query | workspaceId (req), filter opts (eventType?, actorType?, actorId?, path?, minutesAgo?, limit?), paginate?: boolean, nextToken?: string | matching events — **legacy shape** (bare array, newest→oldest) when pagination is not engaged; **paginated envelope** `{ items, nextToken }` when either `paginate: true` or a `nextToken` is supplied (opt-in). Details below the table. |
 
 **`event.query` details.**
 
-**legacy shape** (bare array, newest→oldest) when pagination is not engaged; **paginated envelope** `{ items, nextToken }` when either `paginate: true` or a `nextToken` is supplied (opt-in).
 `nextToken` is an opaque cursor for the next older page (`null` on the last page); pass it back as `nextToken` to fetch the next page.
 `limit` is clamped by the pagination policy when engaged.
 `eventType` accepts the **same glob syntax as `event.subscribe`** ([intentd#938](https://github.com/intent-hq/intentd/pull/938)): bare `*` = no type filter, `prefix:*` = category prefix match (e.g. `note:*` matches `note:created` / `note:updated` / `note:deleted`), anything else = exact match; matching is **case-sensitive** (`NOTE:*` matches nothing), mirroring subscribe's `starts_with` semantics — a `prefix:*` compiles to an index-served half-open range scan, not a `LIKE`, so `%` / `_` in a pattern are literal bytes.
