@@ -40,8 +40,9 @@ rebuild them lives in [`infra/runners/`](../infra/runners/).
 
 ```
 github-runner@<pool>-<n>.service ─ supervisor.sh <pool>-<n> ─┬─ GitHub API: JIT registration (one job)
-                                                            └─ docker run --rm intent-gh-runner:current
-                                                                 └─ actions runner ─ job ─ exits ─ container removed
+                                                            ├─ docker run intent-gh-runner:current
+                                                            │    └─ actions runner ─ job ─ exits
+                                                            └─ job stats (cgroup samples, disk) ─ container removed
 ```
 
 | File | Installed as | Role |
@@ -64,7 +65,7 @@ runner output, tagged `github-runner-<pool>-<n>`).
 ## Design
 
 - **Ephemeral.** Every job gets a new just-in-time runner registration and a new
-  container (`--rm`), so jobs never see another job's files. Nothing persists
+  container, removed when the job ends, so jobs never see another job's files. Nothing persists
   between jobs, not even download caches: a shared cargo registry or rustup
   directory could be poisoned by one job for the next. The pinned Rust toolchain
   is baked into the image instead, so the common case downloads nothing.
@@ -297,6 +298,46 @@ host's RAM minus 9 GiB: 116G on a 128 GB box).
    config (heavy: 32-48 GiB); a new per-slot size needs the range widened.
 7. **Route jobs to it** by raising `CI_LINUX_HEAVY_SLOTS` / `CI_LINUX_XL_SLOTS`
    to the fleet's total slots per pool (see the variables above).
+
+## Job stats
+
+Every slot records what each job used, so job sizes can follow evidence. While
+the job runs, the supervisor samples the container's cgroup about every 2
+seconds (`cpu.stat` `usage_usec` deltas give busy cores; a sample is a few file
+reads with no fork beyond `sleep`, far under 1% of a CPU). When the container
+exits, it measures the container's disk (`docker container inspect --size`),
+removes the container, and writes one JSON line (format `v: 1`) to the journal
+(`job stats: ...`) and to `/var/lib/github-runners/job-stats.jsonl` (directory
+0750, file 0640, root). That file rotates at 10 MB to `.1` ... `.4`.
+
+```bash
+/usr/local/lib/github-runners/supervisor.sh --job-stats                     # every line, oldest first
+/usr/local/lib/github-runners/supervisor.sh --job-stats --since 2026-10-21  # ended at or after
+journalctl -u 'github-runner@*' -g 'job stats' --since today
+```
+
+| Field | Meaning |
+|---|---|
+| `host`, `pool`, `slot`, `runner_name` | Where it ran; `runner_name` matches `runner_name` in the Actions jobs API |
+| `slot_cpus`, `slot_memory_bytes` | The slot's CPU set size and memory limit |
+| `started_at`, `ended_at`, `wall_s` | Container start and exit (UTC) |
+| `cpu_s` | CPU seconds used by the container |
+| `cores_avg`, `cores_p50`, `cores_p95`, `cores_max` | Busy cores: `cpu_s / wall_s`, and percentiles over the 2-second samples |
+| `saturation` | Share of samples at 0.9 × `slot_cpus` or more |
+| `mem_peak_bytes`, `pids_peak` | `memory.peak` and `pids.peak` (the highest sampled `*.current` on kernels without them) |
+| `disk_bytes` | The container's writable layer at exit (checkout, build output); null if it could not be measured |
+| `io_read_bytes`, `io_write_bytes` | Block IO from `io.stat` |
+| `oom_kills` | `memory.events` `oom_kill`, at least 1 if Docker reports the container OOM-killed |
+| `exit_code`, `samples` | The container's exit status; number of 2-second intervals measured |
+
+Only resource figures are recorded: never environment variables, tokens or
+command lines. Measured fields are null when the cgroup was never sampled (a
+container that failed to start), and the percentiles and `saturation` are null
+for a job shorter than one interval. Growth in the last 2 seconds before exit
+can be missed. An idle runner stopped by a drain ran no job and writes no line.
+The container is removed after the measurement and on every supervisor exit,
+including a fatal signal; `ExecStopPost` and the next start remove it if the
+supervisor is killed outright.
 
 ## Drain and stop
 
