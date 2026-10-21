@@ -312,7 +312,7 @@ jobs:
 
   # Discover the entire triage suite, including workflow handoff checks and
   # the pinned real CLI's tool-isolation gate against a localhost fake API.
-  # No OpenAI or GitHub credentials are passed to installation or tests.
+  # No Claude or GitHub credentials are passed to installation or tests.
   triage-parser-test:
     runs-on: ubuntu-latest
     steps:
@@ -322,11 +322,11 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
-      - name: Install the pinned Codex CLI for isolation checks
-        run: npm install -g @openai/codex@0.156.1
-      - name: Test issue triage and Codex isolation
+      - name: Install the pinned Claude Code CLI for isolation checks
+        run: npm install -g --no-audit --no-fund @anthropic-ai/claude-code@2.1.306
+      - name: Test issue triage and Claude isolation
         env:
-          TRIAGE_TEST_REAL_CODEX: '1'
+          TRIAGE_TEST_REAL_CLAUDE: '1'
         run: node --test .github/scripts/issue-triage/*.test.js
 
   # Aggregate gate: the single `CI Gate` context the main ruleset requires
