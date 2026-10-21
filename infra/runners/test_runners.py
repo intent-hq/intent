@@ -354,7 +354,8 @@ class Supervisor(Stubbed):
         self.assertGreaterEqual(line['cores_p95'], line['cores_p50'])
         # Sampling jitter can push an interval to the cap now and then.
         self.assertLess(line['saturation'], 0.25)
-        self.assertAlmostEqual(line['cores_avg'], line['cpu_s'] / line['wall_s'], delta=0.01)
+        # cores_avg comes from the unrounded CPU time; cpu_s is rounded to 0.1 s.
+        self.assertAlmostEqual(line['cores_avg'], line['cpu_s'] / line['wall_s'], delta=0.005 + 0.05 / line['wall_s'])
         # Also in the journal (the unit's stdout), as the same line.
         self.assertIn('job stats: ' + (self.state / 'job-stats.jsonl').read_text().strip(), out)
         self.assertEqual(stat.S_IMODE(self.state.stat().st_mode), 0o750)
