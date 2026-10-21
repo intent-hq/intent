@@ -140,7 +140,8 @@ test('workflow: event routing, manual dry-run default, concurrency and fail-soft
   assert.match(workflow, /issue_comment:\n    types: \[created\]/);
   assert.match(section(section(section(workflow, 'on', 0), 'workflow_dispatch', 0), 'inputs', 0), /dry_run:[\s\S]*?default: true/);
   assert.equal(section(workflow, 'concurrency', 0), 'group: issue-triage-${{ github.event.issue.number || inputs.issue_number }}\ncancel-in-progress: false');
-  assert.equal(section(job, 'needs', 0), 'triage');
+  assert.equal(section(job, 'needs', 0), '[triage, runner-route]');
+  assert.equal(section(job, 'runs-on', 0), `\${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}`);
   assert.equal(section(job, 'continue-on-error', 0), 'true');
   assert.ok(Number(section(job, 'timeout-minutes', 0)) <= 15);
   for (const [event, action, expected] of [['issues', 'opened', true], ['issues', 'edited', false], ['issues', 'reopened', false], ['issues', 'labeled', false], ['issue_comment', 'created', false], ['workflow_dispatch', undefined, true]]) {
