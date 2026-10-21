@@ -1,9 +1,10 @@
-# Grandfathered over-long lines per protocol doc: `<path> <count of lines over 2,000 characters>`,
-# sorted by path. Checked by `scripts/check-doc-line-length.mjs` (run from `make docs-check`).
-# Entries only ratchet down: split a file's long lines into one sentence or bullet per line and
-# the check names the corrected line to write here. Regenerate with `--print-counts`.
-docs/protocol/05-method-catalog.md 2
-docs/protocol/06-events.md 18
-docs/protocol/07-agent-streaming.md 4
-docs/protocol/09-error-codes.md 2
-docs/protocol/versioning.md 14
+# Grandfathered over-long lines per protocol doc: `<path> <count> <chars>`, sorted by path,
+# where count is the number of lines over 2000 characters and chars their combined length.
+# Checked by `scripts/check-doc-line-length.mjs` (run from `make docs-check`). Entries only
+# ratchet down: split a long line into one sentence or bullet per line and the check names the
+# corrected line to write here. Regenerate with `node scripts/check-doc-line-length.mjs --print-counts`.
+docs/protocol/05-method-catalog.md 2 4247
+docs/protocol/06-events.md 18 80803
+docs/protocol/07-agent-streaming.md 4 13142
+docs/protocol/09-error-codes.md 2 7476
+docs/protocol/versioning.md 14 189543
