@@ -1036,6 +1036,16 @@ self-described at the point of use in `DEFAULT_CONFIG_TEMPLATE`,
   total with the next sweep's headroom. The idle-reap sweep
   (`idleReapMinutes`) is independent of this rule and still drains idle
   trees on its own TTL.
+- **The idle-reap sweep keeps agents with running provider workers**
+  ([intent-hq/intentd#2573](https://github.com/intent-hq/intentd/pull/2573)).
+  An idle agent whose current connection is continuous and has a §5.5b worker
+  row still `running` (a `run_in_background` dev server, say) is skipped by
+  the TTL sweep, because killing its process would kill the worker with it. The
+  keep-alive is bounded by `WORKER_KEEPALIVE_CAP` (24 h past the TTL, for a
+  worker whose end report never arrives). Slot-cap admission and the
+  memory-budget drain can still evict such an agent, but only after every
+  idle agent without a running worker (`KeepAliveFn` in
+  `intent-services/src/agent_manager.rs`).
 - **`memoryBudgetMb` is a soft admission gate, not a ceiling**
   (monorepo#2063, validated end-to-end against real agents **under the strict
   policy** — the tree-only criterion that is now the fallback above; on a
