@@ -3,8 +3,8 @@ name: intent-cache runner smoke
 # Exercises the self-hosted runner pools (infra/runners, docs/GITHUB_RUNNERS.md):
 # isolation, paths and limits on every pool, a fresh container per job, and
 # sccache reuse of entries a GitHub-hosted runner wrote, with every slot busy at
-# once. Memory limits differ by host (heavy: 48 GiB on intent-cache, 32 GiB on an
-# EPYC host), so each pool is checked against a range that covers every
+# once. Memory limits differ by host (heavy: 48 GiB on intent-cache, 30-32 GiB on
+# an EPYC host), so each pool is checked against a range that covers every
 # committed host config (test_runners.py keeps them in step).
 on:
   workflow_dispatch:
@@ -29,7 +29,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - {label: intent-cache, cpus: 8, memory_min: 34359738368, memory_max: 51539607552}
+          - {label: intent-cache, cpus: 8, memory_min: 32212254720, memory_max: 51539607552}
           - {label: intent-cache-small, cpus: 1, memory_min: 3221225472, memory_max: 3221225472}
     runs-on: [self-hosted, '${{ matrix.label }}']
     timeout-minutes: 10
@@ -119,7 +119,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - {label: intent-cache-xl, cpus: 16, memory_min: 64424509440, memory_max: 64424509440}
+          - {label: intent-cache-xl, cpus: 16, memory_min: 55834574848, memory_max: 55834574848}
     runs-on: [self-hosted, '${{ matrix.label }}']
     timeout-minutes: 10
     steps: *isolation-steps

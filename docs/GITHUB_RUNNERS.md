@@ -9,19 +9,20 @@ targeting a label runs on whichever host has a free slot.
 | Host | Location | Hardware | Pools (slots) | Labels | Name prefix | Config |
 |---|---|---|---|---|---|---|
 | intent-cache | ReliableSite, Los Angeles | Ryzen 9 3900X, 12 cores / 24 threads, 128 GB | heavy (2), small (6) | `intent-cache`, `intent-cache-small` | `intent-cache` | [`runners.env`](../infra/runners/runners.env) |
-| intent-ci1 | ReliableSite, Los Angeles | EPYC 4545P, 16 cores / 32 threads, 128 GB | xl (1), heavy (1) | `intent-cache-xl`, `intent-cache` | `intent-ci1` | [`hosts/intent-ci1.env`](../infra/runners/hosts/intent-ci1.env) |
+| intent-ci1 | ReliableSite, Los Angeles | EPYC 4545P, 16 cores / 32 threads, 128 GB | xl (1), heavy (2) | `intent-cache-xl`, `intent-cache` | `intent-ci1` | [`hosts/intent-ci1.env`](../infra/runners/hosts/intent-ci1.env) |
 
 | Pool | Label | Hosted fallback | Per slot |
 |---|---|---|---|
-| heavy | `intent-cache` | `gh-linux-8x` | 8 CPUs = 4 whole cores; 48 GB on intent-cache, 32 GB on an EPYC host |
-| xl | `intent-cache-xl` | `gh-linux-16x` | 16 CPUs = 8 whole cores (one CCD), 60 GB |
+| heavy | `intent-cache` | `gh-linux-8x` | 8 CPUs = 4 whole cores; 48 GB on intent-cache, 30 GB on intent-ci1, 32 GB in the three-heavy EPYC layout |
+| xl | `intent-cache-xl` | `gh-linux-16x` | 16 CPUs = 8 whole cores (one CCD), 52 GB |
 | small | `intent-cache-small` | — | 1 CPU, 3 GB (intent-cache only) |
 
 On intent-cache the heavy slots are pinned to 0-3,12-15 and 4-7,16-19, the
 small ones to 8, 9, 10, 20, 21 and 22, and CPUs 11 and 23 (one whole core) are
 left to the cache and the system. On intent-ci1 the xl slot owns cores 0-7
-(CPUs 0-7,16-23), the heavy slot cores 8-11 (8-11,24-27), and cores 12-15 are
-left to the system and Docker. [`hosts/epyc-4545p-3heavy.env`](../infra/runners/hosts/epyc-4545p-3heavy.env)
+(CPUs 0-7,16-23, 52 GB) and the two heavy slots split CCD 1: cores 8-11
+(8-11,24-27) and 12-15 (12-15,28-31), 30 GB each. Every core is pinned; about
+13 GB stays with the system and Docker. [`hosts/epyc-4545p-3heavy.env`](../infra/runners/hosts/epyc-4545p-3heavy.env)
 is the other EPYC layout: three heavy slots (cores 0-3, 4-7, 8-11), 32 GB each.
 
 The routing probe (`runner-route.yml`) caps how many jobs it sends to each
