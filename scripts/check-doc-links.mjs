@@ -2,9 +2,10 @@
 
 // Check agent-facing Markdown for paths that no longer resolve. In addition to
 // local Markdown links, this conservatively checks single-backtick
-// spans whose entire value starts with docs/, scripts/, or .github/ and contains
-// only path characters. Globs, placeholders, whitespace, and ellipses are ignored.
-// Bare paths resolve against the source directory, monorepo root, and component repositories.
+// spans whose entire value starts with docs/, scripts/, .github/, or packages/ and
+// contains only path characters. Globs, placeholders, whitespace, and ellipses are ignored.
+// Bare paths resolve against the source directory, monorepo root, and component repositories;
+// packages/ spans name a submodule path explicitly and resolve against the monorepo root only.
 // References requiring an uninitialized submodule are skipped as unverifiable.
 // Bare paths are never looked up in a submodule that .gitmodules marks `update = none`
 // (the private packages/ios, which CI never checks out): otherwise every missing bare
@@ -28,6 +29,7 @@ import { fileURLToPath } from 'node:url';
 
 const MARKDOWN_LINK = /\[[^\]]*\]\(\s*(<?[^\s)>]+>?)/g;
 const REPO_PATH = /`((?:docs|scripts|\.github)\/[A-Za-z0-9._/-]+)`/g;
+const PACKAGE_PATH = /`(packages\/[A-Za-z0-9._/-]+)`/g;
 const RUNTIME_ANCHOR = /^(?:issuecomment-|discussion_r|discussioncomment-|pullrequestreview-|L\d+(?:-L\d+)?$)/;
 const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 const BLOCKQUOTE = /^(?: {0,3}> ?)+/;
@@ -339,6 +341,10 @@ export async function inspectRepository(root) {
         index: match.index,
         bases: uniquePaths([path.dirname(source), root, ...bareBases]),
       });
+    }
+    for (const match of content.matchAll(PACKAGE_PATH)) {
+      if (match[1].includes('...')) continue;
+      references.push({ raw: match[1], target: cleanTarget(match[1]), index: match.index, bases: [root] });
     }
 
     for (const reference of references) {

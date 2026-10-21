@@ -64,6 +64,58 @@ test('checks only conservative backticked repository paths', async (t) => {
   ]);
 });
 
+// Incident: docs/protocol/README.md named `packages/intentd/scripts/...` for a file
+// that existed only on an unmerged intentd branch; packages/ spans were never checked.
+test('checks backticked packages/ paths against the monorepo root', async (t) => {
+  const root = await fixture(t, {
+    '.gitmodules': '[submodule "packages/product"]\n\tpath = packages/product\n',
+    'docs/guide.md': [
+      '`packages/product` `packages/product/scripts/present.sh` `packages/product/`',
+      '`packages/product/scripts/missing.json` `packages/other/README.md`',
+      '`packages/product/**/*.sh` `packages/<name>/AGENTS.md` `packages/product/...` `packages/product/a b`',
+    ].join('\n'),
+    'packages/product/.git': 'gitdir: elsewhere',
+    'packages/product/scripts/present.sh': '',
+  });
+  assert.deepEqual(await inspectRepository(root), {
+    failures: [
+      { source: 'docs/guide.md', line: 2, target: 'packages/product/scripts/missing.json', resolved: 'packages/product/scripts/missing.json' },
+      { source: 'docs/guide.md', line: 2, target: 'packages/other/README.md', resolved: 'packages/other/README.md' },
+    ],
+    skipped: 0,
+  });
+});
+
+test('resolves packages/ paths only from the monorepo root', async (t) => {
+  const root = await fixture(t, {
+    '.gitmodules': '[submodule "packages/product"]\n\tpath = packages/product\n',
+    'docs/guide.md': '`packages/product/x.md`',
+    'docs/packages/product/x.md': '',
+    'packages/product/.git': 'gitdir: elsewhere',
+    'packages/product/AGENTS.md': '`packages/product/x.md`',
+    'packages/product/packages/product/x.md': '',
+  });
+  const { failures } = await inspectRepository(root);
+  assert.deepEqual(failures.map((failure) => `${failure.source}:${failure.resolved}`), [
+    'docs/guide.md:packages/product/x.md',
+    'packages/product/AGENTS.md:packages/product/x.md',
+  ]);
+});
+
+test('skips packages/ paths into uninitialized submodules, including update = none', async (t) => {
+  const root = await fixture(
+    t,
+    {
+      '.gitmodules':
+        '[submodule "packages/public"]\n\tpath = packages/public\n' +
+        '[submodule "packages/private"]\n\tpath = packages/private\n\tupdate = none\n',
+      'docs/guide.md': '`packages/public/scripts/build.sh` `packages/private/AGENTS.md` `packages/private`',
+    },
+    ['packages/public', 'packages/private'],
+  );
+  assert.deepEqual(await inspectRepository(root), { failures: [], skipped: 3 });
+});
+
 test('skips links into submodules that are absent from the checkout', async (t) => {
   const root = await fixture(t, {
     '.gitmodules': '[submodule "packages/product"]\n\tpath = packages/product\n',

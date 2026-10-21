@@ -199,7 +199,7 @@ measurements and estimates the revised active-only projection without mutation.
 
 **Working directory.** `cwd` is relative to the workspace root. Omit it, pass an
 empty string, or use `.` to run at that root; a relative subdirectory such as
-`packages/web` runs beneath it. Absolute paths are unsupported, including an
+`src/web` runs beneath it. Absolute paths are unsupported, including an
 absolute path equal to the workspace root. Any `..` path component is rejected,
 even in a path such as `child/../sibling`. `script.create` rejects these invalid
 values with `InvalidParams` (`-32602`) before persisting the definition, replacing
