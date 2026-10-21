@@ -267,7 +267,7 @@ WORKSPACES_DIR ?= $(HOME)/intent/workspaces
 SWEEP_DAYS ?= 3
 
 # Parallelism caps shared by the Rust build/test/coverage targets
-# (build-intentd, clippy, test-intentd, test-changed, coverage-changed,
+# (build-intentd, clippy, test-intentd, test-changed, test-select, coverage-changed,
 # coverage-e2e, coverage-all).
 # Negative values mean "logical CPUs minus N" (clamped to at least 1):
 # cargo-nextest accepts them for test threads (NEXTEST_TEST_THREADS /
@@ -288,14 +288,14 @@ BUILD_JOBS ?= -2
 # human at a terminal can restore the bars with
 # `make test NEXTEST_SHOW_PROGRESS=bar CARGO_TERM_PROGRESS_WHEN=auto`.
 # CI already sets CI=true, under which both tools are non-interactive anyway.
-gate test test-intentd test-changed coverage-changed coverage-e2e coverage-all list-tests: export NEXTEST_SHOW_PROGRESS ?= none
-gate check clippy lint-sources build-intentd test test-intentd test-changed coverage-changed coverage-e2e coverage-all list-tests: export CARGO_TERM_PROGRESS_WHEN ?= never
+gate test test-intentd test-changed test-select coverage-changed coverage-e2e coverage-all list-tests: export NEXTEST_SHOW_PROGRESS ?= none
+gate check clippy lint-sources build-intentd test test-intentd test-changed test-select coverage-changed coverage-e2e coverage-all list-tests: export CARGO_TERM_PROGRESS_WHEN ?= never
 # Pagers on the same targets. A saved-script PTY has no keyboard, so any
 # git/gh step that pages to `less` stalls forever waiting for a keypress.
 # nextest ignores PAGER (only --no-pager / user config disable its paging),
 # hence the explicit --no-pager on list-tests.
-gate check clippy lint-sources build-intentd test test-intentd test-changed coverage-changed coverage-e2e coverage-all list-tests: export PAGER ?= cat
-gate check clippy lint-sources build-intentd test test-intentd test-changed coverage-changed coverage-e2e coverage-all list-tests: export GIT_PAGER ?= cat
+gate check clippy lint-sources build-intentd test test-intentd test-changed test-select coverage-changed coverage-e2e coverage-all list-tests: export PAGER ?= cat
+gate check clippy lint-sources build-intentd test test-intentd test-changed test-select coverage-changed coverage-e2e coverage-all list-tests: export GIT_PAGER ?= cat
 
 # Resumable local test runs are opt-in. Records are keyed by the complete
 # monorepo + intentd worktree state and kept outside the checkout. Each invocation
@@ -306,7 +306,7 @@ GATE_FORCE ?= 0
 # tests still run and are recorded (the run still exits non-zero).
 NO_FAIL_FAST ?= 0
 GATE_CACHE_DIR ?= $(HOME)/.cache/intent/gate-runs
-# HERMETIC=1 runs test / test-changed the way CI's runners see the machine:
+# HERMETIC=1 runs test / test-changed / test-select the way CI's runners see the machine:
 # intentd's scripts/test-without-provider-clis.sh hides every provider CLI
 # (codex, claude, opencode, ...) in a private mount namespace, so a test that
 # only passes because the host has them fails here instead of on CI
@@ -340,7 +340,7 @@ FE_BUILD_HEAP_MB ?= 16384
 .PHONY: all help doctor bootstrap-dev-host ensure-submodules ensure-intentd-submodule ensure-fe-submodule ensure-ios-submodule \
 	ensure-fe-toolchain \
 	update \
-	build build-intentd build-sidecar gate test test-intentd test-scripts test-changed list-tests coverage-changed coverage-e2e coverage-all \
+	build build-intentd build-sidecar gate test test-intentd test-scripts test-changed test-select list-tests coverage-changed coverage-e2e coverage-all \
 	fmt clippy lint-sources lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child lint-shell-sleeps lint-shell bash3 check clean clean-dev \
 	sweep sweep-all seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
 	run-intentd dev-ui dev-sandbox-ui dev-sandbox-app dev-sandbox-stack dev-fe fe-launch \
@@ -352,7 +352,7 @@ all: build
 
 help: ## List documented targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
-	@printf '\nLocal Rust gates: COMPACT=1 make gate (also check, test, test-changed; Python 3.10+).\n'
+	@printf '\nLocal Rust gates: COMPACT=1 make gate (also check, test, test-changed, test-select; Python 3.10+).\n'
 	@printf '  Opt-in dev/test debug=0 and CARGO_INCREMENTAL=0; caller Rust flags retain precedence.\n'
 	@printf '  Default: COMPACT=0. Compact/default resume records are separate; coverage rejects COMPACT=1.\n'
 	@printf '  See CONTRIBUTING.md for debugging tradeoffs and the component mixed-goal boundary.\n'
@@ -596,7 +596,7 @@ gate: check | check-callback-fixture check-transfer-fixture ## Run all local Rus
 test: test-intentd ## Run Rust tests; after interruption use RESUME=1 (GATE_FORCE=1 runs all, NO_FAIL_FAST=1 continues past failures, HERMETIC=1 hides provider CLIs like CI)
 
 test-scripts: ## Run the Python script unit tests (Python 3.11+, no submodules needed)
-	python3 -S -B -m unittest -v scripts.test_resumable_nextest scripts.test_compact_gate scripts.test_rust_test_policy scripts.test_seed_dev_providers scripts.test_seed_dev_workspaces scripts.test_cleanup_prereleases scripts.test_script_test_target scripts.test_watch_capacity
+	python3 -S -B -m unittest -v scripts.test_resumable_nextest scripts.test_compact_gate scripts.test_rust_test_policy scripts.test_seed_dev_providers scripts.test_seed_dev_workspaces scripts.test_cleanup_prereleases scripts.test_script_test_target scripts.test_test_select_target scripts.test_watch_capacity
 
 # Runs under nextest so local full-suite runs pick up the same
 # .config/nextest.toml protections CI uses (timing-serial test group,
@@ -665,6 +665,42 @@ test-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd br
 	fi; \
 	echo "[test-changed] falling back to the full 'make test'"; \
 	exec $(MAKE) --no-print-directory test
+
+# A chosen subset of the Rust tests, e.g. while fixing one test before the full
+# gate: E is one nextest filterset, run across the workspace
+# (`make test-select E='test(/repository_selection/)'`,
+# `E='package(intent-acp) & test(/callback/)'`). It goes through the same runner,
+# caller policy and fixture preparation as `make test` (raw `cargo nextest`
+# leaves the callback/transfer fixture variables unset, so fixture tests fail
+# in bulk) and writes a gate-run record of its own (RESUME=1, GATE_FORCE=1,
+# NO_FAIL_FAST=1, HERMETIC=1 and COMPACT=1 apply unchanged). $(value E) keeps
+# `$` (regex anchors) literal; apostrophes are escaped for the single-quoted
+# hand-off below, so E reaches nextest byte-for-byte.
+TEST_SELECT_E = $(subst ','\'',$(value E))
+ifneq ($(filter test-select,$(MAKECMDGOALS)),)
+ifeq ($(strip $(value E)),)
+$(error make test-select needs E='<nextest filterset>', e.g. make test-select E='test(/repository_selection/)')
+endif
+endif
+
+test-select: ensure-intentd-submodule | check-transfer-fixture ## Run only the Rust tests matching E='<nextest filterset>' through the make test runner (fixtures, records; RESUME=1, NO_FAIL_FAST=1, HERMETIC=1 as for test)
+	@python3 scripts/check_watch_capacity.py --quiet
+	@cargo nextest --version >/dev/null 2>&1 || { \
+		echo "[test-select] ERROR: cargo-nextest is not installed — run 'cargo install cargo-nextest --locked'"; \
+		exit 1; \
+	}
+	@$(HERMETIC_PREFLIGHT)
+	@bash "$(INTENTD_DIR)/scripts/with-test-policy.sh" $(HERMETIC_WRAP) python3 scripts/resumable_nextest.py \
+		--repo-root "$(CURDIR)" \
+		--intentd-dir "$(INTENTD_DIR)" \
+		--cache-dir "$(GATE_CACHE_DIR)" \
+		--resume "$(RESUME)" \
+		--force "$(GATE_FORCE)" \
+		--no-fail-fast "$(NO_FAIL_FAST)" \
+		--build-jobs "$(BUILD_JOBS)" \
+		--test-threads "$(TEST_THREADS)" \
+		--label test-select \
+		--filterset '$(TEST_SELECT_E)'
 
 # Local equivalent of intentd's pull_request `coverage-changed` CI job: the
 # same changed-tests.sh selection as test-changed, run under the cargo-llvm-cov

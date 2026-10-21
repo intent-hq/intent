@@ -2912,6 +2912,65 @@ sys.exit(101 if interrupted == "1" else 0)
                     self.assertTrue((planned / "complete").exists())
 
 
+class FilterSelectionTests(unittest.TestCase):
+    """`make test-select E=EXPR` hands EXPR to the runner as --filterset."""
+
+    # Regex anchors, spaces, parens and an apostrophe must all survive.
+    EXPRESSION = "test(/it's a $/) | (package(intent-acp) & test(=exact name))"
+
+    def parse(self, *argv):
+        captured = []
+        with mock.patch.object(sys, "argv", ["resumable_nextest.py", "--repo-root", ".",
+                                             "--intentd-dir", "intentd", "--cache-dir", "cache",
+                                             "--build-jobs", "1", "--test-threads", "1", *argv]), \
+                mock.patch.object(gate, "run_nextest", side_effect=lambda a: captured.append(a) or 0):
+            self.assertEqual(gate.main(), 0)
+        return captured[0]
+
+    def test_filterset_is_one_workspace_plan_restored_exactly(self):
+        args = self.parse("--label", "test-select", "--filterset", self.EXPRESSION)
+        self.assertEqual(gate.split_plans(args.plan), [["--workspace", "-E", self.EXPRESSION]])
+        self.assertEqual(args.label, "test-select")
+
+    def test_filterset_refuses_plan_and_blank_expression(self):
+        for argv in (["--filterset", "all()", "--plan", "-p alpha"], ["--filterset", ""],
+                     ["--filterset", "  "]):
+            with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()) as stderr:
+                with self.assertRaises(SystemExit) as refused:
+                    self.parse(*argv)
+                self.assertEqual(refused.exception.code, 2)
+                self.assertIn("--filterset", stderr.getvalue())
+
+    def test_filtered_run_prepares_both_fixtures_and_records_its_own_scope(self):
+        plans = [gate.shlex.join(["--workspace", "-E", self.EXPRESSION])]
+        self.assertTrue(gate.needs_callback_fixture(gate.split_plans(plans)))
+        self.assertTrue(gate.needs_transfer_fixture(gate.split_plans(plans)))
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+            callback = {"root": str(root / "callback"), "manifest": "verified"}
+            transfer = {"root": str(root / "transfer")}
+            with mock.patch.object(gate, "callback_fixture_identity", return_value=callback), \
+                    mock.patch.object(gate, "transfer_fixture_identity", return_value=transfer):
+                status = harness.execute(make_args(root, plan=plans, label="test-select", base=None))
+            self.assertEqual(status, 0)
+            self.assertEqual(harness.run_commands[0][3:6], ["--workspace", "-E", self.EXPRESSION])
+            self.assertEqual(harness.run_environments[0][gate.CALLBACK_FIXTURE_ENV], callback["root"])
+            self.assertEqual(harness.run_environments[0][gate.TRANSFER_FIXTURE_ENV], transfer["root"])
+            record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(plans))
+            run_record = json.loads((latest_attempt(record_dir) / "run.json").read_text())
+            self.assertEqual((run_record["label"], run_record["exit_code"]), ("test-select", 0))
+            self.assertEqual(run_record["callback_fixture"], callback)
+            self.assertEqual(harness.output_lines[-1],
+                             f"[test-select] record: {latest_attempt(record_dir)}")
+
+    def test_unset_fixture_help_points_to_test_select(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            help_text = gate.callback_setup_help(Path(temporary))
+        self.assertIn("make test-select E='<nextest filterset>'", help_text)
+        self.assertIn("not raw cargo nextest", help_text)
+
+
 class TransferFixtureSelectionTests(unittest.TestCase):
     def test_affected_and_unknown_selectors_require_preflight(self):
         for plans in ([], [["--workspace"]], [["-p", "intent-services"]],

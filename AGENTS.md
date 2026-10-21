@@ -302,12 +302,14 @@ with no rollback.
 
 - `make gate` runs `make check` then the full nextest suite; `make test` is
   test-only (resume records apply only to nextest — `gate` always reruns the lints).
-- When the full suite is impractical, run `make test-changed` before enqueueing:
-  intentd's `scripts/changed-tests.sh` picks the nextest targets changed vs
-  `origin/main` (`BASE=<ref>`; `DRY_RUN=1` prints the plan) and falls back to the
-  full suite on manifest/lockfile/nextest-config changes. `make coverage-changed`
-  runs it under llvm-cov — the local equivalent of the PR `coverage-changed` job.
-- `make test` / `make test-changed` print a unique `record:` attempt path, including
+- When the full suite is impractical, run `make test-changed` before enqueueing: it
+  runs the nextest targets intentd's `scripts/changed-tests.sh` picks vs `origin/main`
+  (`BASE=<ref>`; `DRY_RUN=1` prints the plan), falling back to the full suite on
+  manifest/lockfile/nextest-config changes; `make coverage-changed` runs it under
+  llvm-cov like the PR `coverage-changed` job. To iterate on a few tests use
+  `make test-select E='<nextest filterset>'`, not raw `cargo nextest`, which skips the
+  fixture setup so fixture tests fail in bulk (95 bogus failures, intentd#2559).
+- `make test` / `test-changed` / `test-select` print a unique `record:` attempt path, including
   fully resumed runs. [Receipt and coverage details](CONTRIBUTING.md#test-attempt-receipts-and-resume-coverage)
   explain evidence, interruption and seven-day tree retention. `RESUME=1` skips verified
   passes for the same worktree, submodule pointers, toolchain, lockfile and effective

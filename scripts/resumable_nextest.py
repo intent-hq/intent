@@ -294,8 +294,10 @@ def callback_setup_help(intentd_dir: Path) -> str:
         f"Set {CALLBACK_FIXTURE_ENV} to a verified fixture (Linux x64, descriptor-pinned Node).",
         "Native macOS is not supported by this fixture. Use an existing authorized Linux x64 host.",
         "Complete checkout, tools and gate recipe: CONTRIBUTING.md#linux-x64-callback-gates",
-        f"With the variable unset, make test, test-changed and gate prepare a ready cache under "
-        f"{callback_cache_dir()} offline; a rejected cache must be rebuilt, never edited.",
+        "With the variable unset, make test, test-changed, test-select and gate prepare a ready cache",
+        f"under {callback_cache_dir()} offline; a rejected cache must be rebuilt, never edited.",
+        "For a few tests, run make test-select E='<nextest filterset>' from the monorepo root,",
+        "not raw cargo nextest, which runs these tests with the variable unset.",
         "No downloads or repairs were attempted. On that Linux host, prepare explicitly, then retry",
         "(env -u NODE_OPTIONS clears host Node preloads, which the prepare script refuses):",
     ]
@@ -1707,8 +1709,21 @@ def main() -> int:
         help="nextest target selection, e.g. '-p alpha --test one'; repeatable, "
         "run in order instead of --workspace",
     )
+    parser.add_argument(
+        "--filterset",
+        metavar="EXPR",
+        help="run one nextest filterset across the workspace (make test-select E=EXPR); "
+        "the same as --plan '--workspace -E EXPR', so it cannot be combined with --plan",
+    )
     parser.add_argument("--base", metavar="REF", help="base ref recorded in run.json")
     args = parser.parse_args()
+    if args.filterset is not None:
+        if args.plan:
+            parser.error("--filterset cannot be combined with --plan")
+        if not args.filterset.strip():
+            parser.error("--filterset needs a nextest filterset expression, e.g. 'test(/name/)'")
+        # Quote into the one plan string so split_plans() restores it exactly.
+        args.plan = [shlex.join(["--workspace", "-E", args.filterset])]
     try:
         return run_nextest(args)
     except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as error:
