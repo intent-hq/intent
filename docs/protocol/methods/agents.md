@@ -366,9 +366,13 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
   JPEG alias becomes `image/jpeg`. SVG and other image formats are delivered as
   source-file attachment notices, using the existing `ws.file.getAttachment`
   retrieval contract rather than unsupported vision blocks. Registry-backed images
-  reuse their original attachment ID. Legacy inline images are registered as files
-  in the receiving workspace with content-based idempotency, so repeated delivery
-  reuses the placement while its idempotency binding remains live. Original source
+  already owned by the receiving workspace reuse their original attachment ID.
+  References owned by another workspace (including attachments placed before
+  `workspace.create`) are copied into the receiving workspace, and the notice uses
+  that workspace's new attachment ID so `ws.file.getAttachment` can retrieve it.
+  Legacy inline images are also registered as files in the receiving workspace.
+  Both placement paths use idempotency, so repeated delivery reuses the placement
+  while its idempotency binding remains live. Original source
   bytes and persisted message blocks are retained. This applies to direct delivery,
   queue drain/retry, and attachments carried forward from an interrupted turn.
   Supported raster images still undergo bounded decoding and provider-size
