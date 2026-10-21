@@ -22,7 +22,7 @@
 // precedent as packages/cloudlands-fe/scripts/notify-fixed-issues.sh):
 // once present, re-runs do nothing.
 //
-// The LLM (Codex CLI) sees the issue text as untrusted DATA: it is passed
+// The LLM (Claude Code CLI) sees the issue text as untrusted DATA: it is passed
 // via execFile stdin (never shell-interpolated), and the prompt tells the
 // model to ignore instructions
 // inside it, and everything the model returns is clamped to the fixed
@@ -39,13 +39,15 @@
 //   the Effort field always from the model. An issue whose both fields are
 //   already set is skipped without calling the model, so re-runs are
 //   idempotent. It prints one `fields-only result:` line per issue.
-// CI: --prepare-codex <new-directory> reads issue data and writes a prompt,
-// schema and isolated configuration. The official Codex Action writes its
-// final message to <directory>/response.json; --apply-codex <directory>
-// validates it and applies the usual plan. Repeat the issue number and mode
-// flags in both steps. Preparation never writes to GitHub.
+// CI: --prepare-claude <new-directory> reads issue data and writes a prompt,
+// schema and manifest. `node claude-runner.js <directory>` (the model step,
+// with no GitHub token) writes the validated classification to
+// <directory>/response.json; --apply-claude <directory> validates it and
+// applies the usual plan. Repeat the issue number and mode flags in prepare
+// and apply. Preparation never writes to GitHub.
 // Env: TRIAGE_REPO (default intent-hq/intent); GH_TOKEN for gh;
-// OPENAI_API_KEY for direct local Codex runs (no personal-login fallback).
+// CLAUDE_CODE_OAUTH_TOKEN for direct local Claude runs (no personal-login
+// fallback).
 //
 // The pure logic (query extraction, prompt build, response parsing with
 // the label / field allowlists, action gating, comment build) is exported
@@ -56,7 +58,7 @@
 const { execFileSync } = require('node:child_process');
 const path = require('node:path');
 const { ISSUE_TYPE_BY_LABEL, LEGACY_TYPE_LABELS } = require('./parse-issue.js');
-const { runCodex, prepareClassifier, appliedClassifier } = require('./codex-runner.js');
+const { runClaude, prepareClassifier, appliedClassifier } = require('./claude-runner.js');
 
 const AGENTIC_MARKER = '<!-- issue-triage: agentic -->';
 const NEEDS_TRIAGE_LABEL = 'needs-triage';
@@ -169,7 +171,7 @@ function sanitizeText(text, max = 240) {
     .slice(0, max);
 }
 
-// The instruction handed to `codex exec` on stdin. The issue and candidate
+// The instruction handed to `claude -p` on stdin. The issue and candidate
 // text is embedded as clearly delimited untrusted data. In fields-only
 // (backfill) mode the priority rule asks for a value on every issue —
 // feature requests included — because the whole point of that pass is to
@@ -885,10 +887,10 @@ function runFieldsOnly({ repo, issueNumber, issue, currentLabels, dryRun, classi
     try {
       output = classify(prompt);
     } catch (e) {
-      warn(`Codex classification failed: ${e.message}`);
+      warn(`Claude classification failed: ${e.message}`);
       process.exit(1);
     }
-    if (output === null) return; // Prepare-only: the Action runs the model next.
+    if (output === null) return; // Prepare-only: the model step runs next.
     response = parseTriageResponse(output);
     if (!response) {
       warn('model output contained no valid JSON triage response');
@@ -933,26 +935,26 @@ function main() {
   let fieldsOnly = false;
   let prepareDir;
   let applyDir;
-  while (['--dry-run', '--fields-only', '--prepare-codex', '--apply-codex'].includes(args[0])) {
+  while (['--dry-run', '--fields-only', '--prepare-claude', '--apply-claude'].includes(args[0])) {
     if (args[0] === '--dry-run') dryRun = true;
     else if (args[0] === '--fields-only') fieldsOnly = true;
     else {
       const option = args.shift();
       if (!args[0] || args[0].startsWith('--')) throw new Error(`${option} requires a directory`);
-      if (option === '--prepare-codex') prepareDir = path.resolve(args[0]);
+      if (option === '--prepare-claude') prepareDir = path.resolve(args[0]);
       else applyDir = path.resolve(args[0]);
     }
     args.shift();
   }
   const issueNumber = Number(args[0]);
   if (args.length !== 1 || !Number.isInteger(issueNumber) || issueNumber <= 0 || (prepareDir && applyDir)) {
-    console.error('usage: agentic-triage.js [--dry-run] [--fields-only] [--prepare-codex DIR | --apply-codex DIR] <issue-number>');
+    console.error('usage: agentic-triage.js [--dry-run] [--fields-only] [--prepare-claude DIR | --apply-claude DIR] <issue-number>');
     process.exit(2);
   }
   const repo = process.env.TRIAGE_REPO || 'intent-hq/intent';
   const request = { repo, issueNumber, fieldsOnly, dryRun };
   const classify = prepareDir ? prepareClassifier(prepareDir, request) :
-    applyDir ? appliedClassifier(applyDir, request) : runCodex;
+    applyDir ? appliedClassifier(applyDir, request) : runClaude;
   // Keep the requested dry-run in the manifest, but prohibit all writes during
   // preparation, including marker recovery and deterministic fields-only work.
   const mayWrite = !dryRun && !prepareDir;
@@ -1049,10 +1051,10 @@ function main() {
   try {
     output = classify(prompt);
   } catch (e) {
-    warn(`Codex classification failed: ${e.message}`);
+    warn(`Claude classification failed: ${e.message}`);
     process.exit(1);
   }
-  if (output === null) return; // Prepare-only: the Action runs the model next.
+  if (output === null) return; // Prepare-only: the model step runs next.
   const response = parseTriageResponse(output);
   if (!response) {
     warn('model output contained no valid JSON triage response');

@@ -1,4 +1,4 @@
-// Copied as `gh` / `codex` into a private test PATH. No real network or auth.
+// Copied as `gh` / `claude` into a private test PATH. No real network or auth.
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
@@ -8,26 +8,35 @@ const command = path.basename(process.argv[1]);
 const args = process.argv.slice(2);
 const send = (value) => process.stdout.write(JSON.stringify(value));
 
-if (command === 'codex' && args[0] === '--version') {
-  console.log(settings.version || 'codex-cli 0.156.1');
+// Shape of `claude -p --output-format json --json-schema ...`: the
+// classification is only in structured_output; `result` is free text.
+function claudeResult() {
+  if (settings.stdout !== undefined) return settings.stdout;
+  let structured;
+  try { structured = JSON.parse(settings.response); } catch { /* No structured output. */ }
+  const result = { type: 'result', subtype: 'success', is_error: false, result: settings.response };
+  if (structured !== undefined) result.structured_output = structured;
+  return JSON.stringify(result);
+}
+
+if (command === 'claude' && args[0] === '--version') {
+  console.log(settings.version || '2.1.306 (Claude Code)');
 } else {
-  const input = args.includes('--input') || args.includes('--body-file') || command === 'codex'
+  const input = args.includes('--input') || args.includes('--body-file') || command === 'claude'
     ? fs.readFileSync(0, 'utf8') : '';
   const call = { command, args, input };
-  if (command === 'codex') {
+  if (command === 'claude') {
     call.env = process.env;
     call.cwd = process.cwd();
-    call.config = fs.readFileSync(path.join(process.env.CODEX_HOME, 'config.toml'), 'utf8');
-    call.schema = JSON.parse(fs.readFileSync(args[args.indexOf('--output-schema') + 1], 'utf8'));
+    call.cwdEntries = fs.readdirSync(process.cwd());
+    call.schema = JSON.parse(args[args.indexOf('--json-schema') + 1]);
   } else {
     call.githubToken = process.env.GH_TOKEN;
   }
   fs.appendFileSync(path.join(root, 'calls.jsonl'), `${JSON.stringify(call)}\n`);
-  if (command === 'codex') {
-    const output = args[args.indexOf('--output-last-message') + 1];
-    if (!settings.missingResponse) fs.writeFileSync(output, settings.response);
-    console.log('{"type":"progress","message":"This is not the final answer"}');
-    if (settings.failCodex) {
+  if (command === 'claude') {
+    process.stdout.write(claudeResult());
+    if (settings.failClaude) {
       console.error('model diagnostic with sensitive-data-canary');
       process.exit(1);
     }

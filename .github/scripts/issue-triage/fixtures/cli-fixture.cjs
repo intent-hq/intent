@@ -17,7 +17,7 @@ function fixture(t, overrides = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'triage-test-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const source = `#!${process.execPath}\n${fs.readFileSync(path.join(__dirname, 'mock-triage-command.cjs'), 'utf8')}`;
-  for (const executable of ['gh', 'codex']) {
+  for (const executable of ['gh', 'claude']) {
     fs.writeFileSync(path.join(dir, executable), source, { mode: 0o755 });
   }
   const settings = {
@@ -38,7 +38,7 @@ function fixture(t, overrides = {}) {
     ...process.env, NODE_OPTIONS: '', PATH: `${dir}${path.delimiter}${process.env.PATH}`,
     GH_TOKEN: 'gh-token-canary', GITHUB_TOKEN: 'github-token-canary',
     GH_ENTERPRISE_TOKEN: 'enterprise-token-canary', ACTIONS_RUNTIME_TOKEN: 'actions-token-canary',
-    AUGMENT_SESSION_AUTH: 'augment-auth-canary', OPENAI_API_KEY: 'test-openai-key',
+    ANTHROPIC_API_KEY: 'anthropic-key-canary', CLAUDE_CODE_OAUTH_TOKEN: 'test-claude-token',
     TRIAGE_REPO: 'test/repo',
   };
   const update = () => fs.writeFileSync(path.join(dir, 'fixture.json'), JSON.stringify(settings));
