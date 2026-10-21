@@ -18,6 +18,13 @@ overrides, raw terminal access or host execution. The Shell panel must keep thos
 controls separate from saved-script run and output controls; `canManage` is not
 broadened for Managers.
 
+Manager reads and operations require stored `purpose: "saved"` (legacy absent
+purpose hydrates as saved). Filter lists before pagination, and enforce the same
+restriction on individual IDs and live events. `script.run` accepts an existing
+saved command ID with output/timeout options only; it cannot supply a new command
+or override its definition. On removal, supporting producers include the deleted
+definition's `purpose` so a Manager can invalidate a saved row after it is gone.
+
 | Method | Params | Result |
 | --- | --- | --- |
 | script.list | workspaceId (req), archive? (`active` only; other values rejected in prepared v14), view? (`full` \| `summary`), limit?, cursor? (prepared summary extension below) | { scripts: [...] } — definition plus `runtime` by default; summary pages are discriminated `{ view: "summary", scripts: ScriptSummary[], nextCursor? } |
@@ -808,7 +815,7 @@ minor against daemon main at implementation time; docs land before consumers.
 | --- | --- | --- |
 | `created` | `{ scriptId, action: "created", script }` | Insert the committed definition and current runtime |
 | `updated` | `{ scriptId, action: "updated", script }` | Replace the complete row after definition edit, archive, restore or result commit |
-| `removed` | `{ scriptId, action: "removed" }` | Delete the definition by ID; omit `script` |
+| `removed` | `{ scriptId, action: "removed", purpose? }` | Delete the definition by ID; omit `script`. The prepared guest-role extension adds `purpose: "saved" \| "oneOff"` for scoped delivery after deletion. |
 
 `script` is exactly one **full `script.list` row**, independent of the client's
 active/history filter: all definition fields plus a complete `runtime` object.

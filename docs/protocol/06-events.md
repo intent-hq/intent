@@ -432,7 +432,10 @@ its separate prepared snapshot extension is described below.
 add `data.script` to `created` / `updated`: the full list row including runtime,
 committed archive state and latest result. Optional fields omitted inside that
 row clear old values; absent `script` retains legacy invalidation/refetch.
-`removed` stays `{ scriptId, action: "removed" }` and is directly applicable.
+`removed` retains `{ scriptId, action: "removed" }` and is directly applicable.
+The prepared guest-role extension adds optional `purpose: "saved" | "oneOff"`
+from the deleted definition, allowing saved-script removal delivery to Managers
+after the row no longer exists. Older consumers can ignore this additive field.
 New snapshot consumers make no event-triggered list call, preserve archived output
 views, and fence pending list responses against newer changes/runtime/removals.
 Stopping a finished script publishes its `exited` to `idle` transition as a

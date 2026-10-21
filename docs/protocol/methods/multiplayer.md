@@ -83,6 +83,15 @@ model/provider controls and saved-script operation; opening the shared Shell pan
 must not expose terminal creation/input or script editing. A selected provider must
 already be configured; choosing it does not authorize setup or credential writes.
 
+For model selection, Managers may also update `reasoningEffort` through
+`agent.update`, alongside the existing guest-editable display fields. This narrow
+grant does not permit permission settings, prompts, session identity, delegation
+or other protected agent configuration. Saved-script scope means stored
+`purpose: "saved"`, including legacy absent-purpose definitions: lists filter
+before pagination, ID operations recheck purpose, and live events use the same
+boundary. `script.run` supports an existing saved command ID and output/timeout
+options, without command or environment overrides.
+
 The service resolves the current durable role for every protected operation,
 including requests on already connected sockets. A downgrade takes effect on
 subsequent requests without reconnecting. Script IDs and agent IDs are resolved
