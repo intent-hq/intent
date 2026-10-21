@@ -68,7 +68,7 @@ name: Issue triage
 # This workflow never closes an issue: `needs-info` closure lives in stale.yml.
 #
 # Pass 2 — agentic triage (`agentic-triage` job): on `opened` only, after
-# pass 1, an LLM pass (Auggie CLI) suggests duplicate candidates, the
+# pass 1, an LLM pass (Claude) suggests duplicate candidates, the
 # component label when pass 1 derived none, and the issue Type (Bug /
 # Feature / Task) when the issue has none, and fills the Priority (Urgent
 # / High / Medium / Low, security escalates to Urgent) and Effort (Low /
@@ -89,7 +89,7 @@ name: Issue triage
 # logs a warning and the rest of the pass completes (a failed Type write
 # keeps the legacy label; a failed label removal is a warning too).
 # Fail-soft: continue-on-error, and skipped with a warning when the
-# AUGMENT_SESSION_AUTH secret is absent.
+# CLAUDE_CODE_OAUTH_TOKEN secret is absent. Deterministic marker recovery still runs.
 # Suggest-don't-destroy — it only adds labels/comments and fills an empty
 # Type / Priority / Effort, never closes or edits anything; the only
 # removals are `needs-triage` and the legacy type labels. Logic + local
@@ -603,8 +603,8 @@ jobs:
   # run (the script's marker check keeps re-runs idempotent, and the
   # dispatch dry_run input maps to the script's --dry-run). Fail-soft
   # end to end: the whole job is continue-on-error (an LLM hiccup never
-  # marks the run failed), and a missing AUGMENT_SESSION_AUTH secret skips
-  # it with a warning (same convention as MONOREPO_ISSUES_TOKEN /
+  # marks the run failed), and a missing CLAUDE_CODE_OAUTH_TOKEN secret skips
+  # model classification with a warning (same convention as MONOREPO_ISSUES_TOKEN /
   # SUBMODULE_BUMP_TOKEN elsewhere). The issue Type write (GraphQL
   # `updateIssue` with `issueTypeId`, repository-scoped `issueTypes`
   # lookup) and the Priority / Effort field writes (GraphQL
@@ -623,41 +623,114 @@ jobs:
       github.event_name == 'workflow_dispatch'
     runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
     continue-on-error: true
+    timeout-minutes: 15
+    env:
+      TRIAGE_REPO: ${{ github.repository }}
+      ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue_number }}
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == true }}
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: false
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      # Preparation performs no writes. A fresh bundle outside the checkout
+      # contains the request manifest, prompt and response schema.
+      - name: Prepare Claude classification
+        id: prepare
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIAGE_CLAUDE_DIR: ${{ runner.temp }}/issue-triage-claude
+        run: |
+          echo "TRIAGE_CLAUDE_DIR=$TRIAGE_CLAUDE_DIR" >> "$GITHUB_ENV"
+          args=()
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          node .github/scripts/issue-triage/agentic-triage.js "${args[@]}" --prepare-claude "$TRIAGE_CLAUDE_DIR" "$ISSUE_NUMBER"
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const request = JSON.parse(fs.readFileSync(path.join(process.env.TRIAGE_CLAUDE_DIR, 'request.json'), 'utf8'));
+          if (request.version !== 1 || typeof request.needsModel !== 'boolean') throw new Error('Invalid prepared Claude request');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `needs_model=${request.needsModel}\n`);
+          NODE
 
       - name: Check for LLM credential
         id: gate
+        if: steps.prepare.outputs.needs_model == 'true'
+        shell: bash
         env:
-          AUGMENT_SESSION_AUTH: ${{ secrets.AUGMENT_SESSION_AUTH }}
+          HAS_CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
         run: |
-          if [ -z "$AUGMENT_SESSION_AUTH" ]; then
-            echo "::warning::AUGMENT_SESSION_AUTH secret is absent; skipping agentic triage (fail-soft)."
+          if [ "$HAS_CLAUDE_CODE_OAUTH_TOKEN" != "true" ]; then
+            echo "::warning::CLAUDE_CODE_OAUTH_TOKEN secret is absent; skipping agentic triage (fail-soft)."
             echo "run=false" >> "$GITHUB_OUTPUT"
           else
             echo "run=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/setup-node@v7
-        if: steps.gate.outputs.run == 'true'
-        with:
-          node-version: 22
+      # The package's install script fetches the native binary, so it runs in
+      # its own step with no credentials. Keep the pin in sync with
+      # CLAUDE_VERSION in claude-runner.js (the runner refuses any other
+      # version) and the ci.yml triage-parser-test job.
+      - name: Install the pinned Claude Code CLI
+        id: install
+        if: >-
+          success() && steps.prepare.outcome == 'success' &&
+          steps.prepare.outputs.needs_model == 'true' && steps.gate.outputs.run == 'true'
+        shell: bash
+        run: npm install -g --no-audit --no-fund @anthropic-ai/claude-code@2.1.306
 
-      # Pinned: this job holds issues:write and the AUGMENT_SESSION_AUTH
-      # secret, so latest-at-runtime would let an unreviewed release land
-      # here on the next issue opened.
-      - name: Install Auggie CLI
-        if: steps.gate.outputs.run == 'true'
-        run: npm install -g @augmentcode/auggie@0.36.0
+      # The pinned CLI is invoked directly (not claude-code-action) so this
+      # step's environment holds only the Claude OAuth token and no GitHub
+      # token. claude-runner.js forwards an allowlisted environment to
+      # a tool-less Claude with private HOME/config and an empty working
+      # directory; issue text and results travel only through bundle files.
+      - name: Classify with Claude
+        id: claude
+        if: >-
+          success() && steps.prepare.outcome == 'success' &&
+          steps.prepare.outputs.needs_model == 'true' && steps.gate.outputs.run == 'true'
+        timeout-minutes: 8
+        shell: bash
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: node .github/scripts/issue-triage/claude-runner.js "$TRIAGE_CLAUDE_DIR"
 
-      - name: Run agentic triage
-        if: steps.gate.outputs.run == 'true'
+      # A file alone is not evidence of model success. No-model requests
+      # still apply deterministic recovery, even without a Claude credential.
+      - name: Apply validated Claude classification
+        id: apply
+        if: >-
+          success() && steps.prepare.outcome == 'success' &&
+          (steps.prepare.outputs.needs_model == 'false' ||
+           (steps.prepare.outputs.needs_model == 'true' &&
+            steps.gate.outputs.run == 'true' && steps.claude.outcome == 'success'))
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          AUGMENT_SESSION_AUTH: ${{ secrets.AUGMENT_SESSION_AUTH }}
-          TRIAGE_REPO: ${{ github.repository }}
-          ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue_number }}
-          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '--dry-run' || '' }}
-        run: node .github/scripts/issue-triage/agentic-triage.js $DRY_RUN "$ISSUE_NUMBER"
+        run: |
+          args=()
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          node .github/scripts/issue-triage/agentic-triage.js "${args[@]}" --apply-claude "$TRIAGE_CLAUDE_DIR" "$ISSUE_NUMBER"
+
+      - name: Report incomplete classification
+        id: warn
+        if: >-
+          !cancelled() && (steps.prepare.outcome == 'failure' ||
+          steps.install.outcome == 'failure' || steps.claude.outcome == 'failure' ||
+          steps.apply.outcome == 'failure')
+        shell: bash
+        run: echo "::warning::Claude triage did not complete; deterministic triage remains in place (fail-soft)."
+
+      - name: Remove Claude bundle
+        id: cleanup
+        if: always()
+        shell: bash
+        env:
+          TRIAGE_CLAUDE_DIR: ${{ runner.temp }}/issue-triage-claude
+        run: rm -rf -- "$TRIAGE_CLAUDE_DIR"
