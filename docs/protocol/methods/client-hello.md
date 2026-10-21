@@ -33,6 +33,15 @@ hello completes. Initial hydration and reconnect/event-gap recovery remain requi
 A bundled daemon upgrade does not upgrade older remote hosts. This capability
 does not change experimental Multiplayer readiness.
 
+**Workspace guest roles (prepared).** Exact integer
+`server.capabilities.workspaceGuestRoles: 1`, also returned by
+`system.capabilities`, gates the complete [Participant/Manager contract](./multiplayer.md#workspace-guest-roles-prepared).
+It is support discovery, not caller authority. Guest Managers retain
+`canManage: false`; clients derive narrowly scoped controls from the current
+workspace role. Missing, malformed or unknown capability values hide role
+mutation controls. Refresh on each admitted connection; older remote hosts are
+not upgraded by installing a newer desktop client.
+
 **Submission correlation (prepared).**
 `server.capabilities.submissionCorrelation: 1` gates the complete
 [optimistic submission contract](./agents.md#submission-correlation-and-optimistic-display-prepared-additive-extension):

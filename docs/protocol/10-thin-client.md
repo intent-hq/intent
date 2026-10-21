@@ -296,6 +296,16 @@ owner. A retained guest workspace owner receives permission request/resolved eve
 only for workspaces they currently manage, matching snapshot/answer authority (§8).
 That grant does not admit host creation/administration, guest-denied script RPCs,
 or unrelated management events.
+
+The prepared [guest role extension](methods/multiplayer.md#workspace-guest-roles-prepared)
+adds separately gated agent creation/model controls and saved-script operations
+for `myRole: "manager"` under exact `workspaceGuestRoles: 1`. This role does not
+override `canManage: false`. Keep raw terminal and script-definition controls
+behind their existing authority checks, including when they share a Shell panel
+with runnable scripts. Role mutations require explicit owner authority and only
+update confirmed UI state after success. Membership invalidations and reconnects
+refresh the role before applying it to controls.
+
 Host provider/model/repository
 reads and pairing requests must remain routed to that host when a different local
 daemon exists. Reconcile live membership changes with a fresh bounded snapshot.

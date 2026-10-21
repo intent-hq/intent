@@ -11,6 +11,13 @@ The [prepared service readiness extension](#service-readiness-prepared-additive-
 adds optional `healthUrl` / `readyPattern` definition inputs and `ready` /
 `readiness` runtime fields. These are capability-gated, not yet shipped.
 
+The prepared [workspace guest role extension](./multiplayer.md#workspace-guest-roles-prepared)
+lets a workspace Manager operate existing saved scripts through scoped service
+checks. It grants no script-definition writes, arbitrary command/environment
+overrides, raw terminal access or host execution. The Shell panel must keep those
+controls separate from saved-script run and output controls; `canManage` is not
+broadened for Managers.
+
 | Method | Params | Result |
 | --- | --- | --- |
 | script.list | workspaceId (req), archive? (`active` only; other values rejected in prepared v14), view? (`full` \| `summary`), limit?, cursor? (prepared summary extension below) | { scripts: [...] } — definition plus `runtime` by default; summary pages are discriminated `{ view: "summary", scripts: ScriptSummary[], nextCursor? } |

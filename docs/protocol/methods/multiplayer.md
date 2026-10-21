@@ -10,6 +10,11 @@ implicit identity lifecycle, rotating returning-credential behavior and global
 event/device restrictions. The existing identity triples, proof engines, guest
 rights and workspace-invitation lifetime rules remain the baseline.
 
+**Prepared guest role extension:** [Workspace guest roles](#workspace-guest-roles-prepared)
+add an owner-assigned `manager` role under exact integer `workspaceGuestRoles: 1`.
+The existing `collaborator` wire role is displayed as Participant. This extension
+does not grant host membership or broaden `canManage`.
+
 The multi-principal surface of a daemon: who a connection *is*, which workspaces it may see, how an owner invites a second person and how that person joins. Introduced within protocol 10.3 by the intentd multiplayer stack — principals and caller binding ([intent-hq/intentd#1868](https://github.com/intent-hq/intentd/pull/1868)), message attribution ([#1869](https://github.com/intent-hq/intentd/pull/1869)), membership and capability enforcement ([#1870](https://github.com/intent-hq/intentd/pull/1870), [#1877](https://github.com/intent-hq/intentd/pull/1877), [#1871](https://github.com/intent-hq/intentd/pull/1871)), invite links and the `/invite` join ([#1872](https://github.com/intent-hq/intentd/pull/1872)). The join was reworked within 10.4 from a host-run GitHub device flow (`invite.redeem`, removed by [#1969](https://github.com/intent-hq/intentd/pull/1969)) into the **identity proof** — `invite.challenge` / `invite.prove` with the guest-side `github.identityProof.*` (§5.27) ([#1965](https://github.com/intent-hq/intentd/pull/1965), [#1967](https://github.com/intent-hq/intentd/pull/1967)) — plus the returning guest's `invite.inspect` / `invite.accept` ([#1963](https://github.com/intent-hq/intentd/pull/1963)), the owner-self-join refusal ([#1986](https://github.com/intent-hq/intentd/pull/1986)), reusable unpinned links ([#1988](https://github.com/intent-hq/intentd/pull/1988)) and the direct member add `principal.list` / `workspace.members.add` ([#2023](https://github.com/intent-hq/intentd/pull/2023), [#2025](https://github.com/intent-hq/intentd/pull/2025)). Protocol **10.8** ([versioning](../versioning.md)) makes the identity **provider-neutral** — a GitLab account is an identity: the additive `Principal.identity` triple, the `pinProvider` / `pinHost` pin params, the `invite.prove` `provider` / `host` / `proofId` params and the `sourceControl.identityProof.*` generalization of the guest-side proof (§5.27). The connection principal read `principal.me` is also summarized in §5.46 (client boot); presence, the ephemeral roster layered on top of membership, is §5.47.
 
 Every method below is workspace-scoped unless stated otherwise. Five are **fast paths**: `workspace.invite.create` needs the listener's own pairing snapshot to build the link (like `pairing.getInfo`), and `invite.inspect` / `invite.accept` / `invite.challenge` / `invite.prove` are the only methods served on the unauthenticated `/invite` endpoint; the rest dispatch through the router. (`invite.redeem`, the pre-#1965 two-phase device-flow join, keeps its §5 fast-path catalog entry only until the intentd pin advances past its removal.)
@@ -30,6 +35,68 @@ Every method below is workspace-scoped unless stated otherwise. Five are **fast 
 | invite.accept *(fast path, `/invite` only)* | inviteId (req), secret (req), credential (req) | The **returning guest's** join: `credential` is a per-principal bearer this host minted on an earlier join; its hash resolves the principal exactly like the `/ws` bearer gate (unknown or revoked ⇒ `credential-invalid`; the primary's own ⇒ `owner-self-join`). The invite is validated like `inspect`, a pin is checked against the principal's **stored** identity (`invite-pin-mismatch`) and the join commits with that identity — no forge call, no profile refresh → `{ status: "authorized", token, principalId, login, workspaceId }` with a fresh credential ([#1963](https://github.com/intent-hq/intentd/pull/1963)). An archived workspace refuses the commit with `-32602 { code: "workspace-archived" }` (§ "The join commit") |
 | invite.challenge *(fast path, `/invite` only)* | inviteId (req), secret (req) | `{ workspaceId, workspaceTitle, hostname, prettyHostname, collaborationName, pinIdentity, nonce, nonceExpiresAt }` — validates the open invite like `inspect` and issues a **single-use nonce** bound to it: 32 random bytes (base64url, unpadded), valid **10 minutes**, consumed by the first `invite.prove` that names it. `pinIdentity` (10.8) has the same required-triple-or-null semantics as `inspect`. No forge is contacted ([#1965](https://github.com/intent-hq/intentd/pull/1965)). At most 8 outstanding nonces per invite and 256 daemon-wide (`invite-flow-busy` past either cap) |
 | invite.prove *(fast path, `/invite` only)* | inviteId (req), secret (req), nonce (req), login (req), gistId? *(github)*, provider?: `"github"` \| `"gitlab"` *(10.8, default `"github"`)*, host? *(10.8)*, proofId? *(10.8; alias of `gistId` — exactly one of the two is required)* | The guest published `nonce` in a proof it owns on the named forge (§ "The identity proof") and names it; the host verifies the proof, resolves the account it belongs to and commits the join → `{ status: "authorized", token, principalId, login, workspaceId }` — the **token exactly once**. Refusals: `proof-invalid`, `proof-expired`, `github-unreachable` (the nonce survives for a retry), `identity-unverifiable` *(10.8)*, `owner-self-join`, `invite-pin-mismatch`, `workspace-full`, `workspace-archived` (the shared join transaction found the workspace archived — a proof that validated before a `workspace.archive` and commits after it; a proof validated after the sweep fails earlier with the invite's closed state `invite-revoked`, § "The join commit"), or the invite's closed state ([#1965](https://github.com/intent-hq/intentd/pull/1965), [#1986](https://github.com/intent-hq/intentd/pull/1986)) |
+
+#### Workspace guest roles (prepared)
+
+This extension is part of experimental Multiplayer; the contract does not claim
+a carrying release. Exact integer `workspaceGuestRoles: 1` on both `client.hello`
+(`server.capabilities`) and `system.capabilities` advertises the complete role
+mutation and scoped authorization contract. Missing, malformed or unknown values
+disable role changes. Read support per connection, and refresh authority after
+reconnect before enabling controls.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| workspace.members.setRole | workspaceId (req), principalId (req), role (req: `"collaborator"` \| `"manager"`) | `{ workspaceId, principalId, role, changed: boolean }` — explicit workspace owner or existing administrator authority only. Changes one existing direct guest grant; it never adds a member or transfers ownership. A repeated value returns `changed: false` without publishing an event. |
+
+Unknown roles and `"owner"` are invalid parameters. The target must be an
+existing direct guest member; the owner and inherited host members cannot be
+changed with this method. A caller lacking authority is refused before mutation;
+an unrelated workspace remains indistinguishable from a missing one.
+
+A committed change publishes existing `workspace:updated` with
+`changes: { members: true, rolePrincipalId, role }`. Subscribers re-read the roster
+and caller-relative workspace projection, including on the affected guest's
+already open connection. This delta is an invalidation, not a grant to other
+subscribers. No new event name or membership-count change is introduced.
+
+The durable workspace role is `owner`, `collaborator` or `manager`. Participant
+is the UI label for `collaborator`, preserving existing rows and clients. Existing
+guests, direct member adds and newly redeemed invitations remain Participants;
+joining again cannot upgrade or overwrite an existing grant. Both guest roles
+spend one guest seat. A role change neither changes the owner nor creates host
+membership. Imports do not carry authority from the exporting host.
+
+| Permission | Participant | Manager |
+| --- | --- | --- |
+| Existing guest reads, discussion and agent prompting | Existing behavior | Same |
+| Existing `agent.setModel` RPC | Existing behavior retained | Same |
+| Create agents and use model/provider controls | Existing UI restrictions | Allowed within the granted workspace |
+| Run and observe existing saved scripts | Existing restrictions | Allowed within the granted workspace |
+| Create/edit script commands, command/environment overrides, raw terminals or host execution | Existing restrictions | No additional authority |
+| Change sharing, membership, owner fields or global provider configuration | Existing restrictions | No additional authority |
+
+The scoped Manager grant must not satisfy general workspace-management gates:
+`canManage` stays false for a guest Manager. Existing owner and inherited host-member
+authority is unchanged. Clients use separate permission checks for agent creation,
+model/provider controls and saved-script operation; opening the shared Shell panel
+must not expose terminal creation/input or script editing. A selected provider must
+already be configured; choosing it does not authorize setup or credential writes.
+
+The service resolves the current durable role for every protected operation,
+including requests on already connected sockets. A downgrade takes effect on
+subsequent requests without reconnecting. Script IDs and agent IDs are resolved
+within the authorized workspace; possessing an ID is not a grant. The transport
+allowlist permits attempting an operation, while the service remains the authority
+for the role, workspace and allowed fields. Existing Participant RPC permissions
+are preserved, including the historical `agent.setModel` allowance.
+
+Owner-controlled role selectors belong inline on guest member rows. The owner's
+role is fixed, and inherited host access cannot be changed by selecting a guest
+role. UI state retains the confirmed role until a successful mutation; failures
+leave authority unchanged and surface on the affected row. Membership invalidation
+refreshes both the roster and the caller-relative workspace role, rather than
+treating a capability flag or a selected menu value as a grant.
 
 #### Identity model
 

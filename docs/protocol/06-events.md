@@ -505,6 +505,15 @@ See [§5.17](./methods/client-hello.md) for capability lifecycle and recovery.
 No general access to global settings, account-auth events or unrelated principals
 is implied. See §8 for the permission snapshot/answer/event gate.
 
+The prepared [workspace guest role extension](./methods/multiplayer.md#workspace-guest-roles-prepared)
+reuses this workspace-scoped invalidation. A committed `workspace.members.setRole`
+publishes `changes: { members: true, rolePrincipalId, role }`; unchanged roles emit
+nothing. Refresh both the roster and caller-relative workspace projection so an
+already connected guest gains or loses scoped controls. The payload is not an
+authority snapshot for every subscriber. Manager script events require the same
+current workspace and saved-script authorization as their read/run APIs; the role
+does not admit terminal events or host-wide management streams.
+
 #### Startup-recovery failure `agent:updated` payloads
 
 Automatic startup recovery emits the existing `agent:updated` event with optional

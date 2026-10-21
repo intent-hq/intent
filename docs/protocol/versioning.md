@@ -8,7 +8,7 @@ capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `15.1` — prepared workspace discussions; not a shipped-version claim.
+**Documented version:** `15.1` — prepared workspace discussions and guest roles; not a shipped-version claim.
 Other prepared extensions retain their independent support gates.
 
 **Version 15.1 — workspace discussions (additive, prepared).**
@@ -40,9 +40,18 @@ agent transcripts have workspace-wide visibility. This adds no router method or
 event type; agent tools use the existing conversation/list/send operations.
 Clients tolerate unsupported methods without sending to an agent instead. The
 documented surface, including prepared startup, generic stream recovery,
-PR workspace lookup, and provider profile additions, is now **460 / 403 / 57**
+PR workspace lookup, provider profiles, discussion activity, and guest role additions,
+is now **463 / 406 / 57**
 (dispatchable / router / fast path). This reservation does not identify a carrying
 release or change independent capability gates.
+
+The prepared [workspace guest role extension](./methods/multiplayer.md#workspace-guest-roles-prepared)
+adds `workspace.members.setRole` under exact `workspaceGuestRoles: 1` on both
+discovery surfaces. `collaborator` remains the default wire role, displayed as
+Participant; owner-assigned `manager` grants scoped agent and saved-script
+operations without broadening `canManage` or granting raw terminal access.
+Role changes invalidate membership projections on existing connections. This
+extends the unreleased 15.1 contract and does not establish Multiplayer readiness.
 
 **Version 15.0 — legacy workspace import removal (breaking).**
 Removes the UDS-only `system.importLegacy` fast-path method. Calls on either UDS
