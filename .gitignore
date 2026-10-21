@@ -10,3 +10,7 @@
 # Root-level scratch files
 /.apply_*.py
 /*.tmp
+
+# Python bytecode
+__pycache__/
+*.pyc

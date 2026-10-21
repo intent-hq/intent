@@ -14,7 +14,14 @@
 # SIGTERM (systemctl stop) drains: an idle runner is deregistered and its
 # container stopped at once; a busy runner finishes its job first.
 #
+# Job stats: while a job runs, its container's cgroup is sampled about every
+# 2 seconds. When it ends, one JSON line (format v1: resource use only, never
+# environment, tokens or command lines) goes to the journal and to
+# /var/lib/github-runners/job-stats.jsonl (root only, rotated by size).
+#
 # Usage: supervisor.sh <pool>-<n>     run one job in slot n of pool
+#        supervisor.sh --job-stats [--since <ISO 8601>]
+#                                     print recorded job stats (JSON Lines)
 #        supervisor.sh --plan         validate the config, print every slot
 #        supervisor.sh --host-check   check the CPU sets against this host's CPUs
 #        supervisor.sh --group-apply  create or correct the runner group
@@ -32,6 +39,12 @@ credentials_file="${RUNNERS_CREDENTIALS:-/etc/github-runners/credentials}"
 egress="${RUNNERS_EGRESS:-/usr/local/lib/github-runners/egress.sh}"
 api_url="${GITHUB_API_URL:-https://api.github.com}"
 cpu_sysfs="${RUNNERS_SYSFS_CPU:-/sys/devices/system/cpu}"
+cgroup_root="${RUNNERS_CGROUP_ROOT:-/sys/fs/cgroup}"
+stats_dir="${RUNNERS_STATE_DIR:-/var/lib/github-runners}"
+stats_file="$stats_dir/job-stats.jsonl"
+stats_max_bytes="${RUNNERS_JOB_STATS_MAX_BYTES:-10485760}"
+stats_keep="${RUNNERS_JOB_STATS_KEEP:-4}"
+sample_interval="${RUNNERS_SAMPLE_INTERVAL:-2}"
 work_folder=/home/runner/work
 
 log() { echo "runner-slot-${slot:-?}: $*"; }
@@ -344,8 +357,171 @@ group_check() {
   [ "$(jq -r .ok <<<"$report")" = true ] || exit 1
 }
 
+# Bytes in a Docker size such as 48g (binary units, like docker --memory).
+size_bytes() {
+  local n="${1%[kmg]}"
+  case "$1" in *k) echo $((n << 10)) ;; *m) echo $((n << 20)) ;; *g) echo $((n << 30)) ;; *) echo "$n" ;; esac
+}
+
+# The cgroup v2 directory of container $1 (systemd or cgroupfs driver), or
+# nothing while it does not exist yet.
+find_cgroup() {
+  local id dir
+  id="$(docker container inspect --format '{{.Id}}' "$1" 2>/dev/null)" || return 0
+  [[ "$id" =~ ^[0-9a-f]+$ ]] || return 0
+  for dir in "$cgroup_root/runners.slice/docker-$id.scope" "$cgroup_root/runners.slice/$id"; do
+    if [ -d "$dir" ]; then echo "$dir"; return 0; fi
+  done
+}
+
+# One sample of cgroup $1 on one line: time (us), cpu usage_usec, memory peak,
+# pids peak, IO read bytes, IO write bytes, OOM kills. Builtins only, so a
+# sample costs no fork. Fails without cpu.stat (the cgroup is gone).
+sample_cgroup() {
+  local dir="$1" key value usage="" mem=0 pids=0 rb=0 wb=0 oom=0 field fields
+  [ -r "$dir/cpu.stat" ] || return 1
+  while read -r key value; do
+    if [ "$key" = usage_usec ]; then usage="$value"; break; fi
+  done < "$dir/cpu.stat" || true
+  [[ "$usage" =~ ^[0-9]+$ ]] || return 1
+  if [ -r "$dir/memory.peak" ]; then read -r mem < "$dir/memory.peak" || true
+  elif [ -r "$dir/memory.current" ]; then read -r mem < "$dir/memory.current" || true; fi
+  if [ -r "$dir/pids.peak" ]; then read -r pids < "$dir/pids.peak" || true
+  elif [ -r "$dir/pids.current" ]; then read -r pids < "$dir/pids.current" || true; fi
+  if [ -r "$dir/io.stat" ]; then
+    while read -ra fields; do
+      for field in "${fields[@]:1}"; do
+        case "$field" in rbytes=*) rb=$((rb + ${field#*=})) ;; wbytes=*) wb=$((wb + ${field#*=})) ;; esac
+      done
+    done < "$dir/io.stat" || true
+  fi
+  if [ -r "$dir/memory.events" ]; then
+    while read -r key value; do
+      if [ "$key" = oom_kill ]; then oom="$value"; break; fi
+    done < "$dir/memory.events" || true
+  fi
+  [[ "$mem" =~ ^[0-9]+$ ]] || mem=0
+  [[ "$pids" =~ ^[0-9]+$ ]] || pids=0
+  [[ "$oom" =~ ^[0-9]+$ ]] || oom=0
+  echo "${EPOCHREALTIME/./} $usage $mem $pids $rb $wb $oom"
+}
+
+# sample_job CONTAINER PID FILE: append a sample of the container's cgroup to
+# FILE every $sample_interval seconds while PID (docker run) lives.
+sample_job() {
+  local name="$1" pid="$2" out="$3" dir=""
+  while kill -0 "$pid" 2>/dev/null; do
+    [ -n "$dir" ] || dir="$(find_cgroup "$name")"
+    if [ -n "$dir" ]; then sample_cgroup "$dir" >> "$out" || break; fi
+    sleep "$sample_interval"
+  done
+}
+
+# summarize_samples FILE SLOT_CPUS WALL_S: the measured fields of the job
+# stats line. Busy cores per interval come from usage_usec deltas. Every
+# counter starts at zero with the container and only grows, so each total is
+# its highest sample (a sample racing the cgroup's removal may read short).
+# All null when nothing was sampled.
+summarize_samples() {
+  jq -c -R -s --argjson cpus "$2" --argjson wall "$3" '
+    def r(d): . * d | round / d;
+    def pct(p): sort | .[(((p * length) | ceil) - 1) | if . < 0 then 0 else . end];
+    [split("\n")[] | select(test("^[0-9]+( [0-9]+){6}$")) | split(" ") | map(tonumber)] as $s
+    | [range(1; $s | length) | ($s[.][1] - $s[. - 1][1]) / ($s[.][0] - $s[. - 1][0])] as $c
+    | ($s | last) as $l
+    | (if $l then ([$s[][1]] | max) / 1e6 else null end) as $cpu
+    | {cpu_s: (if $l then $cpu | r(10) else null end),
+       cores_avg: (if $l and $wall > 0 then $cpu / $wall | r(100) else null end),
+       cores_p50: (if ($c | length) > 0 then $c | pct(0.5) | r(100) else null end),
+       cores_p95: (if ($c | length) > 0 then $c | pct(0.95) | r(100) else null end),
+       cores_max: (if ($c | length) > 0 then $c | max | r(100) else null end),
+       saturation: (if ($c | length) > 0 then ([$c[] | select(. >= 0.9 * $cpus)] | length) / ($c | length) | r(1000) else null end),
+       mem_peak_bytes: (if $l then [$s[][2]] | max else null end),
+       pids_peak: (if $l then [$s[][3]] | max else null end),
+       io_read_bytes: (if $l then [$s[][4]] | max else null end),
+       io_write_bytes: (if $l then [$s[][5]] | max else null end),
+       oom_kills: (if $l then [$s[][6]] | max else null end),
+       samples: ($c | length)}' < "$1"
+}
+
+# append_job_stats LINE: append under a lock, first rotating a full file to
+# .1 (and .1 to .2, ...; $stats_keep old files are kept).
+append_job_stats() {
+  (
+    umask 027
+    install -d -m 0750 "$stats_dir"
+    exec 9>>"$stats_dir/job-stats.lock"
+    flock 9
+    local size i
+    size="$(stat -c %s "$stats_file" 2>/dev/null || echo 0)"
+    if [ "$size" -ge "$stats_max_bytes" ]; then
+      for ((i = stats_keep - 1; i >= 1; i--)); do
+        if [ -f "$stats_file.$i" ]; then mv -f "$stats_file.$i" "$stats_file.$((i + 1))"; fi
+      done
+      if [ "$stats_keep" -ge 1 ]; then mv -f "$stats_file" "$stats_file.1"; else rm -f "$stats_file"; fi
+    fi
+    printf '%s\n' "$1" >> "$stats_file"
+  )
+}
+
+# record_job_stats: build the v1 line from the job's samples and container
+# state ($1: "SizeRw OOMKilled" from docker inspect, or empty), journal it
+# and append it to the stats file.
+record_job_stats() {
+  local inspect="$1" disk=null docker_oom=false wall measured line
+  read -r disk docker_oom <<<"$inspect" || true
+  [[ "$disk" =~ ^[0-9]+$ ]] || disk=null
+  wall="$(awk -v a="$job_t0" -v b="$job_t1" 'BEGIN { printf "%.1f", (b - a) / 1e6 }')"
+  measured="$(summarize_samples "$stats_tmp/samples" "$slot_cpus" "$wall")"
+  line="$(jq -c -n --arg host "$(hostname -s)" --arg pool "$pool" --arg slot "$slot" \
+    --argjson cpus "$slot_cpus" --argjson mem "$slot_memory_bytes" --arg name "$runner_name" \
+    --arg start "$started_at" --arg end "$ended_at" --argjson wall "$wall" --argjson m "$measured" \
+    --argjson disk "$disk" --argjson exit "$exit_code" --arg docker_oom "$docker_oom" '
+    {v: 1, host: $host, pool: $pool, slot: $slot, slot_cpus: $cpus, slot_memory_bytes: $mem,
+     runner_name: $name, started_at: $start, ended_at: $end, wall_s: $wall,
+     cpu_s: $m.cpu_s, cores_avg: $m.cores_avg, cores_p50: $m.cores_p50, cores_p95: $m.cores_p95,
+     cores_max: $m.cores_max, saturation: $m.saturation, mem_peak_bytes: $m.mem_peak_bytes,
+     pids_peak: $m.pids_peak, disk_bytes: $disk, io_read_bytes: $m.io_read_bytes,
+     io_write_bytes: $m.io_write_bytes,
+     oom_kills: (if $docker_oom == "true" then ([$m.oom_kills // 0, 1] | max) else $m.oom_kills end),
+     exit_code: $exit, samples: $m.samples}')"
+  log "job stats: $line"
+  append_job_stats "$line"
+}
+
+# --job-stats [--since <ISO 8601>]: every recorded line, oldest first, with
+# ended_at at or after --since. Unparsable lines are skipped.
+job_stats() {
+  local since="" files=() i=1
+  if [ "${1:-}" = --since ] && [ -n "${2:-}" ] && [ -z "${3:-}" ]; then
+    since="$(date -u -d "$2" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" || die "--since: not a date: $2"
+  elif [ -n "${1:-}" ]; then
+    die "usage: $0 --job-stats [--since <ISO 8601>]"
+  fi
+  # Lock before listing the files: a rotation between the two would hide
+  # the rotated file.
+  if [ -r "$stats_dir/job-stats.lock" ]; then exec 9<"$stats_dir/job-stats.lock"; flock -s 9; fi
+  while [ -f "$stats_file.$i" ]; do files=("$stats_file.$i" "${files[@]}"); i=$((i + 1)); done
+  if [ -f "$stats_file" ]; then files+=("$stats_file"); fi
+  [ "${#files[@]}" -gt 0 ] || return 0
+  cat -- "${files[@]}" | jq -c -R --arg since "$since" 'fromjson? | objects | select((.ended_at // "") >= $since)'
+}
+
 container=""
 draining=0
+idle_stopped=0
+container_name=""
+sampler=""
+stats_tmp=""
+# Runs on every exit, including a fatal signal: the container must never
+# outlive the supervisor (ExecStopPost and the next start also remove it).
+# shellcheck disable=SC2317  # invoked by the EXIT trap
+cleanup() {
+  if [ -n "$sampler" ]; then kill "$sampler" 2>/dev/null || true; fi
+  if [ -n "$container_name" ]; then docker rm -f "$container_name" >/dev/null 2>&1 || true; fi
+  if [ -n "$stats_tmp" ]; then rm -rf "$stats_tmp"; fi
+}
+
 # shellcheck disable=SC2317  # invoked by the TERM/INT trap
 on_term() {
   draining=1
@@ -357,6 +533,7 @@ on_term() {
     return 0
   fi
   log "stopping idle runner"
+  idle_stopped=1
   deregister
   docker stop -t 30 "$container" >/dev/null 2>&1 || true
 }
@@ -365,16 +542,18 @@ main() {
   slot="${1:-}"
   case "$slot" in
     --plan) slot=plan; load_config; plan; exit 0 ;;
+    --job-stats) slot=stats; shift; job_stats "$@"; exit 0 ;;
     --host-check) slot=host; load_config; host_check; exit 0 ;;
     --group-apply) slot=group; load_config; load_credentials; mint_token; group_apply; exit 0 ;;
     --group-check) slot=group; load_config; load_credentials; mint_token; group_check; exit 0 ;;
   esac
-  [[ "$slot" =~ ^[a-z][a-z0-9]*-[1-9][0-9]*$ ]] || { echo "usage: $0 <pool>-<n> | --plan | --host-check | --group-apply | --group-check" >&2; exit 2; }
+  [[ "$slot" =~ ^[a-z][a-z0-9]*-[1-9][0-9]*$ ]] || { echo "usage: $0 <pool>-<n> | --job-stats [--since <ISO 8601>] | --plan | --host-check | --group-apply | --group-check" >&2; exit 2; }
   load_config
   local planned
   planned="$(plan)"
   grep -qx -- "$slot" <<<"$planned" || die "$slot is not a configured slot (supervisor.sh --plan lists them)"
-  local pool="${slot%-*}" n="${slot##*-}" sets
+  pool="${slot%-*}"
+  local n="${slot##*-}" sets
   read -ra sets <<<"$(pool_value "$pool" CPUSETS)"
   local cpuset="${sets[n - 1]}" labels memory pids shm
   labels="$(pool_value "$pool" LABELS)"; memory="$(pool_value "$pool" MEMORY)"
@@ -391,7 +570,7 @@ main() {
   resolve_group
   remove_stale
 
-  local runner_name body jit
+  local body jit
   runner_name="$RUNNER_NAME_PREFIX-$slot-$(date +%s)"
   body="$(jq -nc --arg name "$runner_name" --argjson group "$group_id" --arg labels "$labels" --arg work "$work_folder" \
     '{name: $name, runner_group_id: $group, labels: ($labels | split(",")), work_folder: $work}')"
@@ -407,17 +586,28 @@ main() {
   log "registered $runner_name (id $runner_id); starting container $name on CPUs $cpuset"
 
   container="$name"
+  container_name="$name"
+  slot_cpus="$(cpuset_count "$cpuset")"
+  slot_memory_bytes="$(size_bytes "$memory")"
+  stats_tmp="$(mktemp -d)"
+  : > "$stats_tmp/samples"
+  trap cleanup EXIT
   trap on_term TERM INT
-  ACTIONS_RUNNER_INPUT_JITCONFIG="$jit" docker run --rm --init --name "$name" --hostname "$RUNNER_NAME_PREFIX-$slot" \
+  # No --rm: the container's disk is measured after the job, then removed.
+  job_t0="${EPOCHREALTIME/./}"
+  started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  ACTIONS_RUNNER_INPUT_JITCONFIG="$jit" docker run --init --name "$name" --hostname "$RUNNER_NAME_PREFIX-$slot" \
     --network "$RUNNER_NETWORK" --cgroup-parent runners.slice \
-    --cpus "$(cpuset_count "$cpuset")" --cpuset-cpus "$cpuset" --memory "$memory" --memory-swap "$memory" \
+    --cpus "$slot_cpus" --cpuset-cpus "$cpuset" --memory "$memory" --memory-swap "$memory" \
     --pids-limit "${pids:-4096}" --shm-size "${shm:-64m}" --ulimit nofile=65536:65536 --ulimit core=0:0 \
     --cap-drop ALL --security-opt no-new-privileges \
     --label "intent.runner.pool=$pool" --label "intent.runner.slot=$slot" --label "intent.runner.id=$runner_id" \
     --log-opt "tag=$name" --stop-timeout 30 \
     --env ACTIONS_RUNNER_INPUT_JITCONFIG "$RUNNER_IMAGE" &
-  local pid=$! rc=0
+  local pid=$! rc=0 inspect
   jit=""
+  sample_job "$name" "$pid" "$stats_tmp/samples" &
+  sampler=$!
   while :; do
     rc=0
     wait "$pid" || rc=$?
@@ -425,11 +615,25 @@ main() {
     # process is still running then, so keep waiting.
     kill -0 "$pid" 2>/dev/null || break
   done
+  job_t1="${EPOCHREALTIME/./}"
+  ended_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  exit_code="$rc"
   container=""
   log "container exited ($rc)"
+  kill "$sampler" 2>/dev/null || true
+  wait "$sampler" 2>/dev/null || true
+  sampler=""
+  inspect="$(docker container inspect --size --format '{{.SizeRw}} {{.State.OOMKilled}}' "$name" 2>/dev/null)" || inspect=""
+  docker rm -f "$name" >/dev/null 2>&1 || true
+  container_name=""
+  # Before deregister, which can die on a failed token refresh.
+  if [ "$idle_stopped" = 0 ]; then
+    record_job_stats "$inspect" || log "warning: could not record job stats"
+  fi
   deregister
   if [ "$draining" = 1 ]; then log "drained"; fi
   exit 0
 }
 
-main "$@"
+# Sourcing (the tests) defines the functions without running a slot.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then main "$@"; fi
