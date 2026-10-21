@@ -425,7 +425,7 @@ merge queue, so a local run is the only check before a 3.2-only breakage ejects
 the PR. Run it before opening a PR that touches `scripts/*.sh`:
 
 ```bash
-make bash3   # one-time build (a few minutes; needs gcc, make and bison)
+make bash3   # one-time build (a few minutes; make bootstrap-dev-host installs gcc, make and bison)
 REQUIRE_BASH3=1 bash scripts/consumer-checks.test.sh
 ```
 

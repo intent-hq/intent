@@ -387,6 +387,36 @@ expect_line "[missing]  actionlint: $bin_dir/actionlint is on PATH but actionlin
 reject_line "[ok]       actionlint:"
 rm -f "$bin_dir/actionlint"
 
+# make bash3 compiles Bash 3.2, so on Linux the doctor requires a C compiler,
+# make and a yacc: each missing tool is named, the row is one required gap, and
+# cc / yacc stand in for gcc / bison. Stock macOS bash is already 3.2.
+if [[ "$(uname -s)" == Darwin ]]; then
+  run_doctor
+  expect_line "[ok]       Bash 3.2 build tools: not needed (stock /bin/bash is already Bash 3.2)"
+else
+  run_doctor
+  expect_line "[missing]  Bash 3.2 build tools: gcc make bison not found; required by make bash3 (the shell suites' 3.2 pass); run make bootstrap-dev-host"
+  gaps_without_bash3_tools=$(sed -n 's/^Doctor found \([0-9][0-9]*\) required gap(s)\.$/\1/p' "$output")
+  [[ -n "$gaps_without_bash3_tools" ]] || fail "expected a gap summary without the Bash 3.2 build tools"
+  write_launcher gcc 'exit 0'
+  write_launcher make 'exit 0'
+  run_doctor
+  expect_line "[missing]  Bash 3.2 build tools: bison not found; required by make bash3"
+  write_launcher bison 'exit 0'
+  run_doctor
+  expect_line "[ok]       Bash 3.2 build tools: C compiler, make, bison"
+  reject_line "[missing]  Bash 3.2 build tools:"
+  gaps_with_bash3_tools=$(sed -n 's/^Doctor found \([0-9][0-9]*\) required gap(s)\.$/\1/p' "$output")
+  [[ "$gaps_with_bash3_tools" == "$((gaps_without_bash3_tools - 1))" ]] \
+    || fail "the Bash 3.2 build tools did not count as one required gap: $gaps_without_bash3_tools without vs $gaps_with_bash3_tools with"
+  rm -f "$bin_dir/gcc" "$bin_dir/bison"
+  write_launcher cc 'exit 0'
+  write_launcher yacc 'exit 0'
+  run_doctor
+  expect_line "[ok]       Bash 3.2 build tools: C compiler, make, bison"
+  rm -f "$bin_dir/cc" "$bin_dir/yacc" "$bin_dir/make"
+fi
+
 # install_actionlint downloads the pinned archive, refuses a checksum mismatch,
 # and extracts the binary into $CARGO_HOME/bin; a ready pin is left alone.
 bootstrap_funcs="$temp_dir/bootstrap-funcs.sh"
@@ -634,6 +664,48 @@ grep -qx 'component list --toolchain 1.96.0 --installed' "$rustup_log" || fail "
 ! grep -q '^RUSTUP_AUTO_INSTALL=' "$rustup_log" || fail "rustup ran without RUSTUP_AUTO_INSTALL=0: $(grep '^RUSTUP_AUTO_INSTALL=' "$rustup_log" | head -n 1)"
 rm -f "$bin_dir/cargo" "$bin_dir/rustup"
 
+# install_bash3_build_tools installs through the host's package manager, fails
+# clearly without a supported one, and leaves a ready or macOS host alone.
+bash3_tools_log="$temp_dir/bash3-tools.log"
+run_install_bash3_tools() {
+  : >"$bash3_tools_log"
+  PATH="$bin_dir" HOME="$temp_dir/home" INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
+    CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT='' MAKELEVEL='' TOOL_LOG="$bash3_tools_log" \
+    bash -c 'funcs=$1; set --; source "$funcs"
+      as_root() { echo "as_root $*" >>"$TOOL_LOG"; }
+      install_bash3_build_tools' bash "$bootstrap_funcs" >"$output" 2>&1
+}
+grep -q '^install_bash3_build_tools() {' "$bootstrap_funcs" || fail "could not extract install_bash3_build_tools"
+rm -f "$bin_dir/uname"
+write_launcher uname 'echo Linux'
+write_launcher apt-get 'exit 0'
+run_install_bash3_tools || fail "install_bash3_build_tools failed with apt-get"
+expect_line "[install] Bash 3.2 build tools for make bash3 (missing: gcc make bison)"
+[[ "$(cat "$bash3_tools_log")" == "as_root apt-get install -y build-essential bison" ]] \
+  || fail "apt hosts should install build-essential and bison: $(cat "$bash3_tools_log")"
+rm -f "$bin_dir/apt-get"
+write_launcher dnf 'exit 0'
+run_install_bash3_tools || fail "install_bash3_build_tools failed with dnf"
+[[ "$(cat "$bash3_tools_log")" == "as_root dnf install -y gcc make bison" ]] \
+  || fail "dnf hosts should install gcc, make and bison: $(cat "$bash3_tools_log")"
+rm -f "$bin_dir/dnf"
+! run_install_bash3_tools || fail "install_bash3_build_tools succeeded without a package manager"
+expect_line "ERROR: unsupported Linux package manager; install a C compiler, make and bison"
+write_launcher apt-get 'exit 0'
+write_launcher gcc 'exit 0'
+write_launcher make 'exit 0'
+write_launcher bison 'exit 0'
+run_install_bash3_tools || fail "install_bash3_build_tools failed on a ready host"
+expect_line "[skip] Bash 3.2 build tools (C compiler, make, bison) already installed"
+[[ ! -s "$bash3_tools_log" ]] || fail "a ready host ran an install: $(cat "$bash3_tools_log")"
+rm -f "$bin_dir/gcc" "$bin_dir/make" "$bin_dir/bison" "$bin_dir/uname"
+write_launcher uname 'echo Darwin'
+run_install_bash3_tools || fail "install_bash3_build_tools failed on macOS"
+expect_line "[skip] Bash 3.2 build tools: stock /bin/bash is already Bash 3.2"
+[[ ! -s "$bash3_tools_log" ]] || fail "macOS ran an install: $(cat "$bash3_tools_log")"
+rm -f "$bin_dir/apt-get" "$bin_dir/uname"
+ln -s "$(command -v uname)" "$bin_dir/uname"
+
 # install_coverage_tooling is a no-op unless opted in; opted in, it skips a
 # complete host and runs cargo install / rustup component add for the gaps.
 grep -q '^install_coverage_tooling() {' "$bootstrap_funcs" || fail "could not extract bootstrap functions for the install_coverage_tooling fixture"
@@ -648,7 +720,7 @@ run_nextest_gap() {
   PATH="$bin_dir" HOME="$temp_dir/home" INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
     CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT='' MAKELEVEL='' \
     bash -c 'funcs=$1; set --; source "$funcs"
-      for name in required_submodules_ready load_versions python_ready openssl_dev_ready rust_toolchain_ready active_toolchain_ready node_ready pnpm_ready frontend_dependencies_ready gh_ready jq_ready shellcheck_ready actionlint_ready; do
+      for name in required_submodules_ready load_versions python_ready openssl_dev_ready rust_toolchain_ready active_toolchain_ready node_ready pnpm_ready frontend_dependencies_ready gh_ready jq_ready shellcheck_ready bash3_build_tools_ready actionlint_ready; do
         eval "$name() { return 0; }"
       done
       installable_gap_exists' bash "$bootstrap_funcs" >"$output" 2>&1
