@@ -57,12 +57,15 @@ jobs:
       - id: decide
         uses: actions/github-script@v9
         env:
-          # Slot counts of the two Linux pools; each bursts to its hosted label
-          # once this many of its jobs are queued or running. Raise them when
-          # slots are added. Heavy jobs ride larger-runner labels (intent-cache);
-          # fast jobs ride standard labels (intent-cache-small).
-          THRESHOLD: '2'
-          SMALL_THRESHOLD: '6'
+          # Slot counts of the three Linux pools; each bursts to its hosted label
+          # once this many of its jobs are queued or running. Set the org or repo
+          # variables when slots are added; no workflow change is needed. Heavy
+          # jobs ride gh-linux-8x (intent-cache), 16-core jobs gh-linux-16x
+          # (intent-cache-xl, overflowing to intent-cache), and fast jobs the
+          # standard labels (intent-cache-small).
+          THRESHOLD: ${{ vars.CI_LINUX_HEAVY_SLOTS || '2' }}
+          XL_THRESHOLD: ${{ vars.CI_LINUX_XL_SLOTS || '0' }}
+          SMALL_THRESHOLD: ${{ vars.CI_LINUX_SMALL_SLOTS || '6' }}
           SLOT_JOBS: ${{ inputs.slot_jobs }}
           LINUX_RUNNER_DISABLED: ${{ vars.CI_LINUX_RUNNER_DISABLED }}
           WINDOWS_RUNNER_DISABLED: ${{ vars.CI_WINDOWS_RUNNER_DISABLED }}
@@ -75,6 +78,8 @@ jobs:
             const fleets = {
               // Heavy jobs (compile Rust or run over ~5 minutes): 8 cores / 48 GB per slot.
               linux: ['self-hosted', 'linux', 'x64', 'intent-cache'],
+              // 16-core jobs: 16 threads per slot.
+              xl: ['self-hosted', 'linux', 'x64', 'intent-cache-xl'],
               // Fast jobs: 1 core / 3 GB per slot.
               small: ['self-hosted', 'linux', 'x64', 'intent-cache-small'],
               arm: ['self-hosted', 'Linux', 'ARM64'],
@@ -84,6 +89,7 @@ jobs:
             };
             const disabled = {
               linux: process.env.LINUX_RUNNER_DISABLED === 'true',
+              xl: process.env.LINUX_RUNNER_DISABLED === 'true',
               small: process.env.LINUX_RUNNER_DISABLED === 'true',
               arm: process.env.LINUX_RUNNER_DISABLED === 'true',
               windows: process.env.WINDOWS_RUNNER_DISABLED === 'true',
@@ -123,7 +129,7 @@ jobs:
                   }
                 }
               }
-              const thresholds = {linux: Number(process.env.THRESHOLD || '2'), small: Number(process.env.SMALL_THRESHOLD || '6')};
+              const thresholds = {linux: Number(process.env.THRESHOLD || '2'), xl: Number(process.env.XL_THRESHOLD || '0'), small: Number(process.env.SMALL_THRESHOLD || '6')};
               if (Object.values(thresholds).some(n => !Number.isInteger(n) || n < 0)) throw new Error('invalid queue threshold');
               for (const [key, labels] of Object.entries(fleets)) {
                 const demand = jobs.filter(j => ['queued', 'in_progress'].includes(j.status) && labels.every(l => (j.labels || []).some(x => x.toLowerCase() === l.toLowerCase())));
@@ -142,7 +148,12 @@ jobs:
             }
             // Keys are the GitHub-hosted fallback labels jobs ask for; values are
             // the self-hosted fleet labels, or the key itself when the fleet bursts.
+            // A label listed under several pools takes the first with a free slot.
             const hosted = {
+              // 16-core jobs prefer xl slots and overflow to heavy slots before
+              // going hosted, so with no xl slot free they route as they did
+              // before xl existed. 8-core jobs never take an xl slot.
+              xl: ['gh-linux-16x'],
               // Larger runners carry the heavy jobs; standard runners the fast ones.
               linux: ['gh-linux-8x', 'gh-linux-16x'],
               small: ['ubuntu-22.04', 'ubuntu-24.04'],
@@ -167,9 +178,9 @@ jobs:
             const granted = Object.fromEntries(Object.keys(free).map(k => [k, 0]));
             const ranked = requests.map((r, i) => ({...r, i})).sort((a, b) => (b.rust === true) - (a.rust === true) || (b.minutes || 0) - (a.minutes || 0) || a.i - b.i);
             for (const r of ranked) {
-              const key = Object.keys(free).find(k => hosted[k].includes(r.label));
               const runs = !Array.isArray(r.events) || r.events.includes(context.eventName);
-              if (key && runs && free[key] > 0) {
+              const key = runs && Object.keys(hosted).find(k => k in free && hosted[k].includes(r.label) && free[k] > 0);
+              if (key) {
                 free[key] -= 1;
                 granted[key] += 1;
                 slots[r.key] = fleets[key];
@@ -183,13 +194,15 @@ jobs:
             }
             const mapping = {};
             for (const [key, labels] of Object.entries(hosted)) {
-              for (const label of labels) mapping[label] = burst[key] ? [label] : fleets[key];
+              for (const label of labels) if (!mapping[label] || mapping[label][0] === label) mapping[label] = burst[key] ? [label] : fleets[key];
             }
             for (const key of Object.keys(fleets)) core.info(`${key} routing: burst=${burst[key]} (${reasons[key]})`);
             core.setOutput('runners', JSON.stringify(mapping));
             core.setOutput('slots', JSON.stringify(slots));
-            core.setOutput('linux_labels', JSON.stringify(mapping[`gh-linux-${process.env.LINUX_SIZE || '8'}x`]));
+            const linuxLabels = mapping[`gh-linux-${process.env.LINUX_SIZE || '8'}x`];
+            core.setOutput('linux_labels', JSON.stringify(linuxLabels));
+            core.setOutput('linux_burst', String(linuxLabels[0] !== 'self-hosted'));
             core.setOutput('check_labels', JSON.stringify(mapping['gh-linux-8x']));
             core.setOutput('windows_labels', JSON.stringify(mapping['gh-windows-16x']));
             core.setOutput('macos_labels', JSON.stringify(mapping['macos-26-xlarge']));
-            for (const key of ['linux', 'windows', 'macos']) core.setOutput(`${key}_burst`, String(burst[key]));
+            for (const key of ['windows', 'macos']) core.setOutput(`${key}_burst`, String(burst[key]));
