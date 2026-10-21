@@ -445,17 +445,18 @@ class Supervisor(Stubbed):
         def run(seconds):
             out = self.dir / f'samples-{seconds}'
             before = os.times()
-            r = self.bash(f'sleep {seconds} & sample_job gh-runner-heavy-1 $! "$1"', str(out),
-                          RUNNERS_SAMPLE_INTERVAL='0.1')
+            # find_cgroup runs once per job (a docker call until the cgroup
+            # exists); stub it so only the steady sampling loop is measured.
+            r = self.bash(f'cgdir="$2"; find_cgroup() {{ echo "$cgdir"; }}; sleep {seconds} & sample_job gh-runner-heavy-1 $! "$1"',
+                          str(out), str(cg), RUNNERS_SAMPLE_INTERVAL='0.1')
             after = os.times()
             self.assertEqual(r.returncode, 0, r.stderr)
             cpu = (after.children_user - before.children_user) + (after.children_system - before.children_system)
             return cpu, len(out.read_text().splitlines())
-        # The difference between a short and a long run cancels the one-off
-        # start-up (bash, the docker stub that finds the cgroup).
+        # The difference between a short and a long run cancels bash start-up.
         cpu1, n1 = run(2)
         cpu2, n2 = run(6)
-        self.assertGreater(n2 - n1, 15)
+        self.assertGreater(n2 - n1, 25)
         per_sample = max(cpu2 - cpu1, 0) / (n2 - n1)
         # Projected to the real 2-second interval.
         self.assertLess(per_sample / 2.0, 0.01, f'{per_sample * 1000:.2f} ms CPU per sample')
