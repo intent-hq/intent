@@ -819,6 +819,30 @@ expect_line "[skip] cargo-nextest"
 printf 'cargo-nextest 0.9.132\n' >"$nextest_version_file"
 ! NEXTEST_INSTALLED_VERSION=0.9.132 run_install_nextest || fail "installer accepted an archive that still provides old nextest"
 expect_line "ERROR: cargo-nextest >= 0.9.133"
+
+# install_rust retries a toolchain download that fails transiently (rustup
+# could not reach static.rust-lang.org) and gives up with a clear error. The
+# extracted functions resolve SCRIPT_DIR from $0, so point it at scripts/.
+write_launcher rustup '[ "$1 $2" = "toolchain install" ] || exit 0; echo "rustup $*" >>"$TOOL_LOG"; [ "$(grep -c . "$TOOL_LOG")" -gt "$RUSTUP_FAILURES" ] || { echo "error: could not download file" >&2; exit 1; }'
+run_install_toolchain() {
+  : >"$tool_log"
+  PATH="$bin_dir" HOME="$temp_dir/home" INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
+    CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT='' MAKELEVEL='' TOOL_LOG="$tool_log" \
+    GITHUB_ACTIONS='' RETRY_DELAY=0 RUSTUP_FAILURES="$1" \
+    bash -c 'funcs=$1; scripts=$2; set --; source "$funcs"; SCRIPT_DIR=$scripts; load_versions
+      rust_toolchain_ready() { return 1; }
+      active_toolchain_ready() { return 0; }
+      nextest_ready() { return 0; }
+      nextest_version() { echo "cargo-nextest 0.9.143"; }
+      install_rust' bash "$bootstrap_funcs" "$repo_root/scripts" >"$output" 2>&1
+}
+run_install_toolchain 1 || fail "install_rust did not recover from one failed toolchain download"
+expect_line "[install] Rust 1.96.0 with rustfmt and clippy"
+expect_line "WARNING: retry.sh: attempt 1/3 failed (exit 1), retrying in 0s: rustup toolchain install 1.96.0 --profile minimal --component rustfmt --component clippy"
+[[ "$(grep -c . "$tool_log")" == 2 ]] || fail "expected 2 toolchain install attempts: $(cat "$tool_log")"
+! run_install_toolchain 99 || fail "install_rust succeeded although every toolchain download failed"
+expect_line "ERROR: retry.sh: giving up after 3 attempt(s), last exit 1: rustup toolchain install 1.96.0"
+[[ "$(grep -c . "$tool_log")" == 3 ]] || fail "expected 3 toolchain install attempts: $(cat "$tool_log")"
 rm -f "$bin_dir/cargo" "$bin_dir/rustup" "$bin_dir/curl" "$bin_dir/tar" "$bin_dir/mkdir"
 unset NEXTEST_VERSION_FILE
 
@@ -826,7 +850,9 @@ run_install_coverage() {
   : >"$tool_log"
   PATH="$bin_dir" HOME="$temp_dir/home" INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
     CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT='' MAKELEVEL='' TOOL_LOG="$tool_log" BOOTSTRAP_COVERAGE="$1" \
-    bash -c 'funcs=$1; set --; source "$funcs"; load_versions; install_coverage_tooling' bash "$bootstrap_funcs" >"$output" 2>&1 \
+    GITHUB_ACTIONS='' RETRY_DELAY=0 \
+    bash -c 'funcs=$1; scripts=$2; set --; source "$funcs"; SCRIPT_DIR=$scripts; load_versions; install_coverage_tooling' \
+      bash "$bootstrap_funcs" "$repo_root/scripts" >"$output" 2>&1 \
     || fail "install_coverage_tooling exited non-zero with BOOTSTRAP_COVERAGE=$1"
 }
 write_launcher cargo "[ \"\$1\" = install ] && { echo \"cargo \$*\" >>\"\$TOOL_LOG\"; exit 0; }; [ \"\$1\" = llvm-cov ] && exit 101; $pinned_cargo"

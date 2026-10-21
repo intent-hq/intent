@@ -982,13 +982,19 @@ install_submodules() {
   git -C "$ROOT_DIR" submodule update --init --recursive packages/intentd packages/cloudlands-fe || exit 1
 }
 
+# Bounded retries for the Rust downloads: a brief static.rust-lang.org blip
+# otherwise fails the whole bootstrap (and the bootstrap-install queue job).
+retry_download() {
+  bash "$SCRIPT_DIR/retry.sh" -- "$@"
+}
+
 install_rust() {
   if ! command -v rustup >/dev/null 2>&1; then
     command -v curl >/dev/null 2>&1 || { echo "ERROR: curl is required to install rustup" >&2; exit 1; }
     echo "[install] rustup and Rust $TOOLCHAIN"
     TEMP_FILE=$(mktemp "${TMPDIR:-/tmp}/rustup-init.XXXXXX") || exit 1
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o "$TEMP_FILE" || exit 1
-    sh "$TEMP_FILE" -y --profile minimal --default-toolchain "$TOOLCHAIN" --component rustfmt --component clippy || exit 1
+    retry_download curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o "$TEMP_FILE" || exit 1
+    retry_download sh "$TEMP_FILE" -y --profile minimal --default-toolchain "$TOOLCHAIN" --component rustfmt --component clippy || exit 1
     rm -f -- "$TEMP_FILE"
     TEMP_FILE=""
     hash -r
@@ -996,7 +1002,7 @@ install_rust() {
 
   if ! rust_toolchain_ready; then
     echo "[install] Rust $TOOLCHAIN with rustfmt and clippy"
-    rustup toolchain install "$TOOLCHAIN" --profile minimal --component rustfmt --component clippy || exit 1
+    retry_download rustup toolchain install "$TOOLCHAIN" --profile minimal --component rustfmt --component clippy || exit 1
   else
     echo "[skip] Rust $TOOLCHAIN with rustfmt and clippy already installed"
   fi
@@ -1051,7 +1057,7 @@ install_coverage_tooling() {
 
   if ! llvm_tools_ready; then
     echo "[install] llvm-tools-preview component for Rust $TOOLCHAIN"
-    rustup component add --toolchain "$TOOLCHAIN" llvm-tools-preview || exit 1
+    retry_download rustup component add --toolchain "$TOOLCHAIN" llvm-tools-preview || exit 1
   else
     echo "[skip] llvm-tools-preview already installed"
   fi

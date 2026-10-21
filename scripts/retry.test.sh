@@ -78,7 +78,7 @@ reject_output() {
   fi
 }
 
-unset GITHUB_ACTIONS
+unset GITHUB_ACTIONS RETRY_DELAY
 
 # Success on the first attempt: one call, no sleep, no warning.
 FLAKY_FAILURES=0 run_retry -- flaky a b
@@ -110,6 +110,16 @@ FLAKY_FAILURES=99 run_retry --attempts=4 --delay 2 flaky
 expect_status 1 "custom schedule"
 expect_calls 4 "custom schedule"
 expect_sleeps "2 4 6 " "custom schedule"
+
+# RETRY_DELAY sets the default base delay; an explicit --delay wins.
+FLAKY_FAILURES=99 RETRY_DELAY=0 run_retry -- flaky
+expect_status 1 "RETRY_DELAY=0"
+expect_sleeps "0 0 " "RETRY_DELAY=0"
+FLAKY_FAILURES=99 RETRY_DELAY=0 run_retry --delay 5 -- flaky
+expect_sleeps "5 10 " "--delay overrides RETRY_DELAY"
+RETRY_DELAY=soon run_retry -- flaky
+expect_status 2 "invalid RETRY_DELAY"
+expect_calls 0 "invalid RETRY_DELAY"
 
 # A single attempt never sleeps.
 FLAKY_FAILURES=99 run_retry --attempts 1 -- flaky

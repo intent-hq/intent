@@ -46,7 +46,7 @@ jobs:
             [[ "$QUEUE_BASE" =~ ^[0-9a-f]{40}$ ]]
             test "$(git rev-parse HEAD)" = "$QUEUE_HEAD"
             changed=$(mktemp)
-            git diff --name-only "$QUEUE_BASE" HEAD -- scripts/bootstrap-dev-host.sh scripts/bootstrap-dev-host.test.sh scripts/github-readiness.sh scripts/github_readiness.py packages/intentd packages/cloudlands-fe .gitmodules .github/workflows/bootstrap-install.yml .github/workflows/ci.yml > "$changed"
+            git diff --name-only "$QUEUE_BASE" HEAD -- scripts/bootstrap-dev-host.sh scripts/bootstrap-dev-host.test.sh scripts/retry.sh scripts/github-readiness.sh scripts/github_readiness.py packages/intentd packages/cloudlands-fe .gitmodules .github/workflows/bootstrap-install.yml .github/workflows/ci.yml > "$changed"
             if [ ! -s "$changed" ]; then selected=false; fi
             rm "$changed"
           fi

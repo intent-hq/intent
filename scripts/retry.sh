@@ -16,6 +16,8 @@
 # count, and the script exits with the command's last exit status. Exit 126/127
 # (not executable / not found) is never retried. Under GitHub Actions the
 # messages are ::warning:: / ::error:: annotations. Bad arguments exit 2.
+# RETRY_DELAY sets the default base delay (an explicit --delay wins); the
+# shell suites set it to 0 so retries cost no wall time.
 #
 # Bash 3.2 compatible: bootstrap-dev-host.sh runs it on stock macOS bash.
 
@@ -43,7 +45,7 @@ report() {
 }
 
 attempts=3
-delay=15
+delay=${RETRY_DELAY:-15}
 while [ $# -gt 0 ]; do
   case "$1" in
     --attempts)
