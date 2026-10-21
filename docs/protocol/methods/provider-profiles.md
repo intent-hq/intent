@@ -459,6 +459,10 @@ today, and an agent with no eligible backup behaves as today.
   This also applies when the quota failure arrives mid-turn, after partial output:
   output already persisted from the failed attempt stays in the transcript, and the
   backup redrives the turn from the same user message.
+- **Session setup.** A quota failure during provider process or session setup
+  (for example a quota-rejected `session/new`) fails over immediately, with no
+  same-provider setup retries. Setup failures that are not quota failures keep
+  today's retry behavior.
 - **Swallowed attempt.** A failed attempt that leads to a retry emits no
   `agent:failed` and persists no error row. The agent stays busy until the retried
   turn ends.
