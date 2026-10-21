@@ -440,3 +440,24 @@ notice rather than a failure. `scripts/dev-sandbox.test.sh` has no lookup and
 must be started by the interpreter itself, as CI does:
 `REQUIRE_BASH3=1 DEV_SANDBOX_TEST_STARTUP_ONLY=1 ~/.cache/intent-bash3/bash scripts/dev-sandbox.test.sh`.
 The interpreter is isolated; the build does not replace the system shell.
+
+### Script checks for your change
+
+CI runs the shell suites only in the merge queue, so a broken suite or a new
+shellcheck finding otherwise shows up after a push. Before pushing changes to
+`scripts/`, the `Makefile` or `.github/workflows/ci.yml`, run:
+
+```bash
+make test-scripts-changed            # changed vs origin/main, incl. uncommitted work
+DRY_RUN=1 make test-scripts-changed  # print the plan only
+BASE=<ref> make test-scripts-changed # compare with another base
+```
+
+It always runs `make lint-shell`. It runs every suite in the ci.yml
+`shell-tests` job (read from that job, so the lists cannot drift) when the
+`Makefile`, `ci.yml`, `scripts/*.sh`, `scripts/*.py` or `scripts/fixtures/`
+changed. For each changed `scripts/*.mjs` with a sibling `.test.mjs`, it runs
+that test with `node --test`. Every step runs; the failures are listed at the
+end. Like CI it needs node, shellcheck and the `packages/intentd`
+submodule. It skips the Bash 3.2 pass (see above) and the sccache and runner
+steps that download tools.
