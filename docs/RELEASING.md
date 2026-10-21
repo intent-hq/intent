@@ -311,7 +311,7 @@ necessarily retry at once. Manual checks and channel switches bypass this limit.
 
 Both the sitter and the desktop app fetch their update feeds through
 `https://updates.intentapp.dev`, a separate Vercel project
-([intent-hq/intentd-updates](https://github.com/intent-hq/intentd-updates)). It
+([intent-hq/intent-updates](https://github.com/intent-hq/intent-updates)). It
 counts the request and answers with a `302` to the same GitHub asset as before; it
 never serves a manifest or a feed itself, so GitHub stays the only source of
 updates.
