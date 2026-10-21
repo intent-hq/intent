@@ -54,7 +54,7 @@ const SPEC_FENCES = [
   ['108: a backtick info string cannot hold a backtick', '``` ```\naaa', 'PP'],
   ['109: a closer cannot have an info string', '~~~~~~\naaa\n~~~ ~~', 'FFF'],
   ['110: a fence interrupts a paragraph', 'foo\n```\nbar\n```\nbaz', 'PFFFP'],
-  ['111', 'foo\n---\n~~~\nbar\n~~~\n# baz', 'PHFFFH'],
+  ['111', 'foo\n---\n~~~\nbar\n~~~\n# baz', 'HHFFFH'],
   ['112', '```ruby\ndef foo(x)\n  return 3\nend\n```', 'FFFFF'],
   ['113', '~~~~    ruby startline=3 $%@#$\ndef foo(x)\n  return 3\nend\n~~~~~~~', 'FFFFF'],
   ['114', '````;\n````', 'FF'],
@@ -88,8 +88,8 @@ const GITHUB = [
   ['a header without pipes', 'a\n| - |\n| c |', 'TTT', [[1, 1, 1]]],
   ['a table without any pipe', 'a\n:-:\nb', 'TTT', [[1, 1, 1]]],
   ['a lone `|` header is not a table', '|\n| - |', 'PP'],
-  ['a dash-only line is a setext underline', '| a |\n---', 'PH'],
-  ['`===` is a setext underline, not a delimiter', '| a |\n===\n| b |', 'PHP'],
+  ['a dash-only line is a setext underline', '| a |\n---', 'HH'],
+  ['`===` is a setext underline, not a delimiter', '| a |\n===\n| b |', 'HHP'],
   ['a single-column delimiter without pipes', '| a |\n:-:\n| b |', 'TTT', [[1, 1, 1]]],
   ['a delimiter without leading pipes', `| a | b |\n--- | ---\n| c | d |`, 'TTT', [[1, 2, 2]]],
   ['a tight delimiter', '| a | b |\n-|-\n| c | d |', 'TTT', [[1, 2, 2]]],
@@ -107,6 +107,18 @@ const GITHUB = [
   ['a table follows indented code directly', '    code\n| a |\n| - |', 'CTT', [[2, 1]]],
   ['a table indented under a list item', '- item\n  | a | b |\n  | - | - |\n  | c | d |', 'LTTT', [[2, 2, 2]]],
   ['a lazy delimiter after a list item is paragraph text', '- a | b\n| - | - |\n| c | d |', 'LPP'],
+  ['a fence opened on a list item line closes at its indented closer', '1. ```md\n   | a | b |\n   |---|---|\n   ```\n\n| x | y |\n|---|---|\n| 1 | 2 |', 'FFFFBTTT', [[6, 2, 2]]],
+  ['a lazy header and delimiter after a list item are paragraph text', '- item\n| a | b |\n|---|---|\n| 1 | 2 | 3 |', 'LPPP'],
+  ['a list item line can be a table header', '- | a | b |\n  |---|---|\n  | 1 | 2 | 3 |', 'TTT', [[1, 2, 3]]],
+  ['a lazy delimiter under an indented header is paragraph text', '- item\n  | a | b |\n|---|---|', 'LPP'],
+  ['a less-indented line ends a list item table', '- | a | b |\n  |---|---|\n| 1 | 2 |', 'TTP', [[1, 2]]],
+  ['a list item paragraph line can be a table header', '- item\n  text\n  | a | b |\n  |---|---|\n  | 1 | 2 |', 'LPTTT', [[3, 2, 2]]],
+  ['a table indented to a wide list item content column', '1.  item\n    | a | b |\n    |---|---|\n    | 1 | 2 |', 'LTTT', [[2, 2, 2]]],
+  ['a line after a quoted heading is not lazy', '> ## H\n| a | b |\n|---|---|\n| 1 | 2 | 3 |', 'QTTT', [[2, 2, 3]]],
+  ['a line after a quoted table is not lazy', '> | a |\n> |---|\n| b | c |\n|---|---|', 'QQTT', [[3, 2]]],
+  ['a line after a quoted fence is not lazy', '> ```\n> x\n| a | b |\n|---|---|', 'QQTT', [[3, 2]]],
+  ['a setext heading is a heading on both lines', 'Next section\n------------\n| a | b |\n|---|---|', 'HHTT', [[3, 2]]],
+  ['a pipe-free line before a dash-pipe line is prose, not a broken table', 'Some prose\n--|--', 'PP'],
   ['inline triple backticks do not open a fence', '``` x ``` y\n| a | b |\n| - | - |', 'PTT', [[2, 2]]],
   ['two backticks do not open a fence', '``\n| a | b |\n| - | - |', 'PTT', [[2, 2]]],
   ['a tilde fence info string may hold tildes', '~~~ x ~~~\n| a | b |\n| - | - |\n~~~', 'FFFF'],
@@ -182,6 +194,14 @@ test('fences report their opening and closing lines; an unclosed fence has a nul
   assert.deepEqual(shape('x\n\n```js\na\n```\n\n~~~~\nb').fences, [[3, 5], [7, null]]);
 });
 
+test('headings: ATX text without its closing run, setext text joined, list item headings', () => {
+  assert.deepEqual(scanMarkdown('## A `x.y` ##\n\nTwo\nlines\n---\n\n- ### C#\n\n```\n# not\n```').headings, [
+    { line: 1, level: 2, text: 'A `x.y`' },
+    { line: 3, level: 2, text: 'Two lines' },
+    { line: 7, level: 3, text: 'C#' },
+  ]);
+});
+
 test('splitRow: optional outer pipes, trimmed cells, escapes kept', () => {
   assert.deepEqual(splitRow('| a | b |'), ['a', 'b']);
   assert.deepEqual(splitRow('a | b'), ['a', 'b']);
@@ -221,8 +241,9 @@ test('CRLF input reads like LF input', () => {
   assert.deepEqual(shape(md.replace(/\n/g, '\r\n')), shape(md));
 });
 
-/** Table [headerCells, bodyRows] pairs and the <pre> count in GitHub-rendered HTML. */
-function htmlShape(html) {
+/** Table [headerCells, bodyRows] pairs and the <pre> count in GitHub-rendered HTML, outside blockquotes (not reported by the scanner). */
+function htmlShape(rendered) {
+  const html = rendered.replace(/<blockquote>[\s\S]*?<\/blockquote>/g, '');
   const tables = [...html.matchAll(/<table[\s\S]*?<\/table>/g)].map(([t]) => {
     const head = t.match(/<thead>[\s\S]*?<\/thead>/)?.[0] ?? '';
     const body = t.match(/<tbody>[\s\S]*?<\/tbody>/)?.[0] ?? '';

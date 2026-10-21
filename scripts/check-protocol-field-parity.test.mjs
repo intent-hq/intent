@@ -445,6 +445,18 @@ test('parseStagedFields reads the table the way GitHub renders it', () => {
   assert.deepEqual([...hidden.staged.get('Row').keys()], ['real']);
 });
 
+test('parseStagedFields names a separator row with the wrong cell count', () => {
+  const doc = `### ${STAGED_HEADING}\n\n| Row | Field | Contract | App adoption |\n|---|---|---|\n`;
+  const { errors } = parseStagedFields(doc, STAGED_DOC, [pair()]);
+  assert.deepEqual(errors.map((e) => [e.line, e.message]), [[4, `${STAGED_HEADING}: the | --- | separator row has 3 cell(s); expected 4 (GitHub renders a mismatched table as plain text)`]]);
+});
+
+test('parseStagedFields ends the section at a setext heading', () => {
+  const doc = `### ${STAGED_HEADING}\n\nProse only.\n\nNext section\n------------\n\n| Row | Field | Contract | App adoption |\n|---|---|---|---|\n`;
+  const { errors } = parseStagedFields(doc, STAGED_DOC, [pair()]);
+  assert.deepEqual(errors.map((e) => [e.line, e.message.match(/no table follows the heading/)?.[0]]), [[1, 'no table follows the heading']]);
+});
+
 const stagedEntry = (field) => new Map([[field, { file: STAGED_DOC, line: 9, adoption: 'cloudlands-fe#1' }]]);
 
 test('comparePair downgrades a staged daemon-first field to a warning', () => {

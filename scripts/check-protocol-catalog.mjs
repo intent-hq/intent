@@ -190,8 +190,8 @@ export function tableCells(raw = '') {
 /**
  * Collect `{ name, line }` for every method a docs/protocol/methods/*.md file documents.
  *
- * Fenced code, cell splitting and delimiter rows follow GitHub (the shared
- * scanner in scripts/lib/markdown-tables.mjs). On top of that, the row
+ * Fenced code, headings, cell splitting and delimiter rows follow GitHub (the
+ * shared scanner in scripts/lib/markdown-tables.mjs). On top of that, the row
  * conventions below are deliberately more inclusive than GitHub so that
  * Layer 1 errs toward checking a name: any `|`-led line outside a Field table
  * may name a method, even when GitHub would not render it as a table row.
@@ -199,7 +199,8 @@ export function tableCells(raw = '') {
 export function collectDocumentedMethods(text) {
   const found = [];
   let inFieldTable = false;
-  const { lines, kinds } = scanMarkdown(text);
+  const { lines, kinds, headings } = scanMarkdown(text);
+  const headingAt = new Map(headings.map((h) => [h.line, h]));
   lines.forEach((raw, i) => {
     const line = i + 1;
     if (kinds[i] === 'fence') {
@@ -208,9 +209,12 @@ export function collectDocumentedMethods(text) {
     }
     const cells = tableCells(raw);
     if (!cells) inFieldTable = false;
-    if (/^#{2,5} /.test(raw)) {
-      for (const m of raw.matchAll(HEADING_NAME_RE)) found.push({ name: m[1], line });
-      return;
+    if (kinds[i] === 'heading') {
+      inFieldTable = false;
+      const heading = headingAt.get(line);
+      if (heading?.level >= 2 && heading.level <= 5) for (const m of heading.text.matchAll(HEADING_NAME_RE)) found.push({ name: m[1], line });
+      // A setext heading's text line still goes through the inclusive row rules below.
+      if (/^ {0,3}#/.test(raw)) return;
     }
     const separator = isDelimiterRow(lines[i + 1]) ? splitRow(lines[i + 1]) : null;
     // Explicit headers and complete adjacent tables are checker conventions.

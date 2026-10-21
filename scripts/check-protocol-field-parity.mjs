@@ -57,7 +57,6 @@ const STAGED_COLUMNS = ['Row', 'Field', 'Contract', 'App adoption'];
 // One wire name per cell, wrapped in a balanced pair of backticks or none.
 const STAGED_NAME_RE = /^(`?)([^`\s|]+)\1$/;
 const MD_LINK_RE = /\[[^\]]+\]\([^)\s]+\)/;
-const HEADING_RE = /^#{1,6}\s+(.*?)\s*#*\s*$/;
 
 /**
  * Parse the staged daemon-first field table under the `<STAGED_HEADING>`
@@ -73,38 +72,38 @@ export function parseStagedFields(markdown, file = STAGED_DOC, pairs = PAIRS) {
   const staged = new Map();
   const errors = [];
   const fail = (line, message) => errors.push({ file, line, message: `${STAGED_HEADING}: ${message}` });
-  const { lines, kinds, tables, brokenTables } = scanMarkdown(markdown);
-  let start = -1;
-  let end = lines.length;
-  for (let i = 0; i < lines.length; i += 1) {
-    const heading = kinds[i] === 'heading' ? lines[i].trimStart().match(HEADING_RE)?.[1] : undefined;
-    if (heading === undefined) continue;
-    if (start === -1) {
-      if (heading === STAGED_HEADING) start = i;
-      continue;
-    }
-    end = i;
-    break;
-  }
-  if (start === -1) {
+  const { lines, kinds, headings, tables, brokenTables } = scanMarkdown(markdown);
+  const at = headings.findIndex((h) => h.text === STAGED_HEADING);
+  if (at === -1) {
     fail(1, `heading not found; restore the section (with its ${STAGED_COLUMNS.join(' | ')} table) in ${file}`);
     return { staged, errors };
   }
-  const tableAt = (i) => tables.find((t) => t.headerLine === i + 1);
-  const headerAt = lines.findIndex((l, i) => i > start && i < end
-    && (tableAt(i) || brokenTables.some((t) => t.headerLine === i + 1) || (kinds[i] === 'paragraph' && /^\s*\|/.test(l))));
-  if (headerAt === -1) {
-    fail(start + 1, `no table follows the heading; expected columns ${STAGED_COLUMNS.join(' | ')}`);
+  const start = headings[at].line;
+  const end = headings[at + 1]?.line ?? lines.length + 1;
+  const tableByHeader = new Map(tables.map((t) => [t.headerLine, t]));
+  const brokenByHeader = new Map(brokenTables.map((t) => [t.headerLine, t]));
+  // The section's first table, broken table, or `|`-led paragraph line (a header missing its delimiter row).
+  let headerLine = 0;
+  for (let n = start + 1; n < end && !headerLine; n += 1) {
+    if (tableByHeader.has(n) || brokenByHeader.has(n) || (kinds[n - 1] === 'paragraph' && /^\s*\|/.test(lines[n - 1]))) headerLine = n;
+  }
+  if (!headerLine) {
+    fail(start, `no table follows the heading; expected columns ${STAGED_COLUMNS.join(' | ')}`);
     return { staged, errors };
   }
-  const table = tableAt(headerAt);
-  const header = table?.header ?? splitRow(lines[headerAt]);
+  const table = tableByHeader.get(headerLine);
+  const broken = brokenByHeader.get(headerLine);
+  const header = (table ?? broken)?.header ?? splitRow(lines[headerLine - 1]);
   if (header.join('|') !== STAGED_COLUMNS.join('|')) {
-    fail(headerAt + 1, `table columns are ${header.join(' | ')}; expected ${STAGED_COLUMNS.join(' | ')}`);
+    fail(headerLine, `table columns are ${header.join(' | ')}; expected ${STAGED_COLUMNS.join(' | ')}`);
+    return { staged, errors };
+  }
+  if (broken) {
+    fail(broken.delimiterLine, `the | --- | separator row has ${broken.delimiter.length} cell(s); expected ${STAGED_COLUMNS.length} (GitHub renders a mismatched table as plain text)`);
     return { staged, errors };
   }
   if (!table) {
-    fail(headerAt + 2, 'the header row must be followed by a | --- | separator row');
+    fail(headerLine + 1, 'the header row must be followed by a | --- | separator row');
     return { staged, errors };
   }
   const structs = new Map(pairs.map((p) => [p.rust.struct, p]));

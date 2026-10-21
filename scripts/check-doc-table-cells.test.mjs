@@ -105,6 +105,15 @@ test('a pipe-free line before a dash line is not a table header', () => {
   assert.deepEqual(mismatchedRows('Title\n---\n| a | b | c |\n'), []);
 });
 
+test('a pipe-free prose line before a dash-pipe line is not reported', () => {
+  assert.deepEqual(mismatchedRows('Some prose\n--|--\n'), []);
+});
+
+test('a fence opened on a list item line hides its rows and closes at its indented closer', () => {
+  const text = ['1. ```md', '   | a | b |', '   |---|---|', '   | 1 | 2 | 3 |', '   ```', '', table('| x | y | hidden |')].join('\n');
+  assert.deepEqual(mismatchedRows(text), [{ line: 9, cells: 3, header: 2, headerLine: 7 }]);
+});
+
 test('the trailing pipe is optional on every row', () => {
   assert.deepEqual(mismatchedRows(['| a | b', '| --- | ---', '| 1 | 2 |', '| 3 | 4'].join('\n')), []);
 });
