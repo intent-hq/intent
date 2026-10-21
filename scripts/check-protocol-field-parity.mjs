@@ -27,6 +27,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
+import { scanMarkdown, splitRow } from './lib/markdown-tables.mjs';
 import { describeCheckout, formatBanner, formatOffPinWarning, submoduleOf } from './submodule-ref.mjs';
 
 const MODEL_RS = 'packages/intentd/crates/intent-core/src/model.rs';
@@ -56,21 +57,12 @@ const STAGED_COLUMNS = ['Row', 'Field', 'Contract', 'App adoption'];
 // One wire name per cell, wrapped in a balanced pair of backticks or none.
 const STAGED_NAME_RE = /^(`?)([^`\s|]+)\1$/;
 const MD_LINK_RE = /\[[^\]]+\]\([^)\s]+\)/;
-const FENCE_RE = /^\s*(```|~~~)/;
-const HEADING_RE = /^#{1,6}\s+(.*?)\s*#*\s*$/;
-
-// Cells of a `|`-led table row, honoring `\|` escapes (same rule as
-// tableCells in scripts/check-protocol-catalog.mjs); null for any other line.
-function tableCells(raw) {
-  if (!raw.trim().startsWith('|')) return null;
-  const cells = [...raw.trim().matchAll(/\|((?:[^|\\]|\\.)*)/g)].map((m) => m[1].trim());
-  if (cells.at(-1) === '') cells.pop();
-  return cells;
-}
 
 /**
  * Parse the staged daemon-first field table under the `<STAGED_HEADING>`
- * heading in `markdown` (fenced code blocks are skipped). Returns
+ * heading in `markdown`. Headings, fenced code and the table are read by the
+ * shared GFM scanner (scripts/lib/markdown-tables.mjs), so the rows are the
+ * ones GitHub renders. Returns
  * `{ staged, errors }`: `staged` maps a Rust struct name to a Map of wire
  * field → `{ file, line, adoption }`. Every row must name a manifest Rust
  * struct, a wire field, a Markdown link to the contract and the app adoption
@@ -80,45 +72,42 @@ export function parseStagedFields(markdown, file = STAGED_DOC, pairs = PAIRS) {
   const staged = new Map();
   const errors = [];
   const fail = (line, message) => errors.push({ file, line, message: `${STAGED_HEADING}: ${message}` });
-  const lines = markdown.split('\n');
-  const section = [];
-  let inFence = false;
-  let start = -1;
-  for (let i = 0; i < lines.length; i += 1) {
-    if (FENCE_RE.test(lines[i])) inFence = !inFence;
-    if (inFence || FENCE_RE.test(lines[i])) continue;
-    const heading = lines[i].match(HEADING_RE)?.[1];
-    if (start === -1) {
-      if (heading === STAGED_HEADING) start = i;
-      continue;
-    }
-    if (heading !== undefined) break;
-    section.push(i);
-  }
-  if (start === -1) {
+  const { lines, kinds, headings, tables, brokenTables } = scanMarkdown(markdown);
+  const at = headings.findIndex((h) => h.text === STAGED_HEADING);
+  if (at === -1) {
     fail(1, `heading not found; restore the section (with its ${STAGED_COLUMNS.join(' | ')} table) in ${file}`);
     return { staged, errors };
   }
-  const first = section.findIndex((i) => tableCells(lines[i]) !== null);
-  if (first === -1) {
-    fail(start + 1, `no table follows the heading; expected columns ${STAGED_COLUMNS.join(' | ')}`);
+  const start = headings[at].line;
+  const end = headings[at + 1]?.line ?? lines.length + 1;
+  const tableByHeader = new Map(tables.map((t) => [t.headerLine, t]));
+  const brokenByHeader = new Map(brokenTables.map((t) => [t.headerLine, t]));
+  // The section's first table, broken table, or `|`-led paragraph line (a header missing its delimiter row).
+  let headerLine = 0;
+  for (let n = start + 1; n < end && !headerLine; n += 1) {
+    if (tableByHeader.has(n) || brokenByHeader.has(n) || (kinds[n - 1] === 'paragraph' && /^\s*\|/.test(lines[n - 1]))) headerLine = n;
+  }
+  if (!headerLine) {
+    fail(start, `no table follows the heading; expected columns ${STAGED_COLUMNS.join(' | ')}`);
     return { staged, errors };
   }
-  const headerAt = section[first];
-  const header = tableCells(lines[headerAt]);
+  const table = tableByHeader.get(headerLine);
+  const broken = brokenByHeader.get(headerLine);
+  const header = (table ?? broken)?.header ?? splitRow(lines[headerLine - 1]);
   if (header.join('|') !== STAGED_COLUMNS.join('|')) {
-    fail(headerAt + 1, `table columns are ${header.join(' | ')}; expected ${STAGED_COLUMNS.join(' | ')}`);
+    fail(headerLine, `table columns are ${header.join(' | ')}; expected ${STAGED_COLUMNS.join(' | ')}`);
     return { staged, errors };
   }
-  if (!/^\s*\|?[\s:|-]*-[\s:|-]*$/.test(lines[headerAt + 1] ?? '')) {
-    fail(headerAt + 2, 'the header row must be followed by a | --- | separator row');
+  if (broken) {
+    fail(broken.delimiterLine, `the | --- | separator row has ${broken.delimiter.length} cell(s); expected ${STAGED_COLUMNS.length} (GitHub renders a mismatched table as plain text)`);
+    return { staged, errors };
+  }
+  if (!table) {
+    fail(headerLine + 1, 'the header row must be followed by a | --- | separator row');
     return { staged, errors };
   }
   const structs = new Map(pairs.map((p) => [p.rust.struct, p]));
-  for (let i = headerAt + 2; i < lines.length; i += 1) {
-    const cells = tableCells(lines[i]);
-    if (cells === null) break;
-    const line = i + 1;
+  for (const { line, cells } of table.rows) {
     if (cells.length !== STAGED_COLUMNS.length) {
       fail(line, `row has ${cells.length} cell(s); expected ${STAGED_COLUMNS.length}`);
       continue;

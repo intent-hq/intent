@@ -425,6 +425,38 @@ test('parseStagedFields ends the table at the first non-table line', () => {
   assert.deepEqual([...staged.get('Row').keys()], ['a']);
 });
 
+test('parseStagedFields reads the table the way GitHub renders it', () => {
+  const row = (field) => `| \`Row\` | \`${field}\` | ${LINK} | cloudlands-fe#1 |`;
+  const doc = (...body) => stagedDoc().replace('|---|---|---|---|\n', `|---|---|---|---|\n${body.join('\n')}\n`);
+  // A lazy line right after the table is a row on GitHub, so it is checked (and fails) instead of ending the table.
+  const lazy = parseStagedFields(doc(row('a'), 'Trailing prose.'), STAGED_DOC, [pair()]);
+  assert.deepEqual(lazy.errors.map((e) => [e.line, e.message.match(/row has \d+ cell\(s\)/)?.[0]]), [[10, 'row has 1 cell(s)']]);
+  // A tab-indented line is indented code on GitHub: it ends the table and is not a row.
+  const tabbed = parseStagedFields(doc(row('a'), `\t${row('b')}`), STAGED_DOC, [pair()]);
+  assert.deepEqual(tabbed.errors, []);
+  assert.deepEqual([...tabbed.staged.get('Row').keys()], ['a']);
+  // A backslash before an escaped pipe still escapes it (cmark-gfm), so the cell does not split.
+  const escaped = parseStagedFields(doc(`| \`Row\` | \`a\` | ${LINK} \`x\\\\|y\` | cloudlands-fe#1 |`), STAGED_DOC, [pair()]);
+  assert.deepEqual(escaped.errors, []);
+  // A tilde line inside a backtick fence does not close it, so the example heading stays hidden.
+  const fenced = `# Versioning\n\n\`\`\`md\n~~~\n### ${STAGED_HEADING}\n\`\`\`\n\n${stagedDoc([['`Row`', '`real`', LINK, 'cloudlands-fe#1']]).replace('# Versioning\n\n', '')}`;
+  const hidden = parseStagedFields(fenced, STAGED_DOC, [pair()]);
+  assert.deepEqual(hidden.errors, []);
+  assert.deepEqual([...hidden.staged.get('Row').keys()], ['real']);
+});
+
+test('parseStagedFields names a separator row with the wrong cell count', () => {
+  const doc = `### ${STAGED_HEADING}\n\n| Row | Field | Contract | App adoption |\n|---|---|---|\n`;
+  const { errors } = parseStagedFields(doc, STAGED_DOC, [pair()]);
+  assert.deepEqual(errors.map((e) => [e.line, e.message]), [[4, `${STAGED_HEADING}: the | --- | separator row has 3 cell(s); expected 4 (GitHub renders a mismatched table as plain text)`]]);
+});
+
+test('parseStagedFields ends the section at a setext heading', () => {
+  const doc = `### ${STAGED_HEADING}\n\nProse only.\n\nNext section\n------------\n\n| Row | Field | Contract | App adoption |\n|---|---|---|---|\n`;
+  const { errors } = parseStagedFields(doc, STAGED_DOC, [pair()]);
+  assert.deepEqual(errors.map((e) => [e.line, e.message.match(/no table follows the heading/)?.[0]]), [[1, 'no table follows the heading']]);
+});
+
 const stagedEntry = (field) => new Map([[field, { file: STAGED_DOC, line: 9, adoption: 'cloudlands-fe#1' }]]);
 
 test('comparePair downgrades a staged daemon-first field to a warning', () => {
@@ -729,8 +761,8 @@ const bannerOf = (dir, checkout, pin) => `check-protocol-field-parity: ${path.ba
 // Copy the real entry point and its script dependencies, not a stand-in recipe.
 async function makeRoutingRoot(t) {
   const setup = await makeGitRoot(t);
-  await fs.mkdir(path.join(setup.root, 'scripts'));
-  for (const file of ['Makefile', 'scripts/check-protocol-field-parity.mjs', 'scripts/submodule-ref.mjs']) {
+  await fs.mkdir(path.join(setup.root, 'scripts/lib'), { recursive: true });
+  for (const file of ['Makefile', 'scripts/check-protocol-field-parity.mjs', 'scripts/submodule-ref.mjs', 'scripts/lib/markdown-tables.mjs']) {
     await fs.copyFile(fileURLToPath(new URL(`../${file}`, import.meta.url)), path.join(setup.root, file));
   }
   return setup;

@@ -265,7 +265,7 @@ On Windows or Linux, use `pnpm run dist:win` or `pnpm run dist:linux` instead
 
 To build against a locally built intentd instead, point `INTENTD_BIN` at your
 `cargo build --release` output (or omit it in the monorepo, where
-`scripts/copy-sidecar.cjs` defaults to `packages/intentd/target/release`).
+`scripts/copy-sidecar.cjs` defaults to intentd's `target/release` build output).
 
 The packaged artifacts (`.dmg`/`.zip`, `.exe`, AppImage/`.deb`) will be in `dist-electron/`.
 

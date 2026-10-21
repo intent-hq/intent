@@ -111,7 +111,8 @@ Keep the relevant checks green before opening a PR:
 
 `make gate` runs `make check` followed by the full nextest suite. `make test`
 runs tests only; `make test-changed` selects tests changed against `BASE`
-(default `origin/main`) and falls back to the full suite for build-wide changes.
+(default `origin/main`) and falls back to the full suite for build-wide changes;
+`make test-select E='<nextest filterset>'` runs just the matching tests.
 
 Opt in to smaller local build artifacts with:
 
@@ -124,7 +125,7 @@ make -C packages/intentd test COMPACT=1
 Compact and ordinary gates support **Python 3.10+**. The runner uses a bundled
 TOML 1.1 parser offline, including under `python3 -S`; no parser installation is
 needed. Compact applies to the compiler steps in `check`, `test`,
-`test-changed` and `gate`, and to `clippy` and `lint-sources`.
+`test-changed`, `test-select` and `gate`, and to `clippy` and `lint-sources`.
 It sets `CARGO_INCREMENTAL=0` and dev/test profile `debug=0`, including discovered
 package and build overrides. `strip=none` preserves the existing macOS
 proc-macro workaround. Test selection, changed-test fallback and failure handling
@@ -255,7 +256,7 @@ and remains a failure even through `tee`. Inspect the retained log before retryi
 
 For later runs, reuse the saved `callback_cache` path with `--offline`, assign and
 export its returned fixture path, and rerun preflight. With the fixture variable
-unset, `make test`, `make test-changed` and `make gate` do this themselves for a
+unset, `make test`, `make test-changed`, `make test-select` and `make gate` do this themselves for a
 ready cache under `~/.cache/intent/acp-callback-fixture`, and gate preflight hides
 host `NODE_OPTIONS` (such as a Datadog preload) from its checks. An empty offline cache
 refuses; it never downloads. Corrupt caches, mismatched manifests/Node and injected

@@ -2,10 +2,10 @@
 # under the root cgroup (a dash in the name would nest it). Far lower CPU
 # and IO weight than the cache (Caddy and rclone: 1000, cache-priority.conf) so cache latency
 # stays flat while jobs build; per-container limits come from the supervisor.
+# install.sh sets MemoryMax from the host's RAM in runners.slice.d/memory.conf.
 [Unit]
 Description=GitHub Actions runner containers
 
 [Slice]
 CPUWeight=10
 IOWeight=10
-MemoryMax=116G

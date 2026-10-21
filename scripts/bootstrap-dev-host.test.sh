@@ -360,6 +360,29 @@ expect_line "[missing]  shellcheck: $bin_dir/shellcheck is on PATH but shellchec
 reject_line "[ok]       shellcheck:"
 rm -f "$bin_dir/shellcheck"
 
+# make test HERMETIC=1 needs a working bwrap on Linux: an optional row that
+# probes a real sandbox, never a required gap, and absent off Linux.
+rm -f "$bin_dir/uname"
+write_launcher uname '[ "$1" = -m ] && { echo x86_64; exit 0; }; echo Linux'
+run_doctor
+expect_line "[optional] bubblewrap: not installed (only make test HERMETIC=1 needs it); Debian/Ubuntu: sudo apt-get install bubblewrap"
+gaps_without_bwrap=$(sed -n 's/^Doctor found \([0-9][0-9]*\) required gap(s)\.$/\1/p' "$output")
+write_launcher bwrap '[ "$*" = "--dev-bind / / true" ] && exit 0; exit 1'
+run_doctor
+expect_line "[optional] bubblewrap: installed (make test HERMETIC=1 hides provider CLIs like CI)"
+gaps_with_bwrap=$(sed -n 's/^Doctor found \([0-9][0-9]*\) required gap(s)\.$/\1/p' "$output")
+[[ "$gaps_with_bwrap" == "$gaps_without_bwrap" ]] \
+  || fail "bubblewrap changed the required gap count: $gaps_without_bwrap without vs $gaps_with_bwrap with"
+write_launcher bwrap 'echo "bwrap: setting up uid map: Permission denied" >&2; exit 1'
+run_doctor
+expect_line "[optional] bubblewrap: $bin_dir/bwrap cannot create a sandbox (unprivileged user namespaces blocked?), so make test HERMETIC=1 will fail"
+reject_line "[optional] bubblewrap: installed"
+write_launcher uname '[ "$1" = -m ] && { echo arm64; exit 0; }; echo Darwin'
+run_doctor
+reject_line "bubblewrap:"
+rm -f "$bin_dir/bwrap" "$bin_dir/uname"
+ln -s "$(command -v uname)" "$bin_dir/uname"
+
 # cloudlands-fe lint:workflows pins actionlint exactly; absent, unrunnable, or
 # another version is one required gap each, and only the pin is ready.
 run_doctor

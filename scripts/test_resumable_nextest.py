@@ -2912,6 +2912,69 @@ sys.exit(101 if interrupted == "1" else 0)
                     self.assertTrue((planned / "complete").exists())
 
 
+class FilterSelectionTests(unittest.TestCase):
+    """`make test-select E=EXPR` hands EXPR to the runner as --filterset."""
+
+    # Regex anchors, spaces, parens and an apostrophe must all survive.
+    EXPRESSION = "test(/it's a $/) | (package(intent-acp) & test(=exact name))"
+
+    def parse(self, *argv):
+        captured = []
+        with mock.patch.object(sys, "argv", ["resumable_nextest.py", "--repo-root", ".",
+                                             "--intentd-dir", "intentd", "--cache-dir", "cache",
+                                             "--build-jobs", "1", "--test-threads", "1", *argv]), \
+                mock.patch.object(gate, "run_nextest", side_effect=lambda a: captured.append(a) or 0):
+            self.assertEqual(gate.main(), 0)
+        return captured[0]
+
+    def test_filterset_is_one_workspace_plan_restored_exactly(self):
+        args = self.parse("--label", "test-select", "--filterset", self.EXPRESSION)
+        self.assertEqual(gate.split_plans(args.plan), [["--workspace", "-E", self.EXPRESSION]])
+        self.assertEqual(args.label, "test-select")
+
+    def test_filterset_refuses_plan_and_blank_expression(self):
+        for argv in (["--filterset", "all()", "--plan", "-p alpha"], ["--filterset", ""],
+                     ["--filterset", "  "]):
+            with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()) as stderr:
+                with self.assertRaises(SystemExit) as refused:
+                    self.parse(*argv)
+                self.assertEqual(refused.exception.code, 2)
+                self.assertIn("--filterset", stderr.getvalue())
+
+    def test_filtered_run_prepares_both_fixtures_and_records_its_own_scope(self):
+        plans = [gate.shlex.join(["--workspace", "-E", self.EXPRESSION])]
+        self.assertTrue(gate.needs_callback_fixture(gate.split_plans(plans)))
+        self.assertTrue(gate.needs_transfer_fixture(gate.split_plans(plans)))
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+            callback = {"root": str(root / "callback"), "manifest": "verified"}
+            transfer = {"root": str(root / "transfer")}
+            environment = {k: v for k, v in os.environ.items() if k != "NODE_OPTIONS"}
+            with mock.patch.dict(os.environ, environment, clear=True), \
+                    mock.patch.object(gate, "callback_fixture_identity", return_value=callback), \
+                    mock.patch.object(gate, "transfer_fixture_identity", return_value=transfer):
+                status = harness.execute(make_args(root, plan=plans, label="test-select", base=None))
+            self.assertEqual(status, 0)
+            self.assertEqual(harness.run_commands[0][3:6], ["--workspace", "-E", self.EXPRESSION])
+            self.assertEqual(harness.run_environments[0][gate.CALLBACK_FIXTURE_ENV], callback["root"])
+            self.assertEqual(harness.run_environments[0][gate.TRANSFER_FIXTURE_ENV], transfer["root"])
+            record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(plans))
+            run_record = json.loads((latest_attempt(record_dir) / "run.json").read_text())
+            self.assertEqual((run_record["label"], run_record["exit_code"]), ("test-select", 0))
+            self.assertEqual(run_record["callback_fixture"], callback)
+            # plans/results keep their display join (receipt validation compares
+            # it); the exact argv, spaces inside the filterset included, is here.
+            self.assertEqual(run_record["selections"], gate.split_plans(plans))
+            self.assertEqual(harness.output_lines[-1],
+                             f"[test-select] record: {latest_attempt(record_dir)}")
+
+    def test_unset_fixture_help_lists_test_select_among_preparing_targets(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            help_text = gate.callback_setup_help(Path(temporary))
+        self.assertIn("make test, test-changed, test-select and gate prepare", help_text)
+
+
 class TransferFixtureSelectionTests(unittest.TestCase):
     def test_affected_and_unknown_selectors_require_preflight(self):
         for plans in ([], [["--workspace"]], [["-p", "intent-services"]],
@@ -2950,6 +3013,39 @@ class TransferFixtureSelectionTests(unittest.TestCase):
             self.assertEqual(len(set(keys)), len(keys))
             self.assertEqual(keys[-1], gate.tree_key(
                 root, root, fixture_identity=callbacks[-1], transfer_identity=identities[-1]))
+
+    def test_hermetic_runs_keep_separate_resume_credit(self):
+        """`make test HERMETIC=1` (no provider CLIs) never shares passes with
+        an ordinary run, and ordinary keys are unchanged by the feature."""
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            gate, "worktree_tree", return_value="tree"
+        ), mock.patch.object(gate, "submodule_heads", return_value=[]), mock.patch.object(
+            gate, "required_hash", return_value="hash"
+        ), mock.patch.object(gate, "run", return_value="version"), mock.patch.object(
+            gate, "build_settings", return_value={}
+        ):
+            root = Path(directory)
+            modes = {
+                "ordinary": {},
+                "off": {"INTENT_GATE_HERMETIC": "0", "HIDE_NODE": "1"},
+                "hermetic": {"INTENT_GATE_HERMETIC": "1"},
+                "hide-node": {"INTENT_GATE_HERMETIC": "1", "HIDE_NODE": "1"},
+                "unchecked": {"INTENT_GATE_HERMETIC": "1", "SKIP_SELF_CHECK": "1"},
+            }
+            keys, inputs = {}, {}
+            for mode, env in modes.items():
+                with mock.patch.dict(os.environ, env, clear=True):
+                    keys[mode] = gate.tree_key(root, root)
+                    inputs[mode] = gate.tree_inputs(root, root)
+            self.assertEqual(keys["ordinary"], keys["off"])
+            self.assertNotIn("hermetic", inputs["ordinary"])
+            self.assertEqual(len({keys[m] for m in modes if m != "off"}), 4)
+            self.assertEqual(inputs["hermetic"]["hermetic"],
+                             {"HIDE_NODE": False, "SKIP_SELF_CHECK": False})
+            self.assertEqual(inputs["hide-node"]["hermetic"],
+                             {"HIDE_NODE": True, "SKIP_SELF_CHECK": False})
+            self.assertEqual(inputs["unchecked"]["hermetic"],
+                             {"HIDE_NODE": False, "SKIP_SELF_CHECK": True})
 
 
 class CoverageReconciliationTests(unittest.TestCase):

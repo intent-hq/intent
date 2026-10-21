@@ -19,7 +19,7 @@ HOSTED_ONLY = {
 EXCEPTIONS |= set(HOSTED_ONLY)
 MAINTENANCE = {('m1mac-smoke.yml', 'smoke'), ('provision-m1mac.yml', 'provision'), ('provision-m1mac.yml', 'verify'), ('macos-prune.yml', 'prune'), ('windows-prune.yml', 'prune'),
                ('intent-cache-smoke.yml', 'isolation'), ('intent-cache-smoke.yml', 'fresh'), ('intent-cache-smoke.yml', 'cache-reader'),
-               ('intent-cache-smoke.yml', 'cache-reader-small')}
+               ('intent-cache-smoke.yml', 'cache-reader-small'), ('intent-cache-smoke.yml', 'isolation-xl')}
 
 
 def jobs(text):
@@ -213,6 +213,19 @@ class RunnerPolicy(unittest.TestCase):
             self.assertNotRegex(path.read_text(), r'(?i)tinybox', str(path))
         route = (ROOT / '.github/workflows/runner-route.yml').read_text()
         self.assertIn("linux: ['self-hosted', 'linux', 'x64', 'intent-cache'],", route)
+
+    def test_pool_limits_and_xl_fleet(self):
+        # Pool sizes are org/repo variables, so adding hosts needs no workflow change;
+        # the defaults keep today's routing (no xl slots).
+        route = (ROOT / '.github/workflows/runner-route.yml').read_text()
+        for env, var, default in [('THRESHOLD', 'CI_LINUX_HEAVY_SLOTS', 2), ('XL_THRESHOLD', 'CI_LINUX_XL_SLOTS', 0),
+                                  ('SMALL_THRESHOLD', 'CI_LINUX_SMALL_SLOTS', 6)]:
+            self.assertIn(f"          {env}: ${{{{ vars.{var} || '{default}' }}}}\n", route)
+        self.assertIn("xl: ['self-hosted', 'linux', 'x64', 'intent-cache-xl'],", route)
+        # The Linux kill switch covers xl, and only 16-core jobs may take an xl slot.
+        self.assertIn("xl: process.env.LINUX_RUNNER_DISABLED === 'true',", route)
+        self.assertIn("xl: ['gh-linux-16x'],", route)
+        self.assertLess(route.index("xl: ['gh-linux-16x'],"), route.index("linux: ['gh-linux-8x', 'gh-linux-16x'],"))
 
     def test_policy_rejects_new_cloud_pins(self):
         for label in ['ubuntu-24.04', 'gh-linux-8x', 'ubuntu-latest', '${{ matrix.runner }}', '${{ needs.unrelated.outputs.runner }}']:

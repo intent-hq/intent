@@ -365,3 +365,143 @@ test('each pool fits its own jobs and keeps its own labels', async () => {
   const win = await route({ env: slotEnv([{ key: 'win', label: 'windows-2025' }]) });
   assert.deepEqual(win.slots.win, ['windows-2025']);
 });
+// The xl pool: 16-thread slots that take gh-linux-16x jobs; gh-linux-8x jobs stay on the heavy pool.
+const XL = ['self-hosted', 'linux', 'x64', 'intent-cache-xl'];
+const xlSlot = (busy = false) => runner('Linux', 'X64', busy, ['intent-cache-xl']);
+const xlJob = (id, status = 'in_progress') => ({ id, status, labels: XL, created_at: new Date().toISOString() });
+const todaysFleet = () => [
+  cacheSlot(),
+  cacheSlot(),
+  ...Array.from({ length: 6 }, () => smallSlot()),
+  runner('Windows', 'X64'),
+  runner('macOS', 'ARM64'),
+  runner('Linux', 'ARM64'),
+];
+const XL_ON = { XL_THRESHOLD: '2' };
+const MIXED = [
+  { key: 'coverage', label: 'gh-linux-16x', rust: true, minutes: 13 },
+  { key: 'check', label: 'gh-linux-8x', rust: true, minutes: 15 },
+  { key: 'lint', label: 'ubuntu-24.04' },
+];
+test('gh-linux-16x jobs take xl slots; gh-linux-8x jobs stay on the heavy pool', async () => {
+  const r = await route({ env: slotEnv(MIXED, XL_ON), runners: [...todaysFleet(), xlSlot(), xlSlot()] });
+  assert.deepEqual(r.slots, { coverage: XL, check: CACHE, lint: SMALL });
+  // One xl slot is still free, so unlisted 16-core jobs ride it; 8-core jobs never do.
+  assert.deepEqual(r.runners['gh-linux-16x'], XL);
+  assert.deepEqual(r.runners['gh-linux-8x'], CACHE);
+  assert.deepEqual(JSON.parse(r.outputs.check_labels), CACHE);
+  assert.deepEqual(JSON.parse(r.outputs.linux_labels), CACHE);
+  assert.ok(r.messages.some((m) => m.includes('xl routing: burst=false (queue depth=0 threshold=2 online=2 free=2 granted=1)')));
+  // Callers asking for the 16-core size read the xl slot and report it as self-hosted.
+  const sized = await route({ env: { ...XL_ON, LINUX_SIZE: '16' }, runners: [...todaysFleet(), xlSlot()] });
+  assert.deepEqual(JSON.parse(sized.outputs.linux_labels), XL);
+  assert.equal(sized.outputs.linux_burst, 'false');
+  // 8-core jobs never take an xl slot, even when the heavy pool is full.
+  const heavyFull = await route({
+    env: slotEnv([{ key: 'check', label: 'gh-linux-8x' }], XL_ON),
+    runners: [...todaysFleet(), xlSlot()],
+    jobs: [heavyJob(3), heavyJob(4)],
+  });
+  assert.deepEqual(heavyFull.slots.check, ['gh-linux-8x']);
+  assert.deepEqual(heavyFull.runners['gh-linux-8x'], ['gh-linux-8x']);
+  assert.deepEqual(heavyFull.runners['gh-linux-16x'], XL);
+});
+test('a full xl pool sends gh-linux-16x jobs to free heavy slots, then hosted', async () => {
+  const runners = [...todaysFleet(), xlSlot()];
+  const jobs16 = [
+    { key: 'a', label: 'gh-linux-16x', minutes: 30 },
+    { key: 'b', label: 'gh-linux-16x', minutes: 20 },
+    { key: 'c', label: 'gh-linux-16x', minutes: 10 },
+    { key: 'd', label: 'gh-linux-16x', minutes: 5 },
+  ];
+  const r = await route({ env: slotEnv(jobs16, XL_ON), runners });
+  // xl first (longest job), then the two heavy slots, then hosted.
+  assert.deepEqual(r.slots, { a: XL, b: CACHE, c: CACHE, d: ['gh-linux-16x'] });
+  assert.deepEqual(r.runners['gh-linux-16x'], ['gh-linux-16x']);
+  // xl busy elsewhere: 16-core work overflows to heavy exactly as before xl existed.
+  const busy = await route({ env: XL_ON, runners, jobs: [xlJob(3)] });
+  assert.deepEqual(busy.runners['gh-linux-16x'], CACHE);
+  assert.ok(busy.messages.some((m) => m.includes('xl routing: burst=true (queue depth=1 threshold=1 online=1 free=0)')));
+  // Both pools full: hosted.
+  const full = await route({ env: XL_ON, runners, jobs: [xlJob(3), heavyJob(4), heavyJob(5)] });
+  assert.deepEqual(full.runners['gh-linux-16x'], ['gh-linux-16x']);
+  assert.deepEqual(full.runners['gh-linux-8x'], ['gh-linux-8x']);
+});
+test('xl and heavy capacity and demand are counted per pool label', async () => {
+  // xl slots carry the generic labels too; only intent-cache-xl separates them.
+  const xlOnly = await route({ env: XL_ON, runners: [xlSlot(), xlSlot()] });
+  assert.deepEqual(xlOnly.runners['gh-linux-8x'], ['gh-linux-8x']);
+  assert.deepEqual(xlOnly.runners['gh-linux-16x'], XL);
+  assert.ok(xlOnly.messages.some((m) => m.includes('linux routing: burst=true (no available compatible runner)')));
+  // Running xl jobs do not occupy heavy slots, and running heavy jobs do not occupy xl slots.
+  const r = await route({ env: XL_ON, runners: [...todaysFleet(), xlSlot()], jobs: [xlJob(3), xlJob(4), heavyJob(5)] });
+  assert.ok(r.messages.some((m) => m.includes('linux routing: burst=false (queue depth=1 threshold=2 online=2 free=1)')));
+  assert.ok(r.messages.some((m) => m.includes('xl routing: burst=true (queue depth=2 threshold=1 online=1 free=0)')));
+  // A routed job's labels name exactly one pool.
+  assert.ok(!r.runners['gh-linux-8x'].includes('intent-cache-xl'));
+});
+test('with no xl runners online, or the xl limit at its default of 0, routing is unchanged', async () => {
+  const listed = slotEnv([...MIXED, UNIT]);
+  const baseline = await route({ env: listed, jobs: [heavyJob(9)] });
+  // Today's expectations: both 8x and 16x jobs share the heavy pool.
+  // One heavy slot is free; the longer Rust job takes it and 16-core work goes hosted.
+  assert.deepEqual(baseline.slots.check, CACHE);
+  assert.deepEqual(baseline.slots.coverage, ['gh-linux-16x']);
+  assert.deepEqual(onSlots(baseline, CACHE), ['check']);
+  assert.deepEqual(baseline.runners['gh-linux-16x'], ['gh-linux-16x']);
+  for (const f of [
+    { env: { ...listed, ...XL_ON } },
+    { env: { ...listed, ...XL_ON }, runners: [...todaysFleet(), xlSlot(true)].map((r, i, all) => (i === all.length - 1 ? { ...r, status: 'offline' } : r)) },
+    { env: listed, runners: [...todaysFleet(), xlSlot(), xlSlot()] },
+    { env: { ...listed, XL_THRESHOLD: '0' }, runners: [...todaysFleet(), xlSlot()] },
+  ]) {
+    const r = await route({ ...f, jobs: [heavyJob(9)] });
+    assert.deepEqual(r.slots, baseline.slots);
+    assert.deepEqual(r.runners, baseline.runners);
+    for (const key of ['linux_labels', 'check_labels', 'linux_burst', 'windows_labels', 'windows_burst', 'macos_labels', 'macos_burst'])
+      assert.equal(r.outputs[key], baseline.outputs[key], key);
+    assert.ok(r.messages.some((m) => m.startsWith('xl routing: burst=true')));
+  }
+  const sized = await route({ env: { LINUX_SIZE: '16' } });
+  assert.deepEqual(JSON.parse(sized.outputs.linux_labels), CACHE);
+  assert.equal(sized.outputs.linux_burst, 'false');
+});
+test('the Linux kill switch and probe failures also send xl work hosted', async () => {
+  const runners = [...todaysFleet(), xlSlot(), xlSlot()];
+  for (const f of [
+    { env: slotEnv(MIXED, { ...XL_ON, LINUX_RUNNER_DISABLED: 'true' }), runners },
+    { env: slotEnv(MIXED, XL_ON), runners, error: true },
+    { env: slotEnv(MIXED, XL_ON), runners, unreadable: 'intentd' },
+  ]) {
+    const r = await route(f);
+    assert.deepEqual(r.slots, { coverage: ['gh-linux-16x'], check: ['gh-linux-8x'], lint: ['ubuntu-24.04'] });
+    assert.deepEqual(r.runners['gh-linux-16x'], ['gh-linux-16x']);
+  }
+  const killed = await route({ env: { ...XL_ON, LINUX_RUNNER_DISABLED: 'true' }, runners });
+  assert.ok(killed.messages.some((m) => m.includes('xl routing: burst=true (disabled for maintenance)')));
+});
+test('pool limits come from Actions variables with the old values as defaults', async () => {
+  const env = workflow.split('          SLOT_JOBS:')[0].split('        env:\n').pop();
+  assert.match(env, /^ {10}THRESHOLD: \$\{\{ vars\.CI_LINUX_HEAVY_SLOTS \|\| '2' \}\}$/m);
+  assert.match(env, /^ {10}XL_THRESHOLD: \$\{\{ vars\.CI_LINUX_XL_SLOTS \|\| '0' \}\}$/m);
+  assert.match(env, /^ {10}SMALL_THRESHOLD: \$\{\{ vars\.CI_LINUX_SMALL_SLOTS \|\| '6' \}\}$/m);
+  assert.doesNotMatch(workflow, /THRESHOLD: '\d+'/);
+  // An unset variable reaches the script empty only if the expression is dropped; the script defaults match.
+  const unset = await route({ env: { THRESHOLD: '', XL_THRESHOLD: '', SMALL_THRESHOLD: '' }, runners: [...todaysFleet(), cacheSlot(), xlSlot()] });
+  assert.ok(unset.messages.some((m) => m.includes('linux routing: burst=false (queue depth=0 threshold=2 online=3 free=2)')));
+  assert.ok(unset.messages.some((m) => m.includes('small routing: burst=false (queue depth=0 threshold=6 online=6 free=6)')));
+  assert.ok(unset.messages.some((m) => m.includes('xl routing: burst=true (queue depth=0 threshold=0 online=1 free=0)')));
+  // Raising the variables alone grows the pools: 14 heavy and 2 xl slots.
+  const grown = await route({
+    env: slotEnv([{ key: 'unit', label: 'gh-linux-8x', shards: 16 }, { key: 'cov', label: 'gh-linux-16x', shards: 3 }], { THRESHOLD: '14', XL_THRESHOLD: '2' }),
+    runners: [...Array.from({ length: 14 }, () => cacheSlot()), xlSlot(), xlSlot()],
+  });
+  assert.equal(onSlots(grown, CACHE).length, 14);
+  assert.deepEqual(onSlots(grown, XL), ['cov-1', 'cov-2']);
+  // A malformed variable fails the probe open to hosted.
+  for (const bad of [{ XL_THRESHOLD: 'two' }, { THRESHOLD: '-1' }, { SMALL_THRESHOLD: '1.5' }]) {
+    const r = await route({ env: slotEnv(MIXED, bad), runners: [...todaysFleet(), xlSlot()] });
+    assert.ok(Object.values(r.slots).every((labels) => labels.length === 1 && !labels[0].startsWith('self-hosted')));
+    assert.ok(r.messages.some((m) => m.includes('probe failed (invalid queue threshold)')));
+  }
+});

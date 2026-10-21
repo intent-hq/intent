@@ -457,6 +457,20 @@ test('collectDocumentedMethods reads rows, annotated rows, headings, and skips f
   assert.deepEqual(methodNamesInFirstCell('`model.defaultProvider` unset — falls through'), []);
 });
 
+test('collectDocumentedMethods reads fences the way GitHub does', () => {
+  const row = '| hidden.method | Result. |';
+  for (const doc of [
+    `\`\`\`md\n~~~\n${row}\n\`\`\``,
+    `\`\`\`\`md\n\`\`\`\n${row}\n\`\`\`\``,
+    `\`\`\`\n\`\`\` x\n${row}\n\`\`\``,
+    `~~~\n${row}`,
+  ]) assert.deepEqual(collectDocumentedMethods(doc), [], doc);
+  for (const doc of [
+    '```inline``` code is not a fence.\n\n| shown.method | Result. |',
+    '    ```\n| shown.method | Result. |\n    ```',
+  ]) assert.deepEqual(collectDocumentedMethods(doc), [{ name: 'shown.method', line: doc.split('\n').indexOf('| shown.method | Result. |') + 1 }], doc);
+});
+
 test('Layer 1: explicit field tables do not declare methods or change catalog comparisons', async () => {
   const doc = `${METHODS_DOC}\n| Field | Qualified response |\n| --- | --- |\n| \`details.source\`, \`details.target\` | Confirmed branch identities. |\n`;
   const result = await runChecks(await makeRoot({ methods: { 'fields.md': doc } }));
