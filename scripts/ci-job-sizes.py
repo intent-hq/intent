@@ -43,7 +43,6 @@ DEFAULT_BUDGET = 1000  # GitHub API calls per invocation (--max-api-calls)
 PER_PAGE = 100
 SEARCH_CAP = 1000  # the runs list returns at most this many results per query
 RERUN_MARGIN = timedelta(days=2)  # list runs created this long before the stats, for re-runs
-MAX_CANDIDATES = 30  # runs tried per stats line before it is left unmatched
 RATE_LIMITED = re.compile(r"rate limit|HTTP 429", re.IGNORECASE)
 RUNS_JQ = ("{total: .total_count, runs: [.workflow_runs[] | "
            "{id, status, run_attempt, created_at, run_started_at, updated_at}]} | tojson")
@@ -335,10 +334,10 @@ def run_jobs(gh, run, cache_dir):
 def fetch_jobs(gh, repos, stats, since, until, cache_dir=None, all_runs=False, log=None):
     """The Actions jobs that can match the stats, at the fewest API calls.
 
-    Only runs created in the stats' time span (less RERUN_MARGIN, for re-runs of older runs)
-    are listed. Each stats line is tried against the runs whose lifetime overlaps it, nearest
-    start first, and fetching stops as soon as it matches; one run's jobs often match several
-    lines. With all_runs every listed run in the window is fetched instead (paid hosted jobs
+    Only runs created from RERUN_MARGIN before the window to the last stats line are listed
+    (listing is cheap: a page per 100 runs). Each stats line is tried against every run whose
+    lifetime overlaps it, nearest start first, until it matches or the budget runs out; one
+    run's jobs often match several lines. With all_runs every listed run in the window is fetched instead (paid hosted jobs
     with no stats are then priced too). Running out of budget or rate limit stops early with
     partial results and an error line. Returns (jobs, errors, counts).
     """
@@ -348,9 +347,10 @@ def fetch_jobs(gh, repos, stats, since, until, cache_dir=None, all_runs=False, l
     if not window and not all_runs:
         return [], [], counts
     spans = {id(r): _stat_span(r, until) for r in window}
-    lo = since if all_runs else min(s for s, _ in spans.values())
+    # Re-runs keep their run's creation time, so look back from the window start, not from
+    # the first stats line: a run created on the window's first day may be re-run on its last.
+    lo = since - RERUN_MARGIN
     hi = until if all_runs else max(e for _, e in spans.values())
-    lo -= RERUN_MARGIN
 
     jobs, errors, runs = [], [], []
     by_runner = defaultdict(list)
@@ -397,7 +397,7 @@ def fetch_jobs(gh, repos, stats, since, until, cache_dir=None, all_runs=False, l
             overlapping = [run for run, (r_start, r_end) in spans_by_run if r_start <= end and r_end >= start]
             overlapping.sort(key=lambda run: abs((parse_time(run.get("run_started_at") or run["created_at"])
                                                   - start).total_seconds()))
-            candidates[id(record)] = overlapping[:MAX_CANDIDATES]
+            candidates[id(record)] = overlapping
         unique = {(r["repository"], r["id"]) for c in candidates.values() for r in c}
         log(f"{len(window)} stats lines overlap {len(unique)} runs; fetching nearest first")
         for record in sorted(window, key=lambda r: spans[id(r)][0]):

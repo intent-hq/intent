@@ -41,12 +41,13 @@ problems" and the report still renders.
 The script shares the caller's 5000-calls-an-hour GitHub quota, so it reads as little
 as it can:
 
-- It lists only the runs created during the time span the stats cover (from two days
-  before the first stats line, so re-runs of older runs are found, to the end of the
-  last), one query per day, and stops paging when a day is exhausted.
+- It lists only the runs created from two days before `--since` (so re-runs of older
+  runs are found) to the end of the last stats line, one query per day, and stops
+  paging when a day is exhausted. Listing costs one call per 100 runs.
 - It reads a run's jobs (all attempts) only when the run was alive while a stats line's
   runner was, nearest start first, and stops as soon as that line's `runner_name` is
-  found. One run usually matches several lines. A line is given up after 30 runs.
+  found. One run usually matches several lines. A line with no match keeps trying
+  overlapping runs until they run out or the budget does.
 - A completed run's jobs never change, so they are cached on disk by run id and attempt.
   A second report over the same days reads almost no jobs; a re-run is a new attempt
   and is read again.

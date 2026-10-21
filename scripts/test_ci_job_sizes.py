@@ -433,6 +433,39 @@ class FetchTests(unittest.TestCase):
         self.assertEqual(report["matched"], 20)
         self.assertEqual(report["unmatched"], [])
 
+    def test_a_rerun_of_an_early_run_is_found(self):
+        # Created on the window's first day, re-run on its fifth: only the re-run has stats.
+        rerun = {"id": 99001, "repository": "intent-hq/intentd", "status": "completed", "run_attempt": 2,
+                 "created_at": "2026-10-16T08:00:00Z", "run_started_at": "2026-10-20T12:00:00Z",
+                 "updated_at": "2026-10-20T12:30:00Z"}
+        self.runs.append(rerun)
+        self.jobs_by_run[99001] = [dict(job("rerun-runner", "check", attempt=2, started="2026-10-20T12:02:00Z"),
+                                        run_id=99001)]
+        self.stats = [stat("rerun-runner", started="2026-10-20T12:01:00Z", ended_at="2026-10-20T12:20:00Z")]
+        api = FakeGitHub(self.runs, self.jobs_by_run)
+        _, jobs, errors, _ = self.fetch(api)
+        self.assertEqual(errors, [])
+        report = sizes.build_report(self.stats, jobs, WINDOW_SINCE, WINDOW_UNTIL)
+        self.assertEqual((report["matched"], report["unmatched"]), (1, []))
+
+    def test_a_long_queued_job_is_found_behind_many_nearer_runs(self):
+        # The run started at 08:00, but its job only got a runner at 10:00, when 40 other runs started.
+        slow = {"id": 99002, "repository": "intent-hq/intentd", "status": "completed", "run_attempt": 1,
+                "created_at": "2026-10-19T08:00:00Z", "run_started_at": "2026-10-19T08:00:00Z",
+                "updated_at": "2026-10-19T10:30:00Z"}
+        self.runs.append(slow)
+        self.jobs_by_run[99002] = [dict(job("queued-runner", "check", started="2026-10-19T10:00:30Z"), run_id=99002)]
+        for n in range(40):
+            created = sizes.parse_time("2026-10-19T09:59:00Z") + sizes.timedelta(seconds=3 * n)
+            self.runs.append({"id": 99100 + n, "repository": "intent-hq/cloudlands-fe", "status": "completed",
+                              "run_attempt": 1, "created_at": sizes.iso(created),
+                              "run_started_at": sizes.iso(created), "updated_at": sizes.iso(created + 20 * MINUTE)})
+        self.stats = [stat("queued-runner", started="2026-10-19T10:00:00Z", ended_at="2026-10-19T10:20:00Z")]
+        api = FakeGitHub(self.runs, self.jobs_by_run)
+        _, jobs, errors, _ = self.fetch(api)
+        report = sizes.build_report(self.stats, jobs, WINDOW_SINCE, WINDOW_UNTIL)
+        self.assertEqual((report["matched"], report["unmatched"]), (1, []))
+
     def test_runs_outside_every_stats_line_are_never_read(self):
         api = FakeGitHub(self.runs, self.jobs_by_run)
         self.stats.append(stat("ghost", started="2026-10-18T12:01:00Z", ended_at="2026-10-18T12:05:00Z"))
