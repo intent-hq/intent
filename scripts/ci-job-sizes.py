@@ -13,15 +13,17 @@ conclusion), and prints a markdown report plus one JSON size table per repo.
 Hosts are `intent-cache` plus every infra/runners/hosts/<host>.env whose
 RUNNER_NAME_PREFIX equals <host> (layout templates are skipped), reached as
 `ssh root@<host>` over Tailscale. Jobs come from `gh api` (Actions runs and
-jobs, all attempts) unless --jobs-file is given. Standard library only.
+jobs, all attempts) unless --jobs-file is given: only runs that overlap a stats
+line are read, within --max-api-calls, and completed runs are cached on disk.
+Standard library only.
 See docs/CI_JOB_SIZING.md.
 """
 import argparse
 from collections import Counter, defaultdict
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import json
 import math
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -37,6 +39,15 @@ SATURATED = 0.3  # p90 share of samples at >= 90% of the slot's CPUs
 INSUFFICIENT = "not enough samples"
 DAYS_PER_MONTH = 30
 GH_ATTEMPTS = 4
+DEFAULT_BUDGET = 1000  # GitHub API calls per invocation (--max-api-calls)
+PER_PAGE = 100
+SEARCH_CAP = 1000  # the runs list returns at most this many results per query
+RERUN_MARGIN = timedelta(days=2)  # list runs created this long before the stats, for re-runs
+MAX_CANDIDATES = 30  # runs tried per stats line before it is left unmatched
+RATE_LIMITED = re.compile(r"rate limit|HTTP 429", re.IGNORECASE)
+RUNS_JQ = ("{total: .total_count, runs: [.workflow_runs[] | "
+           "{id, status, run_attempt, created_at, run_started_at, updated_at}]} | tojson")
+JOBS_JQ = "{total: .total_count, jobs: .jobs} | tojson"
 
 # The size classes, smallest first. A job fits a class when its p90 busy cores
 # and p95 peak memory are within the limits (strictly below for "small").
@@ -202,49 +213,210 @@ def collect_stats(hosts, since, run=subprocess.run):
     return records, errors
 
 
-def _gh_lines(argv, run, sleep):
-    """Run `gh api`, retrying failures (GitHub returns transient 5xx); raise after GH_ATTEMPTS."""
-    for attempt in range(1, GH_ATTEMPTS + 1):
-        done = run(argv, capture_output=True, text=True, timeout=600)
-        if done.returncode == 0:
-            return [json.loads(line) for line in done.stdout.splitlines() if line.strip()]
-        if attempt < GH_ATTEMPTS:
-            sleep(2 ** attempt)
-    raise RuntimeError(f"{next(a for a in argv if a.startswith('repos/'))}: {done.stderr.strip()[:300]}")
+class BudgetExceeded(RuntimeError):
+    """The --max-api-calls budget is spent."""
 
 
-def fetch_jobs(repos, since, run=subprocess.run, sleep=time.sleep):
-    """Every job attempt of every run created since `since` (minus two days for re-runs of older runs).
+class RateLimited(RuntimeError):
+    """GitHub refused the call for the account's rate limit."""
 
-    Returns (jobs, errors); a run whose jobs cannot be read is an error line, not a failure.
-    """
-    created = (since - timedelta(days=2)).strftime("%Y-%m-%d")
-    jobs, errors = [], []
-    for repo in repos:
+
+class GitHub:
+    """`gh api` with a call budget. Every attempt counts; /rate_limit is free and not counted."""
+
+    def __init__(self, budget=DEFAULT_BUDGET, token=None, run=subprocess.run, sleep=time.sleep):
+        self.budget, self.calls, self.run, self.sleep = budget, 0, run, sleep
+        self.env = dict(os.environ, GH_TOKEN=token) if token else None
+
+    def _exec(self, argv):
+        return self.run(argv, capture_output=True, text=True, timeout=600, env=self.env)
+
+    def rate_limit(self):
+        """The core limit as {limit, remaining, reset}, or None when it cannot be read."""
         try:
-            runs = _gh_lines(["gh", "api", "--paginate", "-X", "GET", f"repos/{repo}/actions/runs",
-                              "-f", f"created=>={created}", "-f", "per_page=100",
-                              "--jq", ".workflow_runs[] | {id} | tojson"], run, sleep)
-        except RuntimeError as error:
-            errors.append(f"{repo}: listing runs failed: {error}")
-            continue
+            done = self._exec(["gh", "api", "rate_limit", "--jq", ".resources.core | tojson"])
+            return json.loads(done.stdout) if done.returncode == 0 else None
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            return None
 
-        def run_jobs(run_id, repo=repo):
+    def get(self, path, params, jq):
+        """One GET; retry transient failures (each attempt is a call); raise after GH_ATTEMPTS."""
+        argv = ["gh", "api", "-X", "GET", path]
+        for key, value in params.items():
+            argv += ["-f", f"{key}={value}"]
+        argv += ["--jq", jq]
+        for attempt in range(1, GH_ATTEMPTS + 1):
+            if self.calls >= self.budget:
+                raise BudgetExceeded(f"API budget of {self.budget} calls reached")
+            self.calls += 1
+            done = self._exec(argv)
+            if done.returncode == 0:
+                return [json.loads(line) for line in done.stdout.splitlines() if line.strip()]
+            if RATE_LIMITED.search(done.stderr):
+                raise RateLimited(f"{path}: {done.stderr.strip()[:300]}")
+            if attempt < GH_ATTEMPTS:
+                self.sleep(2 ** attempt)
+        raise RuntimeError(f"{path}: {done.stderr.strip()[:300]}")
+
+
+def default_cache_dir():
+    base = os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache"
+    return Path(base) / "ci-job-sizes"
+
+
+def _stat_span(record, until):
+    start = parse_time(record["started_at"])
+    end = parse_time(record["ended_at"]) if record.get("ended_at") else until
+    return start, max(start, end)
+
+
+def _run_span(run, until):
+    start = parse_time(run.get("created_at") or run["run_started_at"])
+    end = parse_time(run["updated_at"]) if run.get("status") == "completed" and run.get("updated_at") else until
+    return start, max(start, end)
+
+
+def list_runs(gh, repo, lo, hi):
+    """Runs created in [lo, hi], one query per day (the API returns at most 1000 per query)."""
+    runs, errors, chunk = {}, [], lo
+    while chunk <= hi:
+        chunk_end = min(chunk + timedelta(days=1), hi)
+        query = f"{iso(chunk)}..{iso(chunk_end)}"
+        page, seen = 1, 0
+        while True:
+            found = gh.get(f"repos/{repo}/actions/runs", {"created": query, "per_page": PER_PAGE, "page": page},
+                           RUNS_JQ)
+            body = found[0] if found else {"total": 0, "runs": []}
+            for run in body["runs"]:
+                runs[run["id"]] = dict(run, repository=repo)
+            seen += len(body["runs"])
+            if len(body["runs"]) < PER_PAGE or seen >= body["total"]:
+                break
+            if seen >= SEARCH_CAP:
+                errors.append(f"{repo}: more than {SEARCH_CAP} runs created in {query}; later ones are missing")
+                break
+            page += 1
+        if chunk_end >= hi:
+            break
+        chunk = chunk_end
+    return list(runs.values()), errors
+
+
+def run_jobs(gh, run, cache_dir):
+    """Every job attempt of a run. A completed run's jobs never change, so they are cached by
+    run id and attempt (a re-run is a new attempt and a cache miss)."""
+    repo = run["repository"]
+    cached = None
+    if cache_dir and run.get("status") == "completed":
+        cached = Path(cache_dir) / repo.replace("/", "__") / f"{run['id']}-{run.get('run_attempt') or 1}.json"
+        try:
+            return json.loads(cached.read_text()), True
+        except (OSError, ValueError):
+            pass
+    jobs, page = [], 1
+    while True:
+        found = gh.get(f"repos/{repo}/actions/runs/{run['id']}/jobs",
+                       {"filter": "all", "per_page": PER_PAGE, "page": page}, JOBS_JQ)
+        body = found[0] if found else {"total": 0, "jobs": []}
+        jobs += body["jobs"]
+        if len(body["jobs"]) < PER_PAGE or len(jobs) >= body["total"]:
+            break
+        page += 1
+    for job in jobs:
+        job["repository"] = repo
+    if cached:
+        cached.parent.mkdir(parents=True, exist_ok=True)
+        partial = cached.with_suffix(".tmp")
+        partial.write_text(json.dumps(jobs))
+        partial.replace(cached)
+    return jobs, False
+
+
+def fetch_jobs(gh, repos, stats, since, until, cache_dir=None, all_runs=False, log=None):
+    """The Actions jobs that can match the stats, at the fewest API calls.
+
+    Only runs created in the stats' time span (less RERUN_MARGIN, for re-runs of older runs)
+    are listed. Each stats line is tried against the runs whose lifetime overlaps it, nearest
+    start first, and fetching stops as soon as it matches; one run's jobs often match several
+    lines. With all_runs every listed run in the window is fetched instead (paid hosted jobs
+    with no stats are then priced too). Running out of budget or rate limit stops early with
+    partial results and an error line. Returns (jobs, errors, counts).
+    """
+    log = log or (lambda message: None)
+    window = [r for r in stats if r.get("started_at") and since <= parse_time(r["started_at"]) < until]
+    counts = {"runs_listed": 0, "runs_fetched": 0, "cache_hits": 0}
+    if not window and not all_runs:
+        return [], [], counts
+    spans = {id(r): _stat_span(r, until) for r in window}
+    lo = since if all_runs else min(s for s, _ in spans.values())
+    hi = until if all_runs else max(e for _, e in spans.values())
+    lo -= RERUN_MARGIN
+
+    jobs, errors, runs = [], [], []
+    by_runner = defaultdict(list)
+    fetched = set()
+
+    def fetch(run):
+        found, hit = run_jobs(gh, run, cache_dir)
+        fetched.add((run["repository"], run["id"]))
+        counts["runs_fetched"] += 1
+        counts["cache_hits"] += hit
+        for job in found:
+            jobs.append(job)
+            if job.get("runner_name"):
+                by_runner[job["runner_name"]].append(job)
+
+    try:
+        for repo in repos:
             try:
-                return _gh_lines(["gh", "api", "--paginate",
-                                  f"repos/{repo}/actions/runs/{run_id}/jobs?filter=all&per_page=100",
-                                  "--jq", ".jobs[] | tojson"], run, sleep), None
+                found, problems = list_runs(gh, repo, lo, hi)
             except RuntimeError as error:
-                return [], f"{repo}: {error}"
+                if isinstance(error, (BudgetExceeded, RateLimited)):
+                    raise
+                errors.append(f"{repo}: listing runs failed: {error}")
+                continue
+            runs += found
+            errors += problems
+        counts["runs_listed"] = len(runs)
+        if all_runs:
+            todo = [r for r in runs if _run_span(r, until)[1] >= since and _run_span(r, until)[0] < until]
+            log(f"fetching the jobs of {len(todo)} runs (cached ones cost nothing)")
+            for run in todo:
+                try:
+                    fetch(run)
+                except RuntimeError as error:
+                    if isinstance(error, (BudgetExceeded, RateLimited)):
+                        raise
+                    errors.append(f"{run['repository']}: {error}")
+            return jobs, errors, counts
 
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            for found, error in pool.map(run_jobs, [r["id"] for r in runs]):
-                if error:
-                    errors.append(error)
-                for job in found:
-                    job["repository"] = repo
-                    jobs.append(job)
-    return jobs, errors
+        spans_by_run = [(run, _run_span(run, until)) for run in runs]
+        candidates = {}
+        for record in window:
+            start, end = spans[id(record)]
+            overlapping = [run for run, (r_start, r_end) in spans_by_run if r_start <= end and r_end >= start]
+            overlapping.sort(key=lambda run: abs((parse_time(run.get("run_started_at") or run["created_at"])
+                                                  - start).total_seconds()))
+            candidates[id(record)] = overlapping[:MAX_CANDIDATES]
+        unique = {(r["repository"], r["id"]) for c in candidates.values() for r in c}
+        log(f"{len(window)} stats lines overlap {len(unique)} runs; fetching nearest first")
+        for record in sorted(window, key=lambda r: spans[id(r)][0]):
+            for run in candidates[id(record)]:
+                if record["runner_name"] in by_runner:
+                    break
+                if (run["repository"], run["id"]) in fetched:
+                    continue
+                try:
+                    fetch(run)
+                except RuntimeError as error:
+                    if isinstance(error, (BudgetExceeded, RateLimited)):
+                        raise
+                    fetched.add((run["repository"], run["id"]))
+                    errors.append(f"{run['repository']}: {error}")
+    except (BudgetExceeded, RateLimited) as error:
+        errors.append(f"stopped early, results are partial: {error}. Fetched runs are cached, so a later "
+                      "run resumes cheaply; raise --max-api-calls or wait for the rate limit to reset.")
+    return jobs, errors, counts
 
 
 # ---- report -----------------------------------------------------------------
@@ -454,7 +626,7 @@ SIZE_CLASSES_JSON = [
 
 # ---- CLI --------------------------------------------------------------------
 
-def main(argv=None):
+def main(argv=None, run=subprocess.run, sleep=time.sleep):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--from-file", action="append", metavar="JSONL",
@@ -469,6 +641,14 @@ def main(argv=None):
     parser.add_argument("--save-jobs", metavar="JSON", help="write the fetched jobs here")
     parser.add_argument("--out-dir", help="write ci-job-sizes.md and <owner>__<repo>.json here")
     parser.add_argument("--format", choices=["md", "json"], default="md", help="stdout format")
+    parser.add_argument("--max-api-calls", type=int, default=DEFAULT_BUDGET, metavar="N",
+                        help=f"stop after N GitHub API calls (default {DEFAULT_BUDGET})")
+    parser.add_argument("--token", help="GitHub token for gh (default: GH_TOKEN or gh's own login)")
+    parser.add_argument("--cache-dir", help="run jobs cache (default: $XDG_CACHE_HOME/ci-job-sizes)")
+    parser.add_argument("--no-cache", action="store_true", help="neither read nor write the jobs cache")
+    parser.add_argument("--all-runs", action="store_true",
+                        help="fetch every run in the window, not only those that can match a stats line "
+                             "(prices hosted-only jobs too; costs more calls)")
     args = parser.parse_args(argv)
 
     until = parse_time(args.until) if args.until else datetime.now(timezone.utc).replace(microsecond=0)
@@ -491,8 +671,27 @@ def main(argv=None):
         jobs = json.loads(Path(args.jobs_file).read_text())
     else:
         repos = [r for r in (args.repos or "").split(",") if r] or repos_from_configs()
-        jobs, problems = fetch_jobs(repos, since)
+        gh = GitHub(args.max_api_calls, args.token or None, run=run, sleep=sleep)
+        limit = gh.rate_limit()
+        if limit is not None:
+            reset = iso(datetime.fromtimestamp(limit["reset"], timezone.utc))
+            if limit["remaining"] < len(repos):
+                print(f"error: only {limit['remaining']} of {limit['limit']} GitHub API calls left until {reset}; "
+                      "not starting. Wait for the reset or pass another token (--token / GH_TOKEN).",
+                      file=sys.stderr)
+                return 1
+            if limit["remaining"] < gh.budget:
+                print(f"note: budget lowered to the {limit['remaining']} calls left until {reset}", file=sys.stderr)
+                gh.budget = limit["remaining"]
+        cache = None if args.no_cache else Path(args.cache_dir) if args.cache_dir else default_cache_dir()
+        jobs, problems, counts = fetch_jobs(gh, repos, stats, since, until, cache_dir=cache,
+                                            all_runs=args.all_runs, log=lambda m: print(m, file=sys.stderr))
         errors += problems
+        after = gh.rate_limit()
+        left = f"; {after['remaining']}/{after['limit']} left on the token" if after else ""
+        print(f"GitHub API calls used: {gh.calls} of {gh.budget} budget ({counts['runs_listed']} runs listed, "
+              f"{counts['runs_fetched']} runs' jobs read, {counts['cache_hits']} from cache){left}",
+              file=sys.stderr)
     if args.save_jobs:
         Path(args.save_jobs).write_text(json.dumps(jobs))
 
