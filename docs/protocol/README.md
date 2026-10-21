@@ -274,13 +274,19 @@ model` tooltip), with no warning, fallback action, model mutation or toast.
 ### Gate rollout
 
 During the desktop-control rollout, retain the original `public-sessions.json`
-byte-for-byte for daemon harnesses without a version declaration. The feature
-harness commits `packages/intentd/scripts/transfer-selection-expectation.json` containing exactly
-`{"version":"desktop-control-v1"}` and uses the shared validator's
-`resolveGoldenPath({ fixtureRoot, intentdRoot })` to select
-`public-sessions.desktop-control-v1.json`. The declaration selects a fixed known
-filename; malformed or unknown versions fail. There is no environment/path
-override, payload-based selection, or fallback when a selected artifact is missing.
+byte-for-byte for daemon harnesses without a version declaration. A daemon
+harness opts into the desktop artifact by committing intentd's
+transfer-selection-expectation.json declaration (in intentd's `scripts/`
+directory) containing exactly `{"version":"desktop-control-v1"}`; the
+desktop-control harness,
+[intent-hq/intentd#2245](https://github.com/intent-hq/intentd/pull/2245),
+introduces it. The shared validator's
+`resolveGoldenPath({ fixtureRoot, intentdRoot })` selects
+`public-sessions.desktop-control-v1.json` when the checked-out intentd has the
+declaration and the legacy `public-sessions.json` when it does not. The
+declaration selects a fixed known filename; malformed or unknown versions fail.
+There is no environment/path override, payload-based selection, or fallback when
+a selected artifact is missing.
 Both artifacts must be real clean-source generator output; neither may be edited
 by hand. Regenerate the selected artifact using the daemon harness's
 `scripts/test-transfer-selection-contract.sh --regenerate`, then export again
