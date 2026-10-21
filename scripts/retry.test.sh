@@ -133,6 +133,21 @@ expect_status 127 "command not found"
 expect_sleeps "" "command not found"
 expect_output "not retrying (exit 127, command not runnable)" "command not found"
 
+# A command killed or interrupted by a signal (Ctrl-C, a cancelled job) is
+# not retried.
+for signal_status in 130 143; do
+  FLAKY_FAILURES=99 FLAKY_STATUS=$signal_status run_retry -- flaky
+  expect_status "$signal_status" "signal exit $signal_status"
+  expect_calls 1 "signal exit $signal_status"
+  expect_sleeps "" "signal exit $signal_status"
+  expect_output "not retrying (exit $signal_status, interrupted by a signal): flaky" "signal exit $signal_status"
+done
+
+# The bounds are inclusive.
+FLAKY_FAILURES=99 run_retry --attempts 99 --delay 3600 -- flaky
+expect_status 1 "upper bounds"
+expect_calls 99 "upper bounds"
+
 # GitHub Actions annotations.
 FLAKY_FAILURES=99 GITHUB_ACTIONS=true run_retry --attempts 2 --delay 1 -- flaky
 expect_status 1 "actions annotations"
@@ -140,7 +155,8 @@ expect_output "::warning::retry.sh: attempt 1/2 failed (exit 1), retrying in 1s:
 expect_output "::error::retry.sh: giving up after 2 attempt(s), last exit 1: flaky" "actions annotations"
 
 # Argument validation fails fast with exit 2 and never runs the command.
-for bad in "--attempts 0" "--attempts -1" "--attempts x" "--attempts=" "--delay -5" "--delay 1.5" "--bogus"; do
+for bad in "--attempts 0" "--attempts -1" "--attempts x" "--attempts=" "--attempts 05" "--attempts 100" \
+  "--delay -5" "--delay 1.5" "--delay 08" "--delay 010" "--delay 3601" "--delay 99999999999999999999" "--bogus"; do
   # shellcheck disable=SC2086 # word-split the option pair on purpose
   run_retry $bad -- flaky
   expect_status 2 "invalid arguments '$bad'"

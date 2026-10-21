@@ -14,10 +14,12 @@
 # one (15s, then 30s), the schedule ci.yml's apt retries use. A failed attempt
 # logs a warning; after the last one the error names the command and attempt
 # count, and the script exits with the command's last exit status. Exit 126/127
-# (not executable / not found) is never retried. Under GitHub Actions the
+# (not executable / not found) and exits above 128 (killed or interrupted by a
+# signal, e.g. Ctrl-C or a cancelled job) are never retried. Under GitHub Actions the
 # messages are ::warning:: / ::error:: annotations. Bad arguments exit 2.
 # RETRY_DELAY sets the default base delay (an explicit --delay wins); the
-# shell suites set it to 0 so retries cost no wall time.
+# shell suites set it to 0 so retries cost no wall time. Attempts are 1-99 and
+# the delay 0-3600 seconds, as plain decimals (no leading zeros).
 #
 # Bash 3.2 compatible: bootstrap-dev-host.sh runs it on stock macOS bash.
 
@@ -83,12 +85,15 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# Plain decimals only: a leading zero would make $(( )) read octal (or fail on
+# 08/09), and the bounds keep the arithmetic far from overflow.
 case "$attempts" in
-  '' | *[!0-9]* | 0*) usage_error "--attempts must be a positive integer, got '$attempts'" ;;
+  '' | *[!0-9]* | 0* | ???*) usage_error "--attempts must be an integer from 1 to 99, got '$attempts'" ;;
 esac
 case "$delay" in
-  '' | *[!0-9]*) usage_error "--delay must be a non-negative integer, got '$delay'" ;;
+  '' | *[!0-9]* | 0?* | ?????*) usage_error "--delay must be an integer from 0 to 3600, got '$delay'" ;;
 esac
+[ "$delay" -le 3600 ] || usage_error "--delay must be an integer from 0 to 3600, got '$delay'"
 [ $# -gt 0 ] || usage_error "no command given"
 
 command_text="$*"
@@ -99,6 +104,10 @@ while :; do
   [ "$status" -ne 0 ] || exit 0
   if [ "$status" -eq 126 ] || [ "$status" -eq 127 ]; then
     report error "not retrying (exit $status, command not runnable): $command_text"
+    exit "$status"
+  fi
+  if [ "$status" -gt 128 ]; then
+    report error "not retrying (exit $status, interrupted by a signal): $command_text"
     exit "$status"
   fi
   if [ "$attempt" -ge "$attempts" ]; then

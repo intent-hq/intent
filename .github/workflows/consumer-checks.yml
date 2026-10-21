@@ -216,7 +216,7 @@ jobs:
           # intent-cache runner images ship the headers and have no sudo.
           if ! command -v pkg-config >/dev/null || ! pkg-config --exists openssl; then
             scripts/retry.sh -- sudo apt-get update -qq
-            sudo apt-get install -y --no-install-recommends libssl-dev pkg-config
+            scripts/retry.sh -- sudo apt-get install -y --no-install-recommends libssl-dev pkg-config
           fi
           corepack enable
 
