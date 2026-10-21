@@ -180,22 +180,29 @@ function endsTable(rest) {
  * unquoted line be a lazy continuation (GFM 5.1).
  */
 function quoteStep(quote, content) {
-  if (quote.fence) {
-    if (closes(indentOf(content).rest, quote.fence) && indentOf(content).col <= 3) quote.fence = null;
-    quote.inner = 'other';
-    return;
-  }
   const { col, rest } = indentOf(content);
-  if (isBlank(content)) quote.inner = 'other';
-  else if (col >= 4) quote.inner = quote.inner === 'para' ? 'para' : 'other';
-  else if (openerOf(rest)) {
-    quote.fence = openerOf(rest);
-    quote.inner = 'other';
-  } else if (atxText(rest) || THEMATIC_RE.test(rest) || htmlStart(rest, { canInterruptParagraph: quote.inner !== 'para' })
-    || (quote.inner === 'para' && SETEXT_RE.test(rest))) quote.inner = 'other';
-  else if (quote.inner === 'table') quote.inner = splitRow(rest).length > 0 ? 'table' : 'para';
-  else if (quote.inner === 'para' && delimiterAt(content, 0)) quote.inner = 'table';
-  else quote.inner = 'para';
+  const set = (inner) => {
+    quote.inner = inner;
+    if (inner === 'para') quote.last = content;
+  };
+  if (quote.fence) {
+    if (col <= 3 && closes(rest, quote.fence)) quote.fence = null;
+    return set('other');
+  }
+  if (isBlank(content)) return set('other');
+  if (col >= 4) return set(quote.inner === 'para' ? 'para' : 'other');
+  const opener = openerOf(rest);
+  if (opener) {
+    quote.fence = opener;
+    return set('other');
+  }
+  if (atxText(rest) || THEMATIC_RE.test(rest) || htmlStart(rest, { canInterruptParagraph: quote.inner !== 'para' })
+    || (quote.inner === 'para' && SETEXT_RE.test(rest))) return set('other');
+  if (quote.inner === 'table' && splitRow(rest).length > 0) return set('table');
+  // GFM 4.10: the quoted paragraph's last line is a header only when the cell counts match; otherwise it stays prose.
+  const header = quote.inner === 'para' ? splitRow(quote.last) : [];
+  if (header.length > 0 && delimiterAt(content, 0) && splitRow(content).length === header.length) return set('table');
+  return set('para');
 }
 
 /**
@@ -323,6 +330,7 @@ export function scanMarkdown(text) {
     if (col < base()) {
       if (inParagraph && !interruptsParagraph(rest)) {
         kinds[i] = state === 'quote' ? 'quote' : 'paragraph';
+        if (state === 'quote') quote.last = line;
         continue;
       }
       while (items.length > 0 && col < base()) items.pop();
@@ -333,6 +341,7 @@ export function scanMarkdown(text) {
     if (col - b >= 4) {
       if (state === 'quote') {
         kinds[i] = 'quote';
+        quote.last = line;
         continue;
       }
       // Indented code cannot interrupt a paragraph; there the line is paragraph text (and may be a header).
@@ -345,12 +354,14 @@ export function scanMarkdown(text) {
       }
     } else if (rest.startsWith('>')) {
       kinds[i] = 'quote';
-      quote ??= { inner: 'other', fence: null };
+      quote ??= { inner: 'other', fence: null, last: '' };
       quoteStep(quote, rest.slice(1).replace(/^ /, ''));
       state = quote.inner === 'para' ? 'quote' : 'none';
       continue;
     } else if (state === 'quote' && !interruptsParagraph(rest)) {
+      // A lazy line continues the quoted paragraph and becomes its last line.
       kinds[i] = 'quote';
+      quote.last = line;
       continue;
     } else {
       quote = null;

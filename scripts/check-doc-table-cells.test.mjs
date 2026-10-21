@@ -114,6 +114,10 @@ test('a fence opened on a list item line hides its rows and closes at its indent
   assert.deepEqual(mismatchedRows(text), [{ line: 9, cells: 3, header: 2, headerLine: 7 }]);
 });
 
+test('lazy lines after a quoted header with a mismatched delimiter are quoted prose, not a table', () => {
+  assert.deepEqual(mismatchedRows(['> | a | b |', '> |---|', '| x | y |', '|---|---|', '| 1 | 2 | 3 |'].join('\n')), []);
+});
+
 test('the trailing pipe is optional on every row', () => {
   assert.deepEqual(mismatchedRows(['| a | b', '| --- | ---', '| 1 | 2 |', '| 3 | 4'].join('\n')), []);
 });
