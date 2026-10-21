@@ -609,6 +609,11 @@ test-scripts: ## Run the Python script unit tests (Python 3.11+, no submodules n
 # above); `make test NEXTEST_SHOW_PROGRESS=bar` restores nextest's.
 # Apply the shared caller policy before the runner fingerprints resume evidence.
 # Changed/coverage scripts apply this same wrapper at their test boundaries.
+# test-select reuses this exact invocation, so its knobs cannot drift from test.
+RUST_TEST_RUNNER = bash "$(INTENTD_DIR)/scripts/with-test-policy.sh" $(HERMETIC_WRAP) \
+	python3 scripts/resumable_nextest.py --repo-root "$(CURDIR)" --intentd-dir "$(INTENTD_DIR)" \
+	--cache-dir "$(GATE_CACHE_DIR)" --resume "$(RESUME)" --force "$(GATE_FORCE)" \
+	--no-fail-fast "$(NO_FAIL_FAST)" --build-jobs "$(BUILD_JOBS)" --test-threads "$(TEST_THREADS)"
 test-intentd: ensure-intentd-submodule | check-transfer-fixture
 	@python3 scripts/check_watch_capacity.py --quiet
 	@cargo nextest --version >/dev/null 2>&1 || { \
@@ -616,15 +621,7 @@ test-intentd: ensure-intentd-submodule | check-transfer-fixture
 		exit 1; \
 	}
 	@$(HERMETIC_PREFLIGHT)
-	@bash "$(INTENTD_DIR)/scripts/with-test-policy.sh" $(HERMETIC_WRAP) python3 scripts/resumable_nextest.py \
-		--repo-root "$(CURDIR)" \
-		--intentd-dir "$(INTENTD_DIR)" \
-		--cache-dir "$(GATE_CACHE_DIR)" \
-		--resume "$(RESUME)" \
-		--force "$(GATE_FORCE)" \
-		--no-fail-fast "$(NO_FAIL_FAST)" \
-		--build-jobs "$(BUILD_JOBS)" \
-		--test-threads "$(TEST_THREADS)"
+	@$(RUST_TEST_RUNNER)
 
 # Pre-queue gate when the full suite is impractical: runs only the nextest
 # targets the intentd checkout changed vs BASE (default origin/main). The
@@ -675,11 +672,17 @@ test-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd br
 # in bulk) and writes a gate-run record of its own (RESUME=1, GATE_FORCE=1,
 # NO_FAIL_FAST=1, HERMETIC=1 and COMPACT=1 apply unchanged). $(value E) keeps
 # `$` (regex anchors) literal; apostrophes are escaped for the single-quoted
-# hand-off below, so E reaches nextest byte-for-byte.
+# hand-off below, so E reaches nextest byte-for-byte. E must come from the make
+# command line (a stray exported E is not a selection) and is unexported, so it
+# never reaches Cargo or test processes.
 TEST_SELECT_E = $(subst ','\'',$(value E))
+unexport E
 ifneq ($(filter test-select,$(MAKECMDGOALS)),)
+ifneq ($(origin E),command line)
+$(error make test-select needs E='<nextest filterset>' on the make command line, e.g. make test-select E='test(/repository_selection/)')
+endif
 ifeq ($(strip $(value E)),)
-$(error make test-select needs E='<nextest filterset>', e.g. make test-select E='test(/repository_selection/)')
+$(error make test-select needs a non-empty E='<nextest filterset>', e.g. make test-select E='test(/repository_selection/)')
 endif
 endif
 
@@ -690,17 +693,7 @@ test-select: ensure-intentd-submodule | check-transfer-fixture ## Run only the R
 		exit 1; \
 	}
 	@$(HERMETIC_PREFLIGHT)
-	@bash "$(INTENTD_DIR)/scripts/with-test-policy.sh" $(HERMETIC_WRAP) python3 scripts/resumable_nextest.py \
-		--repo-root "$(CURDIR)" \
-		--intentd-dir "$(INTENTD_DIR)" \
-		--cache-dir "$(GATE_CACHE_DIR)" \
-		--resume "$(RESUME)" \
-		--force "$(GATE_FORCE)" \
-		--no-fail-fast "$(NO_FAIL_FAST)" \
-		--build-jobs "$(BUILD_JOBS)" \
-		--test-threads "$(TEST_THREADS)" \
-		--label test-select \
-		--filterset '$(TEST_SELECT_E)'
+	@$(RUST_TEST_RUNNER) --label test-select --filterset '$(TEST_SELECT_E)'
 
 # Local equivalent of intentd's pull_request `coverage-changed` CI job: the
 # same changed-tests.sh selection as test-changed, run under the cargo-llvm-cov

@@ -2950,7 +2950,9 @@ class FilterSelectionTests(unittest.TestCase):
             harness = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
             callback = {"root": str(root / "callback"), "manifest": "verified"}
             transfer = {"root": str(root / "transfer")}
-            with mock.patch.object(gate, "callback_fixture_identity", return_value=callback), \
+            environment = {k: v for k, v in os.environ.items() if k != "NODE_OPTIONS"}
+            with mock.patch.dict(os.environ, environment, clear=True), \
+                    mock.patch.object(gate, "callback_fixture_identity", return_value=callback), \
                     mock.patch.object(gate, "transfer_fixture_identity", return_value=transfer):
                 status = harness.execute(make_args(root, plan=plans, label="test-select", base=None))
             self.assertEqual(status, 0)
@@ -2961,14 +2963,16 @@ class FilterSelectionTests(unittest.TestCase):
             run_record = json.loads((latest_attempt(record_dir) / "run.json").read_text())
             self.assertEqual((run_record["label"], run_record["exit_code"]), ("test-select", 0))
             self.assertEqual(run_record["callback_fixture"], callback)
+            # plans/results keep their display join (receipt validation compares
+            # it); the exact argv, spaces inside the filterset included, is here.
+            self.assertEqual(run_record["selections"], gate.split_plans(plans))
             self.assertEqual(harness.output_lines[-1],
                              f"[test-select] record: {latest_attempt(record_dir)}")
 
-    def test_unset_fixture_help_points_to_test_select(self):
+    def test_unset_fixture_help_lists_test_select_among_preparing_targets(self):
         with tempfile.TemporaryDirectory() as temporary:
             help_text = gate.callback_setup_help(Path(temporary))
-        self.assertIn("make test-select E='<nextest filterset>'", help_text)
-        self.assertIn("not raw cargo nextest", help_text)
+        self.assertIn("make test, test-changed, test-select and gate prepare", help_text)
 
 
 class TransferFixtureSelectionTests(unittest.TestCase):

@@ -296,8 +296,6 @@ def callback_setup_help(intentd_dir: Path) -> str:
         "Complete checkout, tools and gate recipe: CONTRIBUTING.md#linux-x64-callback-gates",
         "With the variable unset, make test, test-changed, test-select and gate prepare a ready cache",
         f"under {callback_cache_dir()} offline; a rejected cache must be rebuilt, never edited.",
-        "For a few tests, run make test-select E='<nextest filterset>' from the monorepo root,",
-        "not raw cargo nextest, which runs these tests with the variable unset.",
         "No downloads or repairs were attempted. On that Linux host, prepare explicitly, then retry",
         "(env -u NODE_OPTIONS clears host Node preloads, which the prepare script refuses):",
     ]

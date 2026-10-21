@@ -18,7 +18,8 @@ ROOT = Path(__file__).resolve().parents[1]
 # Records every runner invocation (fixture preflights included) as JSON lines.
 RUNNER_STUB = """import json, os, sys
 with open(os.environ["TEST_SELECT_LOG"], "a") as log:
-    log.write(json.dumps({"runner": sys.argv[1:], "policy": os.environ.get("POLICY_WRAPPED")}) + "\\n")
+    log.write(json.dumps({"runner": sys.argv[1:], "policy": os.environ.get("POLICY_WRAPPED"),
+                          "e": os.environ.get("E")}) + "\\n")
 """
 POLICY_STUB = """#!/usr/bin/env bash
 POLICY_WRAPPED=1 exec "$@"
@@ -89,20 +90,24 @@ class TestSelectTargetTests(unittest.TestCase):
         self.assertNotIn("--plan", argv)
         self.assertEqual(call["policy"], "1", "the runner must run under with-test-policy.sh")
 
-    def test_environment_filterset_is_accepted(self):
-        result, calls = self.run_make(env={"E": "test(/repository_selection/)"})
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        argv = self.selection_call(calls)["runner"]
-        self.assertEqual(argv[argv.index("--filterset") + 1], "test(/repository_selection/)")
-
-    def test_missing_or_blank_filterset_is_refused_before_anything_runs(self):
-        for arguments in ((), ("E=",), ("E=   ",)):
-            with self.subTest(arguments=arguments):
-                result, calls = self.run_make(*arguments)
+    def test_missing_blank_or_exported_filterset_is_refused_before_anything_runs(self):
+        cases = (((), None, "on the make command line"), (("E=",), None, "non-empty"),
+                 (("E=   ",), None, "non-empty"),
+                 # A stray exported E is not a selection.
+                 ((), {"E": "test(/repository_selection/)"}, "on the make command line"))
+        for arguments, env, reason in cases:
+            with self.subTest(arguments=arguments, env=env):
+                result, calls = self.run_make(*arguments, env=env)
                 self.assertNotEqual(result.returncode, 0)
-                self.assertIn("make test-select needs E='<nextest filterset>'", result.stderr)
+                self.assertIn("make test-select needs", result.stderr)
+                self.assertIn(reason, result.stderr)
                 self.assertEqual(calls, [])
                 self.assertFalse(self.cargo_log.exists(), "cargo ran before the usage error")
+
+    def test_filterset_is_not_exported_to_children(self):
+        result, calls = self.run_make("E=test(/one/)")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual([call["e"] for call in calls], [None] * len(calls))
 
 
 if __name__ == "__main__":

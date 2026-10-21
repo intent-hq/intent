@@ -233,6 +233,26 @@ if is_test:
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assert_policy(calls, inherited='0')
 
+    def test_select_route_enforces_policy_compact_fixtures_and_resumes(self):
+        expression = "test(/^pass(es)?$/) | test(=it's)"
+        for compact in (False, True):
+            for policy in (None, '0', 'false'):
+                with self.subTest(compact=compact, policy=policy):
+                    shutil.rmtree(self.cache, ignore_errors=True)
+                    result, calls = self.make('test-select', policy=policy, compact=compact,
+                                              extra=(f'E={expression}',))
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assert_policy(calls, inherited=policy, compact=compact)
+                    runs = [c['args'] for c in calls if c['args'][:2] == ['nextest', 'run']]
+                    self.assertEqual([run[2:5] for run in runs], [['--workspace', '-E', expression]])
+                    self.assertTrue(all(c['transfer_fixture'] for c in calls if c['test']), calls)
+                    self.assertIn('[test-select] record:', result.stdout)
+                    result, calls = self.make('test-select', policy=policy, compact=compact,
+                                              extra=(f'E={expression}', 'RESUME=1'))
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn('resumed: skipped 1 tests', result.stdout)
+                    self.assertFalse(any(c['test'] for c in calls))
+
     def test_recursive_fallback_compact_and_make_override(self):
         (self.component / 'Cargo.lock').write_text('changed lock\n')
         for forwarded in (False, True):
