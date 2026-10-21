@@ -177,6 +177,7 @@ docs-check: event-catalog-check check-mcp-bindings ## Check documented developme
 	@scripts/docs-check.sh
 	@node scripts/check-doc-line-length.mjs
 	@node --test scripts/check-doc-line-length.test.mjs
+	@node --test scripts/lib/markdown-tables.test.mjs
 	@node scripts/check-doc-table-cells.mjs
 	@node --test scripts/check-doc-table-cells.test.mjs
 	@node --test docs/protocol/fixtures/scripts/monitors.test.mjs docs/protocol/fixtures/scripts/contract.test.mjs

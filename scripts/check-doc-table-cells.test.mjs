@@ -74,10 +74,25 @@ test('another block start ends the table body', () => {
   }
 });
 
-test('a delimiter row that looks like a list item still opens the body', () => {
-  assert.deepEqual(mismatchedRows(['a | b', '- | -', '1 | 2 | hidden'].join('\n')), [
+test('a `- | -` line is a list item, not a delimiter row, so no table opens (as on GitHub)', () => {
+  assert.deepEqual(mismatchedRows(['a | b', '- | -', '1 | 2 | hidden'].join('\n')), []);
+});
+
+test('a header without pipes still opens a table, as on GitHub', () => {
+  assert.deepEqual(mismatchedRows(['a', '| - |', '| 1 | 2 |'].join('\n')), [
+    { line: 3, cells: 2, header: 1, headerLine: 1 },
+  ]);
+});
+
+test('inline HTML at the start of a row does not end the table, as on GitHub', () => {
+  assert.deepEqual(mismatchedRows(table('<span>x</span> | y | hidden')), [
     { line: 3, cells: 3, header: 2, headerLine: 1 },
   ]);
+  assert.deepEqual(mismatchedRows(table('<span>', '| x | y | hidden |')), []);
+});
+
+test('a lone pipe ends the table, as on GitHub', () => {
+  assert.deepEqual(mismatchedRows(table('|', '| x | y | hidden |')), []);
 });
 
 test('an inline triple-backtick span is not a fence and does not hide later tables', () => {
@@ -88,6 +103,19 @@ test('an inline triple-backtick span is not a fence and does not hide later tabl
 
 test('a pipe-free line before a dash line is not a table header', () => {
   assert.deepEqual(mismatchedRows('Title\n---\n| a | b | c |\n'), []);
+});
+
+test('a pipe-free prose line before a dash-pipe line is not reported', () => {
+  assert.deepEqual(mismatchedRows('Some prose\n--|--\n'), []);
+});
+
+test('a fence opened on a list item line hides its rows and closes at its indented closer', () => {
+  const text = ['1. ```md', '   | a | b |', '   |---|---|', '   | 1 | 2 | 3 |', '   ```', '', table('| x | y | hidden |')].join('\n');
+  assert.deepEqual(mismatchedRows(text), [{ line: 9, cells: 3, header: 2, headerLine: 7 }]);
+});
+
+test('lazy lines after a quoted header with a mismatched delimiter are quoted prose, not a table', () => {
+  assert.deepEqual(mismatchedRows(['> | a | b |', '> |---|', '| x | y |', '|---|---|', '| 1 | 2 | 3 |'].join('\n')), []);
 });
 
 test('the trailing pipe is optional on every row', () => {

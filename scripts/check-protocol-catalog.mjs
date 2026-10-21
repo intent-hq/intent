@@ -5,6 +5,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
+import { isDelimiterRow, scanMarkdown, splitRow } from './lib/markdown-tables.mjs';
 import { describeCheckout, formatBanner, formatOffPinWarning, submoduleOf } from './submodule-ref.mjs';
 
 export const CATALOG_PATH = 'docs/protocol/05-method-catalog.md';
@@ -178,45 +179,50 @@ export function methodNamesInFirstCell(cell) {
 }
 
 /**
- * Markdown table cells of a `|`-led row, or null for a non-table line. As in
- * GitHub's cmark-gfm, `\|` is an escaped pipe wherever it appears (even after
- * another backslash or inside a code span); every other `|` splits the cell.
+ * Markdown table cells of a `|`-led row, or null for a non-table line. Cells
+ * come from the shared GFM scanner (scripts/lib/markdown-tables.mjs): `\|` is
+ * an escaped pipe wherever it appears; every other `|` splits the cell.
  */
 export function tableCells(raw = '') {
-  if (!raw.startsWith('|')) return null;
-  const cells = [...raw.matchAll(/\|((?:\\\||[^|])*)/g)].map((m) => m[1].trim());
-  if (cells.at(-1) === '') cells.pop(); // Optional trailing pipe, not an extra column.
-  return cells;
+  return raw.startsWith('|') ? splitRow(raw) : null;
 }
 
-/** Collect `{ name, line }` for every method a docs/protocol/methods/*.md file documents. */
+/**
+ * Collect `{ name, line }` for every method a docs/protocol/methods/*.md file documents.
+ *
+ * Fenced code, headings, cell splitting and delimiter rows follow GitHub (the
+ * shared scanner in scripts/lib/markdown-tables.mjs). On top of that, the row
+ * conventions below are deliberately more inclusive than GitHub so that
+ * Layer 1 errs toward checking a name: any `|`-led line outside a Field table
+ * may name a method, even when GitHub would not render it as a table row.
+ */
 export function collectDocumentedMethods(text) {
   const found = [];
-  let inFence = false;
   let inFieldTable = false;
-  const lines = text.split('\n');
+  const { lines, kinds, headings } = scanMarkdown(text);
+  const headingAt = new Map(headings.map((h) => [h.line, h]));
   lines.forEach((raw, i) => {
     const line = i + 1;
+    if (kinds[i] === 'fence') {
+      inFieldTable = false;
+      return;
+    }
     const cells = tableCells(raw);
     if (!cells) inFieldTable = false;
-    if (/^\s*(```|~~~)/.test(raw)) {
-      inFence = !inFence;
-      return;
+    if (kinds[i] === 'heading') {
+      inFieldTable = false;
+      const heading = headingAt.get(line);
+      if (heading?.level >= 2 && heading.level <= 5) for (const m of heading.text.matchAll(HEADING_NAME_RE)) found.push({ name: m[1], line });
+      // A setext heading's text line still goes through the inclusive row rules below.
+      if (/^ {0,3}#/.test(raw)) return;
     }
-    if (inFence) return;
-    if (/^#{2,5} /.test(raw)) {
-      for (const m of raw.matchAll(HEADING_NAME_RE)) found.push({ name: m[1], line });
-      return;
-    }
-    const separator = tableCells(lines[i + 1]);
-    const validSeparator = separator?.length > 0 && separator.every((c) => /^:?-+:?$/.test(c));
+    const separator = isDelimiterRow(lines[i + 1]) ? splitRow(lines[i + 1]) : null;
     // Explicit headers and complete adjacent tables are checker conventions.
     // Partial separator-like body cells do not end an established Field table.
-    const completeHeader = validSeparator && separator.length === cells?.length
+    const completeHeader = separator !== null && separator.length === cells?.length
       && cells.every(Boolean) && cells.some((c) => !/^:?-+:?$/.test(c));
     if (cells && (/^(field|method)$/i.test(cells[0]) || completeHeader)) {
-      inFieldTable = /^field$/i.test(cells[0]) && cells.every(Boolean)
-        && separator?.length === cells.length && validSeparator;
+      inFieldTable = /^field$/i.test(cells[0]) && cells.every(Boolean) && separator?.length === cells.length;
     }
     // Markdown body rows may have fewer or more cells than their header.
     if (inFieldTable) return;
