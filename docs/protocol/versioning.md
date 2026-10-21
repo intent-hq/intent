@@ -24,7 +24,10 @@ older daemons from ignoring private target fields. Message events include the co
 descriptor, are broadcast-only, and exclude nonparticipants and agents.
 Replies and per-viewer reaction aggregates require the separate exact
 `discussionMessageActions: 1` capability. Reply targets bind retry identity;
-reaction versions preserve updates without advancing message sequences.
+reaction versions preserve updates without advancing message sequences. Exact
+`discussionReactions: 1` adds five picker choices, bounded immutable reactor
+snapshots, and reactions from explicitly granted agents in the default discussion.
+Older experimental clients must upgrade with this unreleased daemon extension.
 Discussion typing extends the existing `presence.update` and human roster
 shapes with transient, conversation-scoped `discussionTyping`, projected per
 recipient; typing adds no method or event type.

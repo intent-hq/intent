@@ -31,6 +31,7 @@ export const PREPARED_BINDINGS = new Map([
   ['docs/protocol/methods/multiplayer.md', [
     '  ws.discussion.conversations({ beforeId?, limit? }?) → { conversations, hasMore }',
     '  ws.discussion.list(conversationId, { beforeSequence?, afterSequence?, limit? }?) → { messages, hasMore, conversation }',
+    '  ws.discussion.react(conversationId, messageId, reaction, active) → { messageId, reactions, reactionVersion }',
     '  ws.discussion.send(conversationId, body, { messageId, recipientAgentIds?, replyToMessageId? }) → { message, conversation }',
   ].join('\n')],
   ['docs/protocol/methods/script-monitors.md', [

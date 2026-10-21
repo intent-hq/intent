@@ -7,7 +7,9 @@ adds a default workspace-wide chat and direct/group conversations with selected
 members, authenticated authors, and participant-filtered live delivery. The
 desktop feature remains behind Multiplayer Labs; multiple conversations require
 exactly integer `discussionConversations: 1`. Replies and reactions additionally
-require `discussionMessageActions: 1`. Explicitly addressed agents and their
+require `discussionMessageActions: 1`; expanded choices, bounded reactor snapshots,
+and granted agent reactions additionally require exact `discussionReactions: 1`.
+Explicitly addressed agents and their
 replies require `discussionAgentMessaging: 1`; addressing one message grants
 on-demand history access, never an automatic chat subscription. The initial
 agent extension is limited to the workspace-wide discussion. Older daemons may

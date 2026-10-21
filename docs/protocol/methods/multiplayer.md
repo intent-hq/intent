@@ -306,7 +306,7 @@ and does not replace the private-conversation gate.
 | discussion.recipients | workspaceId (req), query? (profile search string, at most 256 UTF-8 bytes), afterPrincipalId? (exclusive principal ID), limit? (integer 1–100, default 50) | `{ members: DiscussionAuthor[], hasMore: boolean }` — current effective workspace members, including offline members, excluding the caller |
 | discussion.list | workspaceId (req), conversationId? (default `"default"`), beforeSequence? (positive integer, exclusive), afterSequence? (nonnegative integer, exclusive; mutually exclusive with beforeSequence), limit? (integer 1–100, default 50) | `{ messages: DiscussionMessage[], hasMore: boolean, conversation: DiscussionConversation }` |
 | discussion.send | workspaceId (req), conversationId? (default `"default"` when neither target field is supplied), recipientPrincipalIds? (1–31 distinct other current workspace members; mutually exclusive with conversationId), messageId (req, nonblank string, at most 128 UTF-8 bytes), body (req, nonblank string, at most 16384 UTF-8 bytes), replyToMessageId? (existing message in the same conversation; requires `discussionMessageActions: 1`), recipientAgentIds? (up to 31 distinct explicit agent recipients; requires `discussionAgentMessaging: 1`, see below) | `{ message: DiscussionMessage, conversation: DiscussionConversation }` |
-| discussion.react | workspaceId (req), conversationId? (default `"default"`), messageId (req, server message ID), reaction (req, `"👍"` or `"🙂"`), active (req, boolean desired state) | `{ messageId, reactions: DiscussionReaction[], reactionVersion }`; requires `discussionMessageActions: 1` |
+| discussion.react | workspaceId (req), conversationId? (default `"default"`), messageId (req, server message ID), reaction (req, `"👍"`, `"👎"`, `"👀"`, `"✅"`, `"🙈"`; legacy `"🙂"` removal/retry only), active (req, boolean desired state) | `{ messageId, reactions: DiscussionReaction[], reactionVersion }`; requires `discussionMessageActions: 1`; expanded choices and reactor snapshots require `discussionReactions: 1` |
 | discussion.stopAgent | workspaceId (req), conversationId? (default `"default"`), messageId (req, committed server ID), agentId (req), attempt (req, positive integer) | `{ activity: DiscussionAgentActivity }`; requires `discussionAgentActivity: 1`; human participant only |
 | discussion.retryAgent | workspaceId (req), conversationId? (default `"default"`), messageId (req, committed server ID), agentId (req), attempt (req, positive integer) | `{ activity: DiscussionAgentActivity }`; requires `discussionAgentActivity: 1`; human participant only |
 
@@ -390,13 +390,43 @@ message-body limit. It confers no access to another conversation or principal.
 The reply target is part of retry identity: a changed target with the same retry
 key is invalid, rather than editing the committed reply.
 
-`DiscussionReaction` is `{ reaction, count, reacted }`. Only `"👍"` and `"🙂"`
-are accepted; `count` is positive and `reacted` says whether the receiving
-authenticated human has that reaction active. Empty aggregates are omitted.
-No reactor principal IDs or profile lists are exposed. `discussion.react` sets
-the caller's desired reaction state on an existing authorized message;
-repeating the same desired state is a no-op. A mutation rechecks membership and
-participation inside the serialized write transaction.
+Exactly integer `discussionReactions: 1`, advertised by hello and
+`system.capabilities`, enables the expanded reaction contract. It requires the
+existing message-actions support and grants no authority. This is a coordinated,
+unreleased Multiplayer Labs addition: older experimental clients only understand
+the old two-emoji response and must upgrade with the daemon; expanded responses
+are not filtered per connection. New clients use the legacy shape and controls
+when this capability is absent or unknown, and require exact `1` before sending
+expanded choices or interpreting reactor snapshots.
+
+`DiscussionReaction` is `{ reaction, count, reacted, reactors }`. The fixed order
+is `"👍"`, `"👎"`, `"👀"`, `"✅"`, `"🙈"`, then legacy `"🙂"`. The picker offers
+only the first five. Existing smiles remain readable/removable; `active: true`
+on an already-selected smile is a no-op, but creating a new smile is invalid.
+`count` is positive; empty aggregates are omitted. `reacted` is the authenticated
+human's or bound agent's own current selection. `reactors` contains at most 20
+immutable `DiscussionAuthor` snapshots, captured server-side at insertion (old
+human rows are snapshotted once during migration; pre-snapshot imported rows
+may have null identity/profile fields when the source cannot be recovered). Samples are ordered by
+first-added UUIDv7 row ID, including inert imported rows; removing a sampled row
+refills from the next row. Counts may exceed sample length; clients can show
+“and N others” using `count - reactors.length`. Never resolve snapshots against
+live profiles or derive ownership from them. Source and destination snapshots
+may share identity strings without representing the same local selection; do not
+deduplicate snapshots by principal or agent ID. Samples and totals are maintained
+on mutation and persisted alongside the message; history reads do no roster
+aggregation or profile joins.
+
+`discussion.react` sets the caller's desired state. Repeating it is a no-op.
+Inside the serialized write transaction, humans require current workspace
+membership and private-conversation participation. Agents require an existing
+explicit discussion grant and a nonretired, nondeleted session in the same
+workspace; only `default` is permitted. Agent identity comes exclusively from
+the authenticated MCP context, never arguments. `ws.discussion.react` exposes
+`(conversationId, messageId, reaction, active)` with the same result. Reactions
+never create a grant, enqueue a message, wake an agent, or subscribe agents to
+discussion events. Agent history and send retries project `reacted` from the
+bound agent rather than a human principal.
 
 An actual change increments that message's nonnegative `reactionVersion` and
 publishes transient `discussion:reaction` with
@@ -641,8 +671,9 @@ inaccessible through discussion APIs, even to the destination owner. Default
 discussion history remains available to destination workspace members.
 
 Reply quotes retain their original inert author snapshots. Reaction counts and
-versions remain historical data, but import clears every reactor's principal
-grant. All destination viewers therefore start with `reacted: false`, including
+versions and immutable reactor snapshots remain historical data. Import retains
+display rows and their order but clears both local principal and agent ownership
+columns; no discussion-agent grant transfers. All destination viewers therefore start with `reacted: false`, including
 people whose principal string matches a source reactor. Turning off an unselected
 reaction is a no-op; a destination person's new reaction adds to the historical
 count and can remove only that new selection.

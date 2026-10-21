@@ -66,7 +66,9 @@ The prepared [workspace discussion contract (§5.55)](./methods/multiplayer.md#5
 adds five workspace-scoped router methods for a default conversation and private
 direct/group discussions with selected workspace members, gated by exactly integer
 `discussionConversations: 1`. Replies and reactions additionally require
-`discussionMessageActions: 1`; `discussion.react` changes a reaction without
+`discussionMessageActions: 1`; expanded choices, bounded reactor snapshots, and
+granted agent reactions additionally require exact `discussionReactions: 1`.
+`discussion.react` changes a reaction without
 creating a message or advancing its sequence.
 Explicit agent recipients and bound agent replies additionally require
 `discussionAgentMessaging: 1`. The initial extension applies to the default

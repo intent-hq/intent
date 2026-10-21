@@ -112,6 +112,9 @@ The separate exact integer `discussionMessageActions: 1` capability, advertised
 on hello and `system.capabilities`, gates same-conversation replies and
 per-viewer reaction aggregates. Never discard an unsupported reply target or
 interpret the capability as authorization.
+Exactly integer `discussionReactions: 1` on both surfaces additionally enables
+the five-choice picker, bounded immutable reactor snapshots, and explicitly
+granted agent reactions (§5.55). Missing or unknown versions do not enable them.
 Exactly integer `discussionAgentMessaging: 1`, also on both discovery surfaces,
 gates explicit `recipientAgentIds` on a message and agent-authored replies in the
 workspace-wide discussion. It grants no agent access by itself: the agent must
