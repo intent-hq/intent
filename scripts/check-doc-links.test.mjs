@@ -2,6 +2,7 @@
 // Run: node --test scripts/check-doc-links.test.mjs
 
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -82,6 +83,24 @@ test('checks backticked packages/ paths against the monorepo root', async (t) =>
       { source: 'docs/guide.md', line: 2, target: 'packages/product/scripts/missing.json', resolved: 'packages/product/scripts/missing.json' },
       { source: 'docs/guide.md', line: 2, target: 'packages/other/README.md', resolved: 'packages/other/README.md' },
     ],
+    skipped: 0,
+  });
+});
+
+test('requires packages/ paths in an initialized git submodule to be tracked', async (t) => {
+  const root = await fixture(t, {
+    '.gitmodules': '[submodule "packages/product"]\n\tpath = packages/product\n',
+    'docs/guide.md': '`packages/product` `packages/product/scripts` `packages/product/scripts/present.sh`\n`packages/product/target/release`',
+    'packages/product/scripts/present.sh': '',
+    'packages/product/target/release/product': '',
+  });
+  const env = { ...process.env };
+  for (const name of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR']) delete env[name];
+  const git = (...args) => execFileSync('git', ['-C', path.join(root, 'packages/product'), ...args], { env });
+  git('init', '-q');
+  git('add', 'scripts/present.sh');
+  assert.deepEqual(await inspectRepository(root), {
+    failures: [{ source: 'docs/guide.md', line: 2, target: 'packages/product/target/release', resolved: 'packages/product/target/release' }],
     skipped: 0,
   });
 });

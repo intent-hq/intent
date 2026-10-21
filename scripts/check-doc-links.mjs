@@ -5,7 +5,10 @@
 // spans whose entire value starts with docs/, scripts/, .github/, or packages/ and
 // contains only path characters. Globs, placeholders, whitespace, and ellipses are ignored.
 // Bare paths resolve against the source directory, monorepo root, and component repositories;
-// packages/ spans name a submodule path explicitly and resolve against the monorepo root only.
+// packages/ spans are monorepo-root-relative and resolve against the monorepo root only.
+// Inside an initialized submodule a packages/ span must name a git-tracked path, so
+// build output or other untracked files on a dev host cannot pass a check that CI's
+// clean pinned checkout would fail.
 // References requiring an uninitialized submodule are skipped as unverifiable.
 // Bare paths are never looked up in a submodule that .gitmodules marks `update = none`
 // (the private packages/ios, which CI never checks out): otherwise every missing bare
@@ -22,14 +25,15 @@
 // (comment and review anchors, `L12` line anchors), and anchors on other file types are
 // not checked.
 
+import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 
 const MARKDOWN_LINK = /\[[^\]]*\]\(\s*(<?[^\s)>]+>?)/g;
-const REPO_PATH = /`((?:docs|scripts|\.github)\/[A-Za-z0-9._/-]+)`/g;
-const PACKAGE_PATH = /`(packages\/[A-Za-z0-9._/-]+)`/g;
+const REPO_PATH = /`((docs|scripts|\.github|packages)\/[A-Za-z0-9._/-]+)`/g;
 const RUNTIME_ANCHOR = /^(?:issuecomment-|discussion_r|discussioncomment-|pullrequestreview-|L\d+(?:-L\d+)?$)/;
 const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 const BLOCKQUOTE = /^(?: {0,3}> ?)+/;
@@ -300,6 +304,38 @@ function anchorReader() {
   };
 }
 
+const execFileAsync = promisify(execFile);
+// Inherited repository overrides (e.g. inside a git hook) would point -C at another repo.
+const GIT_ENV = Object.fromEntries(
+  Object.entries(process.env).filter(([name]) => !['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR'].includes(name)),
+);
+
+// Tracked files of a git checkout plus every ancestor directory ('' is the checkout
+// root), or null when it is not a usable git repository (stat is used instead).
+function trackedReader() {
+  const cache = new Map();
+  return (directory) => {
+    if (!cache.has(directory)) {
+      cache.set(
+        directory,
+        execFileAsync('git', ['-C', directory, 'ls-files', '-z'], { env: GIT_ENV, maxBuffer: 256 * 1024 * 1024 }).then(
+          ({ stdout }) => {
+            const tracked = new Set(['']);
+            for (const file of stdout.split('\0')) {
+              if (!file) continue;
+              const parts = file.split('/');
+              for (let end = 1; end <= parts.length; end += 1) tracked.add(parts.slice(0, end).join(path.sep));
+            }
+            return tracked;
+          },
+          () => null,
+        ),
+      );
+    }
+    return cache.get(directory);
+  };
+}
+
 // The Markdown file whose headings an anchor on `found` refers to, if any.
 async function anchorDocument(found, stat) {
   if (stat.isFile()) return found.endsWith('.md') ? found : null;
@@ -313,6 +349,13 @@ export async function inspectRepository(root) {
   const anchorsIn = anchorReader();
   const [inputs, modules] = await Promise.all([findInputs(root), submodules(root)]);
   const bareBases = modules.filter((module) => !module.optIn).map((module) => module.path);
+  const trackedIn = trackedReader();
+  const trackedStat = async (candidate) => {
+    const module = modules.find((entry) => entry.initialized && isWithin(candidate, entry.path));
+    const tracked = module && (await trackedIn(module.path));
+    if (tracked && !tracked.has(path.relative(module.path, candidate))) return null;
+    return statOf(candidate);
+  };
   const failures = [];
   let skipped = 0;
 
@@ -335,16 +378,14 @@ export async function inspectRepository(root) {
     }
     for (const match of content.matchAll(REPO_PATH)) {
       if (match[1].includes('...')) continue;
+      const rootRelative = match[2] === 'packages';
       references.push({
         raw: match[1],
         target: cleanTarget(match[1]),
         index: match.index,
-        bases: uniquePaths([path.dirname(source), root, ...bareBases]),
+        bases: rootRelative ? [root] : uniquePaths([path.dirname(source), root, ...bareBases]),
+        tracked: rootRelative,
       });
-    }
-    for (const match of content.matchAll(PACKAGE_PATH)) {
-      if (match[1].includes('...')) continue;
-      references.push({ raw: match[1], target: cleanTarget(match[1]), index: match.index, bases: [root] });
     }
 
     for (const reference of references) {
@@ -353,7 +394,7 @@ export async function inspectRepository(root) {
       const isUnverifiable = (candidate) =>
         modules.some((module) => !module.initialized && isWithin(candidate, module.path));
       const verifiable = insideRoot.filter((candidate) => !isUnverifiable(candidate));
-      const stats = await Promise.all(verifiable.map(statOf));
+      const stats = await Promise.all(verifiable.map((candidate) => (reference.tracked ? trackedStat(candidate) : statOf(candidate))));
       const foundIndex = stats.findIndex(Boolean);
       if (foundIndex >= 0) {
         if (!reference.anchor) continue;
