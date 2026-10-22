@@ -154,6 +154,11 @@ REPORT_TIMEOUT = 60
 # Seconds an injected timeout:<command> probe sleeps. Above REPORT_TIMEOUT, so a
 # reporter that does not bound the probe fails the run instead of finishing late.
 INJECTED_SLEEP = 120
+# Elapsed-time bound for a report with one injected timeout: about twice the
+# slowest loaded-host run measured. It sits below REPORT_TIMEOUT so a report
+# that finishes late but inside the run limit still fails; a probe with no
+# deadline at all sleeps past REPORT_TIMEOUT and fails the run instead.
+TIMEOUT_REPORT_BOUND = 45
 
 
 class ComponentGitStatus(unittest.TestCase):
@@ -306,9 +311,7 @@ os.execv(os.environ["REAL_GIT"], [os.environ["REAL_GIT"], *args])
         self.env["DEV_STATUS_PROBE_TIMEOUT"] = "2"
         start = time.monotonic()
         repo = self.report(failure="timeout:status")
-        # A bounded probe finishes well inside half the injected sleep even on a
-        # loaded host; an unbounded one cannot.
-        self.assertLess(time.monotonic() - start, INJECTED_SLEEP / 2)
+        self.assertLess(time.monotonic() - start, TIMEOUT_REPORT_BOUND)
         self.assertIsNone(repo["dirty"], repo)
         self.assertIs(repo["initialized"], True, repo)
         self.assertIs(repo["gitlinkDirty"], False, repo)
