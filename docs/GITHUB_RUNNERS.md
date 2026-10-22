@@ -11,11 +11,11 @@ targeting a label runs on whichever host has a free slot.
 | intent-cache | ReliableSite, Los Angeles | Ryzen 9 3900X, 12 cores / 24 threads, 128 GB | heavy (2), small (6) | `intent-cache`, `intent-cache-small` | `intent-cache` | [`runners.env`](../infra/runners/runners.env) |
 | intent-ci1 | ReliableSite, Los Angeles | EPYC 4545P, 16 cores / 32 threads, 128 GB | xl (1), heavy (2) | `intent-cache-xl`, `intent-cache` | `intent-ci1` | [`hosts/intent-ci1.env`](../infra/runners/hosts/intent-ci1.env) |
 
-| Pool | Label | Hosted fallback | Per slot |
-|---|---|---|---|
-| heavy | `intent-cache` | `gh-linux-8x` | 8 CPUs = 4 whole cores; 48 GB on intent-cache, 30 GB on intent-ci1, 32 GB in the three-heavy EPYC layout |
-| xl | `intent-cache-xl` | `gh-linux-16x` | 16 CPUs = 8 whole cores (one CCD), 52 GB |
-| small | `intent-cache-small` | — | 1 CPU, 3 GB (intent-cache only) |
+| Pool | Label | Serves jobs asking for | Bursts to | Per slot |
+|---|---|---|---|---|
+| heavy | `intent-cache` | `gh-linux-8x`, `gh-linux-16x` | `warp-ubuntu-2404-x64-8x` / `-16x` | 8 CPUs = 4 whole cores; 48 GB on intent-cache, 30 GB on intent-ci1, 32 GB in the three-heavy EPYC layout |
+| xl | `intent-cache-xl` | `gh-linux-16x` | `warp-ubuntu-2404-x64-16x` | 16 CPUs = 8 whole cores (one CCD), 52 GB |
+| small | `intent-cache-small` | nothing routed (free `ubuntu-*` jobs run on GitHub) | — | 1 CPU, 3 GB (intent-cache only) |
 
 On intent-cache the heavy slots are pinned to 0-3,12-15 and 4-7,16-19, the
 small ones to 8, 9, 10, 20, 21 and 22, and CPUs 11 and 23 (one whole core) are
@@ -33,8 +33,12 @@ new host only adds capacity once its variable is raised:
 |---|---|---|
 | `CI_LINUX_HEAVY_SLOTS` | 2 | heavy |
 | `CI_LINUX_XL_SLOTS` | 0 (xl off) | xl |
-| `CI_LINUX_SMALL_SLOTS` | 6 | small |
-| `CI_LINUX_RUNNER_DISABLED` | unset | `true` sends every job, xl included, to hosted runners |
+| `CI_LINUX_RUNNER_DISABLED` | unset | `true` sends every job, xl included, to its burst runner |
+| `CI_WARPBUILD_DISABLED` | unset | `true` bursts to GitHub-hosted labels instead of WarpBuild (see [Burst to WarpBuild](#burst-to-warpbuild)) |
+
+`CI_LINUX_SMALL_SLOTS` is no longer read: jobs on free standard labels always run
+on GitHub, so the small slots only serve jobs that name `intent-cache-small`
+directly (the smoke workflow).
 
 Each slot runs one job in a fresh Docker container, then starts another. Everything needed to
 rebuild them lives in [`infra/runners/`](../infra/runners/).
@@ -116,12 +120,12 @@ runner output, tagged `github-runner-<pool>-<n>`).
   `runner-route` probe also counts every online `self-hosted`/`Linux`/`X64`
   runner, from any pool, as Linux fleet capacity unless the variable
   `CI_LINUX_RUNNER_DISABLED` is `true`. A `gh-linux-16x` job takes a free xl
-  slot first, then a free heavy slot, then goes hosted; a `gh-linux-8x` job
+  slot first, then a free heavy slot, then bursts; a `gh-linux-8x` job
   never takes an xl slot.
 - **Slot fitting.** The probe hands out at most as many slots per run as a
   pool has free: online slots (capped by the organization or repository
-  variables `CI_LINUX_HEAVY_SLOTS` / `CI_LINUX_XL_SLOTS` /
-  `CI_LINUX_SMALL_SLOTS`, defaults 2 / 0 / 6) minus jobs queued or running on
+  variables `CI_LINUX_HEAVY_SLOTS` / `CI_LINUX_XL_SLOTS`, defaults 2 / 0)
+  minus jobs queued or running on
   that pool. A workflow lists the pooled jobs
   that start together (`slot_jobs` input of `runner-route.yml`, or `SLOT_JOBS`
   in an inline probe); each reads `outputs.slots[key]`. Free slots go to
@@ -129,14 +133,50 @@ runner output, tagged `github-runner-<pool>-<n>`).
   cache), then the longest (`minutes`), then list order; `shards: N` or
   `legs: [a, b]` gives each matrix leg its own key (`key-1`..`key-N`, or
   `key-a`, `key-b`) and `events` keeps a job that skips the event from holding
-  a slot. Every other listed job gets its hosted label, and unlisted jobs use
+  a slot. Every other listed job gets its burst runner, and unlisted jobs use
   the pool only while a slot is still free. Any unreadable runner list or job
-  count sends every job hosted. `scripts/test_runner_policy.py` fails a
+  count sends every job to its burst runner. `scripts/test_runner_policy.py` fails a
   workflow whose unlisted pooled jobs (or matrix legs) can run at the same
   time, so they must be listed.
   Two runs probing at the same moment can claim the same free slot, so a pool
   may briefly run a job or two past its slot count; that job waits for the
   next free slot.
+
+## Burst to WarpBuild
+
+When no self-hosted slot is free, jobs on a paid GitHub label run on the matching
+[WarpBuild](https://www.warpbuild.com/docs/ci/cloud-runners) runner instead of the
+GitHub larger runner (the `warpbuildbot` app is installed on the org). Jobs on free
+standard labels (`ubuntu-22.04`, `ubuntu-24.04`, `ubuntu-latest`, `ubuntu-24.04-arm`,
+`windows-2022`, `windows-2025`) always run on GitHub: the three repositories are
+public, so those runners cost nothing.
+
+| GitHub label | WarpBuild runner | Notes |
+|---|---|---|
+| `gh-linux-8x` | `warp-ubuntu-2404-x64-8x` | 8 vCPU / 32 GB |
+| `gh-linux-16x` | `warp-ubuntu-2404-x64-16x` | 16 vCPU / 64 GB |
+| `gh-linux-arm64-8x` | `warp-ubuntu-2404-arm64-8x` | |
+| `gh-windows-16x` | `warp-windows-2022-x64-16x` | Server 2022: node-gyp fails on 2025 |
+| `macos-26-xlarge` | `warp-macos-26-arm64-6x` | M4 Pro |
+| `macos-15-xlarge` | `warp-macos-15-arm64-6x` | signed desktop builds (keychain unlock fails on macOS 26) |
+| `macos-latest-large` | — | no WarpBuild Intel Mac; bursts to GitHub |
+
+The probe sends a burst to GitHub instead of WarpBuild when:
+
+- the run is a fork pull request (no WarpBuild spend from outside contributors);
+- `CI_WARPBUILD_DISABLED` is `true` (organization or repository variable; no
+  workflow change needed);
+- a job on that WarpBuild platform (`warp-ubuntu-*`, `warp-windows-*`,
+  `warp-macos-*`) has been queued for over 10 minutes in any of the three
+  repositories.
+
+An unreadable job queue keeps WarpBuild: a GitHub API error says nothing about
+WarpBuild. Each run logs `warpbuild <platform>: on` or the reason it is off.
+
+Jobs that may not use a self-hosted runner (they need sudo or Docker, or they sign
+releases on Mac/Windows) read the probe's `cloud` output instead of `runners`: the
+WarpBuild runner for a paid label, or the GitHub label under the conditions above,
+never a self-hosted fleet.
 
 ## Preinstalled tools
 
