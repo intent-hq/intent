@@ -8,12 +8,11 @@
 
 1. [Agent Creation Issues](#agent-creation-issues)
 2. [Streaming Issues](#streaming-issues)
-3. [Manager Issues](#manager-issues)
-4. [Memory and Performance](#memory-and-performance)
-5. [Test Issues](#test-issues)
-6. [TypeScript Issues](#typescript-issues)
-7. [Migration Issues](#migration-issues)
-8. [Codex Runtime and Models](#codex-runtime-and-models)
+3. [Performance Issues](#performance-issues)
+4. [Test Issues](#test-issues)
+5. [TypeScript Issues](#typescript-issues)
+6. [Migration Issues](#migration-issues)
+7. [Codex Runtime and Models](#codex-runtime-and-models)
 
 ## Common Issues and Solutions
 

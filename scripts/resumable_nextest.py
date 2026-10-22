@@ -283,12 +283,19 @@ def callback_setup_help(intentd_dir: Path) -> str:
     command = ["env", "-u", "NODE_OPTIONS", sys.executable, "-I", "-B", "-S",
                str(intentd_dir / "scripts/prepare-acp-callback-fixture.py"),
                "--cache-dir", str(callback_cache_dir())]
-    lines = [
+    lines = []
+    if os.environ.get("NODE_OPTIONS"):
+        # Name the host preload as the blocker for the manual route; the value
+        # is not echoed (it may carry host paths or tokens).
+        lines.append("NODE_OPTIONS is set in this shell (often a host preload such as a monitoring "
+                     "tracer); the prepare script refuses it, so run the commands below as "
+                     "printed (they start with env -u NODE_OPTIONS).")
+    lines += [
         f"Set {CALLBACK_FIXTURE_ENV} to a verified fixture (Linux x64, descriptor-pinned Node).",
         "Native macOS is not supported by this fixture. Use an existing authorized Linux x64 host.",
         "Complete checkout, tools and gate recipe: CONTRIBUTING.md#linux-x64-callback-gates",
-        f"With the variable unset, make test, test-changed and gate prepare a ready cache under "
-        f"{callback_cache_dir()} offline; a rejected cache must be rebuilt, never edited.",
+        "With the variable unset, make test, test-changed, test-select and gate prepare a ready cache",
+        f"under {callback_cache_dir()} offline; a rejected cache must be rebuilt, never edited.",
         "No downloads or repairs were attempted. On that Linux host, prepare explicitly, then retry",
         "(env -u NODE_OPTIONS clears host Node preloads, which the prepare script refuses):",
     ]
@@ -487,6 +494,17 @@ def tree_key(repo_root: Path, intentd_dir: Path, output_args: list[str] | None =
              fixture_identity: dict[str, str] | None = None,
              transfer_identity: dict[str, str] | None = None,
              *, child_env: dict[str, str] | None = None) -> str:
+    inputs = tree_inputs(repo_root, intentd_dir, output_args, fixture_identity,
+                         transfer_identity, child_env=child_env)
+    encoded = json.dumps(inputs, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def tree_inputs(repo_root: Path, intentd_dir: Path, output_args: list[str] | None = None,
+                fixture_identity: dict[str, str] | None = None,
+                transfer_identity: dict[str, str] | None = None,
+                *, child_env: dict[str, str] | None = None) -> dict[str, object]:
+    """Everything a pass depends on; [`tree_key`] hashes it."""
     intentd_dir = intentd_dir.resolve()
     inputs = {
         "source-root": str(intentd_dir),
@@ -511,8 +529,17 @@ def tree_key(repo_root: Path, intentd_dir: Path, output_args: list[str] | None =
         "test-policy": {"INTENTD_ASSERT_BOUND_CALLER": os.environ.get("INTENTD_ASSERT_BOUND_CALLER")},
         "test-stack": test_stack_identity(nextest_env() if child_env is None else child_env),
     }
-    encoded = json.dumps(inputs, sort_keys=True, separators=(",", ":")).encode()
-    return hashlib.sha256(encoded).hexdigest()
+    # `make test HERMETIC=1` runs inside intentd's no-provider-CLI sandbox:
+    # its passes must not credit an ordinary run, or the reverse. Added only
+    # for sandboxed runs so ordinary records keep their existing keys.
+    # INTENT_GATE_HERMETIC is internal: only the Makefile's HERMETIC wrapper
+    # sets it. A run that skipped the sandbox self-check is a different mode.
+    if os.environ.get("INTENT_GATE_HERMETIC") == "1":
+        inputs["hermetic"] = {
+            "HIDE_NODE": os.environ.get("HIDE_NODE") == "1",
+            "SKIP_SELF_CHECK": os.environ.get("SKIP_SELF_CHECK") == "1",
+        }
+    return inputs
 
 
 def prune(cache_dir: Path, now: float | None = None) -> None:
@@ -1680,8 +1707,21 @@ def main() -> int:
         help="nextest target selection, e.g. '-p alpha --test one'; repeatable, "
         "run in order instead of --workspace",
     )
+    parser.add_argument(
+        "--filterset",
+        metavar="EXPR",
+        help="run one nextest filterset across the workspace (make test-select E=EXPR); "
+        "the same as --plan '--workspace -E EXPR', so it cannot be combined with --plan",
+    )
     parser.add_argument("--base", metavar="REF", help="base ref recorded in run.json")
     args = parser.parse_args()
+    if args.filterset is not None:
+        if args.plan:
+            parser.error("--filterset cannot be combined with --plan")
+        if not args.filterset.strip():
+            parser.error("--filterset needs a nextest filterset expression, e.g. 'test(/name/)'")
+        # Quote into the one plan string so split_plans() restores it exactly.
+        args.plan = [shlex.join(["--workspace", "-E", args.filterset])]
     try:
         return run_nextest(args)
     except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as error:

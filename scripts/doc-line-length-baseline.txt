@@ -1,0 +1,5 @@
+# Grandfathered over-long lines per protocol doc: `<path> <count> <chars>`, sorted by path,
+# where count is the number of lines over 2000 characters and chars their combined length.
+# Checked by `scripts/check-doc-line-length.mjs` (run from `make docs-check`). Entries only
+# ratchet down: split a long line into one sentence or bullet per line and the check names the
+# corrected line to write here. Regenerate with `node scripts/check-doc-line-length.mjs --print-counts`.

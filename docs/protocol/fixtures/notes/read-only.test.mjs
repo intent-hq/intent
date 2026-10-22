@@ -36,8 +36,9 @@ test('prepared protocol omits edit RPCs and retains full-content concurrency cav
   assert.match(docs, /sourceLength.*UTF-16/);
 });
 
-test('13.9 allocation follows checkout configuration and catalog counts reflect only retained methods', async () => {
-  const versioning = await readFile(new URL('../../versioning.md', import.meta.url), 'utf8');
+function assertReadOnlyAllocation(versioning, catalog) {
+  // Later extensions can advance the global version/counts without changing this reservation.
+  assert.match(versioning, /^\*\*Version 13\.9 — read-only note paging \(additive, prepared\)\.\*\*$/m);
   const section = versioning.split('**Version 13.9 —')[1].split('**Version 13.8 —')[0];
   assert.match(section, /`notePagingRead: 1`/);
   assert.match(section, /444 \/ 388 \/ 56/);
@@ -49,11 +50,45 @@ test('13.9 allocation follows checkout configuration and catalog counts reflect 
   assert.equal((versioning.match(/\*\*Version 13\.9 —/g) ?? []).length, 1);
   const avatars = versioning.split('**Version 13.7 —')[1].split('**Version 13.6 —')[0];
   assert.match(avatars, /`gitlabCheckoutOwnerAvatar: 1`/);
-  const catalog = await readFile(new URL('../../05-method-catalog.md', import.meta.url), 'utf8');
   const row = catalog.split('\n').find(line => line.startsWith('| note |'));
   const methods = row.split('|')[3].trim().split(', ');
   assert.equal(methods.length, 21);
   assert.ok(!methods.some(name => name.startsWith('operation') || name === 'applySplices'));
+}
+
+test('13.9 allocation follows checkout configuration and catalog counts reflect only retained methods', async () => {
+  const versioning = await readFile(new URL('../../versioning.md', import.meta.url), 'utf8');
+  const catalog = await readFile(new URL('../../05-method-catalog.md', import.meta.url), 'utf8');
+  assertReadOnlyAllocation(versioning, catalog);
+});
+
+test('read-only reservation survives unrelated version and catalog additions', async () => {
+  const versioning = await readFile(new URL('../../versioning.md', import.meta.url), 'utf8');
+  const catalog = await readFile(new URL('../../05-method-catalog.md', import.meta.url), 'utf8');
+  assertReadOnlyAllocation(
+    versioning.replace(/\*\*Documented version:\*\* `\d+\.\d+`/, '**Documented version:** `15.0`'),
+    catalog.replace(/\*\*\d+ dispatchable method names\*\*/, '**999 dispatchable method names**'));
+});
+
+test('read-only reservation still rejects changed gates, history and restored write methods', async () => {
+  const versioning = await readFile(new URL('../../versioning.md', import.meta.url), 'utf8');
+  const catalog = await readFile(new URL('../../05-method-catalog.md', import.meta.url), 'utf8');
+  for (const [before, after] of [
+    ['**Version 13.9 —', '**Version 13.99 —'],
+    ['**Version 13.9 —', '**Version 13.9 — duplicate\n**Version 13.9 —'],
+    ['`notePagingRead: 1` plus', '`notePagingRead: 2` plus'],
+    ['`noteAnnotations: 1` separately requires', '`noteAnnotations: 2` separately requires'],
+    ['444 / 388 / 56', '445 / 389 / 56'],
+  ]) {
+    assert.ok(versioning.includes(before), before);
+    assert.throws(() => assertReadOnlyAllocation(versioning.replace(before, after), catalog), { code: 'ERR_ASSERTION' }, before);
+  }
+  for (const method of ['applySplices', 'operationStatus', 'operation.begin', 'operation.append',
+    'operation.seal', 'operation.read', 'operation.commit', 'operation.cancel']) {
+    // Replace one name, keeping 21 methods: the write prohibition must fail independently of the count.
+    assert.throws(() => assertReadOnlyAllocation(versioning,
+      catalog.replace('| note | 21 | add,', `| note | 21 | ${method},`)), { code: 'ERR_ASSERTION' }, method);
+  }
 });
 
 test('source admission rejects missing snapshot identity even when text is exact', async () => {

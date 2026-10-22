@@ -360,6 +360,172 @@ expect_line "[missing]  shellcheck: $bin_dir/shellcheck is on PATH but shellchec
 reject_line "[ok]       shellcheck:"
 rm -f "$bin_dir/shellcheck"
 
+# make test HERMETIC=1 needs a working bwrap on Linux: an optional row that
+# probes a real sandbox, never a required gap, and absent off Linux.
+rm -f "$bin_dir/uname"
+write_launcher uname '[ "$1" = -m ] && { echo x86_64; exit 0; }; echo Linux'
+run_doctor
+expect_line "[optional] bubblewrap: not installed (only make test HERMETIC=1 needs it); Debian/Ubuntu: sudo apt-get install bubblewrap"
+gaps_without_bwrap=$(sed -n 's/^Doctor found \([0-9][0-9]*\) required gap(s)\.$/\1/p' "$output")
+write_launcher bwrap '[ "$*" = "--dev-bind / / true" ] && exit 0; exit 1'
+run_doctor
+expect_line "[optional] bubblewrap: installed (make test HERMETIC=1 hides provider CLIs like CI)"
+gaps_with_bwrap=$(sed -n 's/^Doctor found \([0-9][0-9]*\) required gap(s)\.$/\1/p' "$output")
+[[ "$gaps_with_bwrap" == "$gaps_without_bwrap" ]] \
+  || fail "bubblewrap changed the required gap count: $gaps_without_bwrap without vs $gaps_with_bwrap with"
+write_launcher bwrap 'echo "bwrap: setting up uid map: Permission denied" >&2; exit 1'
+run_doctor
+expect_line "[optional] bubblewrap: $bin_dir/bwrap cannot create a sandbox (unprivileged user namespaces blocked?), so make test HERMETIC=1 will fail"
+reject_line "[optional] bubblewrap: installed"
+write_launcher uname '[ "$1" = -m ] && { echo arm64; exit 0; }; echo Darwin'
+run_doctor
+reject_line "bubblewrap:"
+rm -f "$bin_dir/bwrap" "$bin_dir/uname"
+ln -s "$(command -v uname)" "$bin_dir/uname"
+
+# cloudlands-fe lint:workflows pins actionlint exactly; absent, unrunnable, or
+# another version is one required gap each, and only the pin is ready.
+run_doctor
+expect_line "[missing]  actionlint 1.7.12: required by cloudlands-fe pnpm run lint:workflows; run make bootstrap-dev-host"
+reject_line "[ok]       actionlint:"
+gaps_without_actionlint=$(sed -n 's/^Doctor found \([0-9][0-9]*\) required gap(s)\.$/\1/p' "$output")
+[[ -n "$gaps_without_actionlint" ]] || fail "expected a gap summary without actionlint"
+write_launcher actionlint '[ "$1" = --version ] && { printf "1.7.12\ninstalled by downloading from release page\n"; exit 0; }; exit 1'
+run_doctor
+expect_line "[ok]       actionlint: 1.7.12"
+reject_line "[missing]  actionlint"
+gaps_with_actionlint=$(sed -n 's/^Doctor found \([0-9][0-9]*\) required gap(s)\.$/\1/p' "$output")
+[[ "$gaps_with_actionlint" == "$((gaps_without_actionlint - 1))" ]] \
+  || fail "actionlint did not count as one required gap: $gaps_without_actionlint without vs $gaps_with_actionlint with"
+write_launcher actionlint '[ "$1" = --version ] && { echo v1.7.12; exit 0; }; exit 1'
+run_doctor
+expect_line "[ok]       actionlint: 1.7.12"
+write_launcher actionlint '[ "$1" = --version ] && { echo 1.7.11; exit 0; }; exit 1'
+run_doctor
+expect_line "[missing]  actionlint: found 1.7.11; cloudlands-fe pins 1.7.12; run make bootstrap-dev-host"
+reject_line "[ok]       actionlint:"
+write_launcher actionlint 'echo "cannot execute" >&2; exit 1'
+run_doctor
+expect_line "[missing]  actionlint: $bin_dir/actionlint is on PATH but actionlint --version fails"
+reject_line "[ok]       actionlint:"
+rm -f "$bin_dir/actionlint"
+
+# make bash3 compiles Bash 3.2, so on Linux the doctor requires a C compiler,
+# make and a yacc: each missing tool is named, the row is one required gap, and
+# cc / yacc stand in for gcc / bison. Stock macOS bash is already 3.2.
+if [[ "$(uname -s)" == Darwin ]]; then
+  run_doctor
+  expect_line "[ok]       Bash 3.2 build tools: not needed (stock /bin/bash is already Bash 3.2)"
+else
+  run_doctor
+  expect_line "[missing]  Bash 3.2 build tools: gcc make bison not found; required by make bash3 (the shell suites' 3.2 pass); run make bootstrap-dev-host"
+  gaps_without_bash3_tools=$(sed -n 's/^Doctor found \([0-9][0-9]*\) required gap(s)\.$/\1/p' "$output")
+  [[ -n "$gaps_without_bash3_tools" ]] || fail "expected a gap summary without the Bash 3.2 build tools"
+  write_launcher gcc 'exit 0'
+  write_launcher make 'exit 0'
+  run_doctor
+  expect_line "[missing]  Bash 3.2 build tools: bison not found; required by make bash3"
+  write_launcher bison 'exit 0'
+  run_doctor
+  expect_line "[ok]       Bash 3.2 build tools: C compiler, make, bison"
+  reject_line "[missing]  Bash 3.2 build tools:"
+  gaps_with_bash3_tools=$(sed -n 's/^Doctor found \([0-9][0-9]*\) required gap(s)\.$/\1/p' "$output")
+  [[ "$gaps_with_bash3_tools" == "$((gaps_without_bash3_tools - 1))" ]] \
+    || fail "the Bash 3.2 build tools did not count as one required gap: $gaps_without_bash3_tools without vs $gaps_with_bash3_tools with"
+  rm -f "$bin_dir/gcc" "$bin_dir/bison"
+  write_launcher cc 'exit 0'
+  write_launcher yacc 'exit 0'
+  run_doctor
+  expect_line "[ok]       Bash 3.2 build tools: C compiler, make, bison"
+  rm -f "$bin_dir/cc" "$bin_dir/yacc" "$bin_dir/make"
+fi
+
+# install_actionlint downloads the pinned archive, refuses a checksum mismatch,
+# and extracts the binary into $CARGO_HOME/bin; a ready pin is left alone.
+bootstrap_funcs="$temp_dir/bootstrap-funcs.sh"
+sed '/^if \[\[ "\$MODE" == check \]\]; then$/,$d' "$script" >"$bootstrap_funcs"
+grep -q '^install_actionlint() {' "$bootstrap_funcs" || fail "could not extract install_actionlint"
+actionlint_log="$temp_dir/actionlint.log"
+actionlint_digest=$(bash -c 'funcs=$1; set --; source "$funcs"; actionlint_sha256 "$(actionlint_platform)"' bash "$bootstrap_funcs") \
+  || fail "no pinned actionlint archive for $(uname -s) $(uname -m)"
+
+# The pin and checksums must match the cloudlands-fe gate that consumes them
+# (skipped until the pinned submodule carries scripts/check-workflows.mjs).
+fe_gate="$repo_root/packages/cloudlands-fe/scripts/check-workflows.mjs"
+if [[ -f "$fe_gate" ]]; then
+  pinned_version=$(bash -c 'funcs=$1; set --; source "$funcs"; echo "$ACTIONLINT_VERSION"' bash "$bootstrap_funcs")
+  grep -qF "export const ACTIONLINT_VERSION = '$pinned_version';" "$fe_gate" \
+    || fail "bootstrap actionlint $pinned_version differs from $fe_gate"
+  for platform in linux_amd64 linux_arm64 darwin_amd64 darwin_arm64; do
+    digest=$(bash -c 'funcs=$1; platform=$2; set --; source "$funcs"; actionlint_sha256 "$platform"' bash "$bootstrap_funcs" "$platform")
+    grep -qF "'${platform/_/-}': '$digest'," "$fe_gate" \
+      || fail "bootstrap actionlint checksum for $platform differs from $fe_gate"
+  done
+fi
+ln -sf "$(command -v mkdir)" "$bin_dir/mkdir"
+ln -sf "$(command -v chmod)" "$bin_dir/chmod"
+write_launcher curl 'echo "curl $*" >>"$TOOL_LOG"; [ "$(grep -c "^curl " "$TOOL_LOG")" -gt "${CURL_FAILURES:-0}" ] || { echo "curl: (56) Recv failure" >&2; exit 56; }; while [ $# -gt 0 ]; do [ "$1" = -o ] && { : >"$2"; break; }; shift; done'
+write_launcher sha256sum 'echo "$ACTIONLINT_FIXTURE_DIGEST  $1"'
+write_launcher tar 'echo "tar $*" >>"$TOOL_LOG"; printf "#!/usr/bin/env bash\necho 1.7.12\n" >"$4/actionlint"; chmod +x "$4/actionlint"'
+run_install_actionlint() {
+  : >"$actionlint_log"
+  rm -rf "$temp_dir/home/.cargo/bin/actionlint"
+  PATH="$bin_dir" HOME="$temp_dir/home" INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
+    CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT='' MAKELEVEL='' TOOL_LOG="$actionlint_log" \
+    GITHUB_ACTIONS='' RETRY_DELAY=0 ACTIONLINT_FIXTURE_DIGEST="$1" \
+    bash -c 'funcs=$1; scripts=$2; set --; source "$funcs"; SCRIPT_DIR=$scripts; install_actionlint' \
+    bash "$bootstrap_funcs" "$repo_root/scripts" >"$output" 2>&1
+}
+# --install-actionlint (CI's workflow-lint job) runs the same installer alone.
+run_install_actionlint_mode() {
+  : >"$actionlint_log"
+  rm -rf "$temp_dir/home/.cargo/bin/actionlint"
+  PATH="$bin_dir" HOME="$temp_dir/home" INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
+    CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT='' MAKELEVEL='' TOOL_LOG="$actionlint_log" \
+    GITHUB_ACTIONS='' RETRY_DELAY=0 ACTIONLINT_FIXTURE_DIGEST="$1" \
+    bash "$script" --install-actionlint >"$output" 2>&1
+}
+run_install_actionlint "$actionlint_digest" || fail "install_actionlint failed with a matching checksum"
+expect_line "[install] actionlint 1.7.12"
+grep -q "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_" "$actionlint_log" \
+  || fail "install_actionlint did not download the pinned release: $(cat "$actionlint_log")"
+grep -q "^tar -xzf .* -C $temp_dir/home/.cargo/bin actionlint$" "$actionlint_log" \
+  || fail "install_actionlint did not extract into CARGO_HOME/bin: $(cat "$actionlint_log")"
+# A transient download failure is retried; the checksum is still verified once.
+CURL_FAILURES=1 run_install_actionlint "$actionlint_digest" || fail "install_actionlint did not recover from one failed download"
+expect_line "WARNING: retry.sh: attempt 1/3 failed (exit 56), retrying in 0s: curl"
+[[ "$(grep -c '^curl ' "$actionlint_log")" == 2 ]] || fail "expected 2 actionlint download attempts: $(cat "$actionlint_log")"
+grep -q '^tar ' "$actionlint_log" || fail "install_actionlint did not extract after a retried download"
+run_install_actionlint_mode "$actionlint_digest" || fail "--install-actionlint failed with a matching checksum: $(cat "$output")"
+expect_line "[install] actionlint 1.7.12"
+[[ -x "$temp_dir/home/.cargo/bin/actionlint" ]] || fail "--install-actionlint did not install into CARGO_HOME/bin"
+reject_line "[install] rustup"
+reject_line "Doctor found"
+! run_install_actionlint_mode 0000000000000000000000000000000000000000000000000000000000000000 \
+  || fail "--install-actionlint accepted a checksum mismatch"
+expect_line "ERROR: actionlint archive SHA-256 mismatch"
+! run_install_actionlint 0000000000000000000000000000000000000000000000000000000000000000 \
+  || fail "install_actionlint accepted a checksum mismatch"
+expect_line "ERROR: actionlint archive SHA-256 mismatch"
+grep -q '^tar ' "$actionlint_log" && fail "install_actionlint extracted an archive that failed verification"
+write_launcher actionlint '[ "$1" = --version ] && { echo 1.7.12; exit 0; }; exit 1'
+run_install_actionlint "$actionlint_digest" || fail "install_actionlint failed on a ready host"
+expect_line "[skip] actionlint 1.7.12 already installed"
+[[ ! -s "$actionlint_log" ]] || fail "ready actionlint was reinstalled: $(cat "$actionlint_log")"
+# Without a pinned archive for the host, bootstrap warns instead of failing.
+rm -f "$bin_dir/actionlint" "$bin_dir/uname"
+write_launcher uname '[ "$1" = -m ] && { echo riscv64; exit 0; }; echo Linux'
+run_install_actionlint "$actionlint_digest" || fail "install_actionlint failed on a host without a pinned archive"
+expect_line "[warn] no actionlint 1.7.12 release archive for Linux riscv64"
+[[ ! -s "$actionlint_log" ]] || fail "install_actionlint downloaded on an unsupported host: $(cat "$actionlint_log")"
+# ...but --install-actionlint asked for that one binary, so it fails there.
+! run_install_actionlint_mode "$actionlint_digest" || fail "--install-actionlint succeeded on a host without a pinned archive"
+expect_line "ERROR: actionlint 1.7.12 is not installed; build it from https://github.com/rhysd/actionlint/releases/tag/v1.7.12"
+rm -f "$bin_dir/uname"
+ln -s "$(command -v uname)" "$bin_dir/uname"
+rm -f "$bin_dir/actionlint" "$bin_dir/curl" "$bin_dir/sha256sum" "$bin_dir/tar" "$bin_dir/mkdir" "$bin_dir/chmod"
+rm -rf "$temp_dir/home/.cargo/bin/actionlint"
+
 # A caller cargo that does not run the pinned toolchain draws a warning naming
 # the binary and both versions, without counting as a gap.
 printf '[toolchain]\nchannel = "1.96.0"\ncomponents = ["rustfmt", "clippy"]\n' >"$intentd_dir/rust-toolchain.toml"
@@ -547,10 +713,74 @@ grep -qx 'component list --toolchain 1.96.0 --installed' "$rustup_log" || fail "
 ! grep -q '^RUSTUP_AUTO_INSTALL=' "$rustup_log" || fail "rustup ran without RUSTUP_AUTO_INSTALL=0: $(grep '^RUSTUP_AUTO_INSTALL=' "$rustup_log" | head -n 1)"
 rm -f "$bin_dir/cargo" "$bin_dir/rustup"
 
+# install_bash3_build_tools installs through the host's package manager, fails
+# clearly without a supported one, and leaves a ready or macOS host alone.
+bash3_tools_log="$temp_dir/bash3-tools.log"
+run_install_bash3_tools() {
+  : >"$bash3_tools_log"
+  PATH="$bin_dir" HOME="$temp_dir/home" INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
+    CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT='' MAKELEVEL='' TOOL_LOG="$bash3_tools_log" BIN_DIR="$bin_dir" CHMOD_BIN="$(command -v chmod)" \
+    bash -c 'funcs=$1; set --; source "$funcs"
+      as_root() {
+        echo "as_root $*" >>"$TOOL_LOG"
+        [ -n "${BASH3_TOOLS_INSTALL_FAILS:-}" ] && return 0
+        local tool
+        for tool in gcc make bison; do
+          printf "#!/bin/sh\nexit 0\n" >"$BIN_DIR/$tool"; "$CHMOD_BIN" +x "$BIN_DIR/$tool"
+        done
+      }
+      install_bash3_build_tools' bash "$bootstrap_funcs" >"$output" 2>&1
+  local status=$?
+  rm -f "$bin_dir/gcc" "$bin_dir/make" "$bin_dir/bison"
+  return "$status"
+}
+grep -q '^install_bash3_build_tools() {' "$bootstrap_funcs" || fail "could not extract install_bash3_build_tools"
+rm -f "$bin_dir/uname"
+write_launcher uname 'echo Linux'
+write_launcher apt-get 'exit 0'
+run_install_bash3_tools || fail "install_bash3_build_tools failed with apt-get"
+expect_line "[install] Bash 3.2 build tools for make bash3 (missing: gcc make bison)"
+[[ "$(cat "$bash3_tools_log")" == "as_root apt-get install -y build-essential bison" ]] \
+  || fail "apt hosts should install build-essential and bison: $(cat "$bash3_tools_log")"
+rm -f "$bin_dir/apt-get"
+write_launcher dnf 'exit 0'
+run_install_bash3_tools || fail "install_bash3_build_tools failed with dnf"
+[[ "$(cat "$bash3_tools_log")" == "as_root dnf install -y gcc make bison" ]] \
+  || fail "dnf hosts should install gcc, make and bison: $(cat "$bash3_tools_log")"
+rm -f "$bin_dir/dnf"
+write_launcher yum 'exit 0'
+write_launcher gcc 'exit 0'
+write_launcher make 'exit 0'
+run_install_bash3_tools || fail "install_bash3_build_tools failed with yum"
+expect_line "[install] Bash 3.2 build tools for make bash3 (missing: bison)"
+[[ "$(cat "$bash3_tools_log")" == "as_root yum install -y gcc make bison" ]] \
+  || fail "yum hosts should install gcc, make and bison: $(cat "$bash3_tools_log")"
+! BASH3_TOOLS_INSTALL_FAILS=1 run_install_bash3_tools || fail "install_bash3_build_tools passed although the tools are still missing"
+expect_line "ERROR: Bash 3.2 build tools still missing after install: gcc make bison"
+rm -f "$bin_dir/yum"
+! run_install_bash3_tools || fail "install_bash3_build_tools succeeded without a package manager"
+expect_line "ERROR: unsupported Linux package manager; install a C compiler, make and bison"
+write_launcher apt-get 'exit 0'
+write_launcher gcc 'exit 0'
+write_launcher make 'exit 0'
+write_launcher bison 'exit 0'
+run_install_bash3_tools || fail "install_bash3_build_tools failed on a ready host"
+expect_line "[skip] Bash 3.2 build tools (C compiler, make, bison) already installed"
+[[ ! -s "$bash3_tools_log" ]] || fail "a ready host ran an install: $(cat "$bash3_tools_log")"
+rm -f "$bin_dir/uname"
+write_launcher uname 'echo FreeBSD'
+! run_install_bash3_tools || fail "install_bash3_build_tools succeeded on an unsupported OS"
+expect_line "ERROR: only Linux and macOS are supported; install a C compiler, make and bison"
+rm -f "$bin_dir/uname"
+write_launcher uname 'echo Darwin'
+run_install_bash3_tools || fail "install_bash3_build_tools failed on macOS"
+expect_line "[skip] Bash 3.2 build tools: stock /bin/bash is already Bash 3.2"
+[[ ! -s "$bash3_tools_log" ]] || fail "macOS ran an install: $(cat "$bash3_tools_log")"
+rm -f "$bin_dir/apt-get" "$bin_dir/uname"
+ln -s "$(command -v uname)" "$bin_dir/uname"
+
 # install_coverage_tooling is a no-op unless opted in; opted in, it skips a
 # complete host and runs cargo install / rustup component add for the gaps.
-bootstrap_funcs="$temp_dir/bootstrap-funcs.sh"
-sed '/^if \[\[ "\$MODE" == check \]\]; then$/,$d' "$script" >"$bootstrap_funcs"
 grep -q '^install_coverage_tooling() {' "$bootstrap_funcs" || fail "could not extract bootstrap functions for the install_coverage_tooling fixture"
 tool_log="$temp_dir/tool.log"
 # Resume's bounded group transport needs group() (nextest >= 0.9.133).
@@ -563,7 +793,7 @@ run_nextest_gap() {
   PATH="$bin_dir" HOME="$temp_dir/home" INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
     CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT='' MAKELEVEL='' \
     bash -c 'funcs=$1; set --; source "$funcs"
-      for name in required_submodules_ready load_versions python_ready openssl_dev_ready rust_toolchain_ready active_toolchain_ready node_ready pnpm_ready frontend_dependencies_ready gh_ready jq_ready shellcheck_ready; do
+      for name in required_submodules_ready load_versions python_ready openssl_dev_ready rust_toolchain_ready active_toolchain_ready node_ready pnpm_ready frontend_dependencies_ready gh_ready jq_ready shellcheck_ready bash3_build_tools_ready actionlint_ready; do
         eval "$name() { return 0; }"
       done
       installable_gap_exists' bash "$bootstrap_funcs" >"$output" 2>&1
@@ -589,7 +819,7 @@ run_doctor
 expect_line "[missing]  cargo-nextest >= 0.9.133"
 run_nextest_gap || fail "missing nextest was not an installable gap"
 
-ln -s "$(command -v mkdir)" "$bin_dir/mkdir"
+ln -sf "$(command -v mkdir)" "$bin_dir/mkdir"
 write_launcher curl 'echo "curl $*" >>"$TOOL_LOG"'
 write_launcher tar 'echo "tar $*" >>"$TOOL_LOG"; printf "cargo-nextest %s\n" "${NEXTEST_INSTALLED_VERSION:-0.9.143}" >"$NEXTEST_VERSION_FILE"'
 run_install_nextest() {
@@ -615,6 +845,30 @@ expect_line "[skip] cargo-nextest"
 printf 'cargo-nextest 0.9.132\n' >"$nextest_version_file"
 ! NEXTEST_INSTALLED_VERSION=0.9.132 run_install_nextest || fail "installer accepted an archive that still provides old nextest"
 expect_line "ERROR: cargo-nextest >= 0.9.133"
+
+# install_rust retries a toolchain download that fails transiently (rustup
+# could not reach static.rust-lang.org) and gives up with a clear error. The
+# extracted functions resolve SCRIPT_DIR from $0, so point it at scripts/.
+write_launcher rustup '[ "$1 $2" = "toolchain install" ] || exit 0; echo "rustup $*" >>"$TOOL_LOG"; [ "$(grep -c . "$TOOL_LOG")" -gt "$RUSTUP_FAILURES" ] || { echo "error: could not download file" >&2; exit 1; }'
+run_install_toolchain() {
+  : >"$tool_log"
+  PATH="$bin_dir" HOME="$temp_dir/home" INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
+    CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT='' MAKELEVEL='' TOOL_LOG="$tool_log" \
+    GITHUB_ACTIONS='' RETRY_DELAY=0 RUSTUP_FAILURES="$1" \
+    bash -c 'funcs=$1; scripts=$2; set --; source "$funcs"; SCRIPT_DIR=$scripts; load_versions
+      rust_toolchain_ready() { return 1; }
+      active_toolchain_ready() { return 0; }
+      nextest_ready() { return 0; }
+      nextest_version() { echo "cargo-nextest 0.9.143"; }
+      install_rust' bash "$bootstrap_funcs" "$repo_root/scripts" >"$output" 2>&1
+}
+run_install_toolchain 1 || fail "install_rust did not recover from one failed toolchain download"
+expect_line "[install] Rust 1.96.0 with rustfmt and clippy"
+expect_line "WARNING: retry.sh: attempt 1/3 failed (exit 1), retrying in 0s: rustup toolchain install 1.96.0 --profile minimal --component rustfmt --component clippy"
+[[ "$(grep -c . "$tool_log")" == 2 ]] || fail "expected 2 toolchain install attempts: $(cat "$tool_log")"
+! run_install_toolchain 99 || fail "install_rust succeeded although every toolchain download failed"
+expect_line "ERROR: retry.sh: giving up after 3 attempt(s), last exit 1: rustup toolchain install 1.96.0"
+[[ "$(grep -c . "$tool_log")" == 3 ]] || fail "expected 3 toolchain install attempts: $(cat "$tool_log")"
 rm -f "$bin_dir/cargo" "$bin_dir/rustup" "$bin_dir/curl" "$bin_dir/tar" "$bin_dir/mkdir"
 unset NEXTEST_VERSION_FILE
 
@@ -622,7 +876,9 @@ run_install_coverage() {
   : >"$tool_log"
   PATH="$bin_dir" HOME="$temp_dir/home" INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
     CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT='' MAKELEVEL='' TOOL_LOG="$tool_log" BOOTSTRAP_COVERAGE="$1" \
-    bash -c 'funcs=$1; set --; source "$funcs"; load_versions; install_coverage_tooling' bash "$bootstrap_funcs" >"$output" 2>&1 \
+    GITHUB_ACTIONS='' RETRY_DELAY=0 \
+    bash -c 'funcs=$1; scripts=$2; set --; source "$funcs"; SCRIPT_DIR=$scripts; load_versions; install_coverage_tooling' \
+      bash "$bootstrap_funcs" "$repo_root/scripts" >"$output" 2>&1 \
     || fail "install_coverage_tooling exited non-zero with BOOTSTRAP_COVERAGE=$1"
 }
 write_launcher cargo "[ \"\$1\" = install ] && { echo \"cargo \$*\" >>\"\$TOOL_LOG\"; exit 0; }; [ \"\$1\" = llvm-cov ] && exit 101; $pinned_cargo"

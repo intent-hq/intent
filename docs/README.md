@@ -39,9 +39,12 @@ members of the cloudlands-fe type that consumes it — today `AgentLite` ↔ `Ag
 (`src/shared/types.ts`) — and fails when an emitted field is missing on the FE side. To
 cover another row, add a pair to the manifest constant at the top of the script; to
 exempt a field the FE intentionally does not consume, add it to that pair's `ignore`
-map with a one-line reason. A stale entry — one whose field is no longer emitted or is
-now present in the FE type — is reported as a warning, not a failure, so an FE PR that
-declares a previously ignored field does not have to wait for the monorepo entry to be
+map with a one-line reason. A daemon-first field the FE will adopt later is instead a row
+of the [staged row fields table](./protocol/versioning.md#staged-row-fields-app-adoption-pending),
+added with the field's docs before the intentd PR; the check reports it as a warning
+until the FE declares it. A stale ignore entry or staged row — its field is no longer
+emitted or is now present in the FE type — is reported as a warning, not a failure, so
+an FE PR that declares the field does not have to wait for the monorepo entry to be
 removed; remove the entry in a follow-up.
 
 ## Harness Versioning — `HARNESS.md`
@@ -94,6 +97,7 @@ migrated from `packages/cloudlands-fe/docs/` after an accuracy audit:
 - [fe/DEPLOYING.md](./fe/DEPLOYING.md) — deployment infrastructure, runners, and feeds
 - [SCCACHE_SERVER.md](./SCCACHE_SERVER.md) — self-hosted sccache WebDAV cache server: provisioning, tokens and rotation, prune tuning, health check, rollback (config in `infra/sccache/`)
 - [GITHUB_RUNNERS.md](./GITHUB_RUNNERS.md) — self-hosted GitHub Actions runner slots on the cache box: install, credential and rotation, slots, drain, runner upgrades, troubleshooting (config in `infra/runners/`)
+- [CI_JOB_SIZING.md](./CI_JOB_SIZING.md) — `scripts/ci-job-sizes.py`: per-job resource report from the runner job stats, size-class recommendations and estimated savings
 
 ## Initial porting phase — **COMPLETE (historical)**
 

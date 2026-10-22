@@ -55,6 +55,13 @@ JQ_INSTALL_URL="https://jqlang.github.io/jq/download/"
 # make lint-shell runs shellcheck over scripts/*.sh.
 SHELLCHECK_INSTALL_URL="https://github.com/koalaman/shellcheck#installing"
 
+# cloudlands-fe pnpm run lint:workflows runs actionlint over its GitHub
+# workflows. Exact pin: keep the version and checksums equal to
+# packages/cloudlands-fe/scripts/check-workflows.mjs (from the release's
+# actionlint_<version>_checksums.txt).
+ACTIONLINT_VERSION="1.7.12"
+ACTIONLINT_INSTALL_URL="https://github.com/rhysd/actionlint/releases/tag/v$ACTIONLINT_VERSION"
+
 # Instrumented coverage (make coverage-e2e / coverage-all) needs cargo-llvm-cov
 # plus the llvm-tools-preview rustup component. Neither is required by make
 # test, so the doctor reports them as [optional] and bootstrap installs them
@@ -96,10 +103,12 @@ cleanup() {
 trap cleanup EXIT
 
 usage() {
-  echo "Usage: $0 [--check] [--check-frontend] [--coverage] [--yes]"
+  echo "Usage: $0 [--check] [--check-frontend] [--install-actionlint] [--coverage] [--yes]"
   echo "  --check            Report missing requirements without changing the host"
   echo "  --check-frontend   Report only the frontend toolchain gaps (Corepack + pinned pnpm)"
   echo "                     that block the dev/sandbox targets; exit 0 silently when ready"
+  echo "  --install-actionlint Install only the pinned, checksum-verified actionlint into"
+  echo "                     \$CARGO_HOME/bin (no prompt; CI's workflow-lint job); fails when it cannot"
   echo "  --coverage         Also install cargo-llvm-cov and llvm-tools-preview for"
   echo "                     make coverage-e2e / coverage-all (env alias: BOOTSTRAP_COVERAGE=1)"
   echo "  --yes              Install without prompting"
@@ -109,6 +118,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --check) MODE=check ;;
     --check-frontend) MODE=check-frontend ;;
+    --install-actionlint) MODE=install-actionlint ;;
     --coverage) WITH_COVERAGE=1 ;;
     --yes) ASSUME_YES=1 ;;
     -h|--help) usage; exit 0 ;;
@@ -527,6 +537,79 @@ shellcheck_ready() {
   shellcheck_version >/dev/null
 }
 
+# make bash3 compiles the pinned Bash 3.2 (scripts/install-ci-bash3.sh) for the
+# shell suites' compatibility pass, which needs a C compiler, make and a yacc
+# (bison). Stock macOS /bin/bash is already 3.2, so make bash3 builds nothing
+# there and the tools are not needed.
+bash3_build_tools_needed() {
+  [[ "$(uname -s)" != Darwin ]]
+}
+
+# Prints the missing tools (space separated), or nothing when all are present.
+bash3_build_tools_missing() {
+  local gaps=""
+  command -v gcc >/dev/null 2>&1 || command -v cc >/dev/null 2>&1 || gaps="$gaps gcc"
+  command -v make >/dev/null 2>&1 || gaps="$gaps make"
+  command -v bison >/dev/null 2>&1 || command -v yacc >/dev/null 2>&1 || gaps="$gaps bison"
+  printf '%s\n' "${gaps# }"
+}
+
+bash3_build_tools_ready() {
+  bash3_build_tools_needed || return 0
+  [[ -z "$(bash3_build_tools_missing)" ]]
+}
+
+# The first line of actionlint --version is the version: bare for release
+# archives, v-prefixed for a `go install ...@vX.Y.Z` build.
+actionlint_version() {
+  command -v actionlint >/dev/null 2>&1 || return 1
+  local output
+  output=$(actionlint --version 2>/dev/null) || return 1
+  output=${output%%$'\n'*}
+  output=${output#v}
+  [[ -n "$output" ]] || return 1
+  printf '%s\n' "$output"
+}
+
+# Exact pin, so a local run matches the cloudlands-fe CI result.
+actionlint_ready() {
+  [[ "$(actionlint_version)" == "$ACTIONLINT_VERSION" ]]
+}
+
+# actionlint_platform: the release archive suffix for this host, or failure.
+actionlint_platform() {
+  case "$(uname -s):$(uname -m)" in
+    Linux:x86_64|Linux:amd64) echo linux_amd64 ;;
+    Linux:aarch64|Linux:arm64) echo linux_arm64 ;;
+    Darwin:x86_64) echo darwin_amd64 ;;
+    Darwin:arm64) echo darwin_arm64 ;;
+    *) return 1 ;;
+  esac
+}
+
+actionlint_sha256() {
+  case "$1" in
+    linux_amd64) echo 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8 ;;
+    linux_arm64) echo 325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6 ;;
+    darwin_amd64) echo 5b44c3bc2255115c9b69e30efc0fecdf498fdb63c5d58e17084fd5f16324c644 ;;
+    darwin_arm64) echo aba9ced2dee8d27fecca3dc7feb1a7f9a52caefa1eb46f3271ea66b6e0e6953f ;;
+    *) return 1 ;;
+  esac
+}
+
+# sha256_of FILE: the hex digest with sha256sum (Linux) or shasum (macOS).
+sha256_of() {
+  local output
+  if command -v sha256sum >/dev/null 2>&1; then
+    output=$(sha256sum "$1") || return 1
+  elif command -v shasum >/dev/null 2>&1; then
+    output=$(shasum -a 256 "$1") || return 1
+  else
+    return 1
+  fi
+  printf '%s\n' "${output%% *}"
+}
+
 # Probed through cargo like the nextest check (not command -v), so a stale
 # cargo-llvm-cov binary that no longer runs counts as absent.
 llvm_cov_version() {
@@ -589,6 +672,11 @@ installable_gap_exists() {
   gh_ready || return 0
   jq_ready || return 0
   shellcheck_ready || return 0
+  bash3_build_tools_ready || return 0
+  # Without a pinned archive for this host bootstrap cannot close the gap.
+  if actionlint_platform >/dev/null; then
+    actionlint_ready || return 0
+  fi
   if [[ "$WITH_COVERAGE" == 1 ]]; then
     coverage_tooling_ready || return 0
   fi
@@ -785,6 +873,34 @@ check_all() {
     ok "shellcheck: $(shellcheck_version)"
   fi
 
+  if ! bash3_build_tools_needed; then
+    ok "Bash 3.2 build tools: not needed (stock /bin/bash is already Bash 3.2)"
+  elif bash3_build_tools_ready; then
+    ok "Bash 3.2 build tools: C compiler, make, bison"
+  else
+    missing "Bash 3.2 build tools: $(bash3_build_tools_missing) not found; required by make bash3 (the shell suites' 3.2 pass); run make bootstrap-dev-host"
+  fi
+
+  local actionlint_found
+  if ! command -v actionlint >/dev/null 2>&1; then
+    missing "actionlint $ACTIONLINT_VERSION: required by cloudlands-fe pnpm run lint:workflows; run make bootstrap-dev-host"
+  elif ! actionlint_found=$(actionlint_version); then
+    missing "actionlint: $(command -v actionlint) is on PATH but actionlint --version fails; reinstall it (run make bootstrap-dev-host)"
+  elif [[ "$actionlint_found" != "$ACTIONLINT_VERSION" ]]; then
+    missing "actionlint: found $actionlint_found; cloudlands-fe pins $ACTIONLINT_VERSION; run make bootstrap-dev-host"
+  else
+    ok "actionlint: $actionlint_found"
+  fi
+
+  if [[ "$(uname -s)" == Linux ]]; then
+    if ! command -v bwrap >/dev/null 2>&1; then
+      optional "bubblewrap: not installed (only make test HERMETIC=1 needs it); Debian/Ubuntu: sudo apt-get install bubblewrap"
+    elif bwrap --dev-bind / / true >/dev/null 2>&1; then
+      optional "bubblewrap: installed (make test HERMETIC=1 hides provider CLIs like CI)"
+    else
+      optional "bubblewrap: $(command -v bwrap) cannot create a sandbox (unprivileged user namespaces blocked?), so make test HERMETIC=1 will fail"
+    fi
+  fi
   if command -v sccache >/dev/null 2>&1; then
     optional "sccache: installed"
   else
@@ -869,13 +985,19 @@ install_submodules() {
   git -C "$ROOT_DIR" submodule update --init --recursive packages/intentd packages/cloudlands-fe || exit 1
 }
 
+# Bounded retries for the Rust downloads: a brief static.rust-lang.org blip
+# otherwise fails the whole bootstrap (and the bootstrap-install queue job).
+retry_download() {
+  bash "$SCRIPT_DIR/retry.sh" -- "$@"
+}
+
 install_rust() {
   if ! command -v rustup >/dev/null 2>&1; then
     command -v curl >/dev/null 2>&1 || { echo "ERROR: curl is required to install rustup" >&2; exit 1; }
     echo "[install] rustup and Rust $TOOLCHAIN"
     TEMP_FILE=$(mktemp "${TMPDIR:-/tmp}/rustup-init.XXXXXX") || exit 1
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o "$TEMP_FILE" || exit 1
-    sh "$TEMP_FILE" -y --profile minimal --default-toolchain "$TOOLCHAIN" --component rustfmt --component clippy || exit 1
+    retry_download curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o "$TEMP_FILE" || exit 1
+    retry_download sh "$TEMP_FILE" -y --profile minimal --default-toolchain "$TOOLCHAIN" --component rustfmt --component clippy || exit 1
     rm -f -- "$TEMP_FILE"
     TEMP_FILE=""
     hash -r
@@ -883,7 +1005,7 @@ install_rust() {
 
   if ! rust_toolchain_ready; then
     echo "[install] Rust $TOOLCHAIN with rustfmt and clippy"
-    rustup toolchain install "$TOOLCHAIN" --profile minimal --component rustfmt --component clippy || exit 1
+    retry_download rustup toolchain install "$TOOLCHAIN" --profile minimal --component rustfmt --component clippy || exit 1
   else
     echo "[skip] Rust $TOOLCHAIN with rustfmt and clippy already installed"
   fi
@@ -938,7 +1060,7 @@ install_coverage_tooling() {
 
   if ! llvm_tools_ready; then
     echo "[install] llvm-tools-preview component for Rust $TOOLCHAIN"
-    rustup component add --toolchain "$TOOLCHAIN" llvm-tools-preview || exit 1
+    retry_download rustup component add --toolchain "$TOOLCHAIN" llvm-tools-preview || exit 1
   else
     echo "[skip] llvm-tools-preview already installed"
   fi
@@ -1097,6 +1219,74 @@ install_shellcheck() {
   hash -r
 }
 
+# Installs the tools make bash3 needs to compile Bash 3.2 (see
+# bash3_build_tools_ready); macOS needs none.
+install_bash3_build_tools() {
+  if ! bash3_build_tools_needed; then
+    echo "[skip] Bash 3.2 build tools: stock /bin/bash is already Bash 3.2"
+    return
+  fi
+  if bash3_build_tools_ready; then
+    echo "[skip] Bash 3.2 build tools (C compiler, make, bison) already installed"
+    return
+  fi
+
+  echo "[install] Bash 3.2 build tools for make bash3 (missing: $(bash3_build_tools_missing))"
+  case "$(uname -s)" in
+    Linux)
+      if command -v apt-get >/dev/null 2>&1; then
+        as_root apt-get install -y build-essential bison || exit 1
+      elif command -v dnf >/dev/null 2>&1; then
+        as_root dnf install -y gcc make bison || exit 1
+      elif command -v yum >/dev/null 2>&1; then
+        as_root yum install -y gcc make bison || exit 1
+      else
+        echo "ERROR: unsupported Linux package manager; install a C compiler, make and bison, then re-run" >&2
+        exit 1
+      fi
+      ;;
+    *) echo "ERROR: only Linux and macOS are supported; install a C compiler, make and bison, then re-run" >&2; exit 1 ;;
+  esac
+  hash -r
+  bash3_build_tools_ready || {
+    echo "ERROR: Bash 3.2 build tools still missing after install: $(bash3_build_tools_missing)" >&2
+    exit 1
+  }
+}
+
+# The pinned release binary goes to $CARGO_HOME/bin, which this script already
+# puts on PATH; the archive is verified against the pinned checksum first.
+install_actionlint() {
+  if actionlint_ready; then
+    echo "[skip] actionlint $ACTIONLINT_VERSION already installed"
+    return
+  fi
+
+  local platform expected actual
+  if ! platform=$(actionlint_platform); then
+    echo "[warn] no actionlint $ACTIONLINT_VERSION release archive for $(uname -s) $(uname -m); build it from $ACTIONLINT_INSTALL_URL"
+    return
+  fi
+  expected=$(actionlint_sha256 "$platform") || exit 1
+  command -v curl >/dev/null 2>&1 || { echo "ERROR: curl is required to install actionlint" >&2; exit 1; }
+  echo "[install] actionlint $ACTIONLINT_VERSION from its release archive"
+  TEMP_FILE=$(mktemp "${TMPDIR:-/tmp}/actionlint.XXXXXX") || exit 1
+  retry_download curl --proto '=https' --tlsv1.2 -LsSf \
+    "https://github.com/rhysd/actionlint/releases/download/v$ACTIONLINT_VERSION/actionlint_${ACTIONLINT_VERSION}_$platform.tar.gz" \
+    -o "$TEMP_FILE" || exit 1
+  actual=$(sha256_of "$TEMP_FILE") || { echo "ERROR: sha256sum or shasum is required to verify actionlint" >&2; exit 1; }
+  if [[ "$actual" != "$expected" ]]; then
+    echo "ERROR: actionlint archive SHA-256 mismatch (expected $expected, got $actual)" >&2
+    exit 1
+  fi
+  mkdir -p "$CARGO_HOME/bin" || exit 1
+  tar -xzf "$TEMP_FILE" -C "$CARGO_HOME/bin" actionlint || exit 1
+  rm -f -- "$TEMP_FILE"
+  TEMP_FILE=""
+  hash -r
+  actionlint_ready || { echo "ERROR: $CARGO_HOME/bin/actionlint does not report version $ACTIONLINT_VERSION after installation (found: $(actionlint_version || echo unrunnable))" >&2; exit 1; }
+}
+
 install_frontend() {
   if ! command -v corepack >/dev/null 2>&1; then
     command -v npm >/dev/null 2>&1 || { echo "ERROR: npm is required to install Corepack" >&2; exit 1; }
@@ -1139,6 +1329,15 @@ if [[ "$MODE" == check ]]; then
   exit $?
 fi
 
+# make lint-workflows needs only actionlint, so CI installs just that pin
+# instead of the whole host. Unlike a full bootstrap, a host without a pinned
+# archive is an error here: the caller asked for this one binary.
+if [[ "$MODE" == install-actionlint ]]; then
+  install_actionlint
+  actionlint_ready || { echo "ERROR: actionlint $ACTIONLINT_VERSION is not installed; build it from $ACTIONLINT_INSTALL_URL" >&2; exit 1; }
+  exit 0
+fi
+
 if ! installable_gap_exists; then
   echo "All installable development dependencies are already present; nothing to do."
   check_all
@@ -1171,6 +1370,8 @@ install_frontend
 install_gh
 install_jq
 install_shellcheck
+install_bash3_build_tools
+install_actionlint
 
 echo
 check_all

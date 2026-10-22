@@ -111,7 +111,8 @@ Keep the relevant checks green before opening a PR:
 
 `make gate` runs `make check` followed by the full nextest suite. `make test`
 runs tests only; `make test-changed` selects tests changed against `BASE`
-(default `origin/main`) and falls back to the full suite for build-wide changes.
+(default `origin/main`) and falls back to the full suite for build-wide changes;
+`make test-select E='<nextest filterset>'` runs just the matching tests.
 
 Opt in to smaller local build artifacts with:
 
@@ -124,7 +125,7 @@ make -C packages/intentd test COMPACT=1
 Compact and ordinary gates support **Python 3.10+**. The runner uses a bundled
 TOML 1.1 parser offline, including under `python3 -S`; no parser installation is
 needed. Compact applies to the compiler steps in `check`, `test`,
-`test-changed` and `gate`, and to `clippy` and `lint-sources`.
+`test-changed`, `test-select` and `gate`, and to `clippy` and `lint-sources`.
 It sets `CARGO_INCREMENTAL=0` and dev/test profile `debug=0`, including discovered
 package and build overrides. `strip=none` preserves the existing macOS
 proc-macro workaround. Test selection, changed-test fallback and failure handling
@@ -225,14 +226,16 @@ command -v npm
 callback_run=$(mktemp -d "$HOME/intent-callback-gates.XXXXXX")
 callback_cache="$callback_run/cache"
 printf 'Keep setup logs and test receipts under %s\n' "$callback_run"
-INTENT_ACP_CALLBACK_ADAPTER_FIXTURE=$(python3 -I -B -S \
+# env -u NODE_OPTIONS: the provisioner refuses host Node preloads (e.g. a
+# monitoring tracer injected into every shell); the gates clear it themselves.
+INTENT_ACP_CALLBACK_ADAPTER_FIXTURE=$(env -u NODE_OPTIONS python3 -I -B -S \
   packages/intentd/scripts/prepare-acp-callback-fixture.py \
   --cache-dir "$callback_cache" --build-from-source \
   2>"$callback_run/source-build.log")
 export INTENT_ACP_CALLBACK_ADAPTER_FIXTURE
 
 # Revalidate the same cache without acquisition; stdout is only the fixture path.
-callback_offline=$(python3 -I -B -S \
+callback_offline=$(env -u NODE_OPTIONS python3 -I -B -S \
   packages/intentd/scripts/prepare-acp-callback-fixture.py \
   --cache-dir "$callback_cache" --offline \
   2>"$callback_run/offline.log")
@@ -253,7 +256,7 @@ and remains a failure even through `tee`. Inspect the retained log before retryi
 
 For later runs, reuse the saved `callback_cache` path with `--offline`, assign and
 export its returned fixture path, and rerun preflight. With the fixture variable
-unset, `make test`, `make test-changed` and `make gate` do this themselves for a
+unset, `make test`, `make test-changed`, `make test-select` and `make gate` do this themselves for a
 ready cache under `~/.cache/intent/acp-callback-fixture`, and gate preflight hides
 host `NODE_OPTIONS` (such as a Datadog preload) from its checks. An empty offline cache
 refuses; it never downloads. Corrupt caches, mismatched manifests/Node and injected
@@ -418,11 +421,51 @@ expect a low hit rate unless your path matches a CI runner's.
 
 The `shell-tests-bash3` CI job runs on GitHub-hosted Linux with a checksum-verified
 Bash 3.2.57 build. It tests the shell language compatibility needed by macOS
-users without consuming a macOS runner. To reproduce on Linux:
+users without consuming a macOS runner. CI runs the shell suites only in the
+merge queue, so a local run is the only check before a 3.2-only breakage ejects
+the PR. Run it before opening a PR that touches `scripts/*.sh`:
 
 ```bash
-bash scripts/install-ci-bash3.sh /tmp/intent-bash3
-BASH3_BIN=/tmp/intent-bash3/bash REQUIRE_BASH3=1 bash scripts/consumer-checks.test.sh
+make bash3   # one-time build (a few minutes; make bootstrap-dev-host installs gcc, make and bison)
+REQUIRE_BASH3=1 bash scripts/consumer-checks.test.sh
 ```
 
-The interpreter is isolated; the installer does not replace the system shell.
+`make bash3` builds the same pinned interpreter into
+`${XDG_CACHE_HOME:-~/.cache}/intent-bash3` and does nothing once it is built.
+Export `BASH3_CACHE_DIR` (an absolute path) to move the cache. The suites find
+the cache through the shared lookup in `scripts/find-bash3.sh`, so `BASH3_BIN`
+is only needed for an interpreter elsewhere. On macOS the stock `/bin/bash` is
+already 3.2, so the target builds nothing. Without `REQUIRE_BASH3`, a missing interpreter is a skip
+notice rather than a failure. `scripts/dev-sandbox.test.sh` has no lookup and
+must be started by the interpreter itself, as CI does:
+`REQUIRE_BASH3=1 DEV_SANDBOX_TEST_STARTUP_ONLY=1 ~/.cache/intent-bash3/bash scripts/dev-sandbox.test.sh`.
+The interpreter is isolated; the build does not replace the system shell.
+
+### Script checks for your change
+
+CI runs the shell suites only in the merge queue, so a broken suite or a new
+shellcheck finding otherwise shows up after a push. Before pushing changes to
+`scripts/`, the `Makefile` or `.github/workflows/ci.yml`, run:
+
+```bash
+make test-scripts-changed            # changed vs origin/main, incl. uncommitted work
+DRY_RUN=1 make test-scripts-changed  # print the plan only
+BASE=<ref> make test-scripts-changed # compare with another base
+```
+
+It always runs `make lint-shell`. It runs every suite in the ci.yml
+`shell-tests` job (read from that job, so the lists cannot drift) when the
+`Makefile`, `ci.yml`, `scripts/*.sh`, `scripts/*.py` or `scripts/fixtures/`
+changed. For each changed `scripts/*.mjs` with a sibling `.test.mjs`, it runs
+that test with `node --test`. Every step runs; the failures are listed at the
+end. Like CI it needs node, shellcheck and the `packages/intentd`
+submodule. It skips the Bash 3.2 pass (see above) and the sccache and runner
+steps that download tools.
+
+After editing anything under `.github/`, run `make lint-workflows`. It runs the
+pinned actionlint (with shellcheck over `run:` scripts) over
+`.github/workflows`, and CI's `workflow-lint` job runs the same check on every
+PR. Main is kept finding-free, so a finding in a file you touched is new: fix
+it, or add a path- and message-scoped ignore to `.github/actionlint.yaml` for a
+confirmed false positive. (shellcheck is not pinned, so a newer local copy can
+flag an untouched workflow that CI's does not.) `make bootstrap-dev-host` installs actionlint and shellcheck.

@@ -15,16 +15,18 @@ cloudlands-fe).
 
 | Question | Run |
 |---|---|
-| Where is the release train? Latest tags and ages, alpha/beta/stable versions, the fe daemon pin, open Release and pin-bump PRs with CI Gate state, unshipped commits, the last auto-cut decision line, runner maintenance overrides | `make release-status` (`STATUS_JSON=1` for JSON; `NO_LOGS=1` skips the run-log fetch) |
+| Where is the release train? Latest tags and ages, alpha/beta/stable versions, the fe daemon pin, open Release and pin-bump PRs with CI Gate state and merge queue position, what the merge queue head is waiting on, unshipped commits, the last auto-cut decision line, the last auto-pin-intentd run and its failure reason, runner maintenance overrides | `make release-status` (`STATUS_JSON=1` for JSON; `NO_LOGS=1` skips the run-log fetch) |
 | Which alpha carries my commit? | `make shipped-in COMPONENT=<intentd\|cloudlands-fe> SHA=<sha>` (hooks call `scripts/shipped-in.sh` for its exit codes) |
 
 ## Guarded direct release merges
 
 Both components' `auto-cut-alpha.yml` workflows can squash-merge a verified
 release metadata PR directly, avoiding a second CI run in the merge queue.
-Ordinary PRs, frontend sidecar pin PRs, and monorepo submodule bump PRs continue
-through the queue. A release PR whose diff does not match the metadata shape
-uses the ordinary guarded queue path too.
+cloudlands-fe's `auto-pin-intentd.yml` merges a verified sidecar pin PR directly
+the same way ([Direct sidecar pin merges](#direct-sidecar-pin-merges)). Ordinary
+PRs and monorepo submodule bump PRs continue through the queue. A release or pin
+PR whose diff does not match its verified shape uses the ordinary guarded queue
+path too.
 
 Direct merging requires the existing release guards to pass: the expected
 same-repository release branch and author, no draft or `hold-release`, acceptable
@@ -41,7 +43,8 @@ intentd permits independent crate version changes, matching local dependency
 requirements and workspace-package lockfile versions, plus harmless TOML
 formatting/comments; cloudlands-fe permits the package version and matching
 release-please manifest update. Source, workflow, external dependency and sidecar
-pin changes do not qualify. A classification failure cannot enable direct merging.
+pin changes do not qualify for this release route. A classification failure cannot
+enable direct merging.
 The merge uses `--squash --admin --match-head-commit <assessed-head-sha>`; the
 head match prevents a refreshed, unchecked PR head from being merged using the
 earlier decision. Queue submission is not evidence of a completed merge or a
@@ -81,6 +84,31 @@ episode. It also treats a missing CI Gate as running CI, with the full
 `AUTO_CUT_CI_WAIT_MINUTES` budget, while other CI jobs on the head are still
 queued or in progress and none has failed. CI Gate only reports after every
 other CI job finishes.
+
+### Direct sidecar pin merges
+
+The cloudlands-fe merge queue builds one entry at a time, and an ordinary entry
+takes about 45 minutes. On 2026-10-19 pin PR cloudlands-fe#3535 waited more than
+3 hours behind other entries, and auto-cut deferred the alpha the whole time.
+A plain pin bump already takes the CI fast path, so the queue only added wait.
+`auto-pin-intentd.yml` therefore waits up to 10 minutes for `CI Gate` on the head
+it pushed. `scripts/auto-pin-merge-route.mjs`, run from the workflow's trusted
+checkout of main, then allows a direct merge only when all of these hold:
+
+- `CI Gate` succeeded on that exact head, with no change request and no
+  unresolved review thread (`--admin` would otherwise skip them).
+- The PR's own diff matches `release-pr-fast-path.mjs --pin-only`: only
+  `intentd.version` and the regenerated `source-pin` line, with regular file modes.
+  A `CURRENT_PROTOCOL_VERSION` change is a protocol bump, so it takes the queue.
+- Main has not changed either pin file since the PR's base. Main may otherwise
+  have moved: the cloudlands-fe ruleset does not require up-to-date branches, and
+  a queued pin takes the same CI fast path, so the queue would not retest it.
+
+The merge uses `--squash --admin --match-head-commit <tested-head-sha>`. Any failed,
+timed-out or unreadable guard arms auto-merge through the queue instead. A rolling
+PR already in the queue locks its branch, so the run skips with a notice; the next
+run after it lands advances the pin. A direct merge moves main under the queue, so
+GitHub rebuilds the entry being tested at that moment, as release direct merges do.
 
 The direct path uses the existing `intent-hq-ci` account exemption: User
 `335379076`, mode `always`, on the repository **Default** ruleset in intentd and
@@ -178,11 +206,14 @@ suite is `python3 -S -B -m unittest -v scripts.test_cleanup_prereleases`.
   contents:write on `intent-hq/cloudlands-fe`) and is fail-soft: a missing secret or
   failed dispatch logs a warning and never fails the publish — the fe crons then act
   as the backstop.
-- Windows validation is post-merge only. intentd PRs and merge-queue runs never use
-  a Windows runner. Every push to `main` runs the native Windows check, Clippy,
-  runtime and lifecycle proofs, release build, `install-ps1` and Windows Pi legs, and
-  that push run's CI Gate requires them. A Windows-only regression therefore lands
-  on `main` and holds releases instead of merges. Before merging the Release PR,
+- Windows lint runs in the merge queue; the rest of Windows validation is post-merge
+  only. intentd PRs never use a Windows runner. Each merge-queue run has a required
+  `windows-lint` job (native Windows `cargo check` and target-gated Clippy), so a
+  Windows-only compile or lint error is ejected from the queue instead of landing.
+  Every push to `main` runs the Windows runtime and lifecycle proofs, release build,
+  `install-ps1` and Windows Pi legs, and that push run's CI Gate requires them. A
+  Windows-only runtime regression therefore lands on `main` and holds releases instead
+  of merges. Before merging the Release PR,
   `auto-cut-alpha.yml` reads the latest push-event `ci.yml` run on `main`'s live tip,
   which the Release PR head must contain (see
   [Guarded direct release merges](#guarded-direct-release-merges)). A green run proceeds. A queued or running
@@ -218,24 +249,136 @@ suite is `python3 -S -B -m unittest -v scripts.test_cleanup_prereleases`.
 
 ### When a published daemon reaches running installs
 
-A sitter-supervised daemon (`intentd serve`) picks up a channel publish by one of two
-paths:
+A sitter-supervised daemon (`intentd serve`) picks up a channel publish on a
+schedule that depends on its channel. The sitter re-reads the channel at every tick
+and idle request, so `intentd sitter channel` switches the schedule on a running
+service.
+
+**Stable — at most one automatic check per UTC day.** The sitter records the UTC
+date of its last *successful* automatic check (`last_check_at` in `state.json`) and
+makes a network check only when none is recorded for today:
+
+- **Startup** checks only when due; when it has already checked today, the
+  installed version starts with no request.
+- **While running**, a local tick every 50–70 min makes the check once the UTC day
+  rolls over, so rollover checks spread over the first hour after midnight UTC. A
+  failed check (offline, every source down) is not recorded, so the next tick
+  retries.
+- A newer version is **staged** and handed to the daemon through the idle-restart
+  handshake: once no agent has had a turn in flight for `updates.idleGraceSeconds`
+  (default 120 s), the daemon signals the sitter (`SIGUSR2`, at most every
+  `updates.idleCheckIntervalMinutes`, default 60) and restarts into the staged
+  version the next moment no turn is in flight. That idle request makes no
+  network check unless one is due. If the staged version is still not running,
+  the first tick after it has waited 24 h forces a graceful restart.
+
+A new stable release therefore reaches a running install in two separate steps.
+**Discovery** can take up to about a day: an install that checked just before a
+publish does not look again until the next UTC day, and the 50–70 min tick jitter
+adds up to about an hour after the rollover. **Activation** of the staged version
+then happens at the next idle moment, so an idle install switches within about an
+hour; a continuously busy daemon waits for the forced restart on the first tick
+after the staged version has waited 24 h (up to roughly another hour). In the worst case a busy install runs the new stable release about two
+days after it is published.
+
+**Alpha and beta — unchanged.**
 
 - **Opportunistic, idle-triggered** — once no agent has had a turn in flight for
   `updates.idleGraceSeconds` (default 120 s), the daemon asks its sitter to check
   now (`SIGUSR2`), at most every `updates.idleCheckIntervalMinutes` (default 60).
   The sitter stages any newer version and the daemon restarts into it the next
   moment no turn is in flight, so an idle install updates within about an hour of
-  the publish without interrupting a running agent. `updates.checkOnIdle=false`
-  (live setting, no restart; see
-  [protocol/methods/settings.md](./protocol/methods/settings.md)) disables this path.
-- **Forced, periodic** — the sitter's randomized 12–24 h check, unchanged: it
-  installs a newer version (or one already staged) and restarts the daemon whether
-  or not a turn is in flight. This is the fallback for continuously busy installs and
-  the only path when `checkOnIdle` is off.
+  the publish without interrupting a running agent.
+- **Forced, periodic** — the sitter's randomized 12–24 h check: it installs a newer
+  version (or one already staged) and restarts the daemon whether or not a turn is
+  in flight. This is the fallback for continuously busy installs and the only path
+  when `checkOnIdle` is off.
 
-`intentd update` (`system.requestUpdate`, "Update now") still checks and restarts
-immediately.
+On every channel, `updates.checkOnIdle=false` (live setting, no restart; see
+[protocol/methods/settings.md](./protocol/methods/settings.md)) stops the daemon's
+idle requests. `intentd update` (`system.requestUpdate`, "Update now") always checks
+and restarts immediately, and a manual check never counts as the day's check.
+Failed-start re-checks still run on every channel.
+
+The desktop app follows the same rule for its own updates: on **stable** it checks
+at startup (10 s after launch) only if no check has succeeded that UTC day, and
+its hourly tick and focus/resume checks run only once the day has rolled over.
+Alpha and beta keep the startup check, the hourly check, and focus/resume checks
+after 4 h. "Check for updates" and channel switches always check immediately. A
+failed stable check is not recorded, so the app tries again, but automatic retries
+are throttled: startup, the hourly tick and focus/resume share one limit of one
+failed automatic attempt per hour, so the next focus after a failure does not
+necessarily retry at once. Manual checks and channel switches bypass this limit.
+
+### Update-check statistics (`updates.intentapp.dev`)
+
+Both the sitter and the desktop app fetch their update feeds through
+`https://updates.intentapp.dev`, a separate Vercel project
+([intent-hq/intent-updates](https://github.com/intent-hq/intent-updates)). It
+counts the request and answers with a `302` to the same GitHub asset as before; it
+never serves a manifest or a feed itself, so GitHub stays the only source of
+updates.
+
+| | Sitter (standalone intentd) | Desktop app |
+|---|---|---|
+| Request | `/channel/<ch>.json` → `github.com/intent-hq/intentd-releases/releases/download/channel-<ch>/<ch>.json` | `/desktop/<ch>/<feed>.yml` and the installers it lists → `github.com/intent-hq/cloudlands-releases/releases/download/<ch>/<file>` |
+| `p` platform | target triple | `<platform>-<arch>` |
+| `v` version | sitter version | app version |
+| `src` install source | `brew`, `deb`, `script`, `windows`, `unknown` | `dmg`, `nsis`, `appimage`, `deb`, `unknown` |
+| `k` trigger | `startup`, `daily`, `idle`, `manual` | `startup`, `daily`, `periodic`, `focus`, `manual`, `channel` |
+| `d` daily flag | `1` while no check has *succeeded* this UTC day (from a date in `state.json`) | same (from the `lastUpdateCheckDay` local pref) |
+| Opt-out | `DO_NOT_TRACK=1`, `INTENTD_DISABLE_TELEMETRY=1`, or `telemetry = false` in `<data-dir>/sitter/config.toml` (re-read on every check, kept when `intentd sitter channel` rewrites the file); `INTENTD_SITTER_MANIFEST_BASE_URL` also skips the endpoint | **Settings → General → Updates → Share anonymous update statistics** (on by default, `shareUpdateStatistics` local pref), `DO_NOT_TRACK=1`, or a custom `AUTO_UPDATE_URL` |
+
+No IDs, hostnames, usernames or paths are sent; the sitter's User-Agent is
+`intentd-sitter/<ver> (<triple>)`. The service allowlists every value (anything
+else is counted as `other`), passes Vercel only `user-agent` and `x-forwarded-for`
+so Vercel can derive the country, and never logs or stores the IP. With any opt-out
+the request goes straight to GitHub.
+
+**Fallback.** Any failure of the endpoint (down, 404, slow, or an unexpected
+redirect) falls back to GitHub. The endpoint records its events *before* it
+returns the redirect, so a check whose GitHub fetch then fails (or that the client
+retries on GitHub) may already have been counted. Counting is best effort: a
+request that never reached the service, an event the service failed to record, an
+opted-out install and a version older than this change are not counted:
+
+- The sitter gives the endpoint its own 10 s timeout, then tries the existing
+  `intent-hq/intentd-releases` → `intent-hq/intentd` GitHub bases.
+- The desktop app retries a failed or hung check once against the GitHub feed with
+  no user-visible error, then stays on GitHub for the rest of the session; a failed
+  download through the endpoint also moves the session to GitHub.
+
+**Redirect and host allowlists.**
+
+- The sitter's endpoint client accepts a first redirect only to exactly
+  `https://github.com/intent-hq/{intentd-releases,intentd}/releases/download/channel-<ch>/<ch>.json`
+  for the requested channel (no query, port or userinfo), then only https hops on
+  `*.githubusercontent.com`, at most 5 hops. A response that never left the endpoint
+  is refused, so a compromised Vercel project cannot serve a manifest.
+- The desktop app's updater session (`electron-updater` partition) cancels any
+  request outside `updates.intentapp.dev/desktop/`,
+  `github.com/intent-hq/cloudlands-releases/releases/download/` and
+  `*.githubusercontent.com` (plus a custom `AUTO_UPDATE_URL` prefix). The macOS
+  code-signature and Windows publisher checks remain the main protection.
+- electron-updater attaches its persistent per-installation `.updaterId` as an
+  `x-user-staging-id` header to feed requests. The app strips that header
+  (case-insensitively) from every request to `updates.intentapp.dev`, including
+  redirect hops back to it, so the endpoint never receives an installation ID.
+  Direct GitHub requests keep it, since staged rollouts are decided locally.
+
+**Reading the data.** Open the `updates.intentapp.dev` Vercel project →
+**Analytics → Events**. The Pro plan allows two properties per event:
+
+| Event | Properties |
+|---|---|
+| `intentd_update_check` / `desktop_update_check` | `platform`, `context` = `<ch>/<src>/<k>` (e.g. `stable/brew/idle`) |
+| `intentd_daily_active` / `desktop_daily_active` | `platform`, `version`; fired for every request with `d=1`. The day is recorded only after a successful fetch, so an install whose checks keep failing sends `d=1` (and is counted again) on each retry that day. Treat the count as an approximation of daily active installs: retries can overcount it, and missing or opted-out telemetry undercounts it |
+| `desktop_update_download` | `platform`, `version`, parsed from the artifact name; `.blockmap` files and range continuations are redirected but not counted |
+
+Country comes from Vercel's lookup of the forwarded IP. Only sitter and desktop versions
+released after this change go through the endpoint, and the desktop app's bundled
+daemon does not use the sitter, so the two sources never count the same install
+twice.
 
 ### Cutting a sitter release
 
@@ -708,13 +851,15 @@ Release builds are not routed: cloudlands-fe's signed desktop Mac builds name
 electron-builder's keychain step fails on macOS 26 images. cloudlands-fe routes
 its own Linux jobs with a separate, simpler probe in `intent-pr.yml` that uses the same Linux labels, slot counts and `CI_LINUX_RUNNER_DISABLED` override.
 
-The self-hosted Linux x64 fleet is two pools of runner slots on the cache box, both
+The self-hosted Linux x64 fleet is pools of runner slots on the cache box and on
+runner-only hosts ([GITHUB_RUNNERS.md](./GITHUB_RUNNERS.md)), all
 unprivileged ephemeral containers (no sudo, no Docker socket):
 
 | Pool | Labels | Slots | Takes jobs that ask for |
 |---|---|---|---|
-| heavy | `[self-hosted, linux, x64, intent-cache]` | 2, about 8 CPUs / 48 GB each | larger-runner labels (`gh-linux-8x`, `gh-linux-16x`) |
-| fast | `[self-hosted, linux, x64, intent-cache-small]` | 6, 1 CPU / 3 GB each | standard labels (`ubuntu-24.04`, `ubuntu-22.04`) |
+| heavy | `[self-hosted, linux, x64, intent-cache]` | 2 by default (`CI_LINUX_HEAVY_SLOTS`), 8 CPUs each | larger-runner labels (`gh-linux-8x`, `gh-linux-16x`) |
+| xl | `[self-hosted, linux, x64, intent-cache-xl]` | 0 by default (`CI_LINUX_XL_SLOTS`), 16 CPUs each | `gh-linux-16x` only |
+| fast | `[self-hosted, linux, x64, intent-cache-small]` | 6 by default (`CI_LINUX_SMALL_SLOTS`), 1 CPU / 3 GB each | standard labels (`ubuntu-24.04`, `ubuntu-22.04`) |
 
 A job is heavy when it compiles Rust or its recent median duration is over about
 5 minutes; that cut-off is a tunable choice. Heavy jobs ask for a larger-runner label
@@ -725,8 +870,11 @@ reason.
 
 The shared probe checks online runners and paginated queued/running jobs across all
 three repositories. Each Linux pool bursts once its queued plus running jobs reach
-the smaller of its slot count (`THRESHOLD`, 2, and `SMALL_THRESHOLD`, 6, in
-`runner-route.yml`; raise them when slots are added) and its online slot count. Other platforms require explicitly idle runners with room
+the smaller of its slot count (the organization or repository variables
+`CI_LINUX_HEAVY_SLOTS`, `CI_LINUX_XL_SLOTS` and `CI_LINUX_SMALL_SLOTS`, defaults
+2, 0 and 6; raise them when slots are added) and its online slot count. A
+`gh-linux-16x` job takes a free xl slot first, then a free heavy slot, then goes
+hosted; a `gh-linux-8x` job never takes an xl slot. Other platforms require explicitly idle runners with room
 for queued demand. Queued jobs older than 15 minutes, missing compatible runners,
 unreadable capacity (including sibling queues), or
 [maintenance overrides](#maintenance-overrides) select the hosted fallback; each

@@ -235,8 +235,8 @@ of evidence are independent:
 | Field | Variants and meaning |
 | --- | --- |
 | `gitReceipts` | Completed primitives only: `{ stage: "commit", commitHash }` or `{ stage: "push", pushedSha }`. Missing receipt means missing completion evidence, not proof of no effect. |
-| `outcome` | `{ status: "not-attempted" }`; `{ status: "created"|"reused", review }`; `{ status: "failed", stage, code, message }`; or `{ status: "uncertain", stage, message }`. `code` may be null; stage uses the three qualified action spellings. |
-| `publication` | `{ state: "included"|"local-ahead"|"diverged", localHeadSha, remoteSourceSha }`; `{ state: "remote-branch-missing", localHeadSha }`; or `{ state: "unknown", localHeadSha, remoteSourceSha }`. SHAs may be null in the last two variants. |
+| `outcome` | `{ status: "not-attempted" }`; `{ status: "created"\|"reused", review }`; `{ status: "failed", stage, code, message }`; or `{ status: "uncertain", stage, message }`. `code` may be null; stage uses the three qualified action spellings. |
+| `publication` | `{ state: "included"\|"local-ahead"\|"diverged", localHeadSha, remoteSourceSha }`; `{ state: "remote-branch-missing", localHeadSha }`; or `{ state: "unknown", localHeadSha, remoteSourceSha }`. SHAs may be null in the last two variants. |
 
 `not-attempted` can accompany a successful commit/push-only call. A permitted
 refusal before a consuming stage claim can retain a failed outcome for that
