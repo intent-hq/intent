@@ -2,10 +2,10 @@ name: intent-cache runner smoke
 
 # Exercises the self-hosted runner pools (infra/runners, docs/GITHUB_RUNNERS.md):
 # isolation, paths and limits on every pool, a fresh container per job, and
-# sccache reuse of entries a GitHub-hosted runner wrote, with every slot busy at
-# once. Memory limits differ by host (heavy: 48 GiB on intent-cache, 30-32 GiB on
-# an EPYC host), so each pool is checked against a range that covers every
-# committed host config (test_runners.py keeps them in step).
+# sccache reuse of entries a GitHub-hosted runner wrote, with every heavy slot
+# busy at once. Memory limits differ by host (heavy: 36 GiB on intent-cache,
+# 30-32 GiB on an EPYC host), so each pool is checked against a range that
+# covers every committed host config (test_runners.py keeps them in step).
 on:
   workflow_dispatch:
     inputs:
@@ -33,8 +33,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - {label: intent-cache, cpus: 8, memory_min: 32212254720, memory_max: 51539607552}
-          - {label: intent-cache-small, cpus: 1, memory_min: 3221225472, memory_max: 3221225472}
+          - {label: intent-cache, cpus: 8, memory_min: 32212254720, memory_max: 38654705664}
     runs-on: [self-hosted, '${{ matrix.label }}']
     timeout-minutes: 10
     outputs:
@@ -205,37 +204,7 @@ jobs:
     needs: cache-writer
     strategy:
       matrix:
-        slot: [a, b]
+        slot: [a, b, c]
     runs-on: [self-hosted, intent-cache]
     timeout-minutes: 60
     steps: *cache-build
-
-  # Keeps all six small slots busy while the heavy slots build, so the
-  # cache is measured with every slot loaded.
-  cache-reader-small:
-    name: Build intent-core (intent-cache-small slot ${{ matrix.slot }}, reads the cache)
-    needs: cache-writer
-    strategy:
-      matrix:
-        slot: [1, 2, 3, 4, 5, 6]
-    runs-on: [self-hosted, intent-cache-small]
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          submodules: false
-      - run: git submodule update --init --depth=1 packages/intentd
-      - name: Configure the self-hosted compiler cache
-        env:
-          INTENT_SCCACHE_ENDPOINT: ${{ vars.INTENT_SCCACHE_ENDPOINT }}
-          INTENT_SCCACHE_TOKEN: ${{ secrets.INTENT_SCCACHE_TOKEN }}
-          INTENT_SCCACHE_MODE: ${{ vars.INTENT_SCCACHE_MODE }}
-        run: python3 scripts/setup-sccache.py
-      - name: Build intent-core
-        working-directory: packages/intentd
-        env:
-          CARGO_TERM_PROGRESS_WHEN: never
-        run: |
-          sccache --zero-stats >/dev/null
-          cargo build --locked -p intent-core
-          sccache --show-stats

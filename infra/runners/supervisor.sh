@@ -3,9 +3,8 @@
 # in a fresh container until its single job ends, clean up and exit.
 # github-runner@<pool>-<n>.service restarts this for the next job.
 #
-# Slots belong to pools (default: heavy, 2 x 8 CPUs, 48 GB, label intent-cache;
-# small, 6 x 1 CPU, 3 GB, label intent-cache-small; other hosts may add xl,
-# 16 CPUs, label intent-cache-xl). Each slot is pinned to its own CPU set from
+# Slots belong to pools (default: heavy, 3 x 8 CPUs, 36 GB, label intent-cache;
+# other hosts may add xl, 16 CPUs, label intent-cache-xl). Each slot is pinned to its own CPU set from
 # <POOL>_CPUSETS, so nproc and os.availableParallelism() inside a job report
 # that slot's CPU count. Runners are named <RUNNER_NAME_PREFIX>-<pool>-<n>-<time>;
 # each host has its own prefix, and every prefix in the fleet starts with
@@ -77,19 +76,13 @@ load_config() {
   RUNNER_IMAGE=intent-gh-runner:current
   RUNNER_NETWORK=gh-runners
   RUNNER_BRIDGE=gh-runners0
-  RUNNER_POOLS="heavy small"
-  HEAVY_SLOTS=2
+  RUNNER_POOLS=heavy
+  HEAVY_SLOTS=3
   HEAVY_LABELS=self-hosted,linux,x64,intent-cache
-  HEAVY_CPUSETS="0-3,12-15 4-7,16-19"
-  HEAVY_MEMORY=48g
+  HEAVY_CPUSETS="0-3,12-15 4-7,16-19 8-11,20-23"
+  HEAVY_MEMORY=36g
   HEAVY_PIDS=16384
   HEAVY_SHM=1g
-  SMALL_SLOTS=6
-  SMALL_LABELS=self-hosted,linux,x64,intent-cache-small
-  SMALL_CPUSETS="8 9 10 20 21 22"
-  SMALL_MEMORY=3g
-  SMALL_PIDS=4096
-  SMALL_SHM=256m
   if [ -f "$config_file" ]; then
     read_kv "$config_file" "GITHUB_ORG RUNNER_GROUP RUNNER_GROUP_REPOS RUNNER_NAME_PREFIX RUNNER_FLEET_PREFIX RUNNER_IMAGE RUNNER_NETWORK RUNNER_BRIDGE RUNNER_POOLS" \
       "^[A-Z][A-Z0-9]*_($POOL_KEYS)\$"
