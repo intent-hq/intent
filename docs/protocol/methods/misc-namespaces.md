@@ -6,7 +6,7 @@ Routing-only `workspaceId?` additions below are [prepared contract fields](../wo
 
 | Method | Params | Result |
 | --- | --- | --- |
-| crossWorkspace.listSiblings | workspaceId (req) | sibling workspaces of the given workspace. Siblings are workspaces with the same non-empty GitHub `repositoryOwner`/`repositoryName` (case-insensitive, trailing `.git` tolerated) OR an identical non-empty source `repositoryPath`; a caller with neither errors as not associated with a repository |
+| crossWorkspace.listSiblings | workspaceId (req), includeRetired?: boolean (default false, protocol 15.2) | sibling workspaces of the given workspace; retired workspaces only with `includeRetired: true` ([Retired workspaces](./workspace.md#retired-workspaces)). Siblings are workspaces with the same non-empty GitHub `repositoryOwner`/`repositoryName` (case-insensitive, trailing `.git` tolerated) OR an identical non-empty source `repositoryPath`; a caller with neither errors as not associated with a repository |
 | crossWorkspace.readNote | targetWorkspaceId (req), noteId (req) | note from a sibling workspace (same sibling rule as `listSiblings`; a non-sibling target is denied) |
 | crossWorkspace.listNotes | targetWorkspaceId (req) | notes in a sibling workspace (same sibling rule as `listSiblings`; a non-sibling target is denied) |
 | primitive.addReference | noteId (req), semanticId (req), description (req), snapshot? | { ok, primitiveId, noteId } |

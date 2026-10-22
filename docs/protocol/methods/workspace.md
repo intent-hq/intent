@@ -23,15 +23,16 @@ unchanged. Host-administration virtual workspaces retain their existing boundary
 
 | Method | Params | Result |
 | --- | --- | --- |
-| workspace.list | includeArchived?: boolean (default false) | { workspaces: Workspace[] } — triggers background backfill: existing workspaces with a repositoryPath but missing repositoryOwner/Name are enriched from the origin remote URL (same GitHub derivation as workspace.create, non-blocking spawn, deduped per workspace per daemon lifecycle, skips non-GitHub remotes, persists updates, emits workspace:updated with changed fields). **Membership-narrowed** for a non-administrator caller: only workspaces the bound principal is a member of are returned, and every `Workspace` row carries `myRole` (`"owner"` \| `"collaborator"` \| prepared `"manager"` under `workspaceGuestRoles: 1`), `memberCount` and `openInviteCount` (§5.48) |
-| workspace.findByPullRequest *(prepared; `prWorkspaceLookup: 1`)* | url (req): string — a GitHub-form pull-request URL, `https://<host>/<owner>/<repo>/pull/<number>` (trailing path, query or fragment ignored). No `workspaceId`: daemon-global | { workspaces: PullRequestWorkspace[] } — every workspace the daemon has linked to that PR, most recently linked first; `[]` when none. Archived workspaces are included; deleted and remote workspaces never are. Membership-narrowed like `workspace.list`. `-32602 { code: "invalid-params" }` when `url` is missing or not a pull-request URL. See [PR workspace lookup](#pull-request-workspace-lookup) |
+| workspace.list | includeArchived?: boolean (default false), includeRetired?: boolean (default false) — `includeArchived: true` alone never returns `status: "Retired"` rows; see [Retired workspaces](#retired-workspaces) | { workspaces: Workspace[] } — triggers background backfill: existing workspaces with a repositoryPath but missing repositoryOwner/Name are enriched from the origin remote URL (same GitHub derivation as workspace.create, non-blocking spawn, deduped per workspace per daemon lifecycle, skips non-GitHub remotes, persists updates, emits workspace:updated with changed fields). **Membership-narrowed** for a non-administrator caller: only workspaces the bound principal is a member of are returned, and every `Workspace` row carries `myRole` (`"owner"` \| `"collaborator"` \| prepared `"manager"` under `workspaceGuestRoles: 1`), `memberCount` and `openInviteCount` (§5.48) |
+| workspace.findByPullRequest *(prepared; `prWorkspaceLookup: 1`)* | url (req): string — a GitHub-form pull-request URL, `https://<host>/<owner>/<repo>/pull/<number>` (trailing path, query or fragment ignored). No `workspaceId`: daemon-global | { workspaces: PullRequestWorkspace[] } — every workspace the daemon has linked to that PR, most recently linked first; `[]` when none. Archived workspaces are included; deleted and remote workspaces never are, and retired workspaces only with the additive `includeRetired: true` param ([Retired workspaces](#retired-workspaces)). Membership-narrowed like `workspace.list`. `-32602 { code: "invalid-params" }` when `url` is missing or not a pull-request URL. See [PR workspace lookup](#pull-request-workspace-lookup) |
 | workspace.get | workspaceId (req) | { workspace: Workspace } — -32602 if not found, **or** if the caller is not a member of it (same `{ code: "not-found" }`, indistinguishable by design; §5.48) |
 | workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipIsolation? (canonical; deprecated alias skipWorktree?), githubUrl?, repositoryCheckout? (prepared GitLab selection; see [GitLab project checkout](#gitlab-project-checkout)), clonePath?, isNewRepo?, progressId? (string — arms the unified provisioning progress stream; see notes), contextLinks? (ContextLink[] — issue/PR context links persisted on the row; a pr-kind link additionally makes the create **PR-aware** — an omitted `branch`/`baseRef` defaults to the PR's head/base branch — see the `contextLinks` and PR-aware create notes below)); optional initialAgent: { prompt? *(a blank/whitespace-only prompt reads as absent; the agent is still created — see "Initial-agent orchestration" in the notes)*, name?, model?, reasoningEffort? (string — creation-time effort; omitted inherits, blank clears; see notes), specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks? *(within v7.4, monorepo#3338: entries may carry an attachment-registry `attachmentId` reference instead of inline `data`, under the same exactly-one-of validation + registry check and daemon-side prompt-assembly resolution as `agent.sendMessage` — §5.5; a bad reference rejects `-32602` pre-side-effect)*, fileBlocks? *(v6.12; attachment references only since v10.0 — same per-entry validation as `agent.sendMessage`: every entry must carry a non-empty `attachmentId`, an entry carrying inline `data` or missing `attachmentId` is `-32602` naming the block index — §5.5)*, metadata? } — no `agentId`: agent IDs are server-assigned, and a request carrying `initialAgent.agentId` is rejected with `-32602` (see notes). Every `-32602` rejection is validated before any side effect (see "Pre-side-effect validation" in the notes) | { workspace: Workspace, initialAgent?: AgentLite } — details below the table. |
 | workspace.update | workspaceId (req) + fields to change — the skip toggle uses the same wire names as create: skipIsolation? (canonical; deprecated alias skipWorktree?, either set ⇒ same behavior); the `workspace:updated { changes }` delta serializes it under the canonical skipIsolation name; `statusImageAssetId?: string \| null` is clearable (missing = untouched, `null` = clear, string = set — see the `statusImageAssetId` notes below). A **collaborator** member may change only `title`, `tags`, `statusMessage`, `statusImageAssetId` — any other key is `-32003 { code: "forbidden", detail }` (§5.48). **Archive lifecycle delegation** ([intent-hq/intentd#2066](https://github.com/intent-hq/intentd/pull/2066)): the generic row write never touches `archived` / `archivedAt` and holds `status` while the row is archived — lifecycle state moves only through `workspace.archive` / `workspace.unarchive`. An update carrying `archived` and/or `status: "Archived"` / `"Active"` applies the other fields first, then delegates the flip to those paths: `archived: true` or `status: "Archived"` runs the full `workspace.archive` teardown (guests detached, open invites revoked, hooks / monitors / turns torn down); `archived: false`, or a non-archived `status` on an archived row, runs `workspace.unarchive`. The delegated path publishes the `{ archived, status, archivedAt }` delta itself (`archivedAt` is set by the archive/unarchive path, never by a generic update field), so the update's own `workspace:updated` delta has `archived` and `status` removed from it — both arrive only in the delegated lifecycle delta — and is skipped entirely when nothing else changed. A contradictory pair (e.g. `archived: true` + `status: "Active"`) is `-32602 { code: "invalid-params" }` and nothing is written | { workspace: Workspace } |
 | workspace.delete | workspaceId (req), undoDelayMs? *(v6.7)* | { success: true } — details below the table. |
 | workspace.cancelDelete *(v6.7)* | workspaceId (req) | { cancelled: boolean } — cancels a pending (grace-window) deletion scheduled by `workspace.delete` with `undoDelayMs`. `true` clears the pending deletion, emits `workspace:delete-cancelled { workspaceId }` (§6.5), and drops `pendingDeleteAt` from the row; `false` is the race-safe non-error when no deletion is pending (never scheduled, already cancelled, or already committed) |
 | workspace.archive | workspaceId (req) | { workspace: Workspace } — returns the refreshed record with `archived: true` / `status: "Archived"` / `archivedAt` set, so callers do not need to follow up with `workspace.get`. Emits `workspace:updated` with the full applied delta `changes: { archived: true, status: "Archived", archivedAt: <ts> }` where `<ts>` is the same ISO timestamp persisted on the row (§6.5). **Archive stops active work** ([intent-hq/intentd#896](https://github.com/intent-hq/intentd/pull/896); PR monitors: [intent-hq/intentd#1067](https://github.com/intent-hq/intentd/pull/1067)): in-flight agent turns are gracefully interrupted, ACTIVE background hooks and ACTIVE PR monitors (§5.42) are cancelled, and queued messages/wakes park while the workspace stays archived — see the archive active-work teardown block below. **Archive removes guests** ([intent-hq/intentd#2066](https://github.com/intent-hq/intentd/pull/2066)): the archived flip, the detach of every `collaborator` membership and the revocation of every open invite commit in **one** store transaction — atomic, so a store failure fails the call with the workspace still active — and are announced before the `archived` delta: one `workspace:updated { changes: { members: true, removedPrincipalId, memberCount } }` per detached collaborator (its queued messages dropped, as for `workspace.members.remove`), then one `{ invites: true }` when at least one invite was revoked (§5.48). The returned record's `memberCount` / `openInviteCount` are the post-sweep values. -32602 if not found. |
-| workspace.unarchive | workspaceId (req) | { workspace: Workspace } — mirror of `workspace.archive`; returns the refreshed record with `archived: false` / `status: "Active"` and `archivedAt` cleared. Emits `workspace:updated` with `changes: { archived: false, status: "Active", archivedAt: null }` — an explicit JSON `null` so clients clear the field (§6.5). Re-kicks the queue drains parked by the archived gates so parked messages deliver without a manual kick; cancelled hooks and PR monitors are NOT resurrected, and neither are the collaborators and open invites the archive removed — the owner is the sole member afterwards and brings a guest back explicitly, via `workspace.members.add` or a fresh invite (see the archive active-work teardown block below). The same delta shape is also emitted by the turn-start **auto-unarchive** (see the auto-unarchive block below), which additionally stamps the additive `autoUnarchive` field into `changes` — the stamp is never present on this manual path (or `workspace.restore`). -32602 if not found. |
+| workspace.unarchive | workspaceId (req) | { workspace: Workspace } — mirror of `workspace.archive`; returns the refreshed record with `archived: false` / `status: "Active"` and `archivedAt` cleared. Emits `workspace:updated` with `changes: { archived: false, status: "Active", archivedAt: null }` — an explicit JSON `null` so clients clear the field (§6.5). Re-kicks the queue drains parked by the archived gates so parked messages deliver without a manual kick; cancelled hooks and PR monitors are NOT resurrected, and neither are the collaborators and open invites the archive removed — the owner is the sole member afterwards and brings a guest back explicitly, via `workspace.members.add` or a fresh invite (see the archive active-work teardown block below). The same delta shape is also emitted by the turn-start **auto-unarchive** (see the auto-unarchive block below), which additionally stamps the additive `autoUnarchive` field into `changes` — the stamp is never present on this manual path (or `workspace.restore`). -32602 if not found. **On a `Retired` workspace** this call (and `workspace.restore`) is the manual **revive** — see [Retired workspaces](#retired-workspaces). |
+| workspace.retire | workspaceId (req) | { workspace: Workspace } — moves an `Active` or `Archived` workspace to `status: "Retired"`: the workspace folder on disk is deleted while every database row (agents, conversations, notes, tasks, assets) is kept and stays readable. An `Active` workspace first runs the full `workspace.archive` teardown and gains `archivedAt`. The git branch is kept. Returns the refreshed record with `status: "Retired"`, `archived: true` and `retiredAt` set; emits one `workspace:updated` delta (§6.5). Idempotent on an already-retired workspace (returns the row, emits nothing). Owner/manager only (`-32003` for a collaborator, §5.48); `-32602 { code: "not-found" }` if absent. Details: [Retired workspaces](#retired-workspaces). |
 | workspace.dismissAttention | workspaceId (req) | { workspace: Workspace } — clears `attention` to `"none"`; -32602 if not found |
 | workspace.markSeen | workspaceId (req) | { workspace: Workspace } — marks the workspace seen: advances **every top-level (no parent, non-background, non-deleted) session's per-conversation seen marker** to its `lastMessageId` through the `agent.markSeen` op (§5.5; same monotonic CAS, each advanced session emits its own `agent:updated` marker event; background/child sessions are untouched), which settles the **derived workspace `unread`** (see the `attention` bullet below) to `none` and emits ONE `workspace:attention-changed { none }` on the transition; also clears the stored legacy flag (guarded on `unread` — a persistent `review_required` survives; the clear re-checks the derivation atomically inside the guarded write, so an assistant message landing mid-call is never retired). **Marker advances are the call's contract, so failures propagate**: a failed pending-list read or per-session marker write is the call's error — the caller never sees success while a session stays unread; the one tolerated per-session failure is a racing `agent.delete` (a deleted session no longer feeds the derivation, so it is skipped). Idempotent: a re-call with nothing unseen writes and emits nothing. `updated_at` stays untouched (looking is not "activity", monorepo#1466) |
 | workspace.getContext | workspaceId (req) | { items: ContextItem[] } — persisted chat-context attachments for the workspace; empty array before the first save. -32602 if the workspace is absent. |
@@ -1292,11 +1293,11 @@ each with a dedicated change event (§6.5) that carries the new value:
   fabricated. Transitions surface via `workspace:waiting-changed` (§6.5).
 
 **`status` wire form.** `Workspace.status` serializes as the PascalCase TS `WorkspaceStatus`
-string enum — `"Active" | "Inactive" | "Archived" | "Deleted"` (src/shared/types.ts) — both on
+string enum — `"Active" | "Inactive" | "Archived" | "Retired" | "Deleted"` (src/shared/types.ts; `"Retired"` is additive, see [Retired workspaces](#retired-workspaces)) — both on
 the wire and as the stored DB word (matching the `PullRequestStatus` precedent). Optional
 `Workspace` fields (`statusMessage`, `statusImageAssetId`, `baseRef`, `prUrl`, `prNumber`,
 `prStatus`, `activePullRequest`, `pullRequests`, `pullRequestsTotal` (list rows only, see
-**List-row slimming** below), `contextLinks`, `archivedAt`, `cowSupported`,
+**List-row slimming** below), `contextLinks`, `archivedAt`, `retiredAt`, `cowSupported`,
 `checkoutMode`, repository/worktree fields, …) are
 **omitted when absent**
 (`skip_serializing_if`) rather than emitted as `null`, so clients see only populated keys.
@@ -2180,6 +2181,93 @@ successful `updateContext` emits `workspace:context-changed` with the persisted 
 // ← response (emits workspace:context-changed)
 { "jsonrpc":"2.0","id":10,"result":{ "items":[ /* same list */ ] } }
 ```
+
+#### Retired workspaces
+
+*(Additive, protocol 15.2.)* `Retired` is a lifecycle state between `Archived` and
+`Deleted`. The workspace folder on disk is deleted to free space, while conversations,
+notes, tasks, assets and every other database row are kept and remain readable.
+
+```mermaid
+stateDiagram-v2
+  Active --> Archived: workspace.archive
+  Archived --> Active: workspace.unarchive or auto-unarchive
+  Active --> Retired: workspace.retire (archive teardown first)
+  Archived --> Retired: workspace.retire or auto-retire
+  Retired --> Active: revive (fresh blank folder)
+  Archived --> Deleted: workspace.delete
+  Retired --> Deleted: workspace.delete
+```
+
+**Row shape.** A retired `Workspace` carries `status: "Retired"`, `archived: true`, the
+`archivedAt` of the archive it went through, and the additive `retiredAt` (ISO 8601,
+**omitted when absent**, presence-detected). `retiredAt` is cleared on revive.
+
+**Retire (`workspace.retire`).**
+
+- Allowed from `Active` or `Archived`. From `Active`, the daemon first runs the complete
+  `workspace.archive` teardown (agent turns interrupted, hooks and PR monitors cancelled,
+  guests detached, invites revoked — see the archive active-work teardown block) and sets
+  `archivedAt`; guest-removal deltas are published as for archive.
+- The daemon then removes the git worktree registration and deletes the folder, reusing
+  the `workspace.delete` filesystem removal. Database rows are never deleted.
+- The **git branch is kept**. Secondary git roots inside the folder go with it.
+- One `workspace:updated` delta announces the transition:
+  `changes: { archived: true, status: "Retired", retiredAt: <ts> }`, plus
+  `archivedAt: <ts>` when the workspace was `Active` (§6.5).
+- `-32602 { code: "invalid-params" }` from any other status (for example a workspace with
+  a pending grace-window delete).
+
+**Automatic retire.** When the setting `workspace.autoRetireArchivedAfterDays` (§5.12) is
+set, the daemon periodically retires workspaces whose `archivedAt` is older than that many
+days, through the same path and delta as `workspace.retire`. Absent means off. Remote and
+guest-shared workspaces are skipped.
+
+**Strict list opt-in (normative).** Retired workspaces are absent from **every** surface
+that returns a collection of workspaces unless the caller explicitly passes
+`includeRetired: true`. `includeArchived: true` alone never includes them. A surface
+without an `includeRetired` param never returns them. This covers:
+
+- `workspace.list` and `workspace.findByPullRequest` (`includeRetired?: boolean`, default
+  `false`).
+- The lite `workspace.subscribe` channel (§6.9; `includeRetired?: boolean` fixed at
+  subscribe time): the seq-0 snapshot **and** every delta. For a subscriber that did not
+  opt in, a retire transition is delivered as `removedIds: [workspaceId]`, later events
+  for the retired workspace are dropped, and a revive is delivered as `added`.
+- `crossWorkspace.listSiblings` and the MCP `ws.*` bindings that list workspaces
+  (`ws.crossWorkspace.listSiblings` and app workspace listings).
+- Internal daemon sweeps that iterate workspaces (status, PR, branch and capability
+  refreshes); retired workspaces have no folder to sweep.
+
+Single-workspace reads keep working on a retired workspace: `workspace.get`, note, task,
+comment and agent conversation reads return the kept rows, with the usual membership
+rules.
+
+**Read-only while retired.** A mutating call that needs the folder or the live
+workspace — file writes, terminals, scripts, git operations and commits, sandbox
+operations, `workspace.update` lifecycle fields, member and invite changes — fails with
+`-32602 { code: "workspace-retired", workspaceId }` (§9). `workspace.delete` still works
+and deletes the kept rows as for any workspace.
+
+**Revive.** A retired workspace comes back as a **fresh blank workspace**; nothing from the
+old folder is restored.
+
+- Triggers: manual `workspace.unarchive` / `workspace.restore`, or the turn-start
+  auto-unarchive path when a message is sent to an agent in the retired workspace.
+- The daemon provisions a new folder at the same path from the repository default branch
+  on a **new branch** name (the old branch is left untouched), flips the row to
+  `Active`, and clears `archived`, `archivedAt` and `retiredAt`.
+- Delta: `changes: { archived: false, status: "Active", archivedAt: null, retiredAt: null,
+  branch, revived: { reason } }` where `reason` is `"agent_activity"` (turn-start revive,
+  which also carries `agentId` and `agentName`) or `"manual"`. `revived` is never present
+  on an ordinary unarchive, and `autoUnarchive` is never present on a revive.
+- On an agent-triggered revive the agent's transcript gets a system row and the same turn
+  gets a one-turn notice that all previous on-disk state (files, uncommitted changes, local
+  git state) is gone while conversations and notes were kept.
+
+Clients must treat `"Retired"` as an unknown-but-valid status on older builds; an older
+daemon never emits it. Support is detected by the `workspace.retire` method answering
+(older daemons return `-32601`).
 
 #### Pull request workspace lookup
 
