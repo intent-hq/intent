@@ -11,6 +11,14 @@
 #
 # Rule policy (runner labels, path-scoped ignores) lives in
 # .github/actionlint.yaml, which actionlint reads from the repo root.
+# Results must not depend on the host beyond the two pinned/required tools:
+#   - shellcheck reads `run:` scripts from stdin and would pick up the root
+#     .shellcheckrc (written for scripts/*.sh: its SC2016 disable would hide a
+#     mis-quoted '$VAR' in a workflow), so SHELLCHECK_OPTS=--norc ignores it;
+#   - pyflakes integration is off (-pyflakes=): CI has no pyflakes, so a host
+#     that happens to have it would otherwise report findings CI never sees.
+# The shellcheck binary is not pinned (as for make lint-shell): a newer local
+# copy can report a finding on an untouched workflow that CI's does not.
 #
 # Preconditions fail fast with doctor's [missing] wording instead of degrading:
 #   - actionlint must be exactly the pin in scripts/bootstrap-dev-host.sh
@@ -68,7 +76,7 @@ fi
 
 cd "$repo_root"
 status=0
-actionlint -shellcheck "$shellcheck_path" "$@" || status=$?
+SHELLCHECK_OPTS=--norc actionlint -shellcheck "$shellcheck_path" -pyflakes= "$@" || status=$?
 if [ "$status" -eq 0 ]; then
   echo "lint-workflows: .github/workflows is clean (actionlint $found)"
 fi

@@ -15,7 +15,9 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
-temp_dir=$(mktemp -d)
+# Resolved, because the lint cds to its `pwd -P` repo root (macOS /var is a
+# symlink to /private/var).
+temp_dir=$(cd "$(mktemp -d)" && pwd -P)
 trap 'rm -rf "$temp_dir"' EXIT
 
 pin=$(sed -n 's/^ACTIONLINT_VERSION="\(.*\)"$/\1/p' "$repo_root/scripts/bootstrap-dev-host.sh")
@@ -35,12 +37,14 @@ fake=$temp_dir/repo
 mkdir -p "$fake/scripts" "$fake/.github/workflows"
 cp "$repo_root/scripts/lint-workflows.sh" "$repo_root/scripts/bootstrap-dev-host.sh" "$fake/scripts/"
 cp "$repo_root/.github/actionlint.yaml" "$fake/.github/actionlint.yaml"
+cp "$repo_root/.shellcheckrc" "$fake/.shellcheckrc"
 
 stub_bin=$temp_dir/stub-bin
 mkdir -p "$stub_bin"
 calls=$temp_dir/actionlint-calls
 # Stub actionlint: STUB_VERSION / STUB_VERSION_FAIL drive --version; a lint
-# call records its cwd and arguments and exits STUB_EXIT. Builtins only.
+# call records its cwd, SHELLCHECK_OPTS and arguments and exits STUB_EXIT.
+# Builtins only.
 cat >"$stub_bin/actionlint" <<'SH'
 #!/bin/sh
 if [ "$1" = --version ]; then
@@ -48,7 +52,7 @@ if [ "$1" = --version ]; then
   printf '%s\ninstalled by stub\n' "$STUB_VERSION"
   exit 0
 fi
-{ printf 'cwd=%s\n' "$(pwd)"; for arg in "$@"; do printf 'arg=%s\n' "$arg"; done; } >>"$STUB_CALLS"
+{ printf 'cwd=%s\nopts=%s\n' "$(pwd)" "${SHELLCHECK_OPTS:-}"; for arg in "$@"; do printf 'arg=%s\n' "$arg"; done; } >>"$STUB_CALLS"
 [ "${STUB_EXIT:-0}" -eq 0 ] || echo "stub: finding"
 exit "${STUB_EXIT:-0}"
 SH
@@ -104,9 +108,9 @@ expect_no_lint_call "shellcheck missing"
 
 STUB_VERSION=$pin run_lint "$stub_bin" extra.yml
 expect "clean run exits 0 and says so" 0 "lint-workflows: .github/workflows is clean (actionlint $pin)"
-want_calls=$(printf 'cwd=%s\narg=-shellcheck\narg=%s\narg=extra.yml\n' "$fake" "$stub_bin/shellcheck")
+want_calls=$(printf 'cwd=%s\nopts=--norc\narg=-shellcheck\narg=%s\narg=-pyflakes=\narg=extra.yml\n' "$fake" "$stub_bin/shellcheck")
 if [ "$(cat "$calls")" = "$want_calls" ]; then
-  pass "lint runs from the repo root with the resolved shellcheck and passes arguments"
+  pass "lint runs from the repo root with the resolved shellcheck, no rc file or pyflakes, and passes arguments"
 else
   fail "lint call: got $(cat "$calls"), want $want_calls"
 fi
@@ -185,6 +189,19 @@ jobs:
 YAML
   run_lint "$real_bin"
   expect "real: run: scripts get shellcheck" 1 "SC2086"
+
+  # The root .shellcheckrc (scripts/*.sh policy) disables SC2016; workflow
+  # run: scripts must not inherit that.
+  write_workflow quoting.yml <<'YAML'
+on: push
+jobs:
+  quoting:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo '$HOME'
+YAML
+  run_lint "$real_bin"
+  expect "real: the root .shellcheckrc does not apply to run: scripts" 1 "SC2016"
 
   # The job.workflow_* ignore is scoped to consumer-checks.yml: the same
   # expression in any other workflow still fails.
