@@ -327,13 +327,42 @@ updates.
 | `src` install source | `brew`, `deb`, `script`, `windows`, `unknown` | `dmg`, `nsis`, `appimage`, `deb`, `unknown` |
 | `k` trigger | `startup`, `daily`, `idle`, `manual` | `startup`, `daily`, `periodic`, `focus`, `manual`, `channel` |
 | `d` daily flag | `1` while no check has *succeeded* this UTC day (from a date in `state.json`) | same (from the `lastUpdateCheckDay` local pref) |
+| `w` weekly flag | `1` while no check has succeeded this UTC ISO week (weeks start Monday; `last_week` in `state.json`) | same (`lastUpdateWeek` local pref) |
+| `m` monthly flag | `1` while no check has succeeded this UTC calendar month (`last_month`) | same (`lastUpdateMonth` local pref) |
+| `i` install flag | `1` until the first successful check of a fresh install; never for an estimated install | same |
+| `a` install age | whole UTC days since the first-seen day: `0d`, `1-7d`, `8-30d`, `31-90d`, `91-365d`, `365d+`, or `unknown` (`first_seen_day` / `first_seen_estimated`) | same (`firstSeenDay` / `firstSeenEstimated` local prefs) |
 | Opt-out | `DO_NOT_TRACK=1`, `INTENTD_DISABLE_TELEMETRY=1`, or `telemetry = false` in `<data-dir>/sitter/config.toml` (re-read on every check, kept when `intentd sitter channel` rewrites the file); `INTENTD_SITTER_MANIFEST_BASE_URL` also skips the endpoint | **Settings → General → Updates → Share anonymous update statistics** (on by default, `shareUpdateStatistics` local pref), `DO_NOT_TRACK=1`, or a custom `AUTO_UPDATE_URL` |
 
 No IDs, hostnames, usernames or paths are sent; the sitter's User-Agent is
 `intentd-sitter/<ver> (<triple>)`. The service allowlists every value (anything
-else is counted as `other`), passes Vercel only `user-agent` and `x-forwarded-for`
+else is counted as `other`, and a flag is set only by exactly `1`), passes Vercel only `user-agent` and `x-forwarded-for`
 so Vercel can derive the country, and never logs or stores the IP. With any opt-out
 the request goes straight to GitHub.
+
+**Weekly, monthly and new installs.** Like `d`, the stored week and month advance
+only after a successful check, so a failed check is retried with the same flags (and
+can be counted again). Only dates are stored locally, and none of them is sent: the
+request carries just the `0`/`1` flags and the age bucket. The first-seen day is
+decided once per install:
+
+- **Fresh install:** today's date is recorded and `i=1` is sent until a check
+  succeeds. The sitter treats an install as fresh when `state.json` has no
+  installed version or recorded check and `<data-dir>/sitter/versions/` is empty,
+  and records the date before its first endpoint request, so a failed first check
+  that falls back to GitHub still leaves it fresh. The desktop app treats an install
+  as fresh when there are no earlier update-check prefs and the `userData` folder
+  was created during the current run.
+- **Existing install (upgraded into this change):** the date is estimated from the
+  creation time of the data folder (sitter: `<data-dir>/sitter`; desktop: Electron
+  `userData`), falling back to the oldest file mtime in it (the sitter also looks a few
+  levels into subfolders; the desktop app checks only top-level entries). It is marked
+  estimated and never sends `i=1`. With no usable timestamp the age is `unknown`,
+  and that result is stored so it is not estimated again.
+
+The sitter resolves the first-seen day and advances these dates only on endpoint
+checks, so an opted-out sitter stores nothing new. The desktop app resolves the
+first-seen day at startup and advances the dates after any successful check,
+including one made with the toggle off.
 
 **Fallback.** Any failure of the endpoint (down, 404, slow, or an unexpected
 redirect) falls back to GitHub. The endpoint records its events *before* it
@@ -373,6 +402,9 @@ opted-out install and a version older than this change are not counted:
 |---|---|
 | `intentd_update_check` / `desktop_update_check` | `platform`, `context` = `<ch>/<src>/<k>` (e.g. `stable/brew/idle`) |
 | `intentd_daily_active` / `desktop_daily_active` | `platform`, `version`; fired for every request with `d=1`. The day is recorded only after a successful fetch, so an install whose checks keep failing sends `d=1` (and is counted again) on each retry that day. Treat the count as an approximation of daily active installs: retries can overcount it, and missing or opted-out telemetry undercounts it |
+| `intentd_weekly_active` / `desktop_weekly_active` | `platform`, `channel`; fired for every feed request with `w=1`. Approximates weekly active installs, with the same retry and opt-out caveats as the daily count |
+| `intentd_monthly_active` / `desktop_monthly_active` | `platform`, `age` (the `a` bucket); fired for every feed request with `m=1`. Approximates monthly active installs, broken down by install age |
+| `intentd_install` / `desktop_install` | `platform`, `channel`; fired for every feed request with `i=1`. Counts new installs; installs that predate this change are never counted, and a fresh install whose first checks fail is counted on each retry |
 | `desktop_update_download` | `platform`, `version`, parsed from the artifact name; `.blockmap` files and range continuations are redirected but not counted |
 
 Country comes from Vercel's lookup of the forwarded IP. Only sitter and desktop versions
