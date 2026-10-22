@@ -301,6 +301,51 @@ os.execv(os.environ["REAL_GIT"], [os.environ["REAL_GIT"], *args])
         self.assertIn("timed out", repo["gitErrors"][0]["detail"])
         self.assert_human_error(failure="timeout:status")
 
+    def test_monorepo_probe_failure_keeps_protocol_warning(self):
+        docs = self.root / "docs/protocol"
+        docs.mkdir(parents=True)
+        (docs / "agent-workers.md").write_text("contract v2\n")
+        self.git(self.root, "add", "docs/protocol/agent-workers.md")
+        tree = self.git(self.root, "write-tree")
+        upstream = self.git(self.root, "commit-tree", tree, "-p", "HEAD", "-m", "upstream protocol")
+        self.git(self.root, "rm", "-q", "--cached", "docs/protocol/agent-workers.md")
+        (docs / "agent-workers.md").unlink()
+        self.git(self.root, "update-ref", "refs/remotes/origin/main", upstream)
+        env = dict(self.env, FAIL_PROBE="status")
+        run = lambda *args: subprocess.run(
+            ["bash", str(self.root / "scripts/dev-status.sh"), *args], env=env,
+            capture_output=True, text=True, timeout=20)
+        result = run("--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        monorepo = json.loads(result.stdout)["repos"]["monorepo"]
+        self.assertEqual(monorepo["gitState"], "error", monorepo)
+        self.assertIsNone(monorepo["dirty"], monorepo)
+        self.assertIn("status", {error["probe"] for error in monorepo["gitErrors"]})
+        self.assertEqual([monorepo["behindOriginMain"], monorepo["protocolDocsStale"],
+                          monorepo["protocolDocsChanged"]],
+                         [1, True, ["docs/protocol/agent-workers.md"]], monorepo)
+        lines = run().stdout.splitlines()
+        row = next(i for i, line in enumerate(lines) if line.startswith("Repo       monorepo:"))
+        self.assertIn("Git state unavailable behind-origin/main=1 protocol-docs=stale", lines[row])
+        self.assertTrue(any("WARNING: docs/protocol changed on origin/main" in line
+                            for line in lines[row + 1:row + 4]), lines)
+
+    def test_monorepo_without_merge_base_is_not_compared(self):
+        orphan = self.git(self.root, "commit-tree", self.git(self.root, "write-tree"),
+                          "-m", "unrelated history")
+        self.git(self.root, "update-ref", "refs/remotes/origin/main", orphan)
+        result = subprocess.run(["bash", str(self.root / "scripts/dev-status.sh"), "--json"],
+                                env=self.env, capture_output=True, text=True, timeout=20)
+        monorepo = json.loads(result.stdout)["repos"]["monorepo"]
+        self.assertEqual(monorepo["gitState"], "readable", monorepo)
+        self.assertEqual(monorepo["behindOriginMain"], 1, monorepo)
+        self.assertIsNone(monorepo["protocolDocsStale"], monorepo)
+        self.assertEqual(monorepo["protocolDocsChanged"], [], monorepo)
+        human = subprocess.run(["bash", str(self.root / "scripts/dev-status.sh")],
+                               env=self.env, capture_output=True, text=True, timeout=20).stdout
+        self.assertIn("behind-origin/main=1 protocol-docs=-", human)
+        self.assertIn("docs/protocol could not be compared", human)
+
     def test_absent_and_failed_parent_pin(self):
         shutil.rmtree(self.component)
         repo = self.report()
@@ -679,7 +724,7 @@ monorepo_human | grep -q '^Repo *monorepo: main .* behind-origin/main=- protocol
 base=$(git_fixture rev-parse HEAD)
 git_fixture update-ref refs/remotes/origin/main "$base"
 expect_monorepo '[0, false, []]' "in sync"
-[[ "$(monorepo_human | wc -l)" == 2 ]] && ! grep -Eq "$warning_re|$hint_re" "$temp_dir/monorepo.txt" \
+monorepo_human | tail -n1 | grep -q '^Repo *intentd: ' && ! grep -Eq "$warning_re|$hint_re" "$temp_dir/monorepo.txt" \
   || fail "in-sync monorepo printed a hint: $(cat "$temp_dir/monorepo.txt")"
 grep -q '^Repo *monorepo: main .* behind-origin/main=0 protocol-docs=current$' "$temp_dir/monorepo.txt" \
   || fail "human status did not print the in-sync monorepo row"

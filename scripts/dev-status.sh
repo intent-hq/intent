@@ -334,6 +334,17 @@ def behind_origin_main(path):
         return None
 
 
+def upstream_counts(path):
+    # The upstream ref is optional; a missing one leaves both counts null
+    # without marking the repo's Git state as an error.
+    counts = git_output(path, "rev-list", "--left-right", "--count", "@{upstream}...HEAD")
+    try:
+        behind, ahead = (int(value) for value in counts.split())
+    except (AttributeError, TypeError, ValueError):
+        return None, None
+    return ahead, behind
+
+
 def repo_status(relative_path, gh_ready):
     path = os.path.join(root, relative_path)
     errors = []
@@ -386,15 +397,7 @@ def repo_status(relative_path, gh_ready):
         if branch == "" and head is not None:
             repo["head"] = git_output(path, "rev-parse", "--short", "HEAD") or head[:7]
 
-        # Optional refs may legitimately be absent; retain null counts without
-        # treating them as failures of the required worktree observations.
-        counts = git_output(path, "rev-list", "--left-right", "--count", "@{upstream}...HEAD")
-        if counts:
-            try:
-                behind, ahead = (int(value) for value in counts.split())
-                repo["ahead"], repo["behind"] = ahead, behind
-            except (TypeError, ValueError):
-                pass
+        repo["ahead"], repo["behind"] = upstream_counts(path)
 
         if gh_ready and branch:
             pr = branch_pr(path, branch)
@@ -436,13 +439,10 @@ def monorepo_status():
     porcelain = git_output(root, "status", "--short", "--untracked-files=normal",
                            "--ignore-submodules=dirty", errors=errors, probe="status")
     repo["dirty"] = bool(porcelain) if porcelain is not None else None
-    counts = git_output(root, "rev-list", "--left-right", "--count", "@{upstream}...HEAD")
-    if counts:
-        try:
-            behind, ahead = (int(value) for value in counts.split())
-            repo["ahead"], repo["behind"] = ahead, behind
-        except (TypeError, ValueError):
-            pass
+    repo["ahead"], repo["behind"] = upstream_counts(root)
+    # The comparison is optional like the component lag: a missing ref, or a
+    # diff without a merge-base (shallow clone, unrelated history), leaves
+    # protocolDocsStale null and the human hint says the docs were not compared.
     lag = behind_origin_main(root)
     repo["behindOriginMain"] = lag
     if lag == 0:
@@ -461,21 +461,20 @@ def monorepo_status():
 
 
 def print_monorepo(repo):
-    if repo["gitState"] == "error":
-        print("Repo       monorepo: Git state unavailable")
-        for error in repo["gitErrors"]:
-            print(f"           {error['probe']}: {error['detail']}")
-        return
-    branch = repo["branch"] or f"detached@{repo.get('head') or '?'}"
-    tracking = "-/-" if repo["ahead"] is None else f"+{repo['ahead']}/-{repo['behind']}"
-    dirty = {True: "dirty", False: "clean", None: "unknown"}[repo["dirty"]]
     lag = repo["behindOriginMain"]
     stale = repo["protocolDocsStale"]
     docs = {True: "stale", False: "current", None: "-"}[stale]
-    print(
-        f"Repo       monorepo: {branch} {dirty} ahead/behind={tracking} "
-        f"behind-origin/main={'-' if lag is None else lag} protocol-docs={docs}"
-    )
+    lag_text = f"behind-origin/main={'-' if lag is None else lag} protocol-docs={docs}"
+    if repo["gitState"] == "error":
+        # A failed branch/status probe must not hide the protocol-docs result.
+        print(f"Repo       monorepo: Git state unavailable {lag_text}")
+        for error in repo["gitErrors"]:
+            print(f"           {error['probe']}: {error['detail']}")
+    else:
+        branch = repo["branch"] or f"detached@{repo.get('head') or '?'}"
+        tracking = "-/-" if repo["ahead"] is None else f"+{repo['ahead']}/-{repo['behind']}"
+        dirty = {True: "dirty", False: "clean", None: "unknown"}[repo["dirty"]]
+        print(f"Repo       monorepo: {branch} {dirty} ahead/behind={tracking} {lag_text}")
     if stale:
         paths = repo["protocolDocsChanged"]
         examples = ", ".join(paths[:3]) + (", ..." if len(paths) > 3 else "")
@@ -484,6 +483,12 @@ def print_monorepo(repo):
             f"({len(paths)} file(s): {examples}) — read the contract with "
             f"'git show origin/main:{PROTOCOL_DOCS}/<file>' or update the branch "
             "('git merge origin/main')"
+        )
+    elif lag and stale is None:
+        print(
+            f"           monorepo checkout is {lag} commit(s) behind origin/main and "
+            f"{PROTOCOL_DOCS} could not be compared — read the contract with "
+            f"'git show origin/main:{PROTOCOL_DOCS}/<file>' or update the branch"
         )
     elif lag:
         print(

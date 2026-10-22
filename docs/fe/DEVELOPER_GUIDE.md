@@ -152,9 +152,11 @@ the root checkout itself: `gitState`, `gitErrors`, `branch`, `dirty` (submodule 
 changes ignored), `ahead`/`behind`, `behindOriginMain`, `protocolDocsStale`, and
 `protocolDocsChanged` — the `docs/protocol` paths `origin/main` changed since the merge-base
 (`HEAD...origin/main`), so the branch's own protocol edits never count; `protocolDocsStale` is
-`null` with `[]` paths when the ref is missing. Human output adds a `protocol-docs=` token and,
-when stale, a warning to read the contract with `git show origin/main:docs/protocol/<file>`
-or update the branch; a lag without protocol changes gets a milder hint. Each component includes `gitState`
+`null` with `[]` paths when the ref is missing or has no merge-base with HEAD (for example a
+shallow clone). Like `behindOriginMain`, it is relative to the last fetch. Human output adds a
+`protocol-docs=` token and, when stale, a warning to read the contract with
+`git show origin/main:docs/protocol/<file>` or update the branch, even when another monorepo
+probe failed; a lag without protocol changes (or without a comparison) gets a milder hint. Each component includes `gitState`
 (`absent`, `readable`, or `error`) and `gitErrors` (an array of `{probe, detail}` records,
 empty unless a required probe fails). `absent` means its `.git` marker is missing;
 `readable` means initialization, branch, HEAD, status, and parent pin probes succeeded.

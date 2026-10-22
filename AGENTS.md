@@ -44,9 +44,9 @@ Run `STATUS_JSON=1 make status` first. It reports host gaps, resolved ports, liv
 and health, the monorepo and component branches (`repos.<name>.gitlinkDirty` flags a submodule
 moved off its pin; `repos.<name>.behindOriginMain` counts commits HEAD lags the local
 `origin/main` — branch component work from `origin/main` when > 0), and branch PR checks
-when `gh` is authenticated. When `repos.monorepo.protocolDocsStale` is true, read the contract
-with `git show origin/main:docs/protocol/<file>` or update the branch: a stale checkout's
-docs produced false review findings in workspace any-detect.
+when `gh` is authenticated. If `repos.monorepo.protocolDocsStale`, read the contract via
+`git show origin/main:docs/protocol/<file>` (a stale copy produced false findings on
+[cloudlands-fe#3572](https://github.com/intent-hq/cloudlands-fe/pull/3572)).
 While `setup.running` is true (or your first message carried the setup-in-progress
 notice) the workspace setup script is still provisioning the worktree, so treat the whole
 report as provisional and wait with a hook on `ws.workspace.details().setupStatus` before
