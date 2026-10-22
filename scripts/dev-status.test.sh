@@ -301,6 +301,51 @@ os.execv(os.environ["REAL_GIT"], [os.environ["REAL_GIT"], *args])
         self.assertIn("timed out", repo["gitErrors"][0]["detail"])
         self.assert_human_error(failure="timeout:status")
 
+    def test_monorepo_probe_failure_keeps_protocol_warning(self):
+        docs = self.root / "docs/protocol"
+        docs.mkdir(parents=True)
+        (docs / "agent-workers.md").write_text("contract v2\n")
+        self.git(self.root, "add", "docs/protocol/agent-workers.md")
+        tree = self.git(self.root, "write-tree")
+        upstream = self.git(self.root, "commit-tree", tree, "-p", "HEAD", "-m", "upstream protocol")
+        self.git(self.root, "rm", "-q", "--cached", "docs/protocol/agent-workers.md")
+        (docs / "agent-workers.md").unlink()
+        self.git(self.root, "update-ref", "refs/remotes/origin/main", upstream)
+        env = dict(self.env, FAIL_PROBE="status")
+        run = lambda *args: subprocess.run(
+            ["bash", str(self.root / "scripts/dev-status.sh"), *args], env=env,
+            capture_output=True, text=True, timeout=20)
+        result = run("--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        monorepo = json.loads(result.stdout)["repos"]["monorepo"]
+        self.assertEqual(monorepo["gitState"], "error", monorepo)
+        self.assertIsNone(monorepo["dirty"], monorepo)
+        self.assertIn("status", {error["probe"] for error in monorepo["gitErrors"]})
+        self.assertEqual([monorepo["behindOriginMain"], monorepo["protocolDocsStale"],
+                          monorepo["protocolDocsChanged"]],
+                         [1, True, ["docs/protocol/agent-workers.md"]], monorepo)
+        lines = run().stdout.splitlines()
+        row = next(i for i, line in enumerate(lines) if line.startswith("Repo       monorepo:"))
+        self.assertIn("Git state unavailable behind-origin/main=1 protocol-docs=stale", lines[row])
+        self.assertTrue(any("WARNING: docs/protocol changed on origin/main" in line
+                            for line in lines[row + 1:row + 4]), lines)
+
+    def test_monorepo_without_merge_base_is_not_compared(self):
+        orphan = self.git(self.root, "commit-tree", self.git(self.root, "write-tree"),
+                          "-m", "unrelated history")
+        self.git(self.root, "update-ref", "refs/remotes/origin/main", orphan)
+        result = subprocess.run(["bash", str(self.root / "scripts/dev-status.sh"), "--json"],
+                                env=self.env, capture_output=True, text=True, timeout=20)
+        monorepo = json.loads(result.stdout)["repos"]["monorepo"]
+        self.assertEqual(monorepo["gitState"], "readable", monorepo)
+        self.assertEqual(monorepo["behindOriginMain"], 1, monorepo)
+        self.assertIsNone(monorepo["protocolDocsStale"], monorepo)
+        self.assertEqual(monorepo["protocolDocsChanged"], [], monorepo)
+        human = subprocess.run(["bash", str(self.root / "scripts/dev-status.sh")],
+                               env=self.env, capture_output=True, text=True, timeout=20).stdout
+        self.assertIn("behind-origin/main=1 protocol-docs=-", human)
+        self.assertIn("docs/protocol could not be compared", human)
+
     def test_absent_and_failed_parent_pin(self):
         shutil.rmtree(self.component)
         repo = self.report()
@@ -399,8 +444,19 @@ assert isinstance(coverage["ready"], bool) and isinstance(coverage["detail"], st
 assert coverage["detail"].startswith("cargo-llvm-cov: "), coverage
 assert {"DEV_PORT", "DEV_TCP_PORT", "BRIDGE_PORT", "CDP_PORT"} <= set(report["ports"])
 assert report["sandboxes"] == []
-assert set(report["repos"]) == {"intentd", "cloudlands-fe"}
-for repo in report["repos"].values():
+assert set(report["repos"]) == {"monorepo", "intentd", "cloudlands-fe"}
+assert list(report["repos"])[0] == "monorepo"
+monorepo = report["repos"]["monorepo"]
+assert {"gitState", "gitErrors", "branch", "dirty", "ahead", "behind", "behindOriginMain",
+        "protocolDocsStale", "protocolDocsChanged"} <= set(monorepo), monorepo
+assert monorepo["gitState"] in {"readable", "error"}
+assert monorepo["behindOriginMain"] is None or isinstance(monorepo["behindOriginMain"], int)
+assert monorepo["protocolDocsStale"] in {None, True, False}
+assert isinstance(monorepo["protocolDocsChanged"], list)
+assert bool(monorepo["protocolDocsChanged"]) is (monorepo["protocolDocsStale"] is True)
+for name, repo in report["repos"].items():
+    if name == "monorepo":
+        continue
     assert {"branch", "dirty", "ahead", "behind", "pin", "gitlinkDirty", "behindOriginMain"} <= set(repo)
     assert repo["pin"] is None or isinstance(repo["pin"], str)
     assert repo["gitState"] in {"absent", "readable", "error"}
@@ -548,7 +604,7 @@ fixture_status() {
     bash "$fixture/scripts/dev-status.sh" | python3 -c '
 import json, sys
 repos = json.load(sys.stdin)["repos"]
-print(json.dumps({k: [v["initialized"], v["pin"], v["gitlinkDirty"], v["behindOriginMain"]] for k, v in repos.items()}, sort_keys=True))'
+print(json.dumps({k: [v["initialized"], v["pin"], v["gitlinkDirty"], v["behindOriginMain"]] for k, v in repos.items() if k != "monorepo"}, sort_keys=True))'
 }
 fixture_human_status() {
   PATH="$bin_dir:$PATH" SANDBOX_STATE_DIR="$state_dir" bash "$fixture/scripts/dev-status.sh"
@@ -635,6 +691,84 @@ assert repos["cloudlands-fe"][0] is False and repos["cloudlands-fe"][2] is False
 assert isinstance(repos["cloudlands-fe"][1], str), repos
 assert repos["cloudlands-fe"][3] is None, repos
 PY
+
+# Monorepo root: the checkout itself is compared with its already-fetched
+# origin/main, and protocolDocsStale flags docs/protocol paths main changed since
+# the merge-base (stale contract docs misled a review in workspace any-detect).
+# The branch's own protocol edits never count.
+fixture_monorepo() {
+  PATH="$bin_dir:$PATH" SANDBOX_STATE_DIR="$state_dir" STATUS_JSON=1 \
+    bash "$fixture/scripts/dev-status.sh" | python3 -c '
+import json, sys
+m = json.load(sys.stdin)["repos"]["monorepo"]
+assert m["gitState"] == "readable" and m["branch"] == "main", m
+print(json.dumps([m["behindOriginMain"], m["protocolDocsStale"], m["protocolDocsChanged"]]))'
+}
+monorepo_human() {
+  fixture_human_status >"$temp_dir/monorepo.txt"
+  grep -A1 '^Repo *monorepo: ' "$temp_dir/monorepo.txt"
+}
+expect_monorepo() {
+  local got
+  got=$(fixture_monorepo)
+  [[ "$got" == "$1" ]] || fail "monorepo fixture ($2) reported $got, expected $1"
+}
+warning_re='WARNING: docs/protocol changed on origin/main since this checkout'
+hint_re='monorepo checkout is [0-9]* commit(s) behind origin/main'
+
+expect_monorepo '[null, null, []]' "missing origin/main"
+monorepo_human | grep -q '^Repo *monorepo: main .* behind-origin/main=- protocol-docs=-$' \
+  || fail "human status did not print the unknown monorepo lag: $(cat "$temp_dir/monorepo.txt")"
+! grep -Eq "$warning_re|$hint_re" "$temp_dir/monorepo.txt" || fail "unknown lag printed a monorepo hint"
+
+base=$(git_fixture rev-parse HEAD)
+git_fixture update-ref refs/remotes/origin/main "$base"
+expect_monorepo '[0, false, []]' "in sync"
+monorepo_human | tail -n1 | grep -q '^Repo *intentd: ' \
+  || fail "in-sync monorepo row was not followed by the intentd row: $(cat "$temp_dir/monorepo.txt")"
+! grep -Eq "$warning_re|$hint_re" "$temp_dir/monorepo.txt" \
+  || fail "in-sync monorepo printed a hint: $(cat "$temp_dir/monorepo.txt")"
+grep -q '^Repo *monorepo: main .* behind-origin/main=0 protocol-docs=current$' "$temp_dir/monorepo.txt" \
+  || fail "human status did not print the in-sync monorepo row"
+
+git_fixture switch -q -c upstream
+git_fixture commit -q --allow-empty -m "upstream unrelated"
+unrelated=$(git_fixture rev-parse HEAD)
+mkdir -p "$fixture/docs/protocol"
+printf 'contract v2\n' >"$fixture/docs/protocol/agent-workers.md"
+git_fixture add docs/protocol/agent-workers.md
+git_fixture commit -q -m "upstream protocol change"
+protocol=$(git_fixture rev-parse HEAD)
+git_fixture switch -q main
+git_fixture branch -q -D upstream
+
+git_fixture update-ref refs/remotes/origin/main "$unrelated"
+expect_monorepo '[1, false, []]' "behind without protocol changes"
+monorepo_human | tail -n1 | grep -q '^ *monorepo checkout is 1 commit(s) behind origin/main — read docs from origin/main' \
+  || fail "human status did not print the monorepo lag hint: $(cat "$temp_dir/monorepo.txt")"
+! grep -q "$warning_re" "$temp_dir/monorepo.txt" || fail "unchanged protocol docs printed the stale warning"
+
+git_fixture update-ref refs/remotes/origin/main "$protocol"
+expect_monorepo '[2, true, ["docs/protocol/agent-workers.md"]]' "behind with a protocol change"
+monorepo_human >/dev/null
+grep -q '^Repo *monorepo: main .* behind-origin/main=2 protocol-docs=stale$' "$temp_dir/monorepo.txt" \
+  || fail "human status did not flag stale protocol docs: $(cat "$temp_dir/monorepo.txt")"
+grep -A1 '^Repo *monorepo: ' "$temp_dir/monorepo.txt" | tail -n1 \
+  | grep -qF "$warning_re (1 file(s): docs/protocol/agent-workers.md) — read the contract with 'git show origin/main:docs/protocol/<file>' or update the branch ('git merge origin/main')" \
+  || fail "human status did not print the stale protocol warning: $(cat "$temp_dir/monorepo.txt")"
+! grep -q "$hint_re" "$temp_dir/monorepo.txt" || fail "stale protocol docs printed the plain lag hint too"
+[[ "$(grep -c "$warning_re" "$temp_dir/monorepo.txt")" == 1 ]] || fail "stale warning was not printed exactly once"
+
+# Branch-local protocol edits are intentional, not staleness.
+mkdir -p "$fixture/docs/protocol"
+printf 'local draft\n' >"$fixture/docs/protocol/local.md"
+git_fixture add docs/protocol/local.md
+git_fixture commit -q -m "branch protocol edit"
+git_fixture update-ref refs/remotes/origin/main "$unrelated"
+expect_monorepo '[1, false, []]' "branch-local protocol edit"
+git_fixture update-ref refs/remotes/origin/main "$protocol"
+expect_monorepo '[2, true, ["docs/protocol/agent-workers.md"]]' "branch-local edit with upstream change"
+git_fixture update-ref -d refs/remotes/origin/main
 
 # Setup marker: the daemon keeps <worktree>/.intent/setup-<uuid>.sh in place
 # only while the workspace setup script runs, so its presence flags the whole
