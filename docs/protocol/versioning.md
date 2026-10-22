@@ -17,7 +17,7 @@ Other prepared extensions retain their independent support gates.
 `workspace.retire` (from `Active` or `Archived`; the git branch is kept), the
 `includeRetired?` param on `workspace.list`, `workspace.findByPullRequest`,
 `workspace.subscribe` and `crossWorkspace.listSiblings`, the `retiredAt` and `revived`
-keys on `workspace:updated`, the `workspace-retired` error discriminator, and the
+keys on `workspace:updated`, the `workspace-retired` and `retire-unsupported` error discriminators, and the
 `workspace.autoRetireArchivedAfterDays` setting (absent = off). Retired workspaces are
 absent from every workspace list surface unless the caller passes `includeRetired: true`,
 so older clients never see the new status in a list. Revive via `workspace.unarchive` /

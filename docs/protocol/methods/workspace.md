@@ -32,7 +32,7 @@ unchanged. Host-administration virtual workspaces retain their existing boundary
 | workspace.cancelDelete *(v6.7)* | workspaceId (req) | { cancelled: boolean } — cancels a pending (grace-window) deletion scheduled by `workspace.delete` with `undoDelayMs`. `true` clears the pending deletion, emits `workspace:delete-cancelled { workspaceId }` (§6.5), and drops `pendingDeleteAt` from the row; `false` is the race-safe non-error when no deletion is pending (never scheduled, already cancelled, or already committed) |
 | workspace.archive | workspaceId (req) | { workspace: Workspace } — returns the refreshed record with `archived: true` / `status: "Archived"` / `archivedAt` set, so callers do not need to follow up with `workspace.get`. Emits `workspace:updated` with the full applied delta `changes: { archived: true, status: "Archived", archivedAt: <ts> }` where `<ts>` is the same ISO timestamp persisted on the row (§6.5). **Archive stops active work** ([intent-hq/intentd#896](https://github.com/intent-hq/intentd/pull/896); PR monitors: [intent-hq/intentd#1067](https://github.com/intent-hq/intentd/pull/1067)): in-flight agent turns are gracefully interrupted, ACTIVE background hooks and ACTIVE PR monitors (§5.42) are cancelled, and queued messages/wakes park while the workspace stays archived — see the archive active-work teardown block below. **Archive removes guests** ([intent-hq/intentd#2066](https://github.com/intent-hq/intentd/pull/2066)): the archived flip, the detach of every `collaborator` membership and the revocation of every open invite commit in **one** store transaction — atomic, so a store failure fails the call with the workspace still active — and are announced before the `archived` delta: one `workspace:updated { changes: { members: true, removedPrincipalId, memberCount } }` per detached collaborator (its queued messages dropped, as for `workspace.members.remove`), then one `{ invites: true }` when at least one invite was revoked (§5.48). The returned record's `memberCount` / `openInviteCount` are the post-sweep values. -32602 if not found. |
 | workspace.unarchive | workspaceId (req) | { workspace: Workspace } — mirror of `workspace.archive`; returns the refreshed record with `archived: false` / `status: "Active"` and `archivedAt` cleared. Emits `workspace:updated` with `changes: { archived: false, status: "Active", archivedAt: null }` — an explicit JSON `null` so clients clear the field (§6.5). Re-kicks the queue drains parked by the archived gates so parked messages deliver without a manual kick; cancelled hooks and PR monitors are NOT resurrected, and neither are the collaborators and open invites the archive removed — the owner is the sole member afterwards and brings a guest back explicitly, via `workspace.members.add` or a fresh invite (see the archive active-work teardown block below). The same delta shape is also emitted by the turn-start **auto-unarchive** (see the auto-unarchive block below), which additionally stamps the additive `autoUnarchive` field into `changes` — the stamp is never present on this manual path (or `workspace.restore`). -32602 if not found. **On a `Retired` workspace** this call (and `workspace.restore`) is the manual **revive** — see [Retired workspaces](#retired-workspaces). |
-| workspace.retire | workspaceId (req) | { workspace: Workspace } — moves an `Active` or `Archived` workspace to `status: "Retired"`: the workspace folder on disk is deleted while every database row (agents, conversations, notes, tasks, assets) is kept and stays readable. An `Active` workspace first runs the full `workspace.archive` teardown and gains `archivedAt`. The git branch is kept. Returns the refreshed record with `status: "Retired"`, `archived: true` and `retiredAt` set; emits one `workspace:updated` delta (§6.5). Idempotent on an already-retired workspace (returns the row, emits nothing). Owner/manager only (`-32003` for a collaborator, §5.48); `-32602 { code: "not-found" }` if absent. Details: [Retired workspaces](#retired-workspaces). |
+| workspace.retire | workspaceId (req) | { workspace: Workspace } — moves an `Active` or `Archived` workspace to `status: "Retired"`: the workspace folder on disk is deleted while every database row (agents, conversations, notes, tasks, assets) is kept and stays readable. An `Active` workspace first runs the full `workspace.archive` teardown and gains `archivedAt`. The git branch is kept; only `checkoutMode: "worktree"` workspaces can retire, others get `-32602 { code: "retire-unsupported" }`. Returns the refreshed record with `status: "Retired"`, `archived: true` and `retiredAt` set; emits one `workspace:updated` delta (§6.5). Idempotent on an already-retired workspace (returns the row, emits nothing). Owner/manager only (`-32003` for a collaborator, §5.48); `-32602 { code: "not-found" }` if absent. Details: [Retired workspaces](#retired-workspaces). |
 | workspace.dismissAttention | workspaceId (req) | { workspace: Workspace } — clears `attention` to `"none"`; -32602 if not found |
 | workspace.markSeen | workspaceId (req) | { workspace: Workspace } — marks the workspace seen: advances **every top-level (no parent, non-background, non-deleted) session's per-conversation seen marker** to its `lastMessageId` through the `agent.markSeen` op (§5.5; same monotonic CAS, each advanced session emits its own `agent:updated` marker event; background/child sessions are untouched), which settles the **derived workspace `unread`** (see the `attention` bullet below) to `none` and emits ONE `workspace:attention-changed { none }` on the transition; also clears the stored legacy flag (guarded on `unread` — a persistent `review_required` survives; the clear re-checks the derivation atomically inside the guarded write, so an assistant message landing mid-call is never retired). **Marker advances are the call's contract, so failures propagate**: a failed pending-list read or per-session marker write is the call's error — the caller never sees success while a session stays unread; the one tolerated per-session failure is a racing `agent.delete` (a deleted session no longer feeds the derivation, so it is skipped). Idempotent: a re-call with nothing unseen writes and emits nothing. `updated_at` stays untouched (looking is not "activity", monorepo#1466) |
 | workspace.getContext | workspaceId (req) | { items: ContextItem[] } — persisted chat-context attachments for the workspace; empty array before the first save. -32602 if the workspace is absent. |
@@ -2211,7 +2211,15 @@ stateDiagram-v2
   `archivedAt`; guest-removal deltas are published as for archive.
 - The daemon then removes the git worktree registration and deletes the folder, reusing
   the `workspace.delete` filesystem removal. Database rows are never deleted.
-- The **git branch is kept**. Secondary git roots inside the folder go with it.
+- The **git branch is kept**. Retire is supported only for `checkoutMode: "worktree"`
+  workspaces, whose branch, refs and objects live in the source repository at
+  `repositoryPath`, outside the deleted folder. Removing the worktree registration never
+  deletes that branch. Secondary git roots inside the folder go with it.
+- Retire is refused with `-32602 { code: "retire-unsupported", checkoutMode? }`, and
+  nothing changes, when deleting the folder would destroy the only copy of the repository
+  or a folder the daemon does not own: standalone `cow` / `direct` checkouts (the folder
+  *is* the repository), `skipIsolation` workspaces (the folder is the user's repository)
+  and remote workspaces. The automatic retire sweep skips these workspaces.
 - One `workspace:updated` delta announces the transition:
   `changes: { archived: true, status: "Retired", retiredAt: <ts> }`, plus
   `archivedAt: <ts>` when the workspace was `Active` (§6.5).
@@ -2220,8 +2228,8 @@ stateDiagram-v2
 
 **Automatic retire.** When the setting `workspace.autoRetireArchivedAfterDays` (§5.12) is
 set, the daemon periodically retires workspaces whose `archivedAt` is older than that many
-days, through the same path and delta as `workspace.retire`. Absent means off. Remote and
-guest-shared workspaces are skipped.
+days, through the same path and delta as `workspace.retire`. Absent means off. Remote, guest-shared and retire-unsupported
+workspaces are skipped.
 
 **Strict list opt-in (normative).** Retired workspaces are absent from **every** surface
 that returns a collection of workspaces unless the caller explicitly passes
@@ -2243,11 +2251,19 @@ Single-workspace reads keep working on a retired workspace: `workspace.get`, not
 comment and agent conversation reads return the kept rows, with the usual membership
 rules.
 
-**Read-only while retired.** A mutating call that needs the folder or the live
-workspace — file writes, terminals, scripts, git operations and commits, sandbox
-operations, `workspace.update` lifecycle fields, member and invite changes — fails with
-`-32602 { code: "workspace-retired", workspaceId }` (§9). `workspace.delete` still works
-and deletes the kept rows as for any workspace.
+**Read-only while retired.** **Every** mutating call scoped to a retired workspace fails
+with `-32602 { code: "workspace-retired", workspaceId }` (§9) and writes nothing. This
+includes database-only writes (notes, tasks, comments, primitives, context, settings and
+`workspace.update` fields) as well as calls that need the folder (files, terminals,
+scripts, git operations and commits, sandboxes, hooks, members and invites).
+The only exceptions are:
+
+- `workspace.delete` / `workspace.cancelDelete` — delete still works and removes the kept
+  rows as for any workspace.
+- The revive triggers below — `workspace.unarchive`, `workspace.restore`, and a user
+  message to an agent, which revives the workspace before the turn starts.
+- Per-viewer bookkeeping that changes no workspace content: `workspace.markSeen`,
+  `workspace.dismissAttention` and `agent.markSeen`.
 
 **Revive.** A retired workspace comes back as a **fresh blank workspace**; nothing from the
 old folder is restored.

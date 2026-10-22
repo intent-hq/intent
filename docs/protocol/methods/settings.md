@@ -117,8 +117,8 @@ never persisted or echoed back as the value. Writing that number explicitly via
 is a TOML-backed optional positive integer number of days. Absent (or `null`) means
 **off**: the daemon never retires a workspace automatically, and `settings.reset` removes
 the key and returns `value: null`. When set, a periodic daemon sweep retires every
-workspace whose `archivedAt` is older than that many days, skipping remote and
-guest-shared workspaces ([Retired workspaces](./workspace.md#retired-workspaces)).
+workspace whose `archivedAt` is older than that many days, skipping remote, guest-shared
+and retire-unsupported workspaces ([Retired workspaces](./workspace.md#retired-workspaces)).
 `settings.update` rejects zero, negative and non-integer values with `-32602`.
 Clients that offer a toggle suggest 7 days when turning it on; the daemon has no implicit
 value.
