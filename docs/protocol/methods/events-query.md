@@ -54,6 +54,20 @@ The bounded scalar identity fields (`id`, `workspaceId`, `type`, `timestamp`, `a
 Applies to both response shapes; `nextToken` is unaffected by trimming.
 The **legacy (non-paginated) `limit` is clamped to [1, 500]** (default 50; previously unclamped — a negative value meant "no limit" in SQL); the paginated path keeps its [1, 200] clamp.
 
+#### Discussion history
+
+Workspace discussion messages are stored in their own table and broadcast as
+transient `discussion:message` events; reaction updates are transient
+`discussion:reaction` events. Neither event type is available through event history; use the authorized
+[`discussion.list`](multiplayer.md#555-workspace-discussions) method for history.
+An explicitly addressed agent with `discussionAgentMessaging: 1` uses that same
+bounded history path for its granted workspace-wide discussion; the grant does
+not open event history or automatic event delivery.
+Agent callers cannot read `discussion:` event rows, including persisted copies
+from earlier development builds. The exclusion is applied in SQL before limits,
+counts, and pagination, for explicit types, category wildcards, and unfiltered
+queries. Other event families keep their existing access rules.
+
 #### Recipient queue history
 
 For an agent caller, `event.query` and `event.agentActivity` (including their MCP
@@ -74,4 +88,3 @@ remain readable through conversation history. See the
 normal delivery.
 
 The singular `event.subscribe` / `event.unsubscribe` spellings are **no longer routable** on the wire (`-32601`); for live event streaming use the `events.subscribe` / `events.unsubscribe` fast-path (§6). The MCP bindings `ws.event.subscribe` / `ws.event.unsubscribe` share the one real subscription implementation with the `agent.subscribe` / `agent.unsubscribe` methods of §5.5 (matching, batching, subscriber wakes, restart persistence, and the [monorepo#1229](https://github.com/intent-hq/monorepo/issues/1229) agent-subscriber restriction); over the MCP seam the subscriber is the calling agent, so `ws.event.subscribe` callers are directed to `ws.agent.watch(agentId)` for agent monitoring.
-

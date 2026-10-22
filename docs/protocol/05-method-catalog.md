@@ -62,6 +62,27 @@ The prepared [generic stream recovery contract](./event-stream-recovery.md) adds
 one fast-path method, `events.fence`, under `eventStreamRecovery: 1`. Its bulk-lane
 response brackets recovery reads with actual event-delivery boundaries.
 
+The prepared [workspace discussion contract (§5.55)](./methods/multiplayer.md#555-workspace-discussions)
+adds five workspace-scoped router methods for a default conversation and private
+direct/group discussions with selected workspace members, gated by exactly integer
+`discussionConversations: 1`. Replies and reactions additionally require
+`discussionMessageActions: 1`; expanded choices, bounded reactor snapshots, and
+granted agent reactions additionally require exact `discussionReactions: 1`.
+`discussion.react` changes a reaction without
+creating a message or advancing its sequence.
+Explicit agent recipients and bound agent replies additionally require
+`discussionAgentMessaging: 1`. The initial extension applies to the default
+workspace-wide conversation; agent history access starts only after an explicit
+addressed message, and no automatic discussion subscription is created.
+Its transient typing indicators extend existing presence parameters and human
+roster rows without adding another method or event type (§5.47).
+Older daemons reject these methods with `-32601`; no agent chat fallback is allowed.
+
+The prepared [workspace guest role contract](./methods/multiplayer.md#workspace-guest-roles-prepared)
+adds one owner-authorized router method, `workspace.members.setRole`, under exact
+`workspaceGuestRoles: 1`. The `manager` role grants scoped agent and saved-script
+controls while preserving the existing Participant default and full-management boundary.
+
 The prepared [protocol 15.1 scoped resource reads](./methods/repository-resources.md#prepared-project-pages-and-discussions)
 add six router methods and one socket-private invalidation notification. The
 [owner-only child Git policy](./methods/settings.md#prepared-gitlab-child-git-credential-policy)
@@ -70,20 +91,20 @@ adds two router methods. Require `repositoryResourcePages: 1` and
 retain `repositoryResourceRead: 1`. Neither capability grants authority or
 implies a carrying release.
 
-The documented surface reserves **465 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
+The documented surface reserves **473 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
 
-- **Router methods:** 407 methods dispatched via the main router (`router::dispatch`)
+- **Router methods:** 415 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 58 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 0; use canonical Git read names
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 7 notifications: prepared `events.lost` ([loss contract](./event-stream-recovery.md)), `events.event` (§6.3) and the socket-private `workspace.repositoryContext.retired`, `workspace.repositorySelection.retired`, `accept-changes.retired`, `sourceControl.read.retired`, `sourceControl.read.invalidated` controls (§6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 6 methods total — 2 are **dual-role** and counted within the 465 dispatchable names (`browser.exec`, `host.openInEditor`), and 4 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) — see §5.9, §5.14 and the reverse-RPC list below
+- **Client-served reverse RPCs:** 6 methods total — 2 are **dual-role** and counted within the 473 dispatchable names (`browser.exec`, `host.openInEditor`), and 4 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) — see §5.9, §5.14 and the reverse-RPC list below
 
-**Total:** 465 dispatchable names + 7 notifications. Of the 6 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 4 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) are daemon→client-only reverse RPCs, never dispatched client→server.
+**Total:** 473 dispatchable names + 7 notifications. Of the 6 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 4 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
-The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.54) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
+The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.55) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
 
 **Prepared GitLab repository additions:** the [repository context and selection
 contracts](methods/workspace.md#repository-context), [native review and commit
@@ -94,7 +115,7 @@ capabilities gate support; catalog entries do not grant permission or establish
 which desktop release contains the feature. The methods below lead the component
 pin, while all existing methods and prepared extensions remain present.
 
-### Router methods by namespace (407 total)
+### Router methods by namespace (415 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
@@ -105,6 +126,7 @@ pin, while all existing methods and prepared extensions remain present.
 | crossWorkspace | 3 | listNotes, listSiblings, readNote |
 | debug | 1 | sampleStacks — point-in-time sample of the daemon's own thread stacks rendered as a text report (§5.43; v6.3, daemon-global — no `workspaceId`) |
 | desktop | 4 | getState, respondPermission, revoke, setPermission — prepared desktop control (§5.51); user/executor only |
+| discussion | 7 | conversations, list, react, recipients, retryAgent, send, stopAgent — workspace-wide and participant-restricted discussions (§5.55); authenticated humans, plus explicitly addressed agents in the default discussion under `discussionAgentMessaging: 1` |
 | event | 3 | agentActivity, query, workspaceSummary |
 | file | 16 | attachmentUpload.abort, attachmentUpload.begin, attachmentUpload.chunk, attachmentUpload.commit, delete, exists, getAttachmentInfo, list, mkdir, placeAttachment, read, readChunk, rename, stat, tree, write |
 | file-tracking | 5 | getAgentLocks, getChanges, loadCommits, stage, unstage — the per-file audit-trail reads with agent attribution (§5.19; `workspaceId` req). The attribution writer `trackChange` is internal (no wire method), per the §6.8 principle |
@@ -146,7 +168,7 @@ pin, while all existing methods and prepared extensions remain present.
 | terminal | 7 | create, getBuffer, kill, list, readOutput, resize, write |
 | unsloth | 2 | status, stop — observe / gracefully stop the daemon-managed singleton Unsloth server (§5.37; v2.5, daemon-global — no `workspaceId`) |
 | voice | 2 | getWorkspaceVocabulary, transcribe — `getWorkspaceVocabulary` is the auto-derived per-workspace vocabulary served for client-side transcription engines (§5.41; v5.1, `workspaceId` req); `transcribe` is daemon-owned speech-to-text via the configured provider (§5.41; v4.3, daemon-global — no required `workspaceId`; optional `workspaceId?` workspace-vocabulary injection since v5.1) |
-| workspace | 54 | archive, cancelDelete, cleanup, create, delete, detectProjectType, diskUsage, dismissAttention, duplicate, export.abort, export.finalize, export.read, export.start, findByPullRequest, findRepositories, generateSetupScript, get, getAutoCommit, getBrowserClient, getContext, getSetupScript, getTokenUsage, getUiContext, import.abort, import.begin, import.chunk, import.commit, initializeRepository, invite.list, invite.revoke, list, localChanges, markSeen, members.add, members.leave, members.list, members.remove, repositoryContext, repositoryContext.capture, repositoryContext.release, repositorySelection.capture, repositorySelection.reconcile, repositorySelection.release, repositorySelection.reset, repositorySelection.save, restore, saveSetupScript, setAutoCommit, setBrowserClient, transfer.plan, unarchive, update, updateContext, updateUiContext — the multiplayer membership surface (§5.48; shipped in intentd b518d31): `members.list` → `{ members: [{ principal fields…, role }] }` (any member); `members.add { principalId }` → `{ added, memberCount }` (owner-only; attaches a credentialed guest from `principal.list` as a collaborator without an invite link, idempotent — a repeat answers `added: false`; an unknown principal, the primary principal or a principal with no active credential is `-32602`, a spent guest cap `-32602 { code: "guest-limit" }`; publishes the same `addedPrincipalId` `workspace:updated` an invite join does — [intent-hq/intentd#2025](https://github.com/intent-hq/intentd/pull/2025)); `members.remove` → `{ removed }` (owner-only; the owner row is `-32602`, a non-member is `removed: false`) and `members.leave` (the caller drops its **own** collaborator membership; owners cannot leave) both publish the `removedPrincipalId` `workspace:updated` (§6.5); `invite.list` → `{ invites: [WorkspaceInvite] }` (secrets never included) and `invite.revoke` → `{ revoked }` are owner-only, with `invite.create` on the fast path, below |
+| workspace | 55 | archive, cancelDelete, cleanup, create, delete, detectProjectType, diskUsage, dismissAttention, duplicate, export.abort, export.finalize, export.read, export.start, findByPullRequest, findRepositories, generateSetupScript, get, getAutoCommit, getBrowserClient, getContext, getSetupScript, getTokenUsage, getUiContext, import.abort, import.begin, import.chunk, import.commit, initializeRepository, invite.list, invite.revoke, list, localChanges, markSeen, members.add, members.leave, members.list, members.remove, members.setRole, repositoryContext, repositoryContext.capture, repositoryContext.release, repositorySelection.capture, repositorySelection.reconcile, repositorySelection.release, repositorySelection.reset, repositorySelection.save, restore, saveSetupScript, setAutoCommit, setBrowserClient, transfer.plan, unarchive, update, updateContext, updateUiContext — the multiplayer membership surface (§5.48; shipped in intentd b518d31): `members.list` → `{ members: [{ principal fields…, role }] }` (any member); `members.add { principalId }` → `{ added, memberCount }` (owner-only; attaches a credentialed guest from `principal.list` as a collaborator without an invite link, idempotent — a repeat answers `added: false`; an unknown principal, the primary principal or a principal with no active credential is `-32602`, a spent guest cap `-32602 { code: "guest-limit" }`; publishes the same `addedPrincipalId` `workspace:updated` an invite join does — [intent-hq/intentd#2025](https://github.com/intent-hq/intentd/pull/2025)); `members.remove` → `{ removed }` (owner-only; the owner row is `-32602`, a non-member is `removed: false`) and `members.leave` (the caller drops its **own** collaborator membership; owners cannot leave) both publish the `removedPrincipalId` `workspace:updated` (§6.5); `invite.list` → `{ invites: [WorkspaceInvite] }` (secrets never included) and `invite.revoke` → `{ revoked }` are owner-only, with `invite.create` on the fast path, below |
 
 Namespaces without their own numbered subsection below (`accept-changes.*`, `file-tracking.*`, `drafts.*`, `host.*`) are covered in §5.14–§5.20; `browser.exec` is in §5.9 and the `browser.*` tab-registry methods are in §5.45.
 
@@ -842,4 +864,4 @@ Conventions used below: parameters marked **(req)** are required (a missing/`nul
 
 ### §5.x subsection index
 
-The per-namespace subsections (§5.1–§5.54) live in the [methods/](./methods/) directory; the canonical § → file map is the [§5.x subsections table in the README](./README.md#5x-subsections-methods).
+The per-namespace subsections (§5.1–§5.55) live in the [methods/](./methods/) directory; the canonical § → file map is the [§5.x subsections table in the README](./README.md#5x-subsections-methods).

@@ -8,8 +8,50 @@ capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `15.1` — prepared scoped repository pages and GitLab child Git policy; not a shipped-version claim.
+**Documented version:** `15.1` — prepared discussions, guest roles, scoped repository pages and GitLab child Git policy; not a shipped-version claim.
 Other prepared extensions retain their independent support gates.
+
+**Version 15.1 — workspace discussions (additive, prepared).**
+[Workspace discussions](./methods/multiplayer.md#555-workspace-discussions) add
+`discussion.conversations`, `discussion.recipients`, `discussion.list`,
+`discussion.send`, `discussion.react`, `discussion:message`, and `discussion:reaction` for a default workspace-wide discussion
+and direct/group discussions with selected members. The five router methods use
+authenticated human membership, private participant grants, bounded pagination,
+and principal-scoped retry keys that reject changed bodies or targets. The first
+message atomically creates a private conversation. Exactly integer
+`discussionConversations: 1` gates multiple-conversation targeting, preventing
+older daemons from ignoring private target fields. Message events include the conversation
+descriptor, are broadcast-only, and exclude nonparticipants and agents.
+Replies and per-viewer reaction aggregates require the separate exact
+`discussionMessageActions: 1` capability. Reply targets bind retry identity;
+reaction versions preserve updates without advancing message sequences. Exact
+`discussionReactions: 1` adds five picker choices, bounded immutable reactor
+snapshots, and reactions from explicitly granted agents in the default discussion.
+Older experimental clients must upgrade with this unreleased daemon extension.
+Discussion typing extends the existing `presence.update` and human roster
+shapes with transient, conversation-scoped `discussionTyping`, projected per
+recipient; typing adds no method or event type.
+Agent/daemon snapshots omit that field, and older rosters without it remain valid.
+The prepared `discussionAgentMessaging: 1` extension adds explicit per-message
+agent recipients and bound agent replies to the workspace-wide discussion.
+Addressed agents may read that conversation's history on demand; other messages
+never dispatch a turn automatically. Private chats remain human-only because
+agent transcripts have workspace-wide visibility. This adds no router method or
+event type; agent tools use the existing conversation/list/send operations.
+Clients tolerate unsupported methods without sending to an agent instead. The
+documented surface, including prepared startup, generic stream recovery,
+PR workspace lookup, provider profiles, discussion activity, and guest role additions,
+is now **473 / 415 / 58**
+(dispatchable / router / fast path). This reservation does not identify a carrying
+release or change independent capability gates.
+
+The prepared [workspace guest role extension](./methods/multiplayer.md#workspace-guest-roles-prepared)
+adds `workspace.members.setRole` under exact `workspaceGuestRoles: 1` on both
+discovery surfaces. `collaborator` remains the default wire role, displayed as
+Participant; owner-assigned `manager` grants scoped agent and saved-script
+operations without broadening `canManage` or granting raw terminal access.
+Role changes invalidate membership projections on existing connections. This
+extends the unreleased 15.1 contract and does not establish Multiplayer readiness.
 
 **Version 15.1 — scoped repository pages and GitLab child Git policy (additive, prepared).**
 This extension builds on protocol 15.0 without restoring legacy workspace import
@@ -112,16 +154,19 @@ both keys; clients must detect them by presence.
 **PR workspace lookup (additive, prepared).** The
 [PR workspace lookup](./methods/workspace.md#pull-request-workspace-lookup) reserves
 the read-only router method `workspace.findByPullRequest`, bringing the documented
-surface to **451 / 394 / 57** (dispatchable / router / fast path). The server hello
+surface, including the prepared discussions and provider profiles, to
+**460 / 403 / 57**
+(dispatchable / router / fast path). The server hello
 capability `prWorkspaceLookup: 1` gates support. No shipped numeric version is
 claimed here.
 
-**Startup readiness (additive, prepared).** The [startup contract](./startup-readiness.md)
-reserves `system.startupStatus` and numeric error `-32012`, with exact
+**Version 14.1 — startup readiness (additive).** The [startup contract](./startup-readiness.md)
+adds `system.startupStatus` and numeric error `-32012`, with exact
 `startupStatus: 1` support detection. It does not make ordinary hello usable before
-Store or grant guest access to owner progress. Coordinate the additive minor at
-implementation; no shipped numeric version is claimed here. Before the legacy-import removal, counts including this addition were
-**451 / 393 / 58** (dispatchable / router / fast path); the version-specific counts below describe their original deltas.
+Store or grant guest access to owner progress. The daemon implementation uses
+14.1; this does not identify a carrying desktop release. At the original reservation,
+counts including this addition were **450 / 393 / 57** (dispatchable / router /
+fast path); the version-specific counts below describe their original deltas.
 
 **Version 14.0 — active-only script and monitor lists (breaking, prepared).**
 The [replacement contract](./methods/scripts.md#active-only-compact-lists-prepared-breaking-contract)
@@ -1376,6 +1421,12 @@ above describe the former method, not a durability guarantee for current commits
 - **Clients never cap the protocol version.** A client gates a feature on an advertised capability or on a minimum version (`>= major.minor`), never on a maximum, an exact major or an allowlist of known majors: the major moves for unrelated changes, and a cap silently disables working features on every newer daemon (script monitors and script lists on protocol 15, [intent-hq/intent#7206](https://github.com/intent-hq/intent/issues/7206), [#7248](https://github.com/intent-hq/intent/issues/7248)). Capability values are different: each value names one contract, so clients compare them exactly (`scriptMonitors === 2`). A breaking change to a method's semantics must therefore change something an old client checks: a new capability value (e.g. `scriptMonitors: 1` → `2`) or a new method name. A feature gated only by version (no capability) gains a capability before its first breaking change. Removing a method answers `-32601 Method not found`, which clients treat as "unsupported", not as a crash.
 
 The method surface is enforced by golden tests in `crates/intent-transport/src/catalog.rs`. Any drift (added, removed, or renamed methods) causes CI failure with the instruction: "Update ROUTER_METHODS in catalog.rs, update docs/protocol/05-method-catalog.md, and bump the protocol version." Additive response fields on an existing method (e.g., the optional `system.status` resource fields, §5 fast-path notes) do not change the golden-test-enforced catalog and ship within the current version; clients must detect them by **presence**, not by protocol version.
+
+The prepared `discussionAgentActivity: 1` extension adds per-message/recipient
+activity and selected mention snapshots, transient `discussion:activity`, and
+human-only `discussion.stopAgent` / `discussion.retryAgent`. The attempt fences
+controls; the version orders event, response, and history races. Legacy messages
+without receipts have empty activity. This remains unreleased Multiplayer Labs.
 
 ### Staged row fields (app adoption pending)
 

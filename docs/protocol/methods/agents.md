@@ -45,6 +45,13 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 | agent.subscribe (deprecated) | workspaceId (req), eventTypes (req, array), agentId?, excludeSelf?, batchWindow? | service result `{ subscriptionId, eventTypes }` — details below the table. |
 | agent.unsubscribe (deprecated) | workspaceId (req), subscriptionId (req) | service result `{ success: true, subscriptionId }` — stops delivery; unknown id errors |
 
+**Workspace discussions (prepared for 15.1):** agent subscriptions also reject
+every `discussion:`-prefixed type or pattern with `-32602`, and the delivery-time
+guard excludes these events from restored subscriptions. Human discussions
+cannot wake an agent through `ws.event.subscribe` or `ws.agent.subscribe`.
+Historical discussion rows are excluded separately from agent event queries;
+see [workspace discussions](multiplayer.md#555-workspace-discussions).
+
 **`agent.list` details.**
 
 - **Soft retire (v7.5; see the agent.restore details below):** soft-retired sessions (`retiredAt` set) are EXCLUDED from the default read via an SQL-side filter (cost stays O(rows returned)); `includeRetired: true` serves every row, retired ones carrying the additive presence-detected `retiredAt` field (ISO timestamp; omitted on active rows, never `null`).

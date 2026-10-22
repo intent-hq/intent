@@ -69,6 +69,14 @@ roles to unlock it.
 
 #### Effective workspace membership
 
+The prepared [workspace guest role extension](./multiplayer.md#workspace-guest-roles-prepared)
+adds `manager` alongside the existing guest `collaborator` role. Its scoped agent
+and saved-script permissions do not change the `canManage` precedence below.
+Under `workspaceGuestRoles: 1`, guest roster rows and caller-relative `myRole`
+preserve `manager`; both non-owner guest roles count toward the same guest cap.
+Inherited host members retain their existing authority and cannot be edited as
+workspace guests.
+
 Every caller-relative `Workspace` projection (`get`, full/lite `list`, mutation
 results, and subscription snapshots/deltas) carries **`canManage: boolean`** from
 the current durable grant, with the same precedence as workspace management:

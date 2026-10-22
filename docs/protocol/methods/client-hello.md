@@ -33,6 +33,15 @@ hello completes. Initial hydration and reconnect/event-gap recovery remain requi
 A bundled daemon upgrade does not upgrade older remote hosts. This capability
 does not change experimental Multiplayer readiness.
 
+**Workspace guest roles (prepared).** Exact integer
+`server.capabilities.workspaceGuestRoles: 1`, also returned by
+`system.capabilities`, gates the complete [Participant/Manager contract](./multiplayer.md#workspace-guest-roles-prepared).
+It is support discovery, not caller authority. Guest Managers retain
+`canManage: false`; clients derive narrowly scoped controls from the current
+workspace role. Missing, malformed or unknown capability values hide role
+mutation controls. Refresh on each admitted connection; older remote hosts are
+not upgraded by installing a newer desktop client.
+
 **Submission correlation (prepared).**
 `server.capabilities.submissionCorrelation: 1` gates the complete
 [optimistic submission contract](./agents.md#submission-correlation-and-optimistic-display-prepared-additive-extension):
@@ -98,6 +107,29 @@ TTL, optional single-line regex/line-count triggers, single-owner registration,
 guarded run cancellation and silent lifecycle
 cleanup including queued wakes. Independent of scriptLifecycle/scriptReadiness;
 absence means unavailable, not permission to infer support from version numbers.
+
+**Workspace discussions (prepared additive extension).**
+Exactly integer `server.capabilities.discussionConversations: 1` advertises the
+[§5.55 contract](./multiplayer.md#555-workspace-discussions): conversation and
+recipient discovery, atomic creation with the first message, participant-gated
+history and delivery, and conversation-scoped typing. The same flag is returned
+by `system.capabilities`. Clients require this flag before sending private
+conversation IDs or recipient lists, because earlier single-discussion daemons
+may silently ignore unknown targeting fields. The flag grants no membership or
+participant access and does not enable the desktop Multiplayer Labs setting.
+The separate exact integer `discussionMessageActions: 1` capability, advertised
+on hello and `system.capabilities`, gates same-conversation replies and
+per-viewer reaction aggregates. Never discard an unsupported reply target or
+interpret the capability as authorization.
+Exactly integer `discussionReactions: 1` on both surfaces additionally enables
+the five-choice picker, bounded immutable reactor snapshots, and explicitly
+granted agent reactions (§5.55). Missing or unknown versions do not enable them.
+Exactly integer `discussionAgentMessaging: 1`, also on both discovery surfaces,
+gates explicit `recipientAgentIds` on a message and agent-authored replies in the
+workspace-wide discussion. It grants no agent access by itself: the agent must
+first be explicitly addressed in that conversation. Clients must not silently
+strip recipients when this flag is absent or unknown. Agents still cannot
+subscribe to discussion events, and private discussions remain human-only.
 
 | Method | Params | Result |
 | --- | --- | --- |
@@ -535,3 +567,8 @@ Each recovering `events.subscribe` lease must separately request and acknowledge
 shapes and reconnect/explicit-refresh fallback; discovery alone does not opt in.
 The capability does not promise durable replay, typed-channel recovery or product
 readiness. It is advertised only after the transport and membership-loss cases pass.
+
+Exactly integer `discussionAgentActivity: 1`, on hello and `system.capabilities`,
+adds request-correlated discussion activity, immutable selected mention spans,
+and human `discussion.stopAgent` / `discussion.retryAgent` controls. This is a
+prepared Multiplayer Labs extension; see [the activity contract](./multiplayer.md#correlated-agent-activity-and-controls-prepared).

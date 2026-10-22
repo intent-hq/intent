@@ -11,6 +11,22 @@ The [prepared service readiness extension](#service-readiness-prepared-additive-
 adds optional `healthUrl` / `readyPattern` definition inputs and `ready` /
 `readiness` runtime fields. These are capability-gated, not yet shipped.
 
+The prepared [workspace guest role extension](./multiplayer.md#workspace-guest-roles-prepared)
+lets a workspace Manager operate existing saved scripts through scoped service
+checks. It grants no script-definition writes, arbitrary command/environment
+overrides, raw terminal access or host execution. The Shell panel must keep those
+controls separate from saved-script run and output controls; `canManage` is not
+broadened for Managers.
+
+Manager reads and operations require stored `purpose: "saved"` (legacy absent
+purpose hydrates as saved). Filter lists before pagination, and enforce the same
+restriction on individual IDs and live events. `script.run` accepts an existing
+saved command ID with output/timeout options only; it cannot supply a new command
+or override its definition. On removal, supporting producers include the deleted
+definition's `purpose` so a Manager can invalidate a saved row after it is gone.
+Changing a saved command to `oneOff` emits the scoped invalidation below; it does
+not remove the owner's definition or output.
+
 | Method | Params | Result |
 | --- | --- | --- |
 | script.list | workspaceId (req), archive? (`active` only; other values rejected in prepared v14), view? (`full` \| `summary`), limit?, cursor? (prepared summary extension below) | { scripts: [...] } — definition plus `runtime` by default; summary pages are discriminated `{ view: "summary", scripts: ScriptSummary[], nextCursor? } |
@@ -830,7 +846,17 @@ minor against daemon main at implementation time; docs land before consumers.
 | --- | --- | --- |
 | `created` | `{ scriptId, action: "created", script }` | Insert the committed definition and current runtime |
 | `updated` | `{ scriptId, action: "updated", script }` | Replace the complete row after definition edit, archive, restore or result commit |
-| `removed` | `{ scriptId, action: "removed" }` | Delete the definition by ID; omit `script` |
+| `removed` | `{ scriptId, action: "removed", purpose? }` | Delete the definition by ID; omit `script`. The prepared guest-role extension adds `purpose: "saved" \| "oneOff"` for scoped delivery after deletion. |
+| `guest-access-revoked` | `{ scriptId, action: "guest-access-revoked" }` | Prepared guest-role extension: retire a previously saved row from a Manager's view after conversion to `oneOff`; no definition or output is disclosed. |
+
+On a committed saved-to-one-off transition, publish `guest-access-revoked` before
+the ordinary `updated` snapshot under the same per-ID publication lock. A current
+Manager guest removes the cached definition and output and fences pending reads,
+even when the definition is absent from its cache. Full-authority clients ignore
+this scoped action and apply the ordinary update, preserving owner output and
+viewer hydration. The one-off snapshot remains hidden from Managers. This action
+does not mean the stored definition was deleted; legacy clients may reconcile an
+unknown action through their existing scoped read API.
 
 `script` is exactly one **full `script.list` row**, independent of the client's
 active/history filter: all definition fields plus a complete `runtime` object.
