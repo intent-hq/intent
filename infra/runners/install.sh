@@ -149,6 +149,13 @@ configure_docker() {
   ensure_started docker
 }
 
+# Kernel limits the slots share; reloaded every run so a hand edit is undone.
+configure_sysctl() {
+  install -d -m 0755 "$prefix/etc/sysctl.d"
+  put 0644 "$here/sysctl.conf" "$prefix/etc/sysctl.d/90-github-runners.conf" || true
+  sysctl -q --load "$prefix/etc/sysctl.d/90-github-runners.conf"
+}
+
 install_files() {
   install -d -m 0755 "$lib_dir" "$unit_dir"
   install -d -m 0700 "$etc_dir"
@@ -244,6 +251,7 @@ main() {
   check_os
   install_packages
   configure_docker
+  configure_sysctl
   install_files
   create_network
   build_image

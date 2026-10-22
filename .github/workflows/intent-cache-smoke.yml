@@ -13,6 +13,10 @@ on:
         description: Also check the xl pool (needs an online intent-cache-xl runner, or the job waits for one)
         type: boolean
         default: false
+      chromium:
+        description: Also launch headless Chromium and check the inotify limit (after the image and sysctl rollout)
+        type: boolean
+        default: false
   pull_request:
     paths:
       - infra/runners/**
@@ -141,6 +145,20 @@ jobs:
           if [ -z "$PREVIOUS" ] || [ "$RUNNER_NAME" = "$PREVIOUS" ]; then echo "::error::runner $RUNNER_NAME was reused"; exit 1; fi
           if [ -e "$GITHUB_WORKSPACE/.git" ]; then echo "::error::workspace not empty"; exit 1; fi
           echo "fresh runner $RUNNER_NAME (previous: $PREVIOUS)"
+      # Opt-in until every host runs the image with Chromium's libraries and
+      # the sysctl drop-in (install.sh with a rebuild); pull requests still
+      # test the installed image.
+      - name: Headless Chromium starts without sudo, and inotify has headroom
+        if: github.event_name == 'workflow_dispatch' && inputs.chromium
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          limit="$(cat /proc/sys/fs/inotify/max_user_instances)"
+          if [ "$limit" -lt 32768 ]; then echo "::error::fs.inotify.max_user_instances is $limit; expected 32768 or more"; exit 1; fi
+          # The version cloudlands-fe's component tests launch (the CT packages stop at 1.58).
+          npm install --no-save --no-audit --no-fund playwright-core@1.58.2 >/dev/null
+          npx playwright-core install chromium-headless-shell
+          node -e "require('playwright-core').chromium.launch().then(async (b) => { const p = await b.newPage(); await p.setContent('<p>ok</p>'); console.log('chromium', b.version(), await p.textContent('p')); await b.close(); })"
 
   cache-writer:
     name: Build intentd (GitHub-hosted, writes the cache)
