@@ -310,7 +310,7 @@ next job.
 
 ## Add or remove slots
 
-Edit `/etc/github-runners/runners.env` (for example `SMALL_SLOTS=4`, or a new
+Edit `/etc/github-runners/runners.env` (for example `HEAVY_SLOTS=2`, or a new
 pool added to `RUNNER_POOLS` with its own keys), check it, then apply:
 
 ```bash
