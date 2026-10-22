@@ -158,7 +158,7 @@ and unknown execution; an uncertain input outcome must never be replayed.
 
 [§5.54](./methods/provider-profiles.md) uses `-32602` with these `error.data.code`
 values: `invalid-params` with `data.fieldErrors: [{ field, code, message }]` for
-profile validation; `not-found` for an unknown profile id; `provider-profile-not-found` when
+profile and reorder validation; `not-found` for an unknown profile id; `provider-profile-not-found` when
 `settings.update` names a missing profile;
 `provider-profile-in-use` with `data.inUse` when saved defaults or specialists still
 select the profile; and `provider-profile-replacement-required` with
