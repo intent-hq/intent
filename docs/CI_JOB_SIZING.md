@@ -5,7 +5,7 @@ the per-job resource stats the self-hosted runner slots record (see "Job stats" 
 [GITHUB_RUNNERS.md](./GITHUB_RUNNERS.md)), matches each record to its GitHub Actions
 job, and writes a markdown report plus one JSON size table per repository.
 Standard library only; it needs `ssh` access to the runner hosts over Tailscale and
-an authenticated `gh` that can read Actions runs.
+an authenticated `gh` that can read Actions runs (see "GitHub API use" below).
 
 ## Run it
 
@@ -27,11 +27,38 @@ scripts/ci-job-sizes.py --from-file /tmp/stats.jsonl --jobs-file /tmp/jobs.json 
 | `--since`, `--until` | Window, ISO 8601 (default: the last 5 days) |
 | `--out-dir DIR` | Write `ci-job-sizes.md` and `<owner>__<repo>.json` |
 | `--format md\|json` | What goes to stdout |
+| `--max-api-calls N` | GitHub API call budget for this invocation (default 1000) |
+| `--token TOKEN` | Token handed to `gh` as `GH_TOKEN` (default: the caller's `GH_TOKEN` or `gh` login). Prefer exporting `GH_TOKEN`: a command-line token shows in `ps` |
+| `--cache-dir DIR`, `--no-cache` | Where completed runs' jobs are cached (default `$XDG_CACHE_HOME/ci-job-sizes`, else `~/.cache/ci-job-sizes`) |
+| `--all-runs` | Read every run in the window, not only the runs a stats line can match (prices hosted-only jobs; costs far more calls) |
 
 Each host is read with `ssh root@<host> /usr/local/lib/github-runners/supervisor.sh
 --job-stats --since <since>`. An unreachable host is listed under "Collection
-problems" and the report still renders. Jobs come from every run created since two
-days before `--since` (so re-runs of older runs are found), with all attempts.
+problems" and the report still renders.
+
+## GitHub API use
+
+The script shares the caller's 5000-calls-an-hour GitHub quota, so it reads as little
+as it can:
+
+- It lists only the runs created from two days before `--since` (so re-runs of older
+  runs are found) to the end of the last stats line, one query per day, and stops
+  paging when a day is exhausted. Listing costs one call per 100 runs.
+- It reads a run's jobs (all attempts) only when the run was alive while a stats line's
+  runner was, nearest start first, and stops as soon as that line's `runner_name` is
+  found. One run usually matches several lines. A line with no match keeps trying
+  overlapping runs until they run out or the budget does.
+- A completed run's jobs never change, so they are cached on disk by run id and attempt.
+  A second report over the same days reads almost no jobs; a re-run is a new attempt
+  and is read again.
+- It reads `/rate_limit` first (that call is free). It refuses to start when the token
+  has fewer calls left than repositories to list, and lowers the budget to what is left.
+  When the budget runs out, or GitHub answers with a rate-limit error, it stops and
+  renders the partial report with a "stopped early" line under "Collection problems".
+  It always prints `GitHub API calls used: N of B budget …` on stderr.
+
+By default the paid-per-day column therefore counts only hosted jobs in runs that also
+had a measured self-hosted job. Pass `--all-runs` to price every run in the window.
 
 ## How a job is sized
 
@@ -70,4 +97,4 @@ runners free on the public repos). A negative saving means the job is undersized
 Labels with no known price are listed and counted as $0.
 
 Stats whose runner name matches no job are listed under "Unmatched stats" (the run was
-deleted, belongs to a repo outside `--repos`, or started outside the jobs window).
+deleted, belongs to a repo outside `--repos`, or the API budget ran out first).

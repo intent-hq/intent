@@ -356,10 +356,28 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 - **Image-reference blocks (within v7.4, monorepo#3338).**
   An `imageBlocks` entry may carry an attachment-registry `attachmentId` reference (v6.12 registry, `file.placeAttachment` / `file.attachmentUpload.*`) in place of inline base64 `data` — `{ type: "image", attachmentId, mimeType? }` — under a per-entry exactly-one-of-`data`/`attachmentId` rule (the rule the v6.12 `fileBlocks` contract introduced; `imageBlocks` keep both arms after v10.0 retired the file inline arm): both or neither is `-32602` naming the block index, BEFORE any state change.
   The reference is additionally validated at the RPC seam: an `attachmentId` not naming a registered attachment is `-32602` naming the id (registry-wide lookup by design — `workspace.create`'s `initialAgent` references attachments placed before the new workspace exists), and a registered size over 30 MiB is `-32602` (30 MiB raw = 40 MiB base64, the inbound frame cap that already bounds inline blocks) — the cap applies per reference AND in **aggregate** across all references in the array (individually-valid references whose recorded sizes sum past 30 MiB are `-32602`), so a small request cannot name many attachments that expand one prompt past the transport bound.
-  Resolution happens daemon-side at prompt assembly — the single choke point covering every delivery path (direct send, queue drain, wakes, interrupts, the initial-agent turn): bytes are read from the attachment's canonical workspace root (same within-root containment guard as `file.getAttachment`), base64-encoded, and threaded to the ACP exactly as an inline image block, with MIME resolving block `mimeType` > registry `mime_type` > extension inference; a row/file that vanished after ingress validation is skipped fail-soft with a daemon warn (same convention as note-image resolution).
+  Resolution happens daemon-side at prompt assembly — the single choke point covering every delivery path (direct send, queue drain, wakes, interrupts, the initial-agent turn): bytes are read from the attachment's canonical workspace root (same within-root containment guard as `file.getAttachment`), base64-encoded, and prepared for provider delivery as described below, with MIME resolving block `mimeType` > registry `mime_type` > extension inference; a row/file that vanished or became unsafe after ingress validation fails the turn rather than silently omitting an attachment.
   Persistence keeps the REFERENCE: the session `imageBlocks` and the user transcript row carry `{ type: "image", attachmentId, mimeType? }` with no `data`, so `agent.getSession` / `agent.getConversation` payloads stay constant-size.
   The same contract applies everywhere `imageBlocks` are accepted: `agent.queueMessage`, `agent.editAndRegenerate`, `agent.create`, the `agent.update` `imageBlocks` patch, and `workspace.create`'s `initialAgent` (§5.1).
-  Inline `data` entries are byte-for-byte unchanged.
+  Persisted inline `data` entries remain unchanged; provider-bound copies follow the image delivery rules below.
+- **Image attachment delivery (behavior only).** PNG, JPEG (including the `image/jpg`
+  alias), GIF, and WebP use the shared provider image preparation path. Outbound
+  MIME values are normalized for case, surrounding whitespace, and parameters; the
+  JPEG alias becomes `image/jpeg`. SVG and other image formats are delivered as
+  source-file attachment notices, using the existing `ws.file.getAttachment`
+  retrieval contract rather than unsupported vision blocks. Registry-backed images
+  already owned by the receiving workspace reuse their original attachment ID.
+  References owned by another workspace (including attachments placed before
+  `workspace.create`) are copied into the receiving workspace, and the notice uses
+  that workspace's new attachment ID so `ws.file.getAttachment` can retrieve it.
+  Legacy inline images are also registered as files in the receiving workspace.
+  Both placement paths use idempotency, so repeated delivery reuses the placement
+  while its idempotency binding remains live. Original source
+  bytes and persisted message blocks are retained. This applies to direct delivery,
+  queue drain/retry, and attachments carried forward from an interrupted turn.
+  Supported raster images still undergo bounded decoding and provider-size
+  preparation; invalid image data is not silently dropped. These rules change
+  outbound prompt assembly, not the accepted RPC fields or transcript shape.
 - **Pending human append.**
   A send that falls back to the pending queue follows [Shared pending human queue](#shared-pending-human-queue); its queued result identifies the surviving entry and its turn, which may predate this request.
   Directly delivered messages are unchanged.
