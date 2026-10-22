@@ -438,10 +438,13 @@ never removes external account directories.
 
 #### Backup failover
 
-A turn whose provider rejects it for quota retries on a backup profile instead of
-failing. "Quota" means exactly the failures that `agent:failed` reports with
-`errorCode: "quota-exceeded"` ([§6](../06-events.md)). Every other failure behaves as
-today, and an agent with no eligible backup behaves as today.
+A turn whose provider rejects it for quota retries on another candidate (a backup
+profile, or home) instead of failing. "Quota" means exactly the failures that
+`agent:failed` reports with `errorCode: "quota-exceeded"` ([§6](../06-events.md)).
+Every other failure behaves as today. A quota failure is terminal only when no
+eligible untried candidate remains, home included (see [Exhaustion](#backup-failover)).
+A conversation that is at home with no profile flagged as a backup has no candidate,
+so it behaves as today.
 
 - **Home provider.** Each conversation has a *home* reference: its last explicit
   selection, which is the reference it was on before its first automatic switch. Until
@@ -452,7 +455,9 @@ today, and an agent with no eligible backup behaves as today.
   change home.
 - **Rotation.** The candidates form one cycle: the profiles with `backup: true` whose
   base provider is the agent's base provider, in saved order, then home if it is not
-  already among them. Failover never crosses base providers (Codex and Claude Code
+  already among them. Home is always a candidate while the conversation is away from
+  home, even if no profile is flagged as a backup any more (for example, the flags were
+  cleared after a failover). Failover never crosses base providers (Codex and Claude Code
   stay separate) and never changes the model id.
 - **Choice.** The daemon walks the cycle starting after the current reference,
   wrapping around, and takes the first reference not yet tried for this user turn. If
@@ -486,8 +491,9 @@ today, and an agent with no eligible backup behaves as today.
 - **Swallowed attempt.** A failed attempt that leads to a retry emits no
   `agent:failed` and persists no error row. The agent stays busy until the retried
   turn ends.
-- **Exhaustion.** When no candidate is left, the turn fails with today's terminal
-  `agent:failed` and `errorCode: "quota-exceeded"`, unchanged. `providerId` names the
+- **Exhaustion.** When no eligible untried candidate remains, home included, the turn
+  fails with today's terminal `agent:failed` and `errorCode: "quota-exceeded"`,
+  unchanged. `providerId` names the
   last reference tried, which is the agent's provider at that point.
 
 **Transcript notice.** Each switch persists one row before the retry starts:
