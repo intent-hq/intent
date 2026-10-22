@@ -103,10 +103,12 @@ cleanup() {
 trap cleanup EXIT
 
 usage() {
-  echo "Usage: $0 [--check] [--check-frontend] [--coverage] [--yes]"
+  echo "Usage: $0 [--check] [--check-frontend] [--install-actionlint] [--coverage] [--yes]"
   echo "  --check            Report missing requirements without changing the host"
   echo "  --check-frontend   Report only the frontend toolchain gaps (Corepack + pinned pnpm)"
   echo "                     that block the dev/sandbox targets; exit 0 silently when ready"
+  echo "  --install-actionlint Install only the pinned, checksum-verified actionlint into"
+  echo "                     \$CARGO_HOME/bin (no prompt; CI's workflow-lint job); fails when it cannot"
   echo "  --coverage         Also install cargo-llvm-cov and llvm-tools-preview for"
   echo "                     make coverage-e2e / coverage-all (env alias: BOOTSTRAP_COVERAGE=1)"
   echo "  --yes              Install without prompting"
@@ -116,6 +118,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --check) MODE=check ;;
     --check-frontend) MODE=check-frontend ;;
+    --install-actionlint) MODE=install-actionlint ;;
     --coverage) WITH_COVERAGE=1 ;;
     --yes) ASSUME_YES=1 ;;
     -h|--help) usage; exit 0 ;;
@@ -1268,7 +1271,7 @@ install_actionlint() {
   command -v curl >/dev/null 2>&1 || { echo "ERROR: curl is required to install actionlint" >&2; exit 1; }
   echo "[install] actionlint $ACTIONLINT_VERSION from its release archive"
   TEMP_FILE=$(mktemp "${TMPDIR:-/tmp}/actionlint.XXXXXX") || exit 1
-  curl --proto '=https' --tlsv1.2 -LsSf \
+  retry_download curl --proto '=https' --tlsv1.2 -LsSf \
     "https://github.com/rhysd/actionlint/releases/download/v$ACTIONLINT_VERSION/actionlint_${ACTIONLINT_VERSION}_$platform.tar.gz" \
     -o "$TEMP_FILE" || exit 1
   actual=$(sha256_of "$TEMP_FILE") || { echo "ERROR: sha256sum or shasum is required to verify actionlint" >&2; exit 1; }
@@ -1324,6 +1327,15 @@ fi
 if [[ "$MODE" == check ]]; then
   check_all
   exit $?
+fi
+
+# make lint-workflows needs only actionlint, so CI installs just that pin
+# instead of the whole host. Unlike a full bootstrap, a host without a pinned
+# archive is an error here: the caller asked for this one binary.
+if [[ "$MODE" == install-actionlint ]]; then
+  install_actionlint
+  actionlint_ready || { echo "ERROR: actionlint $ACTIONLINT_VERSION is not installed; build it from $ACTIONLINT_INSTALL_URL" >&2; exit 1; }
+  exit 0
 fi
 
 if ! installable_gap_exists; then

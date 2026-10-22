@@ -138,7 +138,7 @@ jobs:
           for f in "$HOME/leftover-marker" /tmp/leftover-marker "$RUNNER_TEMP/../leftover-marker"; do
             if [ -e "$f" ]; then echo "::error::$f survived from the previous job"; exit 1; fi
           done
-          [ -n "$PREVIOUS" ] && [ "$RUNNER_NAME" != "$PREVIOUS" ] || { echo "::error::runner $RUNNER_NAME was reused"; exit 1; }
+          if [ -z "$PREVIOUS" ] || [ "$RUNNER_NAME" = "$PREVIOUS" ]; then echo "::error::runner $RUNNER_NAME was reused"; exit 1; fi
           if [ -e "$GITHUB_WORKSPACE/.git" ]; then echo "::error::workspace not empty"; exit 1; fi
           echo "fresh runner $RUNNER_NAME (previous: $PREVIOUS)"
 
