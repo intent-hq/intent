@@ -2218,8 +2218,8 @@ stateDiagram-v2
 - Retire is refused with `-32602 { code: "retire-unsupported", checkoutMode? }`, and
   nothing changes, when deleting the folder would destroy the only copy of the repository
   or a folder the daemon does not own: standalone `cow` / `direct` checkouts (the folder
-  *is* the repository), `skipIsolation` workspaces (the folder is the user's repository)
-  and remote workspaces. The automatic retire sweep skips these workspaces.
+  *is* the repository), `skipIsolation` workspaces (the folder is the user's repository),
+  workspaces without a daemon-owned checkout, and remote workspaces. The automatic retire sweep skips these workspaces.
 - One `workspace:updated` delta announces the transition:
   `changes: { archived: true, status: "Retired", archivedAt, retiredAt: <ts> }`, where
   `archivedAt` is the row's value — newly set when the workspace was `Active` (§6.5).
@@ -2264,6 +2264,12 @@ The only exceptions are:
   message to an agent, which revives the workspace before the turn starts.
 - Per-viewer bookkeeping that changes no workspace content: `workspace.markSeen`,
   `workspace.dismissAttention` and `agent.markSeen`.
+- A repeated `workspace.retire` (idempotent, see above).
+
+Client-state writes are **not** exempt: `workspace.updateUiContext` and
+`workspace.setBrowserClient` are refused too, so clients skip them for a retired workspace
+or tolerate `workspace-retired`. Per-connection fast-path state (`drafts.*`, presence)
+is not workspace content and is not gated.
 
 **Revive.** A retired workspace comes back as a **fresh blank workspace**; nothing from the
 old folder is restored.
