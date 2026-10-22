@@ -12,7 +12,8 @@ and is not a profile. Hosts with no profiles keep their current behavior.
 
 Profiles of one base provider have a saved order, and any of them can be marked as a
 **backup**. When a turn fails because its provider ran out of quota, the daemon
-retries it on the next backup profile of the same base provider (see
+retries it on the next backup profile of the same base provider, and later returns
+the conversation to the provider it started on (see
 [Backup failover](#backup-failover)). The Default configuration is never a backup
 and has no position in the order.
 
@@ -442,18 +443,28 @@ failing. "Quota" means exactly the failures that `agent:failed` reports with
 `errorCode: "quota-exceeded"` ([§6](../06-events.md)). Every other failure behaves as
 today, and an agent with no eligible backup behaves as today.
 
-- **Candidates.** The backups are the profiles with `backup: true` whose base provider
-  is the agent's base provider. They are taken in saved order. The current reference
-  may be the Default configuration or a profile. Failover never crosses base providers
-  (Codex and Claude Code stay separate) and never changes the model id.
-- **Choice.** The daemon takes the first candidate in saved order that has not been
-  tried for this user turn. The reference that just failed counts as tried. A profile
-  that no longer exists, or a base provider that is disabled, is skipped.
-- **Switch.** The daemon saves the backup reference as the agent's provider, as
+- **Home provider.** Each conversation has a *home* reference: its last explicit
+  selection, which is the reference it was on before its first automatic switch. Until
+  it first switches, home is simply its current reference. Home may be the Default
+  configuration or a profile, backup or not. An explicit selection that changes the
+  provider or the model (`agent.setModel`, or the provider chosen at create) sets a
+  new home and clears any [return timer](#timed-return). Automatic switches never
+  change home.
+- **Rotation.** The candidates form one cycle: the profiles with `backup: true` whose
+  base provider is the agent's base provider, in saved order, then home if it is not
+  already among them. Failover never crosses base providers (Codex and Claude Code
+  stay separate) and never changes the model id.
+- **Choice.** The daemon walks the cycle starting after the current reference,
+  wrapping around, and takes the first reference not yet tried for this user turn. If
+  the current reference is not in the cycle, the walk starts at the beginning. The
+  reference that just failed counts as tried, so each reference is tried at most once
+  per user turn and the walk never loops. A profile that no longer exists, or a base
+  provider that is disabled, is skipped.
+- **Switch.** The daemon saves the chosen reference as the agent's provider, as
   `agent.setModel` would with the same model, and emits `agent:updated`. The switch
-  is sticky: later turns stay on the backup until the user selects another provider
-  or model. The daemon never switches back on its own.
-- **Retry.** The backup starts a fresh provider process and native session with Intent
+  is sticky: later turns stay on it until the [timed return](#timed-return) or an
+  explicit selection.
+- **Retry.** The chosen reference (a backup, or home) starts a fresh provider process and native session with Intent
   history replayed, as for any [switch](#agent-state-switches-and-replacement). What
   it receives depends on what the failed attempt persisted:
   - **No output yet.** If the failed attempt persisted no assistant text or tool
@@ -486,7 +497,7 @@ today, and an agent with no eligible backup behaves as today.
 metadata = {
   type: "provider_failover";
   fromProvider: string;   // reference that hit its quota
-  toProvider: string;     // backup reference now running the turn
+  toProvider: string;     // reference now running the turn (a backup, or home)
   model: string | null;   // unchanged model id; null = provider default
   reason: "quota-exceeded";
 }
@@ -497,6 +508,57 @@ transcript-only and never replayed: like `model_changed` ([§5.5](agents.md)), h
 replay excludes it and it never reaches a provider prompt. Clients render it from
 `metadata` as an inline notice, not as an error. A failover chain (A → B → C) writes
 one `provider_failover` row per switch and never a `model_changed` row.
+
+##### Timed return
+
+A conversation that left home because of quota goes back to home once home's quota
+has had time to reset.
+
+- **Return-after time.** When a quota switch moves the conversation away from home,
+  the daemon records a return-after time. It is the reset time reported in the quota
+  error when the daemon can parse one (for example "resets at 5pm"), otherwise 5 hours
+  later. A parsed time that is not in the future is ignored. Further switches between
+  backups while away keep the recorded time.
+- **Return.** The first turn that starts at or after the return-after time starts on
+  home instead of the current reference, as a [switch](#agent-state-switches-and-replacement)
+  with Intent history replayed, and emits `agent:updated`. A return happens only at
+  the start of a turn, never mid-turn and never in a failover retry.
+- **Home accepts.** When home produces the turn's first output, the daemon persists
+  one `provider_returned` row before that output. The conversation is home again: the
+  timer and the backoff are cleared.
+- **Home still out of quota.** The turn fails over through the rotation as usual, with
+  home counted as tried; the user sees only the `provider_failover` row. The daemon
+  records a new return-after time: the newly reported reset time if one can be parsed,
+  otherwise a backoff of 1 hour, doubling on each further failed return (1 h, 2 h,
+  4 h, …) up to 24 hours. If every candidate is exhausted, the turn fails as in
+  [Exhaustion](#backup-failover) and the new time still applies.
+- **Clearing.** An explicit selection clears the timer and the backoff. If home is a
+  profile that no longer exists, the daemon clears them and the conversation stays on
+  its current reference.
+- **Persistence.** Home, the return-after time and the backoff step live in the agent
+  session's existing metadata document. They survive a daemon restart, need no
+  database migration, and are not part of `AgentLite` or `AgentSession`.
+
+**Return notice.** The return row has `role: "system"`, one text block naming home,
+and
+
+```ts
+metadata = {
+  type: "provider_returned";
+  fromProvider: string;   // reference the conversation was on while away
+  toProvider: string;     // home reference now running the turn
+  model: string | null;   // unchanged model id; null = provider default
+  reason: "quota-reset";
+}
+```
+
+It follows the `provider_failover` rules: the standard `agent:message` event,
+transcript-only, never replayed to a provider, rendered as an inline notice. A return
+never writes a `model_changed` row.
+
+**Downgrade.** An older daemon ignores the stored home and timer: the conversation
+stays on its current reference and never returns on its own. A later upgrade resumes
+the timer from the stored values.
 
 #### Events
 
@@ -537,5 +599,6 @@ the stored map is unchanged, so clients surface the error rather than retrying.
 Clients detect backup failover support by the presence of `backup` on
 `ProviderProfile` and `ProviderProfileSummary`. When it is absent, they hide the
 reorder and backup controls and never call `providers.profiles.reorder`. An older
-client ignores `backup`, the `reordered` change and the `provider_failover` row
-metadata, and still sees each switch's text row; failover runs without it.
+client ignores `backup`, the `reordered` change and the `provider_failover` and
+`provider_returned` row metadata, and still sees each row's text; failover and return
+run without it.
