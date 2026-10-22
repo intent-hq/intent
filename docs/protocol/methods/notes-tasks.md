@@ -7,13 +7,13 @@ All `note.*` methods require `workspaceId`. All except `list` and `create` addit
 | Method | Params | Result |
 | --- | --- | --- |
 | note.list | workspaceId (req), projection?: "slim" \| "full" *(v8.1)* | { notes: NoteSummary[] } — details below the table. |
-| note.get | noteId (req) | { note: Note } — -32602 with `error.data.code: "not-found"` if not found. A task note with `dependsOn` edges carries the computed `metadata.task.unmetDependsOn` (within v6.8, monorepo#1979; presence-detected, omitted when empty; read/push shapes only — see the note.list row) |
+| note.get | noteId (req), maxContentBytes?: int *(prepared)* | { note: Note } — -32602 with `error.data.code: "not-found"` if not found. `maxContentBytes` opts in to a truncated read that adds `contentTruncated` / `contentBytes` (see "Truncated note reads" below). A task note with `dependsOn` edges carries the computed `metadata.task.unmetDependsOn` (within v6.8, monorepo#1979; presence-detected, omitted when empty; read/push shapes only — see the note.list row) |
 | note.create | title (req), content?, tags?: string[], parentId?, idempotencyKey? | { note, convertedCount, createdTaskNoteIds, createdTasks, warnings } — within v6.14 ([intent-hq/intentd#1162](https://github.com/intent-hq/intentd/pull/1162), monorepo#2129) the result carries the `@@@task` auto-conversion outcome for the initial content, **additive** over the old `{ note }` shape (clients reading `.note` are unaffected): same shapes and warning contract as the four content-write ops (see "`@@@task` auto-conversion on note writes" below and the `task.convertBlocks` row, §5.4), with all four fields always present (`convertedCount: 0` plus empty arrays when the content converts nothing). `note` is the refetched post-conversion row, so its `rev`/`updatedAt` reflect the conversion write. An `idempotencyKey` replay returns the stored result without re-executing; a replayed key recorded before the conversion fields existed decodes the stored bare note as a zeroed conversion outcome. `-32602` when `content` is the line-numbered `note.read` display (see below) |
-| note.update | noteId (req); content? or title?/tags?; expectedVersion?: int | { note } — content present → full content replace; else metadata update. `expectedVersion` is a strict compare-and-set on **both** arms: a stale value → `-32005` Conflict with `error.data = { code: "conflict", current }` and no write (§9) — unlike `note.setContent`, the content arm never merges. `-32602` when `content` is the line-numbered `note.read` display (see "Numbered `note.read` display rejected on content writes" below) |
+| note.update | noteId (req); content? or title?/tags?; expectedVersion?: int; baseContentBytes?: int *(prepared)* | { note } — content present → full content replace; else metadata update. A content-arm `baseContentBytes` that does not match the base → `-32602` `content-base-mismatch`, no write (see "Truncated note reads" below). `expectedVersion` is a strict compare-and-set on **both** arms: a stale value → `-32005` Conflict with `error.data = { code: "conflict", current }` and no write (§9) — unlike `note.setContent`, the content arm never merges. `-32602` when `content` is the line-numbered `note.read` display (see "Numbered `note.read` display rejected on content writes" below) |
 | note.add | noteId (req), content (req), heading?, position?: "end" \| "start" | { ok, ... } — `-32602` when `content` is the line-numbered `note.read` display (see below) |
 | note.edit | noteId (req), old (req), new (req) | { ok, ... } — first exact-match replacement. `-32602` when `new` is the line-numbered `note.read` display (see below) |
 | note.editLines | noteId (req), start (req,int), end (req,int), content (req) | { ok, ... } (1-based inclusive). `-32602` when `content` is the line-numbered `note.read` display (see below) |
-| note.setContent | noteId (req), content (req), confirmReplacement?: boolean, expectedVersion?: int | { ok, noteId, title, previousTitle?, updatedAt, oldContent?, newContent, convertedCount, createdTaskNoteIds, createdTasks, warnings, rev } (full replace). `rev` (additive) is the note's post-write `rev` — after any `@@@task` auto-conversion refetch — i.e. the value a follow-up conditional write sends as `expectedVersion`; `newContent` is the persisted (possibly merged) text. `expectedVersion` is the base the writer read: absent or equal to the current `rev` → `content` replaces the note as-is; **stale** → the write is **merged, not rejected** (see "Three-way merge on stale `expectedVersion`" below) — the writer's intent (`diff(base → content)`, base = the retained snapshot at that rev) is applied onto the current text, or degrades to last-writer-wins when no snapshot survives for that rev. The reduction guard (`> 50 %` shorter without `confirmReplacement`, `-32603`) is measured `base → content` when a base is recoverable and `current → content` otherwise. `-32005` (no write) in exactly two cases: an `expectedVersion` **above** the current `rev` — a rev this note never served — is rejected immediately, and a bounded read-merge-persist loop (5 attempts) whose every attempt misses its rev gate surfaces the last `Conflict`. `-32602` when `content` is the line-numbered `note.read` display (see below) |
+| note.setContent | noteId (req), content (req), confirmReplacement?: boolean, expectedVersion?: int, baseContentBytes?: int *(prepared)* | { ok, noteId, title, previousTitle?, updatedAt, oldContent?, newContent, convertedCount, createdTaskNoteIds, createdTasks, warnings, rev } (full replace). `rev` (additive) is the note's post-write `rev` — after any `@@@task` auto-conversion refetch — i.e. the value a follow-up conditional write sends as `expectedVersion`; `newContent` is the persisted (possibly merged) text. `expectedVersion` is the base the writer read: absent or equal to the current `rev` → `content` replaces the note as-is; **stale** → the write is **merged, not rejected** (see "Three-way merge on stale `expectedVersion`" below) — the writer's intent (`diff(base → content)`, base = the retained snapshot at that rev) is applied onto the current text, or degrades to last-writer-wins when no snapshot survives for that rev. The reduction guard (`> 50 %` shorter without `confirmReplacement`, `-32603`) is measured `base → content` when a base is recoverable and `current → content` otherwise. `-32005` (no write) in exactly two cases: an `expectedVersion` **above** the current `rev` — a rev this note never served — is rejected immediately, and a bounded read-merge-persist loop (5 attempts) whose every attempt misses its rev gate surfaces the last `Conflict`. `-32602` when `content` is the line-numbered `note.read` display (see below). A `baseContentBytes` that does not match the resolved base → `-32602` `content-base-mismatch`, no write (see "Truncated note reads" below) |
 | note.updateMetadata | noteId (req), title?, tags?: string \| string[], expectedVersion?: int | { ok, noteId, title?, tags?, updatedAt?, skipped?, reason? } — metadata-only write (no version snapshot); emits `note:updated`. A stale `expectedVersion` → `-32005` Conflict with `error.data = { code: "conflict", current }` and no write (§9) |
 | note.delete | noteId (req), expectedVersion?: int | { ok, noteId, deleted } — a stale `expectedVersion` → `-32005` Conflict with `error.data = { code: "conflict", current }` and no delete (§9). Emits `note:deleted`. Deleting a **task note** additionally recomputes + emits `task:ready-tasks-changed` (§6.5) after the `note:deleted`, with the additive trigger `triggeredBy: { noteId, reason: "note-deleted" }` (monorepo#1981; generalized by intentd#1121, monorepo#2006), whenever the delete actually **moves** the ready set: deleting a task that was itself ready drops its id from `readyTaskIds`, deleting the last incomplete task child of a parent readies the parent (tree rule), and deleting a task note that other tasks `dependsOn` keeps the #1981 always-emit contract — the dangling edge counts as unmet, so deleting a previously-`complete` dep drops its dependents out of `readyTaskIds`. The pre-delete and post-delete ready sets are compared, so a delete that provably cannot move the set (e.g. a terminal task nobody depends on) emits no recompute. Deleting a **`complete`** dep also re-announces each dependent task note via `note:updated` (the computed `unmetDependsOn` projection moved, monorepo#1979) after the ready-set event — same ordering as the status-transition path (`task:*` first, dependent `note:updated` last) |
 | note.deleteSchedule *(13.10, prepared)* | workspaceId, noteId, noteInstanceId, expectedVersion, sourceRevision, operationKey (req); undoDelayMs? | Guarded cancellable deletion; requires `noteDeleteGrace: 1`; returns bounded OperationResponse. See [grace contract](../note-delete-grace.md). |
@@ -166,6 +166,124 @@ since v6.14 (intentd#1162, monorepo#2129) — earlier daemons converted and retu
 `key=` / `dependsOn=` / `conflictsWith=` / `effort=` header attributes with
 convert-with-warnings semantics — grammar, resolution order, and warning contract are
 documented on the `task.convertBlocks` row (§5.4).
+
+### Truncated note reads (prepared additive contract)
+
+Motivated by [intent-hq/intent#7515](https://github.com/intent-hq/intent/issues/7515).
+A client that cannot afford to load very large notes may ask for a bounded prefix
+of the content and show it read-only.
+Agents, MCP bindings and every client that omits the new params keep full read and
+write access, unchanged.
+
+**Capability.** `server.capabilities.noteTruncatedRead` equal to the exact integer
+`1` on the `client.hello` result gates the whole contract: the `maxContentBytes`
+read param, its response markers and the `baseContentBytes` write guard.
+A daemon without it may ignore both params, serving full content and accepting
+whole-content writes unguarded, so a client must not rely on either without the gate.
+No method, event or error number is added; the method catalog is unchanged.
+
+**Request.** `note.get` and `note.subscribe` accept an optional
+`maxContentBytes`: a positive integer counted in UTF-8 bytes of `content`.
+Absent or `null` keeps responses byte-identical to a daemon without this contract.
+`0`, a negative or fractional number, or a non-number is `-32602`
+(`maxContentBytes must be a positive integer`), with no read or subscription.
+`note.list` does not take it; use its `projection: "slim"` instead.
+
+**Cut rule.** Let `S` be the stored `content` as UTF-8 bytes and `L` the limit.
+
+- If `S` is at most `L` bytes, `content` is `S` and the note carries no new fields,
+  so the row is byte-identical to the unbounded read.
+- Otherwise `content` is the longest prefix of `S` that is at most `L` bytes and
+  ends immediately after a line feed (`\n`, byte `0x0A`).
+  The line feed is kept, so a `\r\n` pair is never split.
+- If no line feed falls within the first `L` bytes, `content` is the longest prefix
+  of `S` that is at most `L` bytes and ends on a UTF-8 character boundary.
+  It may be empty when the first character is longer than `L`.
+  If that boundary falls between a `\r` and the `\n` that follows it, the cut steps
+  back one byte, so a `\r\n` pair is never split here either.
+- A truncated note adds `contentTruncated: true` and `contentBytes`, the full UTF-8
+  size of the stored content.
+  Both are omitted when the content is not truncated; `contentTruncated: false`
+  is never sent.
+
+Every other `Note` field, including `rev`, is served as in the unbounded read.
+`title` and metadata are never truncated.
+The vectors in
+[`fixtures/notes/truncated-read.json`](../fixtures/notes/truncated-read.json)
+freeze this rule, including multibyte, CRLF and no-line-feed cases.
+
+**Not covered.** The bound applies only to `note.get` and `note.subscribe`.
+These paths still carry the full `content` of a large note:
+
+- `task.subscribe` rows, which are full `Note` entities.
+- `note.list` with the default `full` projection.
+- The `oldContent` / `newContent` echo in the `note.setContent` result.
+
+A client that needs bounded loads must list notes with `note.list`
+`projection: "slim"` and must not rely on these paths for large notes.
+
+**Subscriptions.** `note.subscribe` validates `maxContentBytes` before the ack and
+fixes it for the subscription's lifetime.
+It applies the cut rule to every row of the seq-0 snapshot and to every
+`added` and `updated` delta row, so a live update to a large note arrives truncated
+with the same markers.
+A row whose content shrinks under the limit arrives full, without the markers.
+With `projection: "slim"` rows carry no `content`, so the param has no effect
+beyond validation.
+
+**Write guard (`baseContentBytes`).** A truncated read is never a valid base for a
+whole-content write.
+`note.setContent` and the content arm of `note.update` accept an optional
+`baseContentBytes`: a non-negative integer, the UTF-8 size of the content the
+writer started from.
+It is computed from the writer's own base text; a writer must never copy a
+response's `contentBytes` into it.
+A client that reads with `maxContentBytes` must send it on every whole-content write.
+For a full read it equals the size of the base the daemon resolves (below) as long as
+that base is the text the writer read, so the write proceeds as before.
+For a truncated read it is the size of the prefix, which is always smaller than the
+stored size, so the write is refused and the content after the cut survives.
+`baseContentBytes` is ignored on the metadata arm of `note.update` (no `content`).
+
+The daemon compares `baseContentBytes` with the UTF-8 size of the base it resolves:
+
+- `note.update` content arm: the current stored content, after the strict
+  `expectedVersion` check (a stale value is still `-32005` first).
+- `note.setContent` with `expectedVersion` absent or equal to the current `rev`:
+  the current stored content.
+  Without `expectedVersion`, a guarded write is therefore refused when a concurrent
+  writer changed the note's size after the read; this is intended, because the
+  daemon cannot tell that text from the writer's base.
+  Guarded writers should send `expectedVersion`, so a concurrent change goes through
+  the merge-base path below instead of being refused.
+- `note.setContent` with a stale `expectedVersion`: the retained snapshot the
+  three-way merge would use as its base.
+  When no snapshot survives for that rev the base is unknown, and a write that
+  carries `baseContentBytes` is refused instead of degrading to last-writer-wins.
+
+A mismatch, or an unknown base, is `-32602` with
+`error.data = { code: "content-base-mismatch", baseContentBytes, resolvedBaseBytes }`,
+where `resolvedBaseBytes` is the size of the resolved base, or `null` when unknown.
+It can be a merge snapshot's size rather than the stored note's, so a client must
+never copy it into `baseContentBytes`; re-read the note instead.
+The message is `Content base does not match the stored note; re-read the full note
+and retry.`
+The check runs once, before the first persist attempt and before any merge.
+A refused write changes nothing: no row update, no version, no event, no
+`@@@task` conversion.
+Invalid values (negative, fractional or non-number) are `-32602`
+(`baseContentBytes must be a non-negative integer`).
+
+Precedence on a whole-content write, first failure wins:
+
+1. Parameter validation, `-32602` invalid params: missing or malformed params,
+   an invalid `baseContentBytes`, and the line-numbered `note.read` display rejection.
+2. The `expectedVersion` check, `-32005` Conflict: a stale value on `note.update`,
+   or a value above the current `rev` on `note.setContent`.
+3. The base check, `-32602` `content-base-mismatch`.
+Writes without `baseContentBytes` are unguarded, exactly as today.
+Surgical writes (`note.add`, `note.edit`, `note.editLines`) and `task.*` writes
+transform the stored content and take no base size.
 
 ### Revision-safe note pages (prepared additive contract)
 

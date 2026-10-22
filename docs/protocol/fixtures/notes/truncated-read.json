@@ -1,0 +1,21 @@
+{
+  "status": "prepared-specification-only",
+  "capability": { "noteTruncatedRead": 1 },
+  "cases": [
+    { "id": "empty", "content": "", "maxContentBytes": 1, "expect": { "content": "" } },
+    { "id": "fits-exactly", "content": "a\nb\n", "maxContentBytes": 4, "expect": { "content": "a\nb\n" } },
+    { "id": "limit-on-line-feed", "content": "ab\ncd\nef", "maxContentBytes": 6, "expect": { "content": "ab\ncd\n", "contentTruncated": true, "contentBytes": 8 } },
+    { "id": "back-to-previous-line-feed", "content": "ab\ncd\nef", "maxContentBytes": 5, "expect": { "content": "ab\n", "contentTruncated": true, "contentBytes": 8 } },
+    { "id": "early-line-feed-wins-over-char-boundary", "content": "a\nbcdefghij", "maxContentBytes": 8, "expect": { "content": "a\n", "contentTruncated": true, "contentBytes": 11 } },
+    { "id": "crlf-never-split", "content": "a\r\nb\r\nc", "maxContentBytes": 5, "expect": { "content": "a\r\n", "contentTruncated": true, "contentBytes": 7 } },
+    { "id": "crlf-whole-lines", "content": "a\r\nb\r\nc", "maxContentBytes": 6, "expect": { "content": "a\r\nb\r\n", "contentTruncated": true, "contentBytes": 7 } },
+    { "id": "no-line-feed-ascii", "content": "abcdef\n", "maxContentBytes": 4, "expect": { "content": "abcd", "contentTruncated": true, "contentBytes": 7 } },
+    { "id": "no-line-feed-multibyte", "content": "é😀x", "maxContentBytes": 4, "expect": { "content": "é", "contentTruncated": true, "contentBytes": 7 } },
+    { "id": "first-char-longer-than-limit", "content": "😀", "maxContentBytes": 2, "expect": { "content": "", "contentTruncated": true, "contentBytes": 4 } },
+    { "id": "multibyte-lines", "content": "中文\n😀😀\n", "maxContentBytes": 12, "expect": { "content": "中文\n", "contentTruncated": true, "contentBytes": 16 } },
+    { "id": "fallback-never-splits-crlf", "content": "abc\r\nd", "maxContentBytes": 4, "expect": { "content": "abc", "contentTruncated": true, "contentBytes": 6 } },
+    { "id": "fallback-never-splits-crlf-multibyte", "content": "é\r\nx", "maxContentBytes": 3, "expect": { "content": "é", "contentTruncated": true, "contentBytes": 5 } }
+  ],
+  "invalidMaxContentBytes": [0, -1, 1.5, "10", true],
+  "invalidBaseContentBytes": [-1, 1.5, "10", true]
+}
