@@ -163,8 +163,9 @@ and reloads it on every run. `fs.inotify.*` is not namespaced: with
 user-namespace remapping, every slot's inotify instances are charged to the
 namespaces' owner (root) on the host, so the default of 128 is shared by all
 slots and the host's own daemons (a runner container got 106). The drop-in
-raises `fs.inotify.max_user_instances` to 32768 (4096 per slot for intentd's
-coverage suites, times the most slots on any host, plus headroom) and
+raises `fs.inotify.max_user_instances` to 32768 (4096 for each heavy or xl
+slot that can run intentd's coverage suites, at most 3 per host, with more than
+half left for the small slots and host daemons) and
 `fs.inotify.max_user_watches` to 1048576. The limit is the host's and applies
 at once, also inside running containers; after an install, dispatch the smoke
 workflow with `chromium` set to check it.

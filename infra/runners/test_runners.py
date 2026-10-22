@@ -1343,7 +1343,7 @@ class Static(unittest.TestCase):
     def test_sysctl_limits(self):
         values = dict(line.split(' = ') for line in (HERE / 'sysctl.conf').read_text().splitlines()
                       if line and not line.startswith('#'))
-        # 4096 per slot (coverage-all) times the most slots on any host, plus headroom.
+        # 4096 per heavy or xl slot (coverage-all, at most 3 per host), with more than half spare.
         self.assertGreaterEqual(int(values['fs.inotify.max_user_instances']), 32768)
         self.assertGreaterEqual(int(values['fs.inotify.max_user_watches']), 1048576)
 
