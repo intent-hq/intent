@@ -254,7 +254,7 @@ class EventPolicy(unittest.TestCase):
                          ['.github/scripts/t/run.sh', 'scripts/x.py'])
         self.assertTrue(suite_is_run('scripts/runner-policy.test.cjs',
                                      expand_reachable(['python3 -S -B scripts/test_hosted_runners.py'])))
-        self.assertTrue(suite_is_run('docs/protocol/fixtures/notes/contract.test.mjs',
+        self.assertTrue(suite_is_run('docs/protocol/fixtures/notes/truncated-read.test.mjs',
                                      expand_reachable(['make consumer-checks'])))
         rules = makefile_rules()
         self.assertIn('check-agent-worker-contract', rules)
@@ -280,7 +280,7 @@ class EventPolicy(unittest.TestCase):
             looped_make_targets(script + '\nchecks="$checks extra"')
         with self.assertRaises(AssertionError):
             looped_make_targets(script.replace('checks="lint docs-check"', 'checks=$(list)'))
-        self.assertIn('check-note-pagination-contract',
+        self.assertIn('check-note-truncated-read-contract',
                       looped_make_targets((ROOT / 'scripts/consumer-checks.sh').read_text()))
 
     def test_reusable_contract_has_static_pr_checks_and_required_queue_runtime(self):

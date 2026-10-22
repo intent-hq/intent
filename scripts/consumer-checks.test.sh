@@ -61,7 +61,7 @@ run_check() {
   return "$status"
 }
 
-all_checks="event-catalog-check check-mcp-bindings docs-check check-protocol-catalog check-makefile-targets check-protocol-field-parity check-transfer-selection-contract check-backend-keychain-contract check-agent-worker-contract check-app-ui-targets check-note-pagination-contract"
+all_checks="event-catalog-check check-mcp-bindings docs-check check-protocol-catalog check-makefile-targets check-protocol-field-parity check-transfer-selection-contract check-backend-keychain-contract check-agent-worker-contract check-app-ui-targets check-note-truncated-read-contract"
 expect_all_ran() {
   local target
   for target in $all_checks; do
@@ -113,12 +113,12 @@ grep -q '^  check-transfer-selection-contract  *FAIL  *docs/protocol/fixtures/tr
 grep -q 'test-transfer-selection-contract' "$stub_log" &&
   fail "lightweight checks invoked the Cargo/renderer proof"
 
-if run_check STUB_FAIL=check-note-pagination-contract; then
-  fail "invalid note paging fixture was accepted"
+if run_check STUB_FAIL=check-note-truncated-read-contract; then
+  fail "invalid note truncated-read fixture was accepted"
 fi
-expect_all_ran "note pagination fixture failure"
-grep -q '^  check-note-pagination-contract  *FAIL  *docs/protocol/fixtures/notes/' <<<"$check_output" ||
-  fail "note paging failure did not name its fixture path: $check_output"
+expect_all_ran "note truncated-read fixture failure"
+grep -q '^  check-note-truncated-read-contract  *FAIL  *docs/protocol/fixtures/notes/' <<<"$check_output" ||
+  fail "note truncated-read failure did not name its fixture path: $check_output"
 
 if run_check STUB_FAIL=check-agent-worker-contract; then
   fail "worker contract failure must fail consumer checks"
