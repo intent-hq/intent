@@ -21,6 +21,8 @@ const cacheSlot = (busy = false) => runner('Linux', 'X64', busy, ['intent-cache'
 const CACHE = ['self-hosted', 'linux', 'x64', 'intent-cache'];
 const smallSlot = (busy = false) => runner('Linux', 'X64', busy, ['intent-cache-small']);
 const SMALL = ['self-hosted', 'linux', 'x64', 'intent-cache-small'];
+// Standard GitHub-hosted labels are free for public repositories.
+const FREE = ['ubuntu-22.04', 'ubuntu-24.04', 'ubuntu-latest', 'ubuntu-24.04-arm', 'windows-2022', 'windows-2025'];
 // Per-job slot fitting: a run gets self-hosted labels for at most as many jobs as a pool has free slots.
 const heavyJob = (id, status = 'in_progress') => ({ id, status, labels: CACHE, created_at: new Date().toISOString() });
 const UNIT = { key: 'test', label: 'gh-linux-8x', minutes: 13, shards: 4 };
@@ -64,7 +66,8 @@ async function route(fixture = {}) {
       return params.repo === 'cloudlands-fe' ? (fixture.jobs ?? []) : [];
     },
   };
-  const env = { THRESHOLD: '2', SMALL_THRESHOLD: '6', LINUX_SIZE: '8', ...fixture.env };
+  // Pool tests check the GitHub fallback; the WarpBuild tests below turn WarpBuild on.
+  const env = { THRESHOLD: '2', LINUX_SIZE: '8', WARPBUILD_DISABLED: 'true', ...fixture.env };
   await new AsyncFunction('core', 'github', 'context', 'process', script)(
     { setOutput: (k, v) => (outputs[k] = v), info: (m) => messages.push(m) },
     github,
@@ -82,12 +85,11 @@ test('healthy matching fleet is preferred for every workload size', async () => 
   const r = await route();
   // Larger-runner labels carry heavy jobs; standard labels carry fast jobs.
   for (const label of ['gh-linux-8x', 'gh-linux-16x']) assert.deepEqual(r.runners[label], CACHE);
-  for (const label of ['ubuntu-22.04', 'ubuntu-24.04']) assert.deepEqual(r.runners[label], SMALL);
-  for (const label of ['ubuntu-24.04-arm', 'gh-linux-arm64-8x'])
-    assert.deepEqual(r.runners[label], ['self-hosted', 'Linux', 'ARM64']);
+  assert.deepEqual(r.runners['gh-linux-arm64-8x'], ['self-hosted', 'Linux', 'ARM64']);
   assert.deepEqual(r.runners['macos-26-xlarge'], ['self-hosted', 'macOS', 'ARM64']);
-  for (const label of ['windows-2022', 'windows-2025', 'gh-windows-16x'])
-    assert.deepEqual(r.runners[label], ['self-hosted', 'Windows', 'X64']);
+  assert.deepEqual(r.runners['gh-windows-16x'], ['self-hosted', 'Windows', 'X64']);
+  // Free standard labels stay on GitHub even with idle self-hosted runners.
+  for (const label of FREE) assert.deepEqual(r.runners[label], [label]);
   assert.deepEqual(JSON.parse(r.outputs.linux_labels), CACHE);
   assert.deepEqual([...new Set(r.queried)].sort(), ['cloudlands-fe', 'intent', 'intentd']);
 });
@@ -242,45 +244,26 @@ test('the Linux kill switch sends every Linux job to the hosted fallback', async
 test('the probe never names tinybox', () => {
   assert.doesNotMatch(workflow, /tinybox/i);
 });
-test('the fast pool routes standard labels and bursts independently of the heavy pool', async () => {
-  const job = (id, labels = SMALL) => ({ id, status: 'in_progress', labels, created_at: new Date().toISOString() });
-  const five = await route({ jobs: Array.from({ length: 5 }, (_, i) => job(i + 3)) });
-  assert.deepEqual(five.runners['ubuntu-24.04'], SMALL);
-  assert.ok(five.messages.some((m) => m.includes('small routing: burst=false (queue depth=5 threshold=6 online=6 free=1)')));
-  const six = await route({ jobs: Array.from({ length: 6 }, (_, i) => job(i + 3)) });
-  assert.deepEqual(six.runners['ubuntu-24.04'], ['ubuntu-24.04']);
-  assert.deepEqual(six.runners['gh-linux-8x'], CACHE);
-  // A full heavy pool leaves fast jobs on their slots.
-  const heavy = await route({ jobs: [job(3, CACHE), job(4, CACHE)] });
-  assert.deepEqual(heavy.runners['gh-linux-8x'], ['gh-linux-8x']);
-  assert.deepEqual(heavy.runners['ubuntu-24.04'], SMALL);
-  // Heavy slots alone never serve fast jobs, and vice versa.
-  const heavyOnly = await route({ runners: [cacheSlot(), cacheSlot()] });
-  assert.deepEqual(heavyOnly.runners['ubuntu-24.04'], ['ubuntu-24.04']);
-  assert.deepEqual(heavyOnly.runners['gh-linux-8x'], CACHE);
-  const grown = await route({
-    env: { SMALL_THRESHOLD: '8' },
-    runners: Array.from({ length: 8 }, () => smallSlot()),
-    jobs: Array.from({ length: 7 }, (_, i) => job(i + 3)),
-  });
-  assert.deepEqual(grown.runners['ubuntu-24.04'], SMALL);
+test('free standard labels never take a self-hosted slot or a WarpBuild runner', async () => {
+  for (const env of [{}, { WARPBUILD_DISABLED: '' }]) {
+    const idle = await route({ env: slotEnv([{ key: 'lint', label: 'ubuntu-24.04' }, { key: 'win', label: 'windows-2025' }], env) });
+    for (const label of FREE) assert.deepEqual(idle.runners[label], [label]);
+    for (const label of FREE) assert.deepEqual(JSON.parse(idle.outputs.cloud)[label], [label]);
+    assert.deepEqual(idle.slots, { lint: ['ubuntu-24.04'], win: ['windows-2025'] });
+  }
+  assert.doesNotMatch(workflow, /intent-cache-small|SMALL_THRESHOLD/);
 });
-test('both pools carry the generic labels, so capacity and demand are counted per pool label', async () => {
+test('the small pool shares the generic labels but never counts as heavy capacity or demand', async () => {
   // GitHub adds self-hosted/Linux/X64 to every slot; only the pool label separates them.
   const smallOnly = await route({ runners: Array.from({ length: 6 }, () => smallSlot()) });
   assert.deepEqual(smallOnly.runners['gh-linux-8x'], ['gh-linux-8x']);
-  assert.deepEqual(smallOnly.runners['ubuntu-24.04'], SMALL);
   assert.ok(smallOnly.messages.some((m) => m.includes('linux routing: burst=true (no available compatible runner)')));
-  // Six running fast jobs fill the small pool but leave both heavy slots free.
+  // Jobs pinned to the small pool leave both heavy slots free.
   const job = (id) => ({ id, status: 'in_progress', labels: SMALL, created_at: new Date().toISOString() });
   const r = await route({ jobs: Array.from({ length: 6 }, (_, i) => job(i + 3)) });
   assert.ok(r.messages.some((m) => m.includes('linux routing: burst=false (queue depth=0 threshold=2 online=2 free=2)')));
-  // A routed job's labels always include its pool label, so the other pool cannot take it.
-  const healthy = await route({});
-  assert.ok(healthy.runners['gh-linux-8x'].includes('intent-cache'));
-  assert.ok(!healthy.runners['gh-linux-8x'].includes('intent-cache-small'));
-  assert.ok(healthy.runners['ubuntu-24.04'].includes('intent-cache-small'));
-  assert.ok(!healthy.runners['ubuntu-24.04'].includes('intent-cache'));
+  assert.ok(r.runners['gh-linux-8x'].includes('intent-cache'));
+  assert.ok(!r.runners['gh-linux-8x'].includes('intent-cache-small'));
 });
 test('2 free heavy slots and 4 heavy jobs: exactly 2 self-hosted, 2 hosted', async () => {
   const r = await route({ env: slotEnv([UNIT]) });
@@ -344,26 +327,19 @@ test('jobs that skip this event do not take a slot', async () => {
   const queue = await route({ env: slotEnv(jobs), event: 'merge_group' });
   assert.deepEqual(onSlots(queue, CACHE), ['build-web', 'checks']);
 });
-test('each pool fits its own jobs and keeps its own labels', async () => {
-  const small = Array.from({ length: 8 }, (_, i) => ({ key: `s${i}`, label: 'ubuntu-24.04', minutes: i }));
-  const r = await route({ env: slotEnv([...small, UNIT]), jobs: [heavyJob(3), { ...heavyJob(4), labels: SMALL }] });
-  // Small pool: 6 slots, 1 busy -> 5 granted, longest first.
-  assert.deepEqual(onSlots(r, SMALL), ['s3', 's4', 's5', 's6', 's7']);
+test('listed free-label jobs keep their GitHub label while heavy jobs fit the heavy pool', async () => {
+  const small = Array.from({ length: 3 }, (_, i) => ({ key: `s${i}`, label: 'ubuntu-24.04', minutes: 40 + i }));
+  const r = await route({ env: slotEnv([...small, UNIT]), jobs: [heavyJob(3)] });
   assert.deepEqual(onSlots(r, ['ubuntu-24.04']), ['s0', 's1', 's2']);
   // Heavy pool: 2 slots, 1 busy -> 1 granted.
   assert.deepEqual(onSlots(r, CACHE), ['test-1']);
   assert.equal(r.outputs.linux_burst, 'true');
-  assert.deepEqual(r.runners['ubuntu-24.04'], ['ubuntu-24.04']);
-  // A pool with slots left after its listed jobs still serves unlisted jobs.
-  const spare = await route({ env: slotEnv([{ key: 'lint', label: 'ubuntu-24.04' }]) });
-  assert.deepEqual(spare.slots.lint, SMALL);
-  assert.deepEqual(spare.runners['ubuntu-24.04'], SMALL);
   // `legs` gives each named matrix leg its own key.
-  const legs = await route({ env: slotEnv([{ key: 'pin', label: 'ubuntu-24.04', legs: ['codex', 'claude-code'] }]), jobs: Array.from({ length: 5 }, (_, i) => ({ ...heavyJob(i + 3), labels: SMALL })) });
-  assert.deepEqual(legs.slots, { 'pin-codex': SMALL, 'pin-claude-code': ['ubuntu-24.04'] });
+  const legs = await route({ env: slotEnv([{ key: 'pin', label: 'gh-linux-8x', legs: ['codex', 'claude-code'] }]), jobs: [heavyJob(3)] });
+  assert.deepEqual(legs.slots, { 'pin-codex': CACHE, 'pin-claude-code': ['gh-linux-8x'] });
   // Native fleets are not slot-fitted.
-  const win = await route({ env: slotEnv([{ key: 'win', label: 'windows-2025' }]) });
-  assert.deepEqual(win.slots.win, ['windows-2025']);
+  const win = await route({ env: slotEnv([{ key: 'win', label: 'gh-windows-16x' }]) });
+  assert.deepEqual(win.slots.win, ['gh-windows-16x']);
 });
 // The xl pool: 16-thread slots that take gh-linux-16x jobs; gh-linux-8x jobs stay on the heavy pool.
 const XL = ['self-hosted', 'linux', 'x64', 'intent-cache-xl'];
@@ -385,7 +361,7 @@ const MIXED = [
 ];
 test('gh-linux-16x jobs take xl slots; gh-linux-8x jobs stay on the heavy pool', async () => {
   const r = await route({ env: slotEnv(MIXED, XL_ON), runners: [...todaysFleet(), xlSlot(), xlSlot()] });
-  assert.deepEqual(r.slots, { coverage: XL, check: CACHE, lint: SMALL });
+  assert.deepEqual(r.slots, { coverage: XL, check: CACHE, lint: ['ubuntu-24.04'] });
   // One xl slot is still free, so unlisted 16-core jobs ride it; 8-core jobs never do.
   assert.deepEqual(r.runners['gh-linux-16x'], XL);
   assert.deepEqual(r.runners['gh-linux-8x'], CACHE);
@@ -484,12 +460,10 @@ test('pool limits come from Actions variables with the old values as defaults', 
   const env = workflow.split('          SLOT_JOBS:')[0].split('        env:\n').pop();
   assert.match(env, /^ {10}THRESHOLD: \$\{\{ vars\.CI_LINUX_HEAVY_SLOTS \|\| '2' \}\}$/m);
   assert.match(env, /^ {10}XL_THRESHOLD: \$\{\{ vars\.CI_LINUX_XL_SLOTS \|\| '0' \}\}$/m);
-  assert.match(env, /^ {10}SMALL_THRESHOLD: \$\{\{ vars\.CI_LINUX_SMALL_SLOTS \|\| '6' \}\}$/m);
   assert.doesNotMatch(workflow, /THRESHOLD: '\d+'/);
   // An unset variable reaches the script empty only if the expression is dropped; the script defaults match.
-  const unset = await route({ env: { THRESHOLD: '', XL_THRESHOLD: '', SMALL_THRESHOLD: '' }, runners: [...todaysFleet(), cacheSlot(), xlSlot()] });
+  const unset = await route({ env: { THRESHOLD: '', XL_THRESHOLD: '' }, runners: [...todaysFleet(), cacheSlot(), xlSlot()] });
   assert.ok(unset.messages.some((m) => m.includes('linux routing: burst=false (queue depth=0 threshold=2 online=3 free=2)')));
-  assert.ok(unset.messages.some((m) => m.includes('small routing: burst=false (queue depth=0 threshold=6 online=6 free=6)')));
   assert.ok(unset.messages.some((m) => m.includes('xl routing: burst=true (queue depth=0 threshold=0 online=1 free=0)')));
   // Raising the variables alone grows the pools: 14 heavy and 2 xl slots.
   const grown = await route({
@@ -499,9 +473,111 @@ test('pool limits come from Actions variables with the old values as defaults', 
   assert.equal(onSlots(grown, CACHE).length, 14);
   assert.deepEqual(onSlots(grown, XL), ['cov-1', 'cov-2']);
   // A malformed variable fails the probe open to hosted.
-  for (const bad of [{ XL_THRESHOLD: 'two' }, { THRESHOLD: '-1' }, { SMALL_THRESHOLD: '1.5' }]) {
+  for (const bad of [{ XL_THRESHOLD: 'two' }, { THRESHOLD: '-1' }, { THRESHOLD: '1.5' }]) {
     const r = await route({ env: slotEnv(MIXED, bad), runners: [...todaysFleet(), xlSlot()] });
     assert.ok(Object.values(r.slots).every((labels) => labels.length === 1 && !labels[0].startsWith('self-hosted')));
     assert.ok(r.messages.some((m) => m.includes('probe failed (invalid queue threshold)')));
   }
+});
+
+// WarpBuild replaces paid GitHub labels as the burst target.
+const WARP_ON = { WARPBUILD_DISABLED: '' };
+const WARP = {
+  'gh-linux-8x': ['warp-ubuntu-2404-x64-8x'],
+  'gh-linux-16x': ['warp-ubuntu-2404-x64-16x'],
+  'gh-linux-arm64-8x': ['warp-ubuntu-2404-arm64-8x'],
+  'gh-windows-16x': ['warp-windows-2022-x64-16x'],
+  'macos-26-xlarge': ['warp-macos-26-arm64-6x'],
+};
+const FORK = { event: 'pull_request', payload: { pull_request: { head: { repo: { full_name: 'outside/fork' } } } } };
+const warpJob = (id, label, minutesAgo) => ({ id, status: 'queued', labels: [label], created_at: new Date(Date.now() - minutesAgo * 60_000).toISOString() });
+test('full or missing self-hosted fleets burst paid labels to WarpBuild', async () => {
+  for (const f of [{ runners: [] }, { jobs: [heavyJob(3), heavyJob(4)], runners: [cacheSlot(), cacheSlot()] }]) {
+    const r = await route({ ...f, env: WARP_ON });
+    for (const [label, labels] of Object.entries(WARP)) assert.deepEqual(r.runners[label], labels, label);
+    assert.deepEqual(JSON.parse(r.outputs.check_labels), WARP['gh-linux-8x']);
+    assert.deepEqual(JSON.parse(r.outputs.linux_labels), WARP['gh-linux-8x']);
+    assert.equal(r.outputs.linux_burst, 'true');
+    // No WarpBuild Intel Mac; free labels stay free.
+    assert.deepEqual(r.runners['macos-latest-large'], ['macos-latest-large']);
+    for (const label of FREE) assert.deepEqual(r.runners[label], [label]);
+  }
+  const none = await route({ runners: [], env: WARP_ON });
+  assert.deepEqual(JSON.parse(none.outputs.windows_labels), WARP['gh-windows-16x']);
+  assert.deepEqual(JSON.parse(none.outputs.macos_labels), WARP['macos-26-xlarge']);
+  assert.ok(none.messages.includes('warpbuild ubuntu-x64: on'));
+});
+test('a free self-hosted slot still wins over WarpBuild', async () => {
+  const r = await route({ env: slotEnv([UNIT], WARP_ON) });
+  assert.deepEqual(onSlots(r, CACHE), ['test-1', 'test-2']);
+  assert.deepEqual(onSlots(r, WARP['gh-linux-8x']), ['test-3', 'test-4']);
+  assert.deepEqual(r.runners['gh-linux-8x'], WARP['gh-linux-8x']);
+  const idle = await route({ env: WARP_ON });
+  assert.deepEqual(idle.runners['gh-linux-8x'], CACHE);
+  assert.deepEqual(idle.runners['gh-windows-16x'], ['self-hosted', 'Windows', 'X64']);
+  assert.deepEqual(idle.runners['macos-26-xlarge'], ['self-hosted', 'macOS', 'ARM64']);
+});
+test('the WarpBuild kill switch and fork pull requests burst to GitHub', async () => {
+  for (const f of [{ env: slotEnv([UNIT], { WARPBUILD_DISABLED: 'true' }), runners: [] }, { ...FORK, env: slotEnv([UNIT], WARP_ON) }]) {
+    const r = await route(f);
+    for (const label of Object.keys(WARP)) assert.deepEqual(r.runners[label], [label]);
+    for (const label of Object.keys(WARP)) assert.deepEqual(JSON.parse(r.outputs.cloud)[label], [label]);
+    assert.deepEqual(onSlots(r, ['gh-linux-8x']), ['test-1', 'test-2', 'test-3', 'test-4']);
+  }
+  const fork = await route({ ...FORK, env: WARP_ON });
+  assert.equal(fork.queried.length, 0);
+  assert.ok(fork.messages.includes('warpbuild ubuntu-x64: off (fork pull request)'));
+  const off = await route({ env: { WARPBUILD_DISABLED: 'true' } });
+  assert.ok(off.messages.includes('warpbuild macos-arm64: off (CI_WARPBUILD_DISABLED)'));
+  // The kill switch is an Actions variable, so no workflow change is needed to flip it.
+  assert.match(workflow, /^ {10}WARPBUILD_DISABLED: \$\{\{ vars\.CI_WARPBUILD_DISABLED \}\}$/m);
+});
+test('a WarpBuild OS/architecture queued over 10 minutes bursts to GitHub; others keep WarpBuild', async () => {
+  const stuck = await route({ runners: [], env: WARP_ON, jobs: [warpJob(3, 'warp-ubuntu-2404-x64-16x', 11)] });
+  for (const label of ['gh-linux-8x', 'gh-linux-16x']) assert.deepEqual(stuck.runners[label], [label]);
+  // ARM64 Linux, Windows and macOS are tracked separately.
+  assert.deepEqual(stuck.runners['gh-linux-arm64-8x'], WARP['gh-linux-arm64-8x']);
+  assert.deepEqual(stuck.runners['gh-windows-16x'], WARP['gh-windows-16x']);
+  assert.deepEqual(stuck.runners['macos-26-xlarge'], WARP['macos-26-xlarge']);
+  assert.ok(stuck.messages.includes('warpbuild ubuntu-x64: off (queued over 10 minutes)'));
+  assert.ok(stuck.messages.includes('warpbuild ubuntu-arm64: on'));
+  const arm = await route({ runners: [], env: WARP_ON, jobs: [warpJob(3, 'warp-ubuntu-2404-arm64-8x', 30)] });
+  assert.deepEqual(arm.runners['gh-linux-arm64-8x'], ['gh-linux-arm64-8x']);
+  assert.deepEqual(arm.runners['gh-linux-8x'], WARP['gh-linux-8x']);
+  // Aliases and variants map to the same OS/architecture.
+  const alias = await route({ runners: [], env: WARP_ON, jobs: [warpJob(3, 'warp-windows-2025-vs2026-x64-4x', 30)] });
+  assert.deepEqual(alias.runners['gh-windows-16x'], ['gh-windows-16x']);
+  // A WarpBuild job whose age is unreadable is not evidence of an outage.
+  const unknown = await route({ runners: [], env: WARP_ON, jobs: [{ id: 3, status: 'queued', labels: ['warp-ubuntu-2404-x64-8x'] }] });
+  assert.deepEqual(unknown.runners['gh-linux-8x'], WARP['gh-linux-8x']);
+  const mac = await route({ runners: [], env: WARP_ON, jobs: [warpJob(3, 'warp-macos-15-arm64-6x', 30)] });
+  assert.deepEqual(mac.runners['macos-26-xlarge'], ['macos-26-xlarge']);
+  assert.deepEqual(JSON.parse(mac.outputs.cloud)['macos-15-xlarge'], ['macos-15-xlarge']);
+  assert.deepEqual(mac.runners['gh-linux-8x'], WARP['gh-linux-8x']);
+  // A short wait, or a running job, is normal.
+  for (const job of [warpJob(3, 'warp-ubuntu-2404-x64-8x', 2), { ...warpJob(3, 'warp-ubuntu-2404-x64-8x', 60), status: 'in_progress' }]) {
+    const r = await route({ runners: [], env: WARP_ON, jobs: [job] });
+    assert.deepEqual(r.runners['gh-linux-8x'], WARP['gh-linux-8x']);
+  }
+});
+test('an unreadable queue or a probe failure keeps WarpBuild as the burst runner', async () => {
+  for (const f of [{ error: true }, { unreadable: 'intentd' }]) {
+    const r = await route({ ...f, env: slotEnv([UNIT], WARP_ON) });
+    assert.deepEqual(onSlots(r, WARP['gh-linux-8x']), ['test-1', 'test-2', 'test-3', 'test-4']);
+    for (const [label, labels] of Object.entries(WARP)) assert.deepEqual(r.runners[label], labels, label);
+  }
+});
+test('cloud maps every paid label to WarpBuild and never to a self-hosted runner', async () => {
+  const r = await route({ env: WARP_ON });
+  const cloud = JSON.parse(r.outputs.cloud);
+  assert.deepEqual(cloud, {
+    ...Object.fromEntries(FREE.map((label) => [label, [label]])),
+    ...WARP,
+    'macos-15-xlarge': ['warp-macos-15-arm64-6x'],
+    'macos-latest-large': ['macos-latest-large'],
+  });
+  // Idle self-hosted runners are still used by `runners`, never by `cloud`.
+  assert.deepEqual(r.runners['gh-linux-8x'], CACHE);
+  // The reusable workflow exposes it.
+  assert.match(workflow, /^ {6}cloud:\n {8}value: \$\{\{ jobs\.probe\.outputs\.cloud \}\}$/m);
 });

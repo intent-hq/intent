@@ -8,18 +8,22 @@ targeting a label runs on whichever host has a free slot.
 
 | Host | Location | Hardware | Pools (slots) | Labels | Name prefix | Config |
 |---|---|---|---|---|---|---|
-| intent-cache | ReliableSite, Los Angeles | Ryzen 9 3900X, 12 cores / 24 threads, 128 GB | heavy (2), small (6) | `intent-cache`, `intent-cache-small` | `intent-cache` | [`runners.env`](../infra/runners/runners.env) |
+| intent-cache | ReliableSite, Los Angeles | Ryzen 9 3900X, 12 cores / 24 threads, 128 GB | heavy (3) | `intent-cache` | `intent-cache` | [`runners.env`](../infra/runners/runners.env) |
 | intent-ci1 | ReliableSite, Los Angeles | EPYC 4545P, 16 cores / 32 threads, 128 GB | xl (1), heavy (2) | `intent-cache-xl`, `intent-cache` | `intent-ci1` | [`hosts/intent-ci1.env`](../infra/runners/hosts/intent-ci1.env) |
 
-| Pool | Label | Hosted fallback | Per slot |
-|---|---|---|---|
-| heavy | `intent-cache` | `gh-linux-8x` | 8 CPUs = 4 whole cores; 48 GB on intent-cache, 30 GB on intent-ci1, 32 GB in the three-heavy EPYC layout |
-| xl | `intent-cache-xl` | `gh-linux-16x` | 16 CPUs = 8 whole cores (one CCD), 52 GB |
-| small | `intent-cache-small` | — | 1 CPU, 3 GB (intent-cache only) |
+| Pool | Label | Serves jobs asking for | Bursts to | Per slot |
+|---|---|---|---|---|
+| heavy | `intent-cache` | `gh-linux-8x`, `gh-linux-16x` | `warp-ubuntu-2404-x64-8x` / `-16x` | 8 CPUs = 4 whole cores; 36 GB on intent-cache, 30 GB on intent-ci1, 32 GB in the three-heavy EPYC layout |
+| xl | `intent-cache-xl` | `gh-linux-16x` | `warp-ubuntu-2404-x64-16x` | 16 CPUs = 8 whole cores (one CCD), 52 GB |
+| small | `intent-cache-small` | nothing routed (free `ubuntu-*` jobs run on GitHub) | — | no slots on any host |
 
-On intent-cache the heavy slots are pinned to 0-3,12-15 and 4-7,16-19, the
-small ones to 8, 9, 10, 20, 21 and 22, and CPUs 11 and 23 (one whole core) are
-left to the cache and the system. On intent-ci1 the xl slot owns cores 0-7
+On intent-cache the three heavy slots are pinned to 0-3,12-15, 4-7,16-19 and
+8-11,20-23, so every CPU belongs to a slot. The cache shares those CPUs and
+wins contention by cgroup weight rather than a reserved core (see Pinned CPUs
+and limits). There is no small pool: the repositories are public, so jobs that
+fit in 1 CPU run free on GitHub's standard `ubuntu-24.04` runners and
+self-hosting them saved nothing; `runner-route` never routes them to a slot.
+On intent-ci1 the xl slot owns cores 0-7
 (CPUs 0-7,16-23, 52 GB) and the two heavy slots split CCD 1: cores 8-11
 (8-11,24-27) and 12-15 (12-15,28-31), 30 GB each. Every core is pinned; about
 13 GB stays with the system and Docker. [`hosts/epyc-4545p-3heavy.env`](../infra/runners/hosts/epyc-4545p-3heavy.env)
@@ -33,8 +37,11 @@ new host only adds capacity once its variable is raised:
 |---|---|---|
 | `CI_LINUX_HEAVY_SLOTS` | 2 | heavy |
 | `CI_LINUX_XL_SLOTS` | 0 (xl off) | xl |
-| `CI_LINUX_SMALL_SLOTS` | 6 | small |
-| `CI_LINUX_RUNNER_DISABLED` | unset | `true` sends every job, xl included, to hosted runners |
+| `CI_LINUX_RUNNER_DISABLED` | unset | `true` sends every job, xl included, to its burst runner |
+| `CI_WARPBUILD_DISABLED` | unset | `true` bursts to GitHub-hosted labels instead of WarpBuild (see [Burst to WarpBuild](#burst-to-warpbuild)) |
+
+`CI_LINUX_SMALL_SLOTS` is no longer read: jobs on free standard labels always run
+on GitHub, and no host runs `intent-cache-small` slots any more.
 
 Each slot runs one job in a fresh Docker container, then starts another. Everything needed to
 rebuild them lives in [`infra/runners/`](../infra/runners/).
@@ -52,7 +59,7 @@ github-runner@<pool>-<n>.service ─ supervisor.sh <pool>-<n> ─┬─ GitHub A
 | `supervisor.sh` | `/usr/local/lib/github-runners/` | One slot, one job: JIT-register, run the pinned container, drain on stop, deregister; `--plan` validates the config and lists the slots; `--host-check` checks the CPU sets against the host's cores |
 | `runners.env` | `/etc/github-runners/runners.env` (once) | intent-cache's pools, slot counts, labels, CPU sets, memory (not secret) |
 | `hosts/*.env` | `/etc/github-runners/runners.env` (once, `install.sh --config`) | The same for runner-only hosts, one file per layout |
-| `github-runner@.service` | `/etc/systemd/system/` | One instance per slot (`heavy-1`, `small-3`, …); restarts the supervisor after every job |
+| `github-runner@.service` | `/etc/systemd/system/` | One instance per slot (`heavy-1`, `xl-1`, …); restarts the supervisor after every job |
 | `runners.slice` | `/etc/systemd/system/` | Parent cgroup of the containers at the cgroup root: CPU and IO weight 10 (`system.slice`: 100); `runners.slice.d/memory.conf` caps it at the host's RAM minus 9 GiB (116G on a 128 GB box) |
 | `cache-priority.conf` | `/etc/systemd/system/{caddy,sccache-webdav}.service.d/runners-priority.conf` | CPU and IO weight 1000 for the cache services (skipped where a service is not installed) |
 | `egress.sh`, `github-runners-egress.service` | `/usr/local/lib/github-runners/`, `/etc/systemd/system/` | Blocks containers from private, tailnet and link-local addresses |
@@ -92,16 +99,19 @@ runner output, tagged `github-runner-<pool>-<n>`).
   publishes a port, so Docker never opens anything past ufw.
 - **Pinned CPUs and limits.** Each slot is pinned to its own CPU set
   (`--cpuset-cpus`) with a matching CPU quota, so `nproc` and Node's
-  `os.availableParallelism()` report 8 on a heavy slot and 1 on a small one.
-  Memory has no swap: 48 GB (heavy) and 3 GB (small), 2 × 48 + 6 × 3 = 114 GB,
-  leaving about 11 GB of the 125 GB for the system and page cache. Processes:
-  16384 / 4096; `/dev/shm`: 1 GB / 256 MB. The box has 12 cores with two
-  threads each (CPU *n* and *n*+12 share a core), so the CPU sets follow
-  sibling pairs: each heavy slot owns 4 whole cores, the small pool shares
-  cores 8-10, and no heavy slot shares a core with another slot. Caddy, rclone
-  and the system are not pinned: core 11 (CPUs 11 and 23) is never given to a
-  slot, and on the others the cache wins CPU and IO contention (weight 1000
-  inside `system.slice`, which outweighs `runners.slice` 10 to 1). Check
+  `os.availableParallelism()` report 8 on a heavy slot. On intent-cache
+  memory has no swap: 36 GB per heavy slot, 3 × 36 = 108 GB, under the 116G
+  `runners.slice` cap and leaving about 17 GB of the 125 GB for the system and
+  page cache (measured heavy working memory is at most 25 GiB). Processes:
+  16384; `/dev/shm`: 1 GB. The box has 12 cores with two threads each (CPU *n*
+  and *n*+12 share a core), so the CPU sets follow sibling pairs: each heavy
+  slot owns 4 whole cores and no slot shares a core with another. All 24 CPUs
+  are pinned, so no core is reserved for the cache. Caddy, rclone and the
+  system are not pinned and run on the slots' CPUs; they win CPU and IO
+  contention by weight: the installer gives `caddy.service` and
+  `sccache-webdav.service` CPUWeight and IOWeight 1000
+  ([`cache-priority.conf`](../infra/runners/cache-priority.conf)) against 10
+  for `runners.slice`, so a busy slot yields to cache requests. Check
   siblings with `cat /sys/devices/system/cpu/cpu*/topology/thread_siblings_list`
   before changing the sets on other hardware; the installer runs
   `supervisor.sh --host-check`, which refuses a slot whose CPUs do not exist or
@@ -110,18 +120,18 @@ runner output, tagged `github-runner-<pool>-<n>`).
   root NVMe (`/var/lib/docker`), separate from the cache disk, and disappears
   with the container.
 - **Labels.** `self-hosted`, `Linux`, `X64` (GitHub adds these itself) plus
-  `intent-cache` (heavy), `intent-cache-xl` (xl) or `intent-cache-small`
-  (small), whichever host the slot is on. Target a pool explicitly, e.g.
-  `runs-on: [self-hosted, intent-cache-small]`. The
+  `intent-cache` (heavy) or `intent-cache-xl` (xl), whichever host the slot
+  is on. Target a pool explicitly, e.g. `runs-on: [self-hosted, intent-cache]`.
+  No host serves `intent-cache-small` any more. The
   `runner-route` probe also counts every online `self-hosted`/`Linux`/`X64`
   runner, from any pool, as Linux fleet capacity unless the variable
   `CI_LINUX_RUNNER_DISABLED` is `true`. A `gh-linux-16x` job takes a free xl
-  slot first, then a free heavy slot, then goes hosted; a `gh-linux-8x` job
+  slot first, then a free heavy slot, then bursts; a `gh-linux-8x` job
   never takes an xl slot.
 - **Slot fitting.** The probe hands out at most as many slots per run as a
   pool has free: online slots (capped by the organization or repository
-  variables `CI_LINUX_HEAVY_SLOTS` / `CI_LINUX_XL_SLOTS` /
-  `CI_LINUX_SMALL_SLOTS`, defaults 2 / 0 / 6) minus jobs queued or running on
+  variables `CI_LINUX_HEAVY_SLOTS` / `CI_LINUX_XL_SLOTS`, defaults 2 / 0)
+  minus jobs queued or running on
   that pool. A workflow lists the pooled jobs
   that start together (`slot_jobs` input of `runner-route.yml`, or `SLOT_JOBS`
   in an inline probe); each reads `outputs.slots[key]`. Free slots go to
@@ -129,14 +139,51 @@ runner output, tagged `github-runner-<pool>-<n>`).
   cache), then the longest (`minutes`), then list order; `shards: N` or
   `legs: [a, b]` gives each matrix leg its own key (`key-1`..`key-N`, or
   `key-a`, `key-b`) and `events` keeps a job that skips the event from holding
-  a slot. Every other listed job gets its hosted label, and unlisted jobs use
+  a slot. Every other listed job gets its burst runner, and unlisted jobs use
   the pool only while a slot is still free. Any unreadable runner list or job
-  count sends every job hosted. `scripts/test_runner_policy.py` fails a
+  count sends every job to its burst runner. `scripts/test_runner_policy.py` fails a
   workflow whose unlisted pooled jobs (or matrix legs) can run at the same
   time, so they must be listed.
   Two runs probing at the same moment can claim the same free slot, so a pool
   may briefly run a job or two past its slot count; that job waits for the
   next free slot.
+
+## Burst to WarpBuild
+
+When no self-hosted slot is free, jobs on a paid GitHub label run on the matching
+[WarpBuild](https://www.warpbuild.com/docs/ci/cloud-runners) runner instead of the
+GitHub larger runner (the `warpbuildbot` app is installed on the org). Jobs on free
+standard labels (`ubuntu-22.04`, `ubuntu-24.04`, `ubuntu-latest`, `ubuntu-24.04-arm`,
+`windows-2022`, `windows-2025`) always run on GitHub: the three repositories are
+public, so those runners cost nothing.
+
+| GitHub label | WarpBuild runner | Notes |
+|---|---|---|
+| `gh-linux-8x` | `warp-ubuntu-2404-x64-8x` | 8 vCPU / 32 GB |
+| `gh-linux-16x` | `warp-ubuntu-2404-x64-16x` | 16 vCPU / 64 GB |
+| `gh-linux-arm64-8x` | `warp-ubuntu-2404-arm64-8x` | |
+| `gh-windows-16x` | `warp-windows-2022-x64-16x` | Server 2022: node-gyp fails on 2025 |
+| `macos-26-xlarge` | `warp-macos-26-arm64-6x` | M4 Pro |
+| `macos-15-xlarge` | `warp-macos-15-arm64-6x` | signed desktop builds (keychain unlock fails on macOS 26) |
+| `macos-latest-large` | — | no WarpBuild Intel Mac; bursts to GitHub |
+
+The probe sends a burst to GitHub instead of WarpBuild when:
+
+- the run is a fork pull request (no WarpBuild spend from outside contributors);
+- `CI_WARPBUILD_DISABLED` is `true` (organization or repository variable; no
+  workflow change needed);
+- a job for that WarpBuild OS and architecture (`ubuntu-x64`, `ubuntu-arm64`,
+  `windows-x64` or `macos-arm64`, read from its `warp-*` label) has been queued
+  for over 10 minutes in any of the three repositories; a job whose age is
+  unreadable does not count.
+
+An unreadable job queue keeps WarpBuild: a GitHub API error says nothing about
+WarpBuild. Each run logs `warpbuild <os>-<arch>: on` or the reason it is off.
+
+Jobs that may not use a self-hosted runner (they need sudo or Docker, or they sign
+releases on Mac/Windows) read the probe's `cloud` output instead of `runners`: the
+WarpBuild runner for a paid label, or the GitHub label under the conditions above,
+never a self-hosted fleet.
 
 ## Preinstalled tools
 
@@ -263,7 +310,7 @@ next job.
 
 ## Add or remove slots
 
-Edit `/etc/github-runners/runners.env` (for example `SMALL_SLOTS=4`, or a new
+Edit `/etc/github-runners/runners.env` (for example `HEAVY_SLOTS=2`, or a new
 pool added to `RUNNER_POOLS` with its own keys), check it, then apply:
 
 ```bash
@@ -273,9 +320,10 @@ ssh root@intent-cache
 ```
 
 The installer enables exactly the planned slots and drains and disables the
-rest; an invalid file changes nothing. Keep CPU sets disjoint, leave a CPU or
-two unpinned, and keep the total memory under the `runners.slice` cap (the
-host's RAM minus 9 GiB: 116G on a 128 GB box).
+rest; an invalid file changes nothing. Keep CPU sets disjoint and the total
+memory under the `runners.slice` cap (the host's RAM minus 9 GiB: 116G on a
+128 GB box). intent-cache pins every CPU and relies on the cache's cgroup
+weights; on a runner-only host, leaving a core or two unpinned is optional.
 
 ## Add a runner host
 
@@ -317,7 +365,7 @@ host's RAM minus 9 GiB: 116G on a 128 GB box).
    `-f xl=true` for a host with an xl slot) and check
    `journalctl -u 'github-runner@*'` on the new host shows it ran jobs. The
    smoke checks each pool's memory against a range that covers every host
-   config (heavy: 32-48 GiB); a new per-slot size needs the range widened.
+   config (heavy: 30-48 GiB, the top kept for intent-cache's pre-3-slot 48 GiB until its rollout); a new per-slot size needs the range widened.
 7. **Route jobs to it** by raising `CI_LINUX_HEAVY_SLOTS` / `CI_LINUX_XL_SLOTS`
    to the fleet's total slots per pool (see the variables above).
 

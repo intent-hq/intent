@@ -15,6 +15,8 @@ unset NEXTEST_RUNNER RESUME GATE_FORCE NO_FAIL_FAST GATE_CACHE_DIR NEXTEST_HIDE_
 unset TRANSFER_SELECTION_FIXTURE_ROOT
 unset INTENT_ACP_CALLBACK_ADAPTER_FIXTURE NODE_OPTIONS
 unset COMPACT CARGO_INCREMENTAL CARGO_PROFILE_DEV_DEBUG CARGO_PROFILE_TEST_DEBUG
+# make test-changed defaults it to 3 and names it in the summary line.
+unset INTENTD_TEST_TIMEOUT_MULTIPLIER
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 intentd_script="$repo_root/packages/intentd/scripts/changed-tests.sh"
@@ -503,7 +505,7 @@ PY
     [[ "$status" -eq 0 ]] || fail "$case_name: exited $status: $stderr"
     [[ -z "$stderr" ]] || fail "$case_name: unexpected stderr: $stderr"
   }
-  summary_line="[test-changed] summary: 2 passed, 0 failed, 0 skipped/ignored, 0 resumed (tests already passed for this tree)"
+  summary_line="[test-changed] summary: 2 passed, 0 failed, 0 skipped/ignored, 0 resumed (tests already passed for this tree); test time limits x3 (INTENTD_TEST_TIMEOUT_MULTIPLIER=3)"
   expect_recorded_run() {
     expect_ok
     [[ "$stdout" == *"[test-changed] cargo nextest run -p alpha --test one --build-jobs 2 --test-threads 1"$'\n'* ]] || fail "$case_name: plan line missing: $stdout"

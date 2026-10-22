@@ -24,6 +24,14 @@ gate = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 SPEC.loader.exec_module(gate)
 
+
+def setUpModule():
+    # Summary lines and receipts name the caller's test time-limit multiplier;
+    # run every case without the host's value so exact expectations hold.
+    saved = os.environ.pop(gate.TIMEOUT_MULTIPLIER_ENV, None)
+    if saved is not None:
+        unittest.addModuleCleanup(os.environ.__setitem__, gate.TIMEOUT_MULTIPLIER_ENV, saved)
+
 KEY = "a" * 64
 LISTING = json.dumps(
     {
@@ -1316,7 +1324,8 @@ class ResumableNextestTests(unittest.TestCase):
 
             summary = (
                 "[test-changed] summary: 2 passed, 0 failed, 1 skipped/ignored, 0 resumed "
-                "(tests already passed for this tree)"
+                "(tests already passed for this tree); "
+                "test time limits x1 (INTENTD_TEST_TIMEOUT_MULTIPLIER unset)"
             )
             self.assertEqual((latest_attempt(record_dir) / "summary.txt").read_text(), summary + "\n")
             self.assertEqual(
@@ -1493,7 +1502,8 @@ class ResumableNextestTests(unittest.TestCase):
                 harness.output_lines[-2:],
                 [
                     "[test-changed] summary: 1 passed, 1 failed, 0 skipped/ignored, 0 resumed "
-                    "(tests already passed for this tree)",
+                    "(tests already passed for this tree); "
+                    "test time limits x1 (INTENTD_TEST_TIMEOUT_MULTIPLIER unset)",
                     f"[test-changed] record: {latest_attempt(record_dir)}",
                 ],
             )
@@ -1554,7 +1564,8 @@ class ResumableNextestTests(unittest.TestCase):
                 harness.output_lines[-2:],
                 [
                     "[test-changed] summary: 2 passed, 1 failed, 0 skipped/ignored, 0 resumed "
-                    "(tests already passed for this tree)",
+                    "(tests already passed for this tree); "
+                    "test time limits x1 (INTENTD_TEST_TIMEOUT_MULTIPLIER unset)",
                     f"[test-changed] record: {latest_attempt(record_dir)}",
                 ],
             )
@@ -1613,10 +1624,14 @@ class ResumableNextestTests(unittest.TestCase):
             record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
             summary = (
                 "[test-changed] summary: 0 passed, 0 failed, 0 skipped/ignored, 0 resumed "
-                "(tests already passed for this tree)"
+                "(tests already passed for this tree); "
+                "test time limits x1 (INTENTD_TEST_TIMEOUT_MULTIPLIER unset)"
             )
             self.assertEqual(
-                stdout.getvalue().splitlines()[1:], [summary, f"[test-changed] record: {latest_attempt(record_dir)}"]
+                stdout.getvalue().splitlines(),
+                ["[test-changed] test time limits x1 (INTENTD_TEST_TIMEOUT_MULTIPLIER unset)",
+                 "[test-changed] isolated Cargo outputs: ",
+                 summary, f"[test-changed] record: {latest_attempt(record_dir)}"]
             )
             self.assertIn("[test-changed] ERROR:", stderr.getvalue())
             self.assertEqual((latest_attempt(record_dir) / "summary.txt").read_text(), summary + "\n")
@@ -1889,10 +1904,13 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             self.assertEqual(config["profile"][latest_attempt(run_dir).name]["junit"]["path"], "junit.xml")
             summary = (
                 "[test-intentd] summary: 1 passed, 0 failed, 1 skipped/ignored, 0 resumed "
-                "(tests already passed for this tree)"
+                "(tests already passed for this tree); "
+                "test time limits x1 (INTENTD_TEST_TIMEOUT_MULTIPLIER unset)"
             )
+            self.assertEqual(harness.output_lines[0],
+                             "[test-intentd] test time limits x1 (INTENTD_TEST_TIMEOUT_MULTIPLIER unset)")
             self.assertEqual(
-                harness.output_lines[1:],
+                harness.output_lines[2:],
                 [
                     "[test-intentd] no passed-test record for this tree; running the complete suite",
                     event("ok", "alpha::one$passes").rstrip("\n"),
@@ -2013,7 +2031,8 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             self.assertEqual(skip.run_commands, [])
             self.assertEqual(skip.list_commands, [])
             self.assertEqual(
-                skip.output_lines, ["resumed: skipped 2 tests already passed for this tree",
+                skip.output_lines, ["[test-changed] test time limits x1 (INTENTD_TEST_TIMEOUT_MULTIPLIER unset)",
+                                    "resumed: skipped 2 tests already passed for this tree",
                                     f"[test-changed] record: {latest_attempt(record_b)}"]
             )
 
@@ -4187,6 +4206,89 @@ class CapturedNextestTests(unittest.TestCase):
                 self.assertEqual(proof['categories']['executed-passed'], [['coverage-probe', 'b_wait']])
                 self.assertEqual(proof['categories']['resumed-passed'], [['coverage-probe', 'a_pass']])
                 self.assertEqual(self.snapshot(directory), frozen)
+
+
+class TimeoutMultiplierTests(unittest.TestCase):
+    """`make test` / `test-changed` / `test-select` default
+    INTENTD_TEST_TIMEOUT_MULTIPLIER to 3; the runner shows the value and never
+    lets a pass at one multiplier resume a run at another."""
+
+    def test_display_factor_follows_the_test_support_rules(self):
+        # Mirrors timeout.rs's tests: unset/malformed -> 1, never below 1, capped.
+        # Inputs Python's float()/strip() accept but Rust's trim().parse::<f64>()
+        # rejects must also mean 1: digit separators, non-ASCII digits, and the
+        # separators U+001C..U+001F that Python treats as whitespace.
+        cases = {None: 1.0, "": 1.0, "bogus": 1.0, "NaN": 1.0, "inf": 1.0, "1_0": 1.0,
+                 "\uff13": 1.0, "\x1f3": 1.0, "3\x1c": 1.0, "0x3": 1.0,
+                 "3": 3.0, " 3 ": 3.0, "\u30003\u2003": 3.0, "\t3\n": 3.0, "+3": 3.0,
+                 "3.": 3.0, ".5e1": 5.0, "1.5": 1.5, "0": 1.0, "0.1": 1.0, "-1": 1.0,
+                 "-inf": 1.0, "Infinity": 1.0, "1e300": 20.0, "20": 20.0}
+        for setting, expected in cases.items():
+            with self.subTest(setting=setting):
+                self.assertEqual(gate.timeout_multiplier(setting), expected)
+
+    def test_description_names_the_factor_and_the_raw_setting(self):
+        name = gate.TIMEOUT_MULTIPLIER_ENV
+        self.assertEqual(gate.timeout_description({}), f"test time limits x1 ({name} unset)")
+        self.assertEqual(gate.timeout_description({name: "3"}), f"test time limits x3 ({name}=3)")
+        self.assertEqual(gate.timeout_description({name: "1.5"}), f"test time limits x1.5 ({name}=1.5)")
+        self.assertEqual(gate.timeout_description({name: ""}), f"test time limits x1 ({name}='')")
+        self.assertEqual(gate.timeout_description({name: "1e9"}), f"test time limits x20 ({name}=1e9)")
+        self.assertEqual(gate.timeout_description({name: "\uff13"}), f"test time limits x1 ({name}='\uff13')")
+
+    def test_each_multiplier_keeps_separate_resume_credit(self):
+        name = gate.TIMEOUT_MULTIPLIER_ENV
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            gate, "worktree_tree", return_value="tree"
+        ), mock.patch.object(gate, "submodule_heads", return_value=[]), mock.patch.object(
+            gate, "required_hash", return_value="hash"
+        ), mock.patch.object(gate, "run", return_value="version"), mock.patch.object(
+            gate, "build_settings", return_value={}
+        ):
+            root = Path(directory)
+            # Grouped by the stretch the tests actually apply.
+            groups = {1.0: ("unset", "1", "", "0", "bogus", "\uff13"), 3.0: ("3", "3.0", " 3 "),
+                      2.0: ("2",), 20.0: ("20", "1e9")}
+            keys, inputs = {}, {}
+            for factor, settings in groups.items():
+                for setting in settings:
+                    env = {} if setting == "unset" else {name: setting}
+                    with mock.patch.dict(os.environ, env, clear=True):
+                        keys[setting] = gate.tree_key(root, root)
+                        inputs[setting] = gate.tree_inputs(root, root)
+                    self.assertEqual(keys[setting], keys[settings[0]], (setting, settings[0]))
+                    if factor == 1.0:
+                        # x1 runs (direct runner callers, an explicit 1, and every
+                        # record made before the make default) keep their key.
+                        self.assertNotIn("test-timeout", inputs[setting])
+                    else:
+                        self.assertEqual(inputs[setting]["test-timeout"], {"multiplier": factor})
+            self.assertEqual(len({keys[settings[0]] for settings in groups.values()}), len(groups), keys)
+            # The key follows the environment the tests actually receive.
+            with mock.patch.dict(os.environ, {}, clear=True):
+                self.assertEqual(gate.tree_key(root, root, child_env={name: "3"}), keys["3"])
+
+    def test_run_prints_and_records_the_multiplier(self):
+        name = gate.TIMEOUT_MULTIPLIER_ENV
+        for setting in (None, "3", "1"):
+            with self.subTest(setting=setting), tempfile.TemporaryDirectory() as temporary, \
+                    mock.patch.object(gate, "callback_fixture_identity", return_value=None), \
+                    mock.patch.object(gate, "transfer_fixture_identity", return_value=None), \
+                    mock.patch.dict(os.environ, {} if setting is None else {name: setting}):
+                root = Path(temporary)
+                args = make_args(root)
+                harness = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)
+                                                   for _ in gate.split_plans(args.plan)])
+                self.assertEqual(harness.execute(args), 0)
+                description = gate.timeout_description({} if setting is None else {name: setting})
+                self.assertIn(f"[{args.label}] {description}", harness.output_lines)
+                record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(args.plan))
+                attempt = latest_attempt(record_dir)
+                summary = (attempt / "summary.txt").read_text()
+                self.assertTrue(summary.endswith(f"; {description}\n"), summary)
+                self.assertIn(summary.rstrip("\n"), harness.output_lines)
+                self.assertEqual(json.loads((attempt / "run.json").read_text())["test_timeout_multiplier"], setting)
+                self.assertEqual({env.get(name) for env in harness.run_environments}, {setting})
 
 
 if __name__ == "__main__":
