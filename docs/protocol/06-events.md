@@ -664,8 +664,8 @@ metadata projection of the committed `Note`: all normal entity fields except
 `content` (including title, tags, parentId, revision and task metadata). This is a
 metadata patch, not a full-body replacement; it does not include a content preview.
 An empty `metadata` object clears previous task metadata. `note:deleted` retains
-the `noteId` tombstone. Transient annotation invalidations can omit `data.note`.
-Metadata may also be absent if the note was deleted before event enrichment or
+the `noteId` tombstone.
+Metadata may be absent if the note was deleted before event enrichment or
 its read failed. Clients merge pushed metadata without fetching hidden note bodies.
 Only visible mounted note consumers refresh the body; hidden consumers mark it stale.
 

@@ -15,8 +15,7 @@ No event, subscription, writable setting or index-resume operation is added.
 The existing composition cannot simply bind the ordinary listener sooner:
 
 - `intent-store/src/lib.rs::Store::open_with_owner` runs migrations, profile
-  retirement, note-index and annotation-anchor rebuilds, commit and runtime setup
-  before returning a Store. Progress reads must not acquire that write connection,
+  retirement, commit and runtime setup before returning a Store. Progress reads must not acquire that write connection,
   read SQLite, query services or publish through the persisted EventBus.
 - `intent-transport/src/client.rs::handle` persists `upsert_client`. Ordinary UDS
   and WSS admission resolve principals through `WorkspaceApi`; hello also binds
@@ -130,8 +129,11 @@ replay. Unknown method errors return to ordinary `-32601` handling after readine
 | `finalizingStep` | Required only in finalizing: `anchors`, `committing`, or `services`. No estimate for these steps. |
 | `failure` | Required only in failed: `{ code: "startup-failed", message: "Daemon startup failed. Check daemon logs." }`. Raw SQLite/path/token/note details stay in daemon logs. |
 
-Preparing includes database opening/migration and inventory/profile preparation;
-indexing begins when the rebuild work set is fixed. Inventory counts only notes
+Preparing includes database opening/migration and inventory/profile preparation.
+The current daemon rebuilds no note indexes at startup, so it never publishes
+`indexing`, `progress`, `estimatedRemainingMs` or the `anchors` finalizing step;
+they remain valid schema-1 values that clients must keep tolerating, with the
+semantics below. Indexing begins when the rebuild work set is fixed. Inventory counts only notes
 actually selected for rebuilding. Bytes are UTF-8 bytes of those canonical source
 bodies (SQLite BLOB byte length, not character count, derived row count or disk IO).
 Increment completed notes and processed bytes together after a whole note's index
@@ -143,15 +145,15 @@ bounded snapshots at most four times per second, with immediate phase/terminal
 updates and exact final counters; observer failure must not change transaction
 semantics or hold the write transaction waiting for a client.
 
-After indexing, finalizing/anchors covers annotation source-anchor rebuilding;
+After indexing, finalizing/anchors is reserved for source-anchor rebuilding;
 finalizing/committing starts before awaiting the transaction commit. Only after
 commit and the note runtime are usable may finalizing/services cover remaining
 required daemon initialization, including any legacy VACUUM. Finalizing steps can
 advance without resetting `phaseElapsedMs`; they do reset `progressAgeMs`. When no
 notes need rebuilding, zero totals are valid and indexing may be skipped. An
 unmeasured preparation/finalization stage stays indeterminate, never fabricated
-as note progress. Existing optional background initializers do not become new
-readiness prerequisites.
+as note progress. Existing optional background initializers, such as the post-startup cleanup of
+retired note paging tables, do not become new readiness prerequisites.
 
 Ready is published only after all required initialization and required listener
 binding succeed, and ordinary dispatch is installed. Progress reaching N/N is not
