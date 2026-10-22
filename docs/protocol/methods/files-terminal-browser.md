@@ -618,10 +618,22 @@ API gains root support; all other file APIs retain their existing scope.
 > lesser of its own cap and the budget remaining), so a capture op is designed not
 > to outlive the daemon's reverse request. `navigate` runs only the mount step: it
 > passes no deadline (its mount wait is bounded by that stage's own cap alone), does
-> not wait for the guest to settle, and performs no origin check. `snapshot` does
-> not go through the mount path at all. A mount on demand against a not-in-view
-> workspace succeeds with the same additive `warning` string as above; a hidden tab
-> in a displayed workspace mounts with no warning.
+> not wait for the guest to settle, and performs no origin check. `snapshot` and the
+> capture-session actions (`startSession`, `startCapture`, `captureStep`,
+> `startTrace`) run the same mount step under the request deadline, without the
+> settle or origin check. A mount on demand against a not-in-view workspace succeeds
+> with the same additive `warning` string as above; a hidden tab in a displayed
+> workspace mounts with no warning.
+>
+> A workspace that **no window has open** (its tab was closed, or it was not reopened
+> since a restart) is **hosted in the background** before the batch runs: the FE asks
+> one app window connected to the workspace's host (the focused one first) to
+> hydrate the workspace's saved layout without adding a workspace tab, navigating,
+> or moving focus, then routes the batch there like an open workspace. Tab-free
+> batches (`openTunnel` / `listTunnels` / `closeTunnel`) skip this. Every capture
+> also keeps the guest and its window drawing while the app window is minimized or
+> covered (background throttling is lifted for the capture only), so a capture in
+> that state paints instead of failing `not-painting`.
 >
 > When a mount, settle, or paint cannot happen, the op fails as an **action-result
 > error** (the per-action `{ action, success: false, error }` envelope) whose
@@ -629,12 +641,12 @@ API gains root support; all other file APIs retain their existing scope.
 > **additive structured `errorCode`** when the cause is one of:
 >
 > - `workspace-not-visible` — the tab could not be mounted on demand while the
->   workspace is not **displayed** in any window: either no window hosts the
->   workspace at all (the hydration nudge reaches no renderer, so the op fails fast
->   instead of waiting), or a background window does host it but the offscreen
->   registration wait ran out at its own cap. Retry shortly or `listTabs` to confirm
->   the tab still exists; if the workspace is open nowhere, open it in a window and
->   retry.
+>   workspace is not **displayed** in any window: either no app window connected to
+>   the workspace's host exists to host it, even in the background (the hydration
+>   nudge reaches no renderer, so the op fails fast instead of waiting), or a
+>   background window does host it but the offscreen registration wait ran out at
+>   its own cap. Retry shortly or `listTabs` to confirm the tab still exists; if no
+>   Intent window is open, open one and retry.
 > - `deadline-exhausted` — (capture ops only) the request deadline ran out at a
 >   named stage (before or during the mount, the load settle, or the capture
 >   itself); retry the capture.
