@@ -43,6 +43,7 @@ jobs:
         {"key":"consumer-checks-prepare","label":"ubuntu-24.04"},
         {"key":"event-catalog-check","label":"ubuntu-24.04"},
         {"key":"shell-lint","label":"ubuntu-24.04"},
+        {"key":"workflow-lint","label":"ubuntu-24.04"},
         {"key":"repo-hygiene","label":"ubuntu-24.04"},
         {"key":"ruleset-check","label":"ubuntu-24.04"},
         {"key":"breaking-token","label":"ubuntu-24.04","events":["pull_request"]},
@@ -329,6 +330,7 @@ jobs:
           python3 scripts/test_github_readiness.py
           bash scripts/docs-check.test.sh
           bash scripts/lint-fixed-sleeps.test.sh
+          bash scripts/lint-workflows.test.sh
           bash scripts/rust-changed-tests.test.sh
           bash scripts/changed-script-tests.test.sh
           python3 -S -B scripts/test_rust_test_policy.py
@@ -387,6 +389,38 @@ jobs:
           fi
       - run: shellcheck --version
       - run: make lint-shell
+
+  # actionlint over .github/workflows, with its shellcheck pass over run:
+  # scripts. Nothing linted these workflows, and a manual run was too noisy
+  # (runner labels, false alarms) to tell a new mistake from main's baseline
+  # (found while building intent-hq/intent#7557). `make lint-workflows` keeps
+  # main finding-free, so any finding here is new. The pinned, checksum-verified
+  # actionlint comes from bootstrap's one-binary mode; REQUIRE_ACTIONLINT=1
+  # forbids the self-test's skip of its real-actionlint cases.
+  workflow-lint:
+    needs: [runner-route]
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.slots || '{}')['workflow-lint'] || fromJSON('["ubuntu-24.04"]') }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+      - name: Install ShellCheck when absent
+        run: |
+          if ! command -v shellcheck >/dev/null; then
+            for attempt in 1 2 3; do
+              if sudo -n apt-get -o DPkg::Lock::Timeout=300 update -qq; then break; fi
+              if [ "$attempt" -eq 3 ]; then exit 1; fi
+              sleep $((attempt * 15))
+            done
+            sudo -n apt-get -o DPkg::Lock::Timeout=300 install -y -qq shellcheck
+          fi
+      - name: Install the pinned actionlint
+        run: |
+          bash scripts/bootstrap-dev-host.sh --install-actionlint
+          echo "${CARGO_HOME:-$HOME/.cargo}/bin" >> "$GITHUB_PATH"
+      - name: Self-test make lint-workflows
+        run: REQUIRE_ACTIONLINT=1 bash scripts/lint-workflows.test.sh
+      - run: make lint-workflows
 
   # Keep stock macOS Bash 3.2 compatibility without renting a Mac for shell tests.
   # A pinned Linux build runs the same suites; REQUIRE_BASH3 forbids silent skips.
@@ -586,7 +620,7 @@ jobs:
     runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
     permissions: {}
     if: always()
-    needs: [ci-policy, bootstrap-install, pr-title, bridge-test, python-tests, docs-check, event-catalog-check, shell-tests, shell-lint, shell-tests-bash3, repo-hygiene, ruleset-check, breaking-token, submodule-pins, triage-parser-test, consumer-checks-prepare, consumer-checks-exercise, runner-route]
+    needs: [ci-policy, bootstrap-install, pr-title, bridge-test, python-tests, docs-check, event-catalog-check, shell-tests, shell-lint, workflow-lint, shell-tests-bash3, repo-hygiene, ruleset-check, breaking-token, submodule-pins, triage-parser-test, consumer-checks-prepare, consumer-checks-exercise, runner-route]
     steps:
       - uses: actions/checkout@v7
         with:

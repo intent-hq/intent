@@ -461,3 +461,11 @@ that test with `node --test`. Every step runs; the failures are listed at the
 end. Like CI it needs node, shellcheck and the `packages/intentd`
 submodule. It skips the Bash 3.2 pass (see above) and the sccache and runner
 steps that download tools.
+
+After editing anything under `.github/`, run `make lint-workflows`. It runs the
+pinned actionlint (with shellcheck over `run:` scripts) over
+`.github/workflows`, and CI's `workflow-lint` job runs the same check on every
+PR. Main is kept finding-free, so a finding in a file you touched is new: fix
+it, or add a path- and message-scoped ignore to `.github/actionlint.yaml` for a
+confirmed false positive. (shellcheck is not pinned, so a newer local copy can
+flag an untouched workflow that CI's does not.) `make bootstrap-dev-host` installs actionlint and shellcheck.

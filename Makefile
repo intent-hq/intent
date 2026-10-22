@@ -342,7 +342,7 @@ FE_BUILD_HEAP_MB ?= 16384
 	ensure-fe-toolchain \
 	update \
 	build build-intentd build-sidecar gate test test-intentd test-scripts test-scripts-changed test-changed test-select list-tests coverage-changed coverage-e2e coverage-all \
-	fmt clippy lint-sources lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child lint-shell-sleeps lint-shell bash3 check clean clean-dev \
+	fmt clippy lint-sources lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child lint-shell-sleeps lint-shell lint-workflows bash3 check clean clean-dev \
 	sweep sweep-all seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
 	run-intentd dev-ui dev-sandbox-ui dev-sandbox-app dev-sandbox-stack dev-fe fe-launch \
 	sandbox-status sandbox-stop \
@@ -547,6 +547,13 @@ lint-shell: ## Run shellcheck over scripts/*.sh (needs shellcheck; make bootstra
 	@command -v shellcheck >/dev/null 2>&1 || { \
 		echo "[missing]  shellcheck: required by make lint-shell; run make bootstrap-dev-host" >&2; exit 1; }
 	@shellcheck -x scripts/*.sh
+
+# actionlint over .github/workflows (with its shellcheck pass over run:
+# scripts) at the pin in scripts/bootstrap-dev-host.sh. Main is kept clean, so
+# any finding is new; CI's workflow-lint job runs this. Not part of `make
+# check`, for the same missing-binary reason as lint-shell.
+lint-workflows: ## Run the pinned actionlint over .github/workflows (needs actionlint + shellcheck; make bootstrap-dev-host installs them)
+	@bash scripts/lint-workflows.sh
 
 # Bash 3.2 for the scripts/*.test.sh compatibility passes (stock macOS bash is
 # 3.2). CI builds it only for the merge queue, so build it once here and the

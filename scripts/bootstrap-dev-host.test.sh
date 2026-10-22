@@ -464,7 +464,7 @@ if [[ -f "$fe_gate" ]]; then
 fi
 ln -sf "$(command -v mkdir)" "$bin_dir/mkdir"
 ln -sf "$(command -v chmod)" "$bin_dir/chmod"
-write_launcher curl 'echo "curl $*" >>"$TOOL_LOG"; while [ $# -gt 0 ]; do [ "$1" = -o ] && { : >"$2"; break; }; shift; done'
+write_launcher curl 'echo "curl $*" >>"$TOOL_LOG"; [ "$(grep -c "^curl " "$TOOL_LOG")" -gt "${CURL_FAILURES:-0}" ] || { echo "curl: (56) Recv failure" >&2; exit 56; }; while [ $# -gt 0 ]; do [ "$1" = -o ] && { : >"$2"; break; }; shift; done'
 write_launcher sha256sum 'echo "$ACTIONLINT_FIXTURE_DIGEST  $1"'
 write_launcher tar 'echo "tar $*" >>"$TOOL_LOG"; printf "#!/usr/bin/env bash\necho 1.7.12\n" >"$4/actionlint"; chmod +x "$4/actionlint"'
 run_install_actionlint() {
@@ -472,8 +472,18 @@ run_install_actionlint() {
   rm -rf "$temp_dir/home/.cargo/bin/actionlint"
   PATH="$bin_dir" HOME="$temp_dir/home" INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
     CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT='' MAKELEVEL='' TOOL_LOG="$actionlint_log" \
-    ACTIONLINT_FIXTURE_DIGEST="$1" \
-    bash -c 'funcs=$1; set --; source "$funcs"; install_actionlint' bash "$bootstrap_funcs" >"$output" 2>&1
+    GITHUB_ACTIONS='' RETRY_DELAY=0 ACTIONLINT_FIXTURE_DIGEST="$1" \
+    bash -c 'funcs=$1; scripts=$2; set --; source "$funcs"; SCRIPT_DIR=$scripts; install_actionlint' \
+    bash "$bootstrap_funcs" "$repo_root/scripts" >"$output" 2>&1
+}
+# --install-actionlint (CI's workflow-lint job) runs the same installer alone.
+run_install_actionlint_mode() {
+  : >"$actionlint_log"
+  rm -rf "$temp_dir/home/.cargo/bin/actionlint"
+  PATH="$bin_dir" HOME="$temp_dir/home" INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
+    CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT='' MAKELEVEL='' TOOL_LOG="$actionlint_log" \
+    GITHUB_ACTIONS='' RETRY_DELAY=0 ACTIONLINT_FIXTURE_DIGEST="$1" \
+    bash "$script" --install-actionlint >"$output" 2>&1
 }
 run_install_actionlint "$actionlint_digest" || fail "install_actionlint failed with a matching checksum"
 expect_line "[install] actionlint 1.7.12"
@@ -481,6 +491,19 @@ grep -q "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlin
   || fail "install_actionlint did not download the pinned release: $(cat "$actionlint_log")"
 grep -q "^tar -xzf .* -C $temp_dir/home/.cargo/bin actionlint$" "$actionlint_log" \
   || fail "install_actionlint did not extract into CARGO_HOME/bin: $(cat "$actionlint_log")"
+# A transient download failure is retried; the checksum is still verified once.
+CURL_FAILURES=1 run_install_actionlint "$actionlint_digest" || fail "install_actionlint did not recover from one failed download"
+expect_line "WARNING: retry.sh: attempt 1/3 failed (exit 56), retrying in 0s: curl"
+[[ "$(grep -c '^curl ' "$actionlint_log")" == 2 ]] || fail "expected 2 actionlint download attempts: $(cat "$actionlint_log")"
+grep -q '^tar ' "$actionlint_log" || fail "install_actionlint did not extract after a retried download"
+run_install_actionlint_mode "$actionlint_digest" || fail "--install-actionlint failed with a matching checksum: $(cat "$output")"
+expect_line "[install] actionlint 1.7.12"
+[[ -x "$temp_dir/home/.cargo/bin/actionlint" ]] || fail "--install-actionlint did not install into CARGO_HOME/bin"
+reject_line "[install] rustup"
+reject_line "Doctor found"
+! run_install_actionlint_mode 0000000000000000000000000000000000000000000000000000000000000000 \
+  || fail "--install-actionlint accepted a checksum mismatch"
+expect_line "ERROR: actionlint archive SHA-256 mismatch"
 ! run_install_actionlint 0000000000000000000000000000000000000000000000000000000000000000 \
   || fail "install_actionlint accepted a checksum mismatch"
 expect_line "ERROR: actionlint archive SHA-256 mismatch"
@@ -495,6 +518,9 @@ write_launcher uname '[ "$1" = -m ] && { echo riscv64; exit 0; }; echo Linux'
 run_install_actionlint "$actionlint_digest" || fail "install_actionlint failed on a host without a pinned archive"
 expect_line "[warn] no actionlint 1.7.12 release archive for Linux riscv64"
 [[ ! -s "$actionlint_log" ]] || fail "install_actionlint downloaded on an unsupported host: $(cat "$actionlint_log")"
+# ...but --install-actionlint asked for that one binary, so it fails there.
+! run_install_actionlint_mode "$actionlint_digest" || fail "--install-actionlint succeeded on a host without a pinned archive"
+expect_line "ERROR: actionlint 1.7.12 is not installed; build it from https://github.com/rhysd/actionlint/releases/tag/v1.7.12"
 rm -f "$bin_dir/uname"
 ln -s "$(command -v uname)" "$bin_dir/uname"
 rm -f "$bin_dir/actionlint" "$bin_dir/curl" "$bin_dir/sha256sum" "$bin_dir/tar" "$bin_dir/mkdir" "$bin_dir/chmod"
