@@ -12,7 +12,8 @@ conclusion), and prints a markdown report plus one JSON size table per repo.
 
 Hosts are `intent-cache` plus every infra/runners/hosts/<host>.env whose
 RUNNER_NAME_PREFIX equals <host> (layout templates are skipped), reached as
-`ssh root@<host>` over Tailscale. Jobs come from `gh api` (Actions runs and
+`ssh root@<host>` over Tailscale; the host files are found next to this script, never
+from the working directory. Jobs of DEFAULT_REPOS (or --repos) come from `gh api` (Actions runs and
 jobs, all attempts) unless --jobs-file is given: only runs that overlap a stats
 line are read, within --max-api-calls, and completed runs are cached on disk.
 Standard library only.
@@ -42,6 +43,8 @@ GH_ATTEMPTS = 4
 DEFAULT_BUDGET = 1000  # GitHub API calls per invocation (--max-api-calls)
 PER_PAGE = 100
 SEARCH_CAP = 1000  # the runs list returns at most this many results per query
+DEFAULT_REPOS = ["intent-hq/intent", "intent-hq/intentd", "intent-hq/cloudlands-fe"]
+PAGE_CACHE = "(incl. page cache)"  # marks memory that fell back to memory.peak
 RERUN_MARGIN = timedelta(days=2)  # list runs created this long before the stats, for re-runs
 RATE_LIMITED = re.compile(r"rate limit|HTTP 429", re.IGNORECASE)
 RUNS_JQ = ("{total: .total_count, runs: [.workflow_runs[] | "
@@ -166,12 +169,25 @@ def hosts_from_configs(root=ROOT):
     return hosts
 
 
-def repos_from_configs(root=ROOT):
-    repos = set()
-    for _, values in _host_configs(root):
-        org = values.get("GITHUB_ORG", "intent-hq")
-        repos.update(f"{org}/{repo.strip()}" for repo in values.get("RUNNER_GROUP_REPOS", "").split(",") if repo.strip())
-    return sorted(repos)
+def resolve_repos(value):
+    """--repos as a list (None means DEFAULT_REPOS). Raises ValueError when nothing usable is left,
+    so an empty list is an error rather than a report with 0 matches."""
+    if value is None:
+        return list(DEFAULT_REPOS)
+    repos = [repo.strip() for repo in value.split(",") if repo.strip()]
+    bad = [repo for repo in repos if not re.fullmatch(r"[\w.-]+/[\w.-]+", repo)]
+    if bad:
+        raise ValueError(f"--repos needs owner/name entries, got: {', '.join(bad)}")
+    if not repos:
+        raise ValueError("no repositories to read jobs from: --repos is empty")
+    return repos
+
+
+def working_memory(record):
+    """(bytes, measured): mem_work_peak_bytes when recorded, else memory.peak (includes page cache)."""
+    if record.get("mem_work_peak_bytes") is not None:
+        return record["mem_work_peak_bytes"], True
+    return record.get("mem_peak_bytes"), False
 
 
 def parse_stats(lines, source):
@@ -491,6 +507,11 @@ def build_report(stats, jobs, since, until, errors=()):
 
         cores = [r.get("cores_p95") for r in records]
         mem95 = percentile([r.get("mem_peak_bytes") for r in records], 95)
+        work = [working_memory(r) for r in records if working_memory(r)[0] is not None]
+        work95 = percentile([value for value, _ in work], 95)
+        measured_work = {flag for _, flag in work}
+        mem_source = None if not work else "work" if measured_work == {True} else (
+            "peak" if measured_work == {False} else "mixed")
         disk95 = percentile([r.get("disk_bytes") for r in records], 95)
         sats = [r.get("saturation") for r in records]
         wall_cpu = sum((r.get("wall_s") or 0) * (r.get("slot_cpus") or 0) for r in records)
@@ -513,7 +534,9 @@ def build_report(stats, jobs, since, until, errors=()):
             "saturation_p90": _round(percentile(sats, 90), 3),
             "saturation_by_slot": {str(cpus): _round(value, 3)
                                    for cpus, value in sorted(saturation_by_slot.items(), key=lambda kv: kv[0] or 0)},
+            "mem_work_p95_gib": None if work95 is None else _round(work95 / GIB),
             "mem_p95_gib": None if mem95 is None else _round(mem95 / GIB),
+            "mem_source": mem_source,
             "disk_p95_gib": None if disk95 is None else _round(disk95 / GIB),
             "cpu_efficiency": _round(sum(r.get("cpu_s") or 0 for r in records) / wall_cpu, 3) if wall_cpu else None,
             "oom_kills": sum(r.get("oom_kills") or 0 for r in records),
@@ -523,8 +546,8 @@ def build_report(stats, jobs, since, until, errors=()):
             "paid_per_day": _round(paid_cost / days, 4),
             "class": INSUFFICIENT, "fallback": None, "monthly_saving": None,
         }
-        if len(records) >= MIN_RUNS and entry["cores_p90"] is not None and entry["mem_p95_gib"] is not None:
-            size = classify(percentile(cores, 90), mem95, saturation_by_slot)
+        if len(records) >= MIN_RUNS and entry["cores_p90"] is not None and work95 is not None:
+            size = classify(percentile(cores, 90), work95, saturation_by_slot)
             fallback_price = price_per_minute([size["fallback"]]) or 0.0
             saving = sum(billed * (price - fallback_price) for billed, price in paid_jobs)
             entry.update({"class": size["name"], "fallback": size["fallback"],
@@ -553,11 +576,17 @@ def _money(value):
     return "—" if value is None else (f"-${-value:,.2f}" if value < 0 else f"${value:,.2f}")
 
 
+def _work_mem(entry):
+    """Working-memory cell; marked when any run only had memory.peak to offer."""
+    value = _fmt(entry["mem_work_p95_gib"])
+    return f"{value} {PAGE_CACHE}" if entry["mem_source"] in ("peak", "mixed") else value
+
+
 def evidence(entry):
     if entry["runs"] == 0:
         return "no stats recorded"
     parts = [f"cores p90 {_fmt(entry['cores_p90'])}/p95 {_fmt(entry['cores_p95'])}",
-             f"mem p95 {_fmt(entry['mem_p95_gib'])} GiB",
+             f"working mem p95 {_work_mem(entry)} GiB, peak mem p95 {_fmt(entry['mem_p95_gib'])} GiB",
              "saturation p90 " + ", ".join(f"{v} on {k} CPUs" for k, v in entry["saturation_by_slot"].items())]
     if entry["oom_kills"]:
         parts.append(f"{entry['oom_kills']} OOM kills")
@@ -572,10 +601,11 @@ def render_markdown(report):
         f"{report['matched']} of {report['stats_records']} stats records in the window matched a job"
         f" ({report['outside_window']} outside it ignored). "
         f"Classes need {MIN_RUNS}+ completed runs; cores are p90 of each run's p95 busy CPUs, "
-        "memory is p95 of peak. Saving = 30 days of today's paid hosted minutes repriced at the "
+        "memory is p95 of each run's working set (anon + shmem + kernel; runs recorded before that "
+        f"field fall back to memory.peak, marked {PAGE_CACHE}). Saving = 30 days of today's paid hosted minutes repriced at the "
         "recommended class's hosted fallback (negative = upsizing costs more).",
         "",
-        "| Class | Busy cores (p90) | Peak memory (p95) | Hosted fallback |",
+        "| Class | Busy cores (p90) | Working memory (p95) | Hosted fallback |",
         "|---|---|---|---|",
     ]
     for size in SIZE_CLASSES:
@@ -585,20 +615,33 @@ def render_markdown(report):
         lines.append(f"| {size['name']} | {cores} | {mem} | {size['fallback']} |")
     lines.append(f"\nA slot size whose runs have p90 saturation > {SATURATED} needs the class above that slot's class "
                  "(an 8-CPU slot → xl).")
+    unsampled = []
     for repo, entries in report["repos"].items():
+        gap = [e for e in entries if e["runs"] == 0 and (e["paid_per_day"] or 0) > 0]
+        unsampled += gap
         lines += ["", f"## {repo}", "",
                   "| Workflow | Job | Leg | Class | Runs | Retries | Cores p90 | Cores p95 | Saturation p90 "
-                  "| Mem p95 GiB | Disk p95 GiB | CPU eff. | Label | Runs/day | Paid/day | Saving/month |",
-                  "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
-        for e in entries:
+                  "| Mem work p95 GiB | Mem peak p95 GiB | Disk p95 GiB | CPU eff. | Label | Runs/day | Paid/day "
+                  "| Saving/month |",
+                  "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+        for e in (e for e in entries if e not in gap):
             lines.append(
                 f"| {_cell(e['workflow'])} | {_cell(e['job'])} | {_cell(e['leg'] or '')} | {e['class']} | {e['runs']} | {e['retries']} "
                 f"| {_fmt(e['cores_p90'])} | {_fmt(e['cores_p95'])} | {_fmt(e['saturation_p90'])} "
-                f"| {_fmt(e['mem_p95_gib'])} | {_fmt(e['disk_p95_gib'])} | {_fmt(e['cpu_efficiency'])} "
+                f"| {_work_mem(e)} | {_fmt(e['mem_p95_gib'])} | {_fmt(e['disk_p95_gib'])} | {_fmt(e['cpu_efficiency'])} "
                 f"| {e['current_label']} | {_fmt(e['runs_per_day'])} | {_money(e['paid_per_day'])} "
                 f"| {_money(e['monthly_saving'])} |")
         total = sum(e["monthly_saving"] or 0 for e in entries)
         lines.append(f"\nEstimated saving for {repo}: {_money(total)} a month.")
+    if unsampled:
+        unsampled.sort(key=lambda e: (-(e["paid_per_day"] or 0), e["repo"], e["workflow"], e["job"], e["leg"] or ""))
+        lines += ["", f"## No samples yet ({len(unsampled)})", "",
+                  "Paid hosted jobs that never ran on a measured self-hosted slot in the window, most expensive "
+                  "first. They cannot be sized until they do.", "",
+                  "| Repo | Workflow | Job | Leg | Label | Runs/day | Paid/day |", "|---|---|---|---|---|---|---|"]
+        lines += [f"| {e['repo']} | {_cell(e['workflow'])} | {_cell(e['job'])} | {_cell(e['leg'] or '')} "
+                  f"| {e['current_label']} | {_fmt(e['runs_per_day'])} | {_money(e['paid_per_day'])} |"
+                  for e in unsampled]
     if report["unmatched"]:
         lines += ["", f"## Unmatched stats ({len(report['unmatched'])})", "",
                   "No Actions job carries these runner names (deleted run, other repo, or outside the run window).", ""]
@@ -634,7 +677,7 @@ def main(argv=None, run=subprocess.run, sleep=time.sleep):
     source.add_argument("--hosts", nargs="?", const="", metavar="H1,H2",
                         help="SSH-collect from these hosts (default: every configured host)")
     parser.add_argument("--jobs-file", metavar="JSON", help="saved Actions jobs (JSON array) instead of gh api")
-    parser.add_argument("--repos", help="comma-separated owner/name (default: the runner group's repos)")
+    parser.add_argument("--repos", help="comma-separated owner/name (default: " + ",".join(DEFAULT_REPOS) + ")")
     parser.add_argument("--since", help="window start, ISO 8601 (default: 5 days ago)")
     parser.add_argument("--until", help="window end, ISO 8601 (default: now)")
     parser.add_argument("--save-stats", metavar="JSONL", help="write the collected stats here")
@@ -650,6 +693,11 @@ def main(argv=None, run=subprocess.run, sleep=time.sleep):
                         help="fetch every run in the window, not only those that can match a stats line "
                              "(prices hosted-only jobs too; costs more calls)")
     args = parser.parse_args(argv)
+    try:
+        repos = resolve_repos(args.repos)
+    except ValueError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
 
     until = parse_time(args.until) if args.until else datetime.now(timezone.utc).replace(microsecond=0)
     since = parse_time(args.since) if args.since else until - timedelta(days=5)
@@ -670,7 +718,6 @@ def main(argv=None, run=subprocess.run, sleep=time.sleep):
     if args.jobs_file:
         jobs = json.loads(Path(args.jobs_file).read_text())
     else:
-        repos = [r for r in (args.repos or "").split(",") if r] or repos_from_configs()
         gh = GitHub(args.max_api_calls, args.token or None, run=run, sleep=sleep)
         limit = gh.rate_limit()
         if limit is not None:
