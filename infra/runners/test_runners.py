@@ -211,6 +211,21 @@ if args and args[0] in ('enable', 'disable'):
 '''
 
 
+# Sampler overhead budget: under 1% of one CPU at the real 2-second interval.
+SAMPLE_INTERVAL_S = 2.0
+SAMPLER_CPU_BUDGET = 0.01
+SAMPLER_MIN_SAMPLES = 20
+
+
+def sampler_cpu_share(short, long, interval=SAMPLE_INTERVAL_S, min_samples=SAMPLER_MIN_SAMPLES):
+    """Share of one CPU the sampler uses at `interval`, from (cpu_s, samples) of a
+    short and a long run of the same loop: the difference cancels start-up."""
+    (cpu1, n1), (cpu2, n2) = short, long
+    if n2 - n1 < min_samples:
+        raise ValueError(f'need at least {min_samples} more samples in the long run, got {n2 - n1}')
+    return max(cpu2 - cpu1, 0.0) / (n2 - n1) / interval
+
+
 def write_exe(path, text):
     path.write_text(text)
     path.chmod(0o755)
@@ -572,24 +587,49 @@ class Supervisor(Stubbed):
                            'memory.pressure': 'some avg10=0.00 avg60=0.00 avg300=0.00 total=0\n'
                                               'full avg10=0.00 avg60=0.00 avg300=0.00 total=0\n'}.items():
             (cg / name).write_text(text)
-        def run(seconds):
-            out = self.dir / f'samples-{seconds}'
-            before = os.times()
+        def run(samples):
+            """Sample until the file holds `samples` lines, then end the job: the
+            count, not wall time, sets the run's length, so host load cannot
+            shrink it."""
+            out, pidfile = self.dir / f'samples-{samples}', self.dir / f'job-{samples}.pid'
             # find_cgroup runs once per job (a docker call until the cgroup
             # exists); stub it so only the steady sampling loop is measured.
-            r = self.bash(f'cgdir="$2"; find_cgroup() {{ echo "$cgdir"; }}; sleep {seconds} & sample_job gh-runner-heavy-1 $! "$1"',
-                          str(out), str(cg), RUNNERS_SAMPLE_INTERVAL='0.1')
+            script = ('cgdir="$2"; find_cgroup() { echo "$cgdir"; }; '
+                      'sleep 600 & echo $! > "$3"; sample_job gh-runner-heavy-1 $! "$1"')
+            before = os.times()
+            proc = subprocess.Popen(['bash', '-c', f'source "$SUPERVISOR_SH"; {script}', 'test',
+                                     str(out), str(cg), str(pidfile)],
+                                    env={**self.env, 'SUPERVISOR_SH': str(SUPERVISOR), 'RUNNERS_SAMPLE_INTERVAL': '0.05'},
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            deadline = time.time() + 120
+            while not out.exists() or len(out.read_text().splitlines()) < samples:
+                if proc.poll() is not None:
+                    self.fail(f'sampler stopped early: {proc.communicate()}')
+                self.assertLess(time.time(), deadline, 'sampler too slow')
+                time.sleep(0.02)
+            os.kill(int(pidfile.read_text()), signal.SIGTERM)
+            _, err = proc.communicate(timeout=30)
             after = os.times()
-            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(proc.returncode, 0, err)
             cpu = (after.children_user - before.children_user) + (after.children_system - before.children_system)
             return cpu, len(out.read_text().splitlines())
-        # The difference between a short and a long run cancels bash start-up.
-        cpu1, n1 = run(2)
-        cpu2, n2 = run(6)
-        self.assertGreater(n2 - n1, 25)
-        per_sample = max(cpu2 - cpu1, 0) / (n2 - n1)
-        # Projected to the real 2-second interval.
-        self.assertLess(per_sample / 2.0, 0.01, f'{per_sample * 1000:.2f} ms CPU per sample')
+        short, long = run(20), run(120)
+        share = sampler_cpu_share(short, long)
+        self.assertLess(share, SAMPLER_CPU_BUDGET,
+                        f'{share:.2%} of a CPU ({short} -> {long}: cpu_s, samples)')
+
+    def test_sampler_cpu_share_boundaries(self):
+        # 100 extra samples costing 2 s of CPU: 20 ms each, 1% of a CPU at 2 s.
+        self.assertAlmostEqual(sampler_cpu_share((0.1, 20), (2.1, 120)), 0.01)
+        self.assertFalse(sampler_cpu_share((0.1, 20), (2.1, 120)) < SAMPLER_CPU_BUDGET - 1e-12,
+                         'exactly at the budget is not under it')
+        self.assertLess(sampler_cpu_share((0.1, 20), (2.0, 120)), SAMPLER_CPU_BUDGET)
+        # Start-up cancels; a long run that measured less CPU clamps to zero.
+        self.assertEqual(sampler_cpu_share((0.5, 20), (0.4, 120)), 0.0)
+        # The minimum sample difference is inclusive.
+        self.assertEqual(sampler_cpu_share((0, 0), (0, SAMPLER_MIN_SAMPLES)), 0.0)
+        with self.assertRaises(ValueError):
+            sampler_cpu_share((0, 0), (0, SAMPLER_MIN_SAMPLES - 1))
 
     def test_job_stats_rotation(self):
         script = 'for i in $(seq 1 12); do append_job_stats "{\\"v\\":1,\\"ended_at\\":\\"2026-10-21T14:$(printf %02d "$i"):00Z\\",\\"n\\":$i}"; done'
