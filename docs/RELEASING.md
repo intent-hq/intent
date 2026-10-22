@@ -873,7 +873,7 @@ unprivileged ephemeral containers (no sudo, no Docker socket):
 | heavy | `[self-hosted, linux, x64, intent-cache]` | 2 by default (`CI_LINUX_HEAVY_SLOTS`), 8 CPUs each | `gh-linux-8x`, `gh-linux-16x` |
 | xl | `[self-hosted, linux, x64, intent-cache-xl]` | 0 by default (`CI_LINUX_XL_SLOTS`), 16 CPUs each | `gh-linux-16x` only |
 
-The `intent-cache-small` slots take no routed work; only pinned smoke jobs use them.
+No host runs `intent-cache-small` slots any more; free jobs run on GitHub.
 A job asks for a larger-runner label when it compiles Rust or its recent median
 duration is over about 5 minutes; that cut-off is a tunable choice. No other
 self-hosted Linux runner carries these labels. Jobs that need sudo, Docker, or more
@@ -972,7 +972,7 @@ These are lasting facts about each machine. Current reasons belong in the
 
 | Machine | Slots | Requirements and known limits |
 |---|---|---|
-| intent-cache (Linux x64) | 2 heavy (`intent-cache`, about 8 CPUs / 48 GB) and 6 fast (`intent-cache-small`, 1 CPU / 3 GB) ephemeral containers, shared by all three repositories | A fresh container per job: no state survives between jobs, so per-job caches come from the compiler cache and `actions/cache`. Runs as `runner` with no sudo or Docker; the runner image carries the build tools, OpenSSL headers, shellcheck, bison, Python 3, Node, `gh` and PowerShell. |
+| intent-cache (Linux x64) | 3 heavy (`intent-cache`, 8 CPUs / 36 GB) ephemeral containers, shared by all three repositories; 1-CPU jobs run on free GitHub-hosted `ubuntu-24.04` runners | A fresh container per job: no state survives between jobs, so per-job caches come from the compiler cache and `actions/cache`. Runs as `runner` with no sudo or Docker; the runner image carries the build tools, OpenSSL headers, shellcheck, bison, Python 3, Node, `gh` and PowerShell. |
 | 5090pc (Windows x64) | 1 | `windows-prune.yml` keeps 40 GiB free; a full disk failed Rust toolchain installs (`os error 112`). Its safety tests need PowerShell 7 (`pwsh`); without it they fail with `pwsh: command not found` and the cleanup is skipped ([run 38896319862](https://github.com/intent-hq/intentd/actions/runs/38896319862)). |
 | m1mac (macOS ARM64) | 1 | Too slow for intentd's merge-queue `build (aarch64-apple-darwin)` job, even with the compiler cache: over 60 minutes cold and over 26 minutes on an unchanged rerun, against about 8 minutes on a Depot Mac with Depot's managed cache, before the move to GitHub-hosted runners ([run 39120530357](https://github.com/intent-hq/intentd/actions/runs/39120530357), [run 39124725329](https://github.com/intent-hq/intentd/actions/runs/39124725329)). Clippy compiles are not cacheable by sccache, and cache keys include the checkout path, so hosted runners' entries do not match. `actions/setup-python` cannot install there (`mkdir: /Users/runner: Permission denied`); the system Python is 3.9.6. |
 
