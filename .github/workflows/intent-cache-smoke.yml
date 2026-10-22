@@ -5,9 +5,7 @@ name: intent-cache runner smoke
 # sccache reuse of entries a GitHub-hosted runner wrote, with every heavy slot
 # busy at once. Memory limits differ by host (heavy: 36 GiB on intent-cache,
 # 30-32 GiB on an EPYC host), so each pool is checked against a range that
-# covers every committed host config (test_runners.py keeps them in step). The
-# heavy range still reaches 48 GiB, intent-cache's limit before the 3-slot
-# layout is installed; narrow it to 36 GiB once that rollout is done.
+# covers every committed host config (test_runners.py keeps them in step).
 on:
   workflow_dispatch:
     inputs:
@@ -35,7 +33,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - {label: intent-cache, cpus: 8, memory_min: 32212254720, memory_max: 51539607552}
+          - {label: intent-cache, cpus: 8, memory_min: 32212254720, memory_max: 38654705664}
     runs-on: [self-hosted, '${{ matrix.label }}']
     timeout-minutes: 10
     outputs:

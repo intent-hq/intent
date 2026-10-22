@@ -1437,6 +1437,7 @@ class Static(unittest.TestCase):
         smoke = {label: (int(c), int(lo), int(hi)) for label, c, lo, hi in rows}
         self.assertEqual(set(smoke), {'intent-cache', 'intent-cache-xl'})
         units = {'k': 2 ** 10, 'm': 2 ** 20, 'g': 2 ** 30}
+        seen = {}
         for path in [HERE / 'runners.env', *sorted(HOSTS.glob('*.env'))]:
             env = read_env(path)
             for pool in env['RUNNER_POOLS'].split():
@@ -1446,8 +1447,12 @@ class Static(unittest.TestCase):
                     cpus, lo, hi = smoke[label]
                     memory = int(env[f'{p}_MEMORY'][:-1]) * units[env[f'{p}_MEMORY'][-1]]
                     self.assertTrue(lo <= memory <= hi, f'{label}: {memory} outside {lo}..{hi}')
+                    seen.setdefault(label, []).append(memory)
                     for entry in env[f'{p}_CPUSETS'].split()[:int(env[f'{p}_SLOTS'])]:
                         self.assertEqual(len(expand(entry)), cpus)
+        for label, sizes in seen.items():
+            self.assertEqual(smoke[label][1:], (min(sizes), max(sizes)),
+                             f'{label}: the smoke range should match the committed configs exactly, so a stale bound fails')
         xl = text.split('  isolation-xl:')[1].split('\n  fresh:')[0]
         self.assertIn("if: github.event_name == 'workflow_dispatch' && inputs.xl", xl,
                       'the xl check runs only on request: with no xl runner online it would wait in the queue')
