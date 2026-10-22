@@ -17,6 +17,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 COMPONENT = ROOT / "packages/intentd"
 POLICY = "INTENTD_ASSERT_BOUND_CALLER"
+TIMEOUT = "INTENTD_TEST_TIMEOUT_MULTIPLIER"
 
 
 @unittest.skipUnless((COMPONENT / "scripts/with-test-policy.sh").is_file(),
@@ -249,6 +250,66 @@ if is_test:
                     self.assertIn('[test-select] record:', result.stdout)
                     result, calls = self.make('test-select', policy=policy, compact=compact,
                                               extra=(f'E={expression}', 'RESUME=1'))
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn('resumed: skipped 1 tests', result.stdout)
+                    self.assertFalse(any(c['test'] for c in calls))
+
+    def test_local_test_routes_default_timeout_multiplier_to_three(self):
+        """Fixed test budgets time out on busy shared hosts, so the local test
+        routes stretch them 3x like coverage CI unless the caller chose a value
+        (environment or make command line, including 1 and empty)."""
+        self.env.pop(TIMEOUT, None)
+        routes = [(target, False) for target in ('test', 'test-intentd', 'test-changed', 'test-select', 'gate')]
+        routes += [(target, True) for target in ('test', 'test-changed', 'test-select', 'gate')]
+        settings = ((None, None, '3'), ('1', None, '1'), ('', None, ''), (None, '1', '1'), ('5', '2', '2'))
+        for target, forwarded in routes:
+            selection = ('E=test(/passes/)',) if target == 'test-select' else ()
+            for inherited, command_line, expected in settings:
+                with self.subTest(target=target, forwarded=forwarded, inherited=inherited,
+                                  command_line=command_line):
+                    shutil.rmtree(self.cache, ignore_errors=True)
+                    env = {} if inherited is None else {TIMEOUT: inherited}
+                    extra = selection + (() if command_line is None else (f'{TIMEOUT}={command_line}',))
+                    result, calls = self.make(target, forwarded=forwarded, extra=extra, env=env)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    # gate's check phase runs the source lints (`cargo test --test
+                    # '*_lint'`); like compilation, it keeps the caller's environment.
+                    lints = [call for call in calls if call['args'][:1] == ['test']]
+                    tests = [call for call in calls if call['test'] and call not in lints]
+                    self.assertTrue(tests, calls)
+                    self.assertEqual({call['timeout'] for call in tests}, {expected}, tests)
+                    if command_line is None:
+                        for call in calls:
+                            if call in lints or call['args'][0] in {'clippy', 'fmt', 'build'}:
+                                self.assertEqual(call['timeout'], inherited, call)
+        (self.component / 'Cargo.lock').write_text('changed lock\n')
+        for forwarded in (False, True):
+            with self.subTest(fallback=True, forwarded=forwarded):
+                result, calls = self.make('test-changed', forwarded=forwarded)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("falling back to the full 'make test'", result.stdout)
+                tests = [call for call in calls if call['test']]
+                self.assertTrue(any(c['args'][:3] == ['nextest', 'run', '--workspace'] for c in tests), calls)
+                self.assertEqual({call['timeout'] for call in tests}, {'3'}, tests)
+
+    def test_resume_never_mixes_timeout_multipliers(self):
+        self.env.pop(TIMEOUT, None)
+        for target in ('test', 'test-changed', 'test-select'):
+            selection = ('E=test(/passes/)',) if target == 'test-select' else ()
+            with self.subTest(target=target):
+                shutil.rmtree(self.cache, ignore_errors=True)
+                result, calls = self.make(target, extra=selection)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(f'test time limits x3 ({TIMEOUT}=3)', result.stdout)
+                # A pass at the 3x default is not evidence for the strict budgets.
+                result, calls = self.make(target, extra=selection + ('RESUME=1', f'{TIMEOUT}=1'))
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(f'test time limits x1 ({TIMEOUT}=1)', result.stdout)
+                self.assertNotIn('resumed: skipped', result.stdout)
+                self.assertEqual({c['timeout'] for c in calls if c['test']}, {'1'})
+                # Each multiplier still resumes its own passes.
+                for setting in ((), (f'{TIMEOUT}=1',)):
+                    result, calls = self.make(target, extra=selection + ('RESUME=1',) + setting)
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                     self.assertIn('resumed: skipped 1 tests', result.stdout)
                     self.assertFalse(any(c['test'] for c in calls))

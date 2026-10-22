@@ -298,6 +298,20 @@ gate check clippy lint-sources build-intentd test test-intentd test-changed test
 gate check clippy lint-sources build-intentd test test-intentd test-changed test-select coverage-changed coverage-e2e coverage-all list-tests: export PAGER ?= cat
 gate check clippy lint-sources build-intentd test test-intentd test-changed test-select coverage-changed coverage-e2e coverage-all list-tests: export GIT_PAGER ?= cat
 
+# Test time limits on the local test targets. Hang-guard budgets in intentd
+# tests scale with INTENTD_TEST_TIMEOUT_MULTIPLIER (intentd-test-support's
+# test_timeout; fixed_deadline_lint enforces it). Coverage CI already runs at
+# 3 (coverage-e2e.sh, coverage-all.sh, changed-tests.sh --instrumented, hence
+# coverage-changed); at 1 a busy shared dev host timed out three correct tests
+# at their 15 s budget across two make test-changed runs, each passing alone.
+# The local targets therefore default to 3 too. An explicit value, from the
+# environment or the make command line, wins unchanged, including
+# `make test INTENTD_TEST_TIMEOUT_MULTIPLIER=1` for the strict budgets.
+# `gate` gets it through its recursive `make test`; its check/clippy steps and
+# other targets keep the caller's environment. The runner prints the value and
+# keys resume records by it, so passes never mix across multipliers.
+test test-intentd test-changed test-select: export INTENTD_TEST_TIMEOUT_MULTIPLIER ?= 3
+
 # Resumable local test runs are opt-in. Records are keyed by the complete
 # monorepo + intentd worktree state and kept outside the checkout. Each invocation
 # prints its own attempt path, including fully resumed runs; see CONTRIBUTING.md.
@@ -645,7 +659,9 @@ test-intentd: ensure-intentd-submodule | check-transfer-fixture
 # `make test` (per-attempt run.json, coverage.json and available JUnit under
 # GATE_CACHE_DIR; record path printed even on a fully resumed invocation).
 # RESUME=1 / GATE_FORCE=1 apply unchanged. Reverse dependencies are not
-# propagated, so `make test` stays the complete gate.
+# propagated, so `make test` stays the complete gate. Like test and
+# test-select it stretches test time limits 3x unless the caller sets
+# INTENTD_TEST_TIMEOUT_MULTIPLIER (see its export above).
 # The script exits 3 when a build-wide file (Cargo.toml/Cargo.lock, nextest
 # config, toolchain) changed; the target then announces the fallback and runs
 # the full `make test` (skipped under DRY_RUN=1, which only prints the plan).
@@ -711,8 +727,8 @@ test-select: ensure-intentd-submodule | check-transfer-fixture ## Run only the R
 # Local equivalent of intentd's pull_request `coverage-changed` CI job: the
 # same changed-tests.sh selection as test-changed, run under the cargo-llvm-cov
 # instrumentation the merge queue's coverage-e2e / coverage-all jobs use
-# (INTENTD_TEST_TIMEOUT_MULTIPLIER=3, auggie_context_e2e excluded), so a test
-# that only fails instrumented (intent-hq/intentd#1947) fails here before the
+# (INTENTD_TEST_TIMEOUT_MULTIPLIER=3, the local test targets' default too;
+# auggie_context_e2e excluded), so a test that only fails instrumented (intent-hq/intentd#1947) fails here before the
 # queue. No report or floor is produced; a build-wide change runs the mapped
 # crates/ selection instead of falling back. No gate-run record is written
 # (the instrumented run is not resumable). The script does not install
