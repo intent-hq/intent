@@ -422,21 +422,25 @@ def callback_fixture_identity(intentd_dir: Path) -> dict[str, str]:
 
 TIMEOUT_MULTIPLIER_ENV = "INTENTD_TEST_TIMEOUT_MULTIPLIER"
 MAX_TIMEOUT_MULTIPLIER = 20.0
+# Rust's str::trim strips Unicode White_Space; Python's str.strip also strips
+# U+001C..U+001F, which Rust keeps (and then fails to parse).
+RUST_WHITESPACE = ("\t\n\x0b\x0c\r \x85\xa0\u1680" + "".join(map(chr, range(0x2000, 0x200B)))
+                   + "\u2028\u2029\u202f\u205f\u3000")
+# The grammar of Rust's `<f64 as FromStr>`: ASCII digits only, no digit
+# separators or hex, case-insensitive inf/infinity/nan.
+RUST_F64 = re.compile(r"[+-]?(?:inf|infinity|nan|(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:e[+-]?[0-9]+)?)",
+                      re.IGNORECASE | re.ASCII)
 
 
 def timeout_multiplier(setting: str | None) -> float:
-    """The stretch tests apply for a multiplier setting, for display only.
+    """The stretch the tests apply for an INTENTD_TEST_TIMEOUT_MULTIPLIER value.
 
     Mirrors `timeout_multiplier` in packages/intentd/crates/intentd-test-support/
-    src/timeout.rs: unset, unparsable or non-finite means 1, values below 1 are
-    raised to 1 and values above 20 capped. Resume keys use the raw setting.
+    src/timeout.rs (`trim().parse::<f64>()`): unset, unparsable or non-finite
+    means 1, values below 1 are raised to 1 and values above 20 capped.
     """
-    text = (setting or "").strip()
-    try:
-        # Rust's f64 parser rejects the digit separators Python's float accepts.
-        value = float(text) if text and "_" not in text else 1.0
-    except ValueError:
-        value = 1.0
+    text = (setting or "").strip(RUST_WHITESPACE)
+    value = float(text) if RUST_F64.fullmatch(text) else 1.0
     if not math.isfinite(value):
         value = 1.0
     return min(max(value, 1.0), MAX_TIMEOUT_MULTIPLIER)
@@ -563,11 +567,14 @@ def tree_inputs(repo_root: Path, intentd_dir: Path, output_args: list[str] | Non
         "test-stack": test_stack_identity(test_env),
     }
     # The make test targets default INTENTD_TEST_TIMEOUT_MULTIPLIER to 3; a pass
-    # under stretched time limits must not credit a run at another value, or
-    # the reverse. Added only when set (raw value, including empty) so records
-    # made without it keep their existing keys.
-    if TIMEOUT_MULTIPLIER_ENV in test_env:
-        inputs["test-timeout"] = {TIMEOUT_MULTIPLIER_ENV: test_env[TIMEOUT_MULTIPLIER_ENV]}
+    # under stretched time limits must not credit a run at another stretch, or
+    # the reverse. Keyed by the stretch the tests apply, so `3` and `3.0` share
+    # credit. Added only for a stretch other than 1: x1 runs (unset, `1`, or
+    # invalid; direct runner callers and records made before the make default)
+    # keep their existing keys, while default make runs start x3 records.
+    factor = timeout_multiplier(test_env.get(TIMEOUT_MULTIPLIER_ENV))
+    if factor != 1.0:
+        inputs["test-timeout"] = {"multiplier": factor}
     # `make test HERMETIC=1` runs inside intentd's no-provider-CLI sandbox:
     # its passes must not credit an ordinary run, or the reverse. Added only
     # for sandboxed runs so ordinary records keep their existing keys.

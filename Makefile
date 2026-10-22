@@ -309,7 +309,8 @@ gate check clippy lint-sources build-intentd test test-intentd test-changed test
 # `make test INTENTD_TEST_TIMEOUT_MULTIPLIER=1` for the strict budgets.
 # `gate` gets it through its recursive `make test`; its check/clippy steps and
 # other targets keep the caller's environment. The runner prints the value and
-# keys resume records by it, so passes never mix across multipliers.
+# keys resume records by the effective stretch, so passes never mix across
+# multipliers.
 test test-intentd test-changed test-select: export INTENTD_TEST_TIMEOUT_MULTIPLIER ?= 3
 
 # Resumable local test runs are opt-in. Records are keyed by the complete
@@ -728,9 +729,10 @@ test-select: ensure-intentd-submodule | check-transfer-fixture ## Run only the R
 # same changed-tests.sh selection as test-changed, run under the cargo-llvm-cov
 # instrumentation the merge queue's coverage-e2e / coverage-all jobs use
 # (INTENTD_TEST_TIMEOUT_MULTIPLIER=3, the local test targets' default too;
-# auggie_context_e2e excluded), so a test that only fails instrumented (intent-hq/intentd#1947) fails here before the
-# queue. No report or floor is produced; a build-wide change runs the mapped
-# crates/ selection instead of falling back. No gate-run record is written
+# auggie_context_e2e excluded), so a test that only fails instrumented
+# (intent-hq/intentd#1947) fails here before the queue. No report or floor
+# is produced; a build-wide change runs the mapped crates/ selection instead
+# of falling back. No gate-run record is written
 # (the instrumented run is not resumable). The script does not install
 # cargo-llvm-cov / llvm-tools itself, hence the preflight (skipped under
 # DRY_RUN=1, which only prints the plan).

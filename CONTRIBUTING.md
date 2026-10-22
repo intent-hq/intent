@@ -114,15 +114,18 @@ runs tests only; `make test-changed` selects tests changed against `BASE`
 (default `origin/main`) and falls back to the full suite for build-wide changes;
 `make test-select E='<nextest filterset>'` runs just the matching tests.
 
-These three (and the test phase of `make gate`) default
-`INTENTD_TEST_TIMEOUT_MULTIPLIER` to `3`, the value coverage CI and
-`make coverage-changed` already use, so tests' hang-guard time limits stretch
-3x. At 1x, a busy shared dev host makes correct tests time out at budgets such
-as 15 s. A value you set yourself wins unchanged, from the environment or the
-make command line: `make test-select E='...' INTENTD_TEST_TIMEOUT_MULTIPLIER=1`
-checks the strict budgets. Each run prints its multiplier
-(`[<label>] test time limits x3 ...`) and records it in the summary and
-`run.json`. Resume records are kept separate per multiplier value.
+These three (and `make test-intentd`, which `make test` runs, and the test
+phase of `make gate`) default `INTENTD_TEST_TIMEOUT_MULTIPLIER` to `3`, the
+value coverage CI and `make coverage-changed` already use, so tests'
+hang-guard time limits stretch 3x. At 1x, a busy shared dev host makes correct
+tests time out at budgets such as 15 s. The cost: a real hang takes 3x longer
+to fail, and the few waits built from the multiplier take longer. A value you
+set yourself wins unchanged, from the environment or the make command line:
+`make test-select E='...' INTENTD_TEST_TIMEOUT_MULTIPLIER=1` checks the strict
+budgets. Each run prints its multiplier (`[<label>] test time limits x3 ...`)
+and records it in the summary and `run.json`. Resume credit is kept separate
+per effective multiplier, so a pass at 3x never resumes a 1x run (or the
+reverse); `3` and `3.0` share it.
 
 Opt in to smaller local build artifacts with:
 

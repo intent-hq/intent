@@ -4215,9 +4215,14 @@ class TimeoutMultiplierTests(unittest.TestCase):
 
     def test_display_factor_follows_the_test_support_rules(self):
         # Mirrors timeout.rs's tests: unset/malformed -> 1, never below 1, capped.
+        # Inputs Python's float()/strip() accept but Rust's trim().parse::<f64>()
+        # rejects must also mean 1: digit separators, non-ASCII digits, and the
+        # separators U+001C..U+001F that Python treats as whitespace.
         cases = {None: 1.0, "": 1.0, "bogus": 1.0, "NaN": 1.0, "inf": 1.0, "1_0": 1.0,
-                 "3": 3.0, " 3 ": 3.0, "1.5": 1.5, "0": 1.0, "0.1": 1.0, "-1": 1.0,
-                 "-inf": 1.0, "1e300": 20.0, "20": 20.0}
+                 "\uff13": 1.0, "\x1f3": 1.0, "3\x1c": 1.0, "0x3": 1.0,
+                 "3": 3.0, " 3 ": 3.0, "\u30003\u2003": 3.0, "\t3\n": 3.0, "+3": 3.0,
+                 "3.": 3.0, ".5e1": 5.0, "1.5": 1.5, "0": 1.0, "0.1": 1.0, "-1": 1.0,
+                 "-inf": 1.0, "Infinity": 1.0, "1e300": 20.0, "20": 20.0}
         for setting, expected in cases.items():
             with self.subTest(setting=setting):
                 self.assertEqual(gate.timeout_multiplier(setting), expected)
@@ -4229,6 +4234,7 @@ class TimeoutMultiplierTests(unittest.TestCase):
         self.assertEqual(gate.timeout_description({name: "1.5"}), f"test time limits x1.5 ({name}=1.5)")
         self.assertEqual(gate.timeout_description({name: ""}), f"test time limits x1 ({name}='')")
         self.assertEqual(gate.timeout_description({name: "1e9"}), f"test time limits x20 ({name}=1e9)")
+        self.assertEqual(gate.timeout_description({name: "\uff13"}), f"test time limits x1 ({name}='\uff13')")
 
     def test_each_multiplier_keeps_separate_resume_credit(self):
         name = gate.TIMEOUT_MULTIPLIER_ENV
@@ -4240,23 +4246,27 @@ class TimeoutMultiplierTests(unittest.TestCase):
             gate, "build_settings", return_value={}
         ):
             root = Path(directory)
-            settings = {"unset": {}, "strict": {name: "1"}, "default": {name: "3"},
-                        "empty": {name: ""}, "spelled": {name: "3.0"}}
+            # Grouped by the stretch the tests actually apply.
+            groups = {1.0: ("unset", "1", "", "0", "bogus", "\uff13"), 3.0: ("3", "3.0", " 3 "),
+                      2.0: ("2",), 20.0: ("20", "1e9")}
             keys, inputs = {}, {}
-            for mode, env in settings.items():
-                with mock.patch.dict(os.environ, env, clear=True):
-                    keys[mode] = gate.tree_key(root, root)
-                    inputs[mode] = gate.tree_inputs(root, root)
-                    self.assertEqual(keys[mode], gate.tree_key(root, root), "same value, same key")
-            self.assertEqual(len(set(keys.values())), len(keys), keys)
-            # Records made without the variable (direct runner callers, and
-            # every record before the default) keep their existing key.
-            self.assertNotIn("test-timeout", inputs["unset"])
-            self.assertEqual(inputs["default"]["test-timeout"], {name: "3"})
-            self.assertEqual(inputs["empty"]["test-timeout"], {name: ""})
+            for factor, settings in groups.items():
+                for setting in settings:
+                    env = {} if setting == "unset" else {name: setting}
+                    with mock.patch.dict(os.environ, env, clear=True):
+                        keys[setting] = gate.tree_key(root, root)
+                        inputs[setting] = gate.tree_inputs(root, root)
+                    self.assertEqual(keys[setting], keys[settings[0]], (setting, settings[0]))
+                    if factor == 1.0:
+                        # x1 runs (direct runner callers, an explicit 1, and every
+                        # record made before the make default) keep their key.
+                        self.assertNotIn("test-timeout", inputs[setting])
+                    else:
+                        self.assertEqual(inputs[setting]["test-timeout"], {"multiplier": factor})
+            self.assertEqual(len({keys[settings[0]] for settings in groups.values()}), len(groups), keys)
             # The key follows the environment the tests actually receive.
             with mock.patch.dict(os.environ, {}, clear=True):
-                self.assertEqual(gate.tree_key(root, root, child_env={name: "3"}), keys["default"])
+                self.assertEqual(gate.tree_key(root, root, child_env={name: "3"}), keys["3"])
 
     def test_run_prints_and_records_the_multiplier(self):
         name = gate.TIMEOUT_MULTIPLIER_ENV
