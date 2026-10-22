@@ -166,12 +166,13 @@ The probe sends a burst to GitHub instead of WarpBuild when:
 - the run is a fork pull request (no WarpBuild spend from outside contributors);
 - `CI_WARPBUILD_DISABLED` is `true` (organization or repository variable; no
   workflow change needed);
-- a job on that WarpBuild platform (`warp-ubuntu-*`, `warp-windows-*`,
-  `warp-macos-*`) has been queued for over 10 minutes in any of the three
-  repositories.
+- a job for that WarpBuild OS and architecture (`ubuntu-x64`, `ubuntu-arm64`,
+  `windows-x64` or `macos-arm64`, read from its `warp-*` label) has been queued
+  for over 10 minutes in any of the three repositories; a job whose age is
+  unreadable does not count.
 
 An unreadable job queue keeps WarpBuild: a GitHub API error says nothing about
-WarpBuild. Each run logs `warpbuild <platform>: on` or the reason it is off.
+WarpBuild. Each run logs `warpbuild <os>-<arch>: on` or the reason it is off.
 
 Jobs that may not use a self-hosted runner (they need sudo or Docker, or they sign
 releases on Mac/Windows) read the probe's `cloud` output instead of `runners`: the

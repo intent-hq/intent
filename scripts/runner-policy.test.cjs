@@ -505,7 +505,7 @@ test('full or missing self-hosted fleets burst paid labels to WarpBuild', async 
   const none = await route({ runners: [], env: WARP_ON });
   assert.deepEqual(JSON.parse(none.outputs.windows_labels), WARP['gh-windows-16x']);
   assert.deepEqual(JSON.parse(none.outputs.macos_labels), WARP['macos-26-xlarge']);
-  assert.ok(none.messages.includes('warpbuild ubuntu: on'));
+  assert.ok(none.messages.includes('warpbuild ubuntu-x64: on'));
 });
 test('a free self-hosted slot still wins over WarpBuild', async () => {
   const r = await route({ env: slotEnv([UNIT], WARP_ON) });
@@ -526,18 +526,30 @@ test('the WarpBuild kill switch and fork pull requests burst to GitHub', async (
   }
   const fork = await route({ ...FORK, env: WARP_ON });
   assert.equal(fork.queried.length, 0);
-  assert.ok(fork.messages.includes('warpbuild ubuntu: off (fork pull request)'));
+  assert.ok(fork.messages.includes('warpbuild ubuntu-x64: off (fork pull request)'));
   const off = await route({ env: { WARPBUILD_DISABLED: 'true' } });
-  assert.ok(off.messages.includes('warpbuild macos: off (CI_WARPBUILD_DISABLED)'));
+  assert.ok(off.messages.includes('warpbuild macos-arm64: off (CI_WARPBUILD_DISABLED)'));
   // The kill switch is an Actions variable, so no workflow change is needed to flip it.
   assert.match(workflow, /^ {10}WARPBUILD_DISABLED: \$\{\{ vars\.CI_WARPBUILD_DISABLED \}\}$/m);
 });
-test('a WarpBuild platform queued over 10 minutes bursts to GitHub; others keep WarpBuild', async () => {
+test('a WarpBuild OS/architecture queued over 10 minutes bursts to GitHub; others keep WarpBuild', async () => {
   const stuck = await route({ runners: [], env: WARP_ON, jobs: [warpJob(3, 'warp-ubuntu-2404-x64-16x', 11)] });
-  for (const label of ['gh-linux-8x', 'gh-linux-16x', 'gh-linux-arm64-8x']) assert.deepEqual(stuck.runners[label], [label]);
+  for (const label of ['gh-linux-8x', 'gh-linux-16x']) assert.deepEqual(stuck.runners[label], [label]);
+  // ARM64 Linux, Windows and macOS are tracked separately.
+  assert.deepEqual(stuck.runners['gh-linux-arm64-8x'], WARP['gh-linux-arm64-8x']);
   assert.deepEqual(stuck.runners['gh-windows-16x'], WARP['gh-windows-16x']);
   assert.deepEqual(stuck.runners['macos-26-xlarge'], WARP['macos-26-xlarge']);
-  assert.ok(stuck.messages.includes('warpbuild ubuntu: off (queued over 10 minutes)'));
+  assert.ok(stuck.messages.includes('warpbuild ubuntu-x64: off (queued over 10 minutes)'));
+  assert.ok(stuck.messages.includes('warpbuild ubuntu-arm64: on'));
+  const arm = await route({ runners: [], env: WARP_ON, jobs: [warpJob(3, 'warp-ubuntu-2404-arm64-8x', 30)] });
+  assert.deepEqual(arm.runners['gh-linux-arm64-8x'], ['gh-linux-arm64-8x']);
+  assert.deepEqual(arm.runners['gh-linux-8x'], WARP['gh-linux-8x']);
+  // Aliases and variants map to the same OS/architecture.
+  const alias = await route({ runners: [], env: WARP_ON, jobs: [warpJob(3, 'warp-windows-2025-vs2026-x64-4x', 30)] });
+  assert.deepEqual(alias.runners['gh-windows-16x'], ['gh-windows-16x']);
+  // A WarpBuild job whose age is unreadable is not evidence of an outage.
+  const unknown = await route({ runners: [], env: WARP_ON, jobs: [{ id: 3, status: 'queued', labels: ['warp-ubuntu-2404-x64-8x'] }] });
+  assert.deepEqual(unknown.runners['gh-linux-8x'], WARP['gh-linux-8x']);
   const mac = await route({ runners: [], env: WARP_ON, jobs: [warpJob(3, 'warp-macos-15-arm64-6x', 30)] });
   assert.deepEqual(mac.runners['macos-26-xlarge'], ['macos-26-xlarge']);
   assert.deepEqual(JSON.parse(mac.outputs.cloud)['macos-15-xlarge'], ['macos-15-xlarge']);

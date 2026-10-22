@@ -110,7 +110,14 @@ jobs:
               'macos-26-xlarge': 'warp-macos-26-arm64-6x',
               'macos-15-xlarge': 'warp-macos-15-arm64-6x',
             };
-            const platform = (label) => label.split('-')[1];
+            // WarpBuild health is tracked per OS and architecture (ubuntu-x64, ubuntu-arm64, windows-x64, macos-arm64).
+            const family = (label) => {
+              const m = /^warp-(ubuntu|windows|macos)-.*-(x64|arm64)-/.exec(String(label).toLowerCase());
+              return m ? `${m[1]}-${m[2]}` : null;
+            };
+            // A queued job older than `minutes`; `unknownIsOld` decides a job whose age is unreadable.
+            const queuedOver = (j, minutes, unknownIsOld) => j.status === 'queued' &&
+              (Number.isFinite(Date.parse(j.created_at)) ? Date.parse(j.created_at) < Date.now() - minutes * 60 * 1000 : unknownIsOld);
             const burst = Object.fromEntries(Object.keys(fleets).map(k => [k, true]));
             const reasons = Object.fromEntries(Object.keys(fleets).map(k => [k, 'availability not established']));
             // Free slots per Linux pool: online slots (capped by the threshold) minus jobs queued or running on them.
@@ -119,9 +126,9 @@ jobs:
             const fork = context.eventName === 'pull_request' && pr?.head?.repo?.full_name !== `${context.repo.owner}/${context.repo.repo}`;
             // Fork pull requests never spend WarpBuild minutes; the kill switch sends everything to GitHub.
             const warpOn = !fork && process.env.WARPBUILD_DISABLED !== 'true';
-            // A WarpBuild platform whose jobs sit queued for 10 minutes is treated as down.
+            // A WarpBuild OS/architecture whose jobs sit queued for 10 minutes is treated as down.
             // An unreadable queue says nothing about WarpBuild, so it keeps WarpBuild.
-            const warpStuck = {ubuntu: false, windows: false, macos: false};
+            const warpStuck = Object.fromEntries(Object.values(warp).map(label => [family(label), false]));
             try {
               if (fork) throw new Error('fork pull request requires an isolated hosted runner');
               let runners;
@@ -149,15 +156,15 @@ jobs:
                   }
                 }
               }
-              const stuck = (j) => j.status === 'queued' && (!Number.isFinite(Date.parse(j.created_at)) || Date.parse(j.created_at) < Date.now() - 10 * 60 * 1000);
-              for (const key of Object.keys(warpStuck)) {
-                warpStuck[key] = jobs.some(j => stuck(j) && (j.labels || []).some(l => l.toLowerCase().startsWith(`warp-${key}-`)));
+              for (const j of jobs) {
+                if (!queuedOver(j, 10, false)) continue;
+                for (const label of j.labels || []) if (family(label) in warpStuck) warpStuck[family(label)] = true;
               }
               const thresholds = {linux: Number(process.env.THRESHOLD || '2'), xl: Number(process.env.XL_THRESHOLD || '0')};
               if (Object.values(thresholds).some(n => !Number.isInteger(n) || n < 0)) throw new Error('invalid queue threshold');
               for (const [key, labels] of Object.entries(fleets)) {
                 const demand = jobs.filter(j => ['queued', 'in_progress'].includes(j.status) && labels.every(l => (j.labels || []).some(x => x.toLowerCase() === l.toLowerCase())));
-                const stale = demand.some(j => j.status === 'queued' && (!Number.isFinite(Date.parse(j.created_at)) || Date.parse(j.created_at) < Date.now() - 15 * 60 * 1000));
+                const stale = demand.some(j => queuedOver(j, 15, true));
                 const native = !(key in thresholds);
                 const capacity = native ? online[key].filter(r => r.busy === false).length : online[key].length;
                 const limit = native ? capacity - 1 : Math.min(thresholds[key], capacity);
@@ -172,7 +179,7 @@ jobs:
             }
             // Where a GitHub label runs when it does not take a self-hosted slot:
             // its WarpBuild runner while WarpBuild is on and moving, else itself.
-            const cloud = (label) => warpOn && warp[label] && !warpStuck[platform(warp[label])] ? [warp[label]] : [label];
+            const cloud = (label) => warpOn && warp[label] && !warpStuck[family(warp[label])] ? [warp[label]] : [label];
             // Keys are the GitHub labels jobs ask for; values are the self-hosted
             // fleet labels, or the burst runner when the fleet bursts.
             // A label listed under several pools takes the first with a free slot.
