@@ -148,6 +148,12 @@ import unittest
 
 SCRIPT = Path(sys.argv[1])
 REAL_GIT = shutil.which("git")
+# Wall-clock limit for one reporter run. A full report took up to ~22 s at load
+# average ~270 on a 32-core host, so a 20 s limit timed out healthy runs.
+REPORT_TIMEOUT = 60
+# Seconds an injected timeout:<command> probe sleeps. Above REPORT_TIMEOUT, so a
+# reporter that does not bound the probe fails the run instead of finishing late.
+INJECTED_SLEEP = 120
 
 
 class ComponentGitStatus(unittest.TestCase):
@@ -173,6 +179,7 @@ class ComponentGitStatus(unittest.TestCase):
         wrapper = self.bin / "git"
         wrapper.write_text("#!" + sys.executable + r"""
 import json, os, sys, time
+INJECTED_SLEEP = """ + repr(INJECTED_SLEEP) + r"""
 args = sys.argv[1:]
 with open(os.environ["PROBE_LOG"], "a") as log:
     log.write(json.dumps([args, os.environ.get("GIT_OPTIONAL_LOCKS")]) + "\n")
@@ -180,8 +187,10 @@ command = args[2] if args[:1] == ["-C"] else args[0]
 mode = os.environ.get("FAIL_PROBE")
 if mode == command or mode == "timeout:" + command:
     if mode.startswith("timeout:"):
+        # The reporter kills the probe at its deadline, so this sleep only runs
+        # out when the deadline is not enforced.
         # timing-guard: deliberately exceed the reporter's configured probe deadline.
-        time.sleep(30)
+        time.sleep(INJECTED_SLEEP)
     os.write(2, b"\x1b[31mfatal:\x1b[0m injected\r\n\t" + b"x" * 1000 + b"\x00\x7f" + (b"\xff" if os.environ.get("INVALID_DIAGNOSTIC") else b""))
     sys.exit(128)
 os.execv(os.environ["REAL_GIT"], [os.environ["REAL_GIT"], *args])
@@ -213,7 +222,7 @@ os.execv(os.environ["REAL_GIT"], [os.environ["REAL_GIT"], *args])
             env["FAIL_PROBE"] = failure
         result = subprocess.run(["bash", str(self.root / "scripts/dev-status.sh"),
                                  *([] if human else ["--json"])], env=env,
-                                capture_output=True, text=True, timeout=20)
+                                capture_output=True, text=True, timeout=REPORT_TIMEOUT)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stderr, "")
         return result.stdout if human else json.loads(result.stdout)["repos"]["intentd"]
@@ -290,15 +299,21 @@ os.execv(os.environ["REAL_GIT"], [os.environ["REAL_GIT"], *args])
         self.assert_error(self.report(failure="status"), "status")
 
     def test_status_timeout(self):
-        self.env["DEV_STATUS_PROBE_TIMEOUT"] = "0.2"
+        # Only the injected status probe may miss the deadline. Every other probe
+        # runs through the Python git wrapper, whose startup alone exceeded a
+        # 0.2 s budget on a loaded host, so the budget is generous and the
+        # injected sleep is far above it.
+        self.env["DEV_STATUS_PROBE_TIMEOUT"] = "2"
         start = time.monotonic()
         repo = self.report(failure="timeout:status")
-        self.assertLess(time.monotonic() - start, 10)
+        # A bounded probe finishes well inside half the injected sleep even on a
+        # loaded host; an unbounded one cannot.
+        self.assertLess(time.monotonic() - start, INJECTED_SLEEP / 2)
         self.assertIsNone(repo["dirty"], repo)
         self.assertIs(repo["initialized"], True, repo)
         self.assertIs(repo["gitlinkDirty"], False, repo)
         self.assert_error(repo, "status")
-        self.assertIn("timed out", repo["gitErrors"][0]["detail"])
+        self.assertIn("Git probe timed out after 2s", repo["gitErrors"][0]["detail"])
         self.assert_human_error(failure="timeout:status")
 
     def test_monorepo_probe_failure_keeps_protocol_warning(self):
@@ -314,7 +329,7 @@ os.execv(os.environ["REAL_GIT"], [os.environ["REAL_GIT"], *args])
         env = dict(self.env, FAIL_PROBE="status")
         run = lambda *args: subprocess.run(
             ["bash", str(self.root / "scripts/dev-status.sh"), *args], env=env,
-            capture_output=True, text=True, timeout=20)
+            capture_output=True, text=True, timeout=REPORT_TIMEOUT)
         result = run("--json")
         self.assertEqual(result.returncode, 0, result.stderr)
         monorepo = json.loads(result.stdout)["repos"]["monorepo"]
@@ -335,14 +350,14 @@ os.execv(os.environ["REAL_GIT"], [os.environ["REAL_GIT"], *args])
                           "-m", "unrelated history")
         self.git(self.root, "update-ref", "refs/remotes/origin/main", orphan)
         result = subprocess.run(["bash", str(self.root / "scripts/dev-status.sh"), "--json"],
-                                env=self.env, capture_output=True, text=True, timeout=20)
+                                env=self.env, capture_output=True, text=True, timeout=REPORT_TIMEOUT)
         monorepo = json.loads(result.stdout)["repos"]["monorepo"]
         self.assertEqual(monorepo["gitState"], "readable", monorepo)
         self.assertEqual(monorepo["behindOriginMain"], 1, monorepo)
         self.assertIsNone(monorepo["protocolDocsStale"], monorepo)
         self.assertEqual(monorepo["protocolDocsChanged"], [], monorepo)
         human = subprocess.run(["bash", str(self.root / "scripts/dev-status.sh")],
-                               env=self.env, capture_output=True, text=True, timeout=20).stdout
+                               env=self.env, capture_output=True, text=True, timeout=REPORT_TIMEOUT).stdout
         self.assertIn("behind-origin/main=1 protocol-docs=-", human)
         self.assertIn("docs/protocol could not be compared", human)
 
