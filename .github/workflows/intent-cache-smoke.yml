@@ -154,7 +154,8 @@ jobs:
         run: |
           set -euo pipefail
           limit="$(cat /proc/sys/fs/inotify/max_user_instances)"
-          if [ "$limit" -lt 8192 ]; then echo "::error::fs.inotify.max_user_instances is $limit; expected 8192 or more"; exit 1; fi
+          if [ "$limit" -lt 32768 ]; then echo "::error::fs.inotify.max_user_instances is $limit; expected 32768 or more"; exit 1; fi
+          # The version cloudlands-fe's component tests launch (the CT packages stop at 1.58).
           npm install --no-save --no-audit --no-fund playwright-core@1.58.2 >/dev/null
           npx playwright-core install chromium-headless-shell
           node -e "require('playwright-core').chromium.launch().then(async (b) => { const p = await b.newPage(); await p.setContent('<p>ok</p>'); console.log('chromium', b.version(), await p.textContent('p')); await b.close(); })"

@@ -1343,7 +1343,8 @@ class Static(unittest.TestCase):
     def test_sysctl_limits(self):
         values = dict(line.split(' = ') for line in (HERE / 'sysctl.conf').read_text().splitlines()
                       if line and not line.startswith('#'))
-        self.assertGreaterEqual(int(values['fs.inotify.max_user_instances']), 8192)
+        # 4096 per slot (coverage-all) times the most slots on any host, plus headroom.
+        self.assertGreaterEqual(int(values['fs.inotify.max_user_instances']), 32768)
         self.assertGreaterEqual(int(values['fs.inotify.max_user_watches']), 1048576)
 
     def test_smoke_can_launch_chromium(self):
@@ -1355,9 +1356,12 @@ class Static(unittest.TestCase):
     def test_image_has_chromium_libraries(self):
         # Browser jobs (cloudlands-fe component tests) cannot apt-get without sudo.
         dockerfile = (HERE / 'Dockerfile').read_text()
-        for package in ('libnss3', 'libnspr4', 'libgbm1', 'libasound2t64', 'libatk-bridge2.0-0t64',
-                        'libcups2t64', 'libxkbcommon0', 'libxcomposite1', 'libxdamage1', 'libxrandr2',
-                        'libpango-1.0-0', 'libcairo2', 'xvfb'):
+        # Playwright's ubuntu24.04-x64 chromium list (unchanged from 1.58 through 1.63)
+        # plus its non-font tools; one missing .so stops Chromium at launch.
+        for package in ('libasound2t64', 'libatk-bridge2.0-0t64', 'libatk1.0-0t64', 'libatspi2.0-0t64', 'libcairo2',
+                        'libcups2t64', 'libdbus-1-3', 'libdrm2', 'libgbm1', 'libglib2.0-0t64', 'libnspr4', 'libnss3',
+                        'libpango-1.0-0', 'libx11-6', 'libxcb1', 'libxcomposite1', 'libxdamage1', 'libxext6',
+                        'libxfixes3', 'libxkbcommon0', 'libxrandr2', 'libfontconfig1', 'libfreetype6', 'xvfb'):
             self.assertRegex(dockerfile, rf'\s{re.escape(package)}(\s|$)', package)
 
     def test_runner_and_rustup_are_pinned_with_checksums(self):

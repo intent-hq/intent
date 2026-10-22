@@ -147,8 +147,9 @@ unzip, xz, zstd, rsync, file, dpkg-deb, python3 with pip and venv, Node with
 npm and corepack (in `/opt/node`, owned by `runner`, so `corepack enable` and
 `npm install -g` work without sudo), PowerShell (`pwsh`), and rustup with the
 pinned Rust toolchain, and Chromium's shared libraries plus `xvfb` (the
-Playwright 1.58 `install-deps` list for Ubuntu 24.04, without fonts), so a
-browser job needs no `apt-get`. They grow the image (`xvfb` brings the X server and Mesa). Other versions of Node, Python and Rust come from the
+Playwright `install-deps` list for Ubuntu 24.04, unchanged from 1.58 through
+1.63, without fonts), so a browser job needs no `apt-get`. They grow the
+image (`xvfb` brings the X server and Mesa). Other versions of Node, Python and Rust come from the
 usual setup actions. The apt package lists are kept, as on hosted runners, so
 `apt-get install -s` (for example `playwright install-deps --dry-run`) works.
 Core dumps are off (`--ulimit core=0:0`): the host's relative `core_pattern`
@@ -158,13 +159,15 @@ would otherwise write multi-GB core files into the checkout. Pins and checksums 
 ## Kernel limits
 
 `install.sh` installs `sysctl.conf` as `/etc/sysctl.d/90-github-runners.conf`
-and reloads it on every run. With user-namespace remapping, every slot's
-inotify instances count against one host user, so the default of 128 is shared
-by all slots on a host (a runner container got 106). The drop-in raises
-`fs.inotify.max_user_instances` to 8192 (intentd's coverage suites need 4096)
-and `fs.inotify.max_user_watches` to 1048576. New containers inherit the host
-value; after an install, dispatch the smoke workflow with `chromium` set to
-check it.
+and reloads it on every run. `fs.inotify.*` is not namespaced: with
+user-namespace remapping, every slot's inotify instances are charged to the
+namespaces' owner (root) on the host, so the default of 128 is shared by all
+slots and the host's own daemons (a runner container got 106). The drop-in
+raises `fs.inotify.max_user_instances` to 32768 (4096 per slot for intentd's
+coverage suites, times the most slots on any host, plus headroom) and
+`fs.inotify.max_user_watches` to 1048576. The limit is the host's and applies
+at once, also inside running containers; after an install, dispatch the smoke
+workflow with `chromium` set to check it.
 
 ## Not supported in jobs
 
