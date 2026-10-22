@@ -2221,8 +2221,8 @@ stateDiagram-v2
   *is* the repository), `skipIsolation` workspaces (the folder is the user's repository)
   and remote workspaces. The automatic retire sweep skips these workspaces.
 - One `workspace:updated` delta announces the transition:
-  `changes: { archived: true, status: "Retired", retiredAt: <ts> }`, plus
-  `archivedAt: <ts>` when the workspace was `Active` (§6.5).
+  `changes: { archived: true, status: "Retired", archivedAt, retiredAt: <ts> }`, where
+  `archivedAt` is the row's value — newly set when the workspace was `Active` (§6.5).
 - `-32602 { code: "invalid-params" }` from any other status (for example a workspace with
   a pending grace-window delete).
 
@@ -2237,7 +2237,7 @@ that returns a collection of workspaces unless the caller explicitly passes
 without an `includeRetired` param never returns them. This covers:
 
 - `workspace.list` and `workspace.findByPullRequest` (`includeRetired?: boolean`, default
-  `false`).
+  `false`; a non-boolean value is `-32602 { code: "invalid-params" }` on every surface).
 - The lite `workspace.subscribe` channel (§6.9; `includeRetired?: boolean` fixed at
   subscribe time): the seq-0 snapshot **and** every delta. For a subscriber that did not
   opt in, a retire transition is delivered as `removedIds: [workspaceId]`, later events
