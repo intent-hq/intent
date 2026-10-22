@@ -1098,7 +1098,7 @@ class Installer(Stubbed):
         super().setUp()
         self.prefix = self.dir / 'root'
         self.prefix.mkdir()
-        for name in ('apt-get', 'dpkg', 'chown'):
+        for name in ('apt-get', 'dpkg', 'chown', 'sysctl'):
             write_exe(self.bin / name, LOG_STUB)
         for name in ('iptables', 'ip6tables'):
             write_exe(self.bin / name, SH_LOG_STUB)
@@ -1143,6 +1143,19 @@ class Installer(Stubbed):
         self.creds.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.creds.write_text(f'GITHUB_TOKEN={PAT}\n')
         self.creds.chmod(mode)
+
+    def test_sysctl_drop_in_is_installed_and_loaded_every_run(self):
+        # Slots share one host user's inotify instances (userns-remap), so the
+        # host limit must cover coverage-all's 4096 plus the other slots.
+        conf = self.prefix / 'etc/sysctl.d/90-github-runners.conf'
+        loads = []
+        for _ in range(2):
+            result = self.install()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(conf.read_bytes(), (HERE / 'sysctl.conf').read_bytes())
+            self.assertEqual(stat.S_IMODE(conf.stat().st_mode), 0o644)
+            loads = [c['argv'] for c in self.calls('sysctl')]
+        self.assertEqual(loads, [['-q', '--load', str(conf)]] * 2, 'reloaded on every run, even when unchanged')
 
     def test_fresh_install_without_credential(self):
         result = self.install()
@@ -1327,6 +1340,26 @@ class Installer(Stubbed):
 
 
 class Static(unittest.TestCase):
+    def test_sysctl_limits(self):
+        values = dict(line.split(' = ') for line in (HERE / 'sysctl.conf').read_text().splitlines()
+                      if line and not line.startswith('#'))
+        self.assertGreaterEqual(int(values['fs.inotify.max_user_instances']), 8192)
+        self.assertGreaterEqual(int(values['fs.inotify.max_user_watches']), 1048576)
+
+    def test_smoke_can_launch_chromium(self):
+        text = (HERE.parents[1] / '.github/workflows/intent-cache-smoke.yml').read_text()
+        self.assertIn("if: github.event_name == 'workflow_dispatch' && inputs.chromium", text)
+        self.assertIn('chromium.launch()', text)
+        self.assertIn('max_user_instances', text)
+
+    def test_image_has_chromium_libraries(self):
+        # Browser jobs (cloudlands-fe component tests) cannot apt-get without sudo.
+        dockerfile = (HERE / 'Dockerfile').read_text()
+        for package in ('libnss3', 'libnspr4', 'libgbm1', 'libasound2t64', 'libatk-bridge2.0-0t64',
+                        'libcups2t64', 'libxkbcommon0', 'libxcomposite1', 'libxdamage1', 'libxrandr2',
+                        'libpango-1.0-0', 'libcairo2', 'xvfb'):
+            self.assertRegex(dockerfile, rf'\s{re.escape(package)}(\s|$)', package)
+
     def test_runner_and_rustup_are_pinned_with_checksums(self):
         text = (HERE / 'Dockerfile').read_text()
         self.assertRegex(text, r'FROM ubuntu:24\.04@sha256:[0-9a-f]{64}')
