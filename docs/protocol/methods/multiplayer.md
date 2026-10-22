@@ -387,7 +387,7 @@ and does not replace the private-conversation gate.
 | discussion.conversations | workspaceId (req), beforeId? (exclusive conversation ID), limit? (integer 1–100, default 50) | `{ conversations: DiscussionConversation[], hasMore: boolean }` — only conversations accessible to the caller |
 | discussion.recipients | workspaceId (req), query? (profile search string, at most 256 UTF-8 bytes), afterPrincipalId? (exclusive principal ID), limit? (integer 1–100, default 50) | `{ members: DiscussionAuthor[], hasMore: boolean }` — current effective workspace members, including offline members, excluding the caller |
 | discussion.list | workspaceId (req), conversationId? (default `"default"`), beforeSequence? (positive integer, exclusive), afterSequence? (nonnegative integer, exclusive; mutually exclusive with beforeSequence), limit? (integer 1–100, default 50) | `{ messages: DiscussionMessage[], hasMore: boolean, conversation: DiscussionConversation }` |
-| discussion.send | workspaceId (req), conversationId? (default `"default"` when neither target field is supplied), recipientPrincipalIds? (1–31 distinct other current workspace members; mutually exclusive with conversationId), messageId (req, nonblank string, at most 128 UTF-8 bytes), body (req, nonblank string, at most 16384 UTF-8 bytes), replyToMessageId? (existing message in the same conversation; requires `discussionMessageActions: 1`), recipientAgentIds? (up to 31 distinct explicit agent recipients; requires `discussionAgentMessaging: 1`, see below) | `{ message: DiscussionMessage, conversation: DiscussionConversation }` |
+| discussion.send | workspaceId (req), conversationId? (default `"default"` when neither target field is supplied), recipientPrincipalIds? (1–31 distinct other current workspace members; mutually exclusive with conversationId), messageId (req, nonblank string, at most 128 UTF-8 bytes), body (req, nonblank string, at most 16384 UTF-8 bytes), replyToMessageId? (existing message in the same conversation; requires `discussionMessageActions: 1`), recipientAgentIds? (up to 31 distinct explicit agent recipients; requires `discussionAgentMessaging: 1`, see below), principalMentions? (explicit selected person identities/spans; requires `discussionPrincipalMentions: 1`, see below) | `{ message: DiscussionMessage, conversation: DiscussionConversation }` |
 | discussion.react | workspaceId (req), conversationId? (default `"default"`), messageId (req, server message ID), reaction (req, `"👍"`, `"👎"`, `"👀"`, `"✅"`, `"🙈"`; legacy `"🙂"` removal/retry only), active (req, boolean desired state) | `{ messageId, reactions: DiscussionReaction[], reactionVersion }`; requires `discussionMessageActions: 1`; expanded choices and reactor snapshots require `discussionReactions: 1` |
 | discussion.stopAgent | workspaceId (req), conversationId? (default `"default"`), messageId (req, committed server ID), agentId (req), attempt (req, positive integer) | `{ activity: DiscussionAgentActivity }`; requires `discussionAgentActivity: 1`; human participant only |
 | discussion.retryAgent | workspaceId (req), conversationId? (default `"default"`), messageId (req, committed server ID), agentId (req), attempt (req, positive integer) | `{ activity: DiscussionAgentActivity }`; requires `discussionAgentActivity: 1`; human participant only |
@@ -436,7 +436,10 @@ uses the returned conversation ID for subsequent sends and reads.
   "replyTo": null,
   "reactions": [],
   "reactionVersion": 0,
-  "recipientAgentIds": []
+  "recipientAgentIds": [],
+  "agentActivity": [],
+  "agentMentions": [],
+  "principalMentions": []
 }
 ```
 
@@ -572,6 +575,50 @@ The daemon persists these immutable presentation snapshots and includes them in
 retry identity. They never grant delivery or access independently of recipients.
 Import preserves mention text as historical attribution but clears activity and
 does not restore invocation receipts, grants, or pending addressed work.
+
+#### Explicit person mentions (prepared)
+
+Exactly integer `discussionPrincipalMentions: 1` on `client.hello` server
+capabilities and `system.capabilities` enables human notification identities in
+unreleased Multiplayer Labs discussions. Clients require exact `1` before sending
+these fields or using them for notifications. Missing or unknown capability values
+must retain the selected draft; never silently discard its notification targets.
+
+`discussion.send` accepts optional
+`principalMentions: { principalId, name, start, end }[]`, defaulting to `[]`.
+Every `DiscussionMessage` returned in send acknowledgements, history, and live
+events includes `principalMentions`, empty when none were selected. These are
+explicit notification identities, never inferred from matching names, `@` text,
+reply quotes, or author snapshots. They neither add private participants nor
+address an agent; `recipientAgentIds` keeps its existing delivery semantics.
+
+Only authenticated human sends may contain nonempty `principalMentions`; bound
+agent sends reject them as forbidden, including through MCP. Every selected
+principal must be a current effective workspace member and, for a private
+conversation, a current participant. The serialized write transaction checks
+these conditions for new sends and retries. Unknown, removed, or inaccessible
+principals return `not-found`, without exposing membership information.
+
+Each span uses UTF-16 code-unit offsets into `body` and must equal `@` plus the
+nonblank selected `name`. At most 100 spans and 256 UTF-8 bytes per name are
+accepted; principal IDs must be nonblank. The array is sorted by ascending
+position and nonoverlapping, including with `agentMentions`. Repeated mentions
+of one principal at distinct positions are allowed. Invalid offsets, unknown
+object fields, altered text, overlap, and oversized arrays return `invalid-params`.
+Names/spans are immutable selection snapshots, not live profile lookups.
+
+For example, sending `body: "😀 @Bob"` with
+`principalMentions: [{ principalId: "principal-bob", name: "Bob", start: 3, end: 7 }]`
+returns that exact selected array on the committed message. An identical retry
+returns the same server message; adding, removing, reordering, or changing mention
+metadata with the same `messageId` is invalid. A profile rename does not rewrite
+an existing selection or create a new notification. Live message delivery remains
+transient and uses the existing conversation access checks; clients deduplicate
+notifications by committed message ID and never notify from history replay.
+
+Import clears all `principalMentions` notification identities, even when a source
+ID happens to equal a destination ID. The body and author/reply text remain
+historical content. Legacy archives with no such field import as `[]`.
 
 #### Explicit agent messaging (prepared)
 

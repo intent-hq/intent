@@ -572,3 +572,10 @@ Exactly integer `discussionAgentActivity: 1`, on hello and `system.capabilities`
 adds request-correlated discussion activity, immutable selected mention spans,
 and human `discussion.stopAgent` / `discussion.retryAgent` controls. This is a
 prepared Multiplayer Labs extension; see [the activity contract](./multiplayer.md#correlated-agent-activity-and-controls-prepared).
+
+Exactly integer `discussionPrincipalMentions: 1`, on hello and
+`system.capabilities`, enables explicit human discussion notification identities.
+See [person mentions](./multiplayer.md#explicit-person-mentions-prepared) for
+selected UTF-16 spans, membership checks, retry identity, and import behavior.
+Clients must preserve selected drafts on absent or unknown capability values.
+This remains an unreleased Multiplayer Labs feature and grants no access.
