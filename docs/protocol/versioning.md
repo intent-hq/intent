@@ -8,8 +8,22 @@ capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `15.1` — prepared discussions, guest roles, scoped repository pages and GitLab child Git policy; not a shipped-version claim.
+**Documented version:** `15.2` — retired workspaces, on top of 15.1's prepared discussions, guest roles, scoped repository pages and GitLab child Git policy; not a shipped-version claim.
 Other prepared extensions retain their independent support gates.
+
+**Version 15.2 — retired workspaces (additive).**
+[Retired workspaces](./methods/workspace.md#retired-workspaces) add the `"Retired"`
+`WorkspaceStatus`, the presence-detected `Workspace.retiredAt`, the router method
+`workspace.retire` (from `Active` or `Archived`; the git branch is kept), the
+`includeRetired?` param on `workspace.list`, `workspace.findByPullRequest`,
+`workspace.subscribe` and `crossWorkspace.listSiblings`, the `retiredAt` and `revived`
+keys on `workspace:updated`, the `workspace-retired` and `retire-unsupported` error discriminators, and the
+`workspace.autoRetireArchivedAfterDays` setting (absent = off). Retired workspaces are
+absent from every workspace list surface unless the caller passes `includeRetired: true`,
+so older clients never see the new status in a list. Revive via `workspace.unarchive` /
+`workspace.restore` or a message to an agent provisions a fresh blank folder.
+The documented surface is now **474 / 416 / 58** (dispatchable / router / fast path).
+Support is detected by `workspace.retire` answering; older daemons return `-32601`.
 
 **Version 15.1 — workspace discussions (additive, prepared).**
 [Workspace discussions](./methods/multiplayer.md#555-workspace-discussions) add
@@ -1444,3 +1458,4 @@ the `ignore` map of `scripts/check-protocol-field-parity.mjs`, not here.
 
 | Row | Field | Contract | App adoption |
 |---|---|---|---|
+| `Workspace` | `retiredAt` | [Retired workspaces](./methods/workspace.md#retired-workspaces) | Pending cloudlands-fe retired-workspaces PR (home, search and workspace view) |
