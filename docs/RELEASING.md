@@ -833,23 +833,36 @@ promotions of deleted prereleases are not preserved by this retention policy.
 
 ## CI runner routing
 
-Jobs in intent, intentd and cloudlands-fe prefer compatible self-hosted runners.
-intent and intentd share one probe: each has a reusable `runner-route.yml`, and
-intentd's CI route job is an inline copy. The probe runs on GitHub-hosted `ubuntu-24.04` without checkout,
-so it stays available during a self-hosted outage. intentd and cloudlands-fe pull
-requests also run intent's probe through `consumer-checks.yml`. Utility jobs,
-consumer checks, browser suites and release matrices consume its decisions.
-GitHub-hosted labels are the fallback keys, preserving the workload's CPU/memory
-class: standard `ubuntu-24.04`, `windows-2022` and `windows-2025`, the organization
-larger runners `gh-linux-8x`, `gh-linux-16x`, `gh-linux-arm64-8x` and `gh-windows-16x`,
-`macos-26-xlarge` for Apple Silicon and `macos-latest-large` for Intel Macs. The larger
-runners must stay in a runner group shared with all three repositories, with
-**Allow public repositories** enabled: intent, intentd and cloudlands-fe are public,
-and without that setting their larger-runner jobs queue until they time out.
-Release builds are not routed: cloudlands-fe's signed desktop Mac builds name
-`macos-15-xlarge` directly (not the routed `macos-26-xlarge` fallback), because
-electron-builder's keychain step fails on macOS 26 images. cloudlands-fe routes
-its own Linux jobs with a separate, simpler probe in `intent-pr.yml` that uses the same Linux labels, slot counts and `CI_LINUX_RUNNER_DISABLED` override.
+intent, intentd and cloudlands-fe are public, so GitHub's standard runners are free
+there. Jobs that ask for a free standard label (`ubuntu-22.04`, `ubuntu-24.04`,
+`ubuntu-latest`, `ubuntu-24.04-arm`, `windows-2022`, `windows-2025`) always run on
+GitHub. Jobs that ask for a paid label prefer a compatible self-hosted runner and
+burst to [WarpBuild](./GITHUB_RUNNERS.md#burst-to-warpbuild) when none is free.
+
+All three repositories run the same probe: each has a reusable `runner-route.yml`,
+and the route jobs in intentd's `ci.yml` and cloudlands-fe's `intent-pr.yml` are
+inline copies (`runner-policy.test.cjs` keeps them identical). The probe runs on
+GitHub-hosted `ubuntu-24.04` without checkout, so it stays available during a
+self-hosted outage. intentd and cloudlands-fe pull requests also run intent's probe
+through `consumer-checks.yml`. Jobs read one of three outputs, keyed by the
+GitHub label they would otherwise ask for:
+
+| Output | Gives | Used by |
+|---|---|---|
+| `slots[key]` | a self-hosted slot for listed jobs while the pool has one free, else the burst runner | pooled jobs that start together (`slot_jobs`) |
+| `runners[label]` | the self-hosted fleet while it has room, else the burst runner | other routed jobs and matrices |
+| `cloud[label]` | the burst runner only, never self-hosted | jobs that need sudo or Docker, and cloudlands-fe's Mac/Windows and release-signing jobs |
+
+The burst runner for a paid label is its WarpBuild equivalent (`gh-linux-8x` →
+`warp-ubuntu-2404-x64-8x`, `gh-linux-16x` → `-16x`, `gh-linux-arm64-8x` →
+`warp-ubuntu-2404-arm64-8x`, `gh-windows-16x` → `warp-windows-2022-x64-16x`,
+`macos-26-xlarge` → `warp-macos-26-arm64-6x`, `macos-15-xlarge` →
+`warp-macos-15-arm64-6x`), or the GitHub label itself for fork pull requests, while
+`CI_WARPBUILD_DISABLED` is `true`, or while that WarpBuild OS and architecture has a job queued
+over 10 minutes. `macos-latest-large` (Intel) has no WarpBuild equivalent and bursts to
+GitHub. cloudlands-fe's signed desktop Mac builds keep `macos-15-xlarge` as their
+key (not `macos-26-xlarge`), because electron-builder's keychain step fails on
+macOS 26 images.
 
 The self-hosted Linux x64 fleet is pools of runner slots on the cache box and on
 runner-only hosts ([GITHUB_RUNNERS.md](./GITHUB_RUNNERS.md)), all
@@ -857,32 +870,30 @@ unprivileged ephemeral containers (no sudo, no Docker socket):
 
 | Pool | Labels | Slots | Takes jobs that ask for |
 |---|---|---|---|
-| heavy | `[self-hosted, linux, x64, intent-cache]` | 2 by default (`CI_LINUX_HEAVY_SLOTS`), 8 CPUs each | larger-runner labels (`gh-linux-8x`, `gh-linux-16x`) |
+| heavy | `[self-hosted, linux, x64, intent-cache]` | 2 by default (`CI_LINUX_HEAVY_SLOTS`), 8 CPUs each | `gh-linux-8x`, `gh-linux-16x` |
 | xl | `[self-hosted, linux, x64, intent-cache-xl]` | 0 by default (`CI_LINUX_XL_SLOTS`), 16 CPUs each | `gh-linux-16x` only |
-| fast | `[self-hosted, linux, x64, intent-cache-small]` | 6 by default (`CI_LINUX_SMALL_SLOTS`), 1 CPU / 3 GB each | standard labels (`ubuntu-24.04`, `ubuntu-22.04`) |
 
-A job is heavy when it compiles Rust or its recent median duration is over about
-5 minutes; that cut-off is a tunable choice. Heavy jobs ask for a larger-runner label
-and fast jobs for a standard one, so the fallback label also picks the pool. No other
+The `intent-cache-small` slots take no routed work; only pinned smoke jobs use them.
+A job asks for a larger-runner label when it compiles Rust or its recent median
+duration is over about 5 minutes; that cut-off is a tunable choice. No other
 self-hosted Linux runner carries these labels. Jobs that need sudo, Docker, or more
-than a slot offers stay on a hosted label, and the policy tests list each with its
-reason.
+than a slot offers read `cloud`, and the policy tests list each with its reason.
 
 The shared probe checks online runners and paginated queued/running jobs across all
 three repositories. Each Linux pool bursts once its queued plus running jobs reach
 the smaller of its slot count (the organization or repository variables
-`CI_LINUX_HEAVY_SLOTS`, `CI_LINUX_XL_SLOTS` and `CI_LINUX_SMALL_SLOTS`, defaults
-2, 0 and 6; raise them when slots are added) and its online slot count. A
-`gh-linux-16x` job takes a free xl slot first, then a free heavy slot, then goes
-hosted; a `gh-linux-8x` job never takes an xl slot. Other platforms require explicitly idle runners with room
-for queued demand. Queued jobs older than 15 minutes, missing compatible runners,
-unreadable capacity (including sibling queues), or
-[maintenance overrides](#maintenance-overrides) select the hosted fallback; each
-platform logs its reason. Fork PRs never select persistent runners.
+`CI_LINUX_HEAVY_SLOTS` and `CI_LINUX_XL_SLOTS`, defaults 2 and 0; raise them when
+slots are added) and its online slot count. A `gh-linux-16x` job takes a free xl slot
+first, then a free heavy slot, then bursts; a `gh-linux-8x` job never takes an xl
+slot. Other platforms require explicitly idle runners with room for queued demand.
+Queued jobs older than 15 minutes, missing compatible runners, unreadable capacity
+(including sibling queues), or [maintenance overrides](#maintenance-overrides)
+select the burst runner; each platform logs its reason. An unreadable queue keeps
+WarpBuild as the burst runner. Fork PRs never select persistent runners or WarpBuild.
 
 `CI_QUEUE_READ_TOKEN` needs organization Self-hosted runners read and Actions read
 on all three repositories. The probe falls back to repository runner listing if
-organization listing fails, and to GitHub-hosted runners when it cannot establish capacity. Keep
+organization listing fails, and to burst runners when it cannot establish capacity. Keep
 matching organization runner groups accessible to all three repositories; the
 label probe does not prove group access. Reusable callers explicitly pass the
 queue token and Actions read permission through each level. A probe-runner outage
@@ -894,7 +905,7 @@ smoke journey requires a disposable hosted machine. The frontend and intentd que
 cleanup jobs and intentd read-only credential probe remain on independent GitHub-hosted
 Linux, preserving their upstream queue-recovery contract. Host maintenance stays bound
 to the machine it maintains. A platform without a compatible self-hosted runner
-uses its hosted fallback (including GitHub's native Intel Mac image where used).
+uses its burst runner (GitHub's native Intel Mac image for Intel Macs).
 Browser shards retain their worker counts and browser identities, with per-runner
 browser caches and dependency installation for persistent machines.
 
@@ -906,7 +917,7 @@ hosted-runner Vitest suite and backend/monorepo runner tests invoke it in CI, an
 ### Maintenance overrides
 
 Each override is an Actions variable. Setting it to `true` sends that platform's
-routed jobs to the GitHub-hosted fallback, whatever the machine's state. Any other value, or no
+routed jobs to their burst runner (WarpBuild for paid labels), whatever the machine's state. Any other value, or no
 variable, restores self-hosted preference. The shared probe reads the variables of
 the repository whose workflow run is executing. For a called workflow, that is the
 caller: consumer checks on a cloudlands-fe pull request read cloudlands-fe's
@@ -915,9 +926,10 @@ cloudlands-fe; cloudlands-fe's own `intent-pr.yml` routing reads the same Linux 
 
 | Variable | Runner labels covered | Route log reason when set |
 |---|---|---|
-| `CI_LINUX_RUNNER_DISABLED` | both intent-cache pools and `self-hosted, Linux, ARM64` | `linux routing: burst=true (disabled for maintenance)`; the fast pool logs as `small routing`, ARM64 as `arm routing` |
+| `CI_LINUX_RUNNER_DISABLED` | the heavy and xl intent-cache pools and `self-hosted, Linux, ARM64` | `linux routing: burst=true (disabled for maintenance)`; xl logs as `xl routing`, ARM64 as `arm routing` |
 | `CI_WINDOWS_RUNNER_DISABLED` | `self-hosted, Windows, X64` | `windows routing: burst=true (disabled for maintenance)` |
 | `CI_MACOS_RUNNER_DISABLED` | `self-hosted, macOS, ARM64` and `self-hosted, macOS, X64` | `macos routing: burst=true (disabled for maintenance)`; X64 logs as `intel routing` |
+| `CI_WARPBUILD_DISABLED` | WarpBuild, for every platform | `warpbuild ubuntu-x64: off (CI_WARPBUILD_DISABLED)` (likewise `ubuntu-arm64`, `windows-x64`, `macos-arm64`); bursts and `cloud` use the GitHub labels |
 
 When the probe itself fails (fork PRs, or runner or job listing errors), every
 platform instead logs `burst=true (probe failed (...))`, with or without an
@@ -926,10 +938,9 @@ override. Read the reason from a same-repository run.
 Overrides only affect routed jobs. Workflows that name a machine directly keep
 targeting it: intentd's `macos-prune.yml`, `m1mac-smoke.yml`
 and `provision-m1mac.yml`. `windows-prune.yml` is mixed: its `prune` job names
-5090pc, but it needs the routed `safety-tests` job to pass first. While the Windows
-override is on, those tests run on GitHub-hosted Windows, so a passing run proves nothing about
-5090pc. Once the override is off, the tests run on 5090pc, and a failure there skips
-the disk cleanup.
+5090pc, but it needs the `safety-tests` job to pass first. That job asks for the free
+`windows-2022` label, so it always runs on GitHub-hosted Windows: it proves the cleanup
+script's Windows lock and deletion semantics, not 5090pc's state.
 
 Turning an override on: in each repository it should cover, set the variable and
 `CI_<PLATFORM>_RUNNER_DISABLED_REASON`. The reason is one line with the UTC date,
