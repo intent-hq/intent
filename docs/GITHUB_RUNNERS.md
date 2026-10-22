@@ -365,7 +365,7 @@ weights; on a runner-only host, leaving a core or two unpinned is optional.
    `-f xl=true` for a host with an xl slot) and check
    `journalctl -u 'github-runner@*'` on the new host shows it ran jobs. The
    smoke checks each pool's memory against a range that covers every host
-   config (heavy: 30-36 GiB); a new per-slot size needs the range widened.
+   config (heavy: 30-48 GiB, the top kept for intent-cache's pre-3-slot 48 GiB until its rollout); a new per-slot size needs the range widened.
 7. **Route jobs to it** by raising `CI_LINUX_HEAVY_SLOTS` / `CI_LINUX_XL_SLOTS`
    to the fleet's total slots per pool (see the variables above).
 
