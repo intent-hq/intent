@@ -54,23 +54,23 @@ sys.exit(row.get("code", 0))
 # starts when Popen returns, so a slow runner can no longer kill the fake before
 # the state under test exists. Time spent waiting is excluded from the timing.
 READY_RUNNER = r'''
-import os, runpy, subprocess, sys, time
+import os, runpy, signal, subprocess, sys, time
 from pathlib import Path
 ready = Path(os.environ["GH_TEST_READY"])
-real_popen = subprocess.Popen
 waited = 0.0
-def popen(*args, **kwargs):
-    global waited
-    process = real_popen(*args, **kwargs)
-    marker = ready / str(process.pid)
-    started = time.monotonic()
-    while not marker.exists() and process.poll() is None:
-        if time.monotonic() - started > 10:
-            raise SystemExit(f"fake gh {process.pid} never became ready")
-        time.sleep(0.005)
-    waited += time.monotonic() - started
-    return process
-subprocess.Popen = popen
+class ReadyPopen(subprocess.Popen):
+    def __init__(self, *args, **kwargs):
+        global waited
+        super().__init__(*args, **kwargs)
+        marker = ready / str(self.pid)
+        started = time.monotonic()
+        while not marker.exists() and self.poll() is None:
+            if time.monotonic() - started > 10:
+                os.killpg(self.pid, signal.SIGKILL)
+                raise SystemExit(f"fake gh {self.pid} never became ready")
+            time.sleep(0.005)
+        waited += time.monotonic() - started
+subprocess.Popen = ReadyPopen
 sys.argv = sys.argv[1:]
 started = time.monotonic()
 try:
@@ -257,10 +257,17 @@ class ReadinessTests(unittest.TestCase):
         while True:
             try:
                 os.kill(pid, 0)
-                state = Path(f"/proc/{pid}/stat").read_text().split(")", 1)[1].split()[0]
-            except (ProcessLookupError, FileNotFoundError):
+            except ProcessLookupError:
                 return
-            if state == "Z":
+            if Path("/proc/self").exists():
+                try:
+                    state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+                except FileNotFoundError:
+                    return
+            else:
+                state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)],
+                                       capture_output=True, text=True).stdout.strip()
+            if not state or state.startswith("Z"):
                 return
             if time.monotonic() > deadline:
                 self.fail(f"fake gh {pid} survived the timeout (state {state})")
