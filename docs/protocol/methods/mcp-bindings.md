@@ -154,6 +154,15 @@ ws.crossWorkspace.listSiblings() → [workspaces]
 ws.crossWorkspace.readNote(targetWorkspaceId, noteId) → note
 ```
 
+### ws.discussion
+
+```text
+ws.discussion.conversations({ beforeId?, limit? }?) → { conversations, hasMore }
+ws.discussion.list(conversationId, { beforeSequence?, afterSequence?, limit? }?) → { messages, hasMore, conversation }
+ws.discussion.react(conversationId, messageId, reaction, active) → { messageId, reactions, reactionVersion }
+ws.discussion.send(conversationId, body, { messageId, recipientAgentIds?, replyToMessageId?, agentMentions? }) → { message, conversation }
+```
+
 ### ws.event
 
 ```text
