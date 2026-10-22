@@ -111,6 +111,14 @@ Released frontends still cap registered-root reads at major 15 until
 [cloudlands-fe#3478](https://github.com/intent-hq/cloudlands-fe/pull/3478) ships,
 so the daemon must not advertise major 16 before a carrying frontend release.
 
+Also within 15.0 (additive optional response field; presence-detected; no method-catalog
+change, so no version bump): **CI-never-started flag** (§5.42 `MergeRequirements` and
+`lastSnapshot`, §5.7 `ws.pr.snapshot`). The checklist gains `checksNotStarted?: { headSha,
+headCommittedAt, thresholdMinutes }` when an open, conflict-free PR's head has zero check
+runs and statuses at least 15 minutes after its commit time while the base branch requires
+status checks; the monitor wakes the owning agent once per head with a push-again / rebase
+hint. Older daemons and hosts without a commit time omit it; clients detect it by presence.
+
 Also within 15.0 (additive optional response fields; presence-detected; no method-catalog
 change, so no version bump): **merge-queue position and estimated merge time**
 (§5.27 `GithubPullRequest`, §5.42 `MergeRequirements` and `lastSnapshot`, §5.7
