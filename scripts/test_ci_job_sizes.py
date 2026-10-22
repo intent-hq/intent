@@ -275,6 +275,63 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(e["saturation_by_slot"], {"1": 0.8, "8": 0.0})
 
 
+    def test_working_memory_drives_the_class(self):
+        # 20 GiB peak is mostly page cache; the 3.5 GiB working set is medium, not heavy.
+        stats, jobs = measured("wm", 5, "coverage", stat_kw={"cores": 3.0, "mem_gib": 20.0,
+                                                             "mem_work_peak_bytes": int(3.5 * GIB)})
+        e = entry(build(stats, jobs), "intent-hq/intentd", "coverage")
+        self.assertEqual(e["class"], "medium")
+        self.assertAlmostEqual(e["mem_work_p95_gib"], 3.5)
+        self.assertAlmostEqual(e["mem_p95_gib"], 20.0)
+        self.assertEqual(e["mem_source"], "work")
+        markdown = sizes.render_markdown(build(stats, jobs))
+        self.assertIn("| Mem work p95 GiB | Mem peak p95 GiB |", markdown)
+        self.assertIn("| 3.5 | 20.0 |", markdown)
+        self.assertNotIn("(incl. page cache)", markdown.split("## intent-hq/intentd")[1])
+
+    def test_old_records_fall_back_to_peak_with_a_marker(self):
+        stats, jobs = measured("old", 5, "coverage", stat_kw={"cores": 3.0, "mem_gib": 20.0})
+        report = build(stats, jobs)
+        e = entry(report, "intent-hq/intentd", "coverage")
+        self.assertEqual(e["class"], "heavy")
+        self.assertAlmostEqual(e["mem_work_p95_gib"], 20.0)
+        self.assertEqual(e["mem_source"], "peak")
+        self.assertIn("| 20.0 (incl. page cache) | 20.0 |", sizes.render_markdown(report))
+        self.assertIn("incl. page cache", sizes.evidence(e))
+
+    def test_mixed_records_use_each_records_best_value(self):
+        new_stats, new_jobs = measured("new", 3, "mix", stat_kw={"mem_gib": 20.0, "mem_work_peak_bytes": 2 * GIB})
+        old_stats, old_jobs = measured("old", 2, "mix", stat_kw={"mem_gib": 5.0})
+        new_stats[0]["mem_work_peak_bytes"] = None  # a record with the field present but unmeasured
+        report = build(new_stats + old_stats, new_jobs + old_jobs)
+        e = entry(report, "intent-hq/intentd", "mix")
+        self.assertEqual(e["mem_source"], "mixed")
+        self.assertAlmostEqual(e["mem_work_p95_gib"], 20.0)  # the unmeasured record falls back to its peak
+        self.assertIn("(incl. page cache)", sizes.render_markdown(report))
+
+    def test_paid_jobs_without_samples_get_their_own_section(self):
+        stats, jobs = measured("m", 5, "check")
+        jobs += [job("GitHub Actions 3", "coverage-all", labels=("gh-linux-16x",), minutes=30),
+                 job("GitHub Actions 4", "Component Tests (shard 1/4)", repo="intent-hq/cloudlands-fe",
+                     labels=("gh-linux-8x",), minutes=60),
+                 job("GitHub Actions 5", "coverage-e2e", labels=("gh-linux-16x",), minutes=10)]
+        markdown = sizes.render_markdown(build(stats, jobs))
+        tables, gap = markdown.split("## No samples yet")
+        self.assertNotIn("coverage-all", tables)
+        self.assertNotIn("Component Tests", tables)
+        self.assertIn("| CI | check |", tables)
+        rows = [line for line in gap.splitlines() if line.startswith("| intent-hq/")]
+        self.assertEqual([r.split(" | ")[2] for r in rows], ["Component Tests", "coverage-all", "coverage-e2e"])
+        self.assertIn("$0.66", rows[0])  # 60 min x $0.022 / 2 days
+
+    def test_no_gap_section_when_every_paid_job_is_measured(self):
+        stats, jobs = measured("m", 5, "check")
+        # A free job whose only sample was cancelled has 0 sized runs but is not a paid gap.
+        cancelled_stats, cancelled_jobs = measured("c", 1, "lint", job_kw={"conclusion": "cancelled"})
+        markdown = sizes.render_markdown(build(stats + cancelled_stats, jobs + cancelled_jobs))
+        self.assertNotIn("No samples yet", markdown)
+
+
 class InputTests(unittest.TestCase):
     def test_parse_stats_skips_bad_lines(self):
         lines = [json.dumps(stat("ok")), "", "not json", json.dumps({"v": 2, "runner_name": "future"})]
@@ -295,8 +352,16 @@ class InputTests(unittest.TestCase):
             # A layout template is named for its layout, not a host.
             (hosts / "epyc-3heavy.env").write_text("RUNNER_NAME_PREFIX=intent-runner-1\n")
             self.assertEqual(sizes.hosts_from_configs(root), ["intent-cache", "intent-ci1", "intent-ci2"])
-            self.assertEqual(sizes.repos_from_configs(root),
-                             ["intent-hq/cloudlands-fe", "intent-hq/intent", "intent-hq/intentd"])
+
+    def test_default_repos_do_not_depend_on_any_checkout(self):
+        self.assertEqual(sizes.resolve_repos(None),
+                         ["intent-hq/intent", "intent-hq/intentd", "intent-hq/cloudlands-fe"])
+        self.assertEqual(sizes.resolve_repos(" intent-hq/intentd , ,x/y"), ["intent-hq/intentd", "x/y"])
+        for empty in ("", ",", " , "):
+            with self.assertRaises(ValueError):
+                sizes.resolve_repos(empty)
+        with self.assertRaises(ValueError):
+            sizes.resolve_repos("intentd")
 
     def test_live_configs_include_both_hosts(self):
         hosts = sizes.hosts_from_configs(ROOT)
@@ -566,6 +631,54 @@ class FetchTests(unittest.TestCase):
 
 
 class CliTests(unittest.TestCase):
+    def saved_inputs(self, root, count=5):
+        stats, jobs = measured("cwd", count, "check", stat_kw={"cores": 2.0, "mem_gib": 4.0})
+        (root / "stats.jsonl").write_text("".join(json.dumps(s) + "\n" for s in stats))
+        (root / "jobs.json").write_text(json.dumps(jobs))
+        return root / "stats.jsonl", root / "jobs.json"
+
+    def test_runs_from_another_working_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            stats_path, jobs_path = self.saved_inputs(Path(directory))
+            done_run = subprocess.run(
+                [sys.executable, "-S", "-B", str(SCRIPT), "--from-file", str(stats_path), "--jobs-file",
+                 str(jobs_path), "--since", SINCE, "--until", UNTIL],
+                cwd=directory, capture_output=True, text=True, timeout=120)
+        self.assertEqual(done_run.returncode, 0, done_run.stderr)
+        self.assertIn("5 of 5 stats records in the window matched", done_run.stdout)
+        self.assertIn("| CI | check |  | medium |", done_run.stdout)
+
+    def test_a_copy_outside_the_repo_still_lists_the_default_repos(self):
+        with tempfile.TemporaryDirectory() as directory, contextlib.chdir(directory):
+            copy = Path(directory) / "elsewhere" / "scripts" / "ci-job-sizes.py"
+            copy.parent.mkdir(parents=True)
+            copy.write_text(SCRIPT.read_text())
+            spec = importlib.util.spec_from_file_location("ci_job_sizes_copy", copy)
+            moved = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(moved)
+            stats_path, _ = self.saved_inputs(Path(directory))
+            api = FakeGitHub([], {})
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                code = moved.main(["--from-file", str(stats_path), "--since", SINCE, "--until", UNTIL,
+                                   "--no-cache"], run=api, sleep=lambda _: None)
+        self.assertEqual(code, 0)
+        listed = {"/".join(argv[4].split("/")[1:3]) for argv in api.argvs if argv[4:5] and
+                  argv[4].endswith("/actions/runs")}
+        self.assertEqual(listed, {"intent-hq/intent", "intent-hq/intentd", "intent-hq/cloudlands-fe"})
+
+    def test_empty_repos_is_an_error_not_zero_matches(self):
+        with tempfile.TemporaryDirectory() as directory:
+            stats_path, _ = self.saved_inputs(Path(directory))
+            api = FakeGitHub([], {})
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                code = sizes.main(["--from-file", str(stats_path), "--repos", ",", "--since", SINCE,
+                                   "--until", UNTIL], run=api, sleep=lambda _: None)
+        self.assertEqual(code, 2)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("no repositories", stderr.getvalue())
+        self.assertEqual(api.argvs, [])
+
     def test_from_file_writes_markdown_and_json(self):
         stats, jobs = measured("cli", 6, "check (linux)", stat_kw={"cores": 2.0, "mem_gib": 4.0})
         with tempfile.TemporaryDirectory() as directory:

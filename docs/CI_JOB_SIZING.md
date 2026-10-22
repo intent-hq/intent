@@ -20,10 +20,10 @@ scripts/ci-job-sizes.py --from-file /tmp/stats.jsonl --jobs-file /tmp/jobs.json 
 
 | Option | Meaning |
 |---|---|
-| `--hosts [h1,h2]` | SSH-collect (the default). With no list: `intent-cache` plus each `infra/runners/hosts/<host>.env` whose `RUNNER_NAME_PREFIX` is `<host>`; layout templates are skipped |
+| `--hosts [h1,h2]` | SSH-collect (the default). With no list: `intent-cache` plus each `infra/runners/hosts/<host>.env` whose `RUNNER_NAME_PREFIX` is `<host>`; layout templates are skipped. The host files are found relative to the script, so it works from any directory |
 | `--from-file JSONL` | Read saved job-stats lines instead (repeatable) |
 | `--jobs-file JSON` | Read saved Actions jobs (a JSON array) instead of `gh api` |
-| `--repos a/b,c/d` | Repositories to read jobs from (default: every `RUNNER_GROUP_REPOS`) |
+| `--repos a/b,c/d` | Repositories to read jobs from (default: `intent-hq/intent`, `intent-hq/intentd`, `intent-hq/cloudlands-fe`, whatever the working directory). An empty list is an error (exit 2), not a report with 0 matches |
 | `--since`, `--until` | Window, ISO 8601 (default: the last 5 days) |
 | `--out-dir DIR` | Write `ci-job-sizes.md` and `<owner>__<repo>.json` |
 | `--format md\|json` | What goes to stdout |
@@ -71,14 +71,15 @@ and skipped runs are not sized.
 |---|---|
 | Busy cores p90 / p95 | Percentiles, across runs, of each run's p95 busy CPUs |
 | Saturation p90 | p90 of each run's share of samples at ≥ 90% of the slot's CPUs, also kept per slot size |
-| Memory p95, disk p95 | p95 of each run's peak memory and disk use (disk may be missing) |
+| Working memory p95 | p95 of each run's `mem_work_peak_bytes` (anon + shmem + kernel, no page cache). This is what the class uses. A run recorded before that field existed falls back to `mem_peak_bytes`, and the cell is marked **(incl. page cache)** |
+| Peak memory p95, disk p95 | p95 of each run's cgroup `memory.peak` (includes page cache, so IO-heavy jobs look bigger) and disk use (disk may be missing). Shown for comparison |
 | CPU efficiency | Σ CPU seconds ÷ Σ (wall seconds × slot CPUs) |
 | Label | The most common runs-on label in the window |
 | Paid per day | Billed hosted minutes (each job rounded up to a minute) × price, ÷ days |
 
 The thresholds live in `SIZE_CLASSES` at the top of the script:
 
-| Class | Busy cores (p90) | Peak memory (p95) | Hosted fallback |
+| Class | Busy cores (p90) | Working memory (p95) | Hosted fallback |
 |---|---|---|---|
 | small | < 1.5 | < 3 GiB | ubuntu-24.04 (free) |
 | medium | ≤ 4 | ≤ 14 GiB | ubuntu-24.04 (free) |
@@ -89,7 +90,8 @@ Saturation is judged per slot size: when a slot size's runs have p90 saturation 
 0.3, the job needs the class above that slot's class, so a saturated 8-CPU heavy slot
 means xl and a saturated 1-CPU small slot means at least medium. A job with fewer than 5 sized runs shows
 **not enough samples** and no recommendation. Paid jobs with no stats at all (they only
-ever ran hosted) are listed the same way, so expensive unmeasured jobs stay visible.
+ever ran hosted) are listed in a separate **No samples yet** section, most paid per day
+first, so expensive unmeasured jobs stay visible.
 
 The monthly saving is 30 days of the job's paid hosted minutes repriced at the
 recommended class's fallback (gh-linux-8x $0.022/min, gh-linux-16x $0.042/min, standard
