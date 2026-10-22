@@ -226,6 +226,11 @@ def sampler_cpu_share(short, long, interval=SAMPLE_INTERVAL_S, min_samples=SAMPL
     return max(cpu2 - cpu1, 0.0) / (n2 - n1) / interval
 
 
+def sampler_within_budget(share, budget=SAMPLER_CPU_BUDGET):
+    """Strictly under the budget: a share equal to it fails."""
+    return share < budget
+
+
 def write_exe(path, text):
     path.write_text(text)
     path.chmod(0o755)
@@ -579,51 +584,91 @@ class Supervisor(Stubbed):
         self.assertEqual(r.stdout.split()[7:], ['-1', '-1', '-1'])
 
     def test_sampler_overhead_is_under_one_percent_of_a_cpu(self):
+        cg = self.sampler_cgroup()
+        short, long = self.run_sampler(cg, 20), self.run_sampler(cg, 120)
+        share = sampler_cpu_share(short, long)
+        self.assertTrue(sampler_within_budget(share),
+                        f'{share:.2%} of a CPU ({short} -> {long}: cpu_s, samples)')
+
+    def sampler_cgroup(self):
         cg = self.cgroup / 'runners.slice' / ('docker-' + 'c0ffee' * 10 + '.scope')
-        cg.mkdir(parents=True)
+        cg.mkdir(parents=True, exist_ok=True)
         for name, text in {'cpu.stat': 'usage_usec 1\n', 'memory.peak': '1\n', 'pids.peak': '1\n',
                            'io.stat': '8:0 rbytes=1 wbytes=1\n', 'memory.events': 'oom_kill 0\n',
                            'memory.stat': MEMORY_STAT.format(anon=1, file=1, kernel=1, shmem=1),
                            'memory.pressure': 'some avg10=0.00 avg60=0.00 avg300=0.00 total=0\n'
                                               'full avg10=0.00 avg60=0.00 avg300=0.00 total=0\n'}.items():
             (cg / name).write_text(text)
-        def run(samples):
-            """Sample until the file holds `samples` lines, then end the job: the
-            count, not wall time, sets the run's length, so host load cannot
-            shrink it."""
-            out, pidfile = self.dir / f'samples-{samples}', self.dir / f'job-{samples}.pid'
-            # find_cgroup runs once per job (a docker call until the cgroup
-            # exists); stub it so only the steady sampling loop is measured.
-            script = ('cgdir="$2"; find_cgroup() { echo "$cgdir"; }; '
-                      'sleep 600 & echo $! > "$3"; sample_job gh-runner-heavy-1 $! "$1"')
-            before = os.times()
-            proc = subprocess.Popen(['bash', '-c', f'source "$SUPERVISOR_SH"; {script}', 'test',
-                                     str(out), str(cg), str(pidfile)],
-                                    env={**self.env, 'SUPERVISOR_SH': str(SUPERVISOR), 'RUNNERS_SAMPLE_INTERVAL': '0.05'},
-                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            deadline = time.time() + 120
+        return cg
+
+    def run_sampler(self, cg, samples, deadline_s=120):
+        """(cpu_s, samples) of sample_job sampling until the file holds `samples`
+        lines, then ending the job: the count, not wall time, sets the run's
+        length, so host load cannot shrink it. The job and Bash are always
+        ended and reaped, even when an assertion or timeout cuts the run short."""
+        out, pidfile = self.dir / f'samples-{samples}', self.dir / f'job-{samples}.pid'
+        # find_cgroup runs once per job (a docker call until the cgroup
+        # exists); stub it so only the steady sampling loop is measured.
+        script = ('cgdir="$2"; find_cgroup() { echo "$cgdir"; }; '
+                  'sleep 600 & echo $! > "$3"; sample_job gh-runner-heavy-1 $! "$1"')
+        before = os.times()
+        proc = subprocess.Popen(['bash', '-c', f'source "$SUPERVISOR_SH"; {script}', 'test',
+                                 str(out), str(cg), str(pidfile)],
+                                env={**self.env, 'SUPERVISOR_SH': str(SUPERVISOR), 'RUNNERS_SAMPLE_INTERVAL': '0.05'},
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.sampler_pids = [proc.pid]
+        try:
+            deadline = time.time() + deadline_s
             while not out.exists() or len(out.read_text().splitlines()) < samples:
                 if proc.poll() is not None:
                     self.fail(f'sampler stopped early: {proc.communicate()}')
                 self.assertLess(time.time(), deadline, 'sampler too slow')
                 time.sleep(0.02)
-            os.kill(int(pidfile.read_text()), signal.SIGTERM)
-            _, err = proc.communicate(timeout=30)
-            after = os.times()
-            self.assertEqual(proc.returncode, 0, err)
-            cpu = (after.children_user - before.children_user) + (after.children_system - before.children_system)
-            return cpu, len(out.read_text().splitlines())
-        short, long = run(20), run(120)
-        share = sampler_cpu_share(short, long)
-        self.assertLess(share, SAMPLER_CPU_BUDGET,
-                        f'{share:.2%} of a CPU ({short} -> {long}: cpu_s, samples)')
+        finally:
+            job = int(pidfile.read_text()) if pidfile.exists() and pidfile.read_text().strip() else None
+            if job:
+                self.sampler_pids.append(job)
+                try:
+                    os.kill(job, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+            try:
+                _, err = proc.communicate(timeout=30)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                _, err = proc.communicate()
+        after = os.times()
+        self.assertEqual(proc.returncode, 0, err)
+        cpu = (after.children_user - before.children_user) + (after.children_system - before.children_system)
+        return cpu, len(out.read_text().splitlines())
+
+    def test_sampler_run_cleans_up_when_cut_short(self):
+        # The deadline cuts the run short well after Bash has started the job.
+        with self.assertRaises(AssertionError):
+            self.run_sampler(self.sampler_cgroup(), 10_000, deadline_s=5)
+        pidfile = self.dir / 'job-10000.pid'
+        self.assertTrue(pidfile.exists(), 'the job was started')
+        pids = [self.sampler_pids[0], int(pidfile.read_text())]
+        self.addCleanup(lambda: [os.kill(pid, signal.SIGKILL) for pid in pids if self.running(pid)])
+        deadline = time.time() + 10
+        while any(map(self.running, pids)):
+            self.assertLess(time.time(), deadline, f'left running: {[p for p in pids if self.running(p)]}')
+            time.sleep(0.1)
+
+    @staticmethod
+    def running(pid):
+        try:
+            return Path(f'/proc/{pid}/stat').read_text().split()[2] != 'Z'
+        except (OSError, IndexError):
+            return False
 
     def test_sampler_cpu_share_boundaries(self):
         # 100 extra samples costing 2 s of CPU: 20 ms each, 1% of a CPU at 2 s.
         self.assertAlmostEqual(sampler_cpu_share((0.1, 20), (2.1, 120)), 0.01)
-        self.assertFalse(sampler_cpu_share((0.1, 20), (2.1, 120)) < SAMPLER_CPU_BUDGET - 1e-12,
-                         'exactly at the budget is not under it')
-        self.assertLess(sampler_cpu_share((0.1, 20), (2.0, 120)), SAMPLER_CPU_BUDGET)
+        # The real test's check: strictly under, so exactly at the budget fails.
+        self.assertFalse(sampler_within_budget(SAMPLER_CPU_BUDGET))
+        self.assertTrue(sampler_within_budget(SAMPLER_CPU_BUDGET - 1e-9))
+        self.assertTrue(sampler_within_budget(sampler_cpu_share((0.1, 20), (2.0, 120))))
         # Start-up cancels; a long run that measured less CPU clamps to zero.
         self.assertEqual(sampler_cpu_share((0.5, 20), (0.4, 120)), 0.0)
         # The minimum sample difference is inclusive.
