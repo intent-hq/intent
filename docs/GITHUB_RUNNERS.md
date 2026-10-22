@@ -329,7 +329,10 @@ journalctl -u 'github-runner@*' -g 'job stats' --since today
 | `cpu_s` | CPU seconds used by the container |
 | `cores_avg`, `cores_p50`, `cores_p95`, `cores_max` | Busy cores: `cpu_s / wall_s`, and percentiles over the 2-second samples |
 | `saturation` | Share of samples at 0.9 × `slot_cpus` or more |
-| `mem_peak_bytes`, `pids_peak` | `memory.peak` and `pids.peak` (the highest sampled `*.current` on kernels without them) |
+| `mem_peak_bytes`, `pids_peak` | `memory.peak` and `pids.peak` (the highest sampled `*.current` on kernels without them). `memory.peak` counts page cache, so an IO-heavy job can reach the slot limit here without needing that memory |
+| `mem_work_peak_bytes` | Highest sampled working memory: `memory.stat` `anon + shmem + kernel` (on kernels without `kernel`, the sum of `kernel_stack`, `pagetables`, `sec_pagetables`, `percpu`, `vmalloc` and `slab`). Leaves out reclaimable page cache, so it is the figure to size `slot_memory_bytes` from |
+| `mem_file_peak_bytes` | Highest sampled `memory.stat` `file`: page cache, including `shmem` (tmpfs) |
+| `mem_pressure_some_avg10_max` | Highest sampled `memory.pressure` `some avg10`: the percentage of the last 10 seconds in which some task stalled waiting for memory (reclaim or swap). Near 0 means cache filled the slot harmlessly; sustained high values mean the limit is slowing the job |
 | `disk_bytes` | The container's writable layer at exit (checkout, build output); null if it could not be measured |
 | `io_read_bytes`, `io_write_bytes` | Block IO from `io.stat` |
 | `oom_kills` | `memory.events` `oom_kill`, at least 1 if Docker reports the container OOM-killed |
@@ -337,9 +340,14 @@ journalctl -u 'github-runner@*' -g 'job stats' --since today
 
 Only resource figures are recorded: never environment variables, tokens or
 command lines. Measured fields are null when the cgroup was never sampled (a
-container that failed to start), and the percentiles and `saturation` are null
-for a job shorter than one interval. Growth in the last 2 seconds before exit
-can be missed. An idle runner stopped by a drain ran no job and writes no line.
+container that failed to start); `mem_work_peak_bytes`, `mem_file_peak_bytes`
+and `mem_pressure_some_avg10_max` are also null on a kernel without
+`memory.stat` or `memory.pressure` (PSI disabled). These three were added
+without changing `v`, so lines written before them lack the keys, and readers
+should treat a missing key like null. The percentiles and `saturation` are
+null for a job shorter than one interval. Growth in the last 2 seconds before
+exit can be missed, and so can a working-memory or pressure spike between two
+samples (`memory.peak` is a kernel high-water mark and misses nothing). An idle runner stopped by a drain ran no job and writes no line.
 The container is removed after the measurement and on every supervisor exit,
 including a fatal signal; `ExecStopPost` and the next start remove it if the
 supervisor is killed outright.

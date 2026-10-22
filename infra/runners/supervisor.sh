@@ -375,10 +375,16 @@ find_cgroup() {
 }
 
 # One sample of cgroup $1 on one line: time (us), cpu usage_usec, memory peak,
-# pids peak, IO read bytes, IO write bytes, OOM kills. Builtins only, so a
-# sample costs no fork. Fails without cpu.stat (the cgroup is gone).
+# pids peak, IO read bytes, IO write bytes, OOM kills, working memory, file
+# memory, memory pressure "some" avg10 in hundredths of a percent. The last
+# three are -1 when the kernel does not provide them. Working memory is
+# memory.stat anon + shmem + kernel (on kernels without "kernel", its main
+# parts): unlike memory.peak, it leaves out page cache the kernel reclaims
+# under pressure. Builtins only, so a sample costs no fork. Fails without
+# cpu.stat (the cgroup is gone).
 sample_cgroup() {
   local dir="$1" key value usage="" mem=0 pids=0 rb=0 wb=0 oom=0 field fields
+  local work=-1 file=-1 psi=-1 anon="" shmem="" kernel="" kparts=""
   [ -r "$dir/cpu.stat" ] || return 1
   while read -r key value; do
     if [ "$key" = usage_usec ]; then usage="$value"; break; fi
@@ -400,10 +406,35 @@ sample_cgroup() {
       if [ "$key" = oom_kill ]; then oom="$value"; break; fi
     done < "$dir/memory.events" || true
   fi
+  if [ -r "$dir/memory.stat" ]; then
+    # anon, file, kernel and shmem lead the file: stop at shmem when kernel
+    # was there, else read on for kernel's parts.
+    while read -r key value; do
+      case "$key" in
+        anon) anon="$value" ;;
+        file) file="$value" ;;
+        kernel) kernel="$value" ;;
+        shmem) shmem="$value"; [ -z "$kernel" ] || break ;;
+        kernel_stack | pagetables | sec_pagetables | percpu | vmalloc | slab) kparts+=" $value" ;;
+      esac
+    done < "$dir/memory.stat" || true
+    if [ -z "$kernel" ] && [[ "$kparts" =~ ^( [0-9]+)+$ ]]; then kernel=$((${kparts// / + }));  fi
+    if [[ "$anon$shmem$kernel" =~ ^[0-9]+$ && -n "$anon" && -n "$shmem" && -n "$kernel" ]]; then
+      work=$((anon + shmem + kernel))
+    fi
+  fi
+  if [ -r "$dir/memory.pressure" ]; then
+    read -r key value _ < "$dir/memory.pressure" || true
+    # "some avg10=12.34 ...": always two decimals.
+    if [ "$key" = some ] && [[ "$value" =~ ^avg10=([0-9]+)\.([0-9][0-9])$ ]]; then
+      psi=$((10#${BASH_REMATCH[1]}${BASH_REMATCH[2]}))
+    fi
+  fi
   [[ "$mem" =~ ^[0-9]+$ ]] || mem=0
   [[ "$pids" =~ ^[0-9]+$ ]] || pids=0
   [[ "$oom" =~ ^[0-9]+$ ]] || oom=0
-  echo "${EPOCHREALTIME/./} $usage $mem $pids $rb $wb $oom"
+  [[ "$file" =~ ^[0-9]+$ ]] || file=-1
+  echo "${EPOCHREALTIME/./} $usage $mem $pids $rb $wb $oom $work $file $psi"
 }
 
 # sample_job CONTAINER PID FILE: append a sample of the container's cgroup to
@@ -421,13 +452,16 @@ sample_job() {
 # stats line. Busy cores per interval come from usage_usec deltas. Every
 # counter starts at zero with the container and only grows, so each total is
 # its highest sample (a sample racing the cgroup's removal may read short).
-# All null when nothing was sampled.
+# Working and file memory and pressure are the highest sample too (they rise
+# and fall); null when no sample had them (-1). All null when nothing was
+# sampled.
 summarize_samples() {
   jq -c -R -s --argjson cpus "$2" --argjson wall "$3" '
     def r(d): . * d | round / d;
     def pct(p): sort | .[(((p * length) | ceil) - 1) | if . < 0 then 0 else . end];
-    [split("\n")[] | select(test("^[0-9]+( [0-9]+){6}$")) | split(" ") | map(tonumber)] as $s
-    | [range(1; $s | length) | ($s[.][1] - $s[. - 1][1]) / ($s[.][0] - $s[. - 1][0])] as $c
+    [split("\n")[] | select(test("^[0-9]+( [0-9]+){6}( -?[0-9]+){3}$")) | split(" ") | map(tonumber)] as $s
+    | def peak(i): [$s[][i] | select(. >= 0)] | max;
+    [range(1; $s | length) | ($s[.][1] - $s[. - 1][1]) / ($s[.][0] - $s[. - 1][0])] as $c
     | ($s | last) as $l
     | (if $l then ([$s[][1]] | max) / 1e6 else null end) as $cpu
     | {cpu_s: (if $l then $cpu | r(10) else null end),
@@ -437,6 +471,9 @@ summarize_samples() {
        cores_max: (if ($c | length) > 0 then $c | max | r(100) else null end),
        saturation: (if ($c | length) > 0 then ([$c[] | select(. >= 0.9 * $cpus)] | length) / ($c | length) | r(1000) else null end),
        mem_peak_bytes: (if $l then [$s[][2]] | max else null end),
+       mem_work_peak_bytes: peak(7),
+       mem_file_peak_bytes: peak(8),
+       mem_pressure_some_avg10_max: (peak(9) | if . then . / 100 else null end),
        pids_peak: (if $l then [$s[][3]] | max else null end),
        io_read_bytes: (if $l then [$s[][4]] | max else null end),
        io_write_bytes: (if $l then [$s[][5]] | max else null end),
@@ -481,6 +518,8 @@ record_job_stats() {
      runner_name: $name, started_at: $start, ended_at: $end, wall_s: $wall,
      cpu_s: $m.cpu_s, cores_avg: $m.cores_avg, cores_p50: $m.cores_p50, cores_p95: $m.cores_p95,
      cores_max: $m.cores_max, saturation: $m.saturation, mem_peak_bytes: $m.mem_peak_bytes,
+     mem_work_peak_bytes: $m.mem_work_peak_bytes, mem_file_peak_bytes: $m.mem_file_peak_bytes,
+     mem_pressure_some_avg10_max: $m.mem_pressure_some_avg10_max,
      pids_peak: $m.pids_peak, disk_bytes: $disk, io_read_bytes: $m.io_read_bytes,
      io_write_bytes: $m.io_write_bytes,
      oom_kills: (if $docker_oom == "true" then ([$m.oom_kills // 0, 1] | max) else $m.oom_kills end),

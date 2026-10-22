@@ -33,6 +33,63 @@ JIT = 'jit' + 'j' * 60
 APP_TOKEN = 'ghs_' + 'a' * 36
 HAVE_TOOLS = all(shutil.which(t) for t in ('bash', 'jq', 'openssl'))
 
+# cgroup v2 memory.stat in the kernel's order (6.8): anon, file, kernel and
+# shmem come first, the slab totals much later.
+MEMORY_STAT = """anon {anon}
+file {file}
+kernel {kernel}
+kernel_stack 68894720
+pagetables 631996416
+sec_pagetables 0
+percpu 5578992
+sock 36864
+vmalloc 978944
+shmem {shmem}
+zswap 0
+zswapped 0
+file_mapped 2346303488
+file_dirty 2346520576
+file_writeback 0
+swapcached 6778880
+anon_thp 41943040
+file_thp 0
+shmem_thp 0
+inactive_anon 24566947840
+active_anon 50463858688
+inactive_file 21759229952
+active_file 28080177152
+unevictable 3145728
+slab_reclaimable 5324700584
+slab_unreclaimable 211739880
+slab 5536440464
+workingset_refault_anon 49956633
+workingset_refault_file 8489198252
+workingset_activate_anon 18829540
+workingset_activate_file 1677394019
+workingset_restore_anon 18471164
+workingset_restore_file 966733016
+workingset_nodereclaim 158589056
+pgscan 29368345210
+pgsteal 27248776726
+pgscan_kswapd 25748349502
+pgscan_direct 3606230337
+pgscan_khugepaged 13765371
+pgsteal_kswapd 24135846844
+pgsteal_direct 3100773642
+pgsteal_khugepaged 12156240
+pgfault 1511163816303
+pgmajfault 391927616
+pgrefill 8241445868
+pgactivate 1379134356
+pgdeactivate 0
+pglazyfree 205343966
+pglazyfreed 1822673
+zswpin 0
+zswpout 0
+thp_fault_alloc 186042
+thp_collapse_alloc 13519
+"""
+
 CURL_STUB = r'''#!/usr/bin/env python3
 import json, os, sys
 args = sys.argv[1:]
@@ -90,7 +147,13 @@ if sys.argv[1] == 'run':
     if os.environ.get('STUB_CGROUP'):
         cg = os.path.join(os.environ['STUB_CGROUP'], 'runners.slice', f'docker-{CONTAINER_ID}.scope')
         os.makedirs(cg)
+        # memory.peak is mostly page cache: working memory (anon + shmem +
+        # kernel) is 1.5 GiB of the 12 GiB peak.
         for name, text in {'memory.peak': '12884901888\n', 'pids.peak': '812\n',
+                           'memory.stat': f'anon {1 << 30}\nfile {11 << 30}\nkernel {256 << 20}\n'
+                                          f'kernel_stack 1\npagetables 1\nshmem {256 << 20}\nslab 9\n',
+                           'memory.pressure': 'some avg10=12.50 avg60=3.00 avg300=1.00 total=99\n'
+                                              'full avg10=0.00 avg60=0.00 avg300=0.00 total=0\n',
                            'memory.events': 'low 0\nhigh 0\nmax 4\noom 2\noom_kill 1\noom_group_kill 0\n',
                            'io.stat': '259:0 rbytes=1000 wbytes=2000 rios=1 wios=2 dbytes=0 dios=0\n'
                                       '8:0 rbytes=24 wbytes=48 rios=1 wios=1 dbytes=0 dios=0\n'}.items():
@@ -330,16 +393,21 @@ class Supervisor(Stubbed):
         [line] = self.stats_lines()
         self.assertEqual(list(line), ['v', 'host', 'pool', 'slot', 'slot_cpus', 'slot_memory_bytes', 'runner_name',
                                       'started_at', 'ended_at', 'wall_s', 'cpu_s', 'cores_avg', 'cores_p50',
-                                      'cores_p95', 'cores_max', 'saturation', 'mem_peak_bytes', 'pids_peak',
-                                      'disk_bytes', 'io_read_bytes', 'io_write_bytes', 'oom_kills', 'exit_code',
-                                      'samples'])
+                                      'cores_p95', 'cores_max', 'saturation', 'mem_peak_bytes',
+                                      'mem_work_peak_bytes', 'mem_file_peak_bytes', 'mem_pressure_some_avg10_max',
+                                      'pids_peak', 'disk_bytes', 'io_read_bytes', 'io_write_bytes', 'oom_kills',
+                                      'exit_code', 'samples'])
         name = json.loads([c for c in self.calls('curl') if c['method'] == 'POST'][0]['body'])['name']
         self.assertEqual({k: line[k] for k in ('v', 'host', 'pool', 'slot', 'slot_cpus', 'slot_memory_bytes',
-                                               'runner_name', 'mem_peak_bytes', 'pids_peak', 'disk_bytes',
-                                               'io_read_bytes', 'io_write_bytes', 'oom_kills', 'exit_code')},
+                                               'runner_name', 'mem_peak_bytes', 'mem_work_peak_bytes',
+                                               'mem_file_peak_bytes', 'mem_pressure_some_avg10_max', 'pids_peak',
+                                               'disk_bytes', 'io_read_bytes', 'io_write_bytes', 'oom_kills',
+                                               'exit_code')},
                          {'v': 1, 'host': socket.gethostname().split('.')[0], 'pool': 'heavy', 'slot': 'heavy-1',
                           'slot_cpus': 8, 'slot_memory_bytes': 48 << 30, 'runner_name': name,
-                          'mem_peak_bytes': 12884901888, 'pids_peak': 812, 'disk_bytes': 21474836480,
+                          'mem_peak_bytes': 12884901888, 'mem_work_peak_bytes': 1536 << 20,
+                          'mem_file_peak_bytes': 11 << 30, 'mem_pressure_some_avg10_max': 12.5,
+                          'pids_peak': 812, 'disk_bytes': 21474836480,
                           'io_read_bytes': 1024, 'io_write_bytes': 2048, 'oom_kills': 1, 'exit_code': 3})
         for key in ('started_at', 'ended_at'):
             self.assertRegex(line[key], r'^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$')
@@ -370,7 +438,7 @@ class Supervisor(Stubbed):
         self.assertEqual((line['slot'], line['slot_cpus'], line['slot_memory_bytes'], line['samples']),
                          ('small-2', 1, 3 << 30, 0))
         for key in ('cpu_s', 'cores_avg', 'cores_p50', 'cores_p95', 'cores_max', 'saturation', 'mem_peak_bytes',
-                    'pids_peak', 'disk_bytes', 'io_read_bytes', 'io_write_bytes', 'oom_kills'):
+                    'mem_work_peak_bytes', 'mem_file_peak_bytes', 'mem_pressure_some_avg10_max', 'pids_peak', 'disk_bytes', 'io_read_bytes', 'io_write_bytes', 'oom_kills'):
             self.assertIsNone(line[key], key)
         self.assertIn(['rm', '-f', 'gh-runner-small-2'], [c['argv'] for c in self.calls('docker')])
 
@@ -387,17 +455,48 @@ class Supervisor(Stubbed):
                               capture_output=True, text=True, timeout=60)
 
     def test_summary_from_samples(self):
-        # t (us) usage (us) mem pids rbytes wbytes oom_kill: 10 intervals of 2 s at
-        # 1, 2, ..., 10 busy cores on an 8-CPU slot (8, 9 and 10 count as saturated).
-        rows = [f'{2_000_000 * i} {sum(range(1, i + 1)) * 2_000_000} {100 + i} {i} {i} {2 * i} 0' for i in range(11)]
+        # t (us) usage (us) mem pids rbytes wbytes oom_kill work file psi: 10
+        # intervals of 2 s at 1, 2, ..., 10 busy cores on an 8-CPU slot (8, 9
+        # and 10 count as saturated).
+        rows = [f'{2_000_000 * i} {sum(range(1, i + 1)) * 2_000_000} {100 + i} {i} {i} {2 * i} 0 {50 + i} {40 + i} {i}'
+                for i in range(11)]
         rows[4] = rows[4].replace(' 104 ', ' 900 ')
+        rows[6] = rows[6].replace(' 56 ', ' 700 ')
         (self.dir / 'samples').write_text('\n'.join(rows) + '\n')
         r = self.bash('summarize_samples "$1" 8 22.0', str(self.dir / 'samples'))
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(json.loads(r.stdout), {
             'cpu_s': 110.0, 'cores_avg': 5.0, 'cores_p50': 5.0, 'cores_p95': 10.0, 'cores_max': 10.0,
-            'saturation': 0.3, 'mem_peak_bytes': 900, 'pids_peak': 10, 'io_read_bytes': 10,
+            'saturation': 0.3, 'mem_peak_bytes': 900, 'mem_work_peak_bytes': 700, 'mem_file_peak_bytes': 50,
+            'mem_pressure_some_avg10_max': 0.1, 'pids_peak': 10, 'io_read_bytes': 10,
             'io_write_bytes': 20, 'oom_kills': 0, 'samples': 10})
+
+    def test_summary_when_page_cache_fills_the_slot(self):
+        # A 48 GiB slot that an IO-heavy job fills with page cache: memory.peak
+        # sits at the limit, but working memory stays at 2-3 GiB, and reclaim
+        # stalls show up in memory.pressure.
+        gib, limit = 1 << 30, 48 << 30
+        rows = [f'{2_000_000 * i} {2_000_000 * i} {min(limit, (2 + 6 * i) * gib)} 10 0 {i * 7 * gib} 0 '
+                f'{(2 + i % 2) * gib} {min(limit - 3 * gib, 6 * i * gib)} {i * 125}' for i in range(10)]
+        (self.dir / 'samples').write_text('\n'.join(rows) + '\n')
+        r = self.bash('summarize_samples "$1" 8 20.0', str(self.dir / 'samples'))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        m = json.loads(r.stdout)
+        self.assertEqual(m['mem_peak_bytes'], limit)
+        self.assertEqual(m['mem_work_peak_bytes'], 3 * gib)
+        self.assertEqual(m['mem_file_peak_bytes'], 45 * gib)
+        self.assertEqual(m['mem_pressure_some_avg10_max'], 11.25)
+
+    def test_summary_without_memory_stat_or_pressure(self):
+        # -1 marks a file the kernel does not have: the field is null, while
+        # the other fields are still summarized.
+        (self.dir / 'samples').write_text('0 0 5 1 0 0 0 -1 -1 -1\n2000000 2000000 7 1 0 0 0 -1 -1 -1\n')
+        r = self.bash('summarize_samples "$1" 8 2.0', str(self.dir / 'samples'))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        m = json.loads(r.stdout)
+        self.assertEqual(m['mem_peak_bytes'], 7)
+        for key in ('mem_work_peak_bytes', 'mem_file_peak_bytes', 'mem_pressure_some_avg10_max'):
+            self.assertIsNone(m[key], key)
 
     def test_cores_avg_agrees_with_rounded_cpu_s(self):
         # cores_avg is computed from the unrounded CPU time and rounded once;
@@ -409,7 +508,7 @@ class Supervisor(Stubbed):
         strict_misses = 0
         for wall, usage in pairs:
             with self.subTest(wall=wall, usage=usage):
-                (self.dir / 'samples').write_text(f'0 0 0 0 0 0 0\n{int(wall * 1e6)} {usage} 0 0 0 0 0\n')
+                (self.dir / 'samples').write_text(f'0 0 0 0 0 0 0 0 0 0\n{int(wall * 1e6)} {usage} 0 0 0 0 0 0 0 0\n')
                 r = self.bash('summarize_samples "$1" 8 "$2"', str(self.dir / 'samples'), str(wall))
                 self.assertEqual(r.returncode, 0, r.stderr)
                 m = json.loads(r.stdout)
@@ -431,16 +530,47 @@ class Supervisor(Stubbed):
         r = self.bash('sample_cgroup "$1"', str(cg))
         self.assertEqual(r.returncode, 0, r.stderr)
         fields = r.stdout.split()
-        self.assertEqual(fields[1:], ['5000000', '4096', '7', '6', '7', '2'])
+        # No memory.stat or memory.pressure: -1, summarized as null.
+        self.assertEqual(fields[1:], ['5000000', '4096', '7', '6', '7', '2', '-1', '-1', '-1'])
         self.assertAlmostEqual(int(fields[0]) / 1e6, time.time(), delta=5)
+        (cg / 'memory.stat').write_text(MEMORY_STAT.format(anon=3000, file=900000, kernel=200, shmem=40))
+        (cg / 'memory.pressure').write_text('some avg10=7.25 avg60=1.00 avg300=0.10 total=5\n'
+                                            'full avg10=3.00 avg60=0.50 avg300=0.05 total=2\n')
+        fields = self.bash('sample_cgroup "$1"', str(cg)).stdout.split()
+        # Working memory is anon + shmem + kernel; avg10 is in hundredths.
+        self.assertEqual(fields[1:], ['5000000', '4096', '7', '6', '7', '2', '3240', '900000', '725'])
         (cg / 'cpu.stat').unlink()
         self.assertNotEqual(self.bash('sample_cgroup "$1"', str(cg)).returncode, 0)
+
+    def test_sampler_working_memory_without_the_kernel_field(self):
+        # Kernels before 6.1 have no "kernel" total: sum its main parts.
+        cg = self.dir / 'cg'
+        cg.mkdir()
+        (cg / 'cpu.stat').write_text('usage_usec 1\n')
+        (cg / 'memory.stat').write_text('anon 1000\nfile 50\nkernel_stack 1\npagetables 2\nsec_pagetables 4\n'
+                                        'percpu 8\nsock 999\nvmalloc 16\nshmem 100\nslab_reclaimable 31\n'
+                                        'slab_unreclaimable 1\nslab 32\npgfault 7\n')
+        fields = self.bash('sample_cgroup "$1"', str(cg)).stdout.split()
+        self.assertEqual(fields[7:], [str(1000 + 100 + 1 + 2 + 4 + 8 + 16 + 32), '50', '-1'])
+
+    def test_sampler_ignores_malformed_memory_files(self):
+        cg = self.dir / 'cg'
+        cg.mkdir()
+        (cg / 'cpu.stat').write_text('usage_usec 1\n')
+        (cg / 'memory.stat').write_text('anon lots\nfile 5x\n')
+        (cg / 'memory.pressure').write_text('some avg10=bogus\n')
+        r = self.bash('sample_cgroup "$1"', str(cg))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.split()[7:], ['-1', '-1', '-1'])
 
     def test_sampler_overhead_is_under_one_percent_of_a_cpu(self):
         cg = self.cgroup / 'runners.slice' / ('docker-' + 'c0ffee' * 10 + '.scope')
         cg.mkdir(parents=True)
         for name, text in {'cpu.stat': 'usage_usec 1\n', 'memory.peak': '1\n', 'pids.peak': '1\n',
-                           'io.stat': '8:0 rbytes=1 wbytes=1\n', 'memory.events': 'oom_kill 0\n'}.items():
+                           'io.stat': '8:0 rbytes=1 wbytes=1\n', 'memory.events': 'oom_kill 0\n',
+                           'memory.stat': MEMORY_STAT.format(anon=1, file=1, kernel=1, shmem=1),
+                           'memory.pressure': 'some avg10=0.00 avg60=0.00 avg300=0.00 total=0\n'
+                                              'full avg10=0.00 avg60=0.00 avg300=0.00 total=0\n'}.items():
             (cg / name).write_text(text)
         def run(seconds):
             out = self.dir / f'samples-{seconds}'
