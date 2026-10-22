@@ -134,27 +134,6 @@ keys its write refusal on the existing `-32602` code.
 | --- | --- | --- |
 | -32602 | content-base-mismatch | A whole-content write's `baseContentBytes` does not match the resolved base, or the base is unknown. `data` adds `baseContentBytes` and `resolvedBaseBytes` (base size or `null`; never copy it into `baseContentBytes`). Nothing was written; re-read the full note before writing. |
 
-### Prepared note paging errors
-
-Only the opt-in [read-only note paging contract](./methods/notes-tasks.md#revision-safe-note-pages-prepared-additive-contract)
-uses these bounded outcomes. Legacy errors (including full `current` conflict
-entities) remain unchanged. A page-aware error's entire JSON-RPC envelope is at most
-4,096 escaped UTF-8 bytes; `data` includes `code`, optional `currentRevision`,
-never `current: Note`, old/deleted text or a full annotation map.
-Messages are fixed short descriptions; do not echo user payloads into errors.
-
-| Numeric code | data.code | Meaning / client action |
-| --- | --- | --- |
-| -32602 | not-found | Fresh paged comment lookup addresses a missing resource: `data.entity` is `commentThread` after its final comment is deleted, or `comment` for a deleted commentId. A deleted root with surviving replies is a successful `rootState: "deleted"` thread page, not this error. These outcomes do not imply note deletion. Old continuation cursors instead follow the normal stale-epoch rule. Legacy unpaged comment errors remain unchanged. |
-| -32602 | invalid-params | Invalid range, overlap, surrogate boundary, unpaired surrogate, NUL, unknown shape, disallowed filter; no note mutation. |
-| -32602 | note-page-cursor-invalid | Tampered, wrong scope/kind/budget/range-set cursor; reject, never reinterpret it as a first page. |
-| -32602 | note-page-expired | Snapshot expired, evicted or unavailable after restart; preserve drafts and reacquire. Not entity deletion. |
-| -32005 | note-page-stale | Source revision or relevant annotation epoch changed; invalidate that view and reconcile. |
-| -32602 | note-page-budget | Request exceeds hard item/decoded/wire limits, or minimum valid response cannot fit requested budgets; no mutation. |
-| -32006 | note-index-preparing | The requested note's derived index is queued/building, or the preparation queue is full. `retryAfterMs: 1000`; retry only while this view is still wanted. No page or snapshot is admitted. |
-| -32006 | note-index-resource-limit | Conversion exceeded a resource budget. No automatic retry, partial publication or canonical mutation; preserve drafts. |
-| -32602 | not-found | Entity absent or invisible under existing visibility policy. Only this code invokes the deleted-entity flow. |
-
 ### Prepared desktop control errors
 
 [§5.51](./methods/desktop.md#errors-and-verification) reserves typed `desktop-*`
@@ -176,14 +155,3 @@ select the profile; and `provider-profile-replacement-required` with
 `data: { providerRef, reason }` when a qualified reference names a missing profile
 or a disabled base provider. The last one never falls back to another account.
 An unreadable profile file returns `-32603` with `data.code: "provider-profiles-unreadable"`.
-
-### Prepared note deletion grace errors (13.10)
-
-The dedicated grace methods use bounded `error.data.code` values
-`NOTE_DELETE_INVALID`, `NOTE_DELETE_UNAVAILABLE`, `NOTE_DELETE_STALE`,
-`NOTE_DELETE_KEY_EXPIRED`, `NOTE_DELETE_KEY_MISMATCH`, `NOTE_DELETE_ALREADY_PENDING`,
-`NOTE_DELETE_QUOTA`, `NOTE_DELETE_GRAPH_LIMIT`, `NOTE_DELETE_SHUTTING_DOWN` and
-`NOTE_DELETE_FORBIDDEN`. Their exact numeric mapping and side-effect guarantees
-are in the [grace error table](./note-delete-grace.md#errors-and-verification).
-Rejected requests admit no new operation; they do not cancel an earlier operation.
-`UNKNOWN` and `OUTCOME_UNKNOWN` are distinct typed results, never proof of rollback.

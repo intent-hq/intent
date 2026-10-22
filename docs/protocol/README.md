@@ -18,8 +18,6 @@ reject its methods.
 The [compact script list contract](./methods/scripts.md#active-only-compact-lists-prepared-breaking-contract)
 requires `scriptActiveLists: 1` and `scriptMonitors: 2`; archived lists and terminal monitor history are removed. Known-ID output and full lifecycle events remain available.
 
-The [cancellable note deletion contract](./note-delete-grace.md) requires `noteDeleteGrace: 1`; it preserves the independent reading capabilities and immediate deletion behavior.
-
 The [onboarding adapter preparation request](./05-method-catalog.md#hostprepareprovideradapters-136-prepared) adds an owner-only, best-effort background optimization. Clients tolerate an unsupported method; it adds no capability flag and does not establish support for the independently gated extensions above.
 
 This directory is the canonical wire contract between Intent clients (desktop, iOS, CLI, and agent developers building clients) and the Intent backend daemon (`intentd`): transport, JSON-RPC envelope, the full method catalog, events, agent streaming, the permission flow, error codes, and thin-client guidance. It is a **living specification**: changes land through the compatibility policy (see below), and the method surface is enforced by golden tests in the `intent-transport` crate.
