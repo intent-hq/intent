@@ -299,7 +299,9 @@ class ReadinessTests(unittest.TestCase):
         self.set_responses(RATE)
         report = json.loads(self.run_status())
         self.assertTrue(report["host"]["github"]["prReady"])
-        initialized = [repo for repo in report["repos"].values() if repo["initialized"]]
+        # repos.monorepo describes the root checkout and has no PR lookup.
+        initialized = [repo for name, repo in report["repos"].items()
+                       if name != "monorepo" and repo["initialized"]]
         self.assertTrue(initialized, "CI initializes at least intentd")
         for repo in initialized:
             self.assertEqual(repo["pr"]["number"], 123)
