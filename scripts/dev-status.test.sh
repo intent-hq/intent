@@ -724,7 +724,9 @@ monorepo_human | grep -q '^Repo *monorepo: main .* behind-origin/main=- protocol
 base=$(git_fixture rev-parse HEAD)
 git_fixture update-ref refs/remotes/origin/main "$base"
 expect_monorepo '[0, false, []]' "in sync"
-monorepo_human | tail -n1 | grep -q '^Repo *intentd: ' && ! grep -Eq "$warning_re|$hint_re" "$temp_dir/monorepo.txt" \
+monorepo_human | tail -n1 | grep -q '^Repo *intentd: ' \
+  || fail "in-sync monorepo row was not followed by the intentd row: $(cat "$temp_dir/monorepo.txt")"
+! grep -Eq "$warning_re|$hint_re" "$temp_dir/monorepo.txt" \
   || fail "in-sync monorepo printed a hint: $(cat "$temp_dir/monorepo.txt")"
 grep -q '^Repo *monorepo: main .* behind-origin/main=0 protocol-docs=current$' "$temp_dir/monorepo.txt" \
   || fail "human status did not print the in-sync monorepo row"
