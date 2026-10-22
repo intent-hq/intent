@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -30,7 +30,11 @@ function fixture(t) {
   const root = mkdtempSync(path.join(os.tmpdir(), 'transfer-ci-test-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   mkdirSync(path.join(root, 'bin'));
-  return { root, env: { ...process.env, PATH: `${root}/bin:${process.env.PATH}`, RUNNER_TEMP: root, GITHUB_STEP_SUMMARY: `${root}/summary`, GITHUB_ENV: `${root}/env` } };
+  // Workflow steps call scripts/retry.sh from the monorepo checkout; RETRY_DELAY=0
+  // keeps its retries from waiting in real time.
+  mkdirSync(path.join(root, 'scripts'));
+  copyFileSync(path.join(ROOT, 'scripts/retry.sh'), path.join(root, 'scripts/retry.sh'));
+  return { root, env: { ...process.env, PATH: `${root}/bin:${process.env.PATH}`, RUNNER_TEMP: root, GITHUB_STEP_SUMMARY: `${root}/summary`, GITHUB_ENV: `${root}/env`, GITHUB_ACTIONS: '', RETRY_DELAY: '0' } };
 }
 
 test('reusable acquisition preserves workflow revision, caller head and counterpart pin for both directions', () => {
@@ -118,6 +122,31 @@ test('toolchain setup failures propagate from every required tool', (t) => {
     const result = spawnSync('bash', ['-eo', 'pipefail', '-c', command], { cwd: f.root, env: f.env, encoding: 'utf8' });
     assert.equal(result.status, 23, failedTool + ': ' + result.stderr);
   }
+});
+
+test('toolchain and package downloads retry a transient failure, then give up', (t) => {
+  const f = fixture(t);
+  mkdirSync(path.join(f.root, 'packages/intentd'), { recursive: true });
+  writeFileSync(path.join(f.root, 'packages/intentd/rust-toolchain.toml'), '[toolchain]\nchannel = "1.96.0"\n');
+  const command = body(step(workflow, 'Prepare the connected test toolchains'));
+  writeFileSync(path.join(f.root, 'bin', 'pkg-config'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+  writeFileSync(path.join(f.root, 'bin', 'corepack'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  // Each download fails FAILURES times (counted per argv line), then succeeds.
+  const flaky = '#!/bin/sh\necho "$0 $*" >> "$RUNNER_TEMP/tools"\n[ "$(grep -cxF "$0 $*" "$RUNNER_TEMP/tools")" -gt "$FAILURES" ] || { echo "could not download file" >&2; exit 1; }\n';
+  for (const tool of ['rustup', 'sudo']) writeFileSync(path.join(f.root, 'bin', tool), flaky, { mode: 0o755 });
+  const calls = (needle) => readFileSync(path.join(f.root, 'tools'), 'utf8').split('\n').filter((line) => line.includes(needle)).length;
+  let result = spawnSync('bash', ['-eo', 'pipefail', '-c', command], { cwd: f.root, env: { ...f.env, FAILURES: '1' }, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /attempt 1\/3 failed \(exit 1\), retrying in 0s: rustup toolchain install 1\.96\.0 --profile minimal/);
+  assert.deepEqual([calls('rustup toolchain install'), calls('apt-get update'), calls('apt-get install')], [2, 2, 2]);
+  assert.equal(readFileSync(f.env.GITHUB_ENV, 'utf8').trim(), 'RUSTUP_TOOLCHAIN=1.96.0');
+  rmSync(path.join(f.root, 'tools'));
+  rmSync(f.env.GITHUB_ENV);
+  result = spawnSync('bash', ['-eo', 'pipefail', '-c', command], { cwd: f.root, env: { ...f.env, FAILURES: '99' }, encoding: 'utf8' });
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /giving up after 3 attempt\(s\), last exit 1: rustup toolchain install 1\.96\.0/);
+  assert.equal(calls('rustup toolchain install'), 3);
+  assert.equal(existsSync(f.env.GITHUB_ENV), false);
 });
 
 test('preinstalled OpenSSL headers never call sudo (unprivileged runners)', (t) => {

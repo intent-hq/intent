@@ -562,6 +562,16 @@ test('--pinned exits 2 with the submodule hint when the pin is absent from the i
   assert.ok(formatOffPinWarning(checkout.ref).includes(`checkout ${checkout.ref.checkout.slice(0, 7)} is off the recorded pin 1111111`));
 });
 
+test('prepared discussion helpers are confined to the canonical discussion contract', async () => {
+  const { checkDoc } = await import('./check-mcp-bindings.mjs');
+  const mentions = collectDocMentions('`ws.discussion.list`, `ws.discussion.send`, and `ws.discussion.conversations`.');
+  const bindings = parseBindings(BASE_HELP);
+  assert.deepEqual(checkDoc('docs/protocol/methods/multiplayer.md', mentions, bindings), []);
+  assert.equal(checkDoc('docs/protocol/methods/agents.md', mentions, bindings).length, 3);
+  const unknown = collectDocMentions('`ws.discussion.subscribe` is not prepared.');
+  assert.equal(checkDoc('docs/protocol/methods/multiplayer.md', unknown, bindings).length, 1);
+});
+
 test('prepared compact script helpers are scoped and still validate options', async () => {
   const { checkDoc } = await import('./check-mcp-bindings.mjs');
   const file = 'docs/protocol/methods/scripts.md';

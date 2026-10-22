@@ -10,7 +10,16 @@ implicit identity lifecycle, rotating returning-credential behavior and global
 event/device restrictions. The existing identity triples, proof engines, guest
 rights and workspace-invitation lifetime rules remain the baseline.
 
-The multi-principal surface of a daemon: who a connection *is*, which workspaces it may see, how an owner invites a second person and how that person joins. Introduced within protocol 10.3 by the intentd multiplayer stack — principals and caller binding ([intent-hq/intentd#1868](https://github.com/intent-hq/intentd/pull/1868)), message attribution ([#1869](https://github.com/intent-hq/intentd/pull/1869)), membership and capability enforcement ([#1870](https://github.com/intent-hq/intentd/pull/1870), [#1877](https://github.com/intent-hq/intentd/pull/1877), [#1871](https://github.com/intent-hq/intentd/pull/1871)), invite links and the `/invite` join ([#1872](https://github.com/intent-hq/intentd/pull/1872)). The join was reworked within 10.4 from a host-run GitHub device flow (`invite.redeem`, removed by [#1969](https://github.com/intent-hq/intentd/pull/1969)) into the **identity proof** — `invite.challenge` / `invite.prove` with the guest-side `github.identityProof.*` (§5.27) ([#1965](https://github.com/intent-hq/intentd/pull/1965), [#1967](https://github.com/intent-hq/intentd/pull/1967)) — plus the returning guest's `invite.inspect` / `invite.accept` ([#1963](https://github.com/intent-hq/intentd/pull/1963)), the owner-self-join refusal ([#1986](https://github.com/intent-hq/intentd/pull/1986)), reusable unpinned links ([#1988](https://github.com/intent-hq/intentd/pull/1988)) and the direct member add `principal.list` / `workspace.members.add` ([#2023](https://github.com/intent-hq/intentd/pull/2023), [#2025](https://github.com/intent-hq/intentd/pull/2025)). Protocol **10.8** ([versioning](../versioning.md)) makes the identity **provider-neutral** — a GitLab account is an identity: the additive `Principal.identity` triple, the `pinProvider` / `pinHost` pin params, the `invite.prove` `provider` / `host` / `proofId` params and the `sourceControl.identityProof.*` generalization of the guest-side proof (§5.27). The connection principal read `principal.me` is also summarized in §5.46 (client boot); presence, the ephemeral roster layered on top of membership, is §5.47.
+**Prepared guest role extension:** [Workspace guest roles](#workspace-guest-roles-prepared)
+add an owner-assigned `manager` role under exact integer `workspaceGuestRoles: 1`.
+The existing `collaborator` wire role is displayed as Participant. This extension
+does not grant host membership or broaden `canManage`.
+
+The multi-principal surface of a daemon: who a connection *is*, which workspaces it may see, how an owner invites a second person and how that person joins.
+Introduced within protocol 10.3 by the intentd multiplayer stack — principals and caller binding ([intent-hq/intentd#1868](https://github.com/intent-hq/intentd/pull/1868)), message attribution ([#1869](https://github.com/intent-hq/intentd/pull/1869)), membership and capability enforcement ([#1870](https://github.com/intent-hq/intentd/pull/1870), [#1877](https://github.com/intent-hq/intentd/pull/1877), [#1871](https://github.com/intent-hq/intentd/pull/1871)), invite links and the `/invite` join ([#1872](https://github.com/intent-hq/intentd/pull/1872)).
+The join was reworked within 10.4 from a host-run GitHub device flow (`invite.redeem`, removed by [#1969](https://github.com/intent-hq/intentd/pull/1969)) into the **identity proof** — `invite.challenge` / `invite.prove` with the guest-side `github.identityProof.*` (§5.27) ([#1965](https://github.com/intent-hq/intentd/pull/1965), [#1967](https://github.com/intent-hq/intentd/pull/1967)) — plus the returning guest's `invite.inspect` / `invite.accept` ([#1963](https://github.com/intent-hq/intentd/pull/1963)), the owner-self-join refusal ([#1986](https://github.com/intent-hq/intentd/pull/1986)), reusable unpinned links ([#1988](https://github.com/intent-hq/intentd/pull/1988)) and the direct member add `principal.list` / `workspace.members.add` ([#2023](https://github.com/intent-hq/intentd/pull/2023), [#2025](https://github.com/intent-hq/intentd/pull/2025)).
+Protocol **10.8** ([versioning](../versioning.md)) makes the identity **provider-neutral** — a GitLab account is an identity: the additive `Principal.identity` triple, the `pinProvider` / `pinHost` pin params, the `invite.prove` `provider` / `host` / `proofId` params and the `sourceControl.identityProof.*` generalization of the guest-side proof (§5.27).
+The connection principal read `principal.me` is also summarized in §5.46 (client boot); presence, the ephemeral roster layered on top of membership, is §5.47.
 
 Every method below is workspace-scoped unless stated otherwise. Five are **fast paths**: `workspace.invite.create` needs the listener's own pairing snapshot to build the link (like `pairing.getInfo`), and `invite.inspect` / `invite.accept` / `invite.challenge` / `invite.prove` are the only methods served on the unauthenticated `/invite` endpoint; the rest dispatch through the router. (`invite.redeem`, the pre-#1965 two-phase device-flow join, keeps its §5 fast-path catalog entry only until the intentd pin advances past its removal.)
 
@@ -30,6 +39,77 @@ Every method below is workspace-scoped unless stated otherwise. Five are **fast 
 | invite.accept *(fast path, `/invite` only)* | inviteId (req), secret (req), credential (req) | The **returning guest's** join: `credential` is a per-principal bearer this host minted on an earlier join; its hash resolves the principal exactly like the `/ws` bearer gate (unknown or revoked ⇒ `credential-invalid`; the primary's own ⇒ `owner-self-join`). The invite is validated like `inspect`, a pin is checked against the principal's **stored** identity (`invite-pin-mismatch`) and the join commits with that identity — no forge call, no profile refresh → `{ status: "authorized", token, principalId, login, workspaceId }` with a fresh credential ([#1963](https://github.com/intent-hq/intentd/pull/1963)). An archived workspace refuses the commit with `-32602 { code: "workspace-archived" }` (§ "The join commit") |
 | invite.challenge *(fast path, `/invite` only)* | inviteId (req), secret (req) | `{ workspaceId, workspaceTitle, hostname, prettyHostname, collaborationName, pinIdentity, nonce, nonceExpiresAt }` — validates the open invite like `inspect` and issues a **single-use nonce** bound to it: 32 random bytes (base64url, unpadded), valid **10 minutes**, consumed by the first `invite.prove` that names it. `pinIdentity` (10.8) has the same required-triple-or-null semantics as `inspect`. No forge is contacted ([#1965](https://github.com/intent-hq/intentd/pull/1965)). At most 8 outstanding nonces per invite and 256 daemon-wide (`invite-flow-busy` past either cap) |
 | invite.prove *(fast path, `/invite` only)* | inviteId (req), secret (req), nonce (req), login (req), gistId? *(github)*, provider?: `"github"` \| `"gitlab"` *(10.8, default `"github"`)*, host? *(10.8)*, proofId? *(10.8; alias of `gistId` — exactly one of the two is required)* | The guest published `nonce` in a proof it owns on the named forge (§ "The identity proof") and names it; the host verifies the proof, resolves the account it belongs to and commits the join → `{ status: "authorized", token, principalId, login, workspaceId }` — the **token exactly once**. Refusals: `proof-invalid`, `proof-expired`, `github-unreachable` (the nonce survives for a retry), `identity-unverifiable` *(10.8)*, `owner-self-join`, `invite-pin-mismatch`, `workspace-full`, `workspace-archived` (the shared join transaction found the workspace archived — a proof that validated before a `workspace.archive` and commits after it; a proof validated after the sweep fails earlier with the invite's closed state `invite-revoked`, § "The join commit"), or the invite's closed state ([#1965](https://github.com/intent-hq/intentd/pull/1965), [#1986](https://github.com/intent-hq/intentd/pull/1986)) |
+
+#### Workspace guest roles (prepared)
+
+This extension is part of experimental Multiplayer; the contract does not claim
+a carrying release. Exact integer `workspaceGuestRoles: 1` on both `client.hello`
+(`server.capabilities`) and `system.capabilities` advertises the complete role
+mutation and scoped authorization contract. Missing, malformed or unknown values
+disable role changes. Read support per connection, and refresh authority after
+reconnect before enabling controls.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| workspace.members.setRole | workspaceId (req), principalId (req), role (req: `"collaborator"` \| `"manager"`) | `{ workspaceId, principalId, role, changed: boolean }` — explicit workspace owner or existing administrator authority only. Changes one existing direct guest grant; it never adds a member or transfers ownership. A repeated value returns `changed: false` without publishing an event. |
+
+Unknown roles and `"owner"` are invalid parameters. The target must be an
+existing direct guest member; the owner and inherited host members cannot be
+changed with this method. A caller lacking authority is refused before mutation;
+an unrelated workspace remains indistinguishable from a missing one.
+
+A committed change publishes existing `workspace:updated` with
+`changes: { members: true, rolePrincipalId, role }`. Subscribers re-read the roster
+and caller-relative workspace projection, including on the affected guest's
+already open connection. This delta is an invalidation, not a grant to other
+subscribers. No new event name or membership-count change is introduced.
+
+The durable workspace role is `owner`, `collaborator` or `manager`. Participant
+is the UI label for `collaborator`, preserving existing rows and clients. Existing
+guests, direct member adds and newly redeemed invitations remain Participants;
+joining again cannot upgrade or overwrite an existing grant. Both guest roles
+spend one guest seat. A role change neither changes the owner nor creates host
+membership. Imports do not carry authority from the exporting host.
+
+| Permission | Participant | Manager |
+| --- | --- | --- |
+| Existing guest reads, discussion and agent prompting | Existing behavior | Same |
+| Existing `agent.setModel` RPC | Existing behavior retained | Same |
+| Create agents and use model/provider controls | Existing UI restrictions | Allowed within the granted workspace |
+| Run and observe existing saved scripts | Existing restrictions | Allowed within the granted workspace |
+| Create/edit script commands, command/environment overrides, raw terminals or host execution | Existing restrictions | No additional authority |
+| Change sharing, membership, owner fields or global provider configuration | Existing restrictions | No additional authority |
+
+The scoped Manager grant must not satisfy general workspace-management gates:
+`canManage` stays false for a guest Manager. Existing owner and inherited host-member
+authority is unchanged. Clients use separate permission checks for agent creation,
+model/provider controls and saved-script operation; opening the shared Shell panel
+must not expose terminal creation/input or script editing. A selected provider must
+already be configured; choosing it does not authorize setup or credential writes.
+
+For model selection, Managers may also update `reasoningEffort` through
+`agent.update`, alongside the existing guest-editable display fields. This narrow
+grant does not permit permission settings, prompts, session identity, delegation
+or other protected agent configuration. Saved-script scope means stored
+`purpose: "saved"`, including legacy absent-purpose definitions: lists filter
+before pagination, ID operations recheck purpose, and live events use the same
+boundary. `script.run` supports an existing saved command ID and output/timeout
+options, without command or environment overrides.
+
+The service resolves the current durable role for every protected operation,
+including requests on already connected sockets. A downgrade takes effect on
+subsequent requests without reconnecting. Script IDs and agent IDs are resolved
+within the authorized workspace; possessing an ID is not a grant. The transport
+allowlist permits attempting an operation, while the service remains the authority
+for the role, workspace and allowed fields. Existing Participant RPC permissions
+are preserved, including the historical `agent.setModel` allowance.
+
+Owner-controlled role selectors belong inline on guest member rows. The owner's
+role is fixed, and inherited host access cannot be changed by selecting a guest
+role. UI state retains the confirmed role until a successful mutation; failures
+leave authority unchanged and surface on the affected row. Membership invalidation
+refreshes both the roster and the caller-relative workspace role, rather than
+treating a capability flag or a selected menu value as a grant.
 
 #### Identity model
 
@@ -130,7 +210,9 @@ The returning guest's `invite.accept` continues to validate the identity bound t
 
 ##### The join commit
 
-The host re-checks the invite (still open; a pinned invite whose identity triple differs is `-32602 { code: "invite-pin-mismatch" }`) and, shared by `prove` and `accept`, in **one store transaction**: mints or reuses the principal keyed by the **identity triple** (10.8; `github_user_id` is dual-written for a `github` identity so pre-10.8 lookups keep resolving the same row) — a `prove` refreshes its cached `login` / `displayName` / `avatarUrl` — stamps the invite's redemption (the conditional update is the single-use guard of a **pinned** invite — a concurrent join that loses it is answered with the invite's closed state, `invite-redeemed`; a reusable invite stays open and only its last-redemption stamp moves), refuses when the workspace's collaborators already reach the guest cap `sharing.maxGuestsPerWorkspace` (`-32602 { code: "workspace-full" }`, invite left open) or the account is the primary principal's (`owner-self-join`, nothing minted), or the workspace is archived (`-32602 { code: "workspace-archived" }`, nothing written — the transaction-level guard for a join racing `workspace.archive`: the archive's sweep revokes the invite in the same transaction as the flip, so a join that validated **before** the archive and enters this transaction **after** it is refused here, while a join that re-reads the invite after the sweep never gets this far and fails in the service-side validation above with the invite's closed state `invite-revoked`; [intent-hq/intentd#2066](https://github.com/intent-hq/intentd/pull/2066)), adds the `collaborator` membership (a returning principal re-joining a workspace it already belongs to keeps its row), and records a fresh per-principal credential (64 hex chars, stored as its SHA-256), consuming the `accept` credential when one was presented. After the commit `workspace:updated { changes: { members: true, invites: true, addedPrincipalId, memberCount } }` is published when a membership was added, `{ invites: true, memberCount }` alone for a member's re-join. `login` in the result is the joined principal's cached forge login.
+The host re-checks the invite (still open; a pinned invite whose identity triple differs is `-32602 { code: "invite-pin-mismatch" }`) and, shared by `prove` and `accept`, in **one store transaction**: mints or reuses the principal keyed by the **identity triple** (10.8; `github_user_id` is dual-written for a `github` identity so pre-10.8 lookups keep resolving the same row) — a `prove` refreshes its cached `login` / `displayName` / `avatarUrl` — stamps the invite's redemption (the conditional update is the single-use guard of a **pinned** invite — a concurrent join that loses it is answered with the invite's closed state, `invite-redeemed`; a reusable invite stays open and only its last-redemption stamp moves), refuses when the workspace's collaborators already reach the guest cap `sharing.maxGuestsPerWorkspace` (`-32602 { code: "workspace-full" }`, invite left open) or the account is the primary principal's (`owner-self-join`, nothing minted), or the workspace is archived (`-32602 { code: "workspace-archived" }`, nothing written — the transaction-level guard for a join racing `workspace.archive`: the archive's sweep revokes the invite in the same transaction as the flip, so a join that validated **before** the archive and enters this transaction **after** it is refused here, while a join that re-reads the invite after the sweep never gets this far and fails in the service-side validation above with the invite's closed state `invite-revoked`; [intent-hq/intentd#2066](https://github.com/intent-hq/intentd/pull/2066)), adds the `collaborator` membership (a returning principal re-joining a workspace it already belongs to keeps its row), and records a fresh per-principal credential (64 hex chars, stored as its SHA-256), consuming the `accept` credential when one was presented.
+After the commit `workspace:updated { changes: { members: true, invites: true, addedPrincipalId, memberCount } }` is published when a membership was added, `{ invites: true, memberCount }` alone for a member's re-join.
+`login` in the result is the joined principal's cached forge login.
 
 **Credential revocation closes connections.** `principal.revokeSelf` (and any future revocation of a principal's credentials) broadcasts the principal id; every **non-administrator** connection still bound to it — the per-principal-credential ones; a connection admitted on the legacy token never subscribes to revocation, even when bound to the same primary principal — drains its in-flight responses (so the caller's own `revokeSelf` result is delivered, bounded to 5 s) and is then closed with WebSocket close code **1008 (policy)** and reason `credential revoked`. A replayed revoked token is refused at the upgrade gate (`401`). `workspace.members.remove` / `members.leave` do **not** close the connection: the removed member simply stops seeing the workspace — its later reads are `not-found`, its workspace-scoped subscription channels deliver nothing further, and its queued user messages on the workspace's agents are dropped.
 
@@ -277,3 +359,448 @@ field. Reading this projection requires the existing valid open-invite secret.
 `invite.accept` / `invite.prove` keep their existing result shapes; after admission,
 `system.status` supplies and refreshes the same label for guests and host members.
 See [the setting contract](./settings.md#collaborator-facing-machine-name).
+
+### 5.55 Workspace discussions
+
+**Additive, prepared for protocol 15.1.** A workspace has a default discussion for
+all current members and may have direct or group discussions with selected
+members. These are separate from agent conversations and note comments. The
+desktop entry point remains behind Multiplayer Labs. Replies and reactions use
+the independently gated message-actions extension below. Binary attachments,
+message edits, and changes to a conversation's participants are outside this contract.
+
+Exactly integer `discussionConversations: 1` in the server capabilities advertises
+the complete multiple-conversation contract. Clients must check this capability
+before sending recipient lists or non-default conversation IDs: an earlier
+single-discussion daemon may ignore unknown fields and otherwise send private
+content to the workspace-wide discussion. Missing or unrecognized capability
+values never authorize a fallback send.
+
+Exactly integer `discussionMessageActions: 1`, returned by both hello and
+`system.capabilities`, advertises replies and reactions. Clients require it
+before sending `replyToMessageId` or calling `discussion.react`; they must not
+silently drop a reply target on an older daemon. This capability grants no access
+and does not replace the private-conversation gate.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| discussion.conversations | workspaceId (req), beforeId? (exclusive conversation ID), limit? (integer 1–100, default 50) | `{ conversations: DiscussionConversation[], hasMore: boolean }` — only conversations accessible to the caller |
+| discussion.recipients | workspaceId (req), query? (profile search string, at most 256 UTF-8 bytes), afterPrincipalId? (exclusive principal ID), limit? (integer 1–100, default 50) | `{ members: DiscussionAuthor[], hasMore: boolean }` — current effective workspace members, including offline members, excluding the caller |
+| discussion.list | workspaceId (req), conversationId? (default `"default"`), beforeSequence? (positive integer, exclusive), afterSequence? (nonnegative integer, exclusive; mutually exclusive with beforeSequence), limit? (integer 1–100, default 50) | `{ messages: DiscussionMessage[], hasMore: boolean, conversation: DiscussionConversation }` |
+| discussion.send | workspaceId (req), conversationId? (default `"default"` when neither target field is supplied), recipientPrincipalIds? (1–31 distinct other current workspace members; mutually exclusive with conversationId), messageId (req, nonblank string, at most 128 UTF-8 bytes), body (req, nonblank string, at most 16384 UTF-8 bytes), replyToMessageId? (existing message in the same conversation; requires `discussionMessageActions: 1`), recipientAgentIds? (up to 31 distinct explicit agent recipients; requires `discussionAgentMessaging: 1`, see below) | `{ message: DiscussionMessage, conversation: DiscussionConversation }` |
+| discussion.react | workspaceId (req), conversationId? (default `"default"`), messageId (req, server message ID), reaction (req, `"👍"`, `"👎"`, `"👀"`, `"✅"`, `"🙈"`; legacy `"🙂"` removal/retry only), active (req, boolean desired state) | `{ messageId, reactions: DiscussionReaction[], reactionVersion }`; requires `discussionMessageActions: 1`; expanded choices and reactor snapshots require `discussionReactions: 1` |
+| discussion.stopAgent | workspaceId (req), conversationId? (default `"default"`), messageId (req, committed server ID), agentId (req), attempt (req, positive integer) | `{ activity: DiscussionAgentActivity }`; requires `discussionAgentActivity: 1`; human participant only |
+| discussion.retryAgent | workspaceId (req), conversationId? (default `"default"`), messageId (req, committed server ID), agentId (req), attempt (req, positive integer) | `{ activity: DiscussionAgentActivity }`; requires `discussionAgentActivity: 1`; human participant only |
+
+
+`DiscussionConversation` is `{ id, workspaceId, kind, participants, createdAt }`.
+`kind` is `"workspace"`, `"direct"`, or `"group"`. The reserved ID `"default"`
+identifies the workspace-wide conversation; its `participants: []` means current
+workspace membership governs access. A private conversation has a server-generated
+UUID and immutable `DiscussionAuthor` profile snapshots for its participants,
+including the creator. Two participants make a direct discussion; more make a
+group discussion. `createdAt` is a server RFC-3339 timestamp.
+
+The default conversation leads the first conversation page and counts toward
+`limit`. Private conversations follow in descending ID order. `beforeId: "default"`
+starts with private conversations, so a first page with `limit: 1` can continue.
+Subsequent pages use the last returned ID; `hasMore` means another accessible
+conversation remains. Recipient pages use ascending principal ID order and
+apply search and membership filtering before the limit. Both queries are bounded
+in storage, without loading every message or every workspace member.
+
+Sending `recipientPrincipalIds` creates a conversation and its first message in
+one transaction. The authenticated sender is added automatically. Opening or
+abandoning a new-discussion composer creates no durable empty conversation.
+Starting another composer with the same people creates a distinct conversation;
+this contract does not deduplicate discussions by participant set. The client
+uses the returned conversation ID for subsequent sends and reads.
+
+`DiscussionMessage` has the same shape in history, send replies, and events:
+
+```json
+{
+  "id": "server-generated-message-uuid",
+  "workspaceId": "ws-1",
+  "conversationId": "default",
+  "sequence": 42,
+  "body": "Let's review the sidebar together.",
+  "author": {
+    "principalId": "principal-1",
+    "login": "sam",
+    "displayName": "Sam",
+    "avatarUrl": null
+  },
+  "createdAt": "2026-10-14T12:42:00.000Z",
+  "replyToMessageId": null,
+  "replyTo": null,
+  "reactions": [],
+  "reactionVersion": 0,
+  "recipientAgentIds": []
+}
+```
+
+- `id` is the immutable server-generated row identity. It differs from the
+  client-supplied `messageId`, which is only a retry key. Two people choosing the
+  same retry key still create distinct messages.
+- `sequence` is a positive, monotonically increasing server sequence. It orders
+  messages within a conversation and is its pagination cursor; gaps are allowed.
+  Clients do not compare sequence numbers across conversations, order by local
+  clocks, or assume consecutive values.
+- `author` is a snapshot of the connection's authenticated principal, or the
+  bound sending agent under the agent-messaging extension, at send time.
+  The three profile fields are always present and nullable. Request fields
+  cannot choose an author, sequence, timestamp, or workspace other than the
+  authorized `workspaceId`. The snapshot is immutable; render its profile fields
+  without resolving its principal ID against a current principal registry.
+- `createdAt` is a server RFC-3339 timestamp. `body` is plain text; line breaks
+  are preserved. Render it as text, never HTML. Text or a navigational agent
+  reference alone never requests agent delivery; only explicit `recipientAgentIds` do.
+- On a daemon advertising message actions, `replyToMessageId`, `replyTo`,
+  `reactions`, and `reactionVersion` are always present. Older daemons may omit
+  those fields; absence does not establish support for the extension.
+
+#### Replies and reactions
+
+`replyToMessageId` references an existing message in the same conversation.
+The daemon checks this inside the send transaction, including current membership
+and participation. A new conversation cannot reply to another conversation.
+The committed message carries an immutable, nonrecursive quote
+`replyTo: { id, author: DiscussionAuthor, body }`, or `null` when not a reply.
+The quote uses the original author snapshot and body, bounded by the existing
+message-body limit. It confers no access to another conversation or principal.
+The reply target is part of retry identity: a changed target with the same retry
+key is invalid, rather than editing the committed reply.
+
+Exactly integer `discussionReactions: 1`, advertised by hello and
+`system.capabilities`, enables the expanded reaction contract. It requires the
+existing message-actions support and grants no authority. This is a coordinated,
+unreleased Multiplayer Labs addition: older experimental clients only understand
+the old two-emoji response and must upgrade with the daemon; expanded responses
+are not filtered per connection. New clients use the legacy shape and controls
+when this capability is absent or unknown, and require exact `1` before sending
+expanded choices or interpreting reactor snapshots.
+
+`DiscussionReaction` is `{ reaction, count, reacted, reactors }`. The fixed order
+is `"👍"`, `"👎"`, `"👀"`, `"✅"`, `"🙈"`, then legacy `"🙂"`. The picker offers
+only the first five. Existing smiles remain readable/removable; `active: true`
+on an already-selected smile is a no-op, but creating a new smile is invalid.
+`count` is positive; empty aggregates are omitted. `reacted` is the authenticated
+human's or bound agent's own current selection. `reactors` contains at most 20
+immutable `DiscussionAuthor` snapshots, captured server-side at insertion (old
+human rows are snapshotted once during migration; pre-snapshot imported rows
+may have null identity/profile fields when the source cannot be recovered). Samples are ordered by
+first-added UUIDv7 row ID, including inert imported rows; removing a sampled row
+refills from the next row. Counts may exceed sample length; clients can show
+“and N others” using `count - reactors.length`. Never resolve snapshots against
+live profiles or derive ownership from them. Source and destination snapshots
+may share identity strings without representing the same local selection; do not
+deduplicate snapshots by principal or agent ID. Samples and totals are maintained
+on mutation and persisted alongside the message; history reads do no roster
+aggregation or profile joins.
+
+`discussion.react` sets the caller's desired state. Repeating it is a no-op.
+Inside the serialized write transaction, humans require current workspace
+membership and private-conversation participation. Agents require an existing
+explicit discussion grant and a nonretired, nondeleted session in the same
+workspace; only `default` is permitted. Agent identity comes exclusively from
+the authenticated MCP context, never arguments. `ws.discussion.react` exposes
+`(conversationId, messageId, reaction, active)` with the same result. Reactions
+never create a grant, enqueue a message, wake an agent, or subscribe agents to
+discussion events. Agent history and send retries project `reacted` from the
+bound agent rather than a human principal.
+
+An actual change increments that message's nonnegative `reactionVersion` and
+publishes transient `discussion:reaction` with
+`{ workspaceId, conversationId, messageId, reactions, reactionVersion }`.
+Every recipient gets its own `reacted` projection after a fresh access check;
+removed members and agents receive none. A no-op produces no event or version
+increment. Reactions do not change message order, sequence cursors, or unread
+message counts. Clients retain the greatest reaction version across events,
+history pages, and send replies; older responses must not overwrite a newer
+aggregate. Reconnect recovery must refresh reactions for displayed messages,
+since message-sequence catch-up alone cannot observe changes to older messages.
+
+Workspace references may be represented by existing canonical workspace links
+in the plain-text body and rendered as navigable chips. The client must preserve
+the target workspace/backend and validate link kinds; reference text is never
+HTML, executable code, or permission to invoke an agent.
+
+#### Correlated agent activity and controls (prepared)
+
+Exactly integer `discussionAgentActivity: 1` on hello and `system.capabilities`
+adds durable activity and selected mention snapshots to the unreleased Multiplayer
+Labs discussion feature. Every message includes `agentActivity: []` and
+`agentMentions: []`, including ordinary/private messages. Old delivered messages
+without a trustworthy invocation receipt have empty activity, not invented status.
+
+`DiscussionAgentActivity` is `{ agentId, attempt, version, state, updatedAt, error }`.
+`attempt` is a positive integer identifying this recipient's invocation of the
+committed discussion message. `version` is a positive monotonically increasing
+integer across all transitions and retries for that message/recipient pair.
+`state` is `queued`, `working`, `completed`, `failed`, or `stopped`; `updatedAt`
+is RFC-3339 and `error` is a string or null. These describe this request, never
+an agent-wide status. Completed means the invocation ended; only an explicit
+`discussion.send` creates an agent reply. Stopping retains already produced text.
+A daemon restart marks interrupted work stopped; queued deliveries remain queued.
+
+Human members with current instruction authority may Stop or Retry in the default
+workspace-wide discussion. Agent callers and private discussions cannot use these
+controls. Stop cancels only the matching invocation, or removes its queued delivery;
+it must not stop another active request. Generic queue editing/removal refuses discussion
+requests; use this correlated Stop control. Regenerating an unrelated agent chat
+retains pending discussion requests. Retry applies only to failed/stopped
+attempts, creates the next attempt, and never inserts another human discussion
+message. The expected `attempt` is a compare-and-swap fence: a repeated or stale
+request returns current activity without applying again; a future or zero attempt
+is invalid. A retry may finish its already-committed queue handoff after reconnect,
+but never reconstruct completed work. Normal retirement and instruction-revocation
+gates still apply.
+
+Transient `discussion:activity` events carry
+`{ workspaceId, conversationId, messageId, activity }`. Delivery uses the same
+human membership/private-conversation gates as discussion messages; agents cannot
+subscribe. `discussion.list` restores the durable projection on reconnect. Clients
+merge by message ID plus agent ID and accept only newer `version` values, including
+when a request response races an event or a history page.
+
+`discussion.send` additionally accepts `agentMentions?: { agentId, name, start, end }[]`.
+Offsets are UTF-16 code units into `body`; each ordered, non-overlapping span must
+be exactly `@` plus its nonblank name, and its agent must be in `recipientAgentIds`.
+The maximum is 100 spans and 256 UTF-8 bytes per name. Spans may repeat a recipient.
+The daemon persists these immutable presentation snapshots and includes them in
+retry identity. They never grant delivery or access independently of recipients.
+Import preserves mention text as historical attribution but clears activity and
+does not restore invocation receipts, grants, or pending addressed work.
+
+#### Explicit agent messaging (prepared)
+
+Exactly integer `discussionAgentMessaging: 1` on both hello and
+`system.capabilities` gates explicit agent recipients and agent-authored replies.
+This remains part of the unreleased Multiplayer Labs discussion feature.
+Clients must retain an addressed draft when the capability is absent or unknown;
+never drop its recipients and silently post an ordinary message instead.
+
+`recipientAgentIds` selects the agents to receive **this message only**. It is
+independent of human conversation participants, defaults to an empty array,
+and accepts at most 31 distinct, nonempty agent IDs from the same workspace.
+Retired or deleted agents and an agent sender's own ID are invalid targets.
+On a supporting daemon every message includes `recipientAgentIds`, including
+an empty array for ordinary messages. The recipient set is part of retry
+identity: reordering is immaterial, but adding or removing a recipient with the
+same retry key is invalid. Human and agent sender identities have separate
+retry scopes.
+
+The initial extension addresses agents only in the default workspace-wide
+discussion. Private-conversation targeting and agent access remain forbidden:
+ordinary agent transcripts are workspace-visible, so granting private history
+without restricting those transcripts would expose private content.
+Human private conversations keep their existing behavior.
+
+The daemon binds the author to the authenticated human or calling agent; no
+request field can impersonate either. An agent author has `agentId`,
+`principalId: null`, and its captured display name. Human author snapshots keep
+their existing shape with a nonnull `principalId` and no `agentId`.
+Clients identify agent authors explicitly and never compare a null principal
+with the signed-in human to determine ownership. Reply quotes preserve the
+same author snapshot. Imported snapshots are historical attribution, not an
+identity or permission grant on the destination.
+
+For example, an agent-authored message carries:
+
+```json
+{
+  "principalId": null,
+  "agentId": "agent-4fbdc035-e235-43f9-8c15-48d787f05e09",
+  "login": null,
+  "displayName": "Reviewer",
+  "avatarUrl": null
+}
+```
+
+Before being addressed, an agent cannot list or read discussion history or
+post into the discussion. An accepted addressed message establishes durable
+access for that agent to that conversation. The agent receives the addressed
+message and conversation identifiers, without automatically loading history.
+It may then explicitly fetch bounded pages with `ws.discussion.list` and post
+with `ws.discussion.send`; `ws.discussion.conversations` discovers only its
+authorized conversations. These tools bind the agent and workspace from the
+MCP session, never from a caller-supplied author. History uses the same paging
+bounds as human reads. Retired/deleted agents cannot use a previous grant.
+
+The agent-facing calls are:
+
+```javascript
+await ws.discussion.conversations({ limit: 50 });
+await ws.discussion.list("default", { limit: 50 });
+await ws.discussion.send("default", "I checked the change.", {
+  messageId: "unique-reply-key",
+});
+```
+
+The caller supplies a unique `messageId` for each intended post, retaining it
+and all message fields for a retry. To explicitly address another agent, add
+`recipientAgentIds` to the send options. List options also accept
+`beforeSequence` or `afterSequence`; discovery accepts `beforeId`.
+
+An agent's normal turn output is not automatically posted into a discussion.
+It must call the discussion send tool to reply. A reply without explicit agent
+recipients wakes nobody. An authorized agent can explicitly address another
+eligible agent in its reply; merely replying to an agent-authored message or
+including an agent reference does not deliver a turn.
+
+Message persistence, new grants, and pending recipient delivery records share
+one transaction. Delivery uses a stable identity for each message/recipient and
+the existing agent queue; retries preserve the original message and do not
+create a second delivery. Pending delivery must survive daemon restart and
+failed handoff. Being accepted into the queue does not mean that the agent has
+finished replying.
+
+Agents remain excluded from `discussion:` event subscriptions, event history,
+and discussion typing. Addressing one message never subscribes the agent to
+later messages, reactions, or typing activity. Conversation grants and pending
+deliveries must not be reactivated by workspace import.
+
+#### History and delivery
+
+`discussion.list` returns only the selected conversation's messages, in ascending
+sequence order:
+
+- Without a cursor, select the newest `limit` messages. `hasMore` means older
+  rows remain below the returned page.
+- With `beforeSequence`, select the newest `limit` messages strictly below that
+  sequence. `hasMore` again means older rows remain.
+- With `afterSequence`, select the oldest `limit` messages strictly above that
+  sequence. `hasMore` means newer rows remain above the returned page. Zero is
+  accepted so an initially empty discussion can catch up from its beginning.
+
+The cursors are mutually exclusive; supplying both is `-32602` Invalid params.
+An empty page returns an empty `messages` array and `hasMore: false`, with the
+conversation descriptor still present so restored panes can recover their title
+and participants. Queries are bounded
+by the page limit; the server does not load the entire conversation.
+
+`discussion.send` persists the row before replying and publishes
+`discussion:message` with
+`data = { workspaceId, conversationId, conversation, message }`. The event carries
+the complete conversation descriptor and committed message, allowing recipients
+to discover a new conversation without a refetch. It is transient: broadcast
+through the existing event bus without persisting a second copy in the event log. History survives
+daemon restarts and client reconnects in the discussion table; `discussion.list`
+is the recovery path when live delivery is missed.
+
+The retry key is scoped to `(workspaceId, authenticated principalId, messageId)`.
+Repeated sends with the same key, target, reply target, and exact body return the original
+conversation, message identity, body, and author snapshot, even if the person's profile
+has since changed. The response projects the current reaction state for the caller.
+First-message retries use the same recipient set; ordering
+of that set is immaterial. A client retries an uncertain send with that same key and body. New intentional
+sends use new keys. Reusing a key with different text or a different conversation
+or recipient set is `-32602` Invalid params; it does not edit the row, create a
+conversation, insert a new message, or publish another event.
+
+Clients subscribe to workspace events before reading history, route by workspace
+and conversation ID, merge by message `id`, and sort by `sequence`. A live event,
+a send reply, and a history page may contain the same row. A late history reply must not erase a live row. After a
+reconnect, use `afterSequence` from the last successfully synchronized history
+position and advance it through each fetched page until `hasMore` is false.
+Keep this position separate from live arrivals and send replies: seeing a newer
+message does not prove that intervening history was fetched. An initially empty
+history establishes position zero. Bound catch-up work per attempt and preserve
+the last fetched position across interruption or retry; a live message must not
+advance it past unread history. Keep the older-history cursor separate, preserve
+scroll position when prepending history, and retain drafts and uncertain sends
+until their outcome is known. Discard pending replies when the workspace's
+backend or authenticated principal changes. Drafts, uncertain sends, pagination,
+and synchronized history positions are independent for every conversation. A
+legacy event without a conversation ID can only belong to the default discussion.
+
+#### Typing indicators
+
+Discussion typing uses the existing transient [presence channel
+(§5.47)](./presence.md#discussion-typing-151-prepared). A human connection reports
+`presence.update` with `discussionTyping: { workspaceId, conversationId }`;
+omitting `conversationId` selects the default discussion. Human roster rows
+carry `discussionTyping: [{ source, conversationId, since, pulse }]`, projected
+to conversations the recipient may access. An unsent new-conversation composer
+has no server conversation ID and reports no discussion typing. It carries no
+message text and does not change history or message sequence numbers. The existing agent
+typing shape remains unchanged, and agents cannot read discussion typing.
+
+The message stream shows typing avatars and a three-dot bubble, with the other
+members' names in its localized accessible label. Pulses are
+throttled, expire after three seconds without a new pulse, and clear on send,
+empty draft, blur, navigation, hidden window, disconnect, or lost access.
+Multiple connections for one person produce one name; the current person is
+hidden. Only the currently displayed conversation's entries are shown. Repeated
+unchanged rosters cannot revive expired typing. An omitted field from an older
+daemon means no indicator, not a discussion failure.
+
+#### Workspace transfer
+
+Workspace exports include default discussion history. A workspace containing
+private conversations cannot be exported: export returns the existing unsupported
+transfer error, including when a private conversation is created after export
+admission but before the archive snapshot. This prevents the archive from exposing
+private history or participant identities to a nonparticipant owner or agent.
+
+Import preserves message IDs, sequence order, bodies, timestamps, and author snapshots. An imported author's
+`principalId` is inert source-daemon attribution, not a destination identity or
+membership. A matching destination principal string must not rebind the author,
+change the profile, or establish an own-user comparison. Private conversation
+participant grants are cleared on import; their archived history remains
+inaccessible through discussion APIs, even to the destination owner. Default
+discussion history remains available to destination workspace members.
+
+Reply quotes retain their original inert author snapshots. Reaction counts and
+versions and immutable reactor snapshots remain historical data. Import retains
+display rows and their order but clears both local principal and agent ownership
+columns; no discussion-agent grant transfers. All destination viewers therefore start with `reacted: false`, including
+people whose principal string matches a source reactor. Turning off an unselected
+reaction is a no-op; a destination person's new reaction adds to the historical
+count and can remove only that new selection.
+
+Import isolates historical retry keys from destination senders, so a new send
+cannot resolve to an imported message merely by reusing its source principal
+string and client key. This uses the existing archive format and exact daemon
+version compatibility gate; it does not transfer membership or credentials.
+
+#### Access and compatibility
+
+Human calls require an authenticated client connection and current workspace
+membership, including inherited host membership. The prepared agent-messaging
+extension permits bound agents to discover granted conversations, read their
+history, and send replies as agents. Recipient discovery remains human-only.
+Under exact `discussionReactions: 1`, a bound agent may also react in `default`
+with an existing explicit discussion grant and a nonretired, nondeleted session
+in the same workspace, rechecked inside the serialized write transaction.
+Reactions never grant access or wake agents. Agent, daemon, and unbound callers
+cannot post as people.
+A missing or inaccessible workspace is
+`-32602 { code: "not-found" }`; an unsupported caller is `-32003` Forbidden. Malformed
+fields and out-of-range limits are `-32602` Invalid params. The author comes from
+the bound caller, never `client.hello` display metadata.
+
+Private conversation reads, sends, discovery, and event delivery additionally
+require a stored participant grant; workspace or host ownership does not bypass
+this check. Sends and retries recheck the sender's effective workspace membership
+inside the serialized write transaction. An unknown or inaccessible conversation is indistinguishable from a
+missing one. Participant snapshots do not confer membership: a removed workspace
+member loses access even while its historical participant record remains.
+
+`discussion:message` and `discussion:reaction` are workspace-scoped and recheck workspace membership and
+conversation participation at delivery time. Removed members cannot continue
+reading history, sending, or receiving subsequent messages. Private typing entries
+are projected separately for every receiving human; unrelated workspace members
+receive neither a private conversation ID nor its typing activity. Agent
+subscriptions cannot subscribe to or receive `discussion:` events, including subscriptions restored from storage. All event
+history queries exclude discussion rows before pagination, including rows stored
+by earlier development builds; explicit type, wildcard, and unfiltered queries
+cannot expose them. Only a message's explicit `recipientAgentIds`, under the
+agent-messaging extension, requests agent delivery; other sends dispatch no turn.
+
+Older owner connections can answer `-32601`; an older collaborator allowlist can
+answer `-32003`. Clients must show that discussions are unavailable, retain the
+draft, and never substitute an agent message or note comment. Authorization
+errors must not be treated as successful sends. A numeric protocol version does
+not bypass membership or the Multiplayer Labs setting.

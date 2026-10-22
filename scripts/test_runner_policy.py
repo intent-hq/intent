@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reject workload cloud pins while allowing only named infrastructure exceptions."""
+"""Reject paid cloud pins while allowing free standard labels and named infrastructure exceptions."""
 from pathlib import Path
 import json
 import re
@@ -7,6 +7,9 @@ import subprocess
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
+# Standard GitHub-hosted runners are free for public repositories, so jobs may pin
+# them directly; the route never sends them to a self-hosted slot or WarpBuild.
+FREE = {'ubuntu-22.04', 'ubuntu-24.04', 'ubuntu-latest', 'ubuntu-24.04-arm', 'windows-2022', 'windows-2025'}
 # The probe must work when the fleet is offline; the intent-cache smoke needs a
 # GitHub-hosted writer to prove self-hosted runners reuse its cache entries.
 EXCEPTIONS = {('runner-route.yml', 'probe'), ('manual-signed-build.yml', 'smoke-macos'),
@@ -19,7 +22,7 @@ HOSTED_ONLY = {
 EXCEPTIONS |= set(HOSTED_ONLY)
 MAINTENANCE = {('m1mac-smoke.yml', 'smoke'), ('provision-m1mac.yml', 'provision'), ('provision-m1mac.yml', 'verify'), ('macos-prune.yml', 'prune'), ('windows-prune.yml', 'prune'),
                ('intent-cache-smoke.yml', 'isolation'), ('intent-cache-smoke.yml', 'fresh'), ('intent-cache-smoke.yml', 'cache-reader'),
-               ('intent-cache-smoke.yml', 'cache-reader-small')}
+               ('intent-cache-smoke.yml', 'cache-reader-small'), ('intent-cache-smoke.yml', 'isolation-xl')}
 
 
 def jobs(text):
@@ -50,11 +53,11 @@ def violations(text, filename):
         if not runner:
             continue
         runner = runner[1].strip('"\'')
-        if (filename, job) in EXCEPTIONS or (job == 'route' and 'id: decide' in body and 'listSelfHostedRunnersForOrg' in body):
+        if runner in FREE or (filename, job) in EXCEPTIONS or (job == 'route' and 'id: decide' in body and 'listSelfHostedRunnersForOrg' in body):
             continue
         if runner.startswith('[self-hosted,') and (filename, job) in MAINTENANCE:
             continue
-        routed = re.fullmatch(r"\$\{\{ fromJSON\(needs\.(route|runner-route)\.outputs\.(runners|slots|linux_labels|check_labels).*\}\}", runner)
+        routed = re.fullmatch(r"\$\{\{ fromJSON\(needs\.(route|runner-route)\.outputs\.(runners|slots|cloud|linux_labels|check_labels).*\}\}", runner)
         # Matrix legs that may take a pool read their own slot first.
         routed = routed or re.fullmatch(r"\$\{\{ [^|]+ && fromJSON\(needs\.(route|runner-route)\.outputs\.slots \|\| '\{\}'\)\[format\('[\w-]+-\{0\}', matrix\.\w+\)\] \|\| fromJSON\(needs\.(route|runner-route)\.outputs\.runners \|\| '\{\}'\)\[matrix\.(\w+)\] \|\| matrix\.\3 \}\}", runner)
         if not routed and not (runner == '${{ matrix.os }}' and 'needs.route.outputs.' in body):
@@ -62,6 +65,7 @@ def violations(text, filename):
     return errors
 
 
+# Free labels may still be listed; the route always gives them their GitHub label.
 POOLED = {'gh-linux-8x', 'gh-linux-16x', 'ubuntu-22.04', 'ubuntu-24.04'}
 SLOT_READ = re.compile(r"outputs\.slots \|\| '\{\}'\)\[(?:'([\w-]+)'|format\('([\w-]+)-\{0\}', matrix\.\w+\))\] \|\| (?:fromJSON\('\[\"([\w.-]+)\"\]'\)|fromJSON\(needs\.[\w-]+\.outputs\.runners \|\| '\{\}'\)\[matrix\.(\w+)\])")
 
@@ -106,7 +110,7 @@ def slot_violations(text):
     return errors
 
 
-POOL_OF = {'gh-linux-8x': 'heavy', 'gh-linux-16x': 'heavy', 'ubuntu-22.04': 'small', 'ubuntu-24.04': 'small'}
+POOL_OF = {'gh-linux-8x': 'heavy', 'gh-linux-16x': 'heavy'}
 QUEUE_HOSTED = set()
 
 def pool_reads(body):
@@ -164,8 +168,8 @@ class RunnerPolicy(unittest.TestCase):
         two = 'jobs:\n  a:\n' + read.format('route') + '  b:\n' + read.format('route')
         self.assertEqual(len(parallel_pool_violations(two, 'x.yml')), 1)
         self.assertEqual(parallel_pool_violations('jobs:\n  a:\n' + read.format('route') + '  b:\n' + read.format('route, a'), 'x.yml'), [])
-        legs = 'jobs:\n  a:\n    strategy:\n      matrix:\n        os: [ubuntu-24.04]\n        node: [22, 24]\n    runs-on: ${{ fromJSON(needs.route.outputs.runners || \'{}\')[matrix.os] || matrix.os }}\n'
-        self.assertEqual(parallel_pool_violations(legs, 'x.yml'), ['a: several matrix legs share the small pool mapping'])
+        legs = 'jobs:\n  a:\n    strategy:\n      matrix:\n        os: [gh-linux-8x]\n        node: [22, 24]\n    runs-on: ${{ fromJSON(needs.route.outputs.runners || \'{}\')[matrix.os] || matrix.os }}\n'
+        self.assertEqual(parallel_pool_violations(legs, 'x.yml'), ['a: several matrix legs share the heavy pool mapping'])
 
     def test_slot_lists_match_their_jobs(self):
         for path in (ROOT / '.github/workflows').glob('*.yml'):
@@ -214,9 +218,30 @@ class RunnerPolicy(unittest.TestCase):
         route = (ROOT / '.github/workflows/runner-route.yml').read_text()
         self.assertIn("linux: ['self-hosted', 'linux', 'x64', 'intent-cache'],", route)
 
-    def test_policy_rejects_new_cloud_pins(self):
-        for label in ['ubuntu-24.04', 'gh-linux-8x', 'ubuntu-latest', '${{ matrix.runner }}', '${{ needs.unrelated.outputs.runner }}']:
+    def test_pool_limits_and_xl_fleet(self):
+        # Pool sizes are org/repo variables, so adding hosts needs no workflow change;
+        # the defaults keep today's routing (no xl slots).
+        route = (ROOT / '.github/workflows/runner-route.yml').read_text()
+        for env, var, default in [('THRESHOLD', 'CI_LINUX_HEAVY_SLOTS', 2), ('XL_THRESHOLD', 'CI_LINUX_XL_SLOTS', 0)]:
+            self.assertIn(f"          {env}: ${{{{ vars.{var} || '{default}' }}}}\n", route)
+        self.assertIn("xl: ['self-hosted', 'linux', 'x64', 'intent-cache-xl'],", route)
+        # The Linux kill switch covers xl, and only 16-core jobs may take an xl slot.
+        self.assertIn("xl: process.env.LINUX_RUNNER_DISABLED === 'true',", route)
+        self.assertIn("xl: ['gh-linux-16x'],", route)
+        self.assertLess(route.index("xl: ['gh-linux-16x'],"), route.index("linux: ['gh-linux-8x', 'gh-linux-16x'],"))
+
+    def test_policy_rejects_new_paid_pins(self):
+        for label in ['gh-linux-8x', 'gh-linux-16x', 'gh-windows-16x', 'macos-26-xlarge', 'macos-15-xlarge',
+                      '${{ matrix.runner }}', '${{ needs.unrelated.outputs.runner }}']:
             self.assertEqual(violations(f'jobs:\n  new-work:\n    runs-on: {label}\n', 'new.yml'), ['new-work'])
+        # Free standard labels and the cloud mapping are allowed.
+        for label in sorted(FREE) + ["${{ fromJSON(needs.runner-route.outputs.cloud || '{}')['gh-linux-8x'] || fromJSON('[\"gh-linux-8x\"]') }}"]:
+            self.assertEqual(violations(f'jobs:\n  new-work:\n    runs-on: {label}\n', 'new.yml'), [])
+
+    def test_route_knows_the_free_labels(self):
+        route = (ROOT / '.github/workflows/runner-route.yml').read_text()
+        listed = re.search(r"const free = \[([^\]]*)\];", route)[1]
+        self.assertEqual({label.strip(" '") for label in listed.split(',')}, FREE)
 
     def test_shell_jobs_prepare_hosted_image_tools(self):
         text = (ROOT / '.github/workflows/ci.yml').read_text()

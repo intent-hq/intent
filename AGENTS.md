@@ -41,10 +41,12 @@ Always use `http://daemon.localhost:<port>` in the embedded browser.
 ### Situate
 
 Run `STATUS_JSON=1 make status` first. It reports host gaps, resolved ports, live sandboxes
-and health, both component branches (`repos.<name>.gitlinkDirty` flags a submodule moved
-off its pin; `repos.<name>.behindOriginMain` counts commits the checked-out submodule HEAD
-lags the local `origin/main` — branch component work from `origin/main` when > 0), and branch PR checks
-when `gh` is authenticated.
+and health, the monorepo and component branches (`repos.<name>.gitlinkDirty` flags a submodule
+moved off its pin; `repos.<name>.behindOriginMain` counts commits HEAD lags the local
+`origin/main` — branch component work from `origin/main` when > 0), and branch PR checks
+when `gh` is authenticated. If `repos.monorepo.protocolDocsStale`, read the contract via
+`git show origin/main:docs/protocol/<file>` (a stale copy produced false findings on
+[cloudlands-fe#3572](https://github.com/intent-hq/cloudlands-fe/pull/3572)).
 While `setup.running` is true (or your first message carried the setup-in-progress
 notice) the workspace setup script is still provisioning the worktree, so treat the whole
 report as provisional and wait with a hook on `ws.workspace.details().setupStatus` before
@@ -302,12 +304,14 @@ with no rollback.
 
 - `make gate` runs `make check` then the full nextest suite; `make test` is
   test-only (resume records apply only to nextest — `gate` always reruns the lints).
-- When the full suite is impractical, run `make test-changed` before enqueueing:
-  intentd's `scripts/changed-tests.sh` picks the nextest targets changed vs
-  `origin/main` (`BASE=<ref>`; `DRY_RUN=1` prints the plan) and falls back to the
-  full suite on manifest/lockfile/nextest-config changes. `make coverage-changed`
-  runs it under llvm-cov — the local equivalent of the PR `coverage-changed` job.
-- `make test` / `make test-changed` print a unique `record:` attempt path, including
+- When the full suite is impractical, run `make test-changed` before enqueueing: it
+  runs the nextest targets intentd's `scripts/changed-tests.sh` picks vs `origin/main`
+  (`BASE=<ref>`; `DRY_RUN=1` prints the plan), falling back to the full suite on
+  manifest/lockfile/nextest-config changes; `make coverage-changed` runs it under
+  llvm-cov like the PR `coverage-changed` job. To iterate on a few tests use
+  `make test-select E='<nextest filterset>'`, not raw `cargo nextest`, which skips the
+  fixture setup so fixture tests fail in bulk (95 bogus failures, intentd#2559).
+- `make test` / `test-changed` / `test-select` print a unique `record:` attempt path, including
   fully resumed runs. [Receipt and coverage details](CONTRIBUTING.md#test-attempt-receipts-and-resume-coverage)
   explain evidence, interruption and seven-day tree retention. `RESUME=1` skips verified
   passes for the same worktree, submodule pointers, toolchain, lockfile and effective

@@ -662,8 +662,8 @@ echo "shipped-in tests passed under $("$script_bash" -c 'echo "bash $BASH_VERSIO
 
 # Stock macOS /bin/bash is 3.2 (intent-hq/intent#4706). `bash -n` alone
 # accepts Bash 4+ builtins and expansions, so reject them by pattern too,
-# then rerun the fixtures under a real Bash 3 when one can be found:
-# BASH3_BIN, a bash3 on PATH, Homebrew bash@3, or a 3.x /bin/bash. The
+# then rerun the fixtures under a real Bash 3 when one can be found
+# (shared lookup in find-bash3.sh; `make bash3` builds one). The
 # pattern gate is a best-effort guard for hosts without a Bash 3; the real
 # Bash 3 fixture run is the authoritative check. A missing Bash 3 is a skip
 # notice by default; set REQUIRE_BASH3 to a non-empty value (CI) to make it
@@ -725,27 +725,15 @@ gate_sample miss 'my_coproc=1'
 gate_hits=$(gate_matches "$script" "${BASH_SOURCE[0]}")
 [[ -z "$gate_hits" ]] || fail "Bash 4+ constructs found (stock macOS bash is 3.2):"$'\n'"$gate_hits"
 
-find_bash3() {
-  local candidate resolved brew_prefix
-  brew_prefix=$(brew --prefix bash@3 2>/dev/null) || brew_prefix=""
-  for candidate in "${BASH3_BIN:-}" bash3 "${brew_prefix:+$brew_prefix/bin/bash}" \
-    /opt/homebrew/opt/bash@3/bin/bash /usr/local/opt/bash@3/bin/bash /bin/bash; do
-    [[ -n "$candidate" ]] || continue
-    resolved=$(command -v "$candidate" 2>/dev/null) || continue
-    [[ -x "$resolved" ]] || continue
-    "$resolved" -c '[[ "${BASH_VERSINFO[0]}" -eq 3 ]]' 2>/dev/null || continue
-    printf '%s\n' "$resolved"
-    return 0
-  done
-  return 1
-}
+# shellcheck source=scripts/find-bash3.sh
+source "$repo_root/scripts/find-bash3.sh"
 
 if [[ "${BASH_VERSINFO[0]}" -eq 3 ]]; then
   : # the fixtures above already ran under Bash 3
 elif bash3=$(find_bash3); then
   SHIPPED_IN_TEST_BASH="$bash3" "$bash3" "${BASH_SOURCE[0]}"
 elif [[ -n "${REQUIRE_BASH3:-}" ]]; then
-  fail "no Bash 3 interpreter found and REQUIRE_BASH3 is set (point BASH3_BIN at one, or unset REQUIRE_BASH3 to skip the real 3.2 run)"
+  fail "no Bash 3 interpreter found and REQUIRE_BASH3 is set ($(bash3_missing_hint); or unset REQUIRE_BASH3 to skip the real 3.2 run)"
 else
-  echo "shipped-in tests: no Bash 3 interpreter found (set BASH3_BIN); real 3.2 run skipped, static gate only"
+  echo "shipped-in tests: no Bash 3 interpreter found ($(bash3_missing_hint)); real 3.2 run skipped, static gate only"
 fi

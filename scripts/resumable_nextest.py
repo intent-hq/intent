@@ -54,6 +54,7 @@ from datetime import datetime, timezone
 import hashlib
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -294,8 +295,8 @@ def callback_setup_help(intentd_dir: Path) -> str:
         f"Set {CALLBACK_FIXTURE_ENV} to a verified fixture (Linux x64, descriptor-pinned Node).",
         "Native macOS is not supported by this fixture. Use an existing authorized Linux x64 host.",
         "Complete checkout, tools and gate recipe: CONTRIBUTING.md#linux-x64-callback-gates",
-        f"With the variable unset, make test, test-changed and gate prepare a ready cache under "
-        f"{callback_cache_dir()} offline; a rejected cache must be rebuilt, never edited.",
+        "With the variable unset, make test, test-changed, test-select and gate prepare a ready cache",
+        f"under {callback_cache_dir()} offline; a rejected cache must be rebuilt, never edited.",
         "No downloads or repairs were attempted. On that Linux host, prepare explicitly, then retry",
         "(env -u NODE_OPTIONS clears host Node preloads, which the prepare script refuses):",
     ]
@@ -419,6 +420,41 @@ def callback_fixture_identity(intentd_dir: Path) -> dict[str, str]:
         raise RuntimeError(f"callback fixture: {error}\n{callback_setup_help(intentd_dir)}") from error
 
 
+TIMEOUT_MULTIPLIER_ENV = "INTENTD_TEST_TIMEOUT_MULTIPLIER"
+MAX_TIMEOUT_MULTIPLIER = 20.0
+# Rust's str::trim strips Unicode White_Space; Python's str.strip also strips
+# U+001C..U+001F, which Rust keeps (and then fails to parse).
+RUST_WHITESPACE = ("\t\n\x0b\x0c\r \x85\xa0\u1680" + "".join(map(chr, range(0x2000, 0x200B)))
+                   + "\u2028\u2029\u202f\u205f\u3000")
+# The grammar of Rust's `<f64 as FromStr>`: ASCII digits only, no digit
+# separators or hex, case-insensitive inf/infinity/nan.
+RUST_F64 = re.compile(r"[+-]?(?:inf|infinity|nan|(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:e[+-]?[0-9]+)?)",
+                      re.IGNORECASE | re.ASCII)
+
+
+def timeout_multiplier(setting: str | None) -> float:
+    """The stretch the tests apply for an INTENTD_TEST_TIMEOUT_MULTIPLIER value.
+
+    Mirrors `timeout_multiplier` in packages/intentd/crates/intentd-test-support/
+    src/timeout.rs (`trim().parse::<f64>()`): unset, unparsable or non-finite
+    means 1, values below 1 are raised to 1 and values above 20 capped.
+    """
+    text = (setting or "").strip(RUST_WHITESPACE)
+    value = float(text) if RUST_F64.fullmatch(text) else 1.0
+    if not math.isfinite(value):
+        value = 1.0
+    return min(max(value, 1.0), MAX_TIMEOUT_MULTIPLIER)
+
+
+def timeout_description(env: dict[str, str]) -> str:
+    """`test time limits x3 (INTENTD_TEST_TIMEOUT_MULTIPLIER=3)`, so a slow
+    pass (or a strict one) is visible in the run output and summary."""
+    setting = env.get(TIMEOUT_MULTIPLIER_ENV)
+    source = (f"{TIMEOUT_MULTIPLIER_ENV} unset" if setting is None
+              else f"{TIMEOUT_MULTIPLIER_ENV}={shlex.quote(setting)}")
+    return f"test time limits x{timeout_multiplier(setting):g} ({source})"
+
+
 def test_stack_identity(env: dict[str, str]) -> dict[str, object]:
     # Preserve unset (null), empty and explicit values without assuming a Rust
     # default or changing the child's setting. Version the evidence contract.
@@ -494,7 +530,19 @@ def tree_key(repo_root: Path, intentd_dir: Path, output_args: list[str] | None =
              fixture_identity: dict[str, str] | None = None,
              transfer_identity: dict[str, str] | None = None,
              *, child_env: dict[str, str] | None = None) -> str:
+    inputs = tree_inputs(repo_root, intentd_dir, output_args, fixture_identity,
+                         transfer_identity, child_env=child_env)
+    encoded = json.dumps(inputs, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def tree_inputs(repo_root: Path, intentd_dir: Path, output_args: list[str] | None = None,
+                fixture_identity: dict[str, str] | None = None,
+                transfer_identity: dict[str, str] | None = None,
+                *, child_env: dict[str, str] | None = None) -> dict[str, object]:
+    """Everything a pass depends on; [`tree_key`] hashes it."""
     intentd_dir = intentd_dir.resolve()
+    test_env = nextest_env() if child_env is None else child_env
     inputs = {
         "source-root": str(intentd_dir),
         "cargo-outputs": output_args,
@@ -516,10 +564,28 @@ def tree_key(repo_root: Path, intentd_dir: Path, output_args: list[str] | None =
         # us. Direct runner callers keep their own environment: record that
         # exact value (including unset vs empty), never assume canonical policy.
         "test-policy": {"INTENTD_ASSERT_BOUND_CALLER": os.environ.get("INTENTD_ASSERT_BOUND_CALLER")},
-        "test-stack": test_stack_identity(nextest_env() if child_env is None else child_env),
+        "test-stack": test_stack_identity(test_env),
     }
-    encoded = json.dumps(inputs, sort_keys=True, separators=(",", ":")).encode()
-    return hashlib.sha256(encoded).hexdigest()
+    # The make test targets default INTENTD_TEST_TIMEOUT_MULTIPLIER to 3; a pass
+    # under stretched time limits must not credit a run at another stretch, or
+    # the reverse. Keyed by the stretch the tests apply, so `3` and `3.0` share
+    # credit. Added only for a stretch other than 1: x1 runs (unset, `1`, or
+    # invalid; direct runner callers and records made before the make default)
+    # keep their existing keys, while default make runs start x3 records.
+    factor = timeout_multiplier(test_env.get(TIMEOUT_MULTIPLIER_ENV))
+    if factor != 1.0:
+        inputs["test-timeout"] = {"multiplier": factor}
+    # `make test HERMETIC=1` runs inside intentd's no-provider-CLI sandbox:
+    # its passes must not credit an ordinary run, or the reverse. Added only
+    # for sandboxed runs so ordinary records keep their existing keys.
+    # INTENT_GATE_HERMETIC is internal: only the Makefile's HERMETIC wrapper
+    # sets it. A run that skipped the sandbox self-check is a different mode.
+    if os.environ.get("INTENT_GATE_HERMETIC") == "1":
+        inputs["hermetic"] = {
+            "HIDE_NODE": os.environ.get("HIDE_NODE") == "1",
+            "SKIP_SELF_CHECK": os.environ.get("SKIP_SELF_CHECK") == "1",
+        }
+    return inputs
 
 
 def prune(cache_dir: Path, now: float | None = None) -> None:
@@ -1133,11 +1199,13 @@ def plan_key(plans: list[list[str]]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def summary_line(label: str, counts: dict[str, int], resumed: int) -> str:
+def summary_line(label: str, counts: dict[str, int], resumed: int,
+                 env: dict[str, str] | None = None) -> str:
     return (
         f"[{label}] summary: {counts['passed']} passed, {counts['failed']} failed, "
         f"{counts['ignored']} skipped/ignored, {resumed} resumed "
-        "(tests already passed for this tree)"
+        "(tests already passed for this tree); "
+        f"{timeout_description(os.environ if env is None else env)}"
     )
 
 
@@ -1354,6 +1422,7 @@ def run_nextest(args: argparse.Namespace) -> int:
             KeyboardInterrupt, Terminated) as error:
         print(f"[{label}] ERROR: resolving Cargo outputs: {error}", file=sys.stderr, flush=True)
         return failure_exit_code(error)
+    print(f"[{label}] {timeout_description(env)}", flush=True)
     key = tree_key(repo_root, intentd_dir, output_args, fixture_identity,
                    transfer_identity=transfer_identity, child_env=env)
     run_dir = cache_dir / key
@@ -1390,6 +1459,7 @@ def run_nextest(args: argparse.Namespace) -> int:
         "resume_requested": args.resume == "1", "force": args.force == "1",
         "no_fail_fast": no_fail_fast, "build_jobs": args.build_jobs,
         "test_threads": args.test_threads, "test_stack": test_stack_identity(env),
+        "test_timeout_multiplier": env.get(TIMEOUT_MULTIPLIER_ENV),
         "callback_fixture": fixture_identity, "transfer_fixture": transfer_identity,
         "resume_source_attempt": None, "resume_candidates": [], "resumed_tests": None,
         "selection_membership": [None for _ in selections],
@@ -1448,7 +1518,7 @@ def run_nextest(args: argparse.Namespace) -> int:
             write_atomic(complete, profile + "\n")
             if resumed:
                 print(f"resumed: skipped {len(resumed)} tests already passed for this tree", flush=True)
-        summary = summary_line(label, totals, len(resumed))
+        summary = summary_line(label, totals, len(resumed), env)
         write_atomic(record_dir / "summary.txt", summary + "\n")
         print(summary, flush=True)
         print(f"[{label}] record: {record_dir}", flush=True)
@@ -1687,8 +1757,21 @@ def main() -> int:
         help="nextest target selection, e.g. '-p alpha --test one'; repeatable, "
         "run in order instead of --workspace",
     )
+    parser.add_argument(
+        "--filterset",
+        metavar="EXPR",
+        help="run one nextest filterset across the workspace (make test-select E=EXPR); "
+        "the same as --plan '--workspace -E EXPR', so it cannot be combined with --plan",
+    )
     parser.add_argument("--base", metavar="REF", help="base ref recorded in run.json")
     args = parser.parse_args()
+    if args.filterset is not None:
+        if args.plan:
+            parser.error("--filterset cannot be combined with --plan")
+        if not args.filterset.strip():
+            parser.error("--filterset needs a nextest filterset expression, e.g. 'test(/name/)'")
+        # Quote into the one plan string so split_plans() restores it exactly.
+        args.plan = [shlex.join(["--workspace", "-E", args.filterset])]
     try:
         return run_nextest(args)
     except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as error:

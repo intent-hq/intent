@@ -33,6 +33,15 @@ hello completes. Initial hydration and reconnect/event-gap recovery remain requi
 A bundled daemon upgrade does not upgrade older remote hosts. This capability
 does not change experimental Multiplayer readiness.
 
+**Workspace guest roles (prepared).** Exact integer
+`server.capabilities.workspaceGuestRoles: 1`, also returned by
+`system.capabilities`, gates the complete [Participant/Manager contract](./multiplayer.md#workspace-guest-roles-prepared).
+It is support discovery, not caller authority. Guest Managers retain
+`canManage: false`; clients derive narrowly scoped controls from the current
+workspace role. Missing, malformed or unknown capability values hide role
+mutation controls. Refresh on each admitted connection; older remote hosts are
+not upgraded by installing a newer desktop client.
+
 **Submission correlation (prepared).**
 `server.capabilities.submissionCorrelation: 1` gates the complete
 [optimistic submission contract](./agents.md#submission-correlation-and-optimistic-display-prepared-additive-extension):
@@ -62,7 +71,7 @@ bookkeeping and never crosses the wire.
 **Script lifecycle (10.11 implemented candidate).**
 `server.capabilities.scriptLifecycle: 1` advertises the complete saved/one-off,
 archive/restore, list filtering, result persistence and agent-binding contract
-in [§5.8](./scripts.md#saved-scripts-and-one-off-history-1011-implemented-candidate).
+in [§5.8](./scripts.md#saved-scripts-and-one-off-history-protocol-13-baseline).
 The verified candidate implements this capability; current pins and deployed
 clients are not thereby upgraded. Older daemons omit it; clients must not assume
 an unknown create option was
@@ -70,7 +79,7 @@ honored just because creation succeeded. Gate lifecycle controls/options on this
 capability, independently of numeric version.
 
 **Worker observations (prepared additive extension).**
-`server.capabilities.agentWorkers: 1` advertises the read-only list/subscription
+`server.capabilities.agentWorkers: 1` advertises the list/subscription/stop
 contract in [§5.5b](./agent-workers.md), not process liveness or exit evidence.
 Provider-session support is reported independently; older daemons omit this flag.
 
@@ -98,6 +107,29 @@ TTL, optional single-line regex/line-count triggers, single-owner registration,
 guarded run cancellation and silent lifecycle
 cleanup including queued wakes. Independent of scriptLifecycle/scriptReadiness;
 absence means unavailable, not permission to infer support from version numbers.
+
+**Workspace discussions (prepared additive extension).**
+Exactly integer `server.capabilities.discussionConversations: 1` advertises the
+[§5.55 contract](./multiplayer.md#555-workspace-discussions): conversation and
+recipient discovery, atomic creation with the first message, participant-gated
+history and delivery, and conversation-scoped typing. The same flag is returned
+by `system.capabilities`. Clients require this flag before sending private
+conversation IDs or recipient lists, because earlier single-discussion daemons
+may silently ignore unknown targeting fields. The flag grants no membership or
+participant access and does not enable the desktop Multiplayer Labs setting.
+The separate exact integer `discussionMessageActions: 1` capability, advertised
+on hello and `system.capabilities`, gates same-conversation replies and
+per-viewer reaction aggregates. Never discard an unsupported reply target or
+interpret the capability as authorization.
+Exactly integer `discussionReactions: 1` on both surfaces additionally enables
+the five-choice picker, bounded immutable reactor snapshots, and explicitly
+granted agent reactions (§5.55). Missing or unknown versions do not enable them.
+Exactly integer `discussionAgentMessaging: 1`, also on both discovery surfaces,
+gates explicit `recipientAgentIds` on a message and agent-authored replies in the
+workspace-wide discussion. It grants no agent access by itself: the agent must
+first be explicitly addressed in that conversation. Clients must not silently
+strip recipients when this flag is absent or unknown. Agents still cannot
+subscribe to discussion events, and private discussions remain human-only.
 
 | Method | Params | Result |
 | --- | --- | --- |
@@ -324,6 +356,29 @@ native review capabilities do not imply this explicit-resource capability.
 These are client integration obligations, not a shipped frontend guarantee;
 documentation alone does not establish deployed availability.
 
+The separate [prepared project-page and discussion extension](repository-resources.md#prepared-project-pages-and-discussions)
+is additive in protocol 15.1 and uses `repositoryResourcePages: 1`. Keep
+`repositoryResourceRead: 1` unchanged for
+detail-only clients; it does not imply support for the new operations. Detect
+the page capability on the same physical connection that supplies the read
+lifetime. Its prepared `context` is either an explicitly authorized workspace or
+the original durable Host Owner; Home cannot borrow a workspace or infer the
+owner role from checkout access. A capability cannot authorize another instance
+or account, or supply a fallback after denial. A numeric protocol version or
+catalog entry does not replace the exact capability check.
+
+#### GitLab child Git policy capability (prepared)
+
+The protocol 15.1 capability `result.server.capabilities.gitlabChildGitPolicy: 1`
+gates the separate
+[owner-only policy control](settings.md#prepared-gitlab-child-git-credential-policy).
+An absent or unsupported value means the control is unsupported, not disabled.
+Detect it on the connection whose policy binding will be read and changed.
+Neither this capability nor `gitlabCheckout` grants the owner role, enables the
+helper, or proves a current effective grant. Native clone/fetch/push remain
+independent. This prepared contract does not advertise support on older daemons
+or add GitLab fields to the existing GitHub member-policy projection.
+
 #### Client identity, capabilities & device identification (REV-2, v9.9)
 
 `client.hello` is where a connection acquires the **logical-client identity** the daemon uses
@@ -512,3 +567,8 @@ Each recovering `events.subscribe` lease must separately request and acknowledge
 shapes and reconnect/explicit-refresh fallback; discovery alone does not opt in.
 The capability does not promise durable replay, typed-channel recovery or product
 readiness. It is advertised only after the transport and membership-loss cases pass.
+
+Exactly integer `discussionAgentActivity: 1`, on hello and `system.capabilities`,
+adds request-correlated discussion activity, immutable selected mention spans,
+and human `discussion.stopAgent` / `discussion.retryAgent` controls. This is a
+prepared Multiplayer Labs extension; see [the activity contract](./multiplayer.md#correlated-agent-activity-and-controls-prepared).

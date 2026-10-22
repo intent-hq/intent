@@ -3,5 +3,6 @@
   "log-driver": "journald",
   "icc": false,
   "no-new-privileges": true,
-  "live-restore": true
+  "live-restore": true,
+  "dns": ["1.1.1.1", "8.8.8.8", "9.9.9.9"]
 }

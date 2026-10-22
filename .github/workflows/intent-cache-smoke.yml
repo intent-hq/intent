@@ -1,11 +1,22 @@
 name: intent-cache runner smoke
 
-# Exercises the self-hosted runner pools on the intent-cache box
-# (infra/runners, docs/GITHUB_RUNNERS.md): isolation, paths and limits on both
-# pools, a fresh container per job, and sccache reuse of entries a
-# GitHub-hosted runner wrote, with every slot busy at once.
+# Exercises the self-hosted runner pools (infra/runners, docs/GITHUB_RUNNERS.md):
+# isolation, paths and limits on every pool, a fresh container per job, and
+# sccache reuse of entries a GitHub-hosted runner wrote, with every heavy slot
+# busy at once. Memory limits differ by host (heavy: 36 GiB on intent-cache,
+# 30-32 GiB on an EPYC host), so each pool is checked against a range that
+# covers every committed host config (test_runners.py keeps them in step).
 on:
   workflow_dispatch:
+    inputs:
+      xl:
+        description: Also check the xl pool (needs an online intent-cache-xl runner, or the job waits for one)
+        type: boolean
+        default: false
+      chromium:
+        description: Also launch headless Chromium and check the inotify limit (after the image and sysctl rollout)
+        type: boolean
+        default: false
   pull_request:
     paths:
       - infra/runners/**
@@ -22,13 +33,12 @@ jobs:
     strategy:
       matrix:
         include:
-          - {label: intent-cache, cpus: 8, memory: 51539607552}
-          - {label: intent-cache-small, cpus: 1, memory: 3221225472}
+          - {label: intent-cache, cpus: 8, memory_min: 32212254720, memory_max: 38654705664}
     runs-on: [self-hosted, '${{ matrix.label }}']
     timeout-minutes: 10
     outputs:
       runner: ${{ steps.mark.outputs.runner }}
-    steps:
+    steps: &isolation-steps
       - uses: actions/checkout@v7
         with:
           submodules: false
@@ -47,14 +57,18 @@ jobs:
       - name: Unprivileged and limited
         env:
           CPUS: ${{ matrix.cpus }}
-          MEMORY: ${{ matrix.memory }}
+          MEMORY_MIN: ${{ matrix.memory_min }}
+          MEMORY_MAX: ${{ matrix.memory_max }}
         run: |
           set -euo pipefail
           if command -v sudo || command -v docker || [ -e /var/run/docker.sock ]; then echo "::error::sudo or docker is available"; exit 1; fi
           grep -q '^CapEff:[[:space:]]*0000000000000000$' /proc/self/status || { echo "::error::job has capabilities"; exit 1; }
           if [ -e /etc/sccache ] || [ -e /srv/sccache ]; then echo "::error::cache server files are visible"; exit 1; fi
           [ "$(cat /sys/fs/cgroup/cpu.max)" = "${CPUS}00000 100000" ] || { echo "::error::cpu.max is $(cat /sys/fs/cgroup/cpu.max)"; exit 1; }
-          [ "$(cat /sys/fs/cgroup/memory.max)" = "$MEMORY" ] || { echo "::error::memory.max is $(cat /sys/fs/cgroup/memory.max)"; exit 1; }
+          memory=$(cat /sys/fs/cgroup/memory.max)
+          if ! [[ "$memory" =~ ^[0-9]+$ ]] || [ "$memory" -lt "$MEMORY_MIN" ] || [ "$memory" -gt "$MEMORY_MAX" ]; then
+            echo "::error::memory.max is $memory, expected $MEMORY_MIN..$MEMORY_MAX"; exit 1
+          fi
           [ "$(nproc)" = "$CPUS" ] || { echo "::error::nproc is $(nproc), expected $CPUS"; exit 1; }
           node_cpus=$(node -p 'require("os").availableParallelism()')
           [ "$node_cpus" = "$CPUS" ] || { echo "::error::os.availableParallelism() is $node_cpus, expected $CPUS"; exit 1; }
@@ -100,6 +114,19 @@ jobs:
           echo "$GITHUB_RUN_ID" > "$RUNNER_TEMP/../leftover-marker"
           echo "runner=$RUNNER_NAME" >> "$GITHUB_OUTPUT"
 
+  # Dispatch-only: no xl runner may be online, and a job for a missing label
+  # waits in the queue instead of failing.
+  isolation-xl:
+    name: Isolation and paths (${{ matrix.label }})
+    if: github.event_name == 'workflow_dispatch' && inputs.xl
+    strategy:
+      matrix:
+        include:
+          - {label: intent-cache-xl, cpus: 16, memory_min: 55834574848, memory_max: 55834574848}
+    runs-on: [self-hosted, '${{ matrix.label }}']
+    timeout-minutes: 10
+    steps: *isolation-steps
+
   fresh:
     name: Fresh container (intent-cache)
     needs: isolation
@@ -114,9 +141,23 @@ jobs:
           for f in "$HOME/leftover-marker" /tmp/leftover-marker "$RUNNER_TEMP/../leftover-marker"; do
             if [ -e "$f" ]; then echo "::error::$f survived from the previous job"; exit 1; fi
           done
-          [ -n "$PREVIOUS" ] && [ "$RUNNER_NAME" != "$PREVIOUS" ] || { echo "::error::runner $RUNNER_NAME was reused"; exit 1; }
+          if [ -z "$PREVIOUS" ] || [ "$RUNNER_NAME" = "$PREVIOUS" ]; then echo "::error::runner $RUNNER_NAME was reused"; exit 1; fi
           if [ -e "$GITHUB_WORKSPACE/.git" ]; then echo "::error::workspace not empty"; exit 1; fi
           echo "fresh runner $RUNNER_NAME (previous: $PREVIOUS)"
+      # Opt-in until every host runs the image with Chromium's libraries and
+      # the sysctl drop-in (install.sh with a rebuild); pull requests still
+      # test the installed image.
+      - name: Headless Chromium starts without sudo, and inotify has headroom
+        if: github.event_name == 'workflow_dispatch' && inputs.chromium
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          limit="$(cat /proc/sys/fs/inotify/max_user_instances)"
+          if [ "$limit" -lt 32768 ]; then echo "::error::fs.inotify.max_user_instances is $limit; expected 32768 or more"; exit 1; fi
+          # The version cloudlands-fe's component tests launch (the CT packages stop at 1.58).
+          npm install --no-save --no-audit --no-fund playwright-core@1.58.2 >/dev/null
+          npx playwright-core install chromium-headless-shell
+          node -e "require('playwright-core').chromium.launch().then(async (b) => { const p = await b.newPage(); await p.setContent('<p>ok</p>'); console.log('chromium', b.version(), await p.textContent('p')); await b.close(); })"
 
   cache-writer:
     name: Build intentd (GitHub-hosted, writes the cache)
@@ -163,37 +204,7 @@ jobs:
     needs: cache-writer
     strategy:
       matrix:
-        slot: [a, b]
+        slot: [a, b, c]
     runs-on: [self-hosted, intent-cache]
     timeout-minutes: 60
     steps: *cache-build
-
-  # Keeps all six small slots busy while the heavy slots build, so the
-  # cache is measured with every slot loaded.
-  cache-reader-small:
-    name: Build intent-core (intent-cache-small slot ${{ matrix.slot }}, reads the cache)
-    needs: cache-writer
-    strategy:
-      matrix:
-        slot: [1, 2, 3, 4, 5, 6]
-    runs-on: [self-hosted, intent-cache-small]
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          submodules: false
-      - run: git submodule update --init --depth=1 packages/intentd
-      - name: Configure the self-hosted compiler cache
-        env:
-          INTENT_SCCACHE_ENDPOINT: ${{ vars.INTENT_SCCACHE_ENDPOINT }}
-          INTENT_SCCACHE_TOKEN: ${{ secrets.INTENT_SCCACHE_TOKEN }}
-          INTENT_SCCACHE_MODE: ${{ vars.INTENT_SCCACHE_MODE }}
-        run: python3 scripts/setup-sccache.py
-      - name: Build intent-core
-        working-directory: packages/intentd
-        env:
-          CARGO_TERM_PROGRESS_WHEN: never
-        run: |
-          sccache --zero-stats >/dev/null
-          cargo build --locked -p intent-core
-          sccache --show-stats

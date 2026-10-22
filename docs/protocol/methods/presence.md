@@ -9,7 +9,7 @@ Ephemeral who-is-here state for shared (multi-principal) workspaces ([intent-hq/
 
 | Method | Params | Result |
 | --- | --- | --- |
-| presence.update *(fast path)* | focus (req, array of `{ workspaceId (req), agentId?, noteId? }`), typing?: `{ agentId (req) }` \| `null` | `{ ok: true, typingSource }` — replaces the **connection's own** focus set and typing target; `typingSource` is the connection's opaque typing handle (`ts-…`), the `source` its own entry carries in every roster |
+| presence.update *(fast path)* | focus (req, array of `{ workspaceId (req), agentId?, noteId? }`), typing?: `{ agentId (req) }` \| `null`, discussionTyping?: `{ workspaceId (req), conversationId? }` \| `null` *(15.1, prepared)* | `{ ok: true, typingSource }` — replaces the **connection's own** focus set and typing targets; `typingSource` is the connection's opaque typing handle (`ts-…`), the `source` its own entries carry in every roster |
 | presence.snapshot | workspaceId (req) | `{ workspaceId, members: PresenceMember[] }` — the current `presence:changed` roster of a member workspace, on demand |
 | note.presence.update *(fast path)* | workspaceId (req), noteId (req), rev (req), anchor (req), head (req) — each of the three a non-negative integer | `{ ok: true }` — the caller's own caret on a note this connection is subscribed to |
 
@@ -52,6 +52,57 @@ The note-presence channel pair is a §6.9 subscription channel (intercepted on t
 - A connection is **online for its principal** once its `client.hello` completes. A principal's **first** live connection publishes `presence:changed` to **every workspace it is a member of**; further connections of an already-online principal publish nothing — that client reads `presence.snapshot` for its initial roster (likewise a client that attached its `events.subscribe` after its hello).
 - A connection's close — clean close, heartbeat reap (§4) and daemon shutdown alike — drops its presence row and **every note lease it held**: `left` deltas first, then `presence:changed` to every member workspace when it was the principal's **last** connection, or only to the workspaces its own focus / typing touched otherwise.
 - `presence.snapshot` is Member+ (`-32602 { code: "not-found" }` for a non-member or an unknown workspace); `members` lists only the workspace's currently **online** members, each with the `PresenceMember` row above.
+
+#### Discussion typing *(15.1, prepared)*
+
+The [workspace discussion](./multiplayer.md#555-workspace-discussions) composer
+uses the existing presence channel.
+`discussionTyping: { workspaceId, conversationId }` names the one discussion this
+connection is typing in. Omitted `conversationId` means `"default"`; an omitted or
+`null` `discussionTyping` clears it. The whole-state replacement also retains the existing agent `typing` rules. The
+workspace ID must be a non-empty string naming a current member workspace.
+Private conversation targets also require the caller to be a participant; owners
+do not bypass this check. A new unsent composer has no target to report.
+Malformed values return `-32602` Invalid params; an inaccessible or unknown
+workspace returns `-32602` with `data.code: "not-found"`. Validation is atomic
+with the other focus and typing targets, before replacing any connection state.
+
+Human `presence.snapshot` replies and `presence:changed` member rows add:
+
+```json
+{ "discussionTyping": [
+  { "source": "ts-opaque-connection", "conversationId": "default", "since": "2026-10-16T18:00:00Z", "pulse": 3 }
+] }
+```
+
+The array is always present on a supporting daemon's human roster, empty when
+idle, and contains only entries for the roster's workspace and conversations the
+receiving human may access. Both snapshots and live rosters are projected for
+each receiver; a private conversation ID or typing activity is never disclosed
+to another workspace member who is not a participant. Each connection has one
+entry, sorted by `source`. It uses the connection's existing `typingSource`;
+`since` stays fixed while typing in the same workspace and conversation, and a
+per-connection discussion pulse advances on each update naming that target. Another
+connection's update or a repeated snapshot does not advance this pulse. Agent
+`typing` entries retain their existing shape and counters.
+
+This state is transient and contains no draft text. Disconnect removes the
+connection's entry; membership changes remove unauthorized people from the
+roster. Agent-owned event subscriptions cannot receive presence events, and
+agent/daemon `presence.snapshot` replies omit `discussionTyping` while retaining
+the rest of the authorized roster. There is no new method, event type, database
+row, or history cursor.
+
+Clients send throttled activity pulses while the visible, focused composer is
+being edited. They clear the target on send, empty draft, blur, navigation,
+window hiding, or loss of connection/access; merely restoring a draft is not
+typing. Receivers expire each source three seconds after its last unseen
+`(source, pulse)`, using local elapsed time rather than comparing wall clocks.
+Re-emitting an unchanged pulse must not revive an expired entry. Clear received
+state on disconnect or workspace/backend/account changes. Hide the current
+person's entries, filter to the displayed conversation, and combine other
+connections of the same person into one localized typing label. Older rosters
+omit the field; treat omission as no discussion typing without affecting discussion history or sending.
 
 #### Note presence channel
 
