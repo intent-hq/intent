@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -26,6 +28,18 @@ function writeSource(root, doc) {
   fs.writeFileSync(path.join(dir, 'cases.json'), jsonBytes(doc));
 }
 
+const git = (root, ...args) => execFileSync('git', ['-C', root, '-c', 'user.name=t', '-c', 'user.email=t@t',
+  '-c', 'commit.gpgsign=false', ...args], { stdio: ['ignore', 'pipe', 'pipe'] }).toString().trim();
+
+/** A monorepo-shaped git checkout whose HEAD commits `doc`; returns the commit. */
+function commitSource(root, doc) {
+  if (!fs.existsSync(path.join(root, '.git'))) git(root, 'init', '-q');
+  writeSource(root, doc);
+  git(root, 'add', '-A');
+  git(root, 'commit', '-q', '-m', 'cases');
+  return git(root, 'rev-parse', 'HEAD');
+}
+
 test('canonical cases are valid and cover every required case', () => {
   const { doc } = readCases(path.join(ROOT, SOURCE_PATH));
   const ids = doc.cases.map((c) => c.id);
@@ -41,9 +55,10 @@ test('the escaped incident reply strips the block and decodes its prompts', () =
   assert.ok(reply.expect.prompts.includes("Raise Type Check & Lint's timeout to 45 minutes."));
 });
 
-test('normalizeCleaned trims and collapses only runs of three or more line feeds', () => {
+test('normalizeCleaned folds CRLF, trims and collapses only runs of three or more line feeds', () => {
   assert.equal(normalizeCleaned('  a\n\n\n\nb\n'), 'a\n\nb');
   assert.equal(normalizeCleaned('a\nb\n\nc'), 'a\nb\n\nc');
+  assert.equal(normalizeCleaned('a\r\n\r\n\r\nb\r\n'), 'a\n\nb');
 });
 
 const mutations = {
@@ -90,22 +105,37 @@ test('rejects non-canonical formatting', (t) => {
 
 test('export then verify round-trips for every consumer', (t) => {
   const root = tempRoot(t);
-  writeSource(root, canonical());
+  const commit = commitSource(root, canonical());
   for (const component of CONSUMERS) {
     const componentRoot = path.join(root, 'packages', component);
-    const options = { sourceRoot: root, sourceCommit: COMMIT, component, componentRoot };
+    const options = { sourceRoot: root, sourceCommit: commit, component, componentRoot };
     assert.match(exportMirror(options), /exported/);
-    assert.match(verifyMirror(options), /match intent-hq\/intent@a{40}/);
+    assert.match(verifyMirror(options), new RegExp(`match intent-hq/intent@${commit}`));
   }
   const report = checkConsumers(root);
-  for (const component of CONSUMERS) assert.match(report, new RegExp(`${component}: adopted mirror valid at a{40}, current`));
+  for (const component of CONSUMERS) assert.match(report, new RegExp(`${component}: adopted mirror valid at ${commit}, current`));
+});
+
+test('export refuses uncommitted cases, a non-HEAD commit and a bad commit without writing anything', (t) => {
+  const root = tempRoot(t);
+  const doc = canonical();
+  const commit = commitSource(root, doc);
+  const componentRoot = path.join(tempRoot(t), 'ios');
+  const mirrorDir = path.join(componentRoot, MIRRORS.ios.directory);
+  assert.throws(() => exportMirror({ sourceRoot: root, sourceCommit: 'abc', component: 'ios', componentRoot }), /40-character/);
+  assert.throws(() => exportMirror({ sourceRoot: root, sourceCommit: COMMIT, component: 'ios', componentRoot }), /HEAD must equal/);
+  assert.throws(() => exportMirror({ sourceRoot: root, sourceCommit: commit, component: 'constructor', componentRoot }), /unknown component/);
+  byId(doc, 'plain-prompts').expect.cleaned = 'Some message.';
+  writeSource(root, doc);
+  assert.throws(() => exportMirror({ sourceRoot: root, sourceCommit: commit, component: 'ios', componentRoot }), /differs from source commit/);
+  assert.equal(fs.existsSync(mirrorDir), false);
 });
 
 test('a mirror whose expected value was edited fails verify and check', (t) => {
   const root = tempRoot(t);
-  writeSource(root, canonical());
+  const commit = commitSource(root, canonical());
   const componentRoot = path.join(root, 'packages', 'cloudlands-fe');
-  const options = { sourceRoot: root, sourceCommit: COMMIT, component: 'cloudlands-fe', componentRoot };
+  const options = { sourceRoot: root, sourceCommit: commit, component: 'cloudlands-fe', componentRoot };
   exportMirror(options);
   const file = path.join(componentRoot, MIRRORS['cloudlands-fe'].directory, 'cases.json');
   const edited = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -118,57 +148,90 @@ test('a mirror whose expected value was edited fails verify and check', (t) => {
 test('a re-locked mirror that disagrees with the canonical commit fails verify', (t) => {
   const root = tempRoot(t);
   const doc = canonical();
-  writeSource(root, doc);
-  const componentRoot = path.join(root, 'packages', 'ios');
-  exportMirror({ sourceRoot: root, sourceCommit: COMMIT, component: 'ios', componentRoot });
+  const commit = commitSource(root, doc);
+  const componentRoot = path.join(tempRoot(t), 'ios');
   const forked = structuredClone(doc);
   byId(forked, 'plain-prompts').expect.cleaned = 'Some message.';
   const forkRoot = tempRoot(t);
-  writeSource(forkRoot, forked);
-  exportMirror({ sourceRoot: forkRoot, sourceCommit: COMMIT, component: 'ios', componentRoot });
+  const forkCommit = commitSource(forkRoot, forked);
+  exportMirror({ sourceRoot: forkRoot, sourceCommit: forkCommit, component: 'ios', componentRoot });
+  const lockFile = path.join(componentRoot, MIRRORS.ios.lock);
+  const lock = JSON.parse(fs.readFileSync(lockFile, 'utf8'));
+  fs.writeFileSync(lockFile, jsonBytes({ ...lock, sourceCommit: commit }));
   assert.throws(
-    () => verifyMirror({ sourceRoot: root, sourceCommit: COMMIT, component: 'ios', componentRoot }),
+    () => verifyMirror({ sourceRoot: root, sourceCommit: commit, component: 'ios', componentRoot }),
     /mirror provenance/,
   );
 });
 
-test('check reports a mirror behind canonical without failing', (t) => {
+test('check reports an older copy as behind even when today\'s rules would reject it', (t) => {
   const root = tempRoot(t);
   const doc = canonical();
-  writeSource(root, doc);
+  doc.cases = doc.cases.filter((c) => c.id !== 'plain-prompts');
+  const old = structuredClone(doc);
+  const oldCommit = commitSource(root, old);
   const componentRoot = path.join(root, 'packages', 'intentd');
-  exportMirror({ sourceRoot: root, sourceCommit: COMMIT, component: 'intentd', componentRoot });
-  doc.cases.push({ ...structuredClone(doc.cases[0]), id: 'new-case' });
-  writeSource(root, doc);
-  assert.match(checkConsumers(root), /intentd: adopted mirror valid at a{40}, behind canonical/);
+  fs.mkdirSync(componentRoot, { recursive: true });
+  const options = { sourceRoot: root, sourceCommit: oldCommit, component: 'intentd', componentRoot };
+  assert.throws(() => exportMirror(options), /required case plain-prompts/);
+  const mirrorDir = path.join(componentRoot, MIRRORS.intentd.directory);
+  fs.mkdirSync(mirrorDir, { recursive: true });
+  const bytes = jsonBytes(old);
+  fs.writeFileSync(path.join(mirrorDir, 'cases.json'), bytes);
+  fs.writeFileSync(path.join(componentRoot, MIRRORS.intentd.lock), jsonBytes({
+    lockVersion: 1, sourceRepository: 'intent-hq/intent', sourcePath: SOURCE_PATH, sourceCommit: oldCommit,
+    casesSha256: createHash('sha256').update(bytes).digest('hex'),
+  }));
+  commitSource(root, canonical());
+  assert.match(checkConsumers(root), new RegExp(`intentd: adopted mirror valid at ${oldCommit}, behind canonical`));
 });
 
-test('check fails on a half-deleted mirror and on stray files', (t) => {
+test('check rejects a copy locked to a commit off the canonical history', (t) => {
   const root = tempRoot(t);
-  writeSource(root, canonical());
+  const base = commitSource(root, canonical());
+  git(root, 'checkout', '-q', '-b', 'side');
+  const side = structuredClone(canonical());
+  byId(side, 'plain-prompts').expect.cleaned = 'Some message.';
+  const sideCommit = commitSource(root, side);
+  const componentRoot = path.join(root, 'packages', 'ios');
+  exportMirror({ sourceRoot: root, sourceCommit: sideCommit, component: 'ios', componentRoot });
+  git(root, 'checkout', '-q', base);
+  assert.throws(() => checkConsumers(root), /not on this checkout's history/);
+});
+
+test('check fails on a half-deleted mirror, stray files, a dangling symlink and a malformed lock', (t) => {
+  const root = tempRoot(t);
+  const commit = commitSource(root, canonical());
   const componentRoot = path.join(root, 'packages', 'intentd');
-  exportMirror({ sourceRoot: root, sourceCommit: COMMIT, component: 'intentd', componentRoot });
+  exportMirror({ sourceRoot: root, sourceCommit: commit, component: 'intentd', componentRoot });
   const stray = path.join(componentRoot, MIRRORS.intentd.directory, 'extra.json');
   fs.writeFileSync(stray, '{}');
   assert.throws(() => checkConsumers(root), /unexpected files/);
   fs.rmSync(stray);
-  fs.rmSync(path.join(componentRoot, MIRRORS.intentd.lock));
+  const lockFile = path.join(componentRoot, MIRRORS.intentd.lock);
+  const lockBytes = fs.readFileSync(lockFile);
+  fs.writeFileSync(lockFile, '<<<<<<< HEAD\n');
+  assert.throws(() => checkConsumers(root), /suggested-prompts\.lock\.json: invalid JSON/);
+  fs.rmSync(lockFile);
   assert.throws(() => checkConsumers(root), /lock .* is missing/);
+  fs.writeFileSync(lockFile, lockBytes);
+  fs.rmSync(path.join(componentRoot, MIRRORS.intentd.directory), { recursive: true });
+  fs.rmSync(lockFile);
+  fs.symlinkSync(path.join(root, 'nowhere.json'), lockFile);
+  assert.throws(() => checkConsumers(root), /lock .* is missing or not a regular file/);
 });
 
 test('check reports components without a mirror as pre-adoption', (t) => {
   const root = tempRoot(t);
-  writeSource(root, canonical());
+  commitSource(root, canonical());
   fs.mkdirSync(path.join(root, 'packages', 'cloudlands-fe', '.git'), { recursive: true });
   const report = checkConsumers(root);
   assert.match(report, /cloudlands-fe: pre-adoption pin/);
   assert.match(report, /ios: uninspected \(checkout uninitialized; private\/optional\)/);
 });
 
-test('export and verify reject a short source commit and unknown component', (t) => {
+test('main requires every export/verify option', (t) => {
   const root = tempRoot(t);
-  writeSource(root, canonical());
-  assert.throws(() => exportMirror({ sourceRoot: root, sourceCommit: 'abc', component: 'ios', componentRoot: root }), /40-character/);
-  assert.throws(() => exportMirror({ sourceRoot: root, sourceCommit: COMMIT, component: 'android', componentRoot: root }), /unknown component/);
   assert.throws(() => main(['verify', '--source-root', root]), /requires --source-commit/);
+  assert.throws(() => main(['validate', '--component', 'ios']), /only accepts --root/);
 });

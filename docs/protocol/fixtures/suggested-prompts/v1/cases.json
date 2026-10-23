@@ -1,6 +1,6 @@
 {
   "fixtureFormatVersion": 1,
-  "description": "Shared suggested-prompts block cases. Each input is one agent reply; expect gives the prompts found and the reply text left once every well-formed block is removed. See ../README.md.",
+  "description": "Shared suggested-prompts block cases. Each input is one agent reply; expect gives the prompts found and the reply text left once every well-formed block is removed. Format and consumers: docs/protocol/suggested-prompts.md in intent-hq/intent.",
   "consumers": [
     "cloudlands-fe",
     "intentd",

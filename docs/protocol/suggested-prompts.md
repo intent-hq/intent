@@ -35,8 +35,9 @@ Each case has a kebab-case `id`, the `origin` test it was taken from, the reply 
 | `prompts` | Prompts from the last well-formed block, after `Label\|` and `delay:N\|` stripping (at most four). |
 | `cleaned` | Reply text with every well-formed block removed, in comparison form. |
 
-The comparison form trims the text and collapses runs of three or more line feeds to two.
-Parsers differ only in how many blank lines a removed block leaves, which renders the same.
+The comparison form turns CRLF into LF, trims the text and collapses runs of three or more line
+feeds to two. Parsers differ only in line endings and in how many blank lines a removed block
+leaves, which render the same.
 Without a well-formed block the prompts are empty and `cleaned` is the input in comparison form.
 
 Consumers:
@@ -56,9 +57,10 @@ The model matches [backend-keychain.md](./backend-keychain.md#distribution-and-v
 `scripts/suggested-prompts-contract.mjs` validates the canonical file and distributes copies:
 
 - `validate`: checks the canonical cases.
-- `check`: also checks every adopted component copy; `make check-suggested-prompts-contract`
-  runs this inside `make consumer-checks`.
-- `export`: writes a component copy plus a lock naming the monorepo commit.
+- `check`: also checks every adopted component copy against its lock; `make
+  check-suggested-prompts-contract` runs this inside `make consumer-checks`.
+- `export`: writes a component copy plus a lock naming the monorepo commit. The source checkout's
+  HEAD must be that commit, with the case file committed.
 - `verify`: component CI checks the copy byte-for-byte against the monorepo at the locked commit.
 
 | Component | Copy | Lock |
@@ -78,3 +80,6 @@ node scripts/suggested-prompts-contract.mjs export --source-root . \
 
 A component cannot edit its copy on its own: its CI verify step fails. `check` reports a copy
 locked to an older commit as behind canonical rather than failing, so docs can lead the pin.
+Today's schema and required-case rules apply only to the canonical file, so tightening them
+never fails an older copy. A copy locked to a commit off the checkout's history (an unmerged
+branch) fails when that commit is present; a shallow checkout reports it as unverified.

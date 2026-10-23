@@ -2,6 +2,7 @@
 // Shared suggested-prompts block cases: offline validation and exact-byte
 // distribution to the component test suites (same model as
 // backend-keychain-contract.mjs). No component code is imported.
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -62,12 +63,13 @@ function string(value, label) {
 }
 
 /**
- * The comparison form of a cleaned reply: trimmed, with runs of three or more
- * line feeds collapsed to two. Parsers differ only in how many blank lines a
- * removed block leaves behind, which renders identically.
+ * The comparison form of a cleaned reply: CRLF as LF, trimmed, with runs of
+ * three or more line feeds collapsed to two. Parsers differ only in line
+ * endings and in how many blank lines a removed block leaves behind, which
+ * render identically.
  */
 export function normalizeCleaned(text) {
-  return text.trim().replace(/\n{3,}/g, '\n\n');
+  return text.replace(/\r\n/g, '\n').trim().replace(/\n{3,}/g, '\n\n');
 }
 
 export function sha256(bytes) {
@@ -118,17 +120,26 @@ export function validateCases(doc) {
   return doc;
 }
 
-export function readCases(directory) {
-  const file = path.join(directory, CASES_FILE);
+function readJson(file) {
   const bytes = fs.readFileSync(file);
-  let doc;
+  let value;
   try {
-    doc = JSON.parse(bytes.toString('utf8'));
+    value = JSON.parse(bytes.toString('utf8'));
   } catch (error) {
     throw new Error(`${file}: invalid JSON (${error.message})`);
   }
-  validateCases(doc);
-  requireValue(bytes.equals(jsonBytes(doc)), `${file} must be formatted as JSON.stringify(value, null, 2) plus a newline`);
+  requireValue(bytes.equals(jsonBytes(value)), `${file} must be formatted as JSON.stringify(value, null, 2) plus a newline`);
+  return { value, bytes };
+}
+
+/**
+ * Read a cases file. `validate: false` checks only JSON and formatting, for a
+ * component copy locked to an older canonical revision: today's schema and
+ * required-case rules apply to the canonical file, not to older copies.
+ */
+export function readCases(directory, { validate = true } = {}) {
+  const { value: doc, bytes } = readJson(path.join(directory, CASES_FILE));
+  if (validate) validateCases(doc);
   return { doc, bytes, digest: sha256(bytes) };
 }
 
@@ -137,8 +148,8 @@ export function jsonBytes(value) {
 }
 
 function mirrorPaths(componentRoot, component) {
+  requireValue(Object.hasOwn(MIRRORS, component), `unknown component ${component}; expected one of ${CONSUMERS.join(', ')}`);
   const spec = MIRRORS[component];
-  requireValue(spec, `unknown component ${component}; expected one of ${CONSUMERS.join(', ')}`);
   return {
     directory: path.join(componentRoot, spec.directory),
     lock: path.join(componentRoot, spec.lock),
@@ -156,14 +167,22 @@ export function expectedLock(source, sourceCommit) {
   };
 }
 
-function inspectMirror(componentRoot, component) {
+/** True when the path exists in any form, including a dangling symlink. */
+function present(file) {
+  return fs.lstatSync(file, { throwIfNoEntry: false }) !== undefined;
+}
+
+function inspectMirror(componentRoot, component, { validate = true } = {}) {
   const paths = mirrorPaths(componentRoot, component);
-  requireValue(fs.existsSync(paths.lock), `${component}: mirror lock ${paths.lock} is missing`);
-  requireValue(fs.existsSync(paths.directory) && fs.lstatSync(paths.directory).isDirectory(),
-    `${component}: mirror directory ${paths.directory} is missing`);
+  const lockStat = fs.lstatSync(paths.lock, { throwIfNoEntry: false });
+  requireValue(lockStat?.isFile(), `${component}: mirror lock ${paths.lock} is missing or not a regular file`);
+  const dirStat = fs.lstatSync(paths.directory, { throwIfNoEntry: false });
+  requireValue(dirStat?.isDirectory(), `${component}: mirror directory ${paths.directory} is missing or not a regular directory`);
   requireValue(fs.readdirSync(paths.directory).every((file) => file === CASES_FILE),
     `${component}: mirror directory contains unexpected files`);
-  const lock = JSON.parse(fs.readFileSync(paths.lock, 'utf8'));
+  const caseStat = fs.lstatSync(path.join(paths.directory, CASES_FILE), { throwIfNoEntry: false });
+  requireValue(caseStat?.isFile(), `${component}: mirror ${CASES_FILE} is missing or not a regular file`);
+  const lock = readJson(paths.lock).value;
   keys(lock, ['lockVersion', 'sourceRepository', 'sourcePath', 'sourceCommit', 'casesSha256'], [], `${component} lock`);
   equal(lock.lockVersion, 1, `${component} lockVersion`);
   equal(lock.sourceRepository, SOURCE_REPOSITORY, `${component} sourceRepository`);
@@ -171,14 +190,51 @@ function inspectMirror(componentRoot, component) {
   requireValue(typeof lock.sourceCommit === 'string' && SHA.test(lock.sourceCommit),
     `${component} lock sourceCommit must be a full 40-character lowercase Git SHA`);
   requireValue(typeof lock.casesSha256 === 'string' && HASH.test(lock.casesSha256), `${component} lock casesSha256 must be SHA-256`);
-  const mirror = readCases(paths.directory);
+  const mirror = readCases(paths.directory, { validate });
   equal(mirror.digest, lock.casesSha256, `${component}: mirror cases.json SHA-256 vs lock`);
   return { ...mirror, lock, paths };
 }
 
+function git(root, ...args) {
+  return execFileSync('git', ['-C', root, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
+}
+
+/**
+ * The canonical cases at `sourceCommit`: `sourceRoot` must be a checkout whose
+ * HEAD is that commit, and the file must equal the committed bytes, so a copy
+ * never locks uncommitted or unmerged expectations to a commit.
+ */
+function requireSource(sourceRoot, sourceCommit) {
+  requireValue(typeof sourceCommit === 'string' && SHA.test(sourceCommit), 'source commit must be a full 40-character lowercase Git SHA');
+  equal(git(sourceRoot, 'rev-parse', '--show-toplevel').toString().trim(), fs.realpathSync(sourceRoot), 'source root must be the checkout root');
+  equal(git(sourceRoot, 'rev-parse', 'HEAD').toString().trim(), sourceCommit, 'source checkout HEAD must equal the source commit');
+  const source = readCases(path.join(sourceRoot, SOURCE_PATH));
+  requireValue(source.bytes.equals(git(sourceRoot, 'show', `${sourceCommit}:${SOURCE_PATH}/${CASES_FILE}`)),
+    `canonical ${CASES_FILE} differs from source commit ${sourceCommit}; commit it first`);
+  return source;
+}
+
+/** 'ancestor' | 'unrelated' | 'unknown' (commit absent, e.g. a shallow checkout). */
+function lockAncestry(root, sourceCommit) {
+  try {
+    git(root, 'cat-file', '-e', `${sourceCommit}^{commit}`);
+  } catch {
+    return 'unknown';
+  }
+  try {
+    git(root, 'merge-base', '--is-ancestor', sourceCommit, 'HEAD');
+    return 'ancestor';
+  } catch {
+    return 'unrelated';
+  }
+}
+
 /** Write the component mirror and lock from the canonical cases at `sourceRoot`. */
 export function exportMirror({ sourceRoot, sourceCommit, component, componentRoot }) {
-  const source = readCases(path.join(sourceRoot, SOURCE_PATH));
+  // Validate everything before writing, so a bad argument never leaves a
+  // half-updated copy behind.
+  const source = requireSource(sourceRoot, sourceCommit);
+  const lock = jsonBytes(expectedLock(source, sourceCommit));
   const paths = mirrorPaths(componentRoot, component);
   requireValue(path.resolve(paths.directory) !== path.resolve(sourceRoot, SOURCE_PATH), 'mirror must be separate from canonical data');
   if (fs.existsSync(paths.directory)) {
@@ -186,7 +242,8 @@ export function exportMirror({ sourceRoot, sourceCommit, component, componentRoo
   }
   fs.mkdirSync(paths.directory, { recursive: true });
   fs.writeFileSync(path.join(paths.directory, CASES_FILE), source.bytes);
-  fs.writeFileSync(paths.lock, jsonBytes(expectedLock(source, sourceCommit)));
+  fs.writeFileSync(paths.lock, lock);
+  verifyMirror({ sourceRoot, sourceCommit, component, componentRoot });
   return `${component}: exported ${source.doc.cases.length} cases at ${sourceCommit} sha256 ${source.digest}`;
 }
 
@@ -195,7 +252,7 @@ export function exportMirror({ sourceRoot, sourceCommit, component, componentRoo
  * lock's commit, and the mirror must be byte-identical to it.
  */
 export function verifyMirror({ sourceRoot, sourceCommit, component, componentRoot }) {
-  const source = readCases(path.join(sourceRoot, SOURCE_PATH));
+  const source = requireSource(sourceRoot, sourceCommit);
   const mirror = inspectMirror(componentRoot, component);
   equal(mirror.lock, expectedLock(source, sourceCommit), `${component}: mirror provenance`);
   requireValue(mirror.bytes.equals(source.bytes), `${component}: cases.json differs from ${SOURCE_REPOSITORY}@${sourceCommit}`);
@@ -210,13 +267,21 @@ export function checkConsumers(root) {
     const componentRoot = path.join(root, 'packages', component);
     const paths = mirrorPaths(componentRoot, component);
     // Either file declares adoption; a half-deleted mirror must fail, not skip.
-    if (!fs.existsSync(paths.lock) && !fs.existsSync(paths.directory)) {
+    if (!present(paths.lock) && !present(paths.directory)) {
       const initialized = fs.existsSync(path.join(componentRoot, '.git'));
       lines.push(`${component}: ${initialized ? 'pre-adoption pin' : `uninspected (checkout uninitialized${component === 'ios' ? '; private/optional' : ''})`}; conformance not claimed`);
       continue;
     }
-    const mirror = inspectMirror(componentRoot, component);
-    const state = mirror.digest === canonical.digest ? 'current' : 'behind canonical (re-export to pick up new cases)';
+    const mirror = inspectMirror(componentRoot, component, { validate: false });
+    let state = 'current';
+    if (mirror.digest !== canonical.digest) {
+      const ancestry = lockAncestry(root, mirror.lock.sourceCommit);
+      requireValue(ancestry !== 'unrelated',
+        `${component}: lock commit ${mirror.lock.sourceCommit} is not on this checkout's history; export from a merged monorepo commit`);
+      state = ancestry === 'ancestor'
+        ? 'behind canonical (re-export to pick up new cases)'
+        : 'differs from canonical; lock commit not in this checkout, so ancestry is unverified';
+    }
     lines.push(`${component}: adopted mirror valid at ${mirror.lock.sourceCommit}, ${state}; provenance is verified in component CI`);
   }
   return lines.join('\n');
