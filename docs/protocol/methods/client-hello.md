@@ -111,12 +111,19 @@ absence means unavailable, not permission to infer support from version numbers.
 **Workspace discussions (prepared additive extension).**
 Exactly integer `server.capabilities.discussionConversations: 1` advertises the
 [§5.55 contract](./multiplayer.md#555-workspace-discussions): conversation and
-recipient discovery, atomic creation with the first message, participant-gated
-history and delivery, and conversation-scoped typing. The same flag is returned
-by `system.capabilities`. Clients require this flag before sending private
-conversation IDs or recipient lists, because earlier single-discussion daemons
-may silently ignore unknown targeting fields. The flag grants no membership or
-participant access and does not enable the desktop Multiplayer Labs setting.
+recipient discovery, participant-gated history and delivery, and conversation-scoped
+typing. The same flag is returned by `system.capabilities`. Clients require it
+before sending non-default conversation IDs because earlier single-discussion
+daemons may ignore targeting fields. The flag grants no membership or participant
+access and does not enable the desktop Multiplayer Labs setting.
+Exactly integer `discussionManagement: 1` on both surfaces adds first-send
+`createConversation: true`, optional conversation names, Owner/Manager rename,
+Owner-only deletion (including default), and created/updated/deleted events.
+All new conversations include current workspace members; legacy private histories
+remain participant-scoped and read-only. Never silently drop the creation flag
+or redirect an unsupported operation to the default discussion. The flag also
+extends independently gated agent messaging, reactions and Stop/Retry to named
+workspace-wide conversations; it grants no access without an explicit agent grant.
 The separate exact integer `discussionMessageActions: 1` capability, advertised
 on hello and `system.capabilities`, gates same-conversation replies and
 per-viewer reaction aggregates. Never discard an unsupported reply target or
@@ -126,7 +133,8 @@ the five-choice picker, bounded immutable reactor snapshots, and explicitly
 granted agent reactions (§5.55). Missing or unknown versions do not enable them.
 Exactly integer `discussionAgentMessaging: 1`, also on both discovery surfaces,
 gates explicit `recipientAgentIds` on a message and agent-authored replies in the
-workspace-wide discussion. It grants no agent access by itself: the agent must
+workspace-wide discussions (named conversations additionally require
+`discussionManagement: 1`). It grants no agent access by itself: the agent must
 first be explicitly addressed in that conversation. Clients must not silently
 strip recipients when this flag is absent or unknown. Agents still cannot
 subscribe to discussion events, and private discussions remain human-only.

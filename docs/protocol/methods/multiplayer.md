@@ -74,6 +74,7 @@ membership. Imports do not carry authority from the exporting host.
 | Permission | Participant | Manager |
 | --- | --- | --- |
 | Existing guest reads, discussion and agent prompting | Existing behavior | Same |
+| Rename workspace-wide discussions under `discussionManagement: 1` | Not allowed | Allowed; deletion remains Owner-only |
 | Existing `agent.setModel` RPC | Existing behavior retained | Same |
 | Create agents and use model/provider controls | Existing UI restrictions | Allowed within the granted workspace |
 | Run and observe existing saved scripts | Existing restrictions | Allowed within the granted workspace |
@@ -363,17 +364,17 @@ See [the setting contract](./settings.md#collaborator-facing-machine-name).
 ### 5.55 Workspace discussions
 
 **Additive, prepared for protocol 15.1.** A workspace has a default discussion for
-all current members and may have direct or group discussions with selected
-members. These are separate from agent conversations and note comments. The
-desktop entry point remains behind Multiplayer Labs. Replies and reactions use
+all current members. Under `discussionManagement: 1`, every new conversation is
+workspace-wide; earlier direct/group histories remain private and read-only.
+These are separate from agent conversations and note comments. The desktop entry point remains behind Multiplayer Labs. Replies and reactions use
 the independently gated message-actions extension below. Binary attachments,
 message edits, and changes to a conversation's participants are outside this contract.
 
 Exactly integer `discussionConversations: 1` in the server capabilities advertises
 the complete multiple-conversation contract. Clients must check this capability
-before sending recipient lists or non-default conversation IDs: an earlier
-single-discussion daemon may ignore unknown fields and otherwise send private
-content to the workspace-wide discussion. Missing or unrecognized capability
+before sending non-default conversation IDs: an earlier
+single-discussion daemon may ignore unknown fields and send to the wrong
+conversation. Missing or unrecognized capability
 values never authorize a fallback send.
 
 Exactly integer `discussionMessageActions: 1`, returned by both hello and
@@ -387,34 +388,89 @@ and does not replace the private-conversation gate.
 | discussion.conversations | workspaceId (req), beforeId? (exclusive conversation ID), limit? (integer 1–100, default 50) | `{ conversations: DiscussionConversation[], hasMore: boolean }` — only conversations accessible to the caller |
 | discussion.recipients | workspaceId (req), query? (profile search string, at most 256 UTF-8 bytes), afterPrincipalId? (exclusive principal ID), limit? (integer 1–100, default 50) | `{ members: DiscussionAuthor[], hasMore: boolean }` — current effective workspace members, including offline members, excluding the caller |
 | discussion.list | workspaceId (req), conversationId? (default `"default"`), beforeSequence? (positive integer, exclusive), afterSequence? (nonnegative integer, exclusive; mutually exclusive with beforeSequence), limit? (integer 1–100, default 50) | `{ messages: DiscussionMessage[], hasMore: boolean, conversation: DiscussionConversation }` |
-| discussion.send | workspaceId (req), conversationId? (default `"default"` when neither target field is supplied), recipientPrincipalIds? (1–31 distinct other current workspace members; mutually exclusive with conversationId), messageId (req, nonblank string, at most 128 UTF-8 bytes), body (req, nonblank string, at most 16384 UTF-8 bytes), replyToMessageId? (existing message in the same conversation; requires `discussionMessageActions: 1`), recipientAgentIds? (up to 31 distinct explicit agent recipients; requires `discussionAgentMessaging: 1`, see below), principalMentions? (explicit selected person identities/spans; requires `discussionPrincipalMentions: 1`, see below) | `{ message: DiscussionMessage, conversation: DiscussionConversation }` |
+| discussion.send | workspaceId (req), conversationId? (default `"default"`), createConversation? (boolean, default false; see management below), messageId (req, nonblank string, at most 128 UTF-8 bytes), body (req, nonblank string, at most 16384 UTF-8 bytes), replyToMessageId? (existing message in the same conversation; requires `discussionMessageActions: 1`), recipientAgentIds? (up to 31 distinct explicit agent recipients; requires `discussionAgentMessaging: 1`, see below), principalMentions? (explicit selected person identities/spans; requires `discussionPrincipalMentions: 1`, see below) | `{ message: DiscussionMessage, conversation: DiscussionConversation }` |
+| discussion.rename | workspaceId (req), conversationId (req), name (req, string; see management below) | `{ conversation: DiscussionConversation }`; requires `discussionManagement: 1`; Owner or Manager only |
+| discussion.delete | workspaceId (req), conversationId (req) | `{ deleted: true, conversationId }`; requires `discussionManagement: 1`; Owner only |
 | discussion.react | workspaceId (req), conversationId? (default `"default"`), messageId (req, server message ID), reaction (req, `"👍"`, `"👎"`, `"👀"`, `"✅"`, `"🙈"`; legacy `"🙂"` removal/retry only), active (req, boolean desired state) | `{ messageId, reactions: DiscussionReaction[], reactionVersion }`; requires `discussionMessageActions: 1`; expanded choices and reactor snapshots require `discussionReactions: 1` |
 | discussion.stopAgent | workspaceId (req), conversationId? (default `"default"`), messageId (req, committed server ID), agentId (req), attempt (req, positive integer) | `{ activity: DiscussionAgentActivity }`; requires `discussionAgentActivity: 1`; human participant only |
 | discussion.retryAgent | workspaceId (req), conversationId? (default `"default"`), messageId (req, committed server ID), agentId (req), attempt (req, positive integer) | `{ activity: DiscussionAgentActivity }`; requires `discussionAgentActivity: 1`; human participant only |
 
 
-`DiscussionConversation` is `{ id, workspaceId, kind, participants, createdAt }`.
-`kind` is `"workspace"`, `"direct"`, or `"group"`. The reserved ID `"default"`
-identifies the workspace-wide conversation; its `participants: []` means current
-workspace membership governs access. A private conversation has a server-generated
-UUID and immutable `DiscussionAuthor` profile snapshots for its participants,
-including the creator. Two participants make a direct discussion; more make a
-group discussion. `createdAt` is a server RFC-3339 timestamp.
+`DiscussionConversation` is `{ id, workspaceId, kind, participants, createdAt, name? }`.
+`kind` is `"workspace"`, `"direct"`, or `"group"`. Workspace-wide conversations
+have `participants: []`: current workspace membership governs access, including
+members who join later. The reserved ID `"default"` identifies the initial
+workspace-wide conversation; additional workspace conversations have server-generated
+UUIDs. `name` is omitted, not null, until renamed; it never determines identity
+or access.
+`createdAt` is a server RFC-3339 timestamp. Legacy private conversations retain
+their immutable `DiscussionAuthor` participant snapshots and original kind.
 
-The default conversation leads the first conversation page and counts toward
-`limit`. Private conversations follow in descending ID order. `beforeId: "default"`
-starts with private conversations, so a first page with `limit: 1` can continue.
-Subsequent pages use the last returned ID; `hasMore` means another accessible
-conversation remains. Recipient pages use ascending principal ID order and
-apply search and membership filtering before the limit. Both queries are bounded
-in storage, without loading every message or every workspace member.
+The default conversation, unless deleted, leads the first page and counts toward
+`limit`. Other accessible conversations follow in descending ID order.
+`beforeId: "default"` skips the default, so a first page with `limit: 1` can
+continue. Subsequent pages use the last returned ID; `hasMore` means another
+accessible conversation remains. Recipient discovery remains available for
+person mentions, using ascending principal ID order, search and membership
+filtering before the limit. Both queries are bounded in storage.
 
-Sending `recipientPrincipalIds` creates a conversation and its first message in
-one transaction. The authenticated sender is added automatically. Opening or
-abandoning a new-discussion composer creates no durable empty conversation.
-Starting another composer with the same people creates a distinct conversation;
-this contract does not deduplicate discussions by participant set. The client
-uses the returned conversation ID for subsequent sends and reads.
+#### Workspace-wide creation and management (prepared)
+
+Exactly integer `discussionManagement: 1` on hello and `system.capabilities`
+requires the complete workspace-wide creation, naming, deletion, and legacy
+privacy contract. This remains unreleased Multiplayer Labs functionality.
+Require exact support before enabling these operations; never drop a creation
+flag or retry against the default conversation when support is absent or unknown.
+The existing message-actions, person-mention, agent-messaging, agent-activity,
+and reaction capabilities remain independently required for their features.
+
+A human sends `discussion.send` with `createConversation: true`, no
+`conversationId` or `recipientPrincipalIds`, and the first message's stable
+`messageId`. The daemon atomically creates a workspace-wide conversation and
+its first message. Opening or abandoning a composer creates no empty record.
+An identical retry retains the original conversation and message without
+repeating lifecycle or message events; a different
+body or target under that retry key is invalid. Use the returned conversation ID
+for subsequent messages. Separate intentional first sends use separate keys
+and create separate conversations. New direct/group creation via
+`recipientPrincipalIds` is rejected, never converted into a workspace-wide send.
+
+Owner and Manager may rename any workspace-wide conversation, including the
+default; only Owner may delete one. These are authenticated human operations,
+with current workspace membership and role checked by the daemon. A capability
+or agent grant does not confer management authority. Ordinary Participants
+cannot rename or delete. The existing daemon administrator authority remains
+valid; inherited membership alone is not a management grant. Names are trimmed
+before storage and must then be nonblank and at most 128 UTF-8 bytes. Rename
+requires a string, not null; the response carries the stored name. Names are
+presentation metadata, not participant lists.
+
+Deletion removes the conversation from discovery and makes its history and
+mutations unavailable. Deleting the default does not recreate it on the next
+read or send, including after daemon restart. Repeating delete or retrying a
+deleted conversation's first send returns `-32602 { code: "not-found" }`; neither
+can resurrect it.
+Clients remove its open/history panes and cached state and reject late responses
+or events for that deleted ID. A new conversation uses a new server identity.
+
+Committed lifecycle changes publish transient, workspace-scoped events:
+
+- `discussion:created` and `discussion:updated` carry
+  `{ workspaceId, conversationId, conversation }`.
+- `discussion:deleted` carries `{ workspaceId, conversationId }`.
+
+`discussion:created` precedes the first `discussion:message`.
+These events go only to current human workspace members, never agent subscribers
+or event-history queries. Creation is also discoverable from the complete
+conversation descriptor in `discussion:message`. Recover missed changes through
+`discussion.conversations` and `discussion.list`; no message sequence or unread
+count advances merely because a name changed or a conversation was deleted.
+
+Legacy direct/group histories remain readable only by their original participant
+grants and current workspace membership. Owners and Managers receive no bypass.
+They cannot be renamed, deleted, sent to, reacted to, or used for agent operations;
+no migration broadens their membership or destroys their history. Clients show
+them as read-only and retain an unsent draft rather than redirecting it elsewhere.
 
 `DiscussionMessage` has the same shape in history, send replies, and events:
 
@@ -468,6 +524,7 @@ uses the returned conversation ID for subsequent sends and reads.
 `replyToMessageId` references an existing message in the same conversation.
 The daemon checks this inside the send transaction, including current membership
 and participation. A new conversation cannot reply to another conversation.
+Legacy private histories remain read-only, including replies.
 The committed message carries an immutable, nonrecursive quote
 `replyTo: { id, author: DiscussionAuthor, body }`, or `null` when not a reply.
 The quote uses the original author snapshot and body, bounded by the existing
@@ -504,9 +561,11 @@ aggregation or profile joins.
 
 `discussion.react` sets the caller's desired state. Repeating it is a no-op.
 Inside the serialized write transaction, humans require current workspace
-membership and private-conversation participation. Agents require an existing
+membership; legacy private conversations reject reaction mutations.
+Agents require an existing
 explicit discussion grant and a nonretired, nondeleted session in the same
-workspace; only `default` is permitted. Agent identity comes exclusively from
+workspace; under `discussionManagement: 1`, any workspace-wide conversation
+with that explicit grant is permitted. Agent identity comes exclusively from
 the authenticated MCP context, never arguments. `ws.discussion.react` exposes
 `(conversationId, messageId, reaction, active)` with the same result. Reactions
 never create a grant, enqueue a message, wake an agent, or subscribe agents to
@@ -548,8 +607,8 @@ an agent-wide status. Completed means the invocation ended; only an explicit
 A daemon restart marks interrupted work stopped; queued deliveries remain queued.
 
 Human members with current instruction authority may Stop or Retry in the default
-workspace-wide discussion. Agent callers and private discussions cannot use these
-controls. Stop cancels only the matching invocation, or removes its queued delivery;
+discussion, and in named workspace-wide discussions under `discussionManagement: 1`.
+Agent callers and private discussions cannot use these controls. Stop cancels only the matching invocation, or removes its queued delivery;
 it must not stop another active request. Generic queue editing/removal refuses discussion
 requests; use this correlated Stop control. Regenerating an unrelated agent chat
 retains pending discussion requests. Retry applies only to failed/stopped
@@ -594,8 +653,9 @@ address an agent; `recipientAgentIds` keeps its existing delivery semantics.
 
 Only authenticated human sends may contain nonempty `principalMentions`; bound
 agent sends reject them as forbidden, including through MCP. Every selected
-principal must be a current effective workspace member and, for a private
-conversation, a current participant. The serialized write transaction checks
+principal must be a current effective workspace member. Legacy private
+conversations reject new sends; their historical mention snapshots remain inert.
+The serialized write transaction checks
 these conditions for new sends and retries. Unknown, removed, or inaccessible
 principals return `not-found`, without exposing membership information.
 
@@ -638,11 +698,12 @@ identity: reordering is immaterial, but adding or removing a recipient with the
 same retry key is invalid. Human and agent sender identities have separate
 retry scopes.
 
-The initial extension addresses agents only in the default workspace-wide
-discussion. Private-conversation targeting and agent access remain forbidden:
+The initial extension addresses agents in the default workspace-wide discussion;
+`discussionManagement: 1` extends it to every workspace-wide conversation.
+Private-conversation targeting and agent access remain forbidden:
 ordinary agent transcripts are workspace-visible, so granting private history
 without restricting those transcripts would expose private content.
-Human private conversations keep their existing behavior.
+Legacy private histories remain read-only with their original access restrictions.
 
 The daemon binds the author to the authenticated human or calling agent; no
 request field can impersonate either. An agent author has `agentId`,
@@ -740,10 +801,10 @@ The retry key is scoped to `(workspaceId, authenticated principalId, messageId)`
 Repeated sends with the same key, target, reply target, and exact body return the original
 conversation, message identity, body, and author snapshot, even if the person's profile
 has since changed. The response projects the current reaction state for the caller.
-First-message retries use the same recipient set; ordering
-of that set is immaterial. A client retries an uncertain send with that same key and body. New intentional
-sends use new keys. Reusing a key with different text or a different conversation
-or recipient set is `-32602` Invalid params; it does not edit the row, create a
+First-message creation retries retain `createConversation: true`; they do not
+replace it with the returned conversation ID. A client retries an uncertain send
+with that same key and body. New intentional sends use new keys. Reusing a key with different text or a different conversation
+or creation intent is `-32602` Invalid params; it does not edit the row, create a
 conversation, insert a new message, or publish another event.
 
 Clients subscribe to workspace events before reading history, route by workspace
@@ -785,10 +846,10 @@ daemon means no indicator, not a discussion failure.
 
 #### Workspace transfer
 
-Workspace exports include default discussion history. A workspace containing
-private conversations cannot be exported: export returns the existing unsupported
-transfer error, including when a private conversation is created after export
-admission but before the archive snapshot. This prevents the archive from exposing
+Workspace exports include workspace-wide discussion history and names.
+A workspace containing private conversations cannot be exported: export returns the existing unsupported
+transfer error; the archive snapshot rechecks for private history after export
+admission. This prevents the archive from exposing
 private history or participant identities to a nonparticipant owner or agent.
 
 Import preserves message IDs, sequence order, bodies, timestamps, and author snapshots. An imported author's
@@ -796,7 +857,7 @@ Import preserves message IDs, sequence order, bodies, timestamps, and author sna
 membership. A matching destination principal string must not rebind the author,
 change the profile, or establish an own-user comparison. Private conversation
 participant grants are cleared on import; their archived history remains
-inaccessible through discussion APIs, even to the destination owner. Default
+inaccessible through discussion APIs, even to the destination owner. Workspace-wide
 discussion history remains available to destination workspace members.
 
 Reply quotes retain their original inert author snapshots. Reaction counts and
@@ -818,9 +879,10 @@ Human calls require an authenticated client connection and current workspace
 membership, including inherited host membership. The prepared agent-messaging
 extension permits bound agents to discover granted conversations, read their
 history, and send replies as agents. Recipient discovery remains human-only.
-Under exact `discussionReactions: 1`, a bound agent may also react in `default`
-with an existing explicit discussion grant and a nonretired, nondeleted session
-in the same workspace, rechecked inside the serialized write transaction.
+Under exact `discussionReactions: 1`, a bound agent may also react in a
+workspace-wide conversation (named conversations require `discussionManagement: 1`).
+An existing explicit discussion grant and a nonretired, nondeleted session in the
+same workspace are rechecked inside the serialized write transaction.
 Reactions never grant access or wake agents. Agent, daemon, and unbound callers
 cannot post as people.
 A missing or inaccessible workspace is
@@ -828,9 +890,8 @@ A missing or inaccessible workspace is
 fields and out-of-range limits are `-32602` Invalid params. The author comes from
 the bound caller, never `client.hello` display metadata.
 
-Private conversation reads, sends, discovery, and event delivery additionally
-require a stored participant grant; workspace or host ownership does not bypass
-this check. Sends and retries recheck the sender's effective workspace membership
+Legacy private conversation reads and discovery additionally require a stored
+participant grant; workspace or host ownership does not bypass this check. Sends and retries recheck the sender's effective workspace membership
 inside the serialized write transaction. An unknown or inaccessible conversation is indistinguishable from a
 missing one. Participant snapshots do not confer membership: a removed workspace
 member loses access even while its historical participant record remains.
