@@ -10,7 +10,7 @@ targeting a label runs on whichever host has a free slot.
 |---|---|---|---|---|---|---|
 | intent-cache | ReliableSite, Los Angeles | Ryzen 9 3900X, 12 cores / 24 threads, 128 GB | heavy (3) | `intent-cache` | `intent-cache` | [`runners.env`](../infra/runners/runners.env) |
 | intent-ci1 | ReliableSite, Los Angeles | EPYC 4545P, 16 cores / 32 threads, 128 GB | xl (1), heavy (2) | `intent-cache-xl`, `intent-cache` | `intent-ci1` | [`hosts/intent-ci1.env`](../infra/runners/hosts/intent-ci1.env) |
-| intent-ci2 (provisioning) | ReliableSite, Los Angeles | EPYC 4545P, 16 cores / 32 threads, 128 GB | xl (1), heavy (2) | `intent-cache-xl`, `intent-cache` | `intent-ci2` | [`hosts/intent-ci2.env`](../infra/runners/hosts/intent-ci2.env) |
+| intent-ci2 | ReliableSite, Los Angeles | EPYC 4545P, 16 cores / 32 threads, 128 GB | xl (1), heavy (2) | `intent-cache-xl`, `intent-cache` | `intent-ci2` | [`hosts/intent-ci2.env`](../infra/runners/hosts/intent-ci2.env) |
 
 | Pool | Label | Serves jobs asking for | Bursts to | Per slot |
 |---|---|---|---|---|
