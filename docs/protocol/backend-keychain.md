@@ -171,8 +171,8 @@ Required component CI must:
    component name, and the locked SHA. The successful log names source SHA and
    corpus digest. Checkout or comparison failure fails the gate, never skips it.
 4. Execute production conformance tests, including captured no-write behavior.
-   Run native iOS tests through `scripts/xcodebuild.sh` on macOS. Required gates
-   must cover PR and merge-queue builds.
+   Run native iOS tests through the iOS repository's `xcodebuild.sh` script on
+   macOS. Required gates must cover PR and merge-queue builds.
 
 `make check-backend-keychain-contract` (also in `make consumer-checks`) always
 validates the canonical corpus, without compiling native components. It inspects

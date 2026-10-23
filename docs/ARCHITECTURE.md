@@ -112,7 +112,7 @@ bus — never on the transport or on each other directly.
 | intent-sourcecontrol | SourceControl trait + GitHubSourceControl (octocrab): PR/issue/review/check-run/mergeability, retry | core |
 | intent-git | status/stage/commit/branches, worktree create + lock, CoW reflink probe/clone (macOS `clonefile(2)` whole-tree fast path with best-effort walk fallback, Linux `ioctl(FICLONE)`) for CoW workspace checkouts and per-agent sandboxes, hidden repo cache (`repo_cache`) of read-only GitHub clones backing cache-hydrated workspace creation | core |
 | intent-context | ContextEngine trait + AuggieContextEngine + discovery | core |
-| intent-pty | unified portable-pty host for terminals **and** scripts: scrollback ring buffers, multi-client attach, service/command modes, auto-restart, URL/port detection | core |
+| intent-pty | unified portable-pty host for terminals **and** scripts: scrollback ring buffers (script output is also copied by an output sink to per-run logs under `<data_dir>/script-output/`, which `script.output` reads, so it survives restart and archive), multi-client attach, service/command modes, auto-restart, URL/port detection | core |
 | intent-search | BE-owned `search.*`: ripgrep-equivalent content search (grep + ignore + globset), path/glob search, adapters over persisted sessions/events/memories/notes/codebase; per-request cancellation | core, store |
 | intent-js | QuickJS-based JavaScript engine for agent-supplied code: async host bindings, wall-clock timeouts | (none — leaf) |
 | intent-linear | LinearEngine + DTOs for the `linear.*` surface (typed GraphQL over reqwest) | core |
@@ -1036,6 +1036,16 @@ self-described at the point of use in `DEFAULT_CONFIG_TEMPLATE`,
   total with the next sweep's headroom. The idle-reap sweep
   (`idleReapMinutes`) is independent of this rule and still drains idle
   trees on its own TTL.
+- **The idle-reap sweep keeps agents with running provider workers**
+  ([intent-hq/intentd#2573](https://github.com/intent-hq/intentd/pull/2573)).
+  An idle agent whose current connection is continuous and has a §5.5b worker
+  row still `running` (a `run_in_background` dev server, say) is skipped by
+  the TTL sweep, because killing its process would kill the worker with it. The
+  keep-alive is bounded by `WORKER_KEEPALIVE_CAP` (24 h past the TTL, for a
+  worker whose end report never arrives). Slot-cap admission and the
+  memory-budget drain can still evict such an agent, but only after every
+  idle agent without a running worker (`KeepAliveFn` in
+  `intent-services/src/agent_manager.rs`).
 - **`memoryBudgetMb` is a soft admission gate, not a ceiling**
   (monorepo#2063, validated end-to-end against real agents **under the strict
   policy** — the tree-only criterion that is now the fallback above; on a

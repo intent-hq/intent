@@ -38,13 +38,44 @@ row = fixture[args[1]]
 if row.get("stall"):
     child = subprocess.Popen([sys.executable, "-S", "-c", "import time; time.sleep(60)"],
                              start_new_session=row.get("detach", False))
-    Path(os.environ["GH_TEST_CHILD"]).write_text(str(child.pid))
     with open(os.environ["GH_TEST_CHILDREN"], "a") as children:
         children.write(f"{os.getpid()} {child.pid}\n")
+    if os.environ.get("GH_TEST_READY"):
+        Path(os.environ["GH_TEST_READY"], str(os.getpid())).touch()
     time.sleep(60)
 print(row.get("stdout", ""))
 print(row.get("stderr", ""), file=sys.stderr)
 sys.exit(row.get("code", 0))
+'''
+
+# Runs github_readiness.py as __main__, but holds each probe's Popen until the
+# fake gh has logged its call and spawned its detached child. The probe clock
+# starts when Popen returns, so a slow runner can no longer kill the fake before
+# the state under test exists. Time spent waiting is excluded from the timing.
+READY_RUNNER = r'''
+import os, runpy, signal, subprocess, sys, time
+from pathlib import Path
+ready = Path(os.environ["GH_TEST_READY"])
+waited = 0.0
+class ReadyPopen(subprocess.Popen):
+    def __init__(self, *args, **kwargs):
+        global waited
+        super().__init__(*args, **kwargs)
+        marker = ready / str(self.pid)
+        started = time.monotonic()
+        while not marker.exists() and self.poll() is None:
+            if time.monotonic() - started > 10:
+                os.killpg(self.pid, signal.SIGKILL)
+                raise SystemExit(f"fake gh {self.pid} never became ready")
+            time.sleep(0.005)
+        waited += time.monotonic() - started
+subprocess.Popen = ReadyPopen
+sys.argv = sys.argv[1:]
+started = time.monotonic()
+try:
+    runpy.run_path(sys.argv[0], run_name="__main__")
+finally:
+    Path(os.environ["GH_TEST_TIMING"]).write_text(str(time.monotonic() - started - waited))
 '''
 
 
@@ -77,12 +108,11 @@ class ReadinessTests(unittest.TestCase):
         gh.chmod(0o755)
         self.log = self.root / "calls"
         self.responses = self.root / "responses.json"
-        self.child = self.root / "child"
         self.children = self.root / "children"
         self.env = os.environ.copy()
         self.env.update(PATH=f"{self.bin}:{os.environ['PATH']}", GH_TOKEN=SECRET,
                         GH_TEST_LOG=str(self.log), GH_TEST_RESPONSES=str(self.responses),
-                        GH_TEST_CHILD=str(self.child), GH_TEST_CHILDREN=str(self.children),
+                        GH_TEST_CHILDREN=str(self.children),
                         GITHUB_READINESS_TIMEOUT="3")
         self.set_responses()
 
@@ -201,57 +231,98 @@ class ReadinessTests(unittest.TestCase):
                 self.set_responses(row, row)
                 self.assertNotIn("gh auth login", self.run_helper("--human"))
 
-    def test_timeout_kills_children_and_is_bounded(self):
-        self.env["GITHUB_READINESS_TIMEOUT"] = "0.5"
-        self.set_responses({"stall": True}, {"stall": True})
-        started = time.monotonic()
-        report = self.report()
-        self.assertLess(time.monotonic() - started, 4)
+    def run_ready_probes(self, timeout, row):
+        """Run both probes against stalling fakes; return probe-only seconds and spawned pids.
+
+        Launch without host site instrumentation so the timing measures the
+        probes, not Python startup hooks. READY_RUNNER starts each probe's
+        clock only once its fake has logged its call and holds the pipes in
+        its child, so the outcome does not depend on runner speed. The outer
+        bound stays below the children's 60s sleep, so waiting for pipe EOF
+        still fails, and a cleanup removes every fixture process after the
+        test's own liveness checks.
+        """
+        self.env["GITHUB_READINESS_TIMEOUT"] = timeout
+        self.set_responses(row, row)
+        ready, timing, runner = self.root / "ready", self.root / "timing", self.root / "runner.py"
+        ready.mkdir()
+        runner.write_text(READY_RUNNER)
+        self.env.update(GH_TEST_READY=str(ready), GH_TEST_TIMING=str(timing))
+        proc = subprocess.Popen([sys.executable, "-S", str(runner), str(SCRIPTS / "github_readiness.py")],
+                                env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, start_new_session=True)
+        self.addCleanup(self.kill_fixture, proc)
+        out, err = proc.communicate(timeout=40)
+        self.assertEqual(proc.returncode, 0, err)
+        self.assertNotIn(SECRET, out + err)
+        report = json.loads(out)
         self.assertEqual(report["rest"]["reason"], "timeout")
         self.assertEqual(report["graphql"]["reason"], "timeout")
-        # A killed child may briefly remain a zombie until the host reaps it.
-        stat = Path(f"/proc/{self.child.read_text()}/stat")
-        if stat.exists():
-            self.assertEqual(stat.read_text().split(")", 1)[1].split()[0], "Z")
+        calls = self.calls()
+        self.assertEqual([call[:2] for call in calls], [["api", "user"], ["api", "graphql"]])
+        for call in calls:
+            self.assertIn("--include", call)
+            self.assertIn("--hostname", call)
+            self.assertNotIn(SECRET, " ".join(call))
+        spawned = [tuple(map(int, line.split())) for line in self.children.read_text().splitlines()]
+        self.assertEqual(len(spawned), 2)
+        return float(timing.read_text()), spawned
+
+    def kill_fixture(self, proc):
+        if proc.poll() is None:
+            os.killpg(proc.pid, signal.SIGKILL)
+        if self.children.exists():
+            for line in self.children.read_text().splitlines():
+                for pid in map(int, line.split()):
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+        proc.communicate(timeout=2)
+
+    def test_timeout_kills_children_and_is_bounded(self):
+        # Two 0.5s probes; the bound leaves room for a loaded runner's fork,
+        # kill and reap, yet fails a probe that waits for its 60s child.
+        elapsed, spawned = self.run_ready_probes("0.5", {"stall": True})
+        self.assertLess(elapsed, 3)
+        # The child shares the fake's process group, so the group kill must
+        # take down both the fake gh and its child.
+        for parent, child in spawned:
+            self.assert_exited(parent)
+            self.assert_exited(child)
 
     def test_invalid_timeout_does_not_echo_secrets(self):
         self.env["GITHUB_READINESS_TIMEOUT"] = SECRET
         self.report()
 
+    def assert_exited(self, pid):
+        # A killed process may linger as a zombie if its new parent (a CI
+        # container's PID 1, say) does not reap orphans; that still counts.
+        deadline = time.monotonic() + 5
+        while True:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return
+            if Path("/proc/self").exists():
+                try:
+                    state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+                except FileNotFoundError:
+                    return
+            else:
+                state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)],
+                                       capture_output=True, text=True).stdout.strip()
+            if not state or state.startswith("Z"):
+                return
+            if time.monotonic() > deadline:
+                self.fail(f"fake gh {pid} survived the timeout (state {state})")
+            time.sleep(0.01)
+
     def test_timeout_discards_pipes_held_by_detached_children(self):
-        self.env["GITHUB_READINESS_TIMEOUT"] = "0.1"
-        self.set_responses({"stall": True, "detach": True}, {"stall": True, "detach": True})
-        # Launch without host site instrumentation so the deadline measures
-        # the probes, not Python startup hooks. The outer bound catches a
-        # stuck cleanup and the finally block removes every fixture process.
-        proc = subprocess.Popen([sys.executable, "-S", str(SCRIPTS / "github_readiness.py")],
-                                env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                text=True, start_new_session=True)
-        started = time.monotonic()
-        try:
-            out, err = proc.communicate(timeout=2)
-            self.assertEqual(proc.returncode, 0, err)
-            self.assertNotIn(SECRET, out + err)
-            report = json.loads(out)
-            self.assertEqual(report["rest"]["reason"], "timeout")
-            self.assertEqual(report["graphql"]["reason"], "timeout")
-            self.assertEqual(len(self.calls()), 2)
-            self.assertLess(time.monotonic() - started, 2)
-            for line in self.children.read_text().splitlines():
-                parent, _ = map(int, line.split())
-                with self.assertRaises(ProcessLookupError):
-                    os.kill(parent, 0)
-        finally:
-            if proc.poll() is None:
-                os.killpg(proc.pid, signal.SIGKILL)
-            if self.children.exists():
-                for line in self.children.read_text().splitlines():
-                    for pid in map(int, line.split()):
-                        try:
-                            os.kill(pid, signal.SIGKILL)
-                        except ProcessLookupError:
-                            pass
-            proc.communicate(timeout=2)
+        elapsed, spawned = self.run_ready_probes("0.1", {"stall": True, "detach": True})
+        self.assertLess(elapsed, 2)
+        for parent, _ in spawned:
+            self.assert_exited(parent)
 
     def test_timeout_configuration_is_capped(self):
         spec = importlib.util.spec_from_file_location("github_readiness", SCRIPTS / "github_readiness.py")
@@ -299,7 +370,9 @@ class ReadinessTests(unittest.TestCase):
         self.set_responses(RATE)
         report = json.loads(self.run_status())
         self.assertTrue(report["host"]["github"]["prReady"])
-        initialized = [repo for repo in report["repos"].values() if repo["initialized"]]
+        # repos.monorepo describes the root checkout and has no PR lookup.
+        initialized = [repo for name, repo in report["repos"].items()
+                       if name != "monorepo" and repo["initialized"]]
         self.assertTrue(initialized, "CI initializes at least intentd")
         for repo in initialized:
             self.assertEqual(repo["pr"]["number"], 123)

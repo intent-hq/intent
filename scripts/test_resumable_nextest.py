@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import contextlib
+import hashlib
 import importlib.util
 import io
 from itertools import product
@@ -23,6 +24,14 @@ SPEC = importlib.util.spec_from_file_location("resumable_nextest", SCRIPT)
 gate = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 SPEC.loader.exec_module(gate)
+
+
+def setUpModule():
+    # Summary lines and receipts name the caller's test time-limit multiplier;
+    # run every case without the host's value so exact expectations hold.
+    saved = os.environ.pop(gate.TIMEOUT_MULTIPLIER_ENV, None)
+    if saved is not None:
+        unittest.addModuleCleanup(os.environ.__setitem__, gate.TIMEOUT_MULTIPLIER_ENV, saved)
 
 KEY = "a" * 64
 LISTING = json.dumps(
@@ -169,6 +178,23 @@ class AttemptReceiptTests(unittest.TestCase):
         return {str(p.relative_to(directory)): (p.stat().st_ino, p.read_bytes())
                 for p in directory.rglob("*") if p.is_file()}
 
+    def test_latest_attempt_does_not_depend_on_filesystem_timestamp_resolution(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            args = make_args(root, resume="1")
+            harness = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+            self.assertEqual(harness.execute(args), 0)
+            self.assertEqual(harness.execute(args), 0)
+            scope = self.scope(root, args.plan)
+            attempts = list((scope / "attempts").iterdir())
+            for attempt in attempts:
+                os.utime(attempt, ns=(1_000_000_000, 1_000_000_000))
+            expected = Path(harness.output_lines[-1].split("record: ", 1)[1])
+            # Reverse directory order to make a timestamp tie pick the wrong receipt.
+            ordered = [attempt for attempt in attempts if attempt != expected] + [expected]
+            with mock.patch.object(Path, "iterdir", return_value=iter(ordered)):
+                self.assertEqual(latest_attempt(scope), expected)
+
     def test_repeated_and_completed_resume_invocations_preserve_all_artifacts(self):
         for plans in ([], ["-p alpha --test one"]):
             with self.subTest(plans=plans), tempfile.TemporaryDirectory() as temp:
@@ -293,8 +319,36 @@ with mock.patch.object(gate, "callback_fixture_identity", return_value=None), mo
             self.assertEqual((legacy.stat().st_ino, legacy.read_bytes()), before)
 
 
+REPORTED_ATTEMPTS = {}
+
+
+def track_record_output(*args, **kwargs):
+    """Observe the real receipt identity while preserving the runner's output."""
+    if len(args) == 1 and isinstance(args[0], str) and args[0].startswith("[") and "] record: " in args[0]:
+        attempt = Path(args[0].split("] record: ", 1)[1])
+        REPORTED_ATTEMPTS[attempt.parent.parent] = attempt
+    print(*args, **kwargs)
+
+
+gate.print = track_record_output
+
+
 def latest_attempt(scope):
-    return max((scope / "attempts").iterdir(), key=lambda path: path.stat().st_mtime_ns)
+    # Directory mtimes can tie on fast runners. Use the reported identity.
+    if scope in REPORTED_ATTEMPTS:
+        return REPORTED_ATTEMPTS[scope]
+    attempts = list((scope / "attempts").iterdir())
+    if len(attempts) != 1:
+        raise AssertionError("multiple attempts require the runner's reported receipt path")
+    return attempts[0]
+
+
+def attempt_from_output(stdout, scope):
+    record = next(line for line in reversed(stdout.splitlines()) if "] record: " in line)
+    attempt = Path(record.split("] record: ", 1)[1])
+    if attempt.parent != scope / "attempts":
+        raise AssertionError(f"receipt is outside expected scope: {attempt}")
+    return attempt
 
 
 class RealChildReceiptTests(unittest.TestCase):
@@ -456,7 +510,7 @@ with mock.patch.object(gate, 'tree_key', return_value=KEY), \\
                     resumed = self.spawn(root, plans, 'resume')
                     stdout, stderr = self.finish(resumed)
                     self.assertEqual(resumed.returncode, 0, stderr)
-                    current = latest_attempt(scope)
+                    current = attempt_from_output(stdout, scope)
                     self.assertNotIn(current, frozen)
                     for directory, snapshot in frozen.items():
                         self.assertEqual(self.snapshot(directory), snapshot)
@@ -498,11 +552,15 @@ class CallbackPreflightTests(unittest.TestCase):
                 record.mkdir(parents=True)
                 (record / "complete").write_text("complete\n")
                 (record / "passed.jsonl").write_text(gate.record_line("alpha::one", "passes", "ok"))
-                with mock.patch.dict(os.environ, {"INTENT_ACP_CALLBACK_ADAPTER_FIXTURE": ""}), mock.patch.object(
+                # A temporary HOME has no verified cache, so nothing is auto-prepared.
+                with mock.patch.dict(os.environ, {"INTENT_ACP_CALLBACK_ADAPTER_FIXTURE": "",
+                                                  "HOME": str(root / "home")}), mock.patch.object(
                     gate, "isolated_output_args", return_value=[]
                 ) as cargo, mock.patch.object(gate, "tree_key", return_value=KEY) as key:
-                    with self.assertRaisesRegex(RuntimeError, "INTENT_ACP_CALLBACK_ADAPTER_FIXTURE"):
+                    with self.assertRaisesRegex(RuntimeError, "INTENT_ACP_CALLBACK_ADAPTER_FIXTURE") as refused:
                         gate.run_nextest(make_args(root, plan=plans, resume="1"))
+                    self.assertIn("CONTRIBUTING.md#linux-x64-callback-gates", str(refused.exception))
+                    self.assertIn("existing authorized Linux x64 host", str(refused.exception))
                     cargo.assert_not_called()
                     key.assert_not_called()
 
@@ -577,6 +635,29 @@ class CallbackValidatorTests(unittest.TestCase):
         self.assertEqual(absolute["root"], str(self.fixture.payload))
         self.assertEqual(absolute["node-sha256"], self.validator.digest(self.node))
 
+    def test_host_node_options_are_cleared_only_for_validation(self):
+        injected = "--require /opt/datadog-packages/dd-trace/init.js"
+        os.environ["NODE_OPTIONS"] = injected
+        seen = []
+        check = self.validator.platform_check
+        with mock.patch.object(self.validator, "platform_check",
+                               side_effect=lambda: (seen.append(os.environ.get("NODE_OPTIONS")), check())[1]):
+            self.assertEqual(self.identity()["root"], str(self.fixture.payload))
+        self.assertEqual(seen, [None])
+        self.assertEqual(os.environ["NODE_OPTIONS"], injected)
+
+    def test_fixture_runs_drop_host_node_options(self):
+        os.environ["NODE_OPTIONS"] = "--require /opt/datadog-packages/dd-trace/init.js"
+        harness = PlannedRunHarness(self.root, [([event("ok", "alpha::one$passes")], 0)])
+        self.assertEqual(harness.execute(make_args(self.root, plan=["-p intent-acp --lib"])), 0)
+        self.assertNotIn("NODE_OPTIONS", harness.run_environments[0])
+        self.assertIn("NODE_OPTIONS", os.environ)
+
+    def test_ready_prefix_matches_component_prepare(self):
+        source = (SCRIPT.parents[1] / "packages/intentd/scripts/prepare-acp-callback-fixture.py").read_text()
+        self.assertIn(f'key = "{gate.CALLBACK_READY_PREFIX}" + descriptor["manifest"]["sha256"]', source,
+                      "prepare() renamed its ready entry; update CALLBACK_READY_PREFIX")
+
     def test_cli_loads_canonical_verifier_and_checks_real_node_version_offline(self):
         # The child interpreter does not inherit the in-process platform mock.
         if self.host_machine not in ("x86_64", "amd64"):
@@ -589,7 +670,8 @@ class CallbackValidatorTests(unittest.TestCase):
         shutil.copy(self.fixture.descriptor_path, config / "claude-callback-adapter.json")
         for name in ("delta.patch", "files.json"):
             shutil.copy(self.root / name, config)
-        self.node.write_text(f"#!{sys.executable}\nprint('v24.21.0')\n")
+        # The verifier sanitizes loader paths; the version stub needs no Python runtime.
+        self.node.write_text("#!/bin/sh\nprintf '%s\\n' 'v24.21.0'\n")
         self.node.chmod(0o755)
         env = {**os.environ, "PATH": str(self.root) + os.pathsep + os.environ["PATH"]}
         command = [sys.executable, "-S", "-B", str(SCRIPT),
@@ -597,7 +679,7 @@ class CallbackValidatorTests(unittest.TestCase):
         valid = subprocess.run(command, env=env, capture_output=True, text=True, timeout=10)
         self.assertEqual(valid.returncode, 0, valid.stderr)
         self.assertIn('"event": "node-tool"', valid.stderr)
-        self.node.write_text(f"#!{sys.executable}\nprint('v0.0.0')\n")
+        self.node.write_text("#!/bin/sh\nprintf '%s\\n' 'v0.0.0'\n")
         invalid = subprocess.run(command, env=env, capture_output=True, text=True, timeout=10)
         self.assertEqual(invalid.returncode, 2, invalid.stderr)
         self.assertIn("Node version mismatch", invalid.stderr)
@@ -627,7 +709,7 @@ class CallbackValidatorTests(unittest.TestCase):
         source.parent.mkdir(parents=True)
         source.write_text("// baseline\n")
         (self.component / "Cargo.toml").write_text("[workspace]\n")
-        self.node.write_text(f"#!{sys.executable}\nprint('v24.21.0')\n")
+        self.node.write_text("#!/bin/sh\nprintf '%s\\n' 'v24.21.0'\n")
         self.node.chmod(0o755)
         env = {**os.environ, "PATH": str(self.root) + os.pathsep + os.environ["PATH"],
                "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
@@ -777,15 +859,40 @@ with mock.patch.object(gate, 'transfer_fixture_identity', return_value=None):
         with mock.patch.object(self.validator.platform, "machine", return_value="aarch64"):
             with self.assertRaisesRegex(RuntimeError, "Linux x64"):
                 self.identity()
-        with mock.patch.dict(os.environ, {"NODE_OPTIONS": "--require unexpected"}):
-            with self.assertRaisesRegex(RuntimeError, "NODE_OPTIONS"):
-                self.identity()
+        # Host NODE_OPTIONS are hidden from validation rather than refused:
+        # see test_host_node_options_are_cleared_only_for_validation.
         self.node_patch.stop()
         with mock.patch.object(self.validator.shutil, "which", return_value=str(self.node)), mock.patch.object(
             self.validator, "command", return_value="v0.0.0"
         ):
             with self.assertRaisesRegex(RuntimeError, "Node version mismatch"):
                 self.identity()
+
+    def test_unsupported_host_points_to_linux_recipe_before_cargo_or_resume(self):
+        # Diagnostic coverage through the real launcher/platform check, not a
+        # native macOS runtime test. Synthetic payloads never reach Node.
+        record = self.root / "cache" / KEY
+        record.mkdir(parents=True)
+        (record / "complete").write_text("complete\n")
+        passed = gate.record_line("alpha::one", "passes", "ok")
+        (record / "passed.jsonl").write_text(passed)
+        with mock.patch.object(self.validator.sys, "platform", "darwin"), mock.patch.object(
+            self.validator.platform, "machine", return_value="arm64"
+        ), mock.patch.object(gate, "isolated_output_args") as cargo, mock.patch.object(
+            gate, "tree_key", return_value=KEY
+        ) as key:
+            with self.assertRaisesRegex(RuntimeError, "Linux x64") as refused:
+                gate.run_nextest(make_args(self.root, plan=["-p intent-acp --lib"], resume="1"))
+            self.assertIn("CONTRIBUTING.md#linux-x64-callback-gates", str(refused.exception))
+            self.assertIn("existing authorized Linux x64 host", str(refused.exception))
+            self.assertIn("macOS is not supported", str(refused.exception))
+            cargo.assert_not_called()
+            key.assert_not_called()
+            self.validator.prepare.assert_not_called()
+            self.validator.urllib.request.urlopen.assert_not_called()
+            self.validator.node_tool.assert_not_called()
+        self.assertEqual((record / "passed.jsonl").read_text(), passed)
+        self.assertEqual(list(record.glob("attempts/*")), [])
 
     def test_corruption_after_success_cannot_get_complete_resume_credit(self):
         harness = PlannedRunHarness(self.root, [([event("ok", "alpha::one$passes")], 0)])
@@ -866,6 +973,24 @@ with mock.patch.object(gate, 'transfer_fixture_identity', return_value=None):
             self.assertEqual(argv[:2], ["--cache-dir", str(self.root / "user's home/.cache/intent/acp-callback-fixture")])
             self.assertEqual(argv[2], route)
 
+
+    def test_setup_help_names_injected_node_options_only_when_set(self):
+        component = self.root / "component"
+        blocker = "NODE_OPTIONS is set in this shell"
+        with mock.patch.dict(os.environ, {"NODE_OPTIONS": "--require /opt/dd-trace/init.js"}):
+            help_text = gate.callback_setup_help(component)
+        first = help_text.splitlines()[0]
+        self.assertIn(blocker, first)
+        self.assertIn("env -u NODE_OPTIONS", first)
+        self.assertNotIn("dd-trace", help_text, "the preload value is never echoed")
+        for value in (None, ""):
+            env = {k: v for k, v in os.environ.items() if k != "NODE_OPTIONS"}
+            if value is not None:
+                env["NODE_OPTIONS"] = value
+            with mock.patch.dict(os.environ, env, clear=True):
+                unchanged = gate.callback_setup_help(component)
+            self.assertNotIn(blocker, unchanged)
+            self.assertEqual(unchanged, "\n".join(help_text.splitlines()[1:]))
 
 class CallbackValidatorPortabilityTests(unittest.TestCase):
     def test_synthetic_suite_on_arm64_keeps_checks_and_skips_only_native_cli(self):
@@ -1200,7 +1325,8 @@ class ResumableNextestTests(unittest.TestCase):
 
             summary = (
                 "[test-changed] summary: 2 passed, 0 failed, 1 skipped/ignored, 0 resumed "
-                "(tests already passed for this tree)"
+                "(tests already passed for this tree); "
+                "test time limits x1 (INTENTD_TEST_TIMEOUT_MULTIPLIER unset)"
             )
             self.assertEqual((latest_attempt(record_dir) / "summary.txt").read_text(), summary + "\n")
             self.assertEqual(
@@ -1377,7 +1503,8 @@ class ResumableNextestTests(unittest.TestCase):
                 harness.output_lines[-2:],
                 [
                     "[test-changed] summary: 1 passed, 1 failed, 0 skipped/ignored, 0 resumed "
-                    "(tests already passed for this tree)",
+                    "(tests already passed for this tree); "
+                    "test time limits x1 (INTENTD_TEST_TIMEOUT_MULTIPLIER unset)",
                     f"[test-changed] record: {latest_attempt(record_dir)}",
                 ],
             )
@@ -1438,7 +1565,8 @@ class ResumableNextestTests(unittest.TestCase):
                 harness.output_lines[-2:],
                 [
                     "[test-changed] summary: 2 passed, 1 failed, 0 skipped/ignored, 0 resumed "
-                    "(tests already passed for this tree)",
+                    "(tests already passed for this tree); "
+                    "test time limits x1 (INTENTD_TEST_TIMEOUT_MULTIPLIER unset)",
                     f"[test-changed] record: {latest_attempt(record_dir)}",
                 ],
             )
@@ -1497,10 +1625,14 @@ class ResumableNextestTests(unittest.TestCase):
             record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
             summary = (
                 "[test-changed] summary: 0 passed, 0 failed, 0 skipped/ignored, 0 resumed "
-                "(tests already passed for this tree)"
+                "(tests already passed for this tree); "
+                "test time limits x1 (INTENTD_TEST_TIMEOUT_MULTIPLIER unset)"
             )
             self.assertEqual(
-                stdout.getvalue().splitlines()[1:], [summary, f"[test-changed] record: {latest_attempt(record_dir)}"]
+                stdout.getvalue().splitlines(),
+                ["[test-changed] test time limits x1 (INTENTD_TEST_TIMEOUT_MULTIPLIER unset)",
+                 "[test-changed] isolated Cargo outputs: ",
+                 summary, f"[test-changed] record: {latest_attempt(record_dir)}"]
             )
             self.assertIn("[test-changed] ERROR:", stderr.getvalue())
             self.assertEqual((latest_attempt(record_dir) / "summary.txt").read_text(), summary + "\n")
@@ -1773,10 +1905,13 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             self.assertEqual(config["profile"][latest_attempt(run_dir).name]["junit"]["path"], "junit.xml")
             summary = (
                 "[test-intentd] summary: 1 passed, 0 failed, 1 skipped/ignored, 0 resumed "
-                "(tests already passed for this tree)"
+                "(tests already passed for this tree); "
+                "test time limits x1 (INTENTD_TEST_TIMEOUT_MULTIPLIER unset)"
             )
+            self.assertEqual(harness.output_lines[0],
+                             "[test-intentd] test time limits x1 (INTENTD_TEST_TIMEOUT_MULTIPLIER unset)")
             self.assertEqual(
-                harness.output_lines[1:],
+                harness.output_lines[2:],
                 [
                     "[test-intentd] no passed-test record for this tree; running the complete suite",
                     event("ok", "alpha::one$passes").rstrip("\n"),
@@ -1897,7 +2032,8 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             self.assertEqual(skip.run_commands, [])
             self.assertEqual(skip.list_commands, [])
             self.assertEqual(
-                skip.output_lines, ["resumed: skipped 2 tests already passed for this tree",
+                skip.output_lines, ["[test-changed] test time limits x1 (INTENTD_TEST_TIMEOUT_MULTIPLIER unset)",
+                                    "resumed: skipped 2 tests already passed for this tree",
                                     f"[test-changed] record: {latest_attempt(record_b)}"]
             )
 
@@ -2603,6 +2739,7 @@ class StackSettingResumeTests(unittest.TestCase):
         harness.transfer = {"root": str(root / "transfer"), "contract.json": "verified"}
         dumps = json.dumps
         real_popen = subprocess.Popen
+        python_loader_env = {k: os.environ[k] for k in ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH") if k in os.environ}
 
         def capture_inputs(value, **kwargs):
             if isinstance(value, dict) and "root-tree" in value:
@@ -2638,6 +2775,9 @@ for name in tests:
     print(json.dumps({"type": "test", "event": "ok", "name": "alpha::one$" + name}))
 sys.exit(101 if interrupted == "1" else 0)
 '''
+            # Preserve only interpreter loading paths; the controlled Rust
+            # environment and stack assertions remain unchanged.
+            kwargs["env"] = {**kwargs["env"], **python_loader_env}
             process = real_popen(
                 [sys.executable, "-S", "-c", code, config, str(harness.children),
                  "1" if harness.interrupt else "0"], **kwargs
@@ -2792,6 +2932,69 @@ sys.exit(101 if interrupted == "1" else 0)
                     self.assertTrue((planned / "complete").exists())
 
 
+class FilterSelectionTests(unittest.TestCase):
+    """`make test-select E=EXPR` hands EXPR to the runner as --filterset."""
+
+    # Regex anchors, spaces, parens and an apostrophe must all survive.
+    EXPRESSION = "test(/it's a $/) | (package(intent-acp) & test(=exact name))"
+
+    def parse(self, *argv):
+        captured = []
+        with mock.patch.object(sys, "argv", ["resumable_nextest.py", "--repo-root", ".",
+                                             "--intentd-dir", "intentd", "--cache-dir", "cache",
+                                             "--build-jobs", "1", "--test-threads", "1", *argv]), \
+                mock.patch.object(gate, "run_nextest", side_effect=lambda a: captured.append(a) or 0):
+            self.assertEqual(gate.main(), 0)
+        return captured[0]
+
+    def test_filterset_is_one_workspace_plan_restored_exactly(self):
+        args = self.parse("--label", "test-select", "--filterset", self.EXPRESSION)
+        self.assertEqual(gate.split_plans(args.plan), [["--workspace", "-E", self.EXPRESSION]])
+        self.assertEqual(args.label, "test-select")
+
+    def test_filterset_refuses_plan_and_blank_expression(self):
+        for argv in (["--filterset", "all()", "--plan", "-p alpha"], ["--filterset", ""],
+                     ["--filterset", "  "]):
+            with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()) as stderr:
+                with self.assertRaises(SystemExit) as refused:
+                    self.parse(*argv)
+                self.assertEqual(refused.exception.code, 2)
+                self.assertIn("--filterset", stderr.getvalue())
+
+    def test_filtered_run_prepares_both_fixtures_and_records_its_own_scope(self):
+        plans = [gate.shlex.join(["--workspace", "-E", self.EXPRESSION])]
+        self.assertTrue(gate.needs_callback_fixture(gate.split_plans(plans)))
+        self.assertTrue(gate.needs_transfer_fixture(gate.split_plans(plans)))
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+            callback = {"root": str(root / "callback"), "manifest": "verified"}
+            transfer = {"root": str(root / "transfer")}
+            environment = {k: v for k, v in os.environ.items() if k != "NODE_OPTIONS"}
+            with mock.patch.dict(os.environ, environment, clear=True), \
+                    mock.patch.object(gate, "callback_fixture_identity", return_value=callback), \
+                    mock.patch.object(gate, "transfer_fixture_identity", return_value=transfer):
+                status = harness.execute(make_args(root, plan=plans, label="test-select", base=None))
+            self.assertEqual(status, 0)
+            self.assertEqual(harness.run_commands[0][3:6], ["--workspace", "-E", self.EXPRESSION])
+            self.assertEqual(harness.run_environments[0][gate.CALLBACK_FIXTURE_ENV], callback["root"])
+            self.assertEqual(harness.run_environments[0][gate.TRANSFER_FIXTURE_ENV], transfer["root"])
+            record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(plans))
+            run_record = json.loads((latest_attempt(record_dir) / "run.json").read_text())
+            self.assertEqual((run_record["label"], run_record["exit_code"]), ("test-select", 0))
+            self.assertEqual(run_record["callback_fixture"], callback)
+            # plans/results keep their display join (receipt validation compares
+            # it); the exact argv, spaces inside the filterset included, is here.
+            self.assertEqual(run_record["selections"], gate.split_plans(plans))
+            self.assertEqual(harness.output_lines[-1],
+                             f"[test-select] record: {latest_attempt(record_dir)}")
+
+    def test_unset_fixture_help_lists_test_select_among_preparing_targets(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            help_text = gate.callback_setup_help(Path(temporary))
+        self.assertIn("make test, test-changed, test-select and gate prepare", help_text)
+
+
 class TransferFixtureSelectionTests(unittest.TestCase):
     def test_affected_and_unknown_selectors_require_preflight(self):
         for plans in ([], [["--workspace"]], [["-p", "intent-services"]],
@@ -2830,6 +3033,39 @@ class TransferFixtureSelectionTests(unittest.TestCase):
             self.assertEqual(len(set(keys)), len(keys))
             self.assertEqual(keys[-1], gate.tree_key(
                 root, root, fixture_identity=callbacks[-1], transfer_identity=identities[-1]))
+
+    def test_hermetic_runs_keep_separate_resume_credit(self):
+        """`make test HERMETIC=1` (no provider CLIs) never shares passes with
+        an ordinary run, and ordinary keys are unchanged by the feature."""
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            gate, "worktree_tree", return_value="tree"
+        ), mock.patch.object(gate, "submodule_heads", return_value=[]), mock.patch.object(
+            gate, "required_hash", return_value="hash"
+        ), mock.patch.object(gate, "run", return_value="version"), mock.patch.object(
+            gate, "build_settings", return_value={}
+        ):
+            root = Path(directory)
+            modes = {
+                "ordinary": {},
+                "off": {"INTENT_GATE_HERMETIC": "0", "HIDE_NODE": "1"},
+                "hermetic": {"INTENT_GATE_HERMETIC": "1"},
+                "hide-node": {"INTENT_GATE_HERMETIC": "1", "HIDE_NODE": "1"},
+                "unchecked": {"INTENT_GATE_HERMETIC": "1", "SKIP_SELF_CHECK": "1"},
+            }
+            keys, inputs = {}, {}
+            for mode, env in modes.items():
+                with mock.patch.dict(os.environ, env, clear=True):
+                    keys[mode] = gate.tree_key(root, root)
+                    inputs[mode] = gate.tree_inputs(root, root)
+            self.assertEqual(keys["ordinary"], keys["off"])
+            self.assertNotIn("hermetic", inputs["ordinary"])
+            self.assertEqual(len({keys[m] for m in modes if m != "off"}), 4)
+            self.assertEqual(inputs["hermetic"]["hermetic"],
+                             {"HIDE_NODE": False, "SKIP_SELF_CHECK": False})
+            self.assertEqual(inputs["hide-node"]["hermetic"],
+                             {"HIDE_NODE": True, "SKIP_SELF_CHECK": False})
+            self.assertEqual(inputs["unchecked"]["hermetic"],
+                             {"HIDE_NODE": False, "SKIP_SELF_CHECK": True})
 
 
 class CoverageReconciliationTests(unittest.TestCase):
@@ -3971,6 +4207,328 @@ class CapturedNextestTests(unittest.TestCase):
                 self.assertEqual(proof['categories']['executed-passed'], [['coverage-probe', 'b_wait']])
                 self.assertEqual(proof['categories']['resumed-passed'], [['coverage-probe', 'a_pass']])
                 self.assertEqual(self.snapshot(directory), frozen)
+
+
+class TimeoutMultiplierTests(unittest.TestCase):
+    """`make test` / `test-changed` / `test-select` default
+    INTENTD_TEST_TIMEOUT_MULTIPLIER to 3; the runner shows the value and never
+    lets a pass at one multiplier resume a run at another."""
+
+    def test_display_factor_follows_the_test_support_rules(self):
+        # Mirrors timeout.rs's tests: unset/malformed -> 1, never below 1, capped.
+        # Inputs Python's float()/strip() accept but Rust's trim().parse::<f64>()
+        # rejects must also mean 1: digit separators, non-ASCII digits, and the
+        # separators U+001C..U+001F that Python treats as whitespace.
+        cases = {None: 1.0, "": 1.0, "bogus": 1.0, "NaN": 1.0, "inf": 1.0, "1_0": 1.0,
+                 "\uff13": 1.0, "\x1f3": 1.0, "3\x1c": 1.0, "0x3": 1.0,
+                 "3": 3.0, " 3 ": 3.0, "\u30003\u2003": 3.0, "\t3\n": 3.0, "+3": 3.0,
+                 "3.": 3.0, ".5e1": 5.0, "1.5": 1.5, "0": 1.0, "0.1": 1.0, "-1": 1.0,
+                 "-inf": 1.0, "Infinity": 1.0, "1e300": 20.0, "20": 20.0}
+        for setting, expected in cases.items():
+            with self.subTest(setting=setting):
+                self.assertEqual(gate.timeout_multiplier(setting), expected)
+
+    def test_description_names_the_factor_and_the_raw_setting(self):
+        name = gate.TIMEOUT_MULTIPLIER_ENV
+        self.assertEqual(gate.timeout_description({}), f"test time limits x1 ({name} unset)")
+        self.assertEqual(gate.timeout_description({name: "3"}), f"test time limits x3 ({name}=3)")
+        self.assertEqual(gate.timeout_description({name: "1.5"}), f"test time limits x1.5 ({name}=1.5)")
+        self.assertEqual(gate.timeout_description({name: ""}), f"test time limits x1 ({name}='')")
+        self.assertEqual(gate.timeout_description({name: "1e9"}), f"test time limits x20 ({name}=1e9)")
+        self.assertEqual(gate.timeout_description({name: "\uff13"}), f"test time limits x1 ({name}='\uff13')")
+
+    def test_each_multiplier_keeps_separate_resume_credit(self):
+        name = gate.TIMEOUT_MULTIPLIER_ENV
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            gate, "worktree_tree", return_value="tree"
+        ), mock.patch.object(gate, "submodule_heads", return_value=[]), mock.patch.object(
+            gate, "required_hash", return_value="hash"
+        ), mock.patch.object(gate, "run", return_value="version"), mock.patch.object(
+            gate, "build_settings", return_value={}
+        ):
+            root = Path(directory)
+            # Grouped by the stretch the tests actually apply.
+            groups = {1.0: ("unset", "1", "", "0", "bogus", "\uff13"), 3.0: ("3", "3.0", " 3 "),
+                      2.0: ("2",), 20.0: ("20", "1e9")}
+            keys, inputs = {}, {}
+            for factor, settings in groups.items():
+                for setting in settings:
+                    env = {} if setting == "unset" else {name: setting}
+                    with mock.patch.dict(os.environ, env, clear=True):
+                        keys[setting] = gate.tree_key(root, root)
+                        inputs[setting] = gate.tree_inputs(root, root)
+                    self.assertEqual(keys[setting], keys[settings[0]], (setting, settings[0]))
+                    if factor == 1.0:
+                        # x1 runs (direct runner callers, an explicit 1, and every
+                        # record made before the make default) keep their key.
+                        self.assertNotIn("test-timeout", inputs[setting])
+                    else:
+                        self.assertEqual(inputs[setting]["test-timeout"], {"multiplier": factor})
+            self.assertEqual(len({keys[settings[0]] for settings in groups.values()}), len(groups), keys)
+            # The key follows the environment the tests actually receive.
+            with mock.patch.dict(os.environ, {}, clear=True):
+                self.assertEqual(gate.tree_key(root, root, child_env={name: "3"}), keys["3"])
+
+    def test_run_prints_and_records_the_multiplier(self):
+        name = gate.TIMEOUT_MULTIPLIER_ENV
+        for setting in (None, "3", "1"):
+            with self.subTest(setting=setting), tempfile.TemporaryDirectory() as temporary, \
+                    mock.patch.object(gate, "callback_fixture_identity", return_value=None), \
+                    mock.patch.object(gate, "transfer_fixture_identity", return_value=None), \
+                    mock.patch.dict(os.environ, {} if setting is None else {name: setting}):
+                root = Path(temporary)
+                args = make_args(root)
+                harness = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)
+                                                   for _ in gate.split_plans(args.plan)])
+                self.assertEqual(harness.execute(args), 0)
+                description = gate.timeout_description({} if setting is None else {name: setting})
+                self.assertIn(f"[{args.label}] {description}", harness.output_lines)
+                record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(args.plan))
+                attempt = latest_attempt(record_dir)
+                summary = (attempt / "summary.txt").read_text()
+                self.assertTrue(summary.endswith(f"; {description}\n"), summary)
+                self.assertIn(summary.rstrip("\n"), harness.output_lines)
+                self.assertEqual(json.loads((attempt / "run.json").read_text())["test_timeout_multiplier"], setting)
+                self.assertEqual({env.get(name) for env in harness.run_environments}, {setting})
+
+
+
+OLD = "0" * 16
+NEW = "1" * 16
+
+
+class StaleExecutableTests(unittest.TestCase):
+    """A gate keeps only the newest build of each listed test executable."""
+
+    def gate_root(self, root):
+        owner = hashlib.sha256(os.fsencode((root / "intentd").resolve())).hexdigest()
+        return root / "target" / "intent-gates" / owner
+
+    def output_args(self, gate_root, build_root=None):
+        build = json.dumps(str(build_root or gate_root))
+        return ["--target-dir", str(gate_root), "--config", f"build.build-dir={build}"]
+
+    def unit(self, profile, package, name, digest, kind="test-integration-test", body=b"x" * 64):
+        deps = profile / "deps"
+        deps.mkdir(parents=True, exist_ok=True)
+        (profile / ".cargo-lock").touch()
+        fingerprint = profile / ".fingerprint" / f"{package}-{digest}"
+        fingerprint.mkdir(parents=True, exist_ok=True)
+        target = name.replace("_", "-") if kind == "bin" else name
+        (fingerprint / f"{kind}-{target}").write_text("0")
+        (fingerprint / f"{kind}-{target}.json").write_text("{}")
+        (fingerprint / f"dep-{kind}-{target}").write_text("")
+        executable = deps / f"{name}-{digest}"
+        executable.write_bytes(body)
+        executable.chmod(0o755)
+        (deps / f"{name}-{digest}.d").write_text(f"{executable}: src/lib.rs\n")
+        return executable
+
+    def listing(self, *paths):
+        suites = {}
+        for path in paths:
+            name = path.name.rsplit("-", 1)[0]
+            suites[f"alpha::{name}"] = {
+                "package-name": "alpha", "binary-name": name, "binary-id": f"alpha::{name}",
+                "kind": "test", "binary-path": str(path), "testcases": {},
+            }
+        return json.dumps({"rust-suites": suites})
+
+    def prune(self, output_args, *paths, open_paths=frozenset()):
+        out = io.StringIO()
+        with mock.patch.object(gate, "open_paths", return_value=set(map(str, open_paths))), \
+                contextlib.redirect_stdout(out):
+            freed = gate.prune_stale_executables(output_args, [self.listing(*paths)], None, "gate")
+        return freed, out.getvalue()
+
+    def test_superseded_test_executables_and_companions_are_removed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            gate_root = self.gate_root(root)
+            profile = gate_root / "debug"
+            stale = self.unit(profile, "alpha", "one", OLD)
+            (stale.parent / f"one-{OLD}.dwp").write_text("dwarf")
+            (stale.parent / f"one-{OLD}.dSYM" / "Contents").mkdir(parents=True)
+            current = self.unit(profile, "alpha", "one", NEW)
+            unlisted = self.unit(profile, "alpha", "other", "3" * 16)
+            freed, output = self.prune(self.output_args(gate_root), current)
+            self.assertFalse(stale.exists())
+            for suffix in (".d", ".dwp", ".dSYM"):
+                self.assertFalse((stale.parent / f"one-{OLD}{suffix}").exists(), suffix)
+            self.assertTrue(current.exists())
+            self.assertTrue((current.parent / f"one-{NEW}.d").exists())
+            self.assertTrue(unlisted.exists())
+            self.assertEqual(freed, 64 + len(f"{stale}: src/lib.rs\n") + len("dwarf"))
+            self.assertIn("removed 1 superseded test executable", output)
+
+    def test_separate_build_dir_is_pruned_inside_its_owned_child(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            gate_root = self.gate_root(root)
+            build_root = root / "build" / "intent-gates" / gate_root.name
+            stale = self.unit(build_root / "debug", "alpha", "one", OLD)
+            current = self.unit(build_root / "debug", "alpha", "one", NEW)
+            gate_root.mkdir(parents=True)
+            self.prune(self.output_args(gate_root, build_root), current)
+            self.assertFalse(stale.exists())
+            self.assertTrue(current.exists())
+
+    def test_non_test_units_with_the_same_name_are_kept(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            profile = self.gate_root(root) / "debug"
+            real_binary = self.unit(profile, "alpha", "two_bin", OLD, kind="bin")
+            unknown = profile / "deps" / f"two_bin-{'2' * 16}"
+            unknown.write_bytes(b"no fingerprint")
+            current = self.unit(profile, "alpha", "two_bin", NEW, kind="test-bin")
+            self.prune(self.output_args(self.gate_root(root)), current)
+            self.assertTrue(real_binary.exists())
+            self.assertTrue(unknown.exists())
+
+    def test_hardlinked_or_open_stale_executables_are_kept(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            profile = self.gate_root(root) / "debug"
+            linked = self.unit(profile, "alpha", "one", OLD)
+            os.link(linked, profile / "one-copy")
+            running = self.unit(profile, "alpha", "two", OLD)
+            current = [self.unit(profile, "alpha", "one", NEW), self.unit(profile, "alpha", "two", NEW)]
+            self.prune(self.output_args(self.gate_root(root)), *current, open_paths={running})
+            self.assertTrue(linked.exists())
+            self.assertTrue(running.exists())
+
+    @unittest.skipUnless(Path("/proc/self/fd").is_dir(), "needs /proc")
+    def test_proc_scan_sees_files_this_process_has_open(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "held"
+            path.write_text("x")
+            with path.open() as handle:
+                self.assertIn(str(path.resolve()), gate.open_paths([path]))
+            del handle
+
+    def test_nothing_is_removed_when_open_files_cannot_be_checked(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            profile = self.gate_root(root) / "debug"
+            stale = self.unit(profile, "alpha", "one", OLD)
+            current = self.unit(profile, "alpha", "one", NEW)
+            out = io.StringIO()
+            with mock.patch.object(gate, "open_paths", return_value=None), contextlib.redirect_stdout(out):
+                self.assertEqual(gate.prune_stale_executables(
+                    self.output_args(self.gate_root(root)), [self.listing(current)], None, "gate"), 0)
+            self.assertTrue(stale.exists())
+            self.assertIn("cannot check which files are open", out.getvalue())
+
+    def test_held_cargo_lock_or_another_gate_skips_pruning(self):
+        import fcntl
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            gate_root = self.gate_root(root)
+            profile = gate_root / "debug"
+            stale = self.unit(profile, "alpha", "one", OLD)
+            current = self.unit(profile, "alpha", "one", NEW)
+            with (profile / ".cargo-lock").open("a") as cargo_lock:
+                fcntl.flock(cargo_lock, fcntl.LOCK_EX)
+                _, output = self.prune(self.output_args(gate_root), current)
+            self.assertTrue(stale.exists())
+            self.assertIn("Cargo build lock", output)
+            other_gate = gate.acquire_gate_lock(self.output_args(gate_root))
+            try:
+                _, output = self.prune(self.output_args(gate_root), current)
+            finally:
+                os.close(other_gate)
+            self.assertTrue(stale.exists())
+            self.assertIn("another gate", output)
+            self.prune(self.output_args(gate_root), current)
+            self.assertFalse(stale.exists())
+
+    def test_executables_outside_the_owned_gate_folder_are_never_touched(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            normal = root / "target" / "debug"
+            stale = self.unit(normal, "alpha", "one", OLD)
+            current = self.unit(normal, "alpha", "one", NEW)
+            gate_root = self.gate_root(root)
+            gate_root.mkdir(parents=True)
+            self.assertEqual(self.prune(self.output_args(gate_root), current)[0], 0)
+            self.assertEqual(self.prune(self.output_args(root / "target"), current)[0], 0)
+            self.assertEqual(self.prune([], current)[0], 0)
+            self.assertTrue(stale.exists())
+
+    def gate_run(self, root, plan, setup=None, pruning=None):
+        harness = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+        profile = self.gate_root(root) / "debug"
+        oldest = self.unit(profile, "alpha", "one", OLD)
+        previous = self.unit(profile, "alpha", "one", "2" * 16)
+        os.utime(oldest, (1, 1))
+        current = self.unit(profile, "alpha", "one", NEW)
+        listing = json.loads(LISTING)
+        listing["rust-suites"]["alpha::one"].update(kind="test", **{"binary-path": str(current)})
+        listing["rust-suites"]["alpha::one"]["testcases"] = {"passes": {}}
+        harness.listing = json.dumps(listing)
+        args = make_args(root, plan=plan, label=gate.DEFAULT_LABEL) if plan is None else make_args(root, plan=plan)
+        stderr = io.StringIO()
+        with mock.patch.object(gate, "transfer_fixture_identity", return_value=None), \
+                mock.patch.object(gate, "callback_fixture_identity", return_value=None), \
+                mock.patch.object(gate, "open_paths", return_value=set()), \
+                contextlib.ExitStack() as stack, contextlib.redirect_stderr(stderr):
+            if pruning is not None:
+                stack.enter_context(mock.patch.object(gate, "prune_stale_executables", side_effect=pruning))
+            if setup is not None:
+                stack.enter_context(setup)
+            status = harness.execute(args)
+        return status, harness, stderr.getvalue(), (oldest, previous, current)
+
+    def test_whole_workspace_gate_run_removes_every_stale_copy(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            status, harness, _, (oldest, previous, current) = self.gate_run(Path(temporary), None)
+            self.assertEqual(status, 0)
+            self.assertFalse(oldest.exists())
+            self.assertFalse(previous.exists())
+            self.assertTrue(current.exists())
+            self.assertFalse(any("ERROR" in line for line in harness.output_lines), harness.output_lines)
+
+    def test_package_scoped_gate_run_keeps_the_newest_other_build(self):
+        # -p selections resolve features differently from --workspace, so the
+        # full suite's build of the same target must survive a test-changed run.
+        with tempfile.TemporaryDirectory() as temporary:
+            status, _, _, (oldest, previous, current) = self.gate_run(Path(temporary), ["-p alpha --test one"])
+            self.assertEqual(status, 0)
+            self.assertFalse(oldest.exists())
+            self.assertTrue(previous.exists())
+            self.assertTrue(current.exists())
+        self.assertTrue(gate.whole_workspace([["--workspace", "-E", "test(x)"]]))
+        self.assertFalse(gate.whole_workspace([["--workspace", "-p", "alpha"]]))
+        self.assertFalse(gate.whole_workspace([["--workspace"], ["--package=alpha", "--workspace"]]))
+
+    def test_pruning_failure_or_interrupt_never_changes_the_recorded_run(self):
+        for failure in (RuntimeError("symlink loop"), KeyboardInterrupt(), gate.Terminated("SIGTERM")):
+            with self.subTest(failure=type(failure).__name__), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                status, harness, stderr, (oldest, _, _) = self.gate_run(root, None, pruning=failure)
+                self.assertEqual(status, 0)
+                self.assertTrue(oldest.exists())
+                self.assertIn("stale executables kept", stderr)
+                self.assertTrue(any(line.startswith(f"[{gate.DEFAULT_LABEL}] record: ") for line in harness.output_lines))
+                attempt = latest_attempt(root / "cache" / KEY)
+                receipt = json.loads((attempt / "run.json").read_text())
+                self.assertEqual(receipt["exit_code"], 0)
+                self.assertIsNotNone(receipt["finished_at"])
+                self.assertTrue((root / "cache" / KEY / "complete").is_file())
+
+    def test_unusable_gate_folder_means_no_lock_and_no_pruning(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            blocker = root / "target" / "intent-gates"
+            blocker.parent.mkdir(parents=True)
+            blocker.write_text("not a directory")
+            self.assertIsNone(gate.acquire_gate_lock(self.output_args(blocker / ("a" * 64))))
+            failing = mock.patch.object(gate, "acquire_gate_lock", return_value=None)
+            (root / "elsewhere").mkdir()
+            status, _, _, (oldest, previous, _) = self.gate_run(root / "elsewhere", None, setup=failing)
+            self.assertEqual(status, 0)
+            self.assertTrue(oldest.exists())
+            self.assertTrue(previous.exists())
 
 
 if __name__ == "__main__":

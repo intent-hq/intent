@@ -65,6 +65,13 @@ name: Consumer checks
 
 on:
   workflow_call:
+    secrets:
+      # Self-hosted sccache token; used only when the caller's
+      # INTENT_SCCACHE_ENDPOINT variable is set (otherwise uncached).
+      INTENT_SCCACHE_TOKEN:
+        required: false
+      CI_QUEUE_READ_TOKEN:
+        required: false
     inputs:
       component:
         description: "Calling component: intentd or cloudlands-fe"
@@ -82,8 +89,17 @@ on:
         default: false
 
 jobs:
+  runner-route:
+    uses: ./.github/workflows/runner-route.yml
+    permissions:
+      contents: read
+      actions: read
+    secrets:
+      CI_QUEUE_READ_TOKEN: ${{ secrets.CI_QUEUE_READ_TOKEN }}
+
   consumer-checks:
-    runs-on: ubuntu-latest
+    needs: [runner-route]
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['gh-linux-8x'] || fromJSON('["warp-ubuntu-2404-x64-8x"]') }}
     timeout-minutes: 45
     permissions:
       contents: read
@@ -92,6 +108,9 @@ jobs:
       COMPONENT_REPOSITORY: ${{ inputs.self-test && format('intent-hq/{0}', inputs.component) || github.repository }}
       HEAD_SHA: ${{ inputs.head-sha || github.sha }}
     steps:
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
       - name: Validate the component input
         id: component
         run: |
@@ -174,11 +193,11 @@ jobs:
           exit "$status"
 
       - name: Verify connected harnesses and source revisions
-        if: steps.monorepo.outcome == 'success'
+        if: github.event_name == 'merge_group' && steps.monorepo.outcome == 'success'
         run: node scripts/test-transfer-selection-contract.mjs --preflight
 
       - name: Prepare the connected test toolchains
-        if: steps.monorepo.outcome == 'success'
+        if: github.event_name == 'merge_group' && steps.monorepo.outcome == 'success'
         shell: bash
         run: |
           # Only an explicit release toolchain, never a caller-controlled PATH.
@@ -189,25 +208,33 @@ jobs:
           fi
           channel=$(sed -nE 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$toolchain")
           [[ "$channel" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo '::error::invalid Rust release channel'; exit 1; }
-          rustup toolchain install "$channel" --profile minimal
+          # A brief static.rust-lang.org or apt mirror blip must not eject a
+          # green PR from the merge queue (cloudlands-fe run 39606176278), so
+          # downloads get bounded retries; a failed rustup install rolls back.
+          scripts/retry.sh -- rustup toolchain install "$channel" --profile minimal
           echo "RUSTUP_TOOLCHAIN=$channel" >> "$GITHUB_ENV"
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends libssl-dev pkg-config
+          # intent-cache runner images ship the headers and have no sudo.
+          if ! command -v pkg-config >/dev/null || ! pkg-config --exists openssl; then
+            scripts/retry.sh -- sudo apt-get update -qq
+            scripts/retry.sh -- sudo apt-get install -y --no-install-recommends libssl-dev pkg-config
+          fi
           corepack enable
 
-      - uses: Swatinem/rust-cache@v2
-        if: steps.monorepo.outcome == 'success'
-        with:
-          workspaces: packages/intentd -> target
-          cache-on-failure: false
-
+      - name: Configure the self-hosted compiler cache
+        if: github.event_name == 'merge_group' && steps.monorepo.outcome == 'success'
+        shell: bash
+        env:
+          INTENT_SCCACHE_ENDPOINT: ${{ vars.INTENT_SCCACHE_ENDPOINT }}
+          INTENT_SCCACHE_TOKEN: ${{ secrets.INTENT_SCCACHE_TOKEN }}
+          INTENT_SCCACHE_MODE: ${{ vars.INTENT_SCCACHE_MODE }}
+        run: python3 scripts/setup-sccache.py
       - name: Install the selected renderer dependencies
-        if: steps.monorepo.outcome == 'success'
+        if: github.event_name == 'merge_group' && steps.monorepo.outcome == 'success'
         working-directory: packages/cloudlands-fe
         run: corepack pnpm install --frozen-lockfile
 
       - name: Run the connected transfer selection contract
-        if: steps.monorepo.outcome == 'success'
+        if: github.event_name == 'merge_group' && steps.monorepo.outcome == 'success'
         shell: bash
         env:
           NODE_OPTIONS: --max-old-space-size=8192

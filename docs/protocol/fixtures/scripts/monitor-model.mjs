@@ -1,3 +1,5 @@
+// Protocol-13 baseline fixtures remain for framing/lifecycle regression.
+// Protocol-14 membership/retirement overrides are in compact/active-monitors tests.
 // Synthetic executable specification. No component/runtime behavior is tested here.
 import { MonitorLines, MAX_COUNT, fixtureRegex } from './monitor-lines.mjs';
 export const DAY = 86400000;

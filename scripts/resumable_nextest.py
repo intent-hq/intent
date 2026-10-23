@@ -8,6 +8,9 @@ status is then the first non-zero plan status.
 Build outputs use stable per-checkout children under Cargo's configured target
 and build directories. This isolates make test/test-changed from other checkout
 builds; coverage and custom bare-Cargo scripts still manage their own output ownership.
+After a run that listed and executed its selections, superseded hashes of the
+listed test executables are deleted from those children only (see
+prune_stale_executables); this never changes the run's status or records.
 
 Resume identity includes the exact child RUST_MIN_STACK setting, also saved in
 test-stack.json: null means unset, distinct from an empty string or explicit value.
@@ -54,6 +57,7 @@ from datetime import datetime, timezone
 import hashlib
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -67,6 +71,10 @@ import threading
 import time
 import uuid
 import xml.etree.ElementTree as ET
+try:
+    import fcntl
+except ImportError:  # Windows: no flock, so never prune.
+    fcntl = None
 # Cargo accepts TOML 1.1, which older stdlib tomllib versions cannot parse.
 # Use the pinned parser offline, including direct-script/importlib invocation.
 if __package__:
@@ -269,13 +277,35 @@ def needs_callback_fixture(plans: list[list[str]]) -> bool:
     return False
 
 
+# Ready-entry prefix prepare() publishes; test_resumable_nextest pins it to the component.
+CALLBACK_READY_PREFIX = "callback-fixture-v1-linux-x64-"
+
+
+def callback_cache_dir() -> Path:
+    return Path.home() / ".cache/intent/acp-callback-fixture"
+
+
 def callback_setup_help(intentd_dir: Path) -> str:
-    command = [sys.executable, "-I", "-B", "-S",
+    # The prepare script refuses inherited NODE_OPTIONS (e.g. a Datadog host
+    # preload), so every recipe clears it for that one command.
+    command = ["env", "-u", "NODE_OPTIONS", sys.executable, "-I", "-B", "-S",
                str(intentd_dir / "scripts/prepare-acp-callback-fixture.py"),
-               "--cache-dir", str(Path.home() / ".cache/intent/acp-callback-fixture")]
-    lines = [
+               "--cache-dir", str(callback_cache_dir())]
+    lines = []
+    if os.environ.get("NODE_OPTIONS"):
+        # Name the host preload as the blocker for the manual route; the value
+        # is not echoed (it may carry host paths or tokens).
+        lines.append("NODE_OPTIONS is set in this shell (often a host preload such as a monitoring "
+                     "tracer); the prepare script refuses it, so run the commands below as "
+                     "printed (they start with env -u NODE_OPTIONS).")
+    lines += [
         f"Set {CALLBACK_FIXTURE_ENV} to a verified fixture (Linux x64, descriptor-pinned Node).",
-        "No downloads or repairs were attempted. Prepare explicitly, then retry:",
+        "Native macOS is not supported by this fixture. Use an existing authorized Linux x64 host.",
+        "Complete checkout, tools and gate recipe: CONTRIBUTING.md#linux-x64-callback-gates",
+        "With the variable unset, make test, test-changed, test-select and gate prepare a ready cache",
+        f"under {callback_cache_dir()} offline; a rejected cache must be rebuilt, never edited.",
+        "No downloads or repairs were attempted. On that Linux host, prepare explicitly, then retry",
+        "(env -u NODE_OPTIONS clears host Node preloads, which the prepare script refuses):",
     ]
     for description, flags in (
         ("Existing cache, offline", ["--offline"]),
@@ -302,19 +332,79 @@ def load_callback_validator(intentd_dir: Path):
     return module
 
 
-def callback_fixture_identity(intentd_dir: Path) -> dict[str, str]:
-    """Verify explicit content on every affected launch; never call prepare().
+@contextlib.contextmanager
+def without_node_options():
+    """Hide host NODE_OPTIONS from the in-process component checks only.
 
+    Host agents (e.g. Datadog's dd-trace preload) inject NODE_OPTIONS into every
+    shell, and the component's platform_check refuses it. The validator runs its
+    own Node children with NODE_OPTIONS="", and fixture-gated nextest runs drop
+    it (run_nextest), so hiding it here loses no protection.
+    """
+    saved = os.environ.pop("NODE_OPTIONS", None)
+    try:
+        yield
+    finally:
+        if saved is not None:
+            os.environ["NODE_OPTIONS"] = saved
+
+
+def prepare_cached_callback_fixture(intentd_dir: Path) -> str | None:
+    """Prepare from an existing verified cache offline, or return None.
+
+    Only the component's own --offline route runs: it re-verifies the ready
+    cache entry by entry and never downloads, builds or repairs anything.
+    """
+    script = intentd_dir / "scripts/prepare-acp-callback-fixture.py"
+    if not script.is_file():
+        return None
+    validator = load_callback_validator(intentd_dir)
+    try:
+        with without_node_options():
+            validator.platform_check()
+    except validator.InvalidFixture:
+        # Unsupported host: keep the plain unset-variable error and recipe.
+        return None
+    try:
+        descriptor, _manifest = validator.configuration(validator.DEFAULT_DESCRIPTOR)
+    except validator.InvalidFixture as error:
+        raise RuntimeError(str(error)) from error
+    cache = callback_cache_dir()
+    ready = cache / (CALLBACK_READY_PREFIX + descriptor["manifest"]["sha256"])
+    if not ready.is_dir():
+        return None
+    env = {name: value for name, value in os.environ.items() if name != "NODE_OPTIONS"}
+    result = subprocess.run(
+        [sys.executable, "-I", "-B", "-S", str(script), "--offline", "--cache-dir", str(cache)],
+        env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=900)
+    root = result.stdout.strip()
+    if result.returncode != 0 or not root:
+        detail = (result.stderr.strip().splitlines() or [f"exit {result.returncode}"])[-1]
+        detail = detail.removeprefix("callback fixture: ")
+        raise RuntimeError(f"verified cache {ready} could not be prepared offline: {detail}")
+    print(f"[gate] callback fixture: prepared offline from verified cache {root}",
+          file=sys.stderr, flush=True)
+    return root
+
+
+def callback_fixture_identity(intentd_dir: Path) -> dict[str, str]:
+    """Verify explicit or offline-cached content on every affected launch.
+
+    With the fixture variable unset, only an existing verified cache is used,
+    through the component's offline prepare route (no downloads or repairs).
     The component owns all inventory, lock, descriptor and runtime validation.
     Validation precedes Cargo metadata and all resume reads, even fast resumes.
     """
     try:
         value = os.environ.get(CALLBACK_FIXTURE_ENV)
         if not value:
+            value = prepare_cached_callback_fixture(intentd_dir)
+        if not value:
             raise RuntimeError(f"{CALLBACK_FIXTURE_ENV} is unset or empty")
         validator = load_callback_validator(intentd_dir)
         try:
-            validator.platform_check()
+            with without_node_options():
+                validator.platform_check()
             descriptor, manifest = validator.configuration(validator.DEFAULT_DESCRIPTOR)
             # Resolve relative inputs against the Cargo invocation directory;
             # pass the absolute path onward because nextest uses each crate cwd.
@@ -335,6 +425,41 @@ def callback_fixture_identity(intentd_dir: Path) -> dict[str, str]:
     except (OSError, ImportError, RuntimeError, ValueError, KeyError,
             subprocess.TimeoutExpired) as error:
         raise RuntimeError(f"callback fixture: {error}\n{callback_setup_help(intentd_dir)}") from error
+
+
+TIMEOUT_MULTIPLIER_ENV = "INTENTD_TEST_TIMEOUT_MULTIPLIER"
+MAX_TIMEOUT_MULTIPLIER = 20.0
+# Rust's str::trim strips Unicode White_Space; Python's str.strip also strips
+# U+001C..U+001F, which Rust keeps (and then fails to parse).
+RUST_WHITESPACE = ("\t\n\x0b\x0c\r \x85\xa0\u1680" + "".join(map(chr, range(0x2000, 0x200B)))
+                   + "\u2028\u2029\u202f\u205f\u3000")
+# The grammar of Rust's `<f64 as FromStr>`: ASCII digits only, no digit
+# separators or hex, case-insensitive inf/infinity/nan.
+RUST_F64 = re.compile(r"[+-]?(?:inf|infinity|nan|(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:e[+-]?[0-9]+)?)",
+                      re.IGNORECASE | re.ASCII)
+
+
+def timeout_multiplier(setting: str | None) -> float:
+    """The stretch the tests apply for an INTENTD_TEST_TIMEOUT_MULTIPLIER value.
+
+    Mirrors `timeout_multiplier` in packages/intentd/crates/intentd-test-support/
+    src/timeout.rs (`trim().parse::<f64>()`): unset, unparsable or non-finite
+    means 1, values below 1 are raised to 1 and values above 20 capped.
+    """
+    text = (setting or "").strip(RUST_WHITESPACE)
+    value = float(text) if RUST_F64.fullmatch(text) else 1.0
+    if not math.isfinite(value):
+        value = 1.0
+    return min(max(value, 1.0), MAX_TIMEOUT_MULTIPLIER)
+
+
+def timeout_description(env: dict[str, str]) -> str:
+    """`test time limits x3 (INTENTD_TEST_TIMEOUT_MULTIPLIER=3)`, so a slow
+    pass (or a strict one) is visible in the run output and summary."""
+    setting = env.get(TIMEOUT_MULTIPLIER_ENV)
+    source = (f"{TIMEOUT_MULTIPLIER_ENV} unset" if setting is None
+              else f"{TIMEOUT_MULTIPLIER_ENV}={shlex.quote(setting)}")
+    return f"test time limits x{timeout_multiplier(setting):g} ({source})"
 
 
 def test_stack_identity(env: dict[str, str]) -> dict[str, object]:
@@ -412,7 +537,19 @@ def tree_key(repo_root: Path, intentd_dir: Path, output_args: list[str] | None =
              fixture_identity: dict[str, str] | None = None,
              transfer_identity: dict[str, str] | None = None,
              *, child_env: dict[str, str] | None = None) -> str:
+    inputs = tree_inputs(repo_root, intentd_dir, output_args, fixture_identity,
+                         transfer_identity, child_env=child_env)
+    encoded = json.dumps(inputs, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def tree_inputs(repo_root: Path, intentd_dir: Path, output_args: list[str] | None = None,
+                fixture_identity: dict[str, str] | None = None,
+                transfer_identity: dict[str, str] | None = None,
+                *, child_env: dict[str, str] | None = None) -> dict[str, object]:
+    """Everything a pass depends on; [`tree_key`] hashes it."""
     intentd_dir = intentd_dir.resolve()
+    test_env = nextest_env() if child_env is None else child_env
     inputs = {
         "source-root": str(intentd_dir),
         "cargo-outputs": output_args,
@@ -434,10 +571,28 @@ def tree_key(repo_root: Path, intentd_dir: Path, output_args: list[str] | None =
         # us. Direct runner callers keep their own environment: record that
         # exact value (including unset vs empty), never assume canonical policy.
         "test-policy": {"INTENTD_ASSERT_BOUND_CALLER": os.environ.get("INTENTD_ASSERT_BOUND_CALLER")},
-        "test-stack": test_stack_identity(nextest_env() if child_env is None else child_env),
+        "test-stack": test_stack_identity(test_env),
     }
-    encoded = json.dumps(inputs, sort_keys=True, separators=(",", ":")).encode()
-    return hashlib.sha256(encoded).hexdigest()
+    # The make test targets default INTENTD_TEST_TIMEOUT_MULTIPLIER to 3; a pass
+    # under stretched time limits must not credit a run at another stretch, or
+    # the reverse. Keyed by the stretch the tests apply, so `3` and `3.0` share
+    # credit. Added only for a stretch other than 1: x1 runs (unset, `1`, or
+    # invalid; direct runner callers and records made before the make default)
+    # keep their existing keys, while default make runs start x3 records.
+    factor = timeout_multiplier(test_env.get(TIMEOUT_MULTIPLIER_ENV))
+    if factor != 1.0:
+        inputs["test-timeout"] = {"multiplier": factor}
+    # `make test HERMETIC=1` runs inside intentd's no-provider-CLI sandbox:
+    # its passes must not credit an ordinary run, or the reverse. Added only
+    # for sandboxed runs so ordinary records keep their existing keys.
+    # INTENT_GATE_HERMETIC is internal: only the Makefile's HERMETIC wrapper
+    # sets it. A run that skipped the sandbox self-check is a different mode.
+    if os.environ.get("INTENT_GATE_HERMETIC") == "1":
+        inputs["hermetic"] = {
+            "HIDE_NODE": os.environ.get("HIDE_NODE") == "1",
+            "SKIP_SELF_CHECK": os.environ.get("SKIP_SELF_CHECK") == "1",
+        }
+    return inputs
 
 
 def prune(cache_dir: Path, now: float | None = None) -> None:
@@ -1051,11 +1206,13 @@ def plan_key(plans: list[list[str]]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def summary_line(label: str, counts: dict[str, int], resumed: int) -> str:
+def summary_line(label: str, counts: dict[str, int], resumed: int,
+                 env: dict[str, str] | None = None) -> str:
     return (
         f"[{label}] summary: {counts['passed']} passed, {counts['failed']} failed, "
         f"{counts['ignored']} skipped/ignored, {resumed} resumed "
-        "(tests already passed for this tree)"
+        "(tests already passed for this tree); "
+        f"{timeout_description(os.environ if env is None else env)}"
     )
 
 
@@ -1239,6 +1396,194 @@ def isolated_output_args(cwd: Path, config: list[str], env: dict[str, str]) -> l
     return ["--target-dir", target, "--config", f"build.build-dir={json.dumps(build, ensure_ascii=False)}"]
 
 
+# Cargo names hashed outputs `<crate>-<16 hex>` and never deletes superseded ones.
+HASHED_OUTPUT_RE = re.compile(r"^(?P<stem>[A-Za-z0-9_]+)-(?P<digest>[0-9a-f]{16})$")
+STALE_COMPANIONS = (".d", ".dwp", ".dSYM")
+
+
+def gate_output_roots(output_args: list[str]) -> list[Path]:
+    """The gate-owned intent-gates/<owner> roots named by isolated_output_args."""
+    roots = []
+    for flag, value in zip(output_args, output_args[1:]):
+        if flag == "--target-dir":
+            roots.append(Path(value))
+        elif flag == "--config" and value.startswith("build.build-dir="):
+            roots.append(Path(json.loads(value.split("=", 1)[1])))
+    return [root for root in dict.fromkeys(roots)
+            if root.is_absolute() and root.parent.name == "intent-gates" and KEY_RE.fullmatch(root.name)]
+
+
+def acquire_gate_lock(output_args: list[str]) -> int | None:
+    """Hold a shared lock while this gate may execute its outputs.
+
+    Pruning takes it exclusively, so one gate never deletes executables that
+    another gate of the same checkout is still about to start.
+    """
+    roots = gate_output_roots(output_args)
+    if not roots or fcntl is None:
+        return None
+    # Lock the directory itself: a lock file would be an untracked tree input
+    # when the target directory lives unignored inside the checkout.
+    # No lock only means no pruning; Cargo reports unusable outputs itself.
+    try:
+        roots[0].mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(roots[0], os.O_RDONLY | os.O_DIRECTORY)
+    except OSError:
+        return None
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_SH)
+    except OSError:
+        os.close(descriptor)
+        return None
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor
+
+
+def whole_workspace(selections: list[list[str]]) -> bool:
+    """Whether every selection resolves features like a full `--workspace` build."""
+    return all("--workspace" in selection and not any(
+        arg in ("-p", "--package") or arg.startswith(("--package=", "-p"))
+        for arg in selection) for selection in selections)
+
+
+def open_paths(candidates: list[Path]) -> set[str] | None:
+    """Resolved paths any inspectable process has open or is executing; None if unknown."""
+    proc = Path("/proc")
+    if (proc / "self" / "fd").is_dir():
+        found = set()
+        for pid in proc.iterdir():
+            if not pid.name.isdigit():
+                continue
+            links = [pid / "exe"]
+            with contextlib.suppress(OSError):
+                links.extend((pid / "fd").iterdir())
+            for link in links:
+                with contextlib.suppress(OSError):
+                    found.add(os.readlink(link).removesuffix(" (deleted)"))
+        return found
+    if shutil.which("lsof") is None or not candidates:
+        return None if candidates else set()
+    result = subprocess.run(["lsof", "-w", "-Fn", "--", *map(str, candidates)],
+                            capture_output=True, text=True, check=False)
+    if result.returncode not in (0, 1):
+        return None
+    return {line[1:] for line in result.stdout.splitlines() if line.startswith("n")}
+
+
+def is_test_unit(profile: Path, stem: str, digest: str) -> bool:
+    """Only Cargo's own fingerprint may classify a hashed output as a test executable."""
+    units = [path for path in (profile / ".fingerprint").glob(f"*-{digest}") if path.is_dir()]
+    if len(units) != 1:
+        return False
+    kinds = [name.removesuffix(".json") for name in os.listdir(units[0])
+             if not name.startswith("dep-") and name != "invoked.timestamp"]
+    for kind in kinds:
+        match = re.fullmatch(r"test-(?:lib|bin|integration-test)-(.+)", kind)
+        if not match or match[1].replace("-", "_") != stem:
+            return False
+    return bool(kinds)
+
+
+def path_size(path: Path) -> int:
+    if path.is_dir() and not path.is_symlink():
+        return sum(item.lstat().st_size for item in path.rglob("*") if not item.is_dir())
+    return path.lstat().st_size
+
+
+def prune_stale_executables(output_args: list[str], listings: list[str],
+                            held_lock: int | None, label: str, keep_previous: bool = False) -> int:
+    """Delete superseded builds of this run's listed test executables; return bytes freed.
+
+    Only `<deps>/<stem>-<hash>` siblings of a listed executable are candidates,
+    inside the gate's own output roots, classified as test units by Cargo's
+    fingerprint, singly linked, and not open. Every gate of this checkout and
+    Cargo's build lock must be idle. Failures leave files in place.
+
+    Package-scoped selections resolve features differently from a whole-workspace
+    build, so the same target alternates between two hashes; keep_previous keeps
+    the newest other hash per target so switching modes stays warm.
+    """
+    roots = [root.resolve() for root in gate_output_roots(output_args)]
+    if not roots or fcntl is None:
+        return 0
+    current: dict[Path, dict[str, set[str]]] = {}
+    for listing in listings:
+        for suite in json.loads(listing).get("rust-suites", {}).values():
+            path = suite.get("binary-path")
+            if not isinstance(path, str) or not Path(path).is_absolute():
+                continue
+            path = Path(path).resolve()
+            match = HASHED_OUTPUT_RE.fullmatch(path.name)
+            if (match and path.parent.name == "deps"
+                    and any(path.is_relative_to(root) for root in roots)):
+                current.setdefault(path.parent, {}).setdefault(match["stem"], set()).add(path.name)
+    if not current:
+        return 0
+    lock = held_lock if held_lock is not None else os.open(roots[0], os.O_RDONLY | os.O_DIRECTORY)
+    removed = freed = 0
+    try:
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print(f"[{label}] stale executables kept: another gate of this checkout is running", flush=True)
+            return 0
+        for deps, stems in sorted(current.items()):
+            profile = deps.parent
+            with contextlib.ExitStack() as stack:
+                try:
+                    cargo_lock = stack.enter_context((profile / ".cargo-lock").open("rb"))
+                    fcntl.flock(cargo_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    print(f"[{label}] stale executables kept: Cargo build lock is held for {profile}", flush=True)
+                    continue
+                except OSError:
+                    continue
+                candidates = []
+                for entry in deps.iterdir():
+                    match = HASHED_OUTPUT_RE.fullmatch(entry.name)
+                    if (not match or entry.name in stems.get(match["stem"], {entry.name})
+                            or entry.is_symlink() or not entry.is_file()):
+                        continue
+                    if entry.stat().st_nlink == 1 and is_test_unit(profile, match["stem"], match["digest"]):
+                        candidates.append(entry)
+                if keep_previous:
+                    newest: dict[str, Path] = {}
+                    for entry in candidates:
+                        stem = HASHED_OUTPUT_RE.fullmatch(entry.name)["stem"]
+                        if stem not in newest or entry.stat().st_mtime > newest[stem].stat().st_mtime:
+                            newest[stem] = entry
+                    candidates = [entry for entry in candidates if entry not in newest.values()]
+                if not candidates:
+                    continue
+                busy = open_paths(candidates)
+                if busy is None:
+                    print(f"[{label}] stale executables kept: cannot check which files are open", flush=True)
+                    return freed
+                for entry in sorted(candidates):
+                    if str(entry) in busy:
+                        continue
+                    for path in [entry, *(entry.with_name(entry.name + suffix) for suffix in STALE_COMPANIONS)]:
+                        if not path.exists() and not path.is_symlink():
+                            continue
+                        size = path_size(path)
+                        if path.is_dir() and not path.is_symlink():
+                            shutil.rmtree(path)
+                        else:
+                            path.unlink()
+                        freed += size
+                    removed += 1
+    finally:
+        if held_lock is None:
+            os.close(lock)
+    if removed:
+        print(f"[{label}] removed {removed} superseded test executable(s), "
+              f"{freed / (1 << 20):.1f} MiB freed", flush=True)
+    return freed
+
+
 def run_nextest(args: argparse.Namespace) -> int:
     label = args.label
     no_fail_fast = args.no_fail_fast == "1"
@@ -1254,6 +1599,11 @@ def run_nextest(args: argparse.Namespace) -> int:
     env = nextest_env()
     if fixture_identity is not None:
         env[CALLBACK_FIXTURE_ENV] = fixture_identity["root"]
+        # Keep the guarantee the refused-NODE_OPTIONS preflight gave: fixture
+        # runs never carry a host Node preload, so resume evidence stays comparable.
+        if env.pop("NODE_OPTIONS", None):
+            print(f"[{label}] callback fixture: NODE_OPTIONS cleared for this test run",
+                  file=sys.stderr, flush=True)
     if transfer_identity is not None:
         env[TRANSFER_FIXTURE_ENV] = transfer_identity["root"]
     if cargo_config:
@@ -1267,6 +1617,7 @@ def run_nextest(args: argparse.Namespace) -> int:
             KeyboardInterrupt, Terminated) as error:
         print(f"[{label}] ERROR: resolving Cargo outputs: {error}", file=sys.stderr, flush=True)
         return failure_exit_code(error)
+    print(f"[{label}] {timeout_description(env)}", flush=True)
     key = tree_key(repo_root, intentd_dir, output_args, fixture_identity,
                    transfer_identity=transfer_identity, child_env=env)
     run_dir = cache_dir / key
@@ -1303,6 +1654,7 @@ def run_nextest(args: argparse.Namespace) -> int:
         "resume_requested": args.resume == "1", "force": args.force == "1",
         "no_fail_fast": no_fail_fast, "build_jobs": args.build_jobs,
         "test_threads": args.test_threads, "test_stack": test_stack_identity(env),
+        "test_timeout_multiplier": env.get(TIMEOUT_MULTIPLIER_ENV),
         "callback_fixture": fixture_identity, "transfer_fixture": transfer_identity,
         "resume_source_attempt": None, "resume_candidates": [], "resumed_tests": None,
         "selection_membership": [None for _ in selections],
@@ -1361,7 +1713,7 @@ def run_nextest(args: argparse.Namespace) -> int:
             write_atomic(complete, profile + "\n")
             if resumed:
                 print(f"resumed: skipped {len(resumed)} tests already passed for this tree", flush=True)
-        summary = summary_line(label, totals, len(resumed))
+        summary = summary_line(label, totals, len(resumed), env)
         write_atomic(record_dir / "summary.txt", summary + "\n")
         print(summary, flush=True)
         print(f"[{label}] record: {record_dir}", flush=True)
@@ -1369,8 +1721,12 @@ def run_nextest(args: argparse.Namespace) -> int:
 
     # From the first `cargo nextest list` onwards every exit — failure,
     # KeyboardInterrupt or SIGTERM — leaves the summary/record lines and files.
+    gate_lock: int | None = None
+    listings: list[str] = []
+    listed_and_ran = False
     try:
         with terminate_on_signal():
+            gate_lock = acquire_gate_lock(output_args)
             write_atomic(record_dir / "test-stack.json", json.dumps(test_stack_identity(env), indent=2) + "\n")
             project_config = intentd_dir / ".config/nextest.toml"
             if project_config.is_file():
@@ -1436,6 +1792,7 @@ def run_nextest(args: argparse.Namespace) -> int:
                     env,
                 )
                 write_atomic(record_dir / f"listing-{index}.json", list_output + "\n")
+                listings.append(list_output)
                 selected_ids = test_binary_ids(list_output)
                 run_record["selection_membership"][index - 1] = sorted(
                     {(binary_id, test) for (_, test), binary_id in selected_ids.items()})
@@ -1528,6 +1885,7 @@ def run_nextest(args: argparse.Namespace) -> int:
                 os.close(descriptor)
             if first_failure is not None:
                 status = first_failure
+            listed_and_ran = True
     except subprocess.CalledProcessError as error:
         print(f"[{label}] ERROR: {error}", file=sys.stderr, flush=True)
         exit_code = failure_exit_code(error)
@@ -1541,8 +1899,30 @@ def run_nextest(args: argparse.Namespace) -> int:
     except BaseException as error:
         finalize(failure_exit_code(error))
         raise
+    finally:
+        if gate_lock is not None and not listed_and_ran:
+            os.close(gate_lock)
     assert status is not None
-    return finalize(status)
+    try:
+        status = finalize(status)
+    except BaseException:
+        if gate_lock is not None:
+            os.close(gate_lock)
+        raise
+    # Every listed build is complete, so older hashes of those targets are dead
+    # weight. Best effort and after finalize: pruning never changes the run's
+    # outcome or records, even when it fails or is interrupted.
+    try:
+        if gate_lock is not None:
+            with terminate_on_signal():
+                prune_stale_executables(output_args, listings, gate_lock, label,
+                                        keep_previous=not whole_workspace(selections))
+    except (Exception, KeyboardInterrupt, Terminated) as error:
+        print(f"[{label}] warning: stale executables kept: {error!r}", file=sys.stderr, flush=True)
+    finally:
+        if gate_lock is not None:
+            os.close(gate_lock)
+    return status
 
 
 def main() -> int:
@@ -1600,8 +1980,21 @@ def main() -> int:
         help="nextest target selection, e.g. '-p alpha --test one'; repeatable, "
         "run in order instead of --workspace",
     )
+    parser.add_argument(
+        "--filterset",
+        metavar="EXPR",
+        help="run one nextest filterset across the workspace (make test-select E=EXPR); "
+        "the same as --plan '--workspace -E EXPR', so it cannot be combined with --plan",
+    )
     parser.add_argument("--base", metavar="REF", help="base ref recorded in run.json")
     args = parser.parse_args()
+    if args.filterset is not None:
+        if args.plan:
+            parser.error("--filterset cannot be combined with --plan")
+        if not args.filterset.strip():
+            parser.error("--filterset needs a nextest filterset expression, e.g. 'test(/name/)'")
+        # Quote into the one plan string so split_plans() restores it exactly.
+        args.plan = [shlex.join(["--workspace", "-E", args.filterset])]
     try:
         return run_nextest(args)
     except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as error:

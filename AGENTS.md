@@ -41,10 +41,12 @@ Always use `http://daemon.localhost:<port>` in the embedded browser.
 ### Situate
 
 Run `STATUS_JSON=1 make status` first. It reports host gaps, resolved ports, live sandboxes
-and health, both component branches (`repos.<name>.gitlinkDirty` flags a submodule moved
-off its pin; `repos.<name>.behindOriginMain` counts commits the checked-out submodule HEAD
-lags the local `origin/main` — branch component work from `origin/main` when > 0), and branch PR checks
-when `gh` is authenticated.
+and health, the monorepo and component branches (`repos.<name>.gitlinkDirty` flags a submodule
+moved off its pin; `repos.<name>.behindOriginMain` counts commits HEAD lags the local
+`origin/main` — branch component work from `origin/main` when > 0), and branch PR checks
+when `gh` is authenticated. If `repos.monorepo.protocolDocsStale`, read the contract via
+`git show origin/main:docs/protocol/<file>` (a stale copy produced false findings on
+[cloudlands-fe#3572](https://github.com/intent-hq/cloudlands-fe/pull/3572)).
 While `setup.running` is true (or your first message carried the setup-in-progress
 notice) the workspace setup script is still provisioning the worktree, so treat the whole
 report as provisional and wait with a hook on `ws.workspace.details().setupStatus` before
@@ -249,12 +251,13 @@ with no rollback.
 - **Merging**: agents must **NEVER merge a PR, arm auto-merge, or add a PR to the
   merge queue — in this repo or any submodule repo — without explicit permission from
   a human**. Approved + green checks is not enough. Repo-owned automation is exempt
-  (auto-bump-submodules, auto-pin-intentd, auto-cut-alpha, and the release PR
-  workflows merge their own rolling PRs). Ordinary `main` PRs in all three repos
-  use a **merge queue**: after human permission, `gh pr merge --squash` enqueues
-  them until the queue's gate passes. Component auto-cut may directly merge
-  validated release metadata under the approved CI exemption and existing
-  readiness guards ([details](docs/RELEASING.md#guarded-direct-release-merges)).
+  (auto-bump-submodules, auto-pin-intentd, intentd's auto-pin-acp-adapters — the Codex
+  and Claude ACP adapter pins, formerly auto-pin-codex-acp — auto-cut-alpha, and the
+  release PR workflows merge their own rolling PRs). Ordinary `main` PRs in
+  all three repos use a **merge queue**: after human permission, `gh pr merge --squash` enqueues
+  them until the queue's gate passes. Component auto-cut and fe auto-pin may
+  directly merge validated release metadata or sidecar pins under the approved CI
+  exemption and existing readiness guards ([details](docs/RELEASING.md#guarded-direct-release-merges)).
   Main rules are committed in `.github/rulesets/*.main.json`; the bypass contract
   in `.github/rulesets/*.bypass.json` allows `intent-hq-ci` on the two component
   Default rulesets only (none for the monorepo or organization). Rules are
@@ -301,25 +304,27 @@ with no rollback.
 
 - `make gate` runs `make check` then the full nextest suite; `make test` is
   test-only (resume records apply only to nextest — `gate` always reruns the lints).
-- When the full suite is impractical, run `make test-changed` before enqueueing:
-  intentd's `scripts/changed-tests.sh` picks the nextest targets changed vs
-  `origin/main` (`BASE=<ref>`; `DRY_RUN=1` prints the plan) and falls back to the
-  full suite on manifest/lockfile/nextest-config changes. `make coverage-changed`
-  runs it under llvm-cov — the local equivalent of the PR `coverage-changed` job.
-- `make test` / `make test-changed` print a unique `record:` attempt path, including
+- When the full suite is impractical, run `make test-changed` before enqueueing: it
+  runs the nextest targets intentd's `scripts/changed-tests.sh` picks vs `origin/main`
+  (`BASE=<ref>`; `DRY_RUN=1` prints the plan), falling back to the full suite on
+  manifest/lockfile/nextest-config changes; `make coverage-changed` runs it under
+  llvm-cov like the PR `coverage-changed` job. To iterate on a few tests use
+  `make test-select E='<nextest filterset>'`, not raw `cargo nextest`, which skips the
+  fixture setup so fixture tests fail in bulk (95 bogus failures, intentd#2559).
+- `make test` / `test-changed` / `test-select` print a unique `record:` attempt path, including
   fully resumed runs. [Receipt and coverage details](CONTRIBUTING.md#test-attempt-receipts-and-resume-coverage)
   explain evidence, interruption and seven-day tree retention. `RESUME=1` skips verified
   passes for the same worktree, submodule pointers, toolchain, lockfile and effective
   settings (`GATE_FORCE=1` ignores them). To continue past a
   known flake, `RESUME=1 NO_FAIL_FAST=1 make test-changed` (or `make test`) runs the rest
   to completion, records them, and exits non-zero if anything failed ([intent-hq/intent#5645](https://github.com/intent-hq/intent/issues/5645)).
-- Run long gates as saved command-mode `ws.script` entries (`ws.script.start`, a
-  self-checking `ws.hook.schedule` on `ws.script.status`, then `ws.script.output`).
-  The hook must dispatch on `s.status === "exited" && s.exitCode !== undefined` — never
-  on "not running": `starting` is live, and anything else fired a false wake on the
-  validation run ([intent-hq/intent#4858](https://github.com/intent-hq/intent/issues/4858)).
-  `exitCode === -1` means the supervisor could not observe the exit (process lost, or a
-  command script running when the daemon stopped) — read `s.error` and treat as failure.
+- Run long gates as saved command-mode `ws.script` entries: `ws.script.start`, then
+  `ws.script.monitor(scriptId, { ttlMs, runId })` with the start reply's `runId` and a TTL
+  of expected runtime plus margin. End the turn only once registration succeeds; on a
+  `run-finished` refusal, read the result right away. After the wake, read
+  `ws.script.output` and `ws.script.status`: `exitCode === -1` means the supervisor could
+  not observe the exit (process lost, or a command script running when the daemon
+  stopped) — read `s.error` and treat it as failure. Details: `ws.help("script")`.
   `ws.script.run` rejects `timeoutSeconds` above budget − 5s (25s default). Saved scripts
   are PTY-backed, so use the `make` targets (no progress bars or pagers; `make list-tests`
   for nextest discovery) — bare `cargo`/`git`/`gh` without `--no-pager` or that env
@@ -333,9 +338,8 @@ guardrails) lives in [docs/RELEASING.md](./docs/RELEASING.md). The agent-facing 
 - Releases are per-component and channel-based: merging a release PR publishes to the
   rolling **alpha** channel automatically; **beta** and **stable** are manual
   promotions of existing releases (no new build).
-- The pipeline is event-chained (intentd alpha publish → cloudlands-fe pin bump →
-  fe alpha cut), with cron backstops: hourly pin bumps and ten-minute frontend
-  cut attempts, subject to the automated hourly release floor.
+- The pipeline is event-chained (intentd alpha publish → fe pin bump → fe alpha cut),
+  with hourly pin-bump and ten-minute cut crons under the hourly release floor.
 - **Never file routine pin-bump PRs** — the workflows own pin advancement (the monorepo
   `submodule-pins` check enforces this; see Phase 2 above). The one sanctioned exception
   is the cloudlands-fe `intentd.version` pin under the emergency-release procedure
@@ -344,7 +348,8 @@ guardrails) lives in [docs/RELEASING.md](./docs/RELEASING.md). The agent-facing 
   done when the PRs merge — monitor until the work ships in a cloudlands-fe alpha, then
   set the final workspace status message to the carrying version (e.g. "Shipped in
   cloudlands-fe vX.Y.Z (alpha)."; intentd-only changes ride the chained fe alpha, so the
-  version is always the cloudlands-fe tag). `scripts/shipped-in.sh <component> <sha>...`
+  version is always the cloudlands-fe tag). `make release-status` (`STATUS_JSON=1`)
+  prints the whole train, including why auto-cut last skipped. `scripts/shipped-in.sh <component> <sha>...`
   (one or more pairs; or `make shipped-in COMPONENT=... SHA=...` /
   `PAIRS="intentd:<sha> cloudlands-fe:<sha>"`) is the canonical detector: it prints the
   first [intent-hq/cloudlands-releases](https://github.com/intent-hq/cloudlands-releases)

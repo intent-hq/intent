@@ -4,7 +4,12 @@
 #  "host":{"doctorOk":bool,"gaps":[string],
 #  "coverageTooling":{"ready":bool,"detail":string},
 #  "github":{"state":string,"rest":{},"graphql":{},"prReady":bool}},"ports":{},"sandboxes":[],
-#  "repos":{"name":{"gitState":"absent"|"readable"|"error",
+#  "repos":{"monorepo":{"gitState":"readable"|"error",
+#  "gitErrors":[{"probe":string,"detail":string}],"branch":string|null,
+#  "dirty":bool|null,"ahead":int|null,"behind":int|null,
+#  "behindOriginMain":int|null,"protocolDocsStale":bool|null,
+#  "protocolDocsChanged":[string]},
+#  "name":{"gitState":"absent"|"readable"|"error",
 #  "gitErrors":[{"probe":string,"detail":string}],"initialized":bool|null,
 #  "branch":string|null,"dirty":bool|null,"ahead":int|null,
 #  "behind":int|null,"pin":string|null,"gitlinkDirty":bool|null,
@@ -227,10 +232,14 @@ ANSI_ESCAPE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b
 GIT_DETAIL_LIMIT = 240
 
 
+def printable(text):
+    text = ANSI_ESCAPE.sub("", text)
+    return " ".join("".join(c if c.isprintable() else " " for c in text).split())
+
+
 def git_error(errors, probe, detail):
     if errors is not None:
-        detail = ANSI_ESCAPE.sub("", detail)
-        detail = " ".join("".join(c if c.isprintable() else " " for c in detail).split())
+        detail = printable(detail)
         if len(detail) > GIT_DETAIL_LIMIT:
             detail = detail[:GIT_DETAIL_LIMIT - 3] + "..."
         errors.append({"probe": probe, "detail": detail or "Git probe failed"})
@@ -325,6 +334,17 @@ def behind_origin_main(path):
         return None
 
 
+def upstream_counts(path):
+    # The upstream ref is optional; a missing one leaves both counts null
+    # without marking the repo's Git state as an error.
+    counts = git_output(path, "rev-list", "--left-right", "--count", "@{upstream}...HEAD")
+    try:
+        behind, ahead = (int(value) for value in counts.split())
+    except (AttributeError, TypeError, ValueError):
+        return None, None
+    return ahead, behind
+
+
 def repo_status(relative_path, gh_ready):
     path = os.path.join(root, relative_path)
     errors = []
@@ -377,15 +397,7 @@ def repo_status(relative_path, gh_ready):
         if branch == "" and head is not None:
             repo["head"] = git_output(path, "rev-parse", "--short", "HEAD") or head[:7]
 
-        # Optional refs may legitimately be absent; retain null counts without
-        # treating them as failures of the required worktree observations.
-        counts = git_output(path, "rev-list", "--left-right", "--count", "@{upstream}...HEAD")
-        if counts:
-            try:
-                behind, ahead = (int(value) for value in counts.split())
-                repo["ahead"], repo["behind"] = ahead, behind
-            except (TypeError, ValueError):
-                pass
+        repo["ahead"], repo["behind"] = upstream_counts(path)
 
         if gh_ready and branch:
             pr = branch_pr(path, branch)
@@ -396,6 +408,95 @@ def repo_status(relative_path, gh_ready):
     return repo
 
 
+# The contract the components are checked against lives in the monorepo, so a
+# root checkout behind origin/main can make agents and reviewers read stale
+# protocol docs as the truth (workspace any-detect: a review of cloudlands-fe#3572
+# cited a pre-intent#7447 agent-workers.md). Only paths main changed since the
+# merge-base count; the branch's own protocol edits are intentional.
+PROTOCOL_DOCS = "docs/protocol"
+
+
+def monorepo_status():
+    errors = []
+    repo = {
+        "gitState": "readable",
+        "gitErrors": errors,
+        "branch": None,
+        "dirty": None,
+        "ahead": None,
+        "behind": None,
+        "behindOriginMain": None,
+        "protocolDocsStale": None,
+        "protocolDocsChanged": [],
+    }
+    branch = git_output(root, "branch", "--show-current", errors=errors, probe="branch")
+    repo["branch"] = branch or None
+    if branch == "":
+        head = git_output(root, "rev-parse", "--short", "HEAD", errors=errors, probe="head")
+        if head:
+            repo["head"] = head
+    # Component rows report their own worktrees; a moved gitlink still counts.
+    porcelain = git_output(root, "status", "--short", "--untracked-files=normal",
+                           "--ignore-submodules=dirty", errors=errors, probe="status")
+    repo["dirty"] = bool(porcelain) if porcelain is not None else None
+    repo["ahead"], repo["behind"] = upstream_counts(root)
+    # The comparison is optional like the component lag: a missing ref, or a
+    # diff without a merge-base (shallow clone, unrelated history), leaves
+    # protocolDocsStale null and the human hint says the docs were not compared.
+    lag = behind_origin_main(root)
+    repo["behindOriginMain"] = lag
+    if lag == 0:
+        repo["protocolDocsStale"] = False
+    elif lag is not None:
+        changed = git_output(root, "-c", "core.quotePath=false", "diff", "--name-only",
+                             "--no-ext-diff", "HEAD...refs/remotes/origin/main",
+                             "--", PROTOCOL_DOCS)
+        if changed is not None:
+            paths = [printable(line) for line in changed.splitlines() if line.strip()]
+            repo["protocolDocsStale"] = bool(paths)
+            repo["protocolDocsChanged"] = paths
+    if errors:
+        repo["gitState"] = "error"
+    return repo
+
+
+def print_monorepo(repo):
+    lag = repo["behindOriginMain"]
+    stale = repo["protocolDocsStale"]
+    docs = {True: "stale", False: "current", None: "-"}[stale]
+    lag_text = f"behind-origin/main={'-' if lag is None else lag} protocol-docs={docs}"
+    if repo["gitState"] == "error":
+        # A failed branch/status probe must not hide the protocol-docs result.
+        print(f"Repo       monorepo: Git state unavailable {lag_text}")
+        for error in repo["gitErrors"]:
+            print(f"           {error['probe']}: {error['detail']}")
+    else:
+        branch = repo["branch"] or f"detached@{repo.get('head') or '?'}"
+        tracking = "-/-" if repo["ahead"] is None else f"+{repo['ahead']}/-{repo['behind']}"
+        dirty = {True: "dirty", False: "clean", None: "unknown"}[repo["dirty"]]
+        print(f"Repo       monorepo: {branch} {dirty} ahead/behind={tracking} {lag_text}")
+    if stale:
+        paths = repo["protocolDocsChanged"]
+        examples = ", ".join(paths[:3]) + (", ..." if len(paths) > 3 else "")
+        print(
+            f"           WARNING: {PROTOCOL_DOCS} changed on origin/main since this checkout "
+            f"({len(paths)} file(s): {examples}) — read the contract with "
+            f"'git show origin/main:{PROTOCOL_DOCS}/<file>' or update the branch "
+            "('git merge origin/main')"
+        )
+    elif lag and stale is None:
+        print(
+            f"           monorepo checkout is {lag} commit(s) behind origin/main and "
+            f"{PROTOCOL_DOCS} could not be compared — read the contract with "
+            f"'git show origin/main:{PROTOCOL_DOCS}/<file>' or update the branch"
+        )
+    elif lag:
+        print(
+            f"           monorepo checkout is {lag} commit(s) behind origin/main — read docs "
+            "from origin/main ('git show origin/main:<path>') or update the branch"
+        )
+
+
 github = readiness(timeout=probe_timeout())
 gh_ready = github["prReady"]
 report = {
@@ -404,6 +505,7 @@ report = {
     "ports": port_status(),
     "sandboxes": sandbox_status(),
     "repos": {
+        "monorepo": monorepo_status(),
         "intentd": repo_status("packages/intentd", gh_ready),
         "cloudlands-fe": repo_status("packages/cloudlands-fe", gh_ready),
     },
@@ -448,6 +550,9 @@ if report["sandboxes"]:
 else:
     print("Sandboxes  none")
 for name, repo in report["repos"].items():
+    if name == "monorepo":
+        print_monorepo(repo)
+        continue
     if repo["gitState"] == "error":
         dirty = {True: "dirty", False: "clean", None: "unknown"}[repo["dirty"]]
         gitlink = {True: "moved", False: "unchanged", None: "unknown"}[repo["gitlinkDirty"]]

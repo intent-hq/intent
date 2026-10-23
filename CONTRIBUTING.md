@@ -2,6 +2,28 @@
 
 Thanks for your interest in Intent!
 
+## CI before and inside the merge queue
+
+PRs run Linux metadata, formatting, static consumer contracts and workflow-policy
+checks, plus each component's fast Linux correctness checks: intentd's `check`
+(clippy, source lints, `cargo shear`) and `coverage-changed` (the PR's changed tests),
+and the frontend's type/lint checks and unit tests. The queue reruns those on the
+merged tree and adds the rest: native builds, full instrumented coverage, frontend
+builds and integration tests, browser suites, and native runtime checks. In
+particular, daemon lifecycle (Linux/macOS/Windows), Pi (Linux/Windows and both
+supported Node versions), and PowerShell installer tests do not run on PR updates.
+
+The frontend's path-selected browser and macOS fixture suites run in the queue;
+validated release-only diffs keep their existing exemptions. Shared consumer checks
+run static contracts on PRs and the connected Rust/frontend proof in the queue.
+Monorepo runtime script suites and relevant clean-host bootstrap installation are
+also queue checks. Manual diagnostics and scheduled maintenance remain available.
+
+`CI Gate` remains required and rejects failed, cancelled, missing, or unexpectedly
+skipped checks. A green PR gate means the code compiles, passes lint and passes its
+changed or unit tests, and is ready for queued validation; it does not mean runtime
+validation has completed.
+
 ## Contribution posture
 
 <!-- This section states the current posture. When the project opens up to
@@ -89,7 +111,21 @@ Keep the relevant checks green before opening a PR:
 
 `make gate` runs `make check` followed by the full nextest suite. `make test`
 runs tests only; `make test-changed` selects tests changed against `BASE`
-(default `origin/main`) and falls back to the full suite for build-wide changes.
+(default `origin/main`) and falls back to the full suite for build-wide changes;
+`make test-select E='<nextest filterset>'` runs just the matching tests.
+
+These three (and `make test-intentd`, which `make test` runs, and the test
+phase of `make gate`) default `INTENTD_TEST_TIMEOUT_MULTIPLIER` to `3`, the
+value coverage CI and `make coverage-changed` already use, so tests'
+hang-guard time limits stretch 3x. At 1x, a busy shared dev host makes correct
+tests time out at budgets such as 15 s. The cost: a real hang takes 3x longer
+to fail, and the few waits built from the multiplier take longer. A value you
+set yourself wins unchanged, from the environment or the make command line:
+`make test-select E='...' INTENTD_TEST_TIMEOUT_MULTIPLIER=1` checks the strict
+budgets. Each run prints its multiplier (`[<label>] test time limits x3 ...`)
+and records it in the summary and `run.json`. Resume credit is kept separate
+per effective multiplier, so a pass at 3x never resumes a 1x run (or the
+reverse); `3` and `3.0` share it.
 
 Opt in to smaller local build artifacts with:
 
@@ -102,7 +138,7 @@ make -C packages/intentd test COMPACT=1
 Compact and ordinary gates support **Python 3.10+**. The runner uses a bundled
 TOML 1.1 parser offline, including under `python3 -S`; no parser installation is
 needed. Compact applies to the compiler steps in `check`, `test`,
-`test-changed` and `gate`, and to `clippy` and `lint-sources`.
+`test-changed`, `test-select` and `gate`, and to `clippy` and `lint-sources`.
 It sets `CARGO_INCREMENTAL=0` and dev/test profile `debug=0`, including discovered
 package and build overrides. `strip=none` preserves the existing macOS
 proc-macro workaround. Test selection, changed-test fallback and failure handling
@@ -138,6 +174,119 @@ any recipe runs. The unchanged `packages/intentd` forwarder invokes separate
 root makes per goal: `make -C packages/intentd test coverage-changed COMPACT=1` may
 run the noncoverage goal before rejecting coverage. It still never starts compact
 coverage. Use separate invocations with the appropriate mode for each goal.
+
+#### Linux x64 callback gates
+
+The full Rust suite uses the canonical ACP callback adapter fixture, which currently
+supports **Linux x64 only**, with the descriptor's exact Node version. Native
+macOS callback gates are not supported. Mac contributors can run the full gates on
+an **existing authorized Linux x64 host** (for example, their Intent daemon host).
+Use that host's normal access method; the commands below run in **Bash on Linux**,
+not in the Mac terminal. This recipe does not create a host or install a native
+provider. The callbacks exercise the frozen adapter/SDK with a scripted query
+process, without provider credentials or a native Claude login.
+
+Start with a complete monorepo checkout on Linux at the revision you intend to
+validate. For a new checkout, replace the revision below with its full commit SHA:
+
+```bash
+set -euo pipefail
+[ "$(uname -s)" = Linux ] && [ "$(uname -m)" = x86_64 ] || {
+  echo "Run this recipe on the authorized Linux x64 host." >&2
+  exit 1
+}
+git clone https://github.com/intent-hq/intent.git intent-linux-gates
+cd intent-linux-gates
+git checkout --detach "<intended-monorepo-commit>"
+git submodule update --init --recursive
+git rev-parse HEAD
+git submodule status
+make bootstrap-dev-host
+make doctor
+```
+
+The recorded gitlinks select the component revisions; do not advance them to
+latest main or copy a Mac `node_modules` directory. Private iOS is intentionally
+skipped. When testing an unmerged component change, use its reviewed branch/SHA
+in this isolated checkout and record that SHA too; no manual pin-bump PR is needed.
+Keep the monorepo's `docs/protocol/fixtures/transfer-selection` intact: full gates
+also validate those canonical fixtures before Cargo and pass their path to tests.
+
+Bootstrap supplies the repository Rust pin (with rustfmt/Clippy), nextest and host
+prerequisites. Use **Python 3.10+** for the gate runner, even if doctor's host-status
+minimum is lower. Bootstrap checks the frontend's supported Node range; it does
+not promise the callback descriptor's exact version. Activate that exact Node
+version using the host's existing tool manager or installed toolchain, put its
+`bin` directory on `PATH`, then check it below. The descriptor currently pins
+Node `v24.21.0`, npm `11.19.0` and TypeScript `6.0.3`; the checked-out descriptor is
+the authority. An available npm launcher is required for the source route; the
+provisioner obtains its pinned npm privately when necessary and installs the
+locked TypeScript dependencies without package lifecycle scripts.
+
+Continue in the same Linux shell from the monorepo root:
+
+```bash
+set -euo pipefail
+python3 -I -B -S -c 'import sys; assert sys.version_info >= (3, 10), "Python 3.10+ required"'
+callback_node=$(python3 -I -B -S -c 'import json; print(json.load(open("packages/intentd/crates/intent-acp/tests/fixtures/claude-callback-adapter.json"))["tools"]["node"])')
+[ "$(node --version)" = "$callback_node" ] || {
+  echo "Activate descriptor-pinned Node $callback_node on this Linux host first." >&2
+  exit 1
+}
+command -v npm
+
+# New private directory: this run must build, not reuse an existing fixture.
+callback_run=$(mktemp -d "$HOME/intent-callback-gates.XXXXXX")
+callback_cache="$callback_run/cache"
+printf 'Keep setup logs and test receipts under %s\n' "$callback_run"
+# env -u NODE_OPTIONS: the provisioner refuses host Node preloads (e.g. a
+# monitoring tracer injected into every shell); the gates clear it themselves.
+INTENT_ACP_CALLBACK_ADAPTER_FIXTURE=$(env -u NODE_OPTIONS python3 -I -B -S \
+  packages/intentd/scripts/prepare-acp-callback-fixture.py \
+  --cache-dir "$callback_cache" --build-from-source \
+  2>"$callback_run/source-build.log")
+export INTENT_ACP_CALLBACK_ADAPTER_FIXTURE
+
+# Revalidate the same cache without acquisition; stdout is only the fixture path.
+callback_offline=$(env -u NODE_OPTIONS python3 -I -B -S \
+  packages/intentd/scripts/prepare-acp-callback-fixture.py \
+  --cache-dir "$callback_cache" --offline \
+  2>"$callback_run/offline.log")
+[ "$callback_offline" = "$INTENT_ACP_CALLBACK_ADAPTER_FIXTURE" ]
+make check-callback-fixture check-transfer-fixture
+
+GATE_CACHE_DIR="$callback_run/gate-runs"
+export GATE_CACHE_DIR
+make gate 2>&1 | tee "$callback_run/gate.log"
+```
+
+The explicit source build needs network access to the descriptor's pinned upstream
+archive and npm registry. It verifies archive, patched source, lockfile, packed
+artifact and runtime inventory before publishing a ready cache. Keep assignment
+and `export` separate as above: `export VAR=$(...)` hides a failed provisioner's
+exit status. With `set -euo pipefail`, preparation or gate failure stops the recipe
+and remains a failure even through `tee`. Inspect the retained log before retrying.
+
+For later runs, reuse the saved `callback_cache` path with `--offline`, assign and
+export its returned fixture path, and rerun preflight. With the fixture variable
+unset, `make test`, `make test-changed`, `make test-select` and `make gate` do this themselves for a
+ready cache under `~/.cache/intent/acp-callback-fixture`, and gate preflight hides
+host `NODE_OPTIONS` (such as a Datadog preload) from its checks. An empty offline cache
+refuses; it never downloads. Corrupt caches, mismatched manifests/Node and injected
+`NODE_OPTIONS` refuse too when you run the prepare script directly, so prefix it with
+`env -u NODE_OPTIONS` on such hosts. Do not bypass validation or edit a ready cache to make it
+pass. The optional `--bundle /path/to/pinned-bundle.tar.gz` route requires an
+independently supplied matching local bundle; no published download URL exists.
+
+`make gate` includes the full `make test` phase; do not repeat a successful suite.
+Use `make test` when only tests are needed, or `RESUME=1 make test` to continue an
+interrupted attempt with the same source/settings. The gate owns caller assertions
+and validates fixtures before Cargo or resume credit. Keep the printed `record:`
+path under `$GATE_CACHE_DIR` with `gate.log`, `source-build.log` and `offline.log`;
+[attempt receipts](#test-attempt-receipts-and-resume-coverage) describe how to inspect
+completion and failures. A preflight/check failure before the test phase has no
+nextest attempt receipt. A callback-only pass does not establish a full-gate pass;
+retain unrelated failures as failures.
 
 ### Test attempt receipts and resume coverage
 
@@ -254,3 +403,82 @@ Please do not report security vulnerabilities through public issues — see
 
 By contributing, you agree that your contributions will be licensed under the
 [Apache License 2.0](LICENSE).
+
+### Local Rust compiler cache
+
+Install sccache 0.17 or newer and point it at the team's self-hosted cache
+([runbook](docs/SCCACHE_SERVER.md)) with the **read-only** token, which a
+maintainer shares with you out of band:
+
+```bash
+export SCCACHE_WEBDAV_ENDPOINT=https://172.96.141.217
+export SCCACHE_WEBDAV_TOKEN=<read-only-cache-token>
+export SCCACHE_WEBDAV_RW_MODE=READ_ONLY
+make build
+```
+
+`make build` uses the configured cache when `sccache` is on `PATH`; otherwise it
+builds normally. An explicitly set `RUSTC_WRAPPER` (including an empty value)
+takes precedence. Keep tokens out of tracked files. If changing the endpoint
+or credentials while a local sccache server is running, stop that server first
+with `sccache --stop-server` so the next build picks up the new environment.
+
+CI writes to the same cache with its own read-write token (see
+[docs/RELEASING.md](docs/RELEASING.md)); its `INTENT_SCCACHE_*` settings apply
+only to CI jobs. Local builds get the read-only token so developer machines
+cannot write into the shared cache. sccache keys include absolute
+paths, so a local build only hits entries compiled at the same checkout path;
+expect a low hit rate unless your path matches a CI runner's.
+
+### Bash 3 compatibility checks
+
+The `shell-tests-bash3` CI job runs on GitHub-hosted Linux with a checksum-verified
+Bash 3.2.57 build. It tests the shell language compatibility needed by macOS
+users without consuming a macOS runner. CI runs the shell suites only in the
+merge queue, so a local run is the only check before a 3.2-only breakage ejects
+the PR. Run it before opening a PR that touches `scripts/*.sh`:
+
+```bash
+make bash3   # one-time build (a few minutes; make bootstrap-dev-host installs gcc, make and bison)
+REQUIRE_BASH3=1 bash scripts/consumer-checks.test.sh
+```
+
+`make bash3` builds the same pinned interpreter into
+`${XDG_CACHE_HOME:-~/.cache}/intent-bash3` and does nothing once it is built.
+Export `BASH3_CACHE_DIR` (an absolute path) to move the cache. The suites find
+the cache through the shared lookup in `scripts/find-bash3.sh`, so `BASH3_BIN`
+is only needed for an interpreter elsewhere. On macOS the stock `/bin/bash` is
+already 3.2, so the target builds nothing. Without `REQUIRE_BASH3`, a missing interpreter is a skip
+notice rather than a failure. `scripts/dev-sandbox.test.sh` has no lookup and
+must be started by the interpreter itself, as CI does:
+`REQUIRE_BASH3=1 DEV_SANDBOX_TEST_STARTUP_ONLY=1 ~/.cache/intent-bash3/bash scripts/dev-sandbox.test.sh`.
+The interpreter is isolated; the build does not replace the system shell.
+
+### Script checks for your change
+
+CI runs the shell suites only in the merge queue, so a broken suite or a new
+shellcheck finding otherwise shows up after a push. Before pushing changes to
+`scripts/`, the `Makefile` or `.github/workflows/ci.yml`, run:
+
+```bash
+make test-scripts-changed            # changed vs origin/main, incl. uncommitted work
+DRY_RUN=1 make test-scripts-changed  # print the plan only
+BASE=<ref> make test-scripts-changed # compare with another base
+```
+
+It always runs `make lint-shell`. It runs every suite in the ci.yml
+`shell-tests` job (read from that job, so the lists cannot drift) when the
+`Makefile`, `ci.yml`, `scripts/*.sh`, `scripts/*.py` or `scripts/fixtures/`
+changed. For each changed `scripts/*.mjs` with a sibling `.test.mjs`, it runs
+that test with `node --test`. Every step runs; the failures are listed at the
+end. Like CI it needs node, shellcheck and the `packages/intentd`
+submodule. It skips the Bash 3.2 pass (see above) and the sccache and runner
+steps that download tools.
+
+After editing anything under `.github/`, run `make lint-workflows`. It runs the
+pinned actionlint (with shellcheck over `run:` scripts) over
+`.github/workflows`, and CI's `workflow-lint` job runs the same check on every
+PR. Main is kept finding-free, so a finding in a file you touched is new: fix
+it, or add a path- and message-scoped ignore to `.github/actionlint.yaml` for a
+confirmed false positive. (shellcheck is not pinned, so a newer local copy can
+flag an untouched workflow that CI's does not.) `make bootstrap-dev-host` installs actionlint and shellcheck.

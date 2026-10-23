@@ -6,14 +6,14 @@ All `note.*` methods require `workspaceId`. All except `list` and `create` addit
 
 | Method | Params | Result |
 | --- | --- | --- |
-| note.list | workspaceId (req), projection?: "slim" \| "full" *(v8.1)* | { notes: NoteSummary[] } — **Projection (`projection`, additive within v8.1 — [intent-hq/intentd#1508](https://github.com/intent-hq/intentd/pull/1508), monorepo#3573):** absent / `null` / `"full"` keep the full rows byte-identical to before — **full stays the default**, unlike the v8.0 conversation surfaces, because existing consumers (the iOS client) still read `content` off list rows; `"slim"` serves bounded listing rows with `content` omitted, replaced by `contentPreview` (the first 500 chars, char-boundary safe by construction) plus `contentLength` (total chars — Unicode scalar values, the same unit as the note.listVersions summaries' `contentLength` for the NUL-free content the daemon writes — note.listVersions uses SQL `LENGTH`, which stops at the first U+0000), every other Note field serializing exactly as the full row does — full responses scale with total workspace note content, so note-heavy workspaces tripped the transport's 1 MiB outbound frame warning; any other value is `-32602` (`projection must be "slim" or "full"`), never coerced. Serve-time only — stored rows are untouched. Older-daemon interop: pre-8.1 daemons read only `workspaceId` off `note.list` params and ignore unknown members, so sending `projection: "slim"` to a pre-8.1 daemon is silently ignored and serves full rows (never an error) — clients that need slim rows must gate on `protocolVersion` ≥ 8.1 (or detect `contentPreview` presence on the rows they get back). The note subscription channel gained the same projection in v8.2 — see the `note.subscribe` row in §6.9. -32602 with `error.data.code: "not-found"` when the workspace does not exist (deleted, or never created; monorepo#3404 — previously a best-effort empty list). Task-note rows with `dependsOn` edges carry the computed `metadata.task.unmetDependsOn` (within v6.8, monorepo#1979; presence-detected, omitted when empty — see §5.4 task.setRelations). The field is guaranteed only on read/push shapes (`note.get`/`note.list` and the subscription snapshots/deltas they serve); notes embedded in mutation *responses* (e.g. `task.updateNoteStatus`'s `note`, `note.update`'s `note`) may omit it — clients should not patch caches from mutation responses expecting the projection |
-| note.get | noteId (req) | { note: Note } — -32602 with `error.data.code: "not-found"` if not found. A task note with `dependsOn` edges carries the computed `metadata.task.unmetDependsOn` (within v6.8, monorepo#1979; presence-detected, omitted when empty; read/push shapes only — see the note.list row) |
+| note.list | workspaceId (req), projection?: "slim" \| "full" *(v8.1)* | { notes: NoteSummary[] } — details below the table. |
+| note.get | noteId (req), maxContentBytes?: int *(prepared)* | { note: Note } — -32602 with `error.data.code: "not-found"` if not found. `maxContentBytes` opts in to a truncated read that adds `contentTruncated` / `contentBytes` (see "Truncated note reads" below). A task note with `dependsOn` edges carries the computed `metadata.task.unmetDependsOn` (within v6.8, monorepo#1979; presence-detected, omitted when empty; read/push shapes only — see the note.list row) |
 | note.create | title (req), content?, tags?: string[], parentId?, idempotencyKey? | { note, convertedCount, createdTaskNoteIds, createdTasks, warnings } — within v6.14 ([intent-hq/intentd#1162](https://github.com/intent-hq/intentd/pull/1162), monorepo#2129) the result carries the `@@@task` auto-conversion outcome for the initial content, **additive** over the old `{ note }` shape (clients reading `.note` are unaffected): same shapes and warning contract as the four content-write ops (see "`@@@task` auto-conversion on note writes" below and the `task.convertBlocks` row, §5.4), with all four fields always present (`convertedCount: 0` plus empty arrays when the content converts nothing). `note` is the refetched post-conversion row, so its `rev`/`updatedAt` reflect the conversion write. An `idempotencyKey` replay returns the stored result without re-executing; a replayed key recorded before the conversion fields existed decodes the stored bare note as a zeroed conversion outcome. `-32602` when `content` is the line-numbered `note.read` display (see below) |
-| note.update | noteId (req); content? or title?/tags?; expectedVersion?: int | { note } — content present → full content replace; else metadata update. `expectedVersion` is a strict compare-and-set on **both** arms: a stale value → `-32005` Conflict with `error.data = { code: "conflict", current }` and no write (§9) — unlike `note.setContent`, the content arm never merges. `-32602` when `content` is the line-numbered `note.read` display (see "Numbered `note.read` display rejected on content writes" below) |
+| note.update | noteId (req); content? or title?/tags?; expectedVersion?: int; baseContentBytes?: int *(prepared)* | { note } — content present → full content replace; else metadata update. A content-arm `baseContentBytes` that does not match the base → `-32602` `content-base-mismatch`, no write (see "Truncated note reads" below). `expectedVersion` is a strict compare-and-set on **both** arms: a stale value → `-32005` Conflict with `error.data = { code: "conflict", current }` and no write (§9) — unlike `note.setContent`, the content arm never merges. `-32602` when `content` is the line-numbered `note.read` display (see "Numbered `note.read` display rejected on content writes" below) |
 | note.add | noteId (req), content (req), heading?, position?: "end" \| "start" | { ok, ... } — `-32602` when `content` is the line-numbered `note.read` display (see below) |
 | note.edit | noteId (req), old (req), new (req) | { ok, ... } — first exact-match replacement. `-32602` when `new` is the line-numbered `note.read` display (see below) |
 | note.editLines | noteId (req), start (req,int), end (req,int), content (req) | { ok, ... } (1-based inclusive). `-32602` when `content` is the line-numbered `note.read` display (see below) |
-| note.setContent | noteId (req), content (req), confirmReplacement?: boolean, expectedVersion?: int | { ok, noteId, title, previousTitle?, updatedAt, oldContent?, newContent, convertedCount, createdTaskNoteIds, createdTasks, warnings, rev } (full replace). `rev` (additive) is the note's post-write `rev` — after any `@@@task` auto-conversion refetch — i.e. the value a follow-up conditional write sends as `expectedVersion`; `newContent` is the persisted (possibly merged) text. `expectedVersion` is the base the writer read: absent or equal to the current `rev` → `content` replaces the note as-is; **stale** → the write is **merged, not rejected** (see "Three-way merge on stale `expectedVersion`" below) — the writer's intent (`diff(base → content)`, base = the retained snapshot at that rev) is applied onto the current text, or degrades to last-writer-wins when no snapshot survives for that rev. The reduction guard (`> 50 %` shorter without `confirmReplacement`, `-32603`) is measured `base → content` when a base is recoverable and `current → content` otherwise. `-32005` (no write) in exactly two cases: an `expectedVersion` **above** the current `rev` — a rev this note never served — is rejected immediately, and a bounded read-merge-persist loop (5 attempts) whose every attempt misses its rev gate surfaces the last `Conflict`. `-32602` when `content` is the line-numbered `note.read` display (see below) |
+| note.setContent | noteId (req), content (req), confirmReplacement?: boolean, expectedVersion?: int, baseContentBytes?: int *(prepared)* | { ok, noteId, title, previousTitle?, updatedAt, oldContent?, newContent, convertedCount, createdTaskNoteIds, createdTasks, warnings, rev } (full replace). `rev` (additive) is the note's post-write `rev` — after any `@@@task` auto-conversion refetch — i.e. the value a follow-up conditional write sends as `expectedVersion`; `newContent` is the persisted (possibly merged) text. `expectedVersion` is the base the writer read: absent or equal to the current `rev` → `content` replaces the note as-is; **stale** → the write is **merged, not rejected** (see "Three-way merge on stale `expectedVersion`" below) — the writer's intent (`diff(base → content)`, base = the retained snapshot at that rev) is applied onto the current text, or degrades to last-writer-wins when no snapshot survives for that rev. The reduction guard (`> 50 %` shorter without `confirmReplacement`, `-32603`) is measured `base → content` when a base is recoverable and `current → content` otherwise. `-32005` (no write) in exactly two cases: an `expectedVersion` **above** the current `rev` — a rev this note never served — is rejected immediately, and a bounded read-merge-persist loop (5 attempts) whose every attempt misses its rev gate surfaces the last `Conflict`. `-32602` when `content` is the line-numbered `note.read` display (see below). A `baseContentBytes` that does not match the resolved base → `-32602` `content-base-mismatch`, no write (see "Truncated note reads" below) |
 | note.updateMetadata | noteId (req), title?, tags?: string \| string[], expectedVersion?: int | { ok, noteId, title?, tags?, updatedAt?, skipped?, reason? } — metadata-only write (no version snapshot); emits `note:updated`. A stale `expectedVersion` → `-32005` Conflict with `error.data = { code: "conflict", current }` and no write (§9) |
 | note.delete | noteId (req), expectedVersion?: int | { ok, noteId, deleted } — a stale `expectedVersion` → `-32005` Conflict with `error.data = { code: "conflict", current }` and no delete (§9). Emits `note:deleted`. Deleting a **task note** additionally recomputes + emits `task:ready-tasks-changed` (§6.5) after the `note:deleted`, with the additive trigger `triggeredBy: { noteId, reason: "note-deleted" }` (monorepo#1981; generalized by intentd#1121, monorepo#2006), whenever the delete actually **moves** the ready set: deleting a task that was itself ready drops its id from `readyTaskIds`, deleting the last incomplete task child of a parent readies the parent (tree rule), and deleting a task note that other tasks `dependsOn` keeps the #1981 always-emit contract — the dangling edge counts as unmet, so deleting a previously-`complete` dep drops its dependents out of `readyTaskIds`. The pre-delete and post-delete ready sets are compared, so a delete that provably cannot move the set (e.g. a terminal task nobody depends on) emits no recompute. Deleting a **`complete`** dep also re-announces each dependent task note via `note:updated` (the computed `unmetDependsOn` projection moved, monorepo#1979) after the ready-set event — same ordering as the status-transition path (`task:*` first, dependent `note:updated` last) |
 | note.listTasks | noteId (req) | { tasks: [...] } (checkbox/task rows + taskNoteId). Rows with a linked task note also carry the linked task's `dependsOn?` / `conflictsWith?` / computed `unmetDependsOn?` (v6.8; presence-detected, omitted when empty — see §5.4 task.setRelations). A row's `status` word (`done` / `in-progress` / `todo`) is read from the line's checkbox marker; on a row with a `taskNoteId` that marker is the daemon-materialized projection of the task note's status (§5.4 "Linked checkboxes are projections of the task note") |
@@ -22,6 +22,15 @@ All `note.*` methods require `workspaceId`. All except `list` and `create` addit
 | note.listVersions | noteId (req) | bare array of `{ type:"snapshot", v, date, author:{id,name,type}, title, contentLength }` ascending by `v` |
 | note.getVersion | noteId (req), v (req,int) | `{ type:"snapshot", v, date, author, title, content }` — -32602 if the version does not exist |
 | note.restoreVersion | noteId (req), v (req,int) | { ok, noteId, restoredFrom, v, note } — resets title+content to version `v`, bumps `rev`, appends a new version capturing the restored state |
+
+**`note.list` details.**
+
+**Projection (`projection`, additive within v8.1 — [intent-hq/intentd#1508](https://github.com/intent-hq/intentd/pull/1508), monorepo#3573):** absent / `null` / `"full"` keep the full rows byte-identical to before — **full stays the default**, unlike the v8.0 conversation surfaces, because existing consumers (the iOS client) still read `content` off list rows; `"slim"` serves bounded listing rows with `content` omitted, replaced by `contentPreview` (the first 500 chars, char-boundary safe by construction) plus `contentLength` (total chars — Unicode scalar values, the same unit as the note.listVersions summaries' `contentLength` for the NUL-free content the daemon writes — note.listVersions uses SQL `LENGTH`, which stops at the first U+0000), every other Note field serializing exactly as the full row does — full responses scale with total workspace note content, so note-heavy workspaces tripped the transport's 1 MiB outbound frame warning; any other value is `-32602` (`projection must be "slim" or "full"`), never coerced.
+Serve-time only — stored rows are untouched.
+Older-daemon interop: pre-8.1 daemons read only `workspaceId` off `note.list` params and ignore unknown members, so sending `projection: "slim"` to a pre-8.1 daemon is silently ignored and serves full rows (never an error) — clients that need slim rows must gate on `protocolVersion` ≥ 8.1 (or detect `contentPreview` presence on the rows they get back).
+The note subscription channel gained the same projection in v8.2 — see the `note.subscribe` row in §6.9. -32602 with `error.data.code: "not-found"` when the workspace does not exist (deleted, or never created; monorepo#3404 — previously a best-effort empty list).
+Task-note rows with `dependsOn` edges carry the computed `metadata.task.unmetDependsOn` (within v6.8, monorepo#1979; presence-detected, omitted when empty — see §5.4 task.setRelations).
+The field is guaranteed only on read/push shapes (`note.get`/`note.list` and the subscription snapshots/deltas they serve); notes embedded in mutation *responses* (e.g. `task.updateNoteStatus`'s `note`, `note.update`'s `note`) may omit it — clients should not patch caches from mutation responses expecting the projection
 
 ```json
 // → request
@@ -154,6 +163,125 @@ since v6.14 (intentd#1162, monorepo#2129) — earlier daemons converted and retu
 `key=` / `dependsOn=` / `conflictsWith=` / `effort=` header attributes with
 convert-with-warnings semantics — grammar, resolution order, and warning contract are
 documented on the `task.convertBlocks` row (§5.4).
+
+### Truncated note reads (prepared additive contract)
+
+Motivated by [intent-hq/intent#7515](https://github.com/intent-hq/intent/issues/7515).
+A client that cannot afford to load very large notes may ask for a bounded prefix
+of the content and show it read-only.
+Agents, MCP bindings and every client that omits the new params keep full read and
+write access, unchanged.
+
+**Capability.** `server.capabilities.noteTruncatedRead` equal to the exact integer
+`1` on the `client.hello` result gates the whole contract: the `maxContentBytes`
+read param, its response markers and the `baseContentBytes` write guard.
+A daemon without it may ignore both params, serving full content and accepting
+whole-content writes unguarded, so a client must not rely on either without the gate.
+No method, event or error number is added; the method catalog is unchanged.
+
+**Request.** `note.get` and `note.subscribe` accept an optional
+`maxContentBytes`: a positive integer counted in UTF-8 bytes of `content`.
+Absent or `null` keeps responses byte-identical to a daemon without this contract.
+`0`, a negative or fractional number, or a non-number is `-32602`
+(`maxContentBytes must be a positive integer`), with no read or subscription.
+`note.list` does not take it; use its `projection: "slim"` instead.
+
+**Cut rule.** Let `S` be the stored `content` as UTF-8 bytes and `L` the limit.
+
+- If `S` is at most `L` bytes, `content` is `S` and the note carries no new fields,
+  so the row is byte-identical to the unbounded read.
+- Otherwise `content` is the longest prefix of `S` that is at most `L` bytes and
+  ends immediately after a line feed (`\n`, byte `0x0A`).
+  The line feed is kept, so a `\r\n` pair is never split.
+- If no line feed falls within the first `L` bytes, `content` is the longest prefix
+  of `S` that is at most `L` bytes and ends on a UTF-8 character boundary.
+  It may be empty when the first character is longer than `L`.
+  If that boundary falls between a `\r` and the `\n` that follows it, the cut steps
+  back one byte, so a `\r\n` pair is never split here either.
+- A truncated note adds `contentTruncated: true` and `contentBytes`, the full UTF-8
+  size of the stored content.
+  Both are omitted when the content is not truncated; `contentTruncated: false`
+  is never sent.
+
+Every other `Note` field, including `rev`, is served as in the unbounded read.
+`title` and metadata are never truncated.
+The vectors in
+[`fixtures/notes/truncated-read.json`](../fixtures/notes/truncated-read.json)
+freeze this rule, including multibyte, CRLF and no-line-feed cases.
+
+**Not covered.** The bound applies only to `note.get` and `note.subscribe`.
+These paths still carry the full `content` of a large note:
+
+- `task.subscribe` rows, which are full `Note` entities.
+- `note.list` with the default `full` projection.
+- The `oldContent` / `newContent` echo in the `note.setContent` result.
+
+A client that needs bounded loads must list notes with `note.list`
+`projection: "slim"` and must not rely on these paths for large notes.
+
+**Subscriptions.** `note.subscribe` validates `maxContentBytes` before the ack and
+fixes it for the subscription's lifetime.
+It applies the cut rule to every row of the seq-0 snapshot and to every
+`added` and `updated` delta row, so a live update to a large note arrives truncated
+with the same markers.
+A row whose content shrinks under the limit arrives full, without the markers.
+With `projection: "slim"` rows carry no `content`, so the param has no effect
+beyond validation.
+
+**Write guard (`baseContentBytes`).** A truncated read is never a valid base for a
+whole-content write.
+`note.setContent` and the content arm of `note.update` accept an optional
+`baseContentBytes`: a non-negative integer, the UTF-8 size of the content the
+writer started from.
+It is computed from the writer's own base text; a writer must never copy a
+response's `contentBytes` into it.
+A client that reads with `maxContentBytes` must send it on every whole-content write.
+For a full read it equals the size of the base the daemon resolves (below) as long as
+that base is the text the writer read, so the write proceeds as before.
+For a truncated read it is the size of the prefix, which is always smaller than the
+stored size, so the write is refused and the content after the cut survives.
+`baseContentBytes` is ignored on the metadata arm of `note.update` (no `content`).
+
+The daemon compares `baseContentBytes` with the UTF-8 size of the base it resolves:
+
+- `note.update` content arm: the current stored content, after the strict
+  `expectedVersion` check (a stale value is still `-32005` first).
+- `note.setContent` with `expectedVersion` absent or equal to the current `rev`:
+  the current stored content.
+  Without `expectedVersion`, a guarded write is therefore refused when a concurrent
+  writer changed the note after the read; this is intended, because the
+  daemon cannot tell that text from the writer's base.
+  Guarded writers should send `expectedVersion`, so a concurrent change goes through
+  the merge-base path below instead of being refused.
+- `note.setContent` with a stale `expectedVersion`: the retained snapshot the
+  three-way merge would use as its base.
+  When no snapshot survives for that rev the base is unknown, and a write that
+  carries `baseContentBytes` is refused instead of degrading to last-writer-wins.
+
+A mismatch, or an unknown base, is `-32602` with
+`error.data = { code: "content-base-mismatch", baseContentBytes, resolvedBaseBytes }`,
+where `resolvedBaseBytes` is the size of the resolved base, or `null` when unknown.
+It can be a merge snapshot's size rather than the stored note's, so a client must
+never copy it into `baseContentBytes`; re-read the note instead.
+The message is `Content base does not match the stored note; re-read the full note
+and retry.`
+The check runs on every persist attempt, against the base that attempt resolves,
+and before any merge.
+A refused write changes nothing: no row update, no version, no event, no
+`@@@task` conversion.
+Invalid values (negative, fractional or non-number) are `-32602`
+(`baseContentBytes must be a non-negative integer`).
+
+Precedence on a whole-content write, first failure wins:
+
+1. Parameter validation, `-32602` invalid params: missing or malformed params,
+   an invalid `baseContentBytes`, and the line-numbered `note.read` display rejection.
+2. The `expectedVersion` check, `-32005` Conflict: a stale value on `note.update`,
+   or a value above the current `rev` on `note.setContent`.
+3. The base check, `-32602` `content-base-mismatch`.
+Writes without `baseContentBytes` are unguarded, exactly as today.
+Surgical writes (`note.add`, `note.edit`, `note.editLines`) and `task.*` writes
+transform the stored content and take no base size.
 
 ### 5.2.1 `note.lineAttribution.*`
 
@@ -440,14 +568,36 @@ non-authoritative.
 | Method | Params | Result |
 | --- | --- | --- |
 | task.updateStatus | noteId (req), taskText (req), status (req: `done` \| `todo` \| `in-progress`) | { ok, noteId, taskText, status } — rewrites the checkbox marker of the first checkbox line in `noteId` whose text matches `taskText` (exact match preferred, else the first line containing it) and emits `note:updated` for `noteId`. Any other `status` word → `-32603` (`Status must be 'done', 'todo', or 'in-progress'`); empty `taskText` → `-32603`. **Linked line ([intent-hq/intent#4255](https://github.com/intent-hq/intent/issues/4255)):** when the matched line links a task note (`[label](intent://local/task/{id})`), the write is **redirected to the task note** instead of the checkbox — see "Linked checkboxes are projections of the task note" below. The result echoes the requested `status` word either way |
-| task.updateNoteStatus | noteId (req), status (req: `not_started` \| `waiting` \| `discussion_needed` \| `blocked` \| `in_progress` \| `review_required` \| `complete` \| `cancelled`), expectedVersion? | { ok, noteId, status, note, advisory? } — writes the task note's metadata status (see the vocabulary below; non-task note → `-32603 "Note is not a task. Use markAsTask() first."`). On an actual transition it emits `task:status-changed` + `task:ready-tasks-changed` (§6.5), re-announces dependents with `note:updated` when the move crosses the `complete` boundary (monorepo#1979), and may emit `workspace:displayStatus-changed`; a same-status write emits none of these. Either way it then **materializes** the status onto every checkbox line in the workspace that links the task (`[x]` / `[/]` / `[ ]`, one `note:updated` per rewritten note) — see "Linked checkboxes are projections of the task note" below. `expectedVersion?` enables optimistic concurrency against the note `rev`. **Caller-aware terminal guard** (within 9.13; additive, presence-detected): when the task is already `complete` / `cancelled` and the write is attributed to the task's OWN linked agent — the MCP `ws.task.updateNoteStatus` binding and the linked-checkbox redirects of `ws.task.updateStatus` / `ws.task.update` pass the calling agent; the session's `taskNoteId` names the task, or the agent is in the task's `assignedAgentIds` — a move to any other status is refused as a no-op: the task is not written and no `task:status-changed` / `task:ready-tasks-changed` / dependent `note:updated` fires (the checkbox materialization still runs, so a linked marker that had drifted from the terminal status is healed with one parent write + `note:updated`; an already-correct marker stays untouched), and the response answers `ok: true`, the **unchanged** `status` / `note`, plus `advisory` (`"Task is <complete\|cancelled>; a task's own linked agent cannot reopen it. Ask the coordinator or user to reopen the task if more work is needed."`). `advisory` is **absent** (never `null`) on every write that went through, so pre-guard responses are byte-identical. The router path carries no caller and is never guarded — coordinators, verifiers, and users reopen tasks exactly as before, as does any agent not linked to the task; a same-status write by the linked agent stays the ordinary no-op with no `advisory` |
+| task.updateNoteStatus | noteId (req), status (req: `not_started` \| `waiting` \| `discussion_needed` \| `blocked` \| `in_progress` \| `review_required` \| `complete` \| `cancelled`), expectedVersion? | { ok, noteId, status, note, advisory? } — details below the table. |
 | task.update | noteId (req), line (req,int), text?, status? (`todo` \| `in-progress` \| `done`), expected? | { ok, noteId, lineNumber, previousText, newText, status } (atomic single-line edit; at least one of `text` / `status` required; `expected` mismatch → `-32603 Conflict detected …` before anything is written). **Linked line (intent-hq/intent#4255):** when line `line` links a task note, a `status` write is redirected to the task note and the line's marker follows via materialization; a `text` edit on the same call lands in ONE parent write together with the materialized marker. The linked task is resolved from the **post-edit** line (the line after `text` is applied): a `text` that retargets the link from task A to task B sends the `status` write to **B** (A is untouched — it is no longer linked here) and renders B's marker, a `text`-only edit that changes the link renders the new target's **current** status marker in the same parent write, and a post-edit line with no link keeps the raw checkbox write — see "Linked checkboxes are projections of the task note" below |
 | task.getMyTask | taskNoteId (req) | task note w/ metadata, dependencies, acceptance criteria. `taskMetadata` carries the stored `dependsOn?` / `conflictsWith?` relation lists and the result carries the computed `unmetDependsOn?` (v6.8; all presence-detected, omitted when empty) — see task.setRelations |
 | task.markAsTask | noteId (req), status (req), acceptanceCriteria?, effort?, dependsOn?, conflictsWith? | { ok, ... } — always emits `note:updated` (the task-ness/metadata flip; without it a mark was invisible to note-driven refetches until the next unrelated note write). On a note that was **not** already a task it additionally emits `task:created` (§6.5). Re-marking an **existing** task is a status move instead: a real status change emits `task:status-changed` + `task:ready-tasks-changed` (the same pair `task.updateNoteStatus` publishes) and **no** `task:created`; re-marking at the same status emits neither — unless the re-mark's `dependsOn?` param actually changes the list, which recomputes + emits `task:ready-tasks-changed` with the `relations-changed` trigger (monorepo#1981), same as `task.setRelations`. `dependsOn?` / `conflictsWith?` (v6.8) seed/replace the task's relation lists under the same validation and cycle check as `task.setRelations`; omitted params leave an existing task's relations untouched. Every mark also **materializes** `status` onto the checkbox lines linking the note (one `note:updated` per rewritten parent, emitted after the task's own `note:updated` and before `task:created` / `task:status-changed`) — see "Linked checkboxes are projections of the task note" below |
-| task.setRelations | noteId (req), dependsOn?, conflictsWith? | { ok, noteId, dependsOn, conflictsWith } *(v6.8)* — replaces the task's relation lists on `TaskMetadata` and echoes them normalized (deduped, first-seen order). An omitted param keeps the existing list; `[]` clears it. Validation (`-32603`, detail in `error.data`): every id must name a **task note in the same workspace** (missing notes and non-task notes rejected), self-edges rejected; a `dependsOn` write that would close a dependency cycle is rejected with the cycle path named (`"dependsOn would create a cycle: a -> b -> a"`); a `dependsOn` id that is a **tree ancestor or descendant** of the task (via `parent_id` chains, which may cross non-task notes) is rejected with the offending relationship named (`"dependsOn cannot reference a tree ancestor: a is an ancestor of b"` / `"… tree descendant: c is a descendant of b"`) — such an edge would permanently block readiness for both tasks (the parent waits on the child via the tree rule, the child on the parent via the edge; behavior applies to both `task.setRelations` and `task.markAsTask`, monorepo#1982). `conflictsWith` is advisory (symmetric by convention, stored one-sided) — no cycle check. Emits `note:updated` (metadata refetch, §6.5). Non-task note → `-32603 "Note is not a task"`. Readers project the relations plus the computed `unmetDependsOn` — the `dependsOn` ids whose task note is not `complete` (missing and cancelled deps count as unmet) — on `task.getMyTask`, `task.list` / `task.get` rows, and `note.listTasks` rows with a linked task note (all additive, omitted when empty). `dependsOn` also **gates readiness** (behavior only within v6.8, no event-shape change; monorepo#1974): the ready-task recomputation behind `task:ready-tasks-changed` (§6.5) generalizes the tree rule — a task is ready iff all its task children are `complete` AND its `dependsOn` list is fully satisfied (same rule as `unmetDependsOn`: missing and cancelled deps do NOT satisfy an edge), so cross-subtree ordering edges keep a task out of `readyTaskIds` until every dep completes. A write that actually **changes** `dependsOn` additionally recomputes + emits `task:ready-tasks-changed` after the `note:updated`, with the additive trigger `triggeredBy: { noteId, reason: "relations-changed" }` (monorepo#1981; §6.5) — a no-op write or a conflictsWith-only change emits no recompute |
+| task.setRelations | noteId (req), dependsOn?, conflictsWith? | { ok, noteId, dependsOn, conflictsWith } *(v6.8)* — details below the table. |
 | task.convertBlocks | noteId (req) | { ok, convertedCount, createdNoteIds, createdTasks, warnings } — each converted `@@@task` block becomes a child task note emitting `note:created` + `task:created` (§6.5). The fence line takes optional **header attributes** (v6.11, intentd#1128/#1130/#1133): `@@@task key=<token> dependsOn=<a,b> conflictsWith=<c> effort=<token>` — whitespace-separated `name=value` pairs after the keyword, bare tokens (no quoting), `dependsOn`/`conflictsWith` comma-separated and whitespace-tolerant around commas. Each `dependsOn`/`conflictsWith` reference resolves in order: sibling block `key=`s in the same conversion → exact sibling block titles → existing task-note ids in the workspace; resolved edges are written through the same validator as `task.setRelations` (cycle + tree ancestor/descendant checks), and `effort` seeds the task's `estimatedEffort`. **Convert-with-warnings:** conversion never fails on bad attributes — every block still converts, and each header parse issue, unknown/duplicate/empty attribute, unresolvable or ambiguous reference, or validator-rejected edge is skipped with one entry in `warnings` naming the block and the problem. `createdTasks` is `[{ key?, title, noteId }]` in block order, parallel to `createdNoteIds` (`key` present only when authored; idempotently reused existing children are not listed — a reused block's `effort` is dropped with a warning). `createdTasks` / `warnings` are always present (empty arrays when nothing applies) |
 | task.createPrerequisite | dependentNoteId (req), title (req), content?, status? | { ok, ... } — the prerequisite note is born a task, emitting `note:created` + `task:created` (§6.5). `-32602` when `content` is the line-numbered `note.read` display (see "Numbered `note.read` display rejected on content writes", §5.2); nothing is created |
 | task.assignAgent | noteId (req), agentId (req), force?: bool | { ok, noteId, agentId } — **Occupancy guard (intentd#774):** assigning a NEW agent to a task that already has a live assigned agent — loadable, not Deleted, not poisoned (the same live/resumable predicate as `agent.delegate`'s pre-gate, §5.5) — while the task status is not `complete`/`cancelled` is rejected with `-32602` (InvalidParams); the error message names the existing agent's id and name and suggests `agent.sendToTask` / `agent.wakeOrCreate` to reach it, or `force: true` to intentionally assign a second agent. Re-assigning an already-assigned agent stays idempotent-ok (no `force` needed); `force: true` bypasses the guard. Emits `note:updated` for the task note, then **materializes** the task's resulting status onto the checkbox lines linking it (one `note:updated` per rewritten parent — a `not_started → in_progress` move flips `[ ]` → `[/]`), then the `task:status-changed` + `task:ready-tasks-changed` pair when the assignment moved the status — see "Linked checkboxes are projections of the task note" below |
+
+**`task.updateNoteStatus` details.**
+
+writes the task note's metadata status (see the vocabulary below; non-task note → `-32603 "Note is not a task. Use markAsTask() first."`).
+On an actual transition it emits `task:status-changed` + `task:ready-tasks-changed` (§6.5), re-announces dependents with `note:updated` when the move crosses the `complete` boundary (monorepo#1979), and may emit `workspace:displayStatus-changed`; a same-status write emits none of these.
+Either way it then **materializes** the status onto every checkbox line in the workspace that links the task (`[x]` / `[/]` / `[ ]`, one `note:updated` per rewritten note) — see "Linked checkboxes are projections of the task note" below.
+`expectedVersion?` enables optimistic concurrency against the note `rev`.
+**Caller-aware terminal guard** (within 9.13; additive, presence-detected): when the task is already `complete` / `cancelled` and the write is attributed to the task's OWN linked agent — the MCP `ws.task.updateNoteStatus` binding and the linked-checkbox redirects of `ws.task.updateStatus` / `ws.task.update` pass the calling agent; the session's `taskNoteId` names the task, or the agent is in the task's `assignedAgentIds` — a move to any other status is refused as a no-op: the task is not written and no `task:status-changed` / `task:ready-tasks-changed` / dependent `note:updated` fires (the checkbox materialization still runs, so a linked marker that had drifted from the terminal status is healed with one parent write + `note:updated`; an already-correct marker stays untouched), and the response answers `ok: true`, the **unchanged** `status` / `note`, plus `advisory` (`"Task is <complete|cancelled>; a task's own linked agent cannot reopen it. Ask the coordinator or user to reopen the task if more work is needed."`).
+`advisory` is **absent** (never `null`) on every write that went through, so pre-guard responses are byte-identical.
+The router path carries no caller and is never guarded — coordinators, verifiers, and users reopen tasks exactly as before, as does any agent not linked to the task; a same-status write by the linked agent stays the ordinary no-op with no `advisory`
+
+**`task.setRelations` details.**
+
+replaces the task's relation lists on `TaskMetadata` and echoes them normalized (deduped, first-seen order).
+An omitted param keeps the existing list; `[]` clears it.
+Validation (`-32603`, detail in `error.data`): every id must name a **task note in the same workspace** (missing notes and non-task notes rejected), self-edges rejected; a `dependsOn` write that would close a dependency cycle is rejected with the cycle path named (`"dependsOn would create a cycle: a -> b -> a"`); a `dependsOn` id that is a **tree ancestor or descendant** of the task (via `parent_id` chains, which may cross non-task notes) is rejected with the offending relationship named (`"dependsOn cannot reference a tree ancestor: a is an ancestor of b"` / `"… tree descendant: c is a descendant of b"`) — such an edge would permanently block readiness for both tasks (the parent waits on the child via the tree rule, the child on the parent via the edge; behavior applies to both `task.setRelations` and `task.markAsTask`, monorepo#1982).
+`conflictsWith` is advisory (symmetric by convention, stored one-sided) — no cycle check.
+Emits `note:updated` (metadata refetch, §6.5).
+Non-task note → `-32603 "Note is not a task"`.
+Readers project the relations plus the computed `unmetDependsOn` — the `dependsOn` ids whose task note is not `complete` (missing and cancelled deps count as unmet) — on `task.getMyTask`, `task.list` / `task.get` rows, and `note.listTasks` rows with a linked task note (all additive, omitted when empty).
+`dependsOn` also **gates readiness** (behavior only within v6.8, no event-shape change; monorepo#1974): the ready-task recomputation behind `task:ready-tasks-changed` (§6.5) generalizes the tree rule — a task is ready iff all its task children are `complete` AND its `dependsOn` list is fully satisfied (same rule as `unmetDependsOn`: missing and cancelled deps do NOT satisfy an edge), so cross-subtree ordering edges keep a task out of `readyTaskIds` until every dep completes.
+A write that actually **changes** `dependsOn` additionally recomputes + emits `task:ready-tasks-changed` after the `note:updated`, with the additive trigger `triggeredBy: { noteId, reason: "relations-changed" }` (monorepo#1981; §6.5) — a no-op write or a conflictsWith-only change emits no recompute
 
 ```json
 // → request
@@ -591,4 +741,3 @@ clients can ask "who is working on this task?".
   "agentId":"agent-alpha","createdAt":1750000000000
 } } }
 ```
-

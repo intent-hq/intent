@@ -38,7 +38,7 @@ served on the `AgentSession` and `AgentLite` projections (shapes in
 [protocol/methods/agents.md](./protocol/methods/agents.md) §5.5):
 
 - **`harnessVersion`** — the harness version current at creation
-  (`intent_core::CURRENT_HARNESS_VERSION`, today `"2.7"`). There is no
+  (`intent_core::CURRENT_HARNESS_VERSION` in that daemon). There is no
   upgrade/migration/pinning operation; new sessions always get the latest
   version. The stamp depends only on creation time, never on the creator: a
   delegated child mints the current version regardless of the parent's pin,
@@ -113,6 +113,63 @@ background one-shots) use the latest. The session's captured
 `scripts` / `terminalAccess` / `richChatBlocks` / `structuredQuestions` /
 `attentionRequests` gate their sections) — with every gate open, the
 bundled markdown is used untouched.
+
+### Prepared repository guidance for 3.2 sessions
+
+The prepared delivery change in intentd
+`73478bdaa5a09dc81307d4bfe7606a5a85983876` applies only to an active session
+whose saved `harnessVersion` is literally `"3.2"`. It adds recurring repository
+guidance to ordinary ACP prompts after the original physical session is
+confirmed. It does not change a session's stamp, feature snapshot or doctrine,
+introduce a new major version, or establish support in an installed daemon.
+
+The manager retains the original Services allocation, repository read owner,
+workspace/agent and matching ACP Connection. It captures guidance before later
+prompt or startup metadata awaits, then validates the original authority again
+at final transfer. Replacement, retirement or unavailable authority omits the
+optional guidance; an ID or provider name cannot reconstruct that authority.
+The ordinary prompt remains available through its existing path.
+
+Delivery is an additional text block in the original `session/prompt`, with an
+8 KiB maximum. It is **not a system- or developer-role update**. The applicable
+boundaries are a daemon-owned turn or explicit continuation, successful load,
+recreation after failed load, and an existing supported output-free retry.
+Retries recapture on the same original binding before backoff; streamed errors
+do not authorize replay. A provider's internal loop or compaction without a new
+daemon prompt boundary has no new delivery hook.
+
+The initial doctrine channels remain unchanged. The inventory below describes
+the candidate's provider configuration, not native execution of every runtime.
+All rows use the same conditional daemon prompt-text path above:
+
+| Runtime in the candidate | Initial doctrine channel | Qualification |
+| --- | --- | --- |
+| Claude `@agentclientprotocol/claude-agent-acp@0.81.1` | Session metadata | Node 22+/npm 7+; secondary CLI version is not globally pinned. No new native role-mapping proof. |
+| Codex `@agentclientprotocol/codex-acp@2.1.1` | First-turn prepend | Installed CLI qualified separately; no within-Codex-loop claim. |
+| Pi `pi-acp@0.0.34`, Pi CLI 0.81.0+ | First-turn prepend | Initial workspace MCP uses the Pi extension; native extension-loop delivery is not established. |
+| Auggie CLI 0.7.0+ | `--rules` file | `--mcp-config` remains the initial tool channel; native acceptance is separate. |
+| OpenCode / Unsloth through OpenCode | Generated environment configuration | Installed versions are not globally pinned; Unsloth's generic test prompt is unsupported. |
+| Grok agent stdio | First-turn prepend | Installed version is not globally pinned; no new native discovery or loop claim. |
+| Antigravity private profile | First-turn prepend | Original private-profile setup/confirmation remains required; generic test prompt is unsupported. |
+| Droid, environment-gated | `--append-system-prompt-file` | No feature/default activation or native acceptance follows. |
+| Cortex, environment-gated | First-turn prepend | No workspace MCP delivery channel, hence no workspace-tool-result claim. |
+
+Prompt delivery does not acknowledge a private callback or promote the initial
+pending MCP endpoint. Fresh optional workspace-tool results and private monitor
+delivery still require their genuinely negotiated, acknowledged original
+callback route. The standard prompt-only context cannot substitute for it.
+
+Missing, `2.9`, `2.10`, `3.0`, `3.1` and unknown saved stamps do not acquire this
+new fallback during turn, load, recovery or tool response. Their persisted
+instructions/features and existing behavior remain pinned. The general registry
+fallback for an unknown version is not admission to this literal-`3.2` path.
+
+The source's finite checks exercise real daemon ownership with a controlled
+ordinary ACP peer. They do not establish production adapter/model acceptance,
+true role-channel updates, provider-owned within-turn delivery or unsupported
+private-tool support. Landed-source integration and native acceptance remain
+separate from this prepared contract; it does not promote experimental delivery
+into the bundled app guide.
 
 ### Golden tests
 

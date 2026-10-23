@@ -23,8 +23,17 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  runner-route:
+    uses: ./.github/workflows/runner-route.yml
+    permissions:
+      contents: read
+      actions: read
+    secrets:
+      CI_QUEUE_READ_TOKEN: ${{ secrets.CI_QUEUE_READ_TOKEN }}
+
   bump:
-    runs-on: ubuntu-latest
+    needs: [runner-route]
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['ubuntu-24.04'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       # Fail-soft: without the token, warn and end the run successfully
       # (mirrors INTENTD_RELEASES_TOKEN / MONOREPO_ISSUES_TOKEN handling).

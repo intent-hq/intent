@@ -103,9 +103,13 @@ and lifecycle transitions are pushed via `mcp.servers:status-changed` (§6.5).
     consecutive-failure count (there is no process to restart, only status to flip);
     `mcp.servers:status-changed` (§6.5) is emitted only on an actual state transition, with
     `startedAt` preserved across consecutive `running` probes. `mcp.servers.update` restarts
-    any **tracked** server (running, or a remote in `error` or `auth_required`) so a failed remote
-    re-probes the updated URL/credentials immediately instead of keeping the old config until the
-    next sweep; `restart` is authoritative and resets a remote server before a fresh probe.
+    an **eligible enabled** server, including one without a tracked runtime after creation or a
+    failed launch, so the saved URL/credentials are applied immediately. Eligibility requires
+    `config.enabled`, `mcp.enableUserServers`, and absence from `mcp.disabledServers`; a save
+    stops any tracked runtime when one of those gates disables it. The saved definition and
+    server id are preserved even if the new endpoint fails its probe. This governs the daemon
+    connection, not provider-native MCP sessions configured at agent launch. `restart` remains
+    an authoritative reset before a fresh probe. No method names or wire fields change.
 
 ```json
 // → request — enable (start) an MCP server

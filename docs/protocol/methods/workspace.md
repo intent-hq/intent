@@ -23,14 +23,16 @@ unchanged. Host-administration virtual workspaces retain their existing boundary
 
 | Method | Params | Result |
 | --- | --- | --- |
-| workspace.list | includeArchived?: boolean (default false) | { workspaces: Workspace[] } — triggers background backfill: existing workspaces with a repositoryPath but missing repositoryOwner/Name are enriched from the origin remote URL (same GitHub derivation as workspace.create, non-blocking spawn, deduped per workspace per daemon lifecycle, skips non-GitHub remotes, persists updates, emits workspace:updated with changed fields). **Membership-narrowed** for a non-administrator caller: only workspaces the bound principal is a member of are returned, and every `Workspace` row carries `myRole` (`"owner"` \| `"collaborator"`), `memberCount` and `openInviteCount` (§5.48) |
+| workspace.list | includeArchived?: boolean (default false), includeRetired?: boolean (default false) — `includeArchived: true` alone never returns `status: "Retired"` rows; see [Retired workspaces](#retired-workspaces) | { workspaces: Workspace[] } — triggers background backfill: existing workspaces with a repositoryPath but missing repositoryOwner/Name are enriched from the origin remote URL (same GitHub derivation as workspace.create, non-blocking spawn, deduped per workspace per daemon lifecycle, skips non-GitHub remotes, persists updates, emits workspace:updated with changed fields). **Membership-narrowed** for a non-administrator caller: only workspaces the bound principal is a member of are returned, and every `Workspace` row carries `myRole` (`"owner"` \| `"collaborator"` \| prepared `"manager"` under `workspaceGuestRoles: 1`), `memberCount` and `openInviteCount` (§5.48) |
+| workspace.findByPullRequest *(prepared; `prWorkspaceLookup: 1`)* | url (req): string — a GitHub-form pull-request URL, `https://<host>/<owner>/<repo>/pull/<number>` (trailing path, query or fragment ignored). No `workspaceId`: daemon-global | { workspaces: PullRequestWorkspace[] } — every workspace the daemon has linked to that PR, most recently linked first; `[]` when none. Archived workspaces are included; deleted and remote workspaces never are, and retired workspaces only with the additive `includeRetired: true` param ([Retired workspaces](#retired-workspaces)). Membership-narrowed like `workspace.list`. `-32602 { code: "invalid-params" }` when `url` is missing or not a pull-request URL. See [PR workspace lookup](#pull-request-workspace-lookup) |
 | workspace.get | workspaceId (req) | { workspace: Workspace } — -32602 if not found, **or** if the caller is not a member of it (same `{ code: "not-found" }`, indistinguishable by design; §5.48) |
-| workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipIsolation? (canonical; deprecated alias skipWorktree?), githubUrl?, repositoryCheckout? (prepared GitLab selection; see [GitLab project checkout](#gitlab-project-checkout)), clonePath?, isNewRepo?, progressId? (string — arms the unified provisioning progress stream; see notes), contextLinks? (ContextLink[] — issue/PR context links persisted on the row; a pr-kind link additionally makes the create **PR-aware** — an omitted `branch`/`baseRef` defaults to the PR's head/base branch — see the `contextLinks` and PR-aware create notes below)); optional initialAgent: { prompt? *(a blank/whitespace-only prompt reads as absent; the agent is still created — see "Initial-agent orchestration" in the notes)*, name?, model?, reasoningEffort? (string — creation-time effort; omitted inherits, blank clears; see notes), specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks? *(within v7.4, monorepo#3338: entries may carry an attachment-registry `attachmentId` reference instead of inline `data`, under the same exactly-one-of validation + registry check and daemon-side prompt-assembly resolution as `agent.sendMessage` — §5.5; a bad reference rejects `-32602` pre-side-effect)*, fileBlocks? *(v6.12; attachment references only since v10.0 — same per-entry validation as `agent.sendMessage`: every entry must carry a non-empty `attachmentId`, an entry carrying inline `data` or missing `attachmentId` is `-32602` naming the block index — §5.5)*, metadata? } — no `agentId`: agent IDs are server-assigned, and a request carrying `initialAgent.agentId` is rejected with `-32602` (see notes). Every `-32602` rejection is validated before any side effect (see "Pre-side-effect validation" in the notes) | { workspace: Workspace, initialAgent?: AgentLite } — the created agent's server-minted id is `initialAgent.id`; daemon-owned orchestration inside one idempotent op (see notes: clone → checkout (worktree or CoW) → spec seed → initial agent). |
+| workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipIsolation? (canonical; deprecated alias skipWorktree?), githubUrl?, repositoryCheckout? (prepared GitLab selection; see [GitLab project checkout](#gitlab-project-checkout)), clonePath?, isNewRepo?, progressId? (string — arms the unified provisioning progress stream; see notes), contextLinks? (ContextLink[] — issue/PR context links persisted on the row; a pr-kind link additionally makes the create **PR-aware** — an omitted `branch`/`baseRef` defaults to the PR's head/base branch — see the `contextLinks` and PR-aware create notes below)); optional initialAgent: { prompt? *(a blank/whitespace-only prompt reads as absent; the agent is still created — see "Initial-agent orchestration" in the notes)*, name?, model?, reasoningEffort? (string — creation-time effort; omitted inherits, blank clears; see notes), specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks? *(within v7.4, monorepo#3338: entries may carry an attachment-registry `attachmentId` reference instead of inline `data`, under the same exactly-one-of validation + registry check and daemon-side prompt-assembly resolution as `agent.sendMessage` — §5.5; a bad reference rejects `-32602` pre-side-effect)*, fileBlocks? *(v6.12; attachment references only since v10.0 — same per-entry validation as `agent.sendMessage`: every entry must carry a non-empty `attachmentId`, an entry carrying inline `data` or missing `attachmentId` is `-32602` naming the block index — §5.5)*, metadata? } — no `agentId`: agent IDs are server-assigned, and a request carrying `initialAgent.agentId` is rejected with `-32602` (see notes). Every `-32602` rejection is validated before any side effect (see "Pre-side-effect validation" in the notes) | { workspace: Workspace, initialAgent?: AgentLite } — details below the table. |
 | workspace.update | workspaceId (req) + fields to change — the skip toggle uses the same wire names as create: skipIsolation? (canonical; deprecated alias skipWorktree?, either set ⇒ same behavior); the `workspace:updated { changes }` delta serializes it under the canonical skipIsolation name; `statusImageAssetId?: string \| null` is clearable (missing = untouched, `null` = clear, string = set — see the `statusImageAssetId` notes below). A **collaborator** member may change only `title`, `tags`, `statusMessage`, `statusImageAssetId` — any other key is `-32003 { code: "forbidden", detail }` (§5.48). **Archive lifecycle delegation** ([intent-hq/intentd#2066](https://github.com/intent-hq/intentd/pull/2066)): the generic row write never touches `archived` / `archivedAt` and holds `status` while the row is archived — lifecycle state moves only through `workspace.archive` / `workspace.unarchive`. An update carrying `archived` and/or `status: "Archived"` / `"Active"` applies the other fields first, then delegates the flip to those paths: `archived: true` or `status: "Archived"` runs the full `workspace.archive` teardown (guests detached, open invites revoked, hooks / monitors / turns torn down); `archived: false`, or a non-archived `status` on an archived row, runs `workspace.unarchive`. The delegated path publishes the `{ archived, status, archivedAt }` delta itself (`archivedAt` is set by the archive/unarchive path, never by a generic update field), so the update's own `workspace:updated` delta has `archived` and `status` removed from it — both arrive only in the delegated lifecycle delta — and is skipped entirely when nothing else changed. A contradictory pair (e.g. `archived: true` + `status: "Active"`) is `-32602 { code: "invalid-params" }` and nothing is written | { workspace: Workspace } |
-| workspace.delete | workspaceId (req), undoDelayMs? *(v6.7)* | { success: true } — waits for incremental database cleanup and the final workspace-row/tombstone commit, then emits `workspace:deleted` and returns while filesystem cleanup runs in a background task (see “Incremental deletion” below for partial-progress and retry semantics) — only the git-metadata phase (worktree-registration prune + rename of the checkout to a trash path + guarded branch delete; a CoW or `direct` checkout — a standalone clone with no registration in the source repo and a branch living only inside the clone — gets just the rename, no prune and no source-repo branch delete, and **only when it sits in the daemon-owned `<root>/<workspaceId>/<repo-slug>` layout**: a standalone checkout outside that layout — the `isNewRepo` direct shape, where the checkout IS the user's chosen repository folder (§5.1) — is left untouched, deletion removes only the workspace row) holds the per-repository lock; the recursive `remove_dir_all` of the renamed trash directory runs afterwards outside the lock. **Delete grace window (v6.7, [intent-hq/intentd#1096](https://github.com/intent-hq/intentd/pull/1096)):** `undoDelayMs > 0` (non-negative integer; a non-integer value is `-32602`; values above the 60 000 ms cap are silently clamped, never rejected — `deleteAt` reflects the clamped value) schedules an **in-memory** pending deletion instead of committing — returns `{ success: true, scheduled: true, deleteAt }` (ISO commit deadline), emits `workspace:delete-scheduled { workspaceId, deleteAt }` (§6.5), and serves `pendingDeleteAt` on the row until the deadline commits the real delete (which then runs the full teardown above) or `workspace.cancelDelete` cancels it. Absent, `null`, or `0` keeps the immediate-delete behavior byte-identical. Pending deletions are never persisted (a daemon restart drops them; the workspace survives); re-scheduling is idempotent under the registry lock (returns the existing deadline, no second timer); a committed workspace delete supersedes pending agent deletes inside the workspace |
+| workspace.delete | workspaceId (req), undoDelayMs? *(v6.7)* | { success: true } — details below the table. |
 | workspace.cancelDelete *(v6.7)* | workspaceId (req) | { cancelled: boolean } — cancels a pending (grace-window) deletion scheduled by `workspace.delete` with `undoDelayMs`. `true` clears the pending deletion, emits `workspace:delete-cancelled { workspaceId }` (§6.5), and drops `pendingDeleteAt` from the row; `false` is the race-safe non-error when no deletion is pending (never scheduled, already cancelled, or already committed) |
 | workspace.archive | workspaceId (req) | { workspace: Workspace } — returns the refreshed record with `archived: true` / `status: "Archived"` / `archivedAt` set, so callers do not need to follow up with `workspace.get`. Emits `workspace:updated` with the full applied delta `changes: { archived: true, status: "Archived", archivedAt: <ts> }` where `<ts>` is the same ISO timestamp persisted on the row (§6.5). **Archive stops active work** ([intent-hq/intentd#896](https://github.com/intent-hq/intentd/pull/896); PR monitors: [intent-hq/intentd#1067](https://github.com/intent-hq/intentd/pull/1067)): in-flight agent turns are gracefully interrupted, ACTIVE background hooks and ACTIVE PR monitors (§5.42) are cancelled, and queued messages/wakes park while the workspace stays archived — see the archive active-work teardown block below. **Archive removes guests** ([intent-hq/intentd#2066](https://github.com/intent-hq/intentd/pull/2066)): the archived flip, the detach of every `collaborator` membership and the revocation of every open invite commit in **one** store transaction — atomic, so a store failure fails the call with the workspace still active — and are announced before the `archived` delta: one `workspace:updated { changes: { members: true, removedPrincipalId, memberCount } }` per detached collaborator (its queued messages dropped, as for `workspace.members.remove`), then one `{ invites: true }` when at least one invite was revoked (§5.48). The returned record's `memberCount` / `openInviteCount` are the post-sweep values. -32602 if not found. |
-| workspace.unarchive | workspaceId (req) | { workspace: Workspace } — mirror of `workspace.archive`; returns the refreshed record with `archived: false` / `status: "Active"` and `archivedAt` cleared. Emits `workspace:updated` with `changes: { archived: false, status: "Active", archivedAt: null }` — an explicit JSON `null` so clients clear the field (§6.5). Re-kicks the queue drains parked by the archived gates so parked messages deliver without a manual kick; cancelled hooks and PR monitors are NOT resurrected, and neither are the collaborators and open invites the archive removed — the owner is the sole member afterwards and brings a guest back explicitly, via `workspace.members.add` or a fresh invite (see the archive active-work teardown block below). The same delta shape is also emitted by the turn-start **auto-unarchive** (see the auto-unarchive block below), which additionally stamps the additive `autoUnarchive` field into `changes` — the stamp is never present on this manual path (or `workspace.restore`). -32602 if not found. |
+| workspace.unarchive | workspaceId (req) | { workspace: Workspace } — mirror of `workspace.archive`; returns the refreshed record with `archived: false` / `status: "Active"` and `archivedAt` cleared. Emits `workspace:updated` with `changes: { archived: false, status: "Active", archivedAt: null }` — an explicit JSON `null` so clients clear the field (§6.5). Re-kicks the queue drains parked by the archived gates so parked messages deliver without a manual kick; cancelled hooks and PR monitors are NOT resurrected, and neither are the collaborators and open invites the archive removed — the owner is the sole member afterwards and brings a guest back explicitly, via `workspace.members.add` or a fresh invite (see the archive active-work teardown block below). The same delta shape is also emitted by the turn-start **auto-unarchive** (see the auto-unarchive block below), which additionally stamps the additive `autoUnarchive` field into `changes` — the stamp is never present on this manual path (or `workspace.restore`). -32602 if not found. **On a `Retired` workspace** this call (and `workspace.restore`) is the manual **revive** — see [Retired workspaces](#retired-workspaces). |
+| workspace.retire | workspaceId (req) | { workspace: Workspace } — moves an `Active` or `Archived` workspace to `status: "Retired"`: the workspace folder on disk is deleted while every database row (agents, conversations, notes, tasks, assets) is kept and stays readable. An `Active` workspace first runs the full `workspace.archive` teardown and gains `archivedAt`. The git branch is kept; only `checkoutMode: "worktree"` workspaces can retire, others get `-32602 { code: "retire-unsupported" }`. Returns the refreshed record with `status: "Retired"`, `archived: true` and `retiredAt` set; emits one `workspace:updated` delta (§6.5). Idempotent on an already-retired workspace (returns the row, emits nothing). Owner/manager only (`-32003` for a collaborator, §5.48); `-32602 { code: "not-found" }` if absent. Details: [Retired workspaces](#retired-workspaces). |
 | workspace.dismissAttention | workspaceId (req) | { workspace: Workspace } — clears `attention` to `"none"`; -32602 if not found |
 | workspace.markSeen | workspaceId (req) | { workspace: Workspace } — marks the workspace seen: advances **every top-level (no parent, non-background, non-deleted) session's per-conversation seen marker** to its `lastMessageId` through the `agent.markSeen` op (§5.5; same monotonic CAS, each advanced session emits its own `agent:updated` marker event; background/child sessions are untouched), which settles the **derived workspace `unread`** (see the `attention` bullet below) to `none` and emits ONE `workspace:attention-changed { none }` on the transition; also clears the stored legacy flag (guarded on `unread` — a persistent `review_required` survives; the clear re-checks the derivation atomically inside the guarded write, so an assistant message landing mid-call is never retired). **Marker advances are the call's contract, so failures propagate**: a failed pending-list read or per-session marker write is the call's error — the caller never sees success while a session stays unread; the one tolerated per-session failure is a racing `agent.delete` (a deleted session no longer feeds the derivation, so it is skipped). Idempotent: a re-call with nothing unseen writes and emits nothing. `updated_at` stays untouched (looking is not "activity", monorepo#1466) |
 | workspace.getContext | workspaceId (req) | { items: ContextItem[] } — persisted chat-context attachments for the workspace; empty array before the first save. -32602 if the workspace is absent. |
@@ -41,19 +43,77 @@ unchanged. Host-administration virtual workspaces retain their existing boundary
 | workspace.setBrowserClient *(v9.9)* | workspaceId (req), clientId (req): string \| null | same `{ browserClient }` shape as `workspace.getBrowserClient`, built from the committed state — pins agent `browser.exec` for this workspace to the logical `clientId` (§5.17), or **clears** the pin when `clientId` is JSON `null` (the field is required: omitted → -32602 `Missing required parameter: clientId (string \| null)`; a non-string non-null or an empty/whitespace string → -32602 `Invalid parameter: clientId must be a non-empty string or null`). Persists across daemon restarts, emits `workspace:updated` with `changes: { browserClientId: string \| null }` (§6.5; `null` spells the clear) and, when setting, re-homes every **claimed** tab of the workspace to the new pin (§5.45 driving-client switch — one `browser:tab-updated { changes: { hostClientId } }` per moved tab; clearing moves nothing). -32602 on a missing workspace, the virtual Chief workspace, or a `clientId` the daemon has never seen complete `client.hello` (a client row minted only by anonymous `drafts.*` traffic is not pinnable); an **offline but known** client is accepted. |
 | workspace.diskUsage *(v4.2)* | workspaceId (req) | { diskUsage?: { bytes, fileCount, computedAt, breakdown }, refreshing: boolean } — on-demand poll of the workspace's cached whole-directory disk footprint (see the workspace-disk-usage block below for the payload shape and cache semantics). `diskUsage` is **omitted** (absent, never `null`) until the first walk completes and for non-qualifying rows; `refreshing: true` means a background walk is in flight (stale or first-ever poll — poll again shortly). Non-qualifying workspaces — remote, skip-isolation, the virtual Chief workspace, or a never-provisioned directory — answer `{ refreshing: false }` with the field omitted, without arming a walk. -32602 if the workspace is absent. |
 | workspace.localChanges *(v9.7)* | workspaceId (req) | { roots: LocalChangesRoot[], hasUnpushedCommits: boolean, hasUncommittedChanges: boolean } — the local git work that archiving or deleting the workspace would lose or orphan, aggregated over the primary worktree and every registered secondary git root in one round-trip (see the workspace-local-changes block below for the row shape and evaluation rules). Each `roots[]` row is `{ kind: "primary" \| "secondary", gitRootId?, path, branch?, hasRemoteRefs, unpushedCount, uncommittedCount, error? }`; the two booleans are ORs over the rows' counts. `unpushedCount` is **remote-ref-relative** — commits reachable from `HEAD` but from no `refs/remotes/*` ref, saturating at 1000 (exact for never-pushed branches; commits behind a pruned squash-merged branch still count; a repo with no remote refs reports its whole history with `hasRemoteRefs: false`). Root 0 is the primary worktree when evaluated (skipped when there is no daemon-owned checkout — `isRemote` or `skipWorktree` — or the worktree is not a git repository), followed by every `gitRoot.list` root in list order — secondary roots are **always** evaluated. Per-root failures are fail-soft (`error` on that row, counts `0`; a primary whose `.git` exists but cannot be read is an `error` row, not skipped); a workspace with nothing evaluable answers `{ roots: [], hasUnpushedCommits: false, hasUncommittedChanges: false }`. -32602 if the workspace is absent. |
-| workspace.transfer.plan *(v6.6)* | workspaceId (req) | { plan: TransferPlan } — read-only transfer preview for the Transfer/Download feature ([intent-hq/intentd#1092](https://github.com/intent-hq/intentd/pull/1092)): `plan.manifest` is the versioned export manifest — `{ formatVersion, creatingIntentdVersion, workspaceId, createdAt, tables: [{ name, rowCount, approxBytes }], assets: [{ id, sizeBytes }], git: { hasRepository, branch?, dirtyFiles, sandboxBranches, submodules } }`, where `formatVersion` is `TRANSFER_FORMAT_VERSION` (2 for author-preserving exports under the [transfer authorship contract](#human-authorship-in-workspace-transfers), previously 1; the import side refuses unsupported versions), `creatingIntentdVersion` is the exact daemon version (`CARGO_PKG_VERSION`; import gates on exact match), `tables` covers every workspace-scoped table with the `event` table deliberately excluded (event history stays on the source; `approxBytes` sums column byte lengths cast to BLOB — a serialized-payload estimate, not on-disk size), and `git.branch?` is omitted when unresolvable — plus the additive `git.submodules: [{ name, path, commitSha, branch?, carried, published }]` list (unpublished-submodule support, [intent-hq/intentd#1727](https://github.com/intent-hq/intentd/pull/1727); absent/empty in older manifests): one entry per initialized submodule (nested ones recursed) whose checked-out commit is reachable from **no** `refs/remotes/*` ref of that submodule (no remote refs at all counts as unpublished), scanned on the worktree and on every live sandbox path and deduped by `(path, commitSha)`; a submodule is listed only when its gitlink is recorded at the **containing tip** — for a top-level submodule the superproject **index** (what the WIP snapshot commits, so a staged removal — `git rm --cached sub` with the checkout left on disk — is skipped), for a nested one its parent checkout's **HEAD tree** with a gitlink equal to the nested checkout's `HEAD` (the parent is bundled as-is, never snapshotted, so a nested checkout whose commit the parent's HEAD does not record is skipped together with its own subtree); skipped checkouts are never bundled — `name` is the raw `submodule.<name>` key in its own superproject, `path` is worktree-relative with forward slashes (nested paths composed, `sub/inner`, parents listed before children), `commitSha` the checkout's full `HEAD` sha, `branch?` the attached branch (omitted when detached), `carried: true` for worktree findings (the export bundles them — see `workspace.export.start`) and `false` for sandbox-only findings (reported, never bundled), and `published: true` (default `false`) marks a published ancestor of a nested unpublished submodule that is carried anyway so the nested checkout can be hydrated offline — plus the additive `attachments: [{ id, fileName, sizeBytes, exists }]` manifest list (attachment-transfer support): one entry per `attachments`-registry row (§5.9), probing the stored file in the workspace's canonical `.intent/attachments/` store at plan time — `exists: false` (with `sizeBytes: 0`) marks a row whose file was already deleted (deleted-is-deleted is a first-class state: the row transfers, no file rides, and a missing file never fails a plan or an export) — plus the size estimate `totalSizeBytes = dbRowBytes + assetBytes + attachmentBytes + estimatedGitBundleBytes` (bundle estimated via `git rev-list --disk-usage`; `estimatedGitBundleBytes` covers the superproject bundle **plus** every `carried` submodule bundle, each estimated the same way in the submodule's repository; each addend also served — `attachmentBytes` sums only the attachment files the archive will actually carry) and the non-blocking pre-flight `warnings: [{ code, message }]` (`code` machine-readable and stable — e.g. agents running, uncommitted changes, unmerged sandboxes, and `submodule-unpublished-commits`: **exactly one** per plan whenever `git.submodules` is non-empty, listing entries as `<path> @ <sha7> (<branch>)` (`(<branch>)` omitted when detached) — `N submodule(s) point at commits not on any remote and will ride in the archive (~<size>): <carried unpublished list>. Transfer will not push them; publish the branches yourself when ready.` when at least one unpublished entry is carried (`~<size>` is the human-readable sum of the carried submodule bundle estimates), or only `N submodule(s) point at commits not on any remote.` when every finding is sandbox-only; `N` counts only the entries in the list that follows it — the carried unpublished entries in the first form, the sandbox-only entries in the second; either form is followed by the optional clauses ` Also bundled so the nested submodule(s) can be checked out: <list>.` (the `published: true` ancestors, never counted in `N`) and ` Not carried (sandbox only): <list>.` (the `carried: false` entries)). No side effects; the virtual Chief workspace is rejected. -32602 if the workspace is absent |
+| workspace.transfer.plan *(v6.6)* | workspaceId (req) | { plan: TransferPlan } — details below the table. |
 | workspace.import.begin *(v6.9)* | manifest (req, object), archiveSizeBytes (req, u64), archiveSha256 (req) — no workspaceId (the target id lives inside the manifest) | { importId, maxChunkBytes } — opens a staged workspace import of a transfer zip archive ([intent-hq/intentd#1101](https://github.com/intent-hq/intentd/pull/1101); the target-side counterpart of `workspace.transfer.plan`). Validates the manifest header BEFORE any bytes are staged: `formatVersion` must be understood, `creatingIntentdVersion` must match this daemon's `CARGO_PKG_VERSION` **exactly** (the error names both versions), the virtual Chief workspace is rejected, and the manifest's workspace id must not collide with an existing row OR another pending import. Staging lives under `<workspaces_root>/.import-staging/<importId>/`; `maxChunkBytes` is the per-chunk decoded cap (16 MiB, under the 40 MiB frame cap) |
 | workspace.import.chunk *(v6.9)* | importId (req), seq (req, u64), data (req, base64) | { importId, seq, receivedBytes } — stages one seq-numbered slice of the archive as a per-seq file. Chunks may arrive in any order; retrying a seq is **idempotent** (per-seq overwrite, no double-count); the declared `archiveSizeBytes` guards against over-staging |
-| workspace.import.commit *(v6.9)* | importId (req) | { workspace, importedRows, interruptedAgents, rehydrated } — reassembles the staged chunks → verifies the SHA-256 against `begin`'s `archiveSha256` → unzips (zip-slip-safe extract) → checks the embedded manifest equals the `begin` manifest → applies row transforms (path rewrite against the target `workspaces_root`, agent sessions forced to stopped with `interrupted_agent` rows for in-flight agents, `event` rows skipped) → git materialization (clone `git/repo.bundle` at the workspace branch, then — **before** the base ref, sandbox provisioning and WIP unwind, while the checkout is still at the bundled tip — hydrate each `git/refs.json` `submodules[]` entry in list order (parents first) from its `bundleEntry`, **offline** (no network; `GIT_LFS_SKIP_SMUDGE=1`): the untrusted entry is validated (full-hex `commitSha`, plain forward-slash `path` components, `bundleEntry` under `git/`, `submodule.<name>.path` in the containing tip's `.gitmodules` must equal the entry's path relative to that containing repository (the last component of a nested path), and the containing tip's gitlink must equal `commitSha`; the containing repository of a nested entry is the already-hydrated parent entry, so a nested entry whose parent was not bundled — legacy or hand-crafted archives — fails with an explicit error), the submodule is `submodule update --init`-ed from the bundle, `HEAD` is checked against `commitSha`, `branch?` is recreated at that commit (detached otherwise), and `submodule.<name>.url` plus the module's `remote.origin.url` are restored to `originUrl?` (unset / origin removed when absent) so no staging path persists; sandbox checkouts provisioned afterwards inherit the hydrated modules through the CoW copy (the plain-clone fallback on a non-CoW filesystem does not — its gitlinks stay uninitialized); **any** hydration failure fails the commit with the submodule path in the error and rolls back the whole import; archives without `submodules` behave exactly as before, and published submodules with no unpublished descendant are never bundled and are untouched by materialization) → attachment materialization (each `attachments/<attachmentId>` archive entry lands at the `stored_path` its registry row records, resolved against the materialized checkout with the within-workspace containment guard — an escaping `stored_path` fails the commit — dropping the ignore-all `.gitignore` marker in the store dir; a registry row with no archive entry is the deleted-is-deleted state and imports as a row without a file; a later failure unwinds every placed file) → single-transaction row insert + asset placement → boot-style rehydration (hooks, event subscriptions, PR monitors). **Atomic:** nothing is visible in `workspace.list` until commit succeeds |
+| workspace.import.commit *(v6.9)* | importId (req) | { workspace, importedRows, interruptedAgents, rehydrated } — details below the table. |
 | workspace.import.abort *(v6.9)* | importId (req) | { importId, aborted } — deletes the staged session and its staging directory; idempotent (`aborted: false` when the session no longer exists, not an error) |
-| workspace.export.start *(v6.11)* | workspaceId (req) | { exportId, maxChunkBytes } — opens the source-side export of the FE-mediated workspace transfer ([intent-hq/intentd#1118](https://github.com/intent-hq/intentd/pull/1118); the source counterpart of the v6.9 `workspace.import.*` surface) and kicks off the background archive build — the result returns immediately, and progress/outcome travel on the `workspace:transfer:*` events (§6.5). Build stages (each emits `workspace:transfer:progress` before it runs): `stopping-agents` — in-flight agents are captured as pending `interrupted_agent` rows BEFORE the stop (they ride the archive as the target's resumption offers, and equally cover the source if the export is aborted; durable queues untouched) — then `exporting-rows` — the manifest (built by the `workspace.transfer.plan` op; the copy embedded in the zip byte-matches the one the `:ready` event carries) plus the row export — then `bundling-git` (skipped when the workspace has no repository; a dirty worktree and live sandboxes are snapshotted as WIP commits that stay in place while the archive is served and are unwound when the export settles) — then `writing-archive` (zip sealed + SHA-256 hashed). Archive layout (shared with the import side): `manifest.json`, `rows/<table>.jsonl` (only tables with rows), `assets/<assetId>`, `attachments/<attachmentId>` (the registered attachment files that still exist in the git-ignored `.intent/attachments/` store — they never ride the git bundle, so the archive carries them explicitly; a registry row whose file was deleted rides the rows payload with no file entry, and a file that vanishes between plan and write is skipped with a warning, never an export failure), and — when the workspace has a repository — `git/repo.bundle` + `git/refs.json`, plus one **self-contained** `git/submodules/<n>.bundle` per `carried` entry of `manifest.git.submodules` (`n` = the entry's index in `refs.json`'s `submodules` list, parents before nested children; sandbox-only findings never produce a bundle). Each submodule bundle is created from the submodule's own repository after the WIP snapshot (so it anchors the gitlink that actually travels), carries `HEAD` at the recorded commit plus a temporary `refs/intent/transfer/<wsId>/submodule/<n>` ref, is `git bundle verify`-checked, and the temporary ref is deleted from the source submodule afterwards, success or failure. `git/refs.json` accordingly gains the additive `submodules: [{ name, path, commitSha, branch?, originUrl?, bundleEntry, bundleRef, published }]` list (absent/empty in archives from older daemons and whenever nothing is unpublished — the archive layout is then unchanged): `bundleEntry` is the archive entry (`git/submodules/<n>.bundle`), `bundleRef` the ref inside it (outside `refs/heads/*` — importers rely on `HEAD` == `commitSha`), `originUrl?` the checkout's `remote.origin.url` with credentials stripped so the source's secrets never travel (an `http(s)://` URL loses its entire userinfo — tokens ride there as the username; any other `scheme://` URL loses only the `:password`, keeping the user part ssh needs, e.g. `ssh://git@host/o/r.git`; scheme-less scp-like `git@host:path` URLs and local paths pass through unchanged) — restored on import in that stripped form — and the remaining fields carry the `manifest.git.submodules` values. Staging lives under `<workspaces_root>/.export-staging/<exportId>/`; sessions are **in-memory only** (a daemon restart drops them; the boot/lazy sweep clears orphaned staging dirs). `maxChunkBytes` is the per-chunk pre-base64 cap (16 MiB, matching the import side so the FE can pipe `read` chunks straight into `workspace.import.chunk`; the encoded frame stays under the 40 MiB cap, §1.3). -32602 on the virtual Chief workspace, an unknown workspaceId, or a second concurrent export of the same workspace (the error names the in-flight exportId) |
+| workspace.export.start *(v6.11)* | workspaceId (req) | { exportId, maxChunkBytes } — details below the table. |
 | workspace.export.read *(v6.11)* | exportId (req), seq (req, u64), workspaceId? | { exportId, seq, totalChunks, data } — serves one seq-numbered chunk of the sealed archive as base64. **Idempotent**: any seq may be re-requested in any order (same seq, same bytes). -32602 while the session is still building (wait for `workspace:transfer:ready`), on an out-of-range seq (the error names the chunk count), or on an unknown exportId |
 | workspace.export.finalize *(v6.11)* | exportId (req), archiveSource? (bool, default false), finalStatusMessage? (string), workspaceId? | { exportId, finalized: true, workspace } — settles the source after a successful relay: applies the optional final status message, archives the workspace when `archiveSource: true` (otherwise it stays active), then unwinds the WIP snapshot commits and deletes staging. The workspace mutations run BEFORE the session is retired, so a failed mutation leaves the export intact and finalize can be retried. Only valid on a ready session — -32602 while still building or on an unknown exportId |
 | workspace.export.abort *(v6.11)* | exportId (req), workspaceId? | { exportId, aborted } — cancels an export: a still-building session is flagged and the build task cleans up when it next checks between stages (quiet — no `workspace:transfer:failed`); a ready session is cleaned up inline (WIP snapshots unwound, staging deleted). **Idempotent** — an unknown exportId returns `{ aborted: false }`, not an error. The workspace stays usable; agents stay stopped (the user restarts them) |
 
+**`workspace.create` details.**
+
+the created agent's server-minted id is `initialAgent.id`; daemon-owned orchestration inside one idempotent op (see notes: clone → checkout (worktree or CoW) → spec seed → initial agent).
+
+**`workspace.delete` details.**
+
+- waits for incremental database cleanup and the final workspace-row/tombstone commit, then emits `workspace:deleted` and returns while filesystem cleanup runs in a background task (see “Incremental deletion” below for partial-progress and retry semantics) — only the git-metadata phase (worktree-registration prune + rename of the checkout to a trash path + guarded branch delete; a CoW or `direct` checkout — a standalone clone with no registration in the source repo and a branch living only inside the clone — gets just the rename, no prune and no source-repo branch delete, and **only when it sits in the daemon-owned `<root>/<workspaceId>/<repo-slug>` layout**: a standalone checkout outside that layout — the `isNewRepo` direct shape, where the checkout IS the user's chosen repository folder (§5.1) — is left untouched, deletion removes only the workspace row) holds the per-repository lock; the recursive `remove_dir_all` of the renamed trash directory runs afterwards outside the lock.
+- **Delete grace window (v6.7, [intent-hq/intentd#1096](https://github.com/intent-hq/intentd/pull/1096)):** `undoDelayMs > 0` (non-negative integer; a non-integer value is `-32602`; values above the 60 000 ms cap are silently clamped, never rejected — `deleteAt` reflects the clamped value) schedules an **in-memory** pending deletion instead of committing — returns `{ success: true, scheduled: true, deleteAt }` (ISO commit deadline), emits `workspace:delete-scheduled { workspaceId, deleteAt }` (§6.5), and serves `pendingDeleteAt` on the row until the deadline commits the real delete (which then runs the full teardown above) or `workspace.cancelDelete` cancels it.
+  Absent, `null`, or `0` keeps the immediate-delete behavior byte-identical.
+  Pending deletions are never persisted (a daemon restart drops them; the workspace survives); re-scheduling is idempotent under the registry lock (returns the existing deadline, no second timer); a committed workspace delete supersedes pending agent deletes inside the workspace
+
+**`workspace.transfer.plan` details.**
+
+read-only transfer preview for the Transfer/Download feature ([intent-hq/intentd#1092](https://github.com/intent-hq/intentd/pull/1092)): `plan.manifest` is the versioned export manifest — `{ formatVersion, creatingIntentdVersion, workspaceId, createdAt, tables: [{ name, rowCount, approxBytes }], assets: [{ id, sizeBytes }], git: { hasRepository, branch?, dirtyFiles, sandboxBranches, submodules } }`, where `formatVersion` is `TRANSFER_FORMAT_VERSION` (2 for author-preserving exports under the [transfer authorship contract](#human-authorship-in-workspace-transfers), previously 1; the import side refuses unsupported versions), `creatingIntentdVersion` is the exact daemon version (`CARGO_PKG_VERSION`; import gates on exact match), `tables` covers every workspace-scoped table with the `event` table deliberately excluded (event history stays on the source; `approxBytes` sums column byte lengths cast to BLOB — a serialized-payload estimate, not on-disk size), and `git.branch?` is omitted when unresolvable — plus the additive `git.submodules: [{ name, path, commitSha, branch?, carried, published }]` list (unpublished-submodule support, [intent-hq/intentd#1727](https://github.com/intent-hq/intentd/pull/1727); absent/empty in older manifests): one entry per initialized submodule (nested ones recursed) whose checked-out commit is reachable from **no** `refs/remotes/*` ref of that submodule (no remote refs at all counts as unpublished), scanned on the worktree and on every live sandbox path and deduped by `(path, commitSha)`;
+a submodule is listed only when its gitlink is recorded at the **containing tip** — for a top-level submodule the superproject **index** (what the WIP snapshot commits, so a staged removal — `git rm --cached sub` with the checkout left on disk — is skipped), for a nested one its parent checkout's **HEAD tree** with a gitlink equal to the nested checkout's `HEAD` (the parent is bundled as-is, never snapshotted, so a nested checkout whose commit the parent's HEAD does not record is skipped together with its own subtree);
+skipped checkouts are never bundled — `name` is the raw `submodule.<name>` key in its own superproject, `path` is worktree-relative with forward slashes (nested paths composed, `sub/inner`, parents listed before children), `commitSha` the checkout's full `HEAD` sha, `branch?` the attached branch (omitted when detached), `carried: true` for worktree findings (the export bundles them — see `workspace.export.start`) and `false` for sandbox-only findings (reported, never bundled), and `published: true` (default `false`) marks a published ancestor of a nested unpublished submodule that is carried anyway so the nested checkout can be hydrated offline — plus the additive `attachments: [{ id, fileName, sizeBytes, exists }]` manifest list (attachment-transfer support): one entry per `attachments`-registry row (§5.9), probing the stored file in the workspace's canonical `.intent/attachments/` store at plan time — `exists: false` (with `sizeBytes: 0`) marks a row whose file was already deleted (deleted-is-deleted is a first-class state: the row transfers, no file rides, and a missing file never fails a plan or an export) — plus the size estimate `totalSizeBytes = dbRowBytes + assetBytes + attachmentBytes + estimatedGitBundleBytes` (bundle estimated via `git rev-list --disk-usage`;
+`estimatedGitBundleBytes` covers the superproject bundle **plus** every `carried` submodule bundle, each estimated the same way in the submodule's repository;
+each addend also served — `attachmentBytes` sums only the attachment files the archive will actually carry) and the non-blocking pre-flight `warnings: [{ code, message }]` (`code` machine-readable and stable — e.g. agents running, uncommitted changes, unmerged sandboxes, and `submodule-unpublished-commits`: **exactly one** per plan whenever `git.submodules` is non-empty, listing entries as `<path> @ <sha7> (<branch>)` (`(<branch>)` omitted when detached) — `N submodule(s) point at commits not on any remote and will ride in the archive (~<size>): <carried unpublished list>. Transfer will not push them; publish the branches yourself when ready.` when at least one unpublished entry is carried (`~<size>` is the human-readable sum of the carried submodule bundle estimates), or only `N submodule(s) point at commits not on any remote.` when every finding is sandbox-only;
+`N` counts only the entries in the list that follows it — the carried unpublished entries in the first form, the sandbox-only entries in the second;
+either form is followed by the optional clauses ` Also bundled so the nested submodule(s) can be checked out: <list>.` (the `published: true` ancestors, never counted in `N`) and ` Not carried (sandbox only): <list>.` (the `carried: false` entries)).
+No side effects; the virtual Chief workspace is rejected. -32602 if the workspace is absent
+
+**`workspace.import.commit` details.**
+
+- reassembles the staged chunks → verifies the SHA-256 against `begin`'s `archiveSha256` → unzips (zip-slip-safe extract) → checks the embedded manifest equals the `begin` manifest → applies row transforms (path rewrite against the target `workspaces_root`, agent sessions forced to stopped with `interrupted_agent` rows for in-flight agents, `event` rows skipped) → git materialization (clone `git/repo.bundle` at the workspace branch, then — **before** the base ref, sandbox provisioning and WIP unwind, while the checkout is still at the bundled tip — hydrate each `git/refs.json` `submodules[]` entry in list order (parents first) from its `bundleEntry`, **offline** (no network;
+  `GIT_LFS_SKIP_SMUDGE=1`): the untrusted entry is validated (full-hex `commitSha`, plain forward-slash `path` components, `bundleEntry` under `git/`, `submodule.<name>.path` in the containing tip's `.gitmodules` must equal the entry's path relative to that containing repository (the last component of a nested path), and the containing tip's gitlink must equal `commitSha`;
+  the containing repository of a nested entry is the already-hydrated parent entry, so a nested entry whose parent was not bundled — legacy or hand-crafted archives — fails with an explicit error), the submodule is `submodule update --init`-ed from the bundle, `HEAD` is checked against `commitSha`, `branch?` is recreated at that commit (detached otherwise), and `submodule.<name>.url` plus the module's `remote.origin.url` are restored to `originUrl?` (unset / origin removed when absent) so no staging path persists;
+  sandbox checkouts provisioned afterwards inherit the hydrated modules through the CoW copy (the plain-clone fallback on a non-CoW filesystem does not — its gitlinks stay uninitialized);
+  **any** hydration failure fails the commit with the submodule path in the error and rolls back the whole import;
+  archives without `submodules` behave exactly as before, and published submodules with no unpublished descendant are never bundled and are untouched by materialization) → attachment materialization (each `attachments/<attachmentId>` archive entry lands at the `stored_path` its registry row records, resolved against the materialized checkout with the within-workspace containment guard — an escaping `stored_path` fails the commit — dropping the ignore-all `.gitignore` marker in the store dir;
+  a registry row with no archive entry is the deleted-is-deleted state and imports as a row without a file;
+  a later failure unwinds every placed file) → single-transaction row insert + asset placement → boot-style rehydration (hooks, event subscriptions, PR monitors).
+- **Atomic:** nothing is visible in `workspace.list` until commit succeeds
+
+**`workspace.export.start` details.**
+
+opens the source-side export of the FE-mediated workspace transfer ([intent-hq/intentd#1118](https://github.com/intent-hq/intentd/pull/1118); the source counterpart of the v6.9 `workspace.import.*` surface) and kicks off the background archive build — the result returns immediately, and progress/outcome travel on the `workspace:transfer:*` events (§6.5).
+Build stages (each emits `workspace:transfer:progress` before it runs): `stopping-agents` — in-flight agents are captured as pending `interrupted_agent` rows BEFORE the stop (they ride the archive as the target's resumption offers, and equally cover the source if the export is aborted; durable queues untouched) — then `exporting-rows` — the manifest (built by the `workspace.transfer.plan` op; the copy embedded in the zip byte-matches the one the `:ready` event carries) plus the row export — then `bundling-git` (skipped when the workspace has no repository; a dirty worktree and live sandboxes are snapshotted as WIP commits that stay in place while the archive is served and are unwound when the export settles) — then `writing-archive` (zip sealed + SHA-256 hashed).
+Archive layout (shared with the import side): `manifest.json`, `rows/<table>.jsonl` (only tables with rows), `assets/<assetId>`, `attachments/<attachmentId>` (the registered attachment files that still exist in the git-ignored `.intent/attachments/` store — they never ride the git bundle, so the archive carries them explicitly; a registry row whose file was deleted rides the rows payload with no file entry, and a file that vanishes between plan and write is skipped with a warning, never an export failure), and — when the workspace has a repository — `git/repo.bundle` + `git/refs.json`, plus one **self-contained** `git/submodules/<n>.bundle` per `carried` entry of `manifest.git.submodules` (`n` = the entry's index in `refs.json`'s `submodules` list, parents before nested children; sandbox-only findings never produce a bundle).
+Each submodule bundle is created from the submodule's own repository after the WIP snapshot (so it anchors the gitlink that actually travels), carries `HEAD` at the recorded commit plus a temporary `refs/intent/transfer/<wsId>/submodule/<n>` ref, is `git bundle verify`-checked, and the temporary ref is deleted from the source submodule afterwards, success or failure.
+`git/refs.json` accordingly gains the additive `submodules: [{ name, path, commitSha, branch?, originUrl?, bundleEntry, bundleRef, published }]` list (absent/empty in archives from older daemons and whenever nothing is unpublished — the archive layout is then unchanged): `bundleEntry` is the archive entry (`git/submodules/<n>.bundle`), `bundleRef` the ref inside it (outside `refs/heads/*` — importers rely on `HEAD` == `commitSha`), `originUrl?` the checkout's `remote.origin.url` with credentials stripped so the source's secrets never travel (an `http(s)://` URL loses its entire userinfo — tokens ride there as the username; any other `scheme://` URL loses only the `:password`, keeping the user part ssh needs, e.g. `ssh://git@host/o/r.git`; scheme-less scp-like `git@host:path` URLs and local paths pass through unchanged) — restored on import in that stripped form — and the remaining fields carry the `manifest.git.submodules` values.
+Staging lives under `<workspaces_root>/.export-staging/<exportId>/`; sessions are **in-memory only** (a daemon restart drops them; the boot/lazy sweep clears orphaned staging dirs).
+`maxChunkBytes` is the per-chunk pre-base64 cap (16 MiB, matching the import side so the FE can pipe `read` chunks straight into `workspace.import.chunk`; the encoded frame stays under the 40 MiB cap, §1.3). -32602 on the virtual Chief workspace, an unknown workspaceId, or a second concurrent export of the same workspace (the error names the in-flight exportId)
+
 For the [prepared source export lifecycle](../workspace-routing.md#source-workspace-export-lifecycle), capture `workspaceId` at start and retain it with `exportId` through read retries, finalize, abort and late cleanup. Subscribe to `workspace:transfer:*` using that same source workspace and retain it for `events.unsubscribe`. The new follow-up fields stay optional on direct calls; this does not prepare import destination routing or transfer orchestration.
 
 Human message history follows the [transfer authorship contract](#human-authorship-in-workspace-transfers) below.
+
+**Private review-monitor history in workspace transfers.** Workspace-manager
+permission does not authorize exporting a monitor's original forge account data.
+Until transfer has that independent admission, `workspace.export.start` refuses
+workspaces containing qualified private monitor envelopes, including retained
+messages and completed or cancelled monitor records. The refusal uses the existing
+error flow without disclosing the target, account, or message body. It preserves
+the original history and pending monitor state; cancelling a monitor does not make
+retained private history transferable. No rows are silently omitted. Known refusals
+occur before stopping agents or creating export artifacts. The builder also checks
+the exact archive row snapshot, so a concurrent insertion cannot produce a sealed
+archive or readable chunk; failures after preflight use normal export cleanup.
+Ordinary history and proven legacy GitHub monitor transfers retain their existing
+behavior.
 
 **Root Git remote state in workspace transfers** (`workspace.export.start` /
 `workspace.import.commit`; [intent-hq/intent#4438](https://github.com/intent-hq/intent/issues/4438),
@@ -190,6 +250,21 @@ including repository-selection fields, are rejected; repository identity and pat
 from the caller workspace. An omitted `baseRef` uses the repository default. A named ref
 must exist; an unresolved ref is warned before Apply and fails through the existing
 `workspace.create` structured error without fallback.
+
+The checkout kind follows the caller repository's `origin`. When `origin` names the
+caller row's own `github.com` repository (HTTPS or SSH; `repositoryOwner` /
+`repositoryName` compared case-insensitively), `payload.params` carries the canonical
+`githubUrl: "https://github.com/<owner>/<repo>"` and **no** `repositoryPath` /
+`clonePath`, so Apply provisions a standalone checkout hydrated from the repo cache
+(`checkoutMode` `cow` or `direct`) — the same request shape as picking a GitHub
+repository — and `preview.workspaceCreate.repoType` is `"github"`. The row identity is
+required because the clone no longer shares `repositoryPath`, leaving owner/name as the
+`crossWorkspace.*` sibling link. Otherwise (no `origin`, a non-GitHub or different
+`origin`, a row without GitHub identity, or a base ref — named or the default branch —
+that resolves locally but has no `refs/remotes/origin/<ref>`, which a clone would lack)
+the params carry `repositoryPath` and Apply provisions a linked worktree (or a CoW copy
+under `workspace.cowIsolation`); the local-only base ref case adds a preview warning
+naming the ref. Unpushed local work is never carried into a cache-hydrated clone.
 
 The result is the existing `workspace-create` proposal resource with
 `preview.workspaceCreate.mode: "sibling"`, plus a top-level `proposalId` (additive,
@@ -1070,6 +1145,11 @@ that workspace. Already admitted operations finish before teardown; duplicate
 deletes serialize for the same workspace. Other workspaces have independent
 admission. Before removing session data, the daemon tears down live runtime state:
 
+- stop the workspace's running scripts with `script.stop` semantics (no supervisor
+  respawns or reopens a log afterwards), then delete its on-disk script output
+  folder (`<data_dir>/script-output/<workspaceId>/`, best-effort; the startup orphan
+  sweep retries a failed delete — see [Script output persistence](scripts.md#script-output-persistence-new-in-intentd-unreleased));
+
 - list session summaries (IDs and names, without loading transcripts); a store
   error propagates instead of skipping teardown;
 - `AgentManager::stop_many` stops the turn workers, drops session handles, clears
@@ -1192,7 +1272,8 @@ each with a dedicated change event (§6.5) that carries the new value:
   extension).
 - `waiting?` — **derived, read-only, orthogonal wait flag (v6.17).** `true` when the
   workspace has any of: an ACTIVE (`scheduled`/`running`) background hook (§5.40), an
-  ACTIVE PR monitor (§5.42), or a **waiting agent subscription** — an undelivered child
+  ACTIVE PR monitor (§5.42), an `active` script run monitor (§5.8a; within 15.2), or a
+  **waiting agent subscription** — an undelivered child
   completion watch (`report_delivered` excluded, matching the settlement predicate) held
   by a **top-level foreground** agent, anchored in the parent's home workspace
   (§Completion-watch persistence) — i.e. the workspace is watching an external condition
@@ -1211,13 +1292,29 @@ each with a dedicated change event (§6.5) that carries the new value:
   short-circuiting on the first live signal, and each probe is best-effort — a store read
   failure fails open to `false`, so emission is never wedged and waiting is never
   fabricated. Transitions surface via `workspace:waiting-changed` (§6.5).
+- `scriptsRunning?` — **derived, read-only, orthogonal script flag (within 15.2).** `true`
+  when the workspace has at least one **command-mode** saved script (§5.8) with a run in
+  flight — a run identity is open or the runtime status is `starting`, `running` or
+  `restarting`; the same per-script predicate as `system.status`
+  `idleUpdateCheck.runningScripts` (§5.7), scoped to this workspace. Service-mode scripts
+  (dev servers and other long-running processes) never count. Read from the in-memory
+  script registry (never persisted, no store read), so it is `false` after a daemon
+  restart until a run starts. **Presence-detected**: emitted only as `scriptsRunning:
+  true` and **omitted when `false`**, so clients treat an absent field as no running
+  scripts and older daemons interoperate fail-open. **Orthogonal to `activity`,
+  `displayStatus` and `waiting`** — it never promotes `displayStatus` to `in_progress` and
+  never counts as agent activity; clients may combine it with `activity` for their own
+  "running" grouping. Served on the same `workspace.list` / `workspace.get` /
+  subscription emit path as `waiting` (the lite seq-0 snapshot included; the enrichment
+  seeds the transition baseline). Transitions surface via
+  `workspace:scriptsRunning-changed` (§6.5).
 
 **`status` wire form.** `Workspace.status` serializes as the PascalCase TS `WorkspaceStatus`
-string enum — `"Active" | "Inactive" | "Archived" | "Deleted"` (src/shared/types.ts) — both on
+string enum — `"Active" | "Inactive" | "Archived" | "Retired" | "Deleted"` (src/shared/types.ts; `"Retired"` is additive, see [Retired workspaces](#retired-workspaces)) — both on
 the wire and as the stored DB word (matching the `PullRequestStatus` precedent). Optional
 `Workspace` fields (`statusMessage`, `statusImageAssetId`, `baseRef`, `prUrl`, `prNumber`,
 `prStatus`, `activePullRequest`, `pullRequests`, `pullRequestsTotal` (list rows only, see
-**List-row slimming** below), `contextLinks`, `archivedAt`, `cowSupported`,
+**List-row slimming** below), `contextLinks`, `archivedAt`, `retiredAt`, `cowSupported`,
 `checkoutMode`, repository/worktree fields, …) are
 **omitted when absent**
 (`skip_serializing_if`) rather than emitted as `null`, so clients see only populated keys.
@@ -1519,7 +1616,7 @@ included) and the monitored PRs feed them through the monitor signals
 workspace's PRs are. `workspace.get` serves the **same merged pool** (workspace + git-root +
 monitor entries, same source priority / URL dedup / lifecycle rules) **uncapped** and with no
 `pullRequestsTotal`, while the list emit paths (`workspace.list`, the workspace channel's
-seq-0 rows and deltas) carry that pool capped at the **5** most recent
+seq-0 rows and deltas) carry that pool capped at **5** entries, prioritizing draft/open PRs before merged/closed PRs
 (`WORKSPACE_LIST_PR_CAP`) with `pullRequestsTotal` when truncated — so `workspace.get` is
 the recovery surface for the full pool (see the detail-only table below). Everything else is
 unchanged: the stored `workspace.pull_requests` column keeps its workspace-repo semantics
@@ -1615,7 +1712,7 @@ keeps serving every field. The list-only omissions are:
 | `contextLinks` | `workspace.get` | Consumed once, when a client opens the workspace and seeds its layout from the linked pages |
 | `diskUsage` (absent), `diffSummary.files` (`[]` when a `diffSummary` is present) | `workspace.diskUsage`, path-scoped `git.diffs` / `git.numstat` (§5.6) | Never populated on the list path anyway; cleared so the guarantee holds by construction (`diffSummary` totals stay) |
 | `activePullRequest` / `pullRequests[]` entry fields `headSha`, `author` | `workspace.get` | Hover-tooltip data; list contexts (sidebar PR dropdown, card status, delete warning) need `number` / `url` / `title` / `status` / `isDraft` and the timestamps used for ordering, which stay. `mergeable` / `mergeableState` also stay on list entries: the client derives the PR lifecycle display status from them off list rows |
-| `pullRequests[]` entries beyond the **5** most recent (`WORKSPACE_LIST_PR_CAP`) | `workspace.get` (the full **merged** pool — the workspace's own entries plus the git-root and PR-monitor entries the emit-path merge folds in, same source priority / URL dedup / lifecycle rules as the list rows — uncapped, in merge order: stored entries, then git-root, then monitor-derived) | The pool's length is unbounded in production (unlike the active row's `agentSummary`, which is deliberately left uncapped, it is cheap to bound), and the row budget was sized from a five-entry pool. Survivors are ordered by `updatedAt` descending (`number` descending on ties); the entry matching `activePullRequest` (by exact repository-qualified `url` — `id` / `number` collide across the repositories the merged pool spans; an entry without a URL never stands in for an active PR that has one, and `number` decides only between an active PR and an entry that both lack a URL) is always retained, counts toward the 5 and leads the survivors. A pool of 5 or fewer is left as stored (no reorder). `activePullRequest` itself is never removed (its entry is slimmed like the pool's) |
+| `pullRequests[]` entries beyond the **5** highest-priority candidates (`WORKSPACE_LIST_PR_CAP`) | `workspace.get` (the full **merged** pool — the workspace's own entries plus the git-root and PR-monitor entries the emit-path merge folds in, same source priority / URL dedup / lifecycle rules as the list rows — uncapped, in merge order: stored entries, then git-root, then monitor-derived) | The pool's length is unbounded in production (unlike the active row's `agentSummary`, which is deliberately left uncapped, it is cheap to bound), and the row budget was sized from a five-entry pool. Survivors are ordered by lifecycle: draft, open (including queued/conflicted), merged, then closed. Within each lifecycle state, the entry matching `activePullRequest` (by exact repository-qualified `url` — `id` / `number` collide across the repositories the merged pool spans; an entry without a URL never stands in for an active PR that has one, and `number` decides only between an active PR and an entry that both lack a URL) leads, followed by `updatedAt` descending and `number` descending on ties. A terminal active PR cannot displace unfinished PRs in the capped pool; it remains available separately as `activePullRequest`. A pool of 5 or fewer is left as stored (no reorder). `activePullRequest` itself is never removed (its entry is slimmed like the pool's) |
 
 **`pullRequestsTotal?: number`** is the one **list-only** key: present on a `workspace.list` /
 lite `workspace.subscribe` seq-0 row only when the cap above truncated `pullRequests`, carrying
@@ -2102,6 +2199,163 @@ successful `updateContext` emits `workspace:context-changed` with the persisted 
 { "jsonrpc":"2.0","id":10,"result":{ "items":[ /* same list */ ] } }
 ```
 
+#### Retired workspaces
+
+*(Additive, protocol 15.2.)* `Retired` is a lifecycle state between `Archived` and
+`Deleted`. The workspace folder on disk is deleted to free space, while conversations,
+notes, tasks, assets and every other database row are kept and remain readable.
+
+```mermaid
+stateDiagram-v2
+  Active --> Archived: workspace.archive
+  Archived --> Active: workspace.unarchive or auto-unarchive
+  Active --> Retired: workspace.retire (archive teardown first)
+  Archived --> Retired: workspace.retire or auto-retire
+  Retired --> Active: revive (fresh blank folder)
+  Archived --> Deleted: workspace.delete
+  Retired --> Deleted: workspace.delete
+```
+
+**Row shape.** A retired `Workspace` carries `status: "Retired"`, `archived: true`, the
+`archivedAt` of the archive it went through, and the additive `retiredAt` (ISO 8601,
+**omitted when absent**, presence-detected). `retiredAt` is cleared on revive.
+
+**Retire (`workspace.retire`).**
+
+- Allowed from `Active` or `Archived`. From `Active`, the daemon first runs the complete
+  `workspace.archive` teardown (agent turns interrupted, hooks and PR monitors cancelled,
+  guests detached, invites revoked — see the archive active-work teardown block) and sets
+  `archivedAt`; guest-removal deltas are published as for archive.
+- The daemon then removes the git worktree registration and deletes the folder, reusing
+  the `workspace.delete` filesystem removal. Database rows are never deleted.
+- The **git branch is kept**. Retire is supported only for `checkoutMode: "worktree"`
+  workspaces, whose branch, refs and objects live in the source repository at
+  `repositoryPath`, outside the deleted folder. Removing the worktree registration never
+  deletes that branch. Secondary git roots inside the folder go with it.
+- Retire is refused with `-32602 { code: "retire-unsupported", checkoutMode? }`, and
+  nothing changes, when deleting the folder would destroy the only copy of the repository
+  or a folder the daemon does not own: standalone `cow` / `direct` checkouts (the folder
+  *is* the repository), `skipIsolation` workspaces (the folder is the user's repository),
+  workspaces without a daemon-owned checkout, and remote workspaces. The automatic retire sweep skips these workspaces.
+- One `workspace:updated` delta announces the transition:
+  `changes: { archived: true, status: "Retired", archivedAt, retiredAt: <ts> }`, where
+  `archivedAt` is the row's value — newly set when the workspace was `Active` (§6.5).
+- `-32602 { code: "invalid-params" }` from any other status (for example a workspace with
+  a pending grace-window delete).
+
+**Automatic retire.** When the setting `workspace.autoRetireArchivedAfterDays` (§5.12) is
+set, the daemon periodically retires workspaces whose `archivedAt` is older than that many
+days, through the same path and delta as `workspace.retire`. Absent means off. Remote, guest-shared and retire-unsupported
+workspaces are skipped.
+
+**Strict list opt-in (normative).** Retired workspaces are absent from **every** surface
+that returns a collection of workspaces unless the caller explicitly passes
+`includeRetired: true`. `includeArchived: true` alone never includes them. A surface
+without an `includeRetired` param never returns them. This covers:
+
+- `workspace.list` and `workspace.findByPullRequest` (`includeRetired?: boolean`, default
+  `false`; a non-boolean value is `-32602 { code: "invalid-params" }` on every surface).
+- The lite `workspace.subscribe` channel (§6.9; `includeRetired?: boolean` fixed at
+  subscribe time): the seq-0 snapshot **and** every delta. For a subscriber that did not
+  opt in, a retire transition is delivered as `removedIds: [workspaceId]`, later events
+  for the retired workspace are dropped, and a revive is delivered as `added`.
+- `crossWorkspace.listSiblings` and the MCP `ws.*` bindings that list workspaces
+  (`ws.crossWorkspace.listSiblings` and app workspace listings).
+- Internal daemon sweeps that iterate workspaces (status, PR, branch and capability
+  refreshes); retired workspaces have no folder to sweep.
+
+Single-workspace reads keep working on a retired workspace: `workspace.get`, note, task,
+comment and agent conversation reads return the kept rows, with the usual membership
+rules.
+
+**Read-only while retired.** **Every** mutating call scoped to a retired workspace fails
+with `-32602 { code: "workspace-retired", workspaceId }` (§9) and writes nothing. This
+includes database-only writes (notes, tasks, comments, primitives, context, settings and
+`workspace.update` fields) as well as calls that need the folder (files, terminals,
+scripts, git operations and commits, sandboxes, hooks, members and invites).
+The only exceptions are:
+
+- `workspace.delete` / `workspace.cancelDelete` — delete still works and removes the kept
+  rows as for any workspace.
+- The revive triggers below — `workspace.unarchive`, `workspace.restore`, and a user
+  message to an agent, which revives the workspace before the turn starts.
+- Per-viewer bookkeeping that changes no workspace content: `workspace.markSeen`,
+  `workspace.dismissAttention` and `agent.markSeen`.
+- A repeated `workspace.retire` (idempotent, see above).
+
+Client-state writes are **not** exempt: `workspace.updateUiContext` and
+`workspace.setBrowserClient` are refused too, so clients skip them for a retired workspace
+or tolerate `workspace-retired`. Per-connection fast-path state (`drafts.*`, presence)
+is not workspace content and is not gated.
+
+**Revive.** A retired workspace comes back as a **fresh blank workspace**; nothing from the
+old folder is restored.
+
+- Triggers: manual `workspace.unarchive` / `workspace.restore`, or the turn-start
+  auto-unarchive path when a message is sent to an agent in the retired workspace.
+- The daemon provisions a new folder at the same path from the repository default branch
+  on a **new branch** name (the old branch is left untouched), flips the row to
+  `Active`, and clears `archived`, `archivedAt` and `retiredAt`.
+- Delta: `changes: { archived: false, status: "Active", archivedAt: null, retiredAt: null,
+  branch, revived: { reason } }` where `reason` is `"agent_activity"` (turn-start revive,
+  which also carries `agentId` and `agentName`) or `"manual"`. `revived` is never present
+  on an ordinary unarchive, and `autoUnarchive` is never present on a revive.
+- On an agent-triggered revive the agent's transcript gets a system row and the same turn
+  gets a one-turn notice that all previous on-disk state (files, uncommitted changes, local
+  git state) is gone while conversations and notes were kept.
+
+Clients must treat `"Retired"` as an unknown-but-valid status on older builds; an older
+daemon never emits it. Support is detected by the `workspace.retire` method answering
+(older daemons return `-32601`).
+
+#### Pull request workspace lookup
+
+*(prepared, additive)* The daemon records which workspaces a pull request belongs
+to, so a client can offer to open the workspace behind a PR link. Support is gated
+by the server hello capability `prWorkspaceLookup: 1`; clients must not call the
+method, or offer the action, without it.
+
+**Recording.** Whenever the daemon persists a changed PR snapshot for a local
+workspace (its `prUrl`, `activePullRequest` or `pullRequests` pool) or for one of its
+registered git roots (§5.6), it links every PR in that snapshot to the workspace. A
+PR is identified by its canonical URL without the scheme (so `http` and `https` links
+match): host lowercased with a leading `www.` removed and any port kept, owner and
+repository lowercased, and the number without leading zeros. Only
+GitHub-form `/<owner>/<repo>/pull/<number>` URLs are recorded or recognized in this
+revision; GitLab merge requests are out of scope. Each workspace gets its own link,
+so several workspaces can be linked to one PR. A link keeps the time it was first
+recorded (`linkedAt`); later sightings by the same workspace do not change it.
+Links survive the PR leaving the pool, the workspace being archived and the git
+root being unregistered, and they ride workspace transfers with their original
+`linkedAt`. Deleting the workspace removes its links. Remote
+workspace rows are not recorded. Recording starts with the implementing daemon
+release; snapshots persisted earlier are linked only once they next change.
+
+**`workspace.findByPullRequest`**
+
+```jsonc
+// request
+{ "url": "https://github.com/intent-hq/intentd/pull/2100/files" }
+// result
+{
+  "workspaces": [
+    {
+      "id": "detect-prs",
+      "title": "Link PRs to workspaces",
+      "archived": false,
+      "linkedAt": "2026-10-18T04:40:00.000Z" // RFC 3339
+    }
+  ]
+}
+```
+
+`PullRequestWorkspace` is `{ id: string, title: string, archived: boolean,
+linkedAt: string }`. Results are ordered by `linkedAt` descending (the most recently
+linked workspace first), ties broken by `id` ascending. The method is daemon-global
+(no `workspaceId`) and read-only; it emits no events. A non-administrator caller
+only sees workspaces it is a member of (§5.48). A missing `url`, or one that is not
+a pull-request URL, is rejected with `-32602 { code: "invalid-params" }`.
+
 #### Human authorship in workspace transfers
 
 *10.9 contract; docs lead implementation.*
@@ -2263,6 +2517,13 @@ latest-author projections; source provenance may be retained internally but is
 not a destination binding. Do not infer it again from the safe identity, a label
 or a matching destination principal. Unknown legacy comments still omit the
 metadata, following §5.3.
+
+Transferred [workspace discussions](./multiplayer.md#workspace-transfer) retain
+their separate immutable `DiscussionAuthor` snapshots. Their `principalId`
+remains inert source attribution and must never resolve against the destination
+principal registry. Import preserves message identity and order while isolating
+historical retry keys from new destination sends. Discussion history transfers
+without memberships or credentials and needs no additional archive format bump.
 
 **History is not admission.** Imported attribution does not create or link a
 principal/account, add a member, authenticate a caller, grant queue ownership or
@@ -2730,7 +2991,7 @@ omissions is tabulated under **List-row slimming** in the `Workspace` payload no
 
 **TokenUsage** — `{ byAgentId: { [agentId]: TokenUsageTotals }, totals: TokenUsageTotals,
 byModel: { [modelName]: TokenUsageTotals }, byAgentModel?: TokenUsageCrossFilterRow[],
-lastScanAt: string | null }`, where
+agentNames?: { [agentId]: string }, lastScanAt: string | null }`, where
 **TokenUsageTotals** is the consumption counters plus an optional cost —
 `{ inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, thoughtTokens?,
 cost?: { amount: number, currency: string } }`. `byAgentId` keys are
@@ -2738,6 +2999,29 @@ cost?: { amount: number, currency: string } }`. `byAgentId` keys are
 the RFC-3339 timestamp of the last committed materialization by end-of-turn usage accounting or
 the reconciliation pass (`null` before the first). Updated values are pushed via
 `workspace:tokenUsage-changed` (§6.5).
+
+**Additive agent names** *(additive, [intent-hq/intent#7334](https://github.com/intent-hq/intent/pull/7334))*.
+`agentNames` maps an `agentId` to that agent session's display name, so a client can label
+every usage row, including retired agents, delegated agents it has not loaded, and agents in
+their delete grace window. Its keys are a subset of the `byAgentId` keys: only agents whose
+`byAgentId` bucket reports usage (a non-zero counter or a cost) are named. A session whose name
+is empty after trimming whitespace is omitted, and an empty map is omitted from the wire. An
+absent field can therefore mean an empty map, an older daemon, or a persisted snapshot that
+predates the field. Clients handle all three the same way: prefer the name of an agent they
+have loaded, then `agentNames`, then their own generic label. They never show a raw `agentId`.
+
+Names are materialized with the rest of the snapshot: they are the session names at the last
+committed materialization. A name change is a snapshot change, so a recompute that finds one
+commits and publishes `workspace:tokenUsage-changed` even if no counter moved. An applied
+`agent.rename`, or an `agent.update` that sets `name`, recomputes the snapshot when the stored
+snapshot already has a `byAgentId` bucket for that agent, so a rename of an agent with usage
+publishes the new name right away; renaming a usage-less agent writes nothing. A persisted
+snapshot without the field is not backfilled on the read path. The first reconciliation
+pass after a daemon upgrade recomputes every workspace it sweeps, so each swept workspace
+that has a named agent commits and publishes once. A workspace the pass does not sweep, or
+one whose recompute is declined, keeps serving its stored names (or none) until its next
+committed materialization. Ship order: this contract, then the intentd implementation, then
+the cloudlands-fe consumer; the auto-bump advances the pins.
 
 **Additive cross-filter rows.** `byAgentModel` is the sparse, materialized agent × model
 projection. One **TokenUsageCrossFilterRow** has the exact shape
@@ -2873,6 +3157,7 @@ not fall through to the legacy per-message usage fallback.
     { "agentId":"agent-123","model":"sonnet-4.6","totals":{ "inputTokens":1000,"outputTokens":400,"cacheReadTokens":500,"cacheCreationTokens":100,"cost":{ "amount":0.15,"currency":"USD" } },"humanMessages":1,"agentMessages":1 },
     { "agentId":"agent-456","model":"opus-4.8","totals":{ "inputTokens":4000,"outputTokens":1000,"cacheReadTokens":3500,"cacheCreationTokens":500,"cost":{ "amount":0.40,"currency":"USD" } },"humanMessages":2,"agentMessages":3 }
   ],
+  "agentNames":{ "agent-123":"Coordinator","agent-456":"PR reviewer" },
   "totals":{ "inputTokens":12000,"outputTokens":3400,"cacheReadTokens":8000,"cacheCreationTokens":1200,"cost":{ "amount":1.25,"currency":"USD" } },
   "lastScanAt":"2026-06-17T12:00:00Z" } } }
 ```

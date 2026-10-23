@@ -28,10 +28,23 @@ export const RENAMED_BINDINGS = new Map([
 // Docs-first contract: only this canonical proposal may mention these helpers
 // before they ship. Once help declares one, its real signature takes precedence.
 export const PREPARED_BINDINGS = new Map([
+  ['docs/protocol/methods/multiplayer.md', [
+    '  ws.discussion.conversations({ beforeId?, limit? }?) → { conversations, hasMore }',
+    '  ws.discussion.list(conversationId, { beforeSequence?, afterSequence?, limit? }?) → { messages, hasMore, conversation }',
+    '  ws.discussion.react(conversationId, messageId, reaction, active) → { messageId, reactions, reactionVersion }',
+    '  ws.discussion.send(conversationId, body, { messageId, recipientAgentIds?, replyToMessageId? }) → { message, conversation }',
+  ].join('\n')],
   ['docs/protocol/methods/script-monitors.md', [
     '  ws.script.monitor(scriptId, { ttlMs, runId?, outputPattern?, lineCount? }) → { ok, monitor? }',
     '  ws.script.monitors() → [monitors]',
     '  ws.script.unmonitor(monitorId) → { ok, monitor }',
+    '  ws.script.monitorDetails(monitorId) → monitor',
+  ].join('\n')],
+  ['docs/protocol/methods/scripts.md', [
+    '  ws.script.listPage({ archive?, limit?, cursor? }?) → { view, scripts, nextCursor? }',
+    '  ws.script.get(scriptId) → script',
+    '  ws.script.monitorsPage({ state?, limit?, cursor? }?) → { view, monitors, nextCursor? }',
+    '  ws.script.monitorDetails(monitorId) → monitor',
   ].join('\n')],
 ]);
 

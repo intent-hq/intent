@@ -126,7 +126,10 @@ stable `intent-gates/<checkout-id>` children of the configured directories.
 Repeated runs of the same canonical checkout reuse those outputs; another
 checkout sharing the configured target directory cannot replace its test executables. The
 runner prints the chosen paths and retains them in `cargo-outputs.json` beside
-its test record. The first run uses a new build cache. Coverage targets and
+its test record. The first run uses a new build cache. After each run it deletes
+older builds of the test executables it just listed (Cargo keeps every hash),
+skipping files that are open and leaving everything in place while Cargo's
+build lock or another gate of the same checkout is active. Coverage targets and
 custom bare-Cargo scripts do not use this runner and still need distinct output
 directories or an outer lock covering every build and execution.
 

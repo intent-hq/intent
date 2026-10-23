@@ -11,13 +11,22 @@ each triggered by a manual workflow dispatch (`promote-beta.yml` /
 `promote-stable.yml` on intentd, `promote-beta.yml` / `release-stable.yml` on
 cloudlands-fe).
 
+## Where to look
+
+| Question | Run |
+|---|---|
+| Where is the release train? Latest tags and ages, alpha/beta/stable versions, the fe daemon pin, open Release and pin-bump PRs with CI Gate state and merge queue position, what the merge queue head is waiting on, unshipped commits, the last auto-cut decision line, the last auto-pin-intentd run and its failure reason, runner maintenance overrides | `make release-status` (`STATUS_JSON=1` for JSON; `NO_LOGS=1` skips the run-log fetch) |
+| Which alpha carries my commit? | `make shipped-in COMPONENT=<intentd\|cloudlands-fe> SHA=<sha>` (hooks call `scripts/shipped-in.sh` for its exit codes) |
+
 ## Guarded direct release merges
 
 Both components' `auto-cut-alpha.yml` workflows can squash-merge a verified
 release metadata PR directly, avoiding a second CI run in the merge queue.
-Ordinary PRs, frontend sidecar pin PRs, and monorepo submodule bump PRs continue
-through the queue. A release PR whose diff does not match the metadata shape
-uses the ordinary guarded queue path too.
+cloudlands-fe's `auto-pin-intentd.yml` merges a verified sidecar pin PR directly
+the same way ([Direct sidecar pin merges](#direct-sidecar-pin-merges)). Ordinary
+PRs and monorepo submodule bump PRs continue through the queue. A release or pin
+PR whose diff does not match its verified shape uses the ordinary guarded queue
+path too.
 
 Direct merging requires the existing release guards to pass: the expected
 same-repository release branch and author, no draft or `hold-release`, acceptable
@@ -34,11 +43,72 @@ intentd permits independent crate version changes, matching local dependency
 requirements and workspace-package lockfile versions, plus harmless TOML
 formatting/comments; cloudlands-fe permits the package version and matching
 release-please manifest update. Source, workflow, external dependency and sidecar
-pin changes do not qualify. A classification failure cannot enable direct merging.
+pin changes do not qualify for this release route. A classification failure cannot
+enable direct merging.
 The merge uses `--squash --admin --match-head-commit <assessed-head-sha>`; the
 head match prevents a refreshed, unchecked PR head from being merged using the
 earlier decision. Queue submission is not evidence of a completed merge or a
 published alpha; confirm the PR's merged state and the release artifacts.
+
+In intentd, every auto-cut run (cron, manual dispatch and push) also reads
+main's live tip right before merging. It requires the release PR head to contain
+that tip, for both the direct merge and the queue path, and the classifier diffs
+against that tip. GitHub's `baseRefOid` and `mergeStateStatus` are only the PR's
+last-synced view of main, and `--admin` bypasses the ruleset's strict
+up-to-date rule. Cron run 39234998462 saw a stale base (b4349bb0) while main was
+at 2d7c7bb0, and cut v0.11.10 (intentd#2506) one commit behind main. A change
+landing in that window ships without its changelog entry or version bump. A head
+that is behind, or a tip or comparison that cannot be read, never merges: push
+runs retry within their polling budget. Cron and dispatch runs skip, because the
+push run for the newer main commit is queued behind them and handles the wait.
+release-plz rebuilds the PR on current main after every successful run, so a PR
+that is behind catches up on the next refresh. In v0.11.10 that refresh never
+happened because the release-plz run for 2d7c7bb0 failed on a network error.
+After a failed refresh the cut now waits for the next push to main.
+One race remains: main can move in the seconds between this check and the
+merge, because `--match-head-commit` pins only the head.
+
+In intentd, the release PR's own CI is shortened the same way. When the PR's
+`release-fast-path` job reports a metadata-only diff, `check` and
+`coverage-changed` are skipped on that PR. CI Gate accepts the skip only when
+that job succeeded. Main's tip already passed both jobs in the merge queue, and
+every other PR and every merge-queue run still runs them. The classifier runs
+only on `release-plz-*` branches, and its own failure falls back to full CI. It
+also rejects a version bump whose `Cargo.lock` does not carry the new version.
+Without this, each release-plz refresh needed about 8 minutes plus 14 minutes of
+CI. Main merged about every 15 minutes, so the v0.11.9 release PR (intentd#2493,
+2026-10-19) went through 13 CI runs over 4 hours and was never green on current
+main. Auto-cut also waits out two transient states on every run, cron included:
+it re-reads `mergeable=UNKNOWN` every 30 seconds for up to 2 minutes per
+episode. It also treats a missing CI Gate as running CI, with the full
+`AUTO_CUT_CI_WAIT_MINUTES` budget, while other CI jobs on the head are still
+queued or in progress and none has failed. CI Gate only reports after every
+other CI job finishes.
+
+### Direct sidecar pin merges
+
+The cloudlands-fe merge queue builds one entry at a time, and an ordinary entry
+takes about 45 minutes. On 2026-10-19 pin PR cloudlands-fe#3535 waited more than
+3 hours behind other entries, and auto-cut deferred the alpha the whole time.
+A plain pin bump already takes the CI fast path, so the queue only added wait.
+`auto-pin-intentd.yml` therefore waits up to 10 minutes for `CI Gate` on the head
+it pushed. `scripts/auto-pin-merge-route.mjs`, run from the workflow's trusted
+checkout of main, then allows a direct merge only when all of these hold:
+
+- `CI Gate` succeeded on that exact head, with no change request and no
+  unresolved review thread (`--admin` would otherwise skip them).
+- The PR's own diff matches `release-pr-fast-path.mjs --pin-only`: only
+  `intentd.version` and the regenerated `source-pin` line, with regular file modes.
+  A `CURRENT_PROTOCOL_VERSION` change is a protocol bump, so it takes the queue.
+- Main has not changed either pin file since the PR's base. Main may otherwise
+  have moved: the cloudlands-fe ruleset does not require up-to-date branches, and
+  a queued pin takes the same CI fast path, so the queue would not retest it.
+
+The merge uses `--squash --admin --match-head-commit <tested-head-sha>`. Any failed,
+timed-out or unreadable guard arms auto-merge through the queue instead. A rolling
+PR already in the queue locks its branch, so the run skips with a notice; the next
+run after it lands advances the pin. A direct merge moves main under the queue, so
+GitHub rebuilds the entry being tested at that moment, as release direct merges do.
 
 The direct path uses the existing `intent-hq-ci` account exemption: User
 `335379076`, mode `always`, on the repository **Default** ruleset in intentd and
@@ -62,6 +132,67 @@ for drift inspection, not a release-merge credential. To record an intentional
 ruleset change, run `make check-rulesets UPDATE=1` with that credential and review
 the generated diff; this reads live rules and writes local snapshots only.
 
+## Intel Mac release policy — pending rollout
+
+The approved policy builds Intel Mac binaries only for actual tagged daemon,
+sitter and desktop releases (including reruns of those releases). Intel is
+optional: failed or incomplete Intel outputs are omitted without user-facing
+failure notices or dangling downloads, checksums or feed entries. Apple Silicon,
+Linux and Windows remain required. An optional job that is still queued can
+still delay publication; this policy does not cancel jobs or change runner limits.
+
+**Rollout status:** this monorepo change prepares cleanup and documents the
+companion implementation; it does not enable optional Intel in published builds.
+The existing desktop workflow requires both Mac architectures and uses one shared
+Mac feed. Until both component changes ship, use the existing release procedures
+below. The following behavior applies only after the coordinated rollout:
+
+- Daemon cargo-dist planning removes Intel from PR, branch, merge-queue, cache,
+  schedule and manual-test plans, including generated cross-compilation matrices.
+  Tagged daemon and sitter releases may build Intel. Channel manifests and mirrors
+  include only validated archives with matching checksums; an installed Intel
+  daemon stays on its current version if its exact target is absent. Sitter
+  `sitter-latest` and Homebrew may retain a verified older Intel archive/checksum
+  pair with its actual version, never relabel it as the new release. With no valid
+  prior pair, Intel is absent.
+- Desktop release planning admits Intel only when the exact pinned intentd release
+  contains its archive and checksum. Each included Mac build still signs,
+  notarizes and validates normally; incomplete Intel output is omitted as a unit.
+  Manual PR/test builds use Apple Silicon (`macos_arch=arm64`); `x64`, `both` and
+  universal manual selections are rejected. Linux/Windows x64 are unaffected.
+- New native ARM clients read `latest-arm64-mac.yml`. The legacy `latest-mac.yml`
+  advances on a complete dual-CPU release; otherwise it retains that destination
+  channel's own last compatible dual-CPU release using immutable versioned URLs.
+  Alpha, beta and stable each keep their own history. Promotions advance the ARM
+  feed to the selected release without borrowing alpha's legacy feed. Existing
+  shared-feed ARM clients wait for a successful dual release carrying the routing
+  change or install an ARM build manually; optional Intel does not wait for a
+  prerequisite migration release.
+- Only confirmed lack of compatible channel history permits the exact legacy
+  sentinel mapping `version: 0.0.0` and `files: []`, with no other keys. It offers
+  no update with downgrades disabled. Already-deployed clients can display `0.0.0`
+  in a manual-check toast in that case; new clients display their installed
+  version. Unreadable or malformed history stops publication. Never advertise a
+  missing Intel asset as a new-version download.
+
+**Required order:** land this cleanup compatibility change with human approval
+first. Then both component owners update their `.github/workflows/cleanup-prereleases.yml`
+cleanup-source pins (and intentd's exact-pin test) to the actual merged monorepo
+SHA before the new feeds publish. These are script-source pins, not submodule
+gitlinks; do not guess a future SHA or bypass consumer checks. Review and release
+the companion intentd and cloudlands-fe changes together. The companion bundled
+assistant guide section is **Mac update availability**. Record component PR links
+and carrying versions at rollout; none are established by this documentation.
+
+Enforcement lives with the implementations: intentd's
+`scripts/test-optional-intel-release.py` exercises event gating, cross-target
+matrix filtering and workflow restrictions; `scripts/test-optional-intel-dist.py`
+tests real cargo-dist output. Desktop's `scripts/mac-release-workflows.test.ts`
+executes dynamic release/manual selectors and rejects non-release Intel inputs.
+Run these component gates with their companion changes; the monorepo's older
+component pins do not yet contain the new policy. Cleanup's offline regression
+suite is `python3 -S -B -m unittest -v scripts.test_cleanup_prereleases`.
+
 ## intentd
 
 - release-plz maintains a release PR on `main`. Merging it cuts the `vX.Y.Z` tag,
@@ -75,6 +206,21 @@ the generated diff; this reads live rules and writes local snapshots only.
   contents:write on `intent-hq/cloudlands-fe`) and is fail-soft: a missing secret or
   failed dispatch logs a warning and never fails the publish — the fe crons then act
   as the backstop.
+- Windows lint runs in the merge queue; the rest of Windows validation is post-merge
+  only. intentd PRs never use a Windows runner. Each merge-queue run has a required
+  `windows-lint` job (native Windows `cargo check` and target-gated Clippy), so a
+  Windows-only compile or lint error is ejected from the queue instead of landing.
+  Every push to `main` runs the Windows runtime and lifecycle proofs, release build,
+  `install-ps1` and Windows Pi legs, and that push run's CI Gate requires them. A
+  Windows-only runtime regression therefore lands on `main` and holds releases instead
+  of merges. Before merging the Release PR,
+  `auto-cut-alpha.yml` reads the latest push-event `ci.yml` run on `main`'s live tip,
+  which the Release PR head must contain (see
+  [Guarded direct release merges](#guarded-direct-release-merges)). A green run proceeds. A queued or running
+  one waits within the CI budget, then the hourly cron retries. Any other conclusion
+  (failed, cancelled, timed out) skips the cut. To unblock, re-run the
+  failed jobs on that `main` run or land a fix; the next attempt cuts. A human
+  merging the Release PR by hand bypasses this gate on purpose.
 - Stable is promotion-only and beta-first: dispatch `promote-stable.yml` with the
   `version` input, then verify `stable.json` on the `channel-stable` release. A guard
   checks the current beta channel version (`beta.json` on the fixed `channel-beta`
@@ -103,24 +249,168 @@ the generated diff; this reads live rules and writes local snapshots only.
 
 ### When a published daemon reaches running installs
 
-A sitter-supervised daemon (`intentd serve`) picks up a channel publish by one of two
-paths:
+A sitter-supervised daemon (`intentd serve`) picks up a channel publish on a
+schedule that depends on its channel. The sitter re-reads the channel at every tick
+and idle request, so `intentd sitter channel` switches the schedule on a running
+service.
+
+**Stable — at most one automatic check per UTC day.** The sitter records the UTC
+date of its last *successful* automatic check (`last_check_at` in `state.json`) and
+makes a network check only when none is recorded for today:
+
+- **Startup** checks only when due; when it has already checked today, the
+  installed version starts with no request.
+- **While running**, a local tick every 50–70 min makes the check once the UTC day
+  rolls over, so rollover checks spread over the first hour after midnight UTC. A
+  failed check (offline, every source down) is not recorded, so the next tick
+  retries.
+- A newer version is **staged** and handed to the daemon through the idle-restart
+  handshake: once no agent has had a turn in flight for `updates.idleGraceSeconds`
+  (default 120 s), the daemon signals the sitter (`SIGUSR2`, at most every
+  `updates.idleCheckIntervalMinutes`, default 60) and restarts into the staged
+  version the next moment no turn is in flight. That idle request makes no
+  network check unless one is due. If the staged version is still not running,
+  the first tick after it has waited 24 h forces a graceful restart.
+
+A new stable release therefore reaches a running install in two separate steps.
+**Discovery** can take up to about a day: an install that checked just before a
+publish does not look again until the next UTC day, and the 50–70 min tick jitter
+adds up to about an hour after the rollover. **Activation** of the staged version
+then happens at the next idle moment, so an idle install switches within about an
+hour; a continuously busy daemon waits for the forced restart on the first tick
+after the staged version has waited 24 h (up to roughly another hour). In the worst case a busy install runs the new stable release about two
+days after it is published.
+
+**Alpha and beta — unchanged.**
 
 - **Opportunistic, idle-triggered** — once no agent has had a turn in flight for
   `updates.idleGraceSeconds` (default 120 s), the daemon asks its sitter to check
   now (`SIGUSR2`), at most every `updates.idleCheckIntervalMinutes` (default 60).
   The sitter stages any newer version and the daemon restarts into it the next
   moment no turn is in flight, so an idle install updates within about an hour of
-  the publish without interrupting a running agent. `updates.checkOnIdle=false`
-  (live setting, no restart; see
-  [protocol/methods/settings.md](./protocol/methods/settings.md)) disables this path.
-- **Forced, periodic** — the sitter's randomized 12–24 h check, unchanged: it
-  installs a newer version (or one already staged) and restarts the daemon whether
-  or not a turn is in flight. This is the fallback for continuously busy installs and
-  the only path when `checkOnIdle` is off.
+  the publish without interrupting a running agent.
+- **Forced, periodic** — the sitter's randomized 12–24 h check: it installs a newer
+  version (or one already staged) and restarts the daemon whether or not a turn is
+  in flight. This is the fallback for continuously busy installs and the only path
+  when `checkOnIdle` is off.
 
-`intentd update` (`system.requestUpdate`, "Update now") still checks and restarts
-immediately.
+On every channel, `updates.checkOnIdle=false` (live setting, no restart; see
+[protocol/methods/settings.md](./protocol/methods/settings.md)) stops the daemon's
+idle requests. `intentd update` (`system.requestUpdate`, "Update now") always checks
+and restarts immediately, and a manual check never counts as the day's check.
+Failed-start re-checks still run on every channel.
+
+The desktop app follows the same rule for its own updates: on **stable** it checks
+at startup (10 s after launch) only if no check has succeeded that UTC day, and
+its hourly tick and focus/resume checks run only once the day has rolled over.
+Alpha and beta keep the startup check, the hourly check, and focus/resume checks
+after 4 h. "Check for updates" and channel switches always check immediately. A
+failed stable check is not recorded, so the app tries again, but automatic retries
+are throttled: startup, the hourly tick and focus/resume share one limit of one
+failed automatic attempt per hour, so the next focus after a failure does not
+necessarily retry at once. Manual checks and channel switches bypass this limit.
+
+### Update-check statistics (`updates.intentapp.dev`)
+
+Both the sitter and the desktop app fetch their update feeds through
+`https://updates.intentapp.dev`, a separate Vercel project
+([intent-hq/intent-updates](https://github.com/intent-hq/intent-updates)). It
+counts the request and answers with a `302` to the same GitHub asset as before; it
+never serves a manifest or a feed itself, so GitHub stays the only source of
+updates.
+
+| | Sitter (standalone intentd) | Desktop app |
+|---|---|---|
+| Request | `/channel/<ch>.json` → `github.com/intent-hq/intentd-releases/releases/download/channel-<ch>/<ch>.json` | `/desktop/<ch>/<feed>.yml` and the installers it lists → `github.com/intent-hq/cloudlands-releases/releases/download/<ch>/<file>` |
+| `p` platform | target triple | `<platform>-<arch>` |
+| `v` version | sitter version | app version |
+| `src` install source | `brew`, `deb`, `script`, `windows`, `unknown` | `dmg`, `nsis`, `appimage`, `deb`, `unknown` |
+| `k` trigger | `startup`, `daily`, `idle`, `manual` | `startup`, `daily`, `periodic`, `focus`, `manual`, `channel` |
+| `d` daily flag | `1` while no check has *succeeded* this UTC day (from a date in `state.json`) | same (from the `lastUpdateCheckDay` local pref) |
+| `w` weekly flag | `1` while no check has succeeded this UTC ISO week (weeks start Monday; `last_week` in `state.json`) | same (`lastUpdateWeek` local pref) |
+| `m` monthly flag | `1` while no check has succeeded this UTC calendar month (`last_month`) | same (`lastUpdateMonth` local pref) |
+| `i` install flag | `1` until the first successful check of a fresh install; never for an estimated install | same |
+| `a` install age | whole UTC days since the first-seen day: `0d`, `1-7d`, `8-30d`, `31-90d`, `91-365d`, `365d+`, or `unknown` (`first_seen_day` / `first_seen_estimated`) | same (`firstSeenDay` / `firstSeenEstimated` local prefs) |
+| Opt-out | `DO_NOT_TRACK=1`, `INTENTD_DISABLE_TELEMETRY=1`, or `telemetry = false` in `<data-dir>/sitter/config.toml` (re-read on every check, kept when `intentd sitter channel` rewrites the file); `INTENTD_SITTER_MANIFEST_BASE_URL` also skips the endpoint | **Settings → General → Updates → Share anonymous update statistics** (on by default, `shareUpdateStatistics` local pref), `DO_NOT_TRACK=1`, or a custom `AUTO_UPDATE_URL` |
+
+No IDs, hostnames, usernames or paths are sent; the sitter's User-Agent is
+`intentd-sitter/<ver> (<triple>)`. The service allowlists every value (anything
+else is counted as `other`, and a flag is set only by exactly `1`), passes Vercel only `user-agent` and `x-forwarded-for`
+so Vercel can derive the country, and never logs or stores the IP. With any opt-out
+the request goes straight to GitHub.
+
+**Weekly, monthly and new installs.** Like `d`, the stored week and month advance
+only after a successful check, so a failed check is retried with the same flags (and
+can be counted again). Only dates are stored locally, and none of them is sent: the
+request carries just the `0`/`1` flags and the age bucket. The first-seen day is
+decided once per install:
+
+- **Fresh install:** today's date is recorded and `i=1` is sent until a check
+  succeeds. The sitter treats an install as fresh when `state.json` has no
+  installed version or recorded check and `<data-dir>/sitter/versions/` is empty,
+  and records the date before its first endpoint request, so a failed first check
+  that falls back to GitHub still leaves it fresh. The desktop app treats an install
+  as fresh when there are no earlier update-check prefs and the `userData` folder
+  was created during the current run.
+- **Existing install (upgraded into this change):** the date is estimated from the
+  creation time of the data folder (sitter: `<data-dir>/sitter`; desktop: Electron
+  `userData`), falling back to the oldest file mtime in it (the sitter also looks a few
+  levels into subfolders; the desktop app checks only top-level entries). It is marked
+  estimated and never sends `i=1`. With no usable timestamp the age is `unknown`,
+  and that result is stored so it is not estimated again.
+
+The sitter resolves the first-seen day and advances these dates only on endpoint
+checks, so an opted-out sitter stores nothing new. The desktop app resolves the
+first-seen day at startup and advances the dates after any successful check,
+including one made with the toggle off.
+
+**Fallback.** Any failure of the endpoint (down, 404, slow, or an unexpected
+redirect) falls back to GitHub. The endpoint records its events *before* it
+returns the redirect, so a check whose GitHub fetch then fails (or that the client
+retries on GitHub) may already have been counted. Counting is best effort: a
+request that never reached the service, an event the service failed to record, an
+opted-out install and a version older than this change are not counted:
+
+- The sitter gives the endpoint its own 10 s timeout, then tries the existing
+  `intent-hq/intentd-releases` → `intent-hq/intentd` GitHub bases.
+- The desktop app retries a failed or hung check once against the GitHub feed with
+  no user-visible error, then stays on GitHub for the rest of the session; a failed
+  download through the endpoint also moves the session to GitHub.
+
+**Redirect and host allowlists.**
+
+- The sitter's endpoint client accepts a first redirect only to exactly
+  `https://github.com/intent-hq/{intentd-releases,intentd}/releases/download/channel-<ch>/<ch>.json`
+  for the requested channel (no query, port or userinfo), then only https hops on
+  `*.githubusercontent.com`, at most 5 hops. A response that never left the endpoint
+  is refused, so a compromised Vercel project cannot serve a manifest.
+- The desktop app's updater session (`electron-updater` partition) cancels any
+  request outside `updates.intentapp.dev/desktop/`,
+  `github.com/intent-hq/cloudlands-releases/releases/download/` and
+  `*.githubusercontent.com` (plus a custom `AUTO_UPDATE_URL` prefix). The macOS
+  code-signature and Windows publisher checks remain the main protection.
+- electron-updater attaches its persistent per-installation `.updaterId` as an
+  `x-user-staging-id` header to feed requests. The app strips that header
+  (case-insensitively) from every request to `updates.intentapp.dev`, including
+  redirect hops back to it, so the endpoint never receives an installation ID.
+  Direct GitHub requests keep it, since staged rollouts are decided locally.
+
+**Reading the data.** Open the `updates.intentapp.dev` Vercel project →
+**Analytics → Events**. The Pro plan allows two properties per event:
+
+| Event | Properties |
+|---|---|
+| `intentd_update_check` / `desktop_update_check` | `platform`, `context` = `<ch>/<src>/<k>` (e.g. `stable/brew/idle`) |
+| `intentd_daily_active` / `desktop_daily_active` | `platform`, `version`; fired for every request with `d=1`. The day is recorded only after a successful fetch, so an install whose checks keep failing sends `d=1` (and is counted again) on each retry that day. Treat the count as an approximation of daily active installs: retries can overcount it, and missing or opted-out telemetry undercounts it |
+| `intentd_weekly_active` / `desktop_weekly_active` | `platform`, `channel`; fired for every feed request with `w=1`. Approximates weekly active installs, with the same retry and opt-out caveats as the daily count |
+| `intentd_monthly_active` / `desktop_monthly_active` | `platform`, `age` (the `a` bucket); fired for every feed request with `m=1`. Approximates monthly active installs, broken down by install age |
+| `intentd_install` / `desktop_install` | `platform`, `channel`; fired for every feed request with `i=1`. Counts new installs; installs that predate this change are never counted, and a fresh install whose first checks fail is counted on each retry |
+| `desktop_update_download` | `platform`, `version`, parsed from the artifact name; `.blockmap` files and range continuations are redirected but not counted |
+
+Country comes from Vercel's lookup of the forwarded IP. Only sitter and desktop versions
+released after this change go through the endpoint, and the desktop app's bundled
+daemon does not use the sitter, so the two sources never count the same install
+twice.
 
 ### Cutting a sitter release
 
@@ -372,6 +662,27 @@ verified daemon commit metadata. A missing pin, unknown legacy identity or
 malformed manifest is not permission to ignore a dependency. Retained Git tags
 without release records are not enumerated as live dependencies.
 
+Both `latest-mac.yml` and `latest-arm64-mac.yml` protect their independently
+referenced immutable frontend versions and daemon dependencies. The ARM feed is
+optional for older releases; an existing channel must still have the legacy Mac
+feed. Only the exact two-key empty legacy sentinel described above has no release
+dependency. Extra sentinel fields, unknown versions whose dependencies cannot be
+resolved, and failed feed reads abort cleanup before deletion. Every feed must
+match the supported electron-builder block mapping: scalar metadata and a `files`
+list of scalar mappings (or the older `path`/`sha512` pair). Duplicate keys,
+aliases, multiple documents, invalid controls and unsupported fields/shapes abort
+cleanup. Local asset names are accepted; absolute `files[].url` and `path` values
+must point to the same immutable frontend release version the feed declares.
+Path/checksum metadata must agree with its file entry. The dependency-free parser
+is deliberately limited to the emitted format; changes to that format require
+new compatibility fixtures before cleanup can accept them.
+Quoted strings and numeric scalars retain their types: download references must
+be strings, sizes positive integers, and `stagingPercentage` a number from 0 to
+100. Supported optional metadata includes single-line `releaseName`, `releaseNotes`
+and `minimumSystemVersion` strings, root/file `sha2`, and file `blockMapSize`.
+Multiline/structured notes and other unsupported YAML forms stop cleanup until
+explicitly covered by compatibility tests.
+
 `--max-delete` defaults to **20 release deletion attempts per invocation across
 the selected pair**, not 20 versions per repository. This batch limit is separate
 from the newest-20 retention floor; deleting source and mirror records consumes
@@ -406,7 +717,8 @@ not reacquire it. `mirror-release.yml`, `promote-beta.yml` and
 `promote-stable.yml` hold the same group for their entire workflows. PR-only dist
 plans have separate run-specific groups. After `dist generate`, run daemon
 `python3 scripts/configure-release-concurrency.py` to restore the generated
-workflow's lock; daemon CI tests this contract. Sitter publication only writes
+workflow's lock, then `python3 scripts/configure-runner-routing.py` to restore
+self-hosted-first routing. Daemon CI tests both contracts. Sitter publication only writes
 excluded sitter releases and is outside this daemon-version lock.
 
 Frontend `release-alpha.yml`, `promote-beta.yml`, `release-stable.yml` and
@@ -550,3 +862,166 @@ promotions of deleted prereleases are not preserved by this retention policy.
   named on stderr.
 - Commits merged after the release PR was cut ride the next release PR (e.g. intentd#517
   landed via follow-up release PR intentd#520).
+
+## CI runner routing
+
+intent, intentd and cloudlands-fe are public, so GitHub's standard runners are free
+there. Jobs that ask for a free standard label (`ubuntu-22.04`, `ubuntu-24.04`,
+`ubuntu-latest`, `ubuntu-24.04-arm`, `windows-2022`, `windows-2025`) always run on
+GitHub. Jobs that ask for a paid label prefer a compatible self-hosted runner and
+burst to [WarpBuild](./GITHUB_RUNNERS.md#burst-to-warpbuild) when none is free.
+
+All three repositories run the same probe: each has a reusable `runner-route.yml`,
+and the route jobs in intentd's `ci.yml` and cloudlands-fe's `intent-pr.yml` are
+inline copies (`runner-policy.test.cjs` keeps them identical). The probe runs on
+GitHub-hosted `ubuntu-24.04` without checkout, so it stays available during a
+self-hosted outage. intentd and cloudlands-fe pull requests also run intent's probe
+through `consumer-checks.yml`. Jobs read one of three outputs, keyed by the
+GitHub label they would otherwise ask for:
+
+| Output | Gives | Used by |
+|---|---|---|
+| `slots[key]` | a self-hosted slot for listed jobs while the pool has one free, else the burst runner | pooled jobs that start together (`slot_jobs`) |
+| `runners[label]` | the self-hosted fleet while it has room, else the burst runner | other routed jobs and matrices |
+| `cloud[label]` | the burst runner only, never self-hosted | jobs that need sudo or Docker, and cloudlands-fe's Mac/Windows and release-signing jobs |
+
+The burst runner for a paid label is its WarpBuild equivalent (`gh-linux-8x` →
+`warp-ubuntu-2404-x64-8x`, `gh-linux-16x` → `-16x`, `gh-linux-arm64-8x` →
+`warp-ubuntu-2404-arm64-8x`, `gh-windows-8x` → `warp-windows-2022-x64-8x`,
+`gh-windows-16x` → `warp-windows-2022-x64-16x`, `macos-26-xlarge` →
+`warp-macos-26-arm64-12x`, `macos-15-xlarge` → `warp-macos-15-arm64-12x`).
+GitHub's larger runners are off, so there is no GitHub fallback: fork pull requests
+get the free standard runner of the same OS, a WarpBuild platform with a job queued
+over 10 minutes only logs a warning, and a job that runs after a failed route job
+falls back to the WarpBuild label. cloudlands-fe's signed desktop Mac builds keep `macos-15-xlarge` as their
+key (not `macos-26-xlarge`), because electron-builder's keychain step fails on
+macOS 26 images.
+
+The self-hosted Linux x64 fleet is pools of runner slots on the cache box and on
+runner-only hosts ([GITHUB_RUNNERS.md](./GITHUB_RUNNERS.md)), all
+unprivileged ephemeral containers (no sudo, no Docker socket):
+
+| Pool | Labels | Slots | Takes jobs that ask for |
+|---|---|---|---|
+| heavy | `[self-hosted, linux, x64, intent-cache]` | 2 by default (`CI_LINUX_HEAVY_SLOTS`), 8 CPUs each | `gh-linux-8x`, `gh-linux-16x` |
+| xl | `[self-hosted, linux, x64, intent-cache-xl]` | 0 by default (`CI_LINUX_XL_SLOTS`), 16 CPUs each | `gh-linux-16x` only |
+
+No host runs `intent-cache-small` slots any more; free jobs run on GitHub.
+A job asks for a larger-runner label when it compiles Rust or its recent median
+duration is over about 5 minutes; that cut-off is a tunable choice. No other
+self-hosted Linux runner carries these labels. Jobs that need sudo, Docker, or more
+than a slot offers read `cloud`, and the policy tests list each with its reason.
+
+The shared probe checks online runners and paginated queued/running jobs across all
+three repositories. Each Linux pool bursts once its queued plus running jobs reach
+the smaller of its slot count (the organization or repository variables
+`CI_LINUX_HEAVY_SLOTS` and `CI_LINUX_XL_SLOTS`, defaults 2 and 0; raise them when
+slots are added) and its online slot count. A `gh-linux-16x` job takes a free xl slot
+first, then a free heavy slot, then bursts; a `gh-linux-8x` job never takes an xl
+slot. Other platforms require explicitly idle runners with room for queued demand.
+Queued jobs older than 15 minutes, missing compatible runners, unreadable capacity
+(including sibling queues), or [maintenance overrides](#maintenance-overrides)
+select the burst runner; each platform logs its reason. An unreadable queue keeps
+WarpBuild as the burst runner. Fork PRs never select persistent runners or WarpBuild.
+
+`CI_QUEUE_READ_TOKEN` needs organization Self-hosted runners read and Actions read
+on all three repositories. The probe falls back to repository runner listing if
+organization listing fails, and to burst runners when it cannot establish capacity. Keep
+matching organization runner groups accessible to all three repositories; the
+label probe does not prove group access. Reusable callers explicitly pass the
+queue token and Actions read permission through each level. A probe-runner outage
+can still fail routing itself; affected workflows require a rerun.
+
+Infrastructure exceptions are mechanically allowlisted: routing probes run on
+GitHub-hosted Linux, and the packaged smoke journeys require a fresh VM per job
+(GitHub-hosted or WarpBuild, never an intent-cache slot). The frontend and intentd queue-retirement
+cleanup jobs and intentd read-only credential probe remain on independent GitHub-hosted
+Linux, preserving their upstream queue-recovery contract. Host maintenance stays bound
+to the machine it maintains. A platform without a compatible self-hosted runner
+uses its burst runner.
+Browser shards retain their worker counts and browser identities, with per-runner
+browser caches and dependency installation for persistent machines.
+
+Run `python3 -S -B scripts/test_runner_policy.py` in intent and intentd to exercise
+routing fixtures and reject accidental cloud pins. The frontend's existing
+hosted-runner Vitest suite and backend/monorepo runner tests invoke it in CI, and
+`scripts/test_hosted_runners.py` rejects any reintroduced `depot-*` label.
+
+### Maintenance overrides
+
+Each override is an Actions variable. Setting it to `true` sends that platform's
+routed jobs to their burst runner (WarpBuild for paid labels), whatever the machine's state. Any other value, or no
+variable, restores self-hosted preference. The shared probe reads the variables of
+the repository whose workflow run is executing. For a called workflow, that is the
+caller: consumer checks on a cloudlands-fe pull request read cloudlands-fe's
+variables. So when a machine is unhealthy, set the override in intent, intentd and
+cloudlands-fe; cloudlands-fe's own `intent-pr.yml` routing reads the same Linux override.
+
+| Variable | Runner labels covered | Route log reason when set |
+|---|---|---|
+| `CI_LINUX_RUNNER_DISABLED` | the heavy and xl intent-cache pools and `self-hosted, Linux, ARM64` | `linux routing: burst=true (disabled for maintenance)`; xl logs as `xl routing`, ARM64 as `arm routing` |
+| `CI_WINDOWS_RUNNER_DISABLED` | `self-hosted, Windows, X64` | `windows routing: burst=true (disabled for maintenance)` |
+| `CI_MACOS_RUNNER_DISABLED` | `self-hosted, macOS, ARM64` and `self-hosted, macOS, X64` | `macos routing: burst=true (disabled for maintenance)`; X64 logs as `intel routing` |
+
+When the probe itself fails (fork PRs, or runner or job listing errors), every
+platform instead logs `burst=true (probe failed (...))`, with or without an
+override. Read the reason from a same-repository run.
+
+Overrides only affect routed jobs. Workflows that name a machine directly keep
+targeting it: intentd's `macos-prune.yml`, `m1mac-smoke.yml`
+and `provision-m1mac.yml`. `windows-prune.yml` is mixed: its `prune` job names
+5090pc, but it needs the `safety-tests` job to pass first. That job asks for the free
+`windows-2022` label, so it always runs on GitHub-hosted Windows: it proves the cleanup
+script's Windows lock and deletion semantics, not 5090pc's state.
+
+Turning an override on: in each repository it should cover, set the variable and
+`CI_<PLATFORM>_RUNNER_DISABLED_REASON`. The reason is one line with the UTC date,
+what is wrong and an evidence link (a failed run or PR). GitHub variables have no
+description field, so `gh variable list` showing the two together is the only record
+of why a platform is on the hosted fallback:
+
+```bash
+gh variable set CI_LINUX_RUNNER_DISABLED --repo intent-hq/<repo> --body true
+gh variable set CI_LINUX_RUNNER_DISABLED_REASON --repo intent-hq/<repo> \
+  --body "<YYYY-MM-DD>: <what is wrong>; see <run or PR URL>"
+```
+
+Turning it off:
+1. Check the requirements below on the machine itself. Maintenance workflows may run
+   their checks on GitHub-hosted runners while the override is on.
+2. Delete both variables in every repository where they are set.
+3. Watch the next pull request and merge-queue runs:
+   - The route log reason must no longer be `disabled for maintenance`.
+   - Routed jobs must land on the machine and pass.
+   - Linux shows `burst=false` when the queue has room. Windows and macOS still show
+     `burst=true` with a queue-depth reason whenever their single slot is busy.
+4. Restore the override at the first runner-caused failure.
+
+#### Self-hosted machine requirements
+
+These are lasting facts about each machine. Current reasons belong in the
+`*_REASON` variables, not here.
+
+| Machine | Slots | Requirements and known limits |
+|---|---|---|
+| intent-cache (Linux x64) | 3 heavy (`intent-cache`, 8 CPUs / 36 GB) ephemeral containers, shared by all three repositories; 1-CPU jobs run on free GitHub-hosted `ubuntu-24.04` runners | A fresh container per job: no state survives between jobs, so per-job caches come from the compiler cache and `actions/cache`. Runs as `runner` with no sudo or Docker; the runner image carries the build tools, OpenSSL headers, shellcheck, bison, Python 3, Node, `gh` and PowerShell. |
+| 5090pc (Windows x64) | 1 | `windows-prune.yml` keeps 40 GiB free; a full disk failed Rust toolchain installs (`os error 112`). Its safety tests need PowerShell 7 (`pwsh`); without it they fail with `pwsh: command not found` and the cleanup is skipped ([run 38896319862](https://github.com/intent-hq/intentd/actions/runs/38896319862)). |
+| m1mac (macOS ARM64) | 1 | Too slow for intentd's merge-queue `build (aarch64-apple-darwin)` job, even with the compiler cache: over 60 minutes cold and over 26 minutes on an unchanged rerun, against about 8 minutes on a Depot Mac with Depot's managed cache, before the move to GitHub-hosted runners ([run 39120530357](https://github.com/intent-hq/intentd/actions/runs/39120530357), [run 39124725329](https://github.com/intent-hq/intentd/actions/runs/39124725329)). Clippy compiles are not cacheable by sccache, and cache keys include the checkout path, so hosted runners' entries do not match. `actions/setup-python` cannot install there (`mkdir: /Users/runner: Permission denied`); the system Python is 3.9.6. |
+
+A single-slot machine runs its routed jobs one after another, so the combined time
+of a run's jobs on that platform must fit the merge-queue timeout.
+
+Rust compiler caching uses the self-hosted sccache WebDAV cache
+([runbook](SCCACHE_SERVER.md)) when the organization Actions variable
+`INTENT_SCCACHE_ENDPOINT` (an `https://` URL) is set. `scripts/setup-sccache.py`
+installs checksum-verified sccache directly (no Rust cache actions remain), then
+uses the `INTENT_SCCACHE_TOKEN` secret and the optional `INTENT_SCCACHE_MODE`
+variable (`READ_WRITE` by default, or `READ_ONLY`), overwriting any
+`SCCACHE_WEBDAV_*` values the runner already carries. Every run that receives
+secrets (main, releases, the cache producer and same-repo pull requests) writes.
+Without the variable, or when the token is empty as in fork pull requests,
+compilation is uncached. Compiler hit statistics, rather than a restored Actions
+archive, are the evidence of reuse. The job log names the chosen backend and
+mode, never the token. Reusable workflows such as `consumer-checks.yml` accept
+`INTENT_SCCACHE_TOKEN` as an optional secret. Local build configuration is in
+[CONTRIBUTING.md](../CONTRIBUTING.md#local-rust-compiler-cache).

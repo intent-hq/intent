@@ -1,0 +1,13 @@
+files:
+  - blockMapSize: 123
+    sha2: eab1c3f9690823943ee3748370903e00e77fa7ddbffa35092495fa7b58386a00
+    sha512: xzSdmxWhAFpSW3YRgsjCbsk1UrxRNDuzqafMlH7xCc6FAz1IKqTIrMDBKfBODpgpYRWQWZ5xJcnnj1O9YaS0kg==
+    size: 35
+    url: Intent-1.0.24-arm64-mac.zip
+minimumSystemVersion: 13.0.0
+path: Intent-1.0.24-arm64-mac.zip
+releaseName: Intel and Apple Silicon
+releaseNotes: Signed native builds
+sha512: xzSdmxWhAFpSW3YRgsjCbsk1UrxRNDuzqafMlH7xCc6FAz1IKqTIrMDBKfBODpgpYRWQWZ5xJcnnj1O9YaS0kg==
+stagingPercentage: 50
+version: 1.0.24

@@ -69,6 +69,14 @@ roles to unlock it.
 
 #### Effective workspace membership
 
+The prepared [workspace guest role extension](./multiplayer.md#workspace-guest-roles-prepared)
+adds `manager` alongside the existing guest `collaborator` role. Its scoped agent
+and saved-script permissions do not change the `canManage` precedence below.
+Under `workspaceGuestRoles: 1`, guest roster rows and caller-relative `myRole`
+preserve `manager`; both non-owner guest roles count toward the same guest cap.
+Inherited host members retain their existing authority and cannot be edited as
+workspace guests.
+
 Every caller-relative `Workspace` projection (`get`, full/lite `list`, mutation
 results, and subscription snapshots/deltas) carries **`canManage: boolean`** from
 the current durable grant, with the same precedence as workspace management:
@@ -1040,6 +1048,20 @@ refreshes; if a newer revision arrives during a read, re-read rather than apply
 stale authority. The workspace subscription's server-side snapshot/delta boundary
 must also reconcile newly visible/removed workspaces on an upgrade, with no lost
 concurrent workspace creation and no per-member persisted grant fan-out.
+
+Remaining workspace guests cannot receive `host:members-changed`. Every committed
+host addition/promotion therefore also emits the existing `workspace:updated`
+`changes.members: true` invalidation for each effective workspace, including
+inherited and archived workspaces. Offline promotions may leave both roster and
+member count unchanged; neither presence equality nor count equality suppresses
+this invalidation. Ordinary workspace additions/removals and host removals retain
+the same marker. A no-op join does not emit it. Consumers coalesce a membership-list
+refresh for the named workspace; a promotion need not carry a principal ID or
+member count. This additive delivery guarantee is advertised by
+`client.hello` `server.capabilities.workspaceMembershipEvents: 1` (exact integer).
+Older remote hosts may omit it; clients retain presence-driven membership refreshes
+unless this capability is recognized on that connection. See [§5.17](./client-hello.md)
+and [§6 shared-host invalidation](../06-events.md#shared-host-delivery-and-invalidation-109).
 
 Existing workspace events now reach effective members, including permission,
 terminal, script, browser and preview events needed for management. Filter at

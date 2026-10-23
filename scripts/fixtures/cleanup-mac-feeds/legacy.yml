@@ -1,0 +1,10 @@
+files:
+  - sha512: NXfAdyG+6Z5CaevhkHDpW4FQhr6aAJHQjYg2abpr2BPYgmIiLEMwicdxfYnBcbmHa2GuLOXm/EI7LqCdJMCSbA==
+    size: 33
+    url: https://github.com/intent-hq/cloudlands-releases/releases/download/v1.0.23/Intent-1.0.23-x64-mac.zip
+  - sha512: Cil2/BXpzP9+bEFQ3VU3bn/nbeoh8NMrW71uYO8eQ/moQojoy8ZS4QAGAn7XpneNhH/5JrEnIsYVaHhyxEHH/A==
+    size: 35
+    url: https://github.com/intent-hq/cloudlands-releases/releases/download/v1.0.23/Intent-1.0.23-arm64-mac.zip
+path: https://github.com/intent-hq/cloudlands-releases/releases/download/v1.0.23/Intent-1.0.23-x64-mac.zip
+sha512: NXfAdyG+6Z5CaevhkHDpW4FQhr6aAJHQjYg2abpr2BPYgmIiLEMwicdxfYnBcbmHa2GuLOXm/EI7LqCdJMCSbA==
+version: 1.0.23

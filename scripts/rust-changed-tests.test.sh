@@ -15,6 +15,8 @@ unset NEXTEST_RUNNER RESUME GATE_FORCE NO_FAIL_FAST GATE_CACHE_DIR NEXTEST_HIDE_
 unset TRANSFER_SELECTION_FIXTURE_ROOT
 unset INTENT_ACP_CALLBACK_ADAPTER_FIXTURE NODE_OPTIONS
 unset COMPACT CARGO_INCREMENTAL CARGO_PROFILE_DEV_DEBUG CARGO_PROFILE_TEST_DEBUG
+# make test-changed defaults it to 3 and names it in the summary line.
+unset INTENTD_TEST_TIMEOUT_MULTIPLIER
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 intentd_script="$repo_root/packages/intentd/scripts/changed-tests.sh"
@@ -64,6 +66,7 @@ chmod +x "$bin_dir/cargo"
 cat >"$bin_dir/make-stub" <<'SH'
 #!/usr/bin/env bash
 { echo "make:"; printf '%s\n' "$@"; } >>"$PLANNER_TEST_LOG"
+printf '%s\n' "${MAKEFLAGS-}" >"$PLANNER_TEST_LOG.makeflags"
 SH
 chmod +x "$bin_dir/make-stub"
 
@@ -210,6 +213,64 @@ else
   expect_make_ok
   [[ -z "$cargo_log" ]] || fail "$case_name: cargo was invoked: $cargo_log"
   expect_planner "--instrumented" "" 1 -2 -2 none never
+
+  # HERMETIC=1 wraps the runner in intentd's no-provider-CLI sandbox script
+  # (intentd#2551), after a Linux + bwrap preflight that runs before planning.
+  printf '#!/usr/bin/env bash\necho Linux\n' >"$bin_dir/uname"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$bin_dir/bwrap"
+  chmod +x "$bin_dir/uname" "$bin_dir/bwrap"
+  hermetic_line="[test-changed] HERMETIC=1: tests run with every provider CLI hidden (packages/intentd/scripts/test-without-provider-clis.sh)"
+
+  case_name="test-changed recipe wraps the runner under HERMETIC=1"
+  run_make test-changed HERMETIC=1 BUILD_JOBS=3
+  expect_make_ok
+  [[ "$stdout" == *"$hermetic_line"* ]] || fail "$case_name: mode not announced: $stdout"
+  expected="runner:"$'\n'"env"$'\n'"INTENT_GATE_HERMETIC=1"$'\n'"CARGO_BUILD_JOBS=3"$'\n'"bash"$'\n'"packages/intentd/scripts/test-without-provider-clis.sh"$'\n'"python3"$'\n'"scripts/resumable_nextest.py"$'\n'"--repo-root"$'\n'"$mk"
+  [[ "$planner_log" == *"$expected"* ]] || fail "$case_name: runner argv was"$'\n'"$planner_log"
+
+  case_name="test-changed recipe leaves the runner unwrapped by default"
+  run_make test-changed
+  expect_make_ok
+  [[ "$planner_log" == *"runner:"$'\n'"python3"$'\n'* && "$stdout" != *"HERMETIC=1"* ]] \
+    || fail "$case_name: runner argv was"$'\n'"$planner_log"
+
+  case_name="test-changed recipe announces HERMETIC=1 under DRY_RUN=1"
+  run_make test-changed HERMETIC=1 DRY_RUN=1
+  expect_make_ok
+  [[ "$stdout" == *"$hermetic_line"* ]] || fail "$case_name: stdout: $stdout"
+
+  case_name="test-changed recipe carries HERMETIC=1 into the full make test fallback"
+  PLANNER_STUB_EXIT=3 run_make test-changed HERMETIC=1 MAKE="$bin_dir/make-stub"
+  expect_make_ok
+  [[ "$(<"$temp_dir/planner.log.makeflags")" == *"HERMETIC=1"* ]] \
+    || fail "$case_name: MAKEFLAGS were: $(<"$temp_dir/planner.log.makeflags")"
+
+  case_name="test-changed recipe refuses HIDE_NODE=1 with HERMETIC=1 before planning"
+  run_make test-changed HERMETIC=1 HIDE_NODE=1
+  [[ "$status" -ne 0 ]] || fail "$case_name: make exited 0"
+  [[ "$stderr" == *"[test-changed] ERROR: HIDE_NODE=1 is not supported with HERMETIC=1"* ]] || fail "$case_name: stderr: $stderr"
+  [[ -z "$planner_log" ]] || fail "$case_name: planner ran: $planner_log"
+
+  case_name="test-changed recipe refuses HERMETIC=1 without bwrap before planning"
+  rm -f "$bin_dir/bwrap"
+  run_make test-changed HERMETIC=1
+  [[ "$status" -ne 0 ]] || fail "$case_name: make exited 0"
+  [[ "$stderr" == *"[test-changed] ERROR: HERMETIC=1 needs bwrap"* ]] || fail "$case_name: stderr: $stderr"
+  [[ -z "$planner_log" ]] || fail "$case_name: planner ran: $planner_log"
+
+  case_name="test-changed recipe refuses HERMETIC=1 off Linux before planning"
+  printf '#!/usr/bin/env bash\necho Darwin\n' >"$bin_dir/uname"
+  run_make test-changed HERMETIC=1
+  [[ "$status" -ne 0 ]] || fail "$case_name: make exited 0"
+  [[ "$stderr" == *"[test-changed] ERROR: HERMETIC=1 is Linux only"* ]] || fail "$case_name: stderr: $stderr"
+  [[ -z "$planner_log" ]] || fail "$case_name: planner ran: $planner_log"
+  rm -f "$bin_dir/uname"
+
+  case_name="HERMETIC accepts only 0 or 1"
+  run_make test-changed HERMETIC=true
+  [[ "$status" -ne 0 ]] || fail "$case_name: make exited 0"
+  [[ "$stderr" == *"HERMETIC must be 0 or 1, got 'true'"* ]] || fail "$case_name: stderr: $stderr"
+  [[ -z "$planner_log" ]] || fail "$case_name: planner ran: $planner_log"
 fi
 
 # End to end through the real `make test-changed`: intentd's changed-tests.sh
@@ -444,7 +505,7 @@ PY
     [[ "$status" -eq 0 ]] || fail "$case_name: exited $status: $stderr"
     [[ -z "$stderr" ]] || fail "$case_name: unexpected stderr: $stderr"
   }
-  summary_line="[test-changed] summary: 2 passed, 0 failed, 0 skipped/ignored, 0 resumed (tests already passed for this tree)"
+  summary_line="[test-changed] summary: 2 passed, 0 failed, 0 skipped/ignored, 0 resumed (tests already passed for this tree); test time limits x3 (INTENTD_TEST_TIMEOUT_MULTIPLIER=3)"
   expect_recorded_run() {
     expect_ok
     [[ "$stdout" == *"[test-changed] cargo nextest run -p alpha --test one --build-jobs 2 --test-threads 1"$'\n'* ]] || fail "$case_name: plan line missing: $stdout"
@@ -629,8 +690,8 @@ echo "rust-changed-tests tests passed under $("$script_bash" -c 'echo "bash $BAS
 
 # Stock macOS /bin/bash is 3.2 (intent-hq/intent#4706). `bash -n` alone
 # accepts Bash 4+ builtins and expansions, so reject them by pattern too,
-# then rerun the fixtures under a real Bash 3 when one can be found (same
-# lookup as shipped-in.test.sh). intentd's script has its own Bash 3 gate in
+# then rerun the fixtures under a real Bash 3 when one can be found (shared
+# lookup in find-bash3.sh; `make bash3` builds one). intentd's script has its own Bash 3 gate in
 # scripts/test-changed-tests.sh; this suite's rerun feeds it a Bash 3 through
 # $bin_dir/bash. A missing Bash 3 is a skip notice by default; set
 # REQUIRE_BASH3 to a non-empty value (CI) to make it a failure instead.
@@ -664,27 +725,15 @@ gate_sample miss '# mapfile is unavailable on Bash 3'
 gate_hits=$(gate_matches "${BASH_SOURCE[0]}")
 [[ -z "$gate_hits" ]] || fail "Bash 4+ constructs found (stock macOS bash is 3.2):"$'\n'"$gate_hits"
 
-find_bash3() {
-  local candidate resolved brew_prefix
-  brew_prefix=$(brew --prefix bash@3 2>/dev/null) || brew_prefix=""
-  for candidate in "${BASH3_BIN:-}" bash3 "${brew_prefix:+$brew_prefix/bin/bash}" \
-    /opt/homebrew/opt/bash@3/bin/bash /usr/local/opt/bash@3/bin/bash /bin/bash; do
-    [[ -n "$candidate" ]] || continue
-    resolved=$(command -v "$candidate" 2>/dev/null) || continue
-    [[ -x "$resolved" ]] || continue
-    "$resolved" -c '[[ "${BASH_VERSINFO[0]}" -eq 3 ]]' 2>/dev/null || continue
-    printf '%s\n' "$resolved"
-    return 0
-  done
-  return 1
-}
+# shellcheck source=scripts/find-bash3.sh
+source "$repo_root/scripts/find-bash3.sh"
 
 if [[ "${BASH_VERSINFO[0]}" -eq 3 ]]; then
   : # the fixtures above already ran under Bash 3
 elif bash3=$(find_bash3); then
   RUST_CHANGED_TESTS_TEST_BASH="$bash3" "$bash3" "${BASH_SOURCE[0]}"
 elif [[ -n "${REQUIRE_BASH3:-}" ]]; then
-  fail "no Bash 3 interpreter found and REQUIRE_BASH3 is set (point BASH3_BIN at one, or unset REQUIRE_BASH3 to skip the real 3.2 run)"
+  fail "no Bash 3 interpreter found and REQUIRE_BASH3 is set ($(bash3_missing_hint); or unset REQUIRE_BASH3 to skip the real 3.2 run)"
 else
-  echo "rust-changed-tests tests: no Bash 3 interpreter found (set BASH3_BIN); real 3.2 run skipped, static gate only"
+  echo "rust-changed-tests tests: no Bash 3 interpreter found ($(bash3_missing_hint)); real 3.2 run skipped, static gate only"
 fi

@@ -1,0 +1,8 @@
+version: 2.212.1
+files:
+  - url: Intent.Setup.2.212.1.exe
+    sha512: zyolP93Q1jXBrztuEqVIGXPtjjgBYu8TboHdF+GjFtFifxoEjGC6Y5RxnujPcR5bl3ZhlaWUpiE6tmGt+nKmjg==
+    size: 186822518
+path: Intent.Setup.2.212.1.exe
+sha512: zyolP93Q1jXBrztuEqVIGXPtjjgBYu8TboHdF+GjFtFifxoEjGC6Y5RxnujPcR5bl3ZhlaWUpiE6tmGt+nKmjg==
+releaseDate: '2026-10-08T11:50:09.305Z'

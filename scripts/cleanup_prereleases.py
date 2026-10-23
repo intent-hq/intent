@@ -34,7 +34,7 @@ REPOSITORIES = (DAEMON, DAEMON_MIRROR, FE, FE_MIRROR)
 PAIRS = {"intentd": (DAEMON, DAEMON_MIRROR), "cloudlands-fe": (FE, FE_MIRROR)}
 CHANNELS = ("alpha", "beta", "stable")
 VERSION = re.compile(r"v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?\Z")
-FEEDS = {"latest-mac.yml", "latest.yml", "latest-linux.yml", "latest-linux-arm64.yml"}
+FEEDS = {"latest-mac.yml", "latest-arm64-mac.yml", "latest.yml", "latest-linux.yml", "latest-linux-arm64.yml"}
 PROTECTION_ASSETS = FEEDS | {"release-manifest.json", "alpha.json", "beta.json", "stable.json"}
 
 # Reviewed immutable source-build provenance, not a version cutoff. These exact
@@ -319,16 +319,160 @@ def json_object(text, label):
     return data
 
 
-def feed_version(text):
-    # Only parse electron-builder's root version scalar, not arbitrary YAML.
-    # Unsupported shapes, duplicate keys and multiline scalars fail closed.
-    matches = re.findall(r"^version:[ \t]*(.*?)[ \t]*$", text, re.MULTILINE)
-    if len(matches) != 1:
-        raise CleanupError("frontend channel feed needs one root version")
-    scalar = matches[0].strip()
-    if len(scalar) >= 2 and scalar[0] in "\"'" and scalar[-1] == scalar[0]:
-        scalar = scalar[1:-1]
-    return version(scalar)
+def feed_scalar(raw, *, checksum=False):
+    """Read the emitted single-line YAML scalar subset, never arbitrary YAML."""
+    raw = raw.strip(" ")
+    # Base64 hashes may begin with + or /. Admit that alphabet only in SHA-512
+    # fields; other scalars retain the narrow syntax and type checks below.
+    if checksum and re.fullmatch(r"[A-Za-z0-9+/]{86}==", raw):
+        return raw
+    if re.fullmatch(r"'(?:[^']|'')*'", raw):
+        return raw[1:-1].replace("''", "'")
+    if raw.startswith('"'):
+        try:
+            value = json.loads(raw)
+        except ValueError as error:
+            raise CleanupError("unsupported frontend feed scalar") from error
+        if isinstance(value, str) and all(ord(c) >= 32 and not 127 <= ord(c) <= 159 for c in value):
+            return value
+        raise CleanupError("unsupported frontend feed scalar")
+    # Preserve the distinction between quoted strings and emitted numbers.
+    # Null/bool and noncanonical YAML numeric spellings are not supported by any
+    # feed field; never reinterpret them as asset names or metadata strings.
+    if re.fullmatch(r"[+-]?(?:0|[1-9][0-9]*)", raw):
+        return int(raw)
+    if re.fullmatch(r"[+-]?(?:[0-9]+\.[0-9]+(?:[eE][+-]?[0-9]+)?|[0-9]+[eE][+-]?[0-9]+)", raw):
+        return float(raw)
+    if (raw in {"null", "Null", "NULL", "~", "true", "True", "TRUE", "false", "False", "FALSE"}
+            or re.fullmatch(r"[+-]?(?:[0-9][0-9_]*(?:\.[0-9_]*)?(?:[eE][+-]?[0-9]+)?|0[xXob][0-9a-fA-F_]+)", raw)):
+        raise CleanupError("unsupported typed frontend feed scalar")
+    if (re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_./+:@%?=&() -]*", raw)
+            and not re.search(r":(?: |$)", raw)):
+        return raw
+    raise CleanupError("unsupported frontend feed scalar")
+
+
+def feed_document(text):
+    # Dependency-free grammar for electron-builder/js-yaml output: one block
+    # mapping, with scalar fields and a files sequence of scalar mappings. Reject
+    # all unsupported YAML rather than extracting a plausible version from it.
+    if not isinstance(text, str):
+        raise CleanupError("frontend feed must be text")
+    text = text.replace("\r\n", "\n")
+    if re.search(r"[\x00-\x09\x0b-\x1f\x7f-\x9f]", text):
+        raise CleanupError("invalid control character in frontend feed")
+    data, section, entry, files_block = {}, None, None, False
+    root_keys = {"version", "files", "path", "sha512", "sha2", "size", "releaseDate",
+                 "releaseName", "releaseNotes", "minimumSystemVersion", "stagingPercentage"}
+    file_keys = {"url", "sha512", "sha2", "size", "blockMapSize"}
+    for line in text.split("\n"):
+        if not line:
+            continue
+        root = re.fullmatch(r"([A-Za-z][A-Za-z0-9]*):(?: (.*))?", line)
+        first = re.fullmatch(r"  - ([A-Za-z][A-Za-z0-9]*): (.+)", line)
+        field = re.fullmatch(r"    ([A-Za-z][A-Za-z0-9]*): (.+)", line)
+        if root:
+            key, raw = root.groups()
+            if key not in root_keys or key in data:
+                raise CleanupError("unsupported or duplicate frontend feed key")
+            section, entry = key, None
+            if key == "files":
+                if raw not in (None, "[]"):
+                    raise CleanupError("unsupported frontend files sequence")
+                data[key] = []
+                files_block = raw is None
+                if raw == "[]":
+                    section = None
+            else:
+                data[key] = feed_scalar(raw or "", checksum=key == "sha512")
+        elif section == "files" and (first or (field and entry is not None)):
+            if first:
+                entry = {}
+                data["files"].append(entry)
+            key, raw = (first or field).groups()
+            if key not in file_keys or key in entry:
+                raise CleanupError("unsupported or duplicate frontend file key")
+            entry[key] = feed_scalar(raw, checksum=key == "sha512")
+        else:
+            raise CleanupError("unsupported frontend feed document structure")
+    if files_block and not data["files"]:
+        raise CleanupError("frontend files block is empty, not an empty array")
+    return data
+
+
+def feed_reference(reference, value):
+    """Accept local asset names or exact immutable frontend release URLs."""
+    if not isinstance(reference, str):
+        raise CleanupError("frontend asset reference must be a string")
+    try:
+        url = urlsplit(reference)
+    except ValueError as error:
+        raise CleanupError("invalid frontend asset URL") from error
+    if url.scheme or url.netloc or "/" in reference:
+        parts = url.path.split("/")
+        if (url.scheme != "https" or url.netloc != "github.com"
+                or len(parts) != 7 or parts[0] != ""
+                or "/".join(parts[1:3]) not in PAIRS["cloudlands-fe"]
+                or parts[3:5] != ["releases", "download"]
+                or parts[5] != "v" + value or url.query or url.fragment):
+            raise CleanupError("frontend asset URL disagrees with feed version")
+        name = parts[6]
+    else:
+        name = reference
+    # No paths, encoding tricks, query strings or fragments in local names.
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._ ()+-]*", name):
+        raise CleanupError("unsupported frontend asset name")
+    return reference
+
+
+def feed_version(text, *, allow_empty=False):
+    data = feed_document(text)
+    value = version(data.get("version"))
+    if value == "0.0.0":
+        if allow_empty and data == {"version": "0.0.0", "files": []}:
+            return None
+        raise CleanupError("invalid empty frontend channel feed")
+    files = data.get("files")
+    if files is not None and not files:
+        raise CleanupError("empty frontend files sequence")
+    if files is None and not {"path", "sha512"} <= data.keys():
+        raise CleanupError("frontend feed has no download metadata")
+    for entry in [data, *(files or [])]:
+        if entry is not data and not {"url", "sha512", "size"} <= entry.keys():
+            raise CleanupError("incomplete frontend file metadata")
+        for key in ("size", "blockMapSize"):
+            if key in entry and (type(entry[key]) is not int or not 0 < entry[key] <= 2**53 - 1):
+                raise CleanupError("invalid frontend file size")
+        if "sha512" in entry:
+            if not isinstance(entry["sha512"], str):
+                raise CleanupError("frontend checksum must be a string")
+            try:
+                digest = base64.b64decode(entry["sha512"], validate=True)
+            except ValueError as error:
+                raise CleanupError("invalid frontend file checksum") from error
+            if len(digest) != 64 or base64.b64encode(digest).decode() != entry["sha512"]:
+                raise CleanupError("invalid frontend file checksum")
+        if "sha2" in entry and (not isinstance(entry["sha2"], str)
+                               or not re.fullmatch(r"[0-9a-fA-F]{64}", entry["sha2"])):
+            raise CleanupError("invalid legacy frontend checksum")
+        for key in ("url", "path"):
+            if key in entry:
+                feed_reference(entry[key], value)
+    if ("path" in data) != ("sha512" in data):
+        raise CleanupError("incomplete legacy frontend file metadata")
+    if "path" in data and files is not None:
+        if not any(entry["url"] == data["path"] and entry["sha512"] == data["sha512"] for entry in files):
+            raise CleanupError("legacy frontend path/checksum disagrees with files")
+    if "releaseDate" in data:
+        timestamp(data["releaseDate"])
+    for key in ("releaseName", "releaseNotes", "minimumSystemVersion"):
+        if key in data and not isinstance(data[key], str):
+            raise CleanupError("frontend descriptive metadata must be a string")
+    if "stagingPercentage" in data:
+        percentage = data["stagingPercentage"]
+        if type(percentage) not in (int, float) or not 0 <= percentage <= 100:
+            raise CleanupError("invalid frontend staging percentage")
+    return value
 
 
 def build_plan(gh, now):
@@ -384,7 +528,9 @@ def build_plan(gh, now):
                 if "latest-mac.yml" not in assets:
                     raise CleanupError(f"{repo}/{tag}: missing required latest-mac.yml")
                 for name in sorted(FEEDS & assets.keys()):
-                    value = feed_version(assets[name])
+                    value = feed_version(assets[name], allow_empty=name == "latest-mac.yml")
+                    if value is None:
+                        continue
                     frontend_channel_versions.add(value)
                     protect(PAIRS["cloudlands-fe"], value, "frontend-channel")
                 if "release-manifest.json" in assets:

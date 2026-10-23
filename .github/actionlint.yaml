@@ -1,0 +1,21 @@
+# actionlint policy for `make lint-workflows` (CI's workflow-lint job). Main is
+# kept finding-free, so every reported finding is new; keep ignores narrow.
+self-hosted-runner:
+  labels:
+    # Org larger runners (GitHub-hosted); standard GitHub labels are built in.
+    - gh-linux-8x
+    - gh-linux-16x
+    - gh-linux-arm64-8x
+    - gh-windows-16x
+    # Self-hosted intent-cache runner pools (infra/runners).
+    - intent-cache
+    - intent-cache-small
+    - intent-cache-xl
+
+paths:
+  # GitHub's job.workflow_sha / job.workflow_repository context (a reusable
+  # workflow's own commit) is newer than actionlint 1.7.12's schema. Scoped to
+  # this file and these two properties; drop it once the actionlint pin knows them.
+  .github/workflows/consumer-checks.yml:
+    ignore:
+      - 'property "workflow_(sha|repository)" is not defined in object type'

@@ -39,7 +39,29 @@ so `execute` rejects `action:"export"`. A step that fails sets `success:false` a
 
 - **WorkspaceGitStatus** — `{ branch, trunkBranch, aheadOfTrunk, behindTrunk, hasRemote,
   isPushed, uncommittedCount, stagedCount, localCommits: CommitWithAttribution[],
-  existingPR?: { number, url, htmlUrl, title, state: "open"|"closed"|"merged"|"draft" } }`.
+  existingPR?: { number, url, htmlUrl, title, state: "open"|"closed"|"merged"|"draft" },
+  historyIdentity?: string, gitStatus?: GitStatus }`.
+  `gitStatus` is the existing `git.status` (§5.6) snapshot, reused from the
+  working-tree scan, including per-file metadata and any `filesTruncated` /
+  `totalFiles` fields. It does not contain tracked-change attribution.
+  `historyIdentity` is a nonempty opaque equality token for the inputs to
+  `file-tracking.loadCommits`: actual HEAD, actual branch, workspace `baseRef` /
+  `baseCommitSha`, resolved workspace boundary, and the current branch's
+  `origin` tracking tip (which determines each commit's `isPushed`). File-only
+  changes leave it unchanged; commits, resets, rebases, boundary changes and
+  relevant ref changes invalidate it. It is independent of `localCommits`, whose
+  trunk range may be empty or truncated and is not workspace-bounded history.
+  Missing repositories, shallow graphs, unborn/unreadable HEAD, unresolved configured boundaries
+  and identity-resolution errors omit the token; absence never proves equality.
+  Detached HEAD with a resolved commit can carry a token. These fields are
+  additive: older hosts and status producers may omit them.
+  Compare tokens only within the same admitted backend/workspace lifetime and
+  history query; they have no chronological ordering. Clients must establish
+  history for the observed token using the matching `loadCommits` response token,
+  reject replies superseded by a newer identity or lifetime, and retain bounded
+  recovery for missing/malformed tokens, initial
+  hydration, reconnects and event gaps. An unchanged token does not make a
+  missing history page present. No extra history walk produces this token.
 - **CommitWithAttribution** — a local commit carrying agent provenance:
   `{ hash, message, author, date, filesChanged?, isPushed, files?: [{ path, additions?,
   deletions?, status? }], agentId?, linkedNoteId? }`. `files` and `filesChanged` are
@@ -213,8 +235,8 @@ of evidence are independent:
 | Field | Variants and meaning |
 | --- | --- |
 | `gitReceipts` | Completed primitives only: `{ stage: "commit", commitHash }` or `{ stage: "push", pushedSha }`. Missing receipt means missing completion evidence, not proof of no effect. |
-| `outcome` | `{ status: "not-attempted" }`; `{ status: "created"|"reused", review }`; `{ status: "failed", stage, code, message }`; or `{ status: "uncertain", stage, message }`. `code` may be null; stage uses the three qualified action spellings. |
-| `publication` | `{ state: "included"|"local-ahead"|"diverged", localHeadSha, remoteSourceSha }`; `{ state: "remote-branch-missing", localHeadSha }`; or `{ state: "unknown", localHeadSha, remoteSourceSha }`. SHAs may be null in the last two variants. |
+| `outcome` | `{ status: "not-attempted" }`; `{ status: "created"\|"reused", review }`; `{ status: "failed", stage, code, message }`; or `{ status: "uncertain", stage, message }`. `code` may be null; stage uses the three qualified action spellings. |
+| `publication` | `{ state: "included"\|"local-ahead"\|"diverged", localHeadSha, remoteSourceSha }`; `{ state: "remote-branch-missing", localHeadSha }`; or `{ state: "unknown", localHeadSha, remoteSourceSha }`. SHAs may be null in the last two variants. |
 
 `not-attempted` can accompany a successful commit/push-only call. A permitted
 refusal before a consuming stage claim can retain a failed outcome for that
@@ -411,7 +433,7 @@ the **UI-invoked reads** are wire methods; the attribution writer `trackChange` 
 | Method | Params | Result |
 | --- | --- | --- |
 | file-tracking.getChanges | workspaceId (req), filter?: { stage?, agentId?, sessionId?, turnNumber?, filePattern?, since?, until? } | { changes: TrackedChange[], truncated, totalCount } |
-| file-tracking.loadCommits | workspaceId (req), limit?: number (default 50, ≤200), nextToken?, includeOlder?: boolean (default false) | { commits: CommitWithAttribution[], boundarySha, nextToken } — **metadata-only** entries (see the CommitWithAttribution schema, §5.18): the bounded walk skips per-commit tree diffs; clients fetch per-file data on demand via `git.commitDetails` (§5.6). Boundary semantics below |
+| file-tracking.loadCommits | workspaceId (req), limit?: number (default 50, ≤200), nextToken?, includeOlder?: boolean (default false) | { commits: CommitWithAttribution[], boundarySha, nextToken, historyIdentity?: string } — **metadata-only** entries (see the CommitWithAttribution schema, §5.18): the bounded walk skips per-commit tree diffs; clients fetch per-file data on demand via `git.commitDetails` (§5.6). Boundary semantics below |
 | file-tracking.getAgentLocks | workspaceId (req) | { autoCommitEnabled, lockedAgentIds: string[], lockedFilePaths: string[] } — the daemon-computed **agent-lock snapshot**; hydration read for the `changes:agent-locks` event (§6.5). Lock semantics below |
 | file-tracking.stage | workspaceId (req), paths (req): string[] | { ok: true } — stages the referenced files |
 | file-tracking.unstage | workspaceId (req), paths (req): string[] | { ok: true } — unstages the referenced files |
@@ -442,6 +464,15 @@ policy, or tracked-change churn moves the snapshot; unchanged snapshots are neve
 - **Fail-closed safety net:** when boundary info exists but cannot be resolved, the method returns an empty commit list (regardless of `includeOlder`) to prevent leaking arbitrary base-branch history.
 - **Boundary resolution strategy:** (1) prefer the merge-base of HEAD with `origin/<baseRef>` or `<baseRef>` (rebase-resilient); (2) fall back to `baseCommitSha` if it is a valid ancestor of HEAD; (3) return `null` if neither resolves.
 - `nextToken` in the result is the pagination token for the next page, or `null` when exhausted; pass it back as the `nextToken` parameter.
+- Optional `historyIdentity` uses the same equality-token contract as `WorkspaceGitStatus`
+  (§5.18). It certifies the captured immutable HEAD, boundary and upstream tip used
+  by this response's single history walk and push-state projection, including when
+  live refs move or move away and back while the read is pending. It is not a token
+  sampled only after reading live history. Missing/shallow/unborn/error/unresolved inputs
+  omit it. Clients may associate a page with a pushed identity only when the
+  response token matches; a request started after a push alone is insufficient.
+  The token is independent of pagination, so compare pages only for the same query
+  and lifetime and retain recovery for missing or mismatched tokens.
 
 ```json
 // → request — load committed changes for one agent

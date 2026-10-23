@@ -31,7 +31,7 @@ fail() {
 }
 
 # Keep every launcher invocation on the harness interpreter, including the
-# supervised make recipe. CI uses /bin/bash explicitly for the macOS 3.2 run.
+# supervised make recipe. CI supplies its pinned Bash 3.2 interpreter explicitly.
 if [[ -n "${REQUIRE_BASH3:-}" && "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}" != 3.2 ]]; then
   fail "REQUIRE_BASH3 requires running this suite with a real Bash 3.2 interpreter"
 fi
@@ -253,7 +253,7 @@ import socket
 import sys
 path = sys.argv[1]
 keys = ("INTENTD_DATA_DIR", "INTENTD_WORKSPACES_DIR", "INTENTD_ASSERT_HERMETIC_ROOT",
-        "INTENTD_LEGACY_IMPORT_ROOTS", "INTENTD_TCP_PORT")
+        "INTENTD_LEGACY_IMPORT_ROOTS", "INTENTD_TCP_PORT", "INTENTD_USER_SPECIALISTS_DIR")
 with open(os.path.join(os.environ["INTENTD_DATA_DIR"], "daemon-env.json"), "w", encoding="utf-8") as handle:
     json.dump({key: os.environ.get(key) for key in keys}, handle)
 try: os.unlink(path)
@@ -280,9 +280,11 @@ with open(os.path.join(data_dir, "daemon-env.json"), encoding="utf-8") as handle
     values = json.load(handle)
 expected = {"INTENTD_DATA_DIR": data_dir,
             "INTENTD_WORKSPACES_DIR": os.path.join(data_dir, "workspaces"),
-            "INTENTD_ASSERT_HERMETIC_ROOT": "1", "INTENTD_LEGACY_IMPORT_ROOTS": ""}
+            "INTENTD_ASSERT_HERMETIC_ROOT": "1", "INTENTD_LEGACY_IMPORT_ROOTS": "",
+            "INTENTD_USER_SPECIALISTS_DIR": os.path.join(data_dir, "specialists")}
 for key, value in expected.items():
     assert values[key] == value, (key, values[key], value)
+assert os.path.isdir(os.path.join(data_dir, "specialists")), "sandbox specialists dir was not created"
 PY
 }
 
@@ -311,13 +313,17 @@ PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" DEV_DATA_DIR="
 sandbox_pid=$!
 wait_for_ready "$temp_dir/stack.out" || fail "stack sandbox did not become ready: $(cat "$temp_dir/stack.out")"
 [[ $(grep -c '^Sandbox ready:' "$temp_dir/stack.out") -eq 1 ]] || fail "stack ready line was not printed exactly once"
-python3 - "$state_dir/stack.json" <<'PY' || fail "dev stack state metadata was incorrect"
+python3 - "$state_dir/stack.json" "$data_dir/specialists" <<'PY' || fail "dev stack state metadata was incorrect"
 import json
 import sys
 state = json.load(open(sys.argv[1], encoding="utf-8"))
 assert state["intentdSource"] == "dev" and state["tcpPort"] == 43211
 assert isinstance(state["socket"], str) and state["socket"].endswith("/intentd.sock")
+assert state["userSpecialistsDir"] == sys.argv[2], (state["userSpecialistsDir"], sys.argv[2])
 PY
+SANDBOX_STATE_DIR="$state_dir" "$BASH" "$script" status >"$temp_dir/stack-status.out" 2>&1 || fail "stack status failed"
+grep -qF "specialists=$data_dir/specialists" "$temp_dir/stack-status.out" || fail "status did not report the sandbox specialists dir: $(cat "$temp_dir/stack-status.out")"
+grep -qF "Specialists (user tier): $data_dir/specialists" "$temp_dir/stack.out" || fail "stack did not log its specialists dir"
 assert_build_args "$cargo_log" dev
 assert_daemon_isolated "$data_dir"
 grep -q "Starting intentd binary: $temp_dir/build target/debug/intentd" "$temp_dir/stack.out" || fail "default binary path was not target/debug/intentd"
@@ -384,6 +390,31 @@ kill -TERM "$sandbox_pid"
 wait "$sandbox_pid" 2>/dev/null || true
 sandbox_pid=""
 
+# A daemon that predates INTENTD_USER_SPECIALISTS_DIR must not be reported as
+# isolated: the launcher warns and records a null userSpecialistsDir.
+sed 's/, "INTENTD_USER_SPECIALISTS_DIR"//' "$temp_dir/fake intentd" >"$temp_dir/legacy intentd"
+chmod +x "$temp_dir/legacy intentd"
+! grep -q INTENTD_USER_SPECIALISTS_DIR "$temp_dir/legacy intentd" || fail "legacy fixture still names the override"
+port=$(free_port)
+PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" DEV_DATA_DIR="$temp_dir/legacy-data" \
+  SANDBOX_STATE_DIR="$state_dir" \
+  INTENTD_WORKSPACES_DIR="$temp_dir/ordinary workspaces" INTENTD_ASSERT_HERMETIC_ROOT=0 \
+  INTENTD_BIN="$temp_dir/legacy intentd" HEALTH_MODE=ok SANDBOX_READY_TIMEOUT="$ready_timeout" \
+  "$BASH" "$script" stack >"$temp_dir/legacy.out" 2>&1 &
+sandbox_pid=$!
+wait_for_ready "$temp_dir/legacy.out" || fail "legacy-daemon stack did not become ready: $(cat "$temp_dir/legacy.out")"
+grep -q "does not support INTENTD_USER_SPECIALISTS_DIR" "$temp_dir/legacy.out" || fail "legacy daemon was not flagged"
+! grep -q "isolated from ~/.intent/specialists" "$temp_dir/legacy.out" || fail "legacy daemon was reported as isolated"
+python3 - "$state_dir/stack.json" <<'PY' || fail "legacy daemon state claimed isolation"
+import json
+import sys
+state = json.load(open(sys.argv[1], encoding="utf-8"))
+assert state["userSpecialistsDir"] is None
+PY
+kill -TERM "$sandbox_pid"
+wait "$sandbox_pid" 2>/dev/null || true
+sandbox_pid=""
+
 # App mode connects to the selected installed daemon and leaves its lifetime
 # alone. This independent stub stands in for that daemon inside the fixture.
 app_data_dir="$temp_dir/installed data"
@@ -407,6 +438,7 @@ import sys
 with open(sys.argv[1], encoding="utf-8") as handle:
     state = json.load(handle)
 assert state["intentdSource"] == "installed" and state["socket"] == sys.argv[2]
+assert state["userSpecialistsDir"] is None
 PY
 kill -TERM "$sandbox_pid"
 wait "$sandbox_pid" 2>/dev/null || true

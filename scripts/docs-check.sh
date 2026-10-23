@@ -141,6 +141,7 @@ check_banned 'fixed bridge port' '51337'
 check_banned 'manual forward creation' 'mint(s|ed|ing)?[[:space:]]+(a[[:space:]]+)?forward'
 check_banned 'browser-rewritten local port' 'client[- ]local[[:space:]]+(port|ports|url|urls|host|address|origin|localhost)'
 check_banned 'remote websocket override' 'VITE_INTENTD_WS_URL'
+check_banned 'script completion polling hook' 'ws\.hook\.schedule.*ws\.script\.status'
 check_banned 'coordinator-only sequencing label' '(^|[^[:alpha:]])w[a]ve([[:space:]]+N)?([^[:alpha:]]|$)'
 
 hydration_docs=(AGENTS.md docs/fe/DEVELOPER_GUIDE.md)

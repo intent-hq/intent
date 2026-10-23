@@ -71,9 +71,33 @@ taxonomy and `ALL_EVENT_TYPES` ([intent-hq/intentd#756](https://github.com/inten
 | Provider signal | Event type | data payload |
 | --- | --- | --- |
 | turn start (agent-initiated turns **only**) | agent:stream:start | { agentId, messageId, reason: "harness-wake" } — emitted when the daemon opens an **implicit agent-initiated turn** for an out-of-turn `session/update` burst (§6.6; [intent-hq/monorepo#855](https://github.com/intent-hq/monorepo/issues/855)). `messageId` is the assistant messageId minted for the wake turn (the same id carried by the turn's `chat:stream:delta` / `agent:stream:activity` / `agent:tool:call` events and — when the turn persists one — the persisted assistant row; a no-content wake turn skips persistence and its `agent:stream:end` omits `messageId`, §6.6). `reason` is `"harness-wake"` — the only value today. **Prompt (user-initiated) turns never emit this event**: its absence is the normal case, not an error |
-| text token(s) **or tool call** — liveness signal | agent:stream:activity | { agentId, messageId, lastAgentResponse?, digest?, lastToolUse? } — liveness tick ([intent-hq/intentd#775](https://github.com/intent-hq/intentd/pull/775); renamed from `agent:stream:chunk`), leading-edge throttled per agent (first activity of a turn immediate, then ≤1/s; see the rename block above). **Emitted from BOTH the assistant-text-chunk arm and the tool-call arm** ([monorepo#1414](https://github.com/intent-hq/monorepo/issues/1414)), sharing the ONE per-agent throttle window — so a tool-heavy stretch that streams no assistant text keeps ticking (a watched-agent row no longer freezes at the turn's last text), while a turn mixing text and tool calls still emits at most one ping per second regardless of which arm opens the window. A tool-arm ping additionally carries `lastToolUse` = `{ name, status }` for the call just recorded — `name` the same derived real tool name as `agent:tool:call`'s `toolName`, `status` the same normalized `started` \| `completed` \| `error` word — **omitted entirely on text-chunk pings** (never `null`); it is a rendering hint, the canonical tool signal remains `agent:tool:call`. Both arms stamp the same server-derived live-preview fields ([intent-hq/intentd#792](https://github.com/intent-hq/intentd/pull/792)): `lastAgentResponse` = trailing ≤500 chars of the streamed-so-far text blocks clipped at the last completed newline (trailing partial line excluded — [intent-hq/intentd#795](https://github.com/intent-hq/intentd/pull/795); `...`-prefixed when truncated), `digest` = the parsed digest span, derived from the **unclipped** text (its capture requires the closing tag) — same extraction as the §5.5 live-turn overlay; each field **omitted until derivable** (no completed line / no closed digest yet; never an empty string). Streamed reasoning never contributes to either field: `thinking` blocks (§7.1, additive within v6.0 — [intent-hq/intentd#973](https://github.com/intent-hq/intentd/pull/973)) and a pending thought buffer are excluded from the preview derivation. The raw incremental text itself flows on the internal `chat:stream:delta` event — `{ agentId, content, messageId, blockIndex, blockId, blockType, streamId? }`, enriched with the §7.1 block-identity fields (`blockType` is `"thinking"` on reasoning chunks) — which is outside the `agent:*` filter family and consumed by the §7.1 `chat.subscribe` forwarder |
+| text token(s) **or tool call** — liveness signal | agent:stream:activity | { agentId, messageId, lastAgentResponse?, digest?, lastToolUse? } — liveness tick ([intent-hq/intentd#775](https://github.com/intent-hq/intentd/pull/775); renamed from `agent:stream:chunk`), leading-edge throttled per agent (first activity of a turn immediate, then ≤1/s; see the rename block above). Details below the table. |
 | tool call | agent:tool:call | { agentId, toolName, title, toolKind, toolCallId, input, status, output?, messageId, blockIndex, blockId, resultBlockIndex?, resultBlockId?, proposalBlockIds?, registeredAttachments? } — the single tool signal; `toolName` is the **real** tool name derived from the ACP title (`intent-acp::session::derive_tool_name`), `title` the raw human-readable ACP title; for a **known** `toolCallId`, sparse `tool_call_update` fields (`title`/`toolName`/`toolKind`/`input`) are backfilled from the per-call transcript state before the event is published (§7.1, [intent-hq/intentd#551](https://github.com/intent-hq/intentd/pull/551)); `blockIndex`/`blockId` identify the `tool_use` block, and `resultBlockIndex`/`resultBlockId`/`proposalBlockIds` the `tool_result` and standalone proposal-resource blocks the SAME update materialized in the durable transcript — each present only once its block exists (a `started` or output-less update carries none), so the §7.1 `chat.subscribe` delta path stamps the real persisted ids instead of predicting them ([monorepo#2029](https://github.com/intent-hq/monorepo/issues/2029)); `registeredAttachments` is the claimed §7.1 `AtToolResult` canonical block batch, present only when the completed call claimed registered blocks (so the live `chat.subscribe` delta path attaches the SAME blocks the persisted transcript does); §7.1 `chat.subscribe` tails it to synthesize `tool_use` / `tool_result` blocks |
-| complete or error | agent:stream:end | { agentId, stopReason?, finishReason?, interruptReason?, interruptedBy?, messageId?, trailingBlocks?, turnId?, lastAgentResponse?, digest? } — the turn-worker terminal emit (`agent_session.rs` `run_prompt_turn`) covers **both** normal completion **and** error-terminated turns and additively carries ([monorepo#732](https://github.com/intent-hq/monorepo/issues/732), [intent-hq/intentd#575](https://github.com/intent-hq/intentd/pull/575)): `messageId` — the turn's assistant message id, present whenever the turn persisted an assistant message (set only **after** the successful store append, so the event can never advertise a row that was never written); and `trailingBlocks` — the drained §7.1 `AtTurnEnd` resource blocks (e.g. `ws.app.question.ask` question blocks) in registration order, **byte-identical** to the trailing blocks of the persisted message, **omitted** when none were drained. `finishReason` — the **abnormal finish reason**: present only when the turn completed with a non-`end_turn` ACP stop reason (`refusal` \| `max_tokens` \| `max_turn_requests`), carrying that stop reason verbatim; omitted on normal (`end_turn`) completions, error-terminated turns, and every non-turn-worker emit site — never `null`. When the turn persisted an assistant row, the same value is durably tagged on that row as `metadata.finishReason` (§7 transcript metadata), so a reloading client can render the ending without having seen this event. An abnormal finish reason is still a **completion** (`agent:idle` follows with its existing lifecycle `finishReason` field; no `agent:failed`); distinct from the interrupt path's `stopReason: "interrupted"` below. The two fields are not independently optional in one direction: `trailingBlocks` is a trailing slice of the persisted message's blocks, so its presence **implies** `messageId` is present (a client always has the id to associate the blocks with); the converse does not hold — `messageId` routinely appears without `trailingBlocks`. `turnId` ([monorepo#1022](https://github.com/intent-hq/monorepo/issues/1022)) — the turn correlation id naming the logical turn this event closes (the same id the send/enqueue RPC returned, §5.5/§6.6), stamped on both the complete and error arms; omitted when the turn carries none, never `null`. **Final live-preview values ([intent-hq/intentd#792](https://github.com/intent-hq/intentd/pull/792)):** every transcript-bearing terminal emit — the turn-worker emit, the interrupt flush, and the harness-wake finalize — also stamps `lastAgentResponse?` / `digest?` re-derived from the turn's full streamed text (same fields, same ≤500-char cap, and same omit-until-derivable rule as the throttled `agent:stream:activity` frames above — but with **no newline clipping**: [intent-hq/intentd#795](https://github.com/intent-hq/intentd/pull/795) clips only mid-turn frames, so the terminal emit carries the turn's true final text including any unterminated last line), so a client tracking the preview push-style lands on the turn's true final state without an `agent.get` refetch. The not-surfaced-by-streaming failure path (`publish_terminal_failure_events`, e.g. spawn-retry exhaustion) emits `{ agentId, turnId? }` — the same `turnId` as its paired `agent:failed`, and no preview fields (nothing streamed); the daemon never emits `content` or `streamId` on this event. The **user-interrupt path** (§7.2) — **except** when its flush collides with an already-persisted row, the race governed solely by §7.2 "Interrupt racing a completed turn" ([intent-hq/intentd#1720](https://github.com/intent-hq/intentd/pull/1720)): a completed row yields the normal-completion shape with no interrupt fields, an already-interrupted row yields the interrupted shape mirroring that row's reason (so e.g. `"system_suspend"` can reach the wire) — additionally carries `stopReason: "interrupted"` and `interruptReason` (within v4.5, [intent-hq/intentd#919](https://github.com/intent-hq/intentd/pull/919): from the live path's own flush only ever `"user_stop"` \| `"preempted_by_message"` — the interrupt emit comes solely from the live-session interrupt path; the `"daemon_shutdown"` / `"agent_stopped"` teardowns flush the interrupted row without emitting this event, so those reasons appear only in row metadata (§7.2). Always present on the interrupt emit: it matches the persisted row's `metadata.interruptReason` when a row exists (`messageId` present) and is still stamped from the interruption cause when no row was persisted (`messageId` absent)), plus `interruptedBy` (only on `"preempted_by_message"` with an attributable sender: `{ kind: "user" }` or `{ kind: "agent", agentId, name? }` — §7.2), plus `messageId` when an interrupted assistant row was persisted (the id of that row — with the v4.5 always-persist marker-row semantics that is every emitting-path interrupt that found a registered live-turn slot, zero-output turns included; §7.2) and the preview fields derived from the flushed partial turn — but deliberately **no** `trailingBlocks` (the `AtTurnEnd` registry is not drained on the interrupt path; pending entries wait for the next turn's drain / the registry TTL) and no `turnId` (the interrupt emit is a manager-side flush, not the turn worker's terminal). Normal-completion, error, and harness-wake emits never carry `interruptReason` / `interruptedBy` (absent, never `null`). The **harness-wake turn finalize** (`agent_session.rs` `run_harness_wake_turn`, §6.6) is a fourth emit site: its payload is `{ agentId, messageId?, lastAgentResponse?, digest? }` — `messageId` present iff the wake turn persisted an assistant row, and **never** `trailingBlocks` (the wake path performs no `AtTurnEnd` drain; only `run_prompt_turn` does) or `turnId` (agent-initiated turns have no user retry record). A **prompt idle-timeout** turn ([intentd#741](https://github.com/intent-hq/intentd/pull/741), §6.6 warn-and-continue) closes through the ordinary turn-worker emit with a payload indistinguishable from a normal completion — `messageId` iff a partial assistant row was flushed (a fully silent turn carries none), `turnId` of the timed-out turn, no `stopReason` — and is followed by the persisted `[SYSTEM WARNING]` user row + redriven warning turn instead of `agent:failed` / `agent:idle`, until the consecutive-timeout cap is spent (§6.6) |
+| complete or error | agent:stream:end | { agentId, stopReason?, finishReason?, interruptReason?, interruptedBy?, messageId?, trailingBlocks?, turnId?, lastAgentResponse?, digest? } — details below the table. |
+
+**agent:stream:activity details.**
+
+**Emitted from BOTH the assistant-text-chunk arm and the tool-call arm** ([monorepo#1414](https://github.com/intent-hq/monorepo/issues/1414)), sharing the ONE per-agent throttle window — so a tool-heavy stretch that streams no assistant text keeps ticking (a watched-agent row no longer freezes at the turn's last text), while a turn mixing text and tool calls still emits at most one ping per second regardless of which arm opens the window.
+A tool-arm ping additionally carries `lastToolUse` = `{ name, status }` for the call just recorded — `name` the same derived real tool name as `agent:tool:call`'s `toolName`, `status` the same normalized `started` | `completed` | `error` word — **omitted entirely on text-chunk pings** (never `null`); it is a rendering hint, the canonical tool signal remains `agent:tool:call`.
+Both arms stamp the same server-derived live-preview fields ([intent-hq/intentd#792](https://github.com/intent-hq/intentd/pull/792)): `lastAgentResponse` = trailing ≤500 chars of the streamed-so-far text blocks clipped at the last completed newline (trailing partial line excluded — [intent-hq/intentd#795](https://github.com/intent-hq/intentd/pull/795); `...`-prefixed when truncated), `digest` = the parsed digest span, derived from the **unclipped** text (its capture requires the closing tag) — same extraction as the §5.5 live-turn overlay; each field **omitted until derivable** (no completed line / no closed digest yet; never an empty string).
+Streamed reasoning never contributes to either field: `thinking` blocks (§7.1, additive within v6.0 — [intent-hq/intentd#973](https://github.com/intent-hq/intentd/pull/973)) and a pending thought buffer are excluded from the preview derivation.
+The raw incremental text itself flows on the internal `chat:stream:delta` event — `{ agentId, content, messageId, blockIndex, blockId, blockType, streamId? }`, enriched with the §7.1 block-identity fields (`blockType` is `"thinking"` on reasoning chunks) — which is outside the `agent:*` filter family and consumed by the §7.1 `chat.subscribe` forwarder
+
+**agent:stream:end details.**
+
+- the turn-worker terminal emit (`agent_session.rs` `run_prompt_turn`) covers **both** normal completion **and** error-terminated turns and additively carries ([monorepo#732](https://github.com/intent-hq/monorepo/issues/732), [intent-hq/intentd#575](https://github.com/intent-hq/intentd/pull/575)): `messageId` — the turn's assistant message id, present whenever the turn persisted an assistant message (set only **after** the successful store append, so the event can never advertise a row that was never written); and `trailingBlocks` — the drained §7.1 `AtTurnEnd` resource blocks (e.g. `ws.app.question.ask` question blocks) in registration order, **byte-identical** to the trailing blocks of the persisted message, **omitted** when none were drained.
+  `finishReason` — the **abnormal finish reason**: present only when the turn completed with a non-`end_turn` ACP stop reason (`refusal` | `max_tokens` | `max_turn_requests`), carrying that stop reason verbatim; omitted on normal (`end_turn`) completions, error-terminated turns, and every non-turn-worker emit site — never `null`.
+  When the turn persisted an assistant row, the same value is durably tagged on that row as `metadata.finishReason` (§7 transcript metadata), so a reloading client can render the ending without having seen this event.
+  An abnormal finish reason is still a **completion** (`agent:idle` follows with its existing lifecycle `finishReason` field; no `agent:failed`); distinct from the interrupt path's `stopReason: "interrupted"` below.
+  The two fields are not independently optional in one direction: `trailingBlocks` is a trailing slice of the persisted message's blocks, so its presence **implies** `messageId` is present (a client always has the id to associate the blocks with); the converse does not hold — `messageId` routinely appears without `trailingBlocks`.
+  `turnId` ([monorepo#1022](https://github.com/intent-hq/monorepo/issues/1022)) — the turn correlation id naming the logical turn this event closes (the same id the send/enqueue RPC returned, §5.5/§6.6), stamped on both the complete and error arms; omitted when the turn carries none, never `null`.
+- **Final live-preview values ([intent-hq/intentd#792](https://github.com/intent-hq/intentd/pull/792)):** every transcript-bearing terminal emit — the turn-worker emit, the interrupt flush, and the harness-wake finalize — also stamps `lastAgentResponse?` / `digest?` re-derived from the turn's full streamed text (same fields, same ≤500-char cap, and same omit-until-derivable rule as the throttled `agent:stream:activity` frames above — but with **no newline clipping**: [intent-hq/intentd#795](https://github.com/intent-hq/intentd/pull/795) clips only mid-turn frames, so the terminal emit carries the turn's true final text including any unterminated last line), so a client tracking the preview push-style lands on the turn's true final state without an `agent.get` refetch.
+  The not-surfaced-by-streaming failure path (`publish_terminal_failure_events`, e.g. spawn-retry exhaustion) emits `{ agentId, turnId? }` — the same `turnId` as its paired `agent:failed`, and no preview fields (nothing streamed); the daemon never emits `content` or `streamId` on this event.
+  The **user-interrupt path** (§7.2) — **except** when its flush collides with an already-persisted row, the race governed solely by §7.2 "Interrupt racing a completed turn" ([intent-hq/intentd#1720](https://github.com/intent-hq/intentd/pull/1720)): a completed row yields the normal-completion shape with no interrupt fields, an already-interrupted row yields the interrupted shape mirroring that row's reason (so e.g. `"system_suspend"` can reach the wire) — additionally carries `stopReason: "interrupted"` and `interruptReason` (within v4.5, [intent-hq/intentd#919](https://github.com/intent-hq/intentd/pull/919): from the live path's own flush only ever `"user_stop"` | `"preempted_by_message"` — the interrupt emit comes solely from the live-session interrupt path; the `"daemon_shutdown"` / `"agent_stopped"` teardowns flush the interrupted row without emitting this event, so those reasons appear only in row metadata (§7.2).
+  Always present on the interrupt emit: it matches the persisted row's `metadata.interruptReason` when a row exists (`messageId` present) and is still stamped from the interruption cause when no row was persisted (`messageId` absent)), plus `interruptedBy` (only on `"preempted_by_message"` with an attributable sender: `{ kind: "user" }` or `{ kind: "agent", agentId, name? }` — §7.2), plus `messageId` when an interrupted assistant row was persisted (the id of that row — with the v4.5 always-persist marker-row semantics that is every emitting-path interrupt that found a registered live-turn slot, zero-output turns included; §7.2) and the preview fields derived from the flushed partial turn — but deliberately **no** `trailingBlocks` (the `AtTurnEnd` registry is not drained on the interrupt path; pending entries wait for the next turn's drain / the registry TTL) and no `turnId` (the interrupt emit is a manager-side flush, not the turn worker's terminal).
+  Normal-completion, error, and harness-wake emits never carry `interruptReason` / `interruptedBy` (absent, never `null`).
+  The **harness-wake turn finalize** (`agent_session.rs` `run_harness_wake_turn`, §6.6) is a fourth emit site: its payload is `{ agentId, messageId?, lastAgentResponse?, digest? }` — `messageId` present iff the wake turn persisted an assistant row, and **never** `trailingBlocks` (the wake path performs no `AtTurnEnd` drain; only `run_prompt_turn` does) or `turnId` (agent-initiated turns have no user retry record).
+  A **prompt idle-timeout** turn ([intentd#741](https://github.com/intent-hq/intentd/pull/741), §6.6 warn-and-continue) closes through the ordinary turn-worker emit with a payload indistinguishable from a normal completion — `messageId` iff a partial assistant row was flushed (a fully silent turn carries none), `turnId` of the timed-out turn, no `stopReason` — and is followed by the persisted `[SYSTEM WARNING]` user row + redriven warning turn instead of `agent:failed` / `agent:idle`, until the consecutive-timeout cap is spent (§6.6)
 
 Structured consumers should prefer the §7.1 `chat.subscribe` channel (the canonical structured
 transcript) over reconstructing turn state from the firehose.
@@ -82,7 +106,13 @@ Notes for client implementers:
 
 - **Ordering.** Events for one agent arrive in emission order over a single connection. Correlate a stream with `data.agentId` (and `data.streamId` when present). Tool-call activity arrives as the single `agent:tool:call` event interleaved with the `agent:stream:activity` liveness ticks (and, on the internal chat channel, `chat:stream:delta` text); the §7.1 `chat.subscribe` channel synthesizes ordered structured blocks from these signals.
 - **Agent-initiated turns.** A stream may begin with **no user send**: `agent:stream:start { agentId, messageId, reason: "harness-wake" }` announces an implicit agent-initiated turn (§6.6). Clients should open the same streaming UI as a user-initiated turn — spinner/busy state, active Stop/interrupt, autoscroll, live transcript — just with no user message row above it. A send racing an active wake turn auto-queues via the normal busy path and streams after the wake turn's `agent:stream:end`.
-- **Terminal event.** `complete` and `error` are mutually exclusive and **both** map to `agent:stream:end` — there is exactly one terminal event per stream. The complete/error payloads are identical by design — both carry the additive `messageId` / `trailingBlocks` fields under the same conditions (the §7.1 `AtTurnEnd` drain deliberately runs on the error path too); the **user-interrupt** terminal emit alone adds `stopReason: "interrupted"` + `interruptReason` (and `interruptedBy` on message preemption; + `messageId` when an interrupted row was persisted — §7.2, never `trailingBlocks`), letting clients render a live, reason-specific "Stopped" indicator without a transcript re-fetch. A **harness-wake** turn's terminal emit carries `messageId` when the wake turn persisted a row and never `trailingBlocks` (§6.6; see the `agent:stream:end` row above). A client treats `stream:end` as "this turn is done" and then re-fetches the authoritative transcript via `agent.getConversation` if it needs the final, persisted message — though `trailingBlocks` lets it append the turn-end attachments to the finalized in-flight message immediately, without waiting on that re-fetch. A client that does both must not double-render: `trailingBlocks` are byte-identical to the persisted message's trailing blocks, so on re-fetch the client **replaces** the finalized in-flight message (keyed by `messageId`) with the persisted one rather than merging block lists. On the `error` arm the paired lifecycle `agent:failed` (§6 agent lifecycle row) carries `{ agentId, error, turnId?, parentAgentId? }` plus — **only** when the failure is a provider usage/quota rejection ([intent-hq/intentd#1823](https://github.com/intent-hq/intentd/pull/1823)) — the additive `errorCode: "quota-exceeded"` and `providerId?` pair (both absent, never `null`, on every other failure; `providerId` omitted when unresolvable), the structured signal behind a "retry on another provider" affordance; the `agent:stream:end` payload itself never carries either field.
+- **Terminal event.**
+  `complete` and `error` are mutually exclusive and **both** map to `agent:stream:end` — there is exactly one terminal event per stream.
+  The complete/error payloads are identical by design — both carry the additive `messageId` / `trailingBlocks` fields under the same conditions (the §7.1 `AtTurnEnd` drain deliberately runs on the error path too); the **user-interrupt** terminal emit alone adds `stopReason: "interrupted"` + `interruptReason` (and `interruptedBy` on message preemption; + `messageId` when an interrupted row was persisted — §7.2, never `trailingBlocks`), letting clients render a live, reason-specific "Stopped" indicator without a transcript re-fetch.
+  A **harness-wake** turn's terminal emit carries `messageId` when the wake turn persisted a row and never `trailingBlocks` (§6.6; see the `agent:stream:end` details above).
+  A client treats `stream:end` as "this turn is done" and then re-fetches the authoritative transcript via `agent.getConversation` if it needs the final, persisted message — though `trailingBlocks` lets it append the turn-end attachments to the finalized in-flight message immediately, without waiting on that re-fetch.
+  A client that does both must not double-render: `trailingBlocks` are byte-identical to the persisted message's trailing blocks, so on re-fetch the client **replaces** the finalized in-flight message (keyed by `messageId`) with the persisted one rather than merging block lists.
+  On the `error` arm the paired lifecycle `agent:failed` (§6 agent lifecycle details) carries `{ agentId, error, turnId?, parentAgentId? }` plus — **only** when the failure is a provider usage/quota rejection ([intent-hq/intentd#1823](https://github.com/intent-hq/intentd/pull/1823)) — the additive `errorCode: "quota-exceeded"` and `providerId?` pair (both absent, never `null`, on every other failure; `providerId` omitted when unresolvable), the structured signal behind a "retry on another provider" affordance; the `agent:stream:end` payload itself never carries either field.
 - **Dedup.** The same agent output is also persisted; the live `chat:stream:delta` text (and its `agent:stream:activity` liveness ticks) is *incremental UI sugar*. Canonical state is the persisted conversation. After `stream:end` (or on reconnect) call `agent.getConversation` rather than reconstructing solely from chunks. User messages echo cross-client as the user-row `agent:message` event (`role: "user"`, carrying a stable `messageId` — §6.5/§6.6; `agent:user-message:sent` is reserved-but-unused) so other clients can de-dupe their own optimistic insert.
 - **Sending input.** Use `agent.sendMessage` (auto-queues if the agent is mid-stream; with `priority: "interrupt"` it instead preempts the turn keep-alive and streams immediately — duplicate interrupt delivery with the same `messageId` is absorbed idempotently, and an interrupt landing during turn startup queues keep-alive instead of preempting), `agent.queueMessage` to explicitly enqueue, or `agent.sendQueuedMessageNow` to atomically pull one already-queued entry and deliver it immediately with interrupt priority (the rest of the queue is preserved). `agent.stop` cancels an in-flight stream. Note the wire default for an omitted `priority` is queue-if-busy; the agent-facing `ws.agent.send` / `ws.agent.sendToTask` MCP bindings instead resolve an omitted `priority` to `"interrupt"` (A2A sends interrupt by default; explicit `priority: "queue"` opts back into queue-if-busy — behavior only, within v7.0, [intentd#1292](https://github.com/intent-hq/intentd/pull/1292); §5.5).
 
@@ -97,10 +127,12 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
 
 - **Methods:** `chat.subscribe` / `chat.unsubscribe`, intercepted on the subscription fast-path
   before the JSON-RPC dispatcher (like `events.subscribe`). `params` is
-  `{ agentId, limit?, sinceMessageId?, deltaEncoding?, projection?, replaceGroup?, workspaceId? }` — a missing/empty `agentId` is a
+  `{ agentId, limit?, sinceMessageId?, historyDelivery?, deltaEncoding?, projection?, replaceGroup?, workspaceId? }` — a missing/empty `agentId` is a
   `-32602` error.
   `chat.subscribe` returns `{ subscriptionId }`, then
   pushes a seq-0 `subscription.push` **snapshot**, then ordered **deltas** (seq 1, 2, …).
+  The prepared opt-in progressive-history contract below inserts ordered `history`
+  pushes between the initial snapshot and live deltas.
   `replaceGroup` (atomic swap) and per-connection cleanup behave as for the other channels (§6.1).
   The [prepared routing-only](./workspace-routing.md) `workspaceId?` is optional
   for direct callers; workspace clients capture it with the subscription and
@@ -115,10 +147,70 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   and lag-recovery snapshots, including any merged live-turn row. It is a message-count
   upper bound, not a guaranteed page size: shorter histories or the existing slim byte
   budget can yield fewer messages. For example, `limit: 50` requests the newest 50
-  messages in transcript order when enough history fits the budget. No automatic
-  history backfill is added. Daemons predating configurable limits ignore this parameter and retain
+  messages in transcript order when enough history fits the budget. Atomic snapshot
+  delivery adds no automatic history backfill. Daemons predating configurable limits ignore this parameter and retain
   their five-message window; daemons with configurable limits predating the default
   increase also default to five, but honor an explicit `limit`.
+- **Progressive initial history (prepared additive contract; docs lead implementation).**
+  `historyDelivery` accepts `"progressive"` or `"snapshot"`; absent / `null` selects
+  the existing atomic snapshot behavior. Any other value or type returns `-32602`.
+  A progressive subscription's snapshots echo `historyDelivery: "progressive"`
+  and carry `initialHistory: { target, received, complete }`. `target` is the
+  validated subscription `limit`; `received` counts distinct rows delivered from
+  the initial window, including a synthetic live row at most once. These counts
+  are separate from transcript-wide `totalMessages` and from live-message arrivals.
+
+  For a fresh subscription or failed resume, the daemon sends the newest complete
+  slim message in the seq-0 snapshot, then one older complete message per
+  `subscription.push` with `kind: "history"`. An empty conversation instead sends
+  a complete empty snapshot. Every history frame carries
+  `history: { message?, target, received, complete, nextToken?, truncated?, totalMessages? }`.
+  A message-bearing frame has `complete: false`; the final frame has no `message`,
+  has `complete: true`, and supplies authoritative `nextToken`, `truncated`, and
+  `totalMessages`. The final frame is sent even if the newest row alone meets the
+  target. While incomplete, the initial snapshot withholds its usable older-history
+  cursor (`nextToken: null`); that null is **not** evidence of exhaustion.
+
+  Arrival order is newest to oldest. Display order remains chronological by message
+  `seq`, with `id` used for identity and deduplication. These are historical message
+  rows, not live block updates: they must not start an assistant streaming indicator,
+  count as new unread messages, or replay new-message side effects. History frames
+  share the subscription's monotonically increasing envelope `seq` with snapshots
+  and live deltas; duplicate, stale, and gap handling applies to all three kinds.
+  For this mode, the convergence invariant includes the history pushes and covers
+  the selected initial window plus subsequent live events; a single byte-budgeted
+  atomic conversation page can contain fewer rows than that reconstructed window.
+
+  The daemon owns continuation until it has sent the requested number of initial
+  rows or reached the actual beginning of the conversation. A slim page's 512 KiB
+  budget can split the initial transfer into multiple bounded reads; it must not
+  silently lower the target. Slim block projections, the one-message floor, bounded
+  buffering, and connection backpressure remain in force. The final cursor points
+  immediately before the oldest delivered initial row. New rows arriving during
+  transfer do not count toward the captured initial window. A read failure or
+  interrupted transfer must recover rather than report successful exhaustion.
+
+  Clients render rows as they arrive but must gate additional history requests,
+  including automatic viewport filling and history seeks, until `complete: true`.
+  First-content visibility and initial-history completion are separate states;
+  completion-dependent read markers and divider placement must not finalize from
+  the newest row alone. Bottom-follow and reader-position anchoring apply to these
+  prepends, including the first transition from short content to an overflowing
+  viewport. Completion does not require changing short-chat alignment.
+
+  Successful resumes and recovery snapshots may remain atomic. They echo the mode
+  with `initialHistory.complete: true`, preserving the existing resume/reset and
+  byte-budget semantics. A replacement snapshot supersedes any partial initial
+  transfer. Disconnect, unsubscribe, revocation, and transcript invalidation must
+  prevent the superseded transfer's chunks or completion from mutating its replacement.
+  Live deltas continue after the initial transfer, with the existing live-turn
+  overlap and lag-recovery protections.
+
+  The echo negotiates delivery: older daemons ignore the request parameter and send
+  an ordinary snapshot without the echo, which a new client treats as complete.
+  Clients that omit `historyDelivery` never receive `history` frames. This keeps
+  desktop and iOS adoption independent; requesting a different `limit` alone does
+  not opt a client into progressive history.
 - **Slim projection (the wire default since v8.0; introduced opt-in within v7.1 —
   [intent-hq/intentd#1304](https://github.com/intent-hq/intentd/pull/1304)).** Every
   subscription serves the same bounded tool/image block projection as
@@ -127,15 +219,15 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   (pairing/structural fields intact), and oversized `image.data` is swapped for the write-time
   thumbnail (`dataTruncated`/`dataIsThumbnail`/`dataBytes`; legacy pre-thumbnail rows serve the
   block with `data` omitted). The projection is fixed for the subscription's lifetime and applies
-  to **every frame the subscription emits** — the seq-0 snapshot, lag-recovery snapshots, live
-  tool-block deltas, and the seq-0 live-turn merge — so slim snapshots and deltas agree on the
+  to **every frame the subscription emits** — the seq-0 snapshot, history frames, lag-recovery
+  snapshots, live tool-block deltas, and the seq-0 live-turn merge — so their projections agree on the
   served block shape. Absent / `null` selects slim (the v8.0 default, BREAKING over the v7.1
   "byte-identical" opt-in contract) and `projection: "slim"` is an explicit no-op; any other
   value is `-32602`, never coerced. A client holding a truncated
   slim block fetches the full body on demand via `agent.getMessageBlock` (§5.5, v7.2). Slim
-  snapshots additionally inherit the **slim page byte budget** (within v7.2 —
-  [intent-hq/intentd#1314](https://github.com/intent-hq/intentd/pull/1314)): the seq-0 and
-  lag-recovery snapshots reuse the `agent.getConversation` read, so a snapshot page is bounded
+  atomic snapshots additionally inherit the **slim page byte budget** (within v7.2 —
+  [intent-hq/intentd#1314](https://github.com/intent-hq/intentd/pull/1314)): atomic initial,
+  successful-resume and recovery snapshots reuse the `agent.getConversation` read, so a snapshot page is bounded
   at `SLIM_PAGE_BUDGET_BYTES` (512 KiB) total serialized message bytes and may carry fewer than
   the chosen message limit, with `nextToken` re-minted at the first excluded row (§5.5) — the client
   pages older history exactly as before, just in more round-trips. The budget covers the
@@ -143,7 +235,9 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   (always served, even alone over budget — the §5.5 one-message floor), and oldest persisted
   rows are evicted until the merged page fits both the chosen message limit and byte budget,
   with `truncated`/`nextToken` re-minted at the eviction boundary so the evicted rows stay
-  reachable via `agent.getConversation`. Since v10.0
+  reachable via `agent.getConversation`. Progressive initial delivery instead owns
+  bounded continuation until its target or exhaustion; it withholds the cursor
+  until the terminal history frame, as specified above. Since v10.0
   every frame also inherits the `agent.getConversation` legacy-inline-file-block projection
   (§5.5): a persisted pre-10.0 `{ type: "file", data, … }` block with no non-empty
   `attachmentId` is served as `{ type: "text", text: "Attached file: <fileName>" }` (`"Attached
@@ -152,26 +246,35 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   delta ever carries a `type: "file"` block with a `data` key.
 - **Resume via `sinceMessageId` (additive within v6.4).** A reconnecting client that already
   holds the transcript up to a known message id may pass it as the optional `sinceMessageId`
-  (string). Absent / `null` / `""` all mean "no resume" — the standard snapshot below, carrying
+  (string). Absent / `null` / `""` all mean "no resume" — fresh delivery in the selected mode, carrying
   **no** `resumed` key on the initial snapshot; a present non-string value is a `-32602` error. When provided,
   the daemon reads the **same newest page bounded by the subscription's chosen limit** as
-  the standard snapshot (still exactly one conversation read — resume is a post-filter, never a second
-  fetch; monorepo#958 cost contract)
+  the atomic snapshot to check the anchor (exactly one bounded conversation read
+  for this check — resume filtering never searches further back; monorepo#958 cost contract)
   and then:
   - **Id found in the page** → the seq-0 snapshot's `messages[]` carries only the messages
     **after** that id (possibly empty when the id is the newest row), with `resumed: true`,
     `truncated: false`, and `nextToken: null` — no gap exists toward older history, the client
     already holds everything up to `sinceMessageId`, so no older-pages cursor is served.
     `totalMessages` stays the transcript-wide count (same semantics as the standard snapshot,
-    where `messages.length` already ≠ `totalMessages` on a truncated page).
+    where `messages.length` already ≠ `totalMessages` on a truncated page). This is
+    atomic in either delivery mode; progressive subscribers also receive the mode
+    echo and `initialHistory.complete: true`.
   - **Id not in the page** (unknown, pruned, or older than the bounded newest page —
     indistinguishable without an unbounded lookup, which the bounded-read contract forbids) →
-    the **standard full page** is served unchanged (`truncated` / `nextToken` intact) with
+    in atomic mode, the **standard full page** is served unchanged (`truncated` / `nextToken` intact) with
     `resumed: false`: the client MUST discard its cached transcript and rehydrate from this
-    snapshot as if it had subscribed fresh.
+    snapshot as if it had subscribed fresh. In progressive mode, the anchor check
+    is followed by fresh progressive delivery: the newest row is sent with
+    `resumed: false`, an incomplete `initialHistory`, and `nextToken: null`, then
+    older rows and terminal completion follow as specified above. An empty
+    conversation completes in its empty seq-0 snapshot. These additional bounded
+    history reads fill the requested window; they do not search for the missing anchor.
   The live-turn slot merge (in-flight or orphaned, below) and the activity-flags overlay apply
-  identically in both cases, **after** the filter — a merged partial is never trimmed away.
-  Deltas (seq 1, 2, …) are unaffected by resume.
+  after the filter for atomic delivery, or when capturing the first progressive
+  row — a merged partial is never trimmed away by the resume filter.
+  Live deltas retain their semantics. They begin at seq 1 after an atomic resume,
+  or after the last history frame when a failed resume restarts progressive delivery.
 - **Transcript invalidation.** Editing/regenerating or replacing messages emits
   `agent:updated` with `truncatedCount` or `replacedCount`. Standing chat subscriptions
   respond with a fresh snapshot bounded by the subscription's chosen limit (including any
@@ -224,7 +327,7 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   preserved — the client simply applies more appends). Tool calls, terminal reconciles, and
   message-row deltas are conflation barriers in both modes, so a conflated fragment run never
   crosses an authoritative frame.
-- **Snapshot granularity = messages; delta granularity = blocks.** Fresh, stale-resume,
+- **Snapshot granularity = messages; delta granularity = blocks.** In atomic mode, fresh, stale-resume,
   invalidation and lag-recovery snapshots contain the newest **at most `limit` messages**
   (default **20**), including any merged live-turn row. The daemon requests
   `agent.getConversation` with the chosen subscription limit, then counts a merged live row
@@ -742,6 +845,40 @@ terminal must refetch. Live (pre-terminal) chunk deltas never carry `metadata`.
     "truncated":false,"totalMessages":1,"nextToken":null } } }
 ```
 
+#### Progressive history frames (prepared contract)
+
+For a two-message conversation requested with `limit: 20`, seq 0 carries only
+the newer row and `initialHistory: { "target": 20, "received": 1, "complete": false }`,
+alongside the `historyDelivery: "progressive"` echo. The older row follows:
+
+```json
+{ "jsonrpc":"2.0","method":"subscription.push","params":{
+  "subscriptionId":"sub-progressive","kind":"history","seq":1,
+  "history":{
+    "target":20,"received":2,"complete":false,
+    "message":{
+      "id":"older-user","agentId":"agent-123","seq":0,"role":"user",
+      "contentBlocks":[ { "type":"text","id":"older-user:0","text":"Run the tests" } ],
+      "timestamp":"2026-06-27T01:00:00.000Z"
+    } } } }
+```
+
+Exhaustion completes the transfer without waiting for eighteen nonexistent rows:
+
+```json
+{ "jsonrpc":"2.0","method":"subscription.push","params":{
+  "subscriptionId":"sub-progressive","kind":"history","seq":2,
+  "history":{
+    "target":20,"received":2,"complete":true,
+    "nextToken":null,"truncated":false,"totalMessages":2 } } }
+```
+
+A transfer that instead reaches its target with older history remaining has
+`truncated: true` and a non-null final `nextToken`. Live deltas then start at the
+next envelope sequence number. Message `seq` is transcript position; envelope
+`seq` is transport order, so the two sequences intentionally run in different
+directions during initial history delivery.
+
 #### delta frame (in-flight block upsert)
 
 ```json
@@ -786,7 +923,13 @@ On a **user interrupt** of an in-flight turn — `agent.stop`, `agent.sendQueued
 
 This is the same convention as the graceful-shutdown flush of an in-flight turn (which stamps `interruptReason: "daemon_shutdown"`).
 
-**Terminal-event payload.** The interrupt-path terminal `agent:stream:end` (§7 emitted-events table) is emitted **only** by the live-session interrupt path (`interrupt_inner`) — i.e. on the `"user_stop"` and `"preempted_by_message"` reasons; the `"daemon_shutdown"` and `"agent_stopped"` teardowns flush the interrupted row **without** emitting any `agent:stream:end`, so those two reasons exist only in persisted row metadata, never on this event. Everything below describes the emit when this path's own flush persisted the row (or nothing was persisted); when the flush instead **collides** with a row already persisted under the turn's id, the paragraph "Interrupt racing a completed turn" below alone defines the emit — normal-completion shape on a completed row, or the interrupted shape mirroring the colliding row's reason (which is why `"system_suspend"` can appear on this event) — and the "always" / "only ever" statements here do not apply. The emit carries `stopReason: "interrupted"`, plus `messageId` when an interrupted assistant row was persisted — the id of that row — so clients can flag the turn as stopped live, without waiting for the transcript re-fetch. It also **always** carries `interruptReason` (`"user_stop"` or `"preempted_by_message"` on the wire) — matching the persisted row's `metadata.interruptReason` when a row exists (`messageId` present), and still stamped from the interruption cause when the interrupt landed before any row could persist (`messageId` absent) — plus `interruptedBy` under the same presence rule as the row metadata, so clients can render the reason-specific Stopped indicator live. Normal-completion and error-terminated turn emits never carry `stopReason` / `interruptReason` / `interruptedBy`, but they **do** carry `messageId` (when the turn persisted an assistant message) and `trailingBlocks` (when §7.1 `AtTurnEnd` blocks were drained — the drain deliberately runs on the error path too; §7, [intent-hq/intentd#575](https://github.com/intent-hq/intentd/pull/575)). The interrupt emit itself never carries `trailingBlocks`: the `AtTurnEnd` registry is **not** drained on the interrupt path — pending entries wait for the next turn's drain or the registry TTL — so there are no persisted trailing blocks for the event to mirror.
+**Terminal-event payload.**
+The interrupt-path terminal `agent:stream:end` (§7 emitted-events table) is emitted **only** by the live-session interrupt path (`interrupt_inner`) — i.e. on the `"user_stop"` and `"preempted_by_message"` reasons; the `"daemon_shutdown"` and `"agent_stopped"` teardowns flush the interrupted row **without** emitting any `agent:stream:end`, so those two reasons exist only in persisted row metadata, never on this event.
+Everything below describes the emit when this path's own flush persisted the row (or nothing was persisted); when the flush instead **collides** with a row already persisted under the turn's id, the paragraph "Interrupt racing a completed turn" below alone defines the emit — normal-completion shape on a completed row, or the interrupted shape mirroring the colliding row's reason (which is why `"system_suspend"` can appear on this event) — and the "always" / "only ever" statements here do not apply.
+The emit carries `stopReason: "interrupted"`, plus `messageId` when an interrupted assistant row was persisted — the id of that row — so clients can flag the turn as stopped live, without waiting for the transcript re-fetch.
+It also **always** carries `interruptReason` (`"user_stop"` or `"preempted_by_message"` on the wire) — matching the persisted row's `metadata.interruptReason` when a row exists (`messageId` present), and still stamped from the interruption cause when the interrupt landed before any row could persist (`messageId` absent) — plus `interruptedBy` under the same presence rule as the row metadata, so clients can render the reason-specific Stopped indicator live.
+Normal-completion and error-terminated turn emits never carry `stopReason` / `interruptReason` / `interruptedBy`, but they **do** carry `messageId` (when the turn persisted an assistant message) and `trailingBlocks` (when §7.1 `AtTurnEnd` blocks were drained — the drain deliberately runs on the error path too; §7, [intent-hq/intentd#575](https://github.com/intent-hq/intentd/pull/575)).
+The interrupt emit itself never carries `trailingBlocks`: the `AtTurnEnd` registry is **not** drained on the interrupt path — pending entries wait for the next turn's drain or the registry TTL — so there are no persisted trailing blocks for the event to mirror.
 
 **Pre-first-token stop (always-persist marker row).** *(Changed within v4.5 by [intent-hq/intentd#919](https://github.com/intent-hq/intentd/pull/919) — supersedes the STAB-114 zero-output no-op flush.)* When nothing has streamed yet (no content blocks), **every** interruption that found a registered live-turn slot persists the interrupted assistant marker row anyway — `contentBlocks: []` plus the full metadata tag set above — so the transcript durably records the stop. This **row-persistence** guarantee holds on all four reasons: the plain `agent.stop` keep-alive path, interrupt-priority preemption (the empty marker row is persisted BEFORE the interrupting message's user row, so transcript order reads correctly), the graceful-shutdown capture, and the detach/kill teardown. The **event** guarantee is narrower: only the two emitting paths (`"user_stop"` / `"preempted_by_message"`, previous paragraph) carry the marker row's `messageId` on their terminal `agent:stream:end`. On those paths, an interrupt-shaped emit is missing `messageId` only in two cases: no live-turn slot existed to flush — the interrupt landed during turn startup (spawn / `initialize` / `session/new` / `session/load`), before the worker registered the turn — or the flush itself failed at the store (the slot is kept as the only copy of the content for a later teardown's retry); in either case the emit still carries `stopReason: "interrupted"` + `interruptReason`, just no `messageId`. The two UNIQUE-collision outcomes of the next paragraph never omit it. An `agent.stop` that takes the hard-kill fallback (no live connection or no `acpSessionId`) produces **no** interrupt `agent:stream:end` at all — it routes through the kill teardown, whose row flush (reason `"agent_stopped"`) is metadata-only.
 

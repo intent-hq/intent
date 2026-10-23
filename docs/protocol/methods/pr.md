@@ -94,7 +94,7 @@ the existing GitHub behavior.
 > unmonitored PR seeds what the next read serves. The result shape is unchanged.
 > Result shape: `{ repo, prNumber, title, url, state, isDraft, isMerged, isClosed, headSha,
 > updatedAt, mergeable, mergeableState, mergeBlockedReason, checks: { total, passed,
-> failed, pending, failedNames }, reviews: { decision, approvals, changesRequested },
+> failed, pending, skipped, failedNames, skippedNames }, reviews: { decision, approvals, changesRequested },
 > comments: { conversationCount, reviewCommentCount, unresolvedThreadCount?,
 > totalCount }, requirements: MergeRequirements, pausedUntil? }`. **`requirements`** *(additive in v6.1,
 > [intentd#989](https://github.com/intent-hq/intentd/pull/989))* is the full
@@ -118,6 +118,18 @@ the existing GitHub behavior.
 > merged. `checks` tallies the runs on the PR head (SHA, else source branch); a
 > provider without the `checkRuns` capability — or a PR whose head cannot be
 > determined — reports an empty tally rather than failing the snapshot.
+> **`checks.skipped` / `checks.skippedNames`** *(additive; docs lead the intentd change)*
+> count and name the runs that concluded **skipped** (the job never ran — e.g. a
+> path-filtered or `if:`-gated job). `passed` counts only runs that actually succeeded,
+> so `total = passed + failed + pending + skipped`, and a skipped run never blocks a
+> merge on its own. Before this split a skipped run was tallied as passed: intentd#2581
+> at `6c92d3256` (run 39724275631) reported 25/25 passed while `coverage-all` and
+> `coverage-e2e` had been skipped. GitHub conclusion `skipped` and GitLab job status
+> `skipped` map here; GitHub `neutral` and GitLab `allow_failure` jobs ran, so they stay
+> `passed`, and the GitLab skipped-pipeline merge policy still maps to passed or failed.
+> On current daemons both keys are always present (`0` / `[]` when nothing was skipped;
+> `skippedNames` in rollup order). Older daemons omit them and fold skipped runs into
+> `passed`; consumers detect the split by presence.
 > **`reviews.decision`** *(changed in intentd,
 > [intentd#942](https://github.com/intent-hq/intentd/pull/942);
 > [intent-hq/monorepo#1524](https://github.com/intent-hq/monorepo/issues/1524))*
@@ -178,7 +190,7 @@ only `resource`, `details` and `availability`. Their qualified meanings are:
 | `details` | `{ resource, url, title, body, state, draft, sourceBranch, targetBranch, source, target, author, mergeable, mergeableState, headSha, createdAt, updatedAt }`. Its `state` is `open`, `locked`, `closed`, `merged`, or `null`; `draft` is the confirmed boolean or `null`. Optional values remain `null`. |
 | `details.source`, `details.target` | Each confirmed branch identity is `{ provider, instanceBaseUrl, projectId, projectPath, branch }`. An unknown whole identity is `null`; an unknown path inside a known identity is `null`. `projectId` is an exact decimal string, including values above 2^53, with no JavaScript numeric rounding. Branch names or selected targets cannot fill missing identity. |
 | `availability` | Independent `policy`, `approvals`, `checks` and `discussions` states: `available`, `restricted`, `unavailable`, `transient`, `rate-limited`, or `unknown`. |
-| `checks`, `requirements.checks` | Coherent, available rollup evidence supplies the existing totals, items and required flags. Unknown totals/items/names are `null`, with `requiredKnown: false`; a known empty rollup has zero totals and empty arrays. A reported check head that differs from the actual review head makes projected check availability `unknown`, without a refresh. |
+| `checks`, `requirements.checks` | Coherent, available rollup evidence supplies the existing totals, items and required flags. Unknown totals/items/names (including `skipped` / `skippedNames`) are `null`, with `requiredKnown: false`; a known empty rollup has zero totals and empty arrays. A reported check head that differs from the actual review head makes projected check availability `unknown`, without a refresh. |
 | `reviews`, `requirements.approvals` | Aggregate supplied reviews with the existing latest-actionable-review rules. Missing review counts and an absent provider decision are `null`, never an inferred `approved` or `none`. Unknown policy leaves `needed` omitted. |
 | `comments`, `requirements.threads` | Unknown conversation/review-comment counts are `null`; `totalCount` is `null` unless both counts are known. Unknown `unresolvedThreadCount`, `unresolved` and policy-dependent `resolutionRequired` are omitted; known zero remains zero. |
 | Other `requirements` fields | Unknown conflict/behind/draft facts are `null`; unknown policy gives `rulesKnown: false`. Missing facts do not imply readiness or a blocked reason. Optional mergeability/status/reason and queue/ejection fields remain omitted when absent; top-level nullable fields remain present. |
@@ -263,15 +275,72 @@ windows share that admission with background sweeps. Local root maintenance keep
 its separate active/idle scan schedule; a forge check does not require a new local
 scan. See §5.7 for the optional automatic request flag and skipped response shape.
 
-Centralized PR monitoring ([intent-hq/intentd#989](https://github.com/intent-hq/intentd/pull/989)): an agent registers a **daemon-run monitor** on a PR via the MCP `ws.pr.monitor` binding, and one shared daemon loop polls every active monitor (ticking every `prMonitor.pollSeconds`, §5.12, read live, floor 10s; each distinct PR becomes due again after an **effective interval** — the minimum time between two polls of one PR, with the actual revisit landing on the first tick at or after it, i.e. rounded up to the next `pollSeconds` tick — bounded below by the workspace interval above and planned globally from two inputs, the larger of which wins: the **hourly-budget cadence** `max(pollSeconds, ceil(distinctPRs × 3 × 3600 / prMonitor.hourlyRequestBudget))` — 60s for up to 8 PRs at the defaults, 72s for 10 (revisited at the 120s tick), 144s for 20 (180s tick), before any workspace idle delay; the budget is a steady-state cadence **cost model** that costs each distinct-PR poll at 3 forge calls (a single-page planning constant, not a measured or enforced spend: no request is counted or blocked against it, the folded read below spends fewer, paginated fallbacks more) — and, since [intent-hq/intentd#1948](https://github.com/intent-hq/intentd/pull/1948), the **quota cadence**: each due-sweep tick with active monitors consults the **shared quota probe** (a full on-demand sweep plans no cadence and spends none). On GitHub ([intent-hq/intent#5837](https://github.com/intent-hq/intent/issues/5837)), this uses the authoritative `x-ratelimit-*` headers from a small REST `GET /user` read and a GraphQL `rateLimit` query, rather than the `/rate_limit` overview, which can disagree with enforced counters ([GitHub's guidance](https://docs.github.com/en/rest/rate-limit/rate-limit)). All background and recovery callers share one in-flight probe and its result, including failures, with a **60-second minimum interval** after completion; a cancelled in-flight attempt retains unknown evidence for that interval from its start and cannot establish recovery. Each probe makes at most one request per resource without immediate HTTP retries, costing at most one REST point plus one GraphQL point. A healthy result requires valid headers for both resources; remaining headroom is the smaller allowance and the limit is the larger limit, conservatively. Equal remaining allowances use the later reset so cadence does not assume both resources refill early. When the host reports both `remaining` and a reset still ahead, the loop stretches the interval so the projected spend until the window resets — `distinctPRs × 3 × secondsToReset / interval` — stays within `prMonitor.quotaSharePercent` (§5.12, default 50) of the **remaining** quota, in integer arithmetic: `allowed = floor(remaining × share / 100)` requests, `secondsToReset` the forge-reported reset minus now capped at 2h (7200s), interval `ceil(distinctPRs × 3 × secondsToReset / allowed)`, rounded up to whole `pollSeconds` ticks and never below the hourly-budget cadence; once `allowed < 3` — that share cannot pay for a single 3-call fetch — the tick polls **nothing** — however stale, catch-up-marked or never-polled the monitors are — until the window resets (a deferral measured from the tick's probe, never from a monitor's `lastPolledAt`; logged once per deferral run, not per tick). A failed probe, a host without the signal, or a reset already in the past plans no quota cadence and the hourly-budget formula stands alone. Each tick fetches a capped, oldest-`lastPolledAt`-first subset of the due PRs — `ceil(distinctPRs × pollSeconds / effectiveInterval)`, at least 1 — rather than all of them at once, and once a stretched interval spaces successive fetches further apart than one tick (`effectiveInterval / distinctPRs > pollSeconds`) the cap is **0** while the newest `lastPolledAt` across the active monitors is younger than that spacing, so a stale backlog (a restart, an outage, a quota-stretched interval) drains one fetch per spacing — within the budget the interval was planned against — instead of one PR per tick; the hold is measured from the persisted stamps (it survives restarts and needs no spend counter), never applies while no monitor has ever been polled, and depends only on the final effective interval, whichever cadence produced it: plentiful quota or a probe without a usable window removes only the quota-derived stretch, so a hold planned by the hourly budget alone remains (one PR at `pollSeconds` 30 and `hourlyRequestBudget` 60 plans a 180s interval and fetches nothing until 180s have passed since the newest poll), and it is absent only while `effectiveInterval / distinctPRs ≤ pollSeconds`. The debounce below is therefore evaluated at that effective cadence and a wake may arrive roughly `effectiveInterval + pollSeconds` late, plus any deferral by the per-tick fetch cap or a quota deferral), diffs a **merge-requirements checklist** against the monitor's persisted **emit baseline** — the PR state as of the last delivered wake (or registration) — and wakes the owning agent with a **single consolidated, debounced notification** once the PR has been quiet for `prMonitor.debounceSeconds` (§5.12) — a busy PR that never goes quiet still gets its wake via the max-latency bound (5 debounce windows since the oldest un-emitted change; late, never starved — conditional on the coalesced set staying continuously non-empty: a full revert empties the set and re-arms the clock, by design). The pending set is a **coalesced net diff, recomputed against the emit baseline on every poll — never an accumulated log**: a field that moved A→B→C reports one initial→final line, a field that reverted to its baseline value drops out of the set, and a PR that fully reverts within the debounce window empties the set — nothing pending, debounce anchors reset, **no wake sent**. Each delivered wake advances the baseline to the delivered snapshot, so the next wake reports only what moves from there; a merged/closed PR terminalizes the monitor with an immediate, undebounced final wake (state `completed` — the row is retained so merged PRs stay visible) whose "changes since the last report" section coalesces the same way. Monitors are persisted (SQLite `pr_monitor` table), **survive daemon restarts** via boot rehydration with catch-up delivery (the net diff against the pre-restart baseline fires on the first post-restart poll — only when non-empty), and have **no TTL** — this is why agents are steered to `ws.pr.monitor` over a self-authored §5.40 snapshot-diffing hook. Store writes are guarded compare-and-swap, so concurrent flush / cancel / re-register / poll never clobber each other. Safe when source control is unconfigured (the tick logs and returns). The loop shares the global forge **rate-limit pause** with the PR-refresh and git-root sweeps (monorepo#2961): a poll in which ANY forge read — the folded observation or the PR read, a secondary checklist / branch-rules / comment read (with the one per-signal nested branch-rules exception noted under "Per-poll forge cost" below) — fails with the forge's quota-exhausted error (REST 403/429 with an exhausted quota, or a GraphQL `RATE_LIMIT` envelope) pauses ALL forge-touching sweep work until the quota window resets — the deadline is the exhausted resource's reset from the shared probe (the later reset when both REST and GraphQL are exhausted), plus a 30s margin, clamped into [60s, 2h], or a fixed 5min when the host reports no reset. A rejection contradicted by already-healthy counters, including a healthy cadence sample cached before the failure, also uses the 5min fallback and disables early lifting for that pause: those counters do not establish recovery from the rejection. A repeat trigger while paused extends the deadline silently (one WARN per pause window). Opening or extending a pause stamps `lastError` `rate limited; PR monitor polling paused until <RFC 3339 deadline>` on **every active monitor across all workspaces** (a genuine fetch error already on a row is kept and the pause appended as `<error>; <pause>`; an extension re-stamps every row with the new deadline; the baseline is untouched — a quota hit is never persisted as a degraded-but-successful poll), stops fetching further PRs in that sweep, and later sweeps skip the forge while paused; the gate is re-consulted before every fetch within a sweep, so a pause opened by a sibling sweep stops the in-flight sweep's remaining fetches too. The pause **lifts early** ([intent-hq/intentd#1945](https://github.com/intent-hq/intentd/pull/1945)): while paused and early lifting is allowed, PR-monitor, PR-refresh, and git-root ticks consult the same shared probe and re-open the gate — clearing the pause annotation from every active monitor and logging one INFO — once it reports `remaining ≥ max(500, 10% of limit)`. The 60-second minimum interval bounds metered requests across concurrent ticks, repeat triggers, and failed probes; a PR-monitor tick that lifts the pause reuses that result for its cadence. Missing, malformed, or wrong-resource headers never prove recovery, nor does a healthy resource while the other is exhausted. A failed probe, a host without the signal, or quota below the floor keeps the deadline. A pause opened from contradictory health keeps its deadline without further recovery probes, even if those counters remain healthy. The `pr_monitor` **row is authoritative** for the pause: only the serialized gate transitions write or remove pause annotations — the pause stamp, the early-lift clear (scoped to the lifted deadline, so a stamp naming a later one survives a delayed clear), and the boot clear (a restart strips annotations persisted by the previous process, since the new process's gate starts open; a still-exhausted quota re-pauses on the first poll) — and a poll's guarded write-back never introduces an annotation, moves the row's to another deadline, or resurrects a cleared one: it lands only its genuine error part, composed in SQL with whatever unexpired annotation the row currently carries (the stamp and clear leave the concurrency token alone, so an in-flight write-back still lands, with or without the annotation as the row then stands); an annotation whose deadline has passed is dropped by the first post-pause write-back, and a successful poll clears `lastError` entirely.
+Centralized PR monitoring ([intent-hq/intentd#989](https://github.com/intent-hq/intentd/pull/989)): an agent registers a **daemon-run monitor** on a PR via the MCP `ws.pr.monitor` binding, and one shared daemon loop polls every active monitor (ticking every `prMonitor.pollSeconds`, §5.12, read live, floor 10s; each distinct PR becomes due again after an **effective interval** — the minimum time between two polls of one PR, with the actual revisit landing on the first tick at or after it, i.e. rounded up to the next `pollSeconds` tick — bounded below by the workspace interval above and planned globally from two inputs, the larger of which wins: the **hourly-budget cadence** `max(pollSeconds, ceil(distinctPRs × 3 × 3600 / prMonitor.hourlyRequestBudget))` — 60s for up to 8 PRs at the defaults, 72s for 10 (revisited at the 120s tick), 144s for 20 (180s tick), before any workspace idle delay; the budget is a steady-state cadence **cost model** that costs each distinct-PR poll at 3 forge calls (a single-page planning constant, not a measured or enforced spend: no request is counted or blocked against it, the folded read below spends fewer, paginated fallbacks more) — and, since [intent-hq/intentd#1948](https://github.com/intent-hq/intentd/pull/1948), the **quota cadence**: each due-sweep tick with active monitors consults the **shared quota probe** (a full on-demand sweep plans no cadence and spends none).
+On GitHub ([intent-hq/intent#5837](https://github.com/intent-hq/intent/issues/5837)), this uses the authoritative `x-ratelimit-*` headers from a small REST `GET /user` read and a GraphQL `rateLimit` query, rather than the `/rate_limit` overview, which can disagree with enforced counters ([GitHub's guidance](https://docs.github.com/en/rest/rate-limit/rate-limit)).
+All background and recovery callers share one in-flight probe and its result, including failures, with a **60-second minimum interval** after completion; a cancelled in-flight attempt retains unknown evidence for that interval from its start and cannot establish recovery.
+Each probe makes at most one request per resource without immediate HTTP retries, costing at most one REST point plus one GraphQL point.
+A healthy result requires valid headers for both resources; remaining headroom is the smaller allowance and the limit is the larger limit, conservatively.
+Equal remaining allowances use the later reset so cadence does not assume both resources refill early.
+When the host reports both `remaining` and a reset still ahead, the loop stretches the interval so the projected spend until the window resets — `distinctPRs × 3 × secondsToReset / interval` — stays within `prMonitor.quotaSharePercent` (§5.12, default 50) of the **remaining** quota, in integer arithmetic: `allowed = floor(remaining × share / 100)` requests, `secondsToReset` the forge-reported reset minus now capped at 2h (7200s), interval `ceil(distinctPRs × 3 × secondsToReset / allowed)`, rounded up to whole `pollSeconds` ticks and never below the hourly-budget cadence; once `allowed < 3` — that share cannot pay for a single 3-call fetch — the tick polls **nothing** — however stale, catch-up-marked or never-polled the monitors are — until the window resets (a deferral measured from the tick's probe, never from a monitor's `lastPolledAt`; logged once per deferral run, not per tick).
+A failed probe, a host without the signal, or a reset already in the past plans no quota cadence and the hourly-budget formula stands alone.
+Each tick fetches a capped, oldest-`lastPolledAt`-first subset of the due PRs — `ceil(distinctPRs × pollSeconds / effectiveInterval)`, at least 1 — rather than all of them at once, and once a stretched interval spaces successive fetches further apart than one tick (`effectiveInterval / distinctPRs > pollSeconds`) the cap is **0** while the newest `lastPolledAt` across the active monitors is younger than that spacing, so a stale backlog (a restart, an outage, a quota-stretched interval) drains one fetch per spacing — within the budget the interval was planned against — instead of one PR per tick; the hold is measured from the persisted stamps (it survives restarts and needs no spend counter), never applies while no monitor has ever been polled, and depends only on the final effective interval, whichever cadence produced it: plentiful quota or a probe without a usable window removes only the quota-derived stretch, so a hold planned by the hourly budget alone remains (one PR at `pollSeconds` 30 and `hourlyRequestBudget` 60 plans a 180s interval and fetches nothing until 180s have passed since the newest poll), and it is absent only while `effectiveInterval / distinctPRs ≤ pollSeconds`.
+The debounce below is therefore evaluated at that effective cadence and a wake may arrive roughly `effectiveInterval + pollSeconds` late, plus any deferral by the per-tick fetch cap or a quota deferral), diffs a **merge-requirements checklist** against the monitor's persisted **emit baseline** — the PR state as of the last delivered wake (or registration) — and wakes the owning agent with a **single consolidated, debounced notification** once the PR has been quiet for `prMonitor.debounceSeconds` (§5.12) — a busy PR that never goes quiet still gets its wake via the max-latency bound (5 debounce windows since the oldest un-emitted change; late, never starved — conditional on the coalesced set staying continuously non-empty: a full revert empties the set and re-arms the clock, by design).
+The pending set is a **coalesced net diff, recomputed against the emit baseline on every poll — never an accumulated log**: a field that moved A→B→C reports one initial→final line, a field that reverted to its baseline value drops out of the set, and a PR that fully reverts within the debounce window empties the set — nothing pending, debounce anchors reset, **no wake sent**.
+Each delivered wake advances the baseline to the delivered snapshot, so the next wake reports only what moves from there; a merged/closed PR terminalizes the monitor with an immediate, undebounced final wake (state `completed` — the row is retained so merged PRs stay visible) whose "changes since the last report" section coalesces the same way.
+Monitors are persisted (SQLite `pr_monitor` table), **survive daemon restarts** via boot rehydration with catch-up delivery (the net diff against the pre-restart baseline fires on the first post-restart poll — only when non-empty), and have **no TTL** — this is why agents are steered to `ws.pr.monitor` over a self-authored §5.40 snapshot-diffing hook.
+Store writes are guarded compare-and-swap, so concurrent flush / cancel / re-register / poll never clobber each other.
+Safe when source control is unconfigured (the tick logs and returns).
+The loop shares the global forge **rate-limit pause** with the PR-refresh and git-root sweeps (monorepo#2961): a poll in which ANY forge read — the folded observation or the PR read, a secondary checklist / branch-rules / comment read (with the one per-signal nested branch-rules exception noted under "Per-poll forge cost" below) — fails with the forge's quota-exhausted error (REST 403/429 with an exhausted quota, or a GraphQL `RATE_LIMIT` envelope) pauses ALL forge-touching sweep work until the quota window resets — the deadline is the exhausted resource's reset from the shared probe (the later reset when both REST and GraphQL are exhausted), plus a 30s margin, clamped into [60s, 2h], or a fixed 5min when the host reports no reset.
+A rejection contradicted by already-healthy counters, including a healthy cadence sample cached before the failure, also uses the 5min fallback and disables early lifting for that pause: those counters do not establish recovery from the rejection.
+A repeat trigger while paused extends the deadline silently (one WARN per pause window).
+Opening or extending a pause stamps `lastError` `rate limited; PR monitor polling paused until <RFC 3339 deadline>` on **every active monitor across all workspaces** (a genuine fetch error already on a row is kept and the pause appended as `<error>; <pause>`; an extension re-stamps every row with the new deadline; the baseline is untouched — a quota hit is never persisted as a degraded-but-successful poll), stops fetching further PRs in that sweep, and later sweeps skip the forge while paused; the gate is re-consulted before every fetch within a sweep, so a pause opened by a sibling sweep stops the in-flight sweep's remaining fetches too.
+The pause **lifts early** ([intent-hq/intentd#1945](https://github.com/intent-hq/intentd/pull/1945)): while paused and early lifting is allowed, PR-monitor, PR-refresh, and git-root ticks consult the same shared probe and re-open the gate — clearing the pause annotation from every active monitor and logging one INFO — once it reports `remaining ≥ max(500, 10% of limit)`.
+The 60-second minimum interval bounds metered requests across concurrent ticks, repeat triggers, and failed probes; a PR-monitor tick that lifts the pause reuses that result for its cadence.
+Missing, malformed, or wrong-resource headers never prove recovery, nor does a healthy resource while the other is exhausted.
+A failed probe, a host without the signal, or quota below the floor keeps the deadline.
+A pause opened from contradictory health keeps its deadline without further recovery probes, even if those counters remain healthy.
+The `pr_monitor` **row is authoritative** for the pause: only the serialized gate transitions write or remove pause annotations — the pause stamp, the early-lift clear (scoped to the lifted deadline, so a stamp naming a later one survives a delayed clear), and the boot clear (a restart strips annotations persisted by the previous process, since the new process's gate starts open; a still-exhausted quota re-pauses on the first poll) — and a poll's guarded write-back never introduces an annotation, moves the row's to another deadline, or resurrects a cleared one: it lands only its genuine error part, composed in SQL with whatever unexpired annotation the row currently carries (the stamp and clear leave the concurrency token alone, so an in-flight write-back still lands, with or without the annotation as the row then stands); an annotation whose deadline has passed is dropped by the first post-pause write-back, and a successful poll clears `lastError` entirely.
 
-**Per-poll forge cost before ancestry enrichment** ([intent-hq/intentd#1949](https://github.com/intent-hq/intentd/pull/1949)): on GitHub one PR poll is a single GraphQL **PR observation** — the PR record, the merge-requirement signals (checks rollup, `mergeStateStatus`, `isInMergeQueue`, the latest merge-queue ejection, `reviewDecision`), the last 100 reviews, the first 100 review threads as a tally, and the conversation-comment count, measured at `rateLimit.cost` 1 — plus one REST **branch-rules** read of the base branch: 2 reads on the happy path where the per-signal sequence (`get_pr`, merge-requirements probe + branch rules, reviews, review decision, review threads, conversation comments) cost 6 trait reads / 7 HTTP requests. The observation's bounded windows degrade to "absent" rather than truncating: a PR with more than 100 reviews or more than 100 review threads takes the paged per-signal read **for that piece only**, a host with no check rollup takes the REST check-runs fallback, and an unreadable branch-rules endpoint degrades to `rulesKnown: false` exactly as before. A folded read that fails for any reason other than quota exhaustion falls back to the per-signal reads (the load-bearing `get_pr` then decides whether the forge is reachable, so the observation changes how many requests a successful poll costs, never which error a failing one reports — the REST-fallback path on a host whose GraphQL is down costs 9 reads, the failed attempt plus the 8-read degraded path). A cached cheap poll (the PR fingerprint unchanged, up to 5 consecutive polls and 15 minutes) costs 1 read either way. **Shared PR cache** ([intent-hq/intent#5610](https://github.com/intent-hq/intent/issues/5610)): the sub-reads a cheap poll reuses live in the daemon's one in-memory PR cache — keyed by `(owner, repo, number)`, an entry being the PR's last full read (the PR record plus the full checklist, stamped with its fetch time) — which the loop both reads and writes on every poll, and which `github.pulls.get` (§5.27) and `ws.pr.snapshot` (§5.7) serve from while the entry is younger than `prCache.maxAgeSeconds` (§5.12), refreshing it with one folded read otherwise. Registration, re-registration and `prMonitor.flush { check: true }` store their full fetch in the same entry (a generation guard keeps an in-flight sweep read from overwriting a newer on-demand result). Entries under an active monitor live as long as the monitor and are exempt from both retention rules below; **unmonitored** entries expire after 10 minutes idle and are bounded to 256 (the oldest full fetch evicted first) — both enforced by every cache **write** itself, so the bound holds while the sweep is skipped by the rate-limit pause, not only when a poll runs. In-memory only — a restart starts cold. Quota exhaustion on these reads — the observation, `get_pr`, the folded path's branch-rules read, reviews, check runs, review threads, review comments, conversation comments — propagates as the rate-limited error and opens the shared pause above instead of degrading, with one exception: on the per-signal fallback path GitHub's merge-requirements probe reads the branch rules itself and degrades **every** branch-rules failure, quota exhaustion included, to `rulesKnown: false`, so a quota hit on that nested read alone yields a degraded checklist without opening the pause (the surrounding reads still propagate; tracked as [intent-hq/intent#5281](https://github.com/intent-hq/intent/issues/5281)). The hourly-budget model still costs a poll at 3 calls. The additive ancestry enrichment below spends at most one further comparison on a full refresh or changed revision pair, keeping the single-page happy path within that model.
+**Per-poll forge cost before ancestry enrichment** ([intent-hq/intentd#1949](https://github.com/intent-hq/intentd/pull/1949)): on GitHub one PR poll is a single GraphQL **PR observation** — the PR record, the merge-requirement signals (checks rollup, `mergeStateStatus`, `isInMergeQueue`, the latest merge-queue ejection, `reviewDecision`), the last 100 reviews, the first 100 review threads as a tally, and the conversation-comment count, measured at `rateLimit.cost` 1 — plus one REST **branch-rules** read of the base branch: 2 reads on the happy path where the per-signal sequence (`get_pr`, merge-requirements probe + branch rules, reviews, review decision, review threads, conversation comments) cost 6 trait reads / 7 HTTP requests.
+The observation's bounded windows degrade to "absent" rather than truncating: a PR with more than 100 reviews or more than 100 review threads takes the paged per-signal read **for that piece only**, a host with no check rollup takes the REST check-runs fallback, and an unreadable branch-rules endpoint degrades to `rulesKnown: false` exactly as before.
+A folded read that fails for any reason other than quota exhaustion falls back to the per-signal reads (the load-bearing `get_pr` then decides whether the forge is reachable, so the observation changes how many requests a successful poll costs, never which error a failing one reports — the REST-fallback path on a host whose GraphQL is down costs 9 reads, the failed attempt plus the 8-read degraded path).
+A cached cheap poll (the PR fingerprint unchanged, up to 5 consecutive polls and 15 minutes) costs 1 read either way.
+**Shared PR cache** ([intent-hq/intent#5610](https://github.com/intent-hq/intent/issues/5610)): the sub-reads a cheap poll reuses live in the daemon's one in-memory PR cache — keyed by `(owner, repo, number)`, an entry being the PR's last full read (the PR record plus the full checklist, stamped with its fetch time) — which the loop both reads and writes on every poll, and which `github.pulls.get` (§5.27) and `ws.pr.snapshot` (§5.7) serve from while the entry is younger than `prCache.maxAgeSeconds` (§5.12), refreshing it with one folded read otherwise.
+Registration, re-registration and `prMonitor.flush { check: true }` store their full fetch in the same entry (a generation guard keeps an in-flight sweep read from overwriting a newer on-demand result).
+Entries under an active monitor live as long as the monitor and are exempt from both retention rules below; **unmonitored** entries expire after 10 minutes idle and are bounded to 256 (the oldest full fetch evicted first) — both enforced by every cache **write** itself, so the bound holds while the sweep is skipped by the rate-limit pause, not only when a poll runs.
+In-memory only — a restart starts cold.
+Quota exhaustion on these reads — the observation, `get_pr`, the folded path's branch-rules read, reviews, check runs, review threads, review comments, conversation comments — propagates as the rate-limited error and opens the shared pause above instead of degrading, with one exception: on the per-signal fallback path GitHub's merge-requirements probe reads the branch rules itself and degrades **every** branch-rules failure, quota exhaustion included, to `rulesKnown: false`, so a quota hit on that nested read alone yields a degraded checklist without opening the pause (the surrounding reads still propagate; tracked as [intent-hq/intent#5281](https://github.com/intent-hq/intent/issues/5281)).
+The hourly-budget model still costs a poll at 3 calls.
+The additive ancestry enrichment below spends at most one further comparison on a full refresh or changed revision pair, keeping the single-page happy path within that model.
 
-**Registration is MCP-only** (per the §6.8 principle — PR watching is agent-authored background work; the same split as `hook.*` vs `ws.hook.schedule`): `ws.pr.monitor(prNumber, { repo? })` registers (or idempotently re-arms, refreshing the baseline — never a second monitor) the caller's monitor, scoped to the workspace repo unless `repo: "owner/name"` overrides it, and returns `{ ok, monitor, requirements, pausedUntil?, adoptedFrom? }` — `adoptedFrom` *(additive, presence-detected per the §5 convention)* is the previous owner's agent id when the call **adopted** another agent's monitor under the adoption rules below, and is **omitted** (never `null`) on a fresh registration or the caller's own re-arm; active monitors are capped by `prMonitor.maxPerAgent` (default 5, supported range 1–100; `-32602`-style validation error beyond the cap; an adoption counts against the adopter's cap exactly like a fresh registration). The limit is read live on each new registration/adoption across repositories and workspaces. Lowering it never evicts active monitors, and same-owner re-registration remains allowed even above the new limit. The registration fetch is load-bearing — a forge that cannot read the PR (unsupported host, missing PR, no token) fails the call rather than persisting a monitor that could never poll — with one exception, **forge quota exhaustion, which never loses the registration**: the fetch shares the global rate-limit pause described above (while the gate is closed the call consults the same shared quota evidence as a sweep tick, respecting the 60-second probe interval and the restriction on lifting a pause opened from contradictory health, and fetches only if that lifts the pause early; a fetch that fails with the quota-exhausted error opens or extends the pause exactly as a sweep's would), and a **deferred** fetch still persists / re-arms / adopts the row — `lastSnapshot`, `lastPolledAt`, `title`, `url` absent, `lastError` naming the pause, and on a re-arm the previous baseline **cleared** rather than kept stale — and returns `ok: true` with **`requirements: null`** (the one place the checklist is `null` rather than omitted: the field is required on every success payload, and `null` there means exactly "deferred") plus **`pausedUntil`** *(additive, presence-detected; RFC 3339)*, the pause deadline, which is also projected onto `monitor.pausedUntil`. `pausedUntil` on the payload follows the same rule as on `ws.pr.snapshot` — present while the gate is closed at result time (alongside a `null` checklist unless a quota probe lifted the pause between the deferral and the result — the deferred fresh insert runs under the gate's reconcile section and is stamped from the gate's live state, so such a row carries no pause annotation either and is simply due on the very next sweep; alongside a fresh checklist only when a sibling sweep closed the gate between the fetch and the result), omitted (never `null`) otherwise. A never-polled row is due on the first post-pause sweep and sorts first within that tick's fetch cap (under a stretched cadence the cap's spacing hold applies to it like any other backlog, so the adoption may land one spacing later rather than on the very first tick), and a poll of a row without a baseline **adopts** the fetched state as its baseline with nothing pending (no wake) — the fresh-registration semantics, delayed to the quota reset — so a registering agent must not retry or hand-roll a retry hook; `ws.pr.snapshot` serves the checklist once the pause lifts. `ws.pr.unmonitor(prNumber, { repo? })` cancels the caller's **own** active monitor (unknown/foreign PR → not-found error; an owner's own cancel never self-wakes). `ws.pr.monitors()` lists the caller's active and completed monitors. The three bindings are gated by `agentFeatures.prMonitor` (§5.12).
+**Registration is MCP-only** (per the §6.8 principle — PR watching is agent-authored background work; the same split as `hook.*` vs `ws.hook.schedule`): `ws.pr.monitor(prNumber, { repo? })` registers (or idempotently re-arms, refreshing the baseline — never a second monitor) the caller's monitor, scoped to the workspace repo unless `repo: "owner/name"` overrides it, and returns `{ ok, monitor, requirements, pausedUntil?, adoptedFrom? }` — `adoptedFrom` *(additive, presence-detected per the §5 convention)* is the previous owner's agent id when the call **adopted** another agent's monitor under the adoption rules below, and is **omitted** (never `null`) on a fresh registration or the caller's own re-arm; active monitors are capped by `prMonitor.maxPerAgent` (default 5, supported range 1–100; `-32602`-style validation error beyond the cap; an adoption counts against the adopter's cap exactly like a fresh registration).
+The limit is read live on each new registration/adoption across repositories and workspaces.
+Lowering it never evicts active monitors, and same-owner re-registration remains allowed even above the new limit.
+The registration fetch is load-bearing — a forge that cannot read the PR (unsupported host, missing PR, no token) fails the call rather than persisting a monitor that could never poll — with one exception, **forge quota exhaustion, which never loses the registration**: the fetch shares the global rate-limit pause described above (while the gate is closed the call consults the same shared quota evidence as a sweep tick, respecting the 60-second probe interval and the restriction on lifting a pause opened from contradictory health, and fetches only if that lifts the pause early; a fetch that fails with the quota-exhausted error opens or extends the pause exactly as a sweep's would), and a **deferred** fetch still persists / re-arms / adopts the row — `lastSnapshot`, `lastPolledAt`, `title`, `url` absent, `lastError` naming the pause, and on a re-arm the previous baseline **cleared** rather than kept stale — and returns `ok: true` with **`requirements: null`** (the one place the checklist is `null` rather than omitted: the field is required on every success payload, and `null` there means exactly "deferred") plus **`pausedUntil`** *(additive, presence-detected; RFC 3339)*, the pause deadline, which is also projected onto `monitor.pausedUntil`.
+`pausedUntil` on the payload follows the same rule as on `ws.pr.snapshot` — present while the gate is closed at result time (alongside a `null` checklist unless a quota probe lifted the pause between the deferral and the result — the deferred fresh insert runs under the gate's reconcile section and is stamped from the gate's live state, so such a row carries no pause annotation either and is simply due on the very next sweep; alongside a fresh checklist only when a sibling sweep closed the gate between the fetch and the result), omitted (never `null`) otherwise.
+A never-polled row is due on the first post-pause sweep and sorts first within that tick's fetch cap (under a stretched cadence the cap's spacing hold applies to it like any other backlog, so the adoption may land one spacing later rather than on the very first tick), and a poll of a row without a baseline **adopts** the fetched state as its baseline with nothing pending (no wake) — the fresh-registration semantics, delayed to the quota reset — so a registering agent must not retry or hand-roll a retry hook; `ws.pr.snapshot` serves the checklist once the pause lifts.
+`ws.pr.unmonitor(prNumber, { repo? })` cancels the caller's **own** active monitor (unknown/foreign PR → not-found error; an owner's own cancel never self-wakes).
+`ws.pr.monitors()` lists the caller's active and completed monitors.
+The three bindings are gated by `agentFeatures.prMonitor` (§5.12).
 
 **Larger inventories** (planned addition, [intent-hq/intent#5887](https://github.com/intent-hq/intent/issues/5887)). Set `maxPerAgent = 55` under `[prMonitor]` in `config.toml` (or `settings.update` path `prMonitor.maxPerAgent`) for one orchestrator following up to 55 PRs across repositories; no daemon restart is needed. This retains the existing shared scheduler, cache, oldest-first fetch cap, debounce and quota backoff. With the default `hourlyRequestBudget = 1500` and `pollSeconds = 30`, 55 distinct PRs plan a 396-second interval (first eligible tick at 420 seconds), before any remaining-quota stretch; a tick reads at most five distinct PRs. The quota is an admission bound, not a latency promise or a hard forge request counter. Registration still reads each baseline separately. Prefer the supported quota over extra owner agents or an additional polling hook. Merged/closed monitors complete as before; monitoring a reopened PR requires explicit re-registration, not automatic repository discovery.
 
-**One monitor per PR per workspace.** A workspace holds at most **one ACTIVE monitor per `(repo, prNumber)`**, across all its agents — enforced at the store by a partial unique index over active rows (`idx_pr_monitor_workspace_identity`, migration `0118`; the migration dedupes pre-existing duplicate active monitors, oldest wins, marking the rest `cancelled`). Repo identity is **case-insensitive** (GitHub slug semantics: `Intent-HQ/IntentD` is the same repository as `intent-hq/intentd`) for both this workspace rule and the per-agent re-arm identity — the indexes and lookups compare `owner` / `name` under `COLLATE NOCASE` (migration `0119`, which likewise dedupes pre-existing case-variant duplicates, oldest wins) — while the stored `repo` label keeps the casing supplied by the first registration, so a case-variant `repo` override re-arms / cancels / is refused against the existing row and the row's reported `repo` is unchanged. When another agent in the same workspace already holds the PR's active monitor, `ws.pr.monitor` is **refused** with a structured `ok: false` result (the same convention as the `ws.agent.send` single-pending-message refusal — not a JSON-RPC error, so the model can act on it): `{ ok: false, refused: true, reason: "already-monitored", repo, prNumber, ownerAgentId, ownerAgentName?, monitorId, instruction }` — `repo` is the combined `"owner/name"` string, `ownerAgentId` / `ownerAgentName` name the owning agent (`ownerAgentName` is **omitted**, never `null`, when the owning session has no name), `monitorId` is the owner's monitor id (not a full `PrMonitor` row), and `instruction` is prose telling the model how to proceed. The already-monitored precheck refuses **before** the forge fetch and before the per-agent cap check, so the common refusal costs no forge request; two refusals happen **after** the fetch, with the same payload: the insert-race loser — two agents registering the same PR concurrently, neither seeing the other at precheck time — which has already fetched by the time the store's unique index rejects its row, and the parent whose settled child resumed work during the fetch (the post-fetch/pre-adopt recheck under adoption rule (2) below). Either way a refusal persists no row, emits no `prMonitor:registered` event, and carries no `monitor` / `requirements` — a refused agent that needs the PR's current state calls `ws.pr.snapshot`. The owner's **own** re-register is never refused (it re-arms idempotently and returns `{ ok: true, monitor, requirements }` as above). The PR is freed for another agent once the owner's monitor leaves the active state — the owner's `ws.pr.unmonitor`, an FE `prMonitor.cancel`, or completion when the PR merges/closes — after which a retry of `ws.pr.monitor` registers normally. Cross-workspace uniqueness is **not** enforced (two workspaces may each monitor the same PR). **Adoption rules** — the refusal above applies only to a holder that is *live and not adoptable*; the holder check (run at the precheck seam, again on the insert-race fallback, and — for rule (2) — re-run immediately before the adopt write) classifies the owner into exactly one of three outcomes: (1) **orphaned owner → any live agent in the workspace adopts** (within v10.1; [intent-hq/intentd#1916](https://github.com/intent-hq/intentd/pull/1916), [intent-hq/intent#5079](https://github.com/intent-hq/intent/issues/5079)) — the owning session is in a terminal status (`error` / `deleted` / `completed`), soft-retired (§5.5), or its session row is gone, so it can no longer receive wakes; (2) **settled direct sub-agent → the parent adopts** (within v10.2; [intent-hq/intentd#1935](https://github.com/intent-hq/intentd/pull/1935)) — the owner's `parentAgentId` is the caller (direct child only: no grandchildren, no peers, never the reverse direction) AND either its linked task note's status is `complete` / `cancelled`, or it is idle with **no waiting reason other than active PR monitors** (the same reason set the `ws.agent.watch` idle-target guard lists — no queued message, no busy turn, no unresolved attention request or pending questions, no outgoing completion watches, no event subscriptions, no interrupted turn, no active hooks — minus PR monitors, which are precisely what is being taken over; ALL the child's active monitors are ignored, not just the one being adopted); (3) **every other live owner → refused** with the `already-monitored` payload above. A store read failure while evaluating rule (2) fails closed to refusal — the daemon never adopts a monitor whose owner might be working. Because the settled-child verdict predates the forge fetch, and a child that picks up work meanwhile (a queued message, a new turn, a fresh hook) never touches the monitor row, rule (2) is **re-evaluated after the fetch, immediately before the adopt write**: a child that is no longer settled at that point yields the ordinary `already-monitored` refusal (no adoption, no notice; the fetch is simply spent), an owner that became orphaned meanwhile is adopted under rule (1), and only the adopt write itself (a guarded compare-and-swap on the row) remains as a window between the recheck and the re-parenting. **Adoption** in either case is the **same row re-parented and re-armed** under the adopter in one guarded write — baseline refreshed to the fresh forge snapshot, pending changes cleared, debounce anchors reset (a debounced report the previous owner had not yet received is dropped), **no second row** (so the workspace-identity index holds) — it counts against the adopter's own cap, the success payload carries `adoptedFrom` (the previous owner's agent id), and the `prMonitor:registered` event carries the same `adoptedFrom` (§6.5); from then on the adopter receives the PR's wakes, and the previous owner's own `ws.pr.monitor` on that PR is refused like any other non-owner's. **Parent takeover additionally notifies the previous owner** — a queued `pr_monitor_wake` with `reason: "transferred"` and `adoptedBy` (see "Wake deliveries" below); **orphan adoption sends no notice** (the former owner cannot receive one). There is still no daemon-side relay/transfer primitive, and the recommended coordination depends on who holds the monitor: for a refused parent whose **direct child** still holds it, the primary path is to **retry `ws.pr.monitor` once the child settles** (task `complete` / `cancelled`, or idle with nothing pending but its monitors — a `ws.agent.watch` on the child delivers that as its monitoring-idle advisory): the retry adopts and the child is notified; only when the parent needs the monitor immediately should it `ws.agent.send` the child to relay the events it cares about or, as a last resort, to relinquish via `ws.pr.unmonitor` — and the refusal `instruction` for that case says exactly this. For an unrelated live owner the coordination remains `ws.agent.send` to `ownerAgentId`, asking the owner either to relay the PR's wakes or to relinquish the monitor via `ws.pr.unmonitor` so the requester can register; `ws.pr.snapshot` serves a one-shot read in both cases.
+**One monitor per PR per workspace.**
+A workspace holds at most **one ACTIVE monitor per `(repo, prNumber)`**, across all its agents — enforced at the store by a partial unique index over active rows (`idx_pr_monitor_workspace_identity`, migration `0118`; the migration dedupes pre-existing duplicate active monitors, oldest wins, marking the rest `cancelled`).
+Repo identity is **case-insensitive** (GitHub slug semantics: `Intent-HQ/IntentD` is the same repository as `intent-hq/intentd`) for both this workspace rule and the per-agent re-arm identity — the indexes and lookups compare `owner` / `name` under `COLLATE NOCASE` (migration `0119`, which likewise dedupes pre-existing case-variant duplicates, oldest wins) — while the stored `repo` label keeps the casing supplied by the first registration, so a case-variant `repo` override re-arms / cancels / is refused against the existing row and the row's reported `repo` is unchanged.
+When another agent in the same workspace already holds the PR's active monitor, `ws.pr.monitor` is **refused** with a structured `ok: false` result (the same convention as the `ws.agent.send` single-pending-message refusal — not a JSON-RPC error, so the model can act on it): `{ ok: false, refused: true, reason: "already-monitored", repo, prNumber, ownerAgentId, ownerAgentName?, monitorId, instruction }` — `repo` is the combined `"owner/name"` string, `ownerAgentId` / `ownerAgentName` name the owning agent (`ownerAgentName` is **omitted**, never `null`, when the owning session has no name), `monitorId` is the owner's monitor id (not a full `PrMonitor` row), and `instruction` is prose telling the model how to proceed.
+The already-monitored precheck refuses **before** the forge fetch and before the per-agent cap check, so the common refusal costs no forge request; two refusals happen **after** the fetch, with the same payload: the insert-race loser — two agents registering the same PR concurrently, neither seeing the other at precheck time — which has already fetched by the time the store's unique index rejects its row, and the parent whose settled child resumed work during the fetch (the post-fetch/pre-adopt recheck under adoption rule (2) below).
+Either way a refusal persists no row, emits no `prMonitor:registered` event, and carries no `monitor` / `requirements` — a refused agent that needs the PR's current state calls `ws.pr.snapshot`.
+The owner's **own** re-register is never refused (it re-arms idempotently and returns `{ ok: true, monitor, requirements }` as above).
+The PR is freed for another agent once the owner's monitor leaves the active state — the owner's `ws.pr.unmonitor`, an FE `prMonitor.cancel`, or completion when the PR merges/closes — after which a retry of `ws.pr.monitor` registers normally.
+Cross-workspace uniqueness is **not** enforced (two workspaces may each monitor the same PR).
+**Adoption rules** — the refusal above applies only to a holder that is *live and not adoptable*; the holder check (run at the precheck seam, again on the insert-race fallback, and — for rule (2) — re-run immediately before the adopt write) classifies the owner into exactly one of three outcomes: (1) **orphaned owner → any live agent in the workspace adopts** (within v10.1; [intent-hq/intentd#1916](https://github.com/intent-hq/intentd/pull/1916), [intent-hq/intent#5079](https://github.com/intent-hq/intent/issues/5079)) — the owning session is in a terminal status (`error` / `deleted` / `completed`), soft-retired (§5.5), or its session row is gone, so it can no longer receive wakes; (2) **settled direct sub-agent → the parent adopts** (within v10.2; [intent-hq/intentd#1935](https://github.com/intent-hq/intentd/pull/1935)) — the owner's `parentAgentId` is the caller (direct child only: no grandchildren, no peers, never the reverse direction) AND either its linked task note's status is `complete` / `cancelled`, or it is idle with **no waiting reason other than active PR monitors** (the same reason set the `ws.agent.watch` idle-target guard lists — no queued message, no busy turn, no unresolved attention request or pending questions, no outgoing completion watches, no event subscriptions, no interrupted turn, no active hooks — minus PR monitors, which are precisely what is being taken over; ALL the child's active monitors are ignored, not just the one being adopted); (3) **every other live owner → refused** with the `already-monitored` payload above.
+A store read failure while evaluating rule (2) fails closed to refusal — the daemon never adopts a monitor whose owner might be working.
+Because the settled-child verdict predates the forge fetch, and a child that picks up work meanwhile (a queued message, a new turn, a fresh hook) never touches the monitor row, rule (2) is **re-evaluated after the fetch, immediately before the adopt write**: a child that is no longer settled at that point yields the ordinary `already-monitored` refusal (no adoption, no notice; the fetch is simply spent), an owner that became orphaned meanwhile is adopted under rule (1), and only the adopt write itself (a guarded compare-and-swap on the row) remains as a window between the recheck and the re-parenting.
+**Adoption** in either case is the **same row re-parented and re-armed** under the adopter in one guarded write — baseline refreshed to the fresh forge snapshot, pending changes cleared, debounce anchors reset (a debounced report the previous owner had not yet received is dropped), **no second row** (so the workspace-identity index holds) — it counts against the adopter's own cap, the success payload carries `adoptedFrom` (the previous owner's agent id), and the `prMonitor:registered` event carries the same `adoptedFrom` (§6.5); from then on the adopter receives the PR's wakes, and the previous owner's own `ws.pr.monitor` on that PR is refused like any other non-owner's.
+**Parent takeover additionally notifies the previous owner** — a queued `pr_monitor_wake` with `reason: "transferred"` and `adoptedBy` (see "Wake deliveries" below); **orphan adoption sends no notice** (the former owner cannot receive one).
+There is still no daemon-side relay/transfer primitive, and the recommended coordination depends on who holds the monitor: for a refused parent whose **direct child** still holds it, the primary path is to **retry `ws.pr.monitor` once the child settles** (task `complete` / `cancelled`, or idle with nothing pending but its monitors — a `ws.agent.watch` on the child delivers that as its monitoring-idle advisory): the retry adopts and the child is notified; only when the parent needs the monitor immediately should it `ws.agent.send` the child to relay the events it cares about or, as a last resort, to relinquish via `ws.pr.unmonitor` — and the refusal `instruction` for that case says exactly this.
+For an unrelated live owner the coordination remains `ws.agent.send` to `ownerAgentId`, asking the owner either to relay the PR's wakes or to relinquish the monitor via `ws.pr.unmonitor` so the requester can register; `ws.pr.snapshot` serves a one-shot read in both cases.
 
 The **wire surface is read/cancel/flush only** (the FE view over agent-owned monitors):
 
@@ -281,9 +350,37 @@ The **wire surface is read/cancel/flush only** (the FE view over agent-owned mon
 | prMonitor.cancel | workspaceId, monitorId | { ok, monitor } — cancels **any** monitor in the workspace by id and wakes the owning agent with a cancellation notice (unlike the agent's own `ws.pr.unmonitor`, which never self-wakes — the same one-directional visibility as `hook.cancel`, §5.40) |
 | prMonitor.flush | workspaceId, monitorId, check? | { ok, flushed } — delivers a monitor's pending consolidated wake **now**, bypassing the remaining debounce window; `flushed: false` when nothing was pending (a no-op, not an error). `check?: boolean` *(additive; default `false`)* — when `true`, the daemon first performs an **immediate on-demand poll** of that one monitor (fresh snapshot fetched from the forge, coalesced pending set recomputed against the emit baseline through the same guarded CAS write as the loop, terminalizing with the final wake if the PR merged/closed), then flushes whatever is pending — so the flush covers changes the poll loop has not seen yet; the recomputed set being empty returns `flushed: false` with no wake. A forge fetch failure during the check records the monitor's `lastError` (baseline untouched) and returns an error. Omitting `check` (or `false`) preserves the pre-check semantics exactly; a non-boolean value is `-32602` |
 
-**`PrMonitor` wire shape** (shared by `prMonitor.list`, the `ws.pr.monitor` / `ws.pr.unmonitor` results, and `ws.pr.monitors` rows): `{ monitorId, workspaceId, agentId, repo, prNumber, state, pendingChanges, hasPendingChanges, createdAt, updatedAt, pendingSince?, lastChangeAt?, lastPolledAt?, lastError?, pausedUntil?, title?, url?, lastSnapshot? }` — `repo` is the combined `"owner/name"` string; `state ∈ { active, completed, cancelled }`; `pendingChanges` is the human-readable **net** change lines since the last delivered wake — the coalesced diff against the emit baseline, recomputed each poll (awaiting the debounce window; it shrinks or empties when changes revert; `[]` when nothing is pending); `lastError` is the most recent forge-poll error (cleared by a successful poll — a failing poll never kills the loop), carrying the `rate limited; PR monitor polling paused until <deadline>` annotation described above while the global forge rate-limit pause is closed; **`pausedUntil`** *(additive, presence-detected; within v10.2 — [intent-hq/intentd#1945](https://github.com/intent-hq/intentd/pull/1945), [#1954](https://github.com/intent-hq/intentd/pull/1954))* is the RFC 3339 (whole-second, UTC) deadline of that pause, read once per call off the in-memory gate and projected onto **ACTIVE rows only** while the gate is closed — its checklist is not being refreshed and `lastError` names the same deadline. The three surfaces clear on their own schedules: `pausedUntil` disappears the moment the gate opens (deadline elapsed or early lift), without any poll; the `lastError` annotation is removed immediately by the early-lift clear, or — after a natural expiry — dropped by the row's first post-pause write-back (the expiry comparison is whole-second inclusive, so a write-back landing in the deadline's own second can carry it for one more poll); `lastSnapshot` refreshes only on the next successful poll. The key is **omitted** (never `null`) while the gate is open and on every `completed` / `cancelled` row, so a consumer labels a row stale by presence alone (cloudlands-fe renders "Monitoring paused until <time> (GitHub rate limit)" from it, [intent-hq/cloudlands-fe#2551](https://github.com/intent-hq/cloudlands-fe/pull/2551)); `title` / `url` / `lastSnapshot` are present once the monitor has a successful poll baseline, `lastSnapshot` being the last-refresh checklist summary `{ state, isDraft, hasConflicts, isBehind, ancestry?, branchUpdateRequired?, mergeable, mergeBlockedReason, checks: { total, passed, failed, pending, failingRequired, pendingRequired, requiredKnown }, approvals: { decision, have, needed, changesRequested }, threads: { unresolved?, resolutionRequired }, isInMergeQueue?, mergeQueueEjection?, rulesKnown }` (`threads.unresolved` follows the checklist's presence rule below — omitted when the resolution state was unreadable).
+**`PrMonitor` wire shape** (shared by `prMonitor.list`, the `ws.pr.monitor` / `ws.pr.unmonitor` results, and `ws.pr.monitors` rows): `{ monitorId, workspaceId, agentId, repo, prNumber, state, pendingChanges, hasPendingChanges, createdAt, updatedAt, pendingSince?, lastChangeAt?, lastPolledAt?, lastError?, pausedUntil?, title?, url?, lastSnapshot? }` — `repo` is the combined `"owner/name"` string; `state ∈ { active, completed, cancelled }`; `pendingChanges` is the human-readable **net** change lines since the last delivered wake — the coalesced diff against the emit baseline, recomputed each poll (awaiting the debounce window; it shrinks or empties when changes revert; `[]` when nothing is pending); `lastError` is the most recent forge-poll error (cleared by a successful poll — a failing poll never kills the loop), carrying the `rate limited; PR monitor polling paused until <deadline>` annotation described above while the global forge rate-limit pause is closed; **`pausedUntil`** *(additive, presence-detected; within v10.2 — [intent-hq/intentd#1945](https://github.com/intent-hq/intentd/pull/1945), [#1954](https://github.com/intent-hq/intentd/pull/1954))* is the RFC 3339 (whole-second, UTC) deadline of that pause, read once per call off the in-memory gate and projected onto **ACTIVE rows only** while the gate is closed — its checklist is not being refreshed and `lastError` names the same deadline.
+The three surfaces clear on their own schedules: `pausedUntil` disappears the moment the gate opens (deadline elapsed or early lift), without any poll; the `lastError` annotation is removed immediately by the early-lift clear, or — after a natural expiry — dropped by the row's first post-pause write-back (the expiry comparison is whole-second inclusive, so a write-back landing in the deadline's own second can carry it for one more poll); `lastSnapshot` refreshes only on the next successful poll.
+The key is **omitted** (never `null`) while the gate is open and on every `completed` / `cancelled` row, so a consumer labels a row stale by presence alone (cloudlands-fe renders "Monitoring paused until <time> (GitHub rate limit)" from it, [intent-hq/cloudlands-fe#2551](https://github.com/intent-hq/cloudlands-fe/pull/2551)); `title` / `url` / `lastSnapshot` are present once the monitor has a successful poll baseline, `lastSnapshot` being the last-refresh checklist summary `{ state, isDraft, hasConflicts, isBehind, ancestry?, branchUpdateRequired?, mergeable, mergeBlockedReason, checks: { total, passed, failed, pending, skipped, failingRequired, pendingRequired, requiredKnown }, approvals: { decision, have, needed, changesRequested }, threads: { unresolved?, resolutionRequired }, isInMergeQueue?, mergeQueue?, mergeQueueEjection?, checksNotStarted?, rulesKnown }` (`threads.unresolved` follows the checklist's presence rule below — omitted when the resolution state was unreadable).
 
-**`MergeRequirements` checklist** — "what is needed to merge this PR", the reusable object backing `ws.pr.monitor` (the `requirements` result field), the monitor loop's change detection, and the additive `requirements` block on `ws.pr.snapshot` (§5.7) — one canonical shape across all three surfaces. Shape: `{ state, isDraft, hasConflicts, isBehind, ancestry?, branchUpdateRequired?, mergeable?, checks: { total, passed, failed, pending, items: [{ name, status, required, url? }], failingRequired, pendingRequired, requiredKnown }, approvals: { decision, have, needed?, changesRequested }, threads: { unresolved?, resolutionRequired? }, mergeStateStatus?, mergeBlockedReason?, isInMergeQueue?, mergeQueueEjection?, rulesKnown }`. `state` is the 4-value lifecycle word; `mergeable` is the forge's tri-state (omitted while still computing); `threads.unresolved` is the unresolved review-thread count and is **presence-detected** under the same additive convention as `mergeable`: the key is **omitted** (never `null`) when the per-thread resolution state was unreadable — the GraphQL threads read failed and the REST comments fallback carries no resolution state — instead of inflating to "every thread unresolved" or defaulting to zero, while `0` is the ordinary known count when every thread is resolved; consumers treat absence as *unknown*, not *clear* (the monitor's ready promotion never fires on an absent count while `resolutionRequired` is `true`, the rendered checklist row reads `unresolved threads: unknown (thread resolution state unreadable)`, and the monitor's diff never emits a thread-count delta when either side is absent — a known→absent transition is reported as `review threads unreadable (resolution state unavailable)` and absent→known as the neutral `review threads readable again: n unresolved` instead); each `checks.items[]` entry reports `status ∈ { passed, failed, pending }` and its own `required` flag, with `failingRequired` / `pendingRequired` naming the required checks that are failing/still running; `approvals.decision` is the §5.7 `ws.pr.snapshot` decision wire word, `have` counts distinct approving reviewers, `needed` the base branch's required approvals; `mergeStateStatus` is the host's raw merge-state status (GitHub GraphQL `mergeStateStatus`) — the residual signal for rules with no finer detail (merge queue, signed commits, hooks); `isInMergeQueue` is additive and presence-detected per the protocol's additive-field convention: `true` exactly when the host reports the PR queued in its merge queue (GitHub GraphQL `isInMergeQueue`), and the key is omitted (never null) when not queued or unknown; `mergeQueueEjection` *(additive, presence-detected under the same convention)* is the PR's **latest merge-queue removal event** as `{ at, reason? }` — `at` is when the queue ejected the PR (GitHub GraphQL `RemovedFromMergeQueueEvent.createdAt`, RFC 3339) and `reason` the host's raw removal reason (e.g. `failed_checks`; omitted when the host reports none) — with the key omitted when the host reports no removal event; the monitor loop's diff keys its ejection line on the event identity (`at`) and humanizes the reason (underscores → spaces), so an enter→eject pair that nets out on `isInMergeQueue` within one window still reports "removed from the merge queue (failed checks)". Degradation is **per-signal, never fatal**: a host that reports no check rollup yields `checks.requiredKnown: false` (every `required` flag `false`, tallies fall back to the REST check runs), unreadable branch rules yield `rulesKnown: false` with `approvals.needed` / `threads.resolutionRequired` omitted, an unreadable thread resolution state yields `threads.unresolved` omitted, and a fully failed probe still produces the state / conflicts / approvals / threads rows from the snapshot alone — **except for forge quota exhaustion**, which propagates rather than degrading: a GraphQL `RATE_LIMIT` on any of these reads surfaces as the forge's quota-exhausted (rate-limited) error before the REST fallback, so `ws.pr.snapshot` fails instead of returning an omitted count and the monitor keeps its previous baseline and enters the shared rate-limit pause (§5.42 above); the omitted `threads.unresolved` covers non-rate-limit GraphQL failures and the REST fallback only.
+For legacy GitHub `PrMonitor` rows, the compact `lastSnapshot.checks` fields
+`failingRequired` and `pendingRequired` are nonnegative integer counts, including
+`0` for empty lists. `requiredKnown: false` still means required-check evidence is
+unavailable; zero counts do not establish that required checks passed. The full
+`MergeRequirements.checks` fields with the same names remain arrays of check names.
+This does not change the qualified snapshot's nullable check fields or availability
+contract.
+
+**`MergeRequirements` checklist** — "what is needed to merge this PR", the reusable object backing `ws.pr.monitor` (the `requirements` result field), the monitor loop's change detection, and the additive `requirements` block on `ws.pr.snapshot` (§5.7) — one canonical shape across all three surfaces.
+Shape: `{ state, isDraft, hasConflicts, isBehind, ancestry?, branchUpdateRequired?, mergeable?, checks: { total, passed, failed, pending, skipped, items: [{ name, status, required, url? }], failingRequired, pendingRequired, requiredKnown }, approvals: { decision, have, needed?, changesRequested }, threads: { unresolved?, resolutionRequired? }, mergeStateStatus?, mergeBlockedReason?, isInMergeQueue?, mergeQueue?, mergeQueueEjection?, checksNotStarted?, rulesKnown }`.
+`state` is the 4-value lifecycle word;
+`mergeable` is the forge's tri-state (omitted while still computing);
+`threads.unresolved` is the unresolved review-thread count and is **presence-detected** under the same additive convention as `mergeable`: the key is **omitted** (never `null`) when the per-thread resolution state was unreadable — the GraphQL threads read failed and the REST comments fallback carries no resolution state — instead of inflating to "every thread unresolved" or defaulting to zero, while `0` is the ordinary known count when every thread is resolved;
+consumers treat absence as *unknown*, not *clear* (the monitor's ready promotion never fires on an absent count while `resolutionRequired` is `true`, the rendered checklist row reads `unresolved threads: unknown (thread resolution state unreadable)`, and the monitor's diff never emits a thread-count delta when either side is absent — a known→absent transition is reported as `review threads unreadable (resolution state unavailable)` and absent→known as the neutral `review threads readable again: n unresolved` instead);
+each `checks.items[]` entry reports `status ∈ { passed, failed, pending, skipped }` and its own `required` flag, with `failingRequired` / `pendingRequired` naming the required checks that are failing/still running;
+`checks.skipped` *(additive; docs lead the intentd change)* counts the `skipped` items — runs that concluded without executing — which `passed` no longer includes (`total = passed + failed + pending + skipped`); a skipped check is neither failing nor pending, so it never enters `failingRequired` / `pendingRequired` and never blocks merge readiness, and the rendered checklist and wake report it separately instead of as passed (`all checks completed: 23 passed, 2 skipped (coverage-all, coverage-e2e)`; `all checks passed (N)` only when nothing was skipped) (intentd#2581, run 39724275631, showed skipped coverage jobs as 25/25 passed); older daemons omit `skipped`, never emit the `skipped` item status, and count those runs as `passed`;
+`approvals.decision` is the §5.7 `ws.pr.snapshot` decision wire word, `have` counts distinct approving reviewers, `needed` the base branch's required approvals;
+`mergeStateStatus` is the host's raw merge-state status (GitHub GraphQL `mergeStateStatus`) — the residual signal for rules with no finer detail (merge queue, signed commits, hooks);
+`isInMergeQueue` is additive and presence-detected per the protocol's additive-field convention: `true` exactly when the host reports the PR queued in its merge queue (GitHub GraphQL `isInMergeQueue`), and the key is omitted (never null) when not queued or unknown;
+`mergeQueue` *(additive, presence-detected under the same convention; docs-first)* is the PR's place in the queue as the `MergeQueueEntry` of §5.27 (`{ position, queueSize?, state?, enqueuedAt?, estimatedTimeToMerge? }`), present only alongside `isInMergeQueue: true` when the host reported the entry (GitHub GraphQL `PullRequest.mergeQueueEntry`), rides the same per-poll read at no extra forge cost (a cached cheap poll refreshes it with `isInMergeQueue`), and is **informational only**: the monitor's diff never compares it, so a position or estimate change never yields a change line, a pending change or a wake, and the wake's rendered checklist does not print it — agents read it on request from `ws.pr.snapshot` / `ws.pr.monitors`;
+`mergeQueueEjection` *(additive, presence-detected under the same convention)* is the PR's **latest merge-queue removal event** as `{ at, reason? }` — `at` is when the queue ejected the PR (GitHub GraphQL `RemovedFromMergeQueueEvent.createdAt`, RFC 3339) and `reason` the host's raw removal reason (e.g. `failed_checks`; omitted when the host reports none) — with the key omitted when the host reports no removal event **or when that event records a merge rather than an ejection** — its reason is `merged` (case-insensitive; GitHub records a removal when the queue lands the PR — cloudlands-fe#3524 was misreported as ejected on merge) or the PR's `state` is `merged` (a merged PR reports no ejection, whatever the removal's reason; the monitor's degraded-probe hold drops a held event on the same rule) — so the key's presence always means the PR left the queue without merging;
+the monitor loop's diff keys its ejection line on the event identity (`at`) and humanizes the reason (underscores → spaces), so an enter→eject pair that nets out on `isInMergeQueue` within one window still reports "removed from the merge queue (failed checks)".
+`checksNotStarted` *(additive, presence-detected under the same convention; docs-first)* flags a head commit on which CI **never started**: `{ headSha, headCommittedAt, thresholdMinutes }` — `headSha` the PR head the flag is about, `headCommittedAt` that commit's forge-reported commit time (GitHub GraphQL `Commit.committedDate`, RFC 3339; the host exposes no push time) and `thresholdMinutes` the wait the daemon applied (15).
+The key is present only while **all** of these hold: the PR is `open` and not a draft (a draft may legitimately run nothing until `ready_for_review`); the head is **known** conflict-free — `mergeable` is `true`, `hasConflicts` is `false` and `mergeStateStatus` is neither `UNKNOWN` nor `DIRTY` (GitHub does not start `pull_request` workflows on a conflicting head, and a recomputing verdict may hide one); this read's own checks were observed and number **zero** (`checks.total == 0`, no check run and no commit status — an unobserved or degraded checks read never flags, even when the monitor carries an earlier empty list forward); the base branch's rules are readable and require at least one status check (so a repository without required CI never flags); and at least `thresholdMinutes` have passed since `headCommittedAt`.
+It is evaluated when the checklist is **served or polled**, not when it was fetched, so a cached read still crosses the threshold; the monitor additionally never flags a head on the first poll that sees it (registration included), because a commit time can predate its push; hosts that report no commit time (GitLab, the REST-only fallback) omit it — absence means *not flagged or unknown*, never *CI is running*.
+The monitor loop's diff reports its **appearance once per head** (keyed on `headSha`) as `no checks reported for head <first 8 SHA chars> after <n>+ min — CI may never have started; push again (e.g. an empty commit) or rebase to trigger it (expected only if the required checks are path-filtered or run only in the merge queue)`, so the watching agent is woken once with the recovery hint; its disappearance (checks arrived, new head, conflicts) is silent because those changes report themselves, and once its wake is delivered the monitor remembers that head, so a degraded read that clears and later restores the flag never wakes again for it. The debounce window nets out a flag that clears before delivery, and the wake's rendered checklist carries the same hint as a row while the key is present. Motivated by [intent-hq/intentd#2531](https://github.com/intent-hq/intentd/pull/2531), whose re-pushed head received no workflow runs for five hours after a merge-queue ejection.
+Degradation is **per-signal, never fatal**: a host that reports no check rollup yields `checks.requiredKnown: false` (every `required` flag `false`, tallies fall back to the REST check runs), unreadable branch rules yield `rulesKnown: false` with `approvals.needed` / `threads.resolutionRequired` omitted, an unreadable thread resolution state yields `threads.unresolved` omitted, and a fully failed probe still produces the state / conflicts / approvals / threads rows from the snapshot alone — **except for forge quota exhaustion**, which propagates rather than degrading: a GraphQL `RATE_LIMIT` on any of these reads surfaces as the forge's quota-exhausted (rate-limited) error before the REST fallback, so `ws.pr.snapshot` fails instead of returning an omitted count and the monitor keeps its previous baseline and enters the shared rate-limit pause (§5.42 above); the omitted `threads.unresolved` covers non-rate-limit GraphQL failures and the REST fallback only.
 
 #### Branch ancestry and forge-required updates
 
@@ -454,8 +551,8 @@ Lifecycle is observable via the `prMonitor:*` event category (§6.5), and each a
       "headSha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","behindBy":1 },
     "branchUpdateRequired":false,
     "mergeable":true,"mergeBlockedReason":"1 required check failing (ci)",
-    "checks":{ "total":3,"passed":2,"failed":1,"pending":0,
-      "failingRequired":["ci"],"pendingRequired":[],"requiredKnown":true },
+    "checks":{ "total":3,"passed":2,"failed":1,"pending":0,"skipped":0,
+      "failingRequired":1,"pendingRequired":0,"requiredKnown":true },
     "approvals":{ "decision":"approved","have":1,"needed":1,"changesRequested":0 },
     "threads":{ "unresolved":0,"resolutionRequired":true },"rulesKnown":true },
   "createdAt":"2026-08-07T11:58:00.000Z","updatedAt":"2026-08-07T12:00:30.000Z" } ] } }
@@ -472,3 +569,387 @@ Lifecycle is observable via the `prMonitor:*` event category (§6.5), and each a
 // ← response — nothing changed vs. the emit baseline: no wake
 { "jsonrpc":"2.0","id":101,"result":{ "ok":true,"flushed":false } }
 ```
+
+#### Planned qualified review monitoring (not yet advertised)
+
+This contract is **planned**, not a claim that GitLab monitoring is available.
+The current runtime bindings and generated [MCP index](mcp-bindings.md) remain
+unchanged. The additive declarations in `intent-core::review_monitor` and the
+`WorkspaceApi` addressed methods establish the handoff to implementation. Their
+default implementations return unsupported without a legacy fallback. Neither a
+new renderer registration method nor another monitor registry is introduced.
+
+**Capability and entry points.** A completed implementation advertises integer
+`server.capabilities.reviewMonitoring: 1` through `client.hello`. Absent, zero,
+or an unrecognized non-integer value must not enable addressed requests or GitLab
+monitor controls. Version 1 includes addressed snapshots, registration, list,
+cancellation, explicit refresh/flush, polling, restoration and qualified private
+output. Do not advertise it for a partial implementation. Existing
+`agentFeatures.prMonitor` and GitLab Labs/connection gates remain independent;
+capability is host support, not authorization, connection status or merge readiness.
+Older hosts continue to use the existing GitHub UI and calls. Unsupported/disabled
+GitLab behavior uses the established availability treatment in the shared flow.
+
+**Recipient support and legacy output boundary.** Host support alone is insufficient.
+Qualified output requires BOTH server support and an explicit version-1-or-newer
+integer `reviewMonitoring` capability from the actual recipient. Missing, zero,
+negative, boolean, string, fractional or otherwise malformed recipient values mean
+legacy. This is a compatibility declaration, never authorization.
+
+- **Desktop/transport recipient:** read `client.hello.params.capabilities.reviewMonitoring`
+  on the admitted [monitor attachment](client-hello.md#qualified-monitor-attachment-prepared-not-advertised).
+  Ordinary pooled connections remain legacy recipients. It covers that connection only, not all
+  connections sharing a `clientId`. Re-negotiate after reconnect; do not copy a
+  previous socket's declaration. Forwarded/remote-host traffic uses the end consumer's
+  declaration AND each decoding intermediary's support; a capable local proxy cannot
+  upgrade an old desktop. Subscribe, seed, reconnect, direct responses and history
+  projections use the same destination-specific decision.
+- **Agent recipient:** the daemon's trusted harness/session construction records a
+  versioned `reviewMonitoring` support receipt only after that harness's bindings,
+  guidance and wake/history readers implement this contract. It is scoped to the
+  concrete session/host and retired on replacement, retirement or restoration without
+  trusted evidence. A tool argument, prompt, model-generated claim, workspace setting,
+  namespace spelling or persisted wake cannot assert support. Old/unknown harness
+  stamps have no receipt. Re-evaluate both the owning agent's receipt and any desktop
+  viewing its conversation; support of one never implies support of the other.
+
+**Agent private-context extension (prepared, not advertised).** The daemon offers
+`initialize.clientCapabilities._meta.reviewMonitoring: 1` only in an explicitly
+qualified composition. The actual initialize result and each successful session/new
+or session/load result must independently declare `_meta.reviewMonitoring >= 1`.
+Both startup methods carry `_meta.reviewMonitoringContext =
+{version:1, ownerKey, loadAttemptId}` and must echo that exact object in the result.
+These opaque identifiers come from the original daemon-owned agent/workspace and
+startup allocation. They are correlation, not authority. The receipt binds the
+original physical Connection, initialize generation, startup attempt and callback
+Query; it becomes eligible for **new** monitor delivery only after the original
+callback registration acknowledges. A missing/malformed/mismatched echo, delayed
+reply, replacement, reinitialize or retirement cannot establish or revive support.
+Ordinary startup/callback metadata remains unchanged when this extension is absent.
+
+The daemon retains a random private native-family key with the original startup
+owner. Its installation-local `review_context_enrollment` row is committed in the
+same guarded transaction as that exact winning agent/workspace/native session ID.
+A losing startup cannot borrow the winner's key. Cold load reads the exact existing
+association without creating or deriving one; missing enrollment refuses qualified
+resume. Identity, import or transcript replacement invalidates the association,
+including identical-byte replacement; ordinary name and usage updates preserve it.
+The table is excluded from transfer and public projections, and injected import
+rows are rejected. Commit facts remain distinct from later owner confirmation or
+callback failure. This association selects a family only: fresh complete source
+admission, exact attempt ownership and callback support remain independent.
+
+Before resuming native context, the daemon invokes the agent-side method
+`_intent/session/prepare_review_history({sessionId, ownerKey, loadAttemptId})`.
+The result is `{preparationId, snapshotDigest, monitorMessages:
+[{messageId, storeEnvelopeDigest, acpPayloadDigest}]}`. Preparation may classify and
+pin history but must not spawn a native Query, load model context, replay messages,
+or disclose bodies. The daemon independently verifies original private Store
+provenance and freshly admits the entire original source/account/workspace set.
+Only then may it send session/load with `_meta.reviewMonitoringHistory =
+{version:1, preparationId, snapshotDigest, loadAttemptId}`, alongside the matching
+startup context. This pre-resume admission deliberately precedes Query/callback
+creation; it never replaces the callback ACK required for a new wake.
+
+The preparation is bounded, one-use and bound to the original connection,
+initialize generation, owner, session and startup attempt. Consume it before any
+await/spawn. `snapshotDigest` commits the held complete native resume-input closure,
+authoritative enrollment/lineage and complete monotonic source journal. No ambient
+reread or raw-resume fallback is allowed. Empty `monitorMessages` means proven
+ordinary lineage. Missing, copied, truncated or unverifiable classification must
+not become ordinary, even through an incapable route. Compaction, derived and child
+context retain every original source dependency. Installation-private enrollment
+and durable pre-feed journaling must map each Store correlation and exact ACP payload
+to its native SDK UUID/content. Journal persistence never proves transfer or ACK.
+
+A new admitted committed monitor prompt carries `_meta.reviewMonitoringMessage =
+{version:1, messageId, storeEnvelopeDigest, acpPayloadDigest}`. The Store digest is
+opaque; private binding fields never cross ACP. The independently verifiable ACP
+digest commits both correlations, destination and every accepted payload field.
+Strict text-only v1 accepts exactly `{sessionId, prompt:[{type:"text", text}],
+_meta:{reviewMonitoringMessage:{version:1, messageId, storeEnvelopeDigest,
+acpPayloadDigest}}}`. Extra keys, blocks, attachments and sibling metadata refuse
+rather than disappear during conversion; ordinary rich prompts retain their path.
+For this profile, the digest is lowercase SHA-256 of the UTF-8 compact JSON array
+`["intent-review-monitor-acp-text-v1", sessionId, messageId, storeEnvelopeDigest,
+text]`, with no BOM/newline or Unicode normalization. Invalid Unicode refuses.
+Constant field names/types/version are fixed by this domain; only the digest's own
+self-reference is excluded. Conversion to `task-notification` must preserve the
+actual UUID/result/idle/cancel settlement, independently of unrelated autonomous
+turns. Public/model text and metadata cannot mint original account authority.
+
+Retirement invokes `_intent/session/retire_review_context({sessionId,
+loadAttemptId})`. On entry, close eligibility for new private use/dispatch and
+invalidate preparations before any awaitable cleanup. `{retired:true}` is valid
+only after that exact known allocation's native execution/process tree and
+forwarders join, or for its retained matching joined tombstone. Unknown attempts
+cannot select a same-ID replacement or receive fabricated success. Timeout/peer
+loss requires joining only the exact owned execution; ordinary interrupt alone is
+not a retirement proof. Loaded qualified context remains dependent on all original
+sources for subsequent ordinary/autonomous work. Discard delayed replies after
+retirement. Already-dispatched authorized external work cannot be recalled; retain
+uncertain delivery without an exactly-once or rollback claim. Default offers and
+production activation remain disabled pending native qualification.
+
+The internal pure policy `ReviewMonitorOutput<T>::project` divides producer output
+into `LegacyGithub` and `Qualified`. These are not wire tags or caller inputs.
+`LegacyGithub` means the unchanged existing GitHub producer envelope, with its existing
+validation, counts/omissions, errors, URLs and ownership semantics. It must NEVER be
+constructed by stripping identity/availability from a qualified observation. All
+GitLab output, qualified GitHub output (including nullable/restricted facts), and
+unresolved provenance are `Qualified`, regardless of alias or display string.
+Only proven legacy GitHub provenance can select the old producer. Unproven provenance
+must not be guessed from `repo`, a missing `resource`, current remotes or a URL.
+
+| Surface | Recipient without qualified support | Recipient with qualified support and enabled host |
+| --- | --- | --- |
+| List, `agent:idle` / AgentLite / diagnostics wait summaries | Preserve legacy GitHub entries exactly; omit qualified entries. Keep internal waiting/settlement/ownership accounting intact; omission is not completion or cancellation. | Deliver both classes; preserve canonical identity and unknown facts. |
+| Lifecycle event / subscription / replay | Deliver original legacy GitHub events; suppress the entire qualified event. Never emit a slug-only substitute. | Deliver qualified identity/health after fresh admission. |
+| Snapshot, registration, adoption/refusal, cancel/flush and lookup by ID | Legacy GitHub calls retain existing output and ownership. If resolution selects qualified data, return the existing generic unsupported error BEFORE provider reads, registration/adoption/cancel/flush side effects or ownership disclosure. No fallback, disguised success, owner names, qualified URLs or instructions. | Existing admission and canonical ownership rules apply; typed qualified output is allowed. |
+| Agent wake, transfer notice, queue dispatch, persisted replay | Withhold the WHOLE qualified envelope (body, metadata, URL, attachments and derived summaries); do not acknowledge delivery, advance delivered baseline, or discard pending/terminal notices. Preserve registration and durable pending delivery until an admitted capable recipient or explicit cancellation. Legacy GitHub delivery remains unchanged. | Re-check recipient receipt and fresh original authority at delivery; then deliver once through normal debounce/dedup/terminal semantics. |
+| Conversation/history export or desktop view of an agent wake | Omit whole qualified monitor-derived messages and any embedded replay/summary content for that destination. No generic GitHub label or guessed link. Do not alter stored history or agent delivery acknowledgments. | Preserve the full qualified envelope under the same authority and recipient checks. |
+| URLs | Only original legacy GitHub output is eligible; qualified missing-URL output is withheld with its envelope. | An absent observed canonical URL remains absent. Render a non-navigable label/disable existing open actions; never construct a GitHub URL from `repo`/`prNumber`. |
+
+New `gitRootId`/`target` selectors require negotiated support before resolving a
+provider read, including when the requested provider is GitHub. Legacy selectors
+remain unchanged; if their resolution selects qualified data, the same unsupported
+boundary applies without fallback.
+
+An unsupported old agent cannot acquire/adopt a qualified registration. A previously
+capable owner downgraded/replaced without a receipt keeps durable ownership/pending
+notices under existing lifecycle rules; do not silently transfer it to another account
+or consume its pending wake. A capable admitted replacement/adopter must pass the
+existing ownership and authority checks before pending output can be reconsidered.
+Capability withdrawal invalidates any cached per-recipient projection. Preformatted
+queued messages are not an exception: retain internal producer provenance across
+queue/history boundaries and apply the decision again to the entire envelope.
+Never convert null to zero, strip restrictions, or mislabel GitLab to satisfy an old
+consumer. This conservative boundary intentionally hides qualified monitors from old
+clients until they upgrade; it does not hide or change ordinary legacy GitHub monitors.
+
+Both namespace aliases keep the existing number argument named `prNumber` and
+share records, limits, caller ownership, adoption, cancellation and wakes. The
+planned options for snapshot, monitor and unmonitor are exactly one of:
+
+| Address | Planned resolution |
+| --- | --- |
+| no selector | Read the current authorized primary root's saved review selection using the shipped repository-context resolver. No remote, unresolved provenance or multiple plausible projects is a refusal, never a guessed GitHub fallback. |
+| `repo: "owner/name"` | Preserve the explicit legacy GitHub.com override, its validation, output and errors. An old `repo: null` remains omission. It does not select GitLab even through the MR alias. |
+| `gitRootId: "registered-id"` | Resolve that registered root in the requesting workspace under original authority, then use its saved selection. Paths are not IDs; foreign/removed/ambiguous roots fail without primary-root fallback. |
+| `target: ReviewTarget` | A per-call explicit review address: `{ repository: { provider, instanceBaseUrl, projectPath }, kind, number }`. Reuse the shipped target type. Provider canonicalization and current admission are required; a valid authorized explicit target works without an implicit remote. It does not change a saved selection. |
+
+Selectors cannot be combined, even if they appear equivalent. New selectors cannot
+be `null`. The explicit target's number must equal `prNumber`; it is the project-local
+PR number or MR iid, not a GitLab global ID. Only GitHub `pull-request` and GitLab
+`merge-request` kinds are supported; issue monitoring is outside this contract.
+New addressed numbers must be positive JavaScript-safe integers. Legacy number
+validation is unchanged. Preserve nested/case-sensitive GitLab paths and the logical
+instance root including ports and installation prefixes. Never choose identity from
+a display URL, namespace spelling, bare project string or the current default forge.
+Caller, account, connection and daemon IDs are not request options.
+
+**Public projections (qualified recipients only).** Existing fields and lifecycle words remain intact. Add
+`resource?: ReviewTarget` and `monitorAvailability?` to monitor rows, refusal identity,
+`waitingOnPrMonitors` entries, lifecycle event data and wake metadata when known.
+Unresolved target provenance omits `resource`; absence on an older row is unknown,
+not evidence that the row belongs to GitHub. A known resource's `number` equals
+`prNumber`; `repo` remains the full project path. Always supply the observed canonical
+URL for qualified rows/wakes when known; missing GitLab URLs do not permit a GitHub
+URL fallback. The identity supplement does not disclose account/authority receipts.
+
+The monitor's own health is separate from `state: active|completed` and from the
+provider's merge checklist. `monitorAvailability` is one of:
+
+| Shape | Meaning in the existing shared status flow |
+| --- | --- |
+| `{ state: "available" }` | Current admission permits monitoring; does not mean the review is mergeable. |
+| `{ state: "pending" }` | Awaiting the first admitted observation; no invented checklist. |
+| `{ state: "reconnect-required" }` | Original connection is disconnected or needs authentication; retain target, do not use a replacement account. |
+| `{ state: "backoff", retryAt }` | Polling is delayed until the RFC 3339 deadline for this connection. Retain known snapshots as stale. |
+| `{ state: "restricted" }` | Access is denied; do not emit private cached data or pending text. |
+| `{ state: "disabled" }` / `{ state: "unsupported" }` | Existing feature gate or host support prevents monitoring. |
+| `{ state: "unavailable" }` | A transient provider/read failure without a known retry deadline; no successful-poll timestamp advance. |
+| `{ state: "unresolved", reason }` | `missing-provenance`, `unverified-import`, `invalid-target` or `missing-authority`; retain inspectable/cancellable evidence without a provider read. |
+| `{ state: "unknown" }` | Insufficient evidence. Unknown future state/reason words are treated as unknown, never available. |
+
+`lastError` remains a sanitized explanation. Existing `pausedUntil` remains compatible:
+for a qualified active monitor it mirrors a known future backoff deadline; it is omitted
+when no such deadline exists and on terminal rows. GitLab quotas/outages never close
+the global GitHub gate. Use the existing status sentence and detail positions; this
+contract requires no GitLab-only row, panel, action ordering or recovery screen.
+Necessary copy differences are GitLab branding, MR/`!` notation, actual links, and
+truthful capability/data availability.
+
+Qualified rows and registration/snapshot results use the already-shipped qualified
+snapshot projection above, including its `availability` object (`policy`, `approvals`,
+`checks`, `discussions`). The producer reuses `ReviewAvailability`, not another signal
+vocabulary. Where present, `lastSnapshot` retains that projection's requirements and
+availability semantics. Null counts stay null; unknown thread counts stay absent;
+known empty data stays zero. Preserve restricted/unavailable/transient/rate-limited/
+unknown states. A pipeline for a different head cannot establish readiness for the
+current head. Do not deserialize qualified checklists through legacy non-null defaults.
+The compact row's `lastSnapshot.checks.failingRequired` and `pendingRequired` are
+numeric counts (or null when unavailable), and omit the rich `items` list. Full
+snapshot/registration `requirements.checks` retain their named lists. An empty
+observed list projects to zero; unavailable evidence must not project to zero.
+
+**Events and wakes.** Keep the five existing `prMonitor:*` names and
+`type: "pr_monitor_wake"`, `prNumber`, reason words and transfer semantics.
+The optional extension is additive for supported recipients only; events carry
+identity/health, not snapshots or
+private binding data. A material availability transition uses `prMonitor:changed`
+with the complete current `changes` list (possibly empty) and prompts a list refetch.
+An unchanged poll emits nothing. Availability changes must not fabricate a check-count
+delta. Provider changes remain debounced against the last delivered baseline;
+confirmed merge/close completes the monitor with the immediate final wake. Existing
+cancel/flush routes continue to address `workspaceId` plus `monitorId`, so same-number
+GitHub/GitLab rows cannot collide. Explicit checks, cached replay, queued wakes and
+persisted wake replay all require fresh original-authority admission before private
+output. Unauthorized output is suppressed, not rewritten as a passing/empty snapshot.
+
+**Original authority and persistence.** Services capture the original daemon,
+authenticated caller/workspace authority and settled connection/account before the
+first await/queue boundary. `ReviewMonitorBinding { scope: ExecutionScope,
+connection: RepositoryConnectionScope, resource: ReviewTarget }` is private durable
+binding evidence, not a public event, caller input or bearer capability. Its full
+scope/generation/connection/resource tuple qualifies observation/cache sharing;
+`monitorId` remains the public record/control key. Identical names/numbers on another
+forge, instance, daemon or account never share private observations.
+
+Reuse Store migration 0145 and its qualified monitor APIs for canonical target and
+provenance. Store the private binding receipt in the existing snapshot JSON envelope
+under `monitorBinding`, including a receipt-only envelope before a deferred first
+baseline. `lastSnapshot` public projections must exclude this receipt. Poll/baseline
+writes must preserve it. This needs no new migration or duplicate target table.
+A resolved Store target alone does not prove original authority. Restart revalidates
+against trusted durable host/caller/account evidence; matching public IDs or replacing
+an old generation with the current one cannot create a lease. If original evidence
+cannot be established, leave the row unresolved/reconnect-required and cancellable.
+Never recover provenance from changed remotes, current login, a default connection
+or untrusted imported receipts. Store indexes continue to enforce one active owner
+per canonical review per workspace; replacement accounts do not create parallel
+ownership or silently take over an existing target.
+
+**Original saved-message evidence.** Qualified history uses a private local
+association written atomically with the original prepared message. It binds the
+original workspace, agent, complete review binding and a versioned digest of the
+exact unprojected envelope. This evidence constrains fresh account and recipient
+admission; it never grants access, proves transfer or acknowledges a pending wake.
+Monitor rearm, adoption or cancellation cannot rewrite an older message's origin.
+Message or payload mutation, message replacement and session identity changes
+invalidate the association. Ordinary session timestamp or usage updates preserve
+it. Imports and copies cannot recreate it, even when public message bytes match.
+Legacy or malformed evidence remains withheld; there is no inferred backfill.
+Supported history delivery must retain the verified envelope and retire queued
+output before a relevant mutation completes, rather than authorize an ID and
+reload its current content. The private evidence is excluded from transfers;
+the separate workspace-transfer refusal also protects retained public message
+bodies and monitor rows.
+
+**Recovery of uncertain qualified delivery.** A saved message is not proof that
+its original recipient received it. Process loss can leave the same stored row
+and message after either an unsent attempt or a transferred but unacknowledged
+attempt. Automatic restart, reconnect, polling, negotiation, list/history reads
+and ordinary re-registration must preserve that pending obligation and its raw
+baseline evidence without resending it or claiming delivery. Surviving trustworthy
+transfer evidence permits acknowledgement-only reconciliation under fresh original
+authority, never a second prompt for that known transfer.
+
+The existing `prMonitor.flush` action, including Check and Flush, is an explicit
+request for a fresh attempt when the previous transfer cannot be determined.
+Independently readmit the original pinned target/account and intended capable
+recipient before that attempt. It uses the existing guarded delivery pipeline;
+an old serialized body or receipt is not replay authority. This may repeat an
+update transferred immediately before a crash; recovery does not promise exactly
+once delivery. Repeated calls for the same live attempt retain normal deduplication.
+Check and Flush refreshes the pinned target and recomputes the consolidated view.
+If no sendable net change remains, report no delivered wake and preserve the old
+uncertain obligation rather than silently acknowledging it. Only an acknowledged
+recovery attempt or explicit cancellation resolves the uncertain pending evidence,
+including terminal work. Unverifiable original provenance stays withheld and
+cancellable. These qualified recovery rules do not change legacy GitHub recovery,
+add a method or introduce a separate UI action.
+
+**Construction and retirement owner map.**
+
+| Owner | Required responsibility before enabling the capability |
+| --- | --- |
+| ACP binding and addressed service routing | Establish trusted per-agent-session support receipts; enforce unsupported direct-call behavior before side effects or ownership disclosure. Parse the shared request; preserve both aliases and explicit legacy GitHub calls. Capture the original `RepositoryReadRequest` / private host scope synchronously; derive caller ownership from that scope. Resolve and canonicalize once, capture binding evidence, and use existing Store qualification/adoption APIs. Never trust a deserialized binding as admission. |
+| Monitor service and repository admission | Own the long-lived registration admission separate from the short MCP request. Transfer only through the original admitted owner; retire the short request at reply/cancel. Revalidate the retained original authority/account before each read, cache reuse and private delivery; do not capture a later ambient caller to extend it. |
+| Polling/cache/wake owner | Apply recipient projection to whole queued/wake/history envelopes and replays; preserve pending delivery on withheld output without acknowledging it. Reuse qualified observations/cache keys, connection quota isolation and current-head evidence. Preserve receipts on writes, debounce meaningful changes, retire terminal watches, and fence pending/queued/persisted output on authority loss. |
+| Restoration/lifecycle owner | Re-admit the original durable binding, without reselecting remotes. Retire runtime handles on cancel, completion, workspace teardown, owner loss or authority/account invalidation; retain durable unresolved evidence where appropriate. Apply existing orphan/parent-adoption rules with fresh admission and unchanged canonical target. |
+| Native transport and desktop state owner | Negotiate per-connection recipient support, including end-consumer/intermediary intersection across hosts; retire it on disconnect/reconnect. Filter all response/event/history/wait projections by destination. Carry qualified identity/health through original-host list, cancel, flush, event and replay boundaries, rechecking member/guest access and using capability detection. Cache by host/workspace/monitor identity; do not let local backend state replace a remote host's record. |
+| Shared UI and agent guidance owner | Extend the actual GitHub components/copy and metadata consumers. Keep old harness stamps, explicit GitHub behavior, action ordering, keyboard/focus behavior and unknown values. Compare compact/wide captures and matched-input interactions against the recorded GitHub reference. |
+
+The declaration/golden tests establish serialization, structural addressing and
+pure recipient-projection and default-implementation compatibility only. A source-bound
+legacy-consumer probe demonstrates the unsafe raw input and tests the policy output;
+unknown-field tolerance alone is not compatibility proof. Direct MCP snapshot,
+registration, list and cancellation now use original request admission and trusted
+producer provenance. A registered target retains its original private binding and
+does not follow later root selections. Cancellation compares the captured row,
+including owner, target and binding, atomically with its state change. Direct
+insertion, refresh/adoption and cancellation reserve the database writer before
+entering original physical/account authority fences, and retain those fences
+through SQL execution and commit. Retirement before admission leaves no durable
+change; retirement after SQL admission joins its completion. Dropping the async
+caller does not cancel an admitted commit or undo a completed effect. These paths
+remain unavailable to production qualified recipients: the test-owned receipt is
+not a negotiated connection capability. Native qualified cancel/flush refuse and
+native lists omit qualified rows before provider reads or effects.
+
+Later owners must still prove polling, restart/restoration, transfer notices,
+events, waits, whole wake/history/replay delivery, native recipient negotiation and
+Electron behavior before capability advertisement. The private registration
+envelope contains `monitorBinding`, nullable `qualifiedSnapshot` and optional
+`retryAt`; it is evidence, never permission or a delivery acknowledgment. Later
+writers must preserve it and supply independent original authority. Controlled
+captures do not establish live-provider support.
+
+#### Agent guidance for prepared qualified observations
+
+The current help for both observation aliases documents the existing additive
+`gitRootId` and `target` selectors. These examples describe the prepared contract;
+qualified production offers remain disabled. Alias presence, a connected account
+or a harness stamp does not enable private monitoring. The session's captured
+`agentFeatures.prMonitor`, recipient support and current access remain independent.
+
+For a supported session, an explicit GitLab address is:
+
+```javascript
+await ws.mr.snapshot(7, {
+  target: {
+    repository: {
+      provider: "gitlab",
+      instanceBaseUrl: "https://git.example:8443/gitlab",
+      projectPath: "team/sub/app"
+    },
+    kind: "merge-request",
+    number: 7
+  }
+});
+```
+
+The existing `ws.pr.snapshot(7, { repo: "team/app" })` instead addresses GitHub.com
+PR #7. Both aliases share this distinction; MR !7 is a project-local iid, not a
+global GitLab ID. Never combine selectors, infer a forge from the alias or treat
+a per-call address as a saved-selection update. Native observation needs neither
+`gh` nor `glab`. Creation, comments and merging still use forge-appropriate tools
+with separate authentication and write authorization; no native write binding is added.
+
+Harness 3.2 adds these monitor-address and recovery instructions to the existing
+optional repository-context delivery path. Earlier stamps retain their templates
+and captured features; no existing session is upgraded. Current facts remain inert
+JSON, bounded and subject to the same original context admission and final writer
+checks. A capability or remote change updates guidance for subsequent operations,
+not the target/account of an existing watch or restored history.
+
+Structured selection-required or repository-unavailable results require an
+explicit authorized selection, never an origin or GitHub fallback. Reconnect the
+original account for reconnect-required. Restricted, disabled, unsupported and
+unknown states do not authorize private cached output. After interrupted delivery,
+retain pending changes and use the existing Check/Flush controls with a fresh
+check for explicit recovery; a no-change check may leave pending changes intact.
+External work already accepted cannot be recalled, and explicit retry does not
+promise exactly-once effects. Wakes retain the existing sentence patterns and
+machine fields, with actual returned links and PR/# or MR/! terminology.

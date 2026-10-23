@@ -50,6 +50,34 @@ it does not claim the frontend already implements them.
    revision, selection or account identity. Server entry/final validation remains
    authoritative regardless of notification timing.
 
+#### Scoped repository pages (prepared)
+
+The [prepared resource-page contract](methods/repository-resources.md#prepared-project-pages-and-discussions)
+keeps the original physical connection, caller context and read lifetime for
+capture, detail, every page and release. Require `repositoryResourcePages: 1`;
+the unchanged detail-only capability does not imply these operations.
+
+Choose the actual context before capture: the explicit authorized workspace, or
+the durable Host Owner for a host view without a workspace. Never borrow a
+workspace, convert host membership into ownership, or replace the context during
+pagination. Install the original connection's lifecycle handling before capture
+and reconcile events across the await before using its result. Keep the same
+conservative request-start deadline; responses and page cursors do not renew it.
+
+Bind each pending page to its full instance/project, resource kind, exact query,
+page size and cursor. A query change starts a distinct pager. Preserve empty
+pages with continuation and canonical note/thread identities; an unavailable or
+omitted section is not a successful empty collection. Fence late results after
+denial, disposal or account/connection replacement. Success in a summary or
+discussion cannot refresh an older detail observation.
+
+The [child Git policy control](methods/settings.md#prepared-gitlab-child-git-credential-policy)
+has separate owner authority and capability. Retain its complete original
+binding across an explicit toggle; unavailable, pending and failed state is not
+off. Discard stale read/write results after a full-instance/account transition
+without automatically applying the old choice to the replacement. These are
+client obligations, not a claim of deployed frontend or helper support.
+
 #### Repository selection lifecycle
 
 The [repository selection contract](methods/workspace.md#repository-selection)
@@ -249,6 +277,16 @@ the project's real default; it does not request the source fork or merge-request
 head. An unknown instance must not fall back to GitHub or another configured
 account. Preserve the existing GitHub and local-Git paths independently.
 
+### Generic event loss recovery (prepared)
+
+The [negotiated loss contract](event-stream-recovery.md) defines subscription
+admission, ack races, authorization and ABA fences, one active plus one trailing
+read per resource, minimum pacing and finite retries. Recover current authorized
+state through existing read owners; preserve newer pushes and independently
+recovered snapshot channels. Inactive resources refresh on next demand. Old
+daemons retain reconnect/explicit-refresh fallback; no steady-state polling or
+automatic recovery of unreported losses is implied.
+
 ### 10.3 Optimistic UI
 
 For mutations, optimistically apply locally, send the request, and reconcile when (a) the methodresult returns and (b) the corresponding `events.event` arrives. Roll back on error. Use the stable`messageId` you pass to `agent.sendMessage` (and the echoed `agent:user-message:sent` event) tomatch your optimistic message against the canonical one and avoid duplicates across clients.
@@ -286,6 +324,16 @@ owner. A retained guest workspace owner receives permission request/resolved eve
 only for workspaces they currently manage, matching snapshot/answer authority (§8).
 That grant does not admit host creation/administration, guest-denied script RPCs,
 or unrelated management events.
+
+The prepared [guest role extension](methods/multiplayer.md#workspace-guest-roles-prepared)
+adds separately gated agent creation/model controls and saved-script operations
+for `myRole: "manager"` under exact `workspaceGuestRoles: 1`. This role does not
+override `canManage: false`. Keep raw terminal and script-definition controls
+behind their existing authority checks, including when they share a Shell panel
+with runnable scripts. Role mutations require explicit owner authority and only
+update confirmed UI state after success. Membership invalidations and reconnects
+refresh the role before applying it to controls.
+
 Host provider/model/repository
 reads and pairing requests must remain routed to that host when a different local
 daemon exists. Reconcile live membership changes with a fresh bounded snapshot.

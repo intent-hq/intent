@@ -29,21 +29,21 @@ Routing-only `workspaceId?` additions below are [prepared contract fields](../wo
 
 **Client support gate.** Before sending either reader with a nonblank
 `gitRootId`, clients must establish support from the **connected daemon's**
-advertised `client.hello.protocolVersion`: a well-formed, supported protocol
-version: `11.1` or later within major 11, or known major 12 or 13. Missing,
-malformed, older, or otherwise unknown support
-must fail closed before sending the scoped text or chunk request. Re-establish
-support after reconnecting or switching daemons; a previous daemon's result is
-not evidence for the current connection. Documentation version headers and
+advertised `client.hello.protocolVersion`: a well-formed protocol version
+`11.1` or later, with no upper bound (see the
+[compatibility policy](../versioning.md#compatibility-policy)). Missing,
+malformed or older versions must fail closed before sending the scoped text or
+chunk request. Re-establish support after reconnecting or switching daemons; a
+previous daemon's result is not evidence for the current connection. Documentation version headers and
 unrelated capability flags do not establish support. Older daemons can ignore
 the unknown selector and successfully return a same-named primary-workspace
 file, so neither a trial scoped read nor retrying without `gitRootId` is a safe
 fallback. Ordinary reads without a selector keep their existing behavior. Older
-installed frontends with an exact-major-11 guard reject scoped reads against
-protocol 12 and 13; those with only a major-12 allowance still reject 13. They
-need a frontend carrying the known-major-13 guard. Unknown future majors,
-including 14, remain unsupported; see the [installed-client compatibility
-notice](../versioning.md#protocol-version--compatibility).
+installed frontends capped the accepted major and reject scoped reads on later
+protocols; see the [installed-client compatibility
+notice](../versioning.md#protocol-version--compatibility). This gate has no
+capability flag: a future breaking change to `gitRootId` reads must add one
+first (see the compatibility policy).
 
 `file.read` and `file.readChunk` accept an additive optional `gitRootId` request
 field. With a nonblank selector, the daemon resolves the root registered to `workspaceId`
@@ -525,12 +525,16 @@ API gains root support; all other file APIs retain their existing scope.
 >   opener, emulated (sizing invariant unchanged), returned by `listTabs` (with
 >   `visibility: 'hidden'`), and its webview renders offscreen — with **no panel
 >   mount and no focus or active-tab change**. `visible: true` on a **fresh** open
->   opts into opening directly into the panel layout: the tab is mounted per the
->   requested `position` (`adjacent`, `same`, or the new-tab fallback of `replace`)
->   **and activated in its panel** (made the panel's active tab in the saved
->   layout) **without** moving panel/keyboard focus on **every** placement, and the
->   action's `result` carries an **optional `displayed?: boolean`** (the same
->   layout meaning as `listTabs`, read from the layout after the open): **present
+>   inserts the tab **immediately behind the current panel's active tab** (below
+>   it in the panel content menu), preserving active content, keyboard focus, and
+>   forward history. This background insertion is **pending the companion frontend
+>   release**; older frontends activate fresh visible opens. It applies to every
+>   new-tab `position` (`adjacent`, `same`, or the fallback of `replace`). Replacing
+>   an existing owned tab keeps its existing behavior. In an empty panel the new
+>   tab becomes active. User-initiated opens are unchanged. The action's `result`
+>   carries an **optional `displayed?: boolean`** (normally `false` for an insertion
+>   behind an active tab; the same layout meaning as `listTabs`, read from the
+>   layout after the open): **present
 >   only when the FE confirmed the tab's layout state** from a fresh tab list;
 >   **absent when that state is unknown** (stale or unavailable list, tab not
 >   listed) — absence means *unknown*, never `false`, and the caller re-reads it
@@ -543,6 +547,16 @@ API gains root support; all other file APIs retain their existing scope.
 >   visible. A dedupe hit under `visible: true` carries the same optional
 >   `displayed?` for the reused tab (`false` for a hidden tab when confirmed,
 >   absent when unknown). Revealing an existing tab is **`showTab`-only**.
+>   A successful open returns `{ action: "openTab", success: true, result:
+>   { tabId, url, ... } }`. The companion frontend update adds `url` to fresh-open
+>   results; reused-open results already carry it. It is the resolved URL submitted
+>   to the browser, not a guarantee of the eventual page URL after redirects.
+>   Existing `requestedUrl` / `finalUrl` rewrite echoes are unchanged. The daemon
+>   forwards these fields unchanged. Address subsequent actions by the returned
+>   `tabId`, because background insertion does not change the active tab. The
+>   accompanying chat UI turns successful opens with a tab ID and URL into a
+>   clickable **Browsing hostname** badge (including a non-default port) that
+>   reveals the existing tab; this UI also requires the companion frontend release.
 > - **`showTab { tabId, focus? }`** — **activates** an owned tab in a visible panel:
 >   reveals a hidden tab, or brings a visible-but-inactive tab to the front of its
 >   panel; **owner-only** (on a tab the caller does not own it returns the
@@ -604,10 +618,22 @@ API gains root support; all other file APIs retain their existing scope.
 > lesser of its own cap and the budget remaining), so a capture op is designed not
 > to outlive the daemon's reverse request. `navigate` runs only the mount step: it
 > passes no deadline (its mount wait is bounded by that stage's own cap alone), does
-> not wait for the guest to settle, and performs no origin check. `snapshot` does
-> not go through the mount path at all. A mount on demand against a not-in-view
-> workspace succeeds with the same additive `warning` string as above; a hidden tab
-> in a displayed workspace mounts with no warning.
+> not wait for the guest to settle, and performs no origin check. `snapshot` and the
+> capture-session actions (`startSession`, `startCapture`, `captureStep`,
+> `startTrace`) run the same mount step under the request deadline, without the
+> settle or origin check. A mount on demand against a not-in-view workspace succeeds
+> with the same additive `warning` string as above; a hidden tab in a displayed
+> workspace mounts with no warning.
+>
+> A workspace that **no window has open** (its tab was closed, or it was not reopened
+> since a restart) is **hosted in the background** before the batch runs: the FE asks
+> one app window connected to the workspace's host (the focused one first) to
+> hydrate the workspace's saved layout without adding a workspace tab, navigating,
+> or moving focus, then routes the batch there like an open workspace. Tab-free
+> batches (`openTunnel` / `listTunnels` / `closeTunnel`) skip this. Every capture
+> also keeps the guest and its window drawing while the app window is minimized or
+> covered (background throttling is lifted for the capture only), so a capture in
+> that state paints instead of failing `not-painting`.
 >
 > When a mount, settle, or paint cannot happen, the op fails as an **action-result
 > error** (the per-action `{ action, success: false, error }` envelope) whose
@@ -615,12 +641,12 @@ API gains root support; all other file APIs retain their existing scope.
 > **additive structured `errorCode`** when the cause is one of:
 >
 > - `workspace-not-visible` — the tab could not be mounted on demand while the
->   workspace is not **displayed** in any window: either no window hosts the
->   workspace at all (the hydration nudge reaches no renderer, so the op fails fast
->   instead of waiting), or a background window does host it but the offscreen
->   registration wait ran out at its own cap. Retry shortly or `listTabs` to confirm
->   the tab still exists; if the workspace is open nowhere, open it in a window and
->   retry.
+>   workspace is not **displayed** in any window: either no app window connected to
+>   the workspace's host exists to host it, even in the background (the hydration
+>   nudge reaches no renderer, so the op fails fast instead of waiting), or a
+>   background window does host it but the offscreen registration wait ran out at
+>   its own cap. Retry shortly or `listTabs` to confirm the tab still exists; if no
+>   Intent window is open, open one and retry.
 > - `deadline-exhausted` — (capture ops only) the request deadline ran out at a
 >   named stage (before or during the mount, the load settle, or the capture
 >   itself); retry the capture.
