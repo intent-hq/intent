@@ -25,6 +25,7 @@ SUPERVISOR = HERE / 'supervisor.sh'
 INSTALL = HERE / 'install.sh'
 HOSTS = HERE / 'hosts'
 INTENT_CI1 = HOSTS / 'intent-ci1.env'
+INTENT_CI2 = HOSTS / 'intent-ci2.env'
 EPYC_3HEAVY = HOSTS / 'epyc-4545p-3heavy.env'
 # MemTotal of a 128 GB box (125 GiB after the kernel's share).
 MEMINFO_128G = 'MemTotal:       131890000 kB\nMemFree:        1000 kB\n'
@@ -1080,6 +1081,7 @@ class Supervisor(Stubbed):
     def test_committed_layouts_plan(self):
         for path, slots in ((HERE / 'runners.env', ['heavy-1', 'heavy-2', 'heavy-3']),
                             (INTENT_CI1, ['xl-1', 'heavy-1', 'heavy-2']),
+                            (INTENT_CI2, ['xl-1', 'heavy-1', 'heavy-2']),
                             (EPYC_3HEAVY, ['heavy-1', 'heavy-2', 'heavy-3'])):
             with self.subTest(config=path.name):
                 rc, out, err = self.run_supervisor('--plan', RUNNERS_CONFIG=str(path))
@@ -1173,10 +1175,12 @@ class Supervisor(Stubbed):
         small = fake_cpus(self.dir / 'small', 8, 16)
         for config, sysfs, message in (
                 (INTENT_CI1, epyc, None),
+                (INTENT_CI2, epyc, None),
                 (EPYC_3HEAVY, epyc, None),
                 (HERE / 'runners.env', ryzen, None),
                 (HERE / 'runners.env', epyc, 'slot heavy-1: CPU 0 shares a core with CPU 16'),
                 (INTENT_CI1, ryzen, 'slot xl-1: CPU 0 shares a core with CPU 12'),
+                (INTENT_CI2, ryzen, 'slot xl-1: CPU 0 shares a core with CPU 12'),
                 (EPYC_3HEAVY, ryzen, 'slot heavy-1: CPU 0 shares a core with CPU 12'),
                 (EPYC_3HEAVY, small, 'slot heavy-3: CPU 8 does not exist')):
             with self.subTest(config=config.name, host=sysfs.name):
@@ -1642,7 +1646,7 @@ class Static(unittest.TestCase):
     def test_host_configs_fit_an_epyc_4545p(self):
         # 16 cores / 32 threads (CPU n and n+16 share a core), 128 GB (125 GiB).
         configs = sorted(HOSTS.glob('*.env'))
-        self.assertEqual(configs, sorted([INTENT_CI1, EPYC_3HEAVY]))
+        self.assertEqual(configs, sorted([INTENT_CI1, INTENT_CI2, EPYC_3HEAVY]))
         shape = {'xl': (16, 'intent-cache-xl'), 'heavy': (8, 'intent-cache')}
         for path in configs:
             with self.subTest(config=path.name):
@@ -1665,8 +1669,8 @@ class Static(unittest.TestCase):
                     memory += int(env[f'{p}_SLOTS']) * int(env[f'{p}_MEMORY'].rstrip('g'))
                 self.assertEqual(len(cpus), len(set(cpus)), 'slots must not share CPUs')
                 self.assertTrue(all(c < 32 for c in cpus))
-                if path == INTENT_CI1:
-                    self.assertEqual(sorted(cpus), list(range(32)), 'intent-ci1 pins every core')
+                if path in (INTENT_CI1, INTENT_CI2):
+                    self.assertEqual(sorted(cpus), list(range(32)), f'{path.stem} pins every core')
                     self.assertEqual(memory, 52 + 2 * 30)
                     self.assertGreaterEqual(125 - memory, 10, 'leave about 10 GB for the system and Docker')
                 else:
@@ -1678,6 +1682,17 @@ class Static(unittest.TestCase):
         self.assertEqual(ci1['HEAVY_CPUSETS'].split(), ['8-11,24-27', '12-15,28-31'],
                          'one heavy slot per half of CCD 1, both SMT siblings of each core')
         self.assertEqual(read_env(EPYC_3HEAVY)['HEAVY_SLOTS'], '3')
+
+    def test_intent_ci2_matches_intent_ci1_but_its_name(self):
+        # intent-ci2 is a second intent-ci1: same hardware, same slots; only
+        # the runner name prefix (and the host name in comments) differs.
+        ci1, ci2 = read_env(INTENT_CI1), read_env(INTENT_CI2)
+        self.assertEqual(ci2['RUNNER_NAME_PREFIX'], 'intent-ci2')
+        self.assertEqual({**ci2, 'RUNNER_NAME_PREFIX': 'intent-ci1'}, ci1)
+        self.assertEqual(INTENT_CI2.read_text().replace('intent-ci2', 'intent-ci1'), INTENT_CI1.read_text())
+        prefixes = [read_env(path).get('RUNNER_NAME_PREFIX', 'intent-cache')
+                    for path in [HERE / 'runners.env', *sorted(HOSTS.glob('*.env'))]]
+        self.assertEqual(len(prefixes), len(set(prefixes)), 'every host has its own name prefix')
 
 
 if __name__ == '__main__':

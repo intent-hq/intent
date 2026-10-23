@@ -10,10 +10,11 @@ targeting a label runs on whichever host has a free slot.
 |---|---|---|---|---|---|---|
 | intent-cache | ReliableSite, Los Angeles | Ryzen 9 3900X, 12 cores / 24 threads, 128 GB | heavy (3) | `intent-cache` | `intent-cache` | [`runners.env`](../infra/runners/runners.env) |
 | intent-ci1 | ReliableSite, Los Angeles | EPYC 4545P, 16 cores / 32 threads, 128 GB | xl (1), heavy (2) | `intent-cache-xl`, `intent-cache` | `intent-ci1` | [`hosts/intent-ci1.env`](../infra/runners/hosts/intent-ci1.env) |
+| intent-ci2 (provisioning) | ReliableSite, Los Angeles | EPYC 4545P, 16 cores / 32 threads, 128 GB | xl (1), heavy (2) | `intent-cache-xl`, `intent-cache` | `intent-ci2` | [`hosts/intent-ci2.env`](../infra/runners/hosts/intent-ci2.env) |
 
 | Pool | Label | Serves jobs asking for | Bursts to | Per slot |
 |---|---|---|---|---|
-| heavy | `intent-cache` | `gh-linux-8x`, `gh-linux-16x` | `warp-ubuntu-2404-x64-8x` / `-16x` | 8 CPUs = 4 whole cores; 36 GB on intent-cache, 30 GB on intent-ci1, 32 GB in the three-heavy EPYC layout |
+| heavy | `intent-cache` | `gh-linux-8x`, `gh-linux-16x` | `warp-ubuntu-2404-x64-8x` / `-16x` | 8 CPUs = 4 whole cores; 36 GB on intent-cache, 30 GB on intent-ci1 and intent-ci2, 32 GB in the three-heavy EPYC layout |
 | xl | `intent-cache-xl` | `gh-linux-16x` | `warp-ubuntu-2404-x64-16x` | 16 CPUs = 8 whole cores (one CCD), 52 GB |
 | small | `intent-cache-small` | nothing routed (free `ubuntu-*` jobs run on GitHub) | — | no slots on any host |
 
@@ -23,7 +24,7 @@ wins contention by cgroup weight rather than a reserved core (see Pinned CPUs
 and limits). There is no small pool: the repositories are public, so jobs that
 fit in 1 CPU run free on GitHub's standard `ubuntu-24.04` runners and
 self-hosting them saved nothing; `runner-route` never routes them to a slot.
-On intent-ci1 the xl slot owns cores 0-7
+On intent-ci1 and intent-ci2 (same layout) the xl slot owns cores 0-7
 (CPUs 0-7,16-23, 52 GB) and the two heavy slots split CCD 1: cores 8-11
 (8-11,24-27) and 12-15 (12-15,28-31), 30 GB each. Every core is pinned; about
 13 GB stays with the system and Docker. [`hosts/epyc-4545p-3heavy.env`](../infra/runners/hosts/epyc-4545p-3heavy.env)
