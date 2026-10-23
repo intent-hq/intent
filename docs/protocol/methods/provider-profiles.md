@@ -753,9 +753,10 @@ rejects a qualified `providers.fastMode` key with `-32602`; the whole update fai
 the stored map is unchanged, so clients surface the error rather than retrying.
 
 Clients detect Default configuration overrides by the presence of `defaults` on the
-`providers.profiles.list` result. When it is absent, they hide the Default name and
-environment controls and never call `providers.profiles.updateDefault`, which an
-older daemon rejects with `-32601`. Older clients ignore `defaults`, `defaultNames`
+`providers.profiles.list` result. When it is absent, a client may still offer the
+Default name and environment controls (with nothing saved); an older daemon rejects
+`providers.profiles.updateDefault` with `-32601`, which the client reports as a
+failed save. Older clients ignore `defaults`, `defaultNames`
 and the two Default event changes (they re-list on any revision), and keep labelling
 the original configuration `Default`.
 

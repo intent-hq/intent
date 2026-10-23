@@ -667,7 +667,7 @@ Prepared additive extension of [provider profiles (§5.54)](./methods/provider-p
 The Default configuration keeps its bare reference, so no saved selection changes.
 This entry reserves the method without claiming a shipped version. Implementors
 allocate the next minor against main; clients detect support by the presence of
-`defaults` and never call the method otherwise.
+`defaults`, and an older daemon rejects the method with `-32601`.
 
 Additive, presence-detected within the current protocol (no method-catalog change
 or version bump; [intent#5830](https://github.com/intent-hq/intent/issues/5830)):
