@@ -139,7 +139,10 @@ runner output, tagged `github-runner-<pool>-<n>`).
   cache), then the longest (`minutes`), then list order; `shards: N` or
   `legs: [a, b]` gives each matrix leg its own key (`key-1`..`key-N`, or
   `key-a`, `key-b`) and `events` keeps a job that skips the event from holding
-  a slot. Every other listed job gets its burst runner, and unlisted jobs use
+  a slot. `burst: "gh-linux-16x"` on a `gh-linux-8x` entry keeps the job on
+  the heavy pool but sends it to the 16-core burst runner when it gets no slot
+  (intentd's CPU-bound `check`); `test_runner_policy.py` rejects any other
+  `burst` pairing, so it can never turn a free label paid. Every other listed job gets its burst runner, and unlisted jobs use
   the pool only while a slot is still free. Any unreadable runner list or job
   count sends every job to its burst runner. `scripts/test_runner_policy.py` fails a
   workflow whose unlisted pooled jobs (or matrix legs) can run at the same

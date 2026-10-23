@@ -5,8 +5,9 @@ on:
   workflow_call:
     inputs:
       # JSON list of the caller's pooled jobs that start together once routing
-      # finishes: [{"key", "label", "rust"?, "minutes"?, "events"?, "shards"?}].
-      # `label` is the job's GitHub label; `events` lists the events the job
+      # finishes: [{"key", "label", "burst"?, "rust"?, "minutes"?, "events"?, "shards"?}].
+      # `label` is the job's GitHub label and picks its pool; `burst` is the
+      # label to burst as when it gets no slot (default `label`); `events` lists the events the job
       # runs on (default: all); `shards: N` expands to keys key-1..key-N and
       # `legs: [a, b]` to key-a, key-b, one per matrix leg. Each listed job
       # reads its labels from outputs.slots[key].
@@ -198,7 +199,9 @@ jobs:
             // Free slots go to the caller's listed jobs one at a time: Rust-compiling
             // jobs first (they reuse the slot's local cache), then the longest, then
             // list order. Listed jobs that do not fit, or that skip this event, get
-            // their burst runner directly; matrix legs are ranked separately.
+            // their burst runner directly, sized by `burst` when set (a CPU-bound
+            // job keeps its slot size but bursts bigger); matrix legs are ranked
+            // separately.
             // Concurrent runs read the same free count before either job is queued,
             // so a pool may briefly run a job or two over its slot count.
             let requests = [];
@@ -217,7 +220,7 @@ jobs:
                 slotsFree[key] -= 1;
                 granted[key] += 1;
                 slots[r.key] = fleets[key];
-              } else slots[r.key] = cloud(r.label);
+              } else slots[r.key] = cloud(r.burst || r.label);
             }
             // Unlisted jobs (single-job workflows, jobs that start after the listed
             // ones) use a pool only while a slot is still free.
