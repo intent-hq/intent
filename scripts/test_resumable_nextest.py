@@ -4455,24 +4455,80 @@ class StaleExecutableTests(unittest.TestCase):
             self.assertEqual(self.prune([], current)[0], 0)
             self.assertTrue(stale.exists())
 
-    def test_gate_run_removes_stale_copies_of_its_listed_executables(self):
-        with tempfile.TemporaryDirectory() as temporary, \
-                mock.patch.object(gate, "transfer_fixture_identity", return_value=None), \
+    def gate_run(self, root, plan, setup=None, pruning=None):
+        harness = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+        profile = self.gate_root(root) / "debug"
+        oldest = self.unit(profile, "alpha", "one", OLD)
+        previous = self.unit(profile, "alpha", "one", "2" * 16)
+        os.utime(oldest, (1, 1))
+        current = self.unit(profile, "alpha", "one", NEW)
+        listing = json.loads(LISTING)
+        listing["rust-suites"]["alpha::one"].update(kind="test", **{"binary-path": str(current)})
+        listing["rust-suites"]["alpha::one"]["testcases"] = {"passes": {}}
+        harness.listing = json.dumps(listing)
+        args = make_args(root, plan=plan, label=gate.DEFAULT_LABEL) if plan is None else make_args(root, plan=plan)
+        stderr = io.StringIO()
+        with mock.patch.object(gate, "transfer_fixture_identity", return_value=None), \
                 mock.patch.object(gate, "callback_fixture_identity", return_value=None), \
-                mock.patch.object(gate, "open_paths", return_value=set()):
-            root = Path(temporary)
-            harness = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
-            profile = self.gate_root(root) / "debug"
-            stale = self.unit(profile, "alpha", "one", OLD)
-            current = self.unit(profile, "alpha", "one", NEW)
-            listing = json.loads(LISTING)
-            listing["rust-suites"]["alpha::one"].update(kind="test", **{"binary-path": str(current)})
-            listing["rust-suites"]["alpha::one"]["testcases"] = {"passes": {}}
-            harness.listing = json.dumps(listing)
-            self.assertEqual(harness.execute(make_args(root)), 0)
-            self.assertFalse(stale.exists())
+                mock.patch.object(gate, "open_paths", return_value=set()), \
+                contextlib.ExitStack() as stack, contextlib.redirect_stderr(stderr):
+            if pruning is not None:
+                stack.enter_context(mock.patch.object(gate, "prune_stale_executables", side_effect=pruning))
+            if setup is not None:
+                stack.enter_context(setup)
+            status = harness.execute(args)
+        return status, harness, stderr.getvalue(), (oldest, previous, current)
+
+    def test_whole_workspace_gate_run_removes_every_stale_copy(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            status, harness, _, (oldest, previous, current) = self.gate_run(Path(temporary), None)
+            self.assertEqual(status, 0)
+            self.assertFalse(oldest.exists())
+            self.assertFalse(previous.exists())
             self.assertTrue(current.exists())
             self.assertFalse(any("ERROR" in line for line in harness.output_lines), harness.output_lines)
+
+    def test_package_scoped_gate_run_keeps_the_newest_other_build(self):
+        # -p selections resolve features differently from --workspace, so the
+        # full suite's build of the same target must survive a test-changed run.
+        with tempfile.TemporaryDirectory() as temporary:
+            status, _, _, (oldest, previous, current) = self.gate_run(Path(temporary), ["-p alpha --test one"])
+            self.assertEqual(status, 0)
+            self.assertFalse(oldest.exists())
+            self.assertTrue(previous.exists())
+            self.assertTrue(current.exists())
+        self.assertTrue(gate.whole_workspace([["--workspace", "-E", "test(x)"]]))
+        self.assertFalse(gate.whole_workspace([["--workspace", "-p", "alpha"]]))
+        self.assertFalse(gate.whole_workspace([["--workspace"], ["--package=alpha", "--workspace"]]))
+
+    def test_pruning_failure_or_interrupt_never_changes_the_recorded_run(self):
+        for failure in (RuntimeError("symlink loop"), KeyboardInterrupt(), gate.Terminated("SIGTERM")):
+            with self.subTest(failure=type(failure).__name__), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                status, harness, stderr, (oldest, _, _) = self.gate_run(root, None, pruning=failure)
+                self.assertEqual(status, 0)
+                self.assertTrue(oldest.exists())
+                self.assertIn("stale executables kept", stderr)
+                self.assertTrue(any(line.startswith(f"[{gate.DEFAULT_LABEL}] record: ") for line in harness.output_lines))
+                attempt = latest_attempt(root / "cache" / KEY)
+                receipt = json.loads((attempt / "run.json").read_text())
+                self.assertEqual(receipt["exit_code"], 0)
+                self.assertIsNotNone(receipt["finished_at"])
+                self.assertTrue((root / "cache" / KEY / "complete").is_file())
+
+    def test_unusable_gate_folder_means_no_lock_and_no_pruning(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            blocker = root / "target" / "intent-gates"
+            blocker.parent.mkdir(parents=True)
+            blocker.write_text("not a directory")
+            self.assertIsNone(gate.acquire_gate_lock(self.output_args(blocker / ("a" * 64))))
+            failing = mock.patch.object(gate, "acquire_gate_lock", return_value=None)
+            (root / "elsewhere").mkdir()
+            status, _, _, (oldest, previous, _) = self.gate_run(root / "elsewhere", None, setup=failing)
+            self.assertEqual(status, 0)
+            self.assertTrue(oldest.exists())
+            self.assertTrue(previous.exists())
 
 
 if __name__ == "__main__":
