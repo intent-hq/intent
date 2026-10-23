@@ -99,7 +99,7 @@ jobs:
 
   consumer-checks:
     needs: [runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['gh-linux-8x'] || fromJSON('["gh-linux-8x"]') }}
+    runs-on: ${{ fromJSON(needs.runner-route.outputs.runners || '{}')['gh-linux-8x'] || fromJSON('["warp-ubuntu-2404-x64-8x"]') }}
     timeout-minutes: 45
     permissions:
       contents: read
