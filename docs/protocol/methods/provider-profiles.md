@@ -464,7 +464,9 @@ so it behaves as today.
   the current reference is not in the cycle, the walk starts at the beginning. The
   reference that just failed counts as tried, so each reference is tried at most once
   per user turn and the walk never loops. A profile that no longer exists, or a base
-  provider that is disabled, is skipped.
+  provider that is disabled, is skipped. The walk prefers references the
+  [shared quota state](#shared-quota-state) does not mark out of quota; when every
+  untried reference is marked, it takes the first of them anyway.
 - **Switch.** The daemon saves the chosen reference as the agent's provider, as
   `agent.setModel` would with the same model, and emits `agent:updated`. The switch
   is sticky: later turns stay on it until the [timed return](#timed-return) or an
@@ -526,7 +528,8 @@ has had time to reset.
   later. A parsed time that is not in the future is ignored. Further switches between
   backups while away keep the recorded time.
 - **Return.** The first turn that starts at or after the return-after time starts on
-  home instead of the current reference, as a [switch](#agent-state-switches-and-replacement)
+  home instead of the current reference (earlier or later when the
+  [shared quota state](#shared-quota-state) says so), as a [switch](#agent-state-switches-and-replacement)
   with Intent history replayed, and emits `agent:updated`. A return happens only at
   the start of a turn, never mid-turn and never in a failover retry.
 - **Home accepts.** When home produces the turn's first output, the daemon persists
@@ -565,6 +568,42 @@ never writes a `model_changed` row.
 **Downgrade.** An older daemon ignores the stored home and timer: the conversation
 stays on its current reference and never returns on its own. A later upgrade resumes
 the timer from the stored values.
+
+##### Shared quota state
+
+The daemon shares what one conversation learns about a reference's quota with every
+other conversation. The Default configuration (a bare provider id) and each profile
+are tracked separately, never per model.
+
+- **Out of quota.** A quota failure on a reference marks it out of quota until the
+  reset time the error reports (parsed as for the return-after time), otherwise for
+  5 hours. The newest failure replaces any earlier state. A failure is recorded even
+  when the conversation has no candidate to fail over to.
+- **Working.** The first output of an attempt on a reference (or a turn that
+  completes on it without output) marks it working. This replaces an out-of-quota mark
+  only when the attempt started after the mark was recorded.
+- **Turn start.** At the start of a turn (never in a failover retry, replay or
+  continuation), after the timed-return check:
+  - If the conversation is away and home is marked working, the turn starts on home
+    even before the return-after time, as a [return](#timed-return).
+  - If the return-after time has passed but home is still marked out of quota, the
+    conversation stays on its current reference. This is not a failed return, so the
+    backoff is unchanged. A mark therefore also delays the shorter backoff steps after
+    a failed return until it expires.
+  - If the reference the turn would start on is marked out of quota, the daemon
+    switches to the first reference in the [rotation](#backup-failover) that is not
+    marked, before any attempt. The switch writes the usual `provider_failover` row and
+    sets the return-after time to the mark's expiry. The skipped reference is not
+    counted as tried, so the turn can still reach it as its last candidate. Leaving a
+    marked home this way is not a failed return: the backoff and return-after time
+    stay as they are.
+  - The first turn after an explicit selection (`agent.setModel`) is never moved this
+    way: it tries the chosen reference, and fails over as usual if it is out of quota.
+  - If every candidate is marked, nothing moves: the turn tries its current reference
+    and fails over as usual.
+- **Advisory and in-memory.** Marks never make a turn fail without an attempt. They
+  are not persisted: after a daemon restart, each conversation's stored timer applies
+  as before. No method or event exposes them.
 
 #### Events
 
