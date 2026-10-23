@@ -588,12 +588,17 @@ are tracked separately, never per model.
     even before the return-after time, as a [return](#timed-return).
   - If the return-after time has passed but home is still marked out of quota, the
     conversation stays on its current reference. This is not a failed return, so the
-    backoff is unchanged.
+    backoff is unchanged. A mark therefore also delays the shorter backoff steps after
+    a failed return until it expires.
   - If the reference the turn would start on is marked out of quota, the daemon
     switches to the first reference in the [rotation](#backup-failover) that is not
     marked, before any attempt. The switch writes the usual `provider_failover` row and
     sets the return-after time to the mark's expiry. The skipped reference is not
-    counted as tried, so the turn can still reach it as its last candidate.
+    counted as tried, so the turn can still reach it as its last candidate. Leaving a
+    marked home this way is not a failed return: the backoff and return-after time
+    stay as they are.
+  - The first turn after an explicit selection (`agent.setModel`) is never moved this
+    way: it tries the chosen reference, and fails over as usual if it is out of quota.
   - If every candidate is marked, nothing moves: the turn tries its current reference
     and fails over as usual.
 - **Advisory and in-memory.** Marks never make a turn fail without an attempt. They
