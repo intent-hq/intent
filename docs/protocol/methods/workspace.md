@@ -1272,7 +1272,8 @@ each with a dedicated change event (§6.5) that carries the new value:
   extension).
 - `waiting?` — **derived, read-only, orthogonal wait flag (v6.17).** `true` when the
   workspace has any of: an ACTIVE (`scheduled`/`running`) background hook (§5.40), an
-  ACTIVE PR monitor (§5.42), or a **waiting agent subscription** — an undelivered child
+  ACTIVE PR monitor (§5.42), an `active` script run monitor (§5.8a; within 15.2), or a
+  **waiting agent subscription** — an undelivered child
   completion watch (`report_delivered` excluded, matching the settlement predicate) held
   by a **top-level foreground** agent, anchored in the parent's home workspace
   (§Completion-watch persistence) — i.e. the workspace is watching an external condition
@@ -1291,6 +1292,22 @@ each with a dedicated change event (§6.5) that carries the new value:
   short-circuiting on the first live signal, and each probe is best-effort — a store read
   failure fails open to `false`, so emission is never wedged and waiting is never
   fabricated. Transitions surface via `workspace:waiting-changed` (§6.5).
+- `scriptsRunning?` — **derived, read-only, orthogonal script flag (within 15.2).** `true`
+  when the workspace has at least one **command-mode** saved script (§5.8) with a run in
+  flight — a run identity is open or the runtime status is `starting`, `running` or
+  `restarting`; the same per-script predicate as `system.status`
+  `idleUpdateCheck.runningScripts` (§5.7), scoped to this workspace. Service-mode scripts
+  (dev servers and other long-running processes) never count. Read from the in-memory
+  script registry (never persisted, no store read), so it is `false` after a daemon
+  restart until a run starts. **Presence-detected**: emitted only as `scriptsRunning:
+  true` and **omitted when `false`**, so clients treat an absent field as no running
+  scripts and older daemons interoperate fail-open. **Orthogonal to `activity`,
+  `displayStatus` and `waiting`** — it never promotes `displayStatus` to `in_progress` and
+  never counts as agent activity; clients may combine it with `activity` for their own
+  "running" grouping. Served on the same `workspace.list` / `workspace.get` /
+  subscription emit path as `waiting` (the lite seq-0 snapshot included; the enrichment
+  seeds the transition baseline). Transitions surface via
+  `workspace:scriptsRunning-changed` (§6.5).
 
 **`status` wire form.** `Workspace.status` serializes as the PascalCase TS `WorkspaceStatus`
 string enum — `"Active" | "Inactive" | "Archived" | "Retired" | "Deleted"` (src/shared/types.ts; `"Retired"` is additive, see [Retired workspaces](#retired-workspaces)) — both on

@@ -25,6 +25,17 @@ so older clients never see the new status in a list. Revive via `workspace.unarc
 The documented surface is now **471 / 413 / 58** (dispatchable / router / fast path).
 Support is detected by `workspace.retire` answering; older daemons return `-32601`.
 
+Also within 15.2 (additive optional row field, one new event type and a widened derived
+flag; presence-detected; no method-catalog change, so no version bump): **command-script
+and script-monitor workspace signals** (§5.1). `Workspace.scriptsRunning` is `true` while
+the workspace has a command-mode script run in flight (service-mode scripts never count;
+omitted when `false`) and transitions surface via the self-sufficient
+`workspace:scriptsRunning-changed { workspaceId, scriptsRunning }` event (§6.5), tailed by
+the global `workspace` channel. The orthogonal `Workspace.waiting` flag also turns `true`
+for an `active` script run monitor (§5.8a), recomputed at monitor registration and every
+terminal transition. Neither signal feeds `activity` or `displayStatus`. Older daemons omit
+`scriptsRunning` and never emit the event; clients must detect both by presence.
+
 **Version 15.1 — workspace discussions (additive, prepared).**
 [Workspace discussions](./methods/multiplayer.md#555-workspace-discussions) add
 `discussion.conversations`, `discussion.recipients`, `discussion.list`,
@@ -1440,3 +1451,4 @@ the `ignore` map of `scripts/check-protocol-field-parity.mjs`, not here.
 | Row | Field | Contract | App adoption |
 |---|---|---|---|
 | `Workspace` | `retiredAt` | [Retired workspaces](./methods/workspace.md#retired-workspaces) | Pending cloudlands-fe retired-workspaces PR (home, search and workspace view) |
+| `Workspace` | `scriptsRunning` | [Workspace fields](./methods/workspace.md#51-workspace) | Pending cloudlands-fe Home Running/Waiting groups PR |
