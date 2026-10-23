@@ -487,7 +487,7 @@ const WARP = {
   'gh-linux-16x': ['warp-ubuntu-2404-x64-16x'],
   'gh-linux-arm64-8x': ['warp-ubuntu-2404-arm64-8x'],
   'gh-windows-16x': ['warp-windows-2022-x64-16x'],
-  'macos-26-xlarge': ['warp-macos-26-arm64-6x'],
+  'macos-26-xlarge': ['warp-macos-26-arm64-12x'],
 };
 const FORK = { event: 'pull_request', payload: { pull_request: { head: { repo: { full_name: 'outside/fork' } } } } };
 const warpJob = (id, label, minutesAgo) => ({ id, status: 'queued', labels: [label], created_at: new Date(Date.now() - minutesAgo * 60_000).toISOString() });
@@ -550,7 +550,7 @@ test('a WarpBuild OS/architecture queued over 10 minutes bursts to GitHub; other
   // A WarpBuild job whose age is unreadable is not evidence of an outage.
   const unknown = await route({ runners: [], env: WARP_ON, jobs: [{ id: 3, status: 'queued', labels: ['warp-ubuntu-2404-x64-8x'] }] });
   assert.deepEqual(unknown.runners['gh-linux-8x'], WARP['gh-linux-8x']);
-  const mac = await route({ runners: [], env: WARP_ON, jobs: [warpJob(3, 'warp-macos-15-arm64-6x', 30)] });
+  const mac = await route({ runners: [], env: WARP_ON, jobs: [warpJob(3, 'warp-macos-15-arm64-12x', 30)] });
   assert.deepEqual(mac.runners['macos-26-xlarge'], ['macos-26-xlarge']);
   assert.deepEqual(JSON.parse(mac.outputs.cloud)['macos-15-xlarge'], ['macos-15-xlarge']);
   assert.deepEqual(mac.runners['gh-linux-8x'], WARP['gh-linux-8x']);
@@ -573,7 +573,7 @@ test('cloud maps every paid label to WarpBuild and never to a self-hosted runner
   assert.deepEqual(cloud, {
     ...Object.fromEntries(FREE.map((label) => [label, [label]])),
     ...WARP,
-    'macos-15-xlarge': ['warp-macos-15-arm64-6x'],
+    'macos-15-xlarge': ['warp-macos-15-arm64-12x'],
     'macos-latest-large': ['macos-latest-large'],
   });
   // Idle self-hosted runners are still used by `runners`, never by `cloud`.

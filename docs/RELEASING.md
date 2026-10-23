@@ -856,8 +856,8 @@ GitHub label they would otherwise ask for:
 The burst runner for a paid label is its WarpBuild equivalent (`gh-linux-8x` →
 `warp-ubuntu-2404-x64-8x`, `gh-linux-16x` → `-16x`, `gh-linux-arm64-8x` →
 `warp-ubuntu-2404-arm64-8x`, `gh-windows-16x` → `warp-windows-2022-x64-16x`,
-`macos-26-xlarge` → `warp-macos-26-arm64-6x`, `macos-15-xlarge` →
-`warp-macos-15-arm64-6x`), or the GitHub label itself for fork pull requests, while
+`macos-26-xlarge` → `warp-macos-26-arm64-12x`, `macos-15-xlarge` →
+`warp-macos-15-arm64-12x`), or the GitHub label itself for fork pull requests, while
 `CI_WARPBUILD_DISABLED` is `true`, or while that WarpBuild OS and architecture has a job queued
 over 10 minutes. `macos-latest-large` (Intel) has no WarpBuild equivalent and bursts to
 GitHub. cloudlands-fe's signed desktop Mac builds keep `macos-15-xlarge` as their
