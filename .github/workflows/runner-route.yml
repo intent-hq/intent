@@ -5,8 +5,9 @@ on:
   workflow_call:
     inputs:
       # JSON list of the caller's pooled jobs that start together once routing
-      # finishes: [{"key", "label", "rust"?, "minutes"?, "events"?, "shards"?}].
-      # `label` is the job's GitHub label; `events` lists the events the job
+      # finishes: [{"key", "label", "burst"?, "rust"?, "minutes"?, "events"?, "shards"?}].
+      # `label` is the job's GitHub label and picks its pool; `burst` is the
+      # label to burst as when it gets no slot (default `label`); `events` lists the events the job
       # runs on (default: all); `shards: N` expands to keys key-1..key-N and
       # `legs: [a, b]` to key-a, key-b, one per matrix leg. Each listed job
       # reads its labels from outputs.slots[key].
@@ -100,15 +101,16 @@ jobs:
             // jobs asking for them always run there and never take a self-hosted slot.
             const free = ['ubuntu-22.04', 'ubuntu-24.04', 'ubuntu-latest', 'ubuntu-24.04-arm', 'windows-2022', 'windows-2025'];
             // Paid GitHub labels and the WarpBuild runner each bursts to instead
-            // (same cores; Windows stays on Server 2022, macOS 15 keeps signed builds
-            // off macOS 26). Intel Macs have no WarpBuild equivalent and stay on GitHub.
+            // (same cores except Macs, which get 12 because every Mac job is CPU-bound;
+            // Windows stays on Server 2022, macOS 15 keeps signed builds off macOS 26).
+            // Intel Macs have no WarpBuild equivalent and stay on GitHub.
             const warp = {
               'gh-linux-8x': 'warp-ubuntu-2404-x64-8x',
               'gh-linux-16x': 'warp-ubuntu-2404-x64-16x',
               'gh-linux-arm64-8x': 'warp-ubuntu-2404-arm64-8x',
               'gh-windows-16x': 'warp-windows-2022-x64-16x',
-              'macos-26-xlarge': 'warp-macos-26-arm64-6x',
-              'macos-15-xlarge': 'warp-macos-15-arm64-6x',
+              'macos-26-xlarge': 'warp-macos-26-arm64-12x',
+              'macos-15-xlarge': 'warp-macos-15-arm64-12x',
             };
             // WarpBuild health is tracked per OS and architecture (ubuntu-x64, ubuntu-arm64, windows-x64, macos-arm64).
             const family = (label) => {
@@ -197,7 +199,9 @@ jobs:
             // Free slots go to the caller's listed jobs one at a time: Rust-compiling
             // jobs first (they reuse the slot's local cache), then the longest, then
             // list order. Listed jobs that do not fit, or that skip this event, get
-            // their burst runner directly; matrix legs are ranked separately.
+            // their burst runner directly, sized by `burst` when set (a CPU-bound
+            // job keeps its slot size but bursts bigger); matrix legs are ranked
+            // separately.
             // Concurrent runs read the same free count before either job is queued,
             // so a pool may briefly run a job or two over its slot count.
             let requests = [];
@@ -216,7 +220,7 @@ jobs:
                 slotsFree[key] -= 1;
                 granted[key] += 1;
                 slots[r.key] = fleets[key];
-              } else slots[r.key] = cloud(r.label);
+              } else slots[r.key] = cloud(r.burst || r.label);
             }
             // Unlisted jobs (single-job workflows, jobs that start after the listed
             // ones) use a pool only while a slot is still free.
