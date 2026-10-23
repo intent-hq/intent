@@ -118,7 +118,7 @@ jobs:
               'gh-windows-8x': 'windows-2022',
               'gh-windows-16x': 'windows-2022',
               'macos-26-xlarge': 'macos-latest',
-              'macos-15-xlarge': 'macos-latest',
+              'macos-15-xlarge': 'macos-15',
             };
             // WarpBuild health is tracked per OS and architecture (ubuntu-x64, ubuntu-arm64, windows-x64, macos-arm64).
             const family = (label) => {
@@ -152,7 +152,8 @@ jobs:
               ]));
               const jobs = [];
               // A missing sibling view is unknown demand, not zero demand. Fail open to burst runners.
-              if (warpOn || Object.values(online).some(rs => rs.length)) {
+              // With no self-hosted runner online there is no demand to weigh, so skip the listing.
+              if (Object.values(online).some(rs => rs.length)) {
                 for (const repo of new Set(['intent', 'intentd', 'cloudlands-fe', context.repo.repo])) {
                   const seen = new Set();
                   for (const status of ['queued', 'in_progress']) {

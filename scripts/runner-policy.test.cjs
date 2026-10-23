@@ -45,7 +45,7 @@ const FORK_RUNNER = {
   'gh-windows-8x': ['windows-2022'],
   'gh-windows-16x': ['windows-2022'],
   'macos-26-xlarge': ['macos-latest'],
-  'macos-15-xlarge': ['macos-latest'],
+  'macos-15-xlarge': ['macos-15'],
 };
 // Per-job slot fitting: a run gets self-hosted labels for at most as many jobs as a pool has free slots.
 const heavyJob = (id, status = 'in_progress') => ({ id, status, labels: CACHE, created_at: new Date().toISOString() });
@@ -559,8 +559,15 @@ test('fork pull requests run paid sizes on free standard runners, never WarpBuil
   // Forks never read the org's queues or runners.
   assert.equal(r.queried.length, 0);
   assert.ok(r.messages.includes('warpbuild ubuntu-x64: off (fork pull request: free standard runners)'));
-  // Every paid size has a fork runner, and each is a free standard label.
+  // Every paid size has a fork runner, and each is a free standard GitHub label
+  // (macOS 15 stays pinned: signed Mac builds break on macOS 26 images).
   assert.deepEqual(Object.keys(FORK_RUNNER).sort(), Object.keys(WARP).sort());
+  for (const [label] of Object.values(FORK_RUNNER)) assert.ok([...FREE, 'macos-15', 'macos-latest'].includes(label), label);
+});
+test('with no self-hosted runner online the probe skips the queue listing and still bursts to WarpBuild', async () => {
+  const r = await route({ runners: [] });
+  assert.equal(r.queried.length, 0);
+  for (const label of POOLED) assert.deepEqual(r.runners[label], WARP[label], label);
 });
 test('the WarpBuild kill switch is gone: no variable sends bursts to GitHub larger runners', async () => {
   assert.doesNotMatch(workflow, /WARPBUILD_DISABLED/);
@@ -569,22 +576,24 @@ test('the WarpBuild kill switch is gone: no variable sends bursts to GitHub larg
   for (const label of POOLED) assert.deepEqual(r.runners[label], WARP[label], label);
 });
 test('a WarpBuild OS/architecture queued over 10 minutes is a warning; bursts still go to WarpBuild', async () => {
-  const stuck = await route({ runners: [], jobs: [warpJob(3, 'warp-ubuntu-2404-x64-16x', 11)] });
-  for (const label of POOLED) assert.deepEqual(stuck.runners[label], WARP[label], label);
+  const stuck = await route({ jobs: [warpJob(3, 'warp-ubuntu-2404-x64-16x', 11)] });
+  // The queue is read only while a self-hosted runner is online (the default fleet).
+  // Bursts still go to WarpBuild for every size.
+  for (const label of Object.keys(WARP)) assert.deepEqual(JSON.parse(stuck.outputs.cloud)[label], WARP[label], label);
   assert.ok(stuck.messages.includes('warning: warpbuild ubuntu-x64: jobs queued over 10 minutes; bursts still go to WarpBuild'));
   // ARM64 Linux, Windows and macOS are tracked separately.
   assert.ok(stuck.messages.includes('warpbuild ubuntu-arm64: on'));
   // Aliases and variants map to the same OS/architecture.
-  const alias = await route({ runners: [], jobs: [warpJob(3, 'warp-windows-2025-vs2026-x64-4x', 30)] });
+  const alias = await route({ jobs: [warpJob(3, 'warp-windows-2025-vs2026-x64-4x', 30)] });
   assert.ok(alias.messages.includes('warning: warpbuild windows-x64: jobs queued over 10 minutes; bursts still go to WarpBuild'));
-  assert.deepEqual(alias.runners['gh-windows-16x'], WARP['gh-windows-16x']);
+  assert.deepEqual(JSON.parse(alias.outputs.cloud)['gh-windows-16x'], WARP['gh-windows-16x']);
   // A WarpBuild job whose age is unreadable, a short wait, or a running job is not a warning.
   for (const job of [
     { id: 3, status: 'queued', labels: ['warp-ubuntu-2404-x64-8x'] },
     warpJob(3, 'warp-ubuntu-2404-x64-8x', 2),
     { ...warpJob(3, 'warp-ubuntu-2404-x64-8x', 60), status: 'in_progress' },
   ]) {
-    const r = await route({ runners: [], jobs: [job] });
+    const r = await route({ jobs: [job] });
     assert.ok(r.messages.includes('warpbuild ubuntu-x64: on'));
     assert.ok(!r.messages.some((m) => m.startsWith('warning:')));
   }
