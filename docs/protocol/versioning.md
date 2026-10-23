@@ -659,6 +659,16 @@ The new method/event goldens and behavioral assertions must land with component 
 
 
 
+Prepared additive extension of [provider profiles (§5.54)](./methods/provider-profiles.md#default-configuration-overrides):
+**Default configuration overrides**. It adds the router method
+`providers.profiles.updateDefault`, the `defaults` member on the
+`providers.profiles.list` result, the catalog `defaultNames` map, and the
+`default-updated` / `default-activation` changes on `providers:profiles-changed`.
+The Default configuration keeps its bare reference, so no saved selection changes.
+This entry reserves the method without claiming a shipped version. Implementors
+allocate the next minor against main; clients detect support by the presence of
+`defaults`, and an older daemon rejects the method with `-32601`.
+
 Additive, presence-detected within the current protocol (no method-catalog change
 or version bump; [intent#5830](https://github.com/intent-hq/intent/issues/5830)):
 **Assistant prompt versions** (§5.5) — `AgentLite.metadata.chiefPromptVersion?`
