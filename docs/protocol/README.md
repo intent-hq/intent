@@ -49,6 +49,7 @@ wire fixtures. It is not a shipped-version claim.
 | §9 Error Codes (incl. 9.1) | [09-error-codes.md](./09-error-codes.md) |
 | §10 Thin-Client Guidance (10.1–10.4) | [10-thin-client.md](./10-thin-client.md) |
 | Owner-backend Keychain v1 payload, shared fixtures and distribution (separate from daemon RPC) | [backend-keychain.md](./backend-keychain.md) |
+| Suggested-prompts block cases shared by the desktop, daemon and iOS parsers (test contract, not wire) | [suggested-prompts.md](./suggested-prompts.md) |
 
 The [phase 1 node contract](./methods/nodes.md) is a prepared, unimplemented
 extension with capability-gated additions and a separately staged CoW removal.
