@@ -8,7 +8,9 @@ stable identity, a display name, a base provider and environment overrides. A
 profile shares its base provider's installation, executable path and enablement.
 Each profile has its own Fast mode preference (see
 [References in settings](#references-in-settings)). The original configuration stays available as **Default**
-and is not a profile. Hosts with no profiles keep their current behavior.
+and is not a profile. Default can still be renamed and carry its own environment
+overrides (see [Default configuration overrides](#default-configuration-overrides)).
+Hosts with no profiles keep their current behavior.
 
 Profiles of one base provider have a saved order, and any of them can be marked as a
 **backup**. When a turn fails because its provider ran out of quota, the daemon
@@ -211,11 +213,12 @@ guests receive `-32003`. Each is daemon-global, with no `workspaceId` required.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| providers.profiles.list | baseProviderId? | { profiles: ProviderProfile[], revision } |
+| providers.profiles.list | baseProviderId? | { profiles: ProviderProfile[], defaults: DefaultConfig[], revision } |
 | providers.profiles.create | baseProviderId (req), name (req), env?: EnvEntryWrite[], backup?: boolean | { profile: ProviderProfile, revision } |
 | providers.profiles.update | profileId (req), name?, env?: EnvEntryWrite[], backup?: boolean | { profile: ProviderProfile, revision, activation: ProfileActivation } |
 | providers.profiles.delete | profileId (req) | { profileId, revision } |
 | providers.profiles.reorder | baseProviderId (req), profileIds (req): string[] | { profiles: ProviderProfile[], revision } |
+| providers.profiles.updateDefault | baseProviderId (req), name?, env?: EnvEntryWrite[] | { default: DefaultConfig, revision, activation: ProfileActivation } — see [Default configuration overrides](#default-configuration-overrides) |
 
 ```ts
 interface ProviderProfile {
@@ -299,7 +302,7 @@ interface ProfileActivation {
 | `baseProviderId` | `base-provider-unsupported` | It must be a canonical id with `supportsProfiles: true`. |
 | `name` | `name-blank` | It must not be empty after trimming Unicode whitespace. |
 | `name` | `name-invalid` | No control characters, and at most 64 Unicode scalar values after trimming. |
-| `name` | `name-duplicate` | Names must be unique within one base provider, ignoring case (Unicode simple case folding). The same name may exist under another base provider. |
+| `name` | `name-duplicate` | Names must be unique within one base provider, ignoring case (Unicode simple case folding), including a renamed Default of that base provider. The same name may exist under another base provider. |
 | `name` | `name-reserved` | `Default`, ignoring case, names the original configuration. |
 | `baseProviderId` | `profile-limit` | At most 32 profiles per base provider. |
 | `env` | `env-limit` | At most 64 entries. |
@@ -372,6 +375,9 @@ never removes external account directories.
   member reads may include it. `providers` rows stay one per provider type, so
   onboarding, which reads only `providers`, shows each type once. The `profiles` list
   reflects saved metadata at read time. `providers:profiles-changed` invalidates it.
+- `providers.catalog` gains an additive top-level `defaultNames?` map naming each
+  renamed Default configuration (see
+  [Default configuration overrides](#default-configuration-overrides)).
 - `models.list { providerId: providerRef }` returns that profile's catalog with
   `ModelInfo.provider = providerRef`. Cache keys and the version key include the
   profile's resolved environment fingerprint. Catalogs and cached status never cross
@@ -605,6 +611,76 @@ are tracked separately, never per model.
   are not persisted: after a daemon restart, each conversation's stored timer applies
   as before. No method or event exposes them.
 
+#### Default configuration overrides
+
+The Default configuration of `codex` and `claude-code` can carry its own display
+name and environment overrides. These use the same rules as a profile's, without
+`backup` or a position in the order. Default stays the bare reference: its
+`providerRef` is the base provider id. No saved selection, specialist, conversation
+or `model.providerDefaults` key changes when it is renamed or its environment is
+edited, and it is still never a backup.
+
+```ts
+interface DefaultConfig {
+  baseProviderId: "codex" | "claude-code";
+  providerRef: string;         // the bare base provider id
+  name: string;                // "Default" unless renamed
+  env: EnvEntryRead[];         // masked; in stored order; [] when none saved
+  settingsFingerprint: string; // opaque; changes whenever saved env changes
+  activation?: { runningProcesses: number }; // as on ProviderProfile
+}
+```
+
+| Method | Params | Result |
+| --- | --- | --- |
+| providers.profiles.updateDefault | baseProviderId (req), name?, env?: EnvEntryWrite[] | { default: DefaultConfig, revision, activation: ProfileActivation } |
+
+- **Reads.** `providers.profiles.list` gains an additive `defaults: DefaultConfig[]`
+  with one entry per base provider that advertises `supportsProfiles`, in catalog
+  order, whether or not anything is saved. A `baseProviderId` filter narrows it to
+  that base provider. Values are masked exactly as on profiles.
+- **Name.** `name` is trimmed. An empty name after trimming restores `"Default"`.
+  Otherwise the profile name rules apply (`name-invalid`), and the name must not
+  equal, ignoring case, the name of a profile of the same base provider
+  (`name-duplicate`). `Default` itself is allowed here. A profile create or rename
+  whose name equals the renamed Default of its base provider, ignoring case, is
+  rejected with `name-duplicate`. Omitting `name` keeps the saved one.
+- **Environment.** `env` has the profile semantics: `set`, `unset` and `keep`, the
+  complete new list when present, unchanged when omitted. The same limits, key rules,
+  reserved keys and home expansion apply, with the same field codes. `keep` names a
+  key with a saved Default entry. An empty list removes every override.
+- **Validation.** `baseProviderId` must be a canonical id with
+  `supportsProfiles: true` (`base-provider-unsupported`). Errors use the same
+  `-32602` `invalid-params` envelope and `fieldErrors` as profile mutations. The
+  method is administrator-only and daemon-global, like the other
+  `providers.profiles.*` methods.
+- **Storage.** The name lives in the profile file as an optional
+  `defaults: { "<baseProviderId>": { "name" } }` member, written only for a renamed
+  Default; the file `version` stays `1`. Environment entries live in the protected
+  `SecretStore` under account `providerDefaults.<baseProviderId>.env`, in the
+  profile document shape. Neither ever appears in `config.toml`, settings reads,
+  events, catalogs or logs. The writes are atomic and serialized with the other
+  profile mutations.
+- **Runtime.** With no saved entries, the Default configuration launches exactly as
+  before. With entries, every process that the Default configuration starts (agent
+  sessions, one-shot prompts, auth probes and model catalog discovery) applies them
+  as a profile applies its overlay, and the fingerprint-keyed behaviour of profiles
+  applies under the bare reference:
+  - model catalog and auth status caches key on the Default fingerprint;
+  - `activation.runningProcesses` and `AgentLite.usingEarlierProfileSettings` report
+    live Default processes started with an earlier fingerprint;
+  - a native session is never resumed across a Default environment change.
+
+  Saving never interrupts a turn or restarts anything. `providerReplacementRequired`
+  never applies to the bare reference.
+- **Catalog.** `providers.catalog` gains an additive top-level
+  `defaultNames?: { "<baseProviderId>": name }`, holding only renamed Defaults and
+  omitted when none is renamed. Member reads may include it. Clients label the
+  Default configuration with this name and fall back to `Default`.
+- **Downgrade.** An older daemon ignores the `defaults` member and drops it on its
+  next profile-file write, so the name must be set again. Its secret entries stay
+  inert and the Default configuration launches without them.
+
 #### Events
 
 `providers:profiles-changed` is global (no `workspaceId`). The daemon emits exactly
@@ -618,13 +694,19 @@ one event, with a `revision` one higher than the previous event, in two cases:
   process on earlier settings exits or is recycled, or a new process starts.
   `change` is `"activation"`, and `profile` and `envChanged` are omitted. The event
   carries no count; clients re-run `providers.profiles.list` to read it.
+- **A Default configuration change** ([Default configuration overrides](#default-configuration-overrides)).
+  A committed `providers.profiles.updateDefault` has `change: "default-updated"`
+  with `baseProviderId` and `envChanged`. A change in the Default configuration's
+  `activation.runningProcesses` has `change: "default-activation"` with
+  `baseProviderId`. Neither carries `profileId` or `profile`; clients re-run
+  `providers.profiles.list` (and `providers.catalog` for a new name).
 
 The daemon does not reload the profile file. Only a reorder covers several profiles.
 The payload is
-`data = { revision, change: "created" | "updated" | "deleted" | "activation" | "reordered", profileId?, baseProviderId?, profile?: ProviderProfileSummary, envChanged?: boolean }`.
-It never carries env keys or values. `profileId` is present on every change except
-`reordered`, and `baseProviderId` only on `reordered`. `profile` is omitted on delete,
-activation and reorder events. A client re-runs `providers.profiles.list` (or
+`data = { revision, change: "created" | "updated" | "deleted" | "activation" | "reordered" | "default-updated" | "default-activation", profileId?, baseProviderId?, profile?: ProviderProfileSummary, envChanged?: boolean }`.
+It never carries env keys or values. `profileId` is present on every profile change,
+and `baseProviderId` only on `reordered` and the two Default changes. `profile` is
+omitted on delete, activation, reorder and Default events. A client re-runs `providers.profiles.list` (or
 `providers.catalog`) when it sees an activation or reorder event, a revision gap, or
 a reconnect. A failover switch changes no profile and emits no
 `providers:profiles-changed`. A delete that prunes a `model.providerDefaults` key also emits
@@ -640,6 +722,13 @@ on write.
 A daemon that advertises `supportsProfiles` but predates per-profile Fast mode
 rejects a qualified `providers.fastMode` key with `-32602`; the whole update fails and
 the stored map is unchanged, so clients surface the error rather than retrying.
+
+Clients detect Default configuration overrides by the presence of `defaults` on the
+`providers.profiles.list` result. When it is absent, they hide the Default name and
+environment controls and never call `providers.profiles.updateDefault`, which an
+older daemon rejects with `-32601`. Older clients ignore `defaults`, `defaultNames`
+and the two Default event changes (they re-list on any revision), and keep labelling
+the original configuration `Default`.
 
 Clients detect backup failover support by the presence of `backup` on
 `ProviderProfile` and `ProviderProfileSummary`. When it is absent, they hide the
