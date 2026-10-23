@@ -6,11 +6,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { inspectSources, preflight, runContract } from './test-transfer-selection-contract.mjs';
+import { GENERATORS, inspectSources, preflight, runContract } from './test-transfer-selection-contract.mjs';
 import { hashJson } from './check-transfer-selection-contract.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const GENERATOR = 'crates/intent-services/src/transfer_selection_contract.rs';
+const [GENERATOR, MOVED_GENERATOR] = GENERATORS;
+const GENERATOR_IDS = { [GENERATOR]: 'intent-services/transfer-selection-contract', [MOVED_GENERATOR]: 'intent-svc-transfer/transfer-selection-contract' };
 const EXPORTER = 'scripts/test-transfer-selection-contract.sh';
 const RENDERER = 'src/lib/components/chat/input/ModelPicker.transfer-selection-contract.test.ts';
 const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim();
@@ -26,7 +27,7 @@ function commit(root) {
   return git(root, 'rev-parse', 'HEAD');
 }
 
-function fixture(t) {
+function fixture(t, { generator = GENERATOR } = {}) {
   const top = mkdtempSync(path.join(os.tmpdir(), 'transfer-runner-test-'));
   t.after(() => rmSync(top, { recursive: true, force: true }));
   const root = path.join(top, 'monorepo');
@@ -44,7 +45,7 @@ function fixture(t) {
   write(root, 'docs/protocol/fixtures/transfer-selection/public-sessions.desktop-control-v1.json', JSON.stringify(desktop));
   mkdirSync(path.join(root, 'scripts'));
   for (const file of ['check-transfer-selection-contract.mjs', 'test-transfer-selection-contract.mjs']) cpSync(path.join(ROOT, 'scripts', file), path.join(root, 'scripts', file));
-  write(dirs.intentd, GENERATOR, '// synthetic orchestration fixture, never a public golden\n');
+  write(dirs.intentd, generator, '// synthetic orchestration fixture, never a public golden\n');
   write(dirs.intentd, EXPORTER, '#!/bin/bash\nset -euo pipefail\nnode "$FIXTURE_EMITTER" "$@"\n');
   write(dirs['cloudlands-fe'], RENDERER, '// renderer invocation is observed by the fixture corepack executable\n');
   write(dirs['cloudlands-fe'], 'scripts/transfer-selection-fixtures.mjs', '// fixture loader marker\n');
@@ -65,7 +66,8 @@ const { hashJson, resolveGoldenPath } = createRequire(import.meta.url)(root + '/
 const selected = await resolveGoldenPath({fixtureRoot: root, intentdRoot: process.cwd()});
 const artifact = JSON.parse(readFileSync(env.FIXTURE_MODE === 'wrong-schema' ? root + '/public-sessions.json' : selected, 'utf8'));
 if (env.FIXTURE_MODE !== 'stale') artifact.provenance.intentdRevision = execFileSync('git', ['rev-parse', 'HEAD'], {encoding:'utf8'}).trim();
-artifact.provenance.generatorSha256 = createHash('sha256').update(readFileSync('${GENERATOR}')).digest('hex');
+artifact.provenance.generator = ${JSON.stringify(GENERATOR_IDS[generator])};
+artifact.provenance.generatorSha256 = createHash('sha256').update(readFileSync('${generator}')).digest('hex');
 if (env.FIXTURE_MODE === 'wrong-generator') artifact.provenance.generatorSha256 = 'f'.repeat(64);
 if (env.FIXTURE_MODE === 'drift') { artifact.cases[0].session.extraField = 'unreviewed'; artifact.provenance.payloadSha256 = hashJson(artifact.cases); }
 if (env.FIXTURE_MODE === 'tamper') artifact.cases[0].session.provider = 'acp';
@@ -99,6 +101,25 @@ test('local gate generates twice, routes exact fresh input, reports provenance a
   assert.deepEqual(readdirSync(f.env.TMPDIR), []);
   assert.equal(hash(path.join(f.root, 'docs/protocol/fixtures/transfer-selection/public-sessions.json')), golden);
   assert.equal(git(f.root, 'status', '--porcelain'), before);
+});
+
+for (const generator of GENERATORS) {
+  test(`generator at ${generator} is resolved, hashed and accepted`, async (t) => {
+    const f = fixture(t, { generator });
+    const result = await runContract({ root: f.root, env: f.env, log: () => {} });
+    assert.equal(result.sources.generator, generator);
+    assert.equal(result.sources.generatorSha256, hash(path.join(f.dirs.intentd, generator)));
+    const rendered = JSON.parse(readFileSync(f.env.FIXTURE_RENDER_LOG, 'utf8'));
+    assert.equal(rendered.artifact.provenance.generator, GENERATOR_IDS[generator]);
+  });
+}
+
+test('both generator locations at once are ambiguous and fail before export', async (t) => {
+  const f = fixture(t);
+  write(f.dirs.intentd, MOVED_GENERATOR, '// second copy\n');
+  commit(f.dirs.intentd);
+  await assert.rejects(preflight(f.root, f.env), /ambiguous transfer-selection generator/);
+  assert.deepEqual(readdirSync(f.env.TMPDIR), []);
 });
 
 for (const daemon of ['legacy', 'desktop-control-v1']) for (const frontend of ['pin', 'feature']) {

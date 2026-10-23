@@ -12,7 +12,13 @@ import { isDeepStrictEqual, parseArgs } from 'node:util';
 const PROVIDERS = ['auggie', 'acp', 'augment', 'default'];
 const MODES = ['direct', 'history', 'prefix', 'auto'];
 const DEFAULT_ROOT = fileURLToPath(new URL('../docs/protocol/fixtures/transfer-selection/', import.meta.url));
-const GENERATOR = 'intent-services/transfer-selection-contract';
+// The generator id names the crate that owns the contract test. Both ids stay
+// accepted while the transfer feature moves out of intent-services, so either
+// intentd pin passes; the committed goldens keep whichever id generated them.
+export const GENERATORS = Object.freeze([
+  'intent-services/transfer-selection-contract',
+  'intent-svc-transfer/transfer-selection-contract',
+]);
 const TIME = '2000-01-01T00:00:00Z';
 export const GOLDEN_FILES = Object.freeze(['public-sessions.json', 'public-sessions.desktop-control-v1.json']);
 
@@ -170,7 +176,7 @@ export function assertGenerated(contract, artifact, expectedSource = {}) {
   const p = artifact.provenance;
   keys(p, 'kind generator intentdRevision intentdDirty generatorSha256 contractSha256 payloadSha256', 'provenance');
   equal(p.kind, 'intentd-public-import', 'provenance.kind');
-  equal(p.generator, GENERATOR, 'provenance.generator');
+  requireValue(GENERATORS.includes(p.generator), `provenance.generator: expected one of ${JSON.stringify(GENERATORS)}, got ${JSON.stringify(p.generator)}`);
   requireValue(typeof p.intentdRevision === 'string' && /^[a-f0-9]{40}$/.test(p.intentdRevision), 'provenance.intentdRevision must be a full lowercase Git SHA');
   equal(p.intentdDirty, false, 'provenance.intentdDirty');
   for (const field of ['generatorSha256', 'contractSha256', 'payloadSha256']) {

@@ -107,6 +107,30 @@ test('selected desktop golden cannot fall back to legacy or accept rehashed sche
   await assert.rejects(inspectFixtures({ fixtureRoot: dir, generated: selected, fresh }), /stale/);
 });
 
+test('provenance accepts the generator id of either owning crate and nothing else', async (t) => {
+  for (const generator of ['intent-services/transfer-selection-contract', 'intent-svc-transfer/transfer-selection-contract']) {
+    const artifact = syntheticGenerated();
+    artifact.provenance.generator = generator;
+    const dir = await fixture(t, artifact);
+    await inspectFixtures({ fixtureRoot: dir });
+  }
+  for (const generator of ['intent-svc-runtime/transfer-selection-contract', 'transfer-selection-contract', '']) {
+    const artifact = syntheticGenerated();
+    artifact.provenance.generator = generator;
+    const dir = await fixture(t, artifact);
+    await assert.rejects(inspectFixtures({ fixtureRoot: dir }), /provenance\.generator/);
+  }
+});
+
+test('a golden and a fresh output from different owning crates still compare by payload', async (t) => {
+  const dir = await fixture(t);
+  const fresh = syntheticGenerated();
+  fresh.provenance.generator = 'intent-svc-transfer/transfer-selection-contract';
+  const freshPath = path.join(dir, 'fresh.json');
+  await fs.writeFile(freshPath, JSON.stringify(fresh));
+  await inspectFixtures({ fixtureRoot: dir, fresh: freshPath });
+});
+
 test('the maintained inputs cover all 32 stable cases', () => {
   assertContract(contract);
   const expected = ['auggie', 'acp', 'augment', 'default'].flatMap((provider) =>

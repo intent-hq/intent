@@ -206,7 +206,8 @@ goldens must never be hand-written. The emitter must exercise real
   normalizationVersion: 1,
   provenance: {
     kind: 'intentd-public-import',
-    generator: 'intent-services/transfer-selection-contract',
+    generator: 'intent-services/transfer-selection-contract'
+      | 'intent-svc-transfer/transfer-selection-contract',  // owning crate
     intentdRevision: string,  // full lowercase 40-character checkout HEAD SHA
     intentdDirty: false,      // checked from the source worktree, never assumed
     generatorSha256: string,  // SHA-256 of the generator Rust source file bytes
@@ -225,7 +226,10 @@ goldens must never be hand-written. The emitter must exercise real
 `persisted` contains those five raw exported columns, including nulls; `firstTurn`
 contains the actual resolver's provider/model/effort triple, with null for unset.
 Neither is copied from expected values. The generator source is
-`crates/intent-services/src/transfer_selection_contract.rs`; its runner records that
+`crates/intent-services/src/transfer_selection_contract.rs`, or
+`crates/intent-svc-transfer/src/transfer_selection_contract.rs` once transfer moves
+to its own crate; the scripts accept either path and either `generator` id, and
+reject a checkout that has both files. Its runner records that
 file's byte hash and clean intentd HEAD. Commit the harness before producing a
 publishable envelope. Runtime version/cache timestamps stay in the isolated input
 setup, not in provenance. No generated-at timestamp is needed.
