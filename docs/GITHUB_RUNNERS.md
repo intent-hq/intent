@@ -175,9 +175,11 @@ public, so those runners cost nothing.
 Exceptions and edge cases:
 
 - A fork pull request runs each paid size on the free standard runner of its OS
-  (`ubuntu-24.04`, `ubuntu-24.04-arm`, `windows-2022`, `macos-latest`): no WarpBuild
+  (`ubuntu-24.04`, `ubuntu-24.04-arm`, `windows-2022`, `macos-15` for
+  `macos-15-xlarge`, `macos-latest` for `macos-26-xlarge`): no WarpBuild
   spend from outside contributors. intentd and cloudlands-fe close fork PRs anyway.
-- A WarpBuild OS and architecture (`ubuntu-x64`, `ubuntu-arm64`, `windows-x64` or
+- While a self-hosted runner is online (the probe reads the queues only then), a
+  WarpBuild OS and architecture (`ubuntu-x64`, `ubuntu-arm64`, `windows-x64` or
   `macos-arm64`, read from its `warp-*` label) with a job queued for over 10 minutes
   in any of the three repositories logs a warning
   (`warpbuild <os>-<arch>: jobs queued over 10 minutes; bursts still go to WarpBuild`).
