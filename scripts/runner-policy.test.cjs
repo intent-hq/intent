@@ -529,7 +529,7 @@ test('a listed burst label sizes only the burst runner, never the pool', async (
   // Without a slot it bursts as gh-linux-16x: WarpBuild 16x, else GitHub's 16-core label.
   const full = await route({ env: slotEnv([check]), jobs: [heavyJob(3), heavyJob(4)] });
   assert.deepEqual(full.slots.check, ['gh-linux-16x']);
-  // A job that skips this event bursts as its burst label too.
+  // A job listed for pull_request only still runs in the merge queue (intentd's check), on its burst label.
   const skip = await route({ env: slotEnv([{ ...check, events: ['pull_request'] }], WARP_ON), event: 'merge_group' });
   assert.deepEqual(skip.slots.check, WARP['gh-linux-16x']);
   // Without a burst label nothing changes.
