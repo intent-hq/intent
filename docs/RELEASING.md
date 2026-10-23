@@ -887,12 +887,13 @@ GitHub label they would otherwise ask for:
 
 The burst runner for a paid label is its WarpBuild equivalent (`gh-linux-8x` →
 `warp-ubuntu-2404-x64-8x`, `gh-linux-16x` → `-16x`, `gh-linux-arm64-8x` →
-`warp-ubuntu-2404-arm64-8x`, `gh-windows-16x` → `warp-windows-2022-x64-16x`,
-`macos-26-xlarge` → `warp-macos-26-arm64-12x`, `macos-15-xlarge` →
-`warp-macos-15-arm64-12x`), or the GitHub label itself for fork pull requests, while
-`CI_WARPBUILD_DISABLED` is `true`, or while that WarpBuild OS and architecture has a job queued
-over 10 minutes. `macos-latest-large` (Intel) has no WarpBuild equivalent and bursts to
-GitHub. cloudlands-fe's signed desktop Mac builds keep `macos-15-xlarge` as their
+`warp-ubuntu-2404-arm64-8x`, `gh-windows-8x` → `warp-windows-2022-x64-8x`,
+`gh-windows-16x` → `warp-windows-2022-x64-16x`, `macos-26-xlarge` →
+`warp-macos-26-arm64-12x`, `macos-15-xlarge` → `warp-macos-15-arm64-12x`).
+GitHub's larger runners are off, so there is no GitHub fallback: fork pull requests
+get the free standard runner of the same OS, a WarpBuild platform with a job queued
+over 10 minutes only logs a warning, and a job that runs after a failed route job
+falls back to the WarpBuild label. cloudlands-fe's signed desktop Mac builds keep `macos-15-xlarge` as their
 key (not `macos-26-xlarge`), because electron-builder's keychain step fails on
 macOS 26 images.
 
@@ -932,12 +933,12 @@ queue token and Actions read permission through each level. A probe-runner outag
 can still fail routing itself; affected workflows require a rerun.
 
 Infrastructure exceptions are mechanically allowlisted: routing probes run on
-GitHub-hosted Linux, and the manual packaged macOS
-smoke journey requires a disposable hosted machine. The frontend and intentd queue-retirement
+GitHub-hosted Linux, and the packaged smoke journeys require a fresh VM per job
+(GitHub-hosted or WarpBuild, never an intent-cache slot). The frontend and intentd queue-retirement
 cleanup jobs and intentd read-only credential probe remain on independent GitHub-hosted
 Linux, preserving their upstream queue-recovery contract. Host maintenance stays bound
 to the machine it maintains. A platform without a compatible self-hosted runner
-uses its burst runner (GitHub's native Intel Mac image for Intel Macs).
+uses its burst runner.
 Browser shards retain their worker counts and browser identities, with per-runner
 browser caches and dependency installation for persistent machines.
 
@@ -961,7 +962,6 @@ cloudlands-fe; cloudlands-fe's own `intent-pr.yml` routing reads the same Linux 
 | `CI_LINUX_RUNNER_DISABLED` | the heavy and xl intent-cache pools and `self-hosted, Linux, ARM64` | `linux routing: burst=true (disabled for maintenance)`; xl logs as `xl routing`, ARM64 as `arm routing` |
 | `CI_WINDOWS_RUNNER_DISABLED` | `self-hosted, Windows, X64` | `windows routing: burst=true (disabled for maintenance)` |
 | `CI_MACOS_RUNNER_DISABLED` | `self-hosted, macOS, ARM64` and `self-hosted, macOS, X64` | `macos routing: burst=true (disabled for maintenance)`; X64 logs as `intel routing` |
-| `CI_WARPBUILD_DISABLED` | WarpBuild, for every platform | `warpbuild ubuntu-x64: off (CI_WARPBUILD_DISABLED)` (likewise `ubuntu-arm64`, `windows-x64`, `macos-arm64`); bursts and `cloud` use the GitHub labels |
 
 When the probe itself fails (fork PRs, or runner or job listing errors), every
 platform instead logs `burst=true (probe failed (...))`, with or without an

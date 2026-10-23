@@ -38,8 +38,9 @@ new host only adds capacity once its variable is raised:
 | `CI_LINUX_HEAVY_SLOTS` | 2 | heavy |
 | `CI_LINUX_XL_SLOTS` | 0 (xl off) | xl |
 | `CI_LINUX_RUNNER_DISABLED` | unset | `true` sends every job, xl included, to its burst runner |
-| `CI_WARPBUILD_DISABLED` | unset | `true` bursts to GitHub-hosted labels instead of WarpBuild (see [Burst to WarpBuild](#burst-to-warpbuild)) |
 
+`CI_WARPBUILD_DISABLED` is no longer read: GitHub's larger runners are off, so
+there is nothing to switch bursts back to (see [Burst to WarpBuild](#burst-to-warpbuild)).
 `CI_LINUX_SMALL_SLOTS` is no longer read: jobs on free standard labels always run
 on GitHub, and no host runs `intent-cache-small` slots any more.
 
@@ -157,40 +158,47 @@ supervisor is killed outright.
 
 ## Burst to WarpBuild
 
-When no self-hosted slot is free, jobs on a paid GitHub label run on the matching
-[WarpBuild](https://www.warpbuild.com/docs/ci/cloud-runners) runner instead of the
-GitHub larger runner (the `warpbuildbot` app is installed on the org). Jobs on free
+When no self-hosted slot is free, jobs on a paid size run on the matching
+[WarpBuild](https://www.warpbuild.com/docs/ci/cloud-runners) runner (the
+`warpbuildbot` app is installed on the org). GitHub's larger runners are off, so a
+paid size never runs on GitHub. Jobs on free
 standard labels (`ubuntu-22.04`, `ubuntu-24.04`, `ubuntu-latest`, `ubuntu-24.04-arm`,
 `windows-2022`, `windows-2025`) always run on GitHub: the three repositories are
 public, so those runners cost nothing.
 
-| GitHub label | WarpBuild runner | Notes |
+| Size label | WarpBuild runner | Notes |
 |---|---|---|
 | `gh-linux-8x` | `warp-ubuntu-2404-x64-8x` | 8 vCPU / 32 GB |
 | `gh-linux-16x` | `warp-ubuntu-2404-x64-16x` | 16 vCPU / 64 GB |
 | `gh-linux-arm64-8x` | `warp-ubuntu-2404-arm64-8x` | |
+| `gh-windows-8x` | `warp-windows-2022-x64-8x` | cloudlands-fe Windows builds (about a third of 16 CPUs, 12.4 GB at most) |
 | `gh-windows-16x` | `warp-windows-2022-x64-16x` | Server 2022: node-gyp fails on 2025 |
 | `macos-26-xlarge` | `warp-macos-26-arm64-12x` | M4 Pro, 12 vCPU: every Mac job is CPU-bound at 6 |
 | `macos-15-xlarge` | `warp-macos-15-arm64-12x` | 12 vCPU; signed desktop builds (keychain unlock fails on macOS 26) |
-| `macos-latest-large` | — | no WarpBuild Intel Mac; bursts to GitHub |
 
-The probe sends a burst to GitHub instead of WarpBuild when:
+Exceptions and edge cases:
 
-- the run is a fork pull request (no WarpBuild spend from outside contributors);
-- `CI_WARPBUILD_DISABLED` is `true` (organization or repository variable; no
-  workflow change needed);
-- a job for that WarpBuild OS and architecture (`ubuntu-x64`, `ubuntu-arm64`,
-  `windows-x64` or `macos-arm64`, read from its `warp-*` label) has been queued
-  for over 10 minutes in any of the three repositories; a job whose age is
-  unreadable does not count.
+- A fork pull request runs each paid size on the free standard runner of its OS
+  (`ubuntu-24.04`, `ubuntu-24.04-arm`, `windows-2022`, `macos-15` for
+  `macos-15-xlarge`, `macos-latest` for `macos-26-xlarge`): no WarpBuild
+  spend from outside contributors. intentd and cloudlands-fe close fork PRs anyway.
+- While a self-hosted runner is online (the probe reads the queues only then), a
+  WarpBuild OS and architecture (`ubuntu-x64`, `ubuntu-arm64`, `windows-x64` or
+  `macos-arm64`, read from its `warp-*` label) with a job queued for over 10 minutes
+  in any of the three repositories logs a warning
+  (`warpbuild <os>-<arch>: jobs queued over 10 minutes; bursts still go to WarpBuild`).
+  Bursts still go there; there is no other burst runner.
+- A job that still runs after its route job failed uses its `runs-on` fallback,
+  which names the WarpBuild label (`fromJSON('["warp-…"]')`, or `matrix.warp` in
+  cloudlands-fe's release matrices). `scripts/test_runner_policy.py` in each
+  repository rejects a paid size label in any fallback or direct `runs-on`.
 
-An unreadable job queue keeps WarpBuild: a GitHub API error says nothing about
-WarpBuild. Each run logs `warpbuild <os>-<arch>: on` or the reason it is off.
-
-Jobs that may not use a self-hosted runner (they need sudo or Docker, or they sign
-releases on Mac/Windows) read the probe's `cloud` output instead of `runners`: the
-WarpBuild runner for a paid label, or the GitHub label under the conditions above,
-never a self-hosted fleet.
+Jobs that may not use a self-hosted runner (they need sudo or Docker, they sign
+releases on Mac/Windows, or they need a fresh VM per job) read the probe's `cloud`
+output instead of `runners`: the WarpBuild runner for a paid size, never a
+self-hosted fleet. The packaged smoke scripts accept a GitHub-hosted or WarpBuild
+VM (WarpBuild reports `self-hosted` with `WARPBUILD_RUNNER_VERIFICATION_TOKEN` set)
+and refuse an intent-cache slot.
 
 ## Preinstalled tools
 

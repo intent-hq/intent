@@ -72,8 +72,6 @@ jobs:
           LINUX_RUNNER_DISABLED: ${{ vars.CI_LINUX_RUNNER_DISABLED }}
           WINDOWS_RUNNER_DISABLED: ${{ vars.CI_WINDOWS_RUNNER_DISABLED }}
           MACOS_RUNNER_DISABLED: ${{ vars.CI_MACOS_RUNNER_DISABLED }}
-          # `true` sends every burst to GitHub-hosted runners instead of WarpBuild.
-          WARPBUILD_DISABLED: ${{ vars.CI_WARPBUILD_DISABLED }}
         with:
           github-token: ${{ secrets.CI_QUEUE_READ_TOKEN || github.token }}
           script: |
@@ -87,7 +85,6 @@ jobs:
               arm: ['self-hosted', 'Linux', 'ARM64'],
               windows: ['self-hosted', 'Windows', 'X64'],
               macos: ['self-hosted', 'macOS', 'ARM64'],
-              intel: ['self-hosted', 'macOS', 'X64'],
             };
             const disabled = {
               linux: process.env.LINUX_RUNNER_DISABLED === 'true',
@@ -95,22 +92,33 @@ jobs:
               arm: process.env.LINUX_RUNNER_DISABLED === 'true',
               windows: process.env.WINDOWS_RUNNER_DISABLED === 'true',
               macos: process.env.MACOS_RUNNER_DISABLED === 'true',
-              intel: process.env.MACOS_RUNNER_DISABLED === 'true',
             };
             // Standard GitHub-hosted runners are free for public repositories, so
             // jobs asking for them always run there and never take a self-hosted slot.
             const free = ['ubuntu-22.04', 'ubuntu-24.04', 'ubuntu-latest', 'ubuntu-24.04-arm', 'windows-2022', 'windows-2025'];
-            // Paid GitHub labels and the WarpBuild runner each bursts to instead
+            // The paid sizes jobs ask for and the WarpBuild runner each bursts to.
+            // GitHub's larger runners are off, so a paid size never runs on GitHub
             // (same cores except Macs, which get 12 because every Mac job is CPU-bound;
             // Windows stays on Server 2022, macOS 15 keeps signed builds off macOS 26).
-            // Intel Macs have no WarpBuild equivalent and stay on GitHub.
             const warp = {
               'gh-linux-8x': 'warp-ubuntu-2404-x64-8x',
               'gh-linux-16x': 'warp-ubuntu-2404-x64-16x',
               'gh-linux-arm64-8x': 'warp-ubuntu-2404-arm64-8x',
+              'gh-windows-8x': 'warp-windows-2022-x64-8x',
               'gh-windows-16x': 'warp-windows-2022-x64-16x',
               'macos-26-xlarge': 'warp-macos-26-arm64-12x',
               'macos-15-xlarge': 'warp-macos-15-arm64-12x',
+            };
+            // Fork pull requests never spend WarpBuild minutes: a paid size runs on
+            // the free standard runner of its OS instead.
+            const forkRunner = {
+              'gh-linux-8x': 'ubuntu-24.04',
+              'gh-linux-16x': 'ubuntu-24.04',
+              'gh-linux-arm64-8x': 'ubuntu-24.04-arm',
+              'gh-windows-8x': 'windows-2022',
+              'gh-windows-16x': 'windows-2022',
+              'macos-26-xlarge': 'macos-latest',
+              'macos-15-xlarge': 'macos-15',
             };
             // WarpBuild health is tracked per OS and architecture (ubuntu-x64, ubuntu-arm64, windows-x64, macos-arm64).
             const family = (label) => {
@@ -126,10 +134,9 @@ jobs:
             const slotsFree = {};
             const pr = context.payload?.pull_request;
             const fork = context.eventName === 'pull_request' && pr?.head?.repo?.full_name !== `${context.repo.owner}/${context.repo.repo}`;
-            // Fork pull requests never spend WarpBuild minutes; the kill switch sends everything to GitHub.
-            const warpOn = !fork && process.env.WARPBUILD_DISABLED !== 'true';
-            // A WarpBuild OS/architecture whose jobs sit queued for 10 minutes is treated as down.
-            // An unreadable queue says nothing about WarpBuild, so it keeps WarpBuild.
+            const warpOn = !fork;
+            // A WarpBuild OS/architecture whose jobs sit queued for 10 minutes is
+            // reported as a warning; with no other burst runner, jobs still go there.
             const warpStuck = Object.fromEntries(Object.values(warp).map(label => [family(label), false]));
             try {
               if (fork) throw new Error('fork pull request requires an isolated hosted runner');
@@ -145,7 +152,8 @@ jobs:
               ]));
               const jobs = [];
               // A missing sibling view is unknown demand, not zero demand. Fail open to burst runners.
-              if (warpOn || Object.values(online).some(rs => rs.length)) {
+              // With no self-hosted runner online there is no demand to weigh, so skip the listing.
+              if (Object.values(online).some(rs => rs.length)) {
                 for (const repo of new Set(['intent', 'intentd', 'cloudlands-fe', context.repo.repo])) {
                   const seen = new Set();
                   for (const status of ['queued', 'in_progress']) {
@@ -179,9 +187,10 @@ jobs:
               for (const key of Object.keys(fleets)) reasons[key] = `probe failed (${error.message})`;
               for (const key of Object.keys(slotsFree)) slotsFree[key] = 0;
             }
-            // Where a GitHub label runs when it does not take a self-hosted slot:
-            // its WarpBuild runner while WarpBuild is on and moving, else itself.
-            const cloud = (label) => warpOn && warp[label] && !warpStuck[family(warp[label])] ? [warp[label]] : [label];
+            // Where a label runs when it does not take a self-hosted slot: a paid
+            // size's WarpBuild runner (its free standard runner on a fork), a free
+            // label itself.
+            const cloud = (label) => warp[label] ? [warpOn ? warp[label] : forkRunner[label]] : [label];
             // Keys are the GitHub labels jobs ask for; values are the self-hosted
             // fleet labels, or the burst runner when the fleet bursts.
             // A label listed under several pools takes the first with a free slot.
@@ -194,7 +203,6 @@ jobs:
               arm: ['gh-linux-arm64-8x'],
               windows: ['gh-windows-16x'],
               macos: ['macos-26-xlarge'],
-              intel: ['macos-latest-large'],
             };
             // Free slots go to the caller's listed jobs one at a time: Rust-compiling
             // jobs first (they reuse the slot's local cache), then the longest, then
@@ -233,9 +241,13 @@ jobs:
               for (const label of labels) if (!mapping[label] || mapping[label][0] !== 'self-hosted') mapping[label] = burst[key] ? cloud(label) : fleets[key];
             }
             // Jobs that must not use a self-hosted runner (sudo, Docker, release signing) read `cloud`.
-            const clouds = Object.fromEntries([...free, ...Object.keys(warp), 'macos-latest-large'].map(label => [label, cloud(label)]));
+            const clouds = Object.fromEntries([...free, ...Object.keys(warp)].map(label => [label, cloud(label)]));
             for (const key of Object.keys(fleets)) core.info(`${key} routing: burst=${burst[key]} (${reasons[key]})`);
-            for (const key of Object.keys(warpStuck)) core.info(`warpbuild ${key}: ${!warpOn ? (fork ? 'off (fork pull request)' : 'off (CI_WARPBUILD_DISABLED)') : warpStuck[key] ? 'off (queued over 10 minutes)' : 'on'}`);
+            for (const key of Object.keys(warpStuck)) {
+              if (!warpOn) core.info(`warpbuild ${key}: off (fork pull request: free standard runners)`);
+              else if (warpStuck[key]) core.warning(`warpbuild ${key}: jobs queued over 10 minutes; bursts still go to WarpBuild`);
+              else core.info(`warpbuild ${key}: on`);
+            }
             core.setOutput('runners', JSON.stringify(mapping));
             core.setOutput('slots', JSON.stringify(slots));
             core.setOutput('cloud', JSON.stringify(clouds));
