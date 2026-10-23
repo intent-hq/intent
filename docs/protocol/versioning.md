@@ -173,6 +173,15 @@ one runs, and a staged restart waits for them for at most 90 minutes (agent turn
 still waited for without a cap). Service-mode scripts never count. Older daemons omit
 both keys; clients must detect them by presence.
 
+Also within 15.0 (additive response fields; presence-detected; no method-catalog
+change, so no version bump): **skipped PR checks are reported separately** (§5.7
+`ws.pr.snapshot`, §5.42 `MergeRequirements` and `lastSnapshot`). The snapshot `checks`
+block gains `skipped` and `skippedNames`, `MergeRequirements.checks` and the monitor's
+`lastSnapshot.checks` gain `skipped`, and `checks.items[].status` gains the value
+`skipped`. `passed` now excludes skipped runs, and a skipped run never blocks merge
+readiness. Previously skipped runs counted as passed (intentd#2581, run 39724275631).
+Older daemons omit the new keys and count skipped runs as `passed`.
+
 **PR workspace lookup (additive, prepared).** The
 [PR workspace lookup](./methods/workspace.md#pull-request-workspace-lookup) reserves
 the read-only router method `workspace.findByPullRequest`, bringing the documented

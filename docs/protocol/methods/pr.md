@@ -94,7 +94,7 @@ the existing GitHub behavior.
 > unmonitored PR seeds what the next read serves. The result shape is unchanged.
 > Result shape: `{ repo, prNumber, title, url, state, isDraft, isMerged, isClosed, headSha,
 > updatedAt, mergeable, mergeableState, mergeBlockedReason, checks: { total, passed,
-> failed, pending, failedNames }, reviews: { decision, approvals, changesRequested },
+> failed, pending, skipped, failedNames, skippedNames }, reviews: { decision, approvals, changesRequested },
 > comments: { conversationCount, reviewCommentCount, unresolvedThreadCount?,
 > totalCount }, requirements: MergeRequirements, pausedUntil? }`. **`requirements`** *(additive in v6.1,
 > [intentd#989](https://github.com/intent-hq/intentd/pull/989))* is the full
@@ -118,6 +118,18 @@ the existing GitHub behavior.
 > merged. `checks` tallies the runs on the PR head (SHA, else source branch); a
 > provider without the `checkRuns` capability — or a PR whose head cannot be
 > determined — reports an empty tally rather than failing the snapshot.
+> **`checks.skipped` / `checks.skippedNames`** *(additive; docs lead the intentd change)*
+> count and name the runs that concluded **skipped** (the job never ran — e.g. a
+> path-filtered or `if:`-gated job). `passed` counts only runs that actually succeeded,
+> so `total = passed + failed + pending + skipped`, and a skipped run never blocks a
+> merge on its own. Before this split a skipped run was tallied as passed: intentd#2581
+> at `6c92d3256` (run 39724275631) reported 25/25 passed while `coverage-all` and
+> `coverage-e2e` had been skipped. GitHub conclusion `skipped` and GitLab job status
+> `skipped` map here; GitHub `neutral` and GitLab `allow_failure` jobs ran, so they stay
+> `passed`, and the GitLab skipped-pipeline merge policy still maps to passed or failed.
+> On current daemons both keys are always present (`0` / `[]` when nothing was skipped;
+> `skippedNames` in rollup order). Older daemons omit them and fold skipped runs into
+> `passed`; consumers detect the split by presence.
 > **`reviews.decision`** *(changed in intentd,
 > [intentd#942](https://github.com/intent-hq/intentd/pull/942);
 > [intent-hq/monorepo#1524](https://github.com/intent-hq/monorepo/issues/1524))*
@@ -178,7 +190,7 @@ only `resource`, `details` and `availability`. Their qualified meanings are:
 | `details` | `{ resource, url, title, body, state, draft, sourceBranch, targetBranch, source, target, author, mergeable, mergeableState, headSha, createdAt, updatedAt }`. Its `state` is `open`, `locked`, `closed`, `merged`, or `null`; `draft` is the confirmed boolean or `null`. Optional values remain `null`. |
 | `details.source`, `details.target` | Each confirmed branch identity is `{ provider, instanceBaseUrl, projectId, projectPath, branch }`. An unknown whole identity is `null`; an unknown path inside a known identity is `null`. `projectId` is an exact decimal string, including values above 2^53, with no JavaScript numeric rounding. Branch names or selected targets cannot fill missing identity. |
 | `availability` | Independent `policy`, `approvals`, `checks` and `discussions` states: `available`, `restricted`, `unavailable`, `transient`, `rate-limited`, or `unknown`. |
-| `checks`, `requirements.checks` | Coherent, available rollup evidence supplies the existing totals, items and required flags. Unknown totals/items/names are `null`, with `requiredKnown: false`; a known empty rollup has zero totals and empty arrays. A reported check head that differs from the actual review head makes projected check availability `unknown`, without a refresh. |
+| `checks`, `requirements.checks` | Coherent, available rollup evidence supplies the existing totals, items and required flags. Unknown totals/items/names (including `skipped` / `skippedNames`) are `null`, with `requiredKnown: false`; a known empty rollup has zero totals and empty arrays. A reported check head that differs from the actual review head makes projected check availability `unknown`, without a refresh. |
 | `reviews`, `requirements.approvals` | Aggregate supplied reviews with the existing latest-actionable-review rules. Missing review counts and an absent provider decision are `null`, never an inferred `approved` or `none`. Unknown policy leaves `needed` omitted. |
 | `comments`, `requirements.threads` | Unknown conversation/review-comment counts are `null`; `totalCount` is `null` unless both counts are known. Unknown `unresolvedThreadCount`, `unresolved` and policy-dependent `resolutionRequired` are omitted; known zero remains zero. |
 | Other `requirements` fields | Unknown conflict/behind/draft facts are `null`; unknown policy gives `rulesKnown: false`. Missing facts do not imply readiness or a blocked reason. Optional mergeability/status/reason and queue/ejection fields remain omitted when absent; top-level nullable fields remain present. |
@@ -340,7 +352,7 @@ The **wire surface is read/cancel/flush only** (the FE view over agent-owned mon
 
 **`PrMonitor` wire shape** (shared by `prMonitor.list`, the `ws.pr.monitor` / `ws.pr.unmonitor` results, and `ws.pr.monitors` rows): `{ monitorId, workspaceId, agentId, repo, prNumber, state, pendingChanges, hasPendingChanges, createdAt, updatedAt, pendingSince?, lastChangeAt?, lastPolledAt?, lastError?, pausedUntil?, title?, url?, lastSnapshot? }` — `repo` is the combined `"owner/name"` string; `state ∈ { active, completed, cancelled }`; `pendingChanges` is the human-readable **net** change lines since the last delivered wake — the coalesced diff against the emit baseline, recomputed each poll (awaiting the debounce window; it shrinks or empties when changes revert; `[]` when nothing is pending); `lastError` is the most recent forge-poll error (cleared by a successful poll — a failing poll never kills the loop), carrying the `rate limited; PR monitor polling paused until <deadline>` annotation described above while the global forge rate-limit pause is closed; **`pausedUntil`** *(additive, presence-detected; within v10.2 — [intent-hq/intentd#1945](https://github.com/intent-hq/intentd/pull/1945), [#1954](https://github.com/intent-hq/intentd/pull/1954))* is the RFC 3339 (whole-second, UTC) deadline of that pause, read once per call off the in-memory gate and projected onto **ACTIVE rows only** while the gate is closed — its checklist is not being refreshed and `lastError` names the same deadline.
 The three surfaces clear on their own schedules: `pausedUntil` disappears the moment the gate opens (deadline elapsed or early lift), without any poll; the `lastError` annotation is removed immediately by the early-lift clear, or — after a natural expiry — dropped by the row's first post-pause write-back (the expiry comparison is whole-second inclusive, so a write-back landing in the deadline's own second can carry it for one more poll); `lastSnapshot` refreshes only on the next successful poll.
-The key is **omitted** (never `null`) while the gate is open and on every `completed` / `cancelled` row, so a consumer labels a row stale by presence alone (cloudlands-fe renders "Monitoring paused until <time> (GitHub rate limit)" from it, [intent-hq/cloudlands-fe#2551](https://github.com/intent-hq/cloudlands-fe/pull/2551)); `title` / `url` / `lastSnapshot` are present once the monitor has a successful poll baseline, `lastSnapshot` being the last-refresh checklist summary `{ state, isDraft, hasConflicts, isBehind, ancestry?, branchUpdateRequired?, mergeable, mergeBlockedReason, checks: { total, passed, failed, pending, failingRequired, pendingRequired, requiredKnown }, approvals: { decision, have, needed, changesRequested }, threads: { unresolved?, resolutionRequired }, isInMergeQueue?, mergeQueue?, mergeQueueEjection?, checksNotStarted?, rulesKnown }` (`threads.unresolved` follows the checklist's presence rule below — omitted when the resolution state was unreadable).
+The key is **omitted** (never `null`) while the gate is open and on every `completed` / `cancelled` row, so a consumer labels a row stale by presence alone (cloudlands-fe renders "Monitoring paused until <time> (GitHub rate limit)" from it, [intent-hq/cloudlands-fe#2551](https://github.com/intent-hq/cloudlands-fe/pull/2551)); `title` / `url` / `lastSnapshot` are present once the monitor has a successful poll baseline, `lastSnapshot` being the last-refresh checklist summary `{ state, isDraft, hasConflicts, isBehind, ancestry?, branchUpdateRequired?, mergeable, mergeBlockedReason, checks: { total, passed, failed, pending, skipped, failingRequired, pendingRequired, requiredKnown }, approvals: { decision, have, needed, changesRequested }, threads: { unresolved?, resolutionRequired }, isInMergeQueue?, mergeQueue?, mergeQueueEjection?, checksNotStarted?, rulesKnown }` (`threads.unresolved` follows the checklist's presence rule below — omitted when the resolution state was unreadable).
 
 For legacy GitHub `PrMonitor` rows, the compact `lastSnapshot.checks` fields
 `failingRequired` and `pendingRequired` are nonnegative integer counts, including
@@ -351,12 +363,13 @@ This does not change the qualified snapshot's nullable check fields or availabil
 contract.
 
 **`MergeRequirements` checklist** — "what is needed to merge this PR", the reusable object backing `ws.pr.monitor` (the `requirements` result field), the monitor loop's change detection, and the additive `requirements` block on `ws.pr.snapshot` (§5.7) — one canonical shape across all three surfaces.
-Shape: `{ state, isDraft, hasConflicts, isBehind, ancestry?, branchUpdateRequired?, mergeable?, checks: { total, passed, failed, pending, items: [{ name, status, required, url? }], failingRequired, pendingRequired, requiredKnown }, approvals: { decision, have, needed?, changesRequested }, threads: { unresolved?, resolutionRequired? }, mergeStateStatus?, mergeBlockedReason?, isInMergeQueue?, mergeQueue?, mergeQueueEjection?, checksNotStarted?, rulesKnown }`.
+Shape: `{ state, isDraft, hasConflicts, isBehind, ancestry?, branchUpdateRequired?, mergeable?, checks: { total, passed, failed, pending, skipped, items: [{ name, status, required, url? }], failingRequired, pendingRequired, requiredKnown }, approvals: { decision, have, needed?, changesRequested }, threads: { unresolved?, resolutionRequired? }, mergeStateStatus?, mergeBlockedReason?, isInMergeQueue?, mergeQueue?, mergeQueueEjection?, checksNotStarted?, rulesKnown }`.
 `state` is the 4-value lifecycle word;
 `mergeable` is the forge's tri-state (omitted while still computing);
 `threads.unresolved` is the unresolved review-thread count and is **presence-detected** under the same additive convention as `mergeable`: the key is **omitted** (never `null`) when the per-thread resolution state was unreadable — the GraphQL threads read failed and the REST comments fallback carries no resolution state — instead of inflating to "every thread unresolved" or defaulting to zero, while `0` is the ordinary known count when every thread is resolved;
 consumers treat absence as *unknown*, not *clear* (the monitor's ready promotion never fires on an absent count while `resolutionRequired` is `true`, the rendered checklist row reads `unresolved threads: unknown (thread resolution state unreadable)`, and the monitor's diff never emits a thread-count delta when either side is absent — a known→absent transition is reported as `review threads unreadable (resolution state unavailable)` and absent→known as the neutral `review threads readable again: n unresolved` instead);
-each `checks.items[]` entry reports `status ∈ { passed, failed, pending }` and its own `required` flag, with `failingRequired` / `pendingRequired` naming the required checks that are failing/still running;
+each `checks.items[]` entry reports `status ∈ { passed, failed, pending, skipped }` and its own `required` flag, with `failingRequired` / `pendingRequired` naming the required checks that are failing/still running;
+`checks.skipped` *(additive; docs lead the intentd change)* counts the `skipped` items — runs that concluded without executing — which `passed` no longer includes (`total = passed + failed + pending + skipped`); a skipped check is neither failing nor pending, so it never enters `failingRequired` / `pendingRequired` and never blocks merge readiness, and the rendered checklist and wake report it separately instead of as passed (`all checks completed: 23 passed, 2 skipped (coverage-all, coverage-e2e)`; `all checks passed (N)` only when nothing was skipped) (intentd#2581, run 39724275631, showed skipped coverage jobs as 25/25 passed); older daemons omit `skipped`, never emit the `skipped` item status, and count those runs as `passed`;
 `approvals.decision` is the §5.7 `ws.pr.snapshot` decision wire word, `have` counts distinct approving reviewers, `needed` the base branch's required approvals;
 `mergeStateStatus` is the host's raw merge-state status (GitHub GraphQL `mergeStateStatus`) — the residual signal for rules with no finer detail (merge queue, signed commits, hooks);
 `isInMergeQueue` is additive and presence-detected per the protocol's additive-field convention: `true` exactly when the host reports the PR queued in its merge queue (GitHub GraphQL `isInMergeQueue`), and the key is omitted (never null) when not queued or unknown;
@@ -538,7 +551,7 @@ Lifecycle is observable via the `prMonitor:*` event category (§6.5), and each a
       "headSha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","behindBy":1 },
     "branchUpdateRequired":false,
     "mergeable":true,"mergeBlockedReason":"1 required check failing (ci)",
-    "checks":{ "total":3,"passed":2,"failed":1,"pending":0,
+    "checks":{ "total":3,"passed":2,"failed":1,"pending":0,"skipped":0,
       "failingRequired":1,"pendingRequired":0,"requiredKnown":true },
     "approvals":{ "decision":"approved","have":1,"needed":1,"changesRequested":0 },
     "threads":{ "unresolved":0,"resolutionRequired":true },"rulesKnown":true },
