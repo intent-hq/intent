@@ -518,7 +518,7 @@ test('all display-coordinate actions require explicit selection on multiple moni
       assert.equal(c.expectSelectedOnly, true, c.id);
     }
   }
-  for (const action of ['screenshot', 'click', 'scroll', 'drag']) {
+  for (const action of ['screenshot', 'move', 'click', 'scroll', 'drag']) {
     assert.ok(cases.some(c => c.action === action && c.expectError === 'desktop-display-selection-required'));
     assert.ok(cases.some(c => c.action === action && c.expectSelectedId && c.displayId === undefined));
   }
@@ -533,4 +533,32 @@ test('explicit screenshots capture one selected monitor while mixed-DPI metadata
   assert.ok(new Set(displays.map(d => d.scaleFactor)).size > 1);
   assert.ok(displays.some(d => d.displayId === 'display-main'));
   assert.ok(displays.some(d => d.originX < 0));
+});
+
+// Prepared examples describe obligations; component tests exercise real execution.
+test('cursor move is button-free and uses the existing desktop execution safeguards', () => {
+  const move = fixture.cursorMove;
+  assert.equal(move.binding, 'ws.desktop.move');
+  assert.equal(move.actionKind, 'move');
+  assert.deepEqual(move.requiredArguments, ['x', 'y', 'layoutId']);
+  assert.deepEqual(move.optionalArguments, ['displayId']);
+  assert.deepEqual(move.result, { ok: true });
+  assert.equal(move.buttonEvents, 0);
+  assert.equal(move.implicitStart, false);
+  assert.ok(doc.includes('ws.desktop.move(args)'));
+  assert.ok(doc.includes('{ kind: "move", x, y, layoutId, displayId? }'));
+  for (const key of ['button', 'clickCount', 'from', 'to', 'agentId', 'clientId', 'sessionId'])
+    assert.ok(move.forbiddenArguments.includes(key));
+  for (const c of move.cases) {
+    assert.deepEqual(c.expectResult, { ok: true });
+    assert.equal(c.expectButtonEvents, 0);
+    assert.ok(c.args.x >= 0 && c.args.y >= 0 && c.args.layoutId);
+  }
+  for (const id of ['inactive', 'revoked', 'missing-layout', 'nonfinite', 'negative', 'out-of-bounds', 'button-argument', 'stale-layout', 'multiple-without-id', 'missing-display']) {
+    const c = move.refusals.find(c => c.id === id);
+    assert.ok(c, id);
+    assert.equal(c.execution, 'not_started');
+    assert.equal(c.nativeMoves, 0);
+    assert.equal(c.buttonEvents, 0);
+  }
 });
