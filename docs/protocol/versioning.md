@@ -1430,6 +1430,18 @@ the automatic submodule bump must then carry that backend before these docs land
 No manual pin advance is part of the migration. Historical 10.3 replay semantics
 above describe the former method, not a durability guarantee for current commits.
 
+Also within 13.0 (behavior only, no method-catalog or wire-shape change, so no version
+bump — [intent-hq/intentd#2649](https://github.com/intent-hq/intentd/pull/2649), fixes
+[intent-hq/intent#7184](https://github.com/intent-hq/intent/issues/7184)): **per-note
+write serialization** (§5.2). The client content writers to one note (`note.add`,
+`note.edit`, `note.editLines`, `note.setContent`, `task.updateStatus`, `task.update`,
+`task.convertBlocks`, `comment.add`, `primitive.*` appends) and linked-checkbox
+materialization take turns per note from their read to their gated persist, so
+parallel writers — including parallel status changes of tasks linked from one note —
+no longer exhaust their bounded retries against each other and an exact-match `note.edit` always applies to the latest
+text ("Text not found" when an earlier writer replaced its `old` text, instead of a
+three-way merge). The `-32005` shape and the 5-attempt bound are unchanged.
+
 ### Compatibility Policy
 
 - **Additive changes** (new methods, new optional fields, new event types) bump the **minor** version (e.g., 2.0 → 2.1).
