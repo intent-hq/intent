@@ -92,18 +92,18 @@ adds two router methods. Require `repositoryResourcePages: 1` and
 retain `repositoryResourceRead: 1`. Neither capability grants authority or
 implies a carrying release.
 
-The documented surface reserves **473 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
+The documented surface reserves **474 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
 
-- **Router methods:** 415 methods dispatched via the main router (`router::dispatch`)
+- **Router methods:** 416 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 58 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 0; use canonical Git read names
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 7 notifications: prepared `events.lost` ([loss contract](./event-stream-recovery.md)), `events.event` (§6.3) and the socket-private `workspace.repositoryContext.retired`, `workspace.repositorySelection.retired`, `accept-changes.retired`, `sourceControl.read.retired`, `sourceControl.read.invalidated` controls (§6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 6 methods total — 2 are **dual-role** and counted within the 473 dispatchable names (`browser.exec`, `host.openInEditor`), and 4 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) — see §5.9, §5.14 and the reverse-RPC list below
+- **Client-served reverse RPCs:** 6 methods total — 2 are **dual-role** and counted within the 474 dispatchable names (`browser.exec`, `host.openInEditor`), and 4 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) — see §5.9, §5.14 and the reverse-RPC list below
 
-**Total:** 473 dispatchable names + 7 notifications. Of the 6 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 4 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) are daemon→client-only reverse RPCs, never dispatched client→server.
+**Total:** 474 dispatchable names + 7 notifications. Of the 6 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 4 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
 The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.55) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
 
@@ -116,7 +116,7 @@ capabilities gate support; catalog entries do not grant permission or establish
 which desktop release contains the feature. The methods below lead the component
 pin, while all existing methods and prepared extensions remain present.
 
-### Router methods by namespace (415 total)
+### Router methods by namespace (416 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
@@ -150,7 +150,7 @@ pin, while all existing methods and prepared extensions remain present.
 | presence | 1 | snapshot — the current online roster of a member workspace, i.e. the `presence:changed` payload (§6.5) on demand (`{ workspaceId }` req; §5.47; shipped in intentd b518d31). Ephemeral read, no host reach; the presence writes are fast-path (`presence.update`, `note.presence.update`, below) and the per-note viewer channel is `note.presence.subscribe` / `note.presence.unsubscribe` (§6.9) |
 | primitive | 4 | addAgentAction, addCli, addPatch, addReference |
 | principal | 3 | list, me, revokeSelf — `me` is the principal this connection was bound to at admission (`{ id, login: string \| null, displayName: string \| null, avatarUrl: string \| null, isAdministrator, identity? }` — the profile fields are always present, `null` until a forge identity is cached; `identity?` is the v10.8 provider-neutral triple `{ provider, host, externalUserId }`, omitted while unlinked; §5.46; v10.3, [intent-hq/intentd#1869](https://github.com/intent-hq/intentd/pull/1869), no params, daemon-global — no `workspaceId`). Fails closed (`-32603`) when no caller is bound. `list` ([intent-hq/intentd#2023](https://github.com/intent-hq/intentd/pull/2023); §5.48) is the administrator-only roster of credentialed guests `{ principals: [{ principalId, login: string \| null, displayName: string \| null, avatarUrl: string \| null, githubUserId: integer \| null, identity? }] }` the direct member add draws from (the four profile keys always present, `null` when uncached — the `me` convention; `identity?` omitted while unlinked). `revokeSelf` (shipped in intentd b518d31; §5.48) revokes the caller's **own** credentials and drops its collaborator memberships (each publishing the `removedPrincipalId` `workspace:updated`, §6.5); self-directed only (no target parameter), the administrator is refused in the service layer |
-| providers | 6 | catalog, profiles.create, profiles.delete, profiles.list, profiles.reorder, profiles.update — `catalog` is the static provider registry served over the wire (§5.38; v2.6, daemon-global result; optional routing-only `workspaceId`); `profiles.*` manage named Codex/Claude Code profiles (§5.54; prepared, administrator-only) |
+| providers | 7 | catalog, profiles.create, profiles.delete, profiles.list, profiles.reorder, profiles.update, profiles.updateDefault — `catalog` is the static provider registry served over the wire (§5.38; v2.6, daemon-global result; optional routing-only `workspaceId`); `profiles.*` manage named Codex/Claude Code profiles and the Default configuration's name and environment overrides (§5.54; prepared, administrator-only) |
 | repo | 3 | list, remove, warmCache — opportunistic background repo-cache refresh for one GitHub repo (§5.11; v6.10, daemon-global — no `workspaceId`) |
 | repoConfig | 4 | ensureDir, get, has, save |
 | rules | 3 | get, list, update |

@@ -8,7 +8,9 @@ stable identity, a display name, a base provider and environment overrides. A
 profile shares its base provider's installation, executable path and enablement.
 Each profile has its own Fast mode preference (see
 [References in settings](#references-in-settings)). The original configuration stays available as **Default**
-and is not a profile. Hosts with no profiles keep their current behavior.
+and is not a profile. Default can still be renamed and carry its own environment
+overrides (see [Default configuration overrides](#default-configuration-overrides)).
+Hosts with no profiles keep their current behavior.
 
 Profiles of one base provider have a saved order, and any of them can be marked as a
 **backup**. When a turn fails because its provider ran out of quota, the daemon
@@ -211,11 +213,12 @@ guests receive `-32003`. Each is daemon-global, with no `workspaceId` required.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| providers.profiles.list | baseProviderId? | { profiles: ProviderProfile[], revision } |
+| providers.profiles.list | baseProviderId? | { profiles: ProviderProfile[], defaults: DefaultConfig[], revision } |
 | providers.profiles.create | baseProviderId (req), name (req), env?: EnvEntryWrite[], backup?: boolean | { profile: ProviderProfile, revision } |
 | providers.profiles.update | profileId (req), name?, env?: EnvEntryWrite[], backup?: boolean | { profile: ProviderProfile, revision, activation: ProfileActivation } |
 | providers.profiles.delete | profileId (req) | { profileId, revision } |
 | providers.profiles.reorder | baseProviderId (req), profileIds (req): string[] | { profiles: ProviderProfile[], revision } |
+| providers.profiles.updateDefault | baseProviderId (req), name?, env?: EnvEntryWrite[] | { defaultConfig: DefaultConfig, revision, activation: ProfileActivation } — see [Default configuration overrides](#default-configuration-overrides) |
 
 ```ts
 interface ProviderProfile {
@@ -299,7 +302,7 @@ interface ProfileActivation {
 | `baseProviderId` | `base-provider-unsupported` | It must be a canonical id with `supportsProfiles: true`. |
 | `name` | `name-blank` | It must not be empty after trimming Unicode whitespace. |
 | `name` | `name-invalid` | No control characters, and at most 64 Unicode scalar values after trimming. |
-| `name` | `name-duplicate` | Names must be unique within one base provider, ignoring case (Unicode simple case folding). The same name may exist under another base provider. |
+| `name` | `name-duplicate` | Names must be unique within one base provider, ignoring case (Unicode simple case folding), including a renamed Default of that base provider. The same name may exist under another base provider. |
 | `name` | `name-reserved` | `Default`, ignoring case, names the original configuration. |
 | `baseProviderId` | `profile-limit` | At most 32 profiles per base provider. |
 | `env` | `env-limit` | At most 64 entries. |
@@ -372,6 +375,9 @@ never removes external account directories.
   member reads may include it. `providers` rows stay one per provider type, so
   onboarding, which reads only `providers`, shows each type once. The `profiles` list
   reflects saved metadata at read time. `providers:profiles-changed` invalidates it.
+- `providers.catalog` gains an additive top-level `defaultNames?` map naming each
+  renamed Default configuration (see
+  [Default configuration overrides](#default-configuration-overrides)).
 - `models.list { providerId: providerRef }` returns that profile's catalog with
   `ModelInfo.provider = providerRef`. Cache keys and the version key include the
   profile's resolved environment fingerprint. Catalogs and cached status never cross
@@ -464,7 +470,9 @@ so it behaves as today.
   the current reference is not in the cycle, the walk starts at the beginning. The
   reference that just failed counts as tried, so each reference is tried at most once
   per user turn and the walk never loops. A profile that no longer exists, or a base
-  provider that is disabled, is skipped.
+  provider that is disabled, is skipped. The walk prefers references the
+  [shared quota state](#shared-quota-state) does not mark out of quota; when every
+  untried reference is marked, it takes the first of them anyway.
 - **Switch.** The daemon saves the chosen reference as the agent's provider, as
   `agent.setModel` would with the same model, and emits `agent:updated`. The switch
   is sticky: later turns stay on it until the [timed return](#timed-return) or an
@@ -526,7 +534,8 @@ has had time to reset.
   later. A parsed time that is not in the future is ignored. Further switches between
   backups while away keep the recorded time.
 - **Return.** The first turn that starts at or after the return-after time starts on
-  home instead of the current reference, as a [switch](#agent-state-switches-and-replacement)
+  home instead of the current reference (earlier or later when the
+  [shared quota state](#shared-quota-state) says so), as a [switch](#agent-state-switches-and-replacement)
   with Intent history replayed, and emits `agent:updated`. A return happens only at
   the start of a turn, never mid-turn and never in a failover retry.
 - **Home accepts.** When home produces the turn's first output, the daemon persists
@@ -566,10 +575,145 @@ never writes a `model_changed` row.
 stays on its current reference and never returns on its own. A later upgrade resumes
 the timer from the stored values.
 
+##### Shared quota state
+
+The daemon shares what one conversation learns about a reference's quota with every
+other conversation. The Default configuration (a bare provider id) and each profile
+are tracked separately, never per model.
+
+- **Out of quota.** A quota failure on a reference marks it out of quota until the
+  reset time the error reports (parsed as for the return-after time), otherwise for
+  5 hours. The newest failure replaces any earlier state. A failure is recorded even
+  when the conversation has no candidate to fail over to.
+- **Working.** The first output of an attempt on a reference (or a turn that
+  completes on it without output) marks it working. This replaces an out-of-quota mark
+  only when the attempt started after the mark was recorded.
+- **Turn start.** At the start of a turn (never in a failover retry, replay or
+  continuation), after the timed-return check:
+  - If the conversation is away and home is marked working, the turn starts on home
+    even before the return-after time, as a [return](#timed-return).
+  - If the return-after time has passed but home is still marked out of quota, the
+    conversation stays on its current reference. This is not a failed return, so the
+    backoff is unchanged. A mark therefore also delays the shorter backoff steps after
+    a failed return until it expires.
+  - If the reference the turn would start on is marked out of quota, the daemon
+    switches to the first reference in the [rotation](#backup-failover) that is not
+    marked, before any attempt. The switch writes the usual `provider_failover` row and
+    sets the return-after time to the mark's expiry. The skipped reference is not
+    counted as tried, so the turn can still reach it as its last candidate. Leaving a
+    marked home this way is not a failed return: the backoff and return-after time
+    stay as they are.
+  - The first turn after an explicit selection (`agent.setModel`) is never moved this
+    way: it tries the chosen reference, and fails over as usual if it is out of quota.
+  - If every candidate is marked, nothing moves: the turn tries its current reference
+    and fails over as usual.
+- **Advisory and in-memory.** Marks never make a turn fail without an attempt. They
+  are not persisted: after a daemon restart, each conversation's stored timer applies
+  as before. No method or event exposes them.
+
+#### Default configuration overrides
+
+The Default configuration of `codex` and `claude-code` can carry its own display
+name and environment overrides. These use the same rules as a profile's, without
+`backup` or a position in the order. Default stays the bare reference: its
+`providerRef` is the base provider id. No saved selection, specialist, conversation
+or `model.providerDefaults` key changes when it is renamed or its environment is
+edited, and it is still never a backup.
+
+```ts
+interface DefaultConfig {
+  baseProviderId: "codex" | "claude-code";
+  providerRef: string;         // the bare base provider id
+  name: string;                // "Default" unless renamed
+  env: EnvEntryRead[];         // masked; in stored order; [] when none saved
+  settingsFingerprint: string; // opaque; "" exactly when no entries are saved
+  activation?: { runningProcesses: number }; // as on ProviderProfile
+}
+```
+
+| Method | Params | Result |
+| --- | --- | --- |
+| providers.profiles.updateDefault | baseProviderId (req), name?, env?: EnvEntryWrite[] | { defaultConfig: DefaultConfig, revision, activation: ProfileActivation } |
+
+- **Reads.** `providers.profiles.list` gains an additive `defaults: DefaultConfig[]`
+  with one entry per base provider that advertises `supportsProfiles`, in catalog
+  order, whether or not anything is saved. A `baseProviderId` filter narrows it to
+  that base provider. Values are masked exactly as on profiles.
+- **Name.** `name` is trimmed. A name that is empty after trimming, or equals
+  `Default` ignoring case, is not a rename: it restores the unrenamed Default, which
+  reads as `"Default"` and appears in neither the file nor `defaultNames`. Any other
+  name follows the profile rules (`name-invalid`) and must not equal, ignoring case,
+  the name of a profile of the same base provider (`name-duplicate`). A profile
+  create or rename whose name equals the renamed Default of its base provider,
+  ignoring case, is also rejected with `name-duplicate`. Omitting `name` keeps the
+  saved one.
+- **Environment.** `env` has the profile semantics: `set`, `unset` and `keep`, the
+  complete new list when present, unchanged when omitted. The same limits, key rules,
+  reserved keys and home expansion apply, with the same field codes. `keep` names a
+  key with a saved Default entry. An empty list removes every override.
+- **Validation.** `baseProviderId` must be a canonical id with
+  `supportsProfiles: true` (`base-provider-unsupported`). Errors use the same
+  `-32602` `invalid-params` envelope and `fieldErrors` as profile mutations. The
+  method is administrator-only and daemon-global, like the other
+  `providers.profiles.*` methods.
+- **Storage.** Both halves belong to the daemon's own data dir, like profiles:
+  - The profile file gains an optional
+    `defaults: { "<baseProviderId>": { "name"?, "envId"? } }` member. `name` is
+    present only for a renamed Default. `envId` is present only while entries are
+    saved; it is minted like a profile id and is never exposed. A base provider with
+    neither is omitted, and the member is omitted when empty. The file `version`
+    stays `1`.
+  - Environment entries live in the protected `SecretStore` under account
+    `providerProfiles.<envId>.env`, in the profile document shape. Because `envId`
+    is random and recorded only in this daemon's file, another daemon sharing the
+    secret store (a dev sandbox, for example) never reads or overwrites it.
+  - Neither half ever appears in `config.toml`, settings reads, events, catalogs or
+    logs.
+- **Writes.** An `updateDefault` is serialized with the other profile mutations and
+  commits through the profile file's atomic rename. An environment change writes
+  the new entries under a freshly minted `envId`, records both the new and the
+  previous `envId` in `pendingEnvCleanup`, then writes the file with the new name and
+  `envId` together. After the file is committed it removes the previous secret and
+  clears the cleanup list. If the file write fails, the daemon removes the new secret,
+  and the saved name and environment are unchanged. A rename alone writes only the
+  file. At startup, a recorded id counts as having metadata when it is a saved
+  profile id or a current `defaults` `envId`; otherwise its secret is removed.
+- **Runtime.** With no saved entries (`settingsFingerprint: ""`), the Default
+  configuration launches exactly as before. With entries, every process that the
+  Default configuration starts (agent sessions, one-shot prompts, auth probes and
+  model catalog discovery) applies them as a profile applies its overlay, and the
+  fingerprint-keyed behaviour of profiles applies under the bare reference:
+  - Model catalog and auth status caches key on the Default fingerprint.
+  - `activation.runningProcesses` and `AgentLite.usingEarlierProfileSettings` report
+    live Default processes started with a different fingerprint.
+  - A native session is resumed only under the fingerprint it was bound to. A
+    session with no recorded binding counts as bound to `""`, so existing Default
+    conversations keep resuming until entries are first saved. A session bound to a
+    non-empty fingerprint is never resumed after the Default environment changes,
+    including when every entry is removed.
+  - An environment change (`envChanged: true`) clears the bare reference's
+    [shared quota](#shared-quota-state) mark, since the new environment may select
+    another account.
+
+  Saving never interrupts a turn or restarts anything.
+- **Fail closed.** If `envId` is recorded but its secret cannot be read or decoded,
+  the Default configuration does not fall back to running without its entries. A
+  turn, one-shot prompt or probe on the bare reference then fails with `-32603`,
+  like a profile whose environment is unavailable. `providerReplacementRequired`
+  never applies to the bare reference.
+- **Catalog.** `providers.catalog` gains an additive top-level
+  `defaultNames?: { "<baseProviderId>": name }`, holding only renamed Defaults and
+  omitted when none is renamed. Member reads may include it. Clients label the
+  Default configuration with this name and fall back to `Default`.
+- **Downgrade.** An older daemon ignores the `defaults` member and drops it on its
+  next profile-file write. Name and environment are then both gone: the Default
+  configuration launches without entries, and the orphaned secret stays inert. After
+  an upgrade, set both again.
+
 #### Events
 
 `providers:profiles-changed` is global (no `workspaceId`). The daemon emits exactly
-one event, with a `revision` one higher than the previous event, in two cases:
+one event, with a `revision` one higher than the previous event, in three cases:
 
 - **A committed `providers.profiles.*` mutation.** Create, update and delete change
   exactly one profile; `change` is `"created"`, `"updated"` or `"deleted"`. A reorder
@@ -579,13 +723,19 @@ one event, with a `revision` one higher than the previous event, in two cases:
   process on earlier settings exits or is recycled, or a new process starts.
   `change` is `"activation"`, and `profile` and `envChanged` are omitted. The event
   carries no count; clients re-run `providers.profiles.list` to read it.
+- **A Default configuration change** ([Default configuration overrides](#default-configuration-overrides)).
+  A committed `providers.profiles.updateDefault` has `change: "default-updated"`
+  with `baseProviderId` and `envChanged`. A change in the Default configuration's
+  `activation.runningProcesses` has `change: "default-activation"` with
+  `baseProviderId`. Neither carries `profileId` or `profile`; clients re-run
+  `providers.profiles.list` (and `providers.catalog` for a new name).
 
 The daemon does not reload the profile file. Only a reorder covers several profiles.
 The payload is
-`data = { revision, change: "created" | "updated" | "deleted" | "activation" | "reordered", profileId?, baseProviderId?, profile?: ProviderProfileSummary, envChanged?: boolean }`.
-It never carries env keys or values. `profileId` is present on every change except
-`reordered`, and `baseProviderId` only on `reordered`. `profile` is omitted on delete,
-activation and reorder events. A client re-runs `providers.profiles.list` (or
+`data = { revision, change: "created" | "updated" | "deleted" | "activation" | "reordered" | "default-updated" | "default-activation", profileId?, baseProviderId?, profile?: ProviderProfileSummary, envChanged?: boolean }`.
+It never carries env keys or values. `profileId` is present on every profile change,
+and `baseProviderId` only on `reordered` and the two Default changes. `profile` is
+omitted on delete, activation, reorder and Default events. A client re-runs `providers.profiles.list` (or
 `providers.catalog`) when it sees an activation or reorder event, a revision gap, or
 a reconnect. A failover switch changes no profile and emits no
 `providers:profiles-changed`. A delete that prunes a `model.providerDefaults` key also emits
@@ -601,6 +751,14 @@ on write.
 A daemon that advertises `supportsProfiles` but predates per-profile Fast mode
 rejects a qualified `providers.fastMode` key with `-32602`; the whole update fails and
 the stored map is unchanged, so clients surface the error rather than retrying.
+
+Clients detect Default configuration overrides by the presence of `defaults` on the
+`providers.profiles.list` result. When it is absent, a client may still offer the
+Default name and environment controls (with nothing saved); an older daemon rejects
+`providers.profiles.updateDefault` with `-32601`, which the client reports as a
+failed save. Older clients ignore `defaults`, `defaultNames`
+and the two Default event changes (they re-list on any revision), and keep labelling
+the original configuration `Default`.
 
 Clients detect backup failover support by the presence of `backup` on
 `ProviderProfile` and `ProviderProfileSummary`. When it is absent, they hide the

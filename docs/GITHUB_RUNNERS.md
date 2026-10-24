@@ -10,10 +10,11 @@ targeting a label runs on whichever host has a free slot.
 |---|---|---|---|---|---|---|
 | intent-cache | ReliableSite, Los Angeles | Ryzen 9 3900X, 12 cores / 24 threads, 128 GB | heavy (3) | `intent-cache` | `intent-cache` | [`runners.env`](../infra/runners/runners.env) |
 | intent-ci1 | ReliableSite, Los Angeles | EPYC 4545P, 16 cores / 32 threads, 128 GB | xl (1), heavy (2) | `intent-cache-xl`, `intent-cache` | `intent-ci1` | [`hosts/intent-ci1.env`](../infra/runners/hosts/intent-ci1.env) |
+| intent-ci2 | ReliableSite, Los Angeles | EPYC 4545P, 16 cores / 32 threads, 128 GB | xl (1), heavy (2) | `intent-cache-xl`, `intent-cache` | `intent-ci2` | [`hosts/intent-ci2.env`](../infra/runners/hosts/intent-ci2.env) |
 
 | Pool | Label | Serves jobs asking for | Bursts to | Per slot |
 |---|---|---|---|---|
-| heavy | `intent-cache` | `gh-linux-8x`, `gh-linux-16x` | `warp-ubuntu-2404-x64-8x` / `-16x` | 8 CPUs = 4 whole cores; 36 GB on intent-cache, 30 GB on intent-ci1, 32 GB in the three-heavy EPYC layout |
+| heavy | `intent-cache` | `gh-linux-8x`, `gh-linux-16x` | `warp-ubuntu-2404-x64-8x` / `-16x` | 8 CPUs = 4 whole cores; 36 GB on intent-cache, 30 GB on intent-ci1 and intent-ci2, 32 GB in the three-heavy EPYC layout |
 | xl | `intent-cache-xl` | `gh-linux-16x` | `warp-ubuntu-2404-x64-16x` | 16 CPUs = 8 whole cores (one CCD), 52 GB |
 | small | `intent-cache-small` | nothing routed (free `ubuntu-*` jobs run on GitHub) | — | no slots on any host |
 
@@ -23,7 +24,7 @@ wins contention by cgroup weight rather than a reserved core (see Pinned CPUs
 and limits). There is no small pool: the repositories are public, so jobs that
 fit in 1 CPU run free on GitHub's standard `ubuntu-24.04` runners and
 self-hosting them saved nothing; `runner-route` never routes them to a slot.
-On intent-ci1 the xl slot owns cores 0-7
+On intent-ci1 and intent-ci2 (same layout) the xl slot owns cores 0-7
 (CPUs 0-7,16-23, 52 GB) and the two heavy slots split CCD 1: cores 8-11
 (8-11,24-27) and 12-15 (12-15,28-31), 30 GB each. Every core is pinned; about
 13 GB stays with the system and Docker. [`hosts/epyc-4545p-3heavy.env`](../infra/runners/hosts/epyc-4545p-3heavy.env)
@@ -38,8 +39,9 @@ new host only adds capacity once its variable is raised:
 | `CI_LINUX_HEAVY_SLOTS` | 2 | heavy |
 | `CI_LINUX_XL_SLOTS` | 0 (xl off) | xl |
 | `CI_LINUX_RUNNER_DISABLED` | unset | `true` sends every job, xl included, to its burst runner |
-| `CI_WARPBUILD_DISABLED` | unset | `true` bursts to GitHub-hosted labels instead of WarpBuild (see [Burst to WarpBuild](#burst-to-warpbuild)) |
 
+`CI_WARPBUILD_DISABLED` is no longer read: GitHub's larger runners are off, so
+there is nothing to switch bursts back to (see [Burst to WarpBuild](#burst-to-warpbuild)).
 `CI_LINUX_SMALL_SLOTS` is no longer read: jobs on free standard labels always run
 on GitHub, and no host runs `intent-cache-small` slots any more.
 
@@ -50,7 +52,7 @@ rebuild them lives in [`infra/runners/`](../infra/runners/).
 github-runner@<pool>-<n>.service ─ supervisor.sh <pool>-<n> ─┬─ GitHub API: JIT registration (one job)
                                                             ├─ docker run intent-gh-runner:current
                                                             │    └─ actions runner ─ job ─ exits
-                                                            └─ job stats (cgroup samples, disk) ─ container removed
+                                                            └─ container removed
 ```
 
 | File | Installed as | Role |
@@ -69,6 +71,10 @@ github-runner@<pool>-<n>.service ─ supervisor.sh <pool>-<n> ─┬─ GitHub A
 
 Logs go to journald: `journalctl -u 'github-runner@*' -f` (supervisor and the
 runner output, tagged `github-runner-<pool>-<n>`).
+
+The supervisor removes the container when the job ends and on every exit,
+including a fatal signal; `ExecStopPost` and the next start remove it if the
+supervisor is killed outright.
 
 ## Design
 
@@ -139,7 +145,10 @@ runner output, tagged `github-runner-<pool>-<n>`).
   cache), then the longest (`minutes`), then list order; `shards: N` or
   `legs: [a, b]` gives each matrix leg its own key (`key-1`..`key-N`, or
   `key-a`, `key-b`) and `events` keeps a job that skips the event from holding
-  a slot. Every other listed job gets its burst runner, and unlisted jobs use
+  a slot. `burst: "gh-linux-16x"` on a `gh-linux-8x` entry keeps the job on
+  the heavy pool but sends it to the 16-core burst runner when it gets no slot
+  (intentd's CPU-bound `check`); `test_runner_policy.py` rejects any other
+  `burst` pairing, so it can never turn a free label paid. Every other listed job gets its burst runner, and unlisted jobs use
   the pool only while a slot is still free. Any unreadable runner list or job
   count sends every job to its burst runner. `scripts/test_runner_policy.py` fails a
   workflow whose unlisted pooled jobs (or matrix legs) can run at the same
@@ -150,40 +159,47 @@ runner output, tagged `github-runner-<pool>-<n>`).
 
 ## Burst to WarpBuild
 
-When no self-hosted slot is free, jobs on a paid GitHub label run on the matching
-[WarpBuild](https://www.warpbuild.com/docs/ci/cloud-runners) runner instead of the
-GitHub larger runner (the `warpbuildbot` app is installed on the org). Jobs on free
+When no self-hosted slot is free, jobs on a paid size run on the matching
+[WarpBuild](https://www.warpbuild.com/docs/ci/cloud-runners) runner (the
+`warpbuildbot` app is installed on the org). GitHub's larger runners are off, so a
+paid size never runs on GitHub. Jobs on free
 standard labels (`ubuntu-22.04`, `ubuntu-24.04`, `ubuntu-latest`, `ubuntu-24.04-arm`,
 `windows-2022`, `windows-2025`) always run on GitHub: the three repositories are
 public, so those runners cost nothing.
 
-| GitHub label | WarpBuild runner | Notes |
+| Size label | WarpBuild runner | Notes |
 |---|---|---|
 | `gh-linux-8x` | `warp-ubuntu-2404-x64-8x` | 8 vCPU / 32 GB |
 | `gh-linux-16x` | `warp-ubuntu-2404-x64-16x` | 16 vCPU / 64 GB |
 | `gh-linux-arm64-8x` | `warp-ubuntu-2404-arm64-8x` | |
+| `gh-windows-8x` | `warp-windows-2022-x64-8x` | cloudlands-fe Windows builds (about a third of 16 CPUs, 12.4 GB at most) |
 | `gh-windows-16x` | `warp-windows-2022-x64-16x` | Server 2022: node-gyp fails on 2025 |
-| `macos-26-xlarge` | `warp-macos-26-arm64-6x` | M4 Pro |
-| `macos-15-xlarge` | `warp-macos-15-arm64-6x` | signed desktop builds (keychain unlock fails on macOS 26) |
-| `macos-latest-large` | — | no WarpBuild Intel Mac; bursts to GitHub |
+| `macos-26-xlarge` | `warp-macos-26-arm64-12x` | M4 Pro, 12 vCPU: every Mac job is CPU-bound at 6 |
+| `macos-15-xlarge` | `warp-macos-15-arm64-12x` | 12 vCPU; signed desktop builds (keychain unlock fails on macOS 26) |
 
-The probe sends a burst to GitHub instead of WarpBuild when:
+Exceptions and edge cases:
 
-- the run is a fork pull request (no WarpBuild spend from outside contributors);
-- `CI_WARPBUILD_DISABLED` is `true` (organization or repository variable; no
-  workflow change needed);
-- a job for that WarpBuild OS and architecture (`ubuntu-x64`, `ubuntu-arm64`,
-  `windows-x64` or `macos-arm64`, read from its `warp-*` label) has been queued
-  for over 10 minutes in any of the three repositories; a job whose age is
-  unreadable does not count.
+- A fork pull request runs each paid size on the free standard runner of its OS
+  (`ubuntu-24.04`, `ubuntu-24.04-arm`, `windows-2022`, `macos-15` for
+  `macos-15-xlarge`, `macos-latest` for `macos-26-xlarge`): no WarpBuild
+  spend from outside contributors. intentd and cloudlands-fe close fork PRs anyway.
+- While a self-hosted runner is online (the probe reads the queues only then), a
+  WarpBuild OS and architecture (`ubuntu-x64`, `ubuntu-arm64`, `windows-x64` or
+  `macos-arm64`, read from its `warp-*` label) with a job queued for over 10 minutes
+  in any of the three repositories logs a warning
+  (`warpbuild <os>-<arch>: jobs queued over 10 minutes; bursts still go to WarpBuild`).
+  Bursts still go there; there is no other burst runner.
+- A job that still runs after its route job failed uses its `runs-on` fallback,
+  which names the WarpBuild label (`fromJSON('["warp-…"]')`, or `matrix.warp` in
+  cloudlands-fe's release matrices). `scripts/test_runner_policy.py` in each
+  repository rejects a paid size label in any fallback or direct `runs-on`.
 
-An unreadable job queue keeps WarpBuild: a GitHub API error says nothing about
-WarpBuild. Each run logs `warpbuild <os>-<arch>: on` or the reason it is off.
-
-Jobs that may not use a self-hosted runner (they need sudo or Docker, or they sign
-releases on Mac/Windows) read the probe's `cloud` output instead of `runners`: the
-WarpBuild runner for a paid label, or the GitHub label under the conditions above,
-never a self-hosted fleet.
+Jobs that may not use a self-hosted runner (they need sudo or Docker, they sign
+releases on Mac/Windows, or they need a fresh VM per job) read the probe's `cloud`
+output instead of `runners`: the WarpBuild runner for a paid size, never a
+self-hosted fleet. The packaged smoke scripts accept a GitHub-hosted or WarpBuild
+VM (WarpBuild reports `self-hosted` with `WARPBUILD_RUNNER_VERIFICATION_TOKEN` set)
+and refuse an intent-cache slot.
 
 ## Preinstalled tools
 
@@ -368,54 +384,6 @@ weights; on a runner-only host, leaving a core or two unpinned is optional.
    config (heavy: 30-36 GiB); a new per-slot size needs the range widened.
 7. **Route jobs to it** by raising `CI_LINUX_HEAVY_SLOTS` / `CI_LINUX_XL_SLOTS`
    to the fleet's total slots per pool (see the variables above).
-
-## Job stats
-
-Every slot records what each job used, so job sizes can follow evidence. While
-the job runs, the supervisor samples the container's cgroup about every 2
-seconds (`cpu.stat` `usage_usec` deltas give busy cores; a sample is a few file
-reads with no fork beyond `sleep`, far under 1% of a CPU). When the container
-exits, it measures the container's disk (`docker container inspect --size`),
-removes the container, and writes one JSON line (format `v: 1`) to the journal
-(`job stats: ...`) and to `/var/lib/github-runners/job-stats.jsonl` (directory
-0750, file 0640, root). That file rotates at 10 MB to `.1` ... `.4`.
-
-```bash
-/usr/local/lib/github-runners/supervisor.sh --job-stats                     # every line, oldest first
-/usr/local/lib/github-runners/supervisor.sh --job-stats --since 2026-10-21  # ended at or after
-journalctl -u 'github-runner@*' -g 'job stats' --since today
-```
-
-| Field | Meaning |
-|---|---|
-| `host`, `pool`, `slot`, `runner_name` | Where it ran; `runner_name` matches `runner_name` in the Actions jobs API |
-| `slot_cpus`, `slot_memory_bytes` | The slot's CPU set size and memory limit |
-| `started_at`, `ended_at`, `wall_s` | Container start and exit (UTC) |
-| `cpu_s` | CPU seconds used by the container |
-| `cores_avg`, `cores_p50`, `cores_p95`, `cores_max` | Busy cores: `cpu_s / wall_s`, and percentiles over the 2-second samples |
-| `saturation` | Share of samples at 0.9 × `slot_cpus` or more |
-| `mem_peak_bytes`, `pids_peak` | `memory.peak` and `pids.peak` (the highest sampled `*.current` on kernels without them). `memory.peak` counts page cache, so an IO-heavy job can reach the slot limit here without needing that memory |
-| `mem_work_peak_bytes` | Highest sampled working memory: `memory.stat` `anon + shmem + kernel` (on kernels without `kernel`, the sum of `kernel_stack`, `pagetables`, `sec_pagetables`, `percpu`, `vmalloc` and `slab`). Leaves out reclaimable page cache, so it is the figure to size `slot_memory_bytes` from |
-| `mem_file_peak_bytes` | Highest sampled `memory.stat` `file`: page cache, including `shmem` (tmpfs) |
-| `mem_pressure_some_avg10_max` | Highest sampled `memory.pressure` `some avg10`: the percentage of the last 10 seconds in which some task stalled waiting for memory (reclaim or swap). Near 0 means cache filled the slot harmlessly; sustained high values mean the limit is slowing the job |
-| `disk_bytes` | The container's writable layer at exit (checkout, build output); null if it could not be measured |
-| `io_read_bytes`, `io_write_bytes` | Block IO from `io.stat` |
-| `oom_kills` | `memory.events` `oom_kill`, at least 1 if Docker reports the container OOM-killed |
-| `exit_code`, `samples` | The container's exit status; number of 2-second intervals measured |
-
-Only resource figures are recorded: never environment variables, tokens or
-command lines. Measured fields are null when the cgroup was never sampled (a
-container that failed to start); `mem_work_peak_bytes`, `mem_file_peak_bytes`
-and `mem_pressure_some_avg10_max` are also null on a kernel without
-`memory.stat` or `memory.pressure` (PSI disabled). These three were added
-without changing `v`, so lines written before them lack the keys, and readers
-should treat a missing key like null. The percentiles and `saturation` are
-null for a job shorter than one interval. Growth in the last 2 seconds before
-exit can be missed, and so can a working-memory or pressure spike between two
-samples (`memory.peak` is a kernel high-water mark and misses nothing). An idle runner stopped by a drain ran no job and writes no line.
-The container is removed after the measurement and on every supervisor exit,
-including a fatal signal; `ExecStopPost` and the next start remove it if the
-supervisor is killed outright.
 
 ## Drain and stop
 

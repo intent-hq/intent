@@ -327,13 +327,42 @@ updates.
 | `src` install source | `brew`, `deb`, `script`, `windows`, `unknown` | `dmg`, `nsis`, `appimage`, `deb`, `unknown` |
 | `k` trigger | `startup`, `daily`, `idle`, `manual` | `startup`, `daily`, `periodic`, `focus`, `manual`, `channel` |
 | `d` daily flag | `1` while no check has *succeeded* this UTC day (from a date in `state.json`) | same (from the `lastUpdateCheckDay` local pref) |
+| `w` weekly flag | `1` while no check has succeeded this UTC ISO week (weeks start Monday; `last_week` in `state.json`) | same (`lastUpdateWeek` local pref) |
+| `m` monthly flag | `1` while no check has succeeded this UTC calendar month (`last_month`) | same (`lastUpdateMonth` local pref) |
+| `i` install flag | `1` until the first successful check of a fresh install; never for an estimated install | same |
+| `a` install age | whole UTC days since the first-seen day: `0d`, `1-7d`, `8-30d`, `31-90d`, `91-365d`, `365d+`, or `unknown` (`first_seen_day` / `first_seen_estimated`) | same (`firstSeenDay` / `firstSeenEstimated` local prefs) |
 | Opt-out | `DO_NOT_TRACK=1`, `INTENTD_DISABLE_TELEMETRY=1`, or `telemetry = false` in `<data-dir>/sitter/config.toml` (re-read on every check, kept when `intentd sitter channel` rewrites the file); `INTENTD_SITTER_MANIFEST_BASE_URL` also skips the endpoint | **Settings → General → Updates → Share anonymous update statistics** (on by default, `shareUpdateStatistics` local pref), `DO_NOT_TRACK=1`, or a custom `AUTO_UPDATE_URL` |
 
 No IDs, hostnames, usernames or paths are sent; the sitter's User-Agent is
 `intentd-sitter/<ver> (<triple>)`. The service allowlists every value (anything
-else is counted as `other`), passes Vercel only `user-agent` and `x-forwarded-for`
+else is counted as `other`, and a flag is set only by exactly `1`), passes Vercel only `user-agent` and `x-forwarded-for`
 so Vercel can derive the country, and never logs or stores the IP. With any opt-out
 the request goes straight to GitHub.
+
+**Weekly, monthly and new installs.** Like `d`, the stored week and month advance
+only after a successful check, so a failed check is retried with the same flags (and
+can be counted again). Only dates are stored locally, and none of them is sent: the
+request carries just the `0`/`1` flags and the age bucket. The first-seen day is
+decided once per install:
+
+- **Fresh install:** today's date is recorded and `i=1` is sent until a check
+  succeeds. The sitter treats an install as fresh when `state.json` has no
+  installed version or recorded check and `<data-dir>/sitter/versions/` is empty,
+  and records the date before its first endpoint request, so a failed first check
+  that falls back to GitHub still leaves it fresh. The desktop app treats an install
+  as fresh when there are no earlier update-check prefs and the `userData` folder
+  was created during the current run.
+- **Existing install (upgraded into this change):** the date is estimated from the
+  creation time of the data folder (sitter: `<data-dir>/sitter`; desktop: Electron
+  `userData`), falling back to the oldest file mtime in it (the sitter also looks a few
+  levels into subfolders; the desktop app checks only top-level entries). It is marked
+  estimated and never sends `i=1`. With no usable timestamp the age is `unknown`,
+  and that result is stored so it is not estimated again.
+
+The sitter resolves the first-seen day and advances these dates only on endpoint
+checks, so an opted-out sitter stores nothing new. The desktop app resolves the
+first-seen day at startup and advances the dates after any successful check,
+including one made with the toggle off.
 
 **Fallback.** Any failure of the endpoint (down, 404, slow, or an unexpected
 redirect) falls back to GitHub. The endpoint records its events *before* it
@@ -373,6 +402,9 @@ opted-out install and a version older than this change are not counted:
 |---|---|
 | `intentd_update_check` / `desktop_update_check` | `platform`, `context` = `<ch>/<src>/<k>` (e.g. `stable/brew/idle`) |
 | `intentd_daily_active` / `desktop_daily_active` | `platform`, `version`; fired for every request with `d=1`. The day is recorded only after a successful fetch, so an install whose checks keep failing sends `d=1` (and is counted again) on each retry that day. Treat the count as an approximation of daily active installs: retries can overcount it, and missing or opted-out telemetry undercounts it |
+| `intentd_weekly_active` / `desktop_weekly_active` | `platform`, `channel`; fired for every feed request with `w=1`. Approximates weekly active installs, with the same retry and opt-out caveats as the daily count |
+| `intentd_monthly_active` / `desktop_monthly_active` | `platform`, `age` (the `a` bucket); fired for every feed request with `m=1`. Approximates monthly active installs, broken down by install age |
+| `intentd_install` / `desktop_install` | `platform`, `channel`; fired for every feed request with `i=1`. Counts new installs; installs that predate this change are never counted, and a fresh install whose first checks fail is counted on each retry |
 | `desktop_update_download` | `platform`, `version`, parsed from the artifact name; `.blockmap` files and range continuations are redirected but not counted |
 
 Country comes from Vercel's lookup of the forwarded IP. Only sitter and desktop versions
@@ -855,12 +887,13 @@ GitHub label they would otherwise ask for:
 
 The burst runner for a paid label is its WarpBuild equivalent (`gh-linux-8x` →
 `warp-ubuntu-2404-x64-8x`, `gh-linux-16x` → `-16x`, `gh-linux-arm64-8x` →
-`warp-ubuntu-2404-arm64-8x`, `gh-windows-16x` → `warp-windows-2022-x64-16x`,
-`macos-26-xlarge` → `warp-macos-26-arm64-6x`, `macos-15-xlarge` →
-`warp-macos-15-arm64-6x`), or the GitHub label itself for fork pull requests, while
-`CI_WARPBUILD_DISABLED` is `true`, or while that WarpBuild OS and architecture has a job queued
-over 10 minutes. `macos-latest-large` (Intel) has no WarpBuild equivalent and bursts to
-GitHub. cloudlands-fe's signed desktop Mac builds keep `macos-15-xlarge` as their
+`warp-ubuntu-2404-arm64-8x`, `gh-windows-8x` → `warp-windows-2022-x64-8x`,
+`gh-windows-16x` → `warp-windows-2022-x64-16x`, `macos-26-xlarge` →
+`warp-macos-26-arm64-12x`, `macos-15-xlarge` → `warp-macos-15-arm64-12x`).
+GitHub's larger runners are off, so there is no GitHub fallback: fork pull requests
+get the free standard runner of the same OS, a WarpBuild platform with a job queued
+over 10 minutes only logs a warning, and a job that runs after a failed route job
+falls back to the WarpBuild label. cloudlands-fe's signed desktop Mac builds keep `macos-15-xlarge` as their
 key (not `macos-26-xlarge`), because electron-builder's keychain step fails on
 macOS 26 images.
 
@@ -900,12 +933,12 @@ queue token and Actions read permission through each level. A probe-runner outag
 can still fail routing itself; affected workflows require a rerun.
 
 Infrastructure exceptions are mechanically allowlisted: routing probes run on
-GitHub-hosted Linux, and the manual packaged macOS
-smoke journey requires a disposable hosted machine. The frontend and intentd queue-retirement
+GitHub-hosted Linux, and the packaged smoke journeys require a fresh VM per job
+(GitHub-hosted or WarpBuild, never an intent-cache slot). The frontend and intentd queue-retirement
 cleanup jobs and intentd read-only credential probe remain on independent GitHub-hosted
 Linux, preserving their upstream queue-recovery contract. Host maintenance stays bound
 to the machine it maintains. A platform without a compatible self-hosted runner
-uses its burst runner (GitHub's native Intel Mac image for Intel Macs).
+uses its burst runner.
 Browser shards retain their worker counts and browser identities, with per-runner
 browser caches and dependency installation for persistent machines.
 
@@ -929,7 +962,6 @@ cloudlands-fe; cloudlands-fe's own `intent-pr.yml` routing reads the same Linux 
 | `CI_LINUX_RUNNER_DISABLED` | the heavy and xl intent-cache pools and `self-hosted, Linux, ARM64` | `linux routing: burst=true (disabled for maintenance)`; xl logs as `xl routing`, ARM64 as `arm routing` |
 | `CI_WINDOWS_RUNNER_DISABLED` | `self-hosted, Windows, X64` | `windows routing: burst=true (disabled for maintenance)` |
 | `CI_MACOS_RUNNER_DISABLED` | `self-hosted, macOS, ARM64` and `self-hosted, macOS, X64` | `macos routing: burst=true (disabled for maintenance)`; X64 logs as `intel routing` |
-| `CI_WARPBUILD_DISABLED` | WarpBuild, for every platform | `warpbuild ubuntu-x64: off (CI_WARPBUILD_DISABLED)` (likewise `ubuntu-arm64`, `windows-x64`, `macos-arm64`); bursts and `cloud` use the GitHub labels |
 
 When the probe itself fails (fork PRs, or runner or job listing errors), every
 platform instead logs `burst=true (probe failed (...))`, with or without an

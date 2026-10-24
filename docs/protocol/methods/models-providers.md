@@ -213,7 +213,8 @@ The static provider registry (the `intent-providers` crate's `ACP_PROVIDERS` tab
 - `supportsProfiles` and the top-level `profiles` list are prepared additive
   fields for [named provider profiles](provider-profiles.md#catalog-models-and-status).
   `providers` keeps one row per provider type. `models.list` accepts a profile
-  `providerRef` as `providerId`.
+  `providerRef` as `providerId`. The additive top-level `defaultNames` map labels
+  a renamed [Default configuration](provider-profiles.md#default-configuration-overrides).
 - `supportsFastMode` is an additive boolean: whether this daemon can apply the
   provider's `providers.fastMode` preference (§5.12). Implementing daemons emit it
   on every row: `true` for `claude-code` and `codex`, `false` for other providers.

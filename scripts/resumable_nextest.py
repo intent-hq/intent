@@ -8,6 +8,9 @@ status is then the first non-zero plan status.
 Build outputs use stable per-checkout children under Cargo's configured target
 and build directories. This isolates make test/test-changed from other checkout
 builds; coverage and custom bare-Cargo scripts still manage their own output ownership.
+After a run that listed and executed its selections, superseded hashes of the
+listed test executables are deleted from those children only (see
+prune_stale_executables); this never changes the run's status or records.
 
 Resume identity includes the exact child RUST_MIN_STACK setting, also saved in
 test-stack.json: null means unset, distinct from an empty string or explicit value.
@@ -68,6 +71,10 @@ import threading
 import time
 import uuid
 import xml.etree.ElementTree as ET
+try:
+    import fcntl
+except ImportError:  # Windows: no flock, so never prune.
+    fcntl = None
 # Cargo accepts TOML 1.1, which older stdlib tomllib versions cannot parse.
 # Use the pinned parser offline, including direct-script/importlib invocation.
 if __package__:
@@ -1389,6 +1396,194 @@ def isolated_output_args(cwd: Path, config: list[str], env: dict[str, str]) -> l
     return ["--target-dir", target, "--config", f"build.build-dir={json.dumps(build, ensure_ascii=False)}"]
 
 
+# Cargo names hashed outputs `<crate>-<16 hex>` and never deletes superseded ones.
+HASHED_OUTPUT_RE = re.compile(r"^(?P<stem>[A-Za-z0-9_]+)-(?P<digest>[0-9a-f]{16})$")
+STALE_COMPANIONS = (".d", ".dwp", ".dSYM")
+
+
+def gate_output_roots(output_args: list[str]) -> list[Path]:
+    """The gate-owned intent-gates/<owner> roots named by isolated_output_args."""
+    roots = []
+    for flag, value in zip(output_args, output_args[1:]):
+        if flag == "--target-dir":
+            roots.append(Path(value))
+        elif flag == "--config" and value.startswith("build.build-dir="):
+            roots.append(Path(json.loads(value.split("=", 1)[1])))
+    return [root for root in dict.fromkeys(roots)
+            if root.is_absolute() and root.parent.name == "intent-gates" and KEY_RE.fullmatch(root.name)]
+
+
+def acquire_gate_lock(output_args: list[str]) -> int | None:
+    """Hold a shared lock while this gate may execute its outputs.
+
+    Pruning takes it exclusively, so one gate never deletes executables that
+    another gate of the same checkout is still about to start.
+    """
+    roots = gate_output_roots(output_args)
+    if not roots or fcntl is None:
+        return None
+    # Lock the directory itself: a lock file would be an untracked tree input
+    # when the target directory lives unignored inside the checkout.
+    # No lock only means no pruning; Cargo reports unusable outputs itself.
+    try:
+        roots[0].mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(roots[0], os.O_RDONLY | os.O_DIRECTORY)
+    except OSError:
+        return None
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_SH)
+    except OSError:
+        os.close(descriptor)
+        return None
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor
+
+
+def whole_workspace(selections: list[list[str]]) -> bool:
+    """Whether every selection resolves features like a full `--workspace` build."""
+    return all("--workspace" in selection and not any(
+        arg in ("-p", "--package") or arg.startswith(("--package=", "-p"))
+        for arg in selection) for selection in selections)
+
+
+def open_paths(candidates: list[Path]) -> set[str] | None:
+    """Resolved paths any inspectable process has open or is executing; None if unknown."""
+    proc = Path("/proc")
+    if (proc / "self" / "fd").is_dir():
+        found = set()
+        for pid in proc.iterdir():
+            if not pid.name.isdigit():
+                continue
+            links = [pid / "exe"]
+            with contextlib.suppress(OSError):
+                links.extend((pid / "fd").iterdir())
+            for link in links:
+                with contextlib.suppress(OSError):
+                    found.add(os.readlink(link).removesuffix(" (deleted)"))
+        return found
+    if shutil.which("lsof") is None or not candidates:
+        return None if candidates else set()
+    result = subprocess.run(["lsof", "-w", "-Fn", "--", *map(str, candidates)],
+                            capture_output=True, text=True, check=False)
+    if result.returncode not in (0, 1):
+        return None
+    return {line[1:] for line in result.stdout.splitlines() if line.startswith("n")}
+
+
+def is_test_unit(profile: Path, stem: str, digest: str) -> bool:
+    """Only Cargo's own fingerprint may classify a hashed output as a test executable."""
+    units = [path for path in (profile / ".fingerprint").glob(f"*-{digest}") if path.is_dir()]
+    if len(units) != 1:
+        return False
+    kinds = [name.removesuffix(".json") for name in os.listdir(units[0])
+             if not name.startswith("dep-") and name != "invoked.timestamp"]
+    for kind in kinds:
+        match = re.fullmatch(r"test-(?:lib|bin|integration-test)-(.+)", kind)
+        if not match or match[1].replace("-", "_") != stem:
+            return False
+    return bool(kinds)
+
+
+def path_size(path: Path) -> int:
+    if path.is_dir() and not path.is_symlink():
+        return sum(item.lstat().st_size for item in path.rglob("*") if not item.is_dir())
+    return path.lstat().st_size
+
+
+def prune_stale_executables(output_args: list[str], listings: list[str],
+                            held_lock: int | None, label: str, keep_previous: bool = False) -> int:
+    """Delete superseded builds of this run's listed test executables; return bytes freed.
+
+    Only `<deps>/<stem>-<hash>` siblings of a listed executable are candidates,
+    inside the gate's own output roots, classified as test units by Cargo's
+    fingerprint, singly linked, and not open. Every gate of this checkout and
+    Cargo's build lock must be idle. Failures leave files in place.
+
+    Package-scoped selections resolve features differently from a whole-workspace
+    build, so the same target alternates between two hashes; keep_previous keeps
+    the newest other hash per target so switching modes stays warm.
+    """
+    roots = [root.resolve() for root in gate_output_roots(output_args)]
+    if not roots or fcntl is None:
+        return 0
+    current: dict[Path, dict[str, set[str]]] = {}
+    for listing in listings:
+        for suite in json.loads(listing).get("rust-suites", {}).values():
+            path = suite.get("binary-path")
+            if not isinstance(path, str) or not Path(path).is_absolute():
+                continue
+            path = Path(path).resolve()
+            match = HASHED_OUTPUT_RE.fullmatch(path.name)
+            if (match and path.parent.name == "deps"
+                    and any(path.is_relative_to(root) for root in roots)):
+                current.setdefault(path.parent, {}).setdefault(match["stem"], set()).add(path.name)
+    if not current:
+        return 0
+    lock = held_lock if held_lock is not None else os.open(roots[0], os.O_RDONLY | os.O_DIRECTORY)
+    removed = freed = 0
+    try:
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print(f"[{label}] stale executables kept: another gate of this checkout is running", flush=True)
+            return 0
+        for deps, stems in sorted(current.items()):
+            profile = deps.parent
+            with contextlib.ExitStack() as stack:
+                try:
+                    cargo_lock = stack.enter_context((profile / ".cargo-lock").open("rb"))
+                    fcntl.flock(cargo_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    print(f"[{label}] stale executables kept: Cargo build lock is held for {profile}", flush=True)
+                    continue
+                except OSError:
+                    continue
+                candidates = []
+                for entry in deps.iterdir():
+                    match = HASHED_OUTPUT_RE.fullmatch(entry.name)
+                    if (not match or entry.name in stems.get(match["stem"], {entry.name})
+                            or entry.is_symlink() or not entry.is_file()):
+                        continue
+                    if entry.stat().st_nlink == 1 and is_test_unit(profile, match["stem"], match["digest"]):
+                        candidates.append(entry)
+                if keep_previous:
+                    newest: dict[str, Path] = {}
+                    for entry in candidates:
+                        stem = HASHED_OUTPUT_RE.fullmatch(entry.name)["stem"]
+                        if stem not in newest or entry.stat().st_mtime > newest[stem].stat().st_mtime:
+                            newest[stem] = entry
+                    candidates = [entry for entry in candidates if entry not in newest.values()]
+                if not candidates:
+                    continue
+                busy = open_paths(candidates)
+                if busy is None:
+                    print(f"[{label}] stale executables kept: cannot check which files are open", flush=True)
+                    return freed
+                for entry in sorted(candidates):
+                    if str(entry) in busy:
+                        continue
+                    for path in [entry, *(entry.with_name(entry.name + suffix) for suffix in STALE_COMPANIONS)]:
+                        if not path.exists() and not path.is_symlink():
+                            continue
+                        size = path_size(path)
+                        if path.is_dir() and not path.is_symlink():
+                            shutil.rmtree(path)
+                        else:
+                            path.unlink()
+                        freed += size
+                    removed += 1
+    finally:
+        if held_lock is None:
+            os.close(lock)
+    if removed:
+        print(f"[{label}] removed {removed} superseded test executable(s), "
+              f"{freed / (1 << 20):.1f} MiB freed", flush=True)
+    return freed
+
+
 def run_nextest(args: argparse.Namespace) -> int:
     label = args.label
     no_fail_fast = args.no_fail_fast == "1"
@@ -1526,8 +1721,12 @@ def run_nextest(args: argparse.Namespace) -> int:
 
     # From the first `cargo nextest list` onwards every exit — failure,
     # KeyboardInterrupt or SIGTERM — leaves the summary/record lines and files.
+    gate_lock: int | None = None
+    listings: list[str] = []
+    listed_and_ran = False
     try:
         with terminate_on_signal():
+            gate_lock = acquire_gate_lock(output_args)
             write_atomic(record_dir / "test-stack.json", json.dumps(test_stack_identity(env), indent=2) + "\n")
             project_config = intentd_dir / ".config/nextest.toml"
             if project_config.is_file():
@@ -1593,6 +1792,7 @@ def run_nextest(args: argparse.Namespace) -> int:
                     env,
                 )
                 write_atomic(record_dir / f"listing-{index}.json", list_output + "\n")
+                listings.append(list_output)
                 selected_ids = test_binary_ids(list_output)
                 run_record["selection_membership"][index - 1] = sorted(
                     {(binary_id, test) for (_, test), binary_id in selected_ids.items()})
@@ -1685,6 +1885,7 @@ def run_nextest(args: argparse.Namespace) -> int:
                 os.close(descriptor)
             if first_failure is not None:
                 status = first_failure
+            listed_and_ran = True
     except subprocess.CalledProcessError as error:
         print(f"[{label}] ERROR: {error}", file=sys.stderr, flush=True)
         exit_code = failure_exit_code(error)
@@ -1698,8 +1899,30 @@ def run_nextest(args: argparse.Namespace) -> int:
     except BaseException as error:
         finalize(failure_exit_code(error))
         raise
+    finally:
+        if gate_lock is not None and not listed_and_ran:
+            os.close(gate_lock)
     assert status is not None
-    return finalize(status)
+    try:
+        status = finalize(status)
+    except BaseException:
+        if gate_lock is not None:
+            os.close(gate_lock)
+        raise
+    # Every listed build is complete, so older hashes of those targets are dead
+    # weight. Best effort and after finalize: pruning never changes the run's
+    # outcome or records, even when it fails or is interrupted.
+    try:
+        if gate_lock is not None:
+            with terminate_on_signal():
+                prune_stale_executables(output_args, listings, gate_lock, label,
+                                        keep_previous=not whole_workspace(selections))
+    except (Exception, KeyboardInterrupt, Terminated) as error:
+        print(f"[{label}] warning: stale executables kept: {error!r}", file=sys.stderr, flush=True)
+    finally:
+        if gate_lock is not None:
+            os.close(gate_lock)
+    return status
 
 
 def main() -> int:

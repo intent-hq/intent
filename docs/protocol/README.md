@@ -51,6 +51,7 @@ wire fixtures. It is not a shipped-version claim.
 | §9 Error Codes (incl. 9.1) | [09-error-codes.md](./09-error-codes.md) |
 | §10 Thin-Client Guidance (10.1–10.4) | [10-thin-client.md](./10-thin-client.md) |
 | Owner-backend Keychain v1 payload, shared fixtures and distribution (separate from daemon RPC) | [backend-keychain.md](./backend-keychain.md) |
+| Suggested-prompts block cases shared by the desktop, daemon and iOS parsers (test contract, not wire) | [suggested-prompts.md](./suggested-prompts.md) |
 
 The [phase 1 node contract](./methods/nodes.md) is a prepared, unimplemented
 extension with capability-gated additions and a separately staged CoW removal.
@@ -207,7 +208,8 @@ goldens must never be hand-written. The emitter must exercise real
   normalizationVersion: 1,
   provenance: {
     kind: 'intentd-public-import',
-    generator: 'intent-services/transfer-selection-contract',
+    generator: 'intent-services/transfer-selection-contract'
+      | 'intent-svc-transfer/transfer-selection-contract',  // owning crate
     intentdRevision: string,  // full lowercase 40-character checkout HEAD SHA
     intentdDirty: false,      // checked from the source worktree, never assumed
     generatorSha256: string,  // SHA-256 of the generator Rust source file bytes
@@ -226,7 +228,10 @@ goldens must never be hand-written. The emitter must exercise real
 `persisted` contains those five raw exported columns, including nulls; `firstTurn`
 contains the actual resolver's provider/model/effort triple, with null for unset.
 Neither is copied from expected values. The generator source is
-`crates/intent-services/src/transfer_selection_contract.rs`; its runner records that
+`crates/intent-services/src/transfer_selection_contract.rs`, or
+`crates/intent-svc-transfer/src/transfer_selection_contract.rs` once transfer moves
+to its own crate; the scripts accept either path and either `generator` id, and
+reject a checkout that has both files. Its runner records that
 file's byte hash and clean intentd HEAD. Commit the harness before producing a
 publishable envelope. Runtime version/cache timestamps stay in the isolated input
 setup, not in provenance. No generated-at timestamp is needed.

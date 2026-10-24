@@ -25,6 +25,17 @@ so older clients never see the new status in a list. Revive via `workspace.unarc
 The documented surface is now **471 / 413 / 58** (dispatchable / router / fast path).
 Support is detected by `workspace.retire` answering; older daemons return `-32601`.
 
+Also within 15.2 (additive optional row field, one new event type and a widened derived
+flag; presence-detected; no method-catalog change, so no version bump): **command-script
+and script-monitor workspace signals** (§5.1). `Workspace.scriptsRunning` is `true` while
+the workspace has a command-mode script run in flight (service-mode scripts never count;
+omitted when `false`) and transitions surface via the self-sufficient
+`workspace:scriptsRunning-changed { workspaceId, scriptsRunning }` event (§6.5), tailed by
+the global `workspace` channel. The orthogonal `Workspace.waiting` flag also turns `true`
+for an `active` script run monitor (§5.8a), recomputed at monitor registration and every
+terminal transition. Neither signal feeds `activity` or `displayStatus`. Older daemons omit
+`scriptsRunning` and never emit the event; clients must detect both by presence.
+
 **Version 15.1 — workspace discussions (additive, prepared).**
 [Workspace discussions](./methods/multiplayer.md#555-workspace-discussions) add
 `discussion.conversations`, `discussion.recipients`, `discussion.list`,
@@ -56,7 +67,7 @@ event type; agent tools use the existing conversation/list/send operations.
 Clients tolerate unsupported methods without sending to an agent instead. The
 documented surface, including prepared startup, generic stream recovery,
 PR workspace lookup, provider profiles, discussion activity, and guest role additions,
-is now **473 / 415 / 58**
+is now **474 / 416 / 58**
 (dispatchable / router / fast path). This reservation does not identify a carrying
 release or change independent capability gates.
 
@@ -70,7 +81,7 @@ reads, sends and first-message retries cannot resurrect the deleted identity.
 Named workspace conversations support independently gated agent messaging,
 reactions and Stop/Retry with per-conversation grants. This coordinated change to
 unreleased Multiplayer Labs retains older capability gates, does not establish
-readiness, and reserves **473 / 415 / 58** dispatchable / router / fast-path names.
+readiness, and reserves **474 / 416 / 58** dispatchable / router / fast-path names.
 
 The prepared [workspace guest role extension](./methods/multiplayer.md#workspace-guest-roles-prepared)
 adds `workspace.members.setRole` under exact `workspaceGuestRoles: 1` on both
@@ -123,6 +134,14 @@ version, never a maximum (see the [compatibility policy](#compatibility-policy))
 Released frontends still cap registered-root reads at major 15 until
 [cloudlands-fe#3478](https://github.com/intent-hq/cloudlands-fe/pull/3478) ships,
 so the daemon must not advertise major 16 before a carrying frontend release.
+
+Also within 15.0 (additive optional response field; presence-detected; no method-catalog
+change, so no version bump): **CI-never-started flag** (§5.42 `MergeRequirements` and
+`lastSnapshot`, §5.7 `ws.pr.snapshot`). The checklist gains `checksNotStarted?: { headSha,
+headCommittedAt, thresholdMinutes }` when an open, non-draft, conflict-free PR's head has zero check
+runs and statuses at least 15 minutes after its commit time while the base branch requires
+status checks; the monitor wakes the owning agent once per head with a push-again / rebase
+hint. Older daemons and hosts without a commit time omit it; clients detect it by presence.
 
 Also within 15.0 (additive optional response fields; presence-detected; no method-catalog
 change, so no version bump): **merge-queue position and estimated merge time**
@@ -177,6 +196,15 @@ script now counts as busy for the idle update handshake: no idle check is reques
 one runs, and a staged restart waits for them for at most 90 minutes (agent turns are
 still waited for without a cap). Service-mode scripts never count. Older daemons omit
 both keys; clients must detect them by presence.
+
+Also within 15.0 (additive response fields; presence-detected; no method-catalog
+change, so no version bump): **skipped PR checks are reported separately** (§5.7
+`ws.pr.snapshot`, §5.42 `MergeRequirements` and `lastSnapshot`). The snapshot `checks`
+block gains `skipped` and `skippedNames`, `MergeRequirements.checks` and the monitor's
+`lastSnapshot.checks` gain `skipped`, and `checks.items[].status` gains the value
+`skipped`. `passed` now excludes skipped runs, and a skipped run never blocks merge
+readiness. Previously skipped runs counted as passed (intentd#2581, run 39724275631).
+Older daemons omit the new keys and count skipped runs as `passed`.
 
 **PR workspace lookup (additive, prepared).** The
 [PR workspace lookup](./methods/workspace.md#pull-request-workspace-lookup) reserves
@@ -643,6 +671,16 @@ The new method/event goldens and behavioral assertions must land with component 
 
 
 
+
+Prepared additive extension of [provider profiles (§5.54)](./methods/provider-profiles.md#default-configuration-overrides):
+**Default configuration overrides**. It adds the router method
+`providers.profiles.updateDefault`, the `defaults` member on the
+`providers.profiles.list` result, the catalog `defaultNames` map, and the
+`default-updated` / `default-activation` changes on `providers:profiles-changed`.
+The Default configuration keeps its bare reference, so no saved selection changes.
+This entry reserves the method without claiming a shipped version. Implementors
+allocate the next minor against main; clients detect support by the presence of
+`defaults`, and an older daemon rejects the method with `-32601`.
 
 Additive, presence-detected within the current protocol (no method-catalog change
 or version bump; [intent#5830](https://github.com/intent-hq/intent/issues/5830)):
@@ -1405,6 +1443,18 @@ the automatic submodule bump must then carry that backend before these docs land
 No manual pin advance is part of the migration. Historical 10.3 replay semantics
 above describe the former method, not a durability guarantee for current commits.
 
+Also within 13.0 (behavior only, no method-catalog or wire-shape change, so no version
+bump — [intent-hq/intentd#2649](https://github.com/intent-hq/intentd/pull/2649), fixes
+[intent-hq/intent#7184](https://github.com/intent-hq/intent/issues/7184)): **per-note
+write serialization** (§5.2). The client content writers to one note (`note.add`,
+`note.edit`, `note.editLines`, `note.setContent`, `task.updateStatus`, `task.update`,
+`task.convertBlocks`, `comment.add`, `primitive.*` appends) and linked-checkbox
+materialization take turns per note from their read to their gated persist, so
+parallel writers — including parallel status changes of tasks linked from one note —
+no longer exhaust their bounded retries against each other and an exact-match `note.edit` always applies to the latest
+text ("Text not found" when an earlier writer replaced its `old` text, instead of a
+three-way merge). The `-32005` shape and the 5-attempt bound are unchanged.
+
 ### Compatibility Policy
 
 - **Additive changes** (new methods, new optional fields, new event types) bump the **minor** version (e.g., 2.0 → 2.1).
@@ -1436,3 +1486,4 @@ the `ignore` map of `scripts/check-protocol-field-parity.mjs`, not here.
 | Row | Field | Contract | App adoption |
 |---|---|---|---|
 | `Workspace` | `retiredAt` | [Retired workspaces](./methods/workspace.md#retired-workspaces) | Pending cloudlands-fe retired-workspaces PR (home, search and workspace view) |
+| `Workspace` | `scriptsRunning` | [Workspace fields](./methods/workspace.md#51-workspace) | Pending cloudlands-fe Home Running/Waiting groups PR |

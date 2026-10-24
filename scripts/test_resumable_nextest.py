@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import contextlib
+import hashlib
 import importlib.util
 import io
 from itertools import product
@@ -4289,6 +4290,245 @@ class TimeoutMultiplierTests(unittest.TestCase):
                 self.assertIn(summary.rstrip("\n"), harness.output_lines)
                 self.assertEqual(json.loads((attempt / "run.json").read_text())["test_timeout_multiplier"], setting)
                 self.assertEqual({env.get(name) for env in harness.run_environments}, {setting})
+
+
+
+OLD = "0" * 16
+NEW = "1" * 16
+
+
+class StaleExecutableTests(unittest.TestCase):
+    """A gate keeps only the newest build of each listed test executable."""
+
+    def gate_root(self, root):
+        owner = hashlib.sha256(os.fsencode((root / "intentd").resolve())).hexdigest()
+        return root / "target" / "intent-gates" / owner
+
+    def output_args(self, gate_root, build_root=None):
+        build = json.dumps(str(build_root or gate_root))
+        return ["--target-dir", str(gate_root), "--config", f"build.build-dir={build}"]
+
+    def unit(self, profile, package, name, digest, kind="test-integration-test", body=b"x" * 64):
+        deps = profile / "deps"
+        deps.mkdir(parents=True, exist_ok=True)
+        (profile / ".cargo-lock").touch()
+        fingerprint = profile / ".fingerprint" / f"{package}-{digest}"
+        fingerprint.mkdir(parents=True, exist_ok=True)
+        target = name.replace("_", "-") if kind == "bin" else name
+        (fingerprint / f"{kind}-{target}").write_text("0")
+        (fingerprint / f"{kind}-{target}.json").write_text("{}")
+        (fingerprint / f"dep-{kind}-{target}").write_text("")
+        executable = deps / f"{name}-{digest}"
+        executable.write_bytes(body)
+        executable.chmod(0o755)
+        (deps / f"{name}-{digest}.d").write_text(f"{executable}: src/lib.rs\n")
+        return executable
+
+    def listing(self, *paths):
+        suites = {}
+        for path in paths:
+            name = path.name.rsplit("-", 1)[0]
+            suites[f"alpha::{name}"] = {
+                "package-name": "alpha", "binary-name": name, "binary-id": f"alpha::{name}",
+                "kind": "test", "binary-path": str(path), "testcases": {},
+            }
+        return json.dumps({"rust-suites": suites})
+
+    def prune(self, output_args, *paths, open_paths=frozenset()):
+        out = io.StringIO()
+        with mock.patch.object(gate, "open_paths", return_value=set(map(str, open_paths))), \
+                contextlib.redirect_stdout(out):
+            freed = gate.prune_stale_executables(output_args, [self.listing(*paths)], None, "gate")
+        return freed, out.getvalue()
+
+    def test_superseded_test_executables_and_companions_are_removed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            gate_root = self.gate_root(root)
+            profile = gate_root / "debug"
+            stale = self.unit(profile, "alpha", "one", OLD)
+            (stale.parent / f"one-{OLD}.dwp").write_text("dwarf")
+            (stale.parent / f"one-{OLD}.dSYM" / "Contents").mkdir(parents=True)
+            current = self.unit(profile, "alpha", "one", NEW)
+            unlisted = self.unit(profile, "alpha", "other", "3" * 16)
+            freed, output = self.prune(self.output_args(gate_root), current)
+            self.assertFalse(stale.exists())
+            for suffix in (".d", ".dwp", ".dSYM"):
+                self.assertFalse((stale.parent / f"one-{OLD}{suffix}").exists(), suffix)
+            self.assertTrue(current.exists())
+            self.assertTrue((current.parent / f"one-{NEW}.d").exists())
+            self.assertTrue(unlisted.exists())
+            self.assertEqual(freed, 64 + len(f"{stale}: src/lib.rs\n") + len("dwarf"))
+            self.assertIn("removed 1 superseded test executable", output)
+
+    def test_separate_build_dir_is_pruned_inside_its_owned_child(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            gate_root = self.gate_root(root)
+            build_root = root / "build" / "intent-gates" / gate_root.name
+            stale = self.unit(build_root / "debug", "alpha", "one", OLD)
+            current = self.unit(build_root / "debug", "alpha", "one", NEW)
+            gate_root.mkdir(parents=True)
+            self.prune(self.output_args(gate_root, build_root), current)
+            self.assertFalse(stale.exists())
+            self.assertTrue(current.exists())
+
+    def test_non_test_units_with_the_same_name_are_kept(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            profile = self.gate_root(root) / "debug"
+            real_binary = self.unit(profile, "alpha", "two_bin", OLD, kind="bin")
+            unknown = profile / "deps" / f"two_bin-{'2' * 16}"
+            unknown.write_bytes(b"no fingerprint")
+            current = self.unit(profile, "alpha", "two_bin", NEW, kind="test-bin")
+            self.prune(self.output_args(self.gate_root(root)), current)
+            self.assertTrue(real_binary.exists())
+            self.assertTrue(unknown.exists())
+
+    def test_hardlinked_or_open_stale_executables_are_kept(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            profile = self.gate_root(root) / "debug"
+            linked = self.unit(profile, "alpha", "one", OLD)
+            os.link(linked, profile / "one-copy")
+            running = self.unit(profile, "alpha", "two", OLD)
+            current = [self.unit(profile, "alpha", "one", NEW), self.unit(profile, "alpha", "two", NEW)]
+            self.prune(self.output_args(self.gate_root(root)), *current, open_paths={running})
+            self.assertTrue(linked.exists())
+            self.assertTrue(running.exists())
+
+    @unittest.skipUnless(Path("/proc/self/fd").is_dir(), "needs /proc")
+    def test_proc_scan_sees_files_this_process_has_open(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "held"
+            path.write_text("x")
+            with path.open() as handle:
+                self.assertIn(str(path.resolve()), gate.open_paths([path]))
+            del handle
+
+    def test_nothing_is_removed_when_open_files_cannot_be_checked(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            profile = self.gate_root(root) / "debug"
+            stale = self.unit(profile, "alpha", "one", OLD)
+            current = self.unit(profile, "alpha", "one", NEW)
+            out = io.StringIO()
+            with mock.patch.object(gate, "open_paths", return_value=None), contextlib.redirect_stdout(out):
+                self.assertEqual(gate.prune_stale_executables(
+                    self.output_args(self.gate_root(root)), [self.listing(current)], None, "gate"), 0)
+            self.assertTrue(stale.exists())
+            self.assertIn("cannot check which files are open", out.getvalue())
+
+    def test_held_cargo_lock_or_another_gate_skips_pruning(self):
+        import fcntl
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            gate_root = self.gate_root(root)
+            profile = gate_root / "debug"
+            stale = self.unit(profile, "alpha", "one", OLD)
+            current = self.unit(profile, "alpha", "one", NEW)
+            with (profile / ".cargo-lock").open("a") as cargo_lock:
+                fcntl.flock(cargo_lock, fcntl.LOCK_EX)
+                _, output = self.prune(self.output_args(gate_root), current)
+            self.assertTrue(stale.exists())
+            self.assertIn("Cargo build lock", output)
+            other_gate = gate.acquire_gate_lock(self.output_args(gate_root))
+            try:
+                _, output = self.prune(self.output_args(gate_root), current)
+            finally:
+                os.close(other_gate)
+            self.assertTrue(stale.exists())
+            self.assertIn("another gate", output)
+            self.prune(self.output_args(gate_root), current)
+            self.assertFalse(stale.exists())
+
+    def test_executables_outside_the_owned_gate_folder_are_never_touched(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            normal = root / "target" / "debug"
+            stale = self.unit(normal, "alpha", "one", OLD)
+            current = self.unit(normal, "alpha", "one", NEW)
+            gate_root = self.gate_root(root)
+            gate_root.mkdir(parents=True)
+            self.assertEqual(self.prune(self.output_args(gate_root), current)[0], 0)
+            self.assertEqual(self.prune(self.output_args(root / "target"), current)[0], 0)
+            self.assertEqual(self.prune([], current)[0], 0)
+            self.assertTrue(stale.exists())
+
+    def gate_run(self, root, plan, setup=None, pruning=None):
+        harness = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+        profile = self.gate_root(root) / "debug"
+        oldest = self.unit(profile, "alpha", "one", OLD)
+        previous = self.unit(profile, "alpha", "one", "2" * 16)
+        os.utime(oldest, (1, 1))
+        current = self.unit(profile, "alpha", "one", NEW)
+        listing = json.loads(LISTING)
+        listing["rust-suites"]["alpha::one"].update(kind="test", **{"binary-path": str(current)})
+        listing["rust-suites"]["alpha::one"]["testcases"] = {"passes": {}}
+        harness.listing = json.dumps(listing)
+        args = make_args(root, plan=plan, label=gate.DEFAULT_LABEL) if plan is None else make_args(root, plan=plan)
+        stderr = io.StringIO()
+        with mock.patch.object(gate, "transfer_fixture_identity", return_value=None), \
+                mock.patch.object(gate, "callback_fixture_identity", return_value=None), \
+                mock.patch.object(gate, "open_paths", return_value=set()), \
+                contextlib.ExitStack() as stack, contextlib.redirect_stderr(stderr):
+            if pruning is not None:
+                stack.enter_context(mock.patch.object(gate, "prune_stale_executables", side_effect=pruning))
+            if setup is not None:
+                stack.enter_context(setup)
+            status = harness.execute(args)
+        return status, harness, stderr.getvalue(), (oldest, previous, current)
+
+    def test_whole_workspace_gate_run_removes_every_stale_copy(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            status, harness, _, (oldest, previous, current) = self.gate_run(Path(temporary), None)
+            self.assertEqual(status, 0)
+            self.assertFalse(oldest.exists())
+            self.assertFalse(previous.exists())
+            self.assertTrue(current.exists())
+            self.assertFalse(any("ERROR" in line for line in harness.output_lines), harness.output_lines)
+
+    def test_package_scoped_gate_run_keeps_the_newest_other_build(self):
+        # -p selections resolve features differently from --workspace, so the
+        # full suite's build of the same target must survive a test-changed run.
+        with tempfile.TemporaryDirectory() as temporary:
+            status, _, _, (oldest, previous, current) = self.gate_run(Path(temporary), ["-p alpha --test one"])
+            self.assertEqual(status, 0)
+            self.assertFalse(oldest.exists())
+            self.assertTrue(previous.exists())
+            self.assertTrue(current.exists())
+        self.assertTrue(gate.whole_workspace([["--workspace", "-E", "test(x)"]]))
+        self.assertFalse(gate.whole_workspace([["--workspace", "-p", "alpha"]]))
+        self.assertFalse(gate.whole_workspace([["--workspace"], ["--package=alpha", "--workspace"]]))
+
+    def test_pruning_failure_or_interrupt_never_changes_the_recorded_run(self):
+        for failure in (RuntimeError("symlink loop"), KeyboardInterrupt(), gate.Terminated("SIGTERM")):
+            with self.subTest(failure=type(failure).__name__), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                status, harness, stderr, (oldest, _, _) = self.gate_run(root, None, pruning=failure)
+                self.assertEqual(status, 0)
+                self.assertTrue(oldest.exists())
+                self.assertIn("stale executables kept", stderr)
+                self.assertTrue(any(line.startswith(f"[{gate.DEFAULT_LABEL}] record: ") for line in harness.output_lines))
+                attempt = latest_attempt(root / "cache" / KEY)
+                receipt = json.loads((attempt / "run.json").read_text())
+                self.assertEqual(receipt["exit_code"], 0)
+                self.assertIsNotNone(receipt["finished_at"])
+                self.assertTrue((root / "cache" / KEY / "complete").is_file())
+
+    def test_unusable_gate_folder_means_no_lock_and_no_pruning(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            blocker = root / "target" / "intent-gates"
+            blocker.parent.mkdir(parents=True)
+            blocker.write_text("not a directory")
+            self.assertIsNone(gate.acquire_gate_lock(self.output_args(blocker / ("a" * 64))))
+            failing = mock.patch.object(gate, "acquire_gate_lock", return_value=None)
+            (root / "elsewhere").mkdir()
+            status, _, _, (oldest, previous, _) = self.gate_run(root / "elsewhere", None, setup=failing)
+            self.assertEqual(status, 0)
+            self.assertTrue(oldest.exists())
+            self.assertTrue(previous.exists())
 
 
 if __name__ == "__main__":

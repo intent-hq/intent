@@ -107,6 +107,27 @@ marker projection is never textually merged onto the current line. All share the
 5-attempt bound. `note.restoreVersion` is a deliberate unconditional replacement and
 takes no `expectedVersion`.
 
+**Per-note write serialization** (behavior only, no shape change —
+[intent-hq/intentd#2649](https://github.com/intent-hq/intentd/pull/2649),
+[intent-hq/intent#7184](https://github.com/intent-hq/intent/issues/7184)). Within one
+daemon, the client content writers to a note — `note.add`, `note.edit`,
+`note.editLines`, `note.setContent`, `task.updateStatus` and `task.update` (the
+direct parent write), `task.convertBlocks`, `comment.add` and the `primitive.*`
+appends — and linked-checkbox materialization (§5.4) take turns per note: each holds
+the note's write lane from the read its transform derives from until its gated persist
+lands, then releases it before any follow-up write (auto-conversion, a linked-line
+redirect, whose materialization takes the lane itself). Parallel calls on one note —
+including parallel status changes of tasks linked from it — therefore apply one after
+another against the latest text instead of competing for their bounded attempts, and a
+surgical transform always runs on the current content: a `note.edit` whose `old` text
+an earlier queued writer replaced fails with "Text not found" rather than being merged.
+A task status write that lands while a `task.update` holds the parent's lane has its
+line rewrite queued behind that write, so the parent is never rewritten under it.
+Writes to different notes never wait on each other. Writers outside the lane — the
+content arm of `note.update` and `note.restoreVersion` — can still move the `rev`
+between a laned writer's read and persist; that writer then falls back to the gated
+loop above, so `-32005` remains possible (nothing is written; re-read and retry).
+
 **Numbered `note.read` display rejected on content writes** (behavior only, no
 shape change — [intent-hq/intentd#1688](https://github.com/intent-hq/intentd/pull/1688),
 monorepo#4208). The agent-facing `ws.note.read` binding returns two content fields:

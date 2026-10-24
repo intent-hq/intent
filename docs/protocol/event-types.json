@@ -168,6 +168,7 @@
     "workspace:deleted",
     "workspace:displayStatus-changed",
     "workspace:opened",
+    "workspace:scriptsRunning-changed",
     "workspace:setup:completed",
     "workspace:setup:started",
     "workspace:task-stats-changed",
