@@ -6,12 +6,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { GENERATORS, inspectSources, preflight, runContract } from './test-transfer-selection-contract.mjs';
-import { hashJson } from './check-transfer-selection-contract.mjs';
+import { GENERATOR, inspectSources, preflight, runContract } from './test-transfer-selection-contract.mjs';
+import { GENERATOR as GENERATOR_ID, HISTORICAL_GOLDEN_GENERATORS, hashJson } from './check-transfer-selection-contract.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const [GENERATOR, MOVED_GENERATOR] = GENERATORS;
-const GENERATOR_IDS = { [GENERATOR]: 'intent-services/transfer-selection-contract', [MOVED_GENERATOR]: 'intent-svc-transfer/transfer-selection-contract' };
+const OLD_GENERATOR = 'crates/intent-services/src/transfer_selection_contract.rs';
 const EXPORTER = 'scripts/test-transfer-selection-contract.sh';
 const RENDERER = 'src/lib/components/chat/input/ModelPicker.transfer-selection-contract.test.ts';
 const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim();
@@ -66,7 +65,7 @@ const { hashJson, resolveGoldenPath } = createRequire(import.meta.url)(root + '/
 const selected = await resolveGoldenPath({fixtureRoot: root, intentdRoot: process.cwd()});
 const artifact = JSON.parse(readFileSync(env.FIXTURE_MODE === 'wrong-schema' ? root + '/public-sessions.json' : selected, 'utf8'));
 if (env.FIXTURE_MODE !== 'stale') artifact.provenance.intentdRevision = execFileSync('git', ['rev-parse', 'HEAD'], {encoding:'utf8'}).trim();
-artifact.provenance.generator = ${JSON.stringify(GENERATOR_IDS[generator])};
+artifact.provenance.generator = env.FIXTURE_MODE === 'historical-id' ? ${JSON.stringify(HISTORICAL_GOLDEN_GENERATORS[0])} : ${JSON.stringify(GENERATOR_ID)};
 artifact.provenance.generatorSha256 = createHash('sha256').update(readFileSync('${generator}')).digest('hex');
 if (env.FIXTURE_MODE === 'wrong-generator') artifact.provenance.generatorSha256 = 'f'.repeat(64);
 if (env.FIXTURE_MODE === 'drift') { artifact.cases[0].session.extraField = 'unreviewed'; artifact.provenance.payloadSha256 = hashJson(artifact.cases); }
@@ -103,22 +102,20 @@ test('local gate generates twice, routes exact fresh input, reports provenance a
   assert.equal(git(f.root, 'status', '--porcelain'), before);
 });
 
-for (const generator of GENERATORS) {
-  test(`generator at ${generator} is resolved, hashed and accepted`, async (t) => {
-    const f = fixture(t, { generator });
-    const result = await runContract({ root: f.root, env: f.env, log: () => {} });
-    assert.equal(result.sources.generator, generator);
-    assert.equal(result.sources.generatorSha256, hash(path.join(f.dirs.intentd, generator)));
-    const rendered = JSON.parse(readFileSync(f.env.FIXTURE_RENDER_LOG, 'utf8'));
-    assert.equal(rendered.artifact.provenance.generator, GENERATOR_IDS[generator]);
-  });
-}
-
-test('both generator locations at once are ambiguous and fail before export', async (t) => {
+test('generator in intent-svc-transfer is hashed and reported; committed goldens keep their historical id', async (t) => {
   const f = fixture(t);
-  write(f.dirs.intentd, MOVED_GENERATOR, '// second copy\n');
-  commit(f.dirs.intentd);
-  await assert.rejects(preflight(f.root, f.env), /ambiguous transfer-selection generator/);
+  const golden = JSON.parse(readFileSync(path.join(f.root, 'docs/protocol/fixtures/transfer-selection/public-sessions.json'), 'utf8'));
+  assert.ok(HISTORICAL_GOLDEN_GENERATORS.includes(golden.provenance.generator), 'fixture copies the real committed golden');
+  const result = await runContract({ root: f.root, env: f.env, log: () => {} });
+  assert.equal(result.sources.generator, GENERATOR);
+  assert.equal(result.sources.generatorSha256, hash(path.join(f.dirs.intentd, GENERATOR)));
+  const rendered = JSON.parse(readFileSync(f.env.FIXTURE_RENDER_LOG, 'utf8'));
+  assert.equal(rendered.artifact.provenance.generator, GENERATOR_ID);
+});
+
+test('an intentd checkout with only the old intent-services generator path fails before export', async (t) => {
+  const f = fixture(t, { generator: OLD_GENERATOR });
+  await assert.rejects(preflight(f.root, f.env), /required transfer-selection harness.*intent-svc-transfer/);
   assert.deepEqual(readdirSync(f.env.TMPDIR), []);
 });
 
@@ -175,6 +172,7 @@ for (const component of ['intentd', 'cloudlands-fe']) {
 for (const [mode, message] of [
   ['export-fail', /failed \(23\)/], ['no-output', /required fixture/],
   ['stale', /intentdRevision/], ['wrong-generator', /generatorSha256/],
+  ['historical-id', /provenance\.generator/],
   ['drift', /fresh.*(differ|match)|drift/i], ['tamper', /Sha256|provider/],
   ['render-fail', /failed \(31\)/], ['render-mutation', /renderer modified/],
 ]) {

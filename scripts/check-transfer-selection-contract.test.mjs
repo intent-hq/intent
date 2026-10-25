@@ -46,7 +46,7 @@ function syntheticGenerated() {
   return {
     formatVersion: 1, normalizationVersion: 1,
     provenance: {
-      kind: 'intentd-public-import', generator: 'intent-services/transfer-selection-contract',
+      kind: 'intentd-public-import', generator: 'intent-svc-transfer/transfer-selection-contract',
       intentdRevision: 'a'.repeat(40), intentdDirty: false,
       generatorSha256: hashJson({ internalSyntheticFixture: true }),
       contractSha256: hashJson(contract), payloadSha256: hashJson(normalized),
@@ -107,28 +107,45 @@ test('selected desktop golden cannot fall back to legacy or accept rehashed sche
   await assert.rejects(inspectFixtures({ fixtureRoot: dir, generated: selected, fresh }), /stale/);
 });
 
-test('provenance accepts the generator id of either owning crate and nothing else', async (t) => {
-  for (const generator of ['intent-services/transfer-selection-contract', 'intent-svc-transfer/transfer-selection-contract']) {
-    const artifact = syntheticGenerated();
-    artifact.provenance.generator = generator;
-    const dir = await fixture(t, artifact);
-    await inspectFixtures({ fixtureRoot: dir });
-  }
+const HISTORICAL = 'intent-services/transfer-selection-contract';
+
+test('emitted envelopes must carry the intent-svc-transfer id; the default also admits the historical golden id', () => {
+  assert.equal(shared.GENERATOR, 'intent-svc-transfer/transfer-selection-contract');
+  assert.deepEqual(shared.HISTORICAL_GOLDEN_GENERATORS, [HISTORICAL]);
+  const withId = (generator) => { const a = syntheticGenerated(); a.provenance.generator = generator; return a; };
+  assertGenerated(contract, withId(shared.GENERATOR), {}, { emitted: true });
+  assertGenerated(contract, withId(shared.GENERATOR));
+  assertGenerated(contract, withId(HISTORICAL));
+  assert.throws(() => assertGenerated(contract, withId(HISTORICAL), {}, { emitted: true }), /provenance\.generator/);
   for (const generator of ['intent-svc-runtime/transfer-selection-contract', 'transfer-selection-contract', '']) {
-    const artifact = syntheticGenerated();
-    artifact.provenance.generator = generator;
-    const dir = await fixture(t, artifact);
-    await assert.rejects(inspectFixtures({ fixtureRoot: dir }), /provenance\.generator/);
+    assert.throws(() => assertGenerated(contract, withId(generator)), /provenance\.generator/);
+    assert.throws(() => assertGenerated(contract, withId(generator), {}, { emitted: true }), /provenance\.generator/);
   }
 });
 
-test('a golden and a fresh output from different owning crates still compare by payload', async (t) => {
-  const dir = await fixture(t);
-  const fresh = syntheticGenerated();
-  fresh.provenance.generator = 'intent-svc-transfer/transfer-selection-contract';
-  const freshPath = path.join(dir, 'fresh.json');
-  await fs.writeFile(freshPath, JSON.stringify(fresh));
-  await inspectFixtures({ fixtureRoot: dir, fresh: freshPath });
+test('only a committed golden in the fixture root may keep the historical id', async (t) => {
+  const historical = syntheticGenerated();
+  historical.provenance.generator = HISTORICAL;
+  const dir = await fixture(t, historical);
+  await inspectFixtures({ fixtureRoot: dir });
+  await inspectFixtures({ fixtureRoot: dir, generated: path.join(dir, 'public-sessions.json') });
+  const copy = path.join(dir, 'emitted.json');
+  await fs.writeFile(copy, JSON.stringify(historical));
+  await assert.rejects(inspectFixtures({ fixtureRoot: dir, generated: copy }), /provenance\.generator/);
+  const fresh = path.join(dir, 'fresh.json');
+  await fs.writeFile(fresh, JSON.stringify(historical));
+  await assert.rejects(inspectFixtures({ fixtureRoot: dir, fresh }), /provenance\.generator/);
+  await assert.rejects(inspectFixtures({ fixtureRoot: dir, generated: copy, fresh: path.join(dir, 'public-sessions.json') }), /provenance\.generator/);
+  await fs.writeFile(fresh, JSON.stringify(syntheticGenerated()));
+  await inspectFixtures({ fixtureRoot: dir, fresh });
+});
+
+test('the committed goldens are unchanged and still validate', async () => {
+  for (const file of shared.GOLDEN_FILES) {
+    const golden = JSON.parse(await fs.readFile(path.join(root, file), 'utf8'));
+    assert.ok([shared.GENERATOR, ...shared.HISTORICAL_GOLDEN_GENERATORS].includes(golden.provenance.generator));
+    await inspectFixtures({ fixtureRoot: root, generated: path.join(root, file) });
+  }
 });
 
 test('the maintained inputs cover all 32 stable cases', () => {
