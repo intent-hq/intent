@@ -21,7 +21,7 @@ All `note.*` methods require `workspaceId`. All except `list` and `create` addit
 | note.saveAsset | data (req, base64 — a `data:<mime>;base64,` URL prefix is accepted and stripped), mimeType (req), originalName? | { assetId, path, url } — **additive asset write** (no `noteId`; ports the legacy `assets:save` IPC behind note image paste/upload). Writes the decoded bytes under the workspace assets root plus an `<assetId>.meta.json` sidecar (`{ id, originalName, mimeType, size, createdAt }`); `assetId` is `<timestamp36>-<hash8><ext>` with `<ext>` derived from `mimeType` (default `.png`), `url` is `workspace-asset://<workspaceId>/<assetId>` and round-trips through `note.readAsset`. `-32602` on missing params; `-32603` on invalid base64 or when asset storage is not configured |
 | note.listVersions | noteId (req) | bare array of `{ type:"snapshot", v, date, author:{id,name,type}, title, contentLength }` ascending by `v` |
 | note.getVersion | noteId (req), v (req,int) | `{ type:"snapshot", v, date, author, title, content }` — -32602 if the version does not exist |
-| note.restoreVersion | noteId (req), v (req,int) | { ok, noteId, restoredFrom, v, note } — resets title+content to version `v`, bumps `rev`, appends a new version capturing the restored state |
+| note.restoreVersion | noteId (req), v (req,int) | { ok, noteId, restoredFrom, v, note } — resets title+content to version `v`, bumps `rev`, appends a new version capturing the restored state. The restored text runs through the same comment-anchor pass as every content write: a comment anchored after `v` is flagged `isOrphaned`, and markers of a deleted or orphaned comment are scrubbed |
 
 **`note.list` details.**
 
@@ -109,11 +109,17 @@ takes no `expectedVersion`.
 
 **Per-note write serialization** (behavior only, no shape change —
 [intent-hq/intentd#2649](https://github.com/intent-hq/intentd/pull/2649),
+[intent-hq/intentd#2673](https://github.com/intent-hq/intentd/pull/2673),
+[intent-hq/intentd#2683](https://github.com/intent-hq/intentd/pull/2683),
 [intent-hq/intent#7184](https://github.com/intent-hq/intent/issues/7184)). Within one
-daemon, the client content writers to a note — `note.add`, `note.edit`,
-`note.editLines`, `note.setContent`, `task.updateStatus` and `task.update` (the
+daemon, every writer that moves a note's `rev` takes turns per note: the content
+writers — `note.add`, `note.edit`, `note.editLines`, `note.setContent`, both arms of
+`note.update`, `note.restoreVersion`, `task.updateStatus` and `task.update` (the
 direct parent write), `task.convertBlocks`, `comment.add` and the `primitive.*`
-appends — and linked-checkbox materialization (§5.4) take turns per note: each holds
+appends — linked-checkbox materialization (§5.4), and the metadata writers —
+`note.updateMetadata`, `task.updateNoteStatus` (including linked-line redirects),
+`task.markAsTask`, `task.setRelations`, `task.assignAgent` and
+`task.removeAgentFromAllTasks`: each holds
 the note's write lane from the read its transform derives from until its gated persist
 lands, then releases it before any follow-up write (auto-conversion, a linked-line
 redirect, whose materialization takes the lane itself). Parallel calls on one note —
@@ -123,10 +129,12 @@ surgical transform always runs on the current content: a `note.edit` whose `old`
 an earlier queued writer replaced fails with "Text not found" rather than being merged.
 A task status write that lands while a `task.update` holds the parent's lane has its
 line rewrite queued behind that write, so the parent is never rewritten under it.
-Writes to different notes never wait on each other. Writers outside the lane — the
-content arm of `note.update` and `note.restoreVersion` — can still move the `rev`
-between a laned writer's read and persist; that writer then falls back to the gated
-loop above, so `-32005` remains possible (nothing is written; re-read and retry).
+Writes to different notes never wait on each other. Because no writer moves the `rev`
+inside another's read→persist window, a whole-row replacement (`note.restoreVersion`,
+or `note.update` content without `expectedVersion`) never reverts a status, title,
+tag or assignment written concurrently, and a burst of metadata writes no longer
+exhausts a laned writer's bounded attempts. `-32005` remains possible only for a
+caller-supplied stale `expectedVersion`.
 
 **Numbered `note.read` display rejected on content writes** (behavior only, no
 shape change — [intent-hq/intentd#1688](https://github.com/intent-hq/intentd/pull/1688),
