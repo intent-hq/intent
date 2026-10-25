@@ -41,6 +41,9 @@ version bump): **`agent:renamed` carries `nameExplicitlySet`** (§6.5). Both `ag
 (`agent.rename` and a name-only `agent.update`) report the session's persisted flag after
 the write, so clients stop inferring it. Older daemons omit the field; clients treat an
 absent field as `true`.
+An `agent:updated` payload that carries `name` (a mixed `agent.update`, the
+`rememberSpecialist` placeholder rename) likewise carries the persisted `nameExplicitlySet`,
+overriding any request-echoed value. Older daemons omit it there; clients re-read the session.
 
 **Version 15.1 — workspace discussions (additive, prepared).**
 [Workspace discussions](./methods/multiplayer.md#555-workspace-discussions) add
