@@ -150,7 +150,7 @@ ws.comment.respond(noteId, { threadId?, commentId?, comment, type?, author?, aut
 
 ```text
 ws.crossWorkspace.listNotes(targetWorkspaceId) → [notes]
-ws.crossWorkspace.listSiblings() → [workspaces]
+ws.crossWorkspace.listSiblings({ includeRetired? }?) → [workspaces]
 ws.crossWorkspace.readNote(targetWorkspaceId, noteId) → note
 ```
 
