@@ -207,7 +207,9 @@ suite is `python3 -S -B -m unittest -v scripts.test_cleanup_prereleases`.
   failed dispatch logs a warning and never fails the publish — the fe crons then act
   as the backstop.
 - Windows lint runs in the merge queue; the rest of Windows validation is post-merge
-  only. intentd PRs never use a Windows runner. Each merge-queue run has a required
+  only. intentd PRs never use a Windows runner: they run `windows-cross-lint`, Clippy
+  for the Windows GNU target on Linux (`make check-windows` locally), so most
+  Windows-only lint errors fail the PR. Each merge-queue run has a required
   `windows-lint` job (native Windows `cargo check` and target-gated Clippy), so a
   Windows-only compile or lint error is ejected from the queue instead of landing.
   Every push to `main` runs the Windows runtime and lifecycle proofs, release build,
