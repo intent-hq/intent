@@ -154,6 +154,21 @@ ws.crossWorkspace.listSiblings({ includeRetired? }?) → [workspaces]
 ws.crossWorkspace.readNote(targetWorkspaceId, noteId) → note
 ```
 
+### ws.desktop
+
+```text
+ws.desktop.click({ displayId?, layoutId, x, y, button?, clickCount? }) → { ok: true }
+ws.desktop.drag({ displayId?, layoutId, from: { x, y }, to: { x, y } }) → { ok: true }
+ws.desktop.endControl() → { ended, withdrawn }
+ws.desktop.keypress({ key, modifiers? }) → { ok: true }
+ws.desktop.listDisplay() → { layoutId, displays }
+ws.desktop.move({ displayId?, layoutId, x, y }) → { ok: true }
+ws.desktop.screenshot({ displayId?, layoutId? }?) → { capturedAt, layoutId, displays }
+ws.desktop.scroll({ displayId?, layoutId, x, y, deltaX, deltaY }) → { ok: true }
+ws.desktop.startControl() → StartResult
+ws.desktop.type({ text }) → { ok: true }
+```
+
 ### ws.discussion
 
 ```text
