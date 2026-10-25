@@ -36,6 +36,16 @@ for an `active` script run monitor (§5.8a), recomputed at monitor registration 
 terminal transition. Neither signal feeds `activity` or `displayStatus`. Older daemons omit
 `scriptsRunning` and never emit the event; clients must detect both by presence.
 
+Also within 15.2 (additive optional row field and one new event type; presence-detected;
+no method-catalog change, so no version bump): **background-task workspace signal**
+(§5.1). `Workspace.backgroundTasksRunning` is `true` while any agent of the workspace has
+a §5.5b provider background task still running on a continuous, supported connection
+(omitted when `false`); transitions surface via the self-sufficient
+`workspace:backgroundTasksRunning-changed { workspaceId, backgroundTasksRunning }` event
+(§6.5), tailed by the global `workspace` channel. It feeds neither `activity` nor
+`displayStatus`. Older daemons omit the field and never emit the event; clients must
+detect both by presence.
+
 Also within 15.2 (additive event field; presence-detected; no method-catalog change, so no
 version bump): **`agent:renamed` carries `nameExplicitlySet`** (§6.5). Both `agent:renamed` paths
 (`agent.rename` and a name-only `agent.update`) report the session's persisted flag after
@@ -1485,3 +1495,4 @@ the `ignore` map of `scripts/check-protocol-field-parity.mjs`, not here.
 |---|---|---|---|
 | `Workspace` | `retiredAt` | [Retired workspaces](./methods/workspace.md#retired-workspaces) | Pending cloudlands-fe retired-workspaces PR (home, search and workspace view) |
 | `Workspace` | `scriptsRunning` | [Workspace fields](./methods/workspace.md#51-workspace) | Pending cloudlands-fe Home Running/Waiting groups PR |
+| `Workspace` | `backgroundTasksRunning` | [Workspace fields](./methods/workspace.md#51-workspace) | Pending cloudlands-fe Home background-task Running PR |

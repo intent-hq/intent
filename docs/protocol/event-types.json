@@ -157,6 +157,7 @@
     "workspace:activity",
     "workspace:activity-changed",
     "workspace:attention-changed",
+    "workspace:backgroundTasksRunning-changed",
     "workspace:closed",
     "workspace:context-changed",
     "workspace:created",
