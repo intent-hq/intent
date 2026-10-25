@@ -556,10 +556,10 @@ check-windows: ensure-intentd-submodule ## cargo check + clippy for Windows (x86
 	@command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1 || { \
 		echo "make check-windows: x86_64-w64-mingw32-gcc not found. Install MinGW-w64:" >&2; \
 		echo "  Debian/Ubuntu: sudo apt-get install gcc-mingw-w64-x86-64" >&2; \
-		echo "  macOS:         brew install mingw-w64" >&2; \
+		echo "  macOS:         brew install mingw-w64 (untested; CI covers Linux only)" >&2; \
 		exit 2; }
-	@command -v rustup >/dev/null 2>&1 || { echo "make check-windows: rustup not found; the pinned toolchain needs the $(WINDOWS_LINT_TARGET) target (run make bootstrap-dev-host)" >&2; exit 2; }
-	@cd "$(INTENTD_DIR)" && { rustup target list --installed | grep -qx '$(WINDOWS_LINT_TARGET)' || rustup target add $(WINDOWS_LINT_TARGET); }
+	@cd "$(INTENTD_DIR)" && RUSTUP_AUTO_INSTALL=0 rustup which cargo >/dev/null 2>&1 || { echo "make check-windows: the rustup toolchain pinned in $(INTENTD_DIR)/rust-toolchain.toml is not installed (run make bootstrap-dev-host)" >&2; exit 2; }
+	@cd "$(INTENTD_DIR)" && { RUSTUP_AUTO_INSTALL=0 rustup target list --installed | grep -qx '$(WINDOWS_LINT_TARGET)' || RUSTUP_AUTO_INSTALL=0 rustup target add $(WINDOWS_LINT_TARGET); } || { echo "make check-windows: could not add the $(WINDOWS_LINT_TARGET) rustup target to the pinned toolchain (offline?); run: cd $(INTENTD_DIR) && rustup target add $(WINDOWS_LINT_TARGET)" >&2; exit 2; }
 	cd "$(INTENTD_DIR)" && $(COMPACT_CARGO) cargo check --workspace --target $(WINDOWS_LINT_TARGET) --jobs $(BUILD_JOBS)
 	cd "$(INTENTD_DIR)" && $(COMPACT_CARGO) cargo clippy --workspace --all-targets --target $(WINDOWS_LINT_TARGET) --jobs $(BUILD_JOBS) -- -D warnings
 
