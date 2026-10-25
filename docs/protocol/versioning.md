@@ -36,6 +36,12 @@ for an `active` script run monitor (§5.8a), recomputed at monitor registration 
 terminal transition. Neither signal feeds `activity` or `displayStatus`. Older daemons omit
 `scriptsRunning` and never emit the event; clients must detect both by presence.
 
+Also within 15.2 (additive event field; presence-detected; no method-catalog change, so no
+version bump): **`agent:renamed` carries `nameExplicitlySet`** (§6.5). Both rename paths
+(`agent.rename` and a name-only `agent.update`) report the session's persisted flag after
+the write, so clients stop inferring it. Older daemons omit the field; clients treat an
+absent field as `true`.
+
 **Version 15.1 — workspace discussions (additive, prepared).**
 [Workspace discussions](./methods/multiplayer.md#555-workspace-discussions) add
 `discussion.conversations`, `discussion.recipients`, `discussion.list`,
