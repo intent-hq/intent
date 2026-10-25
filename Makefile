@@ -301,13 +301,13 @@ BUILD_JOBS ?= -2
 # `make test NEXTEST_SHOW_PROGRESS=bar CARGO_TERM_PROGRESS_WHEN=auto`.
 # CI already sets CI=true, under which both tools are non-interactive anyway.
 gate test test-intentd test-changed test-select coverage-changed coverage-e2e coverage-all list-tests: export NEXTEST_SHOW_PROGRESS ?= none
-gate check clippy lint-sources build-intentd test test-intentd test-changed test-select coverage-changed coverage-e2e coverage-all list-tests: export CARGO_TERM_PROGRESS_WHEN ?= never
+gate check clippy check-windows lint-sources build-intentd test test-intentd test-changed test-select coverage-changed coverage-e2e coverage-all list-tests: export CARGO_TERM_PROGRESS_WHEN ?= never
 # Pagers on the same targets. A saved-script PTY has no keyboard, so any
 # git/gh step that pages to `less` stalls forever waiting for a keypress.
 # nextest ignores PAGER (only --no-pager / user config disable its paging),
 # hence the explicit --no-pager on list-tests.
-gate check clippy lint-sources build-intentd test test-intentd test-changed test-select coverage-changed coverage-e2e coverage-all list-tests: export PAGER ?= cat
-gate check clippy lint-sources build-intentd test test-intentd test-changed test-select coverage-changed coverage-e2e coverage-all list-tests: export GIT_PAGER ?= cat
+gate check clippy check-windows lint-sources build-intentd test test-intentd test-changed test-select coverage-changed coverage-e2e coverage-all list-tests: export PAGER ?= cat
+gate check clippy check-windows lint-sources build-intentd test test-intentd test-changed test-select coverage-changed coverage-e2e coverage-all list-tests: export GIT_PAGER ?= cat
 
 # Test time limits on the local test targets. Hang-guard budgets in intentd
 # tests scale with INTENTD_TEST_TIMEOUT_MULTIPLIER (intentd-test-support's
@@ -368,7 +368,7 @@ FE_BUILD_HEAP_MB ?= 16384
 	ensure-fe-toolchain \
 	update \
 	build build-intentd build-sidecar gate test test-intentd test-scripts test-scripts-changed test-changed test-select list-tests coverage-changed coverage-e2e coverage-all \
-	fmt clippy lint-sources lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child lint-shell-sleeps lint-shell lint-workflows bash3 check clean clean-dev \
+	fmt clippy check-windows lint-sources lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child lint-shell-sleeps lint-shell lint-workflows bash3 check clean clean-dev \
 	sweep sweep-all seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
 	run-intentd dev-ui dev-sandbox-ui dev-sandbox-app dev-sandbox-stack dev-fe fe-launch \
 	sandbox-status sandbox-stop \
@@ -541,6 +541,27 @@ fmt: ensure-intentd-submodule ## cargo fmt --check
 
 clippy: ensure-intentd-submodule ## cargo clippy --all-targets -- -D warnings
 	cd "$(INTENTD_DIR)" && $(COMPACT_CARGO) cargo clippy --workspace --all-targets --jobs $(BUILD_JOBS) -- -D warnings
+
+# The Windows GNU target's production `cargo check` and `--all-targets`
+# Clippy, from Linux or macOS: the local twin of intentd CI's PR-time
+# `windows-cross-lint` job (the check covers production arms that test
+# fixture features hide from Clippy). Run it before queueing a
+# change that touches cfg(unix) / cfg(windows) code: the Linux `clippy` never
+# compiles that code for Windows, and the queue's native `windows-lint` would
+# eject the PR an hour later (intentd#2672). Not part of `check`: it needs a
+# MinGW-w64 C compiler for the target's build scripts. The rustup target is
+# added on demand (no privilege needed); the compiler must be installed.
+WINDOWS_LINT_TARGET := x86_64-pc-windows-gnu
+check-windows: ensure-intentd-submodule ## cargo check + clippy for Windows (x86_64-pc-windows-gnu) like CI's windows-cross-lint; needs MinGW-w64
+	@command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1 || { \
+		echo "make check-windows: x86_64-w64-mingw32-gcc not found. Install MinGW-w64:" >&2; \
+		echo "  Debian/Ubuntu: sudo apt-get install gcc-mingw-w64-x86-64" >&2; \
+		echo "  macOS:         brew install mingw-w64 (untested; CI covers Linux only)" >&2; \
+		exit 2; }
+	@cd "$(INTENTD_DIR)" && RUSTUP_AUTO_INSTALL=0 rustup which cargo >/dev/null 2>&1 || { echo "make check-windows: the rustup toolchain pinned in $(INTENTD_DIR)/rust-toolchain.toml is not installed (run make bootstrap-dev-host)" >&2; exit 2; }
+	@cd "$(INTENTD_DIR)" && { RUSTUP_AUTO_INSTALL=0 rustup target list --installed | grep -qx '$(WINDOWS_LINT_TARGET)' || RUSTUP_AUTO_INSTALL=0 rustup target add $(WINDOWS_LINT_TARGET); } || { echo "make check-windows: could not add the $(WINDOWS_LINT_TARGET) rustup target to the pinned toolchain (offline?); run: cd $(INTENTD_DIR) && rustup target add $(WINDOWS_LINT_TARGET)" >&2; exit 2; }
+	cd "$(INTENTD_DIR)" && $(COMPACT_CARGO) cargo check --workspace --target $(WINDOWS_LINT_TARGET) --jobs $(BUILD_JOBS)
+	cd "$(INTENTD_DIR)" && $(COMPACT_CARGO) cargo clippy --workspace --all-targets --target $(WINDOWS_LINT_TARGET) --jobs $(BUILD_JOBS) -- -D warnings
 
 # Source lints are discovered by convention: every `tests/*_lint.rs` in any
 # intentd crate is a cargo test target whose name ends in `_lint`, and cargo's
