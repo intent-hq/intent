@@ -7,7 +7,8 @@ import assert from 'node:assert/strict';
 export const MAX_ROWS = 256;
 export const MAX_SEEN = 1024;
 const SCOPE_KEYS = ['workspaceId', 'agentId', 'provider', 'acpSessionId', 'connectionGeneration'];
-// Exact reviewed adapter pins. Any other provider or version is unsupported until reviewed.
+// Adapter pins (synthetic values: the daemon takes each version from its adapter pin and
+// moves it with every pin bump). Any other provider, or any other version, is unsupported.
 export const SUPPORTED_ADAPTERS = Object.freeze({
   codex: Object.freeze({ adapterVersion: '2.2.2', source: 'codex-air' }),
   'claude-code': Object.freeze({ adapterVersion: '0.81.1', source: 'claude-air' }),
