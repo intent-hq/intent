@@ -282,7 +282,11 @@ and builds any branch/ref — e.g. a PR branch — into platform installers for 
 testing. Platforms are opt-in (`build_macos` / `build_windows` / `build_linux`);
 `sign` defaults to true (macOS Developer ID + notarization, Windows Azure Artifact Signing).
 For a manual Windows build, `build_windows=true` selects the platform and
-`sign=false` selects an unsigned build.
+`sign=false` selects an unsigned build. A signed Windows request first runs the
+`windows-signing-preflight` job on a small Linux runner. When any Azure setting below
+is missing or malformed, it fails within seconds, before a Windows runner is allocated
+or the sidecar is built, and names every missing setting; re-run with `sign=false`
+until a repository admin configures them.
 Installers are uploaded as short-lived workflow artifacts (7-day retention),
 version-suffixed `-manual.<run_number>`; nothing is published to
 `intent-hq/cloudlands-releases` and no auto-updater feed is uploaded.
