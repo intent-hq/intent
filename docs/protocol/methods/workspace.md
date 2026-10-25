@@ -1308,6 +1308,23 @@ each with a dedicated change event (§6.5) that carries the new value:
   subscription emit path as `waiting` (the lite seq-0 snapshot included; the enrichment
   seeds the transition baseline). Transitions surface via
   `workspace:scriptsRunning-changed` (§6.5).
+- `backgroundTasksRunning?` — **derived, read-only, orthogonal background-task flag (within
+  15.2).** `true` when any agent of the workspace has a provider background task (§5.5b
+  worker observation — e.g. a backgrounded shell command) still running: the agent's
+  current generation is `supported`, its connection is `continuous`, and at least one row's
+  `providerState` is `running` — the same predicate that keeps such an agent's provider
+  alive past idle reaping. Read from the in-memory worker projections (never persisted, no
+  store read), so it is `false` after a daemon restart, when the provider connection drops
+  or the session is released, and for providers without §5.5b support. **Presence-detected**:
+  emitted only as `backgroundTasksRunning: true` and **omitted when `false`**, so clients
+  treat an absent field as no running background tasks and older daemons interoperate
+  fail-open. **Orthogonal to `activity`, `displayStatus`, `waiting` and `scriptsRunning`**
+  — a workspace roll-up only; it never changes agent, task or script status and never
+  counts as agent activity; clients may combine it with `activity` for their own "running"
+  grouping. Served on the same `workspace.list` / `workspace.get` / subscription emit path
+  as `scriptsRunning` (the lite seq-0 snapshot included; the enrichment seeds the
+  transition baseline). Transitions surface via
+  `workspace:backgroundTasksRunning-changed` (§6.5).
 
 **`status` wire form.** `Workspace.status` serializes as the PascalCase TS `WorkspaceStatus`
 string enum — `"Active" | "Inactive" | "Archived" | "Retired" | "Deleted"` (src/shared/types.ts; `"Retired"` is additive, see [Retired workspaces](#retired-workspaces)) — both on

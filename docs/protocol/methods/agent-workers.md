@@ -135,6 +135,12 @@ turns or alter agent/task/script status. Emit a replacement on accepted state,
 support, continuity, capacity/eviction or generation changes. An unchanged list
 read, replay, stop decision or unrelated ACP event does not emit a worker change.
 
+The one workspace-level roll-up is the separate derived
+[`Workspace.backgroundTasksRunning`](./workspace.md#51-workspace) flag (§5.1): `true`
+while any agent of the workspace passes the running-worker predicate (supported,
+continuous, a row with providerState `running`). It is a Home grouping signal only and
+likewise never alters agent, task or script status.
+
 #### Stop
 
 `agent.workers.stop` asks the provider to stop one worker without cancelling the
