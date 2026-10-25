@@ -140,7 +140,7 @@ test('only a committed golden in the fixture root may keep the historical id', a
   await inspectFixtures({ fixtureRoot: dir, fresh });
 });
 
-test('the committed goldens are unchanged and still validate', async () => {
+test('the committed goldens still validate with their recorded generator id', async () => {
   for (const file of shared.GOLDEN_FILES) {
     const golden = JSON.parse(await fs.readFile(path.join(root, file), 'utf8'));
     assert.ok([shared.GENERATOR, ...shared.HISTORICAL_GOLDEN_GENERATORS].includes(golden.provenance.generator));

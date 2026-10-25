@@ -6,11 +6,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { GENERATOR, inspectSources, preflight, runContract } from './test-transfer-selection-contract.mjs';
+import { GENERATOR_SOURCE, inspectSources, preflight, runContract } from './test-transfer-selection-contract.mjs';
 import { GENERATOR as GENERATOR_ID, HISTORICAL_GOLDEN_GENERATORS, hashJson } from './check-transfer-selection-contract.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const OLD_GENERATOR = 'crates/intent-services/src/transfer_selection_contract.rs';
+const OLD_GENERATOR_SOURCE = 'crates/intent-services/src/transfer_selection_contract.rs';
 const EXPORTER = 'scripts/test-transfer-selection-contract.sh';
 const RENDERER = 'src/lib/components/chat/input/ModelPicker.transfer-selection-contract.test.ts';
 const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim();
@@ -26,7 +26,7 @@ function commit(root) {
   return git(root, 'rev-parse', 'HEAD');
 }
 
-function fixture(t, { generator = GENERATOR } = {}) {
+function fixture(t, { generator = GENERATOR_SOURCE } = {}) {
   const top = mkdtempSync(path.join(os.tmpdir(), 'transfer-runner-test-'));
   t.after(() => rmSync(top, { recursive: true, force: true }));
   const root = path.join(top, 'monorepo');
@@ -107,14 +107,14 @@ test('generator in intent-svc-transfer is hashed and reported; committed goldens
   const golden = JSON.parse(readFileSync(path.join(f.root, 'docs/protocol/fixtures/transfer-selection/public-sessions.json'), 'utf8'));
   assert.ok(HISTORICAL_GOLDEN_GENERATORS.includes(golden.provenance.generator), 'fixture copies the real committed golden');
   const result = await runContract({ root: f.root, env: f.env, log: () => {} });
-  assert.equal(result.sources.generator, GENERATOR);
-  assert.equal(result.sources.generatorSha256, hash(path.join(f.dirs.intentd, GENERATOR)));
+  assert.equal(result.sources.generator, GENERATOR_SOURCE);
+  assert.equal(result.sources.generatorSha256, hash(path.join(f.dirs.intentd, GENERATOR_SOURCE)));
   const rendered = JSON.parse(readFileSync(f.env.FIXTURE_RENDER_LOG, 'utf8'));
   assert.equal(rendered.artifact.provenance.generator, GENERATOR_ID);
 });
 
 test('an intentd checkout with only the old intent-services generator path fails before export', async (t) => {
-  const f = fixture(t, { generator: OLD_GENERATOR });
+  const f = fixture(t, { generator: OLD_GENERATOR_SOURCE });
   await assert.rejects(preflight(f.root, f.env), /required transfer-selection harness.*intent-svc-transfer/);
   assert.deepEqual(readdirSync(f.env.TMPDIR), []);
 });
@@ -186,7 +186,7 @@ for (const [mode, message] of [
 }
 
 test('missing or deleted required harnesses cannot silently disable the gate', async (t) => {
-  for (const [component, files] of [['intentd', [EXPORTER, GENERATOR]], ['cloudlands-fe', [RENDERER, 'scripts/transfer-selection-fixtures.mjs']]]) {
+  for (const [component, files] of [['intentd', [EXPORTER, GENERATOR_SOURCE]], ['cloudlands-fe', [RENDERER, 'scripts/transfer-selection-fixtures.mjs']]]) {
     for (const file of files) {
       const f = fixture(t);
       rmSync(path.join(f.dirs[component], file));

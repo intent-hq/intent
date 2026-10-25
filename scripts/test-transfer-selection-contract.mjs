@@ -11,7 +11,7 @@ import { GOLDEN_FILES, inspectFixtures, resolveGoldenPath } from './check-transf
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // The contract test lives in the crate that owns the transfer feature.
-export const GENERATOR = 'crates/intent-svc-transfer/src/transfer_selection_contract.rs';
+export const GENERATOR_SOURCE = 'crates/intent-svc-transfer/src/transfer_selection_contract.rs';
 const EXPORTER = 'scripts/test-transfer-selection-contract.sh';
 const RENDERER = 'src/lib/components/chat/input/ModelPicker.transfer-selection-contract.test.ts';
 const LOADER = 'scripts/transfer-selection-fixtures.mjs';
@@ -55,8 +55,8 @@ export function inspectSources(root, env = process.env) {
 export async function preflight(root = ROOT, env = process.env) {
   const sources = inspectSources(root, env);
   const intentdRoot = path.join(root, 'packages/intentd');
-  for (const file of [GENERATOR, EXPORTER]) required(intentdRoot, file);
-  sources.generator = GENERATOR;
+  for (const file of [GENERATOR_SOURCE, EXPORTER]) required(intentdRoot, file);
+  sources.generator = GENERATOR_SOURCE;
   for (const file of [RENDERER, LOADER]) required(path.join(root, 'packages/cloudlands-fe'), file);
   const fixtureRoot = path.join(root, 'docs/protocol/fixtures/transfer-selection');
   if (env.TRANSFER_SELECTION_FIXTURE_ROOT !== undefined) {

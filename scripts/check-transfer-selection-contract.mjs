@@ -251,6 +251,7 @@ export async function inspectFixtures({ fixtureRoot, inputsOnly = false, generat
   if (inputsOnly) return '32 transfer-selection input cases valid (outputs not checked)';
   const goldenPath = path.resolve(generated ?? path.join(root, 'public-sessions.json'));
   // Only a GOLDEN_FILES file in the fixture root may keep a historical generator id.
+  // The fixture root itself is trusted (caller argument, environment or default).
   const emitted = !GOLDEN_FILES.some((file) => path.join(root, file) === goldenPath);
   const golden = await readRequiredJson(goldenPath);
   const expectedSource = { intentdRevision, generatorSha256 };
