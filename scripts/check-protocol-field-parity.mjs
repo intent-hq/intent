@@ -20,7 +20,19 @@
 // (`cfg_attr`, `cfg`, unknown serde arguments) fail closed. A pair whose
 // submodule is not initialized is skipped; a manifest path missing from an
 // initialized submodule fails.
+//
+// `--base <ref>` (the Makefile passes origin/main) is the comparison the
+// upstream monorepo-consumer-checks job makes: monorepo main's staged table,
+// the component under test at its own head, the other component at main's
+// pin. When a component checkout is off its recorded pin (or dirty) and a
+// missing field would fail, the field is compared again with the staged table
+// from <ref>'s versioning.md and every component still at its pin read from the
+// gitlink <ref> records. A field <ref> stages, or whose frontend type at <ref>'s
+// pin declares it, is a `pin drift` warning (this monorepo worktree is older
+// than <ref>); any other missing field stays an error.
+// Nothing changes at the pins or when <ref> is HEAD or does not resolve.
 
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
@@ -618,6 +630,7 @@ export function comparePair(pair, rustSource, tsSource, staged = new Map()) {
     errors.push({
       file: rustFile,
       line: f.line,
+      missing: { struct: pair.rust.struct, wire: f.wire, rustName: f.rustName },
       message: `${label}: emitted field ${pair.rust.struct}.${f.wire} (Rust ${f.rustName}) is missing from ${pair.ts.type} (${tsRange}); add it to the TS type (and normalizer if needed), stage a daemon-first field in the "${STAGED_HEADING}" table of ${STAGED_DOC}, or add an ignore entry with a reason in scripts/check-protocol-field-parity.mjs for a field the FE never reads`,
     });
   }
@@ -693,19 +706,22 @@ async function readManifestFile(root, { file, sub, dir, explicit }) {
 }
 
 /**
- * Run every manifest pair against `root`; returns `{ errors, warnings, checked, skipped, refs }`.
- * `warnings` are stale ignore entries and staged daemon-first fields; only `errors` fail the check.
- * The staged table is read from `root`'s `STAGED_DOC` (monorepo docs, never a component root).
- * `refs` holds one submodule ref per distinct component a compared file was read from, in
- * first-read order. Optional `intentdDir` / `feDir` select roots relative to `root` (or absolute);
- * unlike absent default submodules, explicitly selected missing roots fail.
+ * Run every manifest pair against `root`; returns `{ errors, warnings, checked, skipped, refs, drift }`.
+ * `warnings` are stale ignore entries, staged daemon-first fields and pin-drift fields; only
+ * `errors` fail the check. The staged table is read from `root`'s `STAGED_DOC` (monorepo docs,
+ * never a component root). `refs` holds one submodule ref per distinct component a compared file
+ * was read from, in first-read order. Optional `intentdDir` / `feDir` select roots relative to
+ * `root` (or absolute); unlike absent default submodules, explicitly selected missing roots fail.
+ * Optional `base` names the ref of the upstream comparison (see the header); `drift` reports
+ * what it did (`{ status, base?, baseSha?, notes }`, status `off` when no base was given).
  */
-export async function runChecks(root, pairs = PAIRS, { intentdDir, feDir } = {}) {
+export async function runChecks(root, pairs = PAIRS, { intentdDir, feDir, base } = {}) {
   const errors = [];
   const warnings = [];
   const checked = [];
   const skipped = [];
   const refs = new Map();
+  const compared = [];
   let stagedSource = '';
   try {
     stagedSource = await fs.readFile(path.resolve(root, STAGED_DOC), 'utf8');
@@ -730,20 +746,113 @@ export async function runChecks(root, pairs = PAIRS, { intentdDir, feDir } = {})
       if (sub && !refs.has(sub)) refs.set(sub, describeCheckout(root, dir, { pinDir: sub }));
     }
     for (const d of comparePair(selectedPair, rust.source, ts.source, staged.get(pair.rust.struct))) (d.severity === 'warning' ? warnings : errors).push(d);
+    compared.push({ pair, selectedPair, sources, texts: [rust.source, ts.source] });
     checked.push(pairLabel(pair));
   }
-  return { errors, warnings, checked, skipped, refs: [...refs.values()] };
+  const drift = base ? compareAgainstBase(root, base, { errors, warnings, refs, compared, pairs }) : { status: 'off', notes: [] };
+  return { errors: drift.errors ?? errors, warnings, checked, skipped, refs: [...refs.values()], drift: { status: drift.status, base: drift.base, baseSha: drift.baseSha, notes: drift.notes } };
+}
+
+const short = (sha) => sha.slice(0, 7);
+
+/** Git stdout (untrimmed: file contents keep their line numbers), or null when git fails. */
+function gitText(args, cwd) {
+  try {
+    return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 256 * 1024 * 1024 });
+  } catch {
+    return null;
+  }
+}
+
+const missingKey = ({ struct, wire }) => `${struct}.${wire}`;
+
+/** `git fetch origin main` for a remote-tracking `origin/main`, plain `git fetch` otherwise. */
+const fetchCommand = (base) => {
+  const m = base.match(/^(?:refs\/remotes\/)?([^/]+)\/(.+)$/);
+  return m ? `git fetch ${m[1]} ${m[2]}` : 'git fetch';
+};
+
+/**
+ * Re-run each missing field the way monorepo-consumer-checks would against `base` and downgrade
+ * the ones that pass there to pin-drift warnings. Mutates `warnings`; returns
+ * `{ status, base, baseSha?, notes, errors? }` where `errors` replaces the first-pass errors.
+ * Statuses: `no-missing-fields`, `at-pins`, `unresolved`, `base-is-head`, `base-unreadable`, `compared`.
+ */
+function compareAgainstBase(root, base, { errors, warnings, refs, compared, pairs }) {
+  const absRoot = path.resolve(root);
+  const result = { base, notes: [] };
+  if (!errors.some((e) => e.missing)) return { ...result, status: 'no-missing-fields' };
+  // A component the checkout moved (off its pin, or dirty) plays the PR head upstream.
+  const moved = new Set([...refs].filter(([, ref]) => ref.checkout && ref.pin && (ref.checkout !== ref.pin || ref.dirty)).map(([sub]) => sub));
+  if (moved.size === 0) return { ...result, status: 'at-pins' };
+  const baseSha = gitText(['rev-parse', '--verify', '--quiet', `${base}^{commit}`], absRoot)?.trim();
+  const fetchHint = `If the missing field(s) above came from newer component main, run ${fetchCommand(base)} and rerun.`;
+  if (!baseSha) {
+    result.notes.push(`the comparison against ${base} that monorepo-consumer-checks makes was skipped: ${base} does not resolve to a commit. ${fetchHint}`);
+    return { ...result, status: 'unresolved' };
+  }
+  result.baseSha = baseSha;
+  if (baseSha === gitText(['rev-parse', 'HEAD'], absRoot)?.trim()) return { ...result, status: 'base-is-head' };
+  const baseDoc = gitText(['show', `${baseSha}:${STAGED_DOC}`], absRoot);
+  const baseStaged = baseDoc === null ? null : parseStagedFields(baseDoc, `${base}:${STAGED_DOC}`, pairs);
+  if (!baseStaged || baseStaged.errors.length > 0) {
+    result.notes.push(`the comparison against ${base} (${short(baseSha)}) was skipped: ${base}:${STAGED_DOC} is ${baseStaged ? 'malformed there' : 'not readable'}. ${fetchHint}`);
+    return { ...result, status: 'base-unreadable' };
+  }
+  const basePins = new Map();
+  const readAtBase = (source, text) => {
+    if (!source.sub || moved.has(source.sub)) return { text };
+    if (!basePins.has(source.sub)) {
+      const pin = gitText(['rev-parse', '--verify', '--quiet', `${baseSha}:${source.sub}`], absRoot)?.trim() ?? null;
+      basePins.set(source.sub, { pin, warned: false });
+    }
+    const entry = basePins.get(source.sub);
+    if (!entry.pin) return { text };
+    const shown = gitText(['show', `${entry.pin}:${path.relative(source.dir, source.file)}`], path.resolve(absRoot, source.dir));
+    if (shown === null) {
+      if (!entry.warned) {
+        entry.warned = true;
+        result.notes.push(`${base}'s ${source.sub} pin ${short(entry.pin)} is not in the local clone; its checkout was compared instead (git -C ${source.dir} fetch origin to compare against it).`);
+      }
+      return { text };
+    }
+    return { text: shown, pin: entry.pin };
+  };
+  const passes = new Map();
+  for (const { pair, selectedPair, sources, texts } of compared) {
+    const [rust, ts] = sources.map((source, i) => readAtBase(source, texts[i]));
+    const stagedHere = baseStaged.staged.get(pair.rust.struct) ?? new Map();
+    const stillMissing = new Set(comparePair(selectedPair, rust.text, ts.text, stagedHere).filter((d) => d.missing).map((d) => missingKey(d.missing)));
+    const baseTsKeys = new Set((extractTsKeys(ts.text, pair.ts.type)?.keys ?? []).map((k) => k.name));
+    for (const e of errors) {
+      if (!e.missing || e.missing.struct !== pair.rust.struct || stillMissing.has(missingKey(e.missing))) continue;
+      // Passing only because the daemon at <base>'s pin does not emit the field is not drift.
+      const why = stagedHere.has(e.missing.wire)
+        ? `staged in ${base}:${STAGED_DOC}`
+        : baseTsKeys.has(e.missing.wire) && ts.pin
+          ? `declared by ${pair.ts.type} at ${base}'s ${path.basename(sources[1].sub)} pin ${short(ts.pin)}`
+          : null;
+      if (!why) continue;
+      passes.set(e, `${pairLabel(pair)}: pin drift: emitted field ${e.missing.struct}.${e.missing.wire} (Rust ${e.missing.rustName}) is missing locally but passes against ${base} (${short(baseSha)}), the comparison monorepo-consumer-checks makes: ${why}. This monorepo worktree is older than ${base}; rebase it onto ${base} to compare locally.`);
+    }
+  }
+  for (const [e, message] of passes) warnings.push({ file: e.file, line: e.line, severity: 'warning', message });
+  const remaining = errors.filter((e) => !passes.has(e));
+  if (remaining.some((e) => e.missing)) {
+    result.notes.push(`the missing field(s) above also fail against ${base} (${short(baseSha)}), the comparison monorepo-consumer-checks makes, so they come from the component checkout, not from newer main. If ${base} is stale, run ${fetchCommand(base)} and rerun.`);
+  }
+  return { ...result, status: 'compared', errors: remaining };
 }
 
 async function main() {
   const { values, positionals } = parseArgs({
-    options: { 'intentd-dir': { type: 'string' }, 'fe-dir': { type: 'string' } },
+    options: { 'intentd-dir': { type: 'string' }, 'fe-dir': { type: 'string' }, base: { type: 'string' } },
     allowPositionals: true,
   });
-  if (positionals.length > 1) throw new Error('Usage: check-protocol-field-parity.mjs [root] [--intentd-dir DIR] [--fe-dir DIR]');
+  if (positionals.length > 1) throw new Error('Usage: check-protocol-field-parity.mjs [root] [--intentd-dir DIR] [--fe-dir DIR] [--base REF]');
   const root = positionals[0] ? path.resolve(positionals[0]) : process.cwd();
-  const { errors, warnings, checked, skipped, refs } = await runChecks(root, PAIRS, {
-    intentdDir: values['intentd-dir'], feDir: values['fe-dir'],
+  const { errors, warnings, checked, skipped, refs, drift } = await runChecks(root, PAIRS, {
+    intentdDir: values['intentd-dir'], feDir: values['fe-dir'], base: values.base || undefined,
   });
   for (const ref of refs) {
     const banner = formatRefBanner(ref);
@@ -753,13 +862,14 @@ async function main() {
   }
   for (const s of skipped) console.log(s);
   for (const w of warnings) console.error(formatDiagnostic(w));
-  const warningSummary = warnings.length > 0 ? `${warnings.length} warning(s): stale ignore entries or staged daemon-first fields` : '';
+  const warningSummary = warnings.length > 0 ? `${warnings.length} warning(s): stale ignore entries, staged daemon-first fields or pin drift` : '';
   if (errors.length === 0) {
     const suffix = warningSummary ? ` ${warningSummary}; see the warnings above.` : '';
     console.log(`Protocol field parity holds for ${checked.length} pair(s): ${checked.join('; ')}.${suffix}`);
     return;
   }
   for (const e of errors) console.error(formatDiagnostic(e));
+  for (const note of drift.notes) console.error(`note: ${note}`);
   console.error(`check-protocol-field-parity: ${errors.length} error(s)${warningSummary ? `, ${warningSummary}` : ''}`);
   process.exitCode = 1;
 }
