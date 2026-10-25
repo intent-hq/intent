@@ -542,15 +542,17 @@ fmt: ensure-intentd-submodule ## cargo fmt --check
 clippy: ensure-intentd-submodule ## cargo clippy --all-targets -- -D warnings
 	cd "$(INTENTD_DIR)" && $(COMPACT_CARGO) cargo clippy --workspace --all-targets --jobs $(BUILD_JOBS) -- -D warnings
 
-# Clippy for the Windows GNU target, from Linux or macOS: the local twin of
-# intentd CI's PR-time `windows-cross-lint` job. Run it before queueing a
+# The Windows GNU target's production `cargo check` and `--all-targets`
+# Clippy, from Linux or macOS: the local twin of intentd CI's PR-time
+# `windows-cross-lint` job (the check covers production arms that test
+# fixture features hide from Clippy). Run it before queueing a
 # change that touches cfg(unix) / cfg(windows) code: the Linux `clippy` never
 # compiles that code for Windows, and the queue's native `windows-lint` would
 # eject the PR an hour later (intentd#2672). Not part of `check`: it needs a
 # MinGW-w64 C compiler for the target's build scripts. The rustup target is
 # added on demand (no privilege needed); the compiler must be installed.
 WINDOWS_LINT_TARGET := x86_64-pc-windows-gnu
-check-windows: ensure-intentd-submodule ## Clippy for Windows (x86_64-pc-windows-gnu) like CI's windows-cross-lint; needs MinGW-w64
+check-windows: ensure-intentd-submodule ## cargo check + clippy for Windows (x86_64-pc-windows-gnu) like CI's windows-cross-lint; needs MinGW-w64
 	@command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1 || { \
 		echo "make check-windows: x86_64-w64-mingw32-gcc not found. Install MinGW-w64:" >&2; \
 		echo "  Debian/Ubuntu: sudo apt-get install gcc-mingw-w64-x86-64" >&2; \
@@ -558,6 +560,7 @@ check-windows: ensure-intentd-submodule ## Clippy for Windows (x86_64-pc-windows
 		exit 2; }
 	@command -v rustup >/dev/null 2>&1 || { echo "make check-windows: rustup not found; the pinned toolchain needs the $(WINDOWS_LINT_TARGET) target (run make bootstrap-dev-host)" >&2; exit 2; }
 	@cd "$(INTENTD_DIR)" && { rustup target list --installed | grep -qx '$(WINDOWS_LINT_TARGET)' || rustup target add $(WINDOWS_LINT_TARGET); }
+	cd "$(INTENTD_DIR)" && $(COMPACT_CARGO) cargo check --workspace --target $(WINDOWS_LINT_TARGET) --jobs $(BUILD_JOBS)
 	cd "$(INTENTD_DIR)" && $(COMPACT_CARGO) cargo clippy --workspace --all-targets --target $(WINDOWS_LINT_TARGET) --jobs $(BUILD_JOBS) -- -D warnings
 
 # Source lints are discovered by convention: every `tests/*_lint.rs` in any
