@@ -21,7 +21,7 @@ All `note.*` methods require `workspaceId`. All except `list` and `create` addit
 | note.saveAsset | data (req, base64 — a `data:<mime>;base64,` URL prefix is accepted and stripped), mimeType (req), originalName? | { assetId, path, url } — **additive asset write** (no `noteId`; ports the legacy `assets:save` IPC behind note image paste/upload). Writes the decoded bytes under the workspace assets root plus an `<assetId>.meta.json` sidecar (`{ id, originalName, mimeType, size, createdAt }`); `assetId` is `<timestamp36>-<hash8><ext>` with `<ext>` derived from `mimeType` (default `.png`), `url` is `workspace-asset://<workspaceId>/<assetId>` and round-trips through `note.readAsset`. `-32602` on missing params; `-32603` on invalid base64 or when asset storage is not configured |
 | note.listVersions | noteId (req) | bare array of `{ type:"snapshot", v, date, author:{id,name,type}, title, contentLength }` ascending by `v` |
 | note.getVersion | noteId (req), v (req,int) | `{ type:"snapshot", v, date, author, title, content }` — -32602 if the version does not exist |
-| note.restoreVersion | noteId (req), v (req,int) | { ok, noteId, restoredFrom, v, note } — resets title+content to version `v`, bumps `rev`, appends a new version capturing the restored state. The restored text runs through the same comment-anchor pass as every content write: a comment anchored after `v` is flagged `isOrphaned`, and markers of a deleted or orphaned comment are scrubbed |
+| note.restoreVersion | noteId (req), v (req,int) | { ok, noteId, restoredFrom, v, note } — resets title+content to version `v`, bumps `rev`, appends a new version capturing the restored state. The restored text runs through the same comment-anchor pass as every content write: a comment whose anchor the restored text lacks (e.g. one anchored after `v`) is flagged `isOrphaned`, partial anchors are recovered where possible, and markers of a deleted or already-orphaned comment are scrubbed — orphaning is one-way, so a later restore does not revive the comment |
 
 **`note.list` details.**
 
@@ -119,7 +119,8 @@ direct parent write), `task.convertBlocks`, `comment.add` and the `primitive.*`
 appends — linked-checkbox materialization (§5.4), and the metadata writers —
 `note.updateMetadata`, `task.updateNoteStatus` (including linked-line redirects),
 `task.markAsTask`, `task.setRelations`, `task.assignAgent` and
-`task.removeAgentFromAllTasks`: each holds
+`task.removeAgentFromAllTasks`, plus the daemon-internal task-status and
+agent-cleanup paths that share their implementation: each holds
 the note's write lane from the read its transform derives from until its gated persist
 lands, then releases it before any follow-up write (auto-conversion, a linked-line
 redirect, whose materialization takes the lane itself). Parallel calls on one note —
@@ -129,12 +130,13 @@ surgical transform always runs on the current content: a `note.edit` whose `old`
 an earlier queued writer replaced fails with "Text not found" rather than being merged.
 A task status write that lands while a `task.update` holds the parent's lane has its
 line rewrite queued behind that write, so the parent is never rewritten under it.
-Writes to different notes never wait on each other. Because no writer moves the `rev`
-inside another's read→persist window, a whole-row replacement (`note.restoreVersion`,
-or `note.update` content without `expectedVersion`) never reverts a status, title,
-tag or assignment written concurrently, and a burst of metadata writes no longer
-exhausts a laned writer's bounded attempts. `-32005` remains possible only for a
-caller-supplied stale `expectedVersion`.
+Writes to different notes never wait on each other. Within one daemon, no laned writer
+moves the `rev` inside another's read→persist window, so a whole-row replacement
+(`note.restoreVersion`, or `note.update` content without `expectedVersion`) does not
+revert a status, title, tag or assignment written concurrently, and a burst of metadata
+writes does not use up a laned writer's bounded attempts. The gated loop and its
+`-32005` cases described above are unchanged; they remain the bound for any write that
+reaches the store from outside this daemon's lane.
 
 **Numbered `note.read` display rejected on content writes** (behavior only, no
 shape change — [intent-hq/intentd#1688](https://github.com/intent-hq/intentd/pull/1688),
