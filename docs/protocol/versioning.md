@@ -1470,8 +1470,10 @@ pinned cloudlands-fe declares it. List such a field here in the docs PR that doc
 it, which lands before the intentd PR (docs lead the pin). **Row** is the Rust struct
 (`AgentLite`, `Workspace`), **Field** the wire name, **Contract** a Markdown link to the
 field's contract, and **App adoption** the cloudlands-fe PR or issue that declares it.
-`make check-protocol-field-parity` reads this table. A listed field the frontend
-type lacks is a warning instead of an error. An unlisted emitted field still fails,
+`make check-protocol-field-parity` reads this table; a local run off the component
+pins also reads it from `origin/main`, the copy `monorepo-consumer-checks` uses. A
+listed field the frontend type lacks is a warning instead of an error. An unlisted
+emitted field still fails,
 and so does a malformed table. Once the frontend pin declares the field, the check
 warns that the row is stale; remove it then. Fields the frontend never reads stay in
 the `ignore` map of `scripts/check-protocol-field-parity.mjs`, not here.

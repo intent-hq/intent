@@ -215,8 +215,15 @@ check-makefile-targets: ensure-intentd-submodule ## Check Makefile-referenced in
 # Every wire field an intentd row struct emits (AgentLite, Workspace) must be
 # present in the cloudlands-fe type that consumes it, or listed in the script's
 # ignore manifest with a reason; a stale ignore entry is a warning, not a failure.
-check-protocol-field-parity: ensure-intentd-submodule ensure-fe-submodule ## Check intentd row struct fields against the cloudlands-fe types that consume them
-	@node scripts/check-protocol-field-parity.mjs --intentd-dir "$(INTENTD_DIR)" --fe-dir "$(FE_DIR)"
+# When a component checkout is off its recorded pin, a missing field is compared
+# again against PARITY_BASE (default origin/main; empty when CI is set and not
+# false/0) the way
+# the upstream monorepo-consumer-checks job compares a component PR against
+# monorepo main; a field that passes there is a pin-drift warning, not an error.
+# PARITY_BASE= keeps the strict comparison against this worktree's docs and pins.
+PARITY_BASE ?= $(if $(filter-out false 0,$(CI)),,origin/main)
+check-protocol-field-parity: ensure-intentd-submodule ensure-fe-submodule ## Check intentd row struct fields against the cloudlands-fe types that consume them (PARITY_BASE=<ref> for off-pin checkouts, default origin/main)
+	@node scripts/check-protocol-field-parity.mjs --intentd-dir "$(INTENTD_DIR)" --fe-dir "$(FE_DIR)" $(if $(PARITY_BASE),--base "$(PARITY_BASE)")$(CHECK_DEFER_PARITY)
 
 # The live main-branch rulesets of intent, intentd and cloudlands-fe (required
 # CI Gate check, thread resolution, merge queue) are snapshotted under
@@ -615,7 +622,29 @@ ifneq ($(filter test test-intentd gate,$(MAKECMDGOALS)),)
 $(RUST_CHECK_TARGETS): | check-transfer-fixture
 endif
 
-check: $(RUST_CHECK_TARGETS) ## Makefile target check + protocol field parity + shell sleep lint + fmt + clippy + source lints
+# Under make check / make gate a failed check-protocol-field-parity is recorded
+# instead of stopping make, so fmt, clippy and the source lints still run; the
+# check recipe then reports it and fails, and gate stops before the tests.
+# Standalone make check-protocol-field-parity / consumer-checks fail directly.
+# The record is named after this make process ($$PPID of $(shell)), so
+# concurrent runs in one worktree cannot clear each other's failure; it is
+# reset before parity in case a crashed run with a reused PID left one behind.
+ifneq ($(filter check gate,$(MAKECMDGOALS)),)
+CHECK_DEFERRED := $(or $(TMPDIR),/tmp)/intent-check-deferred.$(shell echo $$PPID)
+CHECK_DEFER_PARITY = || { echo check-protocol-field-parity >> "$(CHECK_DEFERRED)" && echo "make check: check-protocol-field-parity failed; continuing with the remaining check steps, check fails at the end" >&2; }
+check-protocol-field-parity: | check-deferred-reset
+endif
+
+.PHONY: check-deferred-reset
+check-deferred-reset:
+	@[ -z "$(CHECK_DEFERRED)" ] || rm -f "$(CHECK_DEFERRED)"
+
+check: $(RUST_CHECK_TARGETS) ## Makefile target check + protocol field parity + shell sleep lint + fmt + clippy + source lints (a parity failure is reported at the end)
+	@if [ -s "$(CHECK_DEFERRED)" ]; then \
+		failed=$$(tr '\n' ' ' < "$(CHECK_DEFERRED)"); rm -f "$(CHECK_DEFERRED)"; \
+		echo "make check: FAILED: $${failed}(output above); every other check step passed" >&2; \
+		exit 1; \
+	fi; rm -f "$(CHECK_DEFERRED)"
 
 gate: check | check-callback-fixture check-transfer-fixture ## Run all local Rust gates (fmt, clippy, source lints, then nextest)
 	@$(MAKE) --no-print-directory test

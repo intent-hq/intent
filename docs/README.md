@@ -47,6 +47,17 @@ emitted or is now present in the FE type — is reported as a warning, not a fai
 an FE PR that declares the field does not have to wait for the monorepo entry to be
 removed; remove the entry in a follow-up.
 
+A local run whose component checkout is off its recorded pin (an intentd branch newer
+than the pin, say) compares like the upstream `monorepo-consumer-checks` job: a missing
+field is checked again against `PARITY_BASE` (default `origin/main`) — that ref's staged
+table, the off-pin checkout as the PR head, and the other component at that ref's pin.
+A field that passes there is a `pin drift` warning (this monorepo worktree is older
+than `origin/main`; rebase it to compare locally); a field the checkout itself adds
+still fails, with a note to `git fetch origin main` if that ref may be stale.
+`PARITY_BASE=` keeps the strict local comparison, and it is off when `CI` is set. Under
+`make check` / `make gate` a parity failure no longer stops make: fmt, clippy and the
+source lints still run, and `check` fails at the end naming the parity step.
+
 ## Harness Versioning — `HARNESS.md`
 
 **[HARNESS.md](./HARNESS.md)** explains the harness versioning system: the permanent
