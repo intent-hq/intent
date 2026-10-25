@@ -1440,6 +1440,7 @@ test('off the intentd pin: an origin/main frontend pin missing from the local cl
 test('off the intentd pin: an unresolvable base skips the comparison with a fetch hint', async (t) => {
   const { root, advance } = await makeGitRoot(t);
   await advance();
+  git(root, 'remote', 'add', 'origin', 'https://example.invalid/intent.git');
   const { code, stderr } = await runCli(root, '--base', 'origin/main');
   assert.equal(code, 1);
   assert.match(stderr, /^note: the comparison against origin\/main that monorepo-consumer-checks makes was skipped: origin\/main does not resolve to a commit\. If the missing field\(s\) above came from newer component main, run git fetch origin main and rerun\.$/m);
@@ -1507,6 +1508,10 @@ test('real Makefile: PARITY_BASE defaults to origin/main locally, is off under C
   const ci = await runMakeArgs(root, ['check-protocol-field-parity'], { CI: 'true' });
   assert.equal(ci.code, 2, ci.stderr);
   assert.doesNotMatch(ci.stderr, /pin drift:/);
+  for (const value of ['false', '0']) {
+    const notCi = await runMakeArgs(root, ['check-protocol-field-parity'], { CI: value });
+    assert.equal(notCi.code, 0, `CI=${value} is not CI:\n${notCi.stderr}`);
+  }
 });
 
 // Stand-ins for fmt / clippy: RUST_CHECK_TARGETS on the command line replaces
@@ -1517,14 +1522,16 @@ test('real Makefile: make check runs the remaining steps after a parity failure 
   const { root, advance } = await makeRoutingRoot(t);
   await advance();
   await fs.writeFile(path.join(root, 'stand-in.mk'), STAND_IN_MK);
-  const goals = ['-f', 'Makefile', '-f', 'stand-in.mk', 'RUST_CHECK_TARGETS=check-protocol-field-parity stand-in-lint', 'PARITY_BASE='];
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'check-deferred-'));
+  t.after(() => fs.rm(tmp, { recursive: true, force: true }));
+  const goals = ['-f', 'Makefile', '-f', 'stand-in.mk', 'RUST_CHECK_TARGETS=check-protocol-field-parity stand-in-lint', 'PARITY_BASE=', `TMPDIR=${tmp}`];
   const failed = await runMakeArgs(root, [...goals, 'check']);
   assert.equal(failed.code, 2, failed.stderr);
   assert.match(failed.stderr, /: error: AgentLite → AgentSession: emitted field AgentLite\.parentAgentId/);
   assert.match(failed.stderr, /make check: check-protocol-field-parity failed; continuing with the remaining check steps, check fails at the end/);
   assert.match(failed.stdout, /^stand-in-lint ran$/m, 'the lints after parity still ran');
   assert.match(failed.stderr, /make check: FAILED: check-protocol-field-parity \(output above\); every other check step passed/);
-  await assert.rejects(fs.stat(path.join(root, '.dev/check-deferred')), 'the record is cleared after the report');
+  assert.deepEqual(await fs.readdir(tmp), [], 'the per-run record is removed after the report');
 
   const standalone = await runMakeArgs(root, [...goals, 'check-protocol-field-parity', 'stand-in-lint']);
   assert.equal(standalone.code, 2);
@@ -1536,6 +1543,7 @@ test('real Makefile: make check runs the remaining steps after a parity failure 
   assert.equal(clean.code, 0, clean.stderr);
   assert.match(clean.stdout, /^stand-in-lint ran$/m);
   assert.doesNotMatch(clean.stderr, /make check: FAILED/);
+  assert.deepEqual(await fs.readdir(tmp), [], 'a clean run leaves no record');
 });
 
 test('a field that only passes because origin/main\'s older daemon pin does not emit it stays an error', async (t) => {
@@ -1551,4 +1559,62 @@ test('a field that only passes because origin/main\'s older daemon pin does not 
   assert.equal(result.errors.length, 1);
   assert.match(result.errors[0].message, /emitted field AgentLite\.parentAgentId/);
   assert.doesNotMatch(result.warnings.map((w) => w.message).join('\n'), /pin drift:/);
+});
+
+test('off the cloudlands-fe pin: a field its checkout drops still fails, with no frontend-pin excuse', async (t) => {
+  const { root } = await makeGitRoot(t);
+  const fe = 'packages/cloudlands-fe';
+  const { rust, ts } = PAIRS[0];
+  const rustFile = path.join(root, rust.file);
+  await fs.writeFile(rustFile, (await fs.readFile(rustFile, 'utf8')).replace(`pub struct ${rust.struct} {\n`, `pub struct ${rust.struct} {\n    pub parent_agent_id: String,\n`));
+  git(path.join(root, 'packages/intentd'), 'commit', '-q', '-am', 'emit parentAgentId');
+  const intentdPin = git(path.join(root, 'packages/intentd'), 'rev-parse', 'HEAD');
+  const tsFile = path.join(root, ts.file);
+  await fs.writeFile(tsFile, (await fs.readFile(tsFile, 'utf8')).replace(`export interface ${ts.type} {\n`, `export interface ${ts.type} {\n  parentAgentId?: string;\n`));
+  git(path.join(root, fe), 'commit', '-q', '-am', 'declare parentAgentId');
+  git(root, 'update-index', '--cacheinfo', `160000,${intentdPin},packages/intentd`);
+  git(root, 'update-index', '--cacheinfo', `160000,${git(path.join(root, fe), 'rev-parse', 'HEAD')},${fe}`);
+  git(root, 'commit', '-q', '-m', 'pins agree');
+  makeBase(root);
+  await fs.writeFile(tsFile, (await fs.readFile(tsFile, 'utf8')).replace('  parentAgentId?: string;\n', ''));
+  git(path.join(root, fe), 'commit', '-q', '-am', 'frontend branch drops parentAgentId');
+  const result = await runChecks(root, PAIRS, { base: 'origin/main' });
+  assert.equal(result.drift.status, 'compared', 'the moved frontend plays the PR head; intentd is read at origin/main\'s pin');
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0].message, /emitted field AgentLite\.parentAgentId/);
+  assert.doesNotMatch(result.warnings.map((w) => w.message).join('\n'), /pin drift:/);
+  assert.match(result.drift.notes.join('\n'), /also fail against origin\/main/);
+});
+
+test('a frontend type that cannot be parsed at origin/main\'s pin excuses nothing', async (t) => {
+  const { root, pins, advance } = await makeGitRoot(t);
+  const head = await advance();
+  const fe = 'packages/cloudlands-fe';
+  const { ts } = PAIRS[0];
+  const renamed = await commitUnchecked(root, fe, ts.file, (s) => s.replace(`export interface ${ts.type} {`, `export interface ${ts.type}Renamed {`), pins[fe]);
+  makeBase(root, { files: { [STAGED_DOC]: stagedDoc([AGENT_PARENT_ROW]) }, gitlinks: { 'packages/intentd': head, [fe]: renamed } });
+  const result = await runChecks(root, PAIRS, { base: 'origin/main' });
+  assert.equal(result.errors.length, 1, 'the missing field stays an error');
+  assert.doesNotMatch(result.warnings.map((w) => w.message).join('\n'), /pin drift:/);
+  const notes = result.drift.notes.join('\n');
+  assert.match(notes, /the comparison of AgentLite → AgentSession against origin\/main \([0-9a-f]{7}\) could not run: .*not found/);
+  assert.match(notes, /were not fully compared against origin\/main/);
+});
+
+test('a manifest file missing at origin/main\'s pin is named as moved, not as an unfetched pin', async (t) => {
+  const { root, pins, advance } = await makeGitRoot(t);
+  const head = await advance();
+  const fe = 'packages/cloudlands-fe';
+  const { ts } = PAIRS[0];
+  const fePath = path.join(root, fe);
+  git(fePath, 'mv', path.relative(fe, ts.file), path.relative(fe, ts.file) + '.moved');
+  git(fePath, 'commit', '-q', '-m', 'move the type file');
+  const moved = git(fePath, 'rev-parse', 'HEAD');
+  git(fePath, 'checkout', '-q', pins[fe]);
+  makeBase(root, { gitlinks: { 'packages/intentd': head, [fe]: moved } });
+  const { drift } = await runChecks(root, PAIRS, { base: 'origin/main' });
+  const notes = drift.notes.join('\n');
+  assert.match(notes, new RegExp(`${path.relative(fe, ts.file).replace(/[.]/g, '\\.')} does not exist at origin/main's packages/cloudlands-fe pin ${moved.slice(0, 7)} \\(moved there\\?\\)`));
+  assert.doesNotMatch(notes, /is not in the local clone/);
+  assert.match(notes, /were not fully compared/);
 });

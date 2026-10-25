@@ -32,7 +32,6 @@
 // than <ref>); any other missing field stays an error.
 // Nothing changes at the pins or when <ref> is HEAD or does not resolve.
 
-import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
@@ -40,7 +39,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import { scanMarkdown, splitRow } from './lib/markdown-tables.mjs';
-import { describeCheckout, formatBanner, formatOffPinWarning, submoduleOf } from './submodule-ref.mjs';
+import { describeCheckout, formatBanner, formatOffPinWarning, gitOrNull, short, submoduleOf } from './submodule-ref.mjs';
 
 const MODEL_RS = 'packages/intentd/crates/intent-core/src/model.rs';
 
@@ -753,24 +752,19 @@ export async function runChecks(root, pairs = PAIRS, { intentdDir, feDir, base }
   return { errors: drift.errors ?? errors, warnings, checked, skipped, refs: [...refs.values()], drift: { status: drift.status, base: drift.base, baseSha: drift.baseSha, notes: drift.notes } };
 }
 
-const short = (sha) => sha.slice(0, 7);
-
-/** Git stdout (untrimmed: file contents keep their line numbers), or null when git fails. */
-function gitText(args, cwd) {
-  try {
-    return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 256 * 1024 * 1024 });
-  } catch {
-    return null;
-  }
-}
-
 const missingKey = ({ struct, wire }) => `${struct}.${wire}`;
 
-/** `git fetch origin main` for a remote-tracking `origin/main`, plain `git fetch` otherwise. */
-const fetchCommand = (base) => {
-  const m = base.match(/^(?:refs\/remotes\/)?([^/]+)\/(.+)$/);
+/** `git fetch <remote> <branch>` when `base` is a remote-tracking branch, plain `git fetch` otherwise. */
+function fetchCommand(base, cwd) {
+  const full = gitOrNull(['rev-parse', '--symbolic-full-name', base], cwd) ?? '';
+  let m = full.match(/^refs\/remotes\/([^/]+)\/(.+)$/);
+  // An unfetched origin/main does not resolve; trust the spelling when it names a configured remote.
+  if (!m && !full) {
+    const spelled = base.match(/^(?:refs\/remotes\/)?([^/]+)\/(.+)$/);
+    if (spelled && (gitOrNull(['remote'], cwd) ?? '').split('\n').includes(spelled[1])) m = spelled;
+  }
   return m ? `git fetch ${m[1]} ${m[2]}` : 'git fetch';
-};
+}
 
 /**
  * Re-run each missing field the way monorepo-consumer-checks would against `base` and downgrade
@@ -785,35 +779,52 @@ function compareAgainstBase(root, base, { errors, warnings, refs, compared, pair
   // A component the checkout moved (off its pin, or dirty) plays the PR head upstream.
   const moved = new Set([...refs].filter(([, ref]) => ref.checkout && ref.pin && (ref.checkout !== ref.pin || ref.dirty)).map(([sub]) => sub));
   if (moved.size === 0) return { ...result, status: 'at-pins' };
-  const baseSha = gitText(['rev-parse', '--verify', '--quiet', `${base}^{commit}`], absRoot)?.trim();
-  const fetchHint = `If the missing field(s) above came from newer component main, run ${fetchCommand(base)} and rerun.`;
+  const baseSha = gitOrNull(['rev-parse', '--verify', '--quiet', `${base}^{commit}`], absRoot);
+  const fetch = fetchCommand(base, absRoot);
+  const fetchHint = `If the missing field(s) above came from newer component main, run ${fetch} and rerun.`;
   if (!baseSha) {
     result.notes.push(`the comparison against ${base} that monorepo-consumer-checks makes was skipped: ${base} does not resolve to a commit. ${fetchHint}`);
     return { ...result, status: 'unresolved' };
   }
   result.baseSha = baseSha;
-  if (baseSha === gitText(['rev-parse', 'HEAD'], absRoot)?.trim()) return { ...result, status: 'base-is-head' };
-  const baseDoc = gitText(['show', `${baseSha}:${STAGED_DOC}`], absRoot);
+  if (baseSha === gitOrNull(['rev-parse', 'HEAD'], absRoot)) return { ...result, status: 'base-is-head' };
+  const baseDoc = gitOrNull(['show', `${baseSha}:${STAGED_DOC}`], absRoot, { trim: false });
   const baseStaged = baseDoc === null ? null : parseStagedFields(baseDoc, `${base}:${STAGED_DOC}`, pairs);
   if (!baseStaged || baseStaged.errors.length > 0) {
     result.notes.push(`the comparison against ${base} (${short(baseSha)}) was skipped: ${base}:${STAGED_DOC} is ${baseStaged ? 'malformed there' : 'not readable'}. ${fetchHint}`);
     return { ...result, status: 'base-unreadable' };
   }
   const basePins = new Map();
+  // `fellBack` marks a component whose base-pin text was unavailable, so the comparison used its checkout.
+  let fellBack = false;
   const readAtBase = (source, text) => {
     if (!source.sub || moved.has(source.sub)) return { text };
+    const dir = path.resolve(absRoot, source.dir);
     if (!basePins.has(source.sub)) {
-      const pin = gitText(['rev-parse', '--verify', '--quiet', `${baseSha}:${source.sub}`], absRoot)?.trim() ?? null;
-      basePins.set(source.sub, { pin, warned: false });
+      const pin = gitOrNull(['rev-parse', '--verify', '--quiet', `${baseSha}:${source.sub}`], absRoot);
+      const inClone = pin !== null && gitOrNull(['cat-file', '-e', `${pin}^{commit}`], dir) !== null;
+      basePins.set(source.sub, { pin, inClone, noted: new Set() });
     }
     const entry = basePins.get(source.sub);
-    if (!entry.pin) return { text };
-    const shown = gitText(['show', `${entry.pin}:${path.relative(source.dir, source.file)}`], path.resolve(absRoot, source.dir));
-    if (shown === null) {
-      if (!entry.warned) {
-        entry.warned = true;
-        result.notes.push(`${base}'s ${source.sub} pin ${short(entry.pin)} is not in the local clone; its checkout was compared instead (git -C ${source.dir} fetch origin to compare against it).`);
+    const note = (key, message) => {
+      fellBack = true;
+      if (!entry.noted.has(key)) {
+        entry.noted.add(key);
+        result.notes.push(message);
       }
+    };
+    if (!entry.pin) {
+      note('pin', `${base} records no ${source.sub} gitlink; its checkout was compared instead.`);
+      return { text };
+    }
+    if (!entry.inClone) {
+      note('pin', `${base}'s ${source.sub} pin ${short(entry.pin)} is not in the local clone; its checkout was compared instead (git -C ${source.dir} fetch origin to compare against it).`);
+      return { text };
+    }
+    const objectPath = path.relative(source.dir, source.file);
+    const shown = gitOrNull(['show', `${entry.pin}:${objectPath}`], dir, { trim: false });
+    if (shown === null) {
+      note(objectPath, `${objectPath} does not exist at ${base}'s ${source.sub} pin ${short(entry.pin)} (moved there?); its checkout was compared instead.`);
       return { text };
     }
     return { text: shown, pin: entry.pin };
@@ -822,7 +833,15 @@ function compareAgainstBase(root, base, { errors, warnings, refs, compared, pair
   for (const { pair, selectedPair, sources, texts } of compared) {
     const [rust, ts] = sources.map((source, i) => readAtBase(source, texts[i]));
     const stagedHere = baseStaged.staged.get(pair.rust.struct) ?? new Map();
-    const stillMissing = new Set(comparePair(selectedPair, rust.text, ts.text, stagedHere).filter((d) => d.missing).map((d) => missingKey(d.missing)));
+    const baseDiags = comparePair(selectedPair, rust.text, ts.text, stagedHere);
+    // The base comparison must itself run cleanly: a parse failure there excuses nothing.
+    const baseBroken = baseDiags.filter((d) => d.severity !== 'warning' && !d.missing);
+    if (baseBroken.length > 0) {
+      fellBack = true;
+      result.notes.push(`the comparison of ${pairLabel(pair)} against ${base} (${short(baseSha)}) could not run: ${baseBroken[0].message}`);
+      continue;
+    }
+    const stillMissing = new Set(baseDiags.filter((d) => d.missing).map((d) => missingKey(d.missing)));
     const baseTsKeys = new Set((extractTsKeys(ts.text, pair.ts.type)?.keys ?? []).map((k) => k.name));
     for (const e of errors) {
       if (!e.missing || e.missing.struct !== pair.rust.struct || stillMissing.has(missingKey(e.missing))) continue;
@@ -839,7 +858,9 @@ function compareAgainstBase(root, base, { errors, warnings, refs, compared, pair
   for (const [e, message] of passes) warnings.push({ file: e.file, line: e.line, severity: 'warning', message });
   const remaining = errors.filter((e) => !passes.has(e));
   if (remaining.some((e) => e.missing)) {
-    result.notes.push(`the missing field(s) above also fail against ${base} (${short(baseSha)}), the comparison monorepo-consumer-checks makes, so they come from the component checkout, not from newer main. If ${base} is stale, run ${fetchCommand(base)} and rerun.`);
+    result.notes.push(fellBack
+      ? `the missing field(s) above were not fully compared against ${base} (${short(baseSha)}) — see the note(s) above — so they may still come from newer main. If ${base} is stale, run ${fetch} and rerun.`
+      : `the missing field(s) above also fail against ${base} (${short(baseSha)}), the comparison monorepo-consumer-checks makes, so they come from the component checkout, not from newer main. If ${base} is stale, run ${fetch} and rerun.`);
   }
   return { ...result, status: 'compared', errors: remaining };
 }
