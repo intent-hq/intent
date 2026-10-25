@@ -12,13 +12,13 @@ import { isDeepStrictEqual, parseArgs } from 'node:util';
 const PROVIDERS = ['auggie', 'acp', 'augment', 'default'];
 const MODES = ['direct', 'history', 'prefix', 'auto'];
 const DEFAULT_ROOT = fileURLToPath(new URL('../docs/protocol/fixtures/transfer-selection/', import.meta.url));
-// The generator id names the crate that owns the contract test. Both ids stay
-// accepted while the transfer feature moves out of intent-services, so either
-// intentd pin passes; the committed goldens keep whichever id generated them.
-export const GENERATORS = Object.freeze([
-  'intent-services/transfer-selection-contract',
-  'intent-svc-transfer/transfer-selection-contract',
-]);
+// The generator id names the crate that owns the contract test. Every fresh or
+// --generated envelope must carry it.
+export const GENERATOR = 'intent-svc-transfer/transfer-selection-contract';
+// Historical ids that only committed goldens may still carry: they were generated
+// before transfer moved out of intent-services and must not be hand-edited. Drop
+// an id here once no file in GOLDEN_FILES carries it (next real regeneration).
+export const HISTORICAL_GOLDEN_GENERATORS = Object.freeze(['intent-services/transfer-selection-contract']);
 const TIME = '2000-01-01T00:00:00Z';
 export const GOLDEN_FILES = Object.freeze(['public-sessions.json', 'public-sessions.desktop-control-v1.json']);
 
@@ -168,7 +168,10 @@ export function normalizeCases(cases) {
   return copy;
 }
 
-export function assertGenerated(contract, artifact, expectedSource = {}) {
+// `emitted: true` marks a fresh daemon emission, which must carry GENERATOR. The
+// default also admits HISTORICAL_GOLDEN_GENERATORS because callers such as the
+// cloudlands-fe fixture loader validate the committed goldens without options.
+export function assertGenerated(contract, artifact, expectedSource = {}, { emitted = false } = {}) {
   assertContract(contract);
   keys(artifact, 'formatVersion normalizationVersion provenance cases', 'generated envelope');
   equal(artifact.formatVersion, 1, 'generated formatVersion');
@@ -176,7 +179,8 @@ export function assertGenerated(contract, artifact, expectedSource = {}) {
   const p = artifact.provenance;
   keys(p, 'kind generator intentdRevision intentdDirty generatorSha256 contractSha256 payloadSha256', 'provenance');
   equal(p.kind, 'intentd-public-import', 'provenance.kind');
-  requireValue(GENERATORS.includes(p.generator), `provenance.generator: expected one of ${JSON.stringify(GENERATORS)}, got ${JSON.stringify(p.generator)}`);
+  const generators = emitted ? [GENERATOR] : [GENERATOR, ...HISTORICAL_GOLDEN_GENERATORS];
+  requireValue(generators.includes(p.generator), `provenance.generator: expected ${generators.length === 1 ? JSON.stringify(GENERATOR) : `one of ${JSON.stringify(generators)}`}, got ${JSON.stringify(p.generator)}`);
   requireValue(typeof p.intentdRevision === 'string' && /^[a-f0-9]{40}$/.test(p.intentdRevision), 'provenance.intentdRevision must be a full lowercase Git SHA');
   equal(p.intentdDirty, false, 'provenance.intentdDirty');
   for (const field of ['generatorSha256', 'contractSha256', 'payloadSha256']) {
@@ -216,9 +220,9 @@ export function assertGenerated(contract, artifact, expectedSource = {}) {
   requireValue(isDeepStrictEqual(artifact.cases, normalizeCases(artifact.cases)), 'output must already be normalized');
 }
 
-export function assertFresh(contract, golden, fresh, expectedSource = {}) {
-  assertGenerated(contract, golden);
-  assertGenerated(contract, fresh, expectedSource);
+export function assertFresh(contract, golden, fresh, expectedSource = {}, { goldenEmitted = false } = {}) {
+  assertGenerated(contract, golden, {}, { emitted: goldenEmitted });
+  assertGenerated(contract, fresh, expectedSource, { emitted: true });
   for (const [index, row] of golden.cases.entries()) {
     requireValue(isDeepStrictEqual(row, fresh.cases[index]), `stale public-sessions.json: freshly generated payload differs for ${row.id}; inspect the daemon change before regenerating`);
   }
@@ -246,6 +250,9 @@ export async function inspectFixtures({ fixtureRoot, inputsOnly = false, generat
   assertContract(contract);
   if (inputsOnly) return '32 transfer-selection input cases valid (outputs not checked)';
   const goldenPath = path.resolve(generated ?? path.join(root, 'public-sessions.json'));
+  // Only a GOLDEN_FILES file in the fixture root may keep a historical generator id.
+  // The fixture root itself is trusted (caller argument, environment or default).
+  const emitted = !GOLDEN_FILES.some((file) => path.join(root, file) === goldenPath);
   const golden = await readRequiredJson(goldenPath);
   const expectedSource = { intentdRevision, generatorSha256 };
   if (fresh !== undefined) {
@@ -253,10 +260,10 @@ export async function inspectFixtures({ fixtureRoot, inputsOnly = false, generat
     const freshArtifact = await readRequiredJson(freshPath);
     const [goldenStat, freshStat] = await Promise.all([fs.stat(goldenPath), fs.stat(freshPath)]);
     requireValue(goldenStat.dev !== freshStat.dev || goldenStat.ino !== freshStat.ino, '--fresh must name a separate newly generated file, not the golden');
-    assertFresh(contract, golden, freshArtifact, expectedSource);
+    assertFresh(contract, golden, freshArtifact, expectedSource, { goldenEmitted: emitted });
     return '32 transfer-selection cases valid; fresh payload matches the golden';
   }
-  assertGenerated(contract, golden, expectedSource);
+  assertGenerated(contract, golden, expectedSource, { emitted });
   return '32 transfer-selection cases valid (integrity only; freshness not checked)';
 }
 

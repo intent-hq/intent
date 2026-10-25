@@ -206,8 +206,7 @@ goldens must never be hand-written. The emitter must exercise real
   normalizationVersion: 1,
   provenance: {
     kind: 'intentd-public-import',
-    generator: 'intent-services/transfer-selection-contract'
-      | 'intent-svc-transfer/transfer-selection-contract',  // owning crate
+    generator: 'intent-svc-transfer/transfer-selection-contract',  // owning crate; see below
     intentdRevision: string,  // full lowercase 40-character checkout HEAD SHA
     intentdDirty: false,      // checked from the source worktree, never assumed
     generatorSha256: string,  // SHA-256 of the generator Rust source file bytes
@@ -226,12 +225,17 @@ goldens must never be hand-written. The emitter must exercise real
 `persisted` contains those five raw exported columns, including nulls; `firstTurn`
 contains the actual resolver's provider/model/effort triple, with null for unset.
 Neither is copied from expected values. The generator source is
-`crates/intent-services/src/transfer_selection_contract.rs`, or
-`crates/intent-svc-transfer/src/transfer_selection_contract.rs` once transfer moves
-to its own crate; the scripts accept either path and either `generator` id, and
-reject a checkout that has both files. Its runner records that
-file's byte hash and clean intentd HEAD. Commit the harness before producing a
-publishable envelope. Runtime version/cache timestamps stay in the isolated input
+`crates/intent-svc-transfer/src/transfer_selection_contract.rs`; its runner records
+that file's byte hash and clean intentd HEAD. Every fresh or `--generated` envelope
+must carry the `intent-svc-transfer/transfer-selection-contract` id. Only the
+committed goldens (the `GOLDEN_FILES` in the fixture directory) may still carry the
+historical `intent-services/transfer-selection-contract` id from before transfer
+moved to its own crate, because goldens are never hand-edited. Remove that id from
+`HISTORICAL_GOLDEN_GENERATORS` once both goldens are regenerated. `assertGenerated`
+called with no options also admits the historical id; the cloudlands-fe fixture
+loader relies on this for the committed golden and for any file it is given. Pass
+`{ emitted: true }` to check a fresh emission strictly. Commit the harness before
+producing a publishable envelope. Runtime version/cache timestamps stay in the isolated input
 setup, not in provenance. No generated-at timestamp is needed.
 
 Only four fields in each `cases[].session` may be normalized:
