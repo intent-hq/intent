@@ -846,11 +846,18 @@ daemon means no indicator, not a discussion failure.
 
 #### Workspace transfer
 
-Workspace exports include workspace-wide discussion history and names.
-A workspace containing private conversations cannot be exported: export returns the existing unsupported
-transfer error; the archive snapshot rechecks for private history after export
-admission. This prevents the archive from exposing
-private history or participant identities to a nonparticipant owner or agent.
+Workspace exports support default discussion history. Named workspace-wide
+conversation export is not yet supported by the companion implementation at
+`c576b988`: its archive snapshot guard rejects messages outside `default`, even
+when admission accepts their workspace-wide conversation metadata. A workspace
+containing a message in a named conversation therefore fails export with the
+unsupported-transfer error. Do not promise named-conversation export until the
+snapshot guard distinguishes workspace-wide conversations from private history.
+
+A workspace containing legacy private conversations also cannot be exported.
+Export returns the unsupported-transfer error; admission and the archive snapshot
+protect against exposing private history or participant identities to a
+nonparticipant owner or agent.
 
 Import preserves message IDs, sequence order, bodies, timestamps, and author snapshots. An imported author's
 `principalId` is inert source-daemon attribution, not a destination identity or
