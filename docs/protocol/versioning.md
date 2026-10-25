@@ -37,7 +37,7 @@ terminal transition. Neither signal feeds `activity` or `displayStatus`. Older d
 `scriptsRunning` and never emit the event; clients must detect both by presence.
 
 Also within 15.2 (additive event field; presence-detected; no method-catalog change, so no
-version bump): **`agent:renamed` carries `nameExplicitlySet`** (§6.5). Both rename paths
+version bump): **`agent:renamed` carries `nameExplicitlySet`** (§6.5). Both `agent:renamed` paths
 (`agent.rename` and a name-only `agent.update`) report the session's persisted flag after
 the write, so clients stop inferring it. Older daemons omit the field; clients treat an
 absent field as `true`.
