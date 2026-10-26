@@ -11,10 +11,10 @@ input uses it to test one host.
 
 | Host | Location | Hardware | Pools (slots) | Labels | Name prefix | Config |
 |---|---|---|---|---|---|---|
-| intent-cache | ReliableSite, Los Angeles | Ryzen 9 3900X, 12 cores / 24 threads, 128 GB | heavy (3) | `intent-cache` | `intent-cache` | [`runners.env`](../infra/runners/runners.env) |
-| intent-ci1 | ReliableSite, Los Angeles | EPYC 4545P, 16 cores / 32 threads, 128 GB | xl (1), heavy (2) | `intent-cache-xl`, `intent-cache` | `intent-ci1` | [`hosts/intent-ci1.env`](../infra/runners/hosts/intent-ci1.env) |
-| intent-ci2 | ReliableSite, Los Angeles | EPYC 4545P, 16 cores / 32 threads, 128 GB | xl (1), heavy (2) | `intent-cache-xl`, `intent-cache` | `intent-ci2` | [`hosts/intent-ci2.env`](../infra/runners/hosts/intent-ci2.env) |
-| intent-ci3 | ReliableSite, Los Angeles | EPYC 4545P, 16 cores / 32 threads, 64 GB | heavy (4) | `intent-cache` | `intent-ci3` | [`hosts/intent-ci3.env`](../infra/runners/hosts/intent-ci3.env) |
+| intent-cache | ReliableSite, Los Angeles | Ryzen 9 3900X, 12 cores / 24 threads, 128 GB | heavy (3) | `intent-cache` + `intent-cache-bigmem` | `intent-cache` | [`runners.env`](../infra/runners/runners.env) |
+| intent-ci1 | ReliableSite, Los Angeles | EPYC 4545P, 16 cores / 32 threads, 128 GB | xl (1), heavy (2) | `intent-cache-xl`, `intent-cache` + `intent-cache-bigmem` | `intent-ci1` | [`hosts/intent-ci1.env`](../infra/runners/hosts/intent-ci1.env) |
+| intent-ci2 | ReliableSite, Los Angeles | EPYC 4545P, 16 cores / 32 threads, 128 GB | xl (1), heavy (2) | `intent-cache-xl`, `intent-cache` + `intent-cache-bigmem` | `intent-ci2` | [`hosts/intent-ci2.env`](../infra/runners/hosts/intent-ci2.env) |
+| intent-ci3 | ReliableSite, Los Angeles | EPYC 4545P, 16 cores / 32 threads, 64 GB | heavy (4) | `intent-cache` only (12 GB slots: no bigmem) | `intent-ci3` | [`hosts/intent-ci3.env`](../infra/runners/hosts/intent-ci3.env) |
 
 | Pool | Label | Serves jobs asking for | Bursts to | Per slot |
 |---|---|---|---|---|
@@ -381,7 +381,10 @@ runner-only host, leaving a core or two unpinned is optional.
    unique in the fleet), and fit the CPU sets and memory to the host: whole
    cores per multi-CPU slot, a few cores unpinned, total memory under the
    host's RAM minus 9 GiB (`/proc/meminfo` MemTotal in whole GiB, which is
-   below the label: 64 GB is 60 GiB). Check it with
+   below the label: 64 GB is 60 GiB). Give heavy slots with 30 GiB or more
+   the `intent-cache-bigmem` label after `intent-cache` (16-core overflow
+   runs only there) and smaller ones not; `--plan` refuses a smaller slot
+   with it. Check it with
    `RUNNERS_CONFIG=<file> infra/runners/supervisor.sh --plan`; the installer
    checks the CPUs and memory on the host itself (step 5). Add a test case
    in `test_runners.py` if it is a new layout, and land it with a row in the
@@ -414,7 +417,8 @@ runner-only host, leaving a core or two unpinned is optional.
    with a free slot and each pool's limits are checked against the span of
    every host's slots (add `-f xl=true` to include the xl pool).
 7. **Route jobs to it** by raising `CI_LINUX_HEAVY_SLOTS` / `CI_LINUX_XL_SLOTS`
-   to the fleet's total slots per pool (see the variables above).
+   / `CI_LINUX_BIGMEM_SLOTS` to the fleet's total slots per pool (see the
+   variables above).
 
 ## Drain and stop
 

@@ -147,6 +147,15 @@ def fake_cpus(root, cores, sibling_offset):
     return root
 
 
+# Heavy slots at or above this carry intent-cache-bigmem (supervisor.sh bigmem_min_kib).
+BIGMEM_MIN = 30 * 2 ** 30
+
+
+def memory_bytes(size):
+    """Bytes in a Docker memory size such as 12g, 512m or 1024k (supervisor.sh memory_kib)."""
+    return int(size[:-1]) * {'k': 2 ** 10, 'm': 2 ** 20, 'g': 2 ** 30}[size[-1]]
+
+
 def read_env(path):
     return dict(line.split('=', 1) for line in Path(path).read_text().splitlines()
                 if line and not line.startswith('#'))
@@ -246,7 +255,7 @@ class Supervisor(Stubbed):
             self.assertEqual(call['auth'], PAT)
             self.assertNotIn(PAT, ' '.join(call['argv']))
         body = json.loads([c for c in self.calls('curl') if c['method'] == 'POST'][0]['body'])
-        self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache', 'intent-host-intent-cache'])
+        self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache', 'intent-cache-bigmem', 'intent-host-intent-cache'])
         self.assertEqual(body['runner_group_id'], 3, 'registers into the intent-cache group, never Default')
         self.assertEqual(body['work_folder'], '/home/runner/work')
         self.assertRegex(body['name'], r'^intent-cache-heavy-1-\d+$')
@@ -451,7 +460,7 @@ class Supervisor(Stubbed):
         rc, out, err = self.run_supervisor('heavy-3')
         self.assertEqual(rc, 0, err)
         body = json.loads([c for c in self.calls('curl') if c['method'] == 'POST'][0]['body'])
-        self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache', 'intent-host-intent-cache'])
+        self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache', 'intent-cache-bigmem', 'intent-host-intent-cache'])
         self.assertRegex(body['name'], r'^intent-cache-heavy-3-\d+$')
         argv = ' '.join([c for c in self.calls('docker') if c['argv'][0] == 'run'][0]['argv'])
         for flag in ('--name gh-runner-heavy-3', '--cpus 8 --cpuset-cpus 8-11,20-23 --memory 36g',
@@ -495,12 +504,26 @@ class Supervisor(Stubbed):
                 ('RUNNER_POOLS=heavy extra\n', 'pool extra: SLOTS must be a number'),
                 ('HEAVY_BOGUS=1\n', 'unknown key HEAVY_BOGUS'),
                 # The supervisor adds the host label itself; a pool must not claim one.
-                ('HEAVY_LABELS=self-hosted,intent-cache,intent-host-intent-ci3\n', 'LABELS must not include a host label')):
+                ('HEAVY_LABELS=self-hosted,intent-cache,intent-host-intent-ci3\n', 'LABELS must not include a host label'),
+                # The default heavy labels include intent-cache-bigmem, so a small slot must drop it.
+                ('HEAVY_MEMORY=12g\n', 'pool heavy: intent-cache-bigmem needs MEMORY of at least 30g'),
+                ('HEAVY_MEMORY=31457279k\n', 'pool heavy: intent-cache-bigmem needs MEMORY of at least 30g'),
+                ('RUNNER_POOLS=xl\nXL_SLOTS=1\nXL_LABELS=self-hosted,intent-cache-bigmem,x\nXL_CPUSETS=0-3\nXL_MEMORY=29g\n',
+                 'pool xl: intent-cache-bigmem needs MEMORY of at least 30g')):
             with self.subTest(config=config):
                 self.config.write_text(config)
                 rc, _, err = self.run_supervisor('--plan')
                 self.assertNotEqual(rc, 0)
                 self.assertIn(message, err)
+
+    def test_plan_accepts_bigmem_at_30g_and_small_slots_without_it(self):
+        for config in ('HEAVY_MEMORY=30g\n', 'HEAVY_MEMORY=31457280k\n',
+                       'HEAVY_MEMORY=12g\nHEAVY_LABELS=self-hosted,linux,x64,intent-cache\n'):
+            with self.subTest(config=config):
+                self.config.write_text(config)
+                rc, out, err = self.run_supervisor('--plan')
+                self.assertEqual(rc, 0, err)
+                self.assertEqual(out.split(), ['heavy-1', 'heavy-2', 'heavy-3'])
 
     def test_unconfigured_slot(self):
         for slot in ('heavy-4', 'small-1', 'other-1'):
@@ -837,7 +860,8 @@ class Supervisor(Stubbed):
         for memory, total in (('17g', None), ('17408m', None), ('17825792k', None),
                               ('17409m', '51.01'), ('18g', '54'), ('17825793k', '51.01')):
             with self.subTest(memory=memory):
-                self.config.write_text(f'GITHUB_ORG=example-org\nHEAVY_MEMORY={memory}\n')
+                # 17g slots are below the bigmem floor, so they carry only intent-cache.
+                self.config.write_text(f'GITHUB_ORG=example-org\nHEAVY_MEMORY={memory}\nHEAVY_LABELS=self-hosted,linux,x64,intent-cache\n')
                 rc, _, err = self.host_check(self.config, ryzen, MEMINFO_64G)
                 if total is None:
                     self.assertEqual(rc, 0, err)
@@ -1233,6 +1257,22 @@ class Static(unittest.TestCase):
         self.assertIn('[ "$(ulimit -c)" = 0 ]', text)
         self.assertIn('apt-get install -s', text)
 
+    def test_bigmem_label_marks_exactly_the_heavy_slots_with_30_gib(self):
+        # runner-route sends gh-linux-16x overflow only to intent-cache-bigmem slots:
+        # one rustc in intentd's check passed 12 GB and was OOM-killed on intent-ci3.
+        # One floor: supervisor.sh --plan refuses less, on live hosts as well as here.
+        self.assertIn(f'bigmem_min_kib=$(({BIGMEM_MIN // 2 ** 30} * 1048576))', (HERE / 'supervisor.sh').read_text())
+        for path in [HERE / 'runners.env', *sorted(HOSTS.glob('*.env'))]:
+            env = read_env(path)
+            for pool in env['RUNNER_POOLS'].split():
+                p = pool.upper()
+                with self.subTest(config=path.name, pool=pool):
+                    labels = env[f'{p}_LABELS'].split(',')
+                    big = pool == 'heavy' and memory_bytes(env[f'{p}_MEMORY']) >= BIGMEM_MIN
+                    self.assertEqual('intent-cache-bigmem' in labels, big, f'{env[f"{p}_MEMORY"]} per slot')
+                    if big:
+                        self.assertEqual(labels[-2:], ['intent-cache', 'intent-cache-bigmem'])
+
     def smoke_plan(self, *args):
         result = subprocess.run([sys.executable, '-S', '-B', str(HERE / 'smoke_plan.py'), *args],
                                 capture_output=True, text=True)
@@ -1515,7 +1555,7 @@ class Static(unittest.TestCase):
                 for pool in env['RUNNER_POOLS'].split():
                     p = pool.upper()
                     cpus_per_slot, label = shape[pool]
-                    self.assertEqual(env[f'{p}_LABELS'], f'self-hosted,linux,x64,{label}')
+                    self.assertIn(env[f'{p}_LABELS'], {f'self-hosted,linux,x64,{label}', f'self-hosted,linux,x64,{label},intent-cache-bigmem'})
                     for entry in env[f'{p}_CPUSETS'].split()[:int(env[f'{p}_SLOTS'])]:
                         cpu_set = set(expand(entry))
                         self.assertEqual(len(cpu_set), cpus_per_slot, entry)
