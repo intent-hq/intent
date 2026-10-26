@@ -61,6 +61,14 @@ endif
 export INTENT_PARALLEL_ROOT := $(CURDIR)/$(INTENTD_DIR)
 export INTENT_PARALLEL_THREADS := $(PARALLEL_THREADS)
 export RUSTC_WRAPPER := $(PARALLEL_WRAPPER)
+# Cargo does not fingerprint flags a RUSTC_WRAPPER adds, so artifacts built with
+# and without -Zthreads (or with another count) would each look Fresh to the
+# other. Give every thread count its own output tree under the caller's target
+# dir; a recursive make reuses the base instead of nesting another level.
+PARALLEL_TARGET_BASE := $(or $(INTENT_PARALLEL_TARGET_BASE),$(CARGO_TARGET_DIR),$(CARGO_BUILD_TARGET_DIR),$(CURDIR)/$(INTENTD_DIR)/target)
+export INTENT_PARALLEL_TARGET_BASE := $(PARALLEL_TARGET_BASE)
+export CARGO_TARGET_DIR := $(PARALLEL_TARGET_BASE)/parallel-t$(PARALLEL_THREADS)
+export CARGO_BUILD_BUILD_DIR := $(CARGO_TARGET_DIR)
 unexport PARALLEL
 endif
 FE_DIR = packages/cloudlands-fe
@@ -411,7 +419,7 @@ help: ## List documented targets
 	@printf '  Default: COMPACT=0. Compact/default resume records are separate; coverage rejects COMPACT=1.\n'
 	@printf '  See CONTRIBUTING.md for debugging tradeoffs and the component mixed-goal boundary.\n'
 	@printf 'Opt-in faster local compiles: PARALLEL=1 make build (also check, clippy, lint-sources, gate, test, test-changed, test-select).\n'
-	@printf '  rustc -Zthreads=N (PARALLEL_THREADS=N, default 8) for intentd crates only; ~1-2 GB more RAM per rustc; never CI or release (CONTRIBUTING.md).\n'
+	@printf '  rustc -Zthreads=N (PARALLEL_THREADS=N, default 8) for intentd crates only; ~1-2 GB more RAM per rustc; builds into target/parallel-tN; never CI or release (CONTRIBUTING.md).\n'
 
 doctor: ## Report missing intentd + cloudlands-fe development prerequisites
 	@scripts/bootstrap-dev-host.sh --check

@@ -211,8 +211,13 @@ wrapper refuse to run when `CI` or `GITHUB_ACTIONS` is set: CI and release
 builds never use it. A `RUSTC_WRAPPER` you set in the environment (for example
 `sccache`) is chained after the wrapper, but a `rustc-wrapper` from Cargo
 configuration is bypassed while `PARALLEL=1` is on; set `RUSTC_WRAPPER=sccache`
-explicitly to keep it. Resume records for `make test` are kept separate per
-thread count. A compiler crash under `PARALLEL=1` should be retried without it
+explicitly to keep it. Cargo does not fingerprint flags added by a wrapper, so
+each thread count builds into its own tree, `packages/intentd/target/parallel-tN`
+(under your `CARGO_TARGET_DIR` when set; `build.build-dir` follows it), and
+switching on, off or to another count never reuses the other setting's artifacts.
+The first `PARALLEL=1` build is therefore a full build, binaries land in
+`target/parallel-tN/debug/`, and each tree takes its own disk space; delete it to
+reclaim it. Resume records for `make test` are kept separate per thread count. A compiler crash under `PARALLEL=1` should be retried without it
 before it is reported.
 
 #### Linux x64 callback gates

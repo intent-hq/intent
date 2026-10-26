@@ -122,6 +122,59 @@ done
 out=$(make_db build PARALLEL=1 PARALLEL_THREADS=4) || true
 if grep -qxF "INTENT_PARALLEL_THREADS := 4" <<<"$out"; then pass "PARALLEL_THREADS overrides"; else fail "PARALLEL_THREADS=4 not applied"; fi
 
+target_of() { { grep -E '^CARGO_TARGET_DIR :?= ' <<<"$1" || true; } | tail -1 | sed -E 's/^CARGO_TARGET_DIR :?= //'; }
+default_target=$(target_of "$(make_db build)")
+t8=$(target_of "$(make_db build PARALLEL=1)")
+t4=$(target_of "$(make_db build PARALLEL=1 PARALLEL_THREADS=4)")
+if [ -z "$default_target" ] && [ "$t8" = "$ROOT/packages/intentd/target/parallel-t8" ] \
+  && [ "$t4" = "$ROOT/packages/intentd/target/parallel-t4" ]; then
+  pass "each thread count builds into its own target dir; the default is untouched"
+else
+  fail "target dirs not isolated per mode: default='$default_target' t8='$t8' t4='$t4'"
+fi
+out=$(env -u CI -u GITHUB_ACTIONS -u RUSTC_WRAPPER CARGO_TARGET_DIR=/tmp/own-target make -C "$ROOT" -pn build PARALLEL=1 2>&1) || true
+if [ "$(target_of "$out")" = /tmp/own-target/parallel-t8 ]; then
+  pass "a caller CARGO_TARGET_DIR is the base for the parallel tree"
+else
+  fail "caller CARGO_TARGET_DIR not used as base: '$(target_of "$out")'"
+fi
+out=$(env -u CI -u GITHUB_ACTIONS RUSTC_WRAPPER="$WRAPPER" INTENT_PARALLEL_TARGET_BASE=/tmp/base \
+  CARGO_TARGET_DIR=/tmp/base/parallel-t8 make -C "$ROOT" -pn build PARALLEL=1 2>&1) || true
+if [ "$(target_of "$out")" = /tmp/base/parallel-t8 ]; then
+  pass "recursive make does not nest the parallel target dir"
+else
+  fail "recursive make nested the target dir: '$(target_of "$out")'"
+fi
+
+# Regression: Cargo ignores wrapper-added flags in its fingerprint, so a shared
+# target dir would report a plain build Fresh after enabling the wrapper.
+if command -v cargo >/dev/null 2>&1; then
+  crate=$(mktemp -d)
+  mkdir -p "$crate/src"
+  printf '[package]\nname = "ptiny"\nversion = "0.1.0"\nedition = "2021"\n[workspace]\n' >"$crate/Cargo.toml"
+  printf 'pub fn f() -> u32 { 1 }\n' >"$crate/src/lib.rs"
+  log="$crate/wrapped.log"
+  printf '#!/usr/bin/env bash\necho "$*" >>%q\nexec "$@"\n' "$log" >"$crate/logwrap.sh"
+  chmod +x "$crate/logwrap.sh"
+  plain() { (cd "$crate" && env -u CI -u GITHUB_ACTIONS -u RUSTC_WRAPPER CARGO_BUILD_RUSTC_WRAPPER= \
+    CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$crate/target" cargo build --offline -q); }
+  wrapped() { (cd "$crate" && env -u CI -u GITHUB_ACTIONS RUSTC_WRAPPER="$WRAPPER" \
+    INTENT_PARALLEL_INNER_WRAPPER="$crate/logwrap.sh" INTENT_PARALLEL_ROOT="$crate" INTENT_PARALLEL_THREADS="$1" \
+    CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$crate/target/parallel-t$1" cargo build --offline -q); }
+  if plain && wrapped 8 && wrapped 4 && plain; then
+    if grep -q -- '--crate-name ptiny.*-Zthreads=8' "$log" && grep -q -- '--crate-name ptiny.*-Zthreads=4' "$log"; then
+      pass "switching modes with per-mode target dirs recompiles with the new -Zthreads"
+    else
+      fail "a mode switch reused artifacts built under another setting: $(cat "$log" 2>/dev/null)"
+    fi
+  else
+    fail "tiny-crate mode-switch build failed"
+  fi
+  rm -rf "$crate"
+else
+  echo "skip: cargo not installed; tiny-crate mode-switch regression not run"
+fi
+
 out=$(env -u CI -u GITHUB_ACTIONS RUSTC_WRAPPER=/usr/bin/sccache make -C "$ROOT" -pn build PARALLEL=1 2>&1) || true
 if grep -qxF "INTENT_PARALLEL_INNER_WRAPPER := /usr/bin/sccache" <<<"$out"; then
   pass "caller RUSTC_WRAPPER is kept as the inner wrapper"
