@@ -20,6 +20,11 @@ HOSTED_ONLY = {
     ('bootstrap-install.yml', 'bootstrap-install'): 'runs sudo docker',
 }
 EXCEPTIONS |= set(HOSTED_ONLY)
+# The runner smoke jobs read their self-hosted labels from the plan job
+# (infra/runners/smoke_plan.py: a pool label, plus intent-host-<host> when a
+# host is given; test_runners.py checks the plan's labels).
+PLANNED = {('intent-cache-smoke.yml', '${{ matrix.runs_on }}'),
+           ('intent-cache-smoke.yml', '${{ fromJSON(needs.plan.outputs.heavy) }}')}
 MAINTENANCE = {('m1mac-smoke.yml', 'smoke'), ('provision-m1mac.yml', 'provision'), ('provision-m1mac.yml', 'verify'), ('macos-prune.yml', 'prune'), ('windows-prune.yml', 'prune'),
                ('intent-cache-smoke.yml', 'isolation'), ('intent-cache-smoke.yml', 'fresh'), ('intent-cache-smoke.yml', 'cache-reader'),
                ('intent-cache-smoke.yml', 'cache-reader-small'), ('intent-cache-smoke.yml', 'isolation-xl')}
@@ -64,7 +69,7 @@ def violations(text, filename):
         runner = runner[1].strip('"\'')
         if runner in FREE or (filename, job) in EXCEPTIONS or (job == 'route' and 'id: decide' in body and 'listSelfHostedRunnersForOrg' in body):
             continue
-        if runner.startswith('[self-hosted,') and (filename, job) in MAINTENANCE:
+        if (runner.startswith('[self-hosted,') or (filename, runner) in PLANNED) and (filename, job) in MAINTENANCE:
             continue
         routed = re.fullmatch(r"\$\{\{ fromJSON\(needs\.(route|runner-route)\.outputs\.(runners|slots|cloud|linux_labels|check_labels).*\}\}", runner)
         # Matrix legs that may take a pool read their own slot first.

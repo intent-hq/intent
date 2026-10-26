@@ -8,7 +8,9 @@
 # <POOL>_CPUSETS, so nproc and os.availableParallelism() inside a job report
 # that slot's CPU count. Runners are named <RUNNER_NAME_PREFIX>-<pool>-<n>-<time>;
 # each host has its own prefix, and every prefix in the fleet starts with
-# RUNNER_FLEET_PREFIX.
+# RUNNER_FLEET_PREFIX. Each slot registers its pool's labels plus the host
+# label intent-host-<RUNNER_NAME_PREFIX>, so a job can target one host (the
+# smoke workflow's host input); routing matches pool labels only.
 #
 # SIGTERM (systemctl stop) drains: an idle runner is deregistered and its
 # container stopped at once; a busy runner finishes its job first.
@@ -112,6 +114,7 @@ plan_pool() {
   memory="$(pool_value "$pool" MEMORY)"; pids="$(pool_value "$pool" PIDS)"; shm="$(pool_value "$pool" SHM)"
   [[ "$slots" =~ ^[0-9]+$ ]] || die "pool $pool: SLOTS must be a number"
   [[ "$labels" =~ ^[A-Za-z0-9._-]+(,[A-Za-z0-9._-]+)*$ ]] || die "pool $pool: LABELS must be a comma-separated list"
+  [[ ",$labels" != *,intent-host-* ]] || die "pool $pool: LABELS must not include a host label (the supervisor adds intent-host-<RUNNER_NAME_PREFIX>)"
   [[ "$memory" =~ ^[1-9][0-9]{0,8}[kmg]$ ]] || die "pool $pool: MEMORY must look like 40g (at most 9 digits)"
   [[ "${pids:-4096}" =~ ^[1-9][0-9]*$ ]] || die "pool $pool: PIDS must be a number"
   [[ "${shm:-64m}" =~ ^[1-9][0-9]*[kmg]$ ]] || die "pool $pool: SHM must look like 1g"
@@ -452,7 +455,7 @@ main() {
 
   local runner_name body jit
   runner_name="$RUNNER_NAME_PREFIX-$slot-$(date +%s)"
-  body="$(jq -nc --arg name "$runner_name" --argjson group "$group_id" --arg labels "$labels" --arg work "$work_folder" \
+  body="$(jq -nc --arg name "$runner_name" --argjson group "$group_id" --arg labels "$labels,intent-host-$RUNNER_NAME_PREFIX" --arg work "$work_folder" \
     '{name: $name, runner_group_id: $group, labels: ($labels | split(",")), work_folder: $work}')"
   api POST "/orgs/$GITHUB_ORG/actions/runners/generate-jitconfig" "$body"
   if [ "$api_status" != 201 ]; then

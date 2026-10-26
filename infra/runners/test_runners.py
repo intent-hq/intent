@@ -246,7 +246,7 @@ class Supervisor(Stubbed):
             self.assertEqual(call['auth'], PAT)
             self.assertNotIn(PAT, ' '.join(call['argv']))
         body = json.loads([c for c in self.calls('curl') if c['method'] == 'POST'][0]['body'])
-        self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache'])
+        self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache', 'intent-host-intent-cache'])
         self.assertEqual(body['runner_group_id'], 3, 'registers into the intent-cache group, never Default')
         self.assertEqual(body['work_folder'], '/home/runner/work')
         self.assertRegex(body['name'], r'^intent-cache-heavy-1-\d+$')
@@ -451,7 +451,7 @@ class Supervisor(Stubbed):
         rc, out, err = self.run_supervisor('heavy-3')
         self.assertEqual(rc, 0, err)
         body = json.loads([c for c in self.calls('curl') if c['method'] == 'POST'][0]['body'])
-        self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache'])
+        self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache', 'intent-host-intent-cache'])
         self.assertRegex(body['name'], r'^intent-cache-heavy-3-\d+$')
         argv = ' '.join([c for c in self.calls('docker') if c['argv'][0] == 'run'][0]['argv'])
         for flag in ('--name gh-runner-heavy-3', '--cpus 8 --cpuset-cpus 8-11,20-23 --memory 36g',
@@ -467,7 +467,7 @@ class Supervisor(Stubbed):
         rc, out, err = self.run_supervisor('small-2')
         self.assertEqual(rc, 0, err)
         body = json.loads([c for c in self.calls('curl') if c['method'] == 'POST'][0]['body'])
-        self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache-small'])
+        self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache-small', 'intent-host-intent-cache'])
         self.assertRegex(body['name'], r'^intent-cache-small-2-\d+$')
         argv = ' '.join([c for c in self.calls('docker') if c['argv'][0] == 'run'][0]['argv'])
         for flag in ('--name gh-runner-small-2', '--cpus 1 ', '--cpuset-cpus 10 ', '--memory 3g',
@@ -493,7 +493,9 @@ class Supervisor(Stubbed):
                 ('HEAVY_CPUSETS=0-3,12-15 x 8-11,20-23\n', "bad CPUSETS entry 'x'"),
                 ('HEAVY_MEMORY=lots\n', 'MEMORY must look like 40g'),
                 ('RUNNER_POOLS=heavy extra\n', 'pool extra: SLOTS must be a number'),
-                ('HEAVY_BOGUS=1\n', 'unknown key HEAVY_BOGUS')):
+                ('HEAVY_BOGUS=1\n', 'unknown key HEAVY_BOGUS'),
+                # The supervisor adds the host label itself; a pool must not claim one.
+                ('HEAVY_LABELS=self-hosted,intent-cache,intent-host-intent-ci3\n', 'LABELS must not include a host label')):
             with self.subTest(config=config):
                 self.config.write_text(config)
                 rc, _, err = self.run_supervisor('--plan')
@@ -665,7 +667,7 @@ class Supervisor(Stubbed):
         rc, out, err = self.run_supervisor('xl-1')
         self.assertEqual(rc, 0, err)
         body = json.loads([c for c in self.calls('curl') if c['method'] == 'POST'][0]['body'])
-        self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache-xl'])
+        self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache-xl', 'intent-host-intent-ci1'])
         self.assertEqual(body['runner_group_id'], 3)
         self.assertRegex(body['name'], r'^intent-ci1-xl-1-\d+$')
         argv = ' '.join([c for c in self.calls('docker') if c['argv'][0] == 'run'][0]['argv'])
@@ -691,7 +693,7 @@ class Supervisor(Stubbed):
                 rc, out, err = self.run_supervisor(f'heavy-{n}')
                 self.assertEqual(rc, 0, err)
                 body = json.loads([c for c in self.calls('curl') if c['method'] == 'POST'][-1]['body'])
-                self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache'])
+                self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache', 'intent-host-intent-ci3'])
                 self.assertRegex(body['name'], rf'^intent-ci3-heavy-{n}-\d+$')
                 argv = ' '.join([c for c in self.calls('docker') if c['argv'][0] == 'run'][-1]['argv'])
                 for flag in (f'--hostname intent-ci3-heavy-{n}', f'--cpus 8 --cpuset-cpus {cpuset} --memory 12g',
@@ -700,6 +702,22 @@ class Supervisor(Stubbed):
         rc, _, err = self.run_supervisor('xl-1')
         self.assertNotEqual(rc, 0, 'intent-ci3 has no xl slot')
         self.assertIn('is not a configured slot', err)
+
+    def test_host_label_follows_the_name_prefix(self):
+        # Each slot also registers intent-host-<RUNNER_NAME_PREFIX>, so a job
+        # (the smoke workflow's host input) can target one host; pool labels
+        # stay first and unchanged, so routing by pool label is unaffected.
+        for path, prefix in ((HERE / 'runners.env', 'intent-cache'), (INTENT_CI1, 'intent-ci1'),
+                             (INTENT_CI2, 'intent-ci2'), (INTENT_CI3, 'intent-ci3')):
+            with self.subTest(config=path.name):
+                self.use_host_config(path)
+                self.responses['GET /orgs/example-org/actions/runners'] = [200, {'runners': []}]
+                rc, _, err = self.run_supervisor('heavy-1')
+                self.assertEqual(rc, 0, err)
+                body = json.loads([c for c in self.calls('curl') if c['method'] == 'POST'][-1]['body'])
+                pool = read_env(path)['HEAVY_LABELS'].split(',')
+                self.assertEqual(body['labels'], [*pool, f'intent-host-{prefix}'])
+                self.assertNotIn(f'intent-host-{prefix}', pool)
 
     def test_stale_cleanup_only_takes_this_hosts_slot(self):
         self.use_host_config(INTENT_CI1)
@@ -1215,31 +1233,172 @@ class Static(unittest.TestCase):
         self.assertIn('[ "$(ulimit -c)" = 0 ]', text)
         self.assertIn('apt-get install -s', text)
 
-    def test_smoke_limits_cover_every_host_config(self):
-        text = (HERE.parents[1] / '.github/workflows/intent-cache-smoke.yml').read_text()
-        rows = re.findall(r'- \{label: ([\w-]+), cpus: (\d+), memory_min: (\d+), memory_max: (\d+)\}', text)
-        smoke = {label: (int(c), int(lo), int(hi)) for label, c, lo, hi in rows}
-        self.assertEqual(set(smoke), {'intent-cache', 'intent-cache-xl'})
+    def smoke_plan(self, *args):
+        result = subprocess.run([sys.executable, '-S', '-B', str(HERE / 'smoke_plan.py'), *args],
+                                capture_output=True, text=True)
+        outputs = dict(line.split('=', 1) for line in result.stdout.splitlines())
+        return result.returncode, {k: v if k == 'host' or not v else json.loads(v) for k, v in outputs.items()}, result.stderr
+
+    def test_smoke_default_limits_cover_every_host_config(self):
+        # Without a host, each pool's range is exactly the span of every
+        # committed config's slots, computed from the files, so it can never
+        # go stale; CPU counts are per pool.
         units = {'k': 2 ** 10, 'm': 2 ** 20, 'g': 2 ** 30}
         seen = {}
         for path in [HERE / 'runners.env', *sorted(HOSTS.glob('*.env'))]:
             env = read_env(path)
             for pool in env['RUNNER_POOLS'].split():
                 p = pool.upper()
-                with self.subTest(config=path.name, pool=pool):
-                    label = env[f'{p}_LABELS'].split(',')[-1]
-                    cpus, lo, hi = smoke[label]
-                    memory = int(env[f'{p}_MEMORY'][:-1]) * units[env[f'{p}_MEMORY'][-1]]
-                    self.assertTrue(lo <= memory <= hi, f'{label}: {memory} outside {lo}..{hi}')
-                    seen.setdefault(label, []).append(memory)
-                    for entry in env[f'{p}_CPUSETS'].split()[:int(env[f'{p}_SLOTS'])]:
-                        self.assertEqual(len(expand(entry)), cpus)
-        for label, sizes in seen.items():
-            self.assertEqual(smoke[label][1:], (min(sizes), max(sizes)),
-                             f'{label}: the smoke range should match the committed configs exactly, so a stale bound fails')
-        xl = text.split('  isolation-xl:')[1].split('\n  fresh:')[0]
-        self.assertIn("if: github.event_name == 'workflow_dispatch' && inputs.xl", xl,
+                memory = int(env[f'{p}_MEMORY'][:-1]) * units[env[f'{p}_MEMORY'][-1]]
+                for entry in env[f'{p}_CPUSETS'].split()[:int(env[f'{p}_SLOTS'])]:
+                    # Keyed by the pool's own label; extra labels (intent-cache-bigmem) may follow it.
+                    label = {'heavy': 'intent-cache', 'xl': 'intent-cache-xl'}[pool]
+                    self.assertIn(label, env[f'{p}_LABELS'].split(','))
+                    seen.setdefault(label, []).append((len(expand(entry)), memory))
+        self.assertEqual(set(seen), {'intent-cache', 'intent-cache-xl'})
+        rc, out, err = self.smoke_plan('--xl', 'true')
+        self.assertEqual(rc, 0, err)
+        legs = out['isolation']['include'] + out['isolation_xl']['include']
+        self.assertEqual(len(legs), 2)
+        for leg in legs:
+            with self.subTest(label=leg['label']):
+                sizes = seen[leg['label']]
+                self.assertEqual({c for c, _ in sizes}, {leg['cpus']})
+                self.assertEqual((leg['memory_min'], leg['memory_max']), (min(m for _, m in sizes), max(m for _, m in sizes)))
+                self.assertEqual(leg['runs_on'], ['self-hosted', leg['label']], 'any host with a free slot')
+        self.assertEqual(out['heavy'], ['self-hosted', 'intent-cache'])
+        self.assertEqual(out['readers'], ['1', '2', '3'])
+        self.assertEqual(out['host'], '')
+        rc, out, err = self.smoke_plan()
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(out['isolation_xl'], '', 'the xl pool is checked only on request')
+
+    def test_smoke_host_checks_that_hosts_own_config(self):
+        # With a host, every leg targets intent-host-<host> (supervisor.sh
+        # registers it), one leg per slot, and the limits are that host's exactly.
+        gib = 2 ** 30
+        expected = {'intent-cache': (3, 36, 0), 'intent-ci1': (2, 30, 1), 'intent-ci2': (2, 30, 1), 'intent-ci3': (4, 12, 0)}
+        for host, (heavy, heavy_gib, xl) in expected.items():
+            with self.subTest(host=host):
+                rc, out, err = self.smoke_plan('--host', host)
+                self.assertEqual(rc, 0, err)
+                self.assertEqual(out['host'], host)
+                label = f'intent-host-{host}'
+                legs = out['isolation']['include']
+                self.assertEqual(len(legs), heavy, 'one isolation leg per heavy slot')
+                for leg in legs:
+                    self.assertEqual((leg['cpus'], leg['memory_min'], leg['memory_max']), (8, heavy_gib * gib, heavy_gib * gib))
+                    self.assertEqual(leg['runs_on'], ['self-hosted', 'intent-cache', label])
+                self.assertEqual(out['heavy'], ['self-hosted', 'intent-cache', label])
+                self.assertEqual(out['readers'], [str(n) for n in range(1, heavy + 1)], 'every heavy slot busy at once')
+                if xl:
+                    (leg,) = out['isolation_xl']['include']
+                    self.assertEqual((leg['cpus'], leg['memory_min'], leg['memory_max']), (16, 52 * gib, 52 * gib))
+                    self.assertEqual(leg['runs_on'], ['self-hosted', 'intent-cache-xl', label])
+                else:
+                    self.assertEqual(out['isolation_xl'], '')
+        # Every committed host is reachable by name; the layout template is not a host.
+        names = {read_env(p).get('RUNNER_NAME_PREFIX', 'intent-cache') for p in [HERE / 'runners.env', *HOSTS.glob('*.env')]
+                 if p.name == 'runners.env' or p.stem == read_env(p)['RUNNER_NAME_PREFIX']}
+        self.assertEqual(names, set(expected))
+        for host in ('intent-ci9', read_env(EPYC_3HEAVY)['RUNNER_NAME_PREFIX'], 'intent-ci3; rm -rf /'):
+            with self.subTest(host=host):
+                rc, out, err = self.smoke_plan('--host', host)
+                self.assertNotEqual(rc, 0)
+                self.assertIn(f"unknown runner host '{host}'", err)
+                self.assertIn('intent-ci3', err)
+                self.assertEqual(out, {})
+
+    def smoke_plan_in(self, files, *args):
+        # The plan against a scratch config tree: runners.env plus hosts/.
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root)
+        (root / 'hosts').mkdir()
+        shutil.copy(HERE / 'smoke_plan.py', root)
+        shutil.copy(HERE / 'runners.env', root)
+        for name, text in files.items():
+            (root / 'hosts' / name).write_text(text)
+        result = subprocess.run([sys.executable, '-S', '-B', str(root / 'smoke_plan.py'), *args],
+                                capture_output=True, text=True)
+        outputs = dict(line.split('=', 1) for line in result.stdout.splitlines())
+        return result.returncode, {k: v if k == 'host' or not v else json.loads(v) for k, v in outputs.items()}, result.stderr
+
+    def test_smoke_plan_edge_cases(self):
+        ci1 = INTENT_CI1.read_text()
+        gib = 2 ** 30
+        # A layout template is not a host: it neither widens nor breaks the fleet range.
+        rc, out, err = self.smoke_plan_in({'intent-ci1.env': ci1, 'template.env': ci1.replace(
+            'RUNNER_NAME_PREFIX=intent-ci1', 'RUNNER_NAME_PREFIX=intent-runner-9').replace(
+            'HEAVY_MEMORY=30g', 'HEAVY_MEMORY=64g').replace('HEAVY_CPUSETS=8-11,24-27 12-15,28-31', 'HEAVY_CPUSETS=8-11 12-15')})
+        self.assertEqual(rc, 0, err)
+        (leg,) = out['isolation']['include']
+        self.assertEqual((leg['cpus'], leg['memory_min'], leg['memory_max']), (8, 30 * gib, 36 * gib))
+        # A drained pool (SLOTS=0) gets no legs instead of an empty matrix.
+        rc, out, err = self.smoke_plan_in({'intent-ci1.env': ci1.replace('XL_SLOTS=1', 'XL_SLOTS=0')}, '--host', 'intent-ci1')
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(out['isolation_xl'], '')
+        rc, out, err = self.smoke_plan_in({'intent-ci1.env': ci1.replace('XL_SLOTS=1', 'XL_SLOTS=0'),
+                                           'intent-ci2.env': INTENT_CI2.read_text()}, '--xl', 'true')
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(out['isolation_xl']['include'][0]['memory_min'], 52 * gib, 'other xl hosts still count')
+        rc, out, err = self.smoke_plan_in({'intent-ci1.env': ci1.replace('XL_SLOTS=1', 'XL_SLOTS=0')}, '--xl', 'true')
+        self.assertNotEqual(rc, 0)
+        self.assertIn('no committed host has a xl slot', err)
+        rc, out, err = self.smoke_plan_in({'intent-ci1.env': ci1.replace('HEAVY_SLOTS=2', 'HEAVY_SLOTS=0')}, '--host', 'intent-ci1')
+        self.assertNotEqual(rc, 0)
+        self.assertIn('intent-ci1 has no heavy slot', err)
+        # Asking for xl on a host without an xl slot is an error, not a silent skip.
+        rc, out, err = self.smoke_plan('--host', 'intent-ci3', '--xl', 'true')
+        self.assertNotEqual(rc, 0)
+        self.assertIn('intent-ci3 has no xl slot', err)
+        rc, out, err = self.smoke_plan('--host', 'intent-ci1', '--xl', 'true')
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(len(out['isolation_xl']['include']), 1)
+
+    def test_smoke_jobs_follow_the_plan(self):
+        text = (HERE.parents[1] / '.github/workflows/intent-cache-smoke.yml').read_text()
+        jobs = dict(re.findall(r'\n  ([\w-]+):\n(.*?)(?=\n  [\w-]+:\n|\Z)', '\n' + text.split('\njobs:\n', 1)[1], re.S))
+        self.assertEqual(set(jobs), {'plan', 'isolation', 'isolation-xl', 'fresh', 'cache-writer', 'cache-reader'})
+        self.assertIn('      host:\n', text.split('\njobs:')[0], 'the dispatch takes an optional host')
+        self.assertIn("if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository",
+                      jobs['plan'], 'never run pull-request code from forks on the self-hosted box')
+        self.assertIn('smoke_plan.py --host "$HOST"', jobs['plan'])
+        # No self-hosted job hard-codes its labels: all of them follow the plan,
+        # so a host input reaches every one, and every one waits for the plan.
+        self.assertNotIn('runs-on: [self-hosted', text)
+        self.assertIn('runs-on: ${{ matrix.runs_on }}', jobs['isolation'])
+        self.assertIn('matrix: ${{ fromJSON(needs.plan.outputs.isolation) }}', jobs['isolation'])
+        self.assertIn('matrix: ${{ fromJSON(needs.plan.outputs.isolation_xl) }}', jobs['isolation-xl'])
+        self.assertIn("if: needs.plan.outputs.isolation_xl != ''", jobs['isolation-xl'],
                       'the xl check runs only on request: with no xl runner online it would wait in the queue')
+        for job in ('fresh', 'cache-reader'):
+            self.assertIn('runs-on: ${{ fromJSON(needs.plan.outputs.heavy) }}', jobs[job])
+        self.assertIn('slot: ${{ fromJSON(needs.plan.outputs.readers) }}', jobs['cache-reader'])
+        guard = "if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository"
+        for name, job in jobs.items():
+            with self.subTest(job=name):
+                if name in ('plan', 'cache-writer'):
+                    # The hosted writer starts at once, without waiting for the plan.
+                    self.assertIn(guard, job)
+                    self.assertNotIn('needs:', job)
+                    self.assertNotIn('SMOKE_HOST:', job)
+                else:
+                    # Every self-hosted job waits for the plan and knows the host.
+                    self.assertRegex(job, r'needs: (plan|\[plan, [\w-]+\])\n')
+                    self.assertIn('      SMOKE_HOST: ${{ needs.plan.outputs.host }}\n', job)
+        # Each self-hosted job proves it ran on the requested host, comparing
+        # the host as a literal prefix of the runner name.
+        check = jobs['isolation'].split('run: &host-check |', 1)[1].split('\n      - ', 1)[0]
+        self.assertIn('slot="${RUNNER_NAME#"$SMOKE_HOST"-}"', check)
+        self.assertNotIn('=~ ^${', check)
+        self.assertIn("if: env.SMOKE_HOST != ''\n        run: *host-check", jobs['fresh'])
+        self.assertIn("if: env.SMOKE_HOST != ''\n        run: *host-check", jobs['cache-writer'])
+        self.assertIn('steps: *cache-build', jobs['cache-reader'])
+        self.assertIn('steps: *isolation-steps', jobs['isolation-xl'])
+        # A host whose label no online runner carries fails in the plan instead
+        # of leaving every job queued.
+        self.assertIn('select(.status == "online")', jobs['plan'])
+        self.assertIn('LABEL: intent-host-${{ steps.plan.outputs.host }}', jobs['plan'])
 
     def test_docker_dns_is_public_and_not_filtered(self):
         # Docker's embedded DNS forwards to these instead of the host's single

@@ -4,7 +4,10 @@ Org-wide GitHub Actions Linux runners for `intent-hq` run on a small fleet of
 hosts. The `intent-cache` box (see [SCCACHE_SERVER.md](./SCCACHE_SERVER.md#the-box))
 runs them next to the sccache server; runner-only hosts run nothing else. All
 of them register into one runner group and share the pool labels, so a job
-targeting a label runs on whichever host has a free slot.
+targeting a label runs on whichever host has a free slot. Each slot also
+registers a host label, `intent-host-<name prefix>` (for example
+`intent-host-intent-ci3`), which nothing routes on; the smoke workflow's `host`
+input uses it to test one host.
 
 | Host | Location | Hardware | Pools (slots) | Labels | Name prefix | Config |
 |---|---|---|---|---|---|---|
@@ -399,11 +402,17 @@ runner-only host, leaving a core or two unpinned is optional.
 6. **Smoke test.** Run `supervisor.sh --group-check` (every fleet runner in the
    group), then dispatch the
    [smoke workflow](../.github/workflows/intent-cache-smoke.yml)
-   (`gh workflow run intent-cache-smoke.yml --repo intent-hq/intent`, plus
-   `-f xl=true` for a host with an xl slot) and check
-   `journalctl -u 'github-runner@*'` on the new host shows it ran jobs. The
-   smoke checks each pool's memory against a range that covers every host
-   config (heavy: 12-36 GiB); a new per-slot size needs the range widened.
+   on the new host:
+   `gh workflow run intent-cache-smoke.yml --repo intent-hq/intent -f host=<host>`.
+   With `host` set, every self-hosted job targets `intent-host-<host>`, the
+   isolation check runs once per slot of the host (each on whichever of its
+   slots is free, so usually all of them) with CPUs and memory matched exactly
+   against the host's committed config, and each job fails unless it ran on a
+   slot of that host. The plan job fails at once if no online runner carries
+   the label (host down, or its `supervisor.sh` predates host labels). Use the
+   same dispatch after resizing a host. Without `host`, jobs land on any host
+   with a free slot and each pool's limits are checked against the span of
+   every host's slots (add `-f xl=true` to include the xl pool).
 7. **Route jobs to it** by raising `CI_LINUX_HEAVY_SLOTS` / `CI_LINUX_XL_SLOTS`
    to the fleet's total slots per pool (see the variables above).
 
