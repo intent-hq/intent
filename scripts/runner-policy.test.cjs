@@ -33,8 +33,8 @@ const WARP = {
   'gh-linux-arm64-8x': ['warp-ubuntu-2404-arm64-8x'],
   'gh-windows-8x': ['warp-windows-2022-x64-8x'],
   'gh-windows-16x': ['warp-windows-2022-x64-16x'],
-  'macos-26-xlarge': ['warp-macos-26-arm64-12x'],
-  'macos-15-xlarge': ['warp-macos-15-arm64-12x'],
+  'macos-26-xlarge': ['warp-macos-26-arm64-6x'],
+  'macos-15-xlarge': ['warp-macos-15-arm64-6x'],
 };
 // The paid sizes `runners` maps (pooled ones); the rest are read through `cloud` only.
 const POOLED = ['gh-linux-8x', 'gh-linux-16x', 'gh-linux-arm64-8x', 'gh-windows-16x', 'macos-26-xlarge'];
