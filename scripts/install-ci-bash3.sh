@@ -7,8 +7,22 @@ mkdir -p "$prefix"
 prefix=$(cd "$prefix" && pwd -P)
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
-curl --fail --location --silent --show-error --retry 3 \
-  https://ftp.gnu.org/gnu/bash/bash-3.2.57.tar.gz --output "$scratch/bash.tar.gz"
+downloaded=false
+for source in \
+  https://ftp.gnu.org/gnu/bash/bash-3.2.57.tar.gz \
+  https://mirrors.kernel.org/gnu/bash/bash-3.2.57.tar.gz; do
+  if curl --fail --location --silent --show-error --retry 2 \
+    --connect-timeout 10 --max-time 120 --retry-max-time 60 \
+    "$source" --output "$scratch/bash.tar.gz"; then
+    downloaded=true
+    break
+  fi
+  echo "Bash 3.2 download failed from $source; trying the next source" >&2
+done
+if [[ "$downloaded" != true ]]; then
+  echo 'Unable to download pinned Bash 3.2 from any source' >&2
+  exit 1
+fi
 (
   cd "$scratch"
   echo '3fa9daf85ebf35068f090ce51283ddeeb3c75eb5bc70b1a4a7cb05868bfe06a4  bash.tar.gz' | sha256sum --check

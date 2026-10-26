@@ -59,10 +59,10 @@ overriding any request-echoed value. Older daemons omit it there; clients re-rea
 [Workspace discussions](./methods/multiplayer.md#555-workspace-discussions) add
 `discussion.conversations`, `discussion.recipients`, `discussion.list`,
 `discussion.send`, `discussion.react`, `discussion:message`, and `discussion:reaction` for a default workspace-wide discussion
-and direct/group discussions with selected members. The five router methods use
+and conversation-scoped history. The original router methods use
 authenticated human membership, private participant grants, bounded pagination,
 and principal-scoped retry keys that reject changed bodies or targets. The first
-message atomically creates a private conversation. Exactly integer
+message atomically creates a conversation. Exactly integer
 `discussionConversations: 1` gates multiple-conversation targeting, preventing
 older daemons from ignoring private target fields. Message events include the conversation
 descriptor, are broadcast-only, and exclude nonparticipants and agents.
@@ -70,24 +70,37 @@ Replies and per-viewer reaction aggregates require the separate exact
 `discussionMessageActions: 1` capability. Reply targets bind retry identity;
 reaction versions preserve updates without advancing message sequences. Exact
 `discussionReactions: 1` adds five picker choices, bounded immutable reactor
-snapshots, and reactions from explicitly granted agents in the default discussion.
+snapshots, and reactions from explicitly granted agents in workspace discussions.
 Older experimental clients must upgrade with this unreleased daemon extension.
 Discussion typing extends the existing `presence.update` and human roster
 shapes with transient, conversation-scoped `discussionTyping`, projected per
 recipient; typing adds no method or event type.
 Agent/daemon snapshots omit that field, and older rosters without it remain valid.
 The prepared `discussionAgentMessaging: 1` extension adds explicit per-message
-agent recipients and bound agent replies to the workspace-wide discussion.
+agent recipients and bound agent replies to workspace-wide discussions
+(named conversations additionally require `discussionManagement: 1`).
 Addressed agents may read that conversation's history on demand; other messages
-never dispatch a turn automatically. Private chats remain human-only because
+never dispatch a turn automatically. Legacy private histories remain human-only because
 agent transcripts have workspace-wide visibility. This adds no router method or
 event type; agent tools use the existing conversation/list/send operations.
 Clients tolerate unsupported methods without sending to an agent instead. The
 documented surface, including prepared startup, generic stream recovery,
 PR workspace lookup, provider profiles, discussion activity, and guest role additions,
-is now **473 / 415 / 58**
+is now **474 / 416 / 58**
 (dispatchable / router / fast path). This reservation does not identify a carrying
 release or change independent capability gates.
+
+The prepared `discussionManagement: 1` extension adds `discussion.rename` and
+`discussion.delete`, first-send `discussion.send { createConversation: true }`,
+optional conversation names, and `discussion:created`, `discussion:updated`,
+`discussion:deleted`. New conversations are workspace-wide; legacy direct/group
+histories retain their original privacy and become read-only. Owner and Manager
+may rename; only Owner may delete, including the default. Deletion is durable:
+reads, sends and first-message retries cannot resurrect the deleted identity.
+Named workspace conversations support independently gated agent messaging,
+reactions and Stop/Retry with per-conversation grants. This coordinated change to
+unreleased Multiplayer Labs retains older capability gates, does not establish
+readiness, and reserves **474 / 416 / 58** dispatchable / router / fast-path names.
 
 The prepared [workspace guest role extension](./methods/multiplayer.md#workspace-guest-roles-prepared)
 adds `workspace.members.setRole` under exact `workspaceGuestRoles: 1` on both

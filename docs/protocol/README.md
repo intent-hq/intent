@@ -3,8 +3,9 @@
 **Documented Protocol Version:** `15.1` (prepared workspace discussions; not a shipped-version claim; the protocol-12, protocol-13.0, protocol-14.0 and protocol-15.0 retirements remain in force — see [compatibility and installed-frontend limits](./versioning.md#protocol-version--compatibility)). [GitLab checkout](./methods/repository-checkout.md) requires exactly integer `gitlabCheckout: 1`; optional owner images additionally require `gitlabCheckoutOwnerAvatar: 1` and an opted-in capture; submission correlation retains its independent `submissionCorrelation: 1` gate. The single-node platform launch remains prepared and capability-gated; its earlier 11.2 reservation does not imply implementation (daemon 11.2 carries script lifecycle snapshots). Other prepared extensions retain their own rollout status and capability gates, including the [shared-host capability contract](./methods/shared-host-membership.md#authority-and-discovery). The documented version does not imply implementation of the separately prepared Home 13.2, GitLab 13.3 or submission-correlation 13.4 additions.
 
 The [workspace discussion contract](./methods/multiplayer.md#555-workspace-discussions)
-adds a default workspace-wide chat and direct/group conversations with selected
-members, authenticated authors, and participant-filtered live delivery. The
+adds workspace-wide conversations, authenticated authors, and access-checked live
+delivery. `discussionManagement: 1` gates first-send creation, Owner/Manager rename
+and Owner-only deletion; legacy private histories stay restricted and read-only. The
 desktop feature remains behind Multiplayer Labs; multiple conversations require
 exactly integer `discussionConversations: 1`. Replies and reactions additionally
 require `discussionMessageActions: 1`; expanded choices, bounded reactor snapshots,
@@ -12,7 +13,8 @@ and granted agent reactions additionally require exact `discussionReactions: 1`.
 Explicitly addressed agents and their
 replies require `discussionAgentMessaging: 1`; addressing one message grants
 on-demand history access, never an automatic chat subscription. The initial
-agent extension is limited to the workspace-wide discussion. Older daemons may
+agent extension covers the default discussion; `discussionManagement: 1` extends
+it to named workspace-wide conversations, with per-conversation grants. Older daemons may
 reject its methods.
 
 The [compact script list contract](./methods/scripts.md#active-only-compact-lists-prepared-breaking-contract)
