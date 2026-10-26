@@ -713,8 +713,10 @@ test-intentd: ensure-intentd-submodule | check-transfer-fixture
 # scripts/resumable_nextest.py, so the run writes the same gate-run record as
 # `make test` (per-attempt run.json, coverage.json and available JUnit under
 # GATE_CACHE_DIR; record path printed even on a fully resumed invocation).
-# RESUME=1 / GATE_FORCE=1 apply unchanged. Reverse dependencies are not
-# propagated, so `make test` stays the complete gate. Like test and
+# RESUME=1 / GATE_FORCE=1 apply unchanged. Reverse dependencies are
+# propagated only from intent-core (to every crate depending on it) and in the
+# narrow cases the script's header lists, so `make test` stays the complete
+# gate. Like test and
 # test-select it stretches test time limits 3x unless the caller sets
 # INTENTD_TEST_TIMEOUT_MULTIPLIER (see its export above).
 # The script exits 3 when a build-wide file (Cargo.toml/Cargo.lock, nextest
