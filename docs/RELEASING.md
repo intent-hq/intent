@@ -892,7 +892,7 @@ The burst runner for a paid label is its WarpBuild equivalent (`gh-linux-8x` →
 `warp-ubuntu-2404-x64-8x`, `gh-linux-16x` → `-16x`, `gh-linux-arm64-8x` →
 `warp-ubuntu-2404-arm64-8x`, `gh-windows-8x` → `warp-windows-2022-x64-8x`,
 `gh-windows-16x` → `warp-windows-2022-x64-16x`, `macos-26-xlarge` →
-`warp-macos-26-arm64-12x`, `macos-15-xlarge` → `warp-macos-15-arm64-12x`).
+`warp-macos-26-arm64-6x`, `macos-15-xlarge` → `warp-macos-15-arm64-6x`).
 GitHub's larger runners are off, so there is no GitHub fallback: fork pull requests
 get the free standard runner of the same OS, a WarpBuild platform with a job queued
 over 10 minutes only logs a warning, and a job that runs after a failed route job

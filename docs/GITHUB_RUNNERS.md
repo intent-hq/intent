@@ -194,8 +194,8 @@ public, so those runners cost nothing.
 | `gh-linux-arm64-8x` | `warp-ubuntu-2404-arm64-8x` | |
 | `gh-windows-8x` | `warp-windows-2022-x64-8x` | cloudlands-fe Windows builds (about a third of 16 CPUs, 12.4 GB at most) |
 | `gh-windows-16x` | `warp-windows-2022-x64-16x` | Server 2022: node-gyp fails on 2025 |
-| `macos-26-xlarge` | `warp-macos-26-arm64-12x` | M4 Pro, 12 vCPU: every Mac job is CPU-bound at 6 |
-| `macos-15-xlarge` | `warp-macos-15-arm64-12x` | 12 vCPU; signed desktop builds (keychain unlock fails on macOS 26) |
+| `macos-26-xlarge` | `warp-macos-26-arm64-6x` | M4 Pro, 6 vCPU: 12x cost twice as much for 1.0–1.25x faster jobs |
+| `macos-15-xlarge` | `warp-macos-15-arm64-6x` | 6 vCPU; signed desktop builds (keychain unlock fails on macOS 26) |
 
 Exceptions and edge cases:
 
