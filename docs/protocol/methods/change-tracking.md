@@ -77,8 +77,10 @@ so `execute` rejects `action:"export"`. A step that fails sets `success:false` a
   stats: { additions, deletions, binary? },
   attribution: { agent?: { agentId, agentName, sessionId, turnNumber, messageId?, toolCallId?,
   timestamp }, manual?, timestamp } }`.
-- **Review** — `{ author, verdict: "approve"|"request-changes"|"comment", body?, submittedAt }`
-  (host-agnostic; GitHub's `APPROVED`/`CHANGES_REQUESTED`/`COMMENTED` map onto `verdict`).
+- **Review** — `{ author, verdict: "approve"|"request-changes"|"comment", body?, submittedAt, id?, commitSha? }`
+  (host-agnostic; GitHub's `APPROVED`/`CHANGES_REQUESTED`/`COMMENTED` map onto `verdict`; additive,
+  omitted when unreported: `id` is the forge's review id, `commitSha` the commit the review was
+  submitted against — GitLab approvals carry neither).
 - **CheckRun** — `{ name, state: "pending"|"success"|"failure"|"neutral"|"cancelled", url? }`.
 - **Metrics** — line-change totals: `{ additions, deletions, filesChanged, byAgent }` (workspace-level
   stats include `byAgent`; per-agent stats may omit `byAgent`; see §5.20).
