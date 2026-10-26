@@ -1461,6 +1461,15 @@ no longer exhaust their bounded retries against each other and an exact-match `n
 text ("Text not found" when an earlier writer replaced its `old` text, instead of a
 three-way merge). The `-32005` shape and the 5-attempt bound are unchanged.
 
+Also within 13.0 (behavior only, no method-catalog or wire-shape change, so no version
+bump — [intent-hq/intentd#2710](https://github.com/intent-hq/intentd/pull/2710)): **`noteIds` attach notes
+by reference** (§5.5 "Per-turn prompt-assembly hints"). `agent.sendMessage` no longer loads a context
+note's `workspace-asset://` images and appends them as ACP `image` blocks; each resolving note instead adds
+one text notice with its title, id, and up to 50 image URLs the agent opens with `ws.note.readAsset`.
+A note with many screenshots can therefore no longer push a turn past the provider image budget and fail
+every send while it is in context. Agents that relied on seeing note images automatically must now open
+them on demand. The `noteIds` param shape is unchanged.
+
 ### Compatibility Policy
 
 - **Additive changes** (new methods, new optional fields, new event types) bump the **minor** version (e.g., 2.0 → 2.1).
