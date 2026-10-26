@@ -114,11 +114,11 @@ background one-shots) use the latest. The session's captured
 `attentionRequests` gate their sections) — with every gate open, the
 bundled markdown is used untouched.
 
-### Prepared repository guidance for 3.2 sessions
+### Prepared repository guidance for 3.2 and 3.3 sessions
 
 The prepared delivery change in intentd
 `73478bdaa5a09dc81307d4bfe7606a5a85983876` applies only to an active session
-whose saved `harnessVersion` is literally `"3.2"`. It adds recurring repository
+whose saved `harnessVersion` is explicitly admitted: `"3.2"` or `"3.3"`. It adds recurring repository
 guidance to ordinary ACP prompts after the original physical session is
 confirmed. It does not change a session's stamp, feature snapshot or doctrine,
 introduce a new major version, or establish support in an installed daemon.
@@ -162,7 +162,8 @@ callback route. The standard prompt-only context cannot substitute for it.
 Missing, `2.9`, `2.10`, `3.0`, `3.1` and unknown saved stamps do not acquire this
 new fallback during turn, load, recovery or tool response. Their persisted
 instructions/features and existing behavior remain pinned. The general registry
-fallback for an unknown version is not admission to this literal-`3.2` path.
+fallback for an unknown version is not admission to this explicit
+`3.2`/`3.3` path.
 
 The source's finite checks exercise real daemon ownership with a controlled
 ordinary ACP peer. They do not establish production adapter/model acceptance,
@@ -170,6 +171,15 @@ true role-channel updates, provider-owned within-turn delivery or unsupported
 private-tool support. Landed-source integration and native acceptance remain
 separate from this prepared contract; it does not promote experimental delivery
 into the bundled app guide.
+
+Harness 3.3 (intentd `6b776f5216047587f55fc2fd4be113dddc714dca`,
+intent-hq/intent#5835) is admitted to the same path with the same guidance
+text. It differs from 3.2 only in instruction composition: an unknown or
+default agent type (including the `interactive` spawn default) gets the
+workspace instruction body once instead of as both the workspace layer and
+the fallback body. Text surfaces, specialist prompts and feature defaults
+are 3.2's. Existing sessions stay pinned to their saved stamp, so a 3.2
+session keeps its original composition.
 
 ### Golden tests
 
