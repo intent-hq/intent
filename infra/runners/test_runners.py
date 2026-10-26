@@ -1251,7 +1251,10 @@ class Static(unittest.TestCase):
                 p = pool.upper()
                 memory = int(env[f'{p}_MEMORY'][:-1]) * units[env[f'{p}_MEMORY'][-1]]
                 for entry in env[f'{p}_CPUSETS'].split()[:int(env[f'{p}_SLOTS'])]:
-                    seen.setdefault(env[f'{p}_LABELS'].split(',')[-1], []).append((len(expand(entry)), memory))
+                    # Keyed by the pool's own label; extra labels (intent-cache-bigmem) may follow it.
+                    label = {'heavy': 'intent-cache', 'xl': 'intent-cache-xl'}[pool]
+                    self.assertIn(label, env[f'{p}_LABELS'].split(','))
+                    seen.setdefault(label, []).append((len(expand(entry)), memory))
         self.assertEqual(set(seen), {'intent-cache', 'intent-cache-xl'})
         rc, out, err = self.smoke_plan('--xl', 'true')
         self.assertEqual(rc, 0, err)
