@@ -64,7 +64,7 @@ github-runner@<pool>-<n>.service ─ supervisor.sh <pool>-<n> ─┬─ GitHub A
 | File | Installed as | Role |
 |---|---|---|
 | `Dockerfile`, `entrypoint.sh` | image `intent-gh-runner:current` | One image for both pools: Ubuntu 24.04, build tools, pinned and checksummed runner, rustup, gh, Node and PowerShell; Rust toolchain baked; user `runner` (uid 1001); no sudo |
-| `supervisor.sh` | `/usr/local/lib/github-runners/` | One slot, one job: JIT-register, run the pinned container, drain on stop, deregister; `--plan` validates the config and lists the slots; `--host-check` checks the CPU sets against the host's cores |
+| `supervisor.sh` | `/usr/local/lib/github-runners/` | One slot, one job: JIT-register, run the pinned container, drain on stop, deregister; `--plan` validates the config and lists the slots; `--host-check` checks the CPU sets against the host's cores and the slots' total memory against the `runners.slice` cap; `--memory-cap` prints that cap |
 | `runners.env` | `/etc/github-runners/runners.env` (once) | intent-cache's pools, slot counts, labels, CPU sets, memory (not secret) |
 | `hosts/*.env` | `/etc/github-runners/runners.env` (once, `install.sh --config`) | The same for runner-only hosts, one file per layout |
 | `github-runner@.service` | `/etc/systemd/system/` | One instance per slot (`heavy-1`, `xl-1`, …); restarts the supervisor after every job |
@@ -127,7 +127,8 @@ supervisor is killed outright.
   siblings with `cat /sys/devices/system/cpu/cpu*/topology/thread_siblings_list`
   before changing the sets on other hardware; the installer runs
   `supervisor.sh --host-check`, which refuses a slot whose CPUs do not exist or
-  that splits a core with another slot. On the EPYC 4545P CPU *n* and *n*+16
+  that splits a core with another slot, and a layout whose total memory is
+  over the `runners.slice` cap. On the EPYC 4545P CPU *n* and *n*+16
   share a core. Job disk lives in the container layer on the
   root NVMe (`/var/lib/docker`), separate from the cache disk, and disappears
   with the container.
@@ -337,15 +338,18 @@ pool added to `RUNNER_POOLS` with its own keys), check it, then apply:
 
 ```bash
 ssh root@intent-cache
-/usr/local/lib/github-runners/supervisor.sh --plan   # validates, lists slots
+/usr/local/lib/github-runners/supervisor.sh --plan         # validates, lists slots
+/usr/local/lib/github-runners/supervisor.sh --host-check   # fits this host's CPUs and memory
 /root/infra/runners/install.sh --no-build
 ```
 
 The installer enables exactly the planned slots and drains and disables the
-rest; an invalid file changes nothing. Keep CPU sets disjoint and the total
-memory under the `runners.slice` cap (the host's RAM minus 9 GiB: 116G on a
-128 GB box). intent-cache pins every CPU and relies on the cache's cgroup
-weights; on a runner-only host, leaving a core or two unpinned is optional.
+rest; an invalid file, or one that does not fit the host, changes no slot.
+Keep CPU sets disjoint and the total memory (each pool's slots × its memory)
+at or under the `runners.slice` cap (the host's RAM in whole GiB minus 9 GiB:
+116G on a 128 GB box, 51G on intent-ci3); `--host-check` enforces both.
+intent-cache pins every CPU and relies on the cache's cgroup weights; on a
+runner-only host, leaving a core or two unpinned is optional.
 
 ## Add a runner host
 
@@ -363,8 +367,10 @@ weights; on a runner-only host, leaving a core or two unpinned is optional.
    `RUNNER_NAME_PREFIX` to the host's name (it must start with `intent-` and be
    unique in the fleet), and fit the CPU sets and memory to the host: whole
    cores per multi-CPU slot, a few cores unpinned, total memory under the
-   host's RAM minus 9 GiB. Check it with
-   `RUNNERS_CONFIG=<file> infra/runners/supervisor.sh --plan`, add a test case
+   host's RAM minus 9 GiB (`/proc/meminfo` MemTotal in whole GiB, which is
+   below the label: 64 GB is 60 GiB). Check it with
+   `RUNNERS_CONFIG=<file> infra/runners/supervisor.sh --plan`; the installer
+   checks the CPUs and memory on the host itself (step 5). Add a test case
    in `test_runners.py` if it is a new layout, and land it with a row in the
    fleet table above.
 4. **Place the credential** at `/etc/github-runners/credentials` (see
@@ -378,8 +384,8 @@ weights; on a runner-only host, leaving a core or two unpinned is optional.
    ```
 
    On a host without the cache services the installer skips their drop-ins.
-   It runs `supervisor.sh --host-check` and changes no slot if the CPU sets do
-   not fit the host.
+   It runs `supervisor.sh --host-check` and changes no slot if the CPU sets or
+   the total memory do not fit the host.
 6. **Smoke test.** Run `supervisor.sh --group-check` (every fleet runner in the
    group), then dispatch the
    [smoke workflow](../.github/workflows/intent-cache-smoke.yml)
@@ -436,7 +442,7 @@ release, so bump the pin at least monthly:
 | `is not a configured slot` | The unit's instance is not in `supervisor.sh --plan`; re-run the installer |
 | Jobs stay queued | `gh api orgs/intent-hq/actions/runners` (needs the same permission): runners online with the expected labels; the `intent-cache` runner group lists the repository; `docker ps` shows `gh-runner-<pool>-<n>` |
 | Offline `<prefix>-<pool>-<n>-*` runners in the org list | Left by a crash or reboot; the slot deletes its own (same prefix and slot only) on its next start |
-| `does not fit this host's CPUs` | `supervisor.sh --host-check` names the slot: a CPU the host lacks, or a slot that splits a core; fix the CPU sets for this host's `thread_siblings_list` |
+| `does not fit this host's CPUs or memory` | `supervisor.sh --host-check` says why. A slot named: a CPU the host lacks, or a slot that splits a core; fix the CPU sets for this host's `thread_siblings_list`. `slots need N GiB in total`: lower `<POOL>_MEMORY` or `<POOL>_SLOTS` until the total is at most the cap it names (RAM minus 9 GiB; `supervisor.sh --memory-cap`) |
 | A job cannot reach a host | Private and tailnet addresses are blocked on purpose; `iptables -t raw -S GH-RUNNERS-EGRESS` lists them |
 | Cache slow while jobs run | `cat /sys/fs/cgroup/runners.slice/cpu.weight` (10) and `/sys/fs/cgroup/system.slice/caddy.service/cpu.weight` (1000); fewer slots or smaller CPU sets |
 

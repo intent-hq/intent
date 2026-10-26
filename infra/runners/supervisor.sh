@@ -15,7 +15,8 @@
 #
 # Usage: supervisor.sh <pool>-<n>     run one job in slot n of pool
 #        supervisor.sh --plan         validate the config, print every slot
-#        supervisor.sh --host-check   check the CPU sets against this host's CPUs
+#        supervisor.sh --host-check   check the CPU sets and total memory against this host
+#        supervisor.sh --memory-cap   print this host's runners.slice memory cap in GiB
 #        supervisor.sh --group-apply  create or correct the runner group
 #        supervisor.sh --group-check  print the group and slot membership (JSON)
 # Config: /etc/github-runners/runners.env (RUNNERS_CONFIG overrides)
@@ -31,6 +32,10 @@ credentials_file="${RUNNERS_CREDENTIALS:-/etc/github-runners/credentials}"
 egress="${RUNNERS_EGRESS:-/usr/local/lib/github-runners/egress.sh}"
 api_url="${GITHUB_API_URL:-https://api.github.com}"
 cpu_sysfs="${RUNNERS_SYSFS_CPU:-/sys/devices/system/cpu}"
+meminfo="${RUNNERS_MEMINFO:-/proc/meminfo}"
+# GiB of RAM kept outside runners.slice for the system, page cache and, on
+# intent-cache, the cache services (125 GiB box: 116G cap).
+slice_reserve_gib=9
 work_folder=/home/runner/work
 
 log() { echo "runner-slot-${slot:-?}: $*"; }
@@ -132,10 +137,56 @@ cpuset_cpus() {
   done
 }
 
-# Check the planned CPU sets against this host: every CPU exists, and a slot
-# with more than one CPU owns whole cores (each CPU's SMT siblings, from
-# topology/thread_siblings_list, are in the same slot). Run on the host itself
-# (install.sh does) before enabling slots on new hardware.
+# Sets host_gib (MemTotal in whole GiB) and slice_cap_gib, the runners.slice
+# memory cap: host_gib minus slice_reserve_gib. install.sh writes the cap as
+# MemoryMax (through --memory-cap); host_check keeps the slots under it.
+read_slice_cap() {
+  local kb
+  kb="$(awk '$1 == "MemTotal:" { print $2 }' "$meminfo" 2>/dev/null || true)"
+  [[ "$kb" =~ ^[0-9]+$ ]] || die "cannot read MemTotal from $meminfo"
+  host_gib=$((kb / 1048576))
+  [ "$host_gib" -gt $((slice_reserve_gib * 2)) ] || die "host has ${host_gib} GiB of RAM; need more than $((slice_reserve_gib * 2))"
+  slice_cap_gib=$((host_gib - slice_reserve_gib))
+}
+
+# KiB in a Docker memory size such as 12g, 512m or 1024k (binary units).
+memory_kib() {
+  local n="${1%?}"
+  case "$1" in
+    *g) echo $((n * 1048576)) ;;
+    *m) echo $((n * 1024)) ;;
+    *k) echo "$n" ;;
+  esac
+}
+
+# KiB as GiB: whole GiB exactly, otherwise rounded up to 0.01 so a total just
+# over the cap never prints as equal to it.
+kib_as_gib() {
+  local h=$((($1 * 100 + 1048575) / 1048576))
+  if [ $(($1 % 1048576)) = 0 ]; then echo $(($1 / 1048576)); else printf '%d.%02d' $((h / 100)) $((h % 100)); fi
+}
+
+# Every slot busy at once must fit runners.slice: the sum of SLOTS x MEMORY
+# over all pools is at most the slice cap, or a full box runs the slice out of
+# memory and the kernel kills jobs at random.
+memory_check() {
+  local pool slots memory total=0 pools=""
+  read_slice_cap
+  for pool in $RUNNER_POOLS; do
+    slots="$(pool_value "$pool" SLOTS)"; memory="$(pool_value "$pool" MEMORY)"
+    [ "$slots" -gt 0 ] || continue
+    total=$((total + slots * $(memory_kib "$memory")))
+    pools+="${pools:+, }$pool $slots x $memory"
+  done
+  [ "$total" -le $((slice_cap_gib * 1048576)) ] && return 0
+  die "slots need $(kib_as_gib "$total") GiB in total ($pools) but runners.slice allows $slice_cap_gib GiB on this host ($host_gib GiB RAM minus $slice_reserve_gib GiB reserve); lower <POOL>_MEMORY or <POOL>_SLOTS"
+}
+
+# Check the planned slots against this host: every CPU exists, a slot with
+# more than one CPU owns whole cores (each CPU's SMT siblings, from
+# topology/thread_siblings_list, are in the same slot), and the slots' total
+# memory fits runners.slice (memory_check). Run on the host itself (install.sh
+# does) before enabling slots on new hardware.
 host_check() {
   local slot pool n sets cpus c sib planned
   planned="$(plan)" || exit 1
@@ -151,6 +202,8 @@ host_check() {
       done
     done
   done
+  slot=host  # memory_check's errors name the host, not the last slot
+  memory_check
 }
 
 load_credentials() {
@@ -367,10 +420,11 @@ main() {
   case "$slot" in
     --plan) slot=plan; load_config; plan; exit 0 ;;
     --host-check) slot=host; load_config; host_check; exit 0 ;;
+    --memory-cap) slot=memory; read_slice_cap; echo "$slice_cap_gib"; exit 0 ;;
     --group-apply) slot=group; load_config; load_credentials; mint_token; group_apply; exit 0 ;;
     --group-check) slot=group; load_config; load_credentials; mint_token; group_check; exit 0 ;;
   esac
-  [[ "$slot" =~ ^[a-z][a-z0-9]*-[1-9][0-9]*$ ]] || { echo "usage: $0 <pool>-<n> | --plan | --host-check | --group-apply | --group-check" >&2; exit 2; }
+  [[ "$slot" =~ ^[a-z][a-z0-9]*-[1-9][0-9]*$ ]] || { echo "usage: $0 <pool>-<n> | --plan | --host-check | --memory-cap | --group-apply | --group-check" >&2; exit 2; }
   load_config
   local planned
   planned="$(plan)"

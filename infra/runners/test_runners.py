@@ -190,6 +190,9 @@ class Supervisor(Stubbed):
         self.creds.chmod(0o600)
         self.config = self.dir / 'runners.env'
         self.config.write_text('GITHUB_ORG=example-org\n')
+        # A 128 GB host, so --host-check does not depend on this machine's RAM.
+        self.meminfo = self.dir / 'meminfo'
+        self.meminfo.write_text(MEMINFO_128G)
         self.responses = {
             'GET /orgs/example-org/actions/runners': [200, {'runners': [
                 {'id': 11, 'name': 'intent-cache-heavy-1-100', 'status': 'offline'},
@@ -209,7 +212,7 @@ class Supervisor(Stubbed):
             'DELETE /orgs/example-org/actions/runners/42': [204, None],
         }
         self.env.update(RUNNERS_CONFIG=str(self.config), RUNNERS_CREDENTIALS=str(self.creds),
-                        RUNNERS_EGRESS=str(self.egress), RUNNERS_RETRY_DELAY='0',
+                        RUNNERS_EGRESS=str(self.egress), RUNNERS_RETRY_DELAY='0', RUNNERS_MEMINFO=str(self.meminfo),
                         STUB_RESPONSES=str(self.dir / 'responses.json'))
 
     def start(self, *args, **env):
@@ -774,6 +777,77 @@ class Supervisor(Stubbed):
         self.assertIn('only 3 entries in CPUSETS', err)
         self.assertEqual(self.calls(), [])
 
+    def host_check(self, config, sysfs, meminfo):
+        self.meminfo.write_text(meminfo)
+        return self.run_supervisor('--host-check', RUNNERS_CONFIG=str(config), RUNNERS_SYSFS_CPU=str(sysfs))
+
+    def test_host_check_passes_committed_configs_on_their_hosts(self):
+        epyc = fake_cpus(self.dir / 'epyc', 16, 16)
+        ryzen = fake_cpus(self.dir / 'ryzen', 12, 12)
+        hosts = {HERE / 'runners.env': (ryzen, MEMINFO_128G), INTENT_CI1: (epyc, MEMINFO_128G),
+                 INTENT_CI2: (epyc, MEMINFO_128G), INTENT_CI3: (epyc, MEMINFO_64G),
+                 EPYC_3HEAVY: (epyc, MEMINFO_128G)}
+        self.assertEqual(sorted(hosts), sorted([HERE / 'runners.env', *HOSTS.glob('*.env')]))
+        for config, (sysfs, meminfo) in hosts.items():
+            with self.subTest(config=config.name):
+                rc, _, err = self.host_check(config, sysfs, meminfo)
+                self.assertEqual(rc, 0, err)
+
+    def test_host_check_refuses_slots_over_the_memory_cap(self):
+        # intent-hq/intent#7865: 4 x 13g was planned for intent-ci3, whose
+        # 60 GiB of RAM leaves runners.slice 51 GiB.
+        epyc = fake_cpus(self.dir / 'epyc', 16, 16)
+        ci3_13g = self.dir / 'ci3-13g.env'
+        ci3_13g.write_text(INTENT_CI3.read_text().replace('HEAVY_MEMORY=12g', 'HEAVY_MEMORY=13g'))
+        self.assertIn('HEAVY_MEMORY=13g', ci3_13g.read_text())
+        for config, meminfo, message in (
+                (ci3_13g, MEMINFO_64G, 'slots need 52 GiB in total (heavy 4 x 13g) but runners.slice allows 51 GiB '
+                                       'on this host (60 GiB RAM minus 9 GiB reserve)'),
+                (INTENT_CI1, MEMINFO_64G, 'slots need 112 GiB in total (xl 1 x 52g, heavy 2 x 30g) but runners.slice '
+                                          'allows 51 GiB'),
+                (EPYC_3HEAVY, MEMINFO_64G, 'slots need 96 GiB in total (heavy 3 x 32g)')):
+            with self.subTest(config=config.name):
+                rc, _, err = self.host_check(config, epyc, meminfo)
+                self.assertNotEqual(rc, 0)
+                self.assertIn('runner-slot-host: error: ' + message, err)
+        self.assertEqual(self.calls(), [])
+
+    def test_host_check_memory_boundary_and_units(self):
+        # Three heavy slots on a 60 GiB host (51 GiB cap): 51 GiB fits, any more does not.
+        ryzen = fake_cpus(self.dir / 'ryzen', 12, 12)
+        for memory, total in (('17g', None), ('17408m', None), ('17825792k', None),
+                              ('17409m', '51.01'), ('18g', '54'), ('17825793k', '51.01')):
+            with self.subTest(memory=memory):
+                self.config.write_text(f'GITHUB_ORG=example-org\nHEAVY_MEMORY={memory}\n')
+                rc, _, err = self.host_check(self.config, ryzen, MEMINFO_64G)
+                if total is None:
+                    self.assertEqual(rc, 0, err)
+                else:
+                    self.assertNotEqual(rc, 0)
+                    self.assertIn(f'slots need {total} GiB in total (heavy 3 x {memory}) but runners.slice allows 51 GiB', err)
+        self.config.write_text('GITHUB_ORG=example-org\nRUNNER_POOLS=heavy xl\nXL_SLOTS=0\nXL_LABELS=x\nXL_MEMORY=900g\n')
+        rc, _, err = self.host_check(self.config, ryzen, MEMINFO_128G)
+        self.assertEqual(rc, 0, 'a pool with no slots needs no memory: ' + err)
+
+    def test_host_check_needs_host_ram(self):
+        ryzen = fake_cpus(self.dir / 'ryzen', 12, 12)
+        for meminfo, message in (('MemFree: 1 kB\n', 'cannot read MemTotal'), ('MemTotal: 8000000 kB\n', 'host has 7 GiB')):
+            with self.subTest(meminfo=meminfo):
+                rc, _, err = self.host_check(self.config, ryzen, meminfo)
+                self.assertNotEqual(rc, 0)
+                self.assertIn(message, err)
+
+    def test_memory_cap(self):
+        for meminfo, cap in ((MEMINFO_128G, '116'), (MEMINFO_64G, '51'), ('MemTotal: 263800000 kB\n', '242')):
+            with self.subTest(cap=cap):
+                self.meminfo.write_text(meminfo)
+                rc, out, err = self.run_supervisor('--memory-cap')
+                self.assertEqual((rc, out), (0, cap + '\n'), err)
+        self.meminfo.write_text('MemFree: 1 kB\n')
+        rc, out, err = self.run_supervisor('--memory-cap')
+        self.assertNotEqual(rc, 0)
+        self.assertIn('cannot read MemTotal', err)
+
 
 @unittest.skipUnless(HAVE_TOOLS, 'needs bash, jq and openssl')
 class Installer(Stubbed):
@@ -1024,6 +1098,9 @@ class Installer(Stubbed):
 
     def test_slice_memory_follows_host_ram(self):
         units = self.prefix / 'etc/systemd/system'
+        # One 36g slot fits even the 53G cap, so --host-check passes at every size.
+        self.env_file.parent.mkdir(mode=0o700, parents=True)
+        self.env_file.write_text('HEAVY_SLOTS=1\n')
         for kb, cap in ((65_800_000, '53G'), (263_800_000, '242G'), (131_890_000, '116G')):
             with self.subTest(kb=kb):
                 self.meminfo.write_text(f'MemTotal: {kb} kB\n')
@@ -1047,9 +1124,29 @@ class Installer(Stubbed):
         self.log.write_text('')
         result = self.install('--no-build')
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("does not fit this host's CPUs", result.stderr)
+        self.assertIn("does not fit this host's CPUs or memory", result.stderr)
         self.assertEqual(self.enabled(), before)
         self.assertFalse(any(a[0] in ('disable', 'enable') and 'runner@' in a[-1] for a in self.systemctl()))
+
+    def test_config_that_does_not_fit_the_memory_changes_nothing(self):
+        for unit in ('lib/systemd/system/caddy.service', 'etc/systemd/system/sccache-webdav.service'):
+            (self.prefix / unit).unlink()
+        self.meminfo.write_text(MEMINFO_64G)
+        fake_cpus(self.sysfs, 16, 16)
+        self.place_credential()
+        self.assertEqual(self.install('--no-build', '--config', str(INTENT_CI3)).returncode, 0)
+        before = self.enabled()
+        self.assertEqual(before, [f'github-runner@heavy-{n}.service' for n in (1, 2, 3, 4)])
+        # intent-hq/intent#7865: the 4 x 13g layout first planned for intent-ci3.
+        self.env_file.write_text(INTENT_CI3.read_text().replace('HEAVY_MEMORY=12g', 'HEAVY_MEMORY=13g'))
+        self.log.write_text('')
+        result = self.install('--no-build')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('slots need 52 GiB in total (heavy 4 x 13g) but runners.slice allows 51 GiB', result.stderr)
+        self.assertIn("does not fit this host's CPUs or memory", result.stderr)
+        self.assertEqual(self.enabled(), before)
+        self.assertFalse(any(a[0] in ('disable', 'enable', 'start', 'stop') and 'runner@' in a[-1] for a in self.systemctl()))
+        self.assertIn('\nMemoryMax=51G\n', (self.prefix / 'etc/systemd/system/runners.slice.d/memory.conf').read_text())
 
     def test_refuses_non_ubuntu_and_bad_args(self):
         other = self.dir / 'debian'
@@ -1202,7 +1299,7 @@ class Static(unittest.TestCase):
 
     @staticmethod
     def slice_cap(host_gib):
-        reserve = int(re.search(r'^slice_reserve_gib=(\d+)$', INSTALL.read_text(), re.M)[1])
+        reserve = int(re.search(r'^slice_reserve_gib=(\d+)$', SUPERVISOR.read_text(), re.M)[1])
         return host_gib - reserve
 
     def test_default_pools_fit_the_box(self):
