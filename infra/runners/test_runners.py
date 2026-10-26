@@ -25,9 +25,12 @@ INSTALL = HERE / 'install.sh'
 HOSTS = HERE / 'hosts'
 INTENT_CI1 = HOSTS / 'intent-ci1.env'
 INTENT_CI2 = HOSTS / 'intent-ci2.env'
+INTENT_CI3 = HOSTS / 'intent-ci3.env'
 EPYC_3HEAVY = HOSTS / 'epyc-4545p-3heavy.env'
 # MemTotal of a 128 GB box (125 GiB after the kernel's share).
 MEMINFO_128G = 'MemTotal:       131890000 kB\nMemFree:        1000 kB\n'
+# MemTotal of intent-ci3's 64 GB (60 GiB after the kernel's and firmware's share).
+MEMINFO_64G = 'MemTotal:       63370000 kB\nMemFree:        1000 kB\n'
 PAT = 'github_pat_' + 'p' * 40
 JIT = 'jit' + 'j' * 60
 APP_TOKEN = 'ghs_' + 'a' * 36
@@ -635,6 +638,7 @@ class Supervisor(Stubbed):
         for path, slots in ((HERE / 'runners.env', ['heavy-1', 'heavy-2', 'heavy-3']),
                             (INTENT_CI1, ['xl-1', 'heavy-1', 'heavy-2']),
                             (INTENT_CI2, ['xl-1', 'heavy-1', 'heavy-2']),
+                            (INTENT_CI3, ['heavy-1', 'heavy-2', 'heavy-3', 'heavy-4']),
                             (EPYC_3HEAVY, ['heavy-1', 'heavy-2', 'heavy-3'])):
             with self.subTest(config=path.name):
                 rc, out, err = self.run_supervisor('--plan', RUNNERS_CONFIG=str(path))
@@ -675,6 +679,24 @@ class Supervisor(Stubbed):
         self.assertEqual(rc, 0, err)
         argv = ' '.join([c for c in self.calls('docker') if c['argv'][0] == 'run'][-1]['argv'])
         self.assertIn('--cpus 8 --cpuset-cpus 12-15,28-31 --memory 30g', argv)
+
+    def test_four_heavy_slots_on_intent_ci3(self):
+        self.use_host_config(INTENT_CI3)
+        self.responses['GET /orgs/example-org/actions/runners'] = [200, {'runners': []}]
+        for n, cpuset in enumerate(('0-3,16-19', '4-7,20-23', '8-11,24-27', '12-15,28-31'), 1):
+            with self.subTest(slot=f'heavy-{n}'):
+                rc, out, err = self.run_supervisor(f'heavy-{n}')
+                self.assertEqual(rc, 0, err)
+                body = json.loads([c for c in self.calls('curl') if c['method'] == 'POST'][-1]['body'])
+                self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache'])
+                self.assertRegex(body['name'], rf'^intent-ci3-heavy-{n}-\d+$')
+                argv = ' '.join([c for c in self.calls('docker') if c['argv'][0] == 'run'][-1]['argv'])
+                for flag in (f'--hostname intent-ci3-heavy-{n}', f'--cpus 8 --cpuset-cpus {cpuset} --memory 12g',
+                             '--memory-swap 12g', '--pids-limit 16384', '--shm-size 1g'):
+                    self.assertIn(flag, argv)
+        rc, _, err = self.run_supervisor('xl-1')
+        self.assertNotEqual(rc, 0, 'intent-ci3 has no xl slot')
+        self.assertIn('is not a configured slot', err)
 
     def test_stale_cleanup_only_takes_this_hosts_slot(self):
         self.use_host_config(INTENT_CI1)
@@ -729,11 +751,14 @@ class Supervisor(Stubbed):
         for config, sysfs, message in (
                 (INTENT_CI1, epyc, None),
                 (INTENT_CI2, epyc, None),
+                (INTENT_CI3, epyc, None),
                 (EPYC_3HEAVY, epyc, None),
                 (HERE / 'runners.env', ryzen, None),
                 (HERE / 'runners.env', epyc, 'slot heavy-1: CPU 0 shares a core with CPU 16'),
                 (INTENT_CI1, ryzen, 'slot xl-1: CPU 0 shares a core with CPU 12'),
                 (INTENT_CI2, ryzen, 'slot xl-1: CPU 0 shares a core with CPU 12'),
+                (INTENT_CI3, ryzen, 'slot heavy-1: CPU 0 shares a core with CPU 12'),
+                (INTENT_CI3, small, 'slot heavy-3: CPU 8 does not exist'),
                 (EPYC_3HEAVY, ryzen, 'slot heavy-1: CPU 0 shares a core with CPU 12'),
                 (EPYC_3HEAVY, small, 'slot heavy-3: CPU 8 does not exist')):
             with self.subTest(config=config.name, host=sysfs.name):
@@ -985,6 +1010,18 @@ class Installer(Stubbed):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.enabled(), [f'github-runner@heavy-{n}.service' for n in (1, 2, 3)])
 
+    def test_four_heavy_layout_on_a_64g_epyc(self):
+        for unit in ('lib/systemd/system/caddy.service', 'etc/systemd/system/sccache-webdav.service'):
+            (self.prefix / unit).unlink()
+        self.meminfo.write_text(MEMINFO_64G)
+        fake_cpus(self.sysfs, 16, 16)
+        self.place_credential()
+        result = self.install('--no-build', '--config', str(INTENT_CI3))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.env_file.read_bytes(), INTENT_CI3.read_bytes())
+        self.assertEqual(self.enabled(), [f'github-runner@heavy-{n}.service' for n in (1, 2, 3, 4)])
+        self.assertIn('\nMemoryMax=51G\n', (self.prefix / 'etc/systemd/system/runners.slice.d/memory.conf').read_text())
+
     def test_slice_memory_follows_host_ram(self):
         units = self.prefix / 'etc/systemd/system'
         for kb, cap in ((65_800_000, '53G'), (263_800_000, '242G'), (131_890_000, '116G')):
@@ -1197,9 +1234,13 @@ class Static(unittest.TestCase):
         self.assertGreaterEqual(self.slice_cap(125), memory)
 
     def test_host_configs_fit_an_epyc_4545p(self):
-        # 16 cores / 32 threads (CPU n and n+16 share a core), 128 GB (125 GiB).
+        # 16 cores / 32 threads (CPU n and n+16 share a core), 128 GB (125 GiB);
+        # intent-ci3 has 64 GB (60 GiB).
         configs = sorted(HOSTS.glob('*.env'))
-        self.assertEqual(configs, sorted([INTENT_CI1, INTENT_CI2, EPYC_3HEAVY]))
+        # Host RAM in GiB and, for hosts that pin every core, the slots' total memory.
+        hosts = {INTENT_CI1: (125, 52 + 2 * 30), INTENT_CI2: (125, 52 + 2 * 30), INTENT_CI3: (60, 4 * 12),
+                 EPYC_3HEAVY: (125, None)}
+        self.assertEqual(configs, sorted(hosts))
         shape = {'xl': (16, 'intent-cache-xl'), 'heavy': (8, 'intent-cache')}
         for path in configs:
             with self.subTest(config=path.name):
@@ -1222,19 +1263,24 @@ class Static(unittest.TestCase):
                     memory += int(env[f'{p}_SLOTS']) * int(env[f'{p}_MEMORY'].rstrip('g'))
                 self.assertEqual(len(cpus), len(set(cpus)), 'slots must not share CPUs')
                 self.assertTrue(all(c < 32 for c in cpus))
-                if path in (INTENT_CI1, INTENT_CI2):
+                gib, total = hosts[path]
+                if total is not None:
                     self.assertEqual(sorted(cpus), list(range(32)), f'{path.stem} pins every core')
-                    self.assertEqual(memory, 52 + 2 * 30)
-                    self.assertGreaterEqual(125 - memory, 10, 'leave about 10 GB for the system and Docker')
+                    self.assertEqual(memory, total)
+                    self.assertGreaterEqual(gib - memory, 10, 'leave about 10 GB for the system and Docker')
                 else:
                     self.assertEqual(set(range(12, 16)) & {c % 16 for c in cpus}, set(), 'cores 12-15 stay unpinned')
-                self.assertLessEqual(memory, self.slice_cap(125))
+                self.assertLessEqual(memory, self.slice_cap(gib))
         ci1 = read_env(INTENT_CI1)
         self.assertEqual((ci1['RUNNER_NAME_PREFIX'], ci1['RUNNER_POOLS'], ci1['XL_SLOTS'], ci1['HEAVY_SLOTS']),
                          ('intent-ci1', 'xl heavy', '1', '2'))
         self.assertEqual(ci1['HEAVY_CPUSETS'].split(), ['8-11,24-27', '12-15,28-31'],
                          'one heavy slot per half of CCD 1, both SMT siblings of each core')
         self.assertEqual(read_env(EPYC_3HEAVY)['HEAVY_SLOTS'], '3')
+        ci3 = read_env(INTENT_CI3)
+        self.assertEqual((ci3['RUNNER_NAME_PREFIX'], ci3['RUNNER_POOLS'], ci3['HEAVY_SLOTS'], ci3['HEAVY_MEMORY']),
+                         ('intent-ci3', 'heavy', '4', '12g'))
+        self.assertNotIn('XL_SLOTS', ci3, 'intent-ci3 has no xl slot')
 
     def test_intent_ci2_matches_intent_ci1_but_its_name(self):
         # intent-ci2 is a second intent-ci1: same hardware, same slots; only
