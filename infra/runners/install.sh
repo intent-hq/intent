@@ -15,7 +15,8 @@
 #
 # Runs on the cache box (intent-cache) or on a runner-only host: the cache
 # services get their priority drop-in only where they are installed. The
-# runners.slice memory cap follows the host's RAM.
+# runners.slice memory cap follows the host's RAM, and the slots' total
+# memory must fit under it.
 #
 # Installs Docker (official apt repo) with user-namespace remapping, the
 # runner image, an isolated bridge network with an egress filter, the
@@ -39,9 +40,6 @@ network=gh-runners
 bridge=gh-runners0
 subnet=172.30.250.0/24
 image=intent-gh-runner
-# GiB of RAM kept outside runners.slice for the system, page cache and, on
-# intent-cache, the cache services (125 GiB box: 116G cap).
-slice_reserve_gib=9
 
 build=1
 seed_config="$here/runners.env"
@@ -125,17 +123,15 @@ unit_exists() {
   return 1
 }
 
-# runners.slice MemoryMax = host RAM (whole GiB) minus slice_reserve_gib.
+# runners.slice MemoryMax = host RAM (whole GiB) minus the reserve, from
+# supervisor.sh --memory-cap: the cap its --host-check holds the slots to.
 install_slice_memory() {
-  local kb gib tmp
-  kb="$(awk '$1 == "MemTotal:" { print $2 }' "$meminfo" 2>/dev/null || true)"
-  [[ "$kb" =~ ^[0-9]+$ ]] || die "cannot read MemTotal from $meminfo"
-  gib=$((kb / 1048576))
-  [ "$gib" -gt $((slice_reserve_gib * 2)) ] || die "host has ${gib} GiB of RAM; need more than $((slice_reserve_gib * 2))"
+  local cap tmp
+  cap="$(RUNNERS_MEMINFO="$meminfo" "$lib_dir/supervisor.sh" --memory-cap)" || die "cannot size runners.slice (see above)"
   install -d -m 0755 "$unit_dir/runners.slice.d"
   tmp="$(mktemp)"
-  printf '# Written by infra/runners/install.sh: host RAM (%s GiB) minus %s GiB.\n[Slice]\nMemoryMax=%sG\n' \
-    "$gib" "$slice_reserve_gib" "$((gib - slice_reserve_gib))" > "$tmp"
+  printf '# Written by infra/runners/install.sh: host RAM minus the reserve (supervisor.sh --memory-cap).\n[Slice]\nMemoryMax=%sG\n' \
+    "$cap" > "$tmp"
   put 0644 "$tmp" "$unit_dir/runners.slice.d/memory.conf" || true
   rm -f "$tmp"
 }
@@ -223,8 +219,8 @@ apply_slots() {
   local wanted n
   wanted="$(RUNNERS_CONFIG="$etc_dir/runners.env" "$lib_dir/supervisor.sh" --plan)" \
     || die "invalid $etc_dir/runners.env (see above)"
-  RUNNERS_CONFIG="$etc_dir/runners.env" "$lib_dir/supervisor.sh" --host-check \
-    || die "$etc_dir/runners.env does not fit this host's CPUs (see above)"
+  RUNNERS_CONFIG="$etc_dir/runners.env" RUNNERS_MEMINFO="$meminfo" "$lib_dir/supervisor.sh" --host-check \
+    || die "$etc_dir/runners.env does not fit this host's CPUs or memory (see above)"
   for n in $(enabled_slots); do
     if ! grep -qx -- "$n" <<<"$wanted"; then
       log "draining and disabling slot $n"
