@@ -112,7 +112,7 @@ plan_pool() {
   memory="$(pool_value "$pool" MEMORY)"; pids="$(pool_value "$pool" PIDS)"; shm="$(pool_value "$pool" SHM)"
   [[ "$slots" =~ ^[0-9]+$ ]] || die "pool $pool: SLOTS must be a number"
   [[ "$labels" =~ ^[A-Za-z0-9._-]+(,[A-Za-z0-9._-]+)*$ ]] || die "pool $pool: LABELS must be a comma-separated list"
-  [[ "$memory" =~ ^[1-9][0-9]*[kmg]$ ]] || die "pool $pool: MEMORY must look like 40g"
+  [[ "$memory" =~ ^[1-9][0-9]{0,8}[kmg]$ ]] || die "pool $pool: MEMORY must look like 40g (at most 9 digits)"
   [[ "${pids:-4096}" =~ ^[1-9][0-9]*$ ]] || die "pool $pool: PIDS must be a number"
   [[ "${shm:-64m}" =~ ^[1-9][0-9]*[kmg]$ ]] || die "pool $pool: SHM must look like 1g"
   read -ra sets <<<"$cpusets"
@@ -170,16 +170,20 @@ kib_as_gib() {
 # over all pools is at most the slice cap, or a full box runs the slice out of
 # memory and the kernel kills jobs at random.
 memory_check() {
-  local pool slots memory total=0 pools=""
+  local pool slots memory total=0 pools="" keys=() fix
   read_slice_cap
   for pool in $RUNNER_POOLS; do
     slots="$(pool_value "$pool" SLOTS)"; memory="$(pool_value "$pool" MEMORY)"
     [ "$slots" -gt 0 ] || continue
     total=$((total + slots * $(memory_kib "$memory")))
     pools+="${pools:+, }$pool $slots x $memory"
+    keys+=("$(tr '[:lower:]' '[:upper:]' <<<"$pool")_MEMORY" "$(tr '[:lower:]' '[:upper:]' <<<"$pool")_SLOTS")
   done
   [ "$total" -le $((slice_cap_gib * 1048576)) ] && return 0
-  die "slots need $(kib_as_gib "$total") GiB in total ($pools) but runners.slice allows $slice_cap_gib GiB on this host ($host_gib GiB RAM minus $slice_reserve_gib GiB reserve); lower <POOL>_MEMORY or <POOL>_SLOTS"
+  fix="${keys[*]}"
+  fix="${fix// /, }"
+  if [ "${#keys[@]}" -gt 2 ]; then fix="${fix%, *} or ${fix##*, }"; else fix="${keys[0]} or ${keys[1]}"; fi
+  die "slots need $(kib_as_gib "$total") GiB in total ($pools) but runners.slice allows $slice_cap_gib GiB on this host ($host_gib GiB RAM minus $slice_reserve_gib GiB reserve); lower $fix"
 }
 
 # Check the planned slots against this host: every CPU exists, a slot with

@@ -802,9 +802,10 @@ class Supervisor(Stubbed):
         self.assertIn('HEAVY_MEMORY=13g', ci3_13g.read_text())
         for config, meminfo, message in (
                 (ci3_13g, MEMINFO_64G, 'slots need 52 GiB in total (heavy 4 x 13g) but runners.slice allows 51 GiB '
-                                       'on this host (60 GiB RAM minus 9 GiB reserve)'),
+                                       'on this host (60 GiB RAM minus 9 GiB reserve); lower HEAVY_MEMORY or HEAVY_SLOTS'),
                 (INTENT_CI1, MEMINFO_64G, 'slots need 112 GiB in total (xl 1 x 52g, heavy 2 x 30g) but runners.slice '
-                                          'allows 51 GiB'),
+                                          'allows 51 GiB on this host (60 GiB RAM minus 9 GiB reserve); '
+                                          'lower XL_MEMORY, XL_SLOTS, HEAVY_MEMORY or HEAVY_SLOTS'),
                 (EPYC_3HEAVY, MEMINFO_64G, 'slots need 96 GiB in total (heavy 3 x 32g)')):
             with self.subTest(config=config.name):
                 rc, _, err = self.host_check(config, epyc, meminfo)
@@ -828,6 +829,13 @@ class Supervisor(Stubbed):
         self.config.write_text('GITHUB_ORG=example-org\nRUNNER_POOLS=heavy xl\nXL_SLOTS=0\nXL_LABELS=x\nXL_MEMORY=900g\n')
         rc, _, err = self.host_check(self.config, ryzen, MEMINFO_128G)
         self.assertEqual(rc, 0, 'a pool with no slots needs no memory: ' + err)
+        # 2^43 GiB is 2^63 KiB: unbounded digits would wrap the sum negative and pass.
+        for memory in ('8796093022208g', '1000000000k'):
+            with self.subTest(memory=memory):
+                self.config.write_text(f'GITHUB_ORG=example-org\nHEAVY_MEMORY={memory}\n')
+                rc, _, err = self.host_check(self.config, ryzen, MEMINFO_128G)
+                self.assertNotEqual(rc, 0)
+                self.assertIn('MEMORY must look like 40g (at most 9 digits)', err)
 
     def test_host_check_needs_host_ram(self):
         ryzen = fake_cpus(self.dir / 'ryzen', 12, 12)
