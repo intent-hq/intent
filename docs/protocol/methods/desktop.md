@@ -222,7 +222,7 @@ a future start, never an action or an active session by itself. Reinstallation o
 another physical primary requires new consent. The agent ellipsis menu reads and
 updates permission for the current assigned primary, or the caller's own eligible
 candidate while unassigned, with the label
-`Allow desktop control without asking`.
+`Allow desktop control`.
 
 The following steps apply to an assigned primary; an unassigned start first uses
 the candidate flow below and rejoins activation at step 4.
