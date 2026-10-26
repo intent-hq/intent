@@ -15,7 +15,8 @@ targeting a label runs on whichever host has a free slot.
 
 | Pool | Label | Serves jobs asking for | Bursts to | Per slot |
 |---|---|---|---|---|
-| heavy | `intent-cache` | `gh-linux-8x`, `gh-linux-16x` | `warp-ubuntu-2404-x64-8x` / `-16x` | 8 CPUs = 4 whole cores; 36 GB on intent-cache, 30 GB on intent-ci1 and intent-ci2, 12 GB on intent-ci3, 32 GB in the three-heavy EPYC layout |
+| heavy | `intent-cache` | `gh-linux-8x` | `warp-ubuntu-2404-x64-8x` | 8 CPUs = 4 whole cores; 36 GB on intent-cache, 30 GB on intent-ci1 and intent-ci2, 12 GB on intent-ci3, 32 GB in the three-heavy EPYC layout |
+| bigmem | `intent-cache` + `intent-cache-bigmem` | `gh-linux-16x` when no xl slot is free | `warp-ubuntu-2404-x64-16x` | heavy slots with 30 GB or more; never intent-ci3 |
 | xl | `intent-cache-xl` | `gh-linux-16x` | `warp-ubuntu-2404-x64-16x` | 16 CPUs = 8 whole cores (one CCD), 52 GB |
 | small | `intent-cache-small` | nothing routed (free `ubuntu-*` jobs run on GitHub) | — | no slots on any host |
 
@@ -31,9 +32,11 @@ On intent-ci1 and intent-ci2 (same layout) the xl slot owns cores 0-7
 13 GB stays with the system and Docker. intent-ci3 has the same CPU with
 64 GB and no xl slot: four heavy slots (cores 0-3, 4-7, 8-11, 12-15), 12 GB
 each, every core pinned, 48 GB under its 51G slice cap (it reports 60 GiB). That is well under the
-other heavy slots, so a job that needs more working memory is OOM-killed
-there; if that happens, drop it to three slots of 16 GB (`HEAVY_SLOTS=3`,
-`HEAVY_MEMORY=16g`). [`hosts/epyc-4545p-3heavy.env`](../infra/runners/hosts/epyc-4545p-3heavy.env)
+other heavy slots, so its slots do not carry `intent-cache-bigmem`: one rustc
+in intentd's 16-core `check` and `coverage-changed` passed 12 GB and was
+OOM-killed there when those jobs overflowed from busy xl slots. Every
+8-core job fits; if one is OOM-killed, drop to three slots of 16 GB
+(`HEAVY_SLOTS=3`, `HEAVY_MEMORY=16g`). [`hosts/epyc-4545p-3heavy.env`](../infra/runners/hosts/epyc-4545p-3heavy.env)
 is the other EPYC layout: three heavy slots (cores 0-3, 4-7, 8-11), 32 GB each.
 
 The routing probe (`runner-route.yml`) caps how many jobs it sends to each
@@ -44,7 +47,8 @@ new host only adds capacity once its variable is raised:
 |---|---|---|
 | `CI_LINUX_HEAVY_SLOTS` | 2 | heavy |
 | `CI_LINUX_XL_SLOTS` | 0 (xl off) | xl |
-| `CI_LINUX_RUNNER_DISABLED` | unset | `true` sends every job, xl included, to its burst runner |
+| `CI_LINUX_BIGMEM_SLOTS` | 0 (16-core overflow bursts) | bigmem; its slots also count against `CI_LINUX_HEAVY_SLOTS` |
+| `CI_LINUX_RUNNER_DISABLED` | unset | `true` sends every job, xl and bigmem included, to its burst runner |
 
 `CI_WARPBUILD_DISABLED` is no longer read: GitHub's larger runners are off, so
 there is nothing to switch bursts back to (see [Burst to WarpBuild](#burst-to-warpbuild)).
@@ -133,16 +137,22 @@ supervisor is killed outright.
   with the container.
 - **Labels.** `self-hosted`, `Linux`, `X64` (GitHub adds these itself) plus
   `intent-cache` (heavy) or `intent-cache-xl` (xl), whichever host the slot
-  is on. Target a pool explicitly, e.g. `runs-on: [self-hosted, intent-cache]`.
+  is on. Heavy slots with 30 GB or more also carry `intent-cache-bigmem`. Target a pool explicitly, e.g. `runs-on: [self-hosted, intent-cache]`.
   No host serves `intent-cache-small` any more. The
   `runner-route` probe also counts every online `self-hosted`/`Linux`/`X64`
   runner, from any pool, as Linux fleet capacity unless the variable
   `CI_LINUX_RUNNER_DISABLED` is `true`. A `gh-linux-16x` job takes a free xl
-  slot first, then a free heavy slot, then bursts; a `gh-linux-8x` job
-  never takes an xl slot.
+  slot first, then a free bigmem heavy slot, then bursts; it never takes a
+  heavy slot without `intent-cache-bigmem`. A `gh-linux-8x` job takes any
+  heavy slot, bigmem included, and never an xl slot. A bigmem grant needs a
+  free slot in both the bigmem and the heavy count and uses one of each, plus
+  an idle bigmem runner that no queued bigmem job has claimed: `gh-linux-8x`
+  jobs run on bigmem runners without counting as bigmem demand. A bigmem job
+  queued over 15 minutes stalls only the bigmem pool.
 - **Slot fitting.** The probe hands out at most as many slots per run as a
   pool has free: online slots (capped by the organization or repository
-  variables `CI_LINUX_HEAVY_SLOTS` / `CI_LINUX_XL_SLOTS`, defaults 2 / 0)
+  variables `CI_LINUX_HEAVY_SLOTS` / `CI_LINUX_XL_SLOTS` /
+  `CI_LINUX_BIGMEM_SLOTS`, defaults 2 / 0 / 0)
   minus jobs queued or running on
   that pool. A workflow lists the pooled jobs
   that start together (`slot_jobs` input of `runner-route.yml`, or `SLOT_JOBS`

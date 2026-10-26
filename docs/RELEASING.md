@@ -918,10 +918,11 @@ than a slot offers read `cloud`, and the policy tests list each with its reason.
 The shared probe checks online runners and paginated queued/running jobs across all
 three repositories. Each Linux pool bursts once its queued plus running jobs reach
 the smaller of its slot count (the organization or repository variables
-`CI_LINUX_HEAVY_SLOTS` and `CI_LINUX_XL_SLOTS`, defaults 2 and 0; raise them when
-slots are added) and its online slot count. A `gh-linux-16x` job takes a free xl slot
-first, then a free heavy slot, then bursts; a `gh-linux-8x` job never takes an xl
-slot. Other platforms require explicitly idle runners with room for queued demand.
+`CI_LINUX_HEAVY_SLOTS`, `CI_LINUX_XL_SLOTS` and `CI_LINUX_BIGMEM_SLOTS`, defaults
+2, 0 and 0; raise them when slots are added) and its online slot count. A
+`gh-linux-16x` job takes a free xl slot first, then a free `intent-cache-bigmem`
+heavy slot (30 GB or more), then bursts; a `gh-linux-8x` job takes any heavy slot
+and never an xl slot. Other platforms require explicitly idle runners with room for queued demand.
 Queued jobs older than 15 minutes, missing compatible runners, unreadable capacity
 (including sibling queues), or [maintenance overrides](#maintenance-overrides)
 select the burst runner; each platform logs its reason. An unreadable queue keeps

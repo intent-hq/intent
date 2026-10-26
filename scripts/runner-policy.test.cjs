@@ -19,6 +19,9 @@ const runner = (os, arch, busy = false, extra = []) => ({
 // intent-cache slots register with GitHub's default labels plus `intent-cache`.
 const cacheSlot = (busy = false) => runner('Linux', 'X64', busy, ['intent-cache']);
 const CACHE = ['self-hosted', 'linux', 'x64', 'intent-cache'];
+// Heavy slots with 30 GB or more also carry `intent-cache-bigmem`; 16-core jobs overflow only to these.
+const bigSlot = (busy = false) => runner('Linux', 'X64', busy, ['intent-cache', 'intent-cache-bigmem']);
+const BIG = ['self-hosted', 'linux', 'x64', 'intent-cache', 'intent-cache-bigmem'];
 const smallSlot = (busy = false) => runner('Linux', 'X64', busy, ['intent-cache-small']);
 const SMALL = ['self-hosted', 'linux', 'x64', 'intent-cache-small'];
 // Standard GitHub-hosted labels are free for public repositories.
@@ -107,7 +110,9 @@ async function route(fixture = {}) {
 test('healthy matching fleet is preferred for every workload size', async () => {
   const r = await route();
   // Larger-runner labels carry heavy jobs; standard labels carry fast jobs.
-  for (const label of ['gh-linux-8x', 'gh-linux-16x']) assert.deepEqual(r.runners[label], CACHE);
+  assert.deepEqual(r.runners['gh-linux-8x'], CACHE);
+  // 16-core jobs need an xl or bigmem slot; plain heavy slots may be too small.
+  assert.deepEqual(r.runners['gh-linux-16x'], WARP['gh-linux-16x']);
   assert.deepEqual(r.runners['gh-linux-arm64-8x'], ['self-hosted', 'Linux', 'ARM64']);
   assert.deepEqual(r.runners['macos-26-xlarge'], ['self-hosted', 'macOS', 'ARM64']);
   assert.deepEqual(r.runners['gh-windows-16x'], ['self-hosted', 'Windows', 'X64']);
@@ -325,14 +330,19 @@ test('the kill switch, a fork, a probe failure, and an unreadable list send list
 });
 test('Rust-compiling jobs get slots first, then the longest jobs', async () => {
   const r = await route({
-    env: slotEnv([
+    runners: [bigSlot(), bigSlot()],
+    env: slotEnv(
+      [
       { key: 'lint', label: 'gh-linux-8x', minutes: 30 },
       { key: 'coverage', label: 'gh-linux-16x', rust: true, minutes: 13 },
       { key: 'unit', label: 'gh-linux-8x', minutes: 14 },
       { key: 'check', label: 'gh-linux-8x', rust: true, minutes: 20 },
-    ]),
+      ],
+      { BIGMEM_THRESHOLD: '2' },
+    ),
   });
-  assert.deepEqual(onSlots(r, CACHE), ['check', 'coverage']);
+  assert.deepEqual(onSlots(r, CACHE), ['check']);
+  assert.deepEqual(r.slots.coverage, BIG);
   assert.deepEqual(r.slots.lint, WARP['gh-linux-8x']);
   assert.deepEqual(r.slots.unit, WARP['gh-linux-8x']);
   const one = await route({ env: slotEnv([{ key: 'a', label: 'gh-linux-8x', minutes: 4 }, { key: 'b', label: 'gh-linux-8x', minutes: 14 }]), jobs: [heavyJob(3)] });
@@ -405,24 +415,25 @@ test('gh-linux-16x jobs take xl slots; gh-linux-8x jobs stay on the heavy pool',
   assert.deepEqual(heavyFull.runners['gh-linux-8x'], WARP['gh-linux-8x']);
   assert.deepEqual(heavyFull.runners['gh-linux-16x'], XL);
 });
-test('a full xl pool sends gh-linux-16x jobs to free heavy slots, then hosted', async () => {
-  const runners = [...todaysFleet(), xlSlot()];
+test('a full xl pool sends gh-linux-16x jobs to free bigmem slots, then hosted', async () => {
+  const runners = [bigSlot(), bigSlot(), ...todaysFleet().slice(2), xlSlot()];
+  const env = { ...XL_ON, BIGMEM_THRESHOLD: '2' };
   const jobs16 = [
     { key: 'a', label: 'gh-linux-16x', minutes: 30 },
     { key: 'b', label: 'gh-linux-16x', minutes: 20 },
     { key: 'c', label: 'gh-linux-16x', minutes: 10 },
     { key: 'd', label: 'gh-linux-16x', minutes: 5 },
   ];
-  const r = await route({ env: slotEnv(jobs16, XL_ON), runners });
-  // xl first (longest job), then the two heavy slots, then hosted.
-  assert.deepEqual(r.slots, { a: XL, b: CACHE, c: CACHE, d: WARP['gh-linux-16x'] });
+  const r = await route({ env: slotEnv(jobs16, env), runners });
+  // xl first (longest job), then the two bigmem slots, then hosted.
+  assert.deepEqual(r.slots, { a: XL, b: BIG, c: BIG, d: WARP['gh-linux-16x'] });
   assert.deepEqual(r.runners['gh-linux-16x'], WARP['gh-linux-16x']);
-  // xl busy elsewhere: 16-core work overflows to heavy exactly as before xl existed.
-  const busy = await route({ env: XL_ON, runners, jobs: [xlJob(3)] });
-  assert.deepEqual(busy.runners['gh-linux-16x'], CACHE);
+  // xl busy elsewhere: 16-core work overflows to a bigmem slot.
+  const busy = await route({ env, runners, jobs: [xlJob(3)] });
+  assert.deepEqual(busy.runners['gh-linux-16x'], BIG);
   assert.ok(busy.messages.some((m) => m.includes('xl routing: burst=true (queue depth=1 threshold=1 online=1 free=0)')));
   // Both pools full: hosted.
-  const full = await route({ env: XL_ON, runners, jobs: [xlJob(3), heavyJob(4), heavyJob(5)] });
+  const full = await route({ env, runners, jobs: [xlJob(3), heavyJob(4), heavyJob(5)] });
   assert.deepEqual(full.runners['gh-linux-16x'], WARP['gh-linux-16x']);
   assert.deepEqual(full.runners['gh-linux-8x'], WARP['gh-linux-8x']);
 });
@@ -462,8 +473,8 @@ test('with no xl runners online, or the xl limit at its default of 0, routing is
     assert.ok(r.messages.some((m) => m.startsWith('xl routing: burst=true')));
   }
   const sized = await route({ env: { LINUX_SIZE: '16' } });
-  assert.deepEqual(JSON.parse(sized.outputs.linux_labels), CACHE);
-  assert.equal(sized.outputs.linux_burst, 'false');
+  assert.deepEqual(JSON.parse(sized.outputs.linux_labels), WARP['gh-linux-16x']);
+  assert.equal(sized.outputs.linux_burst, 'true');
 });
 test('the Linux kill switch and probe failures also send xl work hosted', async () => {
   const runners = [...todaysFleet(), xlSlot(), xlSlot()];
@@ -483,11 +494,13 @@ test('pool limits come from Actions variables with the old values as defaults', 
   const env = workflow.split('          SLOT_JOBS:')[0].split('        env:\n').pop();
   assert.match(env, /^ {10}THRESHOLD: \$\{\{ vars\.CI_LINUX_HEAVY_SLOTS \|\| '2' \}\}$/m);
   assert.match(env, /^ {10}XL_THRESHOLD: \$\{\{ vars\.CI_LINUX_XL_SLOTS \|\| '0' \}\}$/m);
+  assert.match(env, /^ {10}BIGMEM_THRESHOLD: \$\{\{ vars\.CI_LINUX_BIGMEM_SLOTS \|\| '0' \}\}$/m);
   assert.doesNotMatch(workflow, /THRESHOLD: '\d+'/);
   // An unset variable reaches the script empty only if the expression is dropped; the script defaults match.
-  const unset = await route({ env: { THRESHOLD: '', XL_THRESHOLD: '' }, runners: [...todaysFleet(), cacheSlot(), xlSlot()] });
-  assert.ok(unset.messages.some((m) => m.includes('linux routing: burst=false (queue depth=0 threshold=2 online=3 free=2)')));
+  const unset = await route({ env: { THRESHOLD: '', XL_THRESHOLD: '', BIGMEM_THRESHOLD: '' }, runners: [...todaysFleet(), cacheSlot(), bigSlot(), xlSlot()] });
+  assert.ok(unset.messages.some((m) => m.includes('linux routing: burst=false (queue depth=0 threshold=2 online=4 free=2)')));
   assert.ok(unset.messages.some((m) => m.includes('xl routing: burst=true (queue depth=0 threshold=0 online=1 free=0)')));
+  assert.ok(unset.messages.some((m) => m.includes('bigmem routing: burst=true (queue depth=0 threshold=0 online=1 idle=1 free=0)')));
   // Raising the variables alone grows the pools: 14 heavy and 2 xl slots.
   const grown = await route({
     env: slotEnv([{ key: 'unit', label: 'gh-linux-8x', shards: 16 }, { key: 'cov', label: 'gh-linux-16x', shards: 3 }], { THRESHOLD: '14', XL_THRESHOLD: '2' }),
@@ -496,11 +509,113 @@ test('pool limits come from Actions variables with the old values as defaults', 
   assert.equal(onSlots(grown, CACHE).length, 14);
   assert.deepEqual(onSlots(grown, XL), ['cov-1', 'cov-2']);
   // A malformed variable fails the probe open to hosted.
-  for (const bad of [{ XL_THRESHOLD: 'two' }, { THRESHOLD: '-1' }, { THRESHOLD: '1.5' }]) {
+  for (const bad of [{ XL_THRESHOLD: 'two' }, { THRESHOLD: '-1' }, { THRESHOLD: '1.5' }, { BIGMEM_THRESHOLD: 'seven' }]) {
     const r = await route({ env: slotEnv(MIXED, bad), runners: [...todaysFleet(), xlSlot()] });
     assert.ok(Object.values(r.slots).every((labels) => labels.length === 1 && !labels[0].startsWith('self-hosted')));
     assert.ok(r.messages.some((m) => m.includes('probe failed (invalid queue threshold)')));
   }
+});
+// The bigmem pool: heavy slots with 30 GB or more. 16-core jobs that find no
+// free xl slot overflow only to these; a 12 GB heavy slot (intent-ci3)
+// OOM-killed their rustc.
+const bigJob = (id, status = 'in_progress') => ({ id, status, labels: BIG, created_at: new Date().toISOString() });
+const BIG_ON = { THRESHOLD: '4', XL_THRESHOLD: '1', BIGMEM_THRESHOLD: '2' };
+const COV = { key: 'coverage', label: 'gh-linux-16x', rust: true, minutes: 13 };
+test('gh-linux-16x never gets the plain heavy labels', async () => {
+  const small = [cacheSlot(), cacheSlot(), cacheSlot(), cacheSlot()];
+  for (const f of [
+    { runners: small },
+    { runners: small, env: { THRESHOLD: '4' } },
+    { runners: [...small, xlSlot()], jobs: [xlJob(3)], env: { THRESHOLD: '4', XL_THRESHOLD: '1' } },
+    { runners: [...small, xlSlot()], jobs: [xlJob(3)], env: BIG_ON },
+    { runners: [...small, bigSlot(), xlSlot()], jobs: [xlJob(3), bigJob(4)], env: BIG_ON },
+    { runners: [...small, bigSlot(), bigSlot(), xlSlot()], jobs: [xlJob(3)], env: { ...BIG_ON, LINUX_SIZE: '16' } },
+  ]) {
+    const r = await route({ ...f, env: slotEnv([COV, { key: 'big', label: 'gh-linux-16x', shards: 3 }], f.env) });
+    assert.notDeepEqual(r.runners['gh-linux-16x'], CACHE);
+    if (f.env?.LINUX_SIZE === '16') assert.notDeepEqual(JSON.parse(r.outputs.linux_labels), CACHE);
+    for (const key of ['coverage', 'big-1', 'big-2', 'big-3']) assert.notDeepEqual(r.slots[key], CACHE, key);
+  }
+});
+test('with xl full and only small heavy slots free, 16-core jobs burst while 8-core jobs take the slots', async () => {
+  const r = await route({
+    env: slotEnv([COV, UNIT], BIG_ON),
+    runners: [cacheSlot(), cacheSlot(), cacheSlot(), cacheSlot(), xlSlot()],
+    jobs: [xlJob(3)],
+  });
+  assert.deepEqual(r.slots.coverage, WARP['gh-linux-16x']);
+  assert.deepEqual(onSlots(r, CACHE), ['test-1', 'test-2', 'test-3', 'test-4']);
+  assert.deepEqual(r.runners['gh-linux-16x'], WARP['gh-linux-16x']);
+  assert.ok(r.messages.some((m) => m.includes('bigmem routing: burst=true (no available compatible runner)')));
+});
+test('a free bigmem slot takes 16-core overflow and 8-core jobs keep every heavy slot', async () => {
+  const runners = [cacheSlot(), cacheSlot(), bigSlot(), bigSlot(), xlSlot()];
+  const r = await route({ env: slotEnv([COV, { key: 'unit', label: 'gh-linux-8x', minutes: 10 }], BIG_ON), runners, jobs: [xlJob(3)] });
+  assert.deepEqual(r.slots, { coverage: BIG, unit: CACHE });
+  // One bigmem and two heavy slots are left for unlisted jobs.
+  assert.deepEqual(r.runners['gh-linux-16x'], BIG);
+  assert.deepEqual(r.runners['gh-linux-8x'], CACHE);
+  assert.ok(r.messages.some((m) => m.includes('bigmem routing: burst=false (queue depth=0 threshold=2 online=2 idle=2 free=2 granted=1)')));
+  // The heavy count includes the bigmem grant.
+  assert.ok(r.messages.some((m) => m.includes('linux routing: burst=false (queue depth=0 threshold=4 online=4 free=4 granted=2)')));
+  // Callers asking for the 16-core size read the bigmem labels.
+  const sized = await route({ env: { ...BIG_ON, LINUX_SIZE: '16' }, runners, jobs: [xlJob(3)] });
+  assert.deepEqual(JSON.parse(sized.outputs.linux_labels), BIG);
+});
+test('a bigmem grant also takes a heavy slot, and running bigmem jobs count as heavy demand', async () => {
+  const runners = [bigSlot(), bigSlot(), xlSlot()];
+  const tight = { ...BIG_ON, THRESHOLD: '1' };
+  // One heavy slot: whichever job ranks first takes it.
+  const first16 = await route({ env: slotEnv([COV, { key: 'unit', label: 'gh-linux-8x' }], tight), runners, jobs: [xlJob(3)] });
+  assert.deepEqual(first16.slots, { coverage: BIG, unit: WARP['gh-linux-8x'] });
+  assert.deepEqual(first16.runners['gh-linux-16x'], WARP['gh-linux-16x']);
+  const first8 = await route({ env: slotEnv([{ key: 'check', label: 'gh-linux-8x', rust: true, minutes: 20 }, COV], tight), runners, jobs: [xlJob(3)] });
+  assert.deepEqual(first8.slots, { check: CACHE, coverage: WARP['gh-linux-16x'] });
+  assert.deepEqual(first8.runners['gh-linux-16x'], WARP['gh-linux-16x']);
+  // A running bigmem job uses a bigmem slot and a heavy slot.
+  const busy = await route({ env: BIG_ON, runners, jobs: [xlJob(3), bigJob(4)] });
+  assert.ok(busy.messages.some((m) => m.includes('bigmem routing: burst=false (queue depth=1 threshold=2 online=2 idle=2 free=1)')));
+  assert.ok(busy.messages.some((m) => m.includes('linux routing: burst=false (queue depth=1 threshold=2 online=2 free=1)')));
+  // Plain heavy jobs fill the heavy pool, so the bigmem pool has no slot either.
+  const full = await route({ env: BIG_ON, runners: [...runners, cacheSlot(), cacheSlot()], jobs: [xlJob(3), ...[4, 5, 6, 7].map((n) => heavyJob(n))] });
+  assert.deepEqual(full.runners['gh-linux-16x'], WARP['gh-linux-16x']);
+  assert.deepEqual(full.runners['gh-linux-8x'], WARP['gh-linux-8x']);
+});
+test('8-core jobs on bigmem runners leave no bigmem slot, even though they never ask for the label', async () => {
+  // Two plain heavy jobs run on both bigmem runners; four small heavy slots are idle.
+  const runners = [bigSlot(true), bigSlot(true), cacheSlot(), cacheSlot(), cacheSlot(), cacheSlot(), xlSlot()];
+  const env = { ...BIG_ON, THRESHOLD: '6' };
+  const r = await route({ env: slotEnv([COV, { key: 'unit', label: 'gh-linux-8x' }], env), runners, jobs: [xlJob(3), heavyJob(4), heavyJob(5)] });
+  assert.deepEqual(r.slots, { coverage: WARP['gh-linux-16x'], unit: CACHE });
+  assert.ok(r.messages.some((m) => m.includes('bigmem routing: burst=true (queue depth=0 threshold=2 online=2 idle=0 free=0)')));
+  // An idle bigmem runner already claimed by a queued bigmem job is not free either.
+  const claimed = await route({ env: slotEnv([COV], env), runners: [bigSlot(), bigSlot(true), xlSlot()], jobs: [xlJob(3), bigJob(4, 'queued')] });
+  assert.deepEqual(claimed.slots.coverage, WARP['gh-linux-16x']);
+  // One idle, unclaimed bigmem runner takes the grant.
+  const one = await route({ env: slotEnv([COV], env), runners: [bigSlot(), bigSlot(true), xlSlot()], jobs: [xlJob(3), heavyJob(4)] });
+  assert.deepEqual(one.slots.coverage, BIG);
+});
+test('a bigmem job queued over 15 minutes stalls only the bigmem pool, not 8-core routing', async () => {
+  const old = { ...bigJob(4, 'queued'), created_at: new Date(Date.now() - 20 * 60_000).toISOString() };
+  const r = await route({ env: slotEnv([COV, { key: 'unit', label: 'gh-linux-8x' }], BIG_ON), runners: [bigSlot(), bigSlot(), cacheSlot(), cacheSlot(), xlSlot()], jobs: [xlJob(3), old] });
+  assert.deepEqual(r.slots, { coverage: WARP['gh-linux-16x'], unit: CACHE });
+  assert.ok(r.messages.some((m) => m.includes('bigmem routing: burst=true (stalled or unknown-age queue)')));
+  assert.ok(!r.messages.some((m) => m.includes('linux routing: burst=true (stalled')));
+  // A stale plain heavy job still stalls the whole heavy pool, bigmem included.
+  const heavy = await route({ env: slotEnv([COV], BIG_ON), runners: [bigSlot(), bigSlot(), xlSlot()], jobs: [xlJob(3), { ...old, labels: CACHE }] });
+  assert.deepEqual(heavy.slots.coverage, WARP['gh-linux-16x']);
+  assert.ok(heavy.messages.some((m) => m.includes('linux routing: burst=true (stalled or unknown-age queue)')));
+});
+test('with CI_LINUX_BIGMEM_SLOTS unset or the Linux kill switch on, 16-core overflow bursts', async () => {
+  const runners = [bigSlot(), bigSlot(), xlSlot()];
+  const unset = await route({ env: slotEnv([COV], { THRESHOLD: '2', XL_THRESHOLD: '1' }), runners, jobs: [xlJob(3)] });
+  assert.deepEqual(unset.slots.coverage, WARP['gh-linux-16x']);
+  assert.ok(unset.messages.some((m) => m.includes('bigmem routing: burst=true (queue depth=0 threshold=0 online=2 idle=2 free=0)')));
+  // 8-core jobs still use the bigmem slots as ordinary heavy slots.
+  assert.deepEqual(unset.runners['gh-linux-8x'], CACHE);
+  const killed = await route({ env: slotEnv([COV], { ...BIG_ON, LINUX_RUNNER_DISABLED: 'true' }), runners, jobs: [xlJob(3)] });
+  assert.deepEqual(killed.slots.coverage, WARP['gh-linux-16x']);
+  assert.ok(killed.messages.some((m) => m.includes('bigmem routing: burst=true (disabled for maintenance)')));
 });
 
 // WarpBuild replaces paid GitHub labels as the burst target.

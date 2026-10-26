@@ -65,9 +65,10 @@ jobs:
           # jobs are queued or running. Set the org or repo variables when slots
           # are added; no workflow change is needed. Heavy jobs ride gh-linux-8x
           # (intent-cache), 16-core jobs gh-linux-16x (intent-cache-xl,
-          # overflowing to intent-cache).
+          # overflowing to the intent-cache-bigmem heavy slots).
           THRESHOLD: ${{ vars.CI_LINUX_HEAVY_SLOTS || '2' }}
           XL_THRESHOLD: ${{ vars.CI_LINUX_XL_SLOTS || '0' }}
+          BIGMEM_THRESHOLD: ${{ vars.CI_LINUX_BIGMEM_SLOTS || '0' }}
           SLOT_JOBS: ${{ inputs.slot_jobs }}
           LINUX_RUNNER_DISABLED: ${{ vars.CI_LINUX_RUNNER_DISABLED }}
           WINDOWS_RUNNER_DISABLED: ${{ vars.CI_WINDOWS_RUNNER_DISABLED }}
@@ -78,10 +79,13 @@ jobs:
             // No checkout: routing never executes code from a pull request.
             // Org runners with these labels must be in groups shared with all three CI repos.
             const fleets = {
-              // Heavy jobs (compile Rust or run over ~5 minutes): 8 cores / 48 GB per slot.
+              // Heavy jobs (compile Rust or run over ~5 minutes): 8 threads, 12-36 GB per slot.
               linux: ['self-hosted', 'linux', 'x64', 'intent-cache'],
               // 16-core jobs: 16 threads per slot.
               xl: ['self-hosted', 'linux', 'x64', 'intent-cache-xl'],
+              // Heavy slots with 30 GB or more: the only heavy slots 16-core jobs overflow to
+              // (one of their rustc processes needs over 12 GB).
+              bigmem: ['self-hosted', 'linux', 'x64', 'intent-cache', 'intent-cache-bigmem'],
               arm: ['self-hosted', 'Linux', 'ARM64'],
               windows: ['self-hosted', 'Windows', 'X64'],
               macos: ['self-hosted', 'macOS', 'ARM64'],
@@ -89,6 +93,7 @@ jobs:
             const disabled = {
               linux: process.env.LINUX_RUNNER_DISABLED === 'true',
               xl: process.env.LINUX_RUNNER_DISABLED === 'true',
+              bigmem: process.env.LINUX_RUNNER_DISABLED === 'true',
               arm: process.env.LINUX_RUNNER_DISABLED === 'true',
               windows: process.env.WINDOWS_RUNNER_DISABLED === 'true',
               macos: process.env.MACOS_RUNNER_DISABLED === 'true',
@@ -132,6 +137,9 @@ jobs:
             const reasons = Object.fromEntries(Object.keys(fleets).map(k => [k, 'availability not established']));
             // Free slots per Linux pool: online slots (capped by the threshold) minus jobs queued or running on them.
             const slotsFree = {};
+            // A pool whose slots are also slots of another pool: a grant needs a free slot in both and takes one from each.
+            const within = {bigmem: 'linux'};
+            const hasSlot = (key) => slotsFree[key] > 0 && (!within[key] || slotsFree[within[key]] > 0);
             const pr = context.payload?.pull_request;
             const fork = context.eventName === 'pull_request' && pr?.head?.repo?.full_name !== `${context.repo.owner}/${context.repo.repo}`;
             const warpOn = !fork;
@@ -170,18 +178,25 @@ jobs:
                 if (!queuedOver(j, 10, false)) continue;
                 for (const label of j.labels || []) if (family(label) in warpStuck) warpStuck[family(label)] = true;
               }
-              const thresholds = {linux: Number(process.env.THRESHOLD || '2'), xl: Number(process.env.XL_THRESHOLD || '0')};
+              const thresholds = {linux: Number(process.env.THRESHOLD || '2'), xl: Number(process.env.XL_THRESHOLD || '0'), bigmem: Number(process.env.BIGMEM_THRESHOLD || '0')};
               if (Object.values(thresholds).some(n => !Number.isInteger(n) || n < 0)) throw new Error('invalid queue threshold');
+              const asks = (j, labels) => labels.every(l => (j.labels || []).some(x => x.toLowerCase() === l.toLowerCase()));
               for (const [key, labels] of Object.entries(fleets)) {
-                const demand = jobs.filter(j => ['queued', 'in_progress'].includes(j.status) && labels.every(l => (j.labels || []).some(x => x.toLowerCase() === l.toLowerCase())));
-                const stale = demand.some(j => queuedOver(j, 15, true));
+                const demand = jobs.filter(j => ['queued', 'in_progress'].includes(j.status) && asks(j, labels));
+                // A job waiting on a sub-pool (bigmem) stalls only that sub-pool; the rest of its parent pool may be idle.
+                const stale = demand.some(j => queuedOver(j, 15, true) && !Object.keys(within).some(sub => within[sub] === key && asks(j, fleets[sub])));
                 const native = !(key in thresholds);
                 const capacity = native ? online[key].filter(r => r.busy === false).length : online[key].length;
                 const limit = native ? capacity - 1 : Math.min(thresholds[key], capacity);
                 const depth = native ? demand.filter(j => j.status === 'queued').length : demand.length;
                 burst[key] = disabled[key] || capacity === 0 || stale || (native ? depth > limit : depth >= limit);
                 if (!native) slotsFree[key] = burst[key] ? 0 : limit - depth;
-                reasons[key] = disabled[key] ? 'disabled for maintenance' : capacity === 0 ? 'no available compatible runner' : stale ? 'stalled or unknown-age queue' : `queue depth=${depth} threshold=${limit} online=${online[key].length}${native ? '' : ` free=${slotsFree[key]}`}`;
+                // Jobs asking only for the parent pool's labels can run on a sub-pool's
+                // runners without counting as its demand, so a sub-pool grant also
+                // needs a runner that is idle and not already claimed by a queued job.
+                const idle = within[key] ? Math.max(0, online[key].filter(r => r.busy === false).length - demand.filter(j => j.status === 'queued').length) : null;
+                if (idle !== null) slotsFree[key] = Math.min(slotsFree[key], idle);
+                reasons[key] = disabled[key] ? 'disabled for maintenance' : capacity === 0 ? 'no available compatible runner' : stale ? 'stalled or unknown-age queue' : `queue depth=${depth} threshold=${limit} online=${online[key].length}${idle === null ? '' : ` idle=${idle}`}${native ? '' : ` free=${slotsFree[key]}`}`;
               }
             } catch (error) {
               for (const key of Object.keys(fleets)) reasons[key] = `probe failed (${error.message})`;
@@ -195,11 +210,12 @@ jobs:
             // fleet labels, or the burst runner when the fleet bursts.
             // A label listed under several pools takes the first with a free slot.
             const hosted = {
-              // 16-core jobs prefer xl slots and overflow to heavy slots before
-              // bursting, so with no xl slot free they route as they did
-              // before xl existed. 8-core jobs never take an xl slot.
+              // 16-core jobs prefer xl slots and overflow only to bigmem heavy
+              // slots before bursting: a 12 GB heavy slot OOM-kills their rustc.
+              // 8-core jobs never take an xl slot and use every heavy slot.
               xl: ['gh-linux-16x'],
-              linux: ['gh-linux-8x', 'gh-linux-16x'],
+              bigmem: ['gh-linux-16x'],
+              linux: ['gh-linux-8x'],
               arm: ['gh-linux-arm64-8x'],
               windows: ['gh-windows-16x'],
               macos: ['macos-26-xlarge'],
@@ -223,17 +239,21 @@ jobs:
             const ranked = requests.map((r, i) => ({...r, i})).sort((a, b) => (b.rust === true) - (a.rust === true) || (b.minutes || 0) - (a.minutes || 0) || a.i - b.i);
             for (const r of ranked) {
               const runs = !Array.isArray(r.events) || r.events.includes(context.eventName);
-              const key = runs && Object.keys(hosted).find(k => k in slotsFree && hosted[k].includes(r.label) && slotsFree[k] > 0);
+              const key = runs && Object.keys(hosted).find(k => k in slotsFree && hosted[k].includes(r.label) && hasSlot(k));
               if (key) {
                 slotsFree[key] -= 1;
                 granted[key] += 1;
+                if (within[key]) {
+                  slotsFree[within[key]] -= 1;
+                  granted[within[key]] += 1;
+                }
                 slots[r.key] = fleets[key];
               } else slots[r.key] = cloud(r.burst || r.label);
             }
             // Unlisted jobs (single-job workflows, jobs that start after the listed
             // ones) use a pool only while a slot is still free.
             for (const key of Object.keys(slotsFree)) {
-              burst[key] = slotsFree[key] <= 0;
+              burst[key] = !hasSlot(key);
               if (granted[key]) reasons[key] += ` granted=${granted[key]}`;
             }
             const mapping = Object.fromEntries(free.map(label => [label, [label]]));

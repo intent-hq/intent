@@ -243,13 +243,19 @@ class RunnerPolicy(unittest.TestCase):
         # Pool sizes are org/repo variables, so adding hosts needs no workflow change;
         # the defaults keep today's routing (no xl slots).
         route = (ROOT / '.github/workflows/runner-route.yml').read_text()
-        for env, var, default in [('THRESHOLD', 'CI_LINUX_HEAVY_SLOTS', 2), ('XL_THRESHOLD', 'CI_LINUX_XL_SLOTS', 0)]:
+        for env, var, default in [('THRESHOLD', 'CI_LINUX_HEAVY_SLOTS', 2), ('XL_THRESHOLD', 'CI_LINUX_XL_SLOTS', 0), ('BIGMEM_THRESHOLD', 'CI_LINUX_BIGMEM_SLOTS', 0)]:
             self.assertIn(f"          {env}: ${{{{ vars.{var} || '{default}' }}}}\n", route)
         self.assertIn("xl: ['self-hosted', 'linux', 'x64', 'intent-cache-xl'],", route)
         # The Linux kill switch covers xl, and only 16-core jobs may take an xl slot.
         self.assertIn("xl: process.env.LINUX_RUNNER_DISABLED === 'true',", route)
         self.assertIn("xl: ['gh-linux-16x'],", route)
-        self.assertLess(route.index("xl: ['gh-linux-16x'],"), route.index("linux: ['gh-linux-8x', 'gh-linux-16x'],"))
+        # 16-core jobs overflow from xl only to bigmem heavy slots (30 GB or more),
+        # never to plain heavy slots: a 12 GB slot OOM-kills their rustc.
+        self.assertIn("bigmem: ['self-hosted', 'linux', 'x64', 'intent-cache', 'intent-cache-bigmem'],", route)
+        self.assertIn("bigmem: process.env.LINUX_RUNNER_DISABLED === 'true',", route)
+        self.assertLess(route.index("xl: ['gh-linux-16x'],"), route.index("bigmem: ['gh-linux-16x'],"))
+        self.assertIn("linux: ['gh-linux-8x'],", route)
+        self.assertNotRegex(route, r"linux: \[[^\]]*'gh-linux-16x'")
 
     def test_no_job_can_land_on_a_github_larger_runner(self):
         # A paid size reaches a runner only through the probe; a fallback, used if
