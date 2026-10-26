@@ -68,6 +68,46 @@ class Bash3(unittest.TestCase):
                              ['args=-j1', 'MAKEFLAGS=unset', 'MFLAGS=unset', 'GNUMAKEFLAGS=unset'])
             self.assertTrue((root / 'install/bash').exists())
 
+    def test_download_fallback_still_checks_the_pinned_checksum(self):
+        self.check_download_failure(fallback_succeeds=True)
+
+    def test_all_download_sources_failing_never_extracts(self):
+        self.check_download_failure(fallback_succeeds=False)
+
+    def check_download_failure(self, fallback_succeeds):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            curl = root / 'curl'
+            curl.write_text(
+                '#!/bin/bash\nset -e\n'
+                'printf "%s\\n" "$*" >> "$BASH3_TEST_CURL_LOG"\n'
+                'for arg in "$@"; do dest=$arg; done\n'
+                'case "$*" in *ftp.gnu.org*) printf partial > "$dest"; exit 28;; esac\n'
+                + ('printf corrupt > "$dest"\n' if fallback_succeeds else 'exit 28\n'))
+            curl.chmod(0o755)
+            tar = root / 'tar'
+            tar.write_text('#!/bin/bash\ntouch "$BASH3_TEST_MARKER"\nexit 1\n')
+            tar.chmod(0o755)
+            log = root / 'curl.log'
+            env = {**os.environ, 'PATH': str(root) + os.pathsep + os.environ['PATH'],
+                   'BASH3_TEST_CURL_LOG': str(log), 'BASH3_TEST_MARKER': str(root / 'extracted')}
+            result = subprocess.run(
+                ['bash', str(ROOT / 'scripts/install-ci-bash3.sh'), str(root / 'install')],
+                env=env, capture_output=True, text=True, timeout=10)
+            self.assertNotEqual(result.returncode, 0)
+            calls = log.read_text().splitlines()
+            self.assertEqual(len(calls), 2)
+            self.assertIn('https://ftp.gnu.org/gnu/bash/bash-3.2.57.tar.gz', calls[0])
+            self.assertIn('https://mirrors.kernel.org/gnu/bash/bash-3.2.57.tar.gz', calls[1])
+            for call in calls:
+                self.assertIn('--connect-timeout 10', call)
+                self.assertIn('--max-time 120', call)
+            if fallback_succeeds:
+                self.assertIn('FAILED', result.stdout)
+            else:
+                self.assertIn('Unable to download pinned Bash 3.2', result.stderr)
+            self.assertFalse((root / 'extracted').exists())
+
 SUITES = ('ci-gate', 'consumer-checks', 'docs-check', 'lint-fixed-sleeps',
           'release-status', 'rust-changed-tests', 'shipped-in')
 STUB_BASH3 = '#!/bin/sh\nexit 0\n'
