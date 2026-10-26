@@ -36,6 +36,33 @@ endif
 COMPACT_CARGO = $(if $(filter 1,$(COMPACT)),python3 "$(CURDIR)/scripts/resumable_nextest.py" --compact-cargo)
 
 INTENTD_DIR = packages/intentd
+
+# PARALLEL=1: opt-in rustc parallel front end (-Zthreads=PARALLEL_THREADS,
+# default 8) for intentd's own crates in local debug builds, through the
+# scripts/rustc-parallel.sh RUSTC_WRAPPER (CONTRIBUTING.md -> "Parallel
+# compiler front end"). Only `1` enables it, so an unrelated PARALLEL in the
+# environment (GNU parallel reads it as options) is ignored, and PARALLEL=1 is
+# kept out of recipe environments (MAKEFLAGS still reaches sub-makes). Release, coverage and every other goal reject it before
+# any recipe runs, as does CI. A recursive make (gate -> test) inherits the
+# wrapper; INNER keeps a caller's own RUSTC_WRAPPER (e.g. sccache) chained.
+PARALLEL_THREADS ?= 8
+PARALLEL_GOALS := all build build-intentd check clippy lint-sources gate test test-intentd test-changed test-select
+PARALLEL_WRAPPER := $(CURDIR)/scripts/rustc-parallel.sh
+ifeq ($(PARALLEL),1)
+ifneq ($(CI)$(GITHUB_ACTIONS),)
+$(error PARALLEL=1 is for local developer builds only; it is rejected under CI)
+endif
+ifneq ($(filter-out $(PARALLEL_GOALS),$(or $(MAKECMDGOALS),all)),)
+$(error PARALLEL=1 supports only: $(PARALLEL_GOALS); rerun $(filter-out $(PARALLEL_GOALS),$(MAKECMDGOALS)) without it)
+endif
+ifneq ($(RUSTC_WRAPPER),$(PARALLEL_WRAPPER))
+export INTENT_PARALLEL_INNER_WRAPPER := $(RUSTC_WRAPPER)
+endif
+export INTENT_PARALLEL_ROOT := $(CURDIR)/$(INTENTD_DIR)
+export INTENT_PARALLEL_THREADS := $(PARALLEL_THREADS)
+export RUSTC_WRAPPER := $(PARALLEL_WRAPPER)
+unexport PARALLEL
+endif
 FE_DIR = packages/cloudlands-fe
 IOS_DIR = packages/ios
 
@@ -383,6 +410,8 @@ help: ## List documented targets
 	@printf '  Opt-in dev/test debug=0 and CARGO_INCREMENTAL=0; caller Rust flags retain precedence.\n'
 	@printf '  Default: COMPACT=0. Compact/default resume records are separate; coverage rejects COMPACT=1.\n'
 	@printf '  See CONTRIBUTING.md for debugging tradeoffs and the component mixed-goal boundary.\n'
+	@printf 'Opt-in faster local compiles: PARALLEL=1 make build (also check, clippy, lint-sources, gate, test, test-changed, test-select).\n'
+	@printf '  rustc -Zthreads=N (PARALLEL_THREADS=N, default 8) for intentd crates only; ~1-2 GB more RAM per rustc; never CI or release (CONTRIBUTING.md).\n'
 
 doctor: ## Report missing intentd + cloudlands-fe development prerequisites
 	@scripts/bootstrap-dev-host.sh --check

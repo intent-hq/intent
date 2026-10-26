@@ -120,6 +120,14 @@ debug = 1
         included.write_text('[profile.test.package.included]\ndebug=1\n')
         self.assertNotEqual(before, gate.build_settings(self.repo))
 
+    def test_parallel_front_end_has_separate_resume_identity(self):
+        before = gate.build_settings(self.repo)
+        os.environ["INTENT_PARALLEL_THREADS"] = "8"
+        threaded = gate.build_settings(self.repo)
+        self.assertNotEqual(before, threaded)
+        os.environ["INTENT_PARALLEL_THREADS"] = "4"
+        self.assertNotEqual(threaded, gate.build_settings(self.repo))
+
     def test_invalid_compact_config_fails_before_cargo(self):
         os.environ["COMPACT"] = "1"
         (self.repo / "Cargo.toml").write_text('invalid = [')
