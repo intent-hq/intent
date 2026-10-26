@@ -64,11 +64,15 @@ export RUSTC_WRAPPER := $(PARALLEL_WRAPPER)
 # Cargo does not fingerprint flags a RUSTC_WRAPPER adds, so artifacts built with
 # and without -Zthreads (or with another count) would each look Fresh to the
 # other. Give every thread count its own output tree under the caller's target
-# dir; a recursive make reuses the base instead of nesting another level.
+# dir (and build-dir, when one is set); a recursive make reuses the recorded
+# bases instead of nesting another level. `override` also beats command-line
+# CARGO_TARGET_DIR=/CARGO_BUILD_BUILD_DIR= assignments, which are kept as bases.
 PARALLEL_TARGET_BASE := $(or $(INTENT_PARALLEL_TARGET_BASE),$(CARGO_TARGET_DIR),$(CARGO_BUILD_TARGET_DIR),$(CURDIR)/$(INTENTD_DIR)/target)
-export INTENT_PARALLEL_TARGET_BASE := $(PARALLEL_TARGET_BASE)
-export CARGO_TARGET_DIR := $(PARALLEL_TARGET_BASE)/parallel-t$(PARALLEL_THREADS)
-export CARGO_BUILD_BUILD_DIR := $(CARGO_TARGET_DIR)
+PARALLEL_BUILD_BASE := $(if $(INTENT_PARALLEL_BUILD_BASE),$(filter-out -,$(INTENT_PARALLEL_BUILD_BASE)),$(CARGO_BUILD_BUILD_DIR))
+override export INTENT_PARALLEL_TARGET_BASE := $(PARALLEL_TARGET_BASE)
+override export INTENT_PARALLEL_BUILD_BASE := $(or $(PARALLEL_BUILD_BASE),-)
+override export CARGO_TARGET_DIR := $(PARALLEL_TARGET_BASE)/parallel-t$(PARALLEL_THREADS)
+override export CARGO_BUILD_BUILD_DIR := $(or $(PARALLEL_BUILD_BASE),$(PARALLEL_TARGET_BASE))/parallel-t$(PARALLEL_THREADS)
 unexport PARALLEL
 endif
 FE_DIR = packages/cloudlands-fe

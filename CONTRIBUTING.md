@@ -213,7 +213,9 @@ builds never use it. A `RUSTC_WRAPPER` you set in the environment (for example
 configuration is bypassed while `PARALLEL=1` is on; set `RUSTC_WRAPPER=sccache`
 explicitly to keep it. Cargo does not fingerprint flags added by a wrapper, so
 each thread count builds into its own tree, `packages/intentd/target/parallel-tN`
-(under your `CARGO_TARGET_DIR` when set; `build.build-dir` follows it), and
+(under your `CARGO_TARGET_DIR` when set, in the environment or on the make
+command line; a `CARGO_BUILD_BUILD_DIR` likewise gets its own `parallel-tN`
+child, otherwise the build-dir follows the target dir), and
 switching on, off or to another count never reuses the other setting's artifacts.
 The first `PARALLEL=1` build is therefore a full build, binaries land in
 `target/parallel-tN/debug/`, and each tree takes its own disk space; delete it to

@@ -138,6 +138,28 @@ if [ "$(target_of "$out")" = /tmp/own-target/parallel-t8 ]; then
 else
   fail "caller CARGO_TARGET_DIR not used as base: '$(target_of "$out")'"
 fi
+build_of() { { grep -E '^CARGO_BUILD_BUILD_DIR :?= ' <<<"$1" || true; } | tail -1 | sed -E 's/^CARGO_BUILD_BUILD_DIR :?= //'; }
+out=$(make_db build PARALLEL=1 CARGO_TARGET_DIR=/tmp/cli-target)
+if [ "$(target_of "$out")" = /tmp/cli-target/parallel-t8 ] && [ "$(build_of "$out")" = /tmp/cli-target/parallel-t8 ]; then
+  pass "a command-line CARGO_TARGET_DIR is the base, not the effective dir"
+else
+  fail "command-line CARGO_TARGET_DIR defeated isolation: target='$(target_of "$out")' build='$(build_of "$out")'"
+fi
+out=$(make_db build PARALLEL=1 PARALLEL_THREADS=4 CARGO_BUILD_BUILD_DIR=/tmp/cli-build)
+if [ "$(build_of "$out")" = /tmp/cli-build/parallel-t4 ] \
+  && [ "$(target_of "$out")" = "$ROOT/packages/intentd/target/parallel-t4" ]; then
+  pass "a caller build-dir is the base for a per-mode build-dir"
+else
+  fail "caller build-dir not isolated: build='$(build_of "$out")' target='$(target_of "$out")'"
+fi
+out=$(env -u CI -u GITHUB_ACTIONS RUSTC_WRAPPER="$WRAPPER" INTENT_PARALLEL_TARGET_BASE=/tmp/base \
+  INTENT_PARALLEL_BUILD_BASE=/tmp/bbase CARGO_BUILD_BUILD_DIR=/tmp/bbase/parallel-t8 \
+  make -C "$ROOT" -pn build PARALLEL=1 2>&1) || true
+if [ "$(build_of "$out")" = /tmp/bbase/parallel-t8 ]; then
+  pass "recursive make does not nest the parallel build-dir"
+else
+  fail "recursive make nested the build-dir: '$(build_of "$out")'"
+fi
 out=$(env -u CI -u GITHUB_ACTIONS RUSTC_WRAPPER="$WRAPPER" INTENT_PARALLEL_TARGET_BASE=/tmp/base \
   CARGO_TARGET_DIR=/tmp/base/parallel-t8 make -C "$ROOT" -pn build PARALLEL=1 2>&1) || true
 if [ "$(target_of "$out")" = /tmp/base/parallel-t8 ]; then
