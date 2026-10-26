@@ -246,7 +246,7 @@ class Supervisor(Stubbed):
             self.assertEqual(call['auth'], PAT)
             self.assertNotIn(PAT, ' '.join(call['argv']))
         body = json.loads([c for c in self.calls('curl') if c['method'] == 'POST'][0]['body'])
-        self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache'])
+        self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache', 'intent-host-intent-cache'])
         self.assertEqual(body['runner_group_id'], 3, 'registers into the intent-cache group, never Default')
         self.assertEqual(body['work_folder'], '/home/runner/work')
         self.assertRegex(body['name'], r'^intent-cache-heavy-1-\d+$')
@@ -451,7 +451,7 @@ class Supervisor(Stubbed):
         rc, out, err = self.run_supervisor('heavy-3')
         self.assertEqual(rc, 0, err)
         body = json.loads([c for c in self.calls('curl') if c['method'] == 'POST'][0]['body'])
-        self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache'])
+        self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache', 'intent-host-intent-cache'])
         self.assertRegex(body['name'], r'^intent-cache-heavy-3-\d+$')
         argv = ' '.join([c for c in self.calls('docker') if c['argv'][0] == 'run'][0]['argv'])
         for flag in ('--name gh-runner-heavy-3', '--cpus 8 --cpuset-cpus 8-11,20-23 --memory 36g',
@@ -467,7 +467,7 @@ class Supervisor(Stubbed):
         rc, out, err = self.run_supervisor('small-2')
         self.assertEqual(rc, 0, err)
         body = json.loads([c for c in self.calls('curl') if c['method'] == 'POST'][0]['body'])
-        self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache-small'])
+        self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache-small', 'intent-host-intent-cache'])
         self.assertRegex(body['name'], r'^intent-cache-small-2-\d+$')
         argv = ' '.join([c for c in self.calls('docker') if c['argv'][0] == 'run'][0]['argv'])
         for flag in ('--name gh-runner-small-2', '--cpus 1 ', '--cpuset-cpus 10 ', '--memory 3g',
@@ -493,7 +493,9 @@ class Supervisor(Stubbed):
                 ('HEAVY_CPUSETS=0-3,12-15 x 8-11,20-23\n', "bad CPUSETS entry 'x'"),
                 ('HEAVY_MEMORY=lots\n', 'MEMORY must look like 40g'),
                 ('RUNNER_POOLS=heavy extra\n', 'pool extra: SLOTS must be a number'),
-                ('HEAVY_BOGUS=1\n', 'unknown key HEAVY_BOGUS')):
+                ('HEAVY_BOGUS=1\n', 'unknown key HEAVY_BOGUS'),
+                # The supervisor adds the host label itself; a pool must not claim one.
+                ('HEAVY_LABELS=self-hosted,intent-cache,intent-host-intent-ci3\n', 'LABELS must not include a host label')):
             with self.subTest(config=config):
                 self.config.write_text(config)
                 rc, _, err = self.run_supervisor('--plan')
@@ -665,7 +667,7 @@ class Supervisor(Stubbed):
         rc, out, err = self.run_supervisor('xl-1')
         self.assertEqual(rc, 0, err)
         body = json.loads([c for c in self.calls('curl') if c['method'] == 'POST'][0]['body'])
-        self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache-xl'])
+        self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache-xl', 'intent-host-intent-ci1'])
         self.assertEqual(body['runner_group_id'], 3)
         self.assertRegex(body['name'], r'^intent-ci1-xl-1-\d+$')
         argv = ' '.join([c for c in self.calls('docker') if c['argv'][0] == 'run'][0]['argv'])
@@ -691,7 +693,7 @@ class Supervisor(Stubbed):
                 rc, out, err = self.run_supervisor(f'heavy-{n}')
                 self.assertEqual(rc, 0, err)
                 body = json.loads([c for c in self.calls('curl') if c['method'] == 'POST'][-1]['body'])
-                self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache'])
+                self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache', 'intent-host-intent-ci3'])
                 self.assertRegex(body['name'], rf'^intent-ci3-heavy-{n}-\d+$')
                 argv = ' '.join([c for c in self.calls('docker') if c['argv'][0] == 'run'][-1]['argv'])
                 for flag in (f'--hostname intent-ci3-heavy-{n}', f'--cpus 8 --cpuset-cpus {cpuset} --memory 12g',
@@ -700,6 +702,22 @@ class Supervisor(Stubbed):
         rc, _, err = self.run_supervisor('xl-1')
         self.assertNotEqual(rc, 0, 'intent-ci3 has no xl slot')
         self.assertIn('is not a configured slot', err)
+
+    def test_host_label_follows_the_name_prefix(self):
+        # Each slot also registers intent-host-<RUNNER_NAME_PREFIX>, so a job
+        # (the smoke workflow's host input) can target one host; pool labels
+        # stay first and unchanged, so routing by pool label is unaffected.
+        for path, prefix in ((HERE / 'runners.env', 'intent-cache'), (INTENT_CI1, 'intent-ci1'),
+                             (INTENT_CI2, 'intent-ci2'), (INTENT_CI3, 'intent-ci3')):
+            with self.subTest(config=path.name):
+                self.use_host_config(path)
+                self.responses['GET /orgs/example-org/actions/runners'] = [200, {'runners': []}]
+                rc, _, err = self.run_supervisor('heavy-1')
+                self.assertEqual(rc, 0, err)
+                body = json.loads([c for c in self.calls('curl') if c['method'] == 'POST'][-1]['body'])
+                pool = read_env(path)['HEAVY_LABELS'].split(',')
+                self.assertEqual(body['labels'], [*pool, f'intent-host-{prefix}'])
+                self.assertNotIn(f'intent-host-{prefix}', pool)
 
     def test_stale_cleanup_only_takes_this_hosts_slot(self):
         self.use_host_config(INTENT_CI1)

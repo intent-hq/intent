@@ -732,3 +732,21 @@ test('cloud maps every paid label to WarpBuild and never to a self-hosted runner
   // The reusable workflow exposes it.
   assert.match(workflow, /^ {6}cloud:\n {8}value: \$\{\{ jobs\.probe\.outputs\.cloud \}\}$/m);
 });
+// Every slot also registers a host label (intent-host-<RUNNER_NAME_PREFIX>, infra/runners/supervisor.sh)
+// so the runner smoke workflow can target one host. Routing matches pool labels only.
+test('a host label on self-hosted slots changes neither capacity nor routed labels', async () => {
+  const host = (slot, name) => ({ ...slot, labels: [...slot.labels, { name: `intent-host-${name}` }] });
+  const plain = [...todaysFleet(), xlSlot(), cacheSlot(true)];
+  const tagged = [
+    ...todaysFleet().map((r, i) => (i < 2 ? host(r, 'intent-cache') : r)),
+    host(xlSlot(), 'intent-ci1'),
+    host(cacheSlot(true), 'intent-ci3'),
+  ];
+  const fixture = { env: slotEnv([...MIXED, UNIT], XL_ON), jobs: [heavyJob(3), xlJob(4)] };
+  const before = await route({ ...fixture, runners: plain });
+  const after = await route({ ...fixture, runners: tagged });
+  assert.deepEqual(after.outputs, before.outputs);
+  assert.deepEqual(after.messages, before.messages);
+  assert.ok(after.messages.some((m) => m.includes('linux routing: burst=') && m.includes('online=3')));
+  assert.ok(!JSON.stringify(after.outputs).includes('intent-host-'), 'no job is routed to a host label');
+});
