@@ -3,7 +3,8 @@
 # in a fresh container until its single job ends, clean up and exit.
 # github-runner@<pool>-<n>.service restarts this for the next job.
 #
-# Slots belong to pools (default: heavy, 3 x 8 CPUs, 36 GB, label intent-cache;
+# Slots belong to pools (default: heavy, 3 x 8 CPUs, 36 GB, labels intent-cache
+# and intent-cache-bigmem;
 # other hosts may add xl, 16 CPUs, label intent-cache-xl). Each slot is pinned to its own CPU set from
 # <POOL>_CPUSETS, so nproc and os.availableParallelism() inside a job report
 # that slot's CPU count. Runners are named <RUNNER_NAME_PREFIX>-<pool>-<n>-<time>;
@@ -44,6 +45,9 @@ log() { echo "runner-slot-${slot:-?}: $*"; }
 die() { echo "runner-slot-${slot:-?}: error: $*" >&2; exit 1; }
 
 POOL_KEYS='SLOTS|LABELS|CPUSETS|MEMORY|PIDS|SHM'
+# runner-route sends gh-linux-16x overflow only to intent-cache-bigmem slots;
+# one rustc in intentd's check passed 12 GB, so a smaller slot OOM-kills it.
+bigmem_min_kib=$((30 * 1048576))
 
 # KEY=VALUE lines only; values are taken literally (never evaluated). Keys
 # must be listed in $2 or match the per-pool pattern in $3.
@@ -72,7 +76,7 @@ load_config() {
   RUNNER_BRIDGE=gh-runners0
   RUNNER_POOLS=heavy
   HEAVY_SLOTS=3
-  HEAVY_LABELS=self-hosted,linux,x64,intent-cache
+  HEAVY_LABELS=self-hosted,linux,x64,intent-cache,intent-cache-bigmem
   HEAVY_CPUSETS="0-3,12-15 4-7,16-19 8-11,20-23"
   HEAVY_MEMORY=36g
   HEAVY_PIDS=16384
@@ -116,6 +120,9 @@ plan_pool() {
   [[ "$labels" =~ ^[A-Za-z0-9._-]+(,[A-Za-z0-9._-]+)*$ ]] || die "pool $pool: LABELS must be a comma-separated list"
   [[ ",$labels" != *,intent-host-* ]] || die "pool $pool: LABELS must not include a host label (the supervisor adds intent-host-<RUNNER_NAME_PREFIX>)"
   [[ "$memory" =~ ^[1-9][0-9]{0,8}[kmg]$ ]] || die "pool $pool: MEMORY must look like 40g (at most 9 digits)"
+  if [[ ",$labels," == *,intent-cache-bigmem,* ]] && [ "$(memory_kib "$memory")" -lt "$bigmem_min_kib" ]; then
+    die "pool $pool: intent-cache-bigmem needs MEMORY of at least 30g (16-core jobs routed there are OOM-killed below it); drop the label from LABELS"
+  fi
   [[ "${pids:-4096}" =~ ^[1-9][0-9]*$ ]] || die "pool $pool: PIDS must be a number"
   [[ "${shm:-64m}" =~ ^[1-9][0-9]*[kmg]$ ]] || die "pool $pool: SHM must look like 1g"
   read -ra sets <<<"$cpusets"
