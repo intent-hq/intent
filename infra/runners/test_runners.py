@@ -1237,8 +1237,10 @@ class Static(unittest.TestCase):
         # 16 cores / 32 threads (CPU n and n+16 share a core), 128 GB (125 GiB);
         # intent-ci3 has 64 GB (62 GiB).
         configs = sorted(HOSTS.glob('*.env'))
-        self.assertEqual(configs, sorted([INTENT_CI1, INTENT_CI2, INTENT_CI3, EPYC_3HEAVY]))
-        host_gib = {INTENT_CI3: 62}
+        # Host RAM in GiB and, for hosts that pin every core, the slots' total memory.
+        hosts = {INTENT_CI1: (125, 52 + 2 * 30), INTENT_CI2: (125, 52 + 2 * 30), INTENT_CI3: (62, 4 * 13),
+                 EPYC_3HEAVY: (125, None)}
+        self.assertEqual(configs, sorted(hosts))
         shape = {'xl': (16, 'intent-cache-xl'), 'heavy': (8, 'intent-cache')}
         for path in configs:
             with self.subTest(config=path.name):
@@ -1261,10 +1263,10 @@ class Static(unittest.TestCase):
                     memory += int(env[f'{p}_SLOTS']) * int(env[f'{p}_MEMORY'].rstrip('g'))
                 self.assertEqual(len(cpus), len(set(cpus)), 'slots must not share CPUs')
                 self.assertTrue(all(c < 32 for c in cpus))
-                gib = host_gib.get(path, 125)
-                if path in (INTENT_CI1, INTENT_CI2, INTENT_CI3):
+                gib, total = hosts[path]
+                if total is not None:
                     self.assertEqual(sorted(cpus), list(range(32)), f'{path.stem} pins every core')
-                    self.assertEqual(memory, 4 * 13 if path == INTENT_CI3 else 52 + 2 * 30)
+                    self.assertEqual(memory, total)
                     self.assertGreaterEqual(gib - memory, 10, 'leave about 10 GB for the system and Docker')
                 else:
                     self.assertEqual(set(range(12, 16)) & {c % 16 for c in cpus}, set(), 'cores 12-15 stay unpinned')
