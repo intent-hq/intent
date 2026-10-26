@@ -48,7 +48,7 @@ new host only adds capacity once its variable is raised:
 | `CI_LINUX_HEAVY_SLOTS` | 2 | heavy |
 | `CI_LINUX_XL_SLOTS` | 0 (xl off) | xl |
 | `CI_LINUX_BIGMEM_SLOTS` | 0 (16-core overflow bursts) | bigmem; its slots also count against `CI_LINUX_HEAVY_SLOTS` |
-| `CI_LINUX_RUNNER_DISABLED` | unset | `true` sends every job, xl included, to its burst runner |
+| `CI_LINUX_RUNNER_DISABLED` | unset | `true` sends every job, xl and bigmem included, to its burst runner |
 
 `CI_WARPBUILD_DISABLED` is no longer read: GitHub's larger runners are off, so
 there is nothing to switch bursts back to (see [Burst to WarpBuild](#burst-to-warpbuild)).
@@ -145,7 +145,10 @@ supervisor is killed outright.
   slot first, then a free bigmem heavy slot, then bursts; it never takes a
   heavy slot without `intent-cache-bigmem`. A `gh-linux-8x` job takes any
   heavy slot, bigmem included, and never an xl slot. A bigmem grant needs a
-  free slot in both the bigmem and the heavy count and uses one of each.
+  free slot in both the bigmem and the heavy count and uses one of each, plus
+  an idle bigmem runner that no queued bigmem job has claimed: `gh-linux-8x`
+  jobs run on bigmem runners without counting as bigmem demand. A bigmem job
+  queued over 15 minutes stalls only the bigmem pool.
 - **Slot fitting.** The probe hands out at most as many slots per run as a
   pool has free: online slots (capped by the organization or repository
   variables `CI_LINUX_HEAVY_SLOTS` / `CI_LINUX_XL_SLOTS` /

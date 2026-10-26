@@ -180,16 +180,23 @@ jobs:
               }
               const thresholds = {linux: Number(process.env.THRESHOLD || '2'), xl: Number(process.env.XL_THRESHOLD || '0'), bigmem: Number(process.env.BIGMEM_THRESHOLD || '0')};
               if (Object.values(thresholds).some(n => !Number.isInteger(n) || n < 0)) throw new Error('invalid queue threshold');
+              const asks = (j, labels) => labels.every(l => (j.labels || []).some(x => x.toLowerCase() === l.toLowerCase()));
               for (const [key, labels] of Object.entries(fleets)) {
-                const demand = jobs.filter(j => ['queued', 'in_progress'].includes(j.status) && labels.every(l => (j.labels || []).some(x => x.toLowerCase() === l.toLowerCase())));
-                const stale = demand.some(j => queuedOver(j, 15, true));
+                const demand = jobs.filter(j => ['queued', 'in_progress'].includes(j.status) && asks(j, labels));
+                // A job waiting on a sub-pool (bigmem) stalls only that sub-pool; the rest of its parent pool may be idle.
+                const stale = demand.some(j => queuedOver(j, 15, true) && !Object.keys(within).some(sub => within[sub] === key && asks(j, fleets[sub])));
                 const native = !(key in thresholds);
                 const capacity = native ? online[key].filter(r => r.busy === false).length : online[key].length;
                 const limit = native ? capacity - 1 : Math.min(thresholds[key], capacity);
                 const depth = native ? demand.filter(j => j.status === 'queued').length : demand.length;
                 burst[key] = disabled[key] || capacity === 0 || stale || (native ? depth > limit : depth >= limit);
                 if (!native) slotsFree[key] = burst[key] ? 0 : limit - depth;
-                reasons[key] = disabled[key] ? 'disabled for maintenance' : capacity === 0 ? 'no available compatible runner' : stale ? 'stalled or unknown-age queue' : `queue depth=${depth} threshold=${limit} online=${online[key].length}${native ? '' : ` free=${slotsFree[key]}`}`;
+                // Jobs asking only for the parent pool's labels can run on a sub-pool's
+                // runners without counting as its demand, so a sub-pool grant also
+                // needs a runner that is idle and not already claimed by a queued job.
+                const idle = within[key] ? Math.max(0, online[key].filter(r => r.busy === false).length - demand.filter(j => j.status === 'queued').length) : null;
+                if (idle !== null) slotsFree[key] = Math.min(slotsFree[key], idle);
+                reasons[key] = disabled[key] ? 'disabled for maintenance' : capacity === 0 ? 'no available compatible runner' : stale ? 'stalled or unknown-age queue' : `queue depth=${depth} threshold=${limit} online=${online[key].length}${idle === null ? '' : ` idle=${idle}`}${native ? '' : ` free=${slotsFree[key]}`}`;
               }
             } catch (error) {
               for (const key of Object.keys(fleets)) reasons[key] = `probe failed (${error.message})`;
@@ -235,8 +242,11 @@ jobs:
               const key = runs && Object.keys(hosted).find(k => k in slotsFree && hosted[k].includes(r.label) && hasSlot(k));
               if (key) {
                 slotsFree[key] -= 1;
-                if (within[key]) slotsFree[within[key]] -= 1;
                 granted[key] += 1;
+                if (within[key]) {
+                  slotsFree[within[key]] -= 1;
+                  granted[within[key]] += 1;
+                }
                 slots[r.key] = fleets[key];
               } else slots[r.key] = cloud(r.burst || r.label);
             }
