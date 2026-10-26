@@ -36,6 +36,45 @@ endif
 COMPACT_CARGO = $(if $(filter 1,$(COMPACT)),python3 "$(CURDIR)/scripts/resumable_nextest.py" --compact-cargo)
 
 INTENTD_DIR = packages/intentd
+
+# PARALLEL=1: opt-in rustc parallel front end (-Zthreads=PARALLEL_THREADS,
+# default 8) for intentd's own crates in local debug builds, through the
+# scripts/rustc-parallel.sh RUSTC_WRAPPER (CONTRIBUTING.md -> "Parallel
+# compiler front end"). Only `1` enables it, so an unrelated PARALLEL in the
+# environment (GNU parallel reads it as options) is ignored, and PARALLEL=1 is
+# kept out of recipe environments (MAKEFLAGS still reaches sub-makes). Release, coverage and every other goal reject it before
+# any recipe runs, as does CI. A recursive make (gate -> test) inherits the
+# wrapper; INNER keeps a caller's own RUSTC_WRAPPER (e.g. sccache) chained.
+PARALLEL_THREADS ?= 8
+PARALLEL_GOALS := all build build-intentd check clippy lint-sources gate test test-intentd test-changed test-select
+PARALLEL_WRAPPER := $(CURDIR)/scripts/rustc-parallel.sh
+ifeq ($(PARALLEL),1)
+ifneq ($(CI)$(GITHUB_ACTIONS),)
+$(error PARALLEL=1 is for local developer builds only; it is rejected under CI)
+endif
+ifneq ($(filter-out $(PARALLEL_GOALS),$(or $(MAKECMDGOALS),all)),)
+$(error PARALLEL=1 supports only: $(PARALLEL_GOALS); rerun $(filter-out $(PARALLEL_GOALS),$(MAKECMDGOALS)) without it)
+endif
+ifneq ($(RUSTC_WRAPPER),$(PARALLEL_WRAPPER))
+export INTENT_PARALLEL_INNER_WRAPPER := $(RUSTC_WRAPPER)
+endif
+export INTENT_PARALLEL_ROOT := $(CURDIR)/$(INTENTD_DIR)
+export INTENT_PARALLEL_THREADS := $(PARALLEL_THREADS)
+export RUSTC_WRAPPER := $(PARALLEL_WRAPPER)
+# Cargo does not fingerprint flags a RUSTC_WRAPPER adds, so artifacts built with
+# and without -Zthreads (or with another count) would each look Fresh to the
+# other. Give every thread count its own output tree under the caller's target
+# dir (and build-dir, when one is set); a recursive make reuses the recorded
+# bases instead of nesting another level. `override` also beats command-line
+# CARGO_TARGET_DIR=/CARGO_BUILD_BUILD_DIR= assignments, which are kept as bases.
+PARALLEL_TARGET_BASE := $(or $(INTENT_PARALLEL_TARGET_BASE),$(CARGO_TARGET_DIR),$(CARGO_BUILD_TARGET_DIR),$(CURDIR)/$(INTENTD_DIR)/target)
+PARALLEL_BUILD_BASE := $(if $(INTENT_PARALLEL_BUILD_BASE),$(filter-out -,$(INTENT_PARALLEL_BUILD_BASE)),$(CARGO_BUILD_BUILD_DIR))
+override export INTENT_PARALLEL_TARGET_BASE := $(PARALLEL_TARGET_BASE)
+override export INTENT_PARALLEL_BUILD_BASE := $(or $(PARALLEL_BUILD_BASE),-)
+override export CARGO_TARGET_DIR := $(PARALLEL_TARGET_BASE)/parallel-t$(PARALLEL_THREADS)
+override export CARGO_BUILD_BUILD_DIR := $(or $(PARALLEL_BUILD_BASE),$(PARALLEL_TARGET_BASE))/parallel-t$(PARALLEL_THREADS)
+unexport PARALLEL
+endif
 FE_DIR = packages/cloudlands-fe
 IOS_DIR = packages/ios
 
@@ -383,6 +422,8 @@ help: ## List documented targets
 	@printf '  Opt-in dev/test debug=0 and CARGO_INCREMENTAL=0; caller Rust flags retain precedence.\n'
 	@printf '  Default: COMPACT=0. Compact/default resume records are separate; coverage rejects COMPACT=1.\n'
 	@printf '  See CONTRIBUTING.md for debugging tradeoffs and the component mixed-goal boundary.\n'
+	@printf 'Opt-in faster local compiles: PARALLEL=1 make build (also check, clippy, lint-sources, gate, test, test-changed, test-select).\n'
+	@printf '  rustc -Zthreads=N (PARALLEL_THREADS=N, default 8) for intentd crates only; ~1-2 GB more RAM per rustc; builds into target/parallel-tN; never CI or release (CONTRIBUTING.md).\n'
 
 doctor: ## Report missing intentd + cloudlands-fe development prerequisites
 	@scripts/bootstrap-dev-host.sh --check

@@ -232,7 +232,8 @@ def build_settings(cwd: Path) -> dict[str, object]:
         "compact-config": compact_config(cwd),
         "environment": {name: value for name, value in env.items()
                         if name in {"CARGO_INCREMENTAL", "CARGO_TARGET_DIR", "CARGO_BUILD_TARGET_DIR",
-                                    "CARGO_BUILD_BUILD_DIR"} or name.startswith("CARGO_PROFILE_")},
+                                    "CARGO_BUILD_BUILD_DIR"} or name.startswith("CARGO_PROFILE_")
+                        or name.startswith("INTENT_PARALLEL_")},
         "cargo-configs": {str(path): hashlib.sha256(data).hexdigest()
                           for path, data in cargo_configs(cwd).items()},
     }

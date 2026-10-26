@@ -175,6 +175,53 @@ root makes per goal: `make -C packages/intentd test coverage-changed COMPACT=1` 
 run the noncoverage goal before rejecting coverage. It still never starts compact
 coverage. Use separate invocations with the appropriate mode for each goal.
 
+#### Parallel compiler front end
+
+Opt in to rustc's multi-threaded front end for local debug builds with:
+
+```bash
+PARALLEL=1 make build
+PARALLEL=1 make check            # also clippy, lint-sources, gate
+PARALLEL=1 make test-changed     # also test, test-select
+PARALLEL=1 PARALLEL_THREADS=4 make build
+```
+
+It sets `RUSTC_WRAPPER` to `scripts/rustc-parallel.sh`, which adds
+`-Zthreads=$PARALLEL_THREADS` (default 8) and `RUSTC_BOOTSTRAP=1` only to rustc
+invocations for crates under `packages/intentd`. Registry and git dependencies,
+their build-script probes and Cargo's `-vV`/`--print` probes run unchanged, so
+dependency feature detection matches CI. A global `RUSTC_BOOTSTRAP=1
+RUSTFLAGS=-Zthreads=8` would instead turn on nightly-only code in `anyhow`,
+`thiserror` and `proc-macro2`; do not use it.
+
+Measured on intentd at 1.96.0 (32-core shared host, paired against the default):
+clean debug builds are about 35–40% faster; rebuilding after an
+`intent-services/src/lib.rs` body edit is about 25% faster incremental and about
+40% faster with `CARGO_INCREMENTAL=0`; edits to small crates and the link-heavy
+`cargo test --no-run` gain little (≈0% and ≈10%). It costs 15–30% more total CPU
+and 1–2 GB more peak memory per rustc process, so lower `PARALLEL_THREADS` (or
+leave it off) on machines with little RAM. The nightly matching 1.96 crashed
+incremental `intent-services` rebuilds even without threads, so use the pinned
+stable toolchain, not nightly.
+
+Only `PARALLEL=1` enables it; any other value, including an unrelated
+`PARALLEL` from GNU parallel, is ignored. Release, coverage and other goals
+reject `PARALLEL=1` before any recipe runs, and both the Makefile and the
+wrapper refuse to run when `CI` or `GITHUB_ACTIONS` is set: CI and release
+builds never use it. A `RUSTC_WRAPPER` you set in the environment (for example
+`sccache`) is chained after the wrapper, but a `rustc-wrapper` from Cargo
+configuration is bypassed while `PARALLEL=1` is on; set `RUSTC_WRAPPER=sccache`
+explicitly to keep it. Cargo does not fingerprint flags added by a wrapper, so
+each thread count builds into its own `parallel-tN` tree under intentd's target directory
+(under your `CARGO_TARGET_DIR` when set, in the environment or on the make
+command line; a `CARGO_BUILD_BUILD_DIR` likewise gets its own `parallel-tN`
+child, otherwise the build-dir follows the target dir), and
+switching on, off or to another count never reuses the other setting's artifacts.
+The first `PARALLEL=1` build is therefore a full build, binaries land in
+its `debug/` subdirectory, and each tree takes its own disk space; delete it to
+reclaim it. Resume records for `make test` are kept separate per thread count. A compiler crash under `PARALLEL=1` should be retried without it
+before it is reported.
+
 #### Linux x64 callback gates
 
 The full Rust suite uses the canonical ACP callback adapter fixture, which currently
