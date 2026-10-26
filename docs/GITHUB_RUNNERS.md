@@ -15,7 +15,7 @@ targeting a label runs on whichever host has a free slot.
 
 | Pool | Label | Serves jobs asking for | Bursts to | Per slot |
 |---|---|---|---|---|
-| heavy | `intent-cache` | `gh-linux-8x`, `gh-linux-16x` | `warp-ubuntu-2404-x64-8x` / `-16x` | 8 CPUs = 4 whole cores; 36 GB on intent-cache, 30 GB on intent-ci1 and intent-ci2, 13 GB on intent-ci3, 32 GB in the three-heavy EPYC layout |
+| heavy | `intent-cache` | `gh-linux-8x`, `gh-linux-16x` | `warp-ubuntu-2404-x64-8x` / `-16x` | 8 CPUs = 4 whole cores; 36 GB on intent-cache, 30 GB on intent-ci1 and intent-ci2, 12 GB on intent-ci3, 32 GB in the three-heavy EPYC layout |
 | xl | `intent-cache-xl` | `gh-linux-16x` | `warp-ubuntu-2404-x64-16x` | 16 CPUs = 8 whole cores (one CCD), 52 GB |
 | small | `intent-cache-small` | nothing routed (free `ubuntu-*` jobs run on GitHub) | — | no slots on any host |
 
@@ -29,11 +29,11 @@ On intent-ci1 and intent-ci2 (same layout) the xl slot owns cores 0-7
 (CPUs 0-7,16-23, 52 GB) and the two heavy slots split CCD 1: cores 8-11
 (8-11,24-27) and 12-15 (12-15,28-31), 30 GB each. Every core is pinned; about
 13 GB stays with the system and Docker. intent-ci3 has the same CPU with
-64 GB and no xl slot: four heavy slots (cores 0-3, 4-7, 8-11, 12-15), 13 GB
-each, every core pinned, 52 GB under its 53G slice cap. That is well under the
+64 GB and no xl slot: four heavy slots (cores 0-3, 4-7, 8-11, 12-15), 12 GB
+each, every core pinned, 48 GB under its 51G slice cap (it reports 60 GiB). That is well under the
 other heavy slots, so a job that needs more working memory is OOM-killed
-there; if that happens, drop it to three slots of 17 GB (`HEAVY_SLOTS=3`,
-`HEAVY_MEMORY=17g`). [`hosts/epyc-4545p-3heavy.env`](../infra/runners/hosts/epyc-4545p-3heavy.env)
+there; if that happens, drop it to three slots of 16 GB (`HEAVY_SLOTS=3`,
+`HEAVY_MEMORY=16g`). [`hosts/epyc-4545p-3heavy.env`](../infra/runners/hosts/epyc-4545p-3heavy.env)
 is the other EPYC layout: three heavy slots (cores 0-3, 4-7, 8-11), 32 GB each.
 
 The routing probe (`runner-route.yml`) caps how many jobs it sends to each
@@ -387,7 +387,7 @@ weights; on a runner-only host, leaving a core or two unpinned is optional.
    `-f xl=true` for a host with an xl slot) and check
    `journalctl -u 'github-runner@*'` on the new host shows it ran jobs. The
    smoke checks each pool's memory against a range that covers every host
-   config (heavy: 13-36 GiB); a new per-slot size needs the range widened.
+   config (heavy: 12-36 GiB); a new per-slot size needs the range widened.
 7. **Route jobs to it** by raising `CI_LINUX_HEAVY_SLOTS` / `CI_LINUX_XL_SLOTS`
    to the fleet's total slots per pool (see the variables above).
 

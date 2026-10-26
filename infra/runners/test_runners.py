@@ -29,8 +29,8 @@ INTENT_CI3 = HOSTS / 'intent-ci3.env'
 EPYC_3HEAVY = HOSTS / 'epyc-4545p-3heavy.env'
 # MemTotal of a 128 GB box (125 GiB after the kernel's share).
 MEMINFO_128G = 'MemTotal:       131890000 kB\nMemFree:        1000 kB\n'
-# MemTotal of a 64 GB box (62 GiB after the kernel's share).
-MEMINFO_64G = 'MemTotal:       65800000 kB\nMemFree:        1000 kB\n'
+# MemTotal of intent-ci3's 64 GB (60 GiB after the kernel's and firmware's share).
+MEMINFO_64G = 'MemTotal:       63370000 kB\nMemFree:        1000 kB\n'
 PAT = 'github_pat_' + 'p' * 40
 JIT = 'jit' + 'j' * 60
 APP_TOKEN = 'ghs_' + 'a' * 36
@@ -691,8 +691,8 @@ class Supervisor(Stubbed):
                 self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache'])
                 self.assertRegex(body['name'], rf'^intent-ci3-heavy-{n}-\d+$')
                 argv = ' '.join([c for c in self.calls('docker') if c['argv'][0] == 'run'][-1]['argv'])
-                for flag in (f'--hostname intent-ci3-heavy-{n}', f'--cpus 8 --cpuset-cpus {cpuset} --memory 13g',
-                             '--memory-swap 13g', '--pids-limit 16384', '--shm-size 1g'):
+                for flag in (f'--hostname intent-ci3-heavy-{n}', f'--cpus 8 --cpuset-cpus {cpuset} --memory 12g',
+                             '--memory-swap 12g', '--pids-limit 16384', '--shm-size 1g'):
                     self.assertIn(flag, argv)
         rc, _, err = self.run_supervisor('xl-1')
         self.assertNotEqual(rc, 0, 'intent-ci3 has no xl slot')
@@ -1020,7 +1020,7 @@ class Installer(Stubbed):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.env_file.read_bytes(), INTENT_CI3.read_bytes())
         self.assertEqual(self.enabled(), [f'github-runner@heavy-{n}.service' for n in (1, 2, 3, 4)])
-        self.assertIn('\nMemoryMax=53G\n', (self.prefix / 'etc/systemd/system/runners.slice.d/memory.conf').read_text())
+        self.assertIn('\nMemoryMax=51G\n', (self.prefix / 'etc/systemd/system/runners.slice.d/memory.conf').read_text())
 
     def test_slice_memory_follows_host_ram(self):
         units = self.prefix / 'etc/systemd/system'
@@ -1235,10 +1235,10 @@ class Static(unittest.TestCase):
 
     def test_host_configs_fit_an_epyc_4545p(self):
         # 16 cores / 32 threads (CPU n and n+16 share a core), 128 GB (125 GiB);
-        # intent-ci3 has 64 GB (62 GiB).
+        # intent-ci3 has 64 GB (60 GiB).
         configs = sorted(HOSTS.glob('*.env'))
         # Host RAM in GiB and, for hosts that pin every core, the slots' total memory.
-        hosts = {INTENT_CI1: (125, 52 + 2 * 30), INTENT_CI2: (125, 52 + 2 * 30), INTENT_CI3: (62, 4 * 13),
+        hosts = {INTENT_CI1: (125, 52 + 2 * 30), INTENT_CI2: (125, 52 + 2 * 30), INTENT_CI3: (60, 4 * 12),
                  EPYC_3HEAVY: (125, None)}
         self.assertEqual(configs, sorted(hosts))
         shape = {'xl': (16, 'intent-cache-xl'), 'heavy': (8, 'intent-cache')}
@@ -1279,7 +1279,7 @@ class Static(unittest.TestCase):
         self.assertEqual(read_env(EPYC_3HEAVY)['HEAVY_SLOTS'], '3')
         ci3 = read_env(INTENT_CI3)
         self.assertEqual((ci3['RUNNER_NAME_PREFIX'], ci3['RUNNER_POOLS'], ci3['HEAVY_SLOTS'], ci3['HEAVY_MEMORY']),
-                         ('intent-ci3', 'heavy', '4', '13g'))
+                         ('intent-ci3', 'heavy', '4', '12g'))
         self.assertNotIn('XL_SLOTS', ci3, 'intent-ci3 has no xl slot')
 
     def test_intent_ci2_matches_intent_ci1_but_its_name(self):
