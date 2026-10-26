@@ -11,7 +11,7 @@ the smoke jobs' matrices as GitHub step outputs (key=value lines):
   host           the targeted host, or empty
 
 Without --host, every leg targets a pool label and accepts any committed
-slot size for that pool (the min..max memory across the configs). With
+host's slot size for that pool (the min..max memory across the hosts). With
 --host NAME, every leg targets that host's label (intent-host-NAME, which
 supervisor.sh registers on each slot), there is one leg per slot, and the
 CPUs and memory must match that host's config exactly.
@@ -50,7 +50,9 @@ def cpu_count(entry):
 
 
 def slots(env, pool):
-    """(cpus, memory bytes) of each configured slot of a pool."""
+    """(cpus, memory bytes) of each configured slot of a pool (none if not listed)."""
+    if pool not in env['RUNNER_POOLS'].split():
+        return []
     p = pool.upper()
     memory = env[f'{p}_MEMORY']
     size = int(memory[:-1]) * UNITS[memory[-1]]
@@ -80,7 +82,9 @@ def leg(name, pool, cpus, low, high, runs_on):
 
 
 def fleet_leg(pool, root):
-    sizes = [s for _, env in configs(root) if pool in env['RUNNER_POOLS'].split() for s in slots(env, pool)]
+    sizes = [s for env in hosts(root).values() for s in slots(env, pool)]
+    if not sizes:
+        raise SystemExit(f'::error::no committed host has a {pool} slot')
     cpus = {c for c, _ in sizes}
     if len(cpus) != 1:
         raise SystemExit(f'::error::{pool} slots differ in CPU count across configs: {sorted(cpus)}')
@@ -108,17 +112,19 @@ def plan(host='', xl=False, root=HERE):
     if host not in known:
         raise SystemExit(f"::error::unknown runner host '{host}'; expected one of: {', '.join(sorted(known))}")
     env = known[host]
-    pools = env['RUNNER_POOLS'].split()
-    if 'heavy' not in pools:
-        raise SystemExit(f'::error::{host} has no heavy pool; the smoke workflow needs one')
-    unknown = set(pools) - set(POOL_LABEL)
+    unknown = set(env['RUNNER_POOLS'].split()) - set(POOL_LABEL)
     if unknown:
         raise SystemExit(f'::error::{host}: the smoke workflow does not know pools {sorted(unknown)}')
+    if not slots(env, 'heavy'):
+        raise SystemExit(f'::error::{host} has no heavy slot; the smoke workflow needs one')
+    if xl and not slots(env, 'xl'):
+        raise SystemExit(f'::error::{host} has no xl slot; dispatch without xl=true')
     return {
         'isolation': {'include': host_legs(host, env, 'heavy')},
         # A host's own xl slots are online by definition, so check them unasked.
-        'isolation_xl': {'include': host_legs(host, env, 'xl')} if 'xl' in pools else None,
+        'isolation_xl': {'include': host_legs(host, env, 'xl')} if slots(env, 'xl') else None,
         'heavy': ['self-hosted', POOL_LABEL['heavy'], f'intent-host-{host}'],
+        # One reader per heavy slot of the host: all of them busy at once.
         'readers': [str(n) for n in range(1, len(slots(env, 'heavy')) + 1)],
         'host': host,
     }

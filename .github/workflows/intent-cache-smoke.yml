@@ -2,13 +2,15 @@ name: intent-cache runner smoke
 
 # Exercises the self-hosted runner pools (infra/runners, docs/GITHUB_RUNNERS.md):
 # isolation, paths and limits on every pool, a fresh container per job, and
-# sccache reuse of entries a GitHub-hosted runner wrote, with every heavy slot
-# busy at once. infra/runners/smoke_plan.py plans the jobs from the committed
-# runner configs. Without a host, jobs run wherever a pool slot is free and
-# each pool's limits are checked against the range of every committed config.
-# With a host (dispatch -f host=intent-ci3), every self-hosted job targets
-# that host's label (intent-host-<host>, registered by supervisor.sh), with one
-# isolation leg per slot checked against that host's own config exactly.
+# sccache reuse of entries a GitHub-hosted runner wrote, with several heavy
+# slots busy at once. infra/runners/smoke_plan.py plans the jobs from the
+# committed host configs. Without a host, jobs run wherever a pool slot is
+# free, three cache readers run at once, and each pool's limits are checked
+# against the range of every host's slots. With a host (dispatch
+# -f host=intent-ci3), every self-hosted job targets that host's label
+# (intent-host-<host>, registered by supervisor.sh): one isolation leg per
+# slot, checked against that host's own config exactly, and one cache reader
+# per heavy slot.
 on:
   workflow_dispatch:
     inputs:
@@ -56,6 +58,28 @@ jobs:
         run: |
           set -euo pipefail
           python3 -S -B infra/runners/smoke_plan.py --host "$HOST" --xl "$XL" | tee -a "$GITHUB_OUTPUT"
+      # A job for a label no runner carries waits in the queue (timeout-minutes
+      # does not count queue time), so fail here when the host is down or has
+      # not installed a supervisor.sh that registers the host label.
+      - name: The host has an online runner
+        if: steps.plan.outputs.host != ''
+        env:
+          GH_TOKEN: ${{ secrets.CI_QUEUE_READ_TOKEN }}
+          LABEL: intent-host-${{ steps.plan.outputs.host }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::CI_QUEUE_READ_TOKEN is not set; cannot check that a runner carries $LABEL"; exit 0
+          fi
+          if ! online="$(gh api --paginate "orgs/$GITHUB_REPOSITORY_OWNER/actions/runners?per_page=100" \
+              --jq '.runners[] | select(.status == "online") | .labels[].name')"; then
+            echo "::warning::listing org runners failed; cannot check that a runner carries $LABEL"; exit 0
+          fi
+          if ! grep -qxF -- "$LABEL" <<<"$online"; then
+            echo "::error::no online runner carries $LABEL: the host is down, or install.sh --no-build has not installed the supervisor.sh that registers it"
+            exit 1
+          fi
+          echo "$(grep -cxF -- "$LABEL" <<<"$online") online runner(s) carry $LABEL"
 
   isolation:
     name: Isolation and paths (${{ matrix.name }})
@@ -65,6 +89,8 @@ jobs:
       matrix: ${{ fromJSON(needs.plan.outputs.isolation) }}
     runs-on: ${{ matrix.runs_on }}
     timeout-minutes: 10
+    env:
+      SMOKE_HOST: ${{ needs.plan.outputs.host }}
     outputs:
       runner: ${{ steps.mark.outputs.runner }}
     steps: &isolation-steps
@@ -72,16 +98,16 @@ jobs:
         with:
           submodules: false
       - name: Runs on the requested host
-        if: needs.plan.outputs.host != ''
-        env:
-          HOST: ${{ needs.plan.outputs.host }}
+        if: env.SMOKE_HOST != ''
         run: &host-check |
           set -euo pipefail
-          # Slots are named <RUNNER_NAME_PREFIX>-<pool>-<n>-<time> (supervisor.sh).
-          if [[ ! "$RUNNER_NAME" =~ ^${HOST}-[a-z][a-z0-9]*-[1-9][0-9]*-[0-9]+$ ]]; then
-            echo "::error::runner $RUNNER_NAME is not a slot on $HOST"; exit 1
+          # Slots are named <RUNNER_NAME_PREFIX>-<pool>-<n>-<time> (supervisor.sh);
+          # the host is compared as a literal prefix, never as a pattern.
+          slot="${RUNNER_NAME#"$SMOKE_HOST"-}"
+          if [ "$slot" = "$RUNNER_NAME" ] || [[ ! "$slot" =~ ^[a-z][a-z0-9]*-[1-9][0-9]*-[0-9]+$ ]]; then
+            echo "::error::runner $RUNNER_NAME is not a slot on $SMOKE_HOST"; exit 1
           fi
-          echo "runner $RUNNER_NAME on $HOST"
+          echo "runner $RUNNER_NAME on $SMOKE_HOST"
       - name: Paths match GitHub-hosted runners
         run: |
           set -euo pipefail
@@ -165,6 +191,8 @@ jobs:
       matrix: ${{ fromJSON(needs.plan.outputs.isolation_xl) }}
     runs-on: ${{ matrix.runs_on }}
     timeout-minutes: 10
+    env:
+      SMOKE_HOST: ${{ needs.plan.outputs.host }}
     steps: *isolation-steps
 
   fresh:
@@ -172,11 +200,11 @@ jobs:
     needs: [plan, isolation]
     runs-on: ${{ fromJSON(needs.plan.outputs.heavy) }}
     timeout-minutes: 10
+    env:
+      SMOKE_HOST: ${{ needs.plan.outputs.host }}
     steps:
       - name: Runs on the requested host
-        if: needs.plan.outputs.host != ''
-        env:
-          HOST: ${{ needs.plan.outputs.host }}
+        if: env.SMOKE_HOST != ''
         run: *host-check
       - name: No leftovers from the previous job
         env:
@@ -206,7 +234,9 @@ jobs:
 
   cache-writer:
     name: Build intentd (GitHub-hosted, writes the cache)
-    needs: plan
+    # Never run pull-request code from forks on the self-hosted box. No plan
+    # needed: the writer starts at once, and SMOKE_HOST is unset here.
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps: &cache-build
@@ -214,9 +244,7 @@ jobs:
         with:
           submodules: false
       - name: Runs on the requested host
-        if: needs.plan.outputs.host != '' && runner.environment == 'self-hosted'
-        env:
-          HOST: ${{ needs.plan.outputs.host }}
+        if: env.SMOKE_HOST != ''
         run: *host-check
       - run: git submodule update --init --depth=1 packages/intentd
       - name: Configure the self-hosted compiler cache
@@ -257,4 +285,6 @@ jobs:
         slot: ${{ fromJSON(needs.plan.outputs.readers) }}
     runs-on: ${{ fromJSON(needs.plan.outputs.heavy) }}
     timeout-minutes: 60
+    env:
+      SMOKE_HOST: ${{ needs.plan.outputs.host }}
     steps: *cache-build

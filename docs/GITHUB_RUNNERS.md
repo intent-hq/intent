@@ -408,10 +408,11 @@ runner-only host, leaving a core or two unpinned is optional.
    isolation check runs once per slot of the host (each on whichever of its
    slots is free, so usually all of them) with CPUs and memory matched exactly
    against the host's committed config, and each job fails unless it ran on a
-   slot of that host. Use the same dispatch after resizing a host. Without `host`, jobs
-   land on any host with a free slot and each pool's limits are checked
-   against the span of every committed config (add `-f xl=true` to include
-   the xl pool).
+   slot of that host. The plan job fails at once if no online runner carries
+   the label (host down, or its `supervisor.sh` predates host labels). Use the
+   same dispatch after resizing a host. Without `host`, jobs land on any host
+   with a free slot and each pool's limits are checked against the span of
+   every host's slots (add `-f xl=true` to include the xl pool).
 7. **Route jobs to it** by raising `CI_LINUX_HEAVY_SLOTS` / `CI_LINUX_XL_SLOTS`
    to the fleet's total slots per pool (see the variables above).
 
