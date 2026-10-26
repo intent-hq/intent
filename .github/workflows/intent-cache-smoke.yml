@@ -3,10 +3,12 @@ name: intent-cache runner smoke
 # Exercises the self-hosted runner pools (infra/runners, docs/GITHUB_RUNNERS.md):
 # isolation, paths and limits on every pool, a fresh container per job, and
 # sccache reuse of entries a GitHub-hosted runner wrote, with every heavy slot
-# busy at once. Memory limits differ by host (heavy: 36 GiB on intent-cache,
-# 30-32 GiB on a 128 GB EPYC host, 12 GiB on intent-ci3), so each pool is
-# checked against a range that covers every committed host config
-# (test_runners.py keeps them in step).
+# busy at once. infra/runners/smoke_plan.py plans the jobs from the committed
+# runner configs. Without a host, jobs run wherever a pool slot is free and
+# each pool's limits are checked against the range of every committed config.
+# With a host (dispatch -f host=intent-ci3), every self-hosted job targets
+# that host's label (intent-host-<host>, registered by supervisor.sh), with one
+# isolation leg per slot checked against that host's own config exactly.
 on:
   workflow_dispatch:
     inputs:
@@ -18,6 +20,10 @@ on:
         description: Also launch headless Chromium and check the inotify limit (after the image and sysctl rollout)
         type: boolean
         default: false
+      host:
+        description: Run every self-hosted job on this host (its RUNNER_NAME_PREFIX, e.g. intent-ci3) and check its own config; empty for any host
+        type: string
+        default: ''
   pull_request:
     paths:
       - infra/runners/**
@@ -27,15 +33,37 @@ permissions:
   contents: read
 
 jobs:
-  isolation:
-    name: Isolation and paths (${{ matrix.label }})
+  plan:
+    name: Plan (${{ inputs.host || 'any host' }})
     # Never run pull-request code from forks on the self-hosted box.
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      isolation: ${{ steps.plan.outputs.isolation }}
+      isolation_xl: ${{ steps.plan.outputs.isolation_xl }}
+      heavy: ${{ steps.plan.outputs.heavy }}
+      readers: ${{ steps.plan.outputs.readers }}
+      host: ${{ steps.plan.outputs.host }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+      - id: plan
+        env:
+          HOST: ${{ inputs.host }}
+          XL: ${{ github.event_name == 'workflow_dispatch' && inputs.xl }}
+        run: |
+          set -euo pipefail
+          python3 -S -B infra/runners/smoke_plan.py --host "$HOST" --xl "$XL" | tee -a "$GITHUB_OUTPUT"
+
+  isolation:
+    name: Isolation and paths (${{ matrix.name }})
+    needs: plan
     strategy:
-      matrix:
-        include:
-          - {label: intent-cache, cpus: 8, memory_min: 12884901888, memory_max: 38654705664}
-    runs-on: [self-hosted, '${{ matrix.label }}']
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.isolation) }}
+    runs-on: ${{ matrix.runs_on }}
     timeout-minutes: 10
     outputs:
       runner: ${{ steps.mark.outputs.runner }}
@@ -43,6 +71,17 @@ jobs:
       - uses: actions/checkout@v7
         with:
           submodules: false
+      - name: Runs on the requested host
+        if: needs.plan.outputs.host != ''
+        env:
+          HOST: ${{ needs.plan.outputs.host }}
+        run: &host-check |
+          set -euo pipefail
+          # Slots are named <RUNNER_NAME_PREFIX>-<pool>-<n>-<time> (supervisor.sh).
+          if [[ ! "$RUNNER_NAME" =~ ^${HOST}-[a-z][a-z0-9]*-[1-9][0-9]*-[0-9]+$ ]]; then
+            echo "::error::runner $RUNNER_NAME is not a slot on $HOST"; exit 1
+          fi
+          echo "runner $RUNNER_NAME on $HOST"
       - name: Paths match GitHub-hosted runners
         run: |
           set -euo pipefail
@@ -115,25 +154,30 @@ jobs:
           echo "$GITHUB_RUN_ID" > "$RUNNER_TEMP/../leftover-marker"
           echo "runner=$RUNNER_NAME" >> "$GITHUB_OUTPUT"
 
-  # Dispatch-only: no xl runner may be online, and a job for a missing label
-  # waits in the queue instead of failing.
+  # Dispatch-only (xl input, or a host with an xl pool): no xl runner may be
+  # online, and a job for a missing label waits in the queue instead of failing.
   isolation-xl:
-    name: Isolation and paths (${{ matrix.label }})
-    if: github.event_name == 'workflow_dispatch' && inputs.xl
+    name: Isolation and paths (${{ matrix.name }})
+    needs: plan
+    if: needs.plan.outputs.isolation_xl != ''
     strategy:
-      matrix:
-        include:
-          - {label: intent-cache-xl, cpus: 16, memory_min: 55834574848, memory_max: 55834574848}
-    runs-on: [self-hosted, '${{ matrix.label }}']
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.isolation_xl) }}
+    runs-on: ${{ matrix.runs_on }}
     timeout-minutes: 10
     steps: *isolation-steps
 
   fresh:
-    name: Fresh container (intent-cache)
-    needs: isolation
-    runs-on: [self-hosted, intent-cache]
+    name: Fresh container (${{ needs.plan.outputs.host || 'intent-cache' }})
+    needs: [plan, isolation]
+    runs-on: ${{ fromJSON(needs.plan.outputs.heavy) }}
     timeout-minutes: 10
     steps:
+      - name: Runs on the requested host
+        if: needs.plan.outputs.host != ''
+        env:
+          HOST: ${{ needs.plan.outputs.host }}
+        run: *host-check
       - name: No leftovers from the previous job
         env:
           PREVIOUS: ${{ needs.isolation.outputs.runner }}
@@ -162,13 +206,18 @@ jobs:
 
   cache-writer:
     name: Build intentd (GitHub-hosted, writes the cache)
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    needs: plan
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps: &cache-build
       - uses: actions/checkout@v7
         with:
           submodules: false
+      - name: Runs on the requested host
+        if: needs.plan.outputs.host != '' && runner.environment == 'self-hosted'
+        env:
+          HOST: ${{ needs.plan.outputs.host }}
+        run: *host-check
       - run: git submodule update --init --depth=1 packages/intentd
       - name: Configure the self-hosted compiler cache
         env:
@@ -201,11 +250,11 @@ jobs:
           EOF
 
   cache-reader:
-    name: Build intentd (intent-cache slot ${{ matrix.slot }}, reads the cache)
-    needs: cache-writer
+    name: Build intentd (${{ needs.plan.outputs.host || 'intent-cache' }} slot ${{ matrix.slot }}, reads the cache)
+    needs: [plan, cache-writer]
     strategy:
       matrix:
-        slot: [a, b, c]
-    runs-on: [self-hosted, intent-cache]
+        slot: ${{ fromJSON(needs.plan.outputs.readers) }}
+    runs-on: ${{ fromJSON(needs.plan.outputs.heavy) }}
     timeout-minutes: 60
     steps: *cache-build
