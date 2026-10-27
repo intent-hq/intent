@@ -79,12 +79,18 @@ class WorkflowShape(unittest.TestCase):
         self.assertEqual(field(block, 'if'), SELECT_IF)
         self.assertEqual(run_lines(block), ['bash scripts/consumer-checks-shell-suites.sh'])
         self.assertIn('          SELF_TEST: ${{ inputs.self-test }}\n', block)
+        # The PR's own diff, from the caller's context: a reusable workflow's
+        # github context is the caller's event.
+        self.assertIn('          BASE_SHA: ${{ github.event.pull_request.base.sha || '
+                      'github.event.merge_group.base_sha }}\n', block)
+        self.assertIn('          TEST_SHA: ${{ github.sha }}\n', block)
 
     def test_selected_steps_are_gated_only_on_the_selection(self):
         for name in SHELL_SUITE_STEPS:
             block = self.blocks[name]
             with self.subTest(step=name):
-                self.assertNotIn('merge_group', block)
+                self.assertNotIn('merge_group', field(block, 'if'))
+                self.assertNotIn('event_name', field(block, 'if'))
                 self.assertNotIn('continue-on-error', block)
                 if name != SELECT_STEP:
                     self.assertEqual(field(block, 'if'), SELECTED_IF)
@@ -144,51 +150,52 @@ def commit(repo, files, message):
     return git(repo, 'rev-parse', 'HEAD')
 
 
+WATCHED = ('scripts/changed-tests.sh', 'scripts/with-test-policy.sh', 'scripts/test-changed-tests.sh',
+           'scripts/coverage-storage.py', 'scripts/test-without-provider-clis.sh', 'Makefile')
+
+
 class Selection(unittest.TestCase):
     """Run the real selection script against fixture repositories."""
 
     def setUp(self):
         self.temp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.temp)
-        self.env = dict(GIT_ENV)
         self.origin = self.temp / 'intentd-origin'
         self.origin.mkdir()
-        git(self.origin, 'init', '-q')
+        git(self.origin, 'init', '-q', '-b', 'main')
         git(self.origin, 'config', 'uploadpack.allowAnySHA1InWant', 'true')
-        self.pin = commit(self.origin, {
-            'scripts/changed-tests.sh': 'echo plan\n',
-            'scripts/with-test-policy.sh': 'exec "$@"\n',
-            'scripts/test-changed-tests.sh': 'echo suite\n',
-            'scripts/coverage-storage.py': 'pass\n',
-            'scripts/test-without-provider-clis.sh': 'exec "$@"\n',
-            'Makefile': 'test-changed:\n',
-            'README.md': 'intentd\n',
-        }, 'test: pinned')
+        self.base = commit(self.origin, {**{path: f'{path}\n' for path in WATCHED},
+                                         'README.md': 'intentd\n'}, 'test: base')
 
-    def monorepo(self, head, gitlink=True, origin_url=None):
-        """A monorepo checkout pinning self.pin, with `head` at packages/intentd."""
+    def pr(self, files, base=None):
+        """A PR branch from `base` changing `files`, and GitHub's test-merge commit into main."""
+        main = git(self.origin, 'rev-parse', 'main')
+        git(self.origin, 'checkout', '-q', '-b', 'pr', base or main)
+        commit(self.origin, files, 'test: pr')
+        git(self.origin, 'checkout', '-q', 'main')
+        git(self.origin, 'merge', '-q', '--no-ff', '--no-edit', 'pr')
+        merge = git(self.origin, 'rev-parse', 'HEAD')
+        git(self.origin, 'reset', '-q', '--hard', main)
+        return main, merge
+
+    def checkout(self, head='pr', origin_url=None):
+        """The consumer job's tree: packages/intentd shallow at the caller head."""
         mono = self.temp / 'mono'
+        shutil.rmtree(mono, ignore_errors=True)
         mono.mkdir()
-        git(mono, 'init', '-q')
-        (mono / 'Makefile').write_text('all:\n')
-        git(mono, 'add', 'Makefile')
-        if gitlink:
-            git(mono, 'update-index', '--add', '--cacheinfo', f'160000,{self.pin},packages/intentd')
-        git(mono, 'commit', '-qm', 'test: monorepo')
-        # Shallow at the caller head, like actions/checkout with fetch-depth 1,
-        # so the pin must be fetched unless head is the pin.
-        git(mono, 'clone', '-q', '--depth=1', '--no-checkout', f'file://{self.origin}', 'packages/intentd')
         child = mono / 'packages/intentd'
-        git(child, 'fetch', '-q', '--depth=1', 'origin', head)
-        git(child, 'checkout', '-q', '--detach', head)
+        git(mono, 'clone', '-q', '--depth=1', '--no-checkout', f'file://{self.origin}', 'packages/intentd')
+        git(child, 'fetch', '-q', '--depth=1', 'origin', git(self.origin, 'rev-parse', head))
+        git(child, 'checkout', '-q', '--detach', 'FETCH_HEAD')
         if origin_url is not None:
             git(child, 'remote', 'set-url', 'origin', origin_url)
         return mono
 
-    def select(self, mono, component='intentd', self_test=None, bash='bash'):
+    def select(self, mono, base='', test='', component='intentd', self_test=None, bash='bash'):
         output = self.temp / 'github-output'
         output.write_text('')
-        env = {**self.env, 'GITHUB_OUTPUT': str(output), 'COMPONENT': component}
+        env = {**GIT_ENV, 'GITHUB_OUTPUT': str(output), 'COMPONENT': component,
+               'BASE_SHA': base, 'TEST_SHA': test}
         if self_test is not None:
             env['SELF_TEST'] = self_test
         result = subprocess.run([bash, str(SELECT)], cwd=mono, env=env, capture_output=True, text=True)
@@ -196,71 +203,76 @@ class Selection(unittest.TestCase):
         values = dict(line.split('=', 1) for line in output.read_text().splitlines())
         return values, result.stdout
 
-    def change(self, files):
-        return commit(self.origin, files, 'test: caller head')
-
-    def test_head_at_the_pin_skips(self):
-        values, _ = self.select(self.monorepo(self.pin))
-        self.assertEqual(values['selected'], 'false')
-        self.assertIn('match the pinned intentd', values['reason'])
-
     def test_unrelated_change_skips(self):
-        head = self.change({'README.md': 'changed\n', 'scripts/other.sh': 'true\n'})
-        values, _ = self.select(self.monorepo(head))
+        base, merge = self.pr({'README.md': 'changed\n', 'scripts/other.sh': 'true\n'})
+        values, _ = self.select(self.checkout(), base, merge)
         self.assertEqual(values['selected'], 'false')
+        self.assertIn('does not touch', values['reason'])
 
-    def test_changed_tests_change_selects(self):
-        head = self.change({'scripts/changed-tests.sh': 'exec env LC_ALL=C echo plan\n'})
-        values, _ = self.select(self.monorepo(head))
-        self.assertEqual(values['selected'], 'true')
-        self.assertIn('scripts/changed-tests.sh differ', values['reason'])
-
-    def test_with_test_policy_change_selects(self):
-        head = self.change({'scripts/with-test-policy.sh': 'uname >/dev/null; exec "$@"\n'})
-        values, _ = self.select(self.monorepo(head))
-        self.assertEqual(values['selected'], 'true')
-        self.assertIn('scripts/with-test-policy.sh differ', values['reason'])
-
-    def test_files_the_suites_copy_or_run_select(self):
-        for path in ('scripts/test-changed-tests.sh', 'scripts/coverage-storage.py',
-                     'scripts/test-without-provider-clis.sh', 'Makefile'):
+    def test_each_watched_file_selects(self):
+        for path in WATCHED:
             with self.subTest(path=path):
-                head = self.change({path: f'changed {path}\n'})
-                values, _ = self.select(self.monorepo(head))
+                base, merge = self.pr({path: 'uname >/dev/null\n'})
+                values, _ = self.select(self.checkout(), base, merge)
                 self.assertEqual(values['selected'], 'true')
-                self.assertIn(f'{path} differ', values['reason'])
-                shutil.rmtree(self.temp / 'mono')
-                git(self.origin, 'reset', '-q', '--hard', self.pin)
+                self.assertEqual(values['reason'], f'this change touches {path}')
+                git(self.origin, 'branch', '-q', '-D', 'pr')
 
     def test_deleting_a_watched_script_selects(self):
-        (self.origin / 'scripts/with-test-policy.sh').unlink()
-        head = commit(self.origin, {}, 'test: delete')
-        values, _ = self.select(self.monorepo(head))
+        main = git(self.origin, 'rev-parse', 'main')
+        git(self.origin, 'checkout', '-q', '-b', 'pr')
+        git(self.origin, 'rm', '-q', 'scripts/with-test-policy.sh')
+        git(self.origin, 'commit', '-qm', 'test: delete')
+        git(self.origin, 'checkout', '-q', 'main')
+        git(self.origin, 'merge', '-q', '--no-ff', '--no-edit', 'pr')
+        merge = git(self.origin, 'rev-parse', 'HEAD')
+        values, _ = self.select(self.checkout(), main, merge)
         self.assertEqual(values['selected'], 'true')
 
-    def test_unfetchable_pin_selects_with_a_notice(self):
-        head = self.change({'README.md': 'changed\n'})
-        values, stdout = self.select(self.monorepo(head, origin_url=str(self.temp / 'missing')))
-        self.assertEqual(values['selected'], 'true')
-        self.assertIn('::notice::', stdout)
-        self.assertIn('could not fetch the pinned intentd commit', values['reason'])
+    def test_stale_branch_that_never_touched_the_scripts_skips(self):
+        # main moved on with a script change after the branch was cut; the
+        # branch head's scripts differ from main's, but its own change does not.
+        old = self.base
+        commit(self.origin, {'scripts/changed-tests.sh': 'exec env LC_ALL=C plan\n'}, 'test: main moves')
+        base, merge = self.pr({'README.md': 'stale\n'}, base=old)
+        mono = self.checkout()
+        child = mono / 'packages/intentd'
+        self.assertNotEqual(git(child, 'show', 'HEAD:scripts/changed-tests.sh'),
+                            git(self.origin, 'show', f'{base}:scripts/changed-tests.sh'))
+        values, _ = self.select(mono, base, merge)
+        self.assertEqual(values['selected'], 'false')
 
-    def test_missing_gitlink_selects_with_a_notice(self):
-        values, stdout = self.select(self.monorepo(self.pin, gitlink=False))
+    def test_merge_group_diff_selects(self):
+        # The queue's base and head: the head carries the queued PRs.
+        base = git(self.origin, 'rev-parse', 'main')
+        head = commit(self.origin, {'scripts/changed-tests.sh': 'queued\n'}, 'test: queue head')
+        values, _ = self.select(self.checkout('main'), base, head)
+        self.assertEqual(values['selected'], 'true')
+
+    def test_missing_or_malformed_shas_select_with_a_notice(self):
+        base, merge = self.pr({'README.md': 'changed\n'})
+        mono = self.checkout()
+        for args in (('', merge), (base, ''), ('main', merge), (base, merge[:12])):
+            with self.subTest(args=args):
+                values, stdout = self.select(mono, *args)
+                self.assertEqual(values['selected'], 'true')
+                self.assertIn('::notice::', stdout)
+
+    def test_unfetchable_commits_select_with_a_notice(self):
+        base, merge = self.pr({'README.md': 'changed\n'})
+        values, stdout = self.select(self.checkout(origin_url=str(self.temp / 'missing')), base, merge)
         self.assertEqual(values['selected'], 'true')
         self.assertIn('::notice::', stdout)
+        self.assertIn('could not fetch intentd commit', values['reason'])
 
     def test_self_test_always_selects(self):
-        values, _ = self.select(self.monorepo(self.pin), self_test='true')
-        self.assertEqual(values['selected'], 'true')
         values, _ = self.select(self.temp, self_test='true')
         self.assertEqual(values['selected'], 'true')
 
     def test_cloudlands_fe_never_selects(self):
-        head = self.change({'scripts/changed-tests.sh': 'changed\n'})
-        mono = self.monorepo(head)
+        base, merge = self.pr({'scripts/changed-tests.sh': 'changed\n'})
         for self_test in ('true', 'false'):
-            values, _ = self.select(mono, component='cloudlands-fe', self_test=self_test)
+            values, _ = self.select(self.temp, base, merge, component='cloudlands-fe', self_test=self_test)
             self.assertEqual(values['selected'], 'false')
 
     def test_selection_runs_under_bash3(self):
@@ -271,8 +283,11 @@ class Selection(unittest.TestCase):
             if os.environ.get('REQUIRE_BASH3'):
                 self.fail('no Bash 3 interpreter found and REQUIRE_BASH3 is set')
             self.skipTest("no Bash 3 interpreter; run 'make bash3'")
-        head = self.change({'scripts/changed-tests.sh': 'changed\n'})
-        values, _ = self.select(self.monorepo(head), bash=bash3)
+        base, merge = self.pr({'scripts/changed-tests.sh': 'changed\n'})
+        mono = self.checkout()
+        values, _ = self.select(mono, base, merge, bash=bash3)
+        self.assertEqual(values['selected'], 'true')
+        values, _ = self.select(mono, base, '', bash=bash3)
         self.assertEqual(values['selected'], 'true')
 
 

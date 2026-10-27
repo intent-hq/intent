@@ -52,8 +52,9 @@
 # Changed-tests shell suites (intentd callers only): the monorepo drives
 # intentd's scripts/changed-tests.sh and scripts/with-test-policy.sh through
 # scripts/rust-changed-tests.test.sh, whose stub PATH is a deliberate command
-# allowlist. When an intentd PR changes either script (or a file the suites
-# copy), scripts/consumer-checks-shell-suites.sh selects that suite and
+# allowlist. When an intentd PR's own diff (base to the tested merge commit,
+# from the caller's github context) changes either script or a file the suites
+# copy, scripts/consumer-checks-shell-suites.sh selects that suite and
 # intentd's own scripts/test-changed-tests.sh, each run with REQUIRE_BASH3=1
 # against a pinned Bash 3.2, so the PR that breaks them is red here. Before
 # this, intentd#2720 merged green and the monorepo merge queue ejected the pin
@@ -216,6 +217,10 @@ jobs:
         if: inputs.component == 'intentd' && steps.monorepo.outcome == 'success'
         env:
           SELF_TEST: ${{ inputs.self-test }}
+          # The caller's context: its PR or merge-queue base, and the commit
+          # GitHub tests (the PR's test-merge commit or the merge group head).
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          TEST_SHA: ${{ github.sha }}
         run: bash scripts/consumer-checks-shell-suites.sh
 
       - name: Install Bash build prerequisites when absent
