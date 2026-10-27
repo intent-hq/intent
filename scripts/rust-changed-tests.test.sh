@@ -38,8 +38,8 @@ fail() {
   || fail "$intentd_script is missing; initialize the intentd submodule (git submodule update --init packages/intentd)"
 
 ln -s "$script_bash" "$bin_dir/bash"
-# env: changed-tests.sh execs its runner through env to restore the caller's
-# LC_ALL (intentd#2720).
+# env: changed-tests.sh starts every test child (cargo, llvm-cov, the --runner
+# exec) through env to restore the caller's LC_ALL (intentd#2720).
 for command in dirname env mktemp rm sort grep; do
   ln -s "$(command -v "$command")" "$bin_dir/$command"
 done
