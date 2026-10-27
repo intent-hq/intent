@@ -26,6 +26,9 @@ export const MISSING_INTENTD_MESSAGE =
   `${INTENTD_DIR} is not initialized, so the ws.* binding check cannot run. ` +
   `Run \`git submodule update --init ${INTENTD_DIR}\` and retry, or set ${ALLOW_MISSING_ENV}=1 ` +
   `(${ALLOW_MISSING_FLAG}) to skip this check on purpose.`;
+export const MOVED_TOOLS_RS_MESSAGE =
+  `${INTENTD_DIR} is checked out but ${TOOLS_RS_IN_INTENTD} is missing (moved or renamed in intentd?); ` +
+  `update TOOLS_RS_IN_INTENTD in scripts/check-mcp-bindings.mjs. ${ALLOW_MISSING_ENV}=1 does not skip this.`;
 export const SKIPPED_MESSAGE = `skipped: ${TOOLS_RS_PATH} (submodule not initialized; ${ALLOW_MISSING_ENV}=1) - ws.* bindings were NOT checked`;
 
 // `ws.*` names the docs may still mention as history after a rename. Each entry maps the
@@ -406,6 +409,19 @@ export function formatOffPinWarning(ref) {
   });
 }
 
+/** True when the intentd checkout has content (a `.git` entry or `Cargo.toml`), i.e. the submodule is initialized. */
+async function intentdInitialized(root) {
+  for (const marker of ['.git', 'Cargo.toml']) {
+    try {
+      await fs.lstat(path.join(root, INTENTD_DIR, marker));
+      return true;
+    } catch (e) {
+      if (e.code !== 'ENOENT' && e.code !== 'ENOTDIR') throw e;
+    }
+  }
+  return false;
+}
+
 /**
  * The tools.rs text plus the ref it came from. Default: the worktree file (null text when the submodule is not
  * initialized). `pinned`: the blob at the gitlink HEAD records, read through git objects only, so the worktree
@@ -427,6 +443,7 @@ export async function runChecks(root, { write = false, pinned = false, allowMiss
   const { rustText, ref } = await readToolsRs(root, { pinned });
   if (rustText === null) {
     if (pinned) return { errors: [{ file: TOOLS_RS_PATH, line: 1, message: `not found at recorded pin ${short(ref.pin)}` }], skipped: null, wrote: false, bindings: [], ref };
+    if (await intentdInitialized(root)) return { errors: [{ file: TOOLS_RS_PATH, line: 1, message: MOVED_TOOLS_RS_MESSAGE }], skipped: null, wrote: false, bindings: [], ref };
     if (allowMissing) return { errors: [], skipped: SKIPPED_MESSAGE, wrote: false, bindings: [], ref: null };
     return { errors: [{ file: TOOLS_RS_PATH, line: 1, message: MISSING_INTENTD_MESSAGE }], skipped: null, wrote: false, bindings: [], ref: null };
   }

@@ -13,6 +13,7 @@ import {
   INDEX_PATH,
   INTENTD_DIR,
   MISSING_INTENTD_MESSAGE,
+  MOVED_TOOLS_RS_MESSAGE,
   PROTOCOL_DIR,
   RENAMED_BINDINGS,
   SKIPPED_MESSAGE,
@@ -374,6 +375,26 @@ test('allowMissing turns a missing tools.rs into an explicit skip with no errors
   assert.deepEqual(messages(result), []);
   assert.equal(result.skipped, SKIPPED_MESSAGE);
   assert.match(SKIPPED_MESSAGE, /NOT checked/);
+});
+
+test('an initialized checkout without tools.rs (moved file) fails even with allowMissing', async () => {
+  for (const marker of ['Cargo.toml', '.git']) {
+    const root = await makeRoot({ rust: null });
+    await fs.mkdir(path.join(root, INTENTD_DIR), { recursive: true });
+    await fs.writeFile(path.join(root, INTENTD_DIR, marker), '');
+    for (const allowMissing of [false, true]) {
+      const result = await runChecks(root, { allowMissing });
+      assert.equal(result.skipped, null, `${marker} allowMissing=${allowMissing}`);
+      assert.deepEqual(messages(result), [`${TOOLS_RS_PATH}:1: error: ${MOVED_TOOLS_RS_MESSAGE}`]);
+    }
+  }
+});
+
+test('an empty packages/intentd directory (the usual uninitialized state) counts as missing', async () => {
+  const root = await makeRoot({ rust: null });
+  await fs.mkdir(path.join(root, INTENTD_DIR), { recursive: true });
+  assert.deepEqual(messages(await runChecks(root)), [`${TOOLS_RS_PATH}:1: error: ${MISSING_INTENTD_MESSAGE}`]);
+  assert.equal((await runChecks(root, { allowMissing: true })).skipped, SKIPPED_MESSAGE);
 });
 
 test('allowMissing changes nothing when tools.rs is present', async () => {
