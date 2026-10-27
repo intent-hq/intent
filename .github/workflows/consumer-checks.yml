@@ -223,21 +223,11 @@ jobs:
           TEST_SHA: ${{ github.sha }}
         run: bash scripts/consumer-checks-shell-suites.sh
 
-      - name: Install Bash build prerequisites when absent
+      # The monorepo checkout's shared step; the cache it restores is the
+      # caller repo's, filled on its main by a bash3-cache.yml caller.
+      - name: Set up pinned Bash 3.2
         if: steps.shell-suites.outputs.selected == 'true' && steps.monorepo.outcome == 'success'
-        run: |
-          if ! command -v yacc >/dev/null || ! command -v gcc >/dev/null; then
-            for attempt in 1 2 3; do
-              if sudo -n apt-get -o DPkg::Lock::Timeout=300 update -qq; then break; fi
-              if [ "$attempt" -eq 3 ]; then exit 1; fi
-              sleep $((attempt * 15))
-            done
-            sudo -n apt-get -o DPkg::Lock::Timeout=300 install -y -qq build-essential bison
-          fi
-
-      - name: Install pinned Bash 3.2
-        if: steps.shell-suites.outputs.selected == 'true' && steps.monorepo.outcome == 'success'
-        run: bash scripts/install-ci-bash3.sh "$RUNNER_TEMP/bash3"
+        uses: ./.github/actions/setup-bash3
 
       - name: Run the intentd changed-tests shell suites
         if: steps.shell-suites.outputs.selected == 'true' && steps.monorepo.outcome == 'success'
