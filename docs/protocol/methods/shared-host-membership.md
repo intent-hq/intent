@@ -1081,7 +1081,7 @@ events or RPCs.
 
 Multiplayer is always on in the desktop client. The former saved
 **`labs:multiplayerEnabled`** preference, its command-palette toggles and its
-app-setting path are retired: clients ignore and remove a saved value. The
+app-setting path are retired: clients neither read nor write a saved value. The
 Collaboration tab, host invites/members, workspace sharing/rosters/presence entry
 points, joined-host navigation, collaboration sign-in and the shared-host
 pairing/device controls are shown subject only to actual server capabilities and
