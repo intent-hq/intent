@@ -316,10 +316,18 @@ API gains root support; all other file APIs retain their existing scope.
 >    **claimed** registry tab (`ownerAgentId` set, §5.45): the target is the host client
 >    of the oldest claimed tab — the workspace's agent tabs all live on one client. Offline
 >    ⇒ the same `… for this workspace is not connected` `-32603`.
-> 4. **Default (v9.9).** Otherwise the **first-connected eligible** connection (registration
->    order; UDS + WSS share one registry); if it drops, the next eligible connection takes
->    over. No eligible connection at all ⇒ `-32603` `browser.exec: no client connected` —
->    the same class of failure a closed channel already produces.
+> 4. **Default (v9.9).** Otherwise the **first-connected eligible** client (registration
+>    order; UDS + WSS share one registry), via that client's **newest** eligible live
+>    connection — the same per-client rule as the pin, so a stale older socket of the same
+>    app is skipped (intent-hq/intent#7902); if the client's last eligible connection drops,
+>    the next eligible client takes over. No eligible connection at all ⇒ `-32603`
+>    `browser.exec: no client connected` — the same class of failure a closed channel
+>    already produces.
+>
+> A routed request the chosen connection does not answer in time is `-32603` `browser.exec:
+> reverse request timed out: browser.exec: browser client "<name>" (<clientId>) on connection
+> <n> over <uds|wss>, connected <ts> did not answer within <s>s`. The text after the
+> `reverse request timed out: browser.exec` prefix is diagnostic only; do not parse it.
 >
 > `workspace.getBrowserClient` (§5.1) runs the same resolution without dispatching
 > (`resolved: null` for the two offline outcomes). The virtual Chief workspace cannot be
