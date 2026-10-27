@@ -20,10 +20,9 @@ WORKFLOW = ROOT / '.github/workflows/consumer-checks.yml'
 SELECT = ROOT / 'scripts/consumer-checks-shell-suites.sh'
 
 SELECT_STEP = 'Select the intentd changed-tests shell suites'
-PREREQ_STEP = 'Install Bash build prerequisites when absent'
-BASH3_STEP = 'Install pinned Bash 3.2'
+BASH3_STEP = 'Set up pinned Bash 3.2'
 SUITES_STEP = 'Run the intentd changed-tests shell suites'
-SHELL_SUITE_STEPS = (SELECT_STEP, PREREQ_STEP, BASH3_STEP, SUITES_STEP)
+SHELL_SUITE_STEPS = (SELECT_STEP, BASH3_STEP, SUITES_STEP)
 SELECT_IF = "inputs.component == 'intentd' && steps.monorepo.outcome == 'success'"
 SELECTED_IF = "steps.shell-suites.outputs.selected == 'true' && steps.monorepo.outcome == 'success'"
 
@@ -70,7 +69,7 @@ class WorkflowShape(unittest.TestCase):
             self.assertIn(name, self.names)
         positions = [self.names.index(name) for name in SHELL_SUITE_STEPS]
         self.assertEqual(positions, sorted(positions))
-        self.assertEqual(positions, list(range(positions[0], positions[0] + 4)))
+        self.assertEqual(positions, list(range(positions[0], positions[0] + len(SHELL_SUITE_STEPS))))
         self.assertLess(self.names.index('Run the consumer checks (upstream context)'), positions[0])
 
     def test_selection_is_for_intentd_callers_on_every_event(self):
@@ -95,12 +94,14 @@ class WorkflowShape(unittest.TestCase):
                 if name != SELECT_STEP:
                     self.assertEqual(field(block, 'if'), SELECTED_IF)
 
-    def test_bash3_is_built_after_its_prerequisites(self):
-        prereq = '\n'.join(run_lines(self.blocks[PREREQ_STEP]))
-        self.assertIn('install -y -qq build-essential bison', prereq)
-        self.assertIn('command -v yacc', prereq)
-        self.assertEqual(run_lines(self.blocks[BASH3_STEP]),
-                         ['bash scripts/install-ci-bash3.sh "$RUNNER_TEMP/bash3"'])
+    def test_bash3_comes_from_the_shared_cached_step(self):
+        # One cached setup for every Bash 3.2 job (scripts/test_ci_bash3.py
+        # checks the action); a local copy here would rebuild it every run.
+        block = self.blocks[BASH3_STEP]
+        self.assertEqual(field(block, 'uses'), './.github/actions/setup-bash3')
+        self.assertEqual(run_lines(block), [])
+        self.assertNotIn('install-ci-bash3', self.text)
+        self.assertNotIn('build-essential bison', self.text)
 
     def test_suites_require_a_real_bash3(self):
         self.assertEqual(run_lines(self.blocks[SUITES_STEP]), [

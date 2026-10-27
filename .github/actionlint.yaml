@@ -15,7 +15,10 @@ self-hosted-runner:
 paths:
   # GitHub's job.workflow_sha / job.workflow_repository context (a reusable
   # workflow's own commit) is newer than actionlint 1.7.12's schema. Scoped to
-  # this file and these two properties; drop it once the actionlint pin knows them.
+  # these files and these two properties; drop it once the actionlint pin knows them.
   .github/workflows/consumer-checks.yml:
+    ignore:
+      - 'property "workflow_(sha|repository)" is not defined in object type'
+  .github/workflows/bash3-cache.yml:
     ignore:
       - 'property "workflow_(sha|repository)" is not defined in object type'

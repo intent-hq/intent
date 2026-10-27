@@ -441,18 +441,9 @@ jobs:
         with:
           python-version: '3.11'
       - run: git submodule update --init --depth=1 packages/intentd
-      - name: Install Bash build prerequisites when absent
-        run: |
-          if ! command -v yacc >/dev/null || ! command -v gcc >/dev/null; then
-            for attempt in 1 2 3; do
-              if sudo -n apt-get -o DPkg::Lock::Timeout=300 update -qq; then break; fi
-              if [ "$attempt" -eq 3 ]; then exit 1; fi
-              sleep $((attempt * 15))
-            done
-            sudo -n apt-get -o DPkg::Lock::Timeout=300 install -y -qq build-essential bison
-          fi
-      - name: Install pinned Bash 3.2
-        run: bash scripts/install-ci-bash3.sh "$RUNNER_TEMP/bash3"
+      # Restores the cached build (filled on main by bash3-cache.yml) or builds it.
+      - name: Set up pinned Bash 3.2
+        uses: ./.github/actions/setup-bash3
       - run: |
           "$BASH3_BIN" --version
           REQUIRE_BASH3=1 bash scripts/ci-gate.test.sh

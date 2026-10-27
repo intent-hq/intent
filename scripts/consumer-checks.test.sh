@@ -407,8 +407,8 @@ downstream_gates=$(awk -v queue_gate="$queue_gate_line" -v gate="$gate_line" -v 
 ' "$workflow")
 grep -q '^ungated ' <<<"$downstream_gates" &&
   fail "every step after the guard must carry \"$gate_line\":"$'\n'"$downstream_gates"
-[ "$(grep -c '^gated ' <<<"$downstream_gates")" -eq 13 ] ||
-  fail "expected 13 gated steps after the guard (lightweight, shell-suite and connected checks):"$'\n'"$downstream_gates"
+[ "$(grep -c '^gated ' <<<"$downstream_gates")" -eq 12 ] ||
+  fail "expected 12 gated steps after the guard (lightweight, shell-suite and connected checks):"$'\n'"$downstream_gates"
 
 step_name='Run the consumer checks (upstream context)'
 step_block=$(workflow_step "$step_name")

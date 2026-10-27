@@ -1,0 +1,48 @@
+# Fill the pinned Bash 3.2 cache on the default branch.
+#
+# .github/actions/setup-bash3 restores Bash 3.2 from the Actions cache, but a
+# cache saved by a merge-queue run is scoped to that run's temporary
+# gh-readonly-queue ref, so the next queue run cannot read it. Every run can
+# read the default branch's caches, so this workflow saves the entry on main:
+# on a change to the action or the installer (a new key), daily so the entry
+# is never evicted as idle (7 days without a read), and on demand. On a hit
+# it only restores and checks the binary (seconds).
+#
+# Caches are repository-scoped, so the component repos whose PRs run
+# consumer-checks.yml's Bash 3.2 suites call this workflow from their own
+# main/schedule. The job checks out the monorepo at this workflow file's own
+# commit (job.workflow_*, as consumer-checks.yml does), so the action, the
+# installer and the key match the consumer-checks run that reads the entry.
+# The runner is the same Ubuntu 24.04 x64 image family as every job that
+# reads it (hosted, Warp and the self-hosted ubuntu:24.04 pools share a key).
+name: Bash 3.2 cache
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/actions/setup-bash3/**
+      - .github/workflows/bash3-cache.yml
+      - scripts/install-ci-bash3.sh
+  schedule:
+    - cron: '17 5 * * *'
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  fill:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ job.workflow_repository || github.repository }}
+          ref: ${{ job.workflow_sha || github.sha }}
+          submodules: false
+          persist-credentials: false
+      - name: Set up pinned Bash 3.2
+        uses: ./.github/actions/setup-bash3
+      - run: '"$BASH3_BIN" --version'
