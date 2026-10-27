@@ -1612,9 +1612,13 @@ PR is fresher). The **lifecycle** of a duplicate follows its source:
   (including a stale `Closed`), while `Closed` — the snapshotless completed-monitor fallback
   among others — never downgrades a `Merged` verdict, and reopened-after-close is left to the
   sweep re-fetch. `isDraft` moves with `status` so an upgraded entry never reads
-  merged/closed while still claiming draft; a monitor entry's `updatedAt` is the monitor
-  row's, not the PR's, and it carries no `mergeableState`, so it never takes the equal-rank
-  tie-break.
+  merged/closed while still claiming draft; a monitor entry carries no `mergeableState`, so
+  it never takes the equal-rank tie-break. A monitor entry's `updatedAt` is the PR's own
+  forge `updatedAt` as of the monitor's last successful poll (persisted in the snapshot;
+  behavior only, no wire change), so same-state recency ordering compares PR activity on
+  every source; a snapshot persisted before the daemon recorded it, or a snapshotless
+  monitor, falls back to the monitor row's `updatedAt`. `createdAt` is always the monitor
+  row's.
 
 Entries can therefore be
 **cross-repo** (a submodule root's or a monitored PR's repository rather than the workspace
