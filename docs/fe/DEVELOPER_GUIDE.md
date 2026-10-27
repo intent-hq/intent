@@ -78,6 +78,49 @@ gets a startup warning and a `null` `userSpecialistsDir` instead. The first tunn
 hydration of a fresh, pre-warmed app takes roughly one to three minutes depending on host
 load. Follow the root health wait and keep waiting if the splash remains.
 
+### Open a Chat or Note in the App Sandbox
+
+To check a change inside a real agent chat or note, open the workspace route with a
+deep-link parameter instead of clicking through the UI:
+
+```text
+http://daemon.localhost:<DEV_PORT>/workspace/<workspaceId>?agent=<agentId>
+http://daemon.localhost:<DEV_PORT>/workspace/<workspaceId>?note=<noteId>
+```
+
+Once the workspace has loaded, the page opens the note tab and/or the agent's chat tab
+(both parameters may be combined; the chat ends up focused), then removes the parameters
+from the address bar. Cross-workspace `intent://` note links use the same `?note=` URL.
+Do not use `/agent/<agentId>`: it is a standalone legacy view that shows an empty
+placeholder on a cold load, not the workspace chat panel.
+
+With `make dev-sandbox-app` running against the installed daemon and the root health
+wait finished, one `workspace_api` call opens and captures a chat in your own workspace
+(`ws.note.list()` gives note IDs; any workspace and agent the daemon knows also work):
+
+```javascript
+const { id: workspaceId } = await ws.workspace.info();
+const [agent] = await ws.agent.list();
+const url = `http://daemon.localhost:<DEV_PORT>/workspace/${workspaceId}?agent=${agent.id}`;
+const tabs = await ws.browser.listTabs();
+const tabId =
+  tabs.find((t) => t.requestedUrl === url)?.tabId ??
+  (await ws.browser.exec([{ action: "openTab", url }])).result.tabId;
+return ws.browser.exec([
+  { action: "evaluate", tabId,
+    expression: "!!document.querySelector('[data-testid=chat-transcript-inner]')" },
+  { action: "screenshot", tabId },
+]);
+```
+
+While the first hydration runs, `evaluate` returns `false` (or the tab is still
+mounting); retry from a background hook rather than reopening the tab. For a note, check
+`[data-testid=note-view-settings-trigger]` instead. Save the screenshot with
+`ws.note.saveAsset` and record it in the evidence table from the root
+[`Prove`](../../AGENTS.md#prove) step. The browser tool cannot click, so to exercise a link
+inside the chat, call `element.click()` on that anchor through `evaluate`; this runs the
+app's real click handler, unlike calling the link handler directly.
+
 ### Remote Sandbox Internals
 
 `scripts/dev-ports.sh` hashes the worktree's canonical path into one of 1,000 four-port
