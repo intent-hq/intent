@@ -157,16 +157,17 @@ ws.crossWorkspace.readNote(targetWorkspaceId, noteId) → note
 ### ws.desktop
 
 ```text
-ws.desktop.click({ displayId?, layoutId, x, y, button?, clickCount? }) → { ok: true }
-ws.desktop.drag({ displayId?, layoutId, from: { x, y }, to: { x, y } }) → { ok: true }
+ws.desktop.click({ displayId?, layoutId, x, y, button?, clickCount?, windowId? }) → { ok: true }
+ws.desktop.drag({ displayId?, layoutId, from: { x, y }, to: { x, y }, windowId? }) → { ok: true }
 ws.desktop.endControl() → { ended, withdrawn }
-ws.desktop.keypress({ key, modifiers? }) → { ok: true }
+ws.desktop.focusWindow({ windowId }) → { ok: true }
+ws.desktop.keypress({ key, modifiers?, windowId? }) → { ok: true }
 ws.desktop.listDisplay() → { layoutId, displays }
-ws.desktop.move({ displayId?, layoutId, x, y }) → { ok: true }
-ws.desktop.screenshot({ displayId?, layoutId? }?) → { capturedAt, layoutId, displays }
-ws.desktop.scroll({ displayId?, layoutId, x, y, deltaX, deltaY }) → { ok: true }
+ws.desktop.move({ displayId?, layoutId, x, y, windowId? }) → { ok: true }
+ws.desktop.screenshot({ displayId?, layoutId? }?) → { capturedAt, layoutId, displays, frontmost?, windows }
+ws.desktop.scroll({ displayId?, layoutId, x, y, deltaX, deltaY, windowId? }) → { ok: true }
 ws.desktop.startControl() → StartResult
-ws.desktop.type({ text }) → { ok: true }
+ws.desktop.type({ text, windowId? }) → { ok: true }
 ```
 
 ### ws.discussion
