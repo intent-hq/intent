@@ -10,7 +10,7 @@
     "workspace.chief": "The virtual Chief workspace.",
     "workspace.pin": "Workspace.browserClientId, or null when unpinned.",
     "workspace.desktopSession": "clientId of the workspace's active desktop-control session, or null.",
-    "workspace.tabs": "Open registry tabs, oldest first: { tabId, host, owner } where owner is the claiming agent id or null for a user tab.",
+    "workspace.tabs": "Open registry tabs, oldest first and in ascending tabId order (the registry breaks creation-time ties by tabId): { tabId, host, owner } where owner is the claiming agent id or null for a user tab.",
     "connections": "{ id, client, hello, browserExec } in registration order; client is null for a connection that never sent client.hello.",
     "helloOrder": "Optional order in which connections send client.hello (default: registration order). Routing must not depend on it.",
     "drops": "Connection ids that disconnect before the request.",

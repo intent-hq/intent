@@ -77,6 +77,8 @@ test('fixture shape', () => {
     assert.deepEqual(Object.keys(ws).sort(), ['chief', 'desktopSession', 'pin', 'tabs'], c.id);
     if (ws.chief) assert.equal(ws.pin, null, `${c.id}: the Chief workspace cannot be pinned`);
     for (const t of ws.tabs) assert.deepEqual(Object.keys(t).sort(), ['host', 'owner', 'tabId'], c.id);
+    const tabIds = ws.tabs.map(t => t.tabId);
+    assert.deepEqual(tabIds, [...tabIds].sort(), `${c.id}: tabs are listed oldest first in ascending tabId order`);
     const conns = c.connections.map(x => x.id);
     assert.equal(new Set(conns).size, conns.length, `${c.id}: connection ids are unique`);
     for (const x of c.connections) {
