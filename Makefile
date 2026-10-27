@@ -285,7 +285,7 @@ event-catalog-check: ## Check the protocol event-type sidecar against the intent
 # PAIRS="intentd:<sha> cloudlands-fe:<sha>" (space-separated component:sha
 # tokens, forwarded as positional pairs; the tag must carry every pair). The
 # script exits 3 for "not shipped yet", 5 when additionally a release run
-# needs a human re-run (an intentd Release-plz job failed, or a
+# needs a human re-run (an intentd Release-plz run failed, or a
 # cloudlands-fe Release Alpha job is queued past SHIPPED_IN_STALL_MINUTES,
 # default 30; 0 disables that probe), 6 when release-plz confirmed the intentd
 # commits need no release (they ride the next one), and 4 for a transient
