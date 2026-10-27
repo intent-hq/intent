@@ -131,6 +131,7 @@ ws.app.workspaces.transfer(id, { destination? }?) → ProposalCard
 ### ws.browser
 
 ```text
+ws.browser.clients() → { clients, unpinned, workspace }
 ws.browser.docs(topic) → string
 ws.browser.exec(actions, tabId?) → result | results[]
 ws.browser.listTabs(scope?) → [tabs]
