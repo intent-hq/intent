@@ -326,7 +326,9 @@ API gains root support; all other file APIs retain their existing scope.
 >
 > A routed request the chosen connection does not answer in time is `-32603` `browser.exec:
 > reverse request timed out: browser.exec: browser client "<name>" (<clientId>) on connection
-> <n> over <uds|wss>, connected <ts> did not answer within <s>s`. The text after the
+> <n> over <uds|wss>, connected <ts> did not accept or answer the request within <s>s` (the
+> name is the client's hello `name`, escaped). Only a daemon-side deadline gets this suffix;
+> an error the client itself returns passes through unchanged. The text after the
 > `reverse request timed out: browser.exec` prefix is diagnostic only; do not parse it.
 >
 > `workspace.getBrowserClient` (§5.1) runs the same resolution without dispatching
