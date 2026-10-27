@@ -25,6 +25,17 @@ so older clients never see the new status in a list. Revive via `workspace.unarc
 The documented surface is now **471 / 413 / 58** (dispatchable / router / fast path).
 Support is detected by `workspace.retire` answering; older daemons return `-32601`.
 
+Also within 15.2 (behavior and settings only; no method-catalog change, so no version
+bump): **automatic archive and purge**. The new `workspace.autoArchiveIdleAfterDays`
+setting (absent = 7, `0` = off) archives workspaces idle that many days
+([Automatic archive](./methods/workspace.md#automatic-archive)).
+`workspace.purgeArchivedAfterDays` replaces `workspace.autoRetireArchivedAfterDays`
+(migrated on boot), and the automatic purge skips folders holding uncommitted changes or
+unpushed secondary-root commits. A retire also sets the purge `statusMessage` (carried in
+its `workspace:updated` delta, cleared on revive when unchanged), and a revive leaves a
+one-time folder-purged notice pending for every top-level agent. Clients may present
+`Retired` workspaces as archived.
+
 Also within 15.2 (additive optional row field, one new event type and a widened derived
 flag; presence-detected; no method-catalog change, so no version bump): **command-script
 and script-monitor workspace signals** (§5.1). `Workspace.scriptsRunning` is `true` while
