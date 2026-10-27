@@ -355,11 +355,11 @@ guardrails) lives in [docs/RELEASING.md](./docs/RELEASING.md). The agent-facing 
   first [intent-hq/cloudlands-releases](https://github.com/intent-hq/cloudlands-releases)
   tag carrying every listed commit (for intentd, via the `intentdVersion` pin in that
   tag's `release-manifest.json`); exits 3 while any is uncarried; exits 4 on a transient
-  GitHub failure (rate limit, 5xx, network) the next poll simply retries; and exits 5
-  when the active cloudlands-fe Release Alpha run has a job queued longer than 30 min
-  (`SHIPPED_IN_STALL_MINUTES` overrides; `0` disables the probe) — a stalled runner pool
-  needs a human to cancel and re-run the workflow run named on stderr (run 34716428577
-  sat queued ~5.5 h, delaying the release by as much). Never block a turn polling —
+  GitHub failure (rate limit, 5xx, network) the next poll retries; exits 5 when a human
+  must re-run the run named on stderr — a failed intentd Release-plz run (intentd#2726
+  waited ~6 h on run 40430078531) or a Release Alpha job queued over 30 min
+  (`SHIPPED_IN_STALL_MINUTES`); exits 6 when release-plz confirmed the intentd commit
+  needs no release — close with a status saying it rides the next one. Never block a turn polling —
   schedule this hook after replacing the placeholders (drop the pair for a component
   you did not change):
 
@@ -372,7 +372,8 @@ guardrails) lives in [docs/RELEASING.md](./docs/RELEASING.md). The agent-facing 
     command: "scripts/shipped-in.sh", args: ["intentd", "<INTENTD_SHA>", "cloudlands-fe", "<FE_SHA>"], timeoutMs: 120_000,
   });
   if (run.exitCode === 0) return { dispatch: true, message: "Shipped in cloudlands-fe " + run.stdout.trim() };
-  if (run.exitCode === 5) return { dispatch: true, message: "Release pipeline stalled — ask someone with runner access to cancel/re-run: " + run.stderr.trim() };
+  if (run.exitCode === 5) return { dispatch: true, message: "Release pipeline stuck — ask someone with Actions access to re-run the run named here: " + run.stderr.trim() };
+  if (run.exitCode === 6) return { dispatch: true, message: "No intentd release coming — the change rides the next intentd release: " + run.stderr.trim() };
   if (run.exitCode === 3 || run.exitCode === 4) return { dispatch: false };
   throw new Error("shipped-in failed (exit " + run.exitCode + "): " + run.stderr.trim());`,
   });
