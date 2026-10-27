@@ -316,11 +316,12 @@ API gains root support; all other file APIs retain their existing scope.
 >    **claimed** registry tab (`ownerAgentId` set, §5.45): the target is the host client
 >    of the oldest claimed tab — the workspace's agent tabs all live on one client. Offline
 >    ⇒ the same `… for this workspace is not connected` `-32603`.
-> 4. **Default (v9.9).** Otherwise the **first-connected eligible** client (registration
->    order; UDS + WSS share one registry), via that client's **newest** eligible live
->    connection — the same per-client rule as the pin, so a stale older socket of the same
->    app is skipped (intent-hq/intent#7902); if the client's last eligible connection drops,
->    the next eligible client takes over. No eligible connection at all ⇒ `-32603`
+> 4. **Default (v9.9).** Otherwise the client of the **oldest remaining eligible**
+>    registration (registration order; UDS + WSS share one registry), via that client's
+>    **newest** eligible live connection — the same per-client rule as the pin, so a stale
+>    older socket of the same app is skipped (intent-hq/intent#7902). Selection is re-run on
+>    every request: when that oldest registration drops, the client of the next-oldest
+>    eligible registration is chosen, even if the first client still has a newer connection. No eligible connection at all ⇒ `-32603`
 >    `browser.exec: no client connected` — the same class of failure a closed channel
 >    already produces.
 >
