@@ -25,7 +25,7 @@
 # Exit codes: 0 = printed a carrying tag; 3 = no scanned release carries every
 # pair yet (stdout empty; stderr names the pairs the newest scanned release
 # misses); 5 = same, but the release pipeline needs a human to re-run a
-# workflow run named on stderr: the intentd Release-plz PR job failed at
+# workflow run named on stderr: an intentd Release-plz job failed at
 # intentd main HEAD, or the active Release Alpha run on
 # intent-hq/cloudlands-fe looks stalled (a job queued longer than
 # SHIPPED_IN_STALL_MINUTES, default 30; 0 disables the probe) -- stderr names
@@ -251,15 +251,38 @@ for tag in "${tags[@]}"; do
   fi
 done
 
+# The exit-3 probes below are best-effort: a failure keeps the plain exit 3
+# and names the skipped probe, the reason and gh's text on stderr.
+probe_skipped() {
+  local probe=$1 detail
+  shift
+  detail=$(<"$gh_err")
+  detail=${detail//$'\n'/ }
+  echo "shipped-in: $probe skipped: $*${detail:+: $detail}" >&2
+}
+
+# Python prelude reading `gh api .../jobs --paginate` from stdin into `jobs`:
+# --paginate emits one JSON object per page, back to back.
+jobs_pages_py='
+import json, sys
+text = sys.stdin.read()
+decoder = json.JSONDecoder()
+pos, jobs = 0, []
+while True:
+    while pos < len(text) and text[pos].isspace():
+        pos += 1
+    if pos >= len(text):
+        break
+    page, pos = decoder.raw_decode(text, pos)
+    jobs.extend(page.get("jobs", []))
+'
+
 # Best-effort stall probe for the exit-3 path: intentd-only changes ride the
 # cloudlands-fe Release Alpha run too, so its active run tells "not cut yet"
 # apart from "stalled" (a job still queued past the threshold, e.g. a runner
-# label nobody serves). Any probe failure keeps the plain exit 3.
-probe_skipped() {
-  local detail
-  detail=$(<"$gh_err")
-  detail=${detail//$'\n'/ }
-  echo "shipped-in: Release Alpha stall probe skipped: $*${detail:+: $detail}" >&2
+# label nobody serves).
+stall_skipped() {
+  probe_skipped "Release Alpha stall probe" "$@"
 }
 
 release_alpha_stalled() {
@@ -267,7 +290,7 @@ release_alpha_stalled() {
   ((stall_minutes > 0)) || return 0
   run=$(gh run list --repo "$fe_repo" --workflow "Release Alpha" --limit 5 \
     --json databaseId,status,url,displayTitle,createdAt 2>"$gh_err") ||
-    { probe_skipped "gh run list on $fe_repo failed"; return 0; }
+    { stall_skipped "gh run list on $fe_repo failed"; return 0; }
   # Release Alpha runs share the `cloudlands-release` concurrency group without
   # cancel-in-progress, so a newer run sits fully queued behind the one holding
   # the group for as long as that one takes: only the oldest active run can be
@@ -279,26 +302,16 @@ runs = [run for run in json.load(sys.stdin) if run["status"] != "completed"]
 if runs:
     run = min(runs, key=lambda run: run["createdAt"])
     print(run["databaseId"], run["url"])
-' 2>"$gh_err") || { probe_skipped "could not read the active Release Alpha runs on $fe_repo"; return 0; }
+' 2>"$gh_err") || { stall_skipped "could not read the active Release Alpha runs on $fe_repo"; return 0; }
   [[ -n "$run" ]] || return 0
   read -r run_id run_url <<<"$run"
   # The REST jobs payload carries created_at; `gh run view --json jobs` does
-  # not. --paginate emits one JSON object per page, back to back.
+  # not.
   jobs=$(gh api "repos/$fe_repo/actions/runs/$run_id/jobs" --paginate 2>"$gh_err") ||
-    { probe_skipped "gh api jobs for Release Alpha run $run_id on $fe_repo failed"; return 0; }
-  stalled=$(printf '%s\n' "$jobs" | python3 -c '
-import datetime, json, sys
+    { stall_skipped "gh api jobs for Release Alpha run $run_id on $fe_repo failed"; return 0; }
+  stalled=$(printf '%s\n' "$jobs" | python3 -c "$jobs_pages_py"'
+import datetime
 threshold = int(sys.argv[1]) * 60
-text = sys.stdin.read()
-decoder = json.JSONDecoder()
-pos, jobs = 0, []
-while True:
-    while pos < len(text) and text[pos].isspace():
-        pos += 1
-    if pos >= len(text):
-        break
-    page, pos = decoder.raw_decode(text, pos)
-    jobs.extend(page.get("jobs", []))
 now = datetime.datetime.now(datetime.timezone.utc)
 worst = None
 for job in jobs:
@@ -311,7 +324,7 @@ for job in jobs:
 if worst:
     print("%d\t%s\t%s" % (worst[0] // 60, worst[1], worst[2]))
 ' "$stall_minutes" 2>"$gh_err") ||
-    { probe_skipped "could not read the jobs of Release Alpha run $run_id on $fe_repo"; return 0; }
+    { stall_skipped "could not read the jobs of Release Alpha run $run_id on $fe_repo"; return 0; }
   [[ -n "$stalled" ]] || return 0
   IFS=$'\t' read -r age name since <<<"$stalled"
   echo "shipped-in: Release Alpha run $run_url stalled: job \"$name\" queued for $age min (since $since)" >&2
@@ -320,28 +333,29 @@ if worst:
 
 # Best-effort release-plz probe for the exit-3 path when an intentd pair is
 # uncarried. It reads the signals the fe auto-cut guard trusts
-# (cloudlands-fe scripts/intentd-release-readiness.mjs) at intentd main HEAD:
+# (cloudlands-fe scripts/intentd-release-readiness.mjs) at intentd main HEAD,
+# for the uncarried intentd commits that are on main but newer than the
+# released version there (crates/intentd/Cargo.toml) -- the ones only the next
+# intentd release can carry; a commit already tagged just waits on the fe pin:
 #   - an open release-plz-* Release PR: a release is coming -> plain exit 3;
-#   - the latest attempt of the "Release-plz PR" job failed or timed out: no
-#     Release PR opens until someone re-runs it -> exit 5. intentd#2726 waited
-#     ~6 h behind such a failure (run 40430078531, a crates.io network error);
-#   - the "Release-plz no release needed: vX.Y.Z@<sha>" job succeeded: the
-#     commit is on main but changed no released package, so it rides the next
-#     intentd release that does -> exit 6, once every uncarried pair is such a
-#     commit (an fe pair still pending keeps exit 3, with a note).
+#   - the newest Release-plz push run for HEAD completed with its
+#     "Release-plz release" or "Release-plz PR" job failed, timed out or
+#     cancelled: no Release PR (or tag) comes until someone re-runs it -> exit
+#     5. intentd#2726 waited ~6 h behind such a failure (run 40430078531, a
+#     crates.io network error);
+#   - that run's "Release-plz no release needed: vX.Y.Z@<sha>" job succeeded
+#     for the released version: the commits changed no released package and
+#     ride the next intentd release that does -> exit 6, once every uncarried
+#     pair is such a commit (an fe pair still pending keeps exit 3, plus a note).
 # Commit types do not decide this: release-plz releases on package file
-# changes, and test- or refactor-only ranges have shipped (v0.11.22, v0.11.59).
-# Any probe failure keeps the plain exit 3 and notes why on stderr.
+# changes, and test-only ranges have shipped (v0.11.22, v0.11.59).
 release_plz_skipped() {
-  local detail
-  detail=$(<"$gh_err")
-  detail=${detail//$'\n'/ }
-  echo "shipped-in: intentd release-plz probe skipped: $*${detail:+: $detail}" >&2
+  probe_skipped "intentd release-plz probe" "$@"
 }
 
 release_plz_verdict() {
-  local intentd_idx=() i head prs run run_id run_url verdict kind detail status
-  local pending_fe=0 noop=""
+  local intentd_idx=() i head prs run run_id run_url run_state verdict kind detail job
+  local manifest version status pending="" pending_count=0 pending_fe=0
   for i in ${newest_uncarried_idx[@]+"${newest_uncarried_idx[@]}"}; do
     if [[ "${components[i]}" == intentd ]]; then
       intentd_idx+=("$i")
@@ -354,11 +368,11 @@ release_plz_verdict() {
     { release_plz_skipped "gh api main ref on $intentd_repo failed"; return 0; }
   [[ "$head" =~ ^[0-9a-f]{40}$ ]] ||
     { : >"$gh_err"; release_plz_skipped "unexpected main ref '$head' on $intentd_repo"; return 0; }
-  # `head:` search is a branch-name prefix match; the jq filter re-checks it.
-  prs=$(gh pr list --repo "$intentd_repo" --state open --limit 20 --search "head:release-plz-" \
-    --json number,headRefName --jq '.[] | select(.headRefName | startswith("release-plz-")) | .number' \
+  # Every open PR, like the readiness guard: search results can lag or cap.
+  prs=$(gh api "repos/$intentd_repo/pulls?state=open&per_page=100" --paginate \
+    --jq ".[] | select((.head.ref | startswith(\"release-plz-\")) and .head.repo.full_name == \"$intentd_repo\") | .number" \
     2>"$gh_err") ||
-    { release_plz_skipped "gh pr list on $intentd_repo failed"; return 0; }
+    { release_plz_skipped "gh api open pulls on $intentd_repo failed"; return 0; }
   [[ -z "$prs" ]] || return 0
   run=$(gh api "repos/$intentd_repo/actions/workflows/release-plz.yml/runs?branch=main&event=push&head_sha=$head&per_page=20" \
     2>"$gh_err") ||
@@ -368,57 +382,69 @@ import json, sys
 runs = [run for run in json.load(sys.stdin)["workflow_runs"] if run["head_sha"] == sys.argv[1]]
 if runs:
     run = max(runs, key=lambda run: run["run_number"])
-    print(run["id"], run["html_url"])
+    print(run["id"], run["html_url"], run["status"])
 ' "$head" 2>"$gh_err") ||
     { release_plz_skipped "could not read the Release-plz runs on $intentd_repo"; return 0; }
-  # No run for HEAD yet: release-plz has not assessed it, keep waiting.
   [[ -n "$run" ]] || return 0
-  read -r run_id run_url <<<"$run"
-  # The jobs endpoint defaults to the latest attempt, so a re-run that is
-  # still in flight reads as pending, not as the failure it replaces.
+  read -r run_id run_url run_state <<<"$run"
+  # A run (or re-run attempt) still in flight has no verdict yet.
+  [[ "$run_state" == completed ]] || return 0
   verdict=$(gh api "repos/$intentd_repo/actions/runs/$run_id/jobs?per_page=100" --paginate 2>"$gh_err") ||
     { release_plz_skipped "gh api jobs for Release-plz run $run_id on $intentd_repo failed"; return 0; }
-  verdict=$(printf '%s\n' "$verdict" | python3 -c '
-import json, re, sys
-text = sys.stdin.read()
-decoder = json.JSONDecoder()
-pos, jobs = 0, []
-while True:
-    while pos < len(text) and text[pos].isspace():
-        pos += 1
-    if pos >= len(text):
-        break
-    page, pos = decoder.raw_decode(text, pos)
-    jobs.extend(page["jobs"])
-noop = re.compile(r"Release-plz no release needed: (v[0-9]+\.[0-9]+\.[0-9]+)@[0-9a-f]{40}")
+  # The jobs endpoint defaults to the run's latest attempt.
+  verdict=$(printf '%s\n' "$verdict" | python3 -c "$jobs_pages_py"'
+import re
 for job in jobs:
-    if job["name"] == "Release-plz PR" and job.get("conclusion") in ("failure", "timed_out"):
-        print("failed", job["conclusion"])
+    if job["name"] in ("Release-plz release", "Release-plz PR") and job.get("conclusion") in (
+            "failure", "timed_out", "cancelled", "startup_failure"):
+        print("failed\t%s\t%s" % (job["conclusion"], job["name"]))
         sys.exit(0)
+noop = re.compile(r"Release-plz no release needed: (v[0-9]+\.[0-9]+\.[0-9]+)@[0-9a-f]{40}")
 for job in jobs:
     match = noop.fullmatch(job["name"])
     if match and job.get("conclusion") == "success":
-        print("noop", match.group(1))
+        print("noop\t%s\t" % match.group(1))
 ' 2>"$gh_err") ||
     { release_plz_skipped "could not read the jobs of Release-plz run $run_id on $intentd_repo"; return 0; }
   [[ -n "$verdict" ]] || return 0
-  read -r kind detail <<<"$verdict"
-  if [[ "$kind" == failed ]]; then
-    echo "shipped-in: the intentd Release-plz PR job concluded $detail on main $head ($run_url); no Release PR opens until someone re-runs it" >&2
-    exit 5
-  fi
-  # Confirmed no-op: each uncarried intentd commit must be on main and absent
-  # from the baseline tag (one the tag carries waits on the fe pin instead).
+  IFS=$'\t' read -r kind detail job <<<"$verdict"
+  manifest=$(gh api "repos/$intentd_repo/contents/crates/intentd/Cargo.toml?ref=$head" \
+    -H "Accept: application/vnd.github.raw+json" 2>"$gh_err") ||
+    { release_plz_skipped "gh api crates/intentd/Cargo.toml on $intentd_repo main $head failed"; return 0; }
+  version=$(printf '%s\n' "$manifest" | python3 -c '
+import re, sys
+section = None
+for line in sys.stdin:
+    header = re.match(r"\s*\[([^]]+)\]\s*$", line)
+    if header:
+        section = header.group(1).strip()
+    elif section == "package":
+        match = re.match(r"\s*version\s*=\s*\"([0-9]+\.[0-9]+\.[0-9]+)\"\s*$", line)
+        if match:
+            print(match.group(1))
+            break
+' 2>"$gh_err") || version=""
+  [[ -n "$version" ]] ||
+    { : >"$gh_err"; release_plz_skipped "could not read the intentd version on $intentd_repo main $head"; return 0; }
   for i in "${intentd_idx[@]}"; do
     status=$(gh api "repos/$intentd_repo/compare/${shas[i]}...$head" --jq .status 2>"$gh_err") ||
       { release_plz_skipped "gh api compare ${shas[i]}...$head on $intentd_repo failed"; return 0; }
-    carries "$status" || return 0
-    status=$(gh api "repos/$intentd_repo/compare/${shas[i]}...$detail" --jq .status 2>"$gh_err") ||
-      { release_plz_skipped "gh api compare ${shas[i]}...$detail on $intentd_repo failed"; return 0; }
-    ! carries "$status" || return 0
-    noop+="${noop:+, }${shas[i]}"
+    carries "$status" || continue
+    status=$(gh api "repos/$intentd_repo/compare/${shas[i]}...v$version" --jq .status 2>"$gh_err") ||
+      { release_plz_skipped "gh api compare ${shas[i]}...v$version on $intentd_repo failed"; return 0; }
+    carries "$status" && continue
+    pending+="${pending:+, }${shas[i]}"
+    pending_count=$((pending_count + 1))
   done
-  echo "shipped-in: $noop: no intentd release needed -- release-plz found no package changes on main $head since $detail ($run_url); it ships with the next intentd release that changes a package" >&2
+  [[ -n "$pending" ]] || return 0
+  if [[ "$kind" == failed ]]; then
+    echo "shipped-in: the intentd $job job concluded $detail on main $head ($run_url); $pending wait on the next intentd release (after v$version), which cannot start until someone re-runs it" >&2
+    exit 5
+  fi
+  # The no-op proof must name the released version at HEAD and cover every
+  # uncarried intentd pair; anything else keeps waiting.
+  [[ "$detail" == "v$version" && $pending_count -eq ${#intentd_idx[@]} ]] || return 0
+  echo "shipped-in: $pending: no intentd release needed -- release-plz found no package changes on main $head since v$version ($run_url); it ships with the next intentd release that changes a package" >&2
   if ((pending_fe)); then
     echo "shipped-in: still waiting on the cloudlands-fe pair(s)" >&2
     return 0

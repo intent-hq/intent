@@ -860,7 +860,7 @@ promotions of deleted prereleases are not preserved by this retention policy.
   `<component> <sha>` pairs (`make shipped-in PAIRS="intentd:<sha> cloudlands-fe:<sha>"`)
   it prints the first tag carrying all of them. It exits 3 while a commit is uncarried,
   4 on a transient GitHub failure, and 5 when a human must re-run the workflow run
-  named on stderr: the intentd Release-plz PR job failed at intentd main HEAD, or the
+  named on stderr: an intentd Release-plz job failed at intentd main HEAD, or the
   active cloudlands-fe Release Alpha run has a job queued longer than 30 min
   (`SHIPPED_IN_STALL_MINUTES` overrides the threshold; `0` disables the probe). It
   exits 6 when every uncarried commit is on intentd main and release-plz's
