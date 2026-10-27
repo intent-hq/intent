@@ -1448,8 +1448,8 @@ prune and the source-repo branch-delete guard for both, and both are sandbox-eli
 to, written by `workspace.setBrowserClient` and cleared by passing `clientId: null`.
 **Omitted** (never `null`) from `Workspace` payloads (`workspace.list` / `workspace.get` / the
 `workspace` subscription snapshot, §6.9) while the workspace is unpinned — the driving client
-is then resolved live (§5.9: the host of the workspace's claimed tabs, else the
-first-connected eligible client). The pin is a persisted row column written by
+is then resolved live (§5.9: the client of an active desktop-control session, else the host
+of the workspace's oldest claimed tab, else the first-connected eligible client). The pin is a persisted row column written by
 `workspace.setBrowserClient`: a general `workspace.update` never touches it, and the
 `workspace:updated { changes }` delta the setter emits carries `browserClientId` as the
 committed string or an explicit `null` for a clear (§6.5). The pin is **daemon-local**: a

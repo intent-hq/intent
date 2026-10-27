@@ -91,10 +91,10 @@ A saved `browserClientId` is assigned even when offline. Otherwise an active
 workspace desktop session fixes its executor; otherwise the existing oldest
 agent-owned browser-tab host is assigned (including hidden tabs and disconnected
 hosts). User-owned tabs do not assign a primary. The REV-2
-first-connected fallback is not an assignment. Browser calls follow the
-[REV-2 driving-client rules](./files-terminal-browser.md), whose rule 3 sends them to an
-active session's client ahead of claimed tabs; this distinction
-controls desktop consent and the existing primary selector, not browser fallback.
+first-connected fallback is not an assignment. The assigned-versus-default distinction
+controls desktop consent and the existing primary selector, not browser fallback. Browser
+calls follow the [REV-2 driving-client rules](./files-terminal-browser.md), whose rule 3
+sends them to an active session's client ahead of claimed tabs.
 
 For an assigned workspace, resolve that identity **before** testing desktop
 capability/principal; offline is `desktop-offline`, incapable is

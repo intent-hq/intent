@@ -1,8 +1,10 @@
 {
   "schema": "browser-routing/v1",
+  "revision": 1,
   "docs": "docs/protocol/methods/files-terminal-browser.md",
-  "about": "Agent-initiated browser.exec target selection (REV-2, §5.9). Each case gives the workspace state and the live connections, then the target the daemon derives from the workspace (expect.target) and the connection that receives the request, or the error. Connections are listed in registration (arrival) order; drops are applied after every connection registered. intentd mirrors this file at crates/intent-transport/tests/fixtures/browser-routing.json and runs every case.",
+  "about": "Agent-initiated browser.exec target selection (REV-2, §5.9). Each case gives the workspace state and the live connections, then the target the daemon derives from the workspace (expect.target) and the connection that receives the request, or the error. Connections are listed in registration (arrival) order; drops are applied after every connection registered. intentd mirrors this file at crates/intent-transport/tests/fixtures/browser-routing.json and runs every case. Principal authority (administrator-only Chief dispatch, member browser hosting) is outside these cases; intent-transport's hand-written registry tests cover it.",
   "fields": {
+    "revision": "Bump on every change to the cases. intentd's copy may lag behind (a warning) but must never be ahead, nor differ at the same revision.",
     "rule": "The REV-2 rule number in files-terminal-browser.md the case pins.",
     "docText": "A sentence fragment of that rule; the docs contract test requires it verbatim (whitespace-normalised).",
     "workspace.chief": "The virtual Chief workspace.",
@@ -281,7 +283,7 @@
     {
       "id": "chief-ignores-desktop-session-and-claimed-tabs",
       "rule": 5,
-      "docText": "The virtual Chief workspace cannot be pinned and skips rules 2–4: it always resolves under rule 5",
+      "docText": "The virtual Chief workspace cannot be pinned and skips rules 2–4: it always resolves under this rule",
       "workspace": {
         "chief": true,
         "pin": null,

@@ -330,11 +330,14 @@ API gains root support; all other file APIs retain their existing scope.
 >    every request: when that oldest registration drops, the client of the next-oldest
 >    eligible registration is chosen, even if the first client still has a newer connection. No eligible connection at all ⇒ `-32603`
 >    `browser.exec: no client connected` — the same class of failure a closed channel
->    already produces.
+>    already produces. The virtual Chief workspace cannot be pinned and skips rules 2–4: it
+>    always resolves under this rule, whatever desktop session or claimed tabs it has.
 >
 > Each rule is pinned by worked cases in
-> [`fixtures/browser-routing/routing.json`](../fixtures/browser-routing/routing.json), which
-> intentd's routing tests run case by case; change a rule here and its cases together.
+> [`fixtures/browser-routing/routing.json`](../fixtures/browser-routing/routing.json); its
+> contract test checks every case against these rules, and intentd runs the same cases from
+> a copy of the file against its router. Change a rule here and its cases together, bumping
+> the fixture's `revision`.
 >
 > A routed request the chosen connection does not answer in time is `-32603` `browser.exec:
 > reverse request timed out: browser.exec: browser client "<name>" (<clientId>) on connection
@@ -344,9 +347,7 @@ API gains root support; all other file APIs retain their existing scope.
 > `reverse request timed out: browser.exec` prefix is diagnostic only; do not parse it.
 >
 > `workspace.getBrowserClient` (§5.1) runs the same resolution without dispatching
-> (`resolved: null` for the two offline outcomes). The virtual Chief workspace cannot be
-> pinned and skips rules 2–4: it always resolves under rule 5, whatever desktop session or
-> claimed tabs it has. Client-triggered `browser.exec` is
+> (`resolved: null` for the two offline outcomes). Client-triggered `browser.exec` is
 > **unchanged**: it still reverse-dispatches on the caller's own connection, whatever
 > the workspace's pin says.
 >
