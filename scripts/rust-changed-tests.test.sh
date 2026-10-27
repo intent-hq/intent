@@ -38,7 +38,9 @@ fail() {
   || fail "$intentd_script is missing; initialize the intentd submodule (git submodule update --init packages/intentd)"
 
 ln -s "$script_bash" "$bin_dir/bash"
-for command in dirname mktemp rm sort grep; do
+# env: changed-tests.sh execs its runner through env to restore the caller's
+# LC_ALL (intentd#2720).
+for command in dirname env mktemp rm sort grep; do
   ln -s "$(command -v "$command")" "$bin_dir/$command"
 done
 # python3 runs the real record-writing runner in the end-to-end cases below;
