@@ -1077,22 +1077,19 @@ removal ends access without waiting for a cached visibility verdict. See
 [§8](../08-permission-flow.md). This does not admit other guest-denied management
 events or RPCs.
 
-#### Multiplayer lab rollout (client policy)
+#### Multiplayer client policy
 
-The existing saved **`labs:multiplayerEnabled`** preference is default-off; missing
-or unhydrated means off. It gates the Collaboration **tab itself**, page content,
-host invites/members, workspace sharing/rosters/presence entry points, joined-host
-navigation, collaboration sign-in, and the new shared-host pairing/device controls.
-Direct settings routes, legacy aliases, commands/search and open dialogs obey the
-same selector. Disabled incoming invites offer explicit enable-Multiplayer recovery
-before the join; they do not silently enable it. The GitLab lab is independent and
-cannot bypass Multiplayer. Compose visibility with actual server capabilities and
-current role. Enabling a local preference grants no daemon authority.
-
-Disabling hides/dismisses experimental surfaces and stale actions without deleting
-saved sessions, revoking membership, rotating links or stopping shared work. Keep
-ordinary single-user controls and the legacy owner Devices/pairing flow available.
-Re-enabling refreshes server authority before showing management actions.
+Multiplayer is always on in the desktop client. The former saved
+**`labs:multiplayerEnabled`** preference, its command-palette toggles and its
+app-setting path are retired: clients ignore and remove a saved value. The
+Collaboration tab, host invites/members, workspace sharing/rosters/presence entry
+points, joined-host navigation, collaboration sign-in and the shared-host
+pairing/device controls are shown subject only to actual server capabilities and
+current role. Incoming invites never ask the user to enable Multiplayer: an invite
+that arrives before the originating window has published its collaboration policy
+waits for that window's automatic readiness acknowledgement (with a Try again action
+only if that acknowledgement fails), then continues. The GitLab lab is independent.
+No client-side policy grants daemon authority.
 
 #### Required behavioral conformance
 
