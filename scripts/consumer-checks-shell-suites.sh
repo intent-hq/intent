@@ -9,8 +9,8 @@
 # the queue five times until intent#7905.
 #
 # Run from the monorepo checkout with the caller head at packages/intentd.
-# Selects when scripts/changed-tests.sh or scripts/with-test-policy.sh differ
-# between that head and the intentd commit the monorepo pins (the suites are
+# Selects when an intentd file the suites run or copy differs between that
+# head and the intentd commit the monorepo pins (the suites are
 # known to pass at the pin), when SELF_TEST is true (the monorepo's own
 # exercise of this workflow), or when the comparison cannot be made: a failed
 # read or fetch never becomes a skip. Other components never select.
@@ -24,7 +24,12 @@ set -euo pipefail
 component=${COMPONENT:?COMPONENT is required}
 self_test=${SELF_TEST:-false}
 intentd_dir=${INTENTD_DIR:-packages/intentd}
-watched="scripts/changed-tests.sh scripts/with-test-policy.sh"
+# The scripts under test, intentd's own suite and the files the two suites
+# copy or name: rust-changed-tests.test.sh copies the Makefile and expects
+# test-without-provider-clis.sh in runner argv; test-changed-tests.sh copies
+# coverage-storage.py.
+watched="scripts/changed-tests.sh scripts/with-test-policy.sh scripts/test-changed-tests.sh
+scripts/coverage-storage.py scripts/test-without-provider-clis.sh Makefile"
 
 decide() {
   printf 'selected=%s\nreason=%s\n' "$1" "$2" >>"$GITHUB_OUTPUT"
@@ -57,7 +62,7 @@ status=0
 # shellcheck disable=SC2086 # $watched is a fixed list of literal paths.
 git -C "$intentd_dir" diff --quiet "$pin" HEAD -- $watched || status=$?
 case "$status" in
-  0) decide false "$watched match the pinned intentd ${pin:0:12}" ;;
+  0) decide false "the watched changed-tests files match the pinned intentd ${pin:0:12}" ;;
   1)
     # shellcheck disable=SC2086
     changed=$(git -C "$intentd_dir" diff --name-only "$pin" HEAD -- $watched | tr '\n' ' ')

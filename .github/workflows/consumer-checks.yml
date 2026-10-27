@@ -52,14 +52,19 @@
 # Changed-tests shell suites (intentd callers only): the monorepo drives
 # intentd's scripts/changed-tests.sh and scripts/with-test-policy.sh through
 # scripts/rust-changed-tests.test.sh, whose stub PATH is a deliberate command
-# allowlist. When an intentd PR changes either script,
-# scripts/consumer-checks-shell-suites.sh selects that suite and intentd's own
-# scripts/test-changed-tests.sh, each run with REQUIRE_BASH3=1 against a pinned
-# Bash 3.2, so the PR that breaks them is red here. Before this, intentd#2720
-# merged green and the monorepo merge queue ejected the pin bump intent#7900
-# five times ("exec: env: not found") until intent#7905. Other intentd PRs and
-# cloudlands-fe pay only for the selection step. Monorepo PRs still defer these
-# suites to the merge queue (intent#7191); the self-test exercise runs them.
+# allowlist. When an intentd PR changes either script (or a file the suites
+# copy), scripts/consumer-checks-shell-suites.sh selects that suite and
+# intentd's own scripts/test-changed-tests.sh, each run with REQUIRE_BASH3=1
+# against a pinned Bash 3.2, so the PR that breaks them is red here. Before
+# this, intentd#2720 merged green and the monorepo merge queue ejected the pin
+# bump intent#7900 five times ("exec: env: not found") until intent#7905. Other
+# intentd PRs pay only for the selection step; cloudlands-fe skips it. Monorepo
+# PRs still defer these suites to the merge queue (intent#7191); the self-test
+# exercise runs them. Fix order when a change needs both sides (new expected
+# argv or output): first land a monorepo rust-changed-tests.test.sh that
+# accepts both the pinned and the new behavior (the monorepo queue runs it
+# against the pin), then start a new intentd run, and tighten the test after
+# the pin bump.
 #
 # Caller sketch (pull_request + merge_group):
 #   monorepo-consumer-checks:
@@ -233,8 +238,10 @@ jobs:
         if: steps.shell-suites.outputs.selected == 'true' && steps.monorepo.outcome == 'success'
         run: |
           "$BASH3_BIN" --version
-          REQUIRE_BASH3=1 bash scripts/rust-changed-tests.test.sh
-          REQUIRE_BASH3=1 bash packages/intentd/scripts/test-changed-tests.sh
+          status=0
+          REQUIRE_BASH3=1 bash scripts/rust-changed-tests.test.sh || status=1
+          REQUIRE_BASH3=1 bash packages/intentd/scripts/test-changed-tests.sh || status=1
+          exit "$status"
 
       - name: Verify connected harnesses and source revisions
         if: github.event_name == 'merge_group' && steps.monorepo.outcome == 'success'

@@ -99,8 +99,10 @@ class WorkflowShape(unittest.TestCase):
     def test_suites_require_a_real_bash3(self):
         self.assertEqual(run_lines(self.blocks[SUITES_STEP]), [
             '"$BASH3_BIN" --version',
-            'REQUIRE_BASH3=1 bash scripts/rust-changed-tests.test.sh',
-            'REQUIRE_BASH3=1 bash packages/intentd/scripts/test-changed-tests.sh',
+            'status=0',
+            'REQUIRE_BASH3=1 bash scripts/rust-changed-tests.test.sh || status=1',
+            'REQUIRE_BASH3=1 bash packages/intentd/scripts/test-changed-tests.sh || status=1',
+            'exit "$status"',
         ])
 
     def test_header_documents_the_check(self):
@@ -113,6 +115,10 @@ class WorkflowShape(unittest.TestCase):
         ci = (ROOT / '.github/workflows/ci.yml').read_text()
         job = ci.split('\n  shell-tests:\n', 1)[1].split('\n  shell-lint:', 1)[0]
         self.assertIn('python3 -S -B scripts/test_consumer_checks_shell_suites.py',
+                      [line.strip() for line in job.splitlines()])
+        # The Bash 3.2 selection case must not skip in CI.
+        job = ci.split('\n  shell-tests-bash3:\n', 1)[1].split('\n  repo-hygiene:', 1)[0]
+        self.assertIn('REQUIRE_BASH3=1 python3 -S -B scripts/test_consumer_checks_shell_suites.py',
                       [line.strip() for line in job.splitlines()])
 
 
@@ -152,6 +158,10 @@ class Selection(unittest.TestCase):
         self.pin = commit(self.origin, {
             'scripts/changed-tests.sh': 'echo plan\n',
             'scripts/with-test-policy.sh': 'exec "$@"\n',
+            'scripts/test-changed-tests.sh': 'echo suite\n',
+            'scripts/coverage-storage.py': 'pass\n',
+            'scripts/test-without-provider-clis.sh': 'exec "$@"\n',
+            'Makefile': 'test-changed:\n',
             'README.md': 'intentd\n',
         }, 'test: pinned')
 
@@ -210,6 +220,17 @@ class Selection(unittest.TestCase):
         values, _ = self.select(self.monorepo(head))
         self.assertEqual(values['selected'], 'true')
         self.assertIn('scripts/with-test-policy.sh differ', values['reason'])
+
+    def test_files_the_suites_copy_or_run_select(self):
+        for path in ('scripts/test-changed-tests.sh', 'scripts/coverage-storage.py',
+                     'scripts/test-without-provider-clis.sh', 'Makefile'):
+            with self.subTest(path=path):
+                head = self.change({path: f'changed {path}\n'})
+                values, _ = self.select(self.monorepo(head))
+                self.assertEqual(values['selected'], 'true')
+                self.assertIn(f'{path} differ', values['reason'])
+                shutil.rmtree(self.temp / 'mono')
+                git(self.origin, 'reset', '-q', '--hard', self.pin)
 
     def test_deleting_a_watched_script_selects(self):
         (self.origin / 'scripts/with-test-policy.sh').unlink()
