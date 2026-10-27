@@ -27,6 +27,9 @@ done
 # $GH_STUB_DIR/compare/<owner>__<repo>/<base>...<head>, manifests from
 # $GH_STUB_DIR/manifest/<tag>.json, the cloudlands-fe Release Alpha run list
 # from $GH_STUB_DIR/runs.json and its jobs from $GH_STUB_DIR/jobs/<run id>.json.
+# The intentd release-plz probe reads main HEAD from $GH_STUB_DIR/intentd-head,
+# open Release PR numbers from $GH_STUB_DIR/intentd-prs, Release-plz runs from
+# $GH_STUB_DIR/intentd-runs.json and their jobs from the same jobs/ directory.
 # The rate-limit probe (`api repos/intent-hq/cloudlands-releases`) succeeds
 # unless $GH_STUB_DIR/probe.fail exists; its content names the failure mode
 # (one of the modes below, empty = ratelimit).
@@ -70,9 +73,15 @@ case "$1 $2" in
       echo '{"full_name":"intent-hq/cloudlands-releases"}'
       exit 0
     fi
-    if [[ "$path" == */actions/runs/*/jobs ]]; then
+    bare=${path%%\?*}
+    if [[ "$bare" == intent-hq/intentd/git/ref/heads/main ]]; then
+      file="$GH_STUB_DIR/intentd-head"
+    elif [[ "$bare" == intent-hq/intentd/actions/workflows/release-plz.yml/runs ]]; then
+      [[ "$path" == *"branch=main&event=push&head_sha=$(<"$GH_STUB_DIR/intentd-head")&"* ]] || { echo "stub: unexpected Release-plz runs query $path" >&2; exit 1; }
+      file="$GH_STUB_DIR/intentd-runs.json"
+    elif [[ "$bare" == */actions/runs/*/jobs ]]; then
       [[ "$*" == *" --paginate"* ]] || { echo "stub: jobs fetched without --paginate" >&2; exit 1; }
-      run_id=${path%/jobs}; run_id=${run_id##*/}
+      run_id=${bare%/jobs}; run_id=${run_id##*/}
       file="$GH_STUB_DIR/jobs/$run_id.json"
     else
       repo=${path%%/compare/*}; range=${path##*/compare/}
@@ -80,6 +89,9 @@ case "$1 $2" in
     fi
     [[ -f "$file" ]] || { echo "stub: 404 $2" >&2; exit 1; }
     cat "$file" ;;
+  "pr list")
+    [[ "$*" == "pr list --repo intent-hq/intentd --state open --limit 20 --search head:release-plz- "* ]] || { echo "stub: unexpected pr list args: $*" >&2; exit 1; }
+    cat "$GH_STUB_DIR/intentd-prs" ;;
   "run list")
     [[ "$*" == "run list --repo intent-hq/cloudlands-fe --workflow Release Alpha --limit 5 --json databaseId,status,url,displayTitle,createdAt" ]] || { echo "stub: unexpected run list args: $*" >&2; exit 1; }
     cat "$GH_STUB_DIR/runs.json" ;;
@@ -93,6 +105,7 @@ SH
 chmod +x "$bin_dir/gh"
 
 sha=66e5cb92c4858dd3119b1d12d369493bec69dfb2
+intentd_head=ff77764f0a1b2c3d4e5f60718293a4b5c6d7e8f9
 fe_compare="$stub_dir/compare/intent-hq__cloudlands-fe"
 intentd_compare="$stub_dir/compare/intent-hq__intentd"
 manifest_dir="$stub_dir/manifest"
@@ -105,6 +118,10 @@ reset_stub() {
     printf '{"version":"%s","intentdVersion":"0.9.%s"}\n' "${tag#v}" "${tag##*.}" >"$manifest_dir/$tag.json"
   done
   echo '[]' >"$stub_dir/runs.json"
+  # Neutral release-plz state: no open Release PR and no run for HEAD yet.
+  echo "$intentd_head" >"$stub_dir/intentd-head"
+  : >"$stub_dir/intentd-prs"
+  echo '{"total_count":0,"workflow_runs":[]}' >"$stub_dir/intentd-runs.json"
   : >"$temp_dir/gh.log"
 }
 
@@ -405,6 +422,204 @@ grep -q -- '^release list --repo intent-hq/cloudlands-releases --limit 12 ' "$te
 ! grep -q 'v2.1.0' "$temp_dir/gh.log" || fail "multi-pair --limit 2 inspected v2.1.0"
 run_script cloudlands-fe "$sha" --limit=2 intentd "$sha2"
 [[ "$status" -eq 0 && "$stdout" == "v2.3.0 intentdVersion=0.9.5" ]] || fail "--limit between pairs exited $status with '$stdout': $stderr"
+
+# Release-plz verdict: when an intentd pair is uncarried, the newest
+# Release-plz push run for intentd main HEAD decides between "a release is
+# coming" (exit 3), "its Release PR job failed, re-run it" (exit 5) and
+# "release-plz confirmed no release is needed" (exit 6). intentd#2726
+# (87762398b) waited ~6 h behind a failed Release-plz PR job (run 40430078531,
+# a crates.io network error) while every poll answered "not yet".
+rp_run_id=40430078531
+rp_run_url="https://github.com/intent-hq/intentd/actions/runs/$rp_run_id"
+rp_old_run_id=40428021927
+noop_job() {
+  printf 'Release-plz no release needed: %s@fb29506f6c16005708a9a81c61b0b38879deddae\n' "$1"
+}
+unrendered_noop_job='Release-plz no release needed: ${{ needs.release-plz-pr.outputs.baseline_tag }}@${{ needs.release-plz-pr.outputs.baseline_sha }}'
+intentd_not_carried_line="shipped-in: $sha2 is not carried by the newest 3 release(s) on intent-hq/cloudlands-releases (newest v2.3.0)"
+noop_line() {
+  printf 'shipped-in: %s: no intentd release needed -- release-plz found no package changes on main %s since %s (%s); it ships with the next intentd release that changes a package\n' \
+    "$1" "$intentd_head" "$2" "$rp_run_url"
+}
+
+# Each spec is "<run id>|<run number>|<head sha>".
+set_release_plz_runs() {
+  local spec id number head runs=""
+  for spec in "$@"; do
+    IFS='|' read -r id number head <<<"$spec"
+    runs+="${runs:+,}{\"id\":$id,\"run_number\":$number,\"head_sha\":\"$head\",\"html_url\":\"https://github.com/intent-hq/intentd/actions/runs/$id\"}"
+  done
+  printf '{"total_count":%d,"workflow_runs":[%s]}\n' "$#" "$runs" >"$stub_dir/intentd-runs.json"
+}
+
+# Each spec is "<job name>|<status>|<conclusion or empty>".
+set_release_plz_jobs() {
+  local run=$1 spec name job_status conclusion jobs=""
+  shift
+  for spec in "$@"; do
+    name=${spec%|*|*}
+    spec=${spec#"$name|"}
+    IFS='|' read -r job_status conclusion <<<"$spec"
+    jobs+="${jobs:+,}$(python3 -c 'import json, sys; print(json.dumps({"name": sys.argv[1], "status": sys.argv[2], "conclusion": sys.argv[3] or None}))' "$name" "$job_status" "$conclusion")"
+  done
+  mkdir -p "$stub_dir/jobs"
+  printf '{"total_count":%d,"jobs":[%s]}\n' "$#" "$jobs" >"$stub_dir/jobs/$run.json"
+}
+
+# The incident shape after the re-run: a test-only intentd commit on main
+# after the newest pinned tag, and release-plz confirming no release.
+set_noop_intentd() {
+  echo behind >"$intentd_compare/$sha2...v0.9.0"
+  echo ahead >"$intentd_compare/$sha2...$intentd_head"
+  set_release_plz_runs "$rp_run_id|7|$intentd_head"
+  set_release_plz_jobs "$rp_run_id" "Release-plz release|completed|success" \
+    "Release-plz PR|completed|success" "$(noop_job "${1:-v0.9.0}")|completed|success"
+}
+
+reset_stub
+set_noop_intentd
+run_script intentd "$sha2"
+[[ "$status" -eq 6 ]] || fail "confirmed no-op intentd commit exited $status (expected 6): $stderr"
+[[ -z "$stdout" ]] || fail "confirmed no-op intentd commit printed '$stdout'"
+[[ "$stderr" == "$intentd_not_carried_line"$'\n'"$(noop_line "$sha2" v0.9.0)" ]] || fail "confirmed no-op message: $stderr"
+grep -q "^api repos/intent-hq/intentd/actions/runs/$rp_run_id/jobs?per_page=100 --paginate\$" "$temp_dir/gh.log" || fail "Release-plz jobs were not fetched for the HEAD run"
+! grep -q '^run list' "$temp_dir/gh.log" || fail "confirmed no-op still probed the Release Alpha run"
+
+# Both intentd pairs confirmed: one exit 6 naming both.
+reset_stub
+set_noop_intentd
+echo behind >"$intentd_compare/$sha...v0.9.0"
+echo identical >"$intentd_compare/$sha...$intentd_head"
+run_script intentd "$sha2" intentd "$sha"
+[[ "$status" -eq 6 ]] || fail "two confirmed no-op intentd pairs exited $status (expected 6): $stderr"
+[[ "$stderr" == *$'\n'"$(noop_line "$sha2, $sha" v0.9.0)" ]] || fail "two no-op pairs message: $stderr"
+
+# The baseline tag already carries the commit: intentd released it and only
+# the fe pin lags, so the wait is real.
+reset_stub
+set_noop_intentd v0.9.1
+echo ahead >"$intentd_compare/$sha2...v0.9.1"
+run_script intentd "$sha2"
+[[ "$status" -eq 3 ]] || fail "commit carried by the no-op baseline exited $status (expected 3): $stderr"
+[[ "$stderr" == "$intentd_not_carried_line" ]] || fail "commit carried by the no-op baseline changed stderr: $stderr"
+
+# A commit that is not on intentd main is never confirmed.
+reset_stub
+set_noop_intentd
+echo diverged >"$intentd_compare/$sha2...$intentd_head"
+run_script intentd "$sha2"
+[[ "$status" -eq 3 ]] || fail "commit off intentd main exited $status (expected 3): $stderr"
+[[ "$stderr" == "$intentd_not_carried_line" ]] || fail "commit off intentd main changed stderr: $stderr"
+
+# One commit needs no release, the other is in the newer baseline tag the fe
+# pin has not reached yet: still waiting on the pin.
+reset_stub
+set_noop_intentd v0.9.1
+echo behind >"$intentd_compare/$sha2...v0.9.1"
+echo behind >"$intentd_compare/$sha...v0.9.0"
+echo ahead >"$intentd_compare/$sha...$intentd_head"
+echo ahead >"$intentd_compare/$sha...v0.9.1"
+run_script intentd "$sha2" intentd "$sha"
+[[ "$status" -eq 3 ]] || fail "mixed no-op/released intentd pairs exited $status (expected 3): $stderr"
+[[ "$stderr" == "shipped-in: intentd $sha2, intentd $sha are not carried by the newest 3 release(s) on intent-hq/cloudlands-releases (newest v2.3.0)" ]] || fail "mixed no-op/released intentd pairs changed stderr: $stderr"
+
+# An fe pair still pending keeps exit 3 and the note, so the hook keeps
+# tracking the fe change.
+reset_stub
+set_noop_intentd
+echo behind >"$fe_compare/$sha...v2.3.0"
+run_script cloudlands-fe "$sha" intentd "$sha2"
+[[ "$status" -eq 3 ]] || fail "no-op intentd with a pending fe pair exited $status (expected 3): $stderr"
+[[ "$stderr" == *$'\n'"$(noop_line "$sha2" v0.9.0)"$'\n'"shipped-in: still waiting on the cloudlands-fe pair(s)" ]] || fail "pending fe pair message: $stderr"
+grep -q '^run list' "$temp_dir/gh.log" || fail "pending fe pair skipped the Release Alpha stall probe"
+
+# A failed (or timed-out) Release-plz PR job means no Release PR until a human
+# re-runs it: exit 5 naming the run, like a stalled Release Alpha run.
+for conclusion in failure timed_out; do
+  reset_stub
+  echo behind >"$intentd_compare/$sha2...v0.9.0"
+  set_release_plz_runs "$rp_run_id|7|$intentd_head"
+  set_release_plz_jobs "$rp_run_id" "Release-plz release|completed|success" \
+    "Release-plz PR|completed|$conclusion" "$unrendered_noop_job|completed|skipped"
+  run_script intentd "$sha2"
+  [[ "$status" -eq 5 ]] || fail "Release-plz PR job $conclusion exited $status (expected 5): $stderr"
+  [[ -z "$stdout" ]] || fail "Release-plz PR job $conclusion printed '$stdout'"
+  [[ "$stderr" == "$intentd_not_carried_line"$'\n'"shipped-in: the intentd Release-plz PR job concluded $conclusion on main $intentd_head ($rp_run_url); no Release PR opens until someone re-runs it" ]] || fail "Release-plz PR job $conclusion message: $stderr"
+done
+
+# A re-run in flight (latest attempt), a cancelled job, and a run without a
+# verdict yet are all ordinary waits.
+for spec in "Release-plz PR|in_progress|" "Release-plz PR|completed|cancelled" "Release-plz PR|queued|"; do
+  reset_stub
+  echo behind >"$intentd_compare/$sha2...v0.9.0"
+  set_release_plz_runs "$rp_run_id|7|$intentd_head"
+  set_release_plz_jobs "$rp_run_id" "Release-plz release|completed|success" "$spec" "$unrendered_noop_job|queued|"
+  run_script intentd "$sha2"
+  [[ "$status" -eq 3 ]] || fail "Release-plz job '$spec' exited $status (expected 3): $stderr"
+  [[ "$stderr" == "$intentd_not_carried_line" ]] || fail "Release-plz job '$spec' changed stderr: $stderr"
+done
+
+# Only the newest run for HEAD counts; runs for other SHAs are ignored.
+reset_stub
+set_noop_intentd
+set_release_plz_runs "$rp_old_run_id|6|$intentd_head" "$rp_run_id|7|$intentd_head" "5|8|$sha"
+set_release_plz_jobs "$rp_old_run_id" "Release-plz PR|completed|failure"
+set_release_plz_jobs 5 "Release-plz PR|completed|failure"
+run_script intentd "$sha2"
+[[ "$status" -eq 6 ]] || fail "newest Release-plz run was not the one read (exit $status): $stderr"
+! grep -q "actions/runs/$rp_old_run_id/jobs" "$temp_dir/gh.log" || fail "an older Release-plz run had its jobs fetched"
+
+# An open Release PR means a release is coming, whatever the jobs say.
+reset_stub
+set_noop_intentd
+echo 2741 >"$stub_dir/intentd-prs"
+run_script intentd "$sha2"
+[[ "$status" -eq 3 ]] || fail "open Release PR exited $status (expected 3): $stderr"
+[[ "$stderr" == "$intentd_not_carried_line" ]] || fail "open Release PR changed stderr: $stderr"
+! grep -q 'release-plz.yml/runs' "$temp_dir/gh.log" || fail "open Release PR still listed Release-plz runs"
+
+# No Release-plz run for HEAD yet (the reset_stub default): an ordinary wait.
+reset_stub
+echo behind >"$intentd_compare/$sha2...v0.9.0"
+run_script intentd "$sha2"
+[[ "$status" -eq 3 ]] || fail "no Release-plz run for HEAD exited $status (expected 3): $stderr"
+[[ "$stderr" == "$intentd_not_carried_line" ]] || fail "no Release-plz run for HEAD changed stderr: $stderr"
+grep -q '^pr list --repo intent-hq/intentd ' "$temp_dir/gh.log" || fail "uncarried intentd pair skipped the Release PR lookup"
+
+# fe-only waits never touch intentd.
+reset_stub
+echo behind >"$fe_compare/$sha...v2.3.0"
+run_script cloudlands-fe "$sha"
+[[ "$status" -eq 3 ]] || fail "fe-only wait exited $status (expected 3): $stderr"
+! grep -qE '^(pr list|api repos/intent-hq/intentd/)' "$temp_dir/gh.log" || fail "fe-only wait ran the release-plz probe"
+
+# The probe is best-effort: any failure keeps exit 3 and says why.
+probe_skip="shipped-in: intentd release-plz probe skipped: "
+for case in "pr list|1|gh pr list on intent-hq/intentd failed: stub: gh unavailable" \
+  "api repos/intent-hq/intentd/git/ref/heads/main|ratelimit|gh api main ref on intent-hq/intentd failed: gh: API rate limit exceeded" \
+  "api repos/intent-hq/intentd/actions/runs/$rp_run_id/jobs?per_page=100|5xx|gh api jobs for Release-plz run $rp_run_id on intent-hq/intentd failed: gh: Server Error (HTTP 502)" \
+  "api repos/intent-hq/intentd/compare/$sha2...$intentd_head|network|gh api compare $sha2...$intentd_head on intent-hq/intentd failed: error connecting"; do
+  IFS='|' read -r fail_on mode expected <<<"$case"
+  reset_stub
+  set_noop_intentd
+  GH_STUB_FAIL=$mode GH_STUB_FAIL_ON=$fail_on run_script intentd "$sha2"
+  [[ "$status" -eq 3 ]] || fail "probe failure on '$fail_on' exited $status (expected 3): $stderr"
+  [[ "$stderr" == "$intentd_not_carried_line"$'\n'"$probe_skip$expected"* ]] || fail "probe failure on '$fail_on' message: $stderr"
+done
+
+reset_stub
+set_noop_intentd
+echo 'not json' >"$stub_dir/intentd-runs.json"
+run_script intentd "$sha2"
+[[ "$status" -eq 3 ]] || fail "malformed Release-plz runs exited $status (expected 3): $stderr"
+[[ "$stderr" == "$intentd_not_carried_line"$'\n'"${probe_skip}could not read the Release-plz runs on intent-hq/intentd: "* ]] || fail "malformed Release-plz runs message: $stderr"
+
+reset_stub
+set_noop_intentd
+echo 'main' >"$stub_dir/intentd-head"
+run_script intentd "$sha2"
+[[ "$status" -eq 3 ]] || fail "malformed intentd main ref exited $status (expected 3): $stderr"
+[[ "$stderr" == "$intentd_not_carried_line"$'\n'"${probe_skip}unexpected main ref 'main' on intent-hq/intentd" ]] || fail "malformed intentd main ref message: $stderr"
 
 # Stall detection: on the exit-3 path the active cloudlands-fe Release Alpha
 # run is probed and a job queued past SHIPPED_IN_STALL_MINUTES turns exit 3

@@ -859,10 +859,14 @@ promotions of deleted prereleases are not preserved by this retention policy.
   prints the first cloudlands-releases tag whose pin carries the commit; given several
   `<component> <sha>` pairs (`make shipped-in PAIRS="intentd:<sha> cloudlands-fe:<sha>"`)
   it prints the first tag carrying all of them. It exits 3 while a commit is uncarried,
-  4 on a transient GitHub failure, and 5 when the active cloudlands-fe Release Alpha run
-  has a job queued longer than 30 min (`SHIPPED_IN_STALL_MINUTES` overrides the
-  threshold; `0` disables the probe) — a human must cancel and re-run the workflow run
-  named on stderr.
+  4 on a transient GitHub failure, and 5 when a human must re-run the workflow run
+  named on stderr: the intentd Release-plz PR job failed at intentd main HEAD, or the
+  active cloudlands-fe Release Alpha run has a job queued longer than 30 min
+  (`SHIPPED_IN_STALL_MINUTES` overrides the threshold; `0` disables the probe). It
+  exits 6 when every uncarried commit is on intentd main and release-plz's
+  "Release-plz no release needed" job confirms no package changed since the tag
+  stderr names: the commit rides the next intentd release. Release-plz decides by
+  package files, not commit type — test-only ranges have shipped (v0.11.59).
 - Commits merged after the release PR was cut ride the next release PR (e.g. intentd#517
   landed via follow-up release PR intentd#520).
 

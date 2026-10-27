@@ -284,14 +284,16 @@ event-catalog-check: ## Check the protocol event-type sidecar against the intent
 # merged commits. Pass one pair as COMPONENT=... SHA=..., or several as
 # PAIRS="intentd:<sha> cloudlands-fe:<sha>" (space-separated component:sha
 # tokens, forwarded as positional pairs; the tag must carry every pair). The
-# script exits 3 for "not shipped yet", 5 when additionally the newest
-# cloudlands-fe Release Alpha run looks stalled (a job queued longer than
-# SHIPPED_IN_STALL_MINUTES, default 30; 0 disables the probe), and 4 for a
-# transient GitHub failure (rate limit, 5xx, network) worth retrying (make
-# reports them as `Error 3` / `Error 5` / `Error 4`); background hooks should
+# script exits 3 for "not shipped yet", 5 when additionally a release run
+# needs a human re-run (the intentd Release-plz PR job failed, or a
+# cloudlands-fe Release Alpha job is queued past SHIPPED_IN_STALL_MINUTES,
+# default 30; 0 disables that probe), 6 when release-plz confirmed the intentd
+# commits need no release (they ride the next one), and 4 for a transient
+# GitHub failure (rate limit, 5xx, network) worth retrying (make reports them
+# as `Error 3` / `Error 5` / `Error 6` / `Error 4`); background hooks should
 # invoke scripts/shipped-in.sh directly so they can branch on those codes.
 # `LIMIT=N` widens the scan window past the newest 10 releases.
-shipped-in: ## Print the first cloudlands-releases tag carrying COMPONENT=intentd|cloudlands-fe SHA=<commit>, or every pair in PAIRS="intentd:<sha> cloudlands-fe:<sha>" (script exit 3 = not yet, 5 = not yet and Release Alpha run stalled, 4 = transient gh failure)
+shipped-in: ## Print the first cloudlands-releases tag carrying COMPONENT=intentd|cloudlands-fe SHA=<commit>, or every pair in PAIRS="intentd:<sha> cloudlands-fe:<sha>" (script exit 3 = not yet, 5 = not yet and a release run needs a re-run, 6 = no intentd release needed, 4 = transient gh failure)
 	@set -- $(if $(COMPONENT)$(SHA),"$(COMPONENT)" "$(SHA)",); \
 	for pair in $(PAIRS); do \
 		case "$$pair" in \
