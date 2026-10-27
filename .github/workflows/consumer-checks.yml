@@ -49,6 +49,18 @@
 # intent-hq, and makes a monorepo checkout failure fatal. Component callers
 # omit that input and retain the workflow revision and fail-soft defaults.
 #
+# Changed-tests shell suites (intentd callers only): the monorepo drives
+# intentd's scripts/changed-tests.sh and scripts/with-test-policy.sh through
+# scripts/rust-changed-tests.test.sh, whose stub PATH is a deliberate command
+# allowlist. When an intentd PR changes either script,
+# scripts/consumer-checks-shell-suites.sh selects that suite and intentd's own
+# scripts/test-changed-tests.sh, each run with REQUIRE_BASH3=1 against a pinned
+# Bash 3.2, so the PR that breaks them is red here. Before this, intentd#2720
+# merged green and the monorepo merge queue ejected the pin bump intent#7900
+# five times ("exec: env: not found") until intent#7905. Other intentd PRs and
+# cloudlands-fe pay only for the selection step. Monorepo PRs still defer these
+# suites to the merge queue (intent#7191); the self-test exercise runs them.
+#
 # Caller sketch (pull_request + merge_group):
 #   monorepo-consumer-checks:
 #     uses: intent-hq/intent/.github/workflows/consumer-checks.yml@main
@@ -191,6 +203,38 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
+
+      # Path-filtered: see "Changed-tests shell suites" in the header. Runs on
+      # pull_request and merge_group alike, so the breaking intentd PR is red.
+      - name: Select the intentd changed-tests shell suites
+        id: shell-suites
+        if: inputs.component == 'intentd' && steps.monorepo.outcome == 'success'
+        env:
+          SELF_TEST: ${{ inputs.self-test }}
+        run: bash scripts/consumer-checks-shell-suites.sh
+
+      - name: Install Bash build prerequisites when absent
+        if: steps.shell-suites.outputs.selected == 'true' && steps.monorepo.outcome == 'success'
+        run: |
+          if ! command -v yacc >/dev/null || ! command -v gcc >/dev/null; then
+            for attempt in 1 2 3; do
+              if sudo -n apt-get -o DPkg::Lock::Timeout=300 update -qq; then break; fi
+              if [ "$attempt" -eq 3 ]; then exit 1; fi
+              sleep $((attempt * 15))
+            done
+            sudo -n apt-get -o DPkg::Lock::Timeout=300 install -y -qq build-essential bison
+          fi
+
+      - name: Install pinned Bash 3.2
+        if: steps.shell-suites.outputs.selected == 'true' && steps.monorepo.outcome == 'success'
+        run: bash scripts/install-ci-bash3.sh "$RUNNER_TEMP/bash3"
+
+      - name: Run the intentd changed-tests shell suites
+        if: steps.shell-suites.outputs.selected == 'true' && steps.monorepo.outcome == 'success'
+        run: |
+          "$BASH3_BIN" --version
+          REQUIRE_BASH3=1 bash scripts/rust-changed-tests.test.sh
+          REQUIRE_BASH3=1 bash packages/intentd/scripts/test-changed-tests.sh
 
       - name: Verify connected harnesses and source revisions
         if: github.event_name == 'merge_group' && steps.monorepo.outcome == 'success'

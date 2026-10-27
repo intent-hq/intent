@@ -386,7 +386,12 @@ grep -q '^::error::consumer-checks:' <<<"$guard_output" ||
   fail "self-test checkout failure did not emit an error:"$'\n'"$guard_output"
 
 queue_gate_line="        if: github.event_name == 'merge_group' && steps.monorepo.outcome == 'success'"
-downstream_gates=$(awk -v queue_gate="$queue_gate_line" -v gate="$gate_line" -v guard="- name: $guard_name" '
+# The intentd changed-tests shell suites: a selection step for intentd callers,
+# then the steps it selects (scripts/test_consumer_checks_shell_suites.py).
+suites_select_line="        if: inputs.component == 'intentd' && steps.monorepo.outcome == 'success'"
+suites_gate_line="        if: steps.shell-suites.outputs.selected == 'true' && steps.monorepo.outcome == 'success'"
+downstream_gates=$(awk -v queue_gate="$queue_gate_line" -v gate="$gate_line" -v guard="- name: $guard_name" \
+  -v suites_select="$suites_select_line" -v suites_gate="$suites_gate_line" '
   function flush() { if (after_guard && name != "") print (gated ? "gated " : "ungated ") name }
   /^      - / {
     flush()
@@ -397,13 +402,13 @@ downstream_gates=$(awk -v queue_gate="$queue_gate_line" -v gate="$gate_line" -v 
     if (index($0, guard)) guard_seen = 1
     next
   }
-  $0 == gate || $0 == queue_gate { gated = 1 }
+  $0 == gate || $0 == queue_gate || $0 == suites_select || $0 == suites_gate { gated = 1 }
   END { flush() }
 ' "$workflow")
 grep -q '^ungated ' <<<"$downstream_gates" &&
   fail "every step after the guard must carry \"$gate_line\":"$'\n'"$downstream_gates"
-[ "$(grep -c '^gated ' <<<"$downstream_gates")" -eq 9 ] ||
-  fail "expected 9 gated steps after the guard (lightweight and connected checks):"$'\n'"$downstream_gates"
+[ "$(grep -c '^gated ' <<<"$downstream_gates")" -eq 13 ] ||
+  fail "expected 13 gated steps after the guard (lightweight, shell-suite and connected checks):"$'\n'"$downstream_gates"
 
 step_name='Run the consumer checks (upstream context)'
 step_block=$(workflow_step "$step_name")

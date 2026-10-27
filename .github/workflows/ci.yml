@@ -321,6 +321,7 @@ jobs:
           bash scripts/ci-gate.test.sh
           python3 -S -B scripts/test_hosted_runners.py
           python3 -S -B scripts/test_ci_bash3.py
+          python3 -S -B scripts/test_consumer_checks_shell_suites.py
           python3 -S -B scripts/test_setup_sccache.py
           python3 -S -B scripts/test_local_sccache.py
           bash scripts/consumer-checks.test.sh
