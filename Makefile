@@ -237,10 +237,13 @@ check-protocol-catalog: ## Check docs/protocol method catalog against methods/*.
 # signature index, and prose mentions under docs/protocol/ must match it.
 # The help text is read from the packages/intentd checkout (the run names the
 # checkout and the recorded pin, and warns when they differ); PINNED=1 reads it
-# from the recorded gitlink through git objects instead.
+# from the recorded gitlink through git objects instead. A missing packages/intentd
+# checkout fails the check (and so docs-check / consumer-checks); set
+# ALLOW_MISSING_INTENTD=1 only when running without the submodule on purpose.
 PINNED ?=
-check-mcp-bindings: ## Check docs/protocol ws.* MCP binding index and prose against intentd's help text (PINNED=1 reads the recorded gitlink instead of the checkout)
-	@node scripts/check-mcp-bindings.mjs $(if $(PINNED),--pinned)
+ALLOW_MISSING_INTENTD ?=
+check-mcp-bindings: ## Check docs/protocol ws.* MCP binding index and prose against intentd's help text (PINNED=1 reads the recorded gitlink instead of the checkout; fails without packages/intentd unless ALLOW_MISSING_INTENTD=1)
+	@node scripts/check-mcp-bindings.mjs $(if $(PINNED),--pinned) $(if $(filter 1,$(ALLOW_MISSING_INTENTD)),--allow-missing-intentd)
 
 mcp-bindings-doc: ## Regenerate docs/protocol/methods/mcp-bindings.md from intentd's help text (PINNED=1 reads the recorded gitlink instead of the checkout)
 	@node scripts/check-mcp-bindings.mjs --write $(if $(PINNED),--pinned)
