@@ -115,8 +115,10 @@ return ws.browser.exec([
 
 `listTabs("mine")` reuses only your own tabs; another agent's tab at the same URL
 refuses `evaluate` and `screenshot` (`not-owner`). While the first hydration runs, `evaluate` returns `false` (or the tab is still
-mounting); retry from a background hook rather than reopening the tab. For a note, check
-`[data-testid=note-view-settings-trigger]` instead. Save the screenshot with
+mounting); retry from a background hook rather than reopening the tab. For a note, read
+`document.querySelector('[data-note-content-surface]')?.dataset.noteContentState`
+instead: `editor` (or `read-only`) means the note is loaded, `loading` means retry, and
+`missing` usually means a wrong note ID and `error` a failed load. Save the screenshot with
 `ws.note.saveAsset` and record it in the evidence table from the root
 [`Prove`](../../AGENTS.md#prove) step. The browser tool cannot click, so to exercise a link
 inside the chat, call `element.click()` on that anchor through `evaluate`; this runs the
