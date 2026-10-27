@@ -13,8 +13,11 @@ execution connection, alongside `browserExec: true`. Missing/unknown capability
 versions mean unsupported. Capability describes implementation, not permission
 or OS readiness. Old peers ignore the additive flag; a new daemon must never
 send desktop reverse calls to an old client. The UI gates its controls on both
-ends' support. Do not modify browser routing or infer desktop support from
-`browserExec`, host display availability, or a protocol version number.
+ends' support. Do not infer desktop support from `browserExec`, host display
+availability, or a protocol version number. Desktop control changes browser
+routing in one place only: while a workspace has an active session, its agent
+browser calls go to that session's client, after the pin and ahead of claimed tabs
+([REV-2 rule 3](./files-terminal-browser.md)).
 
 ## Agent feature availability (prepared)
 
