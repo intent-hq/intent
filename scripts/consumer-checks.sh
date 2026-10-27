@@ -39,7 +39,7 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 cd "$repo_root"
 
-checks="event-catalog-check check-mcp-bindings docs-check check-protocol-catalog check-makefile-targets check-protocol-field-parity check-transfer-selection-contract check-backend-keychain-contract check-agent-worker-contract check-app-ui-targets check-note-truncated-read-contract check-suggested-prompts-contract"
+checks="event-catalog-check check-mcp-bindings docs-check check-protocol-catalog check-makefile-targets check-protocol-field-parity check-transfer-selection-contract check-backend-keychain-contract check-agent-worker-contract check-app-ui-targets check-note-truncated-read-contract check-browser-routing-contract check-suggested-prompts-contract"
 advisory=${CONSUMER_CHECKS_ADVISORY:-}
 context=${CONSUMER_CHECKS_CONTEXT:-monorepo}
 make_bin=${MAKE:-make}
@@ -96,6 +96,7 @@ fix_path() {
     check-app-ui-targets) echo "intentd app-ui-targets.json + cloudlands-fe app-ui-targets.ts (supported routes and aliases)" ;;
     check-agent-worker-contract) echo "docs/protocol/methods/agent-workers.md + fixtures/agent-workers/v1/ + scripts/agent-worker-contract*.mjs (synthetic only)" ;;
     check-note-truncated-read-contract) echo "docs/protocol/fixtures/notes/truncated-read.json + methods/notes-tasks.md" ;;
+    check-browser-routing-contract) echo "docs/protocol/fixtures/browser-routing/routing.json + methods/files-terminal-browser.md REV-2 (intentd mirror: crates/intent-transport/tests/fixtures/browser-routing.json)" ;;
     check-suggested-prompts-contract) echo "docs/protocol/fixtures/suggested-prompts/v1/ + adopted component copies/locks (see docs/protocol/suggested-prompts.md)" ;;
     *) echo "unknown check" ;;
   esac
