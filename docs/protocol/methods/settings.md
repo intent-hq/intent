@@ -113,15 +113,26 @@ from config.toml and returns `value: null` with `origin: "default"`, and `settin
 never persisted or echoed back as the value. Writing that number explicitly via
 `settings.update` pins it as a `"file"` value that no longer tracks the host's RAM.
 
-**Auto-retire setting (additive, protocol 15.2).** `workspace.autoRetireArchivedAfterDays`
-is a TOML-backed optional positive integer number of days. Absent (or `null`) means
-**off**: the daemon never retires a workspace automatically, and `settings.reset` removes
-the key and returns `value: null`. When set, a periodic daemon sweep retires every
-workspace whose `archivedAt` is older than that many days, skipping remote, guest-shared
-and retire-unsupported workspaces ([Retired workspaces](./workspace.md#retired-workspaces)).
-`settings.update` rejects zero, negative and non-integer values with `-32602`.
-Clients that offer a toggle suggest 7 days when turning it on; the daemon has no implicit
-value.
+**Auto-archive and purge settings (additive, protocol 15.2).** Two TOML-backed
+`[workspace]` settings drive the automatic workspace lifecycle sweeps
+([Automatic archive](./workspace.md#automatic-archive) and
+[automatic purge](./workspace.md#retired-workspaces)):
+
+| Setting | Value | Default / clear |
+| --- | --- | --- |
+| Auto-archive: `workspace.autoArchiveIdleAfterDays` | Optional non-negative integer number of days. `0` turns the sweep off. | Absent means **7**: the sweep is on by default. `defaultValue` advertises `7`, and the absent key reads `value: 7` with `origin: "default"`; `settings.reset` removes the key, returning to that default. |
+| Purge: `workspace.purgeArchivedAfterDays` | Optional positive integer number of days. | Absent (or `null`) means **off**: the daemon never purges a workspace folder automatically. `settings.reset` removes the key and returns `value: null`. Clients that offer a toggle suggest 7 days when turning it on. |
+
+`settings.update` rejects negative and non-integer values for both keys, and zero for
+`workspace.purgeArchivedAfterDays`, with `-32602`. Turning auto-archive off is an explicit
+`0`, never `null` (which is the default).
+
+**Deprecated predecessor.** `workspace.autoRetireArchivedAfterDays` is the earlier name of
+`workspace.purgeArchivedAfterDays`, with the same value semantics. Daemons that support
+the new key migrate the old one on boot: an `autoRetireArchivedAfterDays` value in
+config.toml is rewritten as `purgeArchivedAfterDays` (comments and layout preserved), and
+when both keys are present the new key wins and the old one is removed. Such daemons no
+longer list the old key in `settings.list`; older daemons only know the old key.
 
 **Quick-action effort settings (additive).** The following TOML-backed settings live
 under `[quickActions]`, alongside the existing model settings. Model values remain bare

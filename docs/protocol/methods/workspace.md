@@ -2224,18 +2224,47 @@ successful `updateContext` emits `workspace:context-changed` with the persisted 
 { "jsonrpc":"2.0","id":10,"result":{ "items":[ /* same list */ ] } }
 ```
 
+#### Automatic archive
+
+*(Additive, protocol 15.2; behavior only, no wire-shape change.)* The daemon archives
+workspaces that have been idle for `workspace.autoArchiveIdleAfterDays` days (§5.12
+[settings](./settings.md); absent means 7, `0` turns the sweep off). The setting is read
+live at every sweep, which runs about once an hour (the first run shortly after startup).
+
+- **Idle clock.** A workspace is due when the newest of `lastContentActivity`,
+  `lastActivity` and `createdAt` is older than the cutoff. Unparseable timestamps are
+  ignored; a workspace with no parseable timestamp is never due.
+- **Skipped.** The virtual Chief workspace; remote workspaces; workspaces already
+  archived, retired or deleted; a workspace with a pending grace-window delete; a
+  workspace with collaborators or open invites (archiving would remove them); and a
+  workspace with work in flight — a running agent turn, a running script
+  (`scriptsRunning`), an active background hook or an active PR monitor.
+- **Path.** A due workspace is archived through `workspace.archive`, with the same
+  active-work teardown and the same `workspace:updated` delta. The sweep re-reads the row
+  and re-checks that it is still idle with no agent turn running right before archiving.
+- Each workspace is archived independently; a failure is logged and retried on the next
+  sweep.
+
+Clients may surface auto-archived workspaces like any other archived workspace; the
+existing auto-unarchive (a message to an agent) and `workspace.unarchive` bring them back.
+
 #### Retired workspaces
 
 *(Additive, protocol 15.2.)* `Retired` is a lifecycle state between `Archived` and
 `Deleted`. The workspace folder on disk is deleted to free space, while conversations,
 notes, tasks, assets and every other database row are kept and remain readable.
 
+**Client presentation.** Retiring is a "purge workspace folder" operation on an archived
+workspace. Clients may present a `Retired` workspace as archived (cloudlands-fe shows it
+under Archived, and offers retire only as **Purge workspace folder** on an archived
+workspace); the purge status message below tells the user what happened.
+
 ```mermaid
 stateDiagram-v2
-  Active --> Archived: workspace.archive
+  Active --> Archived: workspace.archive or automatic archive
   Archived --> Active: workspace.unarchive or auto-unarchive
   Active --> Retired: workspace.retire (archive teardown first)
-  Archived --> Retired: workspace.retire or auto-retire
+  Archived --> Retired: workspace.retire or automatic purge
   Retired --> Active: revive (fresh blank folder)
   Archived --> Deleted: workspace.delete
   Retired --> Deleted: workspace.delete
@@ -2261,17 +2290,25 @@ stateDiagram-v2
   nothing changes, when deleting the folder would destroy the only copy of the repository
   or a folder the daemon does not own: standalone `cow` / `direct` checkouts (the folder
   *is* the repository), `skipIsolation` workspaces (the folder is the user's repository),
-  workspaces without a daemon-owned checkout, and remote workspaces. The automatic retire sweep skips these workspaces.
+  workspaces without a daemon-owned checkout, and remote workspaces. The automatic purge sweep skips these workspaces.
+- **Purge status message.** The retire write also sets the workspace `statusMessage` to
+  `"Workspace folder purged to free disk space."`, replacing the previous message, so the
+  workspace card shows that the folder is gone.
 - One `workspace:updated` delta announces the transition:
-  `changes: { archived: true, status: "Retired", archivedAt, retiredAt: <ts> }`, where
-  `archivedAt` is the row's value — newly set when the workspace was `Active` (§6.5).
+  `changes: { archived: true, status: "Retired", archivedAt, retiredAt: <ts>, statusMessage }`,
+  where `archivedAt` is the row's value — newly set when the workspace was `Active` (§6.5).
 - `-32602 { code: "invalid-params" }` from any other status (for example a workspace with
   a pending grace-window delete).
 
-**Automatic retire.** When the setting `workspace.autoRetireArchivedAfterDays` (§5.12) is
-set, the daemon periodically retires workspaces whose `archivedAt` is older than that many
-days, through the same path and delta as `workspace.retire`. Absent means off. Remote, guest-shared and retire-unsupported
-workspaces are skipped.
+**Automatic purge.** When the setting `workspace.purgeArchivedAfterDays` (§5.12; formerly
+`workspace.autoRetireArchivedAfterDays`) is set, the daemon periodically retires workspaces
+whose `archivedAt` is older than that many days, through the same path and delta as
+`workspace.retire`. Absent means off. Remote, guest-shared and retire-unsupported
+workspaces are skipped, and so is any workspace whose folder holds work the purge would
+destroy: the `workspace.localChanges` evaluation reports uncommitted changes in any root,
+unpushed commits in a **secondary** root (it lives inside the folder; the primary branch
+is kept), or fails. Skipped workspaces are retried on the next sweep. Manual
+`workspace.retire` does not apply this check; clients confirm with the user first.
 
 **Strict list opt-in (normative).** Retired workspaces are absent from **every** surface
 that returns a collection of workspaces unless the caller explicitly passes
@@ -2320,14 +2357,24 @@ old folder is restored.
   auto-unarchive path when a message is sent to an agent in the retired workspace.
 - The daemon provisions a new folder at the same path from the repository default branch
   on a **new branch** name (the old branch is left untouched), flips the row to
-  `Active`, and clears `archived`, `archivedAt` and `retiredAt`.
+  `Active`, and clears `archived`, `archivedAt` and `retiredAt`. It also clears
+  `statusMessage` when it still equals the purge status text; a message changed since the
+  purge is kept.
 - Delta: `changes: { archived: false, status: "Active", archivedAt: null, retiredAt: null,
   branch, revived: { reason } }` where `reason` is `"agent_activity"` (turn-start revive,
   which also carries `agentId` and `agentName`) or `"manual"`. `revived` is never present
   on an ordinary unarchive, and `autoUnarchive` is never present on a revive.
 - On an agent-triggered revive the agent's transcript gets a system row and the same turn
-  gets a one-turn notice that all previous on-disk state (files, uncommitted changes, local
-  git state) is gone while conversations and notes were kept.
+  gets a one-turn notice that the workspace folder was purged while archived: all
+  previous on-disk state (files, uncommitted changes, local git state) is gone, the agent
+  is on the new branch, commits on the previous branch are kept, and conversations and
+  notes were kept.
+- Every other agent session in the workspace learns on its own next turn: on any revive
+  (and on a manual revive, which starts no turn, for every session) the daemon records
+  the same notice as pending. The session's next turn carries it once
+  as a trailing `[SYSTEM NOTICE]`, after which it is cleared; the pending notice survives
+  a daemon restart. The agent whose turn triggered an agent-triggered revive gets only
+  that turn's notice, never a second copy.
 
 Clients must treat `"Retired"` as an unknown-but-valid status on older builds; an older
 daemon never emits it. Support is detected by the `workspace.retire` method answering
