@@ -114,11 +114,12 @@ background one-shots) use the latest. The session's captured
 `attentionRequests` gate their sections) — with every gate open, the
 bundled markdown is used untouched.
 
-### Prepared repository guidance for 3.2 and 3.3 sessions
+### Prepared repository guidance for 3.2, 3.3 and 3.4 sessions
 
 The prepared delivery change in intentd
 `73478bdaa5a09dc81307d4bfe7606a5a85983876` applies only to an active session
-whose saved `harnessVersion` is explicitly admitted: `"3.2"` or `"3.3"`. It adds recurring repository
+whose saved `harnessVersion` is explicitly admitted: `"3.2"` or `"3.3"` (and `"3.4"`, admitted by
+intent-hq/intentd#2754). It adds recurring repository
 guidance to ordinary ACP prompts after the original physical session is
 confirmed. It does not change a session's stamp, feature snapshot or doctrine,
 introduce a new major version, or establish support in an installed daemon.
@@ -163,7 +164,7 @@ Missing, `2.9`, `2.10`, `3.0`, `3.1` and unknown saved stamps do not acquire thi
 new fallback during turn, load, recovery or tool response. Their persisted
 instructions/features and existing behavior remain pinned. The general registry
 fallback for an unknown version is not admission to this explicit
-`3.2`/`3.3` path.
+`3.2`/`3.3`/`3.4` path.
 
 The source's finite checks exercise real daemon ownership with a controlled
 ordinary ACP peer. They do not establish production adapter/model acceptance,
@@ -180,6 +181,17 @@ workspace instruction body once instead of as both the workspace layer and
 the fallback body. Text surfaces, specialist prompts and feature defaults
 are 3.2's. Existing sessions stay pinned to their saved stamp, so a 3.2
 session keeps its original composition.
+
+Harness 3.4 (intent-hq/intentd#2754) is admitted to the same path with the same
+guidance text. It differs from 3.3 only in the common instruction body, which
+gains a "Link other workspaces" section: in chat and notes, agents mention
+another workspace as `[Workspace Title](intent://local/workspace/<workspaceId>)`
+and never by its bare internal ID (outside Intent they use the plain title).
+Composition, text surfaces, specialist prompts and feature defaults are 3.3's,
+and a 3.3 session keeps its original prompt. The same change adds `link` /
+`markdownLink` to the `ws.crossWorkspace.listSiblings` rows and the
+`ws.workspace.applyProposal` result; tool output follows the running daemon, so
+every session sees those fields regardless of its stamp.
 
 ### Golden tests
 
