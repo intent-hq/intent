@@ -2236,8 +2236,8 @@ live at every sweep, which runs about once an hour (the first run shortly after 
   workspace with work in flight — a running agent turn, a running script
   (`scriptsRunning`), an active background hook or an active PR monitor.
 - **Path.** A due workspace is archived through `workspace.archive`, with the same
-  active-work teardown and the same `workspace:updated` delta. The sweep re-checks "still
-  Active and still idle" under the archive fence, so a message racing the sweep wins.
+  active-work teardown and the same `workspace:updated` delta. The sweep re-reads the row
+  and re-checks that it is still idle with no agent turn running right before archiving.
 - Each workspace is archived independently; a failure is logged and retried on the next
   sweep.
 
@@ -2365,9 +2365,9 @@ old folder is restored.
   previous on-disk state (files, uncommitted changes, local git state) is gone, the agent
   is on the new branch, commits on the previous branch are kept, and conversations and
   notes were kept.
-- Every other top-level agent session in the workspace learns on its own next turn: on
-  any revive (and on a manual revive, which starts no turn, for every top-level session)
-  the daemon records the same notice as pending. The session's next turn carries it once
+- Every other agent session in the workspace learns on its own next turn: on any revive
+  (and on a manual revive, which starts no turn, for every session) the daemon records
+  the same notice as pending. The session's next turn carries it once
   as a trailing `[SYSTEM NOTICE]`, after which it is cleared; the pending notice survives
   a daemon restart. The agent whose turn triggered an agent-triggered revive gets only
   that turn's notice, never a second copy.

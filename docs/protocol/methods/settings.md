@@ -120,7 +120,7 @@ never persisted or echoed back as the value. Writing that number explicitly via
 
 | Setting | Value | Default / clear |
 | --- | --- | --- |
-| Auto-archive: `workspace.autoArchiveIdleAfterDays` | Optional non-negative integer number of days. `0` turns the sweep off. | Absent means **7**: the sweep is on by default. `defaultValue` advertises `7`; `settings.reset` removes the key and returns `value: null`, which resolves to 7 again. |
+| Auto-archive: `workspace.autoArchiveIdleAfterDays` | Optional non-negative integer number of days. `0` turns the sweep off. | Absent means **7**: the sweep is on by default. `defaultValue` advertises `7`, and the absent key reads `value: 7` with `origin: "default"`; `settings.reset` removes the key, returning to that default. |
 | Purge: `workspace.purgeArchivedAfterDays` | Optional positive integer number of days. | Absent (or `null`) means **off**: the daemon never purges a workspace folder automatically. `settings.reset` removes the key and returns `value: null`. Clients that offer a toggle suggest 7 days when turning it on. |
 
 `settings.update` rejects negative and non-integer values for both keys, and zero for

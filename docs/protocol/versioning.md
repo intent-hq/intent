@@ -33,7 +33,7 @@ setting (absent = 7, `0` = off) archives workspaces idle that many days
 (migrated on boot), and the automatic purge skips folders holding uncommitted changes or
 unpushed secondary-root commits. A retire also sets the purge `statusMessage` (carried in
 its `workspace:updated` delta, cleared on revive when unchanged), and a revive leaves a
-one-time folder-purged notice pending for every top-level agent. Clients may present
+one-time folder-purged notice pending for the workspace's agents. Clients may present
 `Retired` workspaces as archived.
 
 Also within 15.2 (additive optional row field, one new event type and a widened derived
