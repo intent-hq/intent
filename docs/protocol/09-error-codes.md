@@ -140,6 +140,12 @@ keys its write refusal on the existing `-32602` code.
 errors under existing numeric codes: `-32602` for inactive/stale operations and
 `desktop-display-selection-required` / `desktop-display-unavailable` (ambiguous
 selection or missing display, with no capture/input),
+`desktop-target-mismatch` (a `windowId`-targeted action whose window is gone, not
+in the frontmost app, not under the point, or covered; `data.reason` says which.
+With `execution: "not_started"` the check failed before any input and nothing is injected.
+With `execution: "partial"` focus changed between steps of a multistep action
+(such as `type`) or `focusWindow` did not take effect: earlier input may already
+have been delivered, so replaying the whole input is unsafe),
 `-32603` for offline, busy, unsupported and native/transport failures, and
 `-32003` for authority refusal. Action failures distinguish not-started, partial
 and unknown execution; an uncertain input outcome must never be replayed.

@@ -2628,7 +2628,8 @@
       "layoutId"
     ],
     "optionalArguments": [
-      "displayId"
+      "displayId",
+      "windowId"
     ],
     "forbiddenArguments": [
       "button",
@@ -2738,5 +2739,639 @@
         "buttonEvents": 0
       }
     ]
+  },
+  "windowTargeting": {
+    "overlayWindowIds": [
+      "win-intent-glow",
+      "win-intent-stop-panel",
+      "win-intent-consent-toast"
+    ],
+    "screenshot": {
+      "capturedAt": "2026-10-26T12:00:00Z",
+      "layoutId": "layout-a",
+      "displays": [
+        {
+          "displayId": "display-main",
+          "width": 2880,
+          "height": 1800,
+          "originX": 0,
+          "originY": 0,
+          "scaleFactor": 2,
+          "assetId": "asset-1",
+          "url": "workspace-asset://ws-1/asset-1",
+          "mimeType": "image/png"
+        }
+      ],
+      "frontmost": {
+        "appName": "Safari",
+        "bundleId": "com.apple.Safari",
+        "pid": 411,
+        "windowId": "win-safari"
+      },
+      "windows": [
+        {
+          "windowId": "win-safari",
+          "appName": "Safari",
+          "bundleId": "com.apple.Safari",
+          "pid": 411,
+          "title": "Start Page",
+          "x": 200,
+          "y": 100,
+          "width": 1600,
+          "height": 1000,
+          "focused": true
+        },
+        {
+          "windowId": "win-slack",
+          "appName": "Slack",
+          "bundleId": "com.tinyspeck.slackmacgap",
+          "pid": 522,
+          "title": "general",
+          "x": -120,
+          "y": 50,
+          "width": 1400,
+          "height": 900,
+          "focused": false
+        },
+        {
+          "windowId": "win-intent",
+          "appName": "Intent",
+          "bundleId": "dev.intentapp.desktop",
+          "pid": 633,
+          "x": 900,
+          "y": 300,
+          "width": 1200,
+          "height": 900,
+          "focused": false
+        }
+      ]
+    },
+    "error": {
+      "code": -32602,
+      "data": {
+        "code": "desktop-target-mismatch",
+        "detail": "The target window is not ready for input. Call ws.desktop.focusWindow({ windowId }) if needed, take a new screenshot to confirm the target, then retry.",
+        "execution": "not_started",
+        "reason": "not_frontmost"
+      }
+    },
+    "states": {
+      "safari-front": {
+        "frontmostPid": 411,
+        "windows": [
+          {
+            "windowId": "win-safari",
+            "pid": 411,
+            "x": 200,
+            "y": 100,
+            "width": 1600,
+            "height": 1000
+          },
+          {
+            "windowId": "win-slack",
+            "pid": 522,
+            "x": -120,
+            "y": 50,
+            "width": 1400,
+            "height": 900
+          },
+          {
+            "windowId": "win-intent",
+            "pid": 633,
+            "x": 900,
+            "y": 300,
+            "width": 1200,
+            "height": 900
+          }
+        ]
+      },
+      "slack-front": {
+        "frontmostPid": 522,
+        "windows": [
+          {
+            "windowId": "win-slack",
+            "pid": 522,
+            "x": -120,
+            "y": 50,
+            "width": 1400,
+            "height": 900
+          },
+          {
+            "windowId": "win-safari",
+            "pid": 411,
+            "x": 200,
+            "y": 100,
+            "width": 1600,
+            "height": 1000
+          },
+          {
+            "windowId": "win-intent",
+            "pid": 633,
+            "x": 900,
+            "y": 300,
+            "width": 1200,
+            "height": 900
+          }
+        ]
+      },
+      "safari-front-slack-behind-same-app": {
+        "frontmostPid": 411,
+        "windows": [
+          {
+            "windowId": "win-safari",
+            "pid": 411,
+            "x": 200,
+            "y": 100,
+            "width": 1600,
+            "height": 1000
+          },
+          {
+            "windowId": "win-safari-2",
+            "pid": 411,
+            "x": -120,
+            "y": 50,
+            "width": 1400,
+            "height": 900
+          }
+        ]
+      }
+    },
+    "cases": [
+      {
+        "id": "click-in-front-window",
+        "state": "safari-front",
+        "action": "click",
+        "args": {
+          "x": 300,
+          "y": 200,
+          "layoutId": "layout-a",
+          "windowId": "win-safari"
+        },
+        "expectReason": null,
+        "expectResult": {
+          "ok": true
+        }
+      },
+      {
+        "id": "move-in-front-window",
+        "state": "safari-front",
+        "action": "move",
+        "args": {
+          "x": 400,
+          "y": 400,
+          "layoutId": "layout-a",
+          "windowId": "win-safari"
+        },
+        "expectReason": null,
+        "expectResult": {
+          "ok": true
+        }
+      },
+      {
+        "id": "scroll-in-front-window",
+        "state": "safari-front",
+        "action": "scroll",
+        "args": {
+          "x": 500,
+          "y": 500,
+          "deltaX": 0,
+          "deltaY": 120,
+          "layoutId": "layout-a",
+          "windowId": "win-safari"
+        },
+        "expectReason": null,
+        "expectResult": {
+          "ok": true
+        }
+      },
+      {
+        "id": "drag-from-window-to-other-app",
+        "state": "safari-front",
+        "action": "drag",
+        "args": {
+          "from": {
+            "x": 300,
+            "y": 300
+          },
+          "to": {
+            "x": 10,
+            "y": 200
+          },
+          "layoutId": "layout-a",
+          "windowId": "win-safari"
+        },
+        "expectReason": null,
+        "expectResult": {
+          "ok": true
+        },
+        "toOutsideTarget": true
+      },
+      {
+        "id": "type-into-frontmost-app",
+        "state": "safari-front",
+        "action": "type",
+        "args": {
+          "text": "Safari",
+          "windowId": "win-safari"
+        },
+        "expectReason": null,
+        "expectResult": {
+          "ok": true
+        }
+      },
+      {
+        "id": "keypress-into-frontmost-app",
+        "state": "safari-front",
+        "action": "keypress",
+        "args": {
+          "key": "Enter",
+          "windowId": "win-safari"
+        },
+        "expectReason": null,
+        "expectResult": {
+          "ok": true
+        }
+      },
+      {
+        "id": "type-closed-window",
+        "state": "safari-front",
+        "action": "type",
+        "args": {
+          "text": "hello",
+          "windowId": "win-closed"
+        },
+        "expectReason": "window_unavailable",
+        "expectExecution": "not_started",
+        "expectEffects": {
+          "input": 0,
+          "focusChanges": 0
+        }
+      },
+      {
+        "id": "click-other-session-id",
+        "state": "safari-front",
+        "action": "click",
+        "args": {
+          "x": 300,
+          "y": 200,
+          "layoutId": "layout-a",
+          "windowId": "win-previous-session"
+        },
+        "expectReason": "window_unavailable",
+        "expectExecution": "not_started",
+        "expectEffects": {
+          "input": 0,
+          "focusChanges": 0
+        }
+      },
+      {
+        "id": "type-while-slack-front",
+        "state": "slack-front",
+        "action": "type",
+        "args": {
+          "text": "Safari",
+          "windowId": "win-safari"
+        },
+        "expectReason": "not_frontmost",
+        "expectExecution": "not_started",
+        "expectEffects": {
+          "input": 0,
+          "focusChanges": 0
+        }
+      },
+      {
+        "id": "keypress-while-slack-front",
+        "state": "slack-front",
+        "action": "keypress",
+        "args": {
+          "key": "Enter",
+          "windowId": "win-safari"
+        },
+        "expectReason": "not_frontmost",
+        "expectExecution": "not_started",
+        "expectEffects": {
+          "input": 0,
+          "focusChanges": 0
+        }
+      },
+      {
+        "id": "click-background-app-window",
+        "state": "safari-front",
+        "action": "click",
+        "args": {
+          "x": 50,
+          "y": 100,
+          "layoutId": "layout-a",
+          "windowId": "win-slack"
+        },
+        "expectReason": "not_frontmost",
+        "expectExecution": "not_started",
+        "expectEffects": {
+          "input": 0,
+          "focusChanges": 0
+        }
+      },
+      {
+        "id": "move-background-app-window",
+        "state": "safari-front",
+        "action": "move",
+        "args": {
+          "x": 50,
+          "y": 100,
+          "layoutId": "layout-a",
+          "windowId": "win-slack"
+        },
+        "expectReason": "not_frontmost",
+        "expectExecution": "not_started",
+        "expectEffects": {
+          "input": 0,
+          "focusChanges": 0
+        }
+      },
+      {
+        "id": "scroll-background-app-window",
+        "state": "safari-front",
+        "action": "scroll",
+        "args": {
+          "x": 50,
+          "y": 100,
+          "deltaX": 0,
+          "deltaY": -40,
+          "layoutId": "layout-a",
+          "windowId": "win-slack"
+        },
+        "expectReason": "not_frontmost",
+        "expectExecution": "not_started",
+        "expectEffects": {
+          "input": 0,
+          "focusChanges": 0
+        }
+      },
+      {
+        "id": "drag-background-app-window",
+        "state": "safari-front",
+        "action": "drag",
+        "args": {
+          "from": {
+            "x": 50,
+            "y": 100
+          },
+          "to": {
+            "x": 60,
+            "y": 120
+          },
+          "layoutId": "layout-a",
+          "windowId": "win-slack"
+        },
+        "expectReason": "not_frontmost",
+        "expectExecution": "not_started",
+        "expectEffects": {
+          "input": 0,
+          "focusChanges": 0
+        }
+      },
+      {
+        "id": "click-outside-target",
+        "state": "safari-front",
+        "action": "click",
+        "args": {
+          "x": 100,
+          "y": 50,
+          "layoutId": "layout-a",
+          "windowId": "win-safari"
+        },
+        "expectReason": "outside_window",
+        "expectExecution": "not_started",
+        "expectEffects": {
+          "input": 0,
+          "focusChanges": 0
+        }
+      },
+      {
+        "id": "click-right-edge-exclusive",
+        "state": "safari-front",
+        "action": "click",
+        "args": {
+          "x": 1800,
+          "y": 200,
+          "layoutId": "layout-a",
+          "windowId": "win-safari"
+        },
+        "expectReason": "outside_window",
+        "expectExecution": "not_started",
+        "expectEffects": {
+          "input": 0,
+          "focusChanges": 0
+        }
+      },
+      {
+        "id": "drag-from-outside-target",
+        "state": "safari-front",
+        "action": "drag",
+        "args": {
+          "from": {
+            "x": 100,
+            "y": 50
+          },
+          "to": {
+            "x": 300,
+            "y": 300
+          },
+          "layoutId": "layout-a",
+          "windowId": "win-safari"
+        },
+        "expectReason": "outside_window",
+        "expectExecution": "not_started",
+        "expectEffects": {
+          "input": 0,
+          "focusChanges": 0
+        }
+      },
+      {
+        "id": "click-covered-part",
+        "state": "slack-front",
+        "action": "click",
+        "args": {
+          "x": 800,
+          "y": 500,
+          "layoutId": "layout-a",
+          "windowId": "win-safari"
+        },
+        "expectReason": "not_frontmost",
+        "expectExecution": "not_started",
+        "expectEffects": {
+          "input": 0,
+          "focusChanges": 0
+        }
+      },
+      {
+        "id": "click-slack-under-safari",
+        "state": "slack-front",
+        "action": "click",
+        "args": {
+          "x": 100,
+          "y": 200,
+          "layoutId": "layout-a",
+          "windowId": "win-slack"
+        },
+        "expectReason": null,
+        "expectResult": {
+          "ok": true
+        }
+      },
+      {
+        "id": "click-obscured-same-app-window",
+        "state": "safari-front-slack-behind-same-app",
+        "action": "click",
+        "args": {
+          "x": 300,
+          "y": 200,
+          "layoutId": "layout-a",
+          "windowId": "win-safari-2"
+        },
+        "expectReason": "obscured",
+        "expectExecution": "not_started",
+        "expectEffects": {
+          "input": 0,
+          "focusChanges": 0
+        }
+      }
+    ],
+    "untargeted": [
+      {
+        "id": "type-without-window-id",
+        "action": "type",
+        "args": {
+          "text": "hello"
+        },
+        "expectResult": {
+          "ok": true
+        }
+      },
+      {
+        "id": "click-without-window-id",
+        "action": "click",
+        "args": {
+          "x": 10,
+          "y": 10,
+          "layoutId": "layout-a"
+        },
+        "expectResult": {
+          "ok": true
+        }
+      }
+    ],
+    "invalidIds": [
+      {
+        "id": "empty-window-id",
+        "action": "type",
+        "args": {
+          "text": "x",
+          "windowId": ""
+        },
+        "expectError": "invalid-params"
+      },
+      {
+        "id": "null-window-id",
+        "action": "click",
+        "args": {
+          "x": 1,
+          "y": 1,
+          "layoutId": "layout-a",
+          "windowId": null
+        },
+        "expectError": "invalid-params"
+      },
+      {
+        "id": "numeric-window-id",
+        "action": "keypress",
+        "args": {
+          "key": "a",
+          "windowId": 7
+        },
+        "expectError": "invalid-params"
+      }
+    ],
+    "midTypeFocusLoss": {
+      "id": "type-focus-stolen-between-steps",
+      "action": "type",
+      "args": {
+        "text": "hello world",
+        "windowId": "win-safari"
+      },
+      "steps": 3,
+      "expectError": "desktop-target-mismatch",
+      "expectReason": "not_frontmost",
+      "expectExecution": "partial",
+      "expectStepsInjected": 1,
+      "expectHeldInputReleased": true,
+      "expectReplaySafe": false
+    },
+    "focusWindow": {
+      "binding": "ws.desktop.focusWindow",
+      "actionKind": "focusWindow",
+      "requiredArguments": [
+        "windowId"
+      ],
+      "forbiddenArguments": [
+        "x",
+        "y",
+        "layoutId",
+        "displayId",
+        "text",
+        "key",
+        "button",
+        "agentId",
+        "clientId",
+        "sessionId"
+      ],
+      "implicitStart": false,
+      "cases": [
+        {
+          "id": "focus-background-window",
+          "args": {
+            "windowId": "win-slack"
+          },
+          "expectResult": {
+            "ok": true
+          },
+          "expectSyntheticInput": 0,
+          "focusedWindowAfter": "win-slack"
+        },
+        {
+          "id": "focus-unknown",
+          "args": {
+            "windowId": "win-closed"
+          },
+          "expectError": "desktop-target-mismatch",
+          "expectReason": "window_unavailable",
+          "expectExecution": "not_started",
+          "expectSyntheticInput": 0
+        },
+        {
+          "id": "focus-os-refused",
+          "args": {
+            "windowId": "win-slack"
+          },
+          "osRefusesActivation": true,
+          "expectError": "desktop-target-mismatch",
+          "expectReason": "not_frontmost",
+          "expectExecution": "partial",
+          "expectSyntheticInput": 0
+        },
+        {
+          "id": "focus-same-app-other-window-keeps-focus",
+          "args": {
+            "windowId": "win-safari-2"
+          },
+          "appFrontmost": true,
+          "focusedWindowAfter": "win-safari",
+          "expectError": "desktop-target-mismatch",
+          "expectReason": "not_focused",
+          "expectExecution": "partial",
+          "expectSyntheticInput": 0
+        }
+      ]
+    }
   }
 }

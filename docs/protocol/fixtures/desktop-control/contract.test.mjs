@@ -13,6 +13,7 @@ const [fixture, doc, catalog, events, eventDoc, routing] = await Promise.all([
   read('../../06-events.md'),
   read('../../workspace-routing.md'),
 ]);
+const errorCatalog = await read('../../09-error-codes.md');
 const byId = id => {
   const entry = [...fixture.cases, ...fixture.races].find(c => c.id === id);
   assert.ok(entry, `missing required acceptance scenario: ${id}`);
@@ -541,12 +542,12 @@ test('cursor move is button-free and uses the existing desktop execution safegua
   assert.equal(move.binding, 'ws.desktop.move');
   assert.equal(move.actionKind, 'move');
   assert.deepEqual(move.requiredArguments, ['x', 'y', 'layoutId']);
-  assert.deepEqual(move.optionalArguments, ['displayId']);
+  assert.deepEqual(move.optionalArguments, ['displayId', 'windowId']);
   assert.deepEqual(move.result, { ok: true });
   assert.equal(move.buttonEvents, 0);
   assert.equal(move.implicitStart, false);
   assert.ok(doc.includes('ws.desktop.move(args)'));
-  assert.ok(doc.includes('{ kind: "move", x, y, layoutId, displayId? }'));
+  assert.ok(doc.includes('{ kind: "move", x, y, layoutId, displayId?, windowId? }'));
   for (const key of ['button', 'clickCount', 'from', 'to', 'agentId', 'clientId', 'sessionId'])
     assert.ok(move.forbiddenArguments.includes(key));
   for (const c of move.cases) {
@@ -561,4 +562,130 @@ test('cursor move is button-free and uses the existing desktop execution safegua
     assert.equal(c.nativeMoves, 0);
     assert.equal(c.buttonEvents, 0);
   }
+});
+
+const windowReasons = ['window_unavailable', 'not_frontmost', 'outside_window', 'obscured', 'not_focused'];
+const coordinateActions = ['move', 'click', 'scroll', 'drag'];
+
+function inside(w, p) {
+  return w.x <= p.x && p.x < w.x + w.width && w.y <= p.y && p.y < w.y + w.height;
+}
+
+// Reference model of the documented check order; component tests run the real executor.
+function targetReason(state, action, args) {
+  const target = state.windows.find(w => w.windowId === args.windowId);
+  if (!target) return 'window_unavailable';
+  if (target.pid !== state.frontmostPid) return 'not_frontmost';
+  if (!coordinateActions.includes(action)) return undefined;
+  const point = action === 'drag' ? args.from : { x: args.x, y: args.y };
+  if (!inside(target, point)) return 'outside_window';
+  const topmost = state.windows.find(w => inside(w, point));
+  return topmost.windowId === args.windowId ? undefined : 'obscured';
+}
+
+test('screenshots describe the frontmost app and visible windows front-to-back without Intent overlays', () => {
+  const { screenshot, overlayWindowIds } = fixture.windowTargeting;
+  assert.ok(doc.includes('### Window metadata and targeted actions'));
+  assert.ok(doc.includes('windows: WindowMetadata[];'));
+  assert.ok(doc.includes('frontmost?: FrontmostApp;'));
+  const [display] = screenshot.displays;
+  assert.equal(screenshot.displays.length, 1);
+  const ids = screenshot.windows.map(w => w.windowId);
+  assert.equal(new Set(ids).size, ids.length);
+  for (const id of overlayWindowIds) assert.ok(!ids.includes(id), id);
+  for (const w of screenshot.windows) {
+    assert.ok(typeof w.windowId === 'string' && w.windowId.length > 0);
+    assert.ok(typeof w.appName === 'string' && w.appName.length > 0);
+    assert.ok(Number.isInteger(w.pid) && w.pid > 0);
+    for (const k of ['x', 'y']) assert.ok(Number.isInteger(w[k]));
+    for (const k of ['width', 'height']) assert.ok(Number.isInteger(w[k]) && w[k] > 0);
+    assert.equal(typeof w.focused, 'boolean');
+    if (Object.hasOwn(w, 'title')) assert.ok(w.title.length > 0);
+    for (const v of Object.values(w)) assert.notEqual(v, null);
+    const intersects = w.x < display.width && w.x + w.width > 0 && w.y < display.height && w.y + w.height > 0;
+    assert.ok(intersects, w.windowId);
+  }
+  assert.ok(screenshot.windows.some(w => w.x < 0 || w.x + w.width > display.width), 'frames are not clipped');
+  const focused = screenshot.windows.filter(w => w.focused);
+  assert.equal(focused.length, 1);
+  assert.equal(focused[0].windowId, screenshot.frontmost.windowId);
+  assert.equal(focused[0].pid, screenshot.frontmost.pid);
+  assert.equal(screenshot.windows[0].windowId, screenshot.frontmost.windowId, 'first entry is topmost');
+});
+
+test('windowId targets refuse in the documented order and inject nothing on mismatch', () => {
+  const { error, cases, states, untargeted } = fixture.windowTargeting;
+  assert.equal(error.code, -32602);
+  assert.equal(error.data.code, 'desktop-target-mismatch');
+  assert.equal(error.data.execution, 'not_started');
+  assert.ok(error.data.detail.includes('ws.desktop.focusWindow({ windowId })'));
+  assert.ok(doc.includes(error.data.detail));
+  for (const c of cases) {
+    const state = states[c.state];
+    assert.ok(state, c.id);
+    const reason = targetReason(state, c.action, c.args);
+    assert.equal(c.expectReason, reason ?? null, c.id);
+    if (reason) {
+      assert.equal(c.expectExecution, 'not_started', c.id);
+      assert.deepEqual(c.expectEffects, { input: 0, focusChanges: 0 }, c.id);
+    } else {
+      assert.deepEqual(c.expectResult, { ok: true }, c.id);
+    }
+  }
+  for (const action of ['move', 'click', 'scroll', 'drag', 'type', 'keypress']) {
+    assert.ok(cases.some(c => c.action === action && c.expectReason === null), `${action} success`);
+    assert.ok(cases.some(c => c.action === action && c.expectReason === 'not_frontmost'), `${action} not_frontmost`);
+  }
+  for (const reason of windowReasons.filter(r => r !== 'not_focused')) assert.ok(cases.some(c => c.expectReason === reason), reason);
+  assert.ok(!cases.some(c => c.expectReason === 'not_focused'), 'targeted input stays process-level');
+  for (const action of ['type', 'keypress'])
+    assert.ok(!cases.some(c => c.action === action && ['outside_window', 'obscured'].includes(c.expectReason)));
+  assert.ok(cases.some(c => c.action === 'drag' && c.expectReason === null && c.toOutsideTarget), 'drag checks from only');
+  for (const c of untargeted) assert.deepEqual(c.expectResult, { ok: true }, c.id);
+  for (const c of fixture.windowTargeting.invalidIds) assert.equal(c.expectError, 'invalid-params', c.id);
+});
+
+test('focus lost between typing steps stops input as partial and releases held keys', () => {
+  const c = fixture.windowTargeting.midTypeFocusLoss;
+  assert.equal(c.expectError, 'desktop-target-mismatch');
+  assert.equal(c.expectReason, 'not_frontmost');
+  assert.equal(c.expectExecution, 'partial');
+  assert.ok(c.expectStepsInjected > 0 && c.expectStepsInjected < c.steps);
+  assert.equal(c.expectHeldInputReleased, true);
+  assert.equal(c.expectReplaySafe, false);
+  const catalogEntry = errorCatalog.slice(errorCatalog.indexOf('`desktop-target-mismatch`'), errorCatalog.indexOf('### Prepared provider profile errors'));
+  assert.match(catalogEntry, /`execution: "not_started"`[^.]*nothing is injected/);
+  assert.match(catalogEntry, /`execution: "partial"`/);
+  assert.match(catalogEntry, /replay/);
+  assert.match(doc, /Do not replay the whole input after a `partial` result/);
+});
+
+test('focusWindow raises without synthetic input and reports OS refusal truthfully', () => {
+  const f = fixture.windowTargeting.focusWindow;
+  assert.equal(f.binding, 'ws.desktop.focusWindow');
+  assert.ok(doc.includes('ws.desktop.focusWindow(args)'));
+  assert.ok(doc.includes('{ kind: "focusWindow", windowId }'));
+  assert.deepEqual(f.requiredArguments, ['windowId']);
+  for (const key of ['x', 'y', 'layoutId', 'displayId', 'text', 'key'])
+    assert.ok(f.forbiddenArguments.includes(key), key);
+  assert.equal(f.implicitStart, false);
+  for (const c of f.cases) {
+    assert.deepEqual(c.expectSyntheticInput, 0, c.id);
+    if (c.expectReason) {
+      assert.equal(c.expectError, 'desktop-target-mismatch', c.id);
+      assert.ok(windowReasons.includes(c.expectReason), c.id);
+    } else {
+      assert.deepEqual(c.expectResult, { ok: true }, c.id);
+    }
+  }
+  assert.equal(f.cases.find(c => c.id === 'focus-unknown').expectExecution, 'not_started');
+  assert.equal(f.cases.find(c => c.id === 'focus-os-refused').expectExecution, 'partial');
+  assert.equal(f.cases.find(c => c.id === 'focus-os-refused').expectReason, 'not_frontmost');
+  const sameApp = f.cases.find(c => c.id === 'focus-same-app-other-window-keeps-focus');
+  assert.ok(sameApp, 'same-process focus failure');
+  assert.equal(sameApp.appFrontmost, true);
+  assert.notEqual(sameApp.focusedWindowAfter, sameApp.args.windowId);
+  assert.equal(sameApp.expectReason, 'not_focused');
+  assert.equal(sameApp.expectExecution, 'partial');
+  for (const c of f.cases.filter(c => !c.expectReason)) assert.equal(c.focusedWindowAfter, c.args.windowId, c.id);
 });
