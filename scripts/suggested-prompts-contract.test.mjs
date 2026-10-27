@@ -44,7 +44,7 @@ test('canonical cases are valid and cover every required case', () => {
   const { doc } = readCases(path.join(ROOT, SOURCE_PATH));
   const ids = doc.cases.map((c) => c.id);
   for (const id of REQUIRED_CASES) assert.ok(ids.includes(id), id);
-  assert.match(main(['validate']), /cases valid: \d+ cases sha256 [0-9a-f]{64}/);
+  assert.match(main(['validate']), /canonical valid \(\d+ cases sha256 [0-9a-f]{64}\)/);
 });
 
 test('the escaped incident reply strips the block and decodes its prompts', () => {
@@ -110,10 +110,10 @@ test('export then verify round-trips for every consumer', (t) => {
     const componentRoot = path.join(root, 'packages', component);
     const options = { sourceRoot: root, sourceCommit: commit, component, componentRoot };
     assert.match(exportMirror(options), /exported/);
-    assert.match(verifyMirror(options), new RegExp(`match intent-hq/intent@${commit}`));
+    assert.match(verifyMirror(options), new RegExp(`copy matches intent-hq/intent@${commit}`));
   }
   const report = checkConsumers(root);
-  for (const component of CONSUMERS) assert.match(report, new RegExp(`${component}: adopted mirror valid at ${commit}, current`));
+  for (const component of CONSUMERS) assert.match(report, new RegExp(`${component}: adopted copy valid at ${commit}, current`));
 });
 
 test('export refuses uncommitted cases, a non-HEAD commit and a bad commit without writing anything', (t) => {
@@ -141,8 +141,8 @@ test('a mirror whose expected value was edited fails verify and check', (t) => {
   const edited = JSON.parse(fs.readFileSync(file, 'utf8'));
   byId(edited, 'plain-prompts').expect.prompts = ['Run tests'];
   fs.writeFileSync(file, jsonBytes(edited));
-  assert.throws(() => verifyMirror(options), /SHA-256 vs lock/);
-  assert.throws(() => checkConsumers(root), /SHA-256 vs lock/);
+  assert.throws(() => verifyMirror(options), /do not match the SHA-256 hashes in its lock/);
+  assert.throws(() => checkConsumers(root), /do not match the SHA-256 hashes in its lock/);
 });
 
 test('a re-locked mirror that disagrees with the canonical commit fails verify', (t) => {
@@ -160,7 +160,7 @@ test('a re-locked mirror that disagrees with the canonical commit fails verify',
   fs.writeFileSync(lockFile, jsonBytes({ ...lock, sourceCommit: commit }));
   assert.throws(
     () => verifyMirror({ sourceRoot: root, sourceCommit: commit, component: 'ios', componentRoot }),
-    /mirror provenance/,
+    /copy provenance/,
   );
 });
 
@@ -183,7 +183,7 @@ test('check reports an older copy as behind even when today\'s rules would rejec
     casesSha256: createHash('sha256').update(bytes).digest('hex'),
   }));
   commitSource(root, canonical());
-  assert.match(checkConsumers(root), new RegExp(`intentd: adopted mirror valid at ${oldCommit}, behind canonical`));
+  assert.match(checkConsumers(root), new RegExp(`intentd: adopted copy valid at ${oldCommit}, behind canonical`));
 });
 
 test('check rejects a copy locked to a commit off the canonical history', (t) => {

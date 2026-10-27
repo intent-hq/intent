@@ -1,13 +1,15 @@
 #!/usr/bin/env node
-// Offline corpus validation and exact-byte distribution; no component imports.
-import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+// Offline corpus validation; exact-byte component copies go through the shared
+// fixture-copy tool (scripts/lib/fixture-copy.mjs). No component imports.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { isDeepStrictEqual, parseArgs } from 'node:util';
+import { isDeepStrictEqual } from 'node:util';
+import {
+  SOURCE_REPOSITORY, defineFixtureCopy, fixtureCopyMain, jsonBytes, runScript, sha256,
+} from './lib/fixture-copy.mjs';
 
-export const SOURCE_REPOSITORY = 'intent-hq/intent';
+export { SOURCE_REPOSITORY, jsonBytes, sha256 };
 export const SOURCE_PATH = 'docs/protocol/fixtures/backend-keychain/v1';
 export const MIRRORS = {
   'cloudlands-fe': { directory: 'tests/fixtures/backend-keychain/v1', lock: 'tests/fixtures/backend-keychain.lock.json' },
@@ -15,8 +17,6 @@ export const MIRRORS = {
 };
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const FILES = ['corpus.json', 'manifest.json'];
-const SHA = /^[0-9a-f]{40}$/;
-const HASH = /^[0-9a-f]{64}$/;
 const COMMON = 'label host hosts port fingerprint hostname tcAddress detectHosts token updatedAt';
 const DESKTOP = `${COMMON} accent detectedDeviceKind deviceIcon`;
 const IOS = `${COMMON} deleted deletedAt`;
@@ -55,8 +55,6 @@ function strings(value, label) {
   requireValue(Array.isArray(value) && value.every((x) => typeof x === 'string'), `${label} must be a string array`);
 }
 function nullableString(value, label) { if (value !== null) string(value, label); }
-export function sha256(bytes) { return createHash('sha256').update(bytes).digest('hex'); }
-export function jsonBytes(value) { return Buffer.from(`${JSON.stringify(value, null, 2)}\n`, 'utf8'); }
 
 function assertRecord(value, client, label, { extra = false } = {}) {
   object(value, label);
@@ -270,111 +268,32 @@ export function readCorpus(directory) {
   return { corpus, files, digest: sha256(files['corpus.json']) };
 }
 
-function git(root, ...args) {
-  return execFileSync('git', ['-C', root, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
-}
-function requireSource(root, commit) {
-  requireValue(typeof commit === 'string' && SHA.test(commit), 'source commit must be an immutable 40-character lowercase Git SHA');
-  equal(git(root, 'rev-parse', '--show-toplevel').toString().trim(), fs.realpathSync(root), 'source root must be the checkout root');
-  equal(git(root, 'rev-parse', 'HEAD').toString().trim(), commit, 'canonical checkout HEAD must equal source commit');
-  const source = readCorpus(path.join(root, SOURCE_PATH));
-  for (const file of FILES) {
-    requireValue(source.files[file].equals(git(root, 'show', `${commit}:${SOURCE_PATH}/${file}`)), `canonical ${file} differs from source commit ${commit}`);
-  }
-  return source;
-}
-function mirrorPaths(componentRoot, component) {
-  requireValue(Object.hasOwn(MIRRORS, component), `unknown component: ${component}`);
-  const spec = MIRRORS[component];
-  return { directory: path.join(componentRoot, spec.directory), lock: path.join(componentRoot, spec.lock) };
-}
-function expectedLock(source, commit) {
-  return {
-    lockVersion: 1, sourceRepository: SOURCE_REPOSITORY, sourcePath: SOURCE_PATH,
-    sourceCommit: commit, corpusSha256: source.digest,
-    files: Object.fromEntries(FILES.map((file) => [file, sha256(source.files[file])])),
-  };
-}
+export const COPY = defineFixtureCopy({
+  name: 'backend-keychain',
+  sourcePath: SOURCE_PATH,
+  provenance: 'commit',
+  files: FILES,
+  copies: MIRRORS,
+  // Both clients must test against the same corpus (see backend-keychain.md).
+  sameSourceAcrossComponents: true,
+  lockFields: (bytes) => ({
+    corpusSha256: sha256(bytes['corpus.json']),
+    files: Object.fromEntries(FILES.map((file) => [file, sha256(bytes[file])])),
+  }),
+  validate: (directory) => `corpus sha256 ${readCorpus(directory).digest}`,
+});
+
+/** A component copy and lock, checked for integrity only (not provenance). */
 export function inspectMirror(componentRoot, component) {
-  const paths = mirrorPaths(componentRoot, component);
-  const lock = readJson(readBytes(paths.lock), paths.lock);
-  keys(lock, 'lockVersion sourceRepository sourcePath sourceCommit corpusSha256 files', 'lock');
-  equal(lock.lockVersion, 1, 'lockVersion');
-  equal(lock.sourceRepository, SOURCE_REPOSITORY, 'sourceRepository');
-  equal(lock.sourcePath, SOURCE_PATH, 'sourcePath');
-  requireValue(typeof lock.sourceCommit === 'string' && SHA.test(lock.sourceCommit), 'lock sourceCommit must be a full 40-character lowercase Git SHA');
-  requireValue(typeof lock.corpusSha256 === 'string' && HASH.test(lock.corpusSha256), 'lock corpusSha256 must be SHA-256');
-  const source = readCorpus(paths.directory);
-  equal(lock, expectedLock(source, lock.sourceCommit), 'mirror hashes/lock');
-  return { ...source, lock };
+  const copy = COPY.inspectCopy(componentRoot, component);
+  return { files: copy.bytes, lock: copy.lock, digest: sha256(copy.bytes['corpus.json']) };
 }
-export function exportFixtures({ sourceRoot, sourceCommit, componentRoot, component }) {
-  const source = requireSource(sourceRoot, sourceCommit);
-  const paths = mirrorPaths(componentRoot, component);
-  requireValue(path.resolve(paths.directory) !== path.resolve(sourceRoot, SOURCE_PATH), 'mirror must be separate from canonical data');
-  // Refuse extra files instead of leaving a partly updated mirror on failure.
-  if (fs.existsSync(paths.directory)) {
-    requireValue(fs.lstatSync(paths.directory).isDirectory(), 'mirror must be a regular directory');
-    requireValue(fs.readdirSync(paths.directory).every((file) => FILES.includes(file)), 'mirror contains unexpected files');
-  }
-  for (const file of [paths.lock, ...FILES.map((name) => path.join(paths.directory, name))]) {
-    const stat = fs.lstatSync(file, { throwIfNoEntry: false });
-    requireValue(!stat || stat.isFile(), `export target must be a regular file: ${file}`);
-  }
-  fs.mkdirSync(paths.directory, { recursive: true });
-  fs.mkdirSync(path.dirname(paths.lock), { recursive: true });
-  for (const file of FILES) fs.writeFileSync(path.join(paths.directory, file), source.files[file]);
-  fs.writeFileSync(paths.lock, jsonBytes(expectedLock(source, sourceCommit)));
-  return verifyFixtures({ sourceRoot, sourceCommit, componentRoot, component });
-}
-export function verifyFixtures({ sourceRoot, sourceCommit, componentRoot, component }) {
-  const source = requireSource(sourceRoot, sourceCommit);
-  const mirror = inspectMirror(componentRoot, component);
-  equal(mirror.lock, expectedLock(source, sourceCommit), 'mirror provenance');
-  for (const file of FILES) requireValue(mirror.files[file].equals(source.files[file]), `${component}: canonical byte mismatch in ${file}`);
-  return `${component}: verified ${SOURCE_REPOSITORY}@${sourceCommit} corpus sha256 ${source.digest}`;
-}
-export function checkConsumers(root) {
-  const canonical = readCorpus(path.join(root, SOURCE_PATH));
-  const lines = [`canonical Keychain corpus valid: sha256 ${canonical.digest}`];
-  let first;
-  for (const component of Object.keys(MIRRORS)) {
-    const componentRoot = path.join(root, 'packages', component);
-    const paths = mirrorPaths(componentRoot, component);
-    // Either marker declares adoption. Partial deletion must fail, never turn into a skip.
-    const exists = (file) => fs.existsSync(file) || (() => { try { fs.lstatSync(file); return true; } catch { return false; } })();
-    if (!exists(paths.lock) && !exists(paths.directory)) {
-      const initialized = fs.existsSync(path.join(componentRoot, '.git'));
-      lines.push(`${component}: ${initialized ? 'pre-adoption pin' : 'uninspected (checkout uninitialized' + (component === 'ios' ? '; private/optional)' : ')')}; conformance not claimed`);
-      continue;
-    }
-    const mirror = inspectMirror(componentRoot, component);
-    if (first) equal(mirror.lock, first, 'conflicting adopted consumer pins');
-    first = mirror.lock;
-    lines.push(`${component}: adopted integrity valid at ${mirror.lock.sourceCommit} sha256 ${mirror.digest}; provenance is required in component CI`);
-  }
-  return lines.join('\n');
+export const exportFixtures = (options) => COPY.exportCopy(options);
+export const verifyFixtures = (options) => COPY.verifyCopy(options);
+export const checkConsumers = (root) => COPY.checkCopies(root).report;
+
+export function main(args = process.argv.slice(2), options = {}) {
+  return fixtureCopyMain(COPY, args, { script: 'backend-keychain-contract.mjs', defaultRoot: ROOT, ...options });
 }
 
-export function main(args = process.argv.slice(2)) {
-  const { positionals, values } = parseArgs({ args, allowPositionals: true, options: {
-    root: { type: 'string' }, 'source-root': { type: 'string' }, 'source-commit': { type: 'string' },
-    component: { type: 'string' }, 'component-root': { type: 'string' },
-  } });
-  const [command] = positionals;
-  requireValue(positionals.length === 1 && ['validate', 'check', 'export', 'verify'].includes(command),
-    'usage: backend-keychain-contract.mjs validate|check [--root MONOREPO] OR export|verify --source-root MONOREPO --source-commit SHA --component cloudlands-fe|ios --component-root COMPONENT');
-  if (['validate', 'check'].includes(command)) {
-    requireValue(Object.keys(values).every((key) => key === 'root'), 'validate/check only accepts --root');
-    const root = path.resolve(values.root ?? ROOT);
-    return command === 'check' ? checkConsumers(root) : `canonical Keychain corpus valid: sha256 ${readCorpus(path.join(root, SOURCE_PATH)).digest}`;
-  }
-  requireValue(!values.root && ['source-root', 'source-commit', 'component', 'component-root'].every((key) => values[key]), 'export/verify requires explicit source root, source commit, component and component root');
-  return (command === 'export' ? exportFixtures : verifyFixtures)({
-    sourceRoot: path.resolve(values['source-root']), sourceCommit: values['source-commit'],
-    component: values.component, componentRoot: path.resolve(values['component-root']),
-  });
-}
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  try { console.log(main()); } catch (error) { console.error(`backend-keychain-contract: ${error.message}`); process.exitCode = 1; }
-}
+runScript(import.meta.url, 'backend-keychain-contract', () => main());

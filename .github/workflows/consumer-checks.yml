@@ -156,6 +156,10 @@ jobs:
           ref: ${{ inputs.self-test && github.sha || job.workflow_sha || 'main' }}
           submodules: false
           persist-credentials: false
+          # Fixture-copy checks read history (past fixture versions, lock
+          # commit ancestry) from trees only; blob:none skips old blobs.
+          fetch-depth: 0
+          filter: blob:none
 
       - name: Skip when the monorepo checkout failed
         if: steps.monorepo.outcome != 'success'

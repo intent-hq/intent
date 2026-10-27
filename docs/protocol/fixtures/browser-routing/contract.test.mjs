@@ -1,21 +1,20 @@
 // Browser-routing (REV-2, §5.9) contract checks. A reference resolver recomputes
-// every case's expectation from its inputs, every case must quote its rule's
-// text in files-terminal-browser.md, and intentd's mirror must follow the
-// revision rules below. intentd's routing unit tests run the same cases against
-// the real code, so a rule change that skips the docs, the fixture or the
-// daemon fails a test.
+// every case's expectation from its inputs, and every case must quote its rule's
+// text in files-terminal-browser.md. intentd's copy is checked by the shared
+// fixture-copy tool (`node scripts/browser-routing-contract.mjs check`, revision
+// provenance), and intentd's routing unit tests run the same cases against the
+// real code, so a rule change that skips the docs, the fixture or the daemon
+// fails a check.
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import { COPY } from '../../../../scripts/browser-routing-contract.mjs';
 
 const fixtureUrl = new URL('./routing.json', import.meta.url);
 const fixture = JSON.parse(await readFile(fixtureUrl, 'utf8'));
 const docs = await readFile(new URL('../../methods/files-terminal-browser.md', import.meta.url), 'utf8');
-const INTENTD = new URL('../../../../packages/intentd/', import.meta.url);
-const MIRROR_PATH = 'crates/intent-transport/tests/fixtures/browser-routing.json';
-const MIRROR = new URL(MIRROR_PATH, INTENTD);
+const ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
 
 const normalise = text => text.replace(/^> ?/gm, '').replace(/\s+/g, ' ').trim();
 
@@ -136,63 +135,10 @@ test('REV-2 links the fixture', () => {
 });
 
 // Docs lead the pin: a docs change bumps `revision` and lands first, so the
-// pinned copy may lag behind. A copy ahead of the docs, or one that differs at
-// the same revision, fails, as does a copy that intentd still references but
-// that is gone from its known path.
-function mirrorVerdict(canonical, mirror) {
-  if (!Number.isInteger(mirror.revision)) return { fail: "intentd's copy has no integer revision; re-copy routing.json" };
-  if (mirror.revision > canonical.revision) {
-    return { fail: `intentd's copy is at revision ${mirror.revision}, ahead of routing.json (${canonical.revision}); land the docs change first` };
-  }
-  if (mirror.revision < canonical.revision) {
-    return { warn: `intentd's copy is at revision ${mirror.revision}, behind routing.json (${canonical.revision}); copy routing.json into intentd` };
-  }
-  try {
-    assert.deepEqual(mirror, canonical);
-  } catch {
-    return { fail: `intentd's copy differs from routing.json at the same revision ${canonical.revision}; bump revision when changing the cases, or re-copy routing.json` };
-  }
-  return {};
-}
-
-function intentdReferencesMirror() {
-  try {
-    execFileSync('git', ['-C', fileURLToPath(INTENTD), 'grep', '-q', '-F', 'browser-routing.json', '--', 'crates'],
-      { stdio: 'ignore' });
-    return true;
-  } catch (e) {
-    if (e.status === 1) return false;
-    return undefined;
-  }
-}
-
-test('mirror verdicts', () => {
-  const base = { ...fixture, revision: 2 };
-  assert.deepEqual(mirrorVerdict(base, structuredClone(base)), {});
-  assert.ok(mirrorVerdict(base, { ...base, revision: 1, cases: [] }).warn);
-  assert.ok(mirrorVerdict(base, { ...base, revision: 3 }).fail);
-  assert.ok(mirrorVerdict(base, { ...base, cases: base.cases.slice(1) }).fail);
-  assert.ok(mirrorVerdict(base, { ...base, revision: undefined }).fail);
-});
-
-test("intentd's mirror follows the revision rules", async t => {
-  let text;
-  try {
-    text = await readFile(MIRROR, 'utf8');
-  } catch (e) {
-    if (e.code !== 'ENOENT') throw e;
-    const referenced = intentdReferencesMirror();
-    assert.notEqual(referenced, true,
-      `intentd references browser-routing.json but ${MIRROR_PATH} is missing; update MIRROR_PATH here if it moved`);
-    const why = referenced === false ? 'intentd has not adopted the fixture yet' : 'packages/intentd is not a git checkout';
-    console.warn(`::warning::no intentd copy of the browser-routing fixture (${why})`);
-    t.skip(why);
-    return;
-  }
-  const verdict = mirrorVerdict(fixture, JSON.parse(text));
-  assert.equal(verdict.fail, undefined, verdict.fail);
-  if (verdict.warn) {
-    console.warn(`::warning::${verdict.warn}`);
-    t.skip(verdict.warn);
-  }
+// copy may lag behind (a warning); a copy ahead of the docs, one that differs
+// at the same revision, or one intentd references but no longer has, fails.
+test("intentd's copy follows the shared fixture-copy revision rules", () => {
+  const { report, warnings } = COPY.checkCopies(ROOT);
+  for (const line of warnings) console.warn(`::warning::${line}`);
+  assert.match(report, /^browser-routing: canonical valid at revision \d+/);
 });

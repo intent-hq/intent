@@ -1,15 +1,16 @@
 #!/usr/bin/env node
-// Shared suggested-prompts block cases: offline validation and exact-byte
-// distribution to the component test suites (same model as
-// backend-keychain-contract.mjs). No component code is imported.
-import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+// Shared suggested-prompts block cases: offline validation, and exact-byte
+// copies in the component test suites through the shared fixture-copy tool
+// (scripts/lib/fixture-copy.mjs). No component code is imported.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { isDeepStrictEqual, parseArgs } from 'node:util';
+import { isDeepStrictEqual } from 'node:util';
+import {
+  SOURCE_REPOSITORY, defineFixtureCopy, fixtureCopyMain, jsonBytes, readJsonBytes, runScript, sha256,
+} from './lib/fixture-copy.mjs';
 
-export const SOURCE_REPOSITORY = 'intent-hq/intent';
+export { SOURCE_REPOSITORY, jsonBytes, sha256 };
 export const SOURCE_PATH = 'docs/protocol/fixtures/suggested-prompts/v1';
 export const CASES_FILE = 'cases.json';
 export const MIRRORS = {
@@ -39,8 +40,6 @@ export const REQUIRED_CASES = [
 export const MAX_PROMPTS = 4;
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-const SHA = /^[0-9a-f]{40}$/;
-const HASH = /^[0-9a-f]{64}$/;
 
 function requireValue(condition, message) {
   if (!condition) throw new Error(message);
@@ -70,10 +69,6 @@ function string(value, label) {
  */
 export function normalizeCleaned(text) {
   return text.replace(/\r\n/g, '\n').trim().replace(/\n{3,}/g, '\n\n');
-}
-
-export function sha256(bytes) {
-  return createHash('sha256').update(bytes).digest('hex');
 }
 
 export function validateCases(doc) {
@@ -120,213 +115,42 @@ export function validateCases(doc) {
   return doc;
 }
 
-function readJson(file) {
-  const bytes = fs.readFileSync(file);
-  let value;
-  try {
-    value = JSON.parse(bytes.toString('utf8'));
-  } catch (error) {
-    throw new Error(`${file}: invalid JSON (${error.message})`);
-  }
-  requireValue(bytes.equals(jsonBytes(value)), `${file} must be formatted as JSON.stringify(value, null, 2) plus a newline`);
-  return { value, bytes };
-}
-
 /**
  * Read a cases file. `validate: false` checks only JSON and formatting, for a
  * component copy locked to an older canonical revision: today's schema and
  * required-case rules apply to the canonical file, not to older copies.
  */
 export function readCases(directory, { validate = true } = {}) {
-  const { value: doc, bytes } = readJson(path.join(directory, CASES_FILE));
+  const file = path.join(directory, CASES_FILE);
+  const bytes = fs.readFileSync(file);
+  const doc = readJsonBytes(bytes, file);
   if (validate) validateCases(doc);
   return { doc, bytes, digest: sha256(bytes) };
 }
 
-export function jsonBytes(value) {
-  return Buffer.from(`${JSON.stringify(value, null, 2)}\n`, 'utf8');
+export const COPY = defineFixtureCopy({
+  name: 'suggested-prompts',
+  sourcePath: SOURCE_PATH,
+  provenance: 'commit',
+  files: [CASES_FILE],
+  copies: MIRRORS,
+  // The lock format predates the shared tool; adopted locks keep it.
+  lockFields: (bytes) => ({ casesSha256: sha256(bytes[CASES_FILE]) }),
+  validate: (directory) => {
+    const { doc, digest } = readCases(directory);
+    return `${doc.cases.length} cases sha256 ${digest}`;
+  },
+});
+
+/** Write the component copy and lock from the canonical cases at `sourceRoot`. */
+export const exportMirror = (options) => COPY.exportCopy(options);
+/** Component CI provenance: the copy must be byte-identical to the monorepo at the lock's commit. */
+export const verifyMirror = (options) => COPY.verifyCopy(options);
+/** Monorepo/upstream check: canonical cases plus every adopted component copy. */
+export const checkConsumers = (root) => COPY.checkCopies(root).report;
+
+export function main(args = process.argv.slice(2), options = {}) {
+  return fixtureCopyMain(COPY, args, { script: 'suggested-prompts-contract.mjs', defaultRoot: ROOT, ...options });
 }
 
-function mirrorPaths(componentRoot, component) {
-  requireValue(Object.hasOwn(MIRRORS, component), `unknown component ${component}; expected one of ${CONSUMERS.join(', ')}`);
-  const spec = MIRRORS[component];
-  return {
-    directory: path.join(componentRoot, spec.directory),
-    lock: path.join(componentRoot, spec.lock),
-  };
-}
-
-export function expectedLock(source, sourceCommit) {
-  requireValue(typeof sourceCommit === 'string' && SHA.test(sourceCommit), 'source commit must be a full 40-character lowercase Git SHA');
-  return {
-    lockVersion: 1,
-    sourceRepository: SOURCE_REPOSITORY,
-    sourcePath: SOURCE_PATH,
-    sourceCommit,
-    casesSha256: source.digest,
-  };
-}
-
-/** True when the path exists in any form, including a dangling symlink. */
-function present(file) {
-  return fs.lstatSync(file, { throwIfNoEntry: false }) !== undefined;
-}
-
-function inspectMirror(componentRoot, component, { validate = true } = {}) {
-  const paths = mirrorPaths(componentRoot, component);
-  const lockStat = fs.lstatSync(paths.lock, { throwIfNoEntry: false });
-  requireValue(lockStat?.isFile(), `${component}: mirror lock ${paths.lock} is missing or not a regular file`);
-  const dirStat = fs.lstatSync(paths.directory, { throwIfNoEntry: false });
-  requireValue(dirStat?.isDirectory(), `${component}: mirror directory ${paths.directory} is missing or not a regular directory`);
-  requireValue(fs.readdirSync(paths.directory).every((file) => file === CASES_FILE),
-    `${component}: mirror directory contains unexpected files`);
-  const caseStat = fs.lstatSync(path.join(paths.directory, CASES_FILE), { throwIfNoEntry: false });
-  requireValue(caseStat?.isFile(), `${component}: mirror ${CASES_FILE} is missing or not a regular file`);
-  const lock = readJson(paths.lock).value;
-  keys(lock, ['lockVersion', 'sourceRepository', 'sourcePath', 'sourceCommit', 'casesSha256'], [], `${component} lock`);
-  equal(lock.lockVersion, 1, `${component} lockVersion`);
-  equal(lock.sourceRepository, SOURCE_REPOSITORY, `${component} sourceRepository`);
-  equal(lock.sourcePath, SOURCE_PATH, `${component} sourcePath`);
-  requireValue(typeof lock.sourceCommit === 'string' && SHA.test(lock.sourceCommit),
-    `${component} lock sourceCommit must be a full 40-character lowercase Git SHA`);
-  requireValue(typeof lock.casesSha256 === 'string' && HASH.test(lock.casesSha256), `${component} lock casesSha256 must be SHA-256`);
-  const mirror = readCases(paths.directory, { validate });
-  equal(mirror.digest, lock.casesSha256, `${component}: mirror cases.json SHA-256 vs lock`);
-  return { ...mirror, lock, paths };
-}
-
-function git(root, ...args) {
-  return execFileSync('git', ['-C', root, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
-}
-
-/**
- * The canonical cases at `sourceCommit`: `sourceRoot` must be a checkout whose
- * HEAD is that commit, and the file must equal the committed bytes, so a copy
- * never locks uncommitted or unmerged expectations to a commit.
- */
-function requireSource(sourceRoot, sourceCommit) {
-  requireValue(typeof sourceCommit === 'string' && SHA.test(sourceCommit), 'source commit must be a full 40-character lowercase Git SHA');
-  equal(git(sourceRoot, 'rev-parse', '--show-toplevel').toString().trim(), fs.realpathSync(sourceRoot), 'source root must be the checkout root');
-  equal(git(sourceRoot, 'rev-parse', 'HEAD').toString().trim(), sourceCommit, 'source checkout HEAD must equal the source commit');
-  const source = readCases(path.join(sourceRoot, SOURCE_PATH));
-  requireValue(source.bytes.equals(git(sourceRoot, 'show', `${sourceCommit}:${SOURCE_PATH}/${CASES_FILE}`)),
-    `canonical ${CASES_FILE} differs from source commit ${sourceCommit}; commit it first`);
-  return source;
-}
-
-/** 'ancestor' | 'unrelated' | 'unknown' (commit absent, e.g. a shallow checkout). */
-function lockAncestry(root, sourceCommit) {
-  try {
-    git(root, 'cat-file', '-e', `${sourceCommit}^{commit}`);
-  } catch {
-    return 'unknown';
-  }
-  try {
-    git(root, 'merge-base', '--is-ancestor', sourceCommit, 'HEAD');
-    return 'ancestor';
-  } catch {
-    return 'unrelated';
-  }
-}
-
-/** Write the component mirror and lock from the canonical cases at `sourceRoot`. */
-export function exportMirror({ sourceRoot, sourceCommit, component, componentRoot }) {
-  // Validate everything before writing, so a bad argument never leaves a
-  // half-updated copy behind.
-  const source = requireSource(sourceRoot, sourceCommit);
-  const lock = jsonBytes(expectedLock(source, sourceCommit));
-  const paths = mirrorPaths(componentRoot, component);
-  requireValue(path.resolve(paths.directory) !== path.resolve(sourceRoot, SOURCE_PATH), 'mirror must be separate from canonical data');
-  if (fs.existsSync(paths.directory)) {
-    requireValue(fs.readdirSync(paths.directory).every((file) => file === CASES_FILE), `${component}: mirror directory contains unexpected files`);
-  }
-  fs.mkdirSync(paths.directory, { recursive: true });
-  fs.writeFileSync(path.join(paths.directory, CASES_FILE), source.bytes);
-  fs.writeFileSync(paths.lock, lock);
-  verifyMirror({ sourceRoot, sourceCommit, component, componentRoot });
-  return `${component}: exported ${source.doc.cases.length} cases at ${sourceCommit} sha256 ${source.digest}`;
-}
-
-/**
- * Component CI provenance: `sourceRoot` is the monorepo checked out at the
- * lock's commit, and the mirror must be byte-identical to it.
- */
-export function verifyMirror({ sourceRoot, sourceCommit, component, componentRoot }) {
-  const source = requireSource(sourceRoot, sourceCommit);
-  const mirror = inspectMirror(componentRoot, component);
-  equal(mirror.lock, expectedLock(source, sourceCommit), `${component}: mirror provenance`);
-  requireValue(mirror.bytes.equals(source.bytes), `${component}: cases.json differs from ${SOURCE_REPOSITORY}@${sourceCommit}`);
-  return `${component}: ${mirror.doc.cases.length} cases match ${SOURCE_REPOSITORY}@${sourceCommit} sha256 ${source.digest}`;
-}
-
-/** Monorepo/upstream check: canonical cases plus every adopted component mirror. */
-export function checkConsumers(root) {
-  const canonical = readCases(path.join(root, SOURCE_PATH));
-  const lines = [`canonical suggested-prompts cases valid: ${canonical.doc.cases.length} cases sha256 ${canonical.digest}`];
-  for (const component of CONSUMERS) {
-    const componentRoot = path.join(root, 'packages', component);
-    const paths = mirrorPaths(componentRoot, component);
-    // Either file declares adoption; a half-deleted mirror must fail, not skip.
-    if (!present(paths.lock) && !present(paths.directory)) {
-      const initialized = fs.existsSync(path.join(componentRoot, '.git'));
-      lines.push(`${component}: ${initialized ? 'pre-adoption pin' : `uninspected (checkout uninitialized${component === 'ios' ? '; private/optional' : ''})`}; conformance not claimed`);
-      continue;
-    }
-    const mirror = inspectMirror(componentRoot, component, { validate: false });
-    let state = 'current';
-    if (mirror.digest !== canonical.digest) {
-      const ancestry = lockAncestry(root, mirror.lock.sourceCommit);
-      requireValue(ancestry !== 'unrelated',
-        `${component}: lock commit ${mirror.lock.sourceCommit} is not on this checkout's history; export from a merged monorepo commit`);
-      state = ancestry === 'ancestor'
-        ? 'behind canonical (re-export to pick up new cases)'
-        : 'differs from canonical; lock commit not in this checkout, so ancestry is unverified';
-    }
-    lines.push(`${component}: adopted mirror valid at ${mirror.lock.sourceCommit}, ${state}; provenance is verified in component CI`);
-  }
-  return lines.join('\n');
-}
-
-export function main(args = process.argv.slice(2)) {
-  const { positionals, values } = parseArgs({
-    args,
-    allowPositionals: true,
-    options: {
-      root: { type: 'string' },
-      'source-root': { type: 'string' },
-      'source-commit': { type: 'string' },
-      component: { type: 'string' },
-      'component-root': { type: 'string' },
-    },
-  });
-  const usage = 'usage: suggested-prompts-contract.mjs validate|check [--root MONOREPO] '
-    + 'OR export|verify --source-root MONOREPO --source-commit SHA --component cloudlands-fe|intentd|ios --component-root COMPONENT';
-  const [command] = positionals;
-  requireValue(positionals.length === 1 && ['validate', 'check', 'export', 'verify'].includes(command), usage);
-  if (command === 'validate' || command === 'check') {
-    requireValue(Object.keys(values).every((key) => key === 'root'), `${command} only accepts --root`);
-    const root = path.resolve(values.root ?? ROOT);
-    if (command === 'check') return checkConsumers(root);
-    const { doc, digest } = readCases(path.join(root, SOURCE_PATH));
-    return `canonical suggested-prompts cases valid: ${doc.cases.length} cases sha256 ${digest}`;
-  }
-  for (const key of ['source-root', 'source-commit', 'component', 'component-root']) {
-    requireValue(typeof values[key] === 'string', `${command} requires --${key}; ${usage}`);
-  }
-  const options = {
-    sourceRoot: path.resolve(values['source-root']),
-    sourceCommit: values['source-commit'],
-    component: values.component,
-    componentRoot: path.resolve(values['component-root']),
-  };
-  return command === 'export' ? exportMirror(options) : verifyMirror(options);
-}
-
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  try {
-    console.log(main());
-  } catch (error) {
-    console.error(`suggested-prompts-contract: ${error.message}`);
-    process.exitCode = 1;
-  }
-}
+runScript(import.meta.url, 'suggested-prompts-contract', () => main());

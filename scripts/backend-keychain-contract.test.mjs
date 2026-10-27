@@ -149,7 +149,7 @@ test('valid-looking edits plus rehashed mirror and lock still fail provenance', 
   rehashLock(options);
   // Integrity alone is intentionally distinct from provenance.
   assert.ok(inspectMirror(options.componentRoot, options.component));
-  assert.throws(() => verifyFixtures(options), /mirror provenance/);
+  assert.throws(() => verifyFixtures(options), /copy provenance/);
 });
 
 test('source commit must be full, checked out, and contain unchanged exact canonical bytes', (t) => {
@@ -170,7 +170,7 @@ test('wrong lock source revision/repository/path and unsafe inventories fail', (
   }
   writeJson(options.lockPath, original);
   fs.writeFileSync(path.join(options.directory, 'unexpected.json'), '{}\n');
-  assert.throws(() => verifyFixtures(options), /inventory/);
+  assert.throws(() => verifyFixtures(options), /unexpected files/);
   assert.throws(() => exportFixtures(options), /unexpected files/);
   fs.unlinkSync(path.join(options.directory, 'unexpected.json'));
   fs.unlinkSync(path.join(options.directory, 'corpus.json'));
@@ -193,17 +193,17 @@ test('docs-first check explicitly reports pre-adoption and uninitialized private
   fs.mkdirSync(path.join(root, 'packages/cloudlands-fe'), { recursive: true });
   fs.writeFileSync(path.join(root, 'packages/cloudlands-fe/.git'), 'gitdir: unused');
   const result = checkConsumers(root);
-  assert.match(result, /canonical Keychain corpus valid/);
+  assert.match(result, /backend-keychain: canonical valid \(corpus sha256 [0-9a-f]{64}\)/);
   assert.match(result, /cloudlands-fe: pre-adoption pin; conformance not claimed/);
   assert.match(result, /ios: uninspected \(checkout uninitialized; private\/optional\); conformance not claimed/);
-  fs.writeFileSync(path.join(root, SOURCE_PATH, 'corpus.json'), '{}');
+  fs.writeFileSync(path.join(root, SOURCE_PATH, 'corpus.json'), '{}\n');
   assert.throws(() => checkConsumers(root), /manifest.files hashes/);
 });
 
 test('any adopter requires both lock and mirror; both adopted pins must agree', (t) => {
   const source = sourceRepo(t);
   for (const component of Object.keys(MIRRORS)) exportFixtures({ ...source, component, componentRoot: path.join(source.sourceRoot, 'packages', component) });
-  assert.match(checkConsumers(source.sourceRoot), /ios: adopted integrity valid/);
+  assert.match(checkConsumers(source.sourceRoot), /ios: adopted copy valid/);
   const component = 'ios';
   const componentRoot = path.join(source.sourceRoot, 'packages', component);
   const lockPath = path.join(componentRoot, MIRRORS.ios.lock);
@@ -211,10 +211,10 @@ test('any adopter requires both lock and mirror; both adopted pins must agree', 
   writeJson(lockPath, { ...JSON.parse(original), sourceCommit: 'b'.repeat(40) });
   assert.throws(() => checkConsumers(source.sourceRoot), /conflicting adopted consumer pins/);
   fs.unlinkSync(lockPath);
-  assert.throws(() => checkConsumers(source.sourceRoot), /required file missing/);
+  assert.throws(() => checkConsumers(source.sourceRoot), /lock .* is missing or not a regular file/);
   fs.writeFileSync(lockPath, original);
   fs.rmSync(path.join(componentRoot, MIRRORS.ios.directory), { recursive: true });
-  assert.throws(() => checkConsumers(source.sourceRoot), /required corpus directory missing/);
+  assert.throws(() => checkConsumers(source.sourceRoot), /directory .* is missing or not a regular directory/);
 });
 
 test('adopted digest conflicts fail even when each mirror and its lock are internally valid', (t) => {
@@ -238,7 +238,7 @@ test('CLI validates and exports/verifies standalone mirrors, rejects missing/unk
   for (const command of ['validate', 'check']) {
     const result = cli([command, '--root', options.sourceRoot]);
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /canonical Keychain corpus valid/);
+    assert.match(result.stdout, /backend-keychain: canonical valid \(corpus sha256 [0-9a-f]{64}\)/);
   }
   for (const args of [[], ['export'], ['verify', '--root', options.sourceRoot], ['validate', '--unknown'], ['check', '--source-commit', 'main']]) {
     const result = cli(args);

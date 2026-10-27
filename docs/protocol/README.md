@@ -142,6 +142,40 @@ structural integrity only, not executed native capture or durable ACK acceptance
 
 `make check-mcp-bindings` (a prerequisite of `make docs-check`) covers the MCP-only `ws.*` surface the catalog does not: it parses the `WORKSPACE_API_DESCRIPTION` / `WORKSPACE_API_DESCRIPTION_CHIEF` help-text constants in intentd's `crates/intent-acp/src/mcp_server/tools.rs` — from the `packages/intentd` checkout by default (the run names the checkout and the recorded pin on stdout and warns on stderr when they differ), or from the recorded gitlink through git objects with `PINNED=1 make check-mcp-bindings` (`node scripts/check-mcp-bindings.mjs --pinned`; CI runs at the pin) — and enforces that (1) the generated signature index [methods/mcp-bindings.md](./methods/mcp-bindings.md) matches the help text line for line, (2) every `ws.<namespace>.<method>` name mentioned in prose under `docs/protocol/` exists in the help text (renamed bindings are listed in the script's `RENAMED_BINDINGS` map), and (3) every parameter or option name used in an inline-code signature mention such as `` `ws.pr.snapshot(prNumber, { repo? })` `` is a parameter/option of that binding. A change to a binding's help line (new option, new result field) therefore fails CI until `make mcp-bindings-doc` regenerates the index — and the regeneration diff names the binding whose prose paragraph needs updating.
 
+## Copied fixtures
+
+A component that keeps its own copy of a fixture from `fixtures/` must use the
+shared tool in [`scripts/lib/fixture-copy.mjs`](../../scripts/lib/fixture-copy.mjs). Do not
+write a separate copy check. Describe the copy once with `defineFixtureCopy()` in the
+fixture's contract script, add that spec to `REGISTERED` in
+[`scripts/check-fixture-copies.mjs`](../../scripts/check-fixture-copies.mjs), and export
+the copy with the contract script's `export` command. Docs lead the pin: land the
+canonical change here first, then re-export each copy.
+
+| Provenance | Copy | Used by |
+|---|---|---|
+| `commit` | Exact bytes plus a lock naming the full monorepo commit and the copy's SHA-256 hashes. Component CI runs `verify` against the monorepo at that commit. | [suggested-prompts](./suggested-prompts.md#distribution), [backend-keychain](./backend-keychain.md#distribution-and-verification) |
+| `revision` | One JSON file carrying the canonical file's integer `revision`. A case change bumps it. | browser-routing (`scripts/browser-routing-contract.mjs`) |
+
+Each contract script's `check` (part of `make consumer-checks`) applies the same rules
+to every adopted copy:
+
+- A copy that is behind canonical only warns, so docs can land first.
+- A copy that differs from the commit or revision it claims fails.
+- A copy ahead of canonical fails.
+- A copy locked to a commit outside this checkout's history fails.
+- A component that references its copy but no longer has it fails.
+- Today's validation rules apply only to the canonical file, never to an older copy.
+
+`make check-fixture-copies` fails when a component file equals any past or present
+version of a file under `fixtures/` but no registered spec owns it. The check compares
+Git blob ids, so CI needs full history but no blob downloads (`fetch-depth: 0` with
+`filter: blob:none`). A few intentd copies predate the tool and are listed in its
+`LEGACY` table. Never add an entry to that table.
+
+Component CI that sparse-checks out a contract script at a lock's commit must also check
+out `scripts/lib/fixture-copy.mjs`, which every contract script imports.
+
 ## Transfer selection fixture contract
 
 [`fixtures/transfer-selection/contract.json`](./fixtures/transfer-selection/contract.json)

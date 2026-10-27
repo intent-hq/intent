@@ -53,7 +53,8 @@ be removed.
 
 ## Distribution
 
-The model matches [backend-keychain.md](./backend-keychain.md#distribution-and-verification).
+The copies use the shared fixture-copy tool with `commit` provenance (see
+[Copied fixtures](./README.md#copied-fixtures)).
 `scripts/suggested-prompts-contract.mjs` validates the canonical file and distributes copies:
 
 - `validate`: checks the canonical cases.
@@ -62,6 +63,8 @@ The model matches [backend-keychain.md](./backend-keychain.md#distribution-and-v
 - `export`: writes a component copy plus a lock naming the monorepo commit. The source checkout's
   HEAD must be that commit, with the case file committed.
 - `verify`: component CI checks the copy byte-for-byte against the monorepo at the locked commit.
+  Its sparse checkout needs `scripts/suggested-prompts-contract.mjs`,
+  `scripts/lib/fixture-copy.mjs` and `docs/protocol/fixtures/suggested-prompts/v1/`.
 
 | Component | Copy | Lock |
 |-----------|------|------|
@@ -82,4 +85,5 @@ A component cannot edit its copy on its own: its CI verify step fails. `check` r
 locked to an older commit as behind canonical rather than failing, so docs can lead the pin.
 Today's schema and required-case rules apply only to the canonical file, so tightening them
 never fails an older copy. A copy locked to a commit off the checkout's history (an unmerged
-branch) fails when that commit is present; a shallow checkout reports it as unverified.
+branch) fails when that commit is present; a shallow checkout reports it as unverified. A copy
+whose bytes differ from the commit its lock names fails, even if its lock was rehashed.
