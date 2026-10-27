@@ -160,7 +160,8 @@ canonical change here first, then re-export each copy.
 Each contract script's `check` (part of `make consumer-checks`) applies the same rules
 to every adopted copy:
 
-- A copy that is behind canonical only warns, so docs can land first.
+- A copy that is behind canonical only warns, so docs can land first. It must still equal a
+  committed canonical version; with `revision` provenance it is matched against history.
 - A copy that differs from the commit or revision it claims fails.
 - A copy ahead of canonical fails.
 - A copy locked to a commit outside this checkout's history fails.
@@ -168,7 +169,7 @@ to every adopted copy:
 - Today's validation rules apply only to the canonical file, never to an older copy.
 
 `make check-fixture-copies` fails when a component file equals any past or present
-version of a file under `fixtures/` but no registered spec owns it. The check compares
+version of a file under `fixtures/`, including merge resolutions, but no registered spec owns it. The check compares
 Git blob ids, so CI needs full history but no blob downloads (`fetch-depth: 0` with
 `filter: blob:none`). A few intentd copies predate the tool and are listed in its
 `LEGACY` table. Never add an entry to that table.

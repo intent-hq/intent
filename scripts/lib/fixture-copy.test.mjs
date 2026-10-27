@@ -191,6 +191,7 @@ test('commit: export refuses uncommitted canonical bytes without writing', (t) =
 test('revision: current passes, behind warns, ahead or same-revision drift fails', (t) => {
   const root = scratch(t);
   const copy = revisionCopy();
+  commitToy(root, { revision: 1, cases: [] }, REVISION_SOURCE);
   commitToy(root, { revision: 2, cases: [1, 2] }, REVISION_SOURCE);
   assert.match(copy.exportCopy({ sourceRoot: root, component: 'alpha', componentRoot: componentRoot(root, 'alpha') }), /exported revision 2/);
   const file = path.join(componentRoot(root, 'alpha'), 'tests/fixtures/toy-routing.json');
@@ -203,7 +204,10 @@ test('revision: current passes, behind warns, ahead or same-revision drift fails
   for (const [doc, pattern] of [
     [{ revision: 3, cases: [1, 2] }, /ahead of/],
     [{ revision: 2, cases: [1] }, /differs from .* at the same revision 2/],
-    [{ cases: [1, 2] }, /no integer revision/],
+    [{ cases: [1, 2] }, /no positive integer revision/],
+    [{ revision: -1, cases: [] }, /no positive integer revision/],
+    // An older revision number does not excuse an edited copy.
+    [{ revision: 1, cases: ['edited'] }, /matches no committed version of/],
   ]) {
     fs.writeFileSync(file, jsonBytes(doc));
     assert.throws(() => copy.checkCopies(root), pattern);
@@ -215,6 +219,7 @@ test('revision: current passes, behind warns, ahead or same-revision drift fails
 test('CLI: check emits lagging copies as warnings; revision export rejects --source-commit', (t) => {
   const root = scratch(t);
   const copy = revisionCopy();
+  commitToy(root, { revision: 1, cases: [] }, REVISION_SOURCE);
   commitToy(root, { revision: 2, cases: [1] }, REVISION_SOURCE);
   const file = path.join(componentRoot(root, 'alpha'), 'tests/fixtures/toy-routing.json');
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -228,4 +233,16 @@ test('CLI: check emits lagging copies as warnings; revision export rejects --sou
   assert.throws(() => fixtureCopyMain(copy, ['check', '--component', 'alpha'], options), /only accepts --root/);
   assert.throws(() => fixtureCopyMain(commitCopy(), ['verify', '--source-root', root], options), /requires --source-commit/);
   assert.throws(() => fixtureCopyMain(copy, [], options), /usage: toy.mjs/);
+});
+
+test('revision: a lagging copy outside a shallow checkout\'s history only warns as unverified', (t) => {
+  const root = scratch(t);
+  commitToy(root, { revision: 1, cases: [] }, REVISION_SOURCE);
+  commitToy(root, { revision: 2, cases: [1] }, REVISION_SOURCE);
+  const clone = path.join(root, 'clone');
+  execFileSync('git', ['clone', '-q', '--depth=1', `file://${root}`, clone], { stdio: 'ignore' });
+  const file = path.join(componentRoot(clone, 'alpha'), 'tests/fixtures/toy-routing.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, jsonBytes({ revision: 1, cases: [] }));
+  assert.match(revisionCopy().checkCopies(clone).warnings[0], /shallow checkout's history, so unverified/);
 });

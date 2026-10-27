@@ -80,6 +80,27 @@ export function commitAncestry(root, commit) {
   return gitText(root, 'merge-base', '--is-ancestor', commit, 'HEAD') === null ? 'unrelated' : 'ancestor';
 }
 
+/**
+ * Every committed version of the files under `pathspec`: { blobs: Map(blob id
+ * → path), shallow }, or null outside a Git checkout. `-m` includes merge
+ * resolutions, which plain `log --raw` omits. Trees only: with --no-renames
+ * nothing here downloads a blob in a `--filter=blob:none` partial clone.
+ */
+export function historyBlobs(root, pathspec) {
+  const shallow = gitText(root, 'rev-parse', '--is-shallow-repository');
+  if (shallow === null) return null;
+  const blobs = new Map();
+  const raw = git(root, 'log', '-m', '--no-renames', '--format=', '--raw', '--no-abbrev', '-z', '--', pathspec).toString('utf8');
+  const fields = raw.split('\0');
+  for (let i = 0; i < fields.length - 1; i += 2) {
+    const meta = fields[i].replace(/^\n+/, '').split(' ');
+    if (meta.length >= 5 && meta[0].startsWith(':') && !/^0{40}$/.test(meta[3]) && !blobs.has(meta[3])) {
+      blobs.set(meta[3], fields[i + 1]);
+    }
+  }
+  return { blobs, shallow: shallow === 'true' };
+}
+
 /** true / false, or undefined when `componentRoot` is not a Git checkout. */
 function componentReferences(componentRoot, marker) {
   try {
@@ -361,16 +382,27 @@ export function defineFixtureCopy(spec) {
     return { ...canonical, revision, summary: validate(file) };
   }
 
-  /** {} when current, { warn } when the copy lags, { fail } otherwise. */
-  function revisionVerdict(canonical, copy, component) {
+  /**
+   * {} when current, { warn } when the copy lags, { fail } otherwise. A lagging
+   * copy must be byte-identical to a committed canonical version (`history`
+   * from historyBlobs); without full history it warns as unverified.
+   */
+  function revisionVerdict(canonical, copy, component, { bytes, history } = {}) {
     const at = copy[revisionField];
     const ahead = `land the ${sourcePath} change first`;
-    if (!Number.isInteger(at)) return { fail: `${label} ${component}: copy has no integer ${revisionField}; re-export it` };
+    if (!Number.isInteger(at) || at < 1) return { fail: `${label} ${component}: copy has no positive integer ${revisionField}; re-export it` };
     if (at > canonical[revisionField]) {
       return { fail: `${label} ${component}: copy is at ${revisionField} ${at}, ahead of ${sourcePath} (${canonical[revisionField]}); ${ahead}` };
     }
     if (at < canonical[revisionField]) {
-      return { warn: `${label} ${component}: copy is at ${revisionField} ${at}, behind ${sourcePath} (${canonical[revisionField]}); re-export it` };
+      const behind = `${label} ${component}: copy is at ${revisionField} ${at}, behind ${sourcePath} (${canonical[revisionField]}); re-export it`;
+      if (bytes && history && !history.blobs.has(blobId(bytes))) {
+        if (!history.shallow) {
+          return { fail: `${label} ${component}: copy at ${revisionField} ${at} matches no committed version of ${sourcePath}; re-export the copy instead of editing it` };
+        }
+        return { warn: `${behind} (not found in this shallow checkout's history, so unverified)` };
+      }
+      return { warn: behind };
     }
     if (!isDeepStrictEqual(copy, canonical)) {
       return { fail: `${label} ${component}: copy differs from ${sourcePath} at the same ${revisionField} ${at}; bump ${revisionField} when changing the cases, or re-export the copy` };
@@ -403,6 +435,7 @@ export function defineFixtureCopy(spec) {
     const canonical = readCanonicalFile(root);
     const lines = [`${label}: canonical valid at ${revisionField} ${canonical.revision} (${canonical.summary})`];
     const warnings = [];
+    let history;
     for (const component of components) {
       const componentRoot = path.join(root, 'packages', component);
       const { file } = copyPaths(componentRoot, component);
@@ -412,7 +445,9 @@ export function defineFixtureCopy(spec) {
         lines.push(`${component}: ${uninspected(componentRoot, component)}; conformance not claimed`);
         continue;
       }
-      const verdict = revisionVerdict(canonical.value, readRevisionFile(file, `${label} ${component} copy`).value, component);
+      const copy = readRevisionFile(file, `${label} ${component} copy`);
+      history ??= historyBlobs(root, sourcePath) ?? undefined;
+      const verdict = revisionVerdict(canonical.value, copy.value, component, { bytes: copy.bytes, history });
       requireValue(!verdict.fail, verdict.fail);
       if (verdict.warn) warnings.push(verdict.warn);
       lines.push(`${component}: adopted copy ${verdict.warn ? 'behind canonical' : 'current'}`);

@@ -4,7 +4,8 @@
 // "docs first, copy may lag" rules by default instead of a home-made check.
 //
 // A component file counts as a copy when its bytes equal any version of any
-// file under docs/protocol/fixtures in this checkout's history (Git blob ids,
+// file under docs/protocol/fixtures in this checkout's history, merge
+// resolutions included (Git blob ids,
 // so a partial clone with `--filter=blob:none` needs no blob downloads). It
 // passes only when a registered defineFixtureCopy() spec owns that path, or it
 // is a LEGACY copy listed below that predates the tool. Byte-identical copies
@@ -15,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { COPY as browserRouting } from './browser-routing-contract.mjs';
 import { COPY as backendKeychain } from './backend-keychain-contract.mjs';
-import { blobId, git, isFixtureCopy, requireValue, runScript } from './lib/fixture-copy.mjs';
+import { blobId, git, historyBlobs, isFixtureCopy, requireValue, runScript } from './lib/fixture-copy.mjs';
 import { COPY as suggestedPrompts } from './suggested-prompts-contract.mjs';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -74,22 +75,13 @@ function componentFiles(componentRoot) {
 
 /** Map of blob id → canonical path, for every version of every fixture file. */
 function canonicalBlobs(root) {
-  const blobs = new Map();
-  const add = (blob, file) => {
-    if (!/^0{40}$/.test(blob) && !blobs.has(blob)) blobs.set(blob, file);
-  };
-  const shallow = git(root, 'rev-parse', '--is-shallow-repository').toString().trim() === 'true';
-  // --no-renames: rename detection would download blobs in a partial clone.
-  const raw = git(root, 'log', '--no-renames', '--format=', '--raw', '--no-abbrev', '-z', '--', FIXTURES_ROOT).toString('utf8');
-  const fields = raw.split('\0');
-  for (let i = 0; i < fields.length - 1; i += 2) {
-    const meta = fields[i].replace(/^\n/, '').split(' ');
-    if (meta.length >= 5 && meta[0].startsWith(':')) add(meta[3], fields[i + 1]);
-  }
+  const history = historyBlobs(root, FIXTURES_ROOT);
+  requireValue(history, `${root} is not a Git checkout`);
+  const { blobs, shallow } = history;
   const tracked = lines(git(root, 'ls-files', '-z', '--', FIXTURES_ROOT));
   const untracked = lines(git(root, 'ls-files', '-o', '--exclude-standard', '-z', '--', FIXTURES_ROOT));
   for (const { file, blob } of hashFiles(root, [...tracked, ...untracked].filter((f) => fs.existsSync(path.join(root, f))))) {
-    add(blob, file);
+    if (!blobs.has(blob)) blobs.set(blob, file);
   }
   return { blobs, shallow };
 }

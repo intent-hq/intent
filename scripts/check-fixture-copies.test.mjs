@@ -75,6 +75,25 @@ test('an untracked copy of an older fixture version also fails', (t) => {
   assert.doesNotThrow(() => checkFixtureCopies(root, options));
 });
 
+test('a copy of a merge-resolved fixture version fails', (t) => {
+  const { root, intentd } = monorepo(t);
+  const main = git(root, 'rev-parse', '--abbrev-ref', 'HEAD');
+  git(root, 'checkout', '-q', '-b', 'side', 'HEAD~1');
+  write(root, FIXTURE, jsonBytes({ revision: 2, cases: ['side'] }));
+  git(root, 'commit', '-q', '-am', 'side');
+  git(root, 'checkout', '-q', main);
+  try { git(root, 'merge', '-q', 'side'); } catch { /* conflict, resolved below */ }
+  const resolved = jsonBytes({ revision: 3, cases: ['first', 'second', 'side'] });
+  write(root, FIXTURE, resolved);
+  git(root, 'commit', '-q', '-am', 'merge');
+  // Move past the merge so the resolution exists only in a merge commit.
+  write(root, FIXTURE, jsonBytes({ revision: 4, cases: [] }));
+  git(root, 'commit', '-q', '-am', 'v4');
+  write(intentd, 'resolved.json', resolved);
+  git(intentd, 'add', '-A');
+  assert.throws(() => checkFixtureCopies(root, options), /packages\/intentd\/resolved\.json is a copy of/);
+});
+
 test('legacy copies pass and stale legacy entries only warn', (t) => {
   const { root, intentd } = monorepo(t);
   write(intentd, 'legacy.json', V2);
