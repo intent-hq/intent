@@ -481,7 +481,9 @@ expect a low hit rate unless your path matches a CI runner's.
 
 The `shell-tests-bash3` CI job runs on GitHub-hosted Linux with a checksum-verified
 Bash 3.2.57 build. It tests the shell language compatibility needed by macOS
-users without consuming a macOS runner. CI runs the shell suites only in the
+users without consuming a macOS runner. CI restores that build from the Actions cache
+through `.github/actions/setup-bash3` (filled on `main` by `bash3-cache.yml`)
+and compiles it only on a cache miss. CI runs the shell suites only in the
 merge queue, so a local run is the only check before a 3.2-only breakage ejects
 the PR. Run it before opening a PR that touches `scripts/*.sh`:
 

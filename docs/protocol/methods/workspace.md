@@ -39,7 +39,7 @@ unchanged. Host-administration virtual workspaces retain their existing boundary
 | workspace.updateContext | workspaceId (req), items (req): ContextItem[] | { items: ContextItem[] } — atomic full-list replacement (matches the FE's `hydrate/add/remove/update` collapsed to a single authoritative-list write). Order is preserved. Emits `workspace:context-changed` with the persisted list. -32602 on missing workspace, malformed `items`, or an item with an empty `id`. |
 | workspace.getAutoCommit *(v2.7)* | workspaceId (req) | { autoCommit: { enabled: boolean, source: "workspace" \| "global" } } — the effective per-workspace auto-commit state: the persisted workspace override when set (`source: "workspace"`), else the current global `git.autoCommit` setting (`source: "global"` — pre-migration rows and the virtual Chief workspace). -32602 if the workspace is absent. |
 | workspace.setAutoCommit *(v2.7)* | workspaceId (req), enabled (req): boolean | { autoCommit: { enabled: boolean, source: "workspace" } } — echoes the persisted override (`enabled` is the boolean just written; `source` is always `"workspace"`), persists it across daemon restarts, and emits `workspace:updated` with `changes: { autoCommitEnabled: boolean }` (§6.5). -32602 on missing workspace, missing/non-boolean `enabled`, or the virtual Chief workspace. |
-| workspace.getBrowserClient *(v9.9)* | workspaceId (req) | { browserClient: { clientId?, source: "workspace" \| "default", resolved: { clientId, name? } \| null } } — the workspace's **browser-client pin** and the **driving client** an agent `browser.exec` (§5.9) would reach right now. `source: "workspace"` + `clientId` when a pin is persisted; `source: "default"` (no `clientId`) when unpinned. `resolved` is the live client the REV-2 resolution (§5.9: pin → host of the workspace's claimed tabs → first-connected eligible client) lands on, or **`null`** when that client is offline or no eligible client is connected — so `source: "workspace"` with `resolved: null` reads "pinned but not connected". The virtual Chief workspace has no row and always answers `source: "default"`. -32602 if the workspace is absent. See the browser-client-pin block below. |
+| workspace.getBrowserClient *(v9.9)* | workspaceId (req) | { browserClient: { clientId?, source: "workspace" \| "default", resolved: { clientId, name? } \| null } } — the workspace's **browser-client pin** and the **driving client** an agent `browser.exec` (§5.9) would reach right now. `source: "workspace"` + `clientId` when a pin is persisted; `source: "default"` (no `clientId`) when unpinned. `resolved` is the live client the REV-2 resolution (§5.9: pin → client of an active desktop session → host of the workspace's claimed tabs → first-connected eligible client) lands on, or **`null`** when that client is offline or no eligible client is connected — so `source: "workspace"` with `resolved: null` reads "pinned but not connected". The virtual Chief workspace has no row and always answers `source: "default"`. -32602 if the workspace is absent. See the browser-client-pin block below. |
 | workspace.setBrowserClient *(v9.9)* | workspaceId (req), clientId (req): string \| null | same `{ browserClient }` shape as `workspace.getBrowserClient`, built from the committed state — pins agent `browser.exec` for this workspace to the logical `clientId` (§5.17), or **clears** the pin when `clientId` is JSON `null` (the field is required: omitted → -32602 `Missing required parameter: clientId (string \| null)`; a non-string non-null or an empty/whitespace string → -32602 `Invalid parameter: clientId must be a non-empty string or null`). Persists across daemon restarts, emits `workspace:updated` with `changes: { browserClientId: string \| null }` (§6.5; `null` spells the clear) and, when setting, re-homes every **claimed** tab of the workspace to the new pin (§5.45 driving-client switch — one `browser:tab-updated { changes: { hostClientId } }` per moved tab; clearing moves nothing). -32602 on a missing workspace, the virtual Chief workspace, or a `clientId` the daemon has never seen complete `client.hello` (a client row minted only by anonymous `drafts.*` traffic is not pinnable); an **offline but known** client is accepted. |
 | workspace.diskUsage *(v4.2)* | workspaceId (req) | { diskUsage?: { bytes, fileCount, computedAt, breakdown }, refreshing: boolean } — on-demand poll of the workspace's cached whole-directory disk footprint (see the workspace-disk-usage block below for the payload shape and cache semantics). `diskUsage` is **omitted** (absent, never `null`) until the first walk completes and for non-qualifying rows; `refreshing: true` means a background walk is in flight (stale or first-ever poll — poll again shortly). Non-qualifying workspaces — remote, skip-isolation, the virtual Chief workspace, or a never-provisioned directory — answer `{ refreshing: false }` with the field omitted, without arming a walk. -32602 if the workspace is absent. |
 | workspace.localChanges *(v9.7)* | workspaceId (req) | { roots: LocalChangesRoot[], hasUnpushedCommits: boolean, hasUncommittedChanges: boolean } — the local git work that archiving or deleting the workspace would lose or orphan, aggregated over the primary worktree and every registered secondary git root in one round-trip (see the workspace-local-changes block below for the row shape and evaluation rules). Each `roots[]` row is `{ kind: "primary" \| "secondary", gitRootId?, path, branch?, hasRemoteRefs, unpushedCount, uncommittedCount, error? }`; the two booleans are ORs over the rows' counts. `unpushedCount` is **remote-ref-relative** — commits reachable from `HEAD` but from no `refs/remotes/*` ref, saturating at 1000 (exact for never-pushed branches; commits behind a pruned squash-merged branch still count; a repo with no remote refs reports its whole history with `hasRemoteRefs: false`). Root 0 is the primary worktree when evaluated (skipped when there is no daemon-owned checkout — `isRemote` or `skipWorktree` — or the worktree is not a git repository), followed by every `gitRoot.list` root in list order — secondary roots are **always** evaluated. Per-root failures are fail-soft (`error` on that row, counts `0`; a primary whose `.git` exists but cannot be read is an `error` row, not skipped); a workspace with nothing evaluable answers `{ roots: [], hasUnpushedCommits: false, hasUncommittedChanges: false }`. -32602 if the workspace is absent. |
@@ -322,8 +322,12 @@ prompt` / ` with overridden title and prompt` when overrides were used) — so t
 proposals" in [agents.md](./agents.md); the caller is mid-turn, so the notice is
 promoted to the front of its queue), and on an ordinary successful resolution the card
 renders applied. Result:
-`{ ok: true, proposalId, outcome, workspace: { id, title, branch?, path? },
-initialAgent?, overrides?, resolveWarning? }` — `initialAgent` is the `workspace.create`
+`{ ok: true, proposalId, outcome, workspace: { id, title, branch?, path?, link,
+markdownLink }, initialAgent?, overrides?, resolveWarning? }` — `link` is the app link
+`intent://local/workspace/<id>` and `markdownLink` is a Markdown link to it labelled with
+the title (brackets and backslashes escaped, a blank title labelled `Untitled`) for the agent to
+share instead of the bare ID
+([intentd#2754](https://github.com/intent-hq/intentd/pull/2754)); `initialAgent` is the `workspace.create`
 result's initial agent when present (agent-hidden fields stripped), `overrides` is
 `{ title?: true, initialPrompt?: true }` naming the overridden fields (omitted when none).
 **`outcome` is NOT unconditionally `"applied"`.** `agent.resolveProposal` never
@@ -1448,8 +1452,8 @@ prune and the source-repo branch-delete guard for both, and both are sandbox-eli
 to, written by `workspace.setBrowserClient` and cleared by passing `clientId: null`.
 **Omitted** (never `null`) from `Workspace` payloads (`workspace.list` / `workspace.get` / the
 `workspace` subscription snapshot, §6.9) while the workspace is unpinned — the driving client
-is then resolved live (§5.9: the host of the workspace's claimed tabs, else the
-first-connected eligible client). The pin is a persisted row column written by
+is then resolved live (§5.9: the client of an active desktop-control session, else the host
+of the workspace's oldest claimed tab, else the first-connected eligible client). The pin is a persisted row column written by
 `workspace.setBrowserClient`: a general `workspace.update` never touches it, and the
 `workspace:updated { changes }` delta the setter emits carries `browserClientId` as the
 committed string or an explicit `null` for a clear (§6.5). The pin is **daemon-local**: a
@@ -2220,18 +2224,47 @@ successful `updateContext` emits `workspace:context-changed` with the persisted 
 { "jsonrpc":"2.0","id":10,"result":{ "items":[ /* same list */ ] } }
 ```
 
+#### Automatic archive
+
+*(Additive, protocol 15.2; behavior only, no wire-shape change.)* The daemon archives
+workspaces that have been idle for `workspace.autoArchiveIdleAfterDays` days (§5.12
+[settings](./settings.md); absent means 7, `0` turns the sweep off). The setting is read
+live at every sweep, which runs about once an hour (the first run shortly after startup).
+
+- **Idle clock.** A workspace is due when the newest of `lastContentActivity`,
+  `lastActivity` and `createdAt` is older than the cutoff. Unparseable timestamps are
+  ignored; a workspace with no parseable timestamp is never due.
+- **Skipped.** The virtual Chief workspace; remote workspaces; workspaces already
+  archived, retired or deleted; a workspace with a pending grace-window delete; a
+  workspace with collaborators or open invites (archiving would remove them); and a
+  workspace with work in flight — a running agent turn, a running script
+  (`scriptsRunning`), an active background hook or an active PR monitor.
+- **Path.** A due workspace is archived through `workspace.archive`, with the same
+  active-work teardown and the same `workspace:updated` delta. The sweep re-reads the row
+  and re-checks that it is still idle with no agent turn running right before archiving.
+- Each workspace is archived independently; a failure is logged and retried on the next
+  sweep.
+
+Clients may surface auto-archived workspaces like any other archived workspace; the
+existing auto-unarchive (a message to an agent) and `workspace.unarchive` bring them back.
+
 #### Retired workspaces
 
 *(Additive, protocol 15.2.)* `Retired` is a lifecycle state between `Archived` and
 `Deleted`. The workspace folder on disk is deleted to free space, while conversations,
 notes, tasks, assets and every other database row are kept and remain readable.
 
+**Client presentation.** Retiring is a "purge workspace folder" operation on an archived
+workspace. Clients may present a `Retired` workspace as archived (cloudlands-fe shows it
+under Archived, and offers retire only as **Purge workspace folder** on an archived
+workspace); the purge status message below tells the user what happened.
+
 ```mermaid
 stateDiagram-v2
-  Active --> Archived: workspace.archive
+  Active --> Archived: workspace.archive or automatic archive
   Archived --> Active: workspace.unarchive or auto-unarchive
   Active --> Retired: workspace.retire (archive teardown first)
-  Archived --> Retired: workspace.retire or auto-retire
+  Archived --> Retired: workspace.retire or automatic purge
   Retired --> Active: revive (fresh blank folder)
   Archived --> Deleted: workspace.delete
   Retired --> Deleted: workspace.delete
@@ -2257,17 +2290,25 @@ stateDiagram-v2
   nothing changes, when deleting the folder would destroy the only copy of the repository
   or a folder the daemon does not own: standalone `cow` / `direct` checkouts (the folder
   *is* the repository), `skipIsolation` workspaces (the folder is the user's repository),
-  workspaces without a daemon-owned checkout, and remote workspaces. The automatic retire sweep skips these workspaces.
+  workspaces without a daemon-owned checkout, and remote workspaces. The automatic purge sweep skips these workspaces.
+- **Purge status message.** The retire write also sets the workspace `statusMessage` to
+  `"Workspace folder purged to free disk space."`, replacing the previous message, so the
+  workspace card shows that the folder is gone.
 - One `workspace:updated` delta announces the transition:
-  `changes: { archived: true, status: "Retired", archivedAt, retiredAt: <ts> }`, where
-  `archivedAt` is the row's value — newly set when the workspace was `Active` (§6.5).
+  `changes: { archived: true, status: "Retired", archivedAt, retiredAt: <ts>, statusMessage }`,
+  where `archivedAt` is the row's value — newly set when the workspace was `Active` (§6.5).
 - `-32602 { code: "invalid-params" }` from any other status (for example a workspace with
   a pending grace-window delete).
 
-**Automatic retire.** When the setting `workspace.autoRetireArchivedAfterDays` (§5.12) is
-set, the daemon periodically retires workspaces whose `archivedAt` is older than that many
-days, through the same path and delta as `workspace.retire`. Absent means off. Remote, guest-shared and retire-unsupported
-workspaces are skipped.
+**Automatic purge.** When the setting `workspace.purgeArchivedAfterDays` (§5.12; formerly
+`workspace.autoRetireArchivedAfterDays`) is set, the daemon periodically retires workspaces
+whose `archivedAt` is older than that many days, through the same path and delta as
+`workspace.retire`. Absent means off. Remote, guest-shared and retire-unsupported
+workspaces are skipped, and so is any workspace whose folder holds work the purge would
+destroy: the `workspace.localChanges` evaluation reports uncommitted changes in any root,
+unpushed commits in a **secondary** root (it lives inside the folder; the primary branch
+is kept), or fails. Skipped workspaces are retried on the next sweep. Manual
+`workspace.retire` does not apply this check; clients confirm with the user first.
 
 **Strict list opt-in (normative).** Retired workspaces are absent from **every** surface
 that returns a collection of workspaces unless the caller explicitly passes
@@ -2316,14 +2357,24 @@ old folder is restored.
   auto-unarchive path when a message is sent to an agent in the retired workspace.
 - The daemon provisions a new folder at the same path from the repository default branch
   on a **new branch** name (the old branch is left untouched), flips the row to
-  `Active`, and clears `archived`, `archivedAt` and `retiredAt`.
+  `Active`, and clears `archived`, `archivedAt` and `retiredAt`. It also clears
+  `statusMessage` when it still equals the purge status text; a message changed since the
+  purge is kept.
 - Delta: `changes: { archived: false, status: "Active", archivedAt: null, retiredAt: null,
   branch, revived: { reason } }` where `reason` is `"agent_activity"` (turn-start revive,
   which also carries `agentId` and `agentName`) or `"manual"`. `revived` is never present
   on an ordinary unarchive, and `autoUnarchive` is never present on a revive.
 - On an agent-triggered revive the agent's transcript gets a system row and the same turn
-  gets a one-turn notice that all previous on-disk state (files, uncommitted changes, local
-  git state) is gone while conversations and notes were kept.
+  gets a one-turn notice that the workspace folder was purged while archived: all
+  previous on-disk state (files, uncommitted changes, local git state) is gone, the agent
+  is on the new branch, commits on the previous branch are kept, and conversations and
+  notes were kept.
+- Every other agent session in the workspace learns on its own next turn: on any revive
+  (and on a manual revive, which starts no turn, for every session) the daemon records
+  the same notice as pending. The session's next turn carries it once
+  as a trailing `[SYSTEM NOTICE]`, after which it is cleared; the pending notice survives
+  a daemon restart. The agent whose turn triggered an agent-triggered revive gets only
+  that turn's notice, never a second copy.
 
 Clients must treat `"Retired"` as an unknown-but-valid status on older builds; an older
 daemon never emits it. Support is detected by the `workspace.retire` method answering

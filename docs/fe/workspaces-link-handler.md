@@ -51,7 +51,6 @@ intent://local/{workspace-id}/task/{note-id}
 
 - `noteUrl(noteId, workspaceId?)` from `$shared/constants/intent-links`
 - `taskNoteUrl(noteId)` from `$shared/constants/intent-links` for current-workspace task links
-- `workspaceUrl(workspaceId)` / `workspaceLink(text, workspaceId)` from `$shared/constants/intent-links` for workspace links
 
 ### Integration Points
 
@@ -77,12 +76,17 @@ When a valid intent:// link is clicked:
 4. If needed, the app navigates to the target workspace first and opens the note there
 5. If the note doesn't exist, the user sees an error toast
 
+A `workspace` link (`intent://local/workspace/{id}`, optional trailing slash, ID decoded once)
+checks that the workspace exists and then navigates to `/workspace/{id}`, which opens its tab.
+In Assistant chat it opens beside the conversation instead. The reserved `__chief__` and `new`
+IDs are invalid links.
+
 ### Error Handling
 
 - **Invalid URL format**: Shows toast with error message
 - **Note not found**: Shows "Note not found in current workspace" toast
 - **Cross-workspace note not found**: Shows which workspace ID was checked
-- **Workspace not found**: Shows "Workspace {id} not found" toast
+- **Workspace not found**: Shows the "workspace not found" toast, with no navigation
 - **No workspace open for short-form links**: Shows "No space is currently open" toast
 - **Unknown resource type**: Shows "Cannot handle {type} links yet" toast
 
@@ -129,7 +133,7 @@ pnpm test src/lib/utils/workspaces-link-handler --run --reporter=verbose
 Agents should generate note links with `noteUrl()` and treat `generateNoteLink()` as a deprecated compatibility wrapper:
 
 ```typescript
-import { noteUrl, taskNoteUrl, workspaceUrl, workspaceLink } from '$shared/constants/intent-links';
+import { noteUrl, taskNoteUrl } from '$shared/constants/intent-links';
 
 const noteLink = noteUrl('spec');
 // Returns: "intent://local/note/spec"
@@ -137,14 +141,14 @@ const noteLink = noteUrl('spec');
 const taskLink = taskNoteUrl('550e8400-e29b-41d4-a716-446655440000');
 // Returns: "intent://local/task/550e8400-e29b-41d4-a716-446655440000"
 
-const wsLink = workspaceUrl('my-workspace-id');
-// Returns: "intent://local/workspace/my-workspace-id"
-
 // Use in markdown
 const markdown = `See the [spec note](${noteLink}) or [task](${taskLink}).`;
-const wsMarkdown = workspaceLink('My Workspace', 'my-workspace-id');
-// Returns: "[My Workspace](intent://local/workspace/my-workspace-id)"
 ```
+
+Workspace agents get a ready-made workspace link from the daemon: `ws.crossWorkspace.listSiblings`
+rows and the `ws.workspace.applyProposal` result carry `markdownLink`
+(`[My Workspace](intent://local/workspace/my-workspace-id)`), and harness 3.4 tells agents to share
+it instead of the workspace's internal ID.
 
 For chat-side rendering, prefer the fenced ` ```workspace ` block (handled by `ChatWorkspaceCard`) so the user sees a live, clickable workspace card with title, repo, branch, and status. Use the workspace markdown link only when you must reference a workspace inline in a sentence.
 

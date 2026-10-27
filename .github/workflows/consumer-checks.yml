@@ -49,6 +49,24 @@
 # intent-hq, and makes a monorepo checkout failure fatal. Component callers
 # omit that input and retain the workflow revision and fail-soft defaults.
 #
+# Changed-tests shell suites (intentd callers only): the monorepo drives
+# intentd's scripts/changed-tests.sh and scripts/with-test-policy.sh through
+# scripts/rust-changed-tests.test.sh, whose stub PATH is a deliberate command
+# allowlist. When an intentd PR's own diff (base to the tested merge commit,
+# from the caller's github context) changes either script or a file the suites
+# copy, scripts/consumer-checks-shell-suites.sh selects that suite and
+# intentd's own scripts/test-changed-tests.sh, each run with REQUIRE_BASH3=1
+# against a pinned Bash 3.2, so the PR that breaks them is red here. Before
+# this, intentd#2720 merged green and the monorepo merge queue ejected the pin
+# bump intent#7900 five times ("exec: env: not found") until intent#7905. Other
+# intentd PRs pay only for the selection step; cloudlands-fe skips it. Monorepo
+# PRs still defer these suites to the merge queue (intent#7191); the self-test
+# exercise runs them. Fix order when a change needs both sides (new expected
+# argv or output): first land a monorepo rust-changed-tests.test.sh that
+# accepts both the pinned and the new behavior (the monorepo queue runs it
+# against the pin), then start a new intentd run, and tighten the test after
+# the pin bump.
+#
 # Caller sketch (pull_request + merge_group):
 #   monorepo-consumer-checks:
 #     uses: intent-hq/intent/.github/workflows/consumer-checks.yml@main
@@ -190,6 +208,34 @@ jobs:
             sed -n '/^consumer-checks summary$/,$p' "$log"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      # Path-filtered: see "Changed-tests shell suites" in the header. Runs on
+      # pull_request and merge_group alike, so the breaking intentd PR is red.
+      - name: Select the intentd changed-tests shell suites
+        id: shell-suites
+        if: inputs.component == 'intentd' && steps.monorepo.outcome == 'success'
+        env:
+          SELF_TEST: ${{ inputs.self-test }}
+          # The caller's context: its PR or merge-queue base, and the commit
+          # GitHub tests (the PR's test-merge commit or the merge group head).
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          TEST_SHA: ${{ github.sha }}
+        run: bash scripts/consumer-checks-shell-suites.sh
+
+      # The monorepo checkout's shared step; the cache it restores is the
+      # caller repo's, filled on its main by a bash3-cache.yml caller.
+      - name: Set up pinned Bash 3.2
+        if: steps.shell-suites.outputs.selected == 'true' && steps.monorepo.outcome == 'success'
+        uses: ./.github/actions/setup-bash3
+
+      - name: Run the intentd changed-tests shell suites
+        if: steps.shell-suites.outputs.selected == 'true' && steps.monorepo.outcome == 'success'
+        run: |
+          "$BASH3_BIN" --version
+          status=0
+          REQUIRE_BASH3=1 bash scripts/rust-changed-tests.test.sh || status=1
+          REQUIRE_BASH3=1 bash packages/intentd/scripts/test-changed-tests.sh || status=1
           exit "$status"
 
       - name: Verify connected harnesses and source revisions
