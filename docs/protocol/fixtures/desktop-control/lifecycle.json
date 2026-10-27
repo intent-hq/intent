@@ -3304,7 +3304,8 @@
       "expectReason": "not_frontmost",
       "expectExecution": "partial",
       "expectStepsInjected": 1,
-      "expectHeldInputReleased": true
+      "expectHeldInputReleased": true,
+      "expectReplaySafe": false
     },
     "focusWindow": {
       "binding": "ws.desktop.focusWindow",

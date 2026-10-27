@@ -847,6 +847,8 @@ step of `type` and before the key-down of `keypress`; a drag checks once before
 its button press. A mismatch detected after an earlier step returns
 `desktop-target-mismatch` with `execution: "partial"`, stops further input and
 releases any held keys or buttons. Releases are cleanup and are not checked.
+Do not replay the whole input after a `partial` result: earlier steps may already
+have reached the window. Take a new screenshot to see what was entered first.
 
 #### `focusWindow`
 

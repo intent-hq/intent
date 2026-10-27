@@ -13,6 +13,7 @@ const [fixture, doc, catalog, events, eventDoc, routing] = await Promise.all([
   read('../../06-events.md'),
   read('../../workspace-routing.md'),
 ]);
+const errorCatalog = await read('../../09-error-codes.md');
 const byId = id => {
   const entry = [...fixture.cases, ...fixture.races].find(c => c.id === id);
   assert.ok(entry, `missing required acceptance scenario: ${id}`);
@@ -651,6 +652,12 @@ test('focus lost between typing steps stops input as partial and releases held k
   assert.equal(c.expectExecution, 'partial');
   assert.ok(c.expectStepsInjected > 0 && c.expectStepsInjected < c.steps);
   assert.equal(c.expectHeldInputReleased, true);
+  assert.equal(c.expectReplaySafe, false);
+  const catalogEntry = errorCatalog.slice(errorCatalog.indexOf('`desktop-target-mismatch`'), errorCatalog.indexOf('### Prepared provider profile errors'));
+  assert.match(catalogEntry, /`execution: "not_started"`[^.]*nothing is injected/);
+  assert.match(catalogEntry, /`execution: "partial"`/);
+  assert.match(catalogEntry, /replay/);
+  assert.match(doc, /Do not replay the whole input after a `partial` result/);
 });
 
 test('focusWindow raises without synthetic input and reports OS refusal truthfully', () => {
