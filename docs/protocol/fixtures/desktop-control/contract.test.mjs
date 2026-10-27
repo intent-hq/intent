@@ -563,7 +563,7 @@ test('cursor move is button-free and uses the existing desktop execution safegua
   }
 });
 
-const windowReasons = ['window_unavailable', 'not_frontmost', 'outside_window', 'obscured'];
+const windowReasons = ['window_unavailable', 'not_frontmost', 'outside_window', 'obscured', 'not_focused'];
 const coordinateActions = ['move', 'click', 'scroll', 'drag'];
 
 function inside(w, p) {
@@ -635,7 +635,8 @@ test('windowId targets refuse in the documented order and inject nothing on mism
     assert.ok(cases.some(c => c.action === action && c.expectReason === null), `${action} success`);
     assert.ok(cases.some(c => c.action === action && c.expectReason === 'not_frontmost'), `${action} not_frontmost`);
   }
-  for (const reason of windowReasons) assert.ok(cases.some(c => c.expectReason === reason), reason);
+  for (const reason of windowReasons.filter(r => r !== 'not_focused')) assert.ok(cases.some(c => c.expectReason === reason), reason);
+  assert.ok(!cases.some(c => c.expectReason === 'not_focused'), 'targeted input stays process-level');
   for (const action of ['type', 'keypress'])
     assert.ok(!cases.some(c => c.action === action && ['outside_window', 'obscured'].includes(c.expectReason)));
   assert.ok(cases.some(c => c.action === 'drag' && c.expectReason === null && c.toOutsideTarget), 'drag checks from only');
@@ -673,4 +674,11 @@ test('focusWindow raises without synthetic input and reports OS refusal truthful
   assert.equal(f.cases.find(c => c.id === 'focus-unknown').expectExecution, 'not_started');
   assert.equal(f.cases.find(c => c.id === 'focus-os-refused').expectExecution, 'partial');
   assert.equal(f.cases.find(c => c.id === 'focus-os-refused').expectReason, 'not_frontmost');
+  const sameApp = f.cases.find(c => c.id === 'focus-same-app-other-window-keeps-focus');
+  assert.ok(sameApp, 'same-process focus failure');
+  assert.equal(sameApp.appFrontmost, true);
+  assert.notEqual(sameApp.focusedWindowAfter, sameApp.args.windowId);
+  assert.equal(sameApp.expectReason, 'not_focused');
+  assert.equal(sameApp.expectExecution, 'partial');
+  for (const c of f.cases.filter(c => !c.expectReason)) assert.equal(c.focusedWindowAfter, c.args.windowId, c.id);
 });

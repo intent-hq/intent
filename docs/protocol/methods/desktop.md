@@ -859,11 +859,17 @@ reverse method, under the same consent, owner, connection, lease and
 command-ticket fences as any other action; it never starts control implicitly.
 
 Before acting it applies check 1 (`window_unavailable`, `execution: "not_started"`).
-After the native activation and raise calls it verifies check 2. Success returns
-exactly `{ ok: true }`. When the OS declines the activation (for example
-Windows foreground-lock rules), return `desktop-target-mismatch` with `reason:
-"not_frontmost"` and `execution: "partial"`; never fall back to synthetic clicks or
-keystrokes to force focus. The agent should take a new screenshot to confirm the
+After the native activation and raise calls it verifies the **window**, not just
+the process: success returns exactly `{ ok: true }` only when the window's owning
+application is frontmost (check 2) **and** that application's focused window is
+this `windowId` (what a new screenshot would report as `frontmost.windowId` and
+`focused: true`). When the OS declines the activation (for example Windows
+foreground-lock rules), return `desktop-target-mismatch` with `reason:
+"not_frontmost"` and `execution: "partial"`. When the application is frontmost
+but another of its windows (including a sheet or dialog) keeps focus, return
+`reason: "not_focused"` with `execution: "partial"`. Never fall back to synthetic
+clicks or keystrokes to force focus. `not_focused` is specific to `focusWindow`;
+targeted input keeps the process-level check 2 above. The agent should take a new screenshot to confirm the
 result before typing.
 
 Both additions extend the existing `desktop.control` action set; there is no new
@@ -926,14 +932,15 @@ same code/detail (and `reason` when present) as a tool failure, never
 `{ ok: true }`. Malformed inputs use `-32602` with `code: "invalid-params"`;
 authority refusal uses `-32003` with `code: "forbidden"` (hidden resources retain existing not-found semantics).
 `reason` is present only with `desktop-target-mismatch` and is one of
-`window_unavailable`, `not_frontmost`, `outside_window` or `obscured`.
+`window_unavailable`, `not_frontmost`, `outside_window`, `obscured` or
+`not_focused` (`focusWindow` only).
 
 | Numeric | `data.code` | Meaning |
 | --- | --- | --- |
 | -32602 | `desktop-not-active`, `desktop-stale-request`, `desktop-stale-command` | Missing current authority or stale request/command; no execution |
 | -32602 | `desktop-stale-layout` | Display topology changed; not_started before native work, partial/unknown if detected after input |
 | -32602 | `desktop-display-selection-required`, `desktop-display-unavailable` | Multiple displays without a choice, or no matching available display; no capture/input or fallback |
-| -32602 | `desktop-target-mismatch` | Named window missing, not in the frontmost app, not under the point, or covered; not_started before input, partial if detected between steps; carries `reason` |
+| -32602 | `desktop-target-mismatch` | Named window missing, not in the frontmost app, not under the point, covered, or (focusWindow) not focused after raising; not_started before input, partial if detected between steps; carries `reason` |
 | -32602 | `desktop-command-expired` | Local command deadline reached; execution is not_started before the first step, partial after a step |
 | -32603 | `desktop-offline`, `desktop-unsupported`, `desktop-busy` | Primary absent/incapable or physical desktop locked by another session |
 | -32603 | `desktop-os-permission-required`, `desktop-unsupported-operation`, `desktop-deadline-unavailable` | Local OS/operation/monotonic deadline readiness cannot be established |

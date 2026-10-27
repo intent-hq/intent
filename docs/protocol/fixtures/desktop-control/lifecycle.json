@@ -3334,7 +3334,8 @@
           "expectResult": {
             "ok": true
           },
-          "expectSyntheticInput": 0
+          "expectSyntheticInput": 0,
+          "focusedWindowAfter": "win-slack"
         },
         {
           "id": "focus-unknown",
@@ -3354,6 +3355,18 @@
           "osRefusesActivation": true,
           "expectError": "desktop-target-mismatch",
           "expectReason": "not_frontmost",
+          "expectExecution": "partial",
+          "expectSyntheticInput": 0
+        },
+        {
+          "id": "focus-same-app-other-window-keeps-focus",
+          "args": {
+            "windowId": "win-safari-2"
+          },
+          "appFrontmost": true,
+          "focusedWindowAfter": "win-safari",
+          "expectError": "desktop-target-mismatch",
+          "expectReason": "not_focused",
           "expectExecution": "partial",
           "expectSyntheticInput": 0
         }
