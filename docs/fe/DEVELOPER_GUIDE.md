@@ -102,7 +102,7 @@ wait finished, one `workspace_api` call opens and captures a chat in your own wo
 const { id: workspaceId } = await ws.workspace.info();
 const [agent] = await ws.agent.list();
 const url = `http://daemon.localhost:<DEV_PORT>/workspace/${workspaceId}?agent=${agent.id}`;
-const tabs = await ws.browser.listTabs();
+const tabs = await ws.browser.listTabs("mine");
 const tabId =
   tabs.find((t) => t.requestedUrl === url)?.tabId ??
   (await ws.browser.exec([{ action: "openTab", url }])).result.tabId;
@@ -113,7 +113,8 @@ return ws.browser.exec([
 ]);
 ```
 
-While the first hydration runs, `evaluate` returns `false` (or the tab is still
+`listTabs("mine")` reuses only your own tabs; another agent's tab at the same URL
+refuses `evaluate` and `screenshot` (`not-owner`). While the first hydration runs, `evaluate` returns `false` (or the tab is still
 mounting); retry from a background hook rather than reopening the tab. For a note, check
 `[data-testid=note-view-settings-trigger]` instead. Save the screenshot with
 `ws.note.saveAsset` and record it in the evidence table from the root
