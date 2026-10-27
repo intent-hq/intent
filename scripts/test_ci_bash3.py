@@ -21,6 +21,10 @@ class Bash3(unittest.TestCase):
                       'lint-fixed-sleeps', 'release-status', 'rust-changed-tests', 'shipped-in'):
             line = next(line for line in job.splitlines() if f'scripts/{suite}.test.sh' in line)
             self.assertIn('REQUIRE_BASH3=1', line)
+        # intentd's changed-tests suite carries its own Bash 3.2 pass; nothing
+        # else runs it with a real 3.2, so the job requires it here.
+        self.assertIn('REQUIRE_BASH3=1 bash packages/intentd/scripts/test-changed-tests.sh', job)
+        self.assertIn('git submodule update --init --depth=1 packages/intentd', job)
 
     def test_download_mismatch_prevents_execution(self):
         with tempfile.TemporaryDirectory() as temp:
