@@ -345,6 +345,8 @@ API gains root support; all other file APIs retain their existing scope.
 > name is the client's hello `name`, escaped). Only a daemon-side deadline gets this suffix;
 > an error the client itself returns passes through unchanged. The text after the
 > `reverse request timed out: browser.exec` prefix is diagnostic only; do not parse it.
+> Agents check which connections a client holds, and where an unpinned and this workspace's
+> `browser.exec` would go right now, with the read-only `ws.browser.clients()` binding (§6.8).
 >
 > `workspace.getBrowserClient` (§5.1) runs the same resolution without dispatching
 > (`resolved: null` for the two offline outcomes). Client-triggered `browser.exec` is
