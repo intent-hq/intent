@@ -322,8 +322,12 @@ prompt` / ` with overridden title and prompt` when overrides were used) — so t
 proposals" in [agents.md](./agents.md); the caller is mid-turn, so the notice is
 promoted to the front of its queue), and on an ordinary successful resolution the card
 renders applied. Result:
-`{ ok: true, proposalId, outcome, workspace: { id, title, branch?, path? },
-initialAgent?, overrides?, resolveWarning? }` — `initialAgent` is the `workspace.create`
+`{ ok: true, proposalId, outcome, workspace: { id, title, branch?, path?, link,
+markdownLink }, initialAgent?, overrides?, resolveWarning? }` — `link` is the app link
+`intent://local/workspace/<id>` and `markdownLink` is `[<title>](<link>)` (brackets and
+backslashes in the title escaped, a blank title labelled `Untitled`) for the agent to
+share instead of the bare ID
+([intentd#2754](https://github.com/intent-hq/intentd/pull/2754)); `initialAgent` is the `workspace.create`
 result's initial agent when present (agent-hidden fields stripped), `overrides` is
 `{ title?: true, initialPrompt?: true }` naming the overridden fields (omitted when none).
 **`outcome` is NOT unconditionally `"applied"`.** `agent.resolveProposal` never

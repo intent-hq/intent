@@ -118,7 +118,8 @@ bundled markdown is used untouched.
 
 The prepared delivery change in intentd
 `73478bdaa5a09dc81307d4bfe7606a5a85983876` applies only to an active session
-whose saved `harnessVersion` is explicitly admitted: `"3.2"`, `"3.3"` or `"3.4"`. It adds recurring repository
+whose saved `harnessVersion` is explicitly admitted: `"3.2"` or `"3.3"` (and `"3.4"`, admitted by
+intent-hq/intentd#2754). It adds recurring repository
 guidance to ordinary ACP prompts after the original physical session is
 confirmed. It does not change a session's stamp, feature snapshot or doctrine,
 introduce a new major version, or establish support in an installed daemon.
@@ -187,7 +188,10 @@ gains a "Link other workspaces" section: in chat and notes, agents mention
 another workspace as `[Workspace Title](intent://local/workspace/<workspaceId>)`
 and never by its bare internal ID (outside Intent they use the plain title).
 Composition, text surfaces, specialist prompts and feature defaults are 3.3's,
-and a 3.3 session keeps its original prompt.
+and a 3.3 session keeps its original prompt. The same change adds `link` /
+`markdownLink` to the `ws.crossWorkspace.listSiblings` rows and the
+`ws.workspace.applyProposal` result; tool output follows the running daemon, so
+every session sees those fields regardless of its stamp.
 
 ### Golden tests
 
