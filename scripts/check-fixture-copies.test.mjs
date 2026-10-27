@@ -94,6 +94,23 @@ test('a copy of a merge-resolved fixture version fails', (t) => {
   assert.throws(() => checkFixtureCopies(root, options), /packages\/intentd\/resolved\.json is a copy of/);
 });
 
+test('a copy of a version that exists only on a merged branch whose fixture lost the merge fails', (t) => {
+  const { root, intentd } = monorepo(t);
+  const main = git(root, 'rev-parse', '--abbrev-ref', 'HEAD');
+  git(root, 'checkout', '-q', '-b', 'side');
+  const intermediate = jsonBytes({ revision: 3, cases: ['side-intermediate'] });
+  write(root, FIXTURE, intermediate);
+  git(root, 'commit', '-q', '-am', 'side 1');
+  write(root, FIXTURE, jsonBytes({ revision: 4, cases: ['side-final'] }));
+  git(root, 'commit', '-q', '-am', 'side 2');
+  git(root, 'checkout', '-q', main);
+  // The merge keeps main's fixture, so default history simplification prunes the side branch.
+  git(root, 'merge', '-q', '-s', 'ours', '--no-edit', 'side');
+  write(intentd, 'intermediate.json', intermediate);
+  git(intentd, 'add', '-A');
+  assert.throws(() => checkFixtureCopies(root, options), /packages\/intentd\/intermediate\.json is a copy of/);
+});
+
 test('legacy copies pass and stale legacy entries only warn', (t) => {
   const { root, intentd } = monorepo(t);
   write(intentd, 'legacy.json', V2);

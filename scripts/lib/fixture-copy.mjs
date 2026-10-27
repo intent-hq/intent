@@ -83,14 +83,15 @@ export function commitAncestry(root, commit) {
 /**
  * Every committed version of the files under `pathspec`: { blobs: Map(blob id
  * → path), shallow }, or null outside a Git checkout. `-m` includes merge
- * resolutions, which plain `log --raw` omits. Trees only: with --no-renames
+ * resolutions, which plain `log --raw` omits, and `--full-history` keeps the
+ * ancestry of a merge whose fixture matches one parent. Trees only: with --no-renames
  * nothing here downloads a blob in a `--filter=blob:none` partial clone.
  */
 export function historyBlobs(root, pathspec) {
   const shallow = gitText(root, 'rev-parse', '--is-shallow-repository');
   if (shallow === null) return null;
   const blobs = new Map();
-  const raw = git(root, 'log', '-m', '--no-renames', '--format=', '--raw', '--no-abbrev', '-z', '--', pathspec).toString('utf8');
+  const raw = git(root, 'log', '-m', '--full-history', '--no-renames', '--format=', '--raw', '--no-abbrev', '-z', '--', pathspec).toString('utf8');
   const fields = raw.split('\0');
   for (let i = 0; i < fields.length - 1; i += 2) {
     const meta = fields[i].replace(/^\n+/, '').split(' ');
