@@ -1,0 +1,301 @@
+{
+  "schema": "browser-routing/v1",
+  "revision": 1,
+  "docs": "docs/protocol/methods/files-terminal-browser.md",
+  "about": "Agent-initiated browser.exec target selection (REV-2, §5.9). Each case gives the workspace state and the live connections, then the target the daemon derives from the workspace (expect.target) and the connection that receives the request, or the error. Connections are listed in registration (arrival) order; drops are applied after every connection registered. intentd mirrors this file at crates/intent-transport/tests/fixtures/browser-routing.json and runs every case. Principal authority (administrator-only Chief dispatch, member browser hosting) is outside these cases; intent-transport's hand-written registry tests cover it.",
+  "fields": {
+    "revision": "Bump on every change to the cases. intentd's copy may lag behind (a warning) but must never be ahead, nor differ at the same revision.",
+    "rule": "The REV-2 rule number in files-terminal-browser.md the case pins.",
+    "docText": "A sentence fragment of that rule; the docs contract test requires it verbatim (whitespace-normalised).",
+    "workspace.chief": "The virtual Chief workspace.",
+    "workspace.pin": "Workspace.browserClientId, or null when unpinned.",
+    "workspace.desktopSession": "clientId of the workspace's active desktop-control session, or null.",
+    "workspace.tabs": "Open registry tabs, oldest first and in ascending tabId order (the registry breaks creation-time ties by tabId): { tabId, host, owner } where owner is the claiming agent id or null for a user tab.",
+    "connections": "{ id, client, hello, browserExec } in registration order; client is null for a connection that never sent client.hello.",
+    "helloOrder": "Optional order in which connections send client.hello (default: registration order). Routing must not depend on it.",
+    "drops": "Connection ids that disconnect before the request.",
+    "expect.target": "{ kind: default } | { kind: client | pinned, clientId }.",
+    "expect.connection": "The connection id that receives the request.",
+    "expect.error": "{ kind: no-client } | { kind: client-offline, clientId, pinned }."
+  },
+  "cases": [
+    {
+      "id": "eligibility-ignores-unhelloed-and-flagless-connections",
+      "rule": 1,
+      "docText": "Un-hello'd sockets and hello'd connections without the flag are invisible to every rule below, regardless of arrival order",
+      "workspace": { "chief": false, "pin": null, "desktopSession": null, "tabs": [] },
+      "connections": [
+        { "id": "x1", "client": null, "hello": false, "browserExec": false },
+        { "id": "y1", "client": "y", "hello": true, "browserExec": false },
+        { "id": "a1", "client": "a", "hello": true, "browserExec": true }
+      ],
+      "drops": [],
+      "expect": { "target": { "kind": "default" }, "connection": "a1" }
+    },
+    {
+      "id": "pin-routes-to-the-pinned-clients-newest-connection",
+      "rule": 2,
+      "docText": "the target is that logical client: its **newest** eligible live connection",
+      "workspace": { "chief": false, "pin": "b", "desktopSession": null, "tabs": [] },
+      "connections": [
+        { "id": "a1", "client": "a", "hello": true, "browserExec": true },
+        { "id": "b1", "client": "b", "hello": true, "browserExec": true },
+        { "id": "b2", "client": "b", "hello": true, "browserExec": true }
+      ],
+      "drops": [],
+      "expect": { "target": { "kind": "pinned", "clientId": "b" }, "connection": "b2" }
+    },
+    {
+      "id": "pin-offline-is-a-hard-error-with-no-fallback",
+      "rule": 2,
+      "docText": "A pinned client with **no** eligible live connection is a hard failure",
+      "workspace": { "chief": false, "pin": "b", "desktopSession": null, "tabs": [] },
+      "connections": [
+        { "id": "a1", "client": "a", "hello": true, "browserExec": true }
+      ],
+      "drops": [],
+      "expect": {
+        "target": { "kind": "pinned", "clientId": "b" },
+        "error": { "kind": "client-offline", "clientId": "b", "pinned": true }
+      }
+    },
+    {
+      "id": "pin-whose-last-connection-dropped-is-offline",
+      "rule": 2,
+      "docText": "**never** a silent fallback to another client",
+      "workspace": { "chief": false, "pin": "b", "desktopSession": null, "tabs": [] },
+      "connections": [
+        { "id": "a1", "client": "a", "hello": true, "browserExec": true },
+        { "id": "b1", "client": "b", "hello": true, "browserExec": true }
+      ],
+      "drops": ["b1"],
+      "expect": {
+        "target": { "kind": "pinned", "clientId": "b" },
+        "error": { "kind": "client-offline", "clientId": "b", "pinned": true }
+      }
+    },
+    {
+      "id": "pin-with-only-flagless-connections-is-offline",
+      "rule": 2,
+      "docText": "A pinned client with **no** eligible live connection is a hard failure",
+      "workspace": { "chief": false, "pin": "b", "desktopSession": null, "tabs": [] },
+      "connections": [
+        { "id": "b1", "client": "b", "hello": true, "browserExec": false },
+        { "id": "a1", "client": "a", "hello": true, "browserExec": true }
+      ],
+      "drops": [],
+      "expect": {
+        "target": { "kind": "pinned", "clientId": "b" },
+        "error": { "kind": "client-offline", "clientId": "b", "pinned": true }
+      }
+    },
+    {
+      "id": "pin-beats-desktop-session-and-claimed-tabs",
+      "rule": 2,
+      "docText": "If the workspace carries `browserClientId`",
+      "workspace": {
+        "chief": false,
+        "pin": "a",
+        "desktopSession": "c",
+        "tabs": [{ "tabId": "t1", "host": "b", "owner": "agent-1" }]
+      },
+      "connections": [
+        { "id": "a1", "client": "a", "hello": true, "browserExec": true },
+        { "id": "b1", "client": "b", "hello": true, "browserExec": true },
+        { "id": "c1", "client": "c", "hello": true, "browserExec": true }
+      ],
+      "drops": [],
+      "expect": { "target": { "kind": "pinned", "clientId": "a" }, "connection": "a1" }
+    },
+    {
+      "id": "desktop-session-client-beats-claimed-tabs",
+      "rule": 3,
+      "docText": "Unpinned, but the workspace has an **active** desktop-control session (`desktop:session-changed` `status: \"active\"`): the target is the client running that session",
+      "workspace": {
+        "chief": false,
+        "pin": null,
+        "desktopSession": "c",
+        "tabs": [{ "tabId": "t1", "host": "b", "owner": "agent-1" }]
+      },
+      "connections": [
+        { "id": "a1", "client": "a", "hello": true, "browserExec": true },
+        { "id": "b1", "client": "b", "hello": true, "browserExec": true },
+        { "id": "c1", "client": "c", "hello": true, "browserExec": true }
+      ],
+      "drops": [],
+      "expect": { "target": { "kind": "client", "clientId": "c" }, "connection": "c1" }
+    },
+    {
+      "id": "desktop-session-client-offline",
+      "rule": 3,
+      "docText": "`-32603`, with no fallback to claimed tabs",
+      "workspace": { "chief": false, "pin": null, "desktopSession": "c", "tabs": [] },
+      "connections": [
+        { "id": "a1", "client": "a", "hello": true, "browserExec": true }
+      ],
+      "drops": [],
+      "expect": {
+        "target": { "kind": "client", "clientId": "c" },
+        "error": { "kind": "client-offline", "clientId": "c", "pinned": false }
+      }
+    },
+    {
+      "id": "claimed-tab-host-beats-first-connected",
+      "rule": 4,
+      "docText": "the target is the host client of the oldest claimed tab",
+      "workspace": {
+        "chief": false,
+        "pin": null,
+        "desktopSession": null,
+        "tabs": [
+          { "tabId": "t1", "host": "a", "owner": null },
+          { "tabId": "t2", "host": "b", "owner": "agent-1" }
+        ]
+      },
+      "connections": [
+        { "id": "a1", "client": "a", "hello": true, "browserExec": true },
+        { "id": "b1", "client": "b", "hello": true, "browserExec": true }
+      ],
+      "drops": [],
+      "expect": { "target": { "kind": "client", "clientId": "b" }, "connection": "b1" }
+    },
+    {
+      "id": "oldest-claimed-tab-wins-via-its-hosts-newest-connection",
+      "rule": 4,
+      "docText": "the target is the host client of the oldest claimed tab",
+      "workspace": {
+        "chief": false,
+        "pin": null,
+        "desktopSession": null,
+        "tabs": [
+          { "tabId": "t1", "host": "c", "owner": "agent-1" },
+          { "tabId": "t2", "host": "b", "owner": "agent-2" }
+        ]
+      },
+      "connections": [
+        { "id": "b1", "client": "b", "hello": true, "browserExec": true },
+        { "id": "c1", "client": "c", "hello": true, "browserExec": true },
+        { "id": "c2", "client": "c", "hello": true, "browserExec": true }
+      ],
+      "drops": [],
+      "expect": { "target": { "kind": "client", "clientId": "c" }, "connection": "c2" }
+    },
+    {
+      "id": "user-tabs-never-select-a-host",
+      "rule": 4,
+      "docText": "User tabs (no `ownerAgentId`) never select a host.",
+      "workspace": {
+        "chief": false,
+        "pin": null,
+        "desktopSession": null,
+        "tabs": [{ "tabId": "t1", "host": "b", "owner": null }]
+      },
+      "connections": [
+        { "id": "a1", "client": "a", "hello": true, "browserExec": true },
+        { "id": "b1", "client": "b", "hello": true, "browserExec": true }
+      ],
+      "drops": [],
+      "expect": { "target": { "kind": "default" }, "connection": "a1" }
+    },
+    {
+      "id": "claimed-tab-host-offline",
+      "rule": 4,
+      "docText": "Offline ⇒ the same `… for this workspace is not connected` `-32603`.",
+      "workspace": {
+        "chief": false,
+        "pin": null,
+        "desktopSession": null,
+        "tabs": [{ "tabId": "t1", "host": "b", "owner": "agent-1" }]
+      },
+      "connections": [
+        { "id": "a1", "client": "a", "hello": true, "browserExec": true },
+        { "id": "b1", "client": "b", "hello": true, "browserExec": true }
+      ],
+      "drops": ["b1"],
+      "expect": {
+        "target": { "kind": "client", "clientId": "b" },
+        "error": { "kind": "client-offline", "clientId": "b", "pinned": false }
+      }
+    },
+    {
+      "id": "default-first-connected-client-wins-regardless-of-hello-order",
+      "rule": 5,
+      "docText": "Otherwise the client of the **oldest remaining eligible** registration (registration order; UDS + WSS share one registry)",
+      "workspace": { "chief": false, "pin": null, "desktopSession": null, "tabs": [] },
+      "connections": [
+        { "id": "a1", "client": "a", "hello": true, "browserExec": true },
+        { "id": "b1", "client": "b", "hello": true, "browserExec": true }
+      ],
+      "helloOrder": ["b1", "a1"],
+      "drops": [],
+      "expect": { "target": { "kind": "default" }, "connection": "a1" }
+    },
+    {
+      "id": "default-skips-a-stale-older-connection-of-the-same-client",
+      "rule": 5,
+      "docText": "via that client's **newest** eligible live connection — the same per-client rule as the pin, so a stale older socket of the same app is skipped (intent-hq/intent#7902)",
+      "workspace": { "chief": false, "pin": null, "desktopSession": null, "tabs": [] },
+      "connections": [
+        { "id": "a1", "client": "a", "hello": true, "browserExec": true },
+        { "id": "b1", "client": "b", "hello": true, "browserExec": true },
+        { "id": "a2", "client": "a", "hello": true, "browserExec": true }
+      ],
+      "drops": [],
+      "expect": { "target": { "kind": "default" }, "connection": "a2" }
+    },
+    {
+      "id": "default-moves-on-when-the-oldest-registration-drops",
+      "rule": 5,
+      "docText": "when that oldest registration drops, the client of the next-oldest eligible registration is chosen, even if the first client still has a newer connection",
+      "workspace": { "chief": false, "pin": null, "desktopSession": null, "tabs": [] },
+      "connections": [
+        { "id": "a1", "client": "a", "hello": true, "browserExec": true },
+        { "id": "b1", "client": "b", "hello": true, "browserExec": true },
+        { "id": "a2", "client": "a", "hello": true, "browserExec": true }
+      ],
+      "drops": ["a1"],
+      "expect": { "target": { "kind": "default" }, "connection": "b1" }
+    },
+    {
+      "id": "default-with-no-eligible-connection-is-no-client",
+      "rule": 5,
+      "docText": "No eligible connection at all ⇒ `-32603` `browser.exec: no client connected`",
+      "workspace": { "chief": false, "pin": null, "desktopSession": null, "tabs": [] },
+      "connections": [
+        { "id": "x1", "client": null, "hello": false, "browserExec": false },
+        { "id": "y1", "client": "y", "hello": true, "browserExec": false }
+      ],
+      "drops": [],
+      "expect": { "target": { "kind": "default" }, "error": { "kind": "no-client" } }
+    },
+    {
+      "id": "default-after-every-eligible-connection-dropped-is-no-client",
+      "rule": 5,
+      "docText": "No eligible connection at all ⇒ `-32603` `browser.exec: no client connected`",
+      "workspace": { "chief": false, "pin": null, "desktopSession": null, "tabs": [] },
+      "connections": [
+        { "id": "a1", "client": "a", "hello": true, "browserExec": true },
+        { "id": "a2", "client": "a", "hello": true, "browserExec": true }
+      ],
+      "drops": ["a1", "a2"],
+      "expect": { "target": { "kind": "default" }, "error": { "kind": "no-client" } }
+    },
+    {
+      "id": "chief-ignores-desktop-session-and-claimed-tabs",
+      "rule": 5,
+      "docText": "The virtual Chief workspace cannot be pinned and skips rules 2–4: it always resolves under this rule",
+      "workspace": {
+        "chief": true,
+        "pin": null,
+        "desktopSession": "b",
+        "tabs": [{ "tabId": "t1", "host": "b", "owner": "agent-1" }]
+      },
+      "connections": [
+        { "id": "a1", "client": "a", "hello": true, "browserExec": true },
+        { "id": "b1", "client": "b", "hello": true, "browserExec": true }
+      ],
+      "drops": [],
+      "expect": { "target": { "kind": "default" }, "connection": "a1" }
+    }
+  ]
+}

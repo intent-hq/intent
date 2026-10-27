@@ -210,10 +210,13 @@ remain unchanged in protocol 12.0.
 // routes the reverse RPC to the workspace's DRIVING client: the pinned
 // `browserClientId` (`workspace.setBrowserClient`, §5.1) when set — pinned but
 // offline is `-32603` "browser.exec: browser client \"<name>\" (<clientId>) for
-// this workspace is not connected", never a silent fallback — else the host of
-// the workspace's claimed registry tabs (§5.45), else the FIRST-connected
-// connection whose `client.hello` advertised `capabilities.browserExec` (§5.17;
-// across UDS + WSS). When no eligible client is connected the call fails fast
+// this workspace is not connected", never a silent fallback — else the client
+// running the workspace's active desktop-control session (§5.51), else the host
+// of the workspace's oldest claimed registry tab (§5.45), else the client of the
+// oldest eligible registration (a connection whose `client.hello` advertised
+// `capabilities.browserExec`, §5.17; across UDS + WSS). The request goes to the
+// chosen client's NEWEST eligible connection (REV-2 rules 2–5, worked cases in
+// `fixtures/browser-routing/routing.json`). When no eligible client is connected the call fails fast
 // with `-32603` "browser.exec: no client connected". `listTabs` is answered by
 // the daemon from the tab registry and never forwarded. Wire shape of the
 // reverse RPC and its result is unchanged from the client-triggered case above.
