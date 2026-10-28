@@ -599,9 +599,9 @@ preserved, including when there is no working repository connection. Profile
 selection changes neither Intent principal ID nor host/workspace authority.
 Keep generation fencing against an earlier pending refresh/selection.
 
-The desktop `labs:multiplayerEnabled` preference is not a daemon setting or
-permission. It gates the experimental collaboration UI, including the tab and
-direct routes, and cannot grant access or revoke saved memberships when toggled.
+The desktop client no longer has a Multiplayer preference: the retired
+`labs:multiplayerEnabled` key was never a daemon setting or permission, and
+collaboration UI visibility follows server capabilities and role only.
 
 ### Prepared GitLab child Git credential policy
 
