@@ -273,6 +273,7 @@ test('single-file commit: spec shape is checked', () => {
   assert.throws(() => fileCopy({ copies: { ...copies, beta: { directory: 'd', lock: 'l.json' } } }), /all \{ directory, lock \} or all \{ file, lock \}/);
   assert.throws(() => fileCopy({ copies: { alpha: { file: 'f.json' } } }), /relative/);
   assert.throws(() => fileCopy({ copies: { alpha: { file: '../f.json', lock: 'l.json' } } }), /without '\.\.'/);
+  assert.throws(() => fileCopy({ copies: { alpha: { file: 'a/f.json', lock: 'a/./f.json' } } }), /copy and lock must be different files/);
 });
 
 test('single-file commit: export then verify round-trips exact bytes under another name', (t) => {
@@ -332,8 +333,12 @@ test('single-file commit: a copy without a lock is pre-adoption unless the compo
   fs.writeFileSync(path.join(dir, 'tests/fixtures/toy-cases.json'), '{"cases":[1]}\n');
   git(dir, 'add', '-A');
   const { report, warnings } = copy.checkCopies(root);
-  assert.match(report, /alpha: pre-adoption pin \(copy without lock\); conformance not claimed/);
-  assert.match(warnings[0], /toy-cases.json has no lock tests\/fixtures\/toy-cases.lock.json yet \(pre-adoption\)/);
+  assert.match(report, /alpha: pre-adoption pin \(copy without lock tests\/fixtures\/toy-cases.lock.json\); conformance not claimed/);
+  assert.deepEqual(warnings, []);
+  // Without a lock the copy must still be a committed canonical version.
+  fs.writeFileSync(path.join(dir, 'tests/fixtures/toy-cases.json'), '{"cases":[2]}\n');
+  assert.throws(() => copy.checkCopies(root), /toy-cases.json matches no committed version of docs\/protocol\/fixtures\/toy\/cases.json/);
+  fs.writeFileSync(path.join(dir, 'tests/fixtures/toy-cases.json'), '{"cases":[1]}\n');
   fs.writeFileSync(path.join(dir, 'ci.yml'), 'lock: tests/fixtures/toy-cases.lock.json\n');
   git(dir, 'add', '-A');
   assert.throws(() => copy.checkCopies(root), /alpha: the component references toy-cases.lock.json but has no lock/);

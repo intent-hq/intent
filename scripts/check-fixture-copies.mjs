@@ -7,8 +7,9 @@
 // file under docs/protocol/fixtures in this checkout's history, merge
 // resolutions included (Git blob ids,
 // so a partial clone with `--filter=blob:none` needs no blob downloads). It
-// passes only when a registered defineFixtureCopy() spec owns that path (LEGACY
-// is kept empty; see below). Byte-identical copies
+// passes only when a registered defineFixtureCopy() spec owns that path; there
+// is no allowlist. It then runs every registered spec's own copy check (lagging
+// copies warn), so a registered spec is always checked. Byte-identical copies
 // are what export produces; a hand-edited copy is out of reach of this check.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -32,14 +33,6 @@ export const REGISTERED = [
   browserRouting, backendKeychain, checkoutRepoConfig, eventStreamRecovery, noteTruncatedRead, scriptsCompact,
   suggestedPrompts,
 ];
-
-/**
- * Copies that bypass the shared tool. Every copy has moved onto
- * defineFixtureCopy() and this list must stay empty (a test enforces it):
- * register a new or existing copy instead, with a single-file commit spec when
- * the component already keeps one file (scripts/lib/fixture-copy.mjs).
- */
-export const LEGACY = [];
 
 function lines(buffer) {
   return buffer.toString('utf8').split('\0').filter(Boolean);
@@ -88,7 +81,7 @@ function unregisteredSpecs(root, registered) {
 }
 
 /** { report, warnings }; throws listing every copy that bypasses the shared tool. */
-export function checkFixtureCopies(root = ROOT, { registered = REGISTERED, legacy = LEGACY, components = COMPONENTS } = {}) {
+export function checkFixtureCopies(root = ROOT, { registered = REGISTERED, components = COMPONENTS } = {}) {
   requireValue(registered.every(isFixtureCopy), 'REGISTERED must hold defineFixtureCopy() specs');
   const failures = unregisteredSpecs(root, registered)
     .map((spec) => `scripts/${spec} defines a fixture copy that is not in REGISTERED (scripts/check-fixture-copies.mjs)`);
@@ -98,7 +91,6 @@ export function checkFixtureCopies(root = ROOT, { registered = REGISTERED, legac
   if (shallow) {
     warnings.push('monorepo checkout is shallow: only fixture versions in the fetched history are compared; fetch full history (blob:none is enough)');
   }
-  const usedLegacy = new Set();
   for (const component of components) {
     const componentRoot = path.join(root, 'packages', component);
     if (!fs.existsSync(path.join(componentRoot, '.git'))) {
@@ -113,21 +105,19 @@ export function checkFixtureCopies(root = ROOT, { registered = REGISTERED, legac
       if (!source) continue;
       copies += 1;
       if (owned.has(file)) continue;
-      const entry = legacy.find((l) => l.component === component && l.path === file);
-      if (entry) {
-        usedLegacy.add(entry);
-        continue;
-      }
       failures.push(`packages/${component}/${file} is a copy of ${source} that bypasses the shared fixture-copy tool; `
         + 'describe it with defineFixtureCopy() (scripts/lib/fixture-copy.mjs), add the spec to REGISTERED in '
         + 'scripts/check-fixture-copies.mjs, and export the copy with that fixture\'s contract script');
     }
-    report.push(`${component}: ${copies} fixture copies found; all registered or legacy`);
+    report.push(`${component}: ${copies} fixture copies found; all registered`);
   }
-  for (const entry of legacy) {
-    const initialized = fs.existsSync(path.join(root, 'packages', entry.component, '.git'));
-    if (initialized && !usedLegacy.has(entry)) {
-      warnings.push(`LEGACY entry packages/${entry.component}/${entry.path} no longer matches any version of ${entry.source}; remove it from scripts/check-fixture-copies.mjs`);
+  for (const copy of registered) {
+    try {
+      const checked = copy.checkCopies(root);
+      report.push(checked.report);
+      warnings.push(...checked.warnings);
+    } catch (error) {
+      failures.push(`${copy.name}: ${error.message}`);
     }
   }
   if (failures.length > 0) {

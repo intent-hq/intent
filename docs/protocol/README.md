@@ -167,14 +167,15 @@ to every adopted copy:
 - A copy ahead of canonical fails.
 - A copy locked to a commit outside this checkout's history fails.
 - A component that references its copy but no longer has it fails.
-- A single-file copy without its lock only warns (pre-adoption), unless the component
-  references the lock.
+- A single-file copy without its lock is a pre-adoption pin: it must equal a committed
+  canonical version, and the component must not reference the lock.
 - Today's validation rules apply only to the canonical file, never to an older copy.
 
 `make check-fixture-copies` fails when a component file equals any past or present
-version of a file under `fixtures/`, including merge resolutions, but no registered spec owns it. The check compares
+version of a file under `fixtures/`, including merge resolutions, but no registered spec owns it.
+It then runs every registered spec's check. The check compares
 Git blob ids, so CI needs full history but no blob downloads (`fetch-depth: 0` with
-`filter: blob:none`). Its `LEGACY` table must stay empty; register the copy instead.
+`filter: blob:none`). There is no allowlist: register every copy.
 
 Component CI that sparse-checks out a contract script at a lock's commit must also check
 out `scripts/lib/fixture-copy.mjs`, which every contract script imports.

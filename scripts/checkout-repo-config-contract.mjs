@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Checkout repository-config wire golden (docs/protocol/fixtures/checkout-repo-config.json):
-// intentd's serialization test keep an exact single-file copy through the shared
+// intentd's serialization tests keep an exact single-file copy through the shared
 // fixture-copy tool (scripts/lib/fixture-copy.mjs) with commit provenance. The
 // cases themselves are checked by the fixture's own tests under docs/protocol.
 import fs from 'node:fs';
@@ -24,7 +24,11 @@ export const COPY = defineFixtureCopy({
     const fixture = JSON.parse(fs.readFileSync(file, 'utf8'));
     requireValue(fixture.request?.method === 'sourceControl.checkout.repoConfig',
       `${SOURCE_PATH}: request.method must be sourceControl.checkout.repoConfig`);
-    return ['ready', 'absent', 'unavailable'].filter((key) => key in fixture).join(', ');
+    const cases = ['ready', 'absent', 'unavailable'];
+    for (const key of cases) {
+      requireValue(fixture[key] !== null && typeof fixture[key] === 'object', `${SOURCE_PATH}: ${key} must be an object`);
+    }
+    return cases.join(', ');
   },
 });
 

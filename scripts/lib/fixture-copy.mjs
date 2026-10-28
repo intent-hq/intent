@@ -145,8 +145,9 @@ function relative(file) {
  * `{ file, lock }` (the copy may have a different name). The bytes are exact
  * and need only parse when the file is JSON. The default lock key is
  * `fileSha256`. The lock alone declares adoption: a copy file without a lock is
- * a pre-adoption pin (a warning), so a component's existing copy can be
- * registered before the component exports its lock.
+ * a pre-adoption pin, so a component's existing copy can be registered before
+ * the component exports its lock. A pre-adoption copy must still equal a
+ * committed canonical version.
  *
  * `revision`: `sourcePath` is one JSON file with a positive integer
  * `revisionField` (default 'revision'); each copy is `{ file }`.
@@ -172,6 +173,7 @@ export function defineFixtureCopy(spec) {
       requireValue(paths?.directory === undefined, `${name}: commit copies are all { directory, lock } or all { file, lock }`);
       relative(paths?.file);
       relative(paths?.lock);
+      requireValue(path.posix.normalize(paths.file) !== path.posix.normalize(paths.lock), `${name}: ${component} copy and lock must be different files`);
     } else if (provenance === 'commit') {
       relative(paths?.directory);
       relative(paths?.lock);
@@ -378,8 +380,15 @@ export function defineFixtureCopy(spec) {
         requireValue(componentReferences(componentRoot, marker(component)) !== true,
           `${label} ${component}: the component references ${marker(component)} but has no ${single ? 'lock' : 'copy'} at ${where}`);
         if (single && present(paths.file)) {
-          warnings.push(`${label} ${component}: ${copies[component].file} has no lock ${copies[component].lock} yet (pre-adoption); export the copy with its lock`);
-          lines.push(`${component}: pre-adoption pin (copy without lock); conformance not claimed`);
+          // Not yet adopted, but never a hand-edited copy: it must be a committed canonical version.
+          const bytes = readSingleFile(paths.file, `${label} ${component} copy`)[names[0]];
+          const history = historyBlobs(root, sourcePath);
+          if (!history?.blobs.has(blobId(bytes))) {
+            requireValue(history?.shallow === true,
+              `${label} ${component}: ${copies[component].file} matches no committed version of ${sourcePath}; re-export the copy instead of editing it`);
+            warnings.push(`${label} ${component}: pre-adoption copy ${copies[component].file} is not in this shallow checkout's history, so unverified`);
+          }
+          lines.push(`${component}: pre-adoption pin (copy without lock ${copies[component].lock}); conformance not claimed`);
           continue;
         }
         lines.push(`${component}: ${uninspected(componentRoot, component)}; conformance not claimed`);
