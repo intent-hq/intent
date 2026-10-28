@@ -155,6 +155,7 @@ canonical change here first, then re-export each copy.
 | Provenance | Copy | Used by |
 |---|---|---|
 | `commit` | Exact bytes plus a lock naming the full monorepo commit and the copy's SHA-256 hashes. Component CI runs `verify` against the monorepo at that commit. | [suggested-prompts](./suggested-prompts.md#distribution), [backend-keychain](./backend-keychain.md#distribution-and-verification) |
+| `commit`, single file | One file of exact bytes, under any name, plus a lock with its `fileSha256`. The lock alone marks the copy as adopted. | intentd's scripts-compact, note-truncated-read, checkout-repo-config and event-stream-recovery copies (`scripts/<name>-contract.mjs`) |
 | `revision` | One JSON file carrying the canonical file's integer `revision`. A case change bumps it. | browser-routing (`scripts/browser-routing-contract.mjs`) |
 
 Each contract script's `check` (part of `make consumer-checks`) applies the same rules
@@ -166,13 +167,15 @@ to every adopted copy:
 - A copy ahead of canonical fails.
 - A copy locked to a commit outside this checkout's history fails.
 - A component that references its copy but no longer has it fails.
+- A single-file copy without its lock is a pre-adoption pin: it must equal a committed
+  canonical version, and the component must not reference the lock.
 - Today's validation rules apply only to the canonical file, never to an older copy.
 
 `make check-fixture-copies` fails when a component file equals any past or present
-version of a file under `fixtures/`, including merge resolutions, but no registered spec owns it. The check compares
+version of a file under `fixtures/`, including merge resolutions, but no registered spec owns it.
+It then runs every registered spec's check. The check compares
 Git blob ids, so CI needs full history but no blob downloads (`fetch-depth: 0` with
-`filter: blob:none`). A few intentd copies predate the tool and are listed in its
-`LEGACY` table. Never add an entry to that table.
+`filter: blob:none`). There is no allowlist: register every copy.
 
 Component CI that sparse-checks out a contract script at a lock's commit must also check
 out `scripts/lib/fixture-copy.mjs`, which every contract script imports.

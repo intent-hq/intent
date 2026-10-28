@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { LEGACY, REGISTERED, checkFixtureCopies } from './check-fixture-copies.mjs';
+import { REGISTERED, checkFixtureCopies } from './check-fixture-copies.mjs';
 import { defineFixtureCopy, jsonBytes } from './lib/fixture-copy.mjs';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -47,16 +47,19 @@ const toy = defineFixtureCopy({
   copies: { intentd: { file: 'tests/fixtures/toy.json' } },
   validate: () => 'ok',
 });
-const options = { registered: [toy], legacy: [], components: ['cloudlands-fe', 'intentd'] };
+const options = { registered: [toy], components: ['cloudlands-fe', 'intentd'] };
 
 test('registered copies pass, at the current or an older fixture version', (t) => {
   const { root, intentd } = monorepo(t);
   write(intentd, 'tests/fixtures/toy.json', V1);
   git(intentd, 'add', '-A');
   const { report, warnings } = checkFixtureCopies(root, options);
-  assert.match(report, /intentd: 1 fixture copies found; all registered or legacy/);
+  assert.match(report, /intentd: 1 fixture copies found; all registered/);
   assert.match(report, /cloudlands-fe: uninspected/);
-  assert.deepEqual(warnings, []);
+  // Every registered spec's own check runs too: the older copy lags and only warns.
+  assert.match(report, /toy: canonical valid at revision 2/);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /toy intentd: copy is at revision 1, behind/);
 });
 
 test('a tracked copy of the current fixture outside the shared tool fails', (t) => {
@@ -111,17 +114,11 @@ test('a copy of a version that exists only on a merged branch whose fixture lost
   assert.throws(() => checkFixtureCopies(root, options), /packages\/intentd\/intermediate\.json is a copy of/);
 });
 
-test('legacy copies pass and stale legacy entries only warn', (t) => {
+test('a registered spec whose own copy check fails fails the whole check', (t) => {
   const { root, intentd } = monorepo(t);
-  write(intentd, 'legacy.json', V2);
+  write(intentd, 'tests/fixtures/toy.json', jsonBytes({ revision: 3, cases: [] }));
   git(intentd, 'add', '-A');
-  const legacy = [
-    { component: 'intentd', path: 'legacy.json', source: FIXTURE },
-    { component: 'intentd', path: 'gone.json', source: FIXTURE },
-  ];
-  const { warnings } = checkFixtureCopies(root, { ...options, legacy });
-  assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /packages\/intentd\/gone\.json no longer matches/);
+  assert.throws(() => checkFixtureCopies(root, options), /toy: toy intentd: copy is at revision 3, ahead of/);
 });
 
 test('a fixture-copy spec missing from REGISTERED fails', (t) => {
@@ -139,9 +136,43 @@ test('a shallow monorepo checkout warns that only fetched history is compared', 
   assert.match(warnings[0], /shallow/);
 });
 
-test('the real registry covers every adopted copy and legacy entries name real fixtures', () => {
-  assert.deepEqual(REGISTERED.map((copy) => copy.name).sort(), ['backend-keychain', 'browser-routing', 'suggested-prompts']);
-  for (const entry of LEGACY) assert.ok(fs.existsSync(path.join(ROOT, entry.source)), entry.source);
+test('a single-file commit spec owns its copy before and after adoption', (t) => {
+  const { root, intentd } = monorepo(t);
+  const single = defineFixtureCopy({
+    name: 'toy-file',
+    sourcePath: FIXTURE,
+    provenance: 'commit',
+    copies: { intentd: { file: 'tests/goldens/toy_cases.json', lock: 'tests/goldens/toy_cases.lock.json' } },
+    validate: () => 'ok',
+  });
+  write(intentd, 'tests/goldens/toy_cases.json', V1);
+  git(intentd, 'add', '-A');
+  const registered = { ...options, registered: [single] };
+  let result = checkFixtureCopies(root, registered);
+  assert.match(result.report, /intentd: 1 fixture copies found; all registered/);
+  assert.match(result.report, /intentd: pre-adoption pin \(copy without lock tests\/goldens\/toy_cases\.lock\.json\)/);
+  assert.deepEqual(result.warnings, []);
+  assert.throws(() => checkFixtureCopies(root, options), /toy_cases\.json is a copy of/);
+  // A hand-edited copy is no longer a copy for the bypass scan, but the spec still rejects it.
+  write(intentd, 'tests/goldens/toy_cases.json', jsonBytes({ revision: 1, cases: ['edited'] }));
+  assert.throws(() => checkFixtureCopies(root, registered), /toy_cases\.json matches no committed version of/);
+  // Adopted: the lock is not mistaken for a copy, and a lagging copy warns.
+  const commit = git(root, 'rev-parse', 'HEAD~1');
+  git(root, 'checkout', '-q', commit);
+  single.exportCopy({ sourceRoot: root, sourceCommit: commit, component: 'intentd', componentRoot: intentd });
+  git(root, 'checkout', '-q', '-');
+  git(intentd, 'add', '-A');
+  result = checkFixtureCopies(root, registered);
+  assert.match(result.report, /intentd: 1 fixture copies found; all registered/);
+  assert.match(result.report, new RegExp(`intentd: adopted copy valid at ${commit}, behind canonical`));
+  assert.equal(result.warnings.length, 1);
+});
+
+test('the real registry covers every adopted copy', () => {
+  assert.deepEqual(REGISTERED.map((copy) => copy.name).sort(), [
+    'backend-keychain', 'browser-routing', 'checkout-repo-config', 'event-stream-recovery', 'note-truncated-read',
+    'scripts-compact', 'suggested-prompts',
+  ]);
   const result = spawnSync(process.execPath, [path.join(ROOT, 'scripts/check-fixture-copies.mjs')],
     { encoding: 'utf8', env: { ...process.env, DD_TRACE_ENABLED: 'false' } });
   assert.equal(result.status, 0, result.stderr);
