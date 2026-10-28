@@ -15,7 +15,7 @@ input uses it to test one host.
 | intent-ci1 | ReliableSite, Los Angeles | EPYC 4545P, 16 cores / 32 threads, 128 GB | xl (1), heavy (2) | `intent-cache-xl`, `intent-cache` + `intent-cache-bigmem` | `intent-ci1` | [`hosts/intent-ci1.env`](../infra/runners/hosts/intent-ci1.env) |
 | intent-ci2 | ReliableSite, Los Angeles | EPYC 4545P, 16 cores / 32 threads, 128 GB | xl (1), heavy (2) | `intent-cache-xl`, `intent-cache` + `intent-cache-bigmem` | `intent-ci2` | [`hosts/intent-ci2.env`](../infra/runners/hosts/intent-ci2.env) |
 | intent-ci3 | ReliableSite, Los Angeles | EPYC 4545P, 16 cores / 32 threads, 64 GB | heavy (4) | `intent-cache` only (12 GB slots: no bigmem) | `intent-ci3` | [`hosts/intent-ci3.env`](../infra/runners/hosts/intent-ci3.env) |
-| intent-ci4 (not online yet) | ReliableSite, Los Angeles | EPYC 4545P, 16 cores / 32 threads, 64 GB | heavy (4) | `intent-cache` only (12 GB slots: no bigmem) | `intent-ci4` | [`hosts/intent-ci4.env`](../infra/runners/hosts/intent-ci4.env) |
+| intent-ci4 | ReliableSite, Los Angeles | EPYC 4545P, 16 cores / 32 threads, 64 GB | heavy (4) | `intent-cache` only (12 GB slots: no bigmem) | `intent-ci4` | [`hosts/intent-ci4.env`](../infra/runners/hosts/intent-ci4.env) |
 
 | Pool | Label | Serves jobs asking for | Bursts to | Per slot |
 |---|---|---|---|---|
@@ -42,8 +42,7 @@ OOM-killed there when those jobs overflowed from busy xl slots. Every
 8-core job fits; if one is OOM-killed, drop to three slots of 16 GB
 (`HEAVY_SLOTS=3`, `HEAVY_MEMORY=16g`). intent-ci4 is a second intent-ci3:
 same box and slots, only the name differs (`test_runners.py` keeps the two
-files in step). Until it is online, `CI_LINUX_HEAVY_SLOTS` does not count its
-four slots. [`hosts/epyc-4545p-3heavy.env`](../infra/runners/hosts/epyc-4545p-3heavy.env)
+files in step). [`hosts/epyc-4545p-3heavy.env`](../infra/runners/hosts/epyc-4545p-3heavy.env)
 is the other EPYC layout: three heavy slots (cores 0-3, 4-7, 8-11), 32 GB each.
 
 The routing probe (`runner-route.yml`) caps how many jobs it sends to each

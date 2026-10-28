@@ -709,23 +709,24 @@ class Supervisor(Stubbed):
         argv = ' '.join([c for c in self.calls('docker') if c['argv'][0] == 'run'][-1]['argv'])
         self.assertIn('--cpus 8 --cpuset-cpus 12-15,28-31 --memory 30g', argv)
 
-    def test_four_heavy_slots_on_intent_ci3(self):
-        self.use_host_config(INTENT_CI3)
-        self.responses['GET /orgs/example-org/actions/runners'] = [200, {'runners': []}]
-        for n, cpuset in enumerate(('0-3,16-19', '4-7,20-23', '8-11,24-27', '12-15,28-31'), 1):
-            with self.subTest(slot=f'heavy-{n}'):
-                rc, out, err = self.run_supervisor(f'heavy-{n}')
-                self.assertEqual(rc, 0, err)
-                body = json.loads([c for c in self.calls('curl') if c['method'] == 'POST'][-1]['body'])
-                self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache', 'intent-host-intent-ci3'])
-                self.assertRegex(body['name'], rf'^intent-ci3-heavy-{n}-\d+$')
-                argv = ' '.join([c for c in self.calls('docker') if c['argv'][0] == 'run'][-1]['argv'])
-                for flag in (f'--hostname intent-ci3-heavy-{n}', f'--cpus 8 --cpuset-cpus {cpuset} --memory 12g',
-                             '--memory-swap 12g', '--pids-limit 16384', '--shm-size 1g'):
-                    self.assertIn(flag, argv)
-        rc, _, err = self.run_supervisor('xl-1')
-        self.assertNotEqual(rc, 0, 'intent-ci3 has no xl slot')
-        self.assertIn('is not a configured slot', err)
+    def test_four_heavy_slots_on_the_64g_hosts(self):
+        for config, host in ((INTENT_CI3, 'intent-ci3'), (INTENT_CI4, 'intent-ci4')):
+            self.use_host_config(config)
+            self.responses['GET /orgs/example-org/actions/runners'] = [200, {'runners': []}]
+            for n, cpuset in enumerate(('0-3,16-19', '4-7,20-23', '8-11,24-27', '12-15,28-31'), 1):
+                with self.subTest(host=host, slot=f'heavy-{n}'):
+                    rc, out, err = self.run_supervisor(f'heavy-{n}')
+                    self.assertEqual(rc, 0, err)
+                    body = json.loads([c for c in self.calls('curl') if c['method'] == 'POST'][-1]['body'])
+                    self.assertEqual(body['labels'], ['self-hosted', 'linux', 'x64', 'intent-cache', f'intent-host-{host}'])
+                    self.assertRegex(body['name'], rf'^{host}-heavy-{n}-\d+$')
+                    argv = ' '.join([c for c in self.calls('docker') if c['argv'][0] == 'run'][-1]['argv'])
+                    for flag in (f'--hostname {host}-heavy-{n}', f'--cpus 8 --cpuset-cpus {cpuset} --memory 12g',
+                                 '--memory-swap 12g', '--pids-limit 16384', '--shm-size 1g'):
+                        self.assertIn(flag, argv)
+            rc, _, err = self.run_supervisor('xl-1')
+            self.assertNotEqual(rc, 0, f'{host} has no xl slot')
+            self.assertIn('is not a configured slot', err)
 
     def test_host_label_follows_the_name_prefix(self):
         # Each slot also registers intent-host-<RUNNER_NAME_PREFIX>, so a job
@@ -797,6 +798,7 @@ class Supervisor(Stubbed):
                 (INTENT_CI1, epyc, None),
                 (INTENT_CI2, epyc, None),
                 (INTENT_CI3, epyc, None),
+                (INTENT_CI4, epyc, None),
                 (EPYC_3HEAVY, epyc, None),
                 (HERE / 'runners.env', ryzen, None),
                 (HERE / 'runners.env', epyc, 'slot heavy-1: CPU 0 shares a core with CPU 16'),
@@ -1588,27 +1590,18 @@ class Static(unittest.TestCase):
                          ('intent-ci3', 'heavy', '4', '12g'))
         self.assertNotIn('XL_SLOTS', ci3, 'intent-ci3 has no xl slot')
 
-    def test_intent_ci2_matches_intent_ci1_but_its_name(self):
-        # intent-ci2 is a second intent-ci1: same hardware, same slots; only
-        # the runner name prefix (and the host name in comments) differs.
-        ci1, ci2 = read_env(INTENT_CI1), read_env(INTENT_CI2)
-        self.assertEqual(ci2['RUNNER_NAME_PREFIX'], 'intent-ci2')
-        self.assertEqual({**ci2, 'RUNNER_NAME_PREFIX': 'intent-ci1'}, ci1)
-        self.assertEqual(INTENT_CI2.read_text().replace('intent-ci2', 'intent-ci1'), INTENT_CI1.read_text())
+    def test_twin_hosts_match_but_their_name(self):
+        # intent-ci2 is a second intent-ci1 and intent-ci4 a second intent-ci3:
+        # same hardware, same slots; only the runner name prefix (and the host
+        # name in comments) differs.
+        for (base, base_name), (twin, twin_name) in (((INTENT_CI1, 'intent-ci1'), (INTENT_CI2, 'intent-ci2')),
+                                                     ((INTENT_CI3, 'intent-ci3'), (INTENT_CI4, 'intent-ci4'))):
+            with self.subTest(twin=twin_name):
+                self.assertEqual(read_env(twin)['RUNNER_NAME_PREFIX'], twin_name)
+                self.assertEqual(twin.read_text().replace(twin_name, base_name), base.read_text())
         prefixes = [read_env(path).get('RUNNER_NAME_PREFIX', 'intent-cache')
                     for path in [HERE / 'runners.env', *sorted(HOSTS.glob('*.env'))]]
         self.assertEqual(len(prefixes), len(set(prefixes)), 'every host has its own name prefix')
-
-    def test_intent_ci4_matches_intent_ci3_but_its_name(self):
-        # intent-ci4 is a second intent-ci3: same 64 GB EPYC 4545P, same four
-        # 12 GB heavy slots (no xl, no bigmem); only the name prefix (and the
-        # host name in comments) differs.
-        ci3, ci4 = read_env(INTENT_CI3), read_env(INTENT_CI4)
-        self.assertEqual(ci4['RUNNER_NAME_PREFIX'], 'intent-ci4')
-        self.assertEqual({**ci4, 'RUNNER_NAME_PREFIX': 'intent-ci3'}, ci3)
-        self.assertEqual(INTENT_CI4.read_text().replace('intent-ci4', 'intent-ci3'), INTENT_CI3.read_text())
-        self.assertNotIn('intent-cache-bigmem', ci4['HEAVY_LABELS'], '12 GB slots never take 16-core overflow')
-
 
 if __name__ == '__main__':
     unittest.main()
