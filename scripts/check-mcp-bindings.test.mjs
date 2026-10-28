@@ -8,10 +8,15 @@ import { fileURLToPath } from 'node:url';
 
 import { CheckError } from './check-makefile-targets.mjs';
 import {
+  ALLOW_MISSING_ENV,
+  ALLOW_MISSING_FLAG,
   INDEX_PATH,
   INTENTD_DIR,
+  MISSING_INTENTD_MESSAGE,
+  MOVED_TOOLS_RS_MESSAGE,
   PROTOCOL_DIR,
   RENAMED_BINDINGS,
+  SKIPPED_MESSAGE,
   TOOLS_RS_IN_INTENTD,
   TOOLS_RS_PATH,
   collectDocMentions,
@@ -357,10 +362,69 @@ test('valid prose signatures pass: literals, partial option lists, opaque option
   assert.deepEqual(messages(result), []);
 });
 
-test('everything is skipped (exit 0) when tools.rs is absent', async () => {
+test('a missing tools.rs is an error with an init hint, not a silent skip (intent#7939)', async () => {
   const result = await runChecks(await makeRoot({ rust: null }));
+  assert.equal(result.skipped, null);
+  assert.deepEqual(messages(result), [`${TOOLS_RS_PATH}:1: error: ${MISSING_INTENTD_MESSAGE}`]);
+  assert.match(MISSING_INTENTD_MESSAGE, new RegExp(`git submodule update --init ${INTENTD_DIR}`));
+  assert.match(MISSING_INTENTD_MESSAGE, new RegExp(`${ALLOW_MISSING_ENV}=1`));
+});
+
+test('allowMissing turns a missing tools.rs into an explicit skip with no errors', async () => {
+  const result = await runChecks(await makeRoot({ rust: null }), { allowMissing: true });
   assert.deepEqual(messages(result), []);
-  assert.equal(result.skipped, `skipped: ${TOOLS_RS_PATH} (submodule not initialized)`);
+  assert.equal(result.skipped, SKIPPED_MESSAGE);
+  assert.match(SKIPPED_MESSAGE, /NOT checked/);
+});
+
+test('an initialized checkout without tools.rs (moved file) fails even with allowMissing', async () => {
+  for (const marker of ['Cargo.toml', '.git']) {
+    const root = await makeRoot({ rust: null });
+    await fs.mkdir(path.join(root, INTENTD_DIR), { recursive: true });
+    await fs.writeFile(path.join(root, INTENTD_DIR, marker), '');
+    for (const allowMissing of [false, true]) {
+      const result = await runChecks(root, { allowMissing });
+      assert.equal(result.skipped, null, `${marker} allowMissing=${allowMissing}`);
+      assert.deepEqual(messages(result), [`${TOOLS_RS_PATH}:1: error: ${MOVED_TOOLS_RS_MESSAGE}`]);
+    }
+  }
+});
+
+test('an empty packages/intentd directory (the usual uninitialized state) counts as missing', async () => {
+  const root = await makeRoot({ rust: null });
+  await fs.mkdir(path.join(root, INTENTD_DIR), { recursive: true });
+  assert.deepEqual(messages(await runChecks(root)), [`${TOOLS_RS_PATH}:1: error: ${MISSING_INTENTD_MESSAGE}`]);
+  assert.equal((await runChecks(root, { allowMissing: true })).skipped, SKIPPED_MESSAGE);
+});
+
+test('allowMissing changes nothing when tools.rs is present', async () => {
+  const root = await withIndex({ 'methods/agents.md': VALID_DOC });
+  const result = await runChecks(root, { allowMissing: true });
+  assert.equal(result.skipped, null);
+  assert.deepEqual(messages(result), []);
+  assert.ok(result.bindings.length > 0);
+});
+
+test('CLI: a missing submodule exits 1 naming the init command; the flag or env opt-out exits 0 and says so', async (t) => {
+  const root = await makeRoot({ rust: null });
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const run = (args, env = {}) => spawnSync(process.execPath, [SCRIPT, ...args, root], { encoding: 'utf8', env: { ...cleanNodeEnv(), ...env } });
+
+  const strict = run([]);
+  assert.equal(strict.status, 1, strict.stderr);
+  assert.match(strict.stderr, new RegExp(`git submodule update --init ${INTENTD_DIR}`));
+  assert.match(strict.stderr, /1 MCP binding error\(s\)\./);
+  assert.doesNotMatch(strict.stdout, /consistent/);
+
+  for (const [args, env] of [[[ALLOW_MISSING_FLAG], {}], [[], { [ALLOW_MISSING_ENV]: '1' }]]) {
+    const optOut = run(args, env);
+    assert.equal(optOut.status, 0, optOut.stderr);
+    assert.match(optOut.stderr, /bindings were NOT checked/);
+    assert.doesNotMatch(optOut.stdout, /consistent/);
+  }
+
+  const notOne = run([], { [ALLOW_MISSING_ENV]: 'yes' });
+  assert.equal(notOne.status, 1, 'only ALLOW_MISSING_INTENTD=1 opts out');
 });
 
 test('a tools.rs without the constants fails naming each missing constant', async () => {
