@@ -100,6 +100,14 @@ choose another computer because the primary lacks support. The flag grants no
 permission and does not assert current native readiness. Current browser-only
 capability behavior below remains unchanged until this extension is implemented.
 
+**Workspace labels (additive).** Exactly integer `server.capabilities.workspaceLabels: 1`,
+also returned by `system.capabilities`, advertises the
+[§5.1 workspace label contract](./workspace.md#workspace-labels): the optional
+`Workspace.label` field, the clearable `label` param on `workspace.update` and
+`changes.label` on `workspace:updated`. Unlabeled workspaces omit the field, so clients
+cannot detect support by presence; they offer label actions only for exact integer `1`,
+and older daemons omit it.
+
 **Script run monitoring (prepared additive extension).**
 `server.capabilities.scriptMonitors: 1` advertises the entire
 [§5.8a contract](./script-monitors.md): durable run identity, required one-shot

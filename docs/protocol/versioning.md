@@ -66,6 +66,16 @@ An `agent:updated` payload that carries `name` (a mixed `agent.update`, the
 `rememberSpecialist` placeholder rename) likewise carries the persisted `nameExplicitlySet`,
 overriding any request-echoed value. Older daemons omit it there; clients re-read the session.
 
+Also within 15.2 (additive optional row field, update param and `workspace:updated` key;
+capability-gated; no method-catalog change, so no version bump): **workspace labels**
+([§5.1](./methods/workspace.md#workspace-labels)). `Workspace.label` is one optional
+trimmed 1–64 character label per workspace (`"pinned"` = the built-in Pinned label),
+omitted while unset; `workspace.update` sets or clears it with `label?: string | null`
+(owner-only), and `workspace:updated` carries `changes.label: string | null`. Because
+unlabeled workspaces omit the field, support is detected by the exact-integer capability
+`workspaceLabels: 1` on `client.hello` `server.capabilities` and `system.capabilities`;
+older daemons omit it.
+
 **Version 15.1 — workspace discussions (additive, prepared).**
 [Workspace discussions](./methods/multiplayer.md#555-workspace-discussions) add
 `discussion.conversations`, `discussion.recipients`, `discussion.list`,
@@ -1529,3 +1539,4 @@ the `ignore` map of `scripts/check-protocol-field-parity.mjs`, not here.
 | `Workspace` | `retiredAt` | [Retired workspaces](./methods/workspace.md#retired-workspaces) | Pending cloudlands-fe retired-workspaces PR (home, search and workspace view) |
 | `Workspace` | `scriptsRunning` | [Workspace fields](./methods/workspace.md#51-workspace) | Pending cloudlands-fe Home Running/Waiting groups PR |
 | `Workspace` | `backgroundTasksRunning` | [Workspace fields](./methods/workspace.md#51-workspace) | Pending cloudlands-fe Home background-task Running PR |
+| `Workspace` | `label` | [Workspace labels](./methods/workspace.md#workspace-labels) | Pending cloudlands-fe Home workspace labels PR |
