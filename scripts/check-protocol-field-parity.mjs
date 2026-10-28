@@ -600,9 +600,56 @@ export function extractTsKeys(source, typeName) {
 
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-/** Whether `interface <type>` in `tsSource` extends `base` (an `inherits` entry applies). */
+/** `source` with comments and template contents stripped, per line (see `stripNoise`). */
+function cleanLines(source) {
+  const state = { block: false, template: false };
+  return source.split('\n').map((line) => stripNoise(line, state));
+}
+
+/**
+ * The base types named in the live `export interface <type>` declaration's
+ * own heritage clause (`extends A, B<X>` → `['A', 'B']`), read from cleaned
+ * text so comments and template literals do not count, and with the
+ * interface's generic parameters (whose constraints may also say `extends`)
+ * removed. `[]` when it extends nothing; `null` when the declaration is not
+ * found.
+ */
+export function interfaceHeritage(source, type) {
+  const clean = cleanLines(source);
+  const re = TS_INTERFACE_RE(type);
+  const idx = clean.findIndex((line) => re.test(line));
+  if (idx === -1) return null;
+  const open = findTsBodyOpen(clean, idx, type);
+  if (open === null) return null;
+  const head = clean[idx].match(re);
+  let text = '';
+  for (let i = idx; i <= open.line; i += 1) {
+    const start = i === idx ? head.index + head[0].length : 0;
+    const end = i === open.line ? open.col : clean[i].length;
+    text += `${clean[i].slice(start, end)} `;
+  }
+  let top = '';
+  let angle = 0;
+  for (let c = 0; c < text.length; c += 1) {
+    const ch = text[c];
+    if (ch === '=' && text[c + 1] === '>') {
+      if (angle === 0) top += '=>';
+      c += 1;
+    } else if (ch === '<') angle += 1;
+    else if (ch === '>') angle -= 1;
+    else if (angle === 0) top += ch;
+  }
+  const heritage = top.match(/^\s*extends\s+([\s\S]*)$/);
+  if (!heritage) return [];
+  return heritage[1]
+    .split(',')
+    .map((part) => part.trim().match(/^[A-Za-z_$][A-Za-z0-9_$.]*/)?.[0])
+    .filter(Boolean);
+}
+
+/** Whether the live `interface <type>` in `tsSource` extends `base` (an `inherits` entry applies). */
 export function extendsBase(tsSource, type, base) {
-  return new RegExp(`\\binterface\\s+${escapeRe(type)}\\b[^{]*\\bextends\\b[^{]*\\b${escapeRe(base)}\\b`).test(tsSource);
+  return (interfaceHeritage(tsSource, type) ?? []).includes(base);
 }
 
 /**
@@ -623,8 +670,8 @@ export function inheritedTsKeys(pair, tsSource, inheritedSources = []) {
     const source = inheritedSources[i] ?? '';
     let target = base.type;
     if (base.schema) {
-      const inferRe = new RegExp(`\\btype\\s+${escapeRe(base.type)}\\s*=\\s*z\\.infer<\\s*typeof\\s+${escapeRe(base.schema)}\\s*>`);
-      if (!inferRe.test(source)) {
+      const inferRe = new RegExp(`^\\s*export\\s+type\\s+${escapeRe(base.type)}\\s*=\\s*z\\.infer<\\s*typeof\\s+${escapeRe(base.schema)}\\s*>`);
+      if (!cleanLines(source).some((line) => inferRe.test(line))) {
         errors.push({ file: base.file, line: 1, message: `${label}: type ${base.type} = z.infer<typeof ${base.schema}> not found; update its inherits entry in PAIRS` });
         continue;
       }

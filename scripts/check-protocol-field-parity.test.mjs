@@ -22,6 +22,7 @@ import {
   formatRefBanner,
   formatRefOffPinWarning,
   inheritedTsKeys,
+  interfaceHeritage,
   parseStagedFields,
   runChecks,
   toCamelCase,
@@ -1671,4 +1672,35 @@ test('an inherits entry the type no longer extends, or whose base is gone, fails
   assert.match(noInfer.errors[0].message, /z\.infer<typeof NodeFieldsSchema> not found/);
   const noSchema = inheritedTsKeys(inheritPair(NODE_BASE), INHERIT_TS, ['export type NodeFields = z.infer<typeof NodeFieldsSchema>;']);
   assert.match(noSchema.errors[0].message, /NodeFieldsSchema \(inherited by Row\) not found/);
+});
+
+test('interfaceHeritage reads only the live declaration\'s own heritage clause', () => {
+  assert.deepEqual(interfaceHeritage(INHERIT_TS, 'Row'), ['NodeFields']);
+  assert.deepEqual(interfaceHeritage('export interface Row<T extends NodeFields> {\n  id: string;\n}\n', 'Row'), []);
+  assert.deepEqual(interfaceHeritage('export interface Row<T extends NodeFields> extends A<T>, B {\n}\n', 'Row'), ['A', 'B']);
+  assert.deepEqual(interfaceHeritage('export interface Row\n  extends NodeFields,\n    Other {\n}\n', 'Row'), ['NodeFields', 'Other']);
+  assert.equal(interfaceHeritage('export interface Other {}\n', 'Row'), null);
+});
+
+test('generic constraints and dead copies never credit inherited fields', () => {
+  const cases = {
+    'a generic-only constraint': 'export interface Row<T extends NodeFields> {\n  id: string;\n}\n',
+    'a commented copy': '// export interface Row extends NodeFields {\nexport interface Row {\n  id: string;\n}\n',
+    'a block-commented copy': '/* export interface Row extends NodeFields { */\nexport interface Row {\n  id: string;\n}\n',
+    'a template-literal copy': 'const doc = `\nexport interface Row extends NodeFields {\n`;\nexport interface Row {\n  id: string;\n}\n',
+  };
+  for (const [what, ts] of Object.entries(cases)) {
+    const errors = comparePair(inheritPair(NODE_BASE), INHERIT_RUST, ts, new Map(), [INHERIT_BASE]);
+    assert.ok(errors.some((e) => !e.severity && /Row\.nodeId .* is missing from Row/.test(e.message)), `${what}: ${JSON.stringify(errors)}`);
+  }
+});
+
+test('only the live z.infer alias makes a schema the base', () => {
+  const changed = INHERIT_BASE.replace(
+    'export type NodeFields = z.infer<typeof NodeFieldsSchema>;',
+    '// export type NodeFields = z.infer<typeof NodeFieldsSchema>;\nexport type NodeFields = { nodeId?: string };',
+  );
+  const result = inheritedTsKeys(inheritPair(NODE_BASE), INHERIT_TS, [changed]);
+  assert.match(result.errors[0].message, /z\.infer<typeof NodeFieldsSchema> not found/);
+  assert.deepEqual(result.keys, []);
 });
