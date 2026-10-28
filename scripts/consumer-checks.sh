@@ -97,7 +97,7 @@ fix_path() {
     check-agent-worker-contract) echo "docs/protocol/methods/agent-workers.md + fixtures/agent-workers/v1/ + scripts/agent-worker-contract*.mjs (synthetic only)" ;;
     check-note-truncated-read-contract) echo "docs/protocol/fixtures/notes/truncated-read.json + methods/notes-tasks.md" ;;
     check-browser-routing-contract) echo "docs/protocol/fixtures/browser-routing/routing.json + methods/files-terminal-browser.md REV-2 (intentd copy: crates/intent-transport/tests/fixtures/browser-routing.json, via scripts/browser-routing-contract.mjs)" ;;
-    check-fixture-copies) echo "scripts/check-fixture-copies.mjs REGISTERED (describe the copy with defineFixtureCopy() in scripts/lib/fixture-copy.mjs; see docs/protocol/README.md#copied-fixtures)" ;;
+    check-fixture-copies) echo "scripts/check-fixture-copies.mjs REGISTERED (describe the copy with defineFixtureCopy() in scripts/lib/fixture-copy.mjs; see docs/protocol/README.md#copied-fixtures) + intentd single-file copies/locks (scripts/{checkout-repo-config,event-stream-recovery,note-truncated-read,scripts-compact}-contract.mjs)" ;;
     check-suggested-prompts-contract) echo "docs/protocol/fixtures/suggested-prompts/v1/ + adopted component copies/locks (see docs/protocol/suggested-prompts.md)" ;;
     *) echo "unknown check" ;;
   esac

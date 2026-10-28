@@ -7,8 +7,8 @@
 // file under docs/protocol/fixtures in this checkout's history, merge
 // resolutions included (Git blob ids,
 // so a partial clone with `--filter=blob:none` needs no blob downloads). It
-// passes only when a registered defineFixtureCopy() spec owns that path, or it
-// is a LEGACY copy listed below that predates the tool. Byte-identical copies
+// passes only when a registered defineFixtureCopy() spec owns that path (LEGACY
+// is kept empty; see below). Byte-identical copies
 // are what export produces; a hand-edited copy is out of reach of this check.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -16,7 +16,11 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { COPY as browserRouting } from './browser-routing-contract.mjs';
 import { COPY as backendKeychain } from './backend-keychain-contract.mjs';
+import { COPY as checkoutRepoConfig } from './checkout-repo-config-contract.mjs';
+import { COPY as eventStreamRecovery } from './event-stream-recovery-contract.mjs';
 import { blobId, git, historyBlobs, isFixtureCopy, requireValue, runScript } from './lib/fixture-copy.mjs';
+import { COPY as noteTruncatedRead } from './note-truncated-read-contract.mjs';
+import { COPY as scriptsCompact } from './scripts-compact-contract.mjs';
 import { COPY as suggestedPrompts } from './suggested-prompts-contract.mjs';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -24,35 +28,18 @@ export const FIXTURES_ROOT = 'docs/protocol/fixtures';
 export const COMPONENTS = ['cloudlands-fe', 'intentd', 'ios'];
 
 /** Every fixture copied through the shared tool. A new spec must be added here. */
-export const REGISTERED = [browserRouting, backendKeychain, suggestedPrompts];
+export const REGISTERED = [
+  browserRouting, backendKeychain, checkoutRepoConfig, eventStreamRecovery, noteTruncatedRead, scriptsCompact,
+  suggestedPrompts,
+];
 
 /**
- * Copies that predate the shared tool. Do not add entries: register new copies
- * with defineFixtureCopy(). Remove an entry once its copy moves onto the tool
- * or disappears (the check warns about stale entries).
+ * Copies that bypass the shared tool. Every copy has moved onto
+ * defineFixtureCopy() and this list must stay empty (a test enforces it):
+ * register a new or existing copy instead, with a single-file commit spec when
+ * the component already keeps one file (scripts/lib/fixture-copy.mjs).
  */
-export const LEGACY = [
-  {
-    component: 'intentd',
-    path: 'crates/intent-acp/tests/fixtures/scripts-compact.json',
-    source: 'docs/protocol/fixtures/scripts/compact.json',
-  },
-  {
-    component: 'intentd',
-    path: 'crates/intent-core/tests/fixtures/truncated-read.json',
-    source: 'docs/protocol/fixtures/notes/truncated-read.json',
-  },
-  {
-    component: 'intentd',
-    path: 'crates/intent-core/tests/goldens/checkout_repo_config.json',
-    source: 'docs/protocol/fixtures/checkout-repo-config.json',
-  },
-  {
-    component: 'intentd',
-    path: 'crates/intent-transport/src/events/fixtures/event-stream-recovery.json',
-    source: 'docs/protocol/fixtures/event-stream-recovery/contract.json',
-  },
-];
+export const LEGACY = [];
 
 function lines(buffer) {
   return buffer.toString('utf8').split('\0').filter(Boolean);

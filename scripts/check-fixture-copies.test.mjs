@@ -139,9 +139,29 @@ test('a shallow monorepo checkout warns that only fetched history is compared', 
   assert.match(warnings[0], /shallow/);
 });
 
-test('the real registry covers every adopted copy and legacy entries name real fixtures', () => {
-  assert.deepEqual(REGISTERED.map((copy) => copy.name).sort(), ['backend-keychain', 'browser-routing', 'suggested-prompts']);
-  for (const entry of LEGACY) assert.ok(fs.existsSync(path.join(ROOT, entry.source)), entry.source);
+test('a single-file commit spec owns its copy before and after adoption', (t) => {
+  const { root, intentd } = monorepo(t);
+  const single = defineFixtureCopy({
+    name: 'toy-file',
+    sourcePath: FIXTURE,
+    provenance: 'commit',
+    copies: { intentd: { file: 'tests/goldens/toy_cases.json', lock: 'tests/goldens/toy_cases.lock.json' } },
+    validate: () => 'ok',
+  });
+  write(intentd, 'tests/goldens/toy_cases.json', V1);
+  git(intentd, 'add', '-A');
+  const registered = { ...options, registered: [single] };
+  assert.match(checkFixtureCopies(root, registered).report, /intentd: 1 fixture copies found; all registered or legacy/);
+  assert.match(single.checkCopies(root).warnings[0], /pre-adoption/);
+  assert.throws(() => checkFixtureCopies(root, options), /toy_cases\.json is a copy of/);
+});
+
+test('the real registry covers every adopted copy and LEGACY stays empty', () => {
+  assert.deepEqual(REGISTERED.map((copy) => copy.name).sort(), [
+    'backend-keychain', 'browser-routing', 'checkout-repo-config', 'event-stream-recovery', 'note-truncated-read',
+    'scripts-compact', 'suggested-prompts',
+  ]);
+  assert.deepEqual(LEGACY, [], 'register the copy with defineFixtureCopy() instead of listing it in LEGACY');
   const result = spawnSync(process.execPath, [path.join(ROOT, 'scripts/check-fixture-copies.mjs')],
     { encoding: 'utf8', env: { ...process.env, DD_TRACE_ENABLED: 'false' } });
   assert.equal(result.status, 0, result.stderr);

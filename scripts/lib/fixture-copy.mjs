@@ -8,9 +8,10 @@
 // on a lagging copy and fails on a copy that disagrees with the source it
 // claims, or claims a source this checkout has never had. Two provenance kinds:
 //
-// - `commit`: the copy is a directory of exact canonical bytes plus a lock
-//   naming the full monorepo commit it was exported from and the copy hashes.
-//   Component CI runs `verify` against the monorepo checked out at that commit.
+// - `commit`: the copy is a directory (or one file) of exact canonical bytes
+//   plus a lock naming the full monorepo commit it was exported from and the
+//   copy hashes. Component CI runs `verify` against the monorepo checked out at
+//   that commit.
 // - `revision`: the copy is one JSON file carrying the canonical file's
 //   integer revision field; a change to the cases bumps the revision.
 //
@@ -140,6 +141,13 @@ function relative(file) {
  * keys (default `{ files: { name: sha256 } }`). `sameSourceAcrossComponents`
  * requires every adopted copy to carry the same lock.
  *
+ * Single-file `commit`: omit `files`; `sourcePath` is one file and each copy is
+ * `{ file, lock }` (the copy may have a different name). The bytes are exact
+ * and need only parse when the file is JSON. The default lock key is
+ * `fileSha256`. The lock alone declares adoption: a copy file without a lock is
+ * a pre-adoption pin (a warning), so a component's existing copy can be
+ * registered before the component exports its lock.
+ *
  * `revision`: `sourcePath` is one JSON file with a positive integer
  * `revisionField` (default 'revision'); each copy is `{ file }`.
  *
@@ -158,8 +166,13 @@ export function defineFixtureCopy(spec) {
   requireValue(sourcePath.startsWith('docs/protocol/fixtures/'), `${name}: sourcePath must be under docs/protocol/fixtures/`);
   requireValue(typeof validate === 'function', `${name}: validate(location) is required`);
   requireValue(copies && typeof copies === 'object' && Object.keys(copies).length > 0, `${name}: copies must name at least one component`);
+  const single = provenance === 'commit' && Object.values(copies).some((paths) => paths?.file !== undefined);
   for (const [component, paths] of Object.entries(copies)) {
-    if (provenance === 'commit') {
+    if (single) {
+      requireValue(paths?.directory === undefined, `${name}: commit copies are all { directory, lock } or all { file, lock }`);
+      relative(paths?.file);
+      relative(paths?.lock);
+    } else if (provenance === 'commit') {
       relative(paths?.directory);
       relative(paths?.lock);
     } else {
@@ -167,24 +180,33 @@ export function defineFixtureCopy(spec) {
     }
     requireValue(paths.reference === undefined || typeof paths.reference === 'string', `${name}: ${component}.reference must be a string`);
   }
-  if (provenance === 'commit') {
+  if (single) {
+    requireValue(spec.files === undefined, `${name}: a single-file commit copy takes no files list`);
+  } else if (provenance === 'commit') {
     requireValue(Array.isArray(files) && files.length > 0 && files.every((f) => typeof f === 'string' && !f.includes('/')),
       `${name}: commit provenance needs the list of copied file names`);
   }
   const components = Object.keys(copies);
   const label = name;
+  // A single-file copy is handled as a one-file directory keyed by the source's basename.
+  const names = single ? [path.posix.basename(sourcePath)] : files;
+  const sourceFile = (file) => (single ? sourcePath : `${sourcePath}/${file}`);
+  const defaultLockFields = (bytes) => (single
+    ? { fileSha256: sha256(bytes[names[0]]) }
+    : { files: Object.fromEntries(files.map((f) => [f, sha256(bytes[f])])) });
   const buildLock = (bytes, sourceCommit) => ({
     lockVersion: 1,
     sourceRepository: SOURCE_REPOSITORY,
     sourcePath,
     sourceCommit,
-    ...(lockFields ? lockFields(bytes) : { files: Object.fromEntries(files.map((f) => [f, sha256(bytes[f])])) }),
+    ...(lockFields ?? defaultLockFields)(bytes),
   });
 
   function copyPaths(componentRoot, component) {
     requireValue(Object.hasOwn(copies, component),
       `${label}: unknown component ${component}; expected one of ${components.join(', ')}`);
     const spec = copies[component];
+    if (single) return { file: path.join(componentRoot, spec.file), lock: path.join(componentRoot, spec.lock) };
     return provenance === 'commit'
       ? { directory: path.join(componentRoot, spec.directory), lock: path.join(componentRoot, spec.lock) }
       : { file: path.join(componentRoot, spec.file) };
@@ -194,6 +216,7 @@ export function defineFixtureCopy(spec) {
   function copiedFiles(component) {
     const spec = copies[component];
     if (!spec) return [];
+    if (single) return [spec.file];
     return provenance === 'commit' ? files.map((f) => path.posix.join(spec.directory, f)) : [spec.file];
   }
 
@@ -203,6 +226,21 @@ export function defineFixtureCopy(spec) {
   }
 
   // ---- commit provenance -------------------------------------------------
+
+  /** A single-file copy (or canonical file): exact bytes, parsed only for validity. */
+  function readSingleFile(file, what) {
+    requireValue(fs.lstatSync(file, { throwIfNoEntry: false })?.isFile(), `${what}: ${file} is missing or not a regular file`);
+    const bytes = fs.readFileSync(file);
+    requireValue(bytes.length > 0, `${what}: ${file} is empty`);
+    if (file.endsWith('.json')) {
+      try {
+        JSON.parse(bytes.toString('utf8'));
+      } catch (error) {
+        throw new Error(`${what}: invalid JSON (${error.message})`);
+      }
+    }
+    return { [names[0]]: bytes };
+  }
 
   /** The exact files of a copy (or canonical) directory; no content validation. */
   function readDirectory(directory, what) {
@@ -222,9 +260,9 @@ export function defineFixtureCopy(spec) {
   }
 
   function readCanonicalDirectory(root) {
-    const directory = path.join(root, sourcePath);
-    const bytes = readDirectory(directory, `${label} canonical`);
-    return { bytes, summary: validate(directory) };
+    const location = path.join(root, sourcePath);
+    const bytes = single ? readSingleFile(location, `${label} canonical`) : readDirectory(location, `${label} canonical`);
+    return { bytes, summary: validate(location) };
   }
 
   function inspectLock(lockFile, what) {
@@ -232,7 +270,7 @@ export function defineFixtureCopy(spec) {
       `${what}: lock ${lockFile} is missing or not a regular file`);
     const lock = readJsonBytes(fs.readFileSync(lockFile), lockFile);
     requireValue(lock !== null && typeof lock === 'object' && !Array.isArray(lock), `${what}: lock must be an object`);
-    equal(Object.keys(lock).sort(), Object.keys(buildLock(Object.fromEntries(files.map((f) => [f, Buffer.alloc(0)])), '')).sort(),
+    equal(Object.keys(lock).sort(), Object.keys(buildLock(Object.fromEntries(names.map((f) => [f, Buffer.alloc(0)])), '')).sort(),
       `${what}: lock keys`);
     equal(lock.lockVersion, 1, `${what}: lockVersion`);
     equal(lock.sourceRepository, SOURCE_REPOSITORY, `${what}: sourceRepository`);
@@ -250,7 +288,7 @@ export function defineFixtureCopy(spec) {
     const what = `${label} ${component}`;
     const paths = copyPaths(componentRoot, component);
     const lock = inspectLock(paths.lock, what);
-    const bytes = readDirectory(paths.directory, `${what} copy`);
+    const bytes = single ? readSingleFile(paths.file, `${what} copy`) : readDirectory(paths.directory, `${what} copy`);
     requireValue(isDeepStrictEqual(lock, buildLock(bytes, lock.sourceCommit)),
       `${what}: copy bytes do not match the SHA-256 hashes in its lock; re-export the copy instead of editing it`);
     return { bytes, lock, paths };
@@ -268,8 +306,8 @@ export function defineFixtureCopy(spec) {
       'source root must be the checkout root');
     equal(git(sourceRoot, 'rev-parse', 'HEAD').toString().trim(), sourceCommit, 'source checkout HEAD must equal the source commit');
     const source = readCanonicalDirectory(sourceRoot);
-    for (const file of files) {
-      requireValue(source.bytes[file].equals(git(sourceRoot, 'show', `${sourceCommit}:${sourcePath}/${file}`)),
+    for (const file of names) {
+      requireValue(source.bytes[file].equals(git(sourceRoot, 'show', `${sourceCommit}:${sourceFile(file)}`)),
         `canonical ${file} differs from source commit ${sourceCommit}; commit it first`);
     }
     return source;
@@ -279,6 +317,19 @@ export function defineFixtureCopy(spec) {
     // Validate everything before writing so a bad argument never leaves a half-updated copy.
     const source = requireSource(sourceRoot, sourceCommit);
     const paths = copyPaths(componentRoot, component);
+    if (single) {
+      requireValue(path.resolve(paths.file) !== path.resolve(sourceRoot, sourcePath), 'copy must be separate from canonical data');
+      for (const file of [paths.lock, paths.file]) {
+        const target = fs.lstatSync(file, { throwIfNoEntry: false });
+        requireValue(!target || target.isFile(), `export target must be a regular file: ${file}`);
+      }
+      fs.mkdirSync(path.dirname(paths.file), { recursive: true });
+      fs.mkdirSync(path.dirname(paths.lock), { recursive: true });
+      fs.writeFileSync(paths.file, source.bytes[names[0]]);
+      fs.writeFileSync(paths.lock, jsonBytes(buildLock(source.bytes, sourceCommit)));
+      verifyCommitCopy({ sourceRoot, sourceCommit, component, componentRoot });
+      return `${label} ${component}: exported ${SOURCE_REPOSITORY}@${sourceCommit} (${source.summary})`;
+    }
     requireValue(path.resolve(paths.directory) !== path.resolve(sourceRoot, sourcePath), 'copy must be separate from canonical data');
     const stat = fs.lstatSync(paths.directory, { throwIfNoEntry: false });
     if (stat) {
@@ -304,7 +355,7 @@ export function defineFixtureCopy(spec) {
     const copy = inspectCommitCopy(componentRoot, component);
     requireValue(isDeepStrictEqual(copy.lock, buildLock(source.bytes, sourceCommit)),
       `${label} ${component}: copy provenance: its lock does not describe ${SOURCE_REPOSITORY}@${sourceCommit}`);
-    for (const file of files) {
+    for (const file of names) {
       requireValue(copy.bytes[file].equals(source.bytes[file]),
         `${label} ${component}: ${file} differs from ${SOURCE_REPOSITORY}@${sourceCommit}`);
     }
@@ -319,10 +370,18 @@ export function defineFixtureCopy(spec) {
     for (const component of components) {
       const componentRoot = path.join(root, 'packages', component);
       const paths = copyPaths(componentRoot, component);
-      // Either file declares adoption; a half-deleted copy must fail, not skip.
-      if (!present(paths.lock) && !present(paths.directory)) {
+      // Either file declares adoption of a directory copy; a half-deleted copy
+      // must fail, not skip. A single-file copy is adopted by its lock alone.
+      const copyPresent = single ? false : present(paths.directory);
+      if (!present(paths.lock) && !copyPresent) {
+        const where = single ? copies[component].lock : copies[component].directory;
         requireValue(componentReferences(componentRoot, marker(component)) !== true,
-          `${label} ${component}: the component references ${marker(component)} but has no copy at ${copies[component].directory}`);
+          `${label} ${component}: the component references ${marker(component)} but has no ${single ? 'lock' : 'copy'} at ${where}`);
+        if (single && present(paths.file)) {
+          warnings.push(`${label} ${component}: ${copies[component].file} has no lock ${copies[component].lock} yet (pre-adoption); export the copy with its lock`);
+          lines.push(`${component}: pre-adoption pin (copy without lock); conformance not claimed`);
+          continue;
+        }
         lines.push(`${component}: ${uninspected(componentRoot, component)}; conformance not claimed`);
         continue;
       }
@@ -336,14 +395,14 @@ export function defineFixtureCopy(spec) {
     }
     for (const { component, bytes, lock } of adopted) {
       const commit = lock.sourceCommit;
-      const current = files.every((f) => bytes[f].equals(canonical.bytes[f]));
+      const current = names.every((f) => bytes[f].equals(canonical.bytes[f]));
       const ancestry = commitAncestry(root, commit);
       requireValue(ancestry !== 'unrelated',
         `${label} ${component}: lock commit ${commit} is not on this checkout's history; export from a merged monorepo commit`);
       if (ancestry === 'ancestor') {
         // Tree lookups only: blob ids need no blob download in a partial clone.
-        for (const file of files) {
-          const locked = gitText(root, 'rev-parse', '--verify', '--quiet', `${commit}:${sourcePath}/${file}`);
+        for (const file of names) {
+          const locked = gitText(root, 'rev-parse', '--verify', '--quiet', `${commit}:${sourceFile(file)}`);
           requireValue(locked === blobId(bytes[file]),
             `${label} ${component}: ${file} differs from ${SOURCE_REPOSITORY}@${commit}, the commit its lock names; re-export the copy instead of editing it`);
         }

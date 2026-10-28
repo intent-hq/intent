@@ -213,9 +213,13 @@ check-suggested-prompts-contract: ## Validate the shared suggested-prompts block
 	@node --test scripts/suggested-prompts-contract.test.mjs
 	@node scripts/suggested-prompts-contract.mjs check
 
-check-fixture-copies: ## Fail when a component copies a docs/protocol fixture without the shared fixture-copy tool
+check-fixture-copies: ## Fail when a component copies a docs/protocol fixture without the shared fixture-copy tool; check intentd's single-file copies
 	@node --test scripts/lib/fixture-copy.test.mjs scripts/check-fixture-copies.test.mjs
 	@node scripts/check-fixture-copies.mjs
+	@node scripts/checkout-repo-config-contract.mjs check
+	@node scripts/event-stream-recovery-contract.mjs check
+	@node scripts/note-truncated-read-contract.mjs check
+	@node scripts/scripts-compact-contract.mjs check
 
 check-agent-worker-contract: ## Validate synthetic worker observation goldens, model and regression sensitivity
 	@node scripts/agent-worker-contract.mjs

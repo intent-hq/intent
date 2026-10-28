@@ -246,3 +246,108 @@ test('revision: a lagging copy outside a shallow checkout\'s history only warns 
   fs.writeFileSync(file, jsonBytes({ revision: 1, cases: [] }));
   assert.match(revisionCopy().checkCopies(clone).warnings[0], /shallow checkout's history, so unverified/);
 });
+
+const FILE_SOURCE = 'docs/protocol/fixtures/toy/cases.json';
+const fileCopy = (overrides = {}) => defineFixtureCopy({
+  name: 'toy-file',
+  sourcePath: FILE_SOURCE,
+  provenance: 'commit',
+  copies: { alpha: { file: 'tests/fixtures/toy-cases.json', lock: 'tests/fixtures/toy-cases.lock.json' } },
+  validate: (file) => `${JSON.parse(fs.readFileSync(file, 'utf8')).cases.length} cases`,
+  ...overrides,
+});
+/** Commit raw `text` as the canonical single-file fixture; returns the commit. */
+function commitRaw(root, text, file = FILE_SOURCE) {
+  if (!fs.existsSync(path.join(root, '.git'))) git(root, 'init', '-q');
+  fs.mkdirSync(path.join(root, path.dirname(file)), { recursive: true });
+  fs.writeFileSync(path.join(root, file), text);
+  git(root, 'add', '--', file);
+  git(root, 'commit', '-q', '-m', 'toy');
+  return git(root, 'rev-parse', 'HEAD');
+}
+
+test('single-file commit: spec shape is checked', () => {
+  const copies = { alpha: { file: 'f.json', lock: 'f.lock.json' } };
+  assert.deepEqual(fileCopy().copiedFiles('alpha'), ['tests/fixtures/toy-cases.json']);
+  assert.throws(() => fileCopy({ files: ['cases.json'] }), /takes no files list/);
+  assert.throws(() => fileCopy({ copies: { ...copies, beta: { directory: 'd', lock: 'l.json' } } }), /all \{ directory, lock \} or all \{ file, lock \}/);
+  assert.throws(() => fileCopy({ copies: { alpha: { file: 'f.json' } } }), /relative/);
+  assert.throws(() => fileCopy({ copies: { alpha: { file: '../f.json', lock: 'l.json' } } }), /without '\.\.'/);
+});
+
+test('single-file commit: export then verify round-trips exact bytes under another name', (t) => {
+  const root = scratch(t);
+  const copy = fileCopy();
+  // Not JSON.stringify(…, 2) formatted: single-file copies keep the bytes as they are.
+  const text = '{ "cases": [ { "id": "a" } ] }\n';
+  const commit = commitRaw(root, text);
+  assert.match(exportTo(copy, root, commit, 'alpha'), new RegExp(`exported intent-hq/intent@${commit} \\(1 cases\\)`));
+  const dir = componentRoot(root, 'alpha');
+  assert.equal(fs.readFileSync(path.join(dir, 'tests/fixtures/toy-cases.json'), 'utf8'), text);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, 'tests/fixtures/toy-cases.lock.json'), 'utf8')), {
+    lockVersion: 1, sourceRepository: 'intent-hq/intent', sourcePath: FILE_SOURCE, sourceCommit: commit,
+    fileSha256: sha256(Buffer.from(text)),
+  });
+  assert.match(copy.verifyCopy({ sourceRoot: root, sourceCommit: commit, component: 'alpha', componentRoot: dir }), /copy matches/);
+  const { report, warnings } = copy.checkCopies(root);
+  assert.match(report, new RegExp(`alpha: adopted copy valid at ${commit}, current`));
+  assert.deepEqual(warnings, []);
+});
+
+test('single-file commit: a lagging copy warns; an edited copy or unmerged lock commit fails', (t) => {
+  const root = scratch(t);
+  const copy = fileCopy();
+  const old = commitRaw(root, '{"cases":[1]}\n');
+  exportTo(copy, root, old, 'alpha');
+  commitRaw(root, '{"cases":[1,2]}\n');
+  const { report, warnings } = copy.checkCopies(root);
+  assert.match(report, new RegExp(`alpha: adopted copy valid at ${old}, behind canonical`));
+  assert.match(warnings[0], /toy-file alpha: copy at .* is behind canonical/);
+  const dir = componentRoot(root, 'alpha');
+  const file = path.join(dir, 'tests/fixtures/toy-cases.json');
+  const lockFile = path.join(dir, 'tests/fixtures/toy-cases.lock.json');
+  const lock = JSON.parse(fs.readFileSync(lockFile, 'utf8'));
+  const edited = Buffer.from('{"cases":[9]}\n');
+  fs.writeFileSync(file, edited);
+  assert.throws(() => copy.checkCopies(root), /do not match the SHA-256 hashes in its lock/);
+  fs.writeFileSync(lockFile, jsonBytes({ ...lock, fileSha256: sha256(edited) }));
+  assert.throws(() => copy.checkCopies(root), new RegExp(`differs from intent-hq/intent@${old}, the commit its lock names`));
+  fs.writeFileSync(file, 'not json\n');
+  assert.throws(() => copy.checkCopies(root), /invalid JSON/);
+  const head = git(root, 'rev-parse', 'HEAD');
+  git(root, 'checkout', '-q', '-b', 'side');
+  const side = commitRaw(root, '{"cases":[3]}\n');
+  exportTo(copy, root, side, 'alpha');
+  git(root, 'checkout', '-q', head);
+  assert.throws(() => copy.checkCopies(root), /not on this checkout's history/);
+});
+
+test('single-file commit: a copy without a lock is pre-adoption unless the component references the lock', (t) => {
+  const root = scratch(t);
+  const copy = fileCopy();
+  commitRaw(root, '{"cases":[1]}\n');
+  const dir = componentRoot(root, 'alpha');
+  fs.mkdirSync(path.join(dir, 'tests/fixtures'), { recursive: true });
+  git(dir, 'init', '-q');
+  fs.writeFileSync(path.join(dir, 'tests/fixtures/toy-cases.json'), '{"cases":[1]}\n');
+  git(dir, 'add', '-A');
+  const { report, warnings } = copy.checkCopies(root);
+  assert.match(report, /alpha: pre-adoption pin \(copy without lock\); conformance not claimed/);
+  assert.match(warnings[0], /toy-cases.json has no lock tests\/fixtures\/toy-cases.lock.json yet \(pre-adoption\)/);
+  fs.writeFileSync(path.join(dir, 'ci.yml'), 'lock: tests/fixtures/toy-cases.lock.json\n');
+  git(dir, 'add', '-A');
+  assert.throws(() => copy.checkCopies(root), /alpha: the component references toy-cases.lock.json but has no lock/);
+  fs.rmSync(path.join(dir, 'ci.yml'));
+  fs.rmSync(path.join(dir, 'tests'), { recursive: true });
+  git(dir, 'add', '-A');
+  assert.match(copy.checkCopies(root).report, /alpha: pre-adoption pin; conformance not claimed/);
+});
+
+test('single-file commit: a lock without its copy fails', (t) => {
+  const root = scratch(t);
+  const copy = fileCopy();
+  const commit = commitRaw(root, '{"cases":[1]}\n');
+  exportTo(copy, root, commit, 'alpha');
+  fs.rmSync(path.join(componentRoot(root, 'alpha'), 'tests/fixtures/toy-cases.json'));
+  assert.throws(() => copy.checkCopies(root), /toy-cases.json is missing or not a regular file/);
+});
