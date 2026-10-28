@@ -336,8 +336,9 @@ API gains root support; all other file APIs retain their existing scope.
 > Each rule is pinned by worked cases in
 > [`fixtures/browser-routing/routing.json`](../fixtures/browser-routing/routing.json); its
 > contract test checks every case against these rules, and intentd runs the same cases from
-> a copy of the file against its router. Change a rule here and its cases together, bumping
-> the fixture's `revision`.
+> a copy of the file against its router (checked by `scripts/browser-routing-contract.mjs`, the
+> shared fixture-copy tool with `revision` provenance). Change a rule here and its cases together,
+> bumping the fixture's `revision`.
 >
 > A routed request the chosen connection does not answer in time is `-32603` `browser.exec:
 > reverse request timed out: browser.exec: browser client "<name>" (<clientId>) on connection

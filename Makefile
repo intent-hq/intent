@@ -169,7 +169,7 @@ CDP_PORT ?= $(call dev_port_value,CDP_PORT)
 # An explicit INTENTD_SOCKET always takes precedence.
 BRIDGE_PLATFORM ?= $(shell uname -s)
 
-.PHONY: check-app-ui-targets check-doc-links check-note-truncated-read-contract check-browser-routing-contract check-suggested-prompts-contract check-agent-worker-contract test-transfer-selection-contract check-transfer-selection-contract check-backend-keychain-contract ports status consumer-checks docs-check check-protocol-catalog check-mcp-bindings mcp-bindings-doc check-makefile-targets check-protocol-field-parity check-rulesets event-catalog-check shipped-in release-status rpc
+.PHONY: check-app-ui-targets check-doc-links check-note-truncated-read-contract check-browser-routing-contract check-suggested-prompts-contract check-fixture-copies check-agent-worker-contract test-transfer-selection-contract check-transfer-selection-contract check-backend-keychain-contract ports status consumer-checks docs-check check-protocol-catalog check-mcp-bindings mcp-bindings-doc check-makefile-targets check-protocol-field-parity check-rulesets event-catalog-check shipped-in release-status rpc
 ports: ## Print this worktree's resolved development ports
 	@set -- .dev/sandbox/*.json; if [ -e "$$1" ]; then \
 		echo "[ports] Note: these ports are for the next start; read running ports from 'make sandbox-status' or .dev/sandbox/<mode>.json." >&2; \
@@ -205,12 +205,17 @@ check-doc-links: ## Check agent-facing Markdown links, paths, and heading anchor
 check-note-truncated-read-contract: ## Validate the truncated note read vectors (no component runtime proof)
 	@node --test docs/protocol/fixtures/notes/*.test.mjs
 
-check-browser-routing-contract: ## Validate the browser-routing cases against REV-2 and intentd's mirror (no component runtime proof)
+check-browser-routing-contract: ## Validate the browser-routing cases against REV-2 and intentd's copy (no component runtime proof)
 	@node --test docs/protocol/fixtures/browser-routing/contract.test.mjs
+	@node scripts/browser-routing-contract.mjs check
 
 check-suggested-prompts-contract: ## Validate the shared suggested-prompts block cases and any adopted component copies (no component runtime proof)
 	@node --test scripts/suggested-prompts-contract.test.mjs
 	@node scripts/suggested-prompts-contract.mjs check
+
+check-fixture-copies: ## Fail when a component copies a docs/protocol fixture without the shared fixture-copy tool
+	@node --test scripts/lib/fixture-copy.test.mjs scripts/check-fixture-copies.test.mjs
+	@node scripts/check-fixture-copies.mjs
 
 check-agent-worker-contract: ## Validate synthetic worker observation goldens, model and regression sensitivity
 	@node scripts/agent-worker-contract.mjs
