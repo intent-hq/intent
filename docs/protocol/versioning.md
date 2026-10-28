@@ -1539,5 +1539,4 @@ the `ignore` map of `scripts/check-protocol-field-parity.mjs`, not here.
 | `Workspace` | `retiredAt` | [Retired workspaces](./methods/workspace.md#retired-workspaces) | Pending cloudlands-fe retired-workspaces PR (home, search and workspace view) |
 | `Workspace` | `scriptsRunning` | [Workspace fields](./methods/workspace.md#51-workspace) | Pending cloudlands-fe Home Running/Waiting groups PR |
 | `Workspace` | `backgroundTasksRunning` | [Workspace fields](./methods/workspace.md#51-workspace) | Pending cloudlands-fe Home background-task Running PR |
-| `Workspace` | `label` | [Workspace labels](./methods/workspace.md#workspace-labels) | Pending cloudlands-fe Home workspace labels PR |
 | `AgentLite` | `nodeName` | [Placed agent projection](./methods/nodes.md#placement-and-creation) | Pending: the complete node contract that advertises `agentNodes`; the experimental single-node remote launch advertises no capability, so the app stays gated off |
