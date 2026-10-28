@@ -26,6 +26,7 @@ HOSTS = HERE / 'hosts'
 INTENT_CI1 = HOSTS / 'intent-ci1.env'
 INTENT_CI2 = HOSTS / 'intent-ci2.env'
 INTENT_CI3 = HOSTS / 'intent-ci3.env'
+INTENT_CI4 = HOSTS / 'intent-ci4.env'
 EPYC_3HEAVY = HOSTS / 'epyc-4545p-3heavy.env'
 # MemTotal of a 128 GB box (125 GiB after the kernel's share).
 MEMINFO_128G = 'MemTotal:       131890000 kB\nMemFree:        1000 kB\n'
@@ -731,7 +732,7 @@ class Supervisor(Stubbed):
         # (the smoke workflow's host input) can target one host; pool labels
         # stay first and unchanged, so routing by pool label is unaffected.
         for path, prefix in ((HERE / 'runners.env', 'intent-cache'), (INTENT_CI1, 'intent-ci1'),
-                             (INTENT_CI2, 'intent-ci2'), (INTENT_CI3, 'intent-ci3')):
+                             (INTENT_CI2, 'intent-ci2'), (INTENT_CI3, 'intent-ci3'), (INTENT_CI4, 'intent-ci4')):
             with self.subTest(config=path.name):
                 self.use_host_config(path)
                 self.responses['GET /orgs/example-org/actions/runners'] = [200, {'runners': []}]
@@ -827,7 +828,7 @@ class Supervisor(Stubbed):
         ryzen = fake_cpus(self.dir / 'ryzen', 12, 12)
         hosts = {HERE / 'runners.env': (ryzen, MEMINFO_128G), INTENT_CI1: (epyc, MEMINFO_128G),
                  INTENT_CI2: (epyc, MEMINFO_128G), INTENT_CI3: (epyc, MEMINFO_64G),
-                 EPYC_3HEAVY: (epyc, MEMINFO_128G)}
+                 INTENT_CI4: (epyc, MEMINFO_64G), EPYC_3HEAVY: (epyc, MEMINFO_128G)}
         self.assertEqual(sorted(hosts), sorted([HERE / 'runners.env', *HOSTS.glob('*.env')]))
         for config, (sysfs, meminfo) in hosts.items():
             with self.subTest(config=config.name):
@@ -1317,7 +1318,8 @@ class Static(unittest.TestCase):
         # With a host, every leg targets intent-host-<host> (supervisor.sh
         # registers it), one leg per slot, and the limits are that host's exactly.
         gib = 2 ** 30
-        expected = {'intent-cache': (3, 36, 0), 'intent-ci1': (2, 30, 1), 'intent-ci2': (2, 30, 1), 'intent-ci3': (4, 12, 0)}
+        expected = {'intent-cache': (3, 36, 0), 'intent-ci1': (2, 30, 1), 'intent-ci2': (2, 30, 1), 'intent-ci3': (4, 12, 0),
+                    'intent-ci4': (4, 12, 0)}
         for host, (heavy, heavy_gib, xl) in expected.items():
             with self.subTest(host=host):
                 rc, out, err = self.smoke_plan('--host', host)
@@ -1539,11 +1541,11 @@ class Static(unittest.TestCase):
 
     def test_host_configs_fit_an_epyc_4545p(self):
         # 16 cores / 32 threads (CPU n and n+16 share a core), 128 GB (125 GiB);
-        # intent-ci3 has 64 GB (60 GiB).
+        # intent-ci3 and intent-ci4 have 64 GB (60 GiB).
         configs = sorted(HOSTS.glob('*.env'))
         # Host RAM in GiB and, for hosts that pin every core, the slots' total memory.
         hosts = {INTENT_CI1: (125, 52 + 2 * 30), INTENT_CI2: (125, 52 + 2 * 30), INTENT_CI3: (60, 4 * 12),
-                 EPYC_3HEAVY: (125, None)}
+                 INTENT_CI4: (60, 4 * 12), EPYC_3HEAVY: (125, None)}
         self.assertEqual(configs, sorted(hosts))
         shape = {'xl': (16, 'intent-cache-xl'), 'heavy': (8, 'intent-cache')}
         for path in configs:
@@ -1596,6 +1598,16 @@ class Static(unittest.TestCase):
         prefixes = [read_env(path).get('RUNNER_NAME_PREFIX', 'intent-cache')
                     for path in [HERE / 'runners.env', *sorted(HOSTS.glob('*.env'))]]
         self.assertEqual(len(prefixes), len(set(prefixes)), 'every host has its own name prefix')
+
+    def test_intent_ci4_matches_intent_ci3_but_its_name(self):
+        # intent-ci4 is a second intent-ci3: same 64 GB EPYC 4545P, same four
+        # 12 GB heavy slots (no xl, no bigmem); only the name prefix (and the
+        # host name in comments) differs.
+        ci3, ci4 = read_env(INTENT_CI3), read_env(INTENT_CI4)
+        self.assertEqual(ci4['RUNNER_NAME_PREFIX'], 'intent-ci4')
+        self.assertEqual({**ci4, 'RUNNER_NAME_PREFIX': 'intent-ci3'}, ci3)
+        self.assertEqual(INTENT_CI4.read_text().replace('intent-ci4', 'intent-ci3'), INTENT_CI3.read_text())
+        self.assertNotIn('intent-cache-bigmem', ci4['HEAVY_LABELS'], '12 GB slots never take 16-core overflow')
 
 
 if __name__ == '__main__':
