@@ -21,6 +21,7 @@ import {
   formatDiagnostic,
   formatRefBanner,
   formatRefOffPinWarning,
+  inheritedTsKeys,
   parseStagedFields,
   runChecks,
   toCamelCase,
@@ -1617,4 +1618,57 @@ test('a manifest file missing at origin/main\'s pin is named as moved, not as an
   assert.match(notes, new RegExp(`${path.relative(fe, ts.file).replace(/[.]/g, '\\.')} does not exist at origin/main's packages/cloudlands-fe pin ${moved.slice(0, 7)} \\(moved there\\?\\)`));
   assert.doesNotMatch(notes, /is not in the local clone/);
   assert.match(notes, /were not fully compared/);
+});
+
+const INHERIT_RUST = `
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Row {
+    pub id: String,
+    pub node_id: Option<String>,
+    pub node_name: Option<String>,
+}
+`;
+const INHERIT_TS = `
+import type { NodeFields } from './node';
+export interface Row extends NodeFields {
+  id: string;
+}
+`;
+const INHERIT_BASE = `
+export const NodeFieldsSchema = z.object({
+  nodeId: z.string().optional(),
+});
+export type NodeFields = z.infer<typeof NodeFieldsSchema>;
+`;
+const inheritPair = (inherits) => ({
+  rust: { file: 'model.rs', struct: 'Row' },
+  ts: { file: 'types.ts', type: 'Row', inherits },
+  ignore: {},
+});
+const NODE_BASE = [{ file: 'node.ts', type: 'NodeFields', schema: 'NodeFieldsSchema' }];
+
+test('comparePair counts fields an interface inherits through an inherits entry', () => {
+  const errors = comparePair(inheritPair(NODE_BASE), INHERIT_RUST, INHERIT_TS, new Map(), [INHERIT_BASE]);
+  assert.equal(errors.length, 1, JSON.stringify(errors));
+  assert.match(errors[0].message, /Row\.nodeName .* is missing from Row/);
+  // Without the mapping the inherited field is missing too.
+  const plain = comparePair(inheritPair(undefined), INHERIT_RUST, INHERIT_TS);
+  assert.equal(plain.length, 2);
+});
+
+test('a staged row for an inherited field is reported as stale', () => {
+  const staged = new Map([['nodeId', { file: 'versioning.md', line: 9, adoption: 'pending' }]]);
+  const diags = comparePair(inheritPair(NODE_BASE), INHERIT_RUST, INHERIT_TS, staged, [INHERIT_BASE]);
+  assert.ok(diags.some((d) => d.severity === 'warning' && /stale staged field nodeId/.test(d.message)), JSON.stringify(diags));
+});
+
+test('an inherits entry the type no longer extends, or whose base is gone, fails closed', () => {
+  const noExtends = INHERIT_TS.replace(' extends NodeFields', '');
+  const stale = comparePair(inheritPair(NODE_BASE), INHERIT_RUST, noExtends, new Map(), [INHERIT_BASE]);
+  assert.ok(stale.some((d) => !d.severity && /Row\.nodeId .* is missing from Row/.test(d.message)), JSON.stringify(stale));
+  const noInfer = inheritedTsKeys(inheritPair(NODE_BASE), INHERIT_TS, [INHERIT_BASE.replace('z.infer<typeof NodeFieldsSchema>', '{ nodeId?: string }')]);
+  assert.match(noInfer.errors[0].message, /z\.infer<typeof NodeFieldsSchema> not found/);
+  const noSchema = inheritedTsKeys(inheritPair(NODE_BASE), INHERIT_TS, ['export type NodeFields = z.infer<typeof NodeFieldsSchema>;']);
+  assert.match(noSchema.errors[0].message, /NodeFieldsSchema \(inherited by Row\) not found/);
 });

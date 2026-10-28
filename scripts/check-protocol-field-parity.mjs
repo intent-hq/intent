@@ -46,7 +46,15 @@ const MODEL_RS = 'packages/intentd/crates/intent-core/src/model.rs';
 export const PAIRS = [
   {
     rust: { file: MODEL_RS, struct: 'AgentLite' },
-    ts: { file: 'packages/cloudlands-fe/src/shared/types/agent-session.ts', type: 'AgentSession' },
+    ts: {
+      file: 'packages/cloudlands-fe/src/shared/types/agent-session.ts',
+      type: 'AgentSession',
+      // `interface AgentSession extends AgentNodeFields`, where
+      // `type AgentNodeFields = z.infer<typeof AgentNodeFieldsSchema>`.
+      inherits: [
+        { file: 'packages/cloudlands-fe/src/shared/types/agent-node.ts', type: 'AgentNodeFields', schema: 'AgentNodeFieldsSchema' },
+      ],
+    },
     ignore: {
       contextUsage: 'not consumed by the FE today (no reader of the row field)',
       contextReferences: 'read untyped through the agent-session slice (DETAIL_ONLY_SESSION_FIELDS in agent-session-slice.ts); accepted FE typing debt, not declared on the type',
@@ -590,13 +598,55 @@ export function extractTsKeys(source, typeName) {
   return { keys, startLine: idx + 1, endLine };
 }
 
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** Whether `interface <type>` in `tsSource` extends `base` (an `inherits` entry applies). */
+export function extendsBase(tsSource, type, base) {
+  return new RegExp(`\\binterface\\s+${escapeRe(type)}\\b[^{]*\\bextends\\b[^{]*\\b${escapeRe(base)}\\b`).test(tsSource);
+}
+
+/**
+ * Keys `pair.ts.type` inherits through its manifest `inherits` entries
+ * (`interface T extends Base`, `Base` an interface or
+ * `type Base = z.infer<typeof Schema>` declared in another file).
+ * `inheritedSources[i]` is the text of `pair.ts.inherits[i].file`. An entry
+ * the interface does not extend contributes nothing (its fields then count
+ * as missing, so dropping the `extends` still fails); a base that cannot be
+ * read is an error. Returns `{ keys: [{ name, line, file }], errors }`.
+ */
+export function inheritedTsKeys(pair, tsSource, inheritedSources = []) {
+  const keys = [];
+  const errors = [];
+  const label = pairLabel(pair);
+  for (const [i, base] of (pair.ts.inherits ?? []).entries()) {
+    if (!extendsBase(tsSource, pair.ts.type, base.type)) continue;
+    const source = inheritedSources[i] ?? '';
+    let target = base.type;
+    if (base.schema) {
+      const inferRe = new RegExp(`\\btype\\s+${escapeRe(base.type)}\\s*=\\s*z\\.infer<\\s*typeof\\s+${escapeRe(base.schema)}\\s*>`);
+      if (!inferRe.test(source)) {
+        errors.push({ file: base.file, line: 1, message: `${label}: type ${base.type} = z.infer<typeof ${base.schema}> not found; update its inherits entry in PAIRS` });
+        continue;
+      }
+      target = base.schema;
+    }
+    const found = extractTsKeys(source, target);
+    if (found === null) {
+      errors.push({ file: base.file, line: 1, message: `${label}: ${target} (inherited by ${pair.ts.type}) not found; update its inherits entry in PAIRS` });
+      continue;
+    }
+    for (const k of found.keys) keys.push({ ...k, file: base.file });
+  }
+  return { keys, errors };
+}
+
 /**
  * Compare one pair's emitted fields with its TS keys; returns diagnostics
  * (`{ file, line, message, severity? }`). Missing fields and parse failures are
  * errors; stale ignore entries and staged fields carry `severity: 'warning'`.
  * `staged` is this pair's Map from `parseStagedFields` (wire → `{ file, line, adoption }`).
  */
-export function comparePair(pair, rustSource, tsSource, staged = new Map()) {
+export function comparePair(pair, rustSource, tsSource, staged = new Map(), inheritedSources = []) {
   const label = pairLabel(pair);
   const rustFile = pair.rust.file;
   const tsFile = pair.ts.file;
@@ -609,9 +659,12 @@ export function comparePair(pair, rustSource, tsSource, staged = new Map()) {
   if (ts === null) {
     errors.push({ file: tsFile, line: 1, message: `${label}: export interface ${pair.ts.type} / export const ${pair.ts.type} = z.object({ not found` });
   }
+  const inherited = ts === null ? { keys: [], errors: [] } : inheritedTsKeys(pair, tsSource, inheritedSources);
+  errors.push(...inherited.errors);
   if (rust.fields === null || ts === null || errors.length > 0) return errors;
 
   const tsKeys = new Map(ts.keys.map((k) => [k.name, k.line]));
+  for (const k of inherited.keys) if (!tsKeys.has(k.name)) tsKeys.set(k.name, k.line);
   const tsRange = `${tsFile}:${ts.startLine}-${ts.endLine}`;
   const emitted = new Map(rust.fields.map((f) => [f.wire, f]));
   for (const f of rust.fields) {
@@ -732,20 +785,30 @@ export async function runChecks(root, pairs = PAIRS, { intentdDir, feDir, base }
   const dirs = { 'packages/intentd': intentdDir, 'packages/cloudlands-fe': feDir };
   for (const pair of pairs) {
     const sources = [selectFile(pair.rust.file, dirs), selectFile(pair.ts.file, dirs)];
-    const selectedPair = { ...pair, rust: { ...pair.rust, file: sources[0].file }, ts: { ...pair.ts, file: sources[1].file } };
     const [rust, ts] = await Promise.all(sources.map((source) => readManifestFile(root, source)));
-    for (const r of [rust, ts]) if (r.error) errors.push(r.error);
-    const missing = [rust.skipped && pair.rust.file, ts.skipped && pair.ts.file].filter(Boolean);
+    // Only the bases the interface actually extends are read and applied.
+    const inherits = ts.source === undefined ? [] : (pair.ts.inherits ?? []).filter((base) => extendsBase(ts.source, pair.ts.type, base.type));
+    const baseSources = inherits.map((base) => selectFile(base.file, dirs));
+    sources.push(...baseSources);
+    const selectedPair = {
+      ...pair,
+      rust: { ...pair.rust, file: sources[0].file },
+      ts: { ...pair.ts, file: sources[1].file, inherits: inherits.map((base, i) => ({ ...base, file: baseSources[i].file })) },
+    };
+    const bases = await Promise.all(baseSources.map((source) => readManifestFile(root, source)));
+    for (const r of [rust, ts, ...bases]) if (r.error) errors.push(r.error);
+    const missing = [rust.skipped && pair.rust.file, ts.skipped && pair.ts.file, ...bases.map((b, i) => b.skipped && inherits[i].file)].filter(Boolean);
     if (missing.length > 0) {
       skipped.push(`skipped: ${pairLabel(pair)} (${missing.join(', ')} missing — submodule not initialized)`);
       continue;
     }
-    if (rust.error || ts.error) continue;
+    if (rust.error || ts.error || bases.some((b) => b.error)) continue;
     for (const { sub, dir } of sources) {
       if (sub && !refs.has(sub)) refs.set(sub, describeCheckout(root, dir, { pinDir: sub }));
     }
-    for (const d of comparePair(selectedPair, rust.source, ts.source, staged.get(pair.rust.struct))) (d.severity === 'warning' ? warnings : errors).push(d);
-    compared.push({ pair, selectedPair, sources, texts: [rust.source, ts.source] });
+    const baseTexts = bases.map((b) => b.source);
+    for (const d of comparePair(selectedPair, rust.source, ts.source, staged.get(pair.rust.struct), baseTexts)) (d.severity === 'warning' ? warnings : errors).push(d);
+    compared.push({ pair, selectedPair, sources, texts: [rust.source, ts.source, ...baseTexts] });
     checked.push(pairLabel(pair));
   }
   const drift = base ? compareAgainstBase(root, base, { errors, warnings, refs, compared, pairs }) : { status: 'off', notes: [] };
@@ -831,9 +894,10 @@ function compareAgainstBase(root, base, { errors, warnings, refs, compared, pair
   };
   const passes = new Map();
   for (const { pair, selectedPair, sources, texts } of compared) {
-    const [rust, ts] = sources.map((source, i) => readAtBase(source, texts[i]));
+    const [rust, ts, ...bases] = sources.map((source, i) => readAtBase(source, texts[i]));
     const stagedHere = baseStaged.staged.get(pair.rust.struct) ?? new Map();
-    const baseDiags = comparePair(selectedPair, rust.text, ts.text, stagedHere);
+    const baseTexts = bases.map((b) => b.text);
+    const baseDiags = comparePair(selectedPair, rust.text, ts.text, stagedHere, baseTexts);
     // The base comparison must itself run cleanly: a parse failure there excuses nothing.
     const baseBroken = baseDiags.filter((d) => d.severity !== 'warning' && !d.missing);
     if (baseBroken.length > 0) {
@@ -842,7 +906,10 @@ function compareAgainstBase(root, base, { errors, warnings, refs, compared, pair
       continue;
     }
     const stillMissing = new Set(baseDiags.filter((d) => d.missing).map((d) => missingKey(d.missing)));
-    const baseTsKeys = new Set((extractTsKeys(ts.text, pair.ts.type)?.keys ?? []).map((k) => k.name));
+    const baseTsKeys = new Set([
+      ...(extractTsKeys(ts.text, pair.ts.type)?.keys ?? []),
+      ...inheritedTsKeys(selectedPair, ts.text, baseTexts).keys,
+    ].map((k) => k.name));
     for (const e of errors) {
       if (!e.missing || e.missing.struct !== pair.rust.struct || stillMissing.has(missingKey(e.missing))) continue;
       // Passing only because the daemon at <base>'s pin does not emit the field is not drift.
