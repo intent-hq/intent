@@ -61,7 +61,12 @@ run_check() {
   return "$status"
 }
 
-all_checks="event-catalog-check check-mcp-bindings docs-check check-protocol-catalog check-makefile-targets check-protocol-field-parity check-transfer-selection-contract check-backend-keychain-contract check-agent-worker-contract check-app-ui-targets check-note-truncated-read-contract check-browser-routing-contract check-suggested-prompts-contract check-fixture-copies"
+# The check list and every count below come from the runner itself (its
+# usage line prints `checks: <targets>`), so adding a check needs no edit here.
+all_checks=$(cd "$temp_dir" && "$script_bash" scripts/consumer-checks.sh --help 2>&1 | sed -n 's/^checks: //p') || true
+check_count=0
+for target in $all_checks; do check_count=$((check_count + 1)); done
+[ "$check_count" -gt 0 ] || fail "could not read the check list from consumer-checks.sh --help"
 expect_all_ran() {
   local target
   for target in $all_checks; do
@@ -75,18 +80,18 @@ fi
 expect_all_ran "all-green run"
 grep -q -- '--no-print-directory RUSTUP_CARGO= -o event-catalog-check -o check-mcp-bindings docs-check$' "$stub_log" ||
   fail "docs-check was not invoked with its prerequisites assumed old: $(cat "$stub_log")"
-[ "$(grep -c . "$stub_log")" -eq 14 ] || fail "expected 14 make invocations: $(cat "$stub_log")"
+[ "$(grep -c . "$stub_log")" -eq "$check_count" ] || fail "expected $check_count make invocations: $(cat "$stub_log")"
 # The Makefile prepends the rust-toolchain.toml toolchain's bin/ to every
 # recipe's PATH; upstream that file is the caller's PR head, so every make
 # call must empty the probe on its command line (see the real-make run below).
-[ "$(grep -c -- '--no-print-directory RUSTUP_CARGO= ' "$stub_log")" -eq 14 ] ||
+[ "$(grep -c -- '--no-print-directory RUSTUP_CARGO= ' "$stub_log")" -eq "$check_count" ] ||
   fail "not every make invocation carries the RUSTUP_CARGO= override: $(cat "$stub_log")"
 grep -q -- '--no-print-directory RUSTUP_CARGO= check-makefile-targets$' "$stub_log" ||
   fail "monorepo context did not run check-makefile-targets at the pinned gitlink: $(cat "$stub_log")"
 grep -q 'CHECK_MAKEFILE_TARGETS_GITLINK' "$stub_log" &&
   fail "monorepo context overrode the check-makefile-targets gitlink: $(cat "$stub_log")"
-[ "$(grep -c '^  [a-z-]*  *pass  ' <<<"$check_output")" -eq 14 ] ||
-  fail "summary table did not list 14 passing rows: $check_output"
+[ "$(grep -c '^  [a-z-]*  *pass  ' <<<"$check_output")" -eq "$check_count" ] ||
+  fail "summary table did not list $check_count passing rows: $check_output"
 grep -q '::warning::' <<<"$check_output" && fail "all-green run printed a warning: $check_output"
 grep -q '^Fix order:' <<<"$check_output" && fail "monorepo context printed the upstream fix-order line: $check_output"
 [ "$(tail -n 1 <<<"$check_output")" = "consumer-checks: all checks passed" ] ||
@@ -287,6 +292,22 @@ run_real_make "$make_bin" --no-print-directory check-protocol-catalog
 grep -q -e '^attacker node scripts/check-protocol-catalog.mjs$' \
   -e '^attacker bin on recipe PATH: node scripts/check-protocol-catalog.mjs$' "$marker_log" ||
   fail "fixture control: an unhardened make did not expose the attacker's bin to the recipe (rustup stub or Makefile PATH prepend changed?); exit $real_status:"$'\n'"$real_output"$'\n'"$(cat "$marker_log")"
+# The node calls a real run must make come from the Makefile itself: a dry run
+# (`make -n`, which the runner word-splits out of $MAKE) of the same make calls
+# prints every recipe, and each `node ...` line is replayed through sh with
+# `node` defined to log the way the trusted node does, so quoting and globs
+# expand exactly as they do for the real recipe.
+run_real_make env MAKE="$make_bin -n" "$script_bash" scripts/consumer-checks.sh --context upstream
+expected_node_log=$fixture/expected-node.log
+: >"$expected_node_log"
+while IFS= read -r recipe_line; do
+  case "$recipe_line" in
+    node\ *) (cd "$fixture" && sh -c 'node() { echo "trusted node $*"; }; '"$recipe_line") >>"$expected_node_log" ||
+      fail "could not replay dry-run recipe line: $recipe_line" ;;
+  esac
+done <<<"$real_output"
+[ -s "$expected_node_log" ] ||
+  fail "the dry run listed no node recipe lines (make -n output changed?):"$'\n'"$real_output"
 run_real_make env MAKE="$make_bin" "$script_bash" scripts/consumer-checks.sh --context upstream
 [ "$real_status" -eq 1 ] ||
   fail "real-make run exited $real_status (expected 1: the trusted check-protocol-catalog fails):"$'\n'"$real_output"
@@ -294,8 +315,9 @@ run_real_make env MAKE="$make_bin" "$script_bash" scripts/consumer-checks.sh --c
   fail "a caller-controlled toolchain executable ran under consumer-checks:"$'\n'"$(cat "$marker_log")"$'\n'"$real_output"
 grep -q '^trusted node scripts/check-protocol-catalog.mjs$' "$trusted_log" ||
   fail "the trusted node did not run check-protocol-catalog:"$'\n'"$(cat "$trusted_log")"
-[ "$(grep -c '^trusted node ' "$trusted_log")" -eq 24 ] ||
-  fail "expected the 24 node invocations to run the trusted node:"$'\n'"$(cat "$trusted_log")"
+# Every node call the Makefile recipes make ran, each with the trusted node.
+node_calls_diff=$(diff <(sort "$expected_node_log") <(grep '^trusted node ' "$trusted_log" | sort)) ||
+  fail "the trusted node calls differ from the Makefile recipes' node calls (< expected from make -n, > ran):"$'\n'"$node_calls_diff"
 if ! grep -qFx 'trusted node scripts/check-doc-line-length.mjs' "$trusted_log" ||
   ! grep -qFx 'trusted node --test scripts/check-doc-line-length.test.mjs' "$trusted_log"; then
   fail "the protocol line-length ratchet and its tests did not run with the trusted node:"$'\n'"$(cat "$trusted_log")"
@@ -314,8 +336,8 @@ grep -q '^trusted node --test docs/protocol/fixtures/submission-correlation/cont
 grep -q '^trusted docs-check$' "$trusted_log" || fail "docs-check.sh did not run:"$'\n'"$(cat "$trusted_log")"
 grep -q '^  check-protocol-catalog  *FAIL  ' <<<"$real_output" ||
   fail "the trusted checker's failure did not reach the summary table:"$'\n'"$real_output"
-[ "$(grep -c '^  [a-z-]*  *pass  ' <<<"$real_output")" -eq 13 ] ||
-  fail "real-make run did not list the other 13 checks as pass:"$'\n'"$real_output"
+[ "$(grep -c '^  [a-z-]*  *pass  ' <<<"$real_output")" -eq $((check_count - 1)) ] ||
+  fail "real-make run did not list the other $((check_count - 1)) checks as pass:"$'\n'"$real_output"
 
 # The reusable workflow pipes the runner through `tee`, so its step must run
 # under GitHub's `shell: bash` (`bash --noprofile --norc -eo pipefail {0}`);
