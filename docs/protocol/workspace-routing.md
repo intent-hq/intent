@@ -241,6 +241,34 @@ workspace ID, and do not confuse the export session ID with the routing key.
 `workspace.transfer.plan` already takes the source workspace and is unchanged.
 Import destination routing and transfer orchestration remain outside this contract.
 
+## Remote agents on the single-node link
+
+The experimental [single-node private link](./node-link.md#single-node-private-link-nodeprotocol-5)
+runs a remote agent's `workspace_api` code on its execution node and routes each
+`host({ method, args })` frame by method. This is agent-binding routing over a
+private link, not the aggregator routing above, and adds nothing to the public
+method inventory:
+
+| Frames | Where they run |
+| --- | --- |
+| `file.read`, `file.write`, `file.list`, `file.delete`, `file.mkdir`, `file.rename`, `git.commit`, `host.exec`, `help.*` | On the node, against the agent's own checkout and host |
+| `note.*`, `task.*`, `agent.*`, `pr.*` (and its `mr.*` alias), `comment.*`, `event.*` | Forwarded to head as one `workspace.call` link request with params `{ method, args }` |
+| Everything else, including other `git.*`, `script.*`, `terminal.*`, `browser.*`, `hook.*`, `desktop.*`, `search.*`, `crossWorkspace.*`, `mcp.*`, `workspace.*` and `file.getAttachment` | Refused, never run on another host |
+
+A refused frame fails with a message starting `remote-agent-unsupported:` that
+names the method and lists what remote agents can use. Head serves a forwarded
+frame only on the node's current binding, only for an agent recorded on that
+binding's lease, and only when its own copy of this table forwards the method;
+the frame then runs through the same host dispatch as a local agent's bridge, as
+that agent and in its workspace. The agent's `agentFeatures` snapshot and the
+sub-agent gates apply as they do locally. Before an agent-initiated `git.commit`,
+the node forwards the internal frame `git.commitPolicy` (refused from agent code)
+and head answers `{ "autoCommit": boolean }` with the workspace's effective
+auto-commit policy. Tool outputs too large for a reply are written on the node,
+next to the agent's worktree. Attachments are not materialized on nodes, so a
+message with attachments to a remote agent fails with `-32602` before any state
+change.
+
 ## Verification boundary
 
 The inventory is checked against `catalog.rs`, `router.rs` and
