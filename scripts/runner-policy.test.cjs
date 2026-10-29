@@ -437,6 +437,26 @@ test('a full xl pool sends gh-linux-16x jobs to free bigmem slots, then hosted',
   assert.deepEqual(full.runners['gh-linux-16x'], WARP['gh-linux-16x']);
   assert.deepEqual(full.runners['gh-linux-8x'], WARP['gh-linux-8x']);
 });
+test('a job that lists pools takes a slot only in those pools, else bursts', async () => {
+  const runners = [bigSlot(), bigSlot(), ...todaysFleet().slice(2), xlSlot()];
+  const env = { ...XL_ON, BIGMEM_THRESHOLD: '2' };
+  const jobs = [
+    { key: 'a', label: 'gh-linux-16x', minutes: 30, pools: ['xl'] },
+    { key: 'b', label: 'gh-linux-16x', minutes: 20, pools: ['xl'] },
+    { key: 'c', label: 'gh-linux-16x', minutes: 10 },
+  ];
+  const r = await route({ env: slotEnv(jobs, env), runners });
+  // a takes the one xl slot; b may not overflow to bigmem, so it bursts; c (no list) still takes a bigmem slot.
+  assert.deepEqual(r.slots, { a: XL, b: WARP['gh-linux-16x'], c: BIG });
+  // Only c took a bigmem slot.
+  assert.ok(r.messages.some((m) => m.includes('bigmem routing: burst=false (queue depth=0 threshold=2 online=2 idle=2 free=2 granted=1)')));
+  // An unknown pool name, or a pool that does not serve the label, grants nothing.
+  const odd = await route({
+    env: slotEnv([{ key: 'typo', label: 'gh-linux-16x', pools: ['bigmen'] }, { key: 'eight', label: 'gh-linux-8x', pools: ['xl'] }], env),
+    runners,
+  });
+  assert.deepEqual(odd.slots, { typo: WARP['gh-linux-16x'], eight: WARP['gh-linux-8x'] });
+});
 test('xl and heavy capacity and demand are counted per pool label', async () => {
   // xl slots carry the generic labels too; only intent-cache-xl separates them.
   const xlOnly = await route({ env: XL_ON, runners: [xlSlot(), xlSlot()] });

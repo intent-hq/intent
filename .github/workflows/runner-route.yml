@@ -5,11 +5,12 @@ on:
   workflow_call:
     inputs:
       # JSON list of the caller's pooled jobs that start together once routing
-      # finishes: [{"key", "label", "burst"?, "rust"?, "minutes"?, "events"?, "shards"?}].
+      # finishes: [{"key", "label", "burst"?, "rust"?, "minutes"?, "events"?, "shards"?, "pools"?}].
       # `label` is the job's GitHub label and picks its pool; `burst` is the
       # label to burst as when it gets no slot (default `label`); `events` lists the events the job
       # runs on (default: all); `shards: N` expands to keys key-1..key-N and
-      # `legs: [a, b]` to key-a, key-b, one per matrix leg. Each listed job
+      # `legs: [a, b]` to key-a, key-b, one per matrix leg; `pools` limits the self-hosted
+      # pools the job may take (e.g. ["xl"]; default: every pool serving its label). Each listed job
       # reads its labels from outputs.slots[key].
       slot_jobs:
         type: string
@@ -225,7 +226,8 @@ jobs:
             // list order. Listed jobs that do not fit, or that skip this event, get
             // their burst runner directly, sized by `burst` when set (a CPU-bound
             // job keeps its slot size but bursts bigger); matrix legs are ranked
-            // separately.
+            // separately. A job with `pools` takes a slot only in the pools it lists
+            // (e.g. ["xl"]: no overflow to bigmem heavy slots).
             // Concurrent runs read the same free count before either job is queued,
             // so a pool may briefly run a job or two over its slot count.
             let requests = [];
@@ -239,7 +241,8 @@ jobs:
             const ranked = requests.map((r, i) => ({...r, i})).sort((a, b) => (b.rust === true) - (a.rust === true) || (b.minutes || 0) - (a.minutes || 0) || a.i - b.i);
             for (const r of ranked) {
               const runs = !Array.isArray(r.events) || r.events.includes(context.eventName);
-              const key = runs && Object.keys(hosted).find(k => k in slotsFree && hosted[k].includes(r.label) && hasSlot(k));
+              const allowed = (k) => !Array.isArray(r.pools) || r.pools.includes(k);
+              const key = runs && Object.keys(hosted).find(k => k in slotsFree && hosted[k].includes(r.label) && allowed(k) && hasSlot(k));
               if (key) {
                 slotsFree[key] -= 1;
                 granted[key] += 1;
