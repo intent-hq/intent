@@ -881,7 +881,10 @@ registry is the shared source of truth every client renders from: a host reports
 tabs, any client reads the workspace's tabs across hosts, and navigation / close requests
 about a tab are **routed** by the daemon to the client that must perform them. All six
 methods are **fast-path** (§5 catalog): the host-only reports are keyed by the
-connection's `client.hello` identity, never by a wire parameter.
+connection's `client.hello` identity, never by a wire parameter. A host row can also move without
+a report: `workspace.setBrowserClient` migrates claimed tabs, and `client.hello` rehomes open
+tabs still hosted by a superseded id of the same device (§5.17) — both emit
+`browser:tab-updated { changes: { hostClientId } }`.
 
 | Method | Params | Result |
 | --- | --- | --- |

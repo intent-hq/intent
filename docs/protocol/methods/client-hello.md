@@ -161,6 +161,17 @@ subscribe to discussion events, and private discussions remain human-only.
   `clientId` is namespaced as `{principalId}:{presented}` — idempotent, so a client that persists
   the returned id re-hellos to the same identity — and a collaborator can only ever act as a
   client id inside its own namespace; the administrator, agents and the daemon keep the raw id.
+- **Superseded-id tab rehome.** A `clientId` carrying earlier namespace prefixes
+  (`{a}:{b}:{raw}`) still names the device that once hello'd as each shorter `:`-suffix
+  (`{b}:{raw}`, `{raw}`). On a successful hello the daemon moves the **open** browser tabs
+  (§5.45) hosted by such a suffix to the presented id and publishes `browser:tab-updated
+  { changes: { hostClientId, displayed?: null } }` for each, so a device whose id was
+  re-prefixed recovers its tabs ([intent-hq/intent#8045](https://github.com/intent-hq/intent/issues/8045)).
+  A suffix qualifies only when the caller may already act as it (the namespacing above
+  would return it unchanged), it has no live connection, and the move does not widen who
+  may act as the host: when the presented id's head is a principal of this daemon, only
+  suffixes inside that principal's namespace move. Tombstoned rows stay with their old
+  host. A failed rehome is logged and never fails the hello.
 - **Connection → client mapping.** The daemon maps each live connection to its logical
   `clientId`; **multiple connections may share one `clientId`** (the same client reconnecting, or
   several windows of one app).
