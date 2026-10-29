@@ -37,6 +37,13 @@ export const RENAMED_BINDINGS = new Map([
   ['ws.agent.spawnPeer', 'ws.agent.create({ topLevel: true })'], // renamed in v8.1
 ]);
 
+// Prepared §5.56 secret-request bindings, mentioned by more than one protocol doc.
+const PREPARED_SECRET_BINDINGS = [
+  '  ws.secret.request({ name, reason }) → { ok, requestId, message }',
+  '  ws.secret.list() → { secrets, pendingRequests }',
+  '  ws.secret.forget(name) → { ok, forgotten }',
+].join('\n');
+
 // Docs-first contract: only this canonical proposal may mention these helpers
 // before they ship. Once help declares one, its real signature takes precedence.
 export const PREPARED_BINDINGS = new Map([
@@ -52,6 +59,9 @@ export const PREPARED_BINDINGS = new Map([
     '  ws.script.unmonitor(monitorId) → { ok, monitor }',
     '  ws.script.monitorDetails(monitorId) → monitor',
   ].join('\n')],
+  ['docs/protocol/methods/secrets.md', PREPARED_SECRET_BINDINGS],
+  ['docs/protocol/methods/settings.md', PREPARED_SECRET_BINDINGS],
+  ['docs/protocol/07-agent-streaming.md', PREPARED_SECRET_BINDINGS],
   ['docs/protocol/methods/scripts.md', [
     '  ws.script.listPage({ archive?, limit?, cursor? }?) → { view, scripts, nextCursor? }',
     '  ws.script.get(scriptId) → script',
