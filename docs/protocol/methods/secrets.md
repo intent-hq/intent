@@ -49,8 +49,9 @@ including that agent's sub-agents and other agents in the same workspace. A
 background hook runs as the agent that scheduled it, so it can use that agent's
 secrets through `secretEnv`. A hook's secret-request eligibility follows the
 owner's creation-time feature snapshot, while `hostExec` stays live as it does for
-every hook: with `hostExec` turned off, no hook can run `ws.host.exec`, and the
-held secret is usable again once it is back on. A hook cannot call `ws.secret.request`: it has no
+every hook ([§5.40 API surface per run](./hooks.md#540-background-hooks--hook-v210)):
+with `hostExec` turned off, no hook can run `ws.host.exec`, and the held secret is
+usable again at the next run after it is back on. A hook cannot call `ws.secret.request`: it has no
 turn to end and no user-facing chat. When a hook gets `secret-unavailable`, its
 code should return `{ dispatch: true, message }` so the owning agent wakes and
 asks the user itself.
