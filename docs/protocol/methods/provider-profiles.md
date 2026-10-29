@@ -743,6 +743,15 @@ a reconnect. A failover switch changes no profile and emits no
 `providers:profiles-changed`. A delete that prunes a `model.providerDefaults` key also emits
 `settings:changed`, with its own settings revision.
 
+#### Remote execution nodes
+
+An agent placed on the experimental single-node link runs with the same selected
+profile or Default overrides, resolved on head and sent to the node as an
+environment overlay; with neither, the node uses its own provider login. Account
+folders expand `~` against the node's home and must exist there, and nothing
+falls back to another account. See
+[provider credentials](../node-link.md#provider-credentials-profile-environment).
+
 #### Compatibility
 
 The contract is additive under the [field-presence policy](../versioning.md#compatibility-policy).

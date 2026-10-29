@@ -5,6 +5,11 @@ claim about the pinned daemon. See [§5.50](./methods/nodes.md) for public metho
 placement, fields and authority. Both static nodes and the in-process local node
 implement this semantic boundary; only static nodes serialize it over TLS.
 
+The experimental [single-node private link](#single-node-private-link-nodeprotocol-5)
+is a separate, smaller protocol (nodeProtocol 5) for launching agents on one
+hand-configured node. It does not implement or replace the prepared versions 2-4
+below, which stay the target for the complete node contract.
+
 ## Ownership and bootstrap
 
 Head owns SQLite, transcripts, notes/tasks, placement, lease reconciliation,
@@ -72,6 +77,9 @@ must use explicit supported sets:
 
 Both peers agree on the exact installed version/build. Never use an open-ended
 `>=` gate or silently downgrade. Version 1 remains denied for these families.
+Version 5, the [single-node private link](#single-node-private-link-nodeprotocol-5),
+is not a member of any set in this table: it carries none of these families, and a
+version-5 peer never negotiates with a version 2-4 peer.
 Versions 3 and 4 preserve prior family semantics; method grants, installed feature
 policies and current authority are still required. A version-4 Hello does not
 qualify an unimplemented capture/provider profile, listener or readiness. Public
@@ -1289,6 +1297,10 @@ API-key support remains available. A failed secret-store read is not absence and
 must not select manual authentication or another account. A rejected supplied
 token fails authentication without fallback.
 
+The single-node link does not use this token contract or the callback below. It
+sends the selected provider profile's environment with the launch instead; see
+[provider credentials](#provider-credentials-profile-environment).
+
 ### Guarded provider credential startup callback
 
 `node.credentials.provider` is a private node-link startup callback, not a public
@@ -1707,3 +1719,347 @@ insufficient. Additive docs land before consumer merges/contract acceptance;
 authorized local development and draft preparation may proceed in parallel.
 Backend behavior lands before dependent frontend changes. No default listener,
 provider execution, public placement or release acceptance follows from these docs.
+
+## Single-node private link (nodeProtocol 5)
+
+This section is the private head-to-node contract of the **experimental
+single-node remote launch**: one head daemon launches agents on one
+hand-configured execution node over an authenticated link. It is a separate
+protocol from the prepared versions 2-4 above, not a subset negotiated with
+them. It carries no enrollment, preparation registry, checkpoint capture,
+attachment grants or hub checkpoints, and changes no public protocol version
+or capability (see [versioning](./versioning.md#protocol-version--compatibility)).
+The prepared sections above remain the target for the complete node contract.
+
+### Switch and configuration
+
+Remote launch is off unless the head daemon starts with
+`INTENTD_EXPERIMENTAL_REMOTE_LAUNCH=1` **and** its data directory holds
+`remote-node.json`. Otherwise head dials nothing, every remote placement fails
+with `placement-unavailable`, and no daemon behavior changes. A configuration
+file without the switch only logs that remote agents are experimental.
+
+Head's `<data_dir>/remote-node.json` describes its one node. It must be a
+regular file (not a symlink), at most 64 KiB, and on Unix readable only by its
+owner (`0600`), because it holds the lease token:
+
+```json
+{
+  "nodeId": "build-box",
+  "name": "Build box",
+  "endpoint": "wss://build-box.example:7443",
+  "certificateSha256": "<64 hex digits, colons allowed>",
+  "token": "<at least 32 header-safe characters>"
+}
+```
+
+`nodeId` is 1-128 letters, digits, `-`, `_` or `.`; `name` defaults to `nodeId`
+and is the agent projection's `nodeName`. `endpoint` is exactly
+`wss://host:port`. Unknown members are rejected. These are the fields
+`node.register` takes in the [prepared contract](./methods/nodes.md), so moving
+to registration later changes only where they come from. Errors are
+`remote-node-config: <what is wrong>` and never quote the token.
+
+The operator runs the same installed binary on the node as
+`intentd node --config <file> --root <dir>`. The node configuration has the same
+file rules:
+
+```json
+{
+  "nodeId": "build-box",
+  "listen": "0.0.0.0:7443",
+  "token": "<the same token>",
+  "maxAgents": 4,
+  "permission": "autoByRisk",
+  "providers": { "codex": { "binary": "/usr/local/bin/codex-acp" } }
+}
+```
+
+`maxAgents` is 1-64 (default 4). `permission` is how the node answers provider
+permission prompts, since no client is attached to a remote agent: `autoByRisk`
+(default: allow low-risk reads, deny the rest), `allowAll` or `denyAll`.
+`providers` maps known provider ids to an absolute executable path and optional
+replacement `args`; at least one is required. The storage root is a private
+directory (mode `0700`, locked by one node process) holding the binding file,
+the node's TLS identity, the journal and agent working directories; it is never
+head's data directory. At start the node prints one JSON line
+`{ "role": "node", "nodeId", "address", "certificateSha256", "maxAgents", "platform" }`;
+the operator copies `certificateSha256` into head's configuration.
+
+### Connections and authentication
+
+Head always dials; the node never dials head. There are two WSS connections to
+the configured endpoint, both authenticated the same way:
+
+| Path | Carries |
+| --- | --- |
+| `/node/link` | Control, journal and RPC frames |
+| `/node/git` | Git sessions as opaque binary messages, so a large transfer never delays control or journal frames |
+
+- **Pinned TLS.** Head trusts exactly the certificate whose DER SHA-256 it was
+  configured with, and no CA. The pin is checked before any HTTP byte, and so
+  before the token, is written. A mismatch is `node-link-certificate-mismatch`.
+- **Lease token.** Every upgrade request carries `Authorization: Bearer <token>`.
+  The node compares it in constant time before upgrading and rejects a request
+  with an `Origin` header. The token never appears in `Debug` output, errors or
+  logs; daemon log outputs drop the WebSocket library's wire tracing, which
+  would print upgrade headers.
+- **Git connection binding.** The git upgrade also names the binding it belongs
+  to in `x-intent-head-id`, `x-intent-node-id`, `x-intent-lease-id` and
+  `x-intent-generation`. Only the node's current binding is admitted; a git
+  connection of an older generation is closed when a newer binding replaces it.
+- **Limits.** Connect, TLS, WebSocket upgrade and bind complete within 10 s; a
+  node runs at most 16 handshakes at once.
+
+### Binding and generation
+
+```ts
+interface LeaseBinding { headId: string; nodeId: string; leaseId: string; generation: string }
+```
+
+`generation` is a full-width counter serialized as a decimal string, like every
+counter on this link. Head durably advances it before every dial. The node
+persists its current binding in one file, replaced atomically (private temp
+file, fsync, rename, directory fsync) before it acknowledges a bind. On an offer
+it decides:
+
+| Offer | Result |
+| --- | --- |
+| Names another `nodeId` | `node-link-wrong-node` |
+| A different `headId` owns the node | `node-link-other-head`; moving a node to a new head is a manual reset of its binding file |
+| `generation` not greater than the persisted one | `node-link-stale` (head retries with a newer generation) |
+| Otherwise | Accept: persist, close the older link and its git connections, send `welcome` |
+
+An unreadable binding file makes the node refuse every bind
+(`node-link-binding-store`) rather than forget its owner. Head checks once per
+node request, at dispatch, that the request's binding is still current
+(`node-link-stale` otherwise). A request admitted just before a re-bind can
+still finish: the accepted window is one request.
+
+### Frames
+
+Each WebSocket binary message on `/node/link` is one JSON frame of at most
+8 MiB, tagged by `type`:
+
+| `type` | Direction | Lane | Body |
+| --- | --- | --- | --- |
+| `hello` | head → node | control | `protocol: 5`, `intentdVersion`, `binding`, `ackedSeq` |
+| `welcome` | node → head | control | `protocol: 5`, `intentdVersion`, `nodeId`, `platform: { os, arch }`, `maxAgents`, `runningAgents: AgentId[]` |
+| `heartbeat` / `heartbeatReply` | both | control | `nonce` |
+| `launch` | head → node | control | See [launch](#launch-and-agent-lifecycle) |
+| `prompt` | head → node | control | `agentId`, `turnId`, `prompt` (ACP content blocks) |
+| `cancel` | head → node | control | `agentId`: cancel the running turn |
+| `stop` | head → node | control | `agentId`: stop the provider process |
+| `journal` | node → head | journal | One [journal record](#journal-and-acknowledgements) |
+| `ack` | head → node | journal | `seq`: every record through `seq` is ingested |
+| `replayComplete` | node → head | journal | `throughSeq`: every record after the hello's `ackedSeq` was resent |
+| `request` | node → head | rpc | `requestId` (UUID), `agentId`, `method`, `params`, `timeoutMs` |
+| `response` | head → node | rpc | `requestId`, `outcome: { ok: value } \| { err: { code, message, data? } }` |
+| `cancelRequest` | node → head | rpc | `requestId` |
+
+The `hello`, `welcome`, `launch`, `request` and `journal` bodies reject unknown
+members. Both peers must speak exactly protocol 5;
+anything else is `node-link-version-mismatch` naming both versions.
+`intentdVersion` is recorded for diagnostics and is not a compatibility gate.
+Heartbeats run every 15 s and a link silent for 45 s is dead. Head redials with
+exponential backoff from 0.5 s to 30 s (±20% jitter); certificate, token,
+ownership, version and configuration failures are permanent and stop redialing
+until an operator fixes them.
+
+### Journal and acknowledgements
+
+```ts
+interface JournalRecord {
+  seq: string;            // +1 per record across the whole lease
+  agentId: string;
+  workspaceId: string;
+  turnId?: string;
+  recordedAt: string;
+  body:
+    | { kind: "started"; baseCommit: string }       // checkout ready, provider session set up
+    | { kind: "notification"; notification: unknown } // ACP session/update params
+    | { kind: "turnEnded"; stopReason: string; error?: string }
+    | { kind: "exited"; exitCode?: number; error?: string };
+}
+```
+
+The node appends and fsyncs each record before sending it. Head handles records
+in sequence: the next record is ingested into the agent's transcript and
+events, the highest contiguous sequence is persisted, and only then is it
+acked; a record at or below that sequence is a replay, skipped and acked
+again; a gap is not ingested and the link resyncs. The node truncates acked
+records. On reconnect, the hello's `ackedSeq` is head's persisted watermark;
+the node resends every later record, then sends `replayComplete`. Duplicates
+are prevented by sequence; during a replay a live view may briefly show events
+out of order. There is no replay barrier against other writers and no record
+hash.
+
+### Launch and agent lifecycle
+
+Head admits a placement when the agent is created (see
+[nodes §5.50](./methods/nodes.md#placement-and-creation)), records the agent on
+the current lease and writes its `base` ref at the workspace's `HEAD` commit.
+Uncommitted head changes are not carried; the create result's `notice` says so.
+The node starts the agent on its first turn with:
+
+```ts
+interface LaunchCommand {
+  agentId: string;
+  workspaceId: string;
+  provider: string;        // base provider id
+  model?: string;
+  baseCommit: string;      // the agent's base ref
+  repoKey: string;         // opaque name of the node's checkout cache for this repository
+  agentFeatures: unknown;  // the session's agentFeatures snapshot, gating its workspace API
+  isSubAgent: boolean;     // delegated or background agents get the sub-agent gates
+  profileEnv?: ProfileEnvOverlay; // see Provider credentials
+}
+```
+
+The node refuses a launch past `maxAgents` (`node-capacity`) or for a provider
+it does not configure (`node-provider-unavailable`). It fetches `baseCommit`
+over the git connection into a per-repository bare cache named by `repoKey`,
+creates the agent's worktree, spawns the provider and journals `started`. The
+node opens the provider session without prompt injection, so head sends the
+agent's assembled instructions with its first prompt. A remote agent's model
+cannot be switched after creation.
+
+Start and turn failures are journaled as `"<code>: <detail>"` and surface on
+the agent as `placementError: { code, detail }` (code capped at 64 bytes,
+detail at 512):
+
+| Code | Meaning |
+| --- | --- |
+| `node-capacity` | The node already runs `maxAgents` agents |
+| `node-provider-unavailable` | The provider is not configured on the node |
+| `node-profile-unavailable` | The selected profile cannot be used on the node; no other account was used |
+| `node-checkout-failed` | The base commit's checkout could not be prepared |
+| `node-agent-start-failed` | The provider process could not be started or set up (also any error without a code) |
+| `node-agent-not-running` / `node-agent-busy` | A prompt for a stopped agent, or while a turn runs |
+| `node-turn-failed` | The turn failed |
+| `node-shutting-down` | The node is stopping and starts no more agents |
+
+At every bind the node reports `runningAgents`; head keeps the agents it has
+recorded on that lease attached and stops the rest. Capacity is counted in node
+memory and rebuilt from the welcome. A prompt sent during a reconnect waits a
+short grace for the link; a turn whose link stays down past that grace fails
+with `node-link-unavailable` through the existing turn-error path. This link adds
+no `halted` / `resuming` agent status or `node_link_lost` stream-end reason.
+
+### Agent refs over git
+
+Agent work moves only as git refs, stored in the **workspace's own repository**
+under the documented hub names:
+
+```text
+refs/intent/ws/<workspaceId>/agents/<agentId>/base   head writes at launch
+refs/intent/ws/<workspaceId>/agents/<agentId>/head   node pushes the agent's commits
+refs/intent/ws/<workspaceId>/agents/<agentId>/wip    node pushes a commit of its dirty tree
+```
+
+The node names one agent's refs with the remote
+`intent://ws/<workspaceId>/agents/<agentId>`, served by the `git-remote-intent`
+helper (git's `connect` helper protocol) through a local socket named in
+`INTENT_NODE_GIT_SOCKET`. Each `/node/git` message is
+`[kind: u8][session: u32 big-endian][payload]`:
+
+| Kind | Direction | Payload |
+| --- | --- | --- |
+| `1` OPEN | node → head | JSON `{ service, url }`: `git-upload-pack` or `git-receive-pack` for one agent remote |
+| `2` ACCEPT | head → node | None: the service is running |
+| `3` DATA | both | Protocol bytes, at most 64 KiB |
+| `4` EOF | node → head | None: the client sent everything |
+| `5` CLOSE | both | Head's carries JSON `{ error? }` |
+
+Head authorizes each OPEN against the connection's binding: the agent must be
+on that lease and the binding current, else `node-git-denied`. Head runs at most
+8 sessions per node (`node-git-busy`); other failures are `node-git-invalid`,
+`node-git-failed` and `node-git-unavailable`. Head answers with
+`git upload-pack` / `git receive-pack` on protocol v0, with no ambient `GIT_*`
+environment, hooks or global configuration, and with every ref outside that
+agent's prefix hidden: the node cannot read, want or update anything else. A
+push is limited to 1 GiB. After each turn and when the agent exits, the node
+pushes `head` and a `wip` commit of its working tree.
+
+Merging is ordinary git in the workspace: a parent agent or the user merges
+`…/head`; `wip` is never merged. `hub.merge`, `hub.discard` and `hub.publish`,
+checkpoint ids and the separate hub repository are not part of this link. The
+node never talks to the forge and receives no forge credentials. Node-pushed
+objects land in the workspace repository's object store.
+
+### Workspace API on the node
+
+A remote agent's `workspace_api` code runs on its node. Calls on its own
+checkout run there; a fixed set of control-plane namespaces is forwarded to
+head as `request` frames with method `workspace.call`, and everything else is
+refused. The routing table is in
+[workspace routing](./workspace-routing.md#remote-agents-on-the-single-node-link).
+Head treats a forwarded call as made by the agent named in the request only if
+that agent is on the link's lease, and routes it again under that agent's
+existing authority; it never trusts the node's routing.
+
+### Provider credentials: profile environment
+
+Auth is the selected [provider profile](./methods/provider-profiles.md)'s
+environment overlay, resolved on head under the local selection rules:
+
+```ts
+interface ProfileEnvOverlay {
+  providerRef: string;   // "<baseProviderId>@<profileId>", or the base id for Default overrides
+  fingerprint: string;   // the profile's opaque settings fingerprint
+  env: { key: string; value: string | null }[]; // saved order; null unsets
+}
+```
+
+- **Selection.** With a profile selected (or Default-configuration overrides
+  saved), head sends its overlay in `launch.profileEnv`. With neither, head
+  sends nothing and the node uses its own provider login. A selected profile
+  that cannot be resolved fails at create with
+  `provider-profile-replacement-required` and again at each start; head never
+  falls back to another account or to the node's login.
+- **Freshness.** The overlay is resolved again at every start, so the node runs
+  with the profile's current values.
+- **Account folders.** `CLAUDE_CONFIG_DIR` and `CODEX_HOME` are sent as typed.
+  The node expands a leading `~` or `~/` against its own home and requires each
+  such folder to exist there; a missing one fails the start with
+  `node-profile-unavailable` naming the variable only. Login files never leave
+  the node: only environment values are sent.
+- **Application.** The node parses the overlay strictly (any unknown, missing
+  or mistyped member rejects it) and applies it with the local precedence:
+  inherited environment, then the profile (`value` replaces, `null` removes),
+  then Intent's own launch wiring, which a profile cannot override.
+- **Redaction.** Values are secrets. They travel only in the authenticated
+  `launch` frame and never appear in `Debug` output, errors, logs or the
+  journal. The node masks profile secret values in the provider text it
+  journals or logs: every value of a credential-named variable regardless of
+  length, other values from a minimum length. ACP schema identifiers stay
+  readable; an update that cannot be parsed after masking is dropped rather
+  than leaked. Secrets stay in node process memory and the provider's
+  environment for the agent's lifetime.
+
+This replaces, for this link, the prepared
+[provider access token](#guarded-provider-credential-startup-callback) callback
+and private token HOME; neither is used.
+
+### Errors
+
+Link errors are stable codes at the start of the message; the text is fixed per
+kind and never carries the token or peer-supplied text:
+
+| Code | Meaning | Retried |
+| --- | --- | --- |
+| `node-link-unavailable` | Unreachable, dropped or timed out | Yes |
+| `node-link-certificate-mismatch` | The node's certificate does not match the pin | No |
+| `node-link-unauthorized` | The node rejected the token | No |
+| `node-link-stale` | Generation not newer, or a binding no longer current | Yes |
+| `node-link-other-head` / `node-link-wrong-node` | Ownership or node id mismatch | No |
+| `node-link-version-mismatch` | The peers speak different link protocol versions | No |
+| `node-link-protocol` | The peer broke the protocol | Yes |
+| `node-link-config` | Malformed endpoint, pin or token | No |
+| `node-link-closed` / `node-link-timeout` | The link closed or a request timed out before completing | Yes |
+| `node-link-binding-store` | The node cannot read or persist its binding | No |
+| `node-link-frame-too-large` / `node-link-frame-invalid` | A frame over 8 MiB, or malformed | n/a (frame rejected) |
+
+Without a configured, connected node an agent cannot start
+(`node-unavailable`); an agent whose lease head no longer holds cannot start
+again (`node-agent-unplaced`).

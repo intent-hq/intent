@@ -72,6 +72,9 @@ Public protocol and checkpoint/journal formats stay unchanged. [Capture fixtures
 and [their static tests](./fixtures/nodes/checkpoint-capture.test.mjs) establish
 structural integrity only, not executed native capture or durable ACK acceptance. Run the standalone prepared-data checks with
 `node --test docs/protocol/fixtures/nodes/checkpoint-capture.test.mjs`.
+The experimental [single-node private link](./node-link.md#single-node-private-link-nodeprotocol-5)
+is a separate nodeProtocol 5 for one hand-configured node; it advertises no
+capability and makes no public version claim.
 
 ### §5.x subsections (`methods/`)
 

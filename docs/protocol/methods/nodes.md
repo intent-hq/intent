@@ -152,6 +152,36 @@ node names when available and retain neutral identity otherwise. No manual
 placement picker or required-choice dialog is specified. Existing management and
 hub merge/discard remain available.
 
+##### Experimental single-node subset
+
+The experimental [single-node private link](../node-link.md#single-node-private-link-nodeprotocol-5)
+implements part of this section without advertising `agentNodes`. Behind its
+daemon switch, `agent.create`, single `agent.delegate` and `agent.wakeOrCreate`'s
+creation branch (public RPC and MCP) accept the closed `placement` object with
+the same validation. A remote placement needs `target` omitted or `"remote"` and
+`checkout` omitted or `"isolated"`, with optional `os`, `arch` and `nodeId`;
+`exclusive: true`, `target: "local"`, and on `agent.delegate` a batch with a
+placement or `placement` combined with `isolation` fail with `-32602`. An omitted
+placement stays local; `null` is rejected. Admission checks the configured
+node's connection, platform and capacity and fails with the documented
+`placement-unavailable` data (`no-capacity` or `unsupported-platform`,
+`availablePlatforms`, `supportedPlatforms`, `availableOs`, `retryable`,
+`observedAt`); `node-configuration-ambiguous` cannot occur with one node. While
+a node is configured, the full `workspace_api` tool description names it, its
+platforms and current capacity, and how to place an agent.
+
+Placed agents carry `nodeId`, `leaseId`, `nodeName`, the resolved `placement`,
+`effectiveIsolation` (`pending` until the node reports its checkout ready, then
+`isolated`) and `placementError` on detail reads; `agent.list` rows omit them.
+The create result adds a `notice` saying the agent starts from the workspace's
+last commit and that uncommitted changes are not carried; delegate and
+wakeOrCreate results copy `notice`, `nodeId`, `nodeName` and
+`effectiveIsolation`. `nodeState`, `checkpoint`, `nodePath`, the `halted` / `resuming`
+statuses, the node and hub events, `node.*`, `lease.*`, `hub.*`,
+`Workspace.defaultAgentPlacement` and specialist `runsOn` are not part of the
+subset. Agent work is exchanged as the hub ref names in the workspace's own
+repository instead of a separate hub.
+
 #### Lifecycle and events
 
 Add `halted` and `resuming` to persisted/wire AgentStatus, alongside existing

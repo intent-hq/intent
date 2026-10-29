@@ -532,6 +532,22 @@ These additive docs precede consumer merges/contract acceptance; authorized loca
 development and draft preparation may proceed in parallel. Static fixtures do not
 qualify a listener, fresh-workspace source, provider or ready/ACK behavior.
 
+**Private nodeProtocol 5 — experimental single-node link, unadvertised.** The
+[single-node private link](./node-link.md#single-node-private-link-nodeprotocol-5)
+launches agents on one hand-configured node, only when the daemon starts with
+`INTENTD_EXPERIMENTAL_REMOTE_LAUNCH=1` and a node configuration file. It is a
+separate private protocol (peers match exactly 5), outside the `{2,3,4}`, `{3,4}`
+and `4` sets above, and changes no checkpoint or journal format. It makes **no
+public version claim and advertises no capability**: `agentNodes`,
+`agentPlatformRouting` and `localNodeIsolation` stay absent, so clients keep
+placement and hub controls gated off. The `agentNodes: 1` rule is unchanged: it
+still requires the complete static-node, hub, placement and recovery contract of
+[§5.50](./methods/nodes.md). The public surface it adds is the documented
+`placement` subset on agent creation, `placement-unavailable` errors and the
+optional placed-agent projection fields
+([experimental subset](./methods/nodes.md#experimental-single-node-subset)); a
+client must not infer remote support from their presence.
+
 **Prepared command-default change — recommended 11.0, not shipped.**
 [Script creation defaults (§5.8)](./methods/scripts.md#command-creation-defaults-prepared-breaking-change)
 change omission on a new command from `saved` to `oneOff`; new services remain
