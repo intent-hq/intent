@@ -254,7 +254,7 @@ ws.note.edit(id, { old, new }) → { ... }
 ws.note.editLines(id, { start, end, content }) → { ... }
 ws.note.list(tag?) → [{ id, title, tags, ... }]
 ws.note.listTasks(id) → [{ text, status, taskNoteId, linkedTaskNoteId, lineNumber, ... }]
-ws.note.read(id) → { id, title, content, rawContent, tags, ... }
+ws.note.read(id, { startLine?, maxLines? }?) → { id, title, content, rawContent, tags, totalLines, ... }
 ws.note.readAsset(asset) → { assetId, mimeType, data, sizeKb }
 ws.note.saveAsset({ data, mimeType, originalName? }) → { assetId, path, url }
 ws.note.setContent(id, content, confirmReplacement?) → { ... }
