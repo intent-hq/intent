@@ -967,11 +967,17 @@ successful `claimTab` re-homes the row to the workspace's **driving client** (§
 REV-2 rule order; `browser:tab-updated { changes: { hostClientId, ownerAgentId } }`), and
 `workspace.setBrowserClient` (§5.1) moves **every claimed tab** of the workspace to the
 new pin (`changes: { hostClientId }` per moved tab; clearing the pin moves nothing).
-Either re-home also **clears the moved tab's `displayed`** (the previous host's layout
+Independently of the driving client, a successful `client.hello` moves the **open** tabs —
+claimed **and** unclaimed — still hosted by a superseded id of the same device (a shorter
+`:`-suffix of the presented `clientId` the caller may act as, with no live connection;
+§5.17) to the presented id, one `browser:tab-updated { changes: { hostClientId } }` per
+moved tab ([intent-hq/intent#8045](https://github.com/intent-hq/intent/issues/8045)).
+Every re-home also **clears the moved tab's `displayed`** (the previous host's layout
 fact is no longer vouched for): the same `browser:tab-updated` carries `changes: {
 displayed: null }` when it was set, and the row reads with `displayed` absent until the
 new host reports it via `browser.upsertTab` / `browser.syncTabs`.
-Unclaimed (user) tabs never move. A host that receives a `browser:tab-updated` naming
+Apart from that superseded-id rehome, unclaimed (user) tabs never move: a driving-client
+switch leaves them on their physical host. A host that receives a `browser:tab-updated` naming
 another `hostClientId` for one of its tabs stops treating that tab as its own; the new
 host materialises it from the canonical row.
 
