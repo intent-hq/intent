@@ -168,10 +168,12 @@ subscribe to discussion events, and private discussions remain human-only.
   { changes: { hostClientId, displayed?: null } }` for each, so a device whose id was
   re-prefixed recovers its tabs ([intent-hq/intent#8045](https://github.com/intent-hq/intent/issues/8045)).
   A suffix qualifies only when the caller may already act as it (the namespacing above
-  would return it unchanged), it has no live connection, and the move does not widen who
-  may act as the host: when the presented id's head is a principal of this daemon, only
-  suffixes inside that principal's namespace move. Tombstoned rows stay with their old
-  host. A failed rehome is logged and never fails the hello.
+  would return it unchanged), it has no live connection (when liveness cannot be determined
+  nothing moves), and the move does not change who may act as the host: an id's namespace
+  owner is its head segment when that names a principal of this daemon, and a suffix moves
+  only when its namespace owner equals the presented id's (prefixes left by other
+  backends' principals add no one). Tombstoned rows stay with their old host. A failed
+  rehome is logged and never fails the hello.
 - **Connection → client mapping.** The daemon maps each live connection to its logical
   `clientId`; **multiple connections may share one `clientId`** (the same client reconnecting, or
   several windows of one app).
