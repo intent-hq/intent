@@ -114,7 +114,18 @@ runs tests only; `make test-changed` selects tests changed against `BASE`
 (default `origin/main`) and falls back to the full suite for build-wide changes;
 `make test-select E='<nextest filterset>'` runs just the matching tests.
 
-These three (and `make test-intentd`, which `make test` runs, and the test
+`make test-stress E='<nextest filterset>' COUNT=200 LOAD=1` repeats the
+matching tests `COUNT` times (default 100) with retries off, through the same
+runner and fixtures as `test-select`. Use it to show a test fails only under
+load, to prove a flake fix, or to check whether a CI failure is an unrelated
+flake. `LOAD=1` starts `LOAD_CPUS` `yes` spinners (default twice the CPU count)
+plus an fsync disk writer once the build is done, and stops them when the run
+ends. The run prints one comparable line, for example
+`[test-stress] stress: 200/200 iterations (120 failed), 1 test, LOAD=1 (64 cpu + fsync): 80 passed, 120 failed; failures: workspace_lifecycle.rs:68 ×116, workspace_lifecycle.rs:59 ×4`,
+and keeps the full output under `$(GATE_CACHE_DIR)/stress/`. It never writes
+resume records, so `RESUME`, `GATE_FORCE` and `NO_FAIL_FAST` do not apply.
+
+These four (and `make test-intentd`, which `make test` runs, and the test
 phase of `make gate`) default `INTENTD_TEST_TIMEOUT_MULTIPLIER` to `3`, the
 value coverage CI and `make coverage-changed` already use, so tests'
 hang-guard time limits stretch 3x. At 1x, a busy shared dev host makes correct

@@ -310,7 +310,9 @@ with no rollback.
   manifest/lockfile/nextest-config changes; `make coverage-changed` runs it under
   llvm-cov like the PR `coverage-changed` job. To iterate on a few tests use
   `make test-select E='<nextest filterset>'`, not raw `cargo nextest`, which skips the
-  fixture setup so fixture tests fail in bulk (95 bogus failures, intentd#2559).
+  fixture setup so fixture tests fail in bulk (95 bogus failures, intentd#2559). To prove
+  a flake, its fix, or that a CI failure is not yours, use
+  `make test-stress E=... COUNT=200 LOAD=1` (retries off, optional CPU + fsync load).
 - `make test` / `test-changed` / `test-select` print a unique `record:` attempt path, including
   fully resumed runs. [Receipt and coverage details](CONTRIBUTING.md#test-attempt-receipts-and-resume-coverage)
   explain evidence, interruption and seven-day tree retention. `RESUME=1` skips verified

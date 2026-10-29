@@ -47,6 +47,10 @@ streamed passes. Old run.json counters remain native per-child diagnostic totals
 not unique coverage totals. A completed shortcut revalidates its execution source
 and records that source on the report, including each selection's evidence owner.
 No later invocation repairs unfinished receipts; only tree expiry removes them.
+
+`--stress-count N` (make test-stress) hands one `--filterset` to
+scripts/nextest_stress.py: the same fixtures and Cargo outputs, N iterations with
+retries off, an optional `--load 1` CPU + fsync load, and no resume records.
 """
 
 from __future__ import annotations
@@ -69,6 +73,7 @@ import sys
 import tempfile
 import threading
 import time
+from types import SimpleNamespace
 import uuid
 import xml.etree.ElementTree as ET
 try:
@@ -1585,18 +1590,16 @@ def prune_stale_executables(output_args: list[str], listings: list[str],
     return freed
 
 
-def run_nextest(args: argparse.Namespace) -> int:
-    label = args.label
-    no_fail_fast = args.no_fail_fast == "1"
-    repo_root = Path(args.repo_root).resolve()
-    intentd_dir = (repo_root / args.intentd_dir).resolve()
-    cache_dir = Path(args.cache_dir).expanduser().resolve()
-    plans = split_plans(args.plan)
+def prepare_test_env(repo_root: Path, intentd_dir: Path, plans: list[list[str]], label: str):
+    """Fixture preparation and child env shared by every runner mode (test, stress).
+
+    Returns (env, callback fixture identity, transfer fixture identity, compact
+    Cargo config args); the identities are None when the plans cannot need them.
+    """
     fixture_identity = callback_fixture_identity(intentd_dir) if needs_callback_fixture(plans) else None
     transfer_identity = transfer_fixture_identity(repo_root) if needs_transfer_fixture(plans) else None
     cargo_config = compact_config(intentd_dir)
     announce_compact()
-    prune(cache_dir)
     env = nextest_env()
     if fixture_identity is not None:
         env[CALLBACK_FIXTURE_ENV] = fixture_identity["root"]
@@ -1609,6 +1612,19 @@ def run_nextest(args: argparse.Namespace) -> int:
         env[TRANSFER_FIXTURE_ENV] = transfer_identity["root"]
     if cargo_config:
         env["CARGO_INCREMENTAL"] = "0"
+    return env, fixture_identity, transfer_identity, cargo_config
+
+
+def run_nextest(args: argparse.Namespace) -> int:
+    label = args.label
+    no_fail_fast = args.no_fail_fast == "1"
+    repo_root = Path(args.repo_root).resolve()
+    intentd_dir = (repo_root / args.intentd_dir).resolve()
+    cache_dir = Path(args.cache_dir).expanduser().resolve()
+    plans = split_plans(args.plan)
+    env, fixture_identity, transfer_identity, cargo_config = prepare_test_env(
+        repo_root, intentd_dir, plans, label)
+    prune(cache_dir)
     # Resolve before accepting resume evidence: unchanged config text can expand
     # to different paths (Cargo home templates or retargeted output symlinks).
     try:
@@ -1926,6 +1942,12 @@ def run_nextest(args: argparse.Namespace) -> int:
     return status
 
 
+def positive_int(value: str) -> int:
+    if not re.fullmatch(r"[1-9][0-9]*", value):
+        raise argparse.ArgumentTypeError(f"expected a positive integer, got {value!r}")
+    return int(value)
+
+
 def main() -> int:
     if sys.argv[1:2] == ["--check-callback-fixture"]:
         parser = argparse.ArgumentParser()
@@ -1988,7 +2010,37 @@ def main() -> int:
         "the same as --plan '--workspace -E EXPR', so it cannot be combined with --plan",
     )
     parser.add_argument("--base", metavar="REF", help="base ref recorded in run.json")
+    parser.add_argument(
+        "--stress-count",
+        type=positive_int,
+        metavar="N",
+        help="stress mode (make test-stress): run --filterset N times with retries off and "
+        "print pass/fail counts and panic locations; never reads or writes resume records",
+    )
+    parser.add_argument("--load", choices=("0", "1"), default="0",
+                        help="stress mode: 1 runs a built-in CPU + fsync load during the tests")
+    parser.add_argument("--load-cpus", type=positive_int, metavar="N",
+                        help="stress mode: CPU spinners for --load 1 (default: 2 x CPUs)")
     args = parser.parse_args()
+    if args.stress_count is None and (args.load != "0" or args.load_cpus is not None):
+        parser.error("--load and --load-cpus need --stress-count")
+    if args.stress_count is not None:
+        if args.filterset is None or args.plan:
+            parser.error("--stress-count needs --filterset and cannot be combined with --plan")
+        if not args.filterset.strip():
+            parser.error("--filterset needs a nextest filterset expression, e.g. 'test(/name/)'")
+        if __package__:
+            from . import nextest_stress
+        else:
+            import nextest_stress
+        try:
+            gate = sys.modules.get(__name__)
+            if gate is None or getattr(gate, "run_nextest", None) is not run_nextest:
+                gate = SimpleNamespace(**globals())
+            return nextest_stress.run_stress(args, gate)
+        except (OSError, RuntimeError, ValueError) as error:
+            print(f"[{args.label}] ERROR: {error}", file=sys.stderr)
+            return HANDLED_ERROR_EXIT
     if args.filterset is not None:
         if args.plan:
             parser.error("--filterset cannot be combined with --plan")
