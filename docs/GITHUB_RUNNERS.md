@@ -15,12 +15,12 @@ input uses it to test one host.
 | intent-ci1 | ReliableSite, Los Angeles | EPYC 4545P, 16 cores / 32 threads, 128 GB | xl (1), heavy (2) | `intent-cache-xl`, `intent-cache` + `intent-cache-bigmem` | `intent-ci1` | [`hosts/intent-ci1.env`](../infra/runners/hosts/intent-ci1.env) |
 | intent-ci2 | ReliableSite, Los Angeles | EPYC 4545P, 16 cores / 32 threads, 128 GB | xl (1), heavy (2) | `intent-cache-xl`, `intent-cache` + `intent-cache-bigmem` | `intent-ci2` | [`hosts/intent-ci2.env`](../infra/runners/hosts/intent-ci2.env) |
 | intent-ci3 | ReliableSite, Los Angeles | EPYC 4545P, 16 cores / 32 threads, 64 GB | heavy (4) | `intent-cache` only (12 GB slots: no bigmem) | `intent-ci3` | [`hosts/intent-ci3.env`](../infra/runners/hosts/intent-ci3.env) |
-| intent-ci4 | ReliableSite, Los Angeles | EPYC 4545P, 16 cores / 32 threads, 64 GB | heavy (4) | `intent-cache` only (12 GB slots: no bigmem) | `intent-ci4` | [`hosts/intent-ci4.env`](../infra/runners/hosts/intent-ci4.env) |
+| intent-ci4 | ReliableSite, Los Angeles | EPYC 4545P, 16 cores / 32 threads, 128 GB | xl (1), heavy (2) | `intent-cache-xl`, `intent-cache` + `intent-cache-bigmem` | `intent-ci4` | [`hosts/intent-ci4.env`](../infra/runners/hosts/intent-ci4.env) |
 
 | Pool | Label | Serves jobs asking for | Bursts to | Per slot |
 |---|---|---|---|---|
-| heavy | `intent-cache` | `gh-linux-8x` | `warp-ubuntu-2404-x64-8x` | 8 CPUs = 4 whole cores; 36 GB on intent-cache, 30 GB on intent-ci1 and intent-ci2, 12 GB on intent-ci3 and intent-ci4, 32 GB in the three-heavy EPYC layout |
-| bigmem | `intent-cache` + `intent-cache-bigmem` | `gh-linux-16x` when no xl slot is free | `warp-ubuntu-2404-x64-16x` | heavy slots with 30 GB or more; never intent-ci3 or intent-ci4 |
+| heavy | `intent-cache` | `gh-linux-8x` | `warp-ubuntu-2404-x64-8x` | 8 CPUs = 4 whole cores; 36 GB on intent-cache, 30 GB on intent-ci1, intent-ci2 and intent-ci4, 12 GB on intent-ci3, 32 GB in the three-heavy EPYC layout |
+| bigmem | `intent-cache` + `intent-cache-bigmem` | `gh-linux-16x` when no xl slot is free | `warp-ubuntu-2404-x64-16x` | heavy slots with 30 GB or more; never intent-ci3 |
 | xl | `intent-cache-xl` | `gh-linux-16x` | `warp-ubuntu-2404-x64-16x` | 16 CPUs = 8 whole cores (one CCD), 52 GB |
 | small | `intent-cache-small` | nothing routed (free `ubuntu-*` jobs run on GitHub) | — | no slots on any host |
 
@@ -30,7 +30,8 @@ wins contention by cgroup weight rather than a reserved core (see Pinned CPUs
 and limits). There is no small pool: the repositories are public, so jobs that
 fit in 1 CPU run free on GitHub's standard `ubuntu-24.04` runners and
 self-hosting them saved nothing; `runner-route` never routes them to a slot.
-On intent-ci1 and intent-ci2 (same layout) the xl slot owns cores 0-7
+On intent-ci1, intent-ci2 and intent-ci4 (same layout; `test_runners.py` keeps
+the files identical but the name) the xl slot owns cores 0-7
 (CPUs 0-7,16-23, 52 GB) and the two heavy slots split CCD 1: cores 8-11
 (8-11,24-27) and 12-15 (12-15,28-31), 30 GB each. Every core is pinned; about
 13 GB stays with the system and Docker. intent-ci3 has the same CPU with
@@ -40,9 +41,7 @@ other heavy slots, so its slots do not carry `intent-cache-bigmem`: one rustc
 in intentd's 16-core `check` and `coverage-changed` passed 12 GB and was
 OOM-killed there when those jobs overflowed from busy xl slots. Every
 8-core job fits; if one is OOM-killed, drop to three slots of 16 GB
-(`HEAVY_SLOTS=3`, `HEAVY_MEMORY=16g`). intent-ci4 is a second intent-ci3:
-same box and slots, only the name differs (`test_runners.py` keeps the two
-files in step). [`hosts/epyc-4545p-3heavy.env`](../infra/runners/hosts/epyc-4545p-3heavy.env)
+(`HEAVY_SLOTS=3`, `HEAVY_MEMORY=16g`). [`hosts/epyc-4545p-3heavy.env`](../infra/runners/hosts/epyc-4545p-3heavy.env)
 is the other EPYC layout: three heavy slots (cores 0-3, 4-7, 8-11), 32 GB each.
 
 The routing probe (`runner-route.yml`) caps how many jobs it sends to each
@@ -363,7 +362,7 @@ The installer enables exactly the planned slots and drains and disables the
 rest; an invalid file, or one that does not fit the host, changes no slot.
 Keep CPU sets disjoint and the total memory (each pool's slots × its memory)
 at or under the `runners.slice` cap (the host's RAM in whole GiB minus 9 GiB:
-116G on a 128 GB box, 51G on intent-ci3 and intent-ci4); `--host-check` enforces both.
+116G on a 128 GB box, 51G on intent-ci3); `--host-check` enforces both.
 intent-cache pins every CPU and relies on the cache's cgroup weights; on a
 runner-only host, leaving a core or two unpinned is optional.
 
