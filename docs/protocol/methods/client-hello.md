@@ -173,8 +173,10 @@ subscribe to discussion events, and private discussions remain human-only.
   (§5.45) hosted by such a suffix to the presented id and publishes `browser:tab-updated
   { changes: { hostClientId, displayed?: null } }` for each, so a device whose id was
   re-prefixed recovers its tabs ([intent-hq/intent#8045](https://github.com/intent-hq/intent/issues/8045)).
-  A suffix qualifies only when the caller may already act as it (the namespacing above
-  would return it unchanged), it has no live connection (when liveness cannot be determined
+  A suffix qualifies only when the caller currently holds browser-management authority
+  (the same host-role check as the `browser.*` methods; a collaborator must also manage the
+  browser in every workspace that suffix has open tabs in), the caller may already act as
+  it (the namespacing above would return it unchanged), it has no live connection (when liveness cannot be determined
   nothing moves), and the move does not change who may act as the host: an id's namespace
   owner is its head segment when that names a principal of this daemon, and a suffix moves
   only when its namespace owner equals the presented id's (prefixes left by other
