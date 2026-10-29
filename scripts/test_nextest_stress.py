@@ -1,0 +1,275 @@
+#!/usr/bin/env python3
+"""Stress mode of scripts/resumable_nextest.py (make test-stress)."""
+
+import contextlib
+import importlib.util
+import io
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import time
+from types import SimpleNamespace
+import unittest
+from unittest import mock
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+
+
+def load(name):
+    spec = importlib.util.spec_from_file_location(name, HERE / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+stress = load("nextest_stress")
+gate = load("resumable_nextest")
+
+# Captured from cargo-nextest 0.9.143 on a scratch crate (--stress-count 3
+# --failure-output immediate), plus a TIMEOUT and progress-only lines.
+OUTPUT = """\
+ Stress test iteration 1/3 (00:00:00 elapsed so far, 3 iterations remaining)
+        PASS [   0.002s] [1/3] (1/2) probe stable
+        FAIL [   0.002s] [1/3] (2/2) probe flaky
+  stderr ───
+
+    thread 'flaky' (1588021) panicked at src/lib.rs:1:121:
+    unlucky 714882060
+    thread 'flaky' (1588021) panicked at src/other.rs:9:1:
+    second panic is not the location
+
+ Stress test [   0.003s] iteration 1/3: 2 tests run: 1 passed, 1 failed, 0 skipped
+ Stress test iteration 2/3 (00:00:00 elapsed so far, 2 iterations remaining)
+        SLOW [> 60.000s] [2/3] (1/2) probe stable
+        PASS [  61.002s] [2/3] (1/2) probe stable
+     TIMEOUT [ 120.000s] [2/3] (2/2) probe flaky
+ Stress test iteration 3/3 (00:00:00 elapsed so far, 1 iteration remaining)
+        PASS [   0.002s] [3/3] (1/2) probe flaky
+        FAIL [   0.002s] [3/3] (2/2) probe stable
+  stderr ───
+    thread 'stable' (77) panicked at src/lib.rs:1:121:
+    boom
+     Summary [   0.017s] 3/3 stress run iterations: 1 passed, 2 failed
+        FAIL [   0.002s] [1/3] (2/2) probe flaky
+     TIMEOUT [ 120.000s] [2/3] (2/2) probe flaky
+        FAIL [   0.002s] [3/3] (2/2) probe stable
+"""
+
+
+def tally(text):
+    result = stress.StressTally()
+    for line in text.splitlines(keepends=True):
+        result.feed(line)
+    return result.counts()
+
+
+class TallyTests(unittest.TestCase):
+    def test_counts_runs_once_and_groups_failures_by_first_panic_location(self):
+        counts = tally(OUTPUT)
+        self.assertEqual(counts["iterations"], 3)
+        self.assertEqual(counts["total_iterations"], 3)
+        self.assertEqual(counts["failed_iterations"], 3)
+        self.assertEqual(counts["tests"], 2)
+        self.assertEqual(counts["passed"], 3)
+        self.assertEqual(counts["failed"], 3, "the repeated summary block must not double count")
+        self.assertEqual(counts["failures"], {"src/lib.rs:1": 2, "TIMEOUT": 1})
+
+    def test_summary_line_names_iterations_counts_and_locations(self):
+        line = stress.summary_line("test-stress", tally(OUTPUT), "LOAD=1 (4 cpu + fsync)")
+        self.assertEqual(
+            line,
+            "[test-stress] stress: 3/3 iterations (3 failed), 2 tests, LOAD=1 (4 cpu + fsync): "
+            "3 passed, 3 failed; failures: src/lib.rs:1 ×2, TIMEOUT ×1")
+
+    def test_clean_run_has_no_failure_clause(self):
+        text = "".join(f"        PASS [   0.002s] [{i}/2] (1/1) probe one\n" for i in (1, 2))
+        self.assertEqual(stress.summary_line("s", tally(text), "LOAD=0"),
+                         "[s] stress: 2/2 iterations (0 failed), 1 test, LOAD=0: 2 passed, 0 failed")
+
+    def test_panic_outside_a_failure_block_is_ignored(self):
+        text = ("        PASS [   0.002s] [1/1] (1/1) probe one\n"
+                "thread 'x' panicked at src/a.rs:3:4:\n")
+        self.assertEqual(tally(text)["failures"], {})
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    # A zombie still answers kill(0); it is dead for our purposes.
+    with contextlib.suppress(OSError):
+        if Path(f"/proc/{pid}/stat").read_text().split()[2] == "Z":
+            return False
+    return True
+
+
+class LoadTests(unittest.TestCase):
+    def test_load_processes_stop_on_exit_and_on_error(self):
+        for fail in (False, True):
+            with self.subTest(fail=fail), tempfile.TemporaryDirectory() as scratch:
+                pids = []
+                with contextlib.suppress(RuntimeError):
+                    with stress.stress_load(2, Path(scratch)) as processes:
+                        pids = [process.pid for process in processes]
+                        self.assertEqual(len(pids), 3, "two spinners plus the fsync writer")
+                        self.assertTrue(all(alive(pid) for pid in pids))
+                        if fail:
+                            raise RuntimeError("test failure")
+                self.assertEqual([pid for pid in pids if alive(pid)], [])
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "parent-death signal is Linux only")
+    def test_load_dies_with_a_killed_runner(self):
+        code = ("import sys, time; sys.path.insert(0, sys.argv[1]); import nextest_stress as s; "
+                "from pathlib import Path\n"
+                "with s.stress_load(1, Path(sys.argv[2])) as p:\n"
+                "    print(' '.join(str(x.pid) for x in p), flush=True); time.sleep(60)\n")
+        with tempfile.TemporaryDirectory() as scratch:
+            runner = subprocess.Popen([sys.executable, "-c", code, str(HERE), scratch],
+                                      stdout=subprocess.PIPE, text=True)
+            pids = [int(pid) for pid in runner.stdout.readline().split()]
+            runner.kill()
+            runner.wait()
+            runner.stdout.close()
+            for _ in range(100):
+                if not any(alive(pid) for pid in pids):
+                    break
+                time.sleep(0.05)
+            self.assertEqual([pid for pid in pids if alive(pid)], [])
+
+
+FAKE_CARGO = """#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ["FAKE_CARGO_LOG"], "a") as log:
+    log.write(json.dumps({"argv": sys.argv[1:], "fixture": os.environ.get("FIXTURE")}) + "\\n")
+if sys.argv[2] == "run":
+    sys.stderr.write(os.environ["FAKE_CARGO_OUTPUT"])
+    sys.exit(int(os.environ.get("FAKE_CARGO_EXIT", "0")))
+"""
+
+
+class RunStressTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        (self.root / "packages/intentd").mkdir(parents=True)
+        self.cache = self.root / "cache"
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir()
+        cargo = bin_dir / "cargo"
+        cargo.write_text(FAKE_CARGO)
+        cargo.chmod(0o755)
+        self.log = self.root / "cargo.jsonl"
+        patcher = mock.patch.dict(os.environ, {
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "FAKE_CARGO_LOG": str(self.log)})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def fake_gate(self):
+        def nextest_env():
+            return {**os.environ, "FIXTURE": "set"}
+        return SimpleNamespace(
+            callback_fixture_identity=lambda _d: {"root": "/fixture"},
+            transfer_fixture_identity=lambda _r: {"root": "/transfer"},
+            needs_callback_fixture=gate.needs_callback_fixture,
+            needs_transfer_fixture=gate.needs_transfer_fixture,
+            compact_config=lambda _d: [], announce_compact=lambda: None,
+            nextest_env=nextest_env, CALLBACK_FIXTURE_ENV="CB", TRANSFER_FIXTURE_ENV="TR",
+            TIMEOUT_MULTIPLIER_ENV=gate.TIMEOUT_MULTIPLIER_ENV,
+            isolated_output_args=lambda *_: ["--target-dir", str(self.root / "target")],
+            acquire_gate_lock=lambda _o: None, timeout_description=gate.timeout_description,
+            run=gate.run, terminate_on_signal=gate.terminate_on_signal,
+            failure_exit_code=gate.failure_exit_code, Terminated=gate.Terminated)
+
+    def run_stress(self, output, exit_code=0, **overrides):
+        args = SimpleNamespace(label="test-stress", repo_root=str(self.root),
+                               intentd_dir="packages/intentd", cache_dir=str(self.cache),
+                               filterset="test(/it's $/)", stress_count=3, load="0",
+                               load_cpus=None, build_jobs="2", test_threads="5")
+        vars(args).update(overrides)
+        stdout = io.StringIO()
+        with mock.patch.dict(os.environ, {"FAKE_CARGO_OUTPUT": output,
+                                          "FAKE_CARGO_EXIT": str(exit_code)}), \
+                contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(io.StringIO()):
+            status = stress.run_stress(args, self.fake_gate())
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        return status, stdout.getvalue(), calls
+
+    def test_builds_first_then_runs_with_retries_off_and_records_a_summary(self):
+        status, stdout, calls = self.run_stress(OUTPUT, exit_code=100)
+        self.assertEqual(status, 100)
+        self.assertEqual([call["argv"][:2] for call in calls], [["nextest", "list"], ["nextest", "run"]])
+        run = calls[1]["argv"]
+        self.assertEqual(run[2:5], ["--workspace", "-E", "test(/it's $/)"])
+        for flag, value in (("--retries", "0"), ("--stress-count", "3"), ("--failure-output", "immediate"),
+                            ("--build-jobs", "2"), ("--test-threads", "5")):
+            self.assertEqual(run[run.index(flag) + 1], value, flag)
+        self.assertIn("--no-fail-fast", run)
+        self.assertEqual(calls[1]["fixture"], "set")
+        self.assertIn("[test-stress] stress: 3/3 iterations (3 failed), 2 tests, LOAD=0: "
+                      "3 passed, 3 failed; failures: src/lib.rs:1 ×2, TIMEOUT ×1", stdout)
+        records = list((self.cache / "stress").iterdir())
+        self.assertEqual(len(records), 1)
+        summary = json.loads((records[0] / "summary.json").read_text())
+        self.assertEqual((summary["failed"], summary["exit_code"], summary["load"]), (3, 100, False))
+        self.assertIn("panicked at src/lib.rs", (records[0] / "output.log").read_text())
+        self.assertEqual(sorted(p.name for p in self.cache.iterdir()), ["stress"],
+                         "stress runs never write resume journals or completion markers")
+
+    def test_a_parsed_failure_makes_the_exit_non_zero(self):
+        status, _, _ = self.run_stress(OUTPUT, exit_code=0)
+        self.assertEqual(status, 1)
+
+    def test_clean_run_under_load_exits_zero(self):
+        text = "".join(f"        PASS [   0.002s] [{i}/3] (1/1) probe one\n" for i in (1, 2, 3))
+        status, stdout, _ = self.run_stress(text, load="1", load_cpus=2)
+        self.assertEqual(status, 0)
+        self.assertIn("3/3 iterations (0 failed), 1 test, LOAD=1 (2 cpu + fsync): 3 passed, 0 failed", stdout)
+
+    def test_real_gate_provides_every_helper_stress_mode_uses(self):
+        for name in vars(self.fake_gate()):
+            self.assertTrue(hasattr(gate, name), name)
+
+
+class ArgumentTests(unittest.TestCase):
+    def main(self, *argv):
+        base = ["resumable_nextest.py", "--repo-root", ".", "--intentd-dir", "x", "--cache-dir", "c",
+                "--build-jobs", "1", "--test-threads", "1"]
+        with mock.patch.object(sys, "argv", base + list(argv)), \
+                mock.patch("nextest_stress.run_stress", return_value=7) as run_stress, \
+                contextlib.redirect_stderr(io.StringIO()) as stderr:
+            try:
+                status = gate.main()
+            except SystemExit as error:
+                status = error.code
+        return status, run_stress, stderr.getvalue()
+
+    def test_stress_dispatches_with_parsed_options(self):
+        status, run_stress, _ = self.main("--filterset", "test(/a/)", "--stress-count", "20",
+                                          "--load", "1", "--load-cpus", "8")
+        self.assertEqual(status, 7)
+        args = run_stress.call_args.args[0]
+        self.assertEqual((args.stress_count, args.load, args.load_cpus, args.filterset),
+                         (20, "1", 8, "test(/a/)"))
+
+    def test_bad_stress_arguments_are_refused(self):
+        for argv, message in ((("--stress-count", "5"), "needs --filterset"),
+                              (("--filterset", "test(/a/)", "--stress-count", "0"), "positive integer"),
+                              (("--filterset", "test(/a/)", "--stress-count", "x"), "positive integer"),
+                              (("--filterset", "test(/a/)", "--load", "1"), "need --stress-count"),
+                              (("--filterset", " ", "--stress-count", "2"), "filterset expression")):
+            with self.subTest(argv=argv):
+                status, run_stress, stderr = self.main(*argv)
+                self.assertEqual(status, 2)
+                self.assertIn(message, stderr)
+                run_stress.assert_not_called()
+
+
+if __name__ == "__main__":
+    unittest.main()
