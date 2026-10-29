@@ -63,7 +63,9 @@ A held secret is dropped when any of these happens:
 Pending requests are held in memory the same way and are lost on restart. There
 is no time-based expiry, but an agent may hold at most **8 pending requests**.
 A request for a name that already has a pending request from the same agent
-returns that request's `requestId` and adds no new card. A new request beyond the
+returns that request's `requestId` and queues its card again at turn end (an
+earlier card may have been dropped with a cancelled or very long turn). Clients key
+cards by `requestId`, so the repeat shows the same request. A new request beyond the
 cap fails, telling the agent to wait for the user to answer the open ones.
 
 ### Names
