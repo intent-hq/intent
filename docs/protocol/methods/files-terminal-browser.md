@@ -350,7 +350,8 @@ API gains root support; all other file APIs retain their existing scope.
 > `browser.exec` would go right now, with the read-only `ws.browser.clients()` binding (§6.8).
 >
 > `workspace.getBrowserClient` (§5.1) runs the same resolution without dispatching
-> (`resolved: null` for the two offline outcomes). Client-triggered `browser.exec` is
+> (`resolved: null` for the two offline outcomes; an unpinned workspace routed by the desktop or
+> claimed-tab rule also reports that client as `target: { clientId, via }`). Client-triggered `browser.exec` is
 > **unchanged**: it still reverse-dispatches on the caller's own connection, whatever
 > the workspace's pin says.
 >
