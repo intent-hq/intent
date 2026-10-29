@@ -87,6 +87,14 @@ informational warnings on a successful list and on the legacy no-`providerId` pa
 persisted. Older daemons omit it; clients treat an absent or unknown value as a generic load
 failure, so later values are additive.
 
+Also within 15.2 (additive optional response field; presence-detected; no method-catalog
+change, so no version bump): **`browserClient.target`** on `workspace.getBrowserClient` /
+`workspace.setBrowserClient` ([§5.1](./methods/workspace.md#51-workspace)) names the client
+an unpinned workspace is routed to by the desktop-session or claimed-tab rule
+(`{ clientId, via: "desktop" | "tabs" }`), so `resolved: null` with `target` reads "routed
+to a client with no eligible live connection" rather than "no eligible client". Older
+daemons omit it; clients then cannot tell the two apart.
+
 **Version 15.1 — workspace discussions (additive, prepared).**
 [Workspace discussions](./methods/multiplayer.md#555-workspace-discussions) add
 `discussion.conversations`, `discussion.recipients`, `discussion.list`,
