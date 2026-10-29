@@ -76,6 +76,17 @@ unlabeled workspaces omit the field, support is detected by the exact-integer ca
 `workspaceLabels: 1` on `client.hello` `server.capabilities` and `system.capabilities`;
 older daemons omit it.
 
+Also within 15.2 (additive optional result field; presence-detected; no method-catalog
+change, so no version bump): **`models.list` `warningKind`**
+([§5.30](./methods/models-providers.md#530-modelslist--model-catalog)). A provider-scoped
+`models.list` response may carry `warningKind: "cli-missing" | "prerequisite-missing"` next to
+`warning` when the daemon knows why a catalog fetch failed (emitted for `codex` and
+`claude-code`), so clients show an "install the CLI" notice only for a genuinely missing CLI
+instead of matching the human-readable `warning` text. Absent for every other failure, for
+informational warnings on a successful list and on the legacy no-`providerId` path; never
+persisted. Older daemons omit it; clients treat an absent or unknown value as a generic load
+failure, so later values are additive.
+
 **Version 15.1 — workspace discussions (additive, prepared).**
 [Workspace discussions](./methods/multiplayer.md#555-workspace-discussions) add
 `discussion.conversations`, `discussion.recipients`, `discussion.list`,
