@@ -2256,11 +2256,11 @@ live at every sweep, which runs about once an hour (the first run shortly after 
   workspace with collaborators or open invites (archiving would remove them); and a
   workspace with work in flight — a running agent turn, a running script
   (`scriptsRunning`), an active background hook or an active PR monitor; and a workspace
-  with local git work, read from one `workspace.localChanges` evaluation: any root
-  (primary or secondary) with `uncommittedCount > 0`, any root with `unpushedCount > 0`
-  and `hasRemoteRefs: true` (a repository with no remote refs has nothing to push), or
-  any root with an `error`. A failed evaluation also skips the workspace until the next
-  sweep.
+  with local git work in its folder, read from one `workspace.localChanges` evaluation
+  over the primary worktree and the secondary roots inside the folder (roots outside it
+  never block): any such root with `uncommittedCount > 0`, with `unpushedCount > 0` and
+  `hasRemoteRefs: true` (a repository with no remote refs has nothing to push), or with
+  an `error`. A failed evaluation also skips the workspace until the next sweep.
 - **Path.** A due workspace is archived through `workspace.archive`, with the same
   active-work teardown and the same `workspace:updated` delta. The sweep re-reads the row
   and re-checks that it is still idle with no agent turn running right before archiving.
