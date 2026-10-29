@@ -1862,9 +1862,10 @@ members. Both peers must speak exactly protocol 5;
 anything else is `node-link-version-mismatch` naming both versions.
 `intentdVersion` is recorded for diagnostics and is not a compatibility gate.
 Heartbeats run every 15 s and a link silent for 45 s is dead. Head redials with
-exponential backoff from 0.5 s to 30 s (±20% jitter); certificate, token,
-ownership, version and configuration failures are permanent and stop redialing
-until an operator fixes them.
+exponential backoff from 0.5 s to 30 s (±20% jitter). Certificate, token,
+ownership, version and configuration failures are permanent: they end that
+backoff run, and head tries a fresh bind every 60 s until an operator fixes the
+cause.
 
 ### Journal and acknowledgements
 
@@ -1883,15 +1884,26 @@ interface JournalRecord {
 }
 ```
 
-The node appends and fsyncs each record before sending it. Head handles records
-in sequence: the next record is ingested into the agent's transcript and
-events, the highest contiguous sequence is persisted, and only then is it
-acked; a record at or below that sequence is a replay, skipped and acked
-again; a gap is not ingested and the link resyncs. The node truncates acked
-records. On reconnect, the hello's `ackedSeq` is head's persisted watermark;
-the node resends every later record, then sends `replayComplete`. Duplicates
-are prevented by sequence; during a replay a live view may briefly show events
-out of order. There is no replay barrier against other writers and no record
+The node appends and fsyncs each record before sending it, and truncates
+acked records. Head handles records in sequence:
+
+- **Next record.** Head hands it to the agent's runtime (notifications go to the
+  agent manager's stream, turn ends to the waiting turn), persists the new
+  highest sequence and then acks it. The ack covers the sequence watermark
+  only: head does not wait for the transcript to be stored, so a head crash
+  between delivery and transcript processing can leave an acked record missing
+  from the transcript. Records for an agent not attached on head are dropped.
+- **Replay.** A record at or below the watermark is skipped and acked again.
+- **Gap during replay** (between bind and `replayComplete`). The node resends
+  everything it still holds, so missing records are gone from the node: head
+  logs the loss, advances past it and ingests the record it got.
+- **Gap in the live stream.** Head ingests nothing more on that link and
+  rebinds, so the node replays from the persisted watermark.
+
+On reconnect, the hello's `ackedSeq` is head's persisted watermark; the node
+resends every later record, then sends `replayComplete`. Duplicates are
+prevented by sequence; during a replay a live view may briefly show events out
+of order. There is no replay barrier against other writers and no record
 hash.
 
 ### Launch and agent lifecycle
@@ -1924,9 +1936,14 @@ node opens the provider session without prompt injection, so head sends the
 agent's assembled instructions with its first prompt. A remote agent's model
 cannot be switched after creation.
 
-Start and turn failures are journaled as `"<code>: <detail>"` and surface on
-the agent as `placementError: { code, detail }` (code capped at 64 bytes,
-detail at 512):
+Node failures are journaled as `"<code>: <detail>"`. A failure that ends the
+agent's process before its checkout is ready (an `exited` record with an error
+while `effectiveIsolation` is still `pending`) surfaces on the agent as
+`placementError: { code, detail }` (code capped at 64 bytes, detail at 512); a
+later `started` clears it. Once the agent is `isolated`, turn failures follow
+the existing turn-error path and do not set `placementError`. A failure while
+head records the launch sets `placementError.code` to `remote-launch-failed`.
+The node codes are:
 
 | Code | Meaning |
 | --- | --- |
@@ -2046,18 +2063,18 @@ and private token HOME; neither is used.
 Link errors are stable codes at the start of the message; the text is fixed per
 kind and never carries the token or peer-supplied text:
 
-| Code | Meaning | Retried |
+| Code | Meaning | Head redials |
 | --- | --- | --- |
-| `node-link-unavailable` | Unreachable, dropped or timed out | Yes |
-| `node-link-certificate-mismatch` | The node's certificate does not match the pin | No |
-| `node-link-unauthorized` | The node rejected the token | No |
-| `node-link-stale` | Generation not newer, or a binding no longer current | Yes |
-| `node-link-other-head` / `node-link-wrong-node` | Ownership or node id mismatch | No |
-| `node-link-version-mismatch` | The peers speak different link protocol versions | No |
-| `node-link-protocol` | The peer broke the protocol | Yes |
-| `node-link-config` | Malformed endpoint, pin or token | No |
-| `node-link-closed` / `node-link-timeout` | The link closed or a request timed out before completing | Yes |
-| `node-link-binding-store` | The node cannot read or persist its binding | No |
+| `node-link-unavailable` | Unreachable, dropped or timed out | With backoff |
+| `node-link-certificate-mismatch` | The node's certificate does not match the pin | Every 60 s |
+| `node-link-unauthorized` | The node rejected the token | Every 60 s |
+| `node-link-stale` | Generation not newer, or a binding no longer current | With backoff |
+| `node-link-other-head` / `node-link-wrong-node` | Ownership or node id mismatch | Every 60 s |
+| `node-link-version-mismatch` | The peers speak different link protocol versions | Every 60 s |
+| `node-link-protocol` | The peer broke the protocol | With backoff |
+| `node-link-config` | Malformed endpoint, pin or token | Every 60 s |
+| `node-link-closed` / `node-link-timeout` | The link closed or a request timed out before completing | With backoff |
+| `node-link-binding-store` | The node cannot read or persist its binding | Every 60 s |
 | `node-link-frame-too-large` / `node-link-frame-invalid` | A frame over 8 MiB, or malformed | n/a (frame rejected) |
 
 Without a configured, connected node an agent cannot start
