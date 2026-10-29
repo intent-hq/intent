@@ -145,15 +145,36 @@ def summary_line(label: str, counts: dict[str, object], load: str, status: int |
     return text
 
 
-def _die_with_parent() -> None:
-    """Linux: SIGKILL the load process if the runner dies without cleanup."""
-    if sys.platform.startswith("linux"):
-        try:
-            import ctypes
+LOAD_INVALID_EXIT = 3
+PR_SET_PDEATHSIG = 1
 
-            ctypes.CDLL(None, use_errno=True).prctl(1, signal.SIGKILL)  # PR_SET_PDEATHSIG
-        except (OSError, AttributeError):
-            pass
+
+def _libc_prctl():
+    """Resolve prctl in the parent: a child between fork and exec must not import."""
+    if not sys.platform.startswith("linux"):
+        return None
+    try:
+        import ctypes
+
+        return ctypes.CDLL(None, use_errno=True).prctl
+    except (OSError, AttributeError):
+        return None
+
+
+def die_with_parent(parent_pid: int, prctl):
+    """preexec_fn: SIGKILL the load process when the runner dies without cleanup (Linux).
+
+    Registering after the runner already died would never fire, so the child
+    compares getppid() with the runner's pid after registering and exits if it
+    was reparented in that window. A failed registration exits too, rather than
+    starting a load process nothing can reap.
+    """
+    def preexec() -> None:
+        if prctl is None:
+            return
+        if prctl(PR_SET_PDEATHSIG, signal.SIGKILL) != 0 or os.getppid() != parent_pid:
+            os._exit(1)
+    return preexec
 
 
 def _stop(processes: list[subprocess.Popen]) -> None:
@@ -165,22 +186,31 @@ def _stop(processes: list[subprocess.Popen]) -> None:
             process.wait(timeout=10)
 
 
+def exited_early(processes: list[subprocess.Popen]) -> list[str]:
+    """Describe load workers that stopped on their own (they never exit while healthy)."""
+    return [f"{' '.join(map(str, process.args[:1]))} (pid {process.pid}) exited {process.returncode}"
+            for process in processes if process.poll() is not None]
+
+
 @contextlib.contextmanager
-def stress_load(cpus: int, scratch: Path):
+def stress_load(cpus: int, scratch: Path, stderr_path: Path | None = None):
     """Run `cpus` CPU spinners plus one fsync writer for the duration."""
     processes: list[subprocess.Popen] = []
+    preexec = die_with_parent(os.getpid(), _libc_prctl())
+    errors = open(stderr_path, "w", encoding="utf-8") if stderr_path else subprocess.DEVNULL
     try:
         for _ in range(cpus):
             processes.append(subprocess.Popen(
                 ["yes"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL, preexec_fn=_die_with_parent))
+                stderr=errors, preexec_fn=preexec))
         processes.append(subprocess.Popen(
             [sys.executable, "-I", "-c", FSYNC_WRITER, str(scratch / "load.bin"), str(LOAD_CHUNK_MB)],
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            preexec_fn=_die_with_parent))
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=errors, preexec_fn=preexec))
         yield processes
     finally:
         _stop(processes)
+        if stderr_path:
+            errors.close()
 
 
 def prune(stress_dir: Path, now: float | None = None) -> None:
@@ -246,6 +276,7 @@ def run_stress(args, gate) -> int:
     record_dir = stress_dir / uuid.uuid4().hex
     record_dir.mkdir(parents=True)
     tally = StressTally()
+    load_failures: list[str] = []
     status: int | None = None
     gate_lock = None
     with gate.terminate_on_signal():
@@ -274,8 +305,11 @@ def run_stress(args, gate) -> int:
             print(f"[{label}] {load}; running {args.stress_count} iterations with retries off", flush=True)
             with open(record_dir / "output.log", "w", encoding="utf-8") as log, \
                     tempfile.TemporaryDirectory(prefix="load-", dir=stress_dir) as scratch, \
-                    (stress_load(cpus, Path(scratch)) if args.load == "1" else contextlib.nullcontext()):
+                    (stress_load(cpus, Path(scratch), record_dir / "load.err") if args.load == "1"
+                     else contextlib.nullcontext([])) as workers:
                 status = stream(command, intentd_dir, env, log, tally)
+                # A worker that died mid-run means the advertised load did not hold.
+                load_failures = exited_early(workers)
         except subprocess.CalledProcessError as error:
             print(f"[{label}] ERROR: {error}", file=sys.stderr, flush=True)
             status = gate.failure_exit_code(error)
@@ -289,11 +323,17 @@ def run_stress(args, gate) -> int:
             if status == 0 and counts["failed"]:
                 status = 1
             line = summary_line(label, counts, load, status)
+            if load_failures:
+                if status == 0:
+                    status = LOAD_INVALID_EXIT
+                print(f"[{label}] ERROR: load worker(s) stopped during the run: {'; '.join(load_failures)} "
+                      f"(stderr in {record_dir / 'load.err'})", file=sys.stderr, flush=True)
+                line += f"; INVALID: {len(load_failures)} load worker(s) stopped early, so the load did not hold"
             (record_dir / "summary.txt").write_text(line + "\n", encoding="utf-8")
             (record_dir / "summary.json").write_text(json.dumps({
                 **counts, "filterset": args.filterset, "stress_count": args.stress_count,
                 "load": args.load == "1", "load_cpus": cpus if args.load == "1" else 0,
-                "exit_code": status, "test_timeout_multiplier": env.get(gate.TIMEOUT_MULTIPLIER_ENV),
+                "load_failures": load_failures, "exit_code": status, "test_timeout_multiplier": env.get(gate.TIMEOUT_MULTIPLIER_ENV),
             }, indent=2) + "\n", encoding="utf-8")
             print(line, flush=True)
             print(f"[{label}] record: {record_dir}", flush=True)

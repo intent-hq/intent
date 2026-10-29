@@ -160,6 +160,16 @@ def alive(pid):
     return True
 
 
+def marked(marker):
+    """Live processes whose environment carries `marker`."""
+    found = []
+    for environ in Path("/proc").glob("[0-9]*/environ"):
+        with contextlib.suppress(OSError):
+            if marker.encode() in environ.read_bytes().split(b"\0") and alive(int(environ.parent.name)):
+                found.append(int(environ.parent.name))
+    return found
+
+
 class LoadTests(unittest.TestCase):
     def test_load_processes_stop_on_exit_and_on_error(self):
         for fail in (False, True):
@@ -173,6 +183,45 @@ class LoadTests(unittest.TestCase):
                         if fail:
                             raise RuntimeError("test failure")
                 self.assertEqual([pid for pid in pids if alive(pid)], [])
+
+    def test_child_exits_if_the_runner_died_before_registration(self):
+        # The startup window: the runner was SIGKILLed after fork but before the
+        # child registered its parent-death signal, so the child is reparented.
+        calls = []
+        for parent, registered, exits in ((4242, 0, False), (1, 0, True), (4242, -1, True)):
+            with self.subTest(parent=parent, registered=registered), \
+                    mock.patch.object(stress.os, "getppid", return_value=parent), \
+                    mock.patch.object(stress.os, "_exit", side_effect=SystemExit) as exit_:
+                preexec = stress.die_with_parent(4242, lambda o, s, r=registered: calls.append((o, s)) or r)
+                if exits:
+                    with self.assertRaises(SystemExit):
+                        preexec()
+                    exit_.assert_called_once_with(1)
+                else:
+                    preexec()
+                    exit_.assert_not_called()
+        self.assertTrue(all(call == (stress.PR_SET_PDEATHSIG, stress.signal.SIGKILL) for call in calls))
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "parent-death signal is Linux only")
+    def test_load_never_survives_a_runner_killed_during_startup(self):
+        # Kill the runner while it is still spawning workers, at varied points;
+        # every worker inherits a marker so stragglers can be found in /proc.
+        code = ("import sys; sys.path.insert(0, sys.argv[1]); import nextest_stress as s, time; "
+                "from pathlib import Path\n"
+                "with s.stress_load(50, Path(sys.argv[2])) as p:\n    time.sleep(60)\n")
+        for delay in (0.02, 0.1, 0.3):
+            marker = f"INTENT_STRESS_TEST_MARKER={os.getpid()}-{delay}"
+            with self.subTest(delay=delay), tempfile.TemporaryDirectory() as scratch:
+                runner = subprocess.Popen([sys.executable, "-c", code, str(HERE), scratch],
+                                          env={**os.environ, "INTENT_STRESS_TEST_MARKER": marker.split("=", 1)[1]})
+                time.sleep(delay)
+                runner.kill()
+                runner.wait()
+                for _ in range(100):
+                    if not marked(marker):
+                        break
+                    time.sleep(0.05)
+                self.assertEqual(marked(marker), [])
 
     @unittest.skipUnless(sys.platform.startswith("linux"), "parent-death signal is Linux only")
     def test_load_dies_with_a_killed_runner(self):
@@ -201,6 +250,8 @@ with open(os.environ["FAKE_CARGO_LOG"], "a") as log:
 if sys.argv[2:4] == ["run", "--help"]:
     print(os.environ.get("FAKE_CARGO_HELP", "--retries <N>\\n--stress-count <COUNT>"))
 elif sys.argv[2] == "run":
+    import time
+    time.sleep(float(os.environ.get("FAKE_CARGO_SLEEP", "0")))
     sys.stderr.write(os.environ["FAKE_CARGO_OUTPUT"])
     sys.exit(int(os.environ.get("FAKE_CARGO_EXIT", "0")))
 """
@@ -236,14 +287,15 @@ class RunStressTests(unittest.TestCase):
             run=gate.run, terminate_on_signal=gate.terminate_on_signal,
             failure_exit_code=gate.failure_exit_code, Terminated=gate.Terminated)
 
-    def run_stress(self, output, exit_code=0, help_text=None, **overrides):
+    def run_stress(self, output, exit_code=0, help_text=None, sleep=0, **overrides):
         args = SimpleNamespace(label="test-stress", repo_root=str(self.root),
                                intentd_dir="packages/intentd", cache_dir=str(self.cache),
                                filterset="test(/it's $/)", stress_count=3, load="0",
                                load_cpus=None, build_jobs="2", test_threads="5")
         vars(args).update(overrides)
         stdout = io.StringIO()
-        fake = {"FAKE_CARGO_OUTPUT": output, "FAKE_CARGO_EXIT": str(exit_code)}
+        fake = {"FAKE_CARGO_OUTPUT": output, "FAKE_CARGO_EXIT": str(exit_code),
+                "FAKE_CARGO_SLEEP": str(sleep)}
         if help_text is not None:
             fake["FAKE_CARGO_HELP"] = help_text
         with mock.patch.dict(os.environ, fake), \
@@ -297,6 +349,21 @@ class RunStressTests(unittest.TestCase):
         status, stdout, _ = self.run_stress("error: no tests to run\n", exit_code=4)
         self.assertEqual(status, 4)
         self.assertIn("0 passed, 0 failed; ERROR: exited 4 without a test failure", stdout)
+
+    def test_a_load_worker_that_dies_mid_run_invalidates_the_run(self):
+        # e.g. the fsync writer hitting ENOSPC while nextest is still running.
+        text = "".join(f"        PASS [   0.002s] [{i}/3] (1/1) probe one\n" for i in (1, 2, 3))
+        failing_writer = "import sys; sys.stderr.write('No space left on device'); sys.exit(28)"
+        with mock.patch.object(stress, "FSYNC_WRITER", failing_writer):
+            status, stdout, _ = self.run_stress(text, load="1", load_cpus=1, sleep=1)
+        self.assertEqual(status, stress.LOAD_INVALID_EXIT)
+        self.assertIn("3 passed, 0 failed; INVALID: 1 load worker(s) stopped early", stdout)
+        record = next((self.cache / "stress").iterdir())
+        self.assertIn("No space left on device", (record / "load.err").read_text())
+        summary = json.loads((record / "summary.json").read_text())
+        self.assertEqual(summary["exit_code"], stress.LOAD_INVALID_EXIT)
+        self.assertEqual(len(summary["load_failures"]), 1)
+        self.assertIn("exited 28", summary["load_failures"][0])
 
     def test_real_gate_provides_every_helper_stress_mode_uses(self):
         for name in vars(self.fake_gate()):
