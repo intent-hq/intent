@@ -383,7 +383,8 @@ never removes external account directories.
   profile's resolved environment fingerprint. Catalogs and cached status never cross
   profiles or configuration changes. On an older daemon an unknown `providerId` keeps
   its existing empty-list-plus-`warning` degradation. A profile catalog carries the
-  same optional `warningKind` as its provider (§5.30 "Warning kind").
+  same optional `warningKind` as its provider
+  ([§5.30](./models-providers.md#530-modelslist--model-catalog), "Warning kind").
 - `host.providerAuthStatus { providerId: providerRef }` returns
   `{ id: providerRef, authenticated }`. A sweep without `providerId` stays unchanged
   unless `includeProfiles: true`, which appends one entry per profile.
