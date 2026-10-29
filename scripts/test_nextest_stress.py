@@ -53,7 +53,7 @@ OUTPUT = """\
   stderr ───
     thread 'stable' (77) panicked at src/lib.rs:1:121:
     boom
-     Summary [   0.017s] 3/3 stress run iterations: 1 passed, 2 failed
+     Summary [   0.017s] 3/3 stress run iterations: 0 passed, 3 failed
         FAIL [   0.002s] [1/3] (2/2) probe flaky
      TIMEOUT [ 120.000s] [2/3] (2/2) probe flaky
         FAIL [   0.002s] [3/3] (2/2) probe stable
@@ -89,6 +89,58 @@ class TallyTests(unittest.TestCase):
         text = "".join(f"        PASS [   0.002s] [{i}/2] (1/1) probe one\n" for i in (1, 2))
         self.assertEqual(stress.summary_line("s", tally(text), "LOAD=0"),
                          "[s] stress: 2/2 iterations (0 failed), 1 test, LOAD=0: 2 passed, 0 failed")
+
+    def test_every_nextest_final_status_is_classified(self):
+        statuses = {"PASS": True, "LEAK": True, "TIMEOUT-PASS": True, "TMPASS": True,
+                    "FAIL": False, "FAIL + LEAK": False, "LEAK-FAIL": False, "LKFAIL": False,
+                    "XFAIL": False, "TIMEOUT": False, "ABORT": False, "SIGSEGV": False}
+        text = "".join(f"  {status} [   0.002s] [{i}/{len(statuses)}] (1/1) probe one\n"
+                       for i, status in enumerate(statuses, 1))
+        text += "        SLOW [> 60.000s] [1/12] (1/1) probe one\n TERMINATING [> 90.000s] [9/12] (1/1) probe one\n"
+        counts = tally(text)
+        self.assertEqual((counts["iterations"], counts["passed"], counts["failed"]), (12, 4, 8))
+        self.assertEqual(sum(counts["failures"].values()), 8)
+        self.assertIn("FAIL + LEAK", counts["failures"])
+
+    def test_disagreement_with_nextest_summary_is_flagged(self):
+        self.assertEqual(tally(OUTPUT)["nextest_summary"], [3, 3])
+        self.assertNotIn("WARNING", stress.summary_line("s", tally(OUTPUT), "LOAD=0"))
+        # A status line the parser cannot read (here: a future format) must not
+        # silently shrink the counts.
+        drifted = tally("        PASS [   0.002s] [1/2] (1/1) probe one\n"
+                        "        FAIL <0.002s> {2/2} probe one\n"
+                        "     Summary [   0.017s] 2/2 stress run iterations: 1 passed, 1 failed\n")
+        self.assertIn("WARNING: nextest reported 2 iterations with 1 failed",
+                      stress.summary_line("s", drifted, "LOAD=0"))
+
+    def test_unfinished_run_is_flagged(self):
+        line = stress.summary_line("s", tally(""), "LOAD=0", None)
+        self.assertTrue(line.endswith("; ERROR: the run did not complete (see the error above)"), line)
+
+    def test_default_load_follows_usable_cpus(self):
+        with mock.patch.object(stress, "usable_cpus", return_value=8):
+            self.assertEqual(stress.default_load_cpus(), 16)
+        self.assertLessEqual(stress.usable_cpus(), os.cpu_count())
+
+    def test_colored_single_test_output_from_a_pty_is_parsed(self):
+        # Captured from make test-stress under a ws.script PTY (nextest 0.9.143):
+        # colors on, and no "(k/M)" column when one test is selected.
+        text = ("\x1b[31;1m        FAIL\x1b[0m [   2.350s] [\x1b[1m20\x1b[0m/\x1b[1m20\x1b[0m] "
+                "\x1b[35;1mintent-services\x1b[0m \x1b[36mdesktop::tests::workspace_lifecycle\x1b[0m"
+                "\x1b[36m::\x1b[0m\x1b[34;1mwatchdog_ends_control_once\x1b[0m\r\n"
+                "  thread 'w' (9) panicked at crates/intent-services/src/desktop/tests/"
+                "workspace_lifecycle.rs:68:5:\r\n"
+                "\x1b[32;1m        PASS\x1b[0m [   2.1s] [\x1b[1m19\x1b[0m/\x1b[1m20\x1b[0m] "
+                "\x1b[35;1mintent-services\x1b[0m \x1b[36mdesktop::tests::workspace_lifecycle::"
+                "watchdog_ends_control_once\x1b[0m\r\n")
+        # Iterations below 10 are space-padded in a 20-iteration run.
+        text += ("        PASS [   2.998s] [ 2/20] intent-services desktop::tests::workspace_lifecycle::"
+                 "watchdog_ends_control_once\n")
+        counts = tally(text)
+        self.assertEqual((counts["iterations"], counts["total_iterations"], counts["tests"]), (3, 20, 1))
+        self.assertEqual((counts["passed"], counts["failed"]), (2, 1))
+        self.assertEqual(counts["failures"],
+                         {"crates/intent-services/src/desktop/tests/workspace_lifecycle.rs:68": 1})
 
     def test_panic_outside_a_failure_block_is_ignored(self):
         text = ("        PASS [   0.002s] [1/1] (1/1) probe one\n"
@@ -146,7 +198,9 @@ FAKE_CARGO = """#!/usr/bin/env python3
 import json, os, sys
 with open(os.environ["FAKE_CARGO_LOG"], "a") as log:
     log.write(json.dumps({"argv": sys.argv[1:], "fixture": os.environ.get("FIXTURE")}) + "\\n")
-if sys.argv[2] == "run":
+if sys.argv[2:4] == ["run", "--help"]:
+    print(os.environ.get("FAKE_CARGO_HELP", "--retries <N>\\n--stress-count <COUNT>"))
+elif sys.argv[2] == "run":
     sys.stderr.write(os.environ["FAKE_CARGO_OUTPUT"])
     sys.exit(int(os.environ.get("FAKE_CARGO_EXIT", "0")))
 """
@@ -172,30 +226,27 @@ class RunStressTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def fake_gate(self):
-        def nextest_env():
-            return {**os.environ, "FIXTURE": "set"}
+        def prepare_test_env(_repo, _intentd, plans, _label):
+            self.prepared = plans
+            return {**os.environ, "FIXTURE": "set"}, None, None, []
         return SimpleNamespace(
-            callback_fixture_identity=lambda _d: {"root": "/fixture"},
-            transfer_fixture_identity=lambda _r: {"root": "/transfer"},
-            needs_callback_fixture=gate.needs_callback_fixture,
-            needs_transfer_fixture=gate.needs_transfer_fixture,
-            compact_config=lambda _d: [], announce_compact=lambda: None,
-            nextest_env=nextest_env, CALLBACK_FIXTURE_ENV="CB", TRANSFER_FIXTURE_ENV="TR",
-            TIMEOUT_MULTIPLIER_ENV=gate.TIMEOUT_MULTIPLIER_ENV,
+            prepare_test_env=prepare_test_env, TIMEOUT_MULTIPLIER_ENV=gate.TIMEOUT_MULTIPLIER_ENV,
             isolated_output_args=lambda *_: ["--target-dir", str(self.root / "target")],
             acquire_gate_lock=lambda _o: None, timeout_description=gate.timeout_description,
             run=gate.run, terminate_on_signal=gate.terminate_on_signal,
             failure_exit_code=gate.failure_exit_code, Terminated=gate.Terminated)
 
-    def run_stress(self, output, exit_code=0, **overrides):
+    def run_stress(self, output, exit_code=0, help_text=None, **overrides):
         args = SimpleNamespace(label="test-stress", repo_root=str(self.root),
                                intentd_dir="packages/intentd", cache_dir=str(self.cache),
                                filterset="test(/it's $/)", stress_count=3, load="0",
                                load_cpus=None, build_jobs="2", test_threads="5")
         vars(args).update(overrides)
         stdout = io.StringIO()
-        with mock.patch.dict(os.environ, {"FAKE_CARGO_OUTPUT": output,
-                                          "FAKE_CARGO_EXIT": str(exit_code)}), \
+        fake = {"FAKE_CARGO_OUTPUT": output, "FAKE_CARGO_EXIT": str(exit_code)}
+        if help_text is not None:
+            fake["FAKE_CARGO_HELP"] = help_text
+        with mock.patch.dict(os.environ, fake), \
                 contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(io.StringIO()):
             status = stress.run_stress(args, self.fake_gate())
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
@@ -204,14 +255,18 @@ class RunStressTests(unittest.TestCase):
     def test_builds_first_then_runs_with_retries_off_and_records_a_summary(self):
         status, stdout, calls = self.run_stress(OUTPUT, exit_code=100)
         self.assertEqual(status, 100)
-        self.assertEqual([call["argv"][:2] for call in calls], [["nextest", "list"], ["nextest", "run"]])
-        run = calls[1]["argv"]
+        self.assertEqual([call["argv"][:3] for call in calls],
+                         [["nextest", "run", "--help"], ["nextest", "list", "--workspace"],
+                          ["nextest", "run", "--workspace"]])
+        self.assertEqual(self.prepared, [["--workspace", "-E", "test(/it's $/)"]],
+                         "fixtures come from the gate's shared preparation")
+        run = calls[2]["argv"]
         self.assertEqual(run[2:5], ["--workspace", "-E", "test(/it's $/)"])
         for flag, value in (("--retries", "0"), ("--stress-count", "3"), ("--failure-output", "immediate"),
-                            ("--build-jobs", "2"), ("--test-threads", "5")):
+                            ("--build-jobs", "2"), ("--test-threads", "5"), ("--status-level", "pass")):
             self.assertEqual(run[run.index(flag) + 1], value, flag)
         self.assertIn("--no-fail-fast", run)
-        self.assertEqual(calls[1]["fixture"], "set")
+        self.assertEqual(calls[2]["fixture"], "set")
         self.assertIn("[test-stress] stress: 3/3 iterations (3 failed), 2 tests, LOAD=0: "
                       "3 passed, 3 failed; failures: src/lib.rs:1 ×2, TIMEOUT ×1", stdout)
         records = list((self.cache / "stress").iterdir())
@@ -231,6 +286,17 @@ class RunStressTests(unittest.TestCase):
         status, stdout, _ = self.run_stress(text, load="1", load_cpus=2)
         self.assertEqual(status, 0)
         self.assertIn("3/3 iterations (0 failed), 1 test, LOAD=1 (2 cpu + fsync): 3 passed, 0 failed", stdout)
+
+    def test_nextest_without_stress_support_fails_before_the_build(self):
+        with self.assertRaisesRegex(RuntimeError, "no --stress-count"):
+            self.run_stress("", help_text="--retries <N>")
+        calls = [json.loads(line)["argv"][:2] for line in self.log.read_text().splitlines()]
+        self.assertEqual(calls, [["nextest", "run"]], "nothing is built when stress mode is unsupported")
+
+    def test_exit_without_a_test_failure_is_not_reported_as_clean(self):
+        status, stdout, _ = self.run_stress("error: no tests to run\n", exit_code=4)
+        self.assertEqual(status, 4)
+        self.assertIn("0 passed, 0 failed; ERROR: exited 4 without a test failure", stdout)
 
     def test_real_gate_provides_every_helper_stress_mode_uses(self):
         for name in vars(self.fake_gate()):

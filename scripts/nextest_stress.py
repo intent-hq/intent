@@ -28,15 +28,25 @@ import tempfile
 import time
 import uuid
 
-# A final status line of nextest's human reporter in stress mode, e.g.
-# "        FAIL [   0.002s] [3/6] (2/2) crate::binary module::test".
+# A status line of nextest's human reporter in stress mode, e.g.
+# "        FAIL [   0.002s] [3/6] (2/2) crate::binary module::test". Statuses
+# can contain spaces ("FAIL + LEAK").
 STATUS_RE = re.compile(
-    r"^\s*(?P<status>[A-Z][A-Z0-9-]*)\s+\[[^\]]*\]\s+\[(?P<iteration>\d+)/(?P<total>\d+|∞|inf\w*)\]\s+"
-    r"\(\d+/\d+\)\s+(?P<binary>\S+)\s+(?P<test>\S.*?)\s*$"
+    r"^\s*(?P<status>[A-Z][A-Z0-9 +-]*?)\s+\[[^\]]*\]\s+\[\s*(?P<iteration>\d+)/(?P<total>\d+|∞|inf\w*)\]\s+"
+    r"(?:\(\d+/\d+\)\s+)?(?P<binary>\S+)\s+(?P<test>\S.*?)\s*$"
 )
-# Statuses that end a test run; SLOW/START/TERMINATING and friends are progress.
-PASS_STATUSES = {"PASS", "LEAK"}
-FAIL_STATUS_RE = re.compile(r"^(FAIL|LEAK-FAIL|TIMEOUT|ABORT|EXEC-FAIL|SIG[A-Z0-9]+)$")
+# nextest's own iteration totals, cross-checked against the per-run tally.
+SUMMARY_RE = re.compile(
+    r"^\s*Summary\s+\[[^\]]*\]\s+(?P<done>\d+)/(?P<total>\d+) stress run iterations?: "
+    r"(?P<passed>\d+) passed(?:, (?P<failed>\d+) failed)?")
+# nextest colors its output on a TTY (saved scripts are PTY-backed).
+ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+# nextest 0.9.143 final statuses: PASS, LEAK (passed but leaked handles),
+# TIMEOUT-PASS/TMPASS (slow-timeout configured to pass); everything else that
+# is not progress (SLOW, START, TERMINATING, ...) is a failure: FAIL, FAIL + LEAK,
+# LEAK-FAIL/LKFAIL, XFAIL (could not execute), TIMEOUT, ABORT, SIG*.
+PASS_STATUSES = {"PASS", "LEAK", "TIMEOUT-PASS", "TMPASS"}
+PROGRESS_PREFIXES = ("SLOW", "START", "TERMINATING", "DELAY", "RETRY", "TRY ", "SETUP", "CANCEL", "KILL")
 PANIC_RE = re.compile(r"panicked at (?P<file>[^\s:][^:]*):(?P<line>\d+)(?::\d+)?")
 LOAD_CHUNK_MB = 64
 MAX_AGE_SECONDS = 7 * 24 * 60 * 60
@@ -65,14 +75,20 @@ class StressTally:
         self.runs: dict[tuple[int, str, str], str] = {}
         self.locations: dict[tuple[int, str, str], str] = {}
         self.total_iterations: int | None = None
+        self.nextest_summary: tuple[int, int] | None = None
         self._current: tuple[int, str, str] | None = None
 
     def feed(self, line: str) -> None:
+        line = ANSI_RE.sub("", line).replace("\r", "")
+        summary = SUMMARY_RE.match(line)
+        if summary:
+            self.nextest_summary = (int(summary["done"]), int(summary["failed"] or 0))
+            return
         match = STATUS_RE.match(line)
         if match:
             status = match["status"]
             self._current = None
-            if status not in PASS_STATUSES and not FAIL_STATUS_RE.match(status):
+            if status.startswith(PROGRESS_PREFIXES):
                 return
             key = (int(match["iteration"]), match["binary"], match["test"])
             if match["total"].isdigit():
@@ -102,10 +118,12 @@ class StressTally:
             "passed": len(self.runs) - len(failed_keys),
             "failed": len(failed_keys),
             "failures": dict(sorted(reasons.items(), key=lambda item: (-item[1], item[0]))),
+            # nextest's (iterations, failed iterations), or None if it printed no summary.
+            "nextest_summary": list(self.nextest_summary) if self.nextest_summary else None,
         }
 
 
-def summary_line(label: str, counts: dict[str, object], load: str) -> str:
+def summary_line(label: str, counts: dict[str, object], load: str, status: int | None = 0) -> str:
     total = counts["total_iterations"] or counts["iterations"]
     tests = counts["tests"]
     text = (
@@ -116,6 +134,14 @@ def summary_line(label: str, counts: dict[str, object], load: str) -> str:
     failures = counts["failures"]
     if failures:
         text += "; failures: " + ", ".join(f"{reason} ×{count}" for reason, count in failures.items())
+    reported = counts.get("nextest_summary")
+    if reported and tuple(reported) != (counts["iterations"], counts["failed_iterations"]):
+        text += (f"; WARNING: nextest reported {reported[0]} iterations with {reported[1]} failed, "
+                 "so the counts above missed status lines (new nextest output format?)")
+    if status is None:
+        text += "; ERROR: the run did not complete (see the error above)"
+    elif status != 0 and not failures:
+        text += f"; ERROR: exited {status} without a test failure (build, selection or setup; see output above)"
     return text
 
 
@@ -167,8 +193,18 @@ def prune(stress_dir: Path, now: float | None = None) -> None:
                 shutil.rmtree(entry, ignore_errors=True)
 
 
+def usable_cpus() -> int:
+    """CPUs this process may run on (affinity-aware), not the whole host's."""
+    counter = getattr(os, "process_cpu_count", None)
+    if counter is not None:
+        return counter() or 1
+    with contextlib.suppress(AttributeError, OSError):
+        return len(os.sched_getaffinity(0)) or 1
+    return os.cpu_count() or 1
+
+
 def default_load_cpus() -> int:
-    return 2 * (os.cpu_count() or 1)
+    return 2 * usable_cpus()
 
 
 def stream(command: list[str], cwd: Path, env: dict[str, str], log, tally: StressTally) -> int:
@@ -177,18 +213,22 @@ def stream(command: list[str], cwd: Path, env: dict[str, str], log, tally: Stres
     assert process.stdout is not None
     try:
         for line in process.stdout:
-            log.write(line)
+            log.write(ANSI_RE.sub("", line))
             sys.stdout.write(line)
             sys.stdout.flush()
             tally.feed(line)
         return process.wait()
     except BaseException:
+        # Keep draining nextest's output while it cancels: a full pipe would block
+        # it before it can clean up the test processes it started.
         process.terminate()
-        with contextlib.suppress(subprocess.TimeoutExpired):
-            process.wait(timeout=30)
-        if process.poll() is None:
+        try:
+            rest, _ = process.communicate(timeout=60)
+            log.write(rest or "")
+            sys.stdout.write(rest or "")
+        except subprocess.TimeoutExpired:
             process.kill()
-            process.wait()
+            process.communicate()
         raise
 
 
@@ -199,18 +239,7 @@ def run_stress(args, gate) -> int:
     intentd_dir = (repo_root / args.intentd_dir).resolve()
     stress_dir = Path(args.cache_dir).expanduser().resolve() / "stress"
     selection = ["--workspace", "-E", args.filterset]
-    fixture = gate.callback_fixture_identity(intentd_dir) if gate.needs_callback_fixture([selection]) else None
-    transfer = gate.transfer_fixture_identity(repo_root) if gate.needs_transfer_fixture([selection]) else None
-    cargo_config = gate.compact_config(intentd_dir)
-    gate.announce_compact()
-    env = gate.nextest_env()
-    if fixture is not None:
-        env[gate.CALLBACK_FIXTURE_ENV] = fixture["root"]
-        env.pop("NODE_OPTIONS", None)
-    if transfer is not None:
-        env[gate.TRANSFER_FIXTURE_ENV] = transfer["root"]
-    if cargo_config:
-        env["CARGO_INCREMENTAL"] = "0"
+    env, _, _, cargo_config = gate.prepare_test_env(repo_root, intentd_dir, [selection], label)
     cpus = args.load_cpus if args.load_cpus is not None else default_load_cpus()
     load = f"LOAD=1 ({cpus} cpu + fsync)" if args.load == "1" else "LOAD=0"
     prune(stress_dir)
@@ -224,6 +253,10 @@ def run_stress(args, gate) -> int:
             output_args = gate.isolated_output_args(intentd_dir, cargo_config, env)
             gate_lock = gate.acquire_gate_lock(output_args)
             print(f"[{label}] {gate.timeout_description(env)}", flush=True)
+            # Fail before the build when this nextest cannot stress-test.
+            if "--stress-count" not in gate.run(["cargo", "nextest", "run", "--help"], intentd_dir, env):
+                raise RuntimeError("this cargo-nextest has no --stress-count; "
+                                   "run 'cargo install cargo-nextest --locked' to upgrade")
             # Build (and list) before any load starts, so the load only slows the tests.
             gate.run(["cargo", "nextest", "list", *selection, "--build-jobs", args.build_jobs,
                       "--message-format", "json", *cargo_config, *output_args], intentd_dir, env)
@@ -231,13 +264,16 @@ def run_stress(args, gate) -> int:
                 "cargo", "nextest", "run", *selection,
                 "--retries", "0", "--stress-count", str(args.stress_count), "--no-fail-fast",
                 "--failure-output", "immediate", "--success-output", "never",
+                # The tally counts one status line per run: never let the
+                # environment or a profile hide PASS lines.
+                "--status-level", "pass", "--final-status-level", "fail",
                 "--build-jobs", args.build_jobs, "--test-threads", args.test_threads,
                 *cargo_config, *output_args,
             ]
             (record_dir / "command.json").write_text(json.dumps(command, indent=2) + "\n")
             print(f"[{label}] {load}; running {args.stress_count} iterations with retries off", flush=True)
             with open(record_dir / "output.log", "w", encoding="utf-8") as log, \
-                    tempfile.TemporaryDirectory(prefix="intent-stress-load-") as scratch, \
+                    tempfile.TemporaryDirectory(prefix="load-", dir=stress_dir) as scratch, \
                     (stress_load(cpus, Path(scratch)) if args.load == "1" else contextlib.nullcontext()):
                 status = stream(command, intentd_dir, env, log, tally)
         except subprocess.CalledProcessError as error:
@@ -252,7 +288,7 @@ def run_stress(args, gate) -> int:
             counts = tally.counts()
             if status == 0 and counts["failed"]:
                 status = 1
-            line = summary_line(label, counts, load)
+            line = summary_line(label, counts, load, status)
             (record_dir / "summary.txt").write_text(line + "\n", encoding="utf-8")
             (record_dir / "summary.json").write_text(json.dumps({
                 **counts, "filterset": args.filterset, "stress_count": args.stress_count,

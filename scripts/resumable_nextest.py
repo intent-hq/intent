@@ -1590,18 +1590,16 @@ def prune_stale_executables(output_args: list[str], listings: list[str],
     return freed
 
 
-def run_nextest(args: argparse.Namespace) -> int:
-    label = args.label
-    no_fail_fast = args.no_fail_fast == "1"
-    repo_root = Path(args.repo_root).resolve()
-    intentd_dir = (repo_root / args.intentd_dir).resolve()
-    cache_dir = Path(args.cache_dir).expanduser().resolve()
-    plans = split_plans(args.plan)
+def prepare_test_env(repo_root: Path, intentd_dir: Path, plans: list[list[str]], label: str):
+    """Fixture preparation and child env shared by every runner mode (test, stress).
+
+    Returns (env, callback fixture identity, transfer fixture identity, compact
+    Cargo config args); the identities are None when the plans cannot need them.
+    """
     fixture_identity = callback_fixture_identity(intentd_dir) if needs_callback_fixture(plans) else None
     transfer_identity = transfer_fixture_identity(repo_root) if needs_transfer_fixture(plans) else None
     cargo_config = compact_config(intentd_dir)
     announce_compact()
-    prune(cache_dir)
     env = nextest_env()
     if fixture_identity is not None:
         env[CALLBACK_FIXTURE_ENV] = fixture_identity["root"]
@@ -1614,6 +1612,19 @@ def run_nextest(args: argparse.Namespace) -> int:
         env[TRANSFER_FIXTURE_ENV] = transfer_identity["root"]
     if cargo_config:
         env["CARGO_INCREMENTAL"] = "0"
+    return env, fixture_identity, transfer_identity, cargo_config
+
+
+def run_nextest(args: argparse.Namespace) -> int:
+    label = args.label
+    no_fail_fast = args.no_fail_fast == "1"
+    repo_root = Path(args.repo_root).resolve()
+    intentd_dir = (repo_root / args.intentd_dir).resolve()
+    cache_dir = Path(args.cache_dir).expanduser().resolve()
+    plans = split_plans(args.plan)
+    env, fixture_identity, transfer_identity, cargo_config = prepare_test_env(
+        repo_root, intentd_dir, plans, label)
+    prune(cache_dir)
     # Resolve before accepting resume evidence: unchanged config text can expand
     # to different paths (Cargo home templates or retargeted output symlinks).
     try:
