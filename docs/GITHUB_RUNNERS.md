@@ -404,8 +404,11 @@ runner-only host, leaving a core or two unpinned is optional.
    On a host without the cache services the installer skips their drop-ins.
    It runs `supervisor.sh --host-check` and changes no slot if the CPU sets or
    the total memory do not fit the host.
-6. **Smoke test.** Run `supervisor.sh --group-check` (every fleet runner in the
-   group), then dispatch the
+6. **Smoke test** right after installing: an online slot takes any queued job
+   carrying its labels, whatever the variables in step 7 say (they only cap how
+   many jobs `runner-route` sends to a pool), so if this fails, stop the slots
+   (`systemctl stop 'github-runner@*'`) until it passes. Run
+   `supervisor.sh --group-check` (every fleet runner in the group), then dispatch the
    [smoke workflow](../.github/workflows/intent-cache-smoke.yml)
    on the new host:
    `gh workflow run intent-cache-smoke.yml --repo intent-hq/intent -f host=<host>`.
