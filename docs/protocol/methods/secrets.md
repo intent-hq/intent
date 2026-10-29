@@ -24,6 +24,12 @@ captures the effective value, persists it in its feature snapshot, and uses it
 for the prompt, MCP bridge, help and dispatch checks. A setting change applies
 to new sessions only.
 
+Because `ws.host.exec` is the only way to use a secret, the effective feature is
+on only when `agentFeatures.secretRequests` is on, `agentFeatures.hostExec` is
+on, and the session's help variant exposes `ws.host.exec`. A session missing any
+of these never sees `ws.secret` or `secretEnv`, so an agent is never told to use
+a secret it cannot use.
+
 When the effective feature is off, omit the `ws.secret` namespace and the
 `secretEnv` option from discovery and help, and reject `ws.secret.*` calls and
 any `ws.host.exec` call carrying `secretEnv` with the existing feature-disabled
@@ -41,7 +47,10 @@ A secret is owned by the **agent that requested it**, keyed by
 `(workspaceId, agentId, name)`. No other agent can use, list or forget it,
 including that agent's sub-agents and other agents in the same workspace. A
 background hook runs as the agent that scheduled it, so it can use that agent's
-secrets.
+secrets through `secretEnv`. A hook cannot call `ws.secret.request`: it has no
+turn to end and no user-facing chat. When a hook gets `secret-unavailable`, its
+code should return `{ dispatch: true, message }` so the owning agent wakes and
+asks the user itself.
 
 A held secret is dropped when any of these happens:
 
@@ -52,7 +61,10 @@ A held secret is dropped when any of these happens:
 - intentd restarts.
 
 Pending requests are held in memory the same way and are lost on restart. There
-is no time-based expiry.
+is no time-based expiry, but an agent may hold at most **8 pending requests**.
+A request for a name that already has a pending request from the same agent
+returns that request's `requestId` and adds no new card. A new request beyond the
+cap fails, telling the agent to wait for the user to answer the open ones.
 
 ### Names
 
@@ -77,8 +89,9 @@ ws.secret.forget(name) → { ok, forgotten }
   attachment (§7). It returns at once; the agent should end its turn. Only
   top-level agents may call it: sub-agent frames are denied with a redirect to
   `ws.agent.requestDiscussion` / `ws.agent.reportToParent`, like
-  `ws.app.question.ask`. A request for a name the agent already holds succeeds
-  and, once provided, replaces the value.
+  `ws.app.question.ask`. Calls from a background hook are denied (see Storage
+  and lifetime). A request for a name the agent already holds succeeds and,
+  once provided, replaces the value.
 - `list` returns the calling agent's own data only: `secrets: [{ name }]` and
   `pendingRequests: [{ requestId, name }]`. It never returns values.
 - `forget` drops the calling agent's secret; `forgotten` is `false` when the
@@ -94,8 +107,12 @@ tool error below.
 
 Every exact occurrence of a resolved value in the returned `stdout` and `stderr`
 is replaced with `[secret:NAME]`, including an occurrence cut off by output
-truncation. Redaction covers exact bytes only: an encoded, split or transformed
-value is not detected.
+truncation. Redaction is a single left-to-right pass over the raw output that,
+at each position, replaces the **longest** matching value among all resolved
+secrets; replaced text is never scanned again. So when one value contains
+another, the longer one is hidden whole, and a value that happens to look like a
+placeholder cannot reveal part of another. Redaction covers exact bytes only: an
+encoded, split or transformed value is not detected.
 
 `secretEnv` is accepted only by the agent binding `ws.host.exec` (including from
 a background hook). The wire `host.exec` and `host.execStream` methods (§5.14)
@@ -139,8 +156,17 @@ Decoded, `resource.text` is:
 }
 ```
 
-The payload never contains a value. A secret-request block does **not** set the
-pending-questions marker (§5.5).
+The payload never contains a value.
+
+**Attention.** A turn that drains a secret-request block sets the
+pending-questions marker (§5.5) on that message exactly like a question block,
+so the workspace shows that it needs the user. The marker clears when nothing on
+the message is still open: every question is answered (the existing
+`question_answers` intake) and every secret request on it has been provided,
+declined or lost. `agent.dismissQuestions` on the message also drops its pending
+secret requests and delivers one declined notice per request. Provided and
+declined notices are **user-origin** deliveries for the turn-begin attention
+clear (§6.5, agent attention details), because the user caused them.
 
 ### Client-facing router methods
 
@@ -148,12 +174,14 @@ pending-questions marker (§5.5).
 | --- | --- | --- |
 | secret.provide | workspaceId (req), requestId (req), value (req, string) | `{ ok: true, requestId, name }` — stores the value for the request's agent and delivers the provided notice |
 | secret.dismiss | workspaceId (req), requestId (req) | `{ ok: true, requestId, name }` — drops the pending request and delivers the declined notice |
-| secret.list | workspaceId (req), agentId (req) | `{ secrets: [{ name }], pendingRequests: [{ requestId, name }] }` — names only |
+| secret.list | workspaceId (req), agentId (req) | `{ secrets: [{ name }], pendingRequests: [{ requestId, name }], answeredRequests: [{ requestId, name, outcome }] }` — names only; `outcome` is `"provided"` or `"declined"` |
 | secret.forget | workspaceId (req), agentId (req), name (req) | `{ ok: true, forgotten: boolean }` |
 
 All four require the same authority as `agent.sendMessage` to the named agent
 (§5.5, §5.48); a caller without it receives `-32003`. `secret.provide` and
-`secret.dismiss` take the agent from the pending request, never from params.
+`secret.dismiss` take the agent from the pending request, never from params, and
+check authority against the request's own workspace and agent. A request whose
+workspace differs from `params.workspaceId` is treated as unknown.
 
 `secret.provide` rules:
 
@@ -178,10 +206,18 @@ agent starts a turn; a busy agent queues it like a question answer):
 | Provided | The user provided secret OPENROUTER_API_KEY. Use it with ws.host.exec and secretEnv: ["OPENROUTER_API_KEY"]. | `{ type: "secret_provided", source: "system", requestId, name }` |
 | Declined | The user declined to provide secret OPENROUTER_API_KEY. | `{ type: "secret_declined", source: "system", requestId, name }` |
 
-Clients derive a card's state from the transcript and `secret.list`: a later
-user row tagged with the card's `requestId` marks it provided or declined;
-otherwise the card is pending while its `requestId` is in `pendingRequests`, and
-expired when it is not.
+The daemon remembers each answered request's outcome in memory
+(`answeredRequests`, until restart), so a client can show the right state while
+the notice is still queued behind a busy turn. Clients derive a card's state in
+this order:
+
+1. a user row tagged with the card's `requestId`, or a matching
+   `answeredRequests` entry: provided or declined;
+2. the `requestId` is in `pendingRequests`: pending;
+3. otherwise: expired, and the card tells the user to ask the agent again.
+
+The client that answered uses its own `secret.provide` / `secret.dismiss` result
+immediately.
 
 ### Verification requirements
 

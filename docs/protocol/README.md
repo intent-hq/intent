@@ -424,4 +424,6 @@ are contract checks, not proof of packaged native support.
 [§5.56 Secret requests](./methods/secrets.md) lets a top-level agent ask the
 user for a secret through a masked card. The daemon holds values in memory only,
 scoped to the requesting agent, and passes them only to that agent's
-`ws.host.exec` calls; values never reach the model, the transcript or disk.
+`ws.host.exec` calls. Intent itself never stores or sends a value, and redacts
+exact matches from that output; a command that prints a transformed value, or
+writes one to disk, is outside that protection.
