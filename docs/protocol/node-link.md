@@ -1755,10 +1755,22 @@ owner (`0600`), because it holds the lease token:
 
 `nodeId` is 1-128 letters, digits, `-`, `_` or `.`; `name` defaults to `nodeId`
 and is the agent projection's `nodeName`. `endpoint` is exactly
-`wss://host:port`. Unknown members are rejected. These are the fields
-`node.register` takes in the [prepared contract](./methods/nodes.md), so moving
-to registration later changes only where they come from. Errors are
+`wss://host:port`. Unknown members are rejected. Errors are
 `remote-node-config: <what is wrong>` and never quote the token.
+
+This file is not the prepared [`node.register`](./methods/nodes.md) request in
+another form. Registration differs in every member that matters:
+
+| | `remote-node.json` (single-node link) | `node.register` (prepared) |
+| --- | --- | --- |
+| Endpoint | `wss://host:port`; head dials `/node/link` and `/node/git` | `wss://host:port/node` |
+| Certificate pin | 64 hex digits, any case, colons allowed | Lowercase 64-hex DER leaf fingerprint, no separators |
+| Secret | `token`: a long-lived lease token head presents on every connection | `bootstrapToken`: a one-time enrollment token; head then issues a separate lease token |
+| Idempotency | None: the file is read at daemon start | `requestId` UUID for reconciling a lost response |
+| Node id | `nodeId` chosen by the operator | Not a request member; returned in the result's `node` |
+
+Moving from this file to registration is a change of protocol and enrollment
+flow, not only of where the values come from.
 
 The operator runs the same installed binary on the node as
 `intentd node --config <file> --root <dir>`. The node configuration has the same
