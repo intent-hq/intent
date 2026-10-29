@@ -100,6 +100,12 @@ choose another computer because the primary lacks support. The flag grants no
 permission and does not assert current native readiness. Current browser-only
 capability behavior below remains unchanged until this extension is implemented.
 
+**Secret requests (prepared additive extension).** Exactly integer
+`server.capabilities.secretRequests: 1` advertises [§5.56](./secrets.md):
+secret-request resource blocks and the `secret.*` router methods. Clients render
+secret-request cards and call those methods only when it is present. The flag
+grants no permission and says nothing about the agent feature setting.
+
 **Workspace labels (additive).** Exactly integer `server.capabilities.workspaceLabels: 1`,
 also returned by `system.capabilities`, advertises the
 [§5.1 workspace label contract](./workspace.md#workspace-labels): the optional

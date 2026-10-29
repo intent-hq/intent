@@ -1,0 +1,196 @@
+> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.56 Secret requests.
+
+## 5.56 Secret requests *(prepared)*
+
+This is a **prepared additive contract**, not implemented by the current pins.
+It lets a top-level agent on any provider ask the user for a secret (an API key
+or token) through a masked input card, and use it in `ws.host.exec` without the
+model ever receiving the value.
+
+### Status and discovery
+
+The daemon advertises `server.capabilities.secretRequests: 1` (§5.17) only when
+the complete contract below is implemented. Missing or unknown values mean
+unsupported. Clients render secret-request cards and call the `secret.*` methods
+only when the capability is present. Capability describes implementation, not
+permission.
+
+### Agent feature availability
+
+`agentFeatures.secretRequests` is a boolean Agent Feature labelled **Secret
+requests**, default **false** (see [settings](./settings.md)). It follows the
+captured-at-creation rule of the other agent features: each new agent session
+captures the effective value, persists it in its feature snapshot, and uses it
+for the prompt, MCP bridge, help and dispatch checks. A setting change applies
+to new sessions only.
+
+When the effective feature is off, omit the `ws.secret` namespace and the
+`secretEnv` option from discovery and help, and reject `ws.secret.*` calls and
+any `ws.host.exec` call carrying `secretEnv` with the existing feature-disabled
+tool-failure convention. The `secret.*` router methods stay callable so a client
+can still dismiss or forget; they never create a request.
+
+### Storage and lifetime
+
+Secret values live **only in intentd process memory**. They are never written
+to SQLite, the secret store file, settings, logs, tracing, Sentry, events, the
+transcript, or any agent-facing result. Values are wiped from memory when
+dropped.
+
+A secret is owned by the **agent that requested it**, keyed by
+`(workspaceId, agentId, name)`. No other agent can use, list or forget it,
+including that agent's sub-agents and other agents in the same workspace. A
+background hook runs as the agent that scheduled it, so it can use that agent's
+secrets.
+
+A held secret is dropped when any of these happens:
+
+- the owning agent calls `ws.secret.forget(name)`, or a client calls
+  `secret.forget`;
+- the owning agent is deleted or retired;
+- the workspace is archived or deleted;
+- intentd restarts.
+
+Pending requests are held in memory the same way and are lost on restart. There
+is no time-based expiry.
+
+### Names
+
+A secret name is 1–64 characters of `A`–`Z`, `0`–`9` and `_`, starting with a
+letter, for example `OPENROUTER_API_KEY`. Names are case-sensitive and never
+trimmed: any other input is rejected.
+
+### Agent API (MCP-only)
+
+These bindings are MCP-only; there is no wire method that creates a request,
+per the §6.8 principle.
+
+```text
+ws.secret.request({ name, reason }) → { ok, requestId, message }
+ws.secret.list() → { secrets, pendingRequests }
+ws.secret.forget(name) → { ok, forgotten }
+```
+
+- `request` validates `name` and a non-empty trimmed `reason` (at most 500
+  characters), mints a `requestId` (`sec-` followed by a random nonce), records
+  a pending request for the calling agent, and registers an `AtTurnEnd` turn
+  attachment (§7). It returns at once; the agent should end its turn. Only
+  top-level agents may call it: sub-agent frames are denied with a redirect to
+  `ws.agent.requestDiscussion` / `ws.agent.reportToParent`, like
+  `ws.app.question.ask`. A request for a name the agent already holds succeeds
+  and, once provided, replaces the value.
+- `list` returns the calling agent's own data only: `secrets: [{ name }]` and
+  `pendingRequests: [{ requestId, name }]`. It never returns values.
+- `forget` drops the calling agent's secret; `forgotten` is `false` when the
+  agent held no secret of that name.
+
+**Using a secret.** `ws.host.exec` accepts an additive `secretEnv` option:
+either an array of names, where each environment variable has the secret's name,
+or an object mapping an environment variable name to a secret name. The daemon
+resolves every listed secret from the calling agent's secrets before spawning
+and overlays them last, after the caller's `env`. If any listed secret is
+missing, nothing is spawned and the call fails with the `secret-unavailable`
+tool error below.
+
+Every exact occurrence of a resolved value in the returned `stdout` and `stderr`
+is replaced with `[secret:NAME]`, including an occurrence cut off by output
+truncation. Redaction covers exact bytes only: an encoded, split or transformed
+value is not detected.
+
+`secretEnv` is accepted only by the agent binding `ws.host.exec` (including from
+a background hook). The wire `host.exec` and `host.execStream` methods (§5.14)
+reject it with `-32602`, because a client connection has no agent identity.
+`ws.script.create` rejects a `secretEnv` key with an error saying that secrets
+work only with `ws.host.exec`; saved scripts never receive secrets.
+
+**`secret-unavailable` tool error.** The text starts with
+`secret-unavailable:` and names the missing secret, then instructs the agent:
+secrets are held in memory and are lost when intentd restarts; call
+`ws.secret.request` with that name and a reason, then end the turn. The same
+error is returned whether the secret was never provided, was forgotten, was
+lost on restart, or belongs to another agent; it never reveals which.
+
+**Provider shells are out of scope.** Secrets are never injected into the
+provider's own processes (for example Claude Code's Bash tool or Codex's exec),
+and Intent cannot redact output the provider returns to its model directly.
+
+### Turn-end resource
+
+Each `ws.secret.request` call drains at turn end as a trailing `resource` block
+on the final persisted assistant message, in call order, exactly like question
+blocks (§7):
+
+```json
+{ "type": "resource", "resource": {
+    "uri": "intent-secret-request://sec-7m2k9x4q1t8a",
+    "name": "OPENROUTER_API_KEY",
+    "mimeType": "application/vnd.intent.secret-request+json",
+    "text": "<secret request JSON>" } }
+```
+
+Decoded, `resource.text` is:
+
+```json
+{
+  "requestId": "sec-7m2k9x4q1t8a",
+  "agentId": "agent-…",
+  "name": "OPENROUTER_API_KEY",
+  "reason": "Needed to run the integration tests against OpenRouter."
+}
+```
+
+The payload never contains a value. A secret-request block does **not** set the
+pending-questions marker (§5.5).
+
+### Client-facing router methods
+
+| Method | Params | Result |
+| --- | --- | --- |
+| secret.provide | workspaceId (req), requestId (req), value (req, string) | `{ ok: true, requestId, name }` — stores the value for the request's agent and delivers the provided notice |
+| secret.dismiss | workspaceId (req), requestId (req) | `{ ok: true, requestId, name }` — drops the pending request and delivers the declined notice |
+| secret.list | workspaceId (req), agentId (req) | `{ secrets: [{ name }], pendingRequests: [{ requestId, name }] }` — names only |
+| secret.forget | workspaceId (req), agentId (req), name (req) | `{ ok: true, forgotten: boolean }` |
+
+All four require the same authority as `agent.sendMessage` to the named agent
+(§5.5, §5.48); a caller without it receives `-32003`. `secret.provide` and
+`secret.dismiss` take the agent from the pending request, never from params.
+
+`secret.provide` rules:
+
+- `value` must be a non-empty string of at most 16 KiB (UTF-8). It is not
+  trimmed.
+- The request must be pending. An unknown, already answered or lost request
+  fails with `-32602` and `data.code: "secret-request-unknown"`; the client
+  should tell the user to ask the agent to request the secret again.
+- Answering is single-use: the request is removed atomically, so two clients
+  cannot both answer it.
+- The `value` parameter is never logged or echoed. Transport request logging,
+  tracing spans, error messages and Sentry breadcrumbs must omit it.
+
+### Agent notices
+
+After `secret.provide` or `secret.dismiss`, the daemon delivers a user-role
+system message to the owning agent through the ordinary delivery path (an idle
+agent starts a turn; a busy agent queues it like a question answer):
+
+| Outcome | Text (example) | `messageMetadata` |
+| --- | --- | --- |
+| Provided | The user provided secret OPENROUTER_API_KEY. Use it with ws.host.exec and secretEnv: ["OPENROUTER_API_KEY"]. | `{ type: "secret_provided", source: "system", requestId, name }` |
+| Declined | The user declined to provide secret OPENROUTER_API_KEY. | `{ type: "secret_declined", source: "system", requestId, name }` |
+
+Clients derive a card's state from the transcript and `secret.list`: a later
+user row tagged with the card's `requestId` marks it provided or declined;
+otherwise the card is pending while its `requestId` is in `pendingRequests`, and
+expired when it is not.
+
+### Verification requirements
+
+An implementation must prove, with tests that plant a sentinel value:
+
+- the value never appears in any agent-facing egress (`workspace_api` results,
+  wake metadata, `agent.list`, `agent.getConversation`, events) for the owning
+  agent or a second agent in the same workspace;
+- the value never appears in the SQLite store, the secret store file, or daemon
+  logs after a provide, a `ws.host.exec` use and a restart;
+- a second agent's `secretEnv` use and `ws.secret.list` do not see the first
+  agent's secret.

@@ -139,6 +139,7 @@ capability and makes no public version claim.
 | §5.53 GitLab project checkout (prepared) | [methods/repository-checkout.md](./methods/repository-checkout.md) |
 | §5.54 Provider profiles (prepared) | [methods/provider-profiles.md](./methods/provider-profiles.md) |
 | §5.55 Workspace discussions (prepared) | [methods/multiplayer.md](./methods/multiplayer.md#555-workspace-discussions) |
+| §5.56 Secret requests (prepared) | [methods/secrets.md](./methods/secrets.md) |
 | MCP `ws.*` binding signature index (generated; not wire-routable) | [methods/mcp-bindings.md](./methods/mcp-bindings.md) |
 
 `make check-protocol-catalog` (run by CI's `docs-check` job) enforces that the [05-method-catalog.md](./05-method-catalog.md) tables, the method tables in `methods/*.md`, and intentd's `intent-transport` catalog stay in sync (read from the `packages/intentd` checkout; like `check-event-catalog` and `check-protocol-field-parity`, the run names the checkout and the recorded pin on stdout and warns on stderr when they differ): every method documented in a `methods/*.md` table must appear in the catalog, and every method the pinned intentd catalog dispatches must have a catalog entry. The docs lead the pin: document a new method here first — a `methods/*.md` table row plus its catalog entry in one monorepo change; the checker only warns while the pinned `catalog.rs` does not carry it yet — then merge the intentd PR, and the automatic submodule bump passes once both exist. The reverse order fails: a pinned method with no docs row is a CI error, and once the `CI Gate` check is required it holds the rolling bump PR at the merge queue until the docs row lands. The same checks also run upstream: every intentd and cloudlands-fe PR calls the monorepo's reusable `.github/workflows/consumer-checks.yml` (`monorepo-consumer-checks`) with its own head in place of the pin, so a missing docs row is red on that PR before it merges, not on the bump afterwards.
@@ -417,3 +418,10 @@ The shared-host extension is [§5.49 Shared host membership](./methods/shared-ho
 Windows sessions, agent startControl/endControl, local Stop, consent and native
 execution. Its [static fixtures](./fixtures/desktop-control/contract.test.mjs)
 are contract checks, not proof of packaged native support.
+
+### Prepared secret requests
+
+[§5.56 Secret requests](./methods/secrets.md) lets a top-level agent ask the
+user for a secret through a masked card. The daemon holds values in memory only,
+scoped to the requesting agent, and passes them only to that agent's
+`ws.host.exec` calls; values never reach the model, the transcript or disk.

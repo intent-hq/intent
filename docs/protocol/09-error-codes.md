@@ -150,6 +150,16 @@ have been delivered, so replaying the whole input is unsafe),
 `-32003` for authority refusal. Action failures distinguish not-started, partial
 and unknown execution; an uncertain input outcome must never be replayed.
 
+### Prepared secret request errors
+
+[§5.56](./methods/secrets.md#client-facing-router-methods) uses `-32602` with
+`data.code: "secret-request-unknown"` when `secret.provide` or `secret.dismiss`
+names a request that is unknown, already answered, or lost on restart, and with
+`data.code: "invalid-params"` for an empty or oversized value or an invalid name.
+`-32003` means the caller lacks send authority for the target agent. No error
+message or `data` ever contains the submitted value. The agent-facing
+`secret-unavailable` tool error is described in §5.56.
+
 ### Prepared provider profile errors
 
 [§5.54](./methods/provider-profiles.md) uses `-32602` with these `error.data.code`

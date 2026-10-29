@@ -719,6 +719,14 @@ the terminal `agent:stream:end` carries the drained blocks as `trailingBlocks` (
 so a client that finalizes the in-flight message from accumulated chunks can append them
 immediately instead of waiting for a transcript re-fetch.
 
+**Secret-request resource blocks (`AtTurnEnd`, prepared).** A third resource MIME type,
+`application/vnd.intent.secret-request+json`, carries requests an agent makes with the MCP
+`ws.secret.request` binding. These blocks use the same `AtTurnEnd` drain, ordering and
+`trailingBlocks` delivery as question blocks, with an `intent-secret-request://<requestId>` URI and
+the request's `name` as `resource.name`. The payload holds only `requestId`, `agentId`, `name` and
+`reason`, never a value, and does not set the pending-questions marker. See
+[§5.56 Secret requests](./methods/secrets.md#turn-end-resource).
+
 *The `ws.app.question.ask` binding.* JS signature
 `ws.app.question.ask({ question, header, options, explanation?, multiSelect? })` →
 `{ ok: true, attachmentId, message }`. **One question per call** — the model calls it once per
