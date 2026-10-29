@@ -456,6 +456,10 @@ test('a job that lists pools takes a slot only in those pools, else bursts', asy
     runners,
   });
   assert.deepEqual(odd.slots, { typo: WARP['gh-linux-16x'], eight: WARP['gh-linux-8x'] });
+  // While WarpBuild's ubuntu-x64 queue is stuck, a listed job may take any pool serving its label
+  // rather than wait on WarpBuild with a slot free.
+  const stuck = await route({ env: slotEnv(jobs, env), runners, jobs: [warpJob(9, 'warp-ubuntu-2404-x64-16x', 11)] });
+  assert.deepEqual(stuck.slots, { a: XL, b: BIG, c: BIG });
 });
 test('xl and heavy capacity and demand are counted per pool label', async () => {
   // xl slots carry the generic labels too; only intent-cache-xl separates them.

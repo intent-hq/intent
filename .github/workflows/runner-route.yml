@@ -212,7 +212,8 @@ jobs:
             // A label listed under several pools takes the first with a free slot.
             const hosted = {
               // 16-core jobs prefer xl slots and overflow only to bigmem heavy
-              // slots before bursting: a 12 GB heavy slot OOM-kills their rustc.
+              // slots before bursting (unless a listed job's `pools` excludes
+              // bigmem): a 12 GB heavy slot OOM-kills their rustc.
               // 8-core jobs never take an xl slot and use every heavy slot.
               xl: ['gh-linux-16x'],
               bigmem: ['gh-linux-16x'],
@@ -227,7 +228,8 @@ jobs:
             // their burst runner directly, sized by `burst` when set (a CPU-bound
             // job keeps its slot size but bursts bigger); matrix legs are ranked
             // separately. A job with `pools` takes a slot only in the pools it lists
-            // (e.g. ["xl"]: no overflow to bigmem heavy slots).
+            // (e.g. ["xl"]: no overflow to bigmem heavy slots), except while its
+            // WarpBuild burst runner is stuck, when any pool serving its label will do.
             // Concurrent runs read the same free count before either job is queued,
             // so a pool may briefly run a job or two over its slot count.
             let requests = [];
@@ -241,7 +243,7 @@ jobs:
             const ranked = requests.map((r, i) => ({...r, i})).sort((a, b) => (b.rust === true) - (a.rust === true) || (b.minutes || 0) - (a.minutes || 0) || a.i - b.i);
             for (const r of ranked) {
               const runs = !Array.isArray(r.events) || r.events.includes(context.eventName);
-              const allowed = (k) => !Array.isArray(r.pools) || r.pools.includes(k);
+              const allowed = (k) => !Array.isArray(r.pools) || r.pools.includes(k) || warpStuck[family(cloud(r.burst || r.label)[0])] === true;
               const key = runs && Object.keys(hosted).find(k => k in slotsFree && hosted[k].includes(r.label) && allowed(k) && hasSlot(k));
               if (key) {
                 slotsFree[key] -= 1;
