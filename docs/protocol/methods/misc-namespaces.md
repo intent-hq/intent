@@ -284,12 +284,6 @@ never resurrects shipped bundles the operator excluded.
     `spec-writer`; older harness bundles keep Coordinator and `"orchestrator"`.
     Its advisory roster is `teamAgents: ["implementor"]`. The current bundle no
     longer includes `verifier`; historical bundles still resolve that ID.
-    New sessions can opt into the previous workflows with `developer-legacy`,
-    `coordinator-legacy`, `implementor-legacy`, or `verifier-legacy` (display names
-    end in `(Legacy)`). `coordinator-legacy` retains `"orchestrator"` and declares
-    `teamAgents: ["implementor-legacy","verifier-legacy"]`; the helpers retain
-    `"internal"`. These additional IDs do not claim the existing aliases or
-    replace the current defaults.
 - **Specialist aliases (`aliases?`) (additive,
   [intent-hq/intentd#1488](https://github.com/intent-hq/intentd/pull/1488))** — a
   specialist's alternate ids: spawn/delegation callers may address the specialist by any
