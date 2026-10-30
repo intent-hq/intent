@@ -1547,6 +1547,63 @@ class ResumableNextestTests(unittest.TestCase):
             record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
             self.assertFalse((record_dir / "complete").exists())
 
+    def test_resumed_empty_selection_fails_unless_it_reuses_its_own_passes(self):
+        # Regression: a sibling selection's reused pass gave a matched-nothing
+        # selection `--no-tests pass`, so a resumed run passed it vacuously.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            seed = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+            self.assertEqual(seed.execute(make_args(root, resume="1")), 0)
+
+            plans = ["-p alpha --test one", "-p beta --test two"]
+            listings = {
+                "alpha": json.dumps({"rust-suites": {"alpha::one": {
+                    "package-name": "alpha", "binary-name": "one", "binary-id": "alpha::one",
+                    "testcases": {"passes": {"ignored": False, "filter-match": {"status": "matches"}}}}}}),
+                "beta": json.dumps({"rust-suites": {"beta::two": {
+                    "package-name": "beta", "binary-name": "two", "binary-id": "beta::two",
+                    "testcases": {"unrelated": {"ignored": False, "filter-match": {
+                        "status": "mismatch", "reason": "expression"}}}}}}),
+            }
+            harness = PlannedRunHarness(root, [([], 0), ([], 0)])
+            original_run = harness.fake_run
+
+            def fake_run(command, cwd, env=None):
+                if command[:3] == ["cargo", "nextest", "list"]:
+                    harness.list_commands.append(command)
+                    return listings[command[command.index("-p") + 1]]
+                return original_run(command, cwd, env)
+
+            def fake_popen(command, **kwargs):
+                # nextest exits 4 for an empty run unless --no-tests relaxes it.
+                harness.run_commands.append(command)
+                harness.runs.pop(0)
+                empty_ok = command[-2:] in (["--no-tests", "pass"], ["--no-tests", "warn"])
+                return FakeProcess([], 0 if empty_ok else 4)
+
+            harness.fake_run = fake_run
+            harness.fake_popen = fake_popen
+            self.assertEqual(harness.execute(make_args(root, plan=plans, resume="1")), 4)
+            self.assertEqual(len(harness.run_commands), 2)
+            self.assertEqual(harness.run_commands[0][-2:], ["--no-tests", "pass"])
+            self.assertNotIn("--no-tests", harness.run_commands[1])
+
+            record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(plans))
+            self.assertFalse((record_dir / "complete").exists())
+            attempt = latest_attempt(record_dir)
+            receipt = json.loads((attempt / "run.json").read_text())
+            resumed = gate.identity_set(receipt["resumed_tests"])
+            self.assertEqual(resumed, {("alpha::one", "passes")})
+            inventories = gate.receipt_inventories(attempt, receipt)
+            for result in receipt["results"]:
+                gate.validate_result_config(attempt, receipt, result, resumed,
+                                            inventories[result["selection_index"] - 1])
+            # A saved command that relaxes the empty selection is rejected.
+            empty = receipt["results"][1]
+            legacy = dict(empty, command=[*empty["command"], "--no-tests", "pass"])
+            with self.assertRaisesRegex(ValueError, "saved command disagrees"):
+                gate.validate_result_config(attempt, receipt, legacy, resumed, inventories[1])
+
     def test_skipped_only_policy_requires_matched_tests(self):
         skipped = {"active": True, "skipped": True}
         runnable = {"active": True, "skipped": False}
@@ -1556,8 +1613,15 @@ class ResumableNextestTests(unittest.TestCase):
         self.assertFalse(gate.skipped_only({"b": unmatched}))
         self.assertFalse(gate.skipped_only({"a": skipped, "c": runnable}))
         self.assertEqual(gate.no_tests_args(set(), {"a": skipped}), ["--no-tests", "warn"])
-        self.assertEqual(gate.no_tests_args({("x", "y")}, {"a": skipped}), ["--no-tests", "pass"])
         self.assertEqual(gate.no_tests_args(set(), {"b": unmatched}), [])
+        # Only passes reused by this selection's runnable members relax the policy.
+        self.assertEqual(gate.no_tests_args({("x", "y")}, {"a": skipped}), ["--no-tests", "warn"])
+        self.assertEqual(gate.no_tests_args({("x", "y")}, {"b": unmatched}), [])
+        self.assertEqual(gate.no_tests_args({"b"}, {"b": unmatched}), [])
+        self.assertEqual(gate.no_tests_args({"a"}, {"a": skipped}), ["--no-tests", "warn"])
+        self.assertEqual(gate.no_tests_args({"c"}, {"b": unmatched, "c": runnable}), ["--no-tests", "pass"])
+        # A selection that runs real tests but reused none keeps nextest's default.
+        self.assertEqual(gate.no_tests_args({"a"}, {"c": runnable}), [])
 
     def test_planned_complete_marker_short_circuits_unless_forced(self):
         with tempfile.TemporaryDirectory() as temporary:
