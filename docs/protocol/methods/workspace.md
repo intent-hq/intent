@@ -2332,8 +2332,9 @@ skipped. The flag has no other effect: manual `workspace.archive`, auto-unarchiv
 automatic purge of already-archived workspaces are unchanged.
 
 `workspace.update` accepts `autoArchiveDisabled?: boolean`: **missing** leaves the stored
-value untouched, `true` turns the opt-out on and `false` turns it off; any other JSON type is
-`-32602 { code: "invalid-params" }`. Writes are **owner-only**: `autoArchiveDisabled` is not in
+value untouched, `true` turns the opt-out on and `false` turns it off; any other JSON type,
+including `null`, is `-32602 { code: "invalid-params" }`, as is setting it on the virtual Chief
+workspace (never persisted and never auto-archived). Writes are **owner-only**: `autoArchiveDisabled` is not in
 the collaborator allowlist, so a collaborator update carrying it is
 `-32003 { code: "forbidden" }` (§5.48). The applied value travels on `workspace:updated` as
 `changes.autoArchiveDisabled: boolean` (§6.5). The flag is part of the workspace row: it
