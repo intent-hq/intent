@@ -42,7 +42,7 @@ function workspaceTarget({ chief, pin, desktopSession, tabs }) {
   if (chief) return { kind: 'default' };
   if (pin) return { kind: 'pinned', clientId: pin };
   if (desktopSession) return { kind: 'client', clientId: desktopSession };
-  const claimed = tabs.find(t => t.owner);
+  const claimed = tabs.find(t => t.owner && !t.navigationOnly);
   return claimed ? { kind: 'client', clientId: claimed.host } : { kind: 'default' };
 }
 
@@ -75,7 +75,10 @@ test('fixture shape', () => {
     const ws = c.workspace;
     assert.deepEqual(Object.keys(ws).sort(), ['chief', 'desktopSession', 'pin', 'tabs'], c.id);
     if (ws.chief) assert.equal(ws.pin, null, `${c.id}: the Chief workspace cannot be pinned`);
-    for (const t of ws.tabs) assert.deepEqual(Object.keys(t).sort(), ['host', 'owner', 'tabId'], c.id);
+    for (const t of ws.tabs) {
+      assert.deepEqual(Object.keys(t).filter(key => key !== 'navigationOnly').sort(), ['host', 'owner', 'tabId'], c.id);
+      if ('navigationOnly' in t) assert.equal(typeof t.navigationOnly, 'boolean', c.id);
+    }
     const tabIds = ws.tabs.map(t => t.tabId);
     assert.deepEqual(tabIds, [...tabIds].sort(), `${c.id}: tabs are listed oldest first in ascending tabId order`);
     const conns = c.connections.map(x => x.id);

@@ -314,6 +314,15 @@ whether an Assistant chat settings-change card may change the setting. Older dae
 it. Clients then refuse card changes to daemon settings outside their own schema and keep
 their previous behavior for settings they map.
 
+**Prepared native-preview extension (additive; no new methods).**
+`client.hello` can advertise `capabilities.browserNavigation: true` separately from
+`browserExec`. Eligible navigation batches can fall back to the native iOS browser
+when desktop is unavailable; automation still requires `browserExec`. The optional,
+durable `BrowserTab.navigationOnly` marker prevents native tabs from being re-homed
+or treated as automation targets after reconnects, pin changes, or daemon restarts.
+See [§5.9 and §5.45](./methods/files-terminal-browser.md) for routing and ownership.
+Companion daemon and iOS support is required; this is not a shipped-release claim.
+
 **Version 15.1 — workspace discussions (additive).**
 [Workspace discussions](./methods/multiplayer.md#555-workspace-discussions) add
 `discussion.conversations`, `discussion.recipients`, `discussion.list`,

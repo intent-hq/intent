@@ -1520,6 +1520,13 @@ Reading the pin **together with** the live resolution is `workspace.getBrowserCl
 candidates a picker offers are `client.list` (§5.17). The virtual Chief workspace cannot be
 pinned (-32602) and never carries the field.
 
+**Prepared native-preview exception (§5.9).** The pin remains binding for new
+navigation requests, but addressing an existing native iOS tab always uses its physical
+host. Native claimed tabs are excluded from desktop driving-client inference and from
+pin-triggered re-homing. Setting a pin to a navigation-only native client does not move
+desktop tabs there. `workspace.getBrowserClient` describes the automation route; it does
+not by itself establish native navigation availability or page-control support.
+
 **Routed client (`target`) — additive, presence-detected.** `workspace.getBrowserClient` /
 `workspace.setBrowserClient` add `browserClient.target: { clientId, via }` when an **unpinned**
 workspace is routed to a specific client: `via: "desktop"` for the client of an active
