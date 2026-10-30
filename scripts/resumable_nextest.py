@@ -743,8 +743,16 @@ def skipped_only(members: dict) -> bool:
 
 
 def no_tests_args(resumed: set, members: dict) -> list[str]:
-    """nextest's empty-run policy: resumed passes or skipped-only selections pass."""
-    if resumed:
+    """nextest's empty-run policy for one selection.
+
+    An empty run passes only when this selection reused passes of its own
+    runnable members, and warns when it matched only skipped tests. Another
+    selection's reused passes never excuse a selection that matched nothing.
+    Receipts saved under the old run-wide rule fail validate_result_config,
+    so their passes rerun once instead of granting credit.
+    """
+    if any(identity in resumed for identity, meta in members.items()
+           if meta["active"] and not meta["skipped"]):
         return ["--no-tests", "pass"]
     if skipped_only(members):
         return ["--no-tests", "warn"]
