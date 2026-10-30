@@ -114,6 +114,14 @@ also returned by `system.capabilities`, advertises the
 cannot detect support by presence; they offer label actions only for exact integer `1`,
 and older daemons omit it.
 
+**Workspace auto-archive opt-out (additive).** Exactly integer
+`server.capabilities.workspaceAutoArchiveOptOut: 1`, also returned by `system.capabilities`,
+advertises the [§5.1 auto-archive opt-out contract](./workspace.md#auto-archive-opt-out): the
+optional `Workspace.autoArchiveDisabled` field, the `autoArchiveDisabled` param on
+`workspace.update` and `changes.autoArchiveDisabled` on `workspace:updated`. Workspaces that
+have not opted out omit the field, so clients cannot detect support by presence; they offer
+the opt-out only for exact integer `1`, and older daemons omit it.
+
 **Script run monitoring (prepared additive extension).**
 `server.capabilities.scriptMonitors: 1` advertises the entire
 [§5.8a contract](./script-monitors.md): durable run identity, required one-shot

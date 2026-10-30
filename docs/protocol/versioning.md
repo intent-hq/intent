@@ -76,6 +76,16 @@ unlabeled workspaces omit the field, support is detected by the exact-integer ca
 `workspaceLabels: 1` on `client.hello` `server.capabilities` and `system.capabilities`;
 older daemons omit it.
 
+Also within 15.2 (additive optional row field, update param and `workspace:updated` key;
+capability-gated; no method-catalog change, so no version bump): **workspace auto-archive
+opt-out** ([§5.1](./methods/workspace.md#auto-archive-opt-out)). `Workspace.autoArchiveDisabled`
+is a per-workspace boolean, omitted while `false` (the default); while `true` the automatic
+archive sweep skips the workspace. `workspace.update` sets it with
+`autoArchiveDisabled?: boolean` (owner-only), and `workspace:updated` carries
+`changes.autoArchiveDisabled: boolean`. Support is detected by the exact-integer capability
+`workspaceAutoArchiveOptOut: 1` on `client.hello` `server.capabilities` and
+`system.capabilities`; older daemons omit it.
+
 Also within 15.2 (additive optional result field; presence-detected; no method-catalog
 change, so no version bump): **`models.list` `warningKind`**
 ([§5.30](./methods/models-providers.md#530-modelslist--model-catalog)). A provider-scoped
