@@ -732,6 +732,25 @@ def inventory(text: str):
     return identities, aliases
 
 
+def skipped_only(members: dict) -> bool:
+    """True when a selection matched real tests and every one is skipped by default.
+
+    An empty selection (nothing active) is not skipped-only: it usually means a
+    selection or change-map bug, so it keeps nextest's fail-closed default.
+    """
+    active = [meta for meta in members.values() if meta["active"]]
+    return bool(active) and all(meta["skipped"] for meta in active)
+
+
+def no_tests_args(resumed: set, members: dict) -> list[str]:
+    """nextest's empty-run policy: resumed passes or skipped-only selections pass."""
+    if resumed:
+        return ["--no-tests", "pass"]
+    if skipped_only(members):
+        return ["--no-tests", "warn"]
+    return []
+
+
 CATEGORIES = ("executed-passed", "resumed-passed", "ignored", "failed", "unfinished")
 COMPATIBILITY_FIELDS = ("tree_key", "cargo_output_args", "cargo_config_args", "test_stack",
                         "callback_fixture", "transfer_fixture")
@@ -769,7 +788,7 @@ def receipt_inventories(directory: Path, receipt: dict):
 
 
 
-def validate_result_config(directory: Path, receipt: dict, result: dict, resumed: set) -> None:
+def validate_result_config(directory: Path, receipt: dict, result: dict, resumed: set, members: dict) -> None:
     index = result["selection_index"]
     for field in ("native_exit_code", "exit_code"):
         if result[field] is not None and type(result[field]) is not int:
@@ -802,8 +821,9 @@ def validate_result_config(directory: Path, receipt: dict, result: dict, resumed
                "--message-format-version", "0.1", *receipt["cargo_config_args"], *receipt["cargo_output_args"]]
     if receipt["no_fail_fast"]:
         command.append("--no-fail-fast")
-    if resumed:
-        command.extend(["--no-tests", "pass"])
+    # An older receipt for a skipped-only selection carries no flag and fails
+    # here; that run exited 4, so at most its sibling selections' passes rerun.
+    command.extend(no_tests_args(resumed, members))
     if result["command"] != command or result["plan"] != " ".join(receipt["selections"][index - 1]):
         raise ValueError("saved command disagrees with receipt")
 
@@ -997,7 +1017,7 @@ class Evidence:
             index = result["selection_index"]
             if type(index) is not int or index in results or not 1 <= index <= len(inventories):
                 raise ValueError("duplicate or invalid result selection")
-            validate_result_config(directory, receipt, result, resumed)
+            validate_result_config(directory, receipt, result, resumed, inventories[index - 1])
             outcomes, history, junit = selection_evidence(directory, result, inventories[index - 1], resumed)
             results[index] = (outcomes, history, junit)
         return receipt, inventories, results
@@ -1077,7 +1097,7 @@ def coverage_report(directory: Path, receipt: dict, credits: dict):
             result = results.get(index)
             if result is not None:
                 try:
-                    validate_result_config(directory, receipt, result, resumed)
+                    validate_result_config(directory, receipt, result, resumed, members)
                     outcomes, history, junit = selection_evidence(directory, result, members, resumed)
                 except (OSError, ValueError, KeyError, TypeError, AttributeError, ET.ParseError) as error:
                     report["errors"].append(f"selection {index}: {error}")
@@ -1797,6 +1817,7 @@ def run_nextest(args: argparse.Namespace) -> int:
                 "source_root": str(intentd_dir), "args": output_args,
             }, indent=2) + "\n")
             binary_ids: dict[tuple[str, str], str] = {}
+            inventories: list[dict] = []
             for index, selection in enumerate(selections, start=1):
                 list_output = run(
                     [
@@ -1810,7 +1831,8 @@ def run_nextest(args: argparse.Namespace) -> int:
                 )
                 write_atomic(record_dir / f"listing-{index}.json", list_output + "\n")
                 listings.append(list_output)
-                selected_ids = test_binary_ids(list_output)
+                members, selected_ids = inventory(list_output)
+                inventories.append(members)
                 run_record["selection_membership"][index - 1] = sorted(
                     {(binary_id, test) for (_, test), binary_id in selected_ids.items()})
                 save_receipt()
@@ -1818,8 +1840,8 @@ def run_nextest(args: argparse.Namespace) -> int:
                     if identity in binary_ids and binary_ids[identity] != binary:
                         raise RuntimeError("ambiguous nextest identity across selections")
                     binary_ids[identity] = binary
-            known_tests = set().union(*({i for i, meta in inventory((record_dir / f"listing-{n}.json").read_text())[0].items()
-                                        if meta["active"] and not meta["skipped"]} for n in range(1, len(selections) + 1)))
+            known_tests = set().union(*({i for i, meta in members.items() if meta["active"] and not meta["skipped"]}
+                                        for members in inventories))
             # Shared credit applies only to this invocation's active selection.
             resumed &= known_tests
             run_record["resumed_tests"] = sorted(resumed)
@@ -1869,8 +1891,8 @@ def run_nextest(args: argparse.Namespace) -> int:
                     ]
                     if no_fail_fast:
                         command.append("--no-fail-fast")
-                    if resumed:
-                        command.extend(["--no-tests", "pass"])
+                    policy = no_tests_args(resumed, inventories[index - 1])
+                    command.extend(policy)
                     outcomes: dict[str, str] = {}
                     suite_ignored: dict[str, int] = {}
                     result: dict[str, object] = {
@@ -1893,6 +1915,10 @@ def run_nextest(args: argparse.Namespace) -> int:
                     finally:
                         result.update(tally(outcomes, suite_ignored), exit_code=status)
                         save_receipt()
+                    if status == 0 and policy == ["--no-tests", "warn"]:
+                        count = sum(1 for meta in inventories[index - 1].values() if meta["active"])
+                        print(f"[{label}] WARNING: selection {index} matched only skipped/ignored tests "
+                              f"({count}); passed with no tests run", file=sys.stderr, flush=True)
                     if status != 0:
                         if not no_fail_fast:
                             break
