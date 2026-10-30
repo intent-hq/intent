@@ -2316,7 +2316,9 @@ live at every sweep, which runs about once an hour (the first run shortly after 
   to secondary roots.
 - **Path.** A due workspace is archived through `workspace.archive`, with the same
   active-work teardown and the same `workspace:updated` delta. The sweep re-reads the row
-  and re-checks that it is still idle with no agent turn running right before archiving.
+  and re-checks that it is still idle with no agent turn running right before archiving,
+  and the archive transaction itself re-reads `autoArchiveDisabled`, so an opt-out that
+  commits after that re-read still prevents the automatic archive.
 - Each workspace is archived independently; a failure is logged and retried on the next
   sweep.
 
