@@ -412,14 +412,19 @@ reports.
 `placement.nodeId` names an exposed machine; `os` / `arch` filter. With
 `target: "remote"` and no `nodeId`, the backend:
 
-1. keeps machines whose platform matches, whose provider status is `signed-in`
-   or `unknown`, and that list the requested model (or no model was requested);
-2. orders those with free capacity by fewest running agents, then most recently
+1. keeps machines whose platform matches, whose provider is installed (not
+   `cli-missing` or `prerequisite-missing`), and that list the requested model
+   (or no model was requested);
+2. for a launch without a profile, also skips machines whose provider status is
+   `signed-out` or `auth-failed`; a launch with a selected profile (any launch
+   that sends `profileEnv`) ignores the default account's sign-in status;
+3. orders those with free capacity by fewest running agents, then most recently
    used;
-3. connects on demand, refreshing a stale report first.
+4. connects on demand, refreshing a stale report first.
 
-Machines whose provider is `signed-out`, `auth-failed`, `cli-missing` or
-`prerequisite-missing` are skipped. The tool descriptions and
+So a machine with no default login but a valid selected profile stays a
+candidate, and a profile whose credentials fail does so at launch without
+marking the machine's healthy default account `auth-failed`. The tool descriptions and
 `ws.help("agent")` discovery are in
 [model-platform routing](../model-platform-routing.md#exposed-machines-prepared).
 

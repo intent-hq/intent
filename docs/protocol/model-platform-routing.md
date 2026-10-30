@@ -388,10 +388,16 @@ back to another. Without it, `target: "remote"` considers every exposed machine
 that is not revoked:
 
 1. platform matches `os` / `arch`;
-2. the provider's status is `signed-in` or `unknown` (`signed-out`,
-   `auth-failed`, `cli-missing` and `prerequisite-missing` are skipped);
-3. the requested model is listed, or no model was requested;
-4. free capacity under the machine's shared count and memory limits.
+2. the provider is installed: `cli-missing` and `prerequisite-missing` are
+   skipped for every launch;
+3. without a selected profile, the default account's status is `signed-in` or
+   `unknown` (`signed-out` and `auth-failed` are skipped); with a selected
+   profile (the launch sends `profileEnv`) that status is not consulted, because
+   it describes the machine's own login, not the profile's credentials;
+4. the requested model is listed, or no model was requested. The model list
+   comes from the machine's installed provider and is used for profile launches
+   too; a model the profile's account cannot use fails at launch, not here;
+5. free capacity under the machine's shared count and memory limits.
 
 Candidates are ordered by fewest running agents, then most recently used. The
 backend connects on demand and refreshes a report older than 1 hour before

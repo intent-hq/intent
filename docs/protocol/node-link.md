@@ -2199,9 +2199,25 @@ interface ProtocolRange { min: number; max: number } // inclusive; this contract
 The machine picks the highest version in both ranges and returns it as
 `welcome.protocol`. This design starts at **nodeProtocol 6**; the unshipped
 single-node version 5 is not in any supported range. `LaunchCommand.agentFeatures`
-and `LaunchCommand.isSubAgent` are required within protocol 6. Later additions to
-frames within a version are optional with defaults, so a backend and a machine on
-different builds interoperate inside the range.
+and `LaunchCommand.isSubAgent` are required within protocol 6.
+
+**Decoding within protocol 6.** This overrides the single-node rule that the
+`hello`, `welcome`, `launch`, `request` and `journal` bodies reject unknown
+members:
+
+- **Extensible envelopes.** In protocol 6 those bodies, `capabilitiesReply` and
+  `MachineCapabilities` *ignore* unknown members, and a missing optional member
+  takes its documented default. Later additions within protocol 6 must be
+  optional and safe to ignore, so a newer sender and an older receiver on the
+  same version interoperate.
+- **Closed payloads.** Security- or authority-bearing payloads stay strict: the
+  `LeaseBinding`, `ProfileEnvOverlay` and `CapacityRefusal` objects and the
+  `/node/git` OPEN body reject unknown or mistyped members as before.
+- **Not an optional field.** An addition that an older receiver must not
+  silently ignore (one that changes authority, isolation, credentials or the
+  meaning of an existing field) is not added within protocol 6. It needs a
+  higher protocol version, negotiated by the range, before a sender uses it.
+- Unknown `type` values remain `node-link-protocol`.
 
 With no common version the machine refuses the bind, and the backend reports the
 public error `machine-update-required`
@@ -2251,13 +2267,20 @@ interface MachineCapabilities {
 
 - **Models** come from the machine's own `models.list`; `cli-missing` and
   `prerequisite-missing` are its existing `warningKind` values.
-- **Sign-in.** Each provider has a cheap sign-in probe (for example
-  `claude auth status`, `codex login status`) run with the same resolved
-  environment as a launch, cached with a TTL and refreshed with the report. It
-  reports `signed-in` or `signed-out`; `unknown` means the provider has no probe
-  or the probe failed. A launch that fails on authentication sets `auth-failed`
-  until the next successful probe. Profile launches are not pre-probed, because
-  a profile's environment can differ; their auth failures surface at launch.
+- **Sign-in (default account only).** Each provider has a cheap sign-in probe
+  (for example `claude auth status`, `codex login status`) run with the
+  machine's own resolved environment, the one a launch without a profile uses,
+  cached with a TTL and refreshed with the report. It reports `signed-in` or
+  `signed-out`; `unknown` means the provider has no probe or the probe failed. A
+  launch **without** `profileEnv` that fails on authentication sets `auth-failed`
+  until the next successful probe. `status` therefore describes only the
+  machine's default account.
+- **Profile launches.** A launch that carries `profileEnv` is not pre-probed,
+  because the profile's environment can differ, and the default account's
+  `signed-in` / `signed-out` / `auth-failed` status says nothing about it. Its
+  auth failure surfaces at launch (as today) and never changes the provider's
+  reported `status`. `cli-missing` and `prerequisite-missing` describe the
+  installation and apply to every launch.
 - Counts and bytes are non-negative safe JSON integers. The report is advisory,
   never a reservation.
 
