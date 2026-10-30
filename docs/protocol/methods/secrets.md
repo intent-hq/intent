@@ -164,13 +164,18 @@ Decoded, `resource.text` is:
 
 The payload never contains a value.
 
-**Attention.** A turn that drains a secret-request block sets the
-pending-questions marker (§5.5) on that message exactly like a question block,
-so the workspace shows that it needs the user. The marker clears when nothing on
-the message is still open: every question is answered (the existing
-`question_answers` intake) and every secret request on it has been provided,
-declined or lost. `agent.dismissQuestions` on the message also drops its pending
-secret requests and delivers one declined notice per request. Provided and
+**Attention.** Once a top-level agent's secret-request card has been persisted
+at turn end (the same point a question raises it), its workspace's derived
+`displayStatus` is `needs_attention` (§6.5) until the request is answered. A
+request whose card never reached the transcript (for example, a cancelled turn)
+does not count; re-requesting the same name reuses the request and queues its
+card again. The state comes from the daemon's in-memory pending requests, not the
+persisted pending-questions marker (§5.5), which secret-request blocks never
+touch: it ends as soon as every request is provided, declined or lost on restart,
+so a restart can never leave a workspace stuck needing the user for a request
+that no longer exists. `agent.dismissQuestions` on
+the message carrying the cards also declines its pending secret requests and
+delivers one declined notice per request. Provided and
 declined notices are **user-origin** deliveries for the turn-begin attention
 clear (§6.5, agent attention details), because the user caused them.
 
