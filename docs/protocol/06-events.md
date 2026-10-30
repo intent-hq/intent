@@ -920,8 +920,14 @@ Explicit user link clicks still activate content. Settings navigation and
 
 **Turn-start signals.** A client treats each event below as the start of an agent turn: an idle
 agent reads as running as soon as it sees one, without waiting for a later event. The paragraphs
-that follow give the detail. The user-row `agent:message` echo is not listed: the daemon persists
-it after claiming the turn slot, so the running status edge always comes first. The
+that follow give the detail. The user-row `agent:message` echo is not listed. For a direct send
+or wake delivery the daemon persists it after claiming the turn slot, so the running status edge
+comes first. Two held-slot continuations are the exception: the prompt idle-timeout warning turn
+(below) and the truncation auto-redrive (the nudge a delegated agent gets after a turn that looks
+cut off, [monorepo#2863](https://github.com/intent-hq/monorepo/issues/2863)). Each persists a new
+user row with a fresh `turnId` after the previous turn's `agent:stream:end`, without a new running
+edge or an `agent:queue:processing`.
+For those turns this table guarantees nothing before the first `agent:stream:activity`. The
 machine-readable list, with one replayable example per row, is
 [`fixtures/turn-start/turn-start-events.json`](./fixtures/turn-start/turn-start-events.json).
 `make check-turn-start-contract` (part of `make consumer-checks`) keeps this table, that file and
