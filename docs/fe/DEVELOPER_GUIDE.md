@@ -322,8 +322,30 @@ Run the focused avatar component test from `packages/cloudlands-fe`:
 corepack pnpm run test:ct -- src/features/agent/components/agent-avatar/__tests__/agent-avatar-waiting.ct.spec.ts
 ```
 
-The component-test harness defaults to port 3100; set `CT_PORT` to override it. If the
-chosen port is occupied, stop the process that owns it before rerunning the command.
+The component-test harness defaults to port 3100; set `CT_PORT` to override it. A second
+run on an occupied port waits for the `ct-<CT_PORT>` lock; pick a free `CT_PORT` to run
+concurrently.
+
+### Sandbox probe and shot options
+
+These apply to `pnpm sandbox:probe` and `pnpm sandbox:shot` in `packages/cloudlands-fe`.
+
+The sandbox route and Playwright CT harness use the repo-bundled `Inter Variable` font, and
+capture stability waits for `document.fonts.ready`, so geometry does not depend on host fonts.
+Shared options are `--theme light|dark|system` (default `light`), `--width 240..1600`
+(default `720`), `--motion reduced|full` (default `reduced`), `--scale 1|2` (default
+`1`), `--timeout <milliseconds>` (default `30000`), `--out <path>`, and
+`--allow-console-errors`. Set `SANDBOX_DEBUG=1` for runner diagnostics.
+
+The in-process server, like every `test/*.spec.ts` Vite harness, uses its own optimizer
+cache under `node_modules/.vite-harness/<harness>` (via `test/vite-harness-cache.mjs`)
+instead of the shared `node_modules/.vite`, so a probe never invalidates a running
+`dev:ui` / `dev:web` server's optimized deps or vice versa. The runner fails fast with the
+cause named — a `504 Outdated Optimize Dep` / `Optimize Deps Processing Error` on a module
+URL, or an esbuild dependency-scan / optimizer failure from the dev-server log — instead
+of a generic ready-marker timeout. `SANDBOX_GOMAXPROCS=<n>` exports `GOMAXPROCS` to the
+esbuild service for that run; it is a diagnostic knob for the dependency-scan crashes in
+intent-hq/intent#4617, not a fix, so leave it unset normally.
 
 ## Project Structure
 
@@ -533,6 +555,83 @@ main during that rollout; the reusable workflow uses its own resolved workflow c
 To inspect prerequisites without building, run
 `node scripts/test-transfer-selection-contract.mjs --preflight` at the activation
 revision. Local selected-head success does not establish that earlier live pins pass.
+
+### What verify:changed selects
+
+The command runs scoped Prettier and ESLint,
+related Vitest tests, colocated component tests that import the changed file directly or
+through a host `.svelte` they import (one hop, `.svelte` imports only — a change to a `.ts`
+module the host imports, or to a component two hops deep, does not select the spec), and
+only the renderer/main/preload TypeScript boundaries that changed. Ambiguous or high-risk files
+select a conservative suite instead of silently skipping coverage. Any code change (or a
+`knip.jsonc` / `package.json` / `tsconfig*.json` change) also runs knip repo-wide (~3 s,
+also chained into `pnpm run lint`): dead-code detection is a whole-program check, so it
+cannot be scoped to changed files — dropping an import in one file can make an export in
+another unused. knip resolves `m.*()` imports against the gitignored i18n bundle, so
+`lint:dead-code` first runs `generate:i18n --if-stale`, which compiles only while the
+bundle is missing or its recorded input hash no longer matches `messages/*.json`. The gate
+fails when knip stops reporting its canary files
+([details](../../docs/fe/DEVELOPER_GUIDE.md#changed-file-verification-receipts)).
+
+Any renderer source change also runs `pnpm run test:ui-invariants` (chained into
+`validate:architecture` too): the repo-wide UI ratchets and the component-catalog
+`*.meta.ts` caller ledgers. Membership is derived, not listed:
+`scripts/ui-invariant-suites.mjs` scans the vitest test files under `scripts/` and `src/`
+(`*.{test,spec}.*`, minus the Playwright `*.ct.spec.*` / `*.visual.spec.*` suites), runs
+every one whose leading comments carry `// @ui-invariant`, and fails when a test whose
+parsed code (comments, string bodies, and regex literals never count) references
+`buildUiComponentInventory` or imports a `*.meta` module and reads a `.callers` ledger has
+neither that marker nor `// @ui-invariant-exempt: <reason>`. Add the marker to any new
+inventory or ledger suite; `node scripts/ui-invariant-suites.mjs --list` shows the current
+set and `--check` validates markers without running anything. Likewise, any code change
+under `src/`, any `AGENTS.md` change (root or nested — `lint:instruction-themis-pins` scans
+them all), and any edit to the `scripts/check-*.mjs` gates themselves also runs
+`pnpm run lint:architecture` — the repo-wide static architecture scans CI runs through
+`validate:architecture` (its only architecture step; new gates go into `lint:architecture`
+in `package.json`, never into a separate workflow step, so local and CI cannot diverge —
+`scripts/check-ci-architecture-gate.test.ts` fails on any other scanner or wrapper-script
+step in `intent-pr.yml`, and an edit to that workflow runs it locally) —
+because those scans are cross-file graph checks that per-file linting cannot see:
+cloudlands-fe#2315 passed `verify:changed` locally and failed CI in
+`lint:saga-watcher-ownership`. One of those gates, `lint:protocol-version-literals`, fails
+any `src/` line carrying a `v`-prefixed version literal (`v10.1`), and a bare one (`10.1`)
+when the same line mentions protocol/intentd/daemon(s): reference the method/field name,
+the `§` section, or the capability, not protocol version numbers — they are provisional
+until merge and went stale in cloudlands-fe#2447. A deliberate exception appends a
+`// protocol-version-ok: <reason>` comment to the line, or puts
+`// protocol-version-ok-file: <reason>` in the first 10 lines of a fixture-heavy file —
+only a comment with a non-empty reason exempts; a bare token or one inside a string does
+not. A
+change to `scripts/type-check.ts` additionally runs `pnpm run type-check:validate`, since
+`lint:architecture` omits that wrapper and the
+per-boundary checks invoke `tsc` directly.
+
+`vitest related` follows the import graph, so a suite that reads the tree from disk is
+invisible to `verify:changed` (cloudlands-fe#2256 and #2314 both failed only on CI). Such a
+suite declares its triggers in its leading comments —
+`// @verify-changed-triggers: src/preload/index.template.ts, src/lib/components/**`
+(repo-relative paths or globs; `./` and `../` entries resolve from the test file's
+directory) — or opts out with `// @verify-changed-exempt: <reason>`; `// @ui-invariant`
+suites are already covered by the renderer trigger. `pnpm run lint:verify-changed-triggers`
+(in `validate:architecture`) fails an undeclared disk-reading suite. `src/preload/index.ts`
+is untracked and generated by `pnpm run generate:ipc-channels` (run by `dev`, `build`, and
+CI before it is needed), so a hand edit to it can no longer be committed by accident, and
+the generator's guard rejects a locally edited copy on regeneration (cloudlands-fe#2314
+edited it, and only CI caught it).
+
+Only checks that genuinely conflict use host-wide locks, held for one check at a time:
+Playwright CT uses `ct-<CT_PORT>` (default `ct-3100`) and the full Vitest fallback uses
+`vitest-full`. CT runs on different ports can proceed concurrently — even within one
+worktree, since the port keys the component server, the lock, and the
+`playwright/.cache-<CT_PORT>` bundle cache; Svelte and TypeScript checks do not lock. The default waits are 240 seconds for CT and 120 seconds for full
+Vitest. `VERIFY_CHANGED_LOCK_TIMEOUT_MS` overrides either wait but remains capped at
+300000 ms, and the command never stops the process that owns a lock. Direct
+`pnpm run test:ct` runs hold the same `ct-<CT_PORT>` lock (`scripts/verification-lock.mjs`),
+because the CT runtime reuses any server already listening on its port — an unlocked
+second run from another worktree would test that tree's component registry and then fail
+with ECONNREFUSED when the first run exits (intent-hq/intent#4964). A second run on an
+occupied port waits, then fails naming the owner's pid and worktree; pick a free `CT_PORT`
+to run concurrently.
 
 ### Changed-file verification receipts
 
