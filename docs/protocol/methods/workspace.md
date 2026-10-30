@@ -791,15 +791,21 @@ invariant rather than restating it.
 before any side effect: `kind` other than `"proposal"`, a missing or blank `agentId` /
 `proposalId`, or a `proposalId` over the `agent.resolveProposal` length cap rejects `-32602`
 and nothing is created. A client-sent `sourceWorkspaceId` is ignored: the daemon derives the
-source workspace from the agent's session. After a successful create — including an
-idempotent replay of the same `idempotencyKey` — the daemon runs the `agent.resolveProposal`
-path (§5.5 "Pending proposals" in [agents.md](./agents.md)) with `outcome: "applied"` and
+source workspace from the agent's session. The origin is accepted only when the named
+proposal is still pending on that agent, is a `workspace-create` proposal
+(`payload.operation: "workspace.create"`), and — when its `payload.params` carry an
+`idempotencyKey` — the create uses that same key, so neither another kind of card nor a
+replay naming a different card can be marked applied. After a successful create —
+including an idempotent replay of the same `idempotencyKey` — the daemon runs the
+`agent.resolveProposal` path (§5.5 "Pending proposals" in [agents.md](./agents.md)) with `outcome: "applied"` and
 `detail` `"Created workspace <id>."`, so the proposing agent receives the `proposal_resolved`
 notice and `agent:updated` carries the shrunken `pendingProposals` without the proposing
 conversation being open in any client. The resolution is **fail-soft**: an unknown agent, a
-caller who is not a member of the source workspace, or a proposal that is no longer pending
-logs a warning and the create still succeeds; an already-resolved proposal keeps its
-persisted outcome and gets no second notice. A failed create resolves nothing, so the card
+caller who is not a member of the source workspace, or a proposal failing the checks above
+logs a warning and the create still succeeds with nothing resolved (an already-resolved
+proposal keeps its persisted outcome and gets no second notice); any other store error
+during these lookups fails the create with `-32603` before any side effect, so the client
+can retry. A failed create resolves nothing, so the card
 stays pending for Retry. The `workspace:created` event carries the resolved provenance as
 `data.origin` (§6.5). Daemons without this field ignore it (unknown keys are ignored), so
 clients keep their own post-apply `agent.resolveProposal` call as a fallback; it is a no-op
