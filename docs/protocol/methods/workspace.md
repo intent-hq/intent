@@ -26,7 +26,7 @@ unchanged. Host-administration virtual workspaces retain their existing boundary
 | workspace.list | includeArchived?: boolean (default false), includeRetired?: boolean (default false) — `includeArchived: true` alone never returns `status: "Retired"` rows; see [Retired workspaces](#retired-workspaces) | { workspaces: Workspace[] } — triggers background backfill: existing workspaces with a repositoryPath but missing repositoryOwner/Name are enriched from the origin remote URL (same GitHub derivation as workspace.create, non-blocking spawn, deduped per workspace per daemon lifecycle, skips non-GitHub remotes, persists updates, emits workspace:updated with changed fields). **Membership-narrowed** for a non-administrator caller: only workspaces the bound principal is a member of are returned, and every `Workspace` row carries `myRole` (`"owner"` \| `"collaborator"` \| prepared `"manager"` under `workspaceGuestRoles: 1`), `memberCount` and `openInviteCount` (§5.48) |
 | workspace.findByPullRequest *(prepared; `prWorkspaceLookup: 1`)* | url (req): string — a GitHub-form pull-request URL, `https://<host>/<owner>/<repo>/pull/<number>` (trailing path, query or fragment ignored). No `workspaceId`: daemon-global | { workspaces: PullRequestWorkspace[] } — every workspace the daemon has linked to that PR, most recently linked first; `[]` when none. Archived workspaces are included; deleted and remote workspaces never are, and retired workspaces only with the additive `includeRetired: true` param ([Retired workspaces](#retired-workspaces)). Membership-narrowed like `workspace.list`. `-32602 { code: "invalid-params" }` when `url` is missing or not a pull-request URL. See [PR workspace lookup](#pull-request-workspace-lookup) |
 | workspace.get | workspaceId (req) | { workspace: Workspace } — -32602 if not found, **or** if the caller is not a member of it (same `{ code: "not-found" }`, indistinguishable by design; §5.48) |
-| workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipIsolation? (canonical; deprecated alias skipWorktree?), githubUrl?, repositoryCheckout? (prepared GitLab selection; see [GitLab project checkout](#gitlab-project-checkout)), clonePath?, isNewRepo?, progressId? (string — arms the unified provisioning progress stream; see notes), contextLinks? (ContextLink[] — issue/PR context links persisted on the row; a pr-kind link additionally makes the create **PR-aware** — an omitted `branch`/`baseRef` defaults to the PR's head/base branch — see the `contextLinks` and PR-aware create notes below)); optional initialAgent: { prompt? *(a blank/whitespace-only prompt reads as absent; the agent is still created — see "Initial-agent orchestration" in the notes)*, name?, model?, reasoningEffort? (string — creation-time effort; omitted inherits, blank clears; see notes), specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks? *(within v7.4, monorepo#3338: entries may carry an attachment-registry `attachmentId` reference instead of inline `data`, under the same exactly-one-of validation + registry check and daemon-side prompt-assembly resolution as `agent.sendMessage` — §5.5; a bad reference rejects `-32602` pre-side-effect)*, fileBlocks? *(v6.12; attachment references only since v10.0 — same per-entry validation as `agent.sendMessage`: every entry must carry a non-empty `attachmentId`, an entry carrying inline `data` or missing `attachmentId` is `-32602` naming the block index — §5.5)*, metadata? } — no `agentId`: agent IDs are server-assigned, and a request carrying `initialAgent.agentId` is rejected with `-32602` (see notes). Every `-32602` rejection is validated before any side effect (see "Pre-side-effect validation" in the notes) | { workspace: Workspace, initialAgent?: AgentLite } — details below the table. |
+| workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipIsolation? (canonical; deprecated alias skipWorktree?), githubUrl?, repositoryCheckout? (prepared GitLab selection; see [GitLab project checkout](#gitlab-project-checkout)), clonePath?, isNewRepo?, progressId? (string — arms the unified provisioning progress stream; see notes), contextLinks? (ContextLink[] — issue/PR context links persisted on the row; a pr-kind link additionally makes the create **PR-aware** — an omitted `branch`/`baseRef` defaults to the PR's head/base branch — see the `contextLinks` and PR-aware create notes below), origin? ({ kind: "proposal", agentId, proposalId } — see "Proposal origin" below)); optional initialAgent: { prompt? *(a blank/whitespace-only prompt reads as absent; the agent is still created — see "Initial-agent orchestration" in the notes)*, name?, model?, reasoningEffort? (string — creation-time effort; omitted inherits, blank clears; see notes), specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks? *(within v7.4, monorepo#3338: entries may carry an attachment-registry `attachmentId` reference instead of inline `data`, under the same exactly-one-of validation + registry check and daemon-side prompt-assembly resolution as `agent.sendMessage` — §5.5; a bad reference rejects `-32602` pre-side-effect)*, fileBlocks? *(v6.12; attachment references only since v10.0 — same per-entry validation as `agent.sendMessage`: every entry must carry a non-empty `attachmentId`, an entry carrying inline `data` or missing `attachmentId` is `-32602` naming the block index — §5.5)*, metadata? } — no `agentId`: agent IDs are server-assigned, and a request carrying `initialAgent.agentId` is rejected with `-32602` (see notes). Every `-32602` rejection is validated before any side effect (see "Pre-side-effect validation" in the notes) | { workspace: Workspace, initialAgent?: AgentLite, proposalOrigin? } — details below. |
 | workspace.update | workspaceId (req) + fields to change — the skip toggle uses the same wire names as create: skipIsolation? (canonical; deprecated alias skipWorktree?, either set ⇒ same behavior); the `workspace:updated { changes }` delta serializes it under the canonical skipIsolation name; `statusImageAssetId?: string \| null` is clearable (missing = untouched, `null` = clear, string = set — see the `statusImageAssetId` notes below); `label?: string \| null` is clearable the same way — see the [`label` notes](#workspace-labels) below. A **collaborator** member may change only `title`, `tags`, `statusMessage`, `statusImageAssetId` — any other key is `-32003 { code: "forbidden", detail }` (§5.48). **Archive lifecycle delegation** ([intent-hq/intentd#2066](https://github.com/intent-hq/intentd/pull/2066)): the generic row write never touches `archived` / `archivedAt` and holds `status` while the row is archived — lifecycle state moves only through `workspace.archive` / `workspace.unarchive`. An update carrying `archived` and/or `status: "Archived"` / `"Active"` applies the other fields first, then delegates the flip to those paths: `archived: true` or `status: "Archived"` runs the full `workspace.archive` teardown (guests detached, open invites revoked, hooks / monitors / turns torn down); `archived: false`, or a non-archived `status` on an archived row, runs `workspace.unarchive`. The delegated path publishes the `{ archived, status, archivedAt }` delta itself (`archivedAt` is set by the archive/unarchive path, never by a generic update field), so the update's own `workspace:updated` delta has `archived` and `status` removed from it — both arrive only in the delegated lifecycle delta — and is skipped entirely when nothing else changed. A contradictory pair (e.g. `archived: true` + `status: "Active"`) is `-32602 { code: "invalid-params" }` and nothing is written | { workspace: Workspace } |
 | workspace.delete | workspaceId (req), undoDelayMs? *(v6.7)* | { success: true } — details below the table. |
 | workspace.cancelDelete *(v6.7)* | workspaceId (req) | { cancelled: boolean } — cancels a pending (grace-window) deletion scheduled by `workspace.delete` with `undoDelayMs`. `true` clears the pending deletion, emits `workspace:delete-cancelled { workspaceId }` (§6.5), and drops `pendingDeleteAt` from the row; `false` is the race-safe non-error when no deletion is pending (never scheduled, already cancelled, or already committed) |
@@ -312,8 +312,10 @@ under the workspace it creates — so exactly one create runs and every caller r
 identical stored result
 ([intent-hq/intentd#2000](https://github.com/intent-hq/intentd/pull/2000)). The create runs through
 the same `workspace.create` deserialization as the
-router (a non-null `initialAgent.agentId` is rejected), and on success the binding calls
-the same `agent.resolveProposal` path the client-driven Apply uses, requesting
+router (a non-null `initialAgent.agentId` is rejected; a wire `origin` carried in the
+proposal params is discarded in favour of the binding's own provenance), and on success the
+binding calls the same `agent.resolveProposal` path a card Apply's `origin` triggers
+(see "Proposal origin"), requesting
 `outcome: "applied"` with `detail` `"Created workspace <id> (<title>) via
 ws.workspace.applyProposal"` (suffixed ` with overridden title` / ` with overridden
 prompt` / ` with overridden title and prompt` when overrides were used) — so the
@@ -780,6 +782,44 @@ another provider), the explicit or specialist-derived reasoning-effort check, an
 `workspace:created` event, or agent session is persisted, so a rejected create never
 leaves a partially created workspace behind. The per-field notes below inherit this
 invariant rather than restating it.
+
+**Proposal origin (`workspace.create { origin }`,
+[intent-hq/intent#8086](https://github.com/intent-hq/intent/issues/8086)).** A client applying a
+`workspace-create` proposal card passes `origin: { kind: "proposal", agentId, proposalId }`:
+`agentId` is the agent whose message carries the proposal and `proposalId` its
+`pendingProposals` key (`applyToolCallId`, else `preview.title`). The shape is validated
+before any side effect: `kind` other than `"proposal"`, a missing or blank `agentId` /
+`proposalId`, or a `proposalId` over the `agent.resolveProposal` length cap rejects `-32602`
+and nothing is created. A client-sent `sourceWorkspaceId` is ignored: the daemon derives the
+source workspace from the agent's session. The origin is accepted only when the named
+proposal is still pending on that agent, is a `workspace-create` proposal
+(`payload.operation: "workspace.create"`), and — when its `payload.params` carry an
+`idempotencyKey` — the create uses that same key, so neither another kind of card nor a
+replay naming a different card can be marked applied. After a successful create —
+including an idempotent replay of the same `idempotencyKey` — the daemon runs the
+`agent.resolveProposal` path (§5.5 "Pending proposals" in [agents.md](./agents.md)) with `outcome: "applied"` and
+`detail` `"Created workspace <id>."`, so the proposing agent receives the `proposal_resolved`
+notice and `agent:updated` carries the shrunken `pendingProposals` without the proposing
+conversation being open in any client. The resolution is **fail-soft**: an unknown agent, a
+caller who is not a member of the source workspace, or a proposal failing the checks above
+logs a warning and the create still succeeds with nothing resolved (an already-resolved
+proposal keeps its persisted outcome and gets no second notice); any other store error
+during these lookups fails the create with `-32603` before any side effect, so the client
+can retry. A failed create resolves nothing, so the card
+stays pending for Retry. The `workspace:created` event carries the resolved provenance as
+`data.origin` (§6.5). Whenever the request carried a well-formed `origin`, the result adds
+`proposalOrigin: { proposalId, outcome }` — computed per request (an idempotent replay
+reports its own `origin`), never persisted — where `outcome` is the proposal's state after
+this create: `"applied"`, `"dismissed"` (an earlier resolution kept), or `"notResolved"`
+when the daemon declined the origin (any of the fail-soft cases above). The one exception:
+when the daemon accepted the origin but the resolution write itself failed, `proposalOrigin`
+is omitted, so the client fallback below retries the resolution — safe, because the card
+already passed the checks above. **Client fallback:** daemons without this field ignore `origin` (unknown
+keys are ignored) and return no `proposalOrigin`, so a client may call `agent.resolveProposal`
+itself after a successful apply **only when the result has no `proposalOrigin`**; when it is
+present the daemon has handled the card, and a client-side resolve after `"notResolved"`
+would mark applied a card the daemon deliberately refused (e.g. a replay naming another
+card, or a non-`workspace-create` card).
 
 **Initial-agent orchestration (`workspace.create`).** When `initialAgent` is supplied the
 daemon **always** creates and persists the agent session (honoring `name`/`model`/
