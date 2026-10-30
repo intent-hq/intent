@@ -60,6 +60,39 @@ other devices. Authentication by GitHub/GitLab proof is independent of repositor
 connections; collaboration credentials remain on the signing-in person's daemon
 in their separate purpose. No new unauthenticated endpoint is introduced.
 
+### 2.6 Executor credentials
+
+*Prepared for daemon-to-daemon remote agents; not implemented at the pinned daemon.*
+An executor credential lets one backend daemon run remote agents on this
+machine over the [executor link](./node-link.md#daemon-to-daemon-executor-link-nodeprotocol-6).
+It is a separate credential kind, not a `principal_credential` row and not a
+principal with a host role, so no collaborator or member allowlist ever sees it.
+
+- **Minting is owner-only.** `executor.mint` ([§5.50](./methods/nodes.md#machine-methods-executor-credentials))
+  is callable only from the local UDS seat or a WSS connection admitted with the
+  owner token; members and guests get `-32003`. One credential is minted for one
+  backend id. The token is 32 random bytes, hex-encoded, returned once and never
+  logged; the machine stores only its SHA-256 hash.
+- **Path-scoped admission.** On `/node/link` and `/node/git` the upgrade gate
+  looks the bearer token up only among unrevoked executor credentials, after the
+  enable flags and a refusal of any `Origin` header. The owner token and
+  per-principal tokens are `401` there. Executor tokens are never looked up on
+  `/ws`, `/tunnel` or `/invite`, so they are `401` there. Executor connections
+  take no guest seat and never reach the method router.
+- **Scope.** The credential admits only the executor link requests (launch,
+  prompt, cancel, stop, ack, capabilities, heartbeats, `workspace.call`
+  responses) and git sessions for agents on its own binding. Its binding must
+  name the backend id it was minted for.
+- **Revocation.** `executor.revoke` closes that credential's live `/node/*`
+  connections with WebSocket close code **1008** (`credential revoked`) through
+  the existing revocation subscription, stops its agents, and refuses the token
+  with `401` on replay. Revoking one backend leaves other backends' credentials
+  valid.
+
+Running agents means running code as the machine owner's OS user. The
+credential is narrow in API terms but powerful in effect, which is why only the
+owner can mint it.
+
 ### Protected bootstrap admission (prepared)
 
 The [startup contract](./startup-readiness.md#bootstrap-boundary-and-security)

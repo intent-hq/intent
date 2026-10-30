@@ -765,3 +765,31 @@ CLI/app-server environment support. Use the CLI version required by the token
 creation dialog. These are Codex-scoped workspace access tokens, not arbitrary
 copied interactive OAuth sessions. Synthetic adapter tests can prove forwarding;
 only a live eligible account can establish provider acceptance.
+
+### Remote agent settings *(prepared, daemon-to-daemon remote agents)*
+
+These keys belong to [remote machines (§5.50)](./nodes.md#daemon-to-daemon-remote-machines-prepared).
+They are not registered at the pinned daemon. Like the other host settings they
+are owner-only.
+
+- `remoteAgents.enabled` (boolean, default `false`). Machine side: serve the
+  executor link (`/node/link`, `/node/git`) and allow `executor.mint`. Off
+  refuses those upgrades with `403`; turning it off closes live executor
+  connections.
+- `remoteAgents.permission` (enum `allowAll` | `autoByRisk` | `denyAll`, default
+  `allowAll`). Machine side: how provider permission prompts of remote agents are
+  answered, since no client is attached. Applies in regular and node mode.
+- `daemon.mode` (enum `regular` | `node`, default `regular`). `node` starts the
+  daemon with its own orchestration off and the node-mode method list.
+  Changeable only over the local UDS seat (WSS updates fail `-32003`); takes
+  effect at the next daemon start. `intentd serve --node` selects node mode for
+  that process without changing the setting.
+- `experimental.remoteAgents` (boolean, default `false`). Backend side: enables
+  the `remoteMachines.*` mutations, remote placement on exposed machines and the
+  `remoteMachines: 1` capability. Off by default until the feature leaves
+  experimental.
+
+There is no remote-agent cap. Remote agents count against the machine's
+existing `agents.maxConcurrent` process cap and `agents.memoryBudgetMb`
+aggregate budget, shared with local agents; a launch those limits would deny is
+refused with `no-capacity`, never queued.

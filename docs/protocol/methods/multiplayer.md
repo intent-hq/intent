@@ -271,6 +271,13 @@ The baseline counts/list above predate this addition. It permits user-initiated 
 of an existing agent; it does not grant collaborator access to `agent.delete` or MCP
 retirement of another agent. See [§5.5 Direct user retirement](./agents.md#direct-user-retirement).
 
+**Prepared remote machine administration:** `executor.mint`, `executor.list`,
+`executor.revoke` and the five `remoteMachines.*` methods
+([§5.50](./nodes.md#daemon-to-daemon-remote-machines-prepared)) join the
+owner-only refused remainder. They are on neither the collaborator nor the
+member allowlist: a machine shared with you is someone else's computer, so only
+its owner can lend it to a backend.
+
 Within the allowed set, four more rules apply to a collaborator caller:
 
 - **Projected `system.status`.** A collaborator receives a default-deny projection of the §5.7 result: `running`, `listenMode`, `port`, `version`, `buildCommit`, `protocolVersion`, `fingerprint`, `localIps`, `tcAddress`, `hostname`, `prettyHostname`, `collaborationName` and a `host` sub-object reduced to `os` / `arch` / `locality` / `deviceKind` / `hardwareModel` — every one already disclosed by the invite envelope or `server.pairingInfo`. The daemon-global counts (`clients`, `agents`, `busyAgents`, `maxAgents`), process / disk / file-watch / fd telemetry, the agent-memory budget, the update handshake, `transports` and `host.hasDisplay` are omitted; the administrator's snapshot is unchanged.

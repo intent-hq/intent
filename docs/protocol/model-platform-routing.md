@@ -376,6 +376,47 @@ Resolved create/get/list/subscription data carries fully resolved placement
 No configured target ID, pool projection or manual placement selector is added.
 Existing effectiveIsolation and pending/error semantics remain unchanged.
 
+## Exposed machines (prepared)
+
+[Daemon-to-daemon remote machines](./methods/nodes.md#daemon-to-daemon-remote-machines-prepared)
+widen the candidate set from one configured node to every machine exposed to
+this backend. This section governs only backends that advertise
+`remoteMachines: 1`; the single-node rules above stay in force elsewhere.
+
+**Selection.** `placement.nodeId` names one exposed machine and never falls
+back to another. Without it, `target: "remote"` considers every exposed machine
+that is not revoked:
+
+1. platform matches `os` / `arch`;
+2. the provider's status is `signed-in` or `unknown` (`signed-out`,
+   `auth-failed`, `cli-missing` and `prerequisite-missing` are skipped);
+3. the requested model is listed, or no model was requested;
+4. free capacity under the machine's shared count and memory limits.
+
+Candidates are ordered by fewest running agents, then most recently used. The
+backend connects on demand and refreshes a report older than 1 hour before
+deciding. `node-configuration-ambiguous` does not apply: several machines are
+an ordinary candidate set. An explicit remote placement never falls back to
+the local daemon.
+
+**Errors.** When no machine lists the model, admission fails before any launch
+with `model-unavailable`, listing each machine's provider status and models
+(at most 50 per machine). Otherwise a definite no match is
+`placement-unavailable` with reason `no-capacity`, `unsupported-platform`,
+`machine-unreachable`, `machine-unknown` or `machine-revoked`; `no-capacity`
+carries the limit that denied it and is refused, never queued. A version gap is
+`machine-update-required`. MCP's error-to-string path renders the code, reason,
+limit and per-machine alternatives in safe text, as above.
+
+**Tool-description discovery.** The `ws.agent.create` / `ws.agent.delegate`
+tool descriptions and `ws.help("agent")` list the exposed machines: name, id,
+platform, connected or last seen, and each usable provider with its sign-in
+status and up to 10 models. The list is capped at 8 machines and a fixed text
+budget; anything cut is summarized with a count and a pointer to
+`model-unavailable` for the full list. It is recomputed from the cached reports
+at each help request and tool-list refresh, includes `observedAt`, and never
+exposes routes, fingerprints, credentials or other backends.
+
 ## Verification boundary
 
 [Prepared cases](./fixtures/nodes/platform-routing.json) and

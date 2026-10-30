@@ -2092,3 +2092,195 @@ kind and never carries the token or peer-supplied text:
 Without a configured, connected node an agent cannot start
 (`node-unavailable`); an agent whose lease head no longer holds cannot start
 again (`node-agent-unplaced`).
+
+## Daemon-to-daemon executor link (nodeProtocol 6)
+
+This section is the prepared private contract of **daemon-to-daemon remote
+agents**: a regular Intent daemon (the *machine*) runs agents for another daemon
+(the *backend*) after the machine's owner exposes it. It is not implemented at
+the pinned daemon. It reuses the
+[single-node link](#single-node-private-link-nodeprotocol-5)'s frames, journal,
+agent refs over git, workspace API routing and profile environment, and
+replaces that link's separate listener, configuration files, lease token and
+binding file. The public methods, settings and errors are in
+[remote machines (§5.50)](./methods/nodes.md#daemon-to-daemon-remote-machines-prepared).
+Until the machine side ships, the single-node link above stays documented
+unchanged.
+
+### Endpoint on the daemon listener
+
+The machine serves the link on its existing WSS listener
+([§1.1](./01-transport.md#11-connection-url)), with the same port, certificate
+(`ws-cert.pem`) and fingerprint as its pairing payload's `fp=`. There is no
+second listener or TLS identity. Two upgrade paths sit beside `/ws`, `/tunnel`
+and `/invite`:
+
+| Path | Carries | Admits |
+| --- | --- | --- |
+| `/node/link` | Control, journal and RPC frames ([frames](#executor-frames)) | Executor credentials only |
+| `/node/git` | Git sessions as binary messages, as on the [single-node link](#agent-refs-over-git) | Executor credentials only, with the current binding headers |
+
+The upgrade gate runs in this order. Every refusal happens before the
+WebSocket handshake completes:
+
+1. Path. Unknown paths are `404` as today.
+2. `server.wsApi.enabled` off: `403`, as for `/ws`.
+3. `remoteAgents.enabled` off: `403`. A machine that has not opted in serves no
+   executor link, whatever credentials exist.
+4. Any `Origin` header: `403`. Only daemons dial these paths.
+5. Bearer token (`Authorization: Bearer <token>` header only, no `?token=`):
+   looked up **only** among the machine's unrevoked executor credentials
+   ([§2.6](./02-authentication.md#26-executor-credentials)). The owner token and
+   per-principal tokens are `401` here, and executor tokens are `401` on `/ws`,
+   `/tunnel` and `/invite`.
+
+Executor connections take no guest seat, are not JSON-RPC connections, and never
+reach the method router. Before [startup readiness](./startup-readiness.md) the
+`/node/*` paths are unavailable, like `/invite` and `/tunnel`. Insecure dev mode
+(`--insecure`) skips TLS but never skips the executor token.
+
+### Routes and on-demand connection
+
+The backend stores the routes the frontend handed over when the machine was
+added: candidate `hosts`, `port`, optional `tcAddress` and the certificate
+fingerprint.
+
+- **Route race.** The backend tries the direct hosts in parallel, then the
+  tailcat candidate. For tailcat it runs the sitter-shipped tailcat binary in
+  pipe-client mode (`tailcat <tcAddress> <port>`) behind a loopback forwarder,
+  as the frontend's tunnel does. Each attempt has 3 s and the whole connect
+  10 s. The pin is the certificate fingerprint, so a loopback or tailcat hop
+  does not weaken it.
+- **Route refresh.** After every accepted bind the backend replaces the stored
+  `hosts` and `tcAddress` with the ones the machine reports in `welcome`, so a
+  changed address repairs itself.
+- **Connect** only when a placement needs the machine, on an explicit
+  `remoteMachines.refresh`, or when cached capabilities are older than 1 hour
+  and someone reads them.
+- **Stay connected** while the backend has a live agent on the machine. A
+  dropped link then reconnects with the single-node link's backoff, and the
+  hello's `ackedSeq` makes the machine replay its unacknowledged journal.
+- **Disconnect** 10 minutes after the last remote agent on the machine exits.
+  With no live agent nothing reconnects until the backend needs the machine
+  again.
+
+### Binding per credential
+
+The binding keeps the single-node shape and its "higher generation wins" rule:
+
+```ts
+interface LeaseBinding { headId: string; nodeId: string; leaseId: string; generation: string }
+```
+
+- `headId` is the backend's persisted head id; it must equal the `backendId` the
+  presented credential was minted for. Otherwise the bind is refused as
+  `node-link-other-head` ("this credential belongs to another backend").
+- `nodeId` is the machine's daemon id (the `machineId` the backend stored).
+- The machine persists one binding **per executor credential** in its store, not
+  in a binding file. The lease is created when the machine is added, and the
+  generation advances on every connect.
+- One machine can serve several backends at once. Each credential has its own
+  binding, journal and storage under `<data_dir>/executor/<credentialId>/`
+  (journal, checkout cache, worktrees). All backends share the machine's
+  [capacity](#capacity-and-permission).
+
+Revoking a credential closes its live `/node/*` connections with `1008`
+(`credential revoked`), stops its agents and refuses later upgrades with `401`.
+
+### Version range
+
+`hello.protocol` is a range instead of one number:
+
+```ts
+interface ProtocolRange { min: number; max: number } // inclusive; this contract defines 6
+```
+
+The machine picks the highest version in both ranges and returns it as
+`welcome.protocol`. This design starts at **nodeProtocol 6**; the unshipped
+single-node version 5 is not in any supported range. `LaunchCommand.agentFeatures`
+and `LaunchCommand.isSubAgent` are required within protocol 6. Later additions to
+frames within a version are optional with defaults, so a backend and a machine on
+different builds interoperate inside the range.
+
+With no common version the machine refuses the bind, and the backend reports the
+public error `machine-update-required`
+`{ machineVersion, backendVersion, update: "machine" | "backend" }` with the
+message "Update Intent on <machine> (it runs X; this backend needs Y or newer)."
+`update` names the side whose range is older.
+
+### Executor frames
+
+Frames are those of the [single-node link](#frames), with these changes:
+
+| `type` | Direction | Change |
+| --- | --- | --- |
+| `hello` | backend → machine | `protocol: ProtocolRange` |
+| `welcome` | machine → backend | `protocol: 6` (the chosen version); adds `capabilities: MachineCapabilities`, `hosts: string[]`, `tcAddress?`; keeps `runningAgents: AgentId[]` for this binding only |
+| `capabilities` | backend → machine | New, control lane, empty body: ask for a fresh report |
+| `capabilitiesReply` | machine → backend | New, control lane: `capabilities: MachineCapabilities` |
+
+The executor credential admits exactly these link requests, enumerated in one
+constant with a golden test: `hello`, `heartbeat` / `heartbeatReply`, `launch`,
+`prompt`, `cancel`, `stop`, `ack`, `capabilities`, `response` (to the machine's
+`workspace.call` requests), and git sessions on `/node/git` for agents on that
+credential's binding. Any other frame is `node-link-protocol`.
+
+### Capabilities report
+
+```ts
+interface MachineCapabilities {
+  platform: { os: "linux" | "macos"; arch: "x86_64" | "aarch64" };
+  intentdVersion: string;
+  capacity: {
+    runningAgents: number;       // all agents counted against the machine's cap, local and remote
+    agentCap: number;            // effective agents.maxConcurrent
+    chargedMemoryBytes: number;  // aggregate memory charged to running agents
+    memoryBudgetBytes?: number;  // effective agents.memoryBudgetMb in bytes; absent when unlimited
+  };
+  providers: {
+    id: string;
+    visible: boolean;
+    status: "signed-in" | "signed-out" | "unknown" | "auth-failed" | "cli-missing" | "prerequisite-missing";
+    models: string[];
+    modelsStale: boolean;
+  }[];
+  observedAt: string;            // UTC RFC 3339
+}
+```
+
+- **Models** come from the machine's own `models.list`; `cli-missing` and
+  `prerequisite-missing` are its existing `warningKind` values.
+- **Sign-in.** Each provider has a cheap sign-in probe (for example
+  `claude auth status`, `codex login status`) run with the same resolved
+  environment as a launch, cached with a TTL and refreshed with the report. It
+  reports `signed-in` or `signed-out`; `unknown` means the provider has no probe
+  or the probe failed. A launch that fails on authentication sets `auth-failed`
+  until the next successful probe. Profile launches are not pre-probed, because
+  a profile's environment can differ; their auth failures surface at launch.
+- Counts and bytes are non-negative safe JSON integers. The report is advisory,
+  never a reservation.
+
+### Capacity and permission
+
+Remote agents run inside the machine's regular daemon, through its normal
+provider resolution (login-shell environment, installed CLIs) and process
+spawning. They never create workspace or agent rows in the machine's store.
+
+- **Shared limits.** Remote agents count against the same limits as the
+  machine's local agents: the process cap (`agents.maxConcurrent`) and the
+  aggregate memory budget (`agents.memoryBudgetMb` with its host-reserve rule).
+  There is no separate remote cap.
+- **Refused, never queued.** A launch the limits would deny is refused at once.
+  The `launch` failure is journaled as `node-capacity` with
+  `{ limit: "count", runningAgents, agentCap }` or
+  `{ limit: "memory", chargedMemoryBytes, memoryBudgetBytes }`, and the backend
+  surfaces it as `placementError`. Backend admission checks the latest report
+  first and returns `placement-unavailable` / `no-capacity` with the same
+  fields before creating the agent.
+- **Permission prompts.** No client is attached to a remote agent, so the
+  machine answers provider permission prompts with `remoteAgents.permission`:
+  `allowAll` (default), `autoByRisk` or `denyAll`. This holds in regular and
+  node mode.
+
+Running a remote agent runs code as the machine owner's OS user. The executor
+credential is narrow in API terms but not in effect.

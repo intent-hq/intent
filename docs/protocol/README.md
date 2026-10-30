@@ -76,6 +76,11 @@ The experimental [single-node private link](./node-link.md#single-node-private-l
 is a separate nodeProtocol 5 for one hand-configured node; it advertises no
 capability and makes no public version claim.
 
+The prepared [daemon-to-daemon executor link](./node-link.md#daemon-to-daemon-executor-link-nodeprotocol-6)
+lets an owner expose a regular daemon to a backend daemon; it negotiates a
+nodeProtocol range starting at 6 and is gated by `remoteMachines: 1`
+([§5.50](./methods/nodes.md#daemon-to-daemon-remote-machines-prepared)).
+
 ### §5.x subsections (`methods/`)
 
 | Subsection | File |
