@@ -12,6 +12,15 @@ watch for a condition (CI results, file changes) without burning turns polling. 
 watching specifically, agents are steered to the centralized `ws.pr.monitor` instead —
 §5.42, v6.1 — since a hook's TTL expires while a PR sits blocked and a monitor's does
 not.)
+**API surface per run.** A hook has no long-lived MCP bridge: the daemon builds a
+fresh `ws.*` host for every run, including the schedule-time validation run, from the
+**live** `[agentFeatures]` settings at that moment, with the owner as caller and the
+owner's sub-agent status re-derived each run. A toggle change therefore reaches an
+existing hook at its next run, unlike an agent session, whose bridge keeps the
+surface captured at creation (§5.12 Settings). The one exception is
+`agentFeatures.secretRequests` (§5.56), which is always off in a hook run: hooks can
+neither request nor use the owner's secrets.
+
 Per the §6.8 principle, **scheduling is not on the wire**: hooks are created only by
 agents via the `ws.hook.schedule` MCP binding (`{ name ≤ 50 chars, code, delayMs ≥
 10000 | cron | runAt, ttlMs?, perpetual? }` — exactly ONE schedule kind is required
