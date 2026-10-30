@@ -39,7 +39,7 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 cd "$repo_root"
 
-checks="event-catalog-check check-mcp-bindings docs-check check-protocol-catalog check-makefile-targets check-protocol-field-parity check-transfer-selection-contract check-backend-keychain-contract check-agent-worker-contract check-app-ui-targets check-note-truncated-read-contract check-browser-routing-contract check-suggested-prompts-contract check-fixture-copies"
+checks="event-catalog-check check-mcp-bindings docs-check check-protocol-catalog check-makefile-targets check-protocol-field-parity check-transfer-selection-contract check-backend-keychain-contract check-agent-worker-contract check-app-ui-targets check-note-truncated-read-contract check-browser-routing-contract check-suggested-prompts-contract check-turn-start-contract check-fixture-copies"
 advisory=${CONSUMER_CHECKS_ADVISORY:-}
 context=${CONSUMER_CHECKS_CONTEXT:-monorepo}
 make_bin=${MAKE:-make}
@@ -98,6 +98,7 @@ fix_path() {
     check-note-truncated-read-contract) echo "docs/protocol/fixtures/notes/truncated-read.json + methods/notes-tasks.md" ;;
     check-browser-routing-contract) echo "docs/protocol/fixtures/browser-routing/routing.json + methods/files-terminal-browser.md REV-2 (intentd copy: crates/intent-transport/tests/fixtures/browser-routing.json, via scripts/browser-routing-contract.mjs)" ;;
     check-fixture-copies) echo "scripts/check-fixture-copies.mjs REGISTERED (describe the copy with defineFixtureCopy() in scripts/lib/fixture-copy.mjs; see docs/protocol/README.md#copied-fixtures) + the named spec's canonical fixture and adopted copies/locks (scripts/<name>-contract.mjs)" ;;
+    check-turn-start-contract) echo "docs/protocol/fixtures/turn-start/turn-start-events.json + the docs/protocol/06-events.md §6.6 Turn-start signals table + REQUIRED_TYPES in scripts/turn-start-contract.mjs (types must be in docs/protocol/event-types.json)" ;;
     check-suggested-prompts-contract) echo "docs/protocol/fixtures/suggested-prompts/v1/ + adopted component copies/locks (see docs/protocol/suggested-prompts.md)" ;;
     *) echo "unknown check" ;;
   esac

@@ -6,9 +6,9 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { jsonBytes } from './lib/fixture-copy.mjs';
 import {
-  CATALOG_PATH, COPY, DOCS_PATH, REQUIRED_TYPES, SOURCE_PATH, main, readDocsTable, resolvePath,
-  validateCanonical, validateDocsTable, validateFixture,
-} from './turn-start-contract.mjs';
+  CATALOG_PATH, DOCS_PATH, checkTurnStartContract, conditionMatch, readDocsTable, validateCatalog, validateDocsTable,
+} from './check-turn-start-contract.mjs';
+import { COPY, REQUIRED_TYPES, SOURCE_PATH, main, resolvePath, validateFixture } from './turn-start-contract.mjs';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const read = (file) => fs.readFileSync(path.join(ROOT, file), 'utf8');
@@ -16,7 +16,7 @@ const canonical = () => JSON.parse(read(SOURCE_PATH));
 const catalogTypes = () => JSON.parse(read(CATALOG_PATH)).types;
 const docs = () => read(DOCS_PATH);
 const byId = (doc, id) => doc.events.find((entry) => entry.id === id);
-const rejects = (doc, pattern, types = catalogTypes()) => assert.throws(() => validateFixture(doc, types), pattern);
+const rejects = (doc, pattern) => assert.throws(() => validateFixture(doc), pattern);
 
 function tempRoot(t, { doc = canonical(), markdown = docs(), catalog = read(CATALOG_PATH) } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'turn-start-'));
@@ -30,8 +30,13 @@ function tempRoot(t, { doc = canonical(), markdown = docs(), catalog = read(CATA
 
 test('the canonical fixture, catalog and §6.6 table agree and cover every required turn-start event', () => {
   assert.equal(main(['validate']), 'turn-start: canonical valid (4 events)');
-  const types = canonical().events.map((entry) => entry.type);
-  for (const type of REQUIRED_TYPES) assert.ok(types.includes(type), type);
+  assert.match(checkTurnStartContract(), /turn-start contract: 4 events agree/);
+  assert.deepEqual([...new Set(canonical().events.map((entry) => entry.type))].sort(), [...REQUIRED_TYPES].sort());
+});
+
+test('the copy contract imports only the shared fixture-copy tool, so component CI can sparse-check it out', () => {
+  const imports = [...read('scripts/turn-start-contract.mjs').matchAll(/^import .* from '([^']+)';$/gm)].map((m) => m[1]);
+  assert.deepEqual(imports.filter((specifier) => specifier.startsWith('.')), ['./lib/fixture-copy.mjs']);
 });
 
 test('the copy is a single-file commit copy in cloudlands-fe', () => {
@@ -39,18 +44,28 @@ test('the copy is a single-file commit copy in cloudlands-fe', () => {
   assert.deepEqual(COPY.components, ['cloudlands-fe']);
 });
 
-test('only the running status edge counts as a turn start', () => {
+test('only the running status edge and the harness-wake stream start count', () => {
   const entry = byId(canonical(), 'running-status-edge');
   assert.deepEqual(entry.match, { 'data.status': 'active', 'data.isActive': true });
+  assert.equal(entry.turn, 'any');
+  assert.deepEqual(byId(canonical(), 'harness-wake-start').match, { 'data.reason': 'harness-wake' });
   assert.equal(resolvePath(entry.event, 'data.status'), 'active');
   assert.equal(resolvePath(entry.event, 'data.missing.deeper'), undefined);
 });
 
 test('a type missing from the event catalog fails', () => {
+  const events = canonical().events;
+  events[3].type = 'agent:queue:started';
+  assert.throws(() => validateCatalog({ types: catalogTypes() }, events),
+    /queue-drain-start: type agent:queue:started is not in docs\/protocol\/event-types.json/);
+  assert.throws(() => validateCatalog({}, events), /types must be an array/);
+});
+
+test('a fixture type not in REQUIRED_TYPES fails until the list is updated too', () => {
   const doc = canonical();
-  doc.events[3].type = 'agent:queue:started';
-  doc.events[3].event.type = 'agent:queue:started';
-  rejects(doc, /type agent:queue:started is not in docs\/protocol\/event-types.json/);
+  doc.events.push({ ...structuredClone(doc.events[2]), id: 'idle-ping', type: 'agent:idle' });
+  doc.events.at(-1).event.type = 'agent:idle';
+  rejects(doc, /fixture event types not in REQUIRED_TYPES \(scripts\/turn-start-contract.mjs\): agent:idle/);
 });
 
 test('removing a required turn-start event fails', () => {
@@ -120,9 +135,25 @@ test('an example needs an agent, an ISO timestamp and, for a wake turn, its mess
   rejects(wake, /agent-initiated turn opens its assistant message, so event.data.messageId/);
 });
 
-test('the §6.6 table lists every fixture entry with its turn kind', () => {
-  assert.deepEqual(readDocsTable(docs()).map((row) => row.id), canonical().events.map((entry) => entry.id));
+test('the §6.6 table lists every fixture entry with its turn kind and condition', () => {
+  const rows = readDocsTable(docs());
+  assert.deepEqual(rows.map((row) => row.id), canonical().events.map((entry) => entry.id));
+  assert.match(rows[1].condition, /^Only the running edge/);
+  assert.deepEqual(rows[1].match, { 'data.status': 'active', 'data.isActive': true });
+  assert.deepEqual(rows[2].match, {});
   assert.doesNotThrow(() => validateDocsTable(docs(), canonical().events));
+});
+
+test('a table condition that disagrees with the fixture match fails', () => {
+  const dropped = docs().replace(', `data.isActive: true`', '');
+  assert.notEqual(dropped, docs());
+  assert.throws(() => validateDocsTable(dropped, canonical().events), /\(id, type, turn, match\)/);
+  const doc = canonical();
+  delete byId(doc, 'harness-wake-start').match;
+  assert.throws(() => validateDocsTable(docs(), doc.events), /\(id, type, turn, match\)/);
+  assert.deepEqual(conditionMatch('`data.a: 1`, `data.b.c: "x"`, plain `data.messageId`', 'cell'), { 'data.a': 1, 'data.b.c': 'x' });
+  assert.throws(() => conditionMatch('`data.a: nope`', 'cell'), /must be `path: <JSON value>`/);
+  assert.throws(() => conditionMatch('`data.a: 1` `data.a: 2`', 'cell'), /names data.a twice/);
 });
 
 test('a table row missing for a fixture entry fails', () => {
@@ -149,15 +180,14 @@ test('the table must exist exactly once inside §6.6', () => {
   assert.throws(() => readDocsTable(outside), /heading "6.6 Turn\/event lifecycle & batching window" not found/);
 });
 
-test('validateCanonical reads the fixture, catalog and docs under a monorepo-shaped root', (t) => {
-  assert.equal(validateCanonical(path.join(tempRoot(t), SOURCE_PATH)), '4 events');
+test('checkTurnStartContract reads the fixture, catalog and docs under a monorepo-shaped root', (t) => {
+  assert.match(checkTurnStartContract(tempRoot(t)), /4 events agree/);
   const doc = canonical();
   doc.events.push({ ...structuredClone(doc.events[2]), id: 'second-activity-ping' });
-  assert.throws(() => validateCanonical(path.join(tempRoot(t, { doc }), SOURCE_PATH)), /Turn-start signals table must list/);
+  assert.throws(() => checkTurnStartContract(tempRoot(t, { doc })), /Turn-start signals table must list/);
   const catalog = `${JSON.stringify({ version: 1, types: catalogTypes().filter((type) => type !== 'agent:stream:activity') }, null, 2)}\n`;
-  assert.throws(() => validateCanonical(path.join(tempRoot(t, { catalog }), SOURCE_PATH)),
-    /type agent:stream:activity is not in/);
+  assert.throws(() => checkTurnStartContract(tempRoot(t, { catalog })), /type agent:stream:activity is not in/);
   const root = tempRoot(t);
   fs.writeFileSync(path.join(root, SOURCE_PATH), JSON.stringify(canonical()));
-  assert.throws(() => validateCanonical(path.join(root, SOURCE_PATH)), /must be formatted as JSON.stringify/);
+  assert.throws(() => checkTurnStartContract(root), /must be formatted as JSON.stringify/);
 });

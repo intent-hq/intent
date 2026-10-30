@@ -918,20 +918,25 @@ Explicit user link clicks still activate content. Settings navigation and
 
 ### 6.6 Turn/event lifecycle & batching window
 
-**Turn-start signals.** A client must treat each event below as the start of an agent turn: an
-idle agent reads as running as soon as it sees one, without waiting for a later event. The
-paragraphs that follow give the detail. The machine-readable list, with one replayable example
-per row, is [`fixtures/turn-start/turn-start-events.json`](./fixtures/turn-start/turn-start-events.json);
-`scripts/turn-start-contract.mjs` (part of `make consumer-checks`) keeps this table, that file
-and [`event-types.json`](./event-types.json) in step, and cloudlands-fe replays every entry
-through its events bridge. A new turn-start signal is added to both, docs first.
+**Turn-start signals.** A client treats each event below as the start of an agent turn: an idle
+agent reads as running as soon as it sees one, without waiting for a later event. The paragraphs
+that follow give the detail. The user-row `agent:message` echo is not listed: the daemon persists
+it after claiming the turn slot, so the running status edge always comes first. The
+machine-readable list, with one replayable example per row, is
+[`fixtures/turn-start/turn-start-events.json`](./fixtures/turn-start/turn-start-events.json).
+`make check-turn-start-contract` (part of `make consumer-checks`) keeps this table, that file and
+[`event-types.json`](./event-types.json) in step; a `path: value` code span in the Condition cell
+is the entry's payload condition. Components keep a copy through the shared fixture-copy tool
+(see [Copied fixtures](./README.md#copied-fixtures)) and replay every entry. A new turn-start
+signal goes into this table, the fixture and `REQUIRED_TYPES` in `scripts/turn-start-contract.mjs`,
+docs first.
 
 | Turn-start event | Condition | Turn | Fixture id |
 |---|---|---|---|
-| `agent:stream:start` | Always (`reason: "harness-wake"`); opens the assistant message `data.messageId` | `agent-initiated` | `harness-wake-start` |
-| `agent:status-changed` | Only the running edge: `data.status: "active"`, `data.isActive: true` | `prompt` | `running-status-edge` |
-| `agent:stream:activity` | Always; the first ping of a turn | `any` | `first-activity-ping` |
-| `agent:queue:processing` | Always; the queue-drain start, before the drained turn streams | `prompt` | `queue-drain-start` |
+| `agent:stream:start` | `data.reason: "harness-wake"`; opens the assistant message `data.messageId` | `agent-initiated` | `harness-wake-start` |
+| `agent:status-changed` | Only the running edge: `data.status: "active"`, `data.isActive: true`; sent when a turn claims the slot | `any` | `running-status-edge` |
+| `agent:stream:activity` | Any ping of a live turn (§7); the first one opens the turn when nothing earlier did | `any` | `first-activity-ping` |
+| `agent:queue:processing` | Always; the queue-drain start, which can arrive with no running status edge before it | `prompt` | `queue-drain-start` |
 
 **Prompt (user-initiated) turns.** A turn opened by a daemon-dispatched `session/prompt`
 (`agent.sendMessage`, queue drain, wake delivery) emits **no** `agent:stream:start` — that event

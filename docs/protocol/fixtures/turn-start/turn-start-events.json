@@ -1,11 +1,14 @@
 {
   "fixtureFormatVersion": 1,
-  "description": "Every daemon event that PROTOCOL 06-events.md section 6.5/6.6 names as the start of an agent turn, with one replayable example each. A client must treat each entry as turn start: an idle agent reads as running once it sees the event. turn is the 6.6 turn kind: agent-initiated (harness-wake, opens its own assistant message), prompt (daemon-dispatched session/prompt) or any. match lists dotted event paths that must hold for the event to count. The 6.6 Turn-start signals table lists the same entries; scripts/turn-start-contract.mjs checks both against event-types.json.",
+  "description": "The daemon events that PROTOCOL 06-events.md section 6.6 names as the start of an agent turn, with one replayable example each. A client treats each entry as turn start: an idle agent reads as running once it sees the event. turn is the 6.6 turn kind: agent-initiated (harness-wake, opens its own assistant message), prompt (daemon-dispatched session/prompt) or any. match lists dotted event paths that must hold for the event to count. The 6.6 Turn-start signals table lists the same entries; scripts/check-turn-start-contract.mjs checks both against event-types.json.",
   "events": [
     {
       "id": "harness-wake-start",
       "type": "agent:stream:start",
       "turn": "agent-initiated",
+      "match": {
+        "data.reason": "harness-wake"
+      },
       "event": {
         "type": "agent:stream:start",
         "workspaceId": "ws-turn-start",
@@ -26,7 +29,7 @@
     {
       "id": "running-status-edge",
       "type": "agent:status-changed",
-      "turn": "prompt",
+      "turn": "any",
       "match": {
         "data.status": "active",
         "data.isActive": true
@@ -44,7 +47,9 @@
         "data": {
           "agentId": "agent-turn-start",
           "status": "active",
-          "isActive": true
+          "isActive": true,
+          "stopReason": null,
+          "stopReasonTimestamp": null
         }
       }
     },
