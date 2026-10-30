@@ -1466,6 +1466,87 @@ class ResumableNextestTests(unittest.TestCase):
                 {("alpha::one", "passes"), ("alpha::one", "fails"), ("other", "elsewhere")},
             )
 
+    @staticmethod
+    def _filtered_listing(testcases):
+        return json.dumps({"rust-suites": {"alpha::one": {
+            "package-name": "alpha", "binary-name": "one", "binary-id": "alpha::one",
+            "testcases": testcases}}})
+
+    def test_fresh_skipped_only_selection_passes_with_warning(self):
+        # Regression: a branch changing only an all-#[ignore] test file failed a
+        # fresh run with nextest's exit 4 ("no tests to run") while CI passed it.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            # Mirrors cargo-nextest 0.9.143 for an ignored-only selection: the
+            # binary still runs, reporting the skipped test in its suite summary.
+            lines = [
+                suite_event("started", test_count=1),
+                event("started", "alpha::one$skipped"),
+                suite_event("ok", passed=0, failed=0, ignored=1, measured=0, filtered_out=0),
+            ]
+            harness = PlannedRunHarness(root, [(lines, 0)])
+            harness.listing = self._filtered_listing({
+                "skipped": {"ignored": True, "filter-match": {"status": "mismatch", "reason": "ignored"}},
+                "unrelated": {"ignored": False, "filter-match": {"status": "mismatch", "reason": "expression"}},
+            })
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(harness.execute(make_args(root)), 0)
+            self.assertEqual(harness.run_commands[0][-2:], ["--no-tests", "warn"])
+            self.assertIn("[test-changed] WARNING: selection 1 matched only skipped/ignored tests (1); "
+                          "passing with no tests run", stderr.getvalue())
+
+            run_dir = root / "cache" / KEY
+            record_dir = run_dir / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
+            self.assertTrue((record_dir / "complete").is_file())
+            attempt = latest_attempt(record_dir)
+            proof = json.loads((attempt / "coverage.json").read_text())
+            self.assertTrue(proof["complete"], proof["errors"])
+            self.assertEqual(proof["categories"]["ignored"], [["alpha::one", "skipped"]])
+            self.assertEqual(proof["categories"]["executed-passed"], [])
+            self.assertEqual(gate.load_passed(run_dir / "passed.jsonl"), set())
+
+            # The saved receipt still validates; older receipts without the flag
+            # (a fail-closed run) stay readable, but any other policy is rejected.
+            receipt = json.loads((attempt / "run.json").read_text())
+            result = receipt["results"][0]
+            gate.validate_result_config(attempt, receipt, result, set())
+            legacy = dict(result, command=result["command"][:-2])
+            gate.validate_result_config(attempt, receipt, legacy, set())
+            tampered = dict(result, command=[*result["command"][:-1], "pass"])
+            with self.assertRaisesRegex(ValueError, "saved command disagrees"):
+                gate.validate_result_config(attempt, receipt, tampered, set())
+
+    def test_fresh_empty_selection_still_fails_closed(self):
+        # Nothing matched at all usually means a selection or change-map bug:
+        # keep nextest's default so the run fails instead of passing vacuously.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = PlannedRunHarness(root, [([], 4)])
+            harness.listing = self._filtered_listing({
+                "unrelated": {"ignored": False, "filter-match": {"status": "mismatch", "reason": "expression"}},
+                "skipped": {"ignored": True, "filter-match": {"status": "mismatch", "reason": "expression"}},
+            })
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(harness.execute(make_args(root)), 4)
+            self.assertNotIn("--no-tests", harness.run_commands[0])
+            self.assertNotIn("WARNING", stderr.getvalue())
+            record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
+            self.assertFalse((record_dir / "complete").exists())
+
+    def test_skipped_only_policy_requires_matched_tests(self):
+        skipped = {"active": True, "skipped": True}
+        runnable = {"active": True, "skipped": False}
+        unmatched = {"active": False, "skipped": False}
+        self.assertTrue(gate.skipped_only({"a": skipped, "b": unmatched}))
+        self.assertFalse(gate.skipped_only({}))
+        self.assertFalse(gate.skipped_only({"b": unmatched}))
+        self.assertFalse(gate.skipped_only({"a": skipped, "c": runnable}))
+        self.assertEqual(gate.no_tests_args(set(), {"a": skipped}), ["--no-tests", "warn"])
+        self.assertEqual(gate.no_tests_args({("x", "y")}, {"a": skipped}), ["--no-tests", "pass"])
+        self.assertEqual(gate.no_tests_args(set(), {"b": unmatched}), [])
+
     def test_planned_complete_marker_short_circuits_unless_forced(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
