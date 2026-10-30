@@ -282,6 +282,8 @@ never resurrects shipped bundles the operator excluded.
     Harness 3.6 changes the bundled `spec-writer` display name to **Lead**, its role to
     `"lead"`, and accepts both `coordinator` and `lead` aliases. The canonical ID stays
     `spec-writer`; older harness bundles keep Coordinator and `"orchestrator"`.
+    Its advisory roster is `teamAgents: ["implementor"]`. The current bundle no
+    longer includes `verifier`; historical bundles still resolve that ID.
     New sessions can opt into the previous workflows with `developer-legacy`,
     `coordinator-legacy`, `implementor-legacy`, or `verifier-legacy` (display names
     end in `(Legacy)`). `coordinator-legacy` retains `"orchestrator"` and declares
