@@ -45,12 +45,16 @@ dropped.
 
 A secret is owned by the **agent that requested it**, keyed by
 `(workspaceId, agentId, name)`. No other agent can use, list or forget it,
-including that agent's sub-agents and other agents in the same workspace. A
-background hook runs as the agent that scheduled it, so it can use that agent's
-secrets through `secretEnv`. A hook cannot call `ws.secret.request`: it has no
-turn to end and no user-facing chat. When a hook gets `secret-unavailable`, its
-code should return `{ dispatch: true, message }` so the owning agent wakes and
-asks the user itself.
+including that agent's sub-agents and other agents in the same workspace.
+
+**Background hooks never get secrets.** Secrets are transient: the user hands one
+over for the agent's own interactive work (setting it through an API, storing it
+in a cluster secret), not for unattended reuse. A hook run therefore sees
+`agentFeatures.secretRequests` as off whatever the setting
+([§5.40 API surface per run](./hooks.md#540-background-hooks--hook-v210)): it has
+no `ws.secret` namespace, and a `ws.host.exec` call with `secretEnv` is rejected.
+A hook that needs a secret should return `{ dispatch: true, message }` so the
+owning agent wakes and runs the command in its own turn.
 
 A held secret is dropped when any of these happens:
 
@@ -63,7 +67,9 @@ A held secret is dropped when any of these happens:
 Pending requests are held in memory the same way and are lost on restart. There
 is no time-based expiry, but an agent may hold at most **8 pending requests**.
 A request for a name that already has a pending request from the same agent
-returns that request's `requestId` and adds no new card. A new request beyond the
+returns that request's `requestId` and queues its card again at turn end (an
+earlier card may have been dropped with a cancelled or very long turn). Clients key
+cards by `requestId`, so the repeat shows the same request. A new request beyond the
 cap fails, telling the agent to wait for the user to answer the open ones.
 
 ### Names
@@ -89,8 +95,8 @@ ws.secret.forget(name) → { ok, forgotten }
   attachment (§7). It returns at once; the agent should end its turn. Only
   top-level agents may call it: sub-agent frames are denied with a redirect to
   `ws.agent.requestDiscussion` / `ws.agent.reportToParent`, like
-  `ws.app.question.ask`. Calls from a background hook are denied (see Storage
-  and lifetime). A request for a name the agent already holds succeeds and,
+  `ws.app.question.ask`. Background hooks have no `ws.secret` (see Storage and
+  lifetime). A request for a name the agent already holds succeeds and,
   once provided, replaces the value.
 - `list` returns the calling agent's own data only: `secrets: [{ name }]` and
   `pendingRequests: [{ requestId, name }]`. It never returns values.
@@ -114,8 +120,8 @@ another, the longer one is hidden whole, and a value that happens to look like a
 placeholder cannot reveal part of another. Redaction covers exact bytes only: an
 encoded, split or transformed value is not detected.
 
-`secretEnv` is accepted only by the agent binding `ws.host.exec` (including from
-a background hook). The wire `host.exec` and `host.execStream` methods (§5.14)
+`secretEnv` is accepted only by the agent binding `ws.host.exec`, in the agent's
+own turn; background hooks reject it. The wire `host.exec` and `host.execStream` methods (§5.14)
 reject it with `-32602`, because a client connection has no agent identity.
 `ws.script.create` rejects a `secretEnv` key with an error saying that secrets
 work only with `ws.host.exec`; saved scripts never receive secrets.
