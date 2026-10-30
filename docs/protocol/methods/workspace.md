@@ -795,8 +795,11 @@ source workspace from the agent's session. The origin is accepted only when the 
 proposal is still pending on that agent, is a `workspace-create` proposal
 (`payload.operation: "workspace.create"`), and — when its `payload.params` carry an
 `idempotencyKey` — the create uses that same key, so neither another kind of card nor a
-replay naming a different card can be marked applied. After a successful create —
-including an idempotent replay of the same `idempotencyKey` — the daemon runs the
+replay naming a different card can be marked applied. An idempotent replay (the stored
+workspace returned without re-running the create) honours the origin only when the card
+carries its own `idempotencyKey`; a replay naming a key-less pending card reports
+`"notResolved"`, since it cannot prove the replayed workspace was created for that card.
+After a successful create — or an accepted replay — the daemon runs the
 `agent.resolveProposal` path (§5.5 "Pending proposals" in [agents.md](./agents.md)) with `outcome: "applied"` and
 `detail` `"Created workspace <id>."`, so the proposing agent receives the `proposal_resolved`
 notice and `agent:updated` carries the shrunken `pendingProposals` without the proposing
