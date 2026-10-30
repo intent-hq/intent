@@ -2261,6 +2261,14 @@ live at every sweep, which runs about once an hour (the first run shortly after 
   never block): any such root with `uncommittedCount > 0`, with `unpushedCount > 0` and
   `hasRemoteRefs: true` (a repository with no remote refs has nothing to push), or with
   an `error`. A failed evaluation also skips the workspace until the next sweep.
+- **Merged PRs.** Unpushed commits in a root stop blocking when a merged PR the daemon
+  already knows covers that root's `HEAD`: the PR's head SHA equals `HEAD` or descends
+  from it. This lets a workspace archive after its squash-merged branch was deleted and
+  pruned on the remote, which leaves every original commit on no remote ref. Merged PRs
+  come only from stored data, with no forge call per sweep: the workspace's and its
+  secondary roots' `pullRequests` entries with `status: "merged"`, and PR monitors whose
+  last snapshot shows the PR merged. Commits made after the merge, a missing head SHA or
+  commit, and uncommitted changes still block. The purge sweep is unaffected.
 - **Path.** A due workspace is archived through `workspace.archive`, with the same
   active-work teardown and the same `workspace:updated` delta. The sweep re-reads the row
   and re-checks that it is still idle with no agent turn running right before archiving.
