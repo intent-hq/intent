@@ -302,6 +302,14 @@ ws.script.stop(scriptId) → { ok, scriptId }
 ws.script.unmonitor(monitorId) → { ok, monitorId }
 ```
 
+### ws.secret
+
+```text
+ws.secret.forget(name) → { ok, forgotten }
+ws.secret.list() → { secrets, pendingRequests }
+ws.secret.request({ name, reason }) → { ok, requestId, message }
+```
+
 ### ws.task
 
 ```text
