@@ -1598,7 +1598,7 @@ class ResumableNextestTests(unittest.TestCase):
             for result in receipt["results"]:
                 gate.validate_result_config(attempt, receipt, result, resumed,
                                             inventories[result["selection_index"] - 1])
-            # A record from the old run-wide rule is rejected, so its tests rerun.
+            # A saved command that relaxes the empty selection is rejected.
             empty = receipt["results"][1]
             legacy = dict(empty, command=[*empty["command"], "--no-tests", "pass"])
             with self.assertRaisesRegex(ValueError, "saved command disagrees"):
@@ -1620,6 +1620,8 @@ class ResumableNextestTests(unittest.TestCase):
         self.assertEqual(gate.no_tests_args({"b"}, {"b": unmatched}), [])
         self.assertEqual(gate.no_tests_args({"a"}, {"a": skipped}), ["--no-tests", "warn"])
         self.assertEqual(gate.no_tests_args({"c"}, {"b": unmatched, "c": runnable}), ["--no-tests", "pass"])
+        # A selection that runs real tests but reused none keeps nextest's default.
+        self.assertEqual(gate.no_tests_args({"a"}, {"c": runnable}), [])
 
     def test_planned_complete_marker_short_circuits_unless_forced(self):
         with tempfile.TemporaryDirectory() as temporary:

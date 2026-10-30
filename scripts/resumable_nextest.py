@@ -742,17 +742,19 @@ def skipped_only(members: dict) -> bool:
     return bool(active) and all(meta["skipped"] for meta in active)
 
 
+def runnable(members: dict) -> set:
+    """Identities a selection actually runs: active and not skipped by default."""
+    return {identity for identity, meta in members.items() if meta["active"] and not meta["skipped"]}
+
+
 def no_tests_args(resumed: set, members: dict) -> list[str]:
     """nextest's empty-run policy for one selection.
 
     An empty run passes only when this selection reused passes of its own
     runnable members, and warns when it matched only skipped tests. Another
     selection's reused passes never excuse a selection that matched nothing.
-    Receipts saved under the old run-wide rule fail validate_result_config,
-    so their passes rerun once instead of granting credit.
     """
-    if any(identity in resumed for identity, meta in members.items()
-           if meta["active"] and not meta["skipped"]):
+    if not resumed.isdisjoint(runnable(members)):
         return ["--no-tests", "pass"]
     if skipped_only(members):
         return ["--no-tests", "warn"]
@@ -1848,8 +1850,7 @@ def run_nextest(args: argparse.Namespace) -> int:
                     if identity in binary_ids and binary_ids[identity] != binary:
                         raise RuntimeError("ambiguous nextest identity across selections")
                     binary_ids[identity] = binary
-            known_tests = set().union(*({i for i, meta in members.items() if meta["active"] and not meta["skipped"]}
-                                        for members in inventories))
+            known_tests = set().union(*(runnable(members) for members in inventories))
             # Shared credit applies only to this invocation's active selection.
             resumed &= known_tests
             run_record["resumed_tests"] = sorted(resumed)
