@@ -811,8 +811,10 @@ stays pending for Retry. The `workspace:created` event carries the resolved prov
 `proposalOrigin: { proposalId, outcome }` — computed per request (an idempotent replay
 reports its own `origin`), never persisted — where `outcome` is the proposal's state after
 this create: `"applied"`, `"dismissed"` (an earlier resolution kept), or `"notResolved"`
-when the daemon declined the origin (any of the fail-soft cases above, or a failed
-resolution write). **Client fallback:** daemons without this field ignore `origin` (unknown
+when the daemon declined the origin (any of the fail-soft cases above). The one exception:
+when the daemon accepted the origin but the resolution write itself failed, `proposalOrigin`
+is omitted, so the client fallback below retries the resolution — safe, because the card
+already passed the checks above. **Client fallback:** daemons without this field ignore `origin` (unknown
 keys are ignored) and return no `proposalOrigin`, so a client may call `agent.resolveProposal`
 itself after a successful apply **only when the result has no `proposalOrigin`**; when it is
 present the daemon has handled the card, and a client-side resolve after `"notResolved"`
