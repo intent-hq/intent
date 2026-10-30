@@ -169,7 +169,7 @@ CDP_PORT ?= $(call dev_port_value,CDP_PORT)
 # An explicit INTENTD_SOCKET always takes precedence.
 BRIDGE_PLATFORM ?= $(shell uname -s)
 
-.PHONY: check-app-ui-targets check-doc-links check-note-truncated-read-contract check-browser-routing-contract check-suggested-prompts-contract check-turn-start-contract check-fixture-copies check-agent-worker-contract test-transfer-selection-contract check-transfer-selection-contract check-backend-keychain-contract ports status consumer-checks docs-check check-protocol-catalog check-mcp-bindings mcp-bindings-doc check-makefile-targets check-protocol-field-parity check-rulesets event-catalog-check shipped-in release-status rpc
+.PHONY: check-app-ui-targets check-agent-feature-toggles check-doc-links check-note-truncated-read-contract check-browser-routing-contract check-suggested-prompts-contract check-turn-start-contract check-fixture-copies check-agent-worker-contract test-transfer-selection-contract check-transfer-selection-contract check-backend-keychain-contract ports status consumer-checks docs-check check-protocol-catalog check-mcp-bindings mcp-bindings-doc check-makefile-targets check-protocol-field-parity check-rulesets event-catalog-check shipped-in release-status rpc
 ports: ## Print this worktree's resolved development ports
 	@set -- .dev/sandbox/*.json; if [ -e "$$1" ]; then \
 		echo "[ports] Note: these ports are for the next start; read running ports from 'make sandbox-status' or .dev/sandbox/<mode>.json." >&2; \
@@ -278,6 +278,13 @@ check-makefile-targets: ensure-intentd-submodule ## Check Makefile-referenced in
 PARITY_BASE ?= $(if $(filter-out false 0,$(CI)),,origin/main)
 check-protocol-field-parity: ensure-intentd-submodule ensure-fe-submodule ## Check intentd row struct fields against the cloudlands-fe types that consume them (PARITY_BASE=<ref> for off-pin checkouts, default origin/main)
 	@node scripts/check-protocol-field-parity.mjs --intentd-dir "$(INTENTD_DIR)" --fe-dir "$(FE_DIR)" $(if $(PARITY_BASE),--base "$(PARITY_BASE)")$(CHECK_DEFER_PARITY)
+
+# Every agentFeatures.* setting intentd registers for settings.list must have a
+# Settings -> Agent features toggle in cloudlands-fe (FEATURE_PATHS / FEATURES),
+# or an EXEMPT entry with a reason in the script, landed before the intentd PR.
+# An FE-only toggle or a stale EXEMPT entry warns; see docs/README.md.
+check-agent-feature-toggles: ensure-intentd-submodule ensure-fe-submodule ## Check every intentd agentFeatures.* setting has a cloudlands-fe Agent features toggle (or a reasoned EXEMPT entry)
+	@node scripts/check-agent-feature-toggles.mjs --intentd-dir "$(INTENTD_DIR)" --fe-dir "$(FE_DIR)"
 
 # The live main-branch rulesets of intent, intentd and cloudlands-fe (required
 # CI Gate check, thread resolution, merge queue) are snapshotted under
