@@ -918,6 +918,21 @@ Explicit user link clicks still activate content. Settings navigation and
 
 ### 6.6 Turn/event lifecycle & batching window
 
+**Turn-start signals.** A client must treat each event below as the start of an agent turn: an
+idle agent reads as running as soon as it sees one, without waiting for a later event. The
+paragraphs that follow give the detail. The machine-readable list, with one replayable example
+per row, is [`fixtures/turn-start/turn-start-events.json`](./fixtures/turn-start/turn-start-events.json);
+`scripts/turn-start-contract.mjs` (part of `make consumer-checks`) keeps this table, that file
+and [`event-types.json`](./event-types.json) in step, and cloudlands-fe replays every entry
+through its events bridge. A new turn-start signal is added to both, docs first.
+
+| Turn-start event | Condition | Turn | Fixture id |
+|---|---|---|---|
+| `agent:stream:start` | Always (`reason: "harness-wake"`); opens the assistant message `data.messageId` | `agent-initiated` | `harness-wake-start` |
+| `agent:status-changed` | Only the running edge: `data.status: "active"`, `data.isActive: true` | `prompt` | `running-status-edge` |
+| `agent:stream:activity` | Always; the first ping of a turn | `any` | `first-activity-ping` |
+| `agent:queue:processing` | Always; the queue-drain start, before the drained turn streams | `prompt` | `queue-drain-start` |
+
 **Prompt (user-initiated) turns.** A turn opened by a daemon-dispatched `session/prompt`
 (`agent.sendMessage`, queue drain, wake delivery) emits **no** `agent:stream:start` — that event
 is reserved for agent-initiated (harness-wake) turns below. For a direct send or wake delivery

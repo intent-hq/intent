@@ -214,7 +214,7 @@ check-suggested-prompts-contract: ## Validate the shared suggested-prompts block
 	@node scripts/suggested-prompts-contract.mjs check
 
 check-fixture-copies: ## Fail when a component copies a docs/protocol fixture without the shared fixture-copy tool, then check every registered copy
-	@node --test scripts/lib/fixture-copy.test.mjs scripts/check-fixture-copies.test.mjs
+	@node --test scripts/lib/fixture-copy.test.mjs scripts/check-fixture-copies.test.mjs scripts/turn-start-contract.test.mjs
 	@node scripts/check-fixture-copies.mjs
 
 check-agent-worker-contract: ## Validate synthetic worker observation goldens, model and regression sensitivity

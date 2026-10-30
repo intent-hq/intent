@@ -23,6 +23,7 @@ import { blobId, git, historyBlobs, isFixtureCopy, requireValue, runScript } fro
 import { COPY as noteTruncatedRead } from './note-truncated-read-contract.mjs';
 import { COPY as scriptsCompact } from './scripts-compact-contract.mjs';
 import { COPY as suggestedPrompts } from './suggested-prompts-contract.mjs';
+import { COPY as turnStart } from './turn-start-contract.mjs';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 export const FIXTURES_ROOT = 'docs/protocol/fixtures';
@@ -31,7 +32,7 @@ export const COMPONENTS = ['cloudlands-fe', 'intentd', 'ios'];
 /** Every fixture copied through the shared tool. A new spec must be added here. */
 export const REGISTERED = [
   browserRouting, backendKeychain, checkoutRepoConfig, eventStreamRecovery, noteTruncatedRead, scriptsCompact,
-  suggestedPrompts,
+  suggestedPrompts, turnStart,
 ];
 
 function lines(buffer) {

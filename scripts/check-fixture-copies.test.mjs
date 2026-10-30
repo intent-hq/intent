@@ -171,7 +171,7 @@ test('a single-file commit spec owns its copy before and after adoption', (t) =>
 test('the real registry covers every adopted copy', () => {
   assert.deepEqual(REGISTERED.map((copy) => copy.name).sort(), [
     'backend-keychain', 'browser-routing', 'checkout-repo-config', 'event-stream-recovery', 'note-truncated-read',
-    'scripts-compact', 'suggested-prompts',
+    'scripts-compact', 'suggested-prompts', 'turn-start',
   ]);
   const result = spawnSync(process.execPath, [path.join(ROOT, 'scripts/check-fixture-copies.mjs')],
     { encoding: 'utf8', env: { ...process.env, DD_TRACE_ENABLED: 'false' } });
