@@ -2316,9 +2316,13 @@ live at every sweep, which runs about once an hour (the first run shortly after 
   to secondary roots.
 - **Path.** A due workspace is archived through `workspace.archive`, with the same
   active-work teardown and the same `workspace:updated` delta. The sweep re-reads the row
-  and re-checks that it is still idle with no agent turn running right before archiving,
-  and the archive transaction itself re-reads `autoArchiveDisabled`, so an opt-out that
-  commits after that re-read still prevents the automatic archive.
+  and re-checks that it is still idle with no agent turn running right before archiving.
+  The archive transaction then checks `autoArchiveDisabled` once more, in the same
+  transaction as the Archived write: an opt-out committed before that final check (including
+  one committed after the sweep's re-read) prevents the automatic archive, and nothing is
+  written. An opt-out committed after the archive transaction has committed does not undo it;
+  the workspace stays archived, keeps the flag, and is not archived automatically again once
+  unarchived.
 - Each workspace is archived independently; a failure is logged and retried on the next
   sweep.
 
