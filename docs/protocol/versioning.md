@@ -574,6 +574,25 @@ optional placed-agent projection fields
 ([experimental subset](./methods/nodes.md#experimental-single-node-subset)); a
 client must not infer remote support from their presence.
 
+**Prepared daemon-to-daemon remote agents — capability `remoteMachines: 1`, nodeProtocol 6.**
+[Remote machines (§5.50)](./methods/nodes.md#daemon-to-daemon-remote-machines-prepared)
+let a machine's owner expose a regular daemon to a backend daemon through a
+scoped [executor credential](./02-authentication.md#26-executor-credentials).
+It adds eight owner-only router methods (`executor.*`, `remoteMachines.*`), the
+`remoteMachine:changed` event, settings `remoteAgents.enabled`,
+`remoteAgents.permission`, `daemon.mode` and `experimental.remoteAgents`, and
+the errors `model-unavailable`, `machine-update-required` and new
+`placement-unavailable` reasons, taking the documented surface to
+**486 / 428 / 58** (dispatchable / router / fast path). The backend advertises
+`remoteMachines: 1` only when it implements the backend methods and
+`experimental.remoteAgents` is on; the flag is separate from `agentNodes`, whose
+complete-contract rule is unchanged, and it grants no authority. The private
+[executor link](./node-link.md#daemon-to-daemon-executor-link-nodeprotocol-6)
+negotiates a `{ min, max }` range that starts at 6; it is a new link family,
+outside the prepared `{2,3,4}`, `{3,4}` and `4` sets. No public version number
+is claimed by these docs; allocate it against daemon main before
+implementation merges, and land daemon protocol consumers before frontend ones.
+
 **Prepared command-default change — recommended 11.0, not shipped.**
 [Script creation defaults (§5.8)](./methods/scripts.md#command-creation-defaults-prepared-breaking-change)
 change omission on a new command from `saved` to `oneOff`; new services remain

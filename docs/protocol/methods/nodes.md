@@ -304,3 +304,188 @@ standalone repo-cache Git clone with local alternates; never the shared fallback
 of the old per-agent sandbox path. No alias, live migration or automatic legacy
 directory cleanup is introduced. Disabling remote placement after retirement
 leaves the new local node available; it does not restore per-agent CoW.
+
+#### Daemon-to-daemon remote machines (prepared)
+
+Prepared, not implemented at the pinned daemon. Any regular daemon can run
+agents for another daemon (the *backend*), but only after the machine's
+**owner** exposes it to that backend. The machine mints a scoped, revocable
+executor credential for one backend; the backend stores the machine's routes,
+certificate pin and credential, and connects on demand over the
+[executor link](../node-link.md#daemon-to-daemon-executor-link-nodeprotocol-6).
+This contract does not advertise or require `agentNodes`; it reuses the
+documented `placement` object and the
+[experimental subset](#experimental-single-node-subset)'s placed-agent fields.
+
+##### Capability
+
+`client.hello.server.capabilities.remoteMachines: 1` means the daemon
+implements the backend methods below **and** `experimental.remoteAgents` is on.
+It is separate from `agentNodes`, whose complete-contract rule is unchanged.
+The frontend offers **Make available to <current backend>** only while the
+current backend advertises it. The machine-side `executor.*` methods are not
+gated by the capability: an older machine answers `-32601`, which the frontend
+shows as "update Intent on <machine>".
+
+##### Machine methods: executor credentials
+
+Owner-only: the local UDS seat or a WSS connection admitted with the owner
+token. They are on neither the collaborator nor the member allowlist, so guests
+and members get `-32003`, and the service rechecks the owner role.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| executor.mint | backendId (req), backendName (req, 1-128 UTF-8 bytes), backendFingerprint? | `{ credentialId, token, machine: { daemonId, name, platform: { os, arch }, port, hosts, tcAddress?, fingerprint } }`; creates one credential for that backend; `token` (32 random bytes, hex) is returned once and never logged; fails `-32602` `remote-agents-disabled` while `remoteAgents.enabled` is off |
+| executor.list | — | `{ backends: [{ credentialId, backendId, backendName, backendFingerprint?, createdAt, lastUsedAt?, connected, runningAgents }] }`; unrevoked credentials only; never returns tokens |
+| executor.revoke | credentialId (req) | `{ ok: true }`; sets the credential revoked, closes its live executor connections with `1008`, stops its agents and refuses replays with `401`; an already revoked id is a no-op; an unknown id is `-32602` `not-found` |
+
+Minting again for the same `backendId` creates another credential; the earlier
+one stays valid until revoked. `machine.hosts`, `port` and `tcAddress` are the
+routes the machine currently advertises for pairing, and `fingerprint` is its
+WSS certificate fingerprint (§1.2).
+
+##### Backend methods: exposed machines
+
+Owner-only on the backend, with the same classification as the executor
+methods. Mutations fail `-32602` with `data.code: "remote-agents-disabled"`
+while `experimental.remoteAgents` is off.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| remoteMachines.backendInfo | — | `{ backendId, backendName, fingerprint? }`; the backend's persisted head id and display name, for `executor.mint` |
+| remoteMachines.add | machineId (req), name (req), hosts (req, string[]), port (req), tcAddress?, fingerprint (req), credentialId (req), token (req, secret) | `{ machine: RemoteMachine, replacedCredentialId? }`; probes before saving (route race, pin, token, bind, capabilities); on failure saves nothing and fails with `machine-unreachable` or `machine-update-required`; an existing `machineId` is replaced only after a successful probe, and `replacedCredentialId` names the old credential for the caller to revoke |
+| remoteMachines.list | — | `{ machines: RemoteMachine[] }`; never returns tokens |
+| remoteMachines.remove | machineId (req), stopAgents? (boolean, default false) | `{ ok: true, credentialId }`; with live agents on the machine and no `stopAgents: true` fails `-32602` `machine-in-use` with `runningAgents`; the caller revokes `credentialId` on the machine; unknown id is a no-op |
+| remoteMachines.refresh | machineId (req) | `{ machine: RemoteMachine }`; connects on demand and reads fresh capabilities; failures update `state` and fail with `machine-unreachable`, `machine-revoked` or `machine-update-required` |
+
+```ts
+interface RemoteMachine {
+  id: string;                       // the machine's daemon id
+  name: string;
+  platform?: { os: "linux" | "macos"; arch: "x86_64" | "aarch64" };
+  hosts: string[];
+  port: number;
+  tcAddress?: string;
+  fingerprint: string;
+  state: "connected" | "disconnected" | "unreachable" | "revoked" | "update-required";
+  runningAgents: number;            // this backend's live agents on the machine
+  capabilities?: MachineCapabilities; // last report, kept while disconnected
+  observedAt?: string;              // when `capabilities` was reported
+  addedAt: string;
+  lastConnectedAt?: string;
+}
+```
+
+`MachineCapabilities` is defined in the
+[executor link](../node-link.md#capabilities-report). The backend keeps the
+machine row with its last report, and the token in its secret store under
+`remoteMachines.<id>.token`. A `401` from the machine marks it `revoked`; the
+row stays until removed.
+
+`remoteMachine:changed` carries `{ machine: RemoteMachine }`, or
+`{ machineId, removed: true }` after removal. It is delivered to owner
+connections only and emitted on add, remove, state changes and new capability
+reports.
+
+##### Expose flow
+
+1. On an owner machine that is connected and is not the current backend, the
+   frontend offers **Make available to <current backend>** with the warning
+   that remote agents run code as the machine owner's OS user. It never offers
+   it for guest sessions, or when `principal.me` on that connection is not the
+   owner.
+2. The frontend main process relays, keeping the token out of the renderer and
+   never persisting it: `remoteMachines.backendInfo` on the backend,
+   `executor.mint` on the machine, then `remoteMachines.add` on the backend.
+3. If `add` fails, the frontend calls `executor.revoke` so no orphaned
+   credential remains.
+4. Exposing the local machine needs its WSS listener or tailcat to be on; the
+   frontend offers to turn it on first and reads the routes from
+   `server.pairingInfo`.
+5. **Stop making available** calls `remoteMachines.remove` on the backend and
+   `executor.revoke` on the machine. The owner can also revoke from the
+   machine's own settings with `executor.list` / `executor.revoke`, even when
+   the backend is gone.
+
+##### Placement across machines
+
+`placement.nodeId` names an exposed machine; `os` / `arch` filter. With
+`target: "remote"` and no `nodeId`, the backend:
+
+1. keeps machines whose platform matches, whose provider is installed (not
+   `cli-missing` or `prerequisite-missing`), and that list the requested model
+   (or no model was requested);
+2. for a launch without a profile, also skips machines whose provider status is
+   `signed-out` or `auth-failed`; a launch with a selected profile (any launch
+   that sends `profileEnv`) ignores the default account's sign-in status;
+3. orders those with free capacity by fewest running agents, then most recently
+   used;
+4. connects on demand, refreshing a stale report first.
+
+So a machine with no default login but a valid selected profile stays a
+candidate, and a profile whose credentials fail does so at launch without
+marking the machine's healthy default account `auth-failed`. The tool descriptions and
+`ws.help("agent")` discovery are in
+[model-platform routing](../model-platform-routing.md#exposed-machines-prepared).
+
+##### Node mode
+
+`intentd serve --node`, or the persisted setting `daemon.mode: "node"`, starts
+the regular daemon with its own orchestration off: no workspaces, local agents,
+hooks, scripts, schedulers, PR or review monitors. Local front doors that would
+start such work refuse with `-32003` `data.code: "node-mode"`. Node mode serves
+a deny-by-default method list, golden-tested like the collaborator allowlist so
+every cataloged method is either listed or refused:
+
+- `client.hello`, `system.status`, `host.status`, `principal.me`;
+- `server.pairingInfo` and the `pairing.*` methods, local-only as today;
+- `settings.get` / `settings.update` for the `remoteAgents.*`, `daemon.*` and
+  `server.*` keys;
+- `providers.catalog`, `models.list` and the provider-profile reads;
+- `executor.mint`, `executor.list`, `executor.revoke`;
+- the update methods the sitter uses.
+
+Any other method is `-32003` with `data.code: "node-mode"`. Adding a method is a
+deliberate one-line opt-in plus a test update. The executor link's request list
+is a second, separate opt-in.
+
+##### Remote machine errors
+
+Placement keeps `-32602` `placement-unavailable` and its `no-capacity` and
+`unsupported-platform` reasons, and adds `machine-unreachable`,
+`machine-unknown` (no exposed machine has that `nodeId`) and `machine-revoked`.
+For `no-capacity` the machine's limits decide and the launch is **refused, never
+queued**. The data adds `limit: "count" | "memory"`, then `runningAgents` and
+`agentCap` for `count`, or `chargedMemoryBytes` and `memoryBudgetBytes` for
+`memory`, and `retryable: true`, so the delegating model decides what to do.
+With several candidates, `machines[]` carries those fields per machine.
+
+```json
+{"code":-32602,"message":"No capacity on Build box: 4 of 4 agents running","data":{"code":"placement-unavailable","reason":"no-capacity","nodeId":"d-build-box","limit":"count","runningAgents":4,"agentCap":4,"retryable":true,"observedAt":"2026-10-30T00:00:00Z"}}
+```
+
+`model-unavailable` is `-32602`, raised before any launch when no candidate
+lists the requested model:
+
+```ts
+interface ModelUnavailableData {
+  code: "model-unavailable";
+  provider: string;
+  model: string;
+  machines: { nodeId: string; name: string; platform: { os: string; arch: string };
+              status: string; models: string[]; observedAt: string }[]; // models: at most 50
+  retryable: boolean; // true when a listed report is stale or its machine was unreachable
+}
+```
+
+Its message is written for the model: "Model X isn't available on <machine>;
+it has: …", naming each machine's provider status.
+
+`machine-update-required` (`-32602` from placement, add and refresh) carries
+`{ machineVersion, backendVersion, update: "machine" | "backend" }`.
+`machine-unreachable` from `remoteMachines.add` / `refresh` is `-32603` with
+`attempts: [{ route, error }]`, where `error` is the executor link's code (for
+example `node-link-certificate-mismatch` or `node-link-unauthorized`).
+`machine-revoked` from `refresh` is `-32603`. `machine-in-use`,
+`remote-agents-disabled` and `not-found` are `-32602`. Errors never include the
+token.
