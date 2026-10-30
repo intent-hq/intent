@@ -290,7 +290,8 @@ interface ProfileActivation {
   `defaults`), the `profile` in `create` and `update` results, and the
   `defaultConfig` in `updateDefault` results. These are folder locations, not
   credentials. Every other key stays masked as `"********"` (or `""` for a saved
-  empty string). Events, logs and `fieldErrors` remain value-free. An older daemon
+  empty string). Events, logs and `fieldErrors` remain value-free; launch logs still
+  redact these folder values like any other saved value. An older daemon
   masks these keys too, so clients must accept `"********"` for them.
 - **Activation on reads.** Every `ProviderProfile` read carries the optional
   `activation: { runningProcesses }`. That covers `list` and the `profile` in the
