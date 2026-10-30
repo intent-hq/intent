@@ -106,7 +106,7 @@ select a model again after a downgrade.
 | Data | Location | Exposure |
 | --- | --- | --- |
 | `id`, `name`, `baseProviderId`, timestamps, `backup`, order | Daemon-owned file `<data_dir>/provider-profiles.json` (mode `0600`, next to `config.toml`): `{ "version": 1, "profiles": [{ "id", "baseProvider", "name", "createdAt", "updatedAt", "backup"? }] }` | Only through `providers.profiles.*`. Not a `settings.*` path: `settings.get` / `settings.reset` return `-32602`, and `settings.update` rejects it. |
-| Environment entries | Existing protected `SecretStore`, account `providerProfiles.<profileId>.env`, one JSON document per profile | Only through `providers.profiles.*` reads, masked |
+| Environment entries | Existing protected `SecretStore`, account `providerProfiles.<profileId>.env`, one JSON document per profile | Only through `providers.profiles.*` reads, masked except the folder-path keys (see [Folder paths on reads](#folder-paths-on-reads)) |
 
 The metadata stays out of `config.toml` because `SettingsFile` denies unknown fields
 and `Config::resolve` fails startup on a malformed file. A new table there would stop
@@ -227,14 +227,14 @@ interface ProviderProfile {
   baseProviderId: "codex" | "claude-code";
   name: string;               // trimmed display name
   backup: boolean;            // quota failover may switch to this profile
-  env: EnvEntryRead[];        // masked; in stored order
+  env: EnvEntryRead[];        // masked except folder paths; in stored order
   settingsFingerprint: string; // opaque; changes whenever saved env changes; not derived from values alone
   createdAt: string;          // RFC 3339
   updatedAt: string;
   activation?: { runningProcesses: number }; // see "Activation on reads"
 }
 type EnvEntryRead =
-  | { key: string; kind: "set"; value: "********" | "" } // "" means a saved empty string
+  | { key: string; kind: "set"; value: string } // "********" (masked) or "" (saved empty string); CLAUDE_CONFIG_DIR / CODEX_HOME: the stored value
   | { key: string; kind: "unset" };
 type EnvEntryWrite =
   | { key: string; kind: "set"; value: string }  // literal, including ""
@@ -257,7 +257,7 @@ interface ProfileActivation {
   resolved. `~/.claude-work` becomes `<home>/.claude-work`. Expansion happens
   before account-home lookup, isolation and fingerprinting, so auth checks, model
   catalogs and launched sessions all see the same path. The stored value is
-  unchanged and reads still return it masked. `~user/…`, `$HOME`, `${…}` and a `~`
+  unchanged, and reads return that stored, unexpanded value. `~user/…`, `$HOME`, `${…}` and a `~`
   anywhere else stay literal, and every other key is used exactly as typed. If the
   daemon cannot determine its home directory, the value stays literal.
 - **Update.** `env`, when present, is the complete new list. Keys left out are removed,
@@ -280,7 +280,18 @@ interface ProfileActivation {
 - **`revision`** is a process-local, strictly increasing profile watermark with the
   same client rules as the [settings revision](settings.md). Reset it on reconnect
   and ignore older results and events.
-- `list` returns masked values only. No method returns a saved value.
+- `list` returns masked values, except the folder paths below. No method returns any
+  other saved value.
+- <a id="folder-paths-on-reads"></a>**Folder paths on reads.** A `set` entry whose key is
+  `CLAUDE_CONFIG_DIR` or `CODEX_HOME` (compared ignoring ASCII case, as for home
+  expansion, under either base provider) reads back with `value` exactly as stored:
+  not masked and not home-expanded, so `~/.claude-work` reads as `~/.claude-work`.
+  This applies to every `EnvEntryRead`: `providers.profiles.list` (profiles and
+  `defaults`), the `profile` in `create` and `update` results, and the
+  `defaultConfig` in `updateDefault` results. These are folder locations, not
+  credentials. Every other key stays masked as `"********"` (or `""` for a saved
+  empty string). Events, logs and `fieldErrors` remain value-free. An older daemon
+  masks these keys too, so clients must accept `"********"` for them.
 - **Activation on reads.** Every `ProviderProfile` read carries the optional
   `activation: { runningProcesses }`. That covers `list` and the `profile` in the
   `create` and `update` results. `runningProcesses` is a non-negative integer: the
@@ -627,7 +638,7 @@ interface DefaultConfig {
   baseProviderId: "codex" | "claude-code";
   providerRef: string;         // the bare base provider id
   name: string;                // "Default" unless renamed
-  env: EnvEntryRead[];         // masked; in stored order; [] when none saved
+  env: EnvEntryRead[];         // masked except folder paths; in stored order; [] when none saved
   settingsFingerprint: string; // opaque; "" exactly when no entries are saved
   activation?: { runningProcesses: number }; // as on ProviderProfile
 }
@@ -640,7 +651,8 @@ interface DefaultConfig {
 - **Reads.** `providers.profiles.list` gains an additive `defaults: DefaultConfig[]`
   with one entry per base provider that advertises `supportsProfiles`, in catalog
   order, whether or not anything is saved. A `baseProviderId` filter narrows it to
-  that base provider. Values are masked exactly as on profiles.
+  that base provider. Values are masked exactly as on profiles, and folder paths are
+  returned as stored (see [Folder paths on reads](#folder-paths-on-reads)).
 - **Name.** `name` is trimmed. A name that is empty after trimming, or equals
   `Default` ignoring case, is not a rename: it restores the unrenamed Default, which
   reads as `"Default"` and appears in neither the file nor `defaultNames`. Any other
