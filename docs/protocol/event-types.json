@@ -198,6 +198,7 @@
         "archived",
         "archivedAt",
         "attention",
+        "autoArchiveDisabled",
         "autoCommitEnabled",
         "autoUnarchive",
         "baseCommitSha",

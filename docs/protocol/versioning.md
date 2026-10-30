@@ -76,6 +76,16 @@ unlabeled workspaces omit the field, support is detected by the exact-integer ca
 `workspaceLabels: 1` on `client.hello` `server.capabilities` and `system.capabilities`;
 older daemons omit it.
 
+Also within 15.2 (additive optional row field, update param and `workspace:updated` key;
+capability-gated; no method-catalog change, so no version bump): **workspace auto-archive
+opt-out** ([§5.1](./methods/workspace.md#auto-archive-opt-out)). `Workspace.autoArchiveDisabled`
+is a per-workspace boolean, omitted while `false` (the default); while `true` the automatic
+archive sweep skips the workspace. `workspace.update` sets it with
+`autoArchiveDisabled?: boolean` (owner-only), and `workspace:updated` carries
+`changes.autoArchiveDisabled: boolean`. Support is detected by the exact-integer capability
+`workspaceAutoArchiveOptOut: 1` on `client.hello` `server.capabilities` and
+`system.capabilities`; older daemons omit it.
+
 Also within 15.2 (additive optional result field; presence-detected; no method-catalog
 change, so no version bump): **`models.list` `warningKind`**
 ([§5.30](./methods/models-providers.md#530-modelslist--model-catalog)). A provider-scoped
@@ -1582,4 +1592,5 @@ the `ignore` map of `scripts/check-protocol-field-parity.mjs`, not here.
 | `Workspace` | `retiredAt` | [Retired workspaces](./methods/workspace.md#retired-workspaces) | Pending cloudlands-fe retired-workspaces PR (home, search and workspace view) |
 | `Workspace` | `scriptsRunning` | [Workspace fields](./methods/workspace.md#51-workspace) | Pending cloudlands-fe Home Running/Waiting groups PR |
 | `Workspace` | `backgroundTasksRunning` | [Workspace fields](./methods/workspace.md#51-workspace) | Pending cloudlands-fe Home background-task Running PR |
+| `Workspace` | `autoArchiveDisabled` | [Auto-archive opt-out](./methods/workspace.md#auto-archive-opt-out) | Pending [cloudlands-fe#3863](https://github.com/intent-hq/cloudlands-fe/pull/3863) (Home Disable auto-archive toggle) |
 | `AgentLite` | `nodeName` | [Placed agent projection](./methods/nodes.md#placement-and-creation) | Pending: the complete node contract that advertises `agentNodes`; the experimental single-node remote launch advertises no capability, so the app stays gated off |
