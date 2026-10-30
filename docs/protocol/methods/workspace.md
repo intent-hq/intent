@@ -1373,7 +1373,7 @@ each with a dedicated change event (§6.5) that carries the new value:
 **`status` wire form.** `Workspace.status` serializes as the PascalCase TS `WorkspaceStatus`
 string enum — `"Active" | "Inactive" | "Archived" | "Retired" | "Deleted"` (src/shared/types.ts; `"Retired"` is additive, see [Retired workspaces](#retired-workspaces)) — both on
 the wire and as the stored DB word (matching the `PullRequestStatus` precedent). Optional
-`Workspace` fields (`statusMessage`, `statusImageAssetId`, `label`, `autoArchiveDisabled` (omitted while `false`), `baseRef`, `prUrl`, `prNumber`,
+`Workspace` fields (`statusMessage`, `statusImageAssetId`, `label`, `autoArchiveDisabled`, `baseRef`, `prUrl`, `prNumber`,
 `prStatus`, `activePullRequest`, `pullRequests`, `pullRequestsTotal` (list rows only, see
 **List-row slimming** below), `contextLinks`, `archivedAt`, `retiredAt`, `cowSupported`,
 `checkoutMode`, repository/worktree fields, …) are
@@ -2290,12 +2290,13 @@ workspaces that have been idle for `workspace.autoArchiveIdleAfterDays` days (§
 [settings](./settings.md); absent or `0` means off, the default). The setting is read
 live at every sweep, which runs about once an hour (the first run shortly after startup).
 
+- **Opt-out.** A workspace with `autoArchiveDisabled: true` ([below](#auto-archive-opt-out)) is
+  never due, so it is filtered out before the skip checks and is not counted as skipped.
 - **Idle clock.** A workspace is due when the newest of `lastContentActivity`,
   `lastActivity` and `createdAt` is older than the cutoff. Unparseable timestamps are
   ignored; a workspace with no parseable timestamp is never due.
 - **Skipped.** The virtual Chief workspace; remote workspaces; workspaces already
-  archived, retired or deleted; a workspace opted out with `autoArchiveDisabled: true`
-  ([below](#auto-archive-opt-out)); a workspace with a pending grace-window delete; a
+  archived, retired or deleted; a workspace with a pending grace-window delete; a
   workspace with collaborators or open invites (archiving would remove them); and a
   workspace with work in flight — a running agent turn, a running script
   (`scriptsRunning`), an active background hook or an active PR monitor; and a workspace
@@ -2332,9 +2333,11 @@ skipped. The flag has no other effect: manual `workspace.archive`, auto-unarchiv
 automatic purge of already-archived workspaces are unchanged.
 
 `workspace.update` accepts `autoArchiveDisabled?: boolean`: **missing** leaves the stored
-value untouched, `true` turns the opt-out on and `false` turns it off; any other JSON type,
-including `null`, is `-32602 { code: "invalid-params" }`, as is setting it on the virtual Chief
-workspace (never persisted and never auto-archived). Writes are **owner-only**: `autoArchiveDisabled` is not in
+value untouched, `true` turns the opt-out on and `false` turns it off. Any other JSON type,
+including `null`, is `-32602 { code: "invalid-params" }`, and so is carrying the key at all (either
+value) on the virtual Chief workspace, which is never persisted or auto-archived; in both cases
+the whole update is refused and nothing is written. A write that matches the stored value still
+succeeds and carries the value on the delta. Writes are **owner-only**: `autoArchiveDisabled` is not in
 the collaborator allowlist, so a collaborator update carrying it is
 `-32003 { code: "forbidden" }` (§5.48). The applied value travels on `workspace:updated` as
 `changes.autoArchiveDisabled: boolean` (§6.5). The flag is part of the workspace row: it

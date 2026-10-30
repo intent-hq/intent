@@ -1592,4 +1592,5 @@ the `ignore` map of `scripts/check-protocol-field-parity.mjs`, not here.
 | `Workspace` | `retiredAt` | [Retired workspaces](./methods/workspace.md#retired-workspaces) | Pending cloudlands-fe retired-workspaces PR (home, search and workspace view) |
 | `Workspace` | `scriptsRunning` | [Workspace fields](./methods/workspace.md#51-workspace) | Pending cloudlands-fe Home Running/Waiting groups PR |
 | `Workspace` | `backgroundTasksRunning` | [Workspace fields](./methods/workspace.md#51-workspace) | Pending cloudlands-fe Home background-task Running PR |
+| `Workspace` | `autoArchiveDisabled` | [Auto-archive opt-out](./methods/workspace.md#auto-archive-opt-out) | Pending [cloudlands-fe#3863](https://github.com/intent-hq/cloudlands-fe/pull/3863) (Home Disable auto-archive toggle) |
 | `AgentLite` | `nodeName` | [Placed agent projection](./methods/nodes.md#placement-and-creation) | Pending: the complete node contract that advertises `agentNodes`; the experimental single-node remote launch advertises no capability, so the app stays gated off |
