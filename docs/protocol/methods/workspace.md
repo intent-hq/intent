@@ -2266,7 +2266,7 @@ live at every sweep, which runs about once an hour (the first run shortly after 
   from it. This lets a workspace archive after its squash-merged branch was deleted and
   pruned on the remote, which leaves every original commit on no remote ref. Merged PRs
   come only from stored data, with no forge call per sweep: the workspace's and its
-  secondary roots' `pullRequests` entries with `status: "merged"`, and PR monitors whose
+  secondary roots' `pullRequests` entries with `status: "Merged"`, and PR monitors whose
   last snapshot shows the PR merged. Commits made after the merge, a missing head SHA or
   commit, and uncommitted changes still block. The purge sweep is unaffected.
 - **Path.** A due workspace is archived through `workspace.archive`, with the same
