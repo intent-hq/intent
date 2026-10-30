@@ -1494,7 +1494,7 @@ class ResumableNextestTests(unittest.TestCase):
                 self.assertEqual(harness.execute(make_args(root)), 0)
             self.assertEqual(harness.run_commands[0][-2:], ["--no-tests", "warn"])
             self.assertIn("[test-changed] WARNING: selection 1 matched only skipped/ignored tests (1); "
-                          "passing with no tests run", stderr.getvalue())
+                          "passed with no tests run", stderr.getvalue())
 
             run_dir = root / "cache" / KEY
             record_dir = run_dir / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
@@ -1506,16 +1506,28 @@ class ResumableNextestTests(unittest.TestCase):
             self.assertEqual(proof["categories"]["executed-passed"], [])
             self.assertEqual(gate.load_passed(run_dir / "passed.jsonl"), set())
 
-            # The saved receipt still validates; older receipts without the flag
-            # (a fail-closed run) stay readable, but any other policy is rejected.
+            # The saved receipt validates against its verified listing; a dropped
+            # or altered empty-run policy is rejected.
             receipt = json.loads((attempt / "run.json").read_text())
             result = receipt["results"][0]
-            gate.validate_result_config(attempt, receipt, result, set())
-            legacy = dict(result, command=result["command"][:-2])
-            gate.validate_result_config(attempt, receipt, legacy, set())
-            tampered = dict(result, command=[*result["command"][:-1], "pass"])
-            with self.assertRaisesRegex(ValueError, "saved command disagrees"):
-                gate.validate_result_config(attempt, receipt, tampered, set())
+            members = gate.receipt_inventories(attempt, receipt)[0]
+            gate.validate_result_config(attempt, receipt, result, set(), members)
+            for command in (result["command"][:-2], [*result["command"][:-1], "pass"]):
+                with self.assertRaisesRegex(ValueError, "saved command disagrees"):
+                    gate.validate_result_config(attempt, receipt, dict(result, command=command), set(), members)
+
+    def test_failed_skipped_only_selection_does_not_claim_a_pass(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = PlannedRunHarness(root, [([], 101)])
+            harness.listing = self._filtered_listing({
+                "skipped": {"ignored": True, "filter-match": {"status": "mismatch", "reason": "ignored"}},
+            })
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(harness.execute(make_args(root)), 101)
+            self.assertEqual(harness.run_commands[0][-2:], ["--no-tests", "warn"])
+            self.assertNotIn("WARNING", stderr.getvalue())
 
     def test_fresh_empty_selection_still_fails_closed(self):
         # Nothing matched at all usually means a selection or change-map bug:
@@ -2512,11 +2524,13 @@ class ResumeSelectionTests(unittest.TestCase):
                 resumed = set(map(tuple, receipt['resumed_tests']))
                 receipt['receipt_schema'] = 3
                 with self.assertRaisesRegex(ValueError, 'config disagrees'):
-                    gate.validate_result_config(completed, receipt, receipt['results'][0], resumed)
+                    gate.validate_result_config(completed, receipt, receipt['results'][0], resumed,
+                                                gate.receipt_inventories(completed, receipt)[0])
                 receipt['receipt_schema'] = schema
                 receipt['results'][0]['command'].extend(['-E', gate.remaining_filter(resumed)])
                 with self.assertRaisesRegex(ValueError, 'command disagrees'):
-                    gate.validate_result_config(completed, receipt, receipt['results'][0], resumed)
+                    gate.validate_result_config(completed, receipt, receipt['results'][0], resumed,
+                                                gate.receipt_inventories(completed, receipt)[0])
 
 
 class ProjectDefaultFilterTests(unittest.TestCase):
