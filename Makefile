@@ -813,8 +813,8 @@ test-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd br
 # tree, or the commits since origin/main on a clean branch ahead of it; BASE is
 # a cloudlands-fe ref. DRY_RUN=1 maps to --resolved-plan, which lists every
 # selected unit-test file without running checks (cloudlands-fe#3876's missed
-# two-window console test was in that list). The run is exec'd, so make reports
-# the script's own code ("Error 2" = empty change set). FE_VERIFY_BASE escapes
+# two-window console test was in that list). Nothing masks the exit status:
+# pnpm passes the script's code through to make ("Error 2" = empty change set). FE_VERIFY_BASE escapes
 # apostrophes for the single-quoted hand-off; scripts/fe-verify-changed.test.sh
 # pins the mapping.
 FE_VERIFY_BASE = $(subst ','\'',$(BASE))

@@ -307,12 +307,12 @@ with no rollback.
 - When the full suite is impractical, run the changed-tests target before enqueueing, never
   a hand-picked list (one missed a two-window test that failed CI on cloudlands-fe#3876):
   Rust `make test-changed` (intentd's `scripts/changed-tests.sh` vs `origin/main`, full
-  suite on manifest/lockfile/nextest-config changes; `make coverage-changed` adds llvm-cov)
-  or frontend `make fe-verify-changed` (cloudlands-fe `verify:changed`). Both take
-  `BASE=<ref>`; `DRY_RUN=1` prints the plan. Iterate with `make test-select E='<filterset>'`,
-  not raw `cargo nextest`, which skips fixture setup (95 bogus failures, intentd#2559); to
-  prove a flake, its fix, or that a CI failure is not yours, use
-  `make test-stress E=... COUNT=200 LOAD=1` (retries off, optional CPU + fsync load).
+  suite on manifest/lockfile/nextest-config changes; `make coverage-changed` = the PR job)
+  or frontend `make fe-verify-changed` (cloudlands-fe `verify:changed`, working tree first).
+  Both take `BASE=<ref>`; `DRY_RUN=1` prints the plan. Iterate on Rust tests with
+  `make test-select E='<filterset>'`, not raw `cargo nextest`, which skips fixture setup (95
+  bogus failures, intentd#2559); to prove a flake, its fix, or that a CI failure is not
+  yours, use `make test-stress E=... COUNT=200 LOAD=1` (retries off, optional CPU + fsync load).
 - `make test` / `test-changed` / `test-select` print a unique `record:` attempt path, including
   fully resumed runs. [Receipt and coverage details](CONTRIBUTING.md#test-attempt-receipts-and-resume-coverage)
   explain evidence, interruption and seven-day tree retention. `RESUME=1` skips verified

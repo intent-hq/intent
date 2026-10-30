@@ -28,8 +28,8 @@ make_bin=$(command -v make 2>/dev/null) || {
   exit 0
 }
 
-# The checkout path carries an apostrophe and a space so the recipe must keep
-# FE_DIR and BASE as whole words.
+# The checkout path carries an apostrophe and a space, so the recipe must not
+# break when the working directory has them (FE_DIR itself stays relative).
 mk="$temp_dir/reviewer's checkout"
 fe="$mk/packages/cloudlands-fe"
 bin_dir="$temp_dir/bin"
@@ -110,14 +110,7 @@ expect_ok
 expect_verify_argv
 
 case_name="an exported BASE / DRY_RUN reaches the recipe like a make variable"
-: >"$temp_dir/log"
-set +e
-BASE=main DRY_RUN=1 PATH="$bin_dir:$PATH" FE_TEST_LOG="$temp_dir/log" \
-  "$make_bin" -C "$mk" --no-print-directory fe-verify-changed >/dev/null 2>"$temp_dir/stderr" </dev/null
-status=$?
-set -e
-stderr=$(<"$temp_dir/stderr")
-log=$(<"$temp_dir/log")
+BASE=main DRY_RUN=1 run_make
 expect_ok
 expect_verify_argv --resolved-plan --base main
 
