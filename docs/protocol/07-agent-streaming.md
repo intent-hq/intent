@@ -724,7 +724,7 @@ immediately instead of waiting for a transcript re-fetch.
 `ws.secret.request` binding. These blocks use the same `AtTurnEnd` drain, ordering and
 `trailingBlocks` delivery as question blocks, with an `intent-secret-request://<requestId>` URI and
 the request's `name` as `resource.name`. The payload holds only `requestId`, `agentId`, `name` and
-`reason`, never a value. Like a question block, it sets the pending-questions marker. See
+`reason`, never a value. Unlike a question block, it never sets the pending-questions marker. See
 [§5.56 Secret requests](./methods/secrets.md#turn-end-resource).
 
 *The `ws.app.question.ask` binding.* JS signature
