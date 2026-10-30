@@ -2268,7 +2268,8 @@ live at every sweep, which runs about once an hour (the first run shortly after 
   come only from stored data, with no forge call per sweep: the workspace's and its
   secondary roots' `pullRequests` entries with `status: "Merged"`, and PR monitors whose
   last snapshot shows the PR merged. Commits made after the merge, a missing head SHA or
-  commit, and uncommitted changes still block. The purge sweep is unaffected.
+  commit, and uncommitted changes still block. The automatic purge applies the same rule
+  to secondary roots.
 - **Path.** A due workspace is archived through `workspace.archive`, with the same
   active-work teardown and the same `workspace:updated` delta. The sweep re-reads the row
   and re-checks that it is still idle with no agent turn running right before archiving.
@@ -2361,7 +2362,10 @@ whose `archivedAt` is older than that many days, through the same path and delta
 workspaces are skipped, and so is any workspace whose folder holds work the purge would
 destroy: the `workspace.localChanges` evaluation reports uncommitted changes in any root,
 unpushed commits in a **secondary** root (it lives inside the folder; the primary branch
-is kept), or fails. Skipped workspaces are retried on the next sweep. Manual
+is kept), or fails. A secondary root's unpushed commits stop blocking when a merged PR
+the daemon already knows covers that root's `HEAD`, with the same evidence and coverage
+test as the automatic archive's **Merged PRs** rule: those commits survive on the forge.
+Skipped workspaces are retried on the next sweep. Manual
 `workspace.retire` does not apply this check; clients confirm with the user first.
 
 **Strict list opt-in (normative).** Retired workspaces are absent from **every** surface
