@@ -11,7 +11,7 @@
     "workspace.pin": "Workspace.browserClientId, or null when unpinned.",
     "workspace.desktopSession": "clientId of the workspace's active desktop-control session, or null.",
     "workspace.recentFocus": "Optional. Client ids whose connections focused the workspace through presence.update, most recent first: clients focusing it now (latest update naming it first), then by when their focus left it. Absent means none. Non-Chief, unpinned workspaces with no desktop session and no claimed tab route to the first of these with an eligible live connection, else under the default rule.",
-    "workspace.tabs": "Open registry tabs, oldest first and in ascending tabId order (the registry breaks creation-time ties by tabId): { tabId, host, owner } where owner is the claiming agent id or null for a user tab.",
+    "workspace.tabs": "Open registry tabs, oldest first and in ascending tabId order (the registry breaks creation-time ties by tabId): { tabId, host, owner, navigationOnly? } where owner is the claiming agent id or null for a user tab; navigationOnly defaults to false and excludes native tabs from automation host inference.",
     "connections": "{ id, client, hello, browserExec } in registration order; client is null for a connection that never sent client.hello.",
     "helloOrder": "Optional order in which connections send client.hello (default: registration order). Routing must not depend on it.",
     "drops": "Connection ids that disconnect before the request.",
@@ -20,6 +20,35 @@
     "expect.error": "{ kind: no-client } | { kind: client-offline, clientId, pinned }."
   },
   "cases": [
+    {
+      "id": "native-claimed-tab-does-not-select-automation-host",
+      "rule": 4,
+      "docText": "Native navigation-only tabs never select the automation host",
+      "workspace": { "chief": false, "pin": null, "desktopSession": null, "tabs": [
+        { "tabId": "a-native", "host": "ios", "owner": "agent-a", "navigationOnly": true }
+      ] },
+      "connections": [
+        { "id": "i1", "client": "ios", "hello": true, "browserExec": false },
+        { "id": "d1", "client": "desktop", "hello": true, "browserExec": true }
+      ],
+      "drops": [],
+      "expect": { "target": { "kind": "default" }, "connection": "d1" }
+    },
+    {
+      "id": "desktop-claimed-tab-selected-after-older-native-tab",
+      "rule": 4,
+      "docText": "only desktop claimed tabs participate in this rule",
+      "workspace": { "chief": false, "pin": null, "desktopSession": null, "tabs": [
+        { "tabId": "a-native", "host": "ios", "owner": "agent-a", "navigationOnly": true },
+        { "tabId": "b-desktop", "host": "desktop-b", "owner": "agent-b" }
+      ] },
+      "connections": [
+        { "id": "a1", "client": "desktop-a", "hello": true, "browserExec": true },
+        { "id": "b1", "client": "desktop-b", "hello": true, "browserExec": true }
+      ],
+      "drops": [],
+      "expect": { "target": { "kind": "client", "clientId": "desktop-b" }, "connection": "b1" }
+    },
     {
       "id": "eligibility-ignores-unhelloed-and-flagless-connections",
       "rule": 1,

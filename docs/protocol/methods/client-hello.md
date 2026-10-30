@@ -545,12 +545,18 @@ per-workspace browser-client pin (§5.1 `workspace.setBrowserClient`) — [inten
 [intent-hq/intentd#1760](https://github.com/intent-hq/intentd/pull/1760).
 
 - **`capabilities.browserExec`.** A connection is **eligible** to serve daemon-initiated
-  `browser.exec` reverse RPCs only once its hello advertised `capabilities.browserExec === true`.
+  browser automation only once its hello advertised `capabilities.browserExec === true`.
   Un-hello'd sockets (CLIs, dev tooling, an iOS app that never sends hello) and connections
   whose hello omitted the flag (e.g. an FE auxiliary connection) are never candidates, regardless
-  of arrival order. Any other member of `capabilities` is stored verbatim and reported back by
-  `client.list`; the daemon interprets only `browserExec`. An omitted `capabilities` is stored
-  as `{}`.
+  of arrival order. An omitted `capabilities` is stored as `{}`.
+- **`capabilities.browserNavigation` (prepared native-preview extension).** Exact boolean
+  `true` advertises native browser navigation without implying page automation. An iOS
+  connection can advertise this flag while keeping `browserExec: false`. Navigation-only
+  clients cannot execute screenshots, DOM inspection, JavaScript, clicks, typing, or
+  emulated viewport actions. The action-aware routing rules and tab-host preservation are
+  defined in §5.9. Older clients that advertise only `browserExec: true` keep their existing
+  navigation and automation support. Other capability members remain stored verbatim.
+  This extension requires companion daemon and iOS support; it is not a shipped-release claim.
 - **Device identification.** `hostname`, `prettyHostname` and `deviceKind` are the client's own
   device identification — the same triple the daemon reports about itself in `host.status` /
   `server.pairingInfo` (§5.14). Each is optional and taken **only when a string** (any other JSON
@@ -609,6 +615,9 @@ Per entry:
   connections advertised it. So a later auxiliary socket that omits the flag never masks an
   earlier eligible connection, and the flag agrees with what §5.9 target selection would route
   to.
+  In the prepared native-preview extension, `browserNavigation: true` is likewise
+  preserved when any live connection advertises it, so an auxiliary hello cannot mask
+  navigation support. It remains independent of `browserExec`.
 - `connections` — the number of live hello'd connections sharing the `clientId`.
 - `transports` — the wire spelling (`"uds"` | `"wss"`) of each live connection, oldest first
   (`transports.length === connections`).
