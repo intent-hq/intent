@@ -2131,8 +2131,9 @@ WebSocket handshake completes:
 5. Bearer token (`Authorization: Bearer <token>` header only, no `?token=`):
    looked up **only** among the machine's unrevoked executor credentials
    ([§2.6](./02-authentication.md#26-executor-credentials)). The owner token and
-   per-principal tokens are `401` here, and executor tokens are `401` on `/ws`,
-   `/tunnel` and `/invite`.
+   per-principal tokens are `401` here, and executor tokens are `401` on `/ws`
+   and `/tunnel`. `/invite` keeps its anonymous admission: it resolves no
+   credential, so an executor token there confers no authority.
 
 Executor connections take no guest seat, are not JSON-RPC connections, and never
 reach the method router. Before [startup readiness](./startup-readiness.md) the
@@ -2270,13 +2271,34 @@ spawning. They never create workspace or agent rows in the machine's store.
   machine's local agents: the process cap (`agents.maxConcurrent`) and the
   aggregate memory budget (`agents.memoryBudgetMb` with its host-reserve rule).
   There is no separate remote cap.
-- **Refused, never queued.** A launch the limits would deny is refused at once.
-  The `launch` failure is journaled as `node-capacity` with
-  `{ limit: "count", runningAgents, agentCap }` or
-  `{ limit: "memory", chargedMemoryBytes, memoryBudgetBytes }`, and the backend
-  surfaces it as `placementError`. Backend admission checks the latest report
-  first and returns `placement-unavailable` / `no-capacity` with the same
-  fields before creating the agent.
+- **Refused, never queued.** Backend admission checks the latest report first
+  and returns `placement-unavailable` / `no-capacity` with the limit's fields
+  before creating the agent. A launch the limits deny at the machine anyway
+  (capacity changed since the report) is refused at once, as below.
+
+**Capacity refusal on the wire.** In protocol 6 the journal's `exited` body
+gains an optional structured failure next to the inherited `error` string:
+
+```ts
+type ExitedBody = {
+  kind: "exited"; exitCode?: number; error?: string; // error stays "<code>: <detail>"
+  failure?: { code: string; data?: CapacityRefusal }; // protocol 6; data only for node-capacity
+};
+type CapacityRefusal =
+  | { limit: "count"; runningAgents: number; agentCap: number }
+  | { limit: "memory"; chargedMemoryBytes: number; memoryBudgetBytes: number };
+```
+
+For a capacity refusal the machine journals `exited` with
+`error: "node-capacity: <detail>"` and `failure: { code: "node-capacity", data }`;
+`data` is closed (unknown members reject the record). The backend projects it as
+`placementError: { code: "node-capacity", detail, data, retryable: true }`;
+`data` and `retryable` are optional additions to `placementError`, present only
+for this refusal, and the existing `{ code, detail }` reading still works. The
+same agent is never relaunched or queued automatically: the agent stays
+unstarted, and the next prompt to it retries the launch on the same machine
+(placement does not move a created agent). A delegating model that wants another
+machine creates a new agent.
 - **Permission prompts.** No client is attached to a remote agent, so the
   machine answers provider permission prompts with `remoteAgents.permission`:
   `allowAll` (default), `autoByRisk` or `denyAll`. This holds in regular and

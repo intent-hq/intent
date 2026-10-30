@@ -77,8 +77,10 @@ principal with a host role, so no collaborator or member allowlist ever sees it.
   looks the bearer token up only among unrevoked executor credentials, after the
   enable flags and a refusal of any `Origin` header. The owner token and
   per-principal tokens are `401` there. Executor tokens are never looked up on
-  `/ws`, `/tunnel` or `/invite`, so they are `401` there. Executor connections
-  take no guest seat and never reach the method router.
+  `/ws` or `/tunnel`, so they are `401` there. `/invite` keeps its anonymous
+  admission (§2.4): it resolves no credential, so an executor token presented
+  there is ignored and confers no authority beyond the four invite methods.
+  Executor connections take no guest seat and never reach the method router.
 - **Scope.** The credential admits only the executor link requests (launch,
   prompt, cancel, stop, ack, capabilities, heartbeats, `workspace.call`
   responses) and git sessions for agents on its own binding. Its binding must
