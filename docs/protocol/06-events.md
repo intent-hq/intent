@@ -919,6 +919,32 @@ Explicit user link clicks still activate content. Settings navigation and
 
 ### 6.6 Turn/event lifecycle & batching window
 
+**Turn-start signals.** A client treats each event below as the start of an agent turn: an idle
+agent reads as running as soon as it sees one, without waiting for a later event. The paragraphs
+that follow give the detail. The user-row `agent:message` echo is not listed. For a direct send
+or wake delivery the daemon persists it after claiming the turn slot, so the running status edge
+comes first. Two held-slot continuations are the exception: the prompt idle-timeout warning turn
+(below) and the truncation auto-redrive (the nudge a delegated agent gets after a turn that looks
+cut off, [monorepo#2863](https://github.com/intent-hq/monorepo/issues/2863)). Each persists a new
+user row with a fresh `turnId` after the previous turn's `agent:stream:end`, without a new running
+edge or an `agent:queue:processing`.
+For those turns this table guarantees nothing before the first `agent:stream:activity`. The
+machine-readable list, with one replayable example per row, is
+[`fixtures/turn-start/turn-start-events.json`](./fixtures/turn-start/turn-start-events.json).
+`make check-turn-start-contract` (part of `make consumer-checks`) keeps this table, that file and
+[`event-types.json`](./event-types.json) in step; a `path: value` code span in the Condition cell
+is the entry's payload condition. Components keep a copy through the shared fixture-copy tool
+(see [Copied fixtures](./README.md#copied-fixtures)) and replay every entry. A new turn-start
+signal goes into this table, the fixture and `REQUIRED_TYPES` in `scripts/turn-start-contract.mjs`,
+docs first.
+
+| Turn-start event | Condition | Turn | Fixture id |
+|---|---|---|---|
+| `agent:stream:start` | `data.reason: "harness-wake"`; opens the assistant message `data.messageId` | `agent-initiated` | `harness-wake-start` |
+| `agent:status-changed` | Only the running edge: `data.status: "active"`, `data.isActive: true`; sent when a turn claims the slot | `any` | `running-status-edge` |
+| `agent:stream:activity` | Any ping of a live turn (§7); the first one opens the turn when nothing earlier did | `any` | `first-activity-ping` |
+| `agent:queue:processing` | Always; the queue-drain start, which can arrive with no running status edge before it | `prompt` | `queue-drain-start` |
+
 **Prompt (user-initiated) turns.** A turn opened by a daemon-dispatched `session/prompt`
 (`agent.sendMessage`, queue drain, wake delivery) emits **no** `agent:stream:start` — that event
 is reserved for agent-initiated (harness-wake) turns below. For a direct send or wake delivery

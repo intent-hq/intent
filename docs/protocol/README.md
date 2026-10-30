@@ -159,7 +159,7 @@ canonical change here first, then re-export each copy.
 | Provenance | Copy | Used by |
 |---|---|---|
 | `commit` | Exact bytes plus a lock naming the full monorepo commit and the copy's SHA-256 hashes. Component CI runs `verify` against the monorepo at that commit. | [suggested-prompts](./suggested-prompts.md#distribution), [backend-keychain](./backend-keychain.md#distribution-and-verification) |
-| `commit`, single file | One file of exact bytes, under any name, plus a lock with its `fileSha256`. The lock alone marks the copy as adopted. | intentd's scripts-compact, note-truncated-read, checkout-repo-config and event-stream-recovery copies (`scripts/<name>-contract.mjs`) |
+| `commit`, single file | One file of exact bytes, under any name, plus a lock with its `fileSha256`. The lock alone marks the copy as adopted. | intentd's scripts-compact, note-truncated-read, checkout-repo-config and event-stream-recovery copies; cloudlands-fe's turn-start copy (`scripts/<name>-contract.mjs`) |
 | `revision` | One JSON file carrying the canonical file's integer `revision`. A case change bumps it. | browser-routing (`scripts/browser-routing-contract.mjs`) |
 
 Each contract script's `check` (part of `make consumer-checks`) applies the same rules

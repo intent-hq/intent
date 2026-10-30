@@ -169,7 +169,7 @@ CDP_PORT ?= $(call dev_port_value,CDP_PORT)
 # An explicit INTENTD_SOCKET always takes precedence.
 BRIDGE_PLATFORM ?= $(shell uname -s)
 
-.PHONY: check-app-ui-targets check-doc-links check-note-truncated-read-contract check-browser-routing-contract check-suggested-prompts-contract check-fixture-copies check-agent-worker-contract test-transfer-selection-contract check-transfer-selection-contract check-backend-keychain-contract ports status consumer-checks docs-check check-protocol-catalog check-mcp-bindings mcp-bindings-doc check-makefile-targets check-protocol-field-parity check-rulesets event-catalog-check shipped-in release-status rpc
+.PHONY: check-app-ui-targets check-doc-links check-note-truncated-read-contract check-browser-routing-contract check-suggested-prompts-contract check-turn-start-contract check-fixture-copies check-agent-worker-contract test-transfer-selection-contract check-transfer-selection-contract check-backend-keychain-contract ports status consumer-checks docs-check check-protocol-catalog check-mcp-bindings mcp-bindings-doc check-makefile-targets check-protocol-field-parity check-rulesets event-catalog-check shipped-in release-status rpc
 ports: ## Print this worktree's resolved development ports
 	@set -- .dev/sandbox/*.json; if [ -e "$$1" ]; then \
 		echo "[ports] Note: these ports are for the next start; read running ports from 'make sandbox-status' or .dev/sandbox/<mode>.json." >&2; \
@@ -212,6 +212,10 @@ check-browser-routing-contract: ## Validate the browser-routing cases against RE
 check-suggested-prompts-contract: ## Validate the shared suggested-prompts block cases and any adopted component copies (no component runtime proof)
 	@node --test scripts/suggested-prompts-contract.test.mjs
 	@node scripts/suggested-prompts-contract.mjs check
+
+check-turn-start-contract: ## Check the turn-start events fixture against event-types.json and the 06-events.md §6.6 table (no component runtime proof)
+	@node --test scripts/turn-start-contract.test.mjs
+	@node scripts/check-turn-start-contract.mjs
 
 check-fixture-copies: ## Fail when a component copies a docs/protocol fixture without the shared fixture-copy tool, then check every registered copy
 	@node --test scripts/lib/fixture-copy.test.mjs scripts/check-fixture-copies.test.mjs
