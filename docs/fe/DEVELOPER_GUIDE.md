@@ -534,6 +534,112 @@ To inspect prerequisites without building, run
 `node scripts/test-transfer-selection-contract.mjs --preflight` at the activation
 revision. Local selected-head success does not establish that earlier live pins pass.
 
+### Changed-file verification receipts
+
+Each run prints `record: <path>` for its attempt under `.dev/verify-changed/attempts/`:
+`run.json` holds the source, configuration, command and resolved-selection identities;
+`results.jsonl` appends check outcomes and each unit file's result as it finishes; and
+`coverage.json` lists every current check and resolved unit file per lane as
+`executed-passed`, `resumed-passed` (with its source attempt), `failed` or `unfinished`.
+The run passes only when every entry is satisfied. To continue after a failure or
+interruption, rerun with `--resume`; never hand-pick stages. It reruns anything not
+proven compatible. A configuration, lockfile, Node, Vitest setup or runner change voids
+all credit. A non-unit check needs an identical command on identical sources. A unit
+file keeps its pass unless the plan for the changes since then would select it (direct
+edit, `vitest related`, declared trigger, UI invariant, full-risk fallback or deleted
+module). Credit follows the file across lanes, so an edited test that moves from the
+declared to the direct lane simply reruns there (cloudlands-fe#3439).
+`--resolved-plan --resume` previews the continuation; `--max-unit-files` still bounds
+the full resolved plan. Attempts untouched for seven days are pruned.
+
+The dead-code gate runs knip through `scripts/check-dead-code.mjs`, which drops two
+known-unused canary files under `src/lib/components/__knip-canary__/` for the run and fails when knip does not
+report them — the masks fixed in cloudlands-fe#2695 (`.svelte` in vite
+`resolve.extensions`, an `import.meta.glob` over the component tree, an unanchored
+gitignore rule) had silently zeroed knip's Svelte coverage for months.
+
+### Component test browser pin
+
+CT keeps compiler/runner 1.58.2 and explicitly launches Chromium 153.0.8010.12
+(revision 1243), supplied by the exact `ct-browser` alias for Playwright core 1.63.0.
+`scripts/ct-browser.mjs` owns the checked identity, OS-specific executable resolution,
+cache key and dependency marker. Install with
+`node scripts/run-ct-tests.mjs --install-browsers chromium` (add `--with-deps` when
+needed); `--print-browser-plan` reports the resolved plan. Use the same
+`PLAYWRIGHT_BROWSERS_PATH` for installation and tests, including per-runner caches.
+The shared fixture rejects missing installs and wrong `Browser.getVersion` results;
+each attempt attaches `ct-runtime.json` with runner/browser versions and source hashes.
+The two-line `playwright-core@1.58.2` patch backports error classification from
+[Playwright PR 41868](https://github.com/microsoft/playwright/pull/41868), without
+retaining or intercepting promises. This browser is an integration experiment for
+intent-hq/intent#5481: the opt-in weak-inner-promise diagnostic still fails completion.
+
+Traces use `retain-on-first-failure`: the original failed attempt survives a passing
+retry. The opt-in `playwright-ct-evidence.config.ts` control requires a fresh
+`CT_EVIDENCE_OUTPUT` directory and is expected to fail the strict flaky gate with
+`--retries=1 --fail-on-flaky-tests`. The separate lifetime diagnostic config requires
+`CT_LIFETIME_EXECUTABLE`, `CT_LIFETIME_VERSION` and `CT_LIFETIME_OUTPUT`; these
+diagnostics are outside default discovery and do not change the ordinary pin.
+
+### Component test fresh-context guard
+
+Every CT spec imports `test` / `expect` from `src/test/ct-test.ts`. The module sets
+`_optionContextReuseMode: 'none'` for the whole suite, so every test mounts into a fresh browser context: ct-core's
+per-worker context reuse resets the page between tests, and that reset raced the next
+`mount()` and surfaced as a pass-on-retry "Execution context was destroyed, most likely
+because of a navigation" at the `mount(` line (intent-hq/intent#4373, #4783, #5236,
+#5249, #5279, #5481). The cost is ~0.2 s per test (critical-path CI shard +10%), accepted
+suite-wide; `CT_CONTEXT_REUSE=1` restores reuse for local wall-time measurement only and
+is never set on CI. Two auto fixtures ride along:
+
+- _Guard_: asserts via CDP that each test's `browserContextId` is new to the worker. A
+  failure `browser context <id> was already used by an earlier test in this worker …`
+  means reuse is back for the suite — typically a Playwright upgrade no longer honoring
+  the private option, or `PW_TEST_REUSE_CONTEXT` in the environment — so fix the
+  module, not the spec. A destroyed-context failure with the guard passing is therefore
+  a residual incident to investigate, not one to quarantine or retry away.
+- _Recorder_: on a failure it attaches `cdp-lifecycle.json` to the test's attachments in
+  the HTML report (`playwright-report/`; nothing under `test-results/`), covering
+  execution-context and navigation events from the moment the `page` fixture was ready
+  — the leading `Runtime.executionContextCreated` entries replay contexts that already
+  existed at attach. A `Page.frameRequestedNavigation` / `Runtime.executionContextsCleared`
+  / `Page.frameNavigated` (to `about:blank` or the CT host) sequence just before the
+  failing mount confirms a reuse reset; `Inspector.targetCrashed` is a renderer crash. No
+  navigation or clear after attach is inconclusive, not exoneration — the recorded
+  methods are a selection — so inspect a `DEBUG=pw:protocol` run or a trace before
+  drawing a conclusion. The recorder never fails a test; a `cdp-lifecycle-recorder`
+  annotation reports when it could not start or attach.
+
+### Nightly browser-test reporting
+
+All browser lanes retain JSON, HTML and traces for seven days; the nightly
+manifest and per-lane outcomes distinguish missing reports from successful runs.
+`nightly-browser-report.yml` processes every nightly/main manual completion,
+including green runs with retries or quarantine failures. Its isolated writer
+uses main's code and `MONOREPO_ISSUES_TOKEN` (central-tracker Issues write, with
+permission to set Bug Type, labels and assignees). New issues go to
+`intent-hq/intent`, owned by @panghy; matched issues retain their owners and human
+text. Exact markers and complete open/closed issue/comment listings deduplicate
+occurrences using each job's own attempt and completion time; retained shards
+do not count again. Fixed regressions reopen, current duplicates follow their
+canonical issue, and an explicit duplicate undo overrides old comments.
+Not-planned closures stay closed with recurrence evidence. No green run
+automatically closes an issue. Quarantine failures reuse an existing strong
+match or an `issue`/`quarantine` annotation containing its tracking issue URL.
+Missing reports or stale rerun evidence produce a separate CI incident.
+Collection and publication bind the triggering attempt; a later source attempt
+fails reporting with saved event/evidence-gap metadata instead of replacing it.
+For read-only diagnosis, run
+`node scripts/nightly-test-failures.mjs collect --run <id> --out /tmp/nightly-report`
+(add `--attempt <n>` to pin the source attempt, or `--historical` for older/non-nightly artifacts).
+`publish --out /tmp/nightly-report` previews issue actions; writes
+require the trusted completion workflow. Its saved plan, receipts, summary and
+original archives survive reporting errors; rerun that workflow after correcting
+auth/API failures. Python 3 reads bounded ZIP members without extracting files.
+Writers use GitHub's `concurrency.queue: max` to retain pending completions;
+`.github/actionlint.yaml` ignores only actionlint's unknown-`queue` diagnostic for
+this [documented key](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
+
 ## Debugging Notes
 
 - `pnpm run dev:cdp` is the best default when working on browser/CDP features.

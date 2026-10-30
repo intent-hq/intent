@@ -151,17 +151,10 @@ cloudlands-fe#2687), and a mixed one can be announced before it has fully shippe
 ### Phase 2 — Monorepo pin advance (automated)
 
 Submodule pins are advanced automatically by the `auto-bump-submodules` workflow
-(`.github/workflows/auto-bump-submodules.yml`): it detects submodule tips ahead of the
-recorded pins and lands the bump via a single rolling PR on the `auto/submodule-bump`
-branch with auto-merge armed; repeat runs update that PR instead of opening new ones.
-Each submodule repo triggers the workflow via `repository_dispatch` (`submodule-update`)
-on push to its `main`. Monorepo `main` pushes that change submodule gitlinks trigger a
-continuation to pick up deferred tips after a queued bump merges. A cron run every
-30 minutes is the backstop; manual `workflow_dispatch` handles urgent bumps. The
-`repository_dispatch` notifications are sent by the submodule repos using the
-`MONOREPO_DISPATCH_TOKEN` secret (stored in each submodule repo; a fine-grained PAT with
-contents:write on `intent-hq/intent`), and are fail-soft: when the secret is absent
-the notify step logs a warning and skips, and the cron backstop still advances the pins.
+(`.github/workflows/auto-bump-submodules.yml`) through a single rolling PR on the
+`auto/submodule-bump` branch with auto-merge armed. Submodule `main` pushes dispatch it, a
+30-minute cron is the backstop, and every token it uses is fail-soft
+([triggers and credentials](docs/RELEASING.md#submodule-pin-auto-bump)).
 
 The workflow owns pin advancement: the `submodule-pins` CI job fails any monorepo PR
 whose diff moves a `packages/*` gitlink unless its head branch is `auto/submodule-bump`
@@ -185,30 +178,15 @@ instead of filing a PR:
 gh workflow run auto-bump-submodules.yml
 ```
 
-The workflow authenticates with the `SUBMODULE_BUMP_TOKEN` secret — a fine-grained PAT
-with contents:read on `intent-hq/intentd`, `intent-hq/cloudlands-fe`, and
-`intent-hq/ios`, plus contents:write and pull-requests:write on `intent-hq/intent`.
-Like `INTENTD_RELEASES_TOKEN` / `MONOREPO_ISSUES_TOKEN`, it is fail-soft: when the
-secret is absent the workflow logs a warning and exits successfully. The private
-`packages/ios` submodule is best-effort — if its tip cannot be read, it is skipped
-with a warning and never fails the run.
-
 ### Cross-component features (intentd + cloudlands-fe)
 
-For features that need changes in both intentd and cloudlands-fe, development and PR
-filing on both repos proceed fully in parallel — nothing serializes until merge time.
-Both merges require explicit human permission (see Conventions → Merging), and the
-only ordering constraint is the final merge: **do not merge the cloudlands-fe PR
-(or arm auto-merge on it, or add it to the merge queue) until the intentd PR is
-confirmed merged** — approved/green is not enough. This intentd-first rule applies
-specifically to protocol changes (the daemon↔fe wire contract, `docs/protocol/`):
-whenever a feature touches the protocol, the daemon side must land first.
-Rationale: cloudlands-fe may depend on daemon
-behavior/protocol that only exists once the intentd change has landed, so an fe-first
-merge can break main or ship against a contract that doesn't exist yet. This rule is
-about submodule PR merges, not monorepo bumps — after both are merged, the
-auto-bump-submodules workflow advances both monorepo pins automatically (a single
-rolling bump PR may cover both submodule refs); do not file a manual bump PR.
+For features that need changes in both intentd and cloudlands-fe, develop and file PRs
+on both repos in parallel. Both merges need explicit human permission. When the feature
+touches the protocol (the daemon↔fe wire contract, `docs/protocol/`), **do not merge the
+cloudlands-fe PR (or arm auto-merge on it, or enqueue it) until the intentd PR is
+confirmed merged** — approved/green is not enough, because an fe-first merge can ship
+against a contract that does not exist yet. After both merge, the auto-bump advances
+both pins; do not file a manual bump PR.
 
 ### Manual test builds (optional, for complex changes)
 
@@ -242,7 +220,7 @@ with no rollback.
   treat `BREAKING CHANGE:` / `BREAKING-CHANGE:` (and `Release-As:`) appearing anywhere
   in a commit body as a real footer — a commit that merely *quotes* the token causes a
   false major bump (or, for `Release-As:`, a forced pinned version); this accidentally
-  cut cloudlands-fe v3.0.0 — see intent-hq/monorepo#2988. Squash merges include every
+  cut cloudlands-fe v3.0.0 — see intent-hq/intent#2988. Squash merges include every
   branch commit message in the squash body, so the token in any branch commit still
   lands on main. Never write the
   literal token in commit messages, PR titles/bodies, or review comments unless an
@@ -251,48 +229,26 @@ with no rollback.
 - **Merging**: agents must **NEVER merge a PR, arm auto-merge, or add a PR to the
   merge queue — in this repo or any submodule repo — without explicit permission from
   a human**. Approved + green checks is not enough. Repo-owned automation is exempt
-  (auto-bump-submodules, auto-pin-intentd, intentd's auto-pin-acp-adapters — the Codex
-  and Claude ACP adapter pins, formerly auto-pin-codex-acp — auto-cut-alpha, and the
-  release PR workflows merge their own rolling PRs). Ordinary `main` PRs in
-  all three repos use a **merge queue**: after human permission, `gh pr merge --squash` enqueues
-  them until the queue's gate passes. Component auto-cut and fe auto-pin may
-  directly merge validated release metadata or sidecar pins under the approved CI
-  exemption and existing readiness guards ([details](docs/RELEASING.md#guarded-direct-release-merges)).
-  Main rules are committed in `.github/rulesets/*.main.json`; the bypass contract
-  in `.github/rulesets/*.bypass.json` allows `intent-hq-ci` on the two component
-  Default rulesets only (none for the monorepo or organization). Rules are
-  compared with the live configuration by `ruleset-check` CI and daily by
-  `ruleset-drift.yml`; after an intended ruleset change, run
-  `make check-rulesets UPDATE=1` and commit the result in the same PR. The bypass
-  half needs the `RULESET_ADMIN_TOKEN` secret (a fine-grained PAT with administration
-  read on intent, intentd and cloudlands-fe — GitHub returns `bypass_actors` only to
-  such a caller) and is fail-soft: without it the bypass actors are skipped with a
-  warning, so set it locally too when running `UPDATE=1` for a bypass change. The
-  bypass-actor comparison is deliberately confined to `ruleset-drift.yml`, which runs
-  main's code; the `ruleset-check` CI job runs the script from the PR head or the
-  merged tree, so it never receives the token and skips the bypass actors. A PR whose
-  gate is red cannot enter the queue, and the queue reruns CI on the actual merged
-  tree (`merge_group` runs of the same check) before landing. A monorepo PR also
-  cannot enter the queue while any review thread is unresolved: auto-merge arms but
-  the PR stays BLOCKED outside the queue
-  ([intent-hq/intent#4959](https://github.com/intent-hq/intent/issues/4959)), so
-  confirm `ws.pr.snapshot(N).requirements.threads.unresolved` is 0 before enqueueing.
-  `--auto` enqueues once still-pending PR checks pass; its "The merge strategy for
-  main is set by the merge queue" output is informational, not an error. A
-  `merge_group` failure ejects the PR (it does not land): the timeline records a
-  `RemovedFromMergeQueueEvent` with `reason: failed_checks` (a check that does not
-  report within the queue's timeout counts as failed), surfaced by `ws.pr.snapshot` /
-  `ws.pr.monitor` as `mergeQueueEjection`. An ejected PR is not re-queued on its
-  own: fix the cause and re-enqueue with `gh pr merge --squash --auto`. The queue's
-  squash uses the same title rules as a direct squash merge: on a single-commit PR
-  the commit title defaults to that commit's message headline; on a multi-commit PR
-  it defaults to the PR title. The commit message includes all commit messages from
-  the PR either way.
-  On single-commit PRs, ensure the branch commit message is itself a valid
-  conventional commit (amend auto-commits like "Coordinator" before pushing) to
-  prevent non-conventional commits from landing on main (e.g., PR #102 incident); on
-  multi-commit PRs, ensure the PR title is a valid conventional commit, since it is
-  what lands as the squash title.
+  (auto-bump-submodules, auto-pin-intentd, intentd's auto-pin-acp-adapters,
+  auto-cut-alpha, and the release PR workflows merge their own rolling PRs; see
+  [guarded direct release merges](docs/RELEASING.md#guarded-direct-release-merges)).
+  - Ordinary `main` PRs in all three repos use a **merge queue**: after human
+    permission, `gh pr merge --squash --auto` enqueues once pending checks pass (its
+    "merge strategy … is set by the merge queue" output is informational). A red gate
+    cannot enter, and the queue reruns CI on the merged tree (`merge_group`).
+  - A monorepo PR with any unresolved review thread stays BLOCKED outside the queue
+    ([intent-hq/intent#4959](https://github.com/intent-hq/intent/issues/4959)): confirm
+    `ws.pr.snapshot(N).requirements.threads.unresolved` is 0 before enqueueing.
+  - A `merge_group` failure ejects the PR without landing it (`mergeQueueEjection` in
+    `ws.pr.snapshot` / `ws.pr.monitor`; a check that times out counts as failed). It is
+    not re-queued on its own: fix the cause and re-enqueue.
+  - The squash title is the commit headline on a single-commit PR and the PR title on a
+    multi-commit PR, and the body includes every branch commit message. Make that title
+    a valid conventional commit (amend auto-commits like "Coordinator" before pushing;
+    PR #102 incident).
+  - Branch rules live in `.github/rulesets/*.main.json` and `*.bypass.json`; after an
+    intended ruleset change run `make check-rulesets UPDATE=1` and commit the result in
+    the same PR ([ruleset drift details](docs/RELEASING.md#ruleset-snapshots-and-drift)).
 - **Changelogs** are generated with `git-cliff` (see `cliff.toml`).
 - **Rust**: run the package gates before opening a PR — `make check` / `make test`
   also run from `packages/intentd` (its Makefile forwards them to the root); see
@@ -413,8 +369,10 @@ incident. Prefer mechanizing an existing prose rule over adding another.
 
 ## Filing Issues
 
-File issues on [intent-hq/intent](https://github.com/intent-hq/intent/issues), the single
-tracker for all components, only for problems affecting released builds. Do not file
+File intentd and cloudlands-fe issues on [intent-hq/intent](https://github.com/intent-hq/intent/issues),
+only for problems affecting released builds. iOS issues go to
+[intent-hq/ios](https://github.com/intent-hq/ios/issues) instead (see
+`packages/ios/AGENTS.md` → Issues and pull requests). Do not file
 issues discovered during PR reviews. Every issue filed must include the affected
 released version and corresponding commit hash in its body.
 
@@ -425,8 +383,8 @@ released version and corresponding commit hash in its body.
   label stays a regular label). Set the Type when filing:
   `gh issue create --repo intent-hq/intent --type Bug ...`. `make doctor` enforces
   gh >= 2.94.0; if `--type` is unrecognized, run `make bootstrap-dev-host` to upgrade.
-- **Labels**: apply the appropriate `component:*` label (`component:intentd`,
-  `component:fe`, `component:ios`) plus `agent-filed`.
+- **Labels**: apply the appropriate `component:*` label (`component:intentd` or
+  `component:fe`) plus `agent-filed`.
 - **Aggressive dedup**: search existing issues first
   (`gh issue list --repo intent-hq/intent --search "<keywords>" --state all`) and
   comment on / link the existing issue instead of filing a duplicate.
