@@ -25,7 +25,7 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 | agent.resolveProposal *(v8.7, [intentd#1581](https://github.com/intent-hq/intentd/pull/1581))* | agentId (req), proposalId (req), outcome (req: `"applied"` \| `"dismissed"`), detail?, workspaceId (req) | { success: true, proposalId, outcome } — details below the table. |
 | agent.markSeen *(v4.5)* | agentId (req), messageId (req), workspaceId (req) | { success: true, lastSeenMessageId } — details below the table. |
 | agent.editAndRegenerate | agentId (req), messageId (req), content (req), workspaceId (req), imageBlocks?, fileBlocks? *(attachment references only since v10.0; see the file-block contract on `agent.sendMessage`)*, model? | { success, queued: false, messageId, truncatedCount } — details below the table. |
-| agent.queueMessage | agentId (req), content (req), messageId? *(prepared submission correlation v1, below)*, imageBlocks?, fileBlocks? *(attachment references only since v10.0; an inline-`data` entry is `-32602` naming the index BEFORE enqueueing — see the file-block contract on `agent.sendMessage`)*, messageMetadata?, workspaceId? | { success, queuedMessage, turnId } — details below the table. |
+| agent.queueMessage | agentId (req), content (req), messageId? *(submission correlation v1, below)*, imageBlocks?, fileBlocks? *(attachment references only since v10.0; an inline-`data` entry is `-32602` naming the index BEFORE enqueueing — see the file-block contract on `agent.sendMessage`)*, messageMetadata?, workspaceId? | { success, queuedMessage, turnId } — details below the table. |
 | agent.editQueuedMessage | agentId (req), messageId (req), content (req), editing?, workspaceId? | { success, queuedMessage } (QueuedMessage shape as above). **Author-only for human entries**, independently of shared queue visibility; a displaced editor alias additionally fails the stale-edit conflict check described below: another principal's entry cannot be edited or restamped, including by an owner. Unknown-human entries cannot establish authorship and are refused to every wire caller. Unauthorized edits have no side effects: a non-host-owner wire caller gets `-32602` (`queued message not found: <id>`), even though the entry is visible; a host owner gets `-32602` (`queued message <id> can only be edited by its author`). Agent/daemon callers and genuinely automatic/agent entries retain their existing rules; imported-human delivery restrictions are separate. An unbound wire request fails the membership gate ahead of this check with `-32003 Forbidden` (§5.48). A nonexistent id keeps its existing error. See [Shared pending human queue](#shared-pending-human-queue) |
 | agent.removeQueuedMessage | agentId (req), messageId (req), workspaceId? | { success: true }. **Human entries: author or owner only**, independently of shared queue visibility. Other participants cannot remove someone else's entry, even when its id and content are visible. Unauthorized removal is `-32602` (`queued message not found: <id>`) with no side effects. Automatic/agent entries keep their existing mutation policy. Removal of a nonexistent id remains an idempotent success. See [Shared pending human queue](#shared-pending-human-queue) |
 | agent.getQueue | agentId (req), workspaceId? | { success, queue: QueuedMessage[] } — QueuedMessage = { id, content, queuedAt, position, turnId?, imageBlocks?, fileBlocks?, deliveryGroups?, messageMetadata?, interruptPriority?, editing?, editingMessageId?, author? } (shape as `agent.queueMessage`, including attachment-reference-only `fileBlocks` and the multiplayer `author` projection, §5.48; additive `deliveryGroups` retains [grouped retry content](#queued-delivery-groups-prepared-additive-extension)). **Shared queue:** every caller with access to the workspace receives the full queue, including other participants' messages and the owner's. `position` is the zero-based index in the full queue. `agent.diagnostics` queue entries and the `agent:queue:updated` / `agent:queue:processing` events use the same shared-read policy (§6.5). Reading an entry does not authorize editing, removal or immediate delivery; see [Shared pending human queue](#shared-pending-human-queue). Attribution still distinguishes a resolved principal, an unknown human and an automatic/agent entry; missing identity never grants authorship. [Imported unbound human queues](./workspace.md#human-authorship-in-workspace-transfers) retain their historical author, remain held against automatic delivery, and require affirmative current host-owner authorization for an explicit send. A parked dismissal notice (intentd#892, within v4.3) surfaces here with its `questions_dismissed` `messageMetadata` and `interruptPriority: true` at the queue head — promoted to position 0 ahead of even pre-existing interrupt-priority entries, unlike the normal interrupt insertion order; see `agent.dismissQuestions` |
@@ -45,7 +45,7 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 | agent.subscribe (deprecated) | workspaceId (req), eventTypes (req, array), agentId?, excludeSelf?, batchWindow? | service result `{ subscriptionId, eventTypes }` — details below the table. |
 | agent.unsubscribe (deprecated) | workspaceId (req), subscriptionId (req) | service result `{ success: true, subscriptionId }` — stops delivery; unknown id errors |
 
-**Workspace discussions (prepared for 15.1):** agent subscriptions also reject
+**Workspace discussions (15.1):** agent subscriptions also reject
 every `discussion:`-prefixed type or pattern with `-32602`, and the delivery-time
 guard excludes these events from restored subscriptions. Human discussions
 cannot wake an agent through `ws.event.subscribe` or `ws.agent.subscribe`.
@@ -1578,7 +1578,7 @@ stable ID again returns that entry without appending its content or attachments
 twice, including after queue rehydration. Attachment-bearing entries instead
 retain their separate identities and their own text and attachment arrays after
 restoration. This is a pending-entry guarantee,
-not a global exactly-once delivery promise. Without the prepared submission
+not a global exactly-once delivery promise. Without the submission
 correlation capability below, `agent.queueMessage` has no client-supplied message
 ID, so repeating that RPC is a new submission; identical text alone is never a
 deduplication key. The JSON-RPC request `id` is only
@@ -1954,7 +1954,7 @@ the daemon field and dependent frontend behavior.
 | Replace combined text and retry | New text is delivered once with retained attachments; old grouped text is not replayed |
 | Legacy combined retry omits `deliveryGroups` | Aggregate text/attachments still render and deliver without invented grouping |
 
-#### Submission correlation and optimistic display (prepared additive extension)
+#### Submission correlation and optimistic display (additive extension)
 
 **Support gate.** `client.hello.server.capabilities.submissionCorrelation: 1`
 advertises this complete contract, including every human send/queue ingress,
@@ -1963,7 +1963,7 @@ persist/echo path described here (runtime and store-only paths alike). Enable
 queue optimism only for the exact integer `1`; absent, null, malformed, `true`
 and unknown future versions mean unsupported. Public protocol **13.4** is allocated
 to this additive extension; numeric protocol version alone never enables this
-feature or the independently prepared Home 13.2 and GitLab 13.3 additions. See
+feature or the independently gated Home 13.2 and GitLab 13.3 additions. See
 [version allocation](../versioning.md#protocol-version--compatibility).
 These docs do not claim a carrying release.
 No method/event names, queue scheduling rules or mutation permissions change.

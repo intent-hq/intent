@@ -277,7 +277,7 @@ the project's real default; it does not request the source fork or merge-request
 head. An unknown instance must not fall back to GitHub or another configured
 account. Preserve the existing GitHub and local-Git paths independently.
 
-### Generic event loss recovery (prepared)
+### Generic event loss recovery
 
 The [negotiated loss contract](event-stream-recovery.md) defines subscription
 admission, ack races, authorization and ABA fences, one active plus one trailing

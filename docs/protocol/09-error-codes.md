@@ -141,9 +141,9 @@ gains `limit: "count" | "memory"` with its counts or bytes. `-32603`:
 `unconfirmedStops` from `remoteMachines.remove` when stops go unacknowledged. `-32003` with `data.code: "node-mode"` refuses
 a method outside the node-mode list. No new numeric error is introduced.
 
-### Prepared truncated note read errors
+### Truncated note read errors
 
-The opt-in [truncated note read contract](./methods/notes-tasks.md#truncated-note-reads-prepared-additive-contract)
+The opt-in [truncated note read contract](./methods/notes-tasks.md#truncated-note-reads-additive-contract)
 keys its write refusal on the existing `-32602` code.
 
 | Numeric code | data.code | Meaning / client action |

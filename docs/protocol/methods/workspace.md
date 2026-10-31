@@ -1996,7 +1996,7 @@ attention is never fabricated.
    metadata read, not a transcript tail walk — modulo the one-time pre-upgrade fallback,
    §5.5 — and pendingness survives later user messages
    and agent turns) — or (c, new in intentd#945) the workspace
-   `attention` flag reads `review_required` — or (d, prepared, §5.56) a session has a
+   `attention` flag reads `review_required` — or (d, §5.56) a session has a
    pending secret request in the daemon's memory whose card was persisted at turn end
    (a request whose card was never persisted does not count). The cheap session-metadata check (attention
    requests) runs over every candidate first; pending-questions probes only

@@ -4,29 +4,3 @@
 # advertises. Checked by `scripts/check-protocol-status-labels.mjs` (run from
 # `make docs-check`). Entries only ratchet down: drop a stale label and write the
 # count the check names. Regenerate with `node scripts/check-protocol-status-labels.mjs --print-baseline`.
-docs/protocol/05-method-catalog.md agentWorkers 1
-docs/protocol/05-method-catalog.md eventStreamRecovery 1
-docs/protocol/05-method-catalog.md noteTruncatedRead 1
-docs/protocol/06-events.md agentWorkers 1
-docs/protocol/06-events.md eventStreamRecovery 2
-docs/protocol/06-events.md noteTruncatedRead 1
-docs/protocol/06-events.md submissionCorrelation 1
-docs/protocol/09-error-codes.md noteTruncatedRead 1
-docs/protocol/README.md agentWorkers 1
-docs/protocol/event-stream-recovery.md eventStreamRecovery 2
-docs/protocol/fixtures/event-stream-recovery/contract.json eventStreamRecovery 1
-docs/protocol/fixtures/notes/truncated-read.json noteTruncatedRead 1
-docs/protocol/fixtures/submission-correlation/contract.json submissionCorrelation 1
-docs/protocol/methods/agent-workers.md agentWorkers 1
-docs/protocol/methods/agents.md submissionCorrelation 1
-docs/protocol/methods/client-hello.md agentWorkers 1
-docs/protocol/methods/client-hello.md eventStreamRecovery 1
-docs/protocol/methods/client-hello.md submissionCorrelation 1
-docs/protocol/methods/notes-tasks.md hostMembership 1
-docs/protocol/methods/notes-tasks.md noteTruncatedRead 1
-docs/protocol/methods/workspace.md secretRequests 1
-docs/protocol/versioning.md agentWorkers 1
-docs/protocol/versioning.md eventStreamRecovery 1
-docs/protocol/versioning.md noteTruncatedRead 1
-docs/protocol/versioning.md submissionCorrelation 1
-docs/protocol/workspace-routing.md agentWorkers 1

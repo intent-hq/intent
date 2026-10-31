@@ -1,8 +1,8 @@
-> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.5b Worker observations (prepared additive extension).
+> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.5b Worker observations (additive extension).
 
 ### 5.5b Provider worker observations and stop
 
-**Prepared, not implemented by the pinned components.** This contract defines a
+**Implemented by intentd under `agentWorkers: 1`.** This contract defines a
 bounded projection of provider reports about background work (shell commands,
 and for Claude also workflows and monitors) plus a provider-mediated stop
 request. It is not a process monitor: it adds no output reader, filesystem
