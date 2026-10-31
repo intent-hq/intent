@@ -70,6 +70,10 @@ setting without a toggle fails both here and on the upstream intentd PR. For a s
 that intentionally has no toggle, or whose toggle lands later, add it with a one-line
 reason to the script's `EXEMPT` map, and land that change before the intentd PR. A
 toggle the daemon does not register, or a stale `EXEMPT` entry, is only a warning.
+The same check fails when a registered setting is missing from the Agent features list
+in `docs/protocol/methods/settings.md` (the paths before "— booleans"). For a docs-first
+addition, a `(prepared addition)` bullet that opens with the path also counts; once the
+daemon registers it, a bullet still saying "not implemented by the current pins" warns.
 
 ## Harness Versioning — `HARNESS.md`
 
