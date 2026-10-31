@@ -518,3 +518,15 @@ test('a quoted "see ..." heading is a reference, ahead of a broad § number late
   });
   assert.deepEqual(labels(docs, {}, advertised), ['docs/protocol/methods/notes-tasks.md:3 noteTruncatedRead prepared']);
 });
+
+test('a quoted heading prefers an exact match and needs a unique prefix', () => {
+  const doc = (headings) => docsWith({
+    'docs/protocol/a.md': ['The prepared extension (see "Truncated note reads" below).', '', ...headings.flatMap(([h, cap]) => [h, '', `\`server.capabilities.${cap}: 1\``, ''])].join('\n'),
+  });
+  // An exact heading wins over an earlier one it only prefixes, either way round.
+  assert.deepEqual(labels(doc([['### Truncated note reads legacy', 'liveState'], ['### Truncated note reads', 'futureThing']])), []);
+  assert.deepEqual(labels(doc([['### Truncated note reads legacy', 'futureThing'], ['### Truncated note reads', 'liveState']])), ['docs/protocol/a.md:1 liveState prepared']);
+  // A trailing status parenthetical does not stop an exact match; an ambiguous prefix resolves to nothing.
+  assert.deepEqual(labels(doc([['### Truncated note reads (prepared additive contract)', 'liveState']])), ['docs/protocol/a.md:1 liveState prepared', 'docs/protocol/a.md:3 liveState prepared']);
+  assert.deepEqual(labels(doc([['### Truncated note reads v1', 'liveState'], ['### Truncated note reads v2', 'liveState']])), []);
+});

@@ -27,7 +27,8 @@
 // A section reference is a link to a protocol doc (its anchor, else the
 // heading numbered like a `§N.N` in the link text, else the file's numbered
 // section), a bare `§N.N`, or a quoted same-file heading (`see "Truncated
-// note reads" below`). A file whose `> Part of ... — §N.N Title` banner
+// note reads" below`: exact, else ignoring a trailing parenthetical, else a
+// unique prefix). A file whose `> Part of ... — §N.N Title` banner
 // names one number is that section (methods/desktop.md is §5.51 with no
 // numbered heading). A reference stands for the capability with more than
 // half the mentions in the referenced section, climbing to enclosing
@@ -377,6 +378,23 @@ function versionRefsIn(text) {
 
 /** Heading text without a leading section number, lowercased, for quoted references. */
 const headingKey = (text) => text.replace(HEADING_NUMBER_RE, '').trim().toLowerCase();
+/** `headingKey` without a trailing parenthetical such as `(prepared additive contract)` or `*(10.9)*`. */
+const headingCore = (text) => headingKey(text).replace(/\s*[*_]*\([^()]*\)[*_]*$/, '').trim();
+
+/**
+ * The section a quoted heading names: an exact heading, else one equal
+ * once its trailing parenthetical is dropped, else the only heading the
+ * quote prefixes. An ambiguous quote names nothing.
+ */
+function quotedSection(doc, quoted) {
+  const q = quoted.trim().toLowerCase();
+  for (const key of [headingKey, headingCore]) {
+    const hits = doc.sections.filter((s) => key(s.heading.text) === q);
+    if (hits.length) return hits.length === 1 ? hits[0] : null;
+  }
+  const prefixed = doc.sections.filter((s) => headingKey(s.heading.text).startsWith(q));
+  return prefixed.length === 1 ? prefixed[0] : null;
+}
 
 /**
  * The capability a run of blocks is about: the one with more than half of
@@ -422,7 +440,7 @@ function resolveReference(ctx, fromFile, ref, loose = false) {
     if (ref.path) file = path.posix.normalize(path.posix.join(path.posix.dirname(fromFile), ref.path));
     const doc = ctx.docs.get(file);
     if (!doc) return null;
-    if (ref.heading) section = doc.sections.find((s) => headingKey(s.heading.text).startsWith(ref.heading.toLowerCase())) ?? null;
+    if (ref.heading) section = quotedSection(doc, ref.heading);
     else if (ref.anchor) section = doc.sections.find((s) => s.slug === safeDecode(ref.anchor)) ?? null;
     else if (ref.number) section = doc.sections.find((s) => s.number === ref.number) ?? null;
     else section = doc.root ?? doc.sections.find((s) => s.number) ?? null;
