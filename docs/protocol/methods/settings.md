@@ -42,7 +42,8 @@ tunnel), `sharing.*` (guest access), `sourceControl.*` and `identity.provider` (
 endpoints, OAuth clients, credential routing, primary identity), `accounts.*`, executables
 and locations (`providers.paths`, `context.auggiePath`, `workspace.defaultShell`,
 `workspace.sshKeyPath`, `storage.dataDir`, `workspaces.root`,
-`workspace.worktreesLocation`), `permissions.rules`, and opaque state
+`workspace.worktreesLocation`), `permissions.rules`, the prompt rules injected into every
+agent (`userRules`, `workspaceRules`), and opaque state
 (`quickActions.providerSettings`, `repos.known`, `workspace.changeHistory`,
 `workspaceInitializer.state`, `hardwareConsole.state`). Every other setting is `true`.
 
