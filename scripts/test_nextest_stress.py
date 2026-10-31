@@ -10,6 +10,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from types import SimpleNamespace
 import unittest
@@ -149,15 +150,35 @@ class TallyTests(unittest.TestCase):
 
 
 def alive(pid):
+    """Whether `pid` is a live process; once False it stays False while the pid is not reused.
+
+    kill(0) still succeeds for a zombie (Z), for a zombie its parent is reaping
+    (X), and for the instant after /proc/<pid> is removed but before the pid is
+    unhashed, so all three count as dead (intent-hq/intent#8136).
+    """
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
-    # A zombie still answers kill(0); it is dead for our purposes.
-    with contextlib.suppress(OSError):
-        if Path(f"/proc/{pid}/stat").read_text().split()[2] == "Z":
-            return False
-    return True
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except (FileNotFoundError, ProcessLookupError):
+        return not Path("/proc/self/stat").exists()
+    except OSError:
+        return True
+    # The command name in parentheses may contain spaces; the state follows it.
+    return stat.rpartition(")")[2].split()[0] not in ("Z", "X")
+
+
+def wait_until_dead(pids, polls=100, interval=0.05):
+    """Poll until every pid is dead; a pid seen dead once is never re-checked (its number may be reused)."""
+    remaining = list(pids)
+    for _ in range(polls):
+        remaining = [pid for pid in remaining if alive(pid)]
+        if not remaining:
+            break
+        time.sleep(interval)
+    return remaining
 
 
 def marked(marker):
@@ -168,6 +189,58 @@ def marked(marker):
             if marker.encode() in environ.read_bytes().split(b"\0") and alive(int(environ.parent.name)):
                 found.append(int(environ.parent.name))
     return found
+
+
+class AliveTests(unittest.TestCase):
+    """The test oracle for "the load died": a dead pid must never read as alive again (#8136)."""
+
+    def test_dying_and_vanishing_processes_count_as_dead(self):
+        stat = "4242 (python3 -I) {} 1 4242 4242 0 -1\n"
+        cases = [(stat.format("R"), True), (stat.format("S"), True), (stat.format("D"), True),
+                 (stat.format("Z"), False), (stat.format("X"), False),
+                 (FileNotFoundError(), False), (ProcessLookupError(), False), (PermissionError(), True)]
+        for read, expected in cases:
+            with self.subTest(read=read), mock.patch.object(os, "kill"), \
+                    mock.patch.object(Path, "exists", return_value=True), \
+                    mock.patch.object(Path, "read_text", side_effect=[read]):
+                self.assertIs(alive(4242), expected)
+        with mock.patch.object(os, "kill", side_effect=ProcessLookupError):
+            self.assertFalse(alive(4242))
+
+    def test_without_proc_a_signalable_pid_is_alive(self):
+        with mock.patch.object(os, "kill"), mock.patch.object(Path, "exists", return_value=False), \
+                mock.patch.object(Path, "read_text", side_effect=FileNotFoundError):
+            self.assertTrue(alive(4242))
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "/proc process states are Linux only")
+    def test_a_process_being_reaped_never_reads_alive_again(self):
+        # Sample alive() from a second thread while the parent reaps the child,
+        # which walks it through Z, X and a removed /proc entry.
+        flips = []
+        for _ in range(200):
+            pid = os.posix_spawn("/bin/true", ["true"], os.environ)
+            seen, done = [], threading.Event()
+
+            def sample():
+                while not done.is_set():
+                    seen.append(alive(pid))
+            sampler = threading.Thread(target=sample)
+            sampler.start()
+            time.sleep(0.0005)
+            os.waitpid(pid, 0)
+            time.sleep(0.0002)
+            done.set()
+            sampler.join()
+            if False in seen and True in seen[seen.index(False):]:
+                flips.append(pid)
+        self.assertEqual(flips, [])
+
+    def test_wait_until_dead_never_rechecks_a_dead_pid(self):
+        # A reused pid number must not resurrect a worker already seen dead.
+        answers = {1: iter([False, True]), 2: iter([True, False])}
+        with mock.patch(f"{__name__}.alive", side_effect=lambda pid: next(answers[pid])), \
+                mock.patch.object(time, "sleep"):
+            self.assertEqual(wait_until_dead([1, 2]), [])
 
 
 class LoadTests(unittest.TestCase):
@@ -236,11 +309,7 @@ class LoadTests(unittest.TestCase):
             runner.kill()
             runner.wait()
             runner.stdout.close()
-            for _ in range(100):
-                if not any(alive(pid) for pid in pids):
-                    break
-                time.sleep(0.05)
-            self.assertEqual([pid for pid in pids if alive(pid)], [])
+            self.assertEqual(wait_until_dead(pids), [])
 
 
 FAKE_CARGO = """#!/usr/bin/env python3
