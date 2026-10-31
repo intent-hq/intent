@@ -123,6 +123,14 @@ an unpinned workspace is routed to by the desktop-session or claimed-tab rule
 to a client with no eligible live connection" rather than "no eligible client". Older
 daemons omit it; clients then cannot tell the two apart.
 
+Also within 15.3 (additive definition field; no method-catalog change, so no version
+bump): **`SettingDefinition.proposable`**
+([§5.12 chat settings proposals](./methods/settings.md#512-settings)). Supporting daemons
+emit it on every `settings.list` / `settings.get` definition, `true` or `false`, to say
+whether an Assistant chat settings-change card may change the setting. Older daemons omit
+it. Clients then refuse card changes to daemon settings outside their own schema and keep
+their previous behavior for settings they map.
+
 **Version 15.1 — workspace discussions (additive, prepared).**
 [Workspace discussions](./methods/multiplayer.md#555-workspace-discussions) add
 `discussion.conversations`, `discussion.recipients`, `discussion.list`,
