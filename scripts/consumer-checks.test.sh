@@ -78,8 +78,11 @@ if ! run_check; then
   fail "all-green run exited non-zero: $check_output"
 fi
 expect_all_ran "all-green run"
+# The monorepo row leaves check-doc-links to run as a docs-check
+# prerequisite, so `make consumer-checks` checks doc links the way the ci.yml
+# docs-check job does.
 grep -q -- '--no-print-directory RUSTUP_CARGO= -o event-catalog-check -o check-mcp-bindings -o check-protocol-status-labels docs-check$' "$stub_log" ||
-  fail "docs-check was not invoked with its prerequisites assumed old: $(cat "$stub_log")"
+  fail "docs-check was not invoked with its prerequisites assumed old (and check-doc-links left to run): $(cat "$stub_log")"
 [ "$(grep -c . "$stub_log")" -eq "$check_count" ] || fail "expected $check_count make invocations: $(cat "$stub_log")"
 # The Makefile prepends the rust-toolchain.toml toolchain's bin/ to every
 # recipe's PATH; upstream that file is the caller's PR head, so every make
@@ -203,6 +206,10 @@ fi
 [ "$(tail -n 1 <<<"$check_output")" = "Fix order: additions land the monorepo docs change first (docs may lead the pin); removals land the component first and drop the docs entry after the bump; then re-run this job." ] ||
   fail "upstream context did not end with the fix-order line: $check_output"
 [ "$(grep -c '^Fix order:' <<<"$check_output")" -eq 1 ] || fail "fix-order line printed more than once: $check_output"
+# Upstream, the doc link check stays out of the component PR gate: the docs
+# row assumes check-doc-links up to date.
+grep -q -- '--no-print-directory RUSTUP_CARGO= -o event-catalog-check -o check-mcp-bindings -o check-protocol-status-labels -o check-doc-links docs-check$' "$stub_log" ||
+  fail "upstream context did not assume check-doc-links up to date for docs-check: $(cat "$stub_log")"
 # Upstream, packages/intentd is the caller's PR head rather than the pin, so
 # check-makefile-targets must read that head instead of the monorepo gitlink.
 grep -q -- '--no-print-directory RUSTUP_CARGO= CHECK_MAKEFILE_TARGETS_GITLINK=HEAD check-makefile-targets$' "$stub_log" ||
@@ -308,6 +315,7 @@ grep -q -e '^attacker node scripts/check-protocol-catalog.mjs$' \
 # `node` defined to log the way the trusted node does, so quoting and globs
 # expand exactly as they do for the real recipe.
 run_real_make env MAKE="$make_bin -n" "$script_bash" scripts/consumer-checks.sh --context upstream
+upstream_dry_run=$real_output
 expected_node_log=$fixture/expected-node.log
 : >"$expected_node_log"
 while IFS= read -r recipe_line; do
@@ -348,6 +356,19 @@ grep -q '^  check-protocol-catalog  *FAIL  ' <<<"$real_output" ||
   fail "the trusted checker's failure did not reach the summary table:"$'\n'"$real_output"
 [ "$(grep -c '^  [a-z-]*  *pass  ' <<<"$real_output")" -eq $((check_count - 1)) ] ||
   fail "real-make run did not list the other $((check_count - 1)) checks as pass:"$'\n'"$real_output"
+# Against the real Makefile: the upstream dry run above skipped the doc link
+# check, and a monorepo dry run of the runner must include it (and its tests),
+# as standalone `make docs-check` does.
+grep -qF 'node scripts/check-doc-links.mjs' <<<"$upstream_dry_run" &&
+  fail "upstream consumer-checks ran the doc link check:"$'\n'"$upstream_dry_run"
+run_real_make env MAKE="$make_bin -n" "$script_bash" scripts/consumer-checks.sh
+if ! grep -qFx 'node --test scripts/check-doc-links.test.mjs' <<<"$real_output" ||
+  ! grep -qFx 'node scripts/check-doc-links.mjs' <<<"$real_output"; then
+  fail "monorepo consumer-checks did not run the doc link check and its tests in the docs-check row:"$'\n'"$real_output"
+fi
+run_real_make "$make_bin" -n --no-print-directory docs-check
+grep -qFx 'node scripts/check-doc-links.mjs' <<<"$real_output" ||
+  fail "make docs-check does not run the doc link check the ci.yml docs-check job runs:"$'\n'"$real_output"
 
 # The reusable workflow pipes the runner through `tee`, so its step must run
 # under GitHub's `shell: bash` (`bash --noprofile --norc -eo pipefail {0}`);
