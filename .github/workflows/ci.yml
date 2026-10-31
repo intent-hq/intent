@@ -105,9 +105,10 @@ jobs:
   # The UDS→WS bridge shim (scripts/uds-ws-bridge.mjs) and the UDS JSON-RPC
   # probe (scripts/uds-rpc.mjs) are zero-dependency Node, so their node:test
   # suites need no submodules and use the shared runner routing policy.
-  # The breaking-token and submodule-pins unit suites also run here: their
-  # own jobs are pull_request-only, so without this the queue never re-tests
-  # them on the merged tree. scripts/test-ci-event-policy.py fails CI when a
+  # The breaking-token, submodule-pins and docs-pr-scope unit suites also run
+  # here: the first two jobs are pull_request-only and docs-pr-scope.yml runs
+  # only in the component repos, so without this the queue never re-tests them
+  # on the merged tree. scripts/test-ci-event-policy.py fails CI when a
   # scripts/*.test.{mjs,cjs} suite is not reached from a merge_group job.
   bridge-test:
     if: github.event_name == 'merge_group'
@@ -122,7 +123,7 @@ jobs:
           node-version: 22
       - run: node --test scripts/uds-ws-bridge.test.mjs
       - run: node --test scripts/uds-rpc.test.mjs
-      - run: node --test scripts/check-breaking-token.test.mjs scripts/check-submodule-pins.test.mjs
+      - run: node --test scripts/check-breaking-token.test.mjs scripts/check-submodule-pins.test.mjs scripts/check-docs-pr-scope.test.mjs
 
   # Standard-library-only Python suites run without submodules. Use the same
   # entry point locally and in CI; tomllib requires Python 3.11 or newer.
