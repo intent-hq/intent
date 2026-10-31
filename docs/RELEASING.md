@@ -87,7 +87,7 @@ other CI job finishes.
 
 ### Direct sidecar pin merges
 
-The cloudlands-fe merge queue builds one entry at a time, and an ordinary entry
+The cloudlands-fe merge queue builds up to five entries at once, and an ordinary entry
 takes about 45 minutes. On 2026-10-19 pin PR cloudlands-fe#3535 waited more than
 3 hours behind other entries, and auto-cut deferred the alpha the whole time.
 A plain pin bump already takes the CI fast path, so the queue only added wait.
