@@ -22,3 +22,6 @@ paths:
   .github/workflows/bash3-cache.yml:
     ignore:
       - 'property "workflow_(sha|repository)" is not defined in object type'
+  .github/workflows/docs-pr-scope.yml:
+    ignore:
+      - 'property "workflow_(sha|repository)" is not defined in object type'
