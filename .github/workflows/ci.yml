@@ -253,10 +253,9 @@ jobs:
       - run: node --test scripts/check-agent-feature-toggles.test.mjs
       - run: node --test scripts/check-app-guide-sources.test.mjs
       - run: node --test scripts/consumer-checks-ci.test.mjs
+      # Includes the doc link check against the pinned components (a
+      # docs-check prerequisite), so `make docs-check` matches this job.
       - run: make consumer-checks
-      - name: Check doc links against the pinned components
-        if: ${{ !cancelled() && steps.submodules.outcome == 'success' }}
-        run: node scripts/check-doc-links.mjs
 
   # The event-type catalog is vendored on three surfaces (intentd golden,
   # protocol sidecar, iOS test fixture). The public intentd copy is checked out

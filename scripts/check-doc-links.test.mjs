@@ -242,47 +242,75 @@ function makeGraph(makefile) {
   return rules;
 }
 
-function reachable(rules, roots) {
+function reachable(rules, roots, assumedOld = new Set()) {
   const seen = new Set();
   const stack = [...roots];
   while (stack.length > 0) {
     const target = stack.pop();
-    if (seen.has(target) || !rules.has(target)) continue;
+    if (seen.has(target) || assumedOld.has(target) || !rules.has(target)) continue;
     seen.add(target);
     stack.push(...rules.get(target).prerequisites);
   }
   return seen;
 }
 
+// Runs scripts/consumer-checks.sh against a make stub that records its argv and
+// returns the targets each context would build: command-line targets plus their
+// prerequisites, minus those `-o` assumes old, as real make would.
+async function consumerCheckTargets(t, context) {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'consumer-make-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const log = path.join(dir, 'make.log');
+  const stub = path.join(dir, 'make');
+  await fs.writeFile(stub, `#!/bin/sh\nprintf '%s\\n' "$*" >>"${log}"\n`, { mode: 0o755 });
+  execFileSync('bash', ['scripts/consumer-checks.sh', '--context', context], {
+    cwd: REPO,
+    env: { ...process.env, MAKE: stub, CONSUMER_CHECKS_ADVISORY: '', CONSUMER_CHECKS_CONTEXT: '' },
+    stdio: 'pipe',
+  });
+  const rules = makeGraph(await fs.readFile(path.join(REPO, 'Makefile'), 'utf8'));
+  const calls = (await fs.readFile(log, 'utf8')).trim().split('\n');
+  const targets = new Set();
+  for (const call of calls) {
+    const words = call.split(/\s+/);
+    const assumedOld = new Set(words.filter((_, index) => words[index - 1] === '-o'));
+    const goals = words.filter((word, index) => !word.startsWith('-') && !word.includes('=') && words[index - 1] !== '-o');
+    for (const target of reachable(rules, goals, assumedOld)) targets.add(target);
+  }
+  return { rules, targets };
+}
+
 // Incident: docs/protocol/README.md named an intentd script that existed only on an
 // unmerged branch for ~3 weeks because CI ran the checker only without submodules.
 // The docs-check job checks out intentd and cloudlands-fe at their pins, so it also
-// runs the checker; component PRs must not (monorepo docs would fail them).
-test('the docs-check CI job runs the checker after initializing the component submodules', async () => {
+// runs the checker (through `make consumer-checks`, whose docs-check row runs it as a
+// docs-check prerequisite, so a local `make docs-check` gives the CI answer: PR #8244
+// passed locally and failed CI); component PRs must not (monorepo docs would fail them).
+test('the docs-check CI job runs the checker after initializing the component submodules', async (t) => {
   const workflow = await fs.readFile(path.join(REPO, '.github/workflows/ci.yml'), 'utf8');
   const job = workflow.match(/^ {2}docs-check:\n([\s\S]*?)(?=^ {2}[\w-]+:\n)/m)?.[1];
   assert.ok(job, 'ci.yml has a docs-check job');
   const steps = job.split(/^ {6}- /m).slice(1);
   const init = steps.findIndex((step) => /git submodule update --init\b.*packages\/cloudlands-fe.*packages\/intentd/.test(step));
-  const check = steps.findIndex((step) => /\bnode scripts\/check-doc-links\.mjs\b/.test(step));
+  const check = steps.findIndex((step) => /^run: make consumer-checks$/m.test(step));
   assert.ok(init >= 0, 'docs-check initializes cloudlands-fe and intentd');
-  assert.ok(check > init, 'docs-check runs check-doc-links.mjs after the submodule init step');
+  assert.ok(check > init, 'docs-check runs make consumer-checks after the submodule init step');
+  const { targets } = await consumerCheckTargets(t, 'monorepo');
+  assert.ok(targets.has('check-doc-links'), 'monorepo consumer checks run check-doc-links');
+  const rules = makeGraph(await fs.readFile(path.join(REPO, 'Makefile'), 'utf8'));
+  assert.ok(reachable(rules, ['docs-check']).has('check-doc-links'), 'make docs-check runs check-doc-links');
+  assert.match(rules.get('check-doc-links').recipe, /^\t@?node scripts\/check-doc-links\.mjs$/m);
 });
 
-test('component consumer checks never run the doc-link checker', async () => {
-  const rules = makeGraph(await fs.readFile(path.join(REPO, 'Makefile'), 'utf8'));
-  const consumerChecks = await fs.readFile(path.join(REPO, 'scripts/consumer-checks.sh'), 'utf8');
-  const listed = consumerChecks.match(/^checks="([^"]+)"/m)?.[1].split(/\s+/);
-  assert.ok(listed?.includes('docs-check'), 'consumer-checks.sh lists its make targets');
-  const targets = reachable(rules, listed);
-  assert.ok(targets.has('event-catalog-check'), 'docs-check prerequisites are followed');
+test('component consumer checks never run the doc-link checker', async (t) => {
+  const { rules, targets } = await consumerCheckTargets(t, 'upstream');
+  assert.ok(targets.has('docs-check'), 'upstream consumer checks run docs-check');
+  assert.ok(targets.has('check-protocol-fixture-tests'), 'docs-check prerequisites are followed');
   for (const target of targets) {
-    assert.notEqual(target, 'check-doc-links', 'consumer checks must not depend on check-doc-links');
+    assert.notEqual(target, 'check-doc-links', 'upstream consumer checks must not build check-doc-links');
     assert.doesNotMatch(rules.get(target).recipe, /check-doc-links/, `make ${target} must not run the doc-link checker`);
   }
-  for (const script of ['scripts/consumer-checks.sh', 'scripts/docs-check.sh']) {
-    assert.doesNotMatch(await fs.readFile(path.join(REPO, script), 'utf8'), /check-doc-links/, `${script} must not run it`);
-  }
+  assert.doesNotMatch(await fs.readFile(path.join(REPO, 'scripts/docs-check.sh'), 'utf8'), /check-doc-links/);
 });
 
 test('reports links that escape the repository', async (t) => {
