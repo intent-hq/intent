@@ -668,6 +668,16 @@ Actor: `{ type: "user", id: <hostClientId> }` — the reporting host client.
   Actor: `{ type: "user" }` with no `id` on both.
   `note:presence` identifies the acting viewer via the payload's `principalId`; `presence:changed` does **not** identify the principal whose transition caused it — `members[]` is the set of principals currently online (a principal whose last connection just closed is absent from the roster it triggered).
 
+#### Plain-folder workspaces *(15.3)*
+
+The daemon never emits `changes:*`, `git:*`, `gitRoot:*`, `pr:*` or `prMonitor:*` events
+for a plain-folder workspace (`Workspace.plainFolder: true`, §5.1
+[Plain-folder workspaces](./methods/workspace.md#plain-folder-workspaces)): it runs no git
+status refresh, git metadata watcher, auto-commit, PR monitoring or automatic PR refresh
+for it. `file:*`, `task:*`, `note:*`, `agent:*` and `workspace:*` events are emitted as for
+any other workspace. Subscriptions to the suppressed patterns are still accepted; they
+simply receive nothing for that workspace.
+
 #### Payload-bearing task updates
 
 `task:updated` carries `{ workspaceId, tasks, removedIds }`. `tasks` contains complete
