@@ -2,14 +2,16 @@
 
 ## Status and discovery
 
-This is a **prepared additive contract**, not implemented or qualified by the
-current pins. Initial support requires both macOS and Windows. Linux is outside
-the initial scope. No currently advertised protocol version changes here.
+This is a **shipped additive contract**: the pinned intentd and cloudlands-fe
+implement it. Native execution is supported on macOS and Windows only; Linux is
+not supported, and a Linux client never advertises the client capability. No
+currently advertised protocol version changes here.
 
-The daemon advertises `server.capabilities.desktopControl: 1` only when the
-complete session, consent, agent-binding and revocation contract is implemented.
+The daemon advertises `server.capabilities.desktopControl: 1` because it
+implements the complete session, consent, agent-binding and revocation contract.
 Electron advertises `client.hello.capabilities.desktopControl: 1` only on its
-execution connection, alongside `browserExec: true`. Missing/unknown capability
+execution connection, alongside `browserExec: true`, and only on macOS or Windows
+when its bundled native desktop helper is present. Missing/unknown capability
 versions mean unsupported. Capability describes implementation, not permission
 or OS readiness. Old peers ignore the additive flag; a new daemon must never
 send desktop reverse calls to an old client. The UI gates its controls on both
@@ -19,14 +21,14 @@ routing in one place only: while a workspace has an active session, its agent
 browser calls go to that session's client, after the pin and ahead of claimed tabs
 ([REV-2 rule 3](./files-terminal-browser.md)).
 
-## Agent feature availability (prepared)
+## Agent feature availability
 
 `agentFeatures.desktopControl` is a boolean Agent Feature labelled **Desktop
 control**, default **true**, including when omitted from settings or an older
 persisted feature snapshot. It is separate from protocol
 `capabilities.desktopControl`, native OS readiness, remembered consent and active
 session authority. Default-on exposes the API; it never grants permission.
-See [settings](./settings.md) for the prepared setting definition.
+See [settings](./settings.md) for the setting definition.
 
 Capture the effective feature at each new agent-session creation, including
 creation/delegation of child agents, and use that same captured value for the
@@ -67,7 +69,7 @@ combinations weakens owner checks or user-only consent decisions.
 
 ## Identity, primary selection and authority
 
-Agent calls use the prepared MCP-only desktop namespace shown below; they are
+Agent calls use the MCP-only desktop namespace shown below; they are
 **not public router methods**. Derive the agent and workspace from authenticated
 agent execution context. For this desktop feature, **agent owner** means the
 persisted `workspace.owner_principal_id` of that resolved workspace, including
@@ -956,12 +958,12 @@ Pre-execution action refusals set `execution: "not_started"`; partial input sets
 `partial`; loss of confirmation sets `unknown`. Permission persistence and local
 teardown failures use `desktop-execution-failed` with an explanatory detail.
 
-[Prepared lifecycle fixtures](../fixtures/desktop-control/lifecycle.json) and
+[Lifecycle fixtures](../fixtures/desktop-control/lifecycle.json) and
 [static contract tests](../fixtures/desktop-control/contract.test.mjs) validate
 examples, required result distinctions and catalog alignment. Run:
 `node --test docs/protocol/fixtures/desktop-control/contract.test.mjs`,
 `make docs-check` and `make consumer-checks`.
-These tests do not implement the session manager or qualify native support.
+These static tests do not exercise the session manager or qualify native support.
 Component tests must execute those scenarios against real daemon/WSS and
 Electron code, including zero/one/multiple-display metadata and selection, selected-only native
 capture, unknown IDs, hotplug/rotation/DPI changes between preparation and execution,
