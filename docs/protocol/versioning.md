@@ -1633,6 +1633,7 @@ the `ignore` map of `scripts/check-protocol-field-parity.mjs`, not here.
 
 | Row | Field | Contract | App adoption |
 |---|---|---|---|
+| `Workspace` | `attentionReminder` | [Workspace reminder projection (§5.1)](methods/workspace.md) | [cloudlands-fe#3308](https://github.com/intent-hq/cloudlands-fe/pull/3308) |
 | `Workspace` | `retiredAt` | [Retired workspaces](./methods/workspace.md#retired-workspaces) | Pending cloudlands-fe retired-workspaces PR (home, search and workspace view) |
 | `Workspace` | `scriptsRunning` | [Workspace fields](./methods/workspace.md#51-workspace) | Pending cloudlands-fe Home Running/Waiting groups PR |
 | `Workspace` | `backgroundTasksRunning` | [Workspace fields](./methods/workspace.md#51-workspace) | Pending cloudlands-fe Home background-task Running PR |
