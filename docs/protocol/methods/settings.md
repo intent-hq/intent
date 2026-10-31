@@ -27,10 +27,40 @@ interface SettingDefinition {
   max?: number;           // numeric bound (type === "number")
   defaultValue?: unknown; // value used by settings.reset (informational only for absent-means-auto keys, see below)
   sensitive?: boolean;    // when true, value is redacted in settings.list / settings.get
+  proposable?: boolean;   // whether an Assistant chat settings-change card may change it; see "Chat settings proposals"
   tokenImpact?: string;   // approximate prompt-token cost of the gated feature, e.g. "~620 tokens/session"; presence-detected (absent when unannotated)
 }
 // SettingDefinitionWithValue = SettingDefinition & { value: unknown }  // current value (redacted if sensitive)
 ```
+
+**Chat settings proposals (`proposable`, additive).** The daemon decides which settings an
+Assistant chat settings-change card may change. Daemons that support it emit `proposable` on
+**every** definition, `true` or `false` (unlike the presence-detected flags above). It is `false`
+for every `sensitive` setting, for read-only settings (`server.auth.token`, `specialists.dir`,
+`providers.active`), and for the security-relevant families: `server.*` (listener, auth,
+tunnel), `sharing.*` (guest access), `sourceControl.*` and `identity.provider` (forge
+endpoints, OAuth clients, credential routing, primary identity), `accounts.*`, executables
+and locations (`providers.paths`, `context.auggiePath`, `workspace.defaultShell`,
+`workspace.sshKeyPath`, `storage.dataDir`, `workspaces.root`,
+`workspace.worktreesLocation`), `permissions.rules`, and opaque state
+(`quickActions.providerSettings`, `repos.known`, `workspace.changeHistory`,
+`workspaceInitializer.state`, `hardwareConsole.state`). Every other setting is `true`.
+
+- The Assistant's `ws.app.settings.propose` refuses a path unless `proposable` is `true`, and
+  checks the value against the definition (type, `enumValues`, `min` / `max`; `null` only
+  for a setting without `defaultValue`) before it renders a card.
+- A client applying a card change to a daemon setting outside its own schema reads the
+  definition with `settings.get` (never from the proposal payload) and applies it with
+  `settings.update` only when `proposable` is `true` and the setting is not `sensitive`. An
+  absent flag means an older daemon, and the client refuses. A client refuses a card change
+  to a daemon setting its own schema maps whenever the daemon sends `proposable: false`.
+- `null` in a card change means unset. The client applies it with `settings.reset`, because
+  `settings.update` rejects `null` for absent-means-auto keys such as
+  `agents.memoryBudgetMb` and for string or object keys. Undo restores the previous value
+  exactly, including `null`.
+
+`settings.update` itself is unchanged: `proposable` is advice to the chat proposal path, and
+the Settings UI keeps writing every non-read-only setting.
 
 `changes` entries use the `AppSettingChange` shape `{ path, value, reason? }` (`reason` is an optional free-text audit note). `settings.update` **validates** each change against its definition (type / enum / min / max) and **persists** atomically; an unknown `path` or a value failing validation yields `-32602` and the whole batch is rejected (nothing applied). On success it emits a `settings:changed` notification (§6.5) carrying the applied `{ path, value, origin? }` pairs (sensitive values redacted).
 
