@@ -7,8 +7,8 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import {
-  DEFINITIONS_FILE, FE_DIR, FE_FILE, INTENTD_DIR, REGISTRY_FILE,
-  compare, parseDefinitionPaths, parseFePaths, parseKnownPaths, run, stripComments,
+  DEFINITIONS_FILE, DOCS_FILE, FE_DIR, FE_FILE, INTENTD_DIR, REGISTRY_FILE,
+  compare, parseDefinitionPaths, parseDocsPaths, parseFePaths, parseKnownPaths, run, stripComments,
 } from './check-agent-feature-toggles.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -60,6 +60,16 @@ export const FEATURES: {
 ${entries.map((p) => `  {\n    path: '${p}',\n    label: () => m.x(),\n    // Off by default on the daemon.\n    defaultValue: true,\n  },\n`).join('')}${entriesExtra}];
 `;
 
+// The settings.md shape: one Agent features bullet whose paths precede
+// "— booleans", other code spans after it, and optional prepared bullets.
+const settingsMd = (paths, prepared = []) => `## Settings
+
+- **Tools:** \`rtk.enabled\` *(boolean, default \`false\`)*.
+- **Agent features (new in intentd):** ${paths.map((p, i) => `\`${p}\`${i === 1 ? ' *(v6.1)*' : ''}`).join(', ')} — booleans, TOML-backed under \`[agentFeatures]\`.
+  All default **\`true\`** except \`agentFeatures.secretRequests\`; see \`agentFeatures.notListed\` too.
+${prepared.map(({ path: p, notImplemented = true }) => `- **Brand new agent feature (prepared addition)**: \`${p}\` *(boolean)* — mentions \`agentFeatures.hostExec\`.${notImplemented ? ' This addition is **not implemented by the current pins**.' : ''}\n`).join('')}- **PR monitor:** \`prMonitor.pollSeconds\`.
+`;
+
 const BASE = ['agentFeatures.hostExec', 'agentFeatures.secretRequests', 'agentFeatures.mcpTools'];
 const lists = ({ daemon = BASE, known = daemon, fe = BASE, entries = fe } = {}) => ({
   daemon: parseDefinitionPaths(definitionsRs(daemon)),
@@ -67,9 +77,10 @@ const lists = ({ daemon = BASE, known = daemon, fe = BASE, entries = fe } = {}) 
   ...parseFePaths(featureTs(fe, entries)),
 });
 
-function fixture({ daemon = BASE, known = daemon, fe = BASE, entries = fe, intentdDir = INTENTD_DIR, feDir = FE_DIR } = {}) {
+function fixture({ daemon = BASE, known = daemon, fe = BASE, entries = fe, docs = daemon, intentdDir = INTENTD_DIR, feDir = FE_DIR } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), 'agent-feature-toggles-'));
   const files = {
+    [DOCS_FILE]: settingsMd(docs),
     [path.join(intentdDir, DEFINITIONS_FILE)]: definitionsRs(daemon),
     [path.join(intentdDir, REGISTRY_FILE)]: registryRs(known),
     [path.join(feDir, FE_FILE)]: featureTs(fe, entries),
@@ -90,7 +101,8 @@ test('the pinned component sources parse', () => {
   const daemon = parseDefinitionPaths(readFileSync(path.join(root, INTENTD_DIR, DEFINITIONS_FILE), 'utf8'));
   const known = parseKnownPaths(readFileSync(path.join(root, INTENTD_DIR, REGISTRY_FILE), 'utf8'));
   const { featurePaths, featureEntries } = parseFePaths(readFileSync(path.join(root, FE_DIR, FE_FILE), 'utf8'));
-  for (const values of [daemon, known, featurePaths, featureEntries]) {
+  const { listed } = parseDocsPaths(readFileSync(path.join(root, DOCS_FILE), 'utf8'));
+  for (const values of [daemon, known, featurePaths, featureEntries, listed]) {
     assert.ok(values.length > 0);
     for (const value of values) assert.match(value, /^agentFeatures\.[A-Za-z]+$/);
   }
@@ -101,7 +113,7 @@ test('agreeing synthetic components pass through the CLI', () => {
   try {
     const out = cli(dir);
     assert.equal(out.status, 0, out.stderr);
-    assert.match(out.stdout, /3 agentFeatures\.\* settings have Settings toggles$/m);
+    assert.match(out.stdout, /3 agentFeatures\.\* settings have Settings toggles; 3 are documented in docs\/protocol\/methods\/settings\.md$/m);
     assert.doesNotMatch(out.stdout, /::warning::/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -246,6 +258,70 @@ test('run reports a missing component file', () => {
   rmSync(path.join(dir, INTENTD_DIR, DEFINITIONS_FILE));
   try {
     assert.throws(() => run(dir, quiet), /settings\.rs not found; initialize the submodule/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI fails and names a daemon setting missing from the docs list', () => {
+  const dir = fixture({ docs: BASE.filter((p) => p !== 'agentFeatures.secretRequests') });
+  try {
+    const out = cli(dir);
+    assert.equal(out.status, 1);
+    assert.match(out.stderr, /agentFeatures\.secretRequests is registered by intentd .* but missing from the Agent features list in docs\/protocol\/methods\/settings\.md/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the docs list is the bullet text before "— booleans"', () => {
+  const { listed, prepared } = parseDocsPaths(settingsMd(BASE));
+  assert.deepEqual(listed, BASE, 'mentions after the list, and other bullets, do not count');
+  assert.deepEqual(prepared, []);
+});
+
+test('a prepared-addition bullet documents a setting, and warns once the daemon registers it', () => {
+  const daemon = [...BASE, 'agentFeatures.brandNew'];
+  const l = lists({ daemon, fe: daemon });
+  const stale = compare({ ...l, docs: parseDocsPaths(settingsMd(BASE, [{ path: 'agentFeatures.brandNew' }])) });
+  assert.deepEqual(stale.errors, []);
+  assert.equal(stale.documented, 4);
+  assert.equal(stale.warnings.length, 1);
+  assert.match(stale.warnings[0], /agentFeatures\.brandNew has a prepared-addition bullet .* "not implemented by the current pins", but intentd registers it/);
+  const unlisted = compare({ ...l, docs: parseDocsPaths(settingsMd(BASE, [{ path: 'agentFeatures.brandNew', notImplemented: false }])) });
+  assert.deepEqual(unlisted.errors, []);
+  assert.equal(unlisted.warnings.length, 1, 'warns without the "not implemented" phrase too');
+  assert.match(unlisted.warnings[0], /agentFeatures\.brandNew is registered by intentd but documented only by a prepared-addition bullet/);
+  const listed = compare({ ...l, docs: parseDocsPaths(settingsMd(daemon, [{ path: 'agentFeatures.brandNew', notImplemented: false }])) });
+  assert.deepEqual(listed.errors, []);
+  assert.deepEqual(listed.warnings, []);
+});
+
+test('a docs-first prepared bullet for an unregistered setting is silent', () => {
+  const result = compare({ ...lists(), docs: parseDocsPaths(settingsMd(BASE, [{ path: 'agentFeatures.docsFirst' }])) });
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.warnings, []);
+});
+
+test('a listed path the daemon does not register warns; a duplicate fails', () => {
+  const extra = compare({ ...lists(), docs: parseDocsPaths(settingsMd([...BASE, 'agentFeatures.gone'])) });
+  assert.deepEqual(extra.errors, []);
+  assert.match(extra.warnings.join('\n'), /agentFeatures\.gone is in the Agent features list .* but intentd does not register it/);
+  const dup = compare({ ...lists(), docs: parseDocsPaths(settingsMd([...BASE, 'agentFeatures.hostExec'])) });
+  assert.match(dup.errors.join('\n'), /Agent features list names agentFeatures\.hostExec more than once/);
+});
+
+test('unrecognized docs shapes fail closed', () => {
+  assert.throws(() => parseDocsPaths(settingsMd(BASE).replace('- **Agent features', '- **Agent toggles')), /expected one `- \*\*Agent features \.\.\.\*\*` bullet, found 0/);
+  assert.throws(() => parseDocsPaths(settingsMd(BASE).replace(' — booleans', ', booleans')), /no longer lists its settings before `— booleans`/);
+  assert.throws(() => parseDocsPaths(settingsMd(['rtk.enabled'])), /lists no agentFeatures\.\* setting/);
+});
+
+test('run reports missing settings docs without a submodule hint', () => {
+  const dir = fixture();
+  rmSync(path.join(dir, DOCS_FILE));
+  try {
+    assert.throws(() => run(dir, quiet), (error) => /settings\.md not found; update check-agent-feature-toggles/.test(error.message));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -367,10 +367,10 @@ test('ownership boundary examples reject every identity fallback and invalidate 
   }
 });
 
-test('desktop feature is explicitly prepared, default on and independent of consent and capabilities', async () => {
+test('desktop feature is documented in settings, default on and independent of consent and capabilities', async () => {
   const settings = await read('../../methods/settings.md');
   assert.ok(doc.includes('agentFeatures.desktopControl'));
-  assert.ok(settings.includes('**Desktop control agent feature (prepared addition)**'));
+  assert.ok(settings.includes('**Desktop control agent feature:** `agentFeatures.desktopControl` *(boolean, default `true`'));
   const feature = fixture.agentFeature;
   assert.equal(feature.path, 'agentFeatures.desktopControl');
   assert.equal(feature.defaultValue, true);

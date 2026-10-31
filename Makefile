@@ -293,7 +293,7 @@ check-protocol-field-parity: ensure-intentd-submodule ensure-fe-submodule ## Che
 # Settings -> Agent features toggle in cloudlands-fe (FEATURE_PATHS / FEATURES),
 # or an EXEMPT entry with a reason in the script, landed before the intentd PR.
 # An FE-only toggle or a stale EXEMPT entry warns; see docs/README.md.
-check-agent-feature-toggles: ensure-intentd-submodule ensure-fe-submodule ## Check every intentd agentFeatures.* setting has a cloudlands-fe Agent features toggle (or a reasoned EXEMPT entry)
+check-agent-feature-toggles: ensure-intentd-submodule ensure-fe-submodule ## Check every intentd agentFeatures.* setting has a cloudlands-fe Agent features toggle (or a reasoned EXEMPT entry) and appears in the settings.md Agent features list
 	@node scripts/check-agent-feature-toggles.mjs --intentd-dir "$(INTENTD_DIR)" --fe-dir "$(FE_DIR)"
 
 # The live main-branch rulesets of intent, intentd and cloudlands-fe (required

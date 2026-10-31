@@ -18,6 +18,11 @@
 //   - cloudlands-fe: `FEATURE_PATHS` (read by the settings form) and the
 //     `path:` entries of `FEATURES` (read by the harness features modal) in
 //     agent-feature-definitions.ts; the two must agree.
+//   - monorepo docs: the code spans listed before "— booleans" on the
+//     `- **Agent features` bullet of docs/protocol/methods/settings.md, plus
+//     the setting each `- **... (prepared addition)**` bullet opens with. The
+//     list said "All default true" and omitted desktopControl and
+//     secretRequests (off by default) after both shipped.
 //
 // Direction rules (the same "docs lead the pin" order as
 // check-protocol-field-parity's staged table):
@@ -28,7 +33,14 @@
 //     or one left over after a daemon removal);
 //   - a stale EXEMPT entry (the FE now lists the path, or the daemon no longer
 //     registers it) only warns, so the FE PR that adds the toggle is not
-//     blocked on removing the entry; remove it in a follow-up.
+//     blocked on removing the entry; remove it in a follow-up;
+//   - a daemon setting the docs neither list nor name in a prepared-addition
+//     bullet fails (docs lead: write the prepared bullet before the intentd
+//     PR). EXEMPT does not apply; every setting is documented;
+//   - a documented path the daemon does not register only warns, and so does
+//     a registered setting the list omits but a prepared bullet names (move it
+//     into the list; the message calls out a leftover "not implemented by the
+//     current pins").
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -43,6 +55,7 @@ export const FE_DIR = 'packages/cloudlands-fe';
 export const DEFINITIONS_FILE = 'crates/intent-services/src/settings.rs';
 export const REGISTRY_FILE = 'crates/intent-services/src/settings_registry.rs';
 export const FE_FILE = 'src/lib/components/settings/agent-feature-definitions.ts';
+export const DOCS_FILE = 'docs/protocol/methods/settings.md';
 const CHECK = 'check-agent-feature-toggles';
 const SCRIPT = `scripts/${CHECK}.mjs`;
 const PREFIX = 'agentFeatures.';
@@ -189,14 +202,37 @@ export function parseFePaths(source, file = FE_FILE) {
   return { featurePaths, featureEntries };
 }
 
+/**
+ * `{ listed, prepared }` from the monorepo settings docs, or throws naming
+ * what changed. `listed` is the Agent features bullet's path list; `prepared`
+ * is `[{ path, notImplemented }]`, one per top-level `(prepared addition)`
+ * bullet that opens with an `agentFeatures.*` code span.
+ */
+export function parseDocsPaths(source, file = DOCS_FILE) {
+  const lines = source.split('\n');
+  const bullets = lines.filter((line) => /^- \*\*Agent features\b/.test(line));
+  if (bullets.length !== 1) throw new Error(`${file}: expected one \`- **Agent features ...**\` bullet, found ${bullets.length}; update ${CHECK}`);
+  const list = bullets[0].match(/^- \*\*Agent features\b[^*]*\*\*(.*?)\s+—\s+booleans\b/);
+  if (!list) throw new Error(`${file}: the Agent features bullet no longer lists its settings before \`— booleans\`; update ${CHECK}`);
+  const listed = [...list[1].matchAll(/`(agentFeatures\.[^`]*)`/g)].map((m) => m[1]);
+  if (!listed.length) throw new Error(`${file}: the Agent features bullet lists no agentFeatures.* setting; update ${CHECK}`);
+  const prepared = [];
+  for (const line of lines) {
+    if (!/^- \*\*[^*]*\(prepared addition\)/.test(line)) continue;
+    const m = line.match(/^- \*\*[^*]*\*\*:?\s*`(agentFeatures\.[^`]*)`/);
+    if (m) prepared.push({ path: m[1], notImplemented: /not implemented by the current pins/.test(line) });
+  }
+  return { listed, prepared };
+}
+
 const duplicates = (values) => [...new Set(values.filter((v, i) => values.indexOf(v) !== i))];
 
 /**
  * Compare the lists. Returns `{ errors, warnings, matched, exempted }`. `hint`
  * is appended to a missing-toggle error (the local off-pin rebase hint).
  */
-export function compare({ daemon, known = daemon, featurePaths, featureEntries, exempt = EXEMPT, hint = '', files = {} }) {
-  const f = { definitions: `${INTENTD_DIR}/${DEFINITIONS_FILE}`, registry: `${INTENTD_DIR}/${REGISTRY_FILE}`, fe: `${FE_DIR}/${FE_FILE}`, ...files };
+export function compare({ daemon, known = daemon, featurePaths, featureEntries, docs, exempt = EXEMPT, hint = '', files = {} }) {
+  const f = { definitions: `${INTENTD_DIR}/${DEFINITIONS_FILE}`, registry: `${INTENTD_DIR}/${REGISTRY_FILE}`, fe: `${FE_DIR}/${FE_FILE}`, docs: DOCS_FILE, ...files };
   const errors = [];
   const warnings = [];
   for (const [name, values] of [['intentd definitions()', daemon], ['intentd KNOWN_PATHS', known], ['FEATURE_PATHS', featurePaths], ['FEATURES', featureEntries]]) {
@@ -236,17 +272,36 @@ export function compare({ daemon, known = daemon, featurePaths, featureEntries, 
   for (const p of featurePaths) {
     if (!registered.has(p)) warnings.push(`${p} has a toggle but intentd does not register it (FE-first toggle, or left over after a daemon removal)`);
   }
-  return { errors, warnings, matched, exempted };
+  let documented = 0;
+  if (docs) {
+    for (const dup of duplicates(docs.listed)) errors.push(`${f.docs} Agent features list names ${dup} more than once`);
+    const listed = new Set(docs.listed);
+    const prepared = new Set(docs.prepared.map((d) => d.path));
+    for (const p of daemon) {
+      if (listed.has(p) || prepared.has(p)) documented += 1;
+      else errors.push(`${p} is registered by intentd (${f.definitions} definitions()) but missing from the Agent features list in ${f.docs}; add it to that list with its default (a prepared-addition bullet counts only when it opens with the path, as \`- **... (prepared addition)**: \`${p}\`\`)`);
+    }
+    for (const p of docs.listed) if (!registered.has(p)) warnings.push(`${p} is in the Agent features list of ${f.docs} but intentd does not register it (docs-first addition: use a prepared-addition bullet; or left over after a daemon removal)`);
+    for (const { path: p, notImplemented } of docs.prepared) {
+      if (!registered.has(p)) continue;
+      if (notImplemented) warnings.push(`${p} has a prepared-addition bullet in ${f.docs} that says "not implemented by the current pins", but intentd registers it; move it into the Agent features list and drop that wording`);
+      else if (!listed.has(p)) warnings.push(`${p} is registered by intentd but documented only by a prepared-addition bullet in ${f.docs}; move it into the Agent features list`);
+    }
+  }
+  return { errors, warnings, matched, exempted, documented };
 }
 
 /**
  * Read and compare the checkouts under `root`. `intentdDir` / `feDir` are
  * relative to `root` (the Makefile's INTENTD_DIR / FE_DIR).
  */
-export function run(root, { intentdDir = INTENTD_DIR, feDir = FE_DIR, exempt = EXEMPT, env = process.env, log = console.log, warn = console.error } = {}) {
+export function run(root, { intentdDir = INTENTD_DIR, feDir = FE_DIR, docsFile = DOCS_FILE, exempt = EXEMPT, env = process.env, log = console.log, warn = console.error } = {}) {
   const read = (dir, file) => {
     const full = path.resolve(root, dir, file);
-    if (!fs.existsSync(full)) throw new Error(`${path.join(dir, file)} not found; initialize the submodule (make ensure-intentd-submodule ensure-fe-submodule) or update ${CHECK} if the file moved`);
+    if (!fs.existsSync(full)) {
+      const fix = dir === '.' ? '' : 'initialize the submodule (make ensure-intentd-submodule ensure-fe-submodule) or ';
+      throw new Error(`${path.join(dir, file)} not found; ${fix}update ${CHECK} if the file moved`);
+    }
     return fs.readFileSync(full, 'utf8');
   };
   const intentdRef = describeCheckout(root, intentdDir, { pinDir: INTENTD_DIR });
@@ -257,17 +312,18 @@ export function run(root, { intentdDir = INTENTD_DIR, feDir = FE_DIR, exempt = E
     const offPin = formatOffPinWarning(ref);
     if (offPin) warn(offPin);
   }
-  const files = { definitions: path.join(intentdDir, DEFINITIONS_FILE), registry: path.join(intentdDir, REGISTRY_FILE), fe: path.join(feDir, FE_FILE) };
+  const files = { definitions: path.join(intentdDir, DEFINITIONS_FILE), registry: path.join(intentdDir, REGISTRY_FILE), fe: path.join(feDir, FE_FILE), docs: docsFile };
   const daemon = parseDefinitionPaths(read(intentdDir, DEFINITIONS_FILE), files.definitions);
   const known = parseKnownPaths(read(intentdDir, REGISTRY_FILE), files.registry);
   const { featurePaths, featureEntries } = parseFePaths(read(feDir, FE_FILE), files.fe);
+  const docs = parseDocsPaths(read('.', docsFile), files.docs);
   // A local intentd branch newer than the pin may need an exemption that
   // origin/main already has. In CI the monorepo is main (upstream, intentd is
   // off-pin by construction), so the hint would only mislead.
   const ci = env.CI && !['false', '0'].includes(env.CI);
   const offPin = Boolean(intentdRef.checkout && intentdRef.pin && (intentdRef.checkout !== intentdRef.pin || intentdRef.dirty));
   const hint = offPin && !ci ? ' If origin/main already exempts it, rebase this monorepo worktree.' : '';
-  return compare({ daemon, known, featurePaths, featureEntries, exempt, hint, files });
+  return compare({ daemon, known, featurePaths, featureEntries, docs, exempt, hint, files });
 }
 
 function main() {
@@ -287,7 +343,7 @@ function main() {
     process.exitCode = 1;
     return;
   }
-  console.log(`${CHECK}: ${result.matched} agentFeatures.* settings have Settings toggles${result.exempted ? ` (${result.exempted} exempt)` : ''}`);
+  console.log(`${CHECK}: ${result.matched} agentFeatures.* settings have Settings toggles${result.exempted ? ` (${result.exempted} exempt)` : ''}; ${result.documented} are documented in ${DOCS_FILE}`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();
