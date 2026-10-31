@@ -169,7 +169,7 @@ CDP_PORT ?= $(call dev_port_value,CDP_PORT)
 # An explicit INTENTD_SOCKET always takes precedence.
 BRIDGE_PLATFORM ?= $(shell uname -s)
 
-.PHONY: check-app-ui-targets check-agent-feature-toggles check-doc-links check-note-truncated-read-contract check-browser-routing-contract check-suggested-prompts-contract check-turn-start-contract check-fixture-copies check-agent-worker-contract test-transfer-selection-contract check-transfer-selection-contract check-backend-keychain-contract ports status consumer-checks docs-check check-protocol-catalog check-mcp-bindings mcp-bindings-doc check-makefile-targets check-protocol-field-parity check-rulesets event-catalog-check shipped-in release-status rpc
+.PHONY: check-app-ui-targets check-app-guide-sources check-agent-feature-toggles check-doc-links check-note-truncated-read-contract check-browser-routing-contract check-suggested-prompts-contract check-turn-start-contract check-fixture-copies check-agent-worker-contract test-transfer-selection-contract check-transfer-selection-contract check-backend-keychain-contract ports status consumer-checks docs-check check-protocol-catalog check-mcp-bindings mcp-bindings-doc check-makefile-targets check-protocol-field-parity check-rulesets event-catalog-check shipped-in release-status rpc
 ports: ## Print this worktree's resolved development ports
 	@set -- .dev/sandbox/*.json; if [ -e "$$1" ]; then \
 		echo "[ports] Note: these ports are for the next start; read running ports from 'make sandbox-status' or .dev/sandbox/<mode>.json." >&2; \
@@ -197,6 +197,16 @@ check-transfer-selection-contract: ## Validate transfer-selection fixtures and p
 
 check-app-ui-targets: ## Check Assistant navigation against the frontend registry
 	@node scripts/check-app-ui-targets.mjs
+
+# Every file intentd's assistant-app-guide.md cites in a `<!-- Sources: ... -->`
+# comment must exist in the component it names at the recorded gitlink (git
+# objects only; packages/ios citations are skipped). The upstream consumer job
+# sets CHECK_APP_GUIDE_SOURCES_UPSTREAM=1: each checkout's HEAD is read, and a
+# missing cloudlands-fe file only warns there (docs leading or trailing the
+# pin); the auto/submodule-bump PR stays strict.
+CHECK_APP_GUIDE_SOURCES_UPSTREAM ?=
+check-app-guide-sources: ensure-intentd-submodule ensure-fe-submodule ## Check that the assistant app guide's Sources comments cite files present at the pinned components (CHECK_APP_GUIDE_SOURCES_UPSTREAM=1 reads checkout HEADs and warns for cloudlands-fe)
+	@node scripts/check-app-guide-sources.mjs $(if $(filter 1,$(CHECK_APP_GUIDE_SOURCES_UPSTREAM)),--upstream)
 
 check-doc-links: ## Check agent-facing Markdown links, paths, and heading anchors (CI: repo-hygiene without submodules, docs-check with the component pins)
 	@node --test scripts/check-doc-links.test.mjs

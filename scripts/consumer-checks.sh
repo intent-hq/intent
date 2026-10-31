@@ -39,7 +39,7 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 cd "$repo_root"
 
-checks="event-catalog-check check-mcp-bindings docs-check check-protocol-catalog check-makefile-targets check-protocol-field-parity check-agent-feature-toggles check-transfer-selection-contract check-backend-keychain-contract check-agent-worker-contract check-app-ui-targets check-note-truncated-read-contract check-browser-routing-contract check-suggested-prompts-contract check-turn-start-contract check-fixture-copies"
+checks="event-catalog-check check-mcp-bindings docs-check check-protocol-catalog check-makefile-targets check-protocol-field-parity check-agent-feature-toggles check-transfer-selection-contract check-backend-keychain-contract check-agent-worker-contract check-app-ui-targets check-app-guide-sources check-note-truncated-read-contract check-browser-routing-contract check-suggested-prompts-contract check-turn-start-contract check-fixture-copies"
 advisory=${CONSUMER_CHECKS_ADVISORY:-}
 context=${CONSUMER_CHECKS_CONTEXT:-monorepo}
 make_bin=${MAKE:-make}
@@ -95,6 +95,7 @@ fix_path() {
     check-transfer-selection-contract) echo "docs/protocol/fixtures/transfer-selection/ (shape, coverage and provenance; no compilation)" ;;
     check-backend-keychain-contract) echo "docs/protocol/fixtures/backend-keychain/v1/ + adopted component mirrors/locks (see docs/protocol/backend-keychain.md)" ;;
     check-app-ui-targets) echo "intentd app-ui-targets.json + cloudlands-fe app-ui-targets.ts (supported routes and aliases)" ;;
+    check-app-guide-sources) echo "intentd assistant-app-guide.md Sources comments (cite files present at the pinned components; drop guide text for code that never landed)" ;;
     check-agent-worker-contract) echo "docs/protocol/methods/agent-workers.md + fixtures/agent-workers/v1/ + scripts/agent-worker-contract*.mjs (synthetic only)" ;;
     check-note-truncated-read-contract) echo "docs/protocol/fixtures/notes/truncated-read.json + methods/notes-tasks.md" ;;
     check-browser-routing-contract) echo "docs/protocol/fixtures/browser-routing/routing.json + methods/files-terminal-browser.md REV-2 (intentd copy: crates/intent-transport/tests/fixtures/browser-routing.json, via scripts/browser-routing-contract.mjs)" ;;
@@ -108,13 +109,21 @@ fix_path() {
 # Upstream, packages/intentd is the caller's own checkout (a PR head, not the
 # pin), so check-makefile-targets asks whether that head still provides the
 # Makefile's crates / --test targets; in fe upstream context intentd sits at
-# the pin, so HEAD == pin. The monorepo keeps the strict pinned-gitlink read.
+# the pin, so HEAD == pin. check-app-guide-sources likewise reads both checkout
+# HEADs upstream and only warns for a missing cloudlands-fe file. The monorepo
+# keeps the strict pinned-gitlink reads.
 make_args() {
   case "$1" in
     docs-check) echo "-o event-catalog-check -o check-mcp-bindings docs-check" ;;
     check-makefile-targets)
       if [ "$context" = "upstream" ]; then
         echo "CHECK_MAKEFILE_TARGETS_GITLINK=HEAD $1"
+      else
+        echo "$1"
+      fi ;;
+    check-app-guide-sources)
+      if [ "$context" = "upstream" ]; then
+        echo "CHECK_APP_GUIDE_SOURCES_UPSTREAM=1 $1"
       else
         echo "$1"
       fi ;;
