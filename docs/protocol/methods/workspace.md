@@ -2810,6 +2810,9 @@ validation"), when:
 - it also sets a git-only option — `githubUrl`, `repositoryCheckout`, `clonePath`,
   `isNewRepo: true`, `baseRef`, `branch`, `worktreePath` or `isRemote: true` —
   `{ code: "invalid-params" }` with a message naming the option;
+- it carries a pr-kind `contextLinks` entry, which would make the create PR-aware and
+  derive `branch` / `baseRef` and PR fields from the forge — `{ code: "invalid-params" }`;
+  issue-kind links are accepted and persisted as for any create;
 - `repositoryPath` is missing — `{ code: "invalid-params" }`;
 - the path cannot hold a plain folder —
   `{ code: "plain-folder-path-rejected", reason, path }`, where `reason` is one of:

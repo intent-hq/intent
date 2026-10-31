@@ -17,8 +17,8 @@ an ordinary folder with no git repository. They add the presence-detected
 `Workspace.plainFolder` row field (omitted = `false`; set only at create, never by
 `workspace.update`, and kept if `.git` appears later) and the `workspace.create` option
 `plainFolder: true` with `repositoryPath` naming an existing non-git folder or a new
-folder. The option is refused before any side effect with git-only create options or a
-path inside a git repository or the daemon workspaces root
+folder. The option is refused before any side effect with git-only create options, a pr-kind
+`contextLinks` entry, or a path inside a git repository or the daemon workspaces root
 (`plain-folder-path-rejected`). Intent never deletes, moves or modifies the folder:
 `workspace.retire` keeps its `retire-unsupported` refusal with `plainFolder: true`, and
 `workspace.duplicate` plus the agent bindings `ws.git.*`, `ws.pr.*`, `ws.mr.*` and
