@@ -29,7 +29,7 @@ The prepared [compact script list contract](./methods/scripts.md#active-only-com
 adds `script.get` and `scriptMonitor.get`, plus optional bounded summary views on
 the existing lists under `scriptActiveLists: 1` / `scriptMonitors: 2`. Protocol 14 removes archived list selection and terminal monitor history; full event payloads remain unchanged.
 
-The prepared [desktop control contract (§5.51)](./methods/desktop.md) adds four
+The [desktop control contract (§5.51)](./methods/desktop.md) adds four
 user/executor router methods and one daemon-only reverse RPC. Agent lifecycle
 and actions are MCP-only; `desktopControl: 1` gates support independently at both ends.
 
@@ -97,7 +97,7 @@ adds eight owner-only router methods: `executor.*` on the machine that runs
 remote agents, `remoteMachines.*` on the backend. `remoteMachines: 1` gates the
 backend side; catalog presence does not imply `agentNodes`.
 
-The prepared [secret request contract (§5.56)](./methods/secrets.md) adds four
+The [secret request contract (§5.56)](./methods/secrets.md) adds four
 workspace router methods for answering, dismissing, listing and forgetting
 agent-requested secrets. Requests are MCP-only; `secretRequests: 1` gates support.
 
@@ -135,7 +135,7 @@ pin, while all existing methods and prepared extensions remain present.
 | comment | 6 | add, delete, getThread, list, resolveThread, respond |
 | crossWorkspace | 3 | listNotes, listSiblings, readNote |
 | debug | 1 | sampleStacks — point-in-time sample of the daemon's own thread stacks rendered as a text report (§5.43; v6.3, daemon-global — no `workspaceId`) |
-| desktop | 4 | getState, respondPermission, revoke, setPermission — prepared desktop control (§5.51); user/executor only |
+| desktop | 4 | getState, respondPermission, revoke, setPermission — desktop control (§5.51); user/executor only |
 | discussion | 9 | conversations, delete, list, react, recipients, rename, retryAgent, send, stopAgent — workspace-wide discussions and participant-restricted legacy histories (§5.55); authenticated humans, plus explicitly addressed agents in the default discussion under `discussionAgentMessaging: 1` |
 | event | 3 | agentActivity, query, workspaceSummary |
 | executor | 3 | list, mint, revoke — prepared daemon-to-daemon executor credentials (§5.50), owner-only, daemon-global |
@@ -169,7 +169,7 @@ pin, while all existing methods and prepared extensions remain present.
 | script | 12 | archive, create, get, list, output, remove, restart, restore, run, start, status, stop |
 | scriptMonitor | 4 | cancel, cancelRun, get, list — prepared script run monitors (§5.8a); registration is MCP-only |
 | search | 7 | cancel, codebase, events, fileNames, inFiles, messages, notes |
-| secret | 4 | dismiss, forget, list, provide — prepared secret requests (§5.56); values held in daemon memory only, request creation is MCP-only |
+| secret | 4 | dismiss, forget, list, provide — secret requests (§5.56); values held in daemon memory only, request creation is MCP-only |
 | sentry | 8 | assignIssue, authStatus, getIssue, ignoreIssue, listIssues, listProjects, resolveIssue, searchIssues |
 | settings | 4 | get, list, reset, update |
 | skill | 1 | list |
@@ -859,7 +859,7 @@ No entries remain in this alias catalog. Use `git.diffs` and `git.commits` for G
 Of these 6 method names, `browser.exec` and `host.openInEditor` are **client-callable triggers**: the daemon validates the envelope, then serves the request. `browser.exec`'s real work always happens on the connected frontend via a reverse RPC (synthetic `rev-<n>` request id) whose result is echoed back to the original caller. `host.openInEditor`'s real work happens on the daemon host on a local connection (no reverse RPC is dispatched, §5.14) and on the connected frontend via that same reverse RPC mechanism on a remote connection. These 2 method names are **dual-role**: they appear in the dispatchable method catalog AND are also issued daemon→client as reverse RPCs on remote connections. `host.openExternal`, `host.pickApplication`, `providers.setup.openLogin` and `desktop.control` are **daemon→client-only**: they are never dispatched client→server and do not appear in the dispatchable method catalog. On a remote connection the daemon is always the requester (synthetic `rev-<n>` id) and the connected client returns the result; on a local connection the daemon serves the `host.*` intents directly on the daemon host without a reverse dispatch (§5.14).
 
 - `browser.exec` — browser automation (Chrome DevTools) — §5.9 (dual-role). When the caller is a client connection the reverse RPC goes back on that same connection; when the caller is an **agent** (MCP `ws.browser.exec`) or a tab-addressed `browser.navigateTab` / `browser.closeTab` (§5.45), the daemon selects the target connection under the REV-2 rules in §5.9 (capability gate `capabilities.browserExec`, §5.17; workspace pin `workspace.setBrowserClient`, §5.1)
-- `desktop.control` — typed desktop preparation, startControl/endControl, lease renewal and action execution (§5.51; prepared, daemon→client only)
+- `desktop.control` — typed desktop preparation, startControl/endControl, lease renewal and action execution (§5.51; daemon→client only)
 - `host.openExternal` — open a URL in the default browser — §5.14 (daemon→client only)
 - `host.openInEditor` — open a file or directory in the user's editor — §5.14 (dual-role)
 - `host.pickApplication` — prompt the user to select an application — §5.14 (daemon→client only)

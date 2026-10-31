@@ -160,13 +160,14 @@ operations without broadening `canManage` or granting raw terminal access.
 Role changes invalidate membership projections on existing connections. This
 extends the unreleased 15.1 contract and does not establish Multiplayer readiness.
 
-The prepared [secret request extension (§5.56)](./methods/secrets.md) adds
+The [secret request extension (§5.56)](./methods/secrets.md) adds
 `secret.provide`, `secret.dismiss`, `secret.list` and `secret.forget`, the
 `application/vnd.intent.secret-request+json` turn-end resource, the
 `agentFeatures.secretRequests` setting and the agent-only `secretEnv` option on
 `ws.host.exec`, under exact `server.capabilities.secretRequests: 1`. It adds no
 event type. The documented surface is now **478 / 420 / 58** (dispatchable /
-router / fast path). This reservation does not identify a carrying release.
+router / fast path). The pinned intentd implements it; this entry does not
+identify a carrying release.
 
 **Version 15.1 — scoped repository pages and GitLab child Git policy (additive, prepared).**
 This extension builds on protocol 15.0 without restoring legacy workspace import

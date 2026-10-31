@@ -312,7 +312,7 @@ API gains root support; all other file APIs retain their existing scope.
 >    this workspace is not connected` when no name is known) — **never** a silent
 >    fallback to another client. The name is the client's last hello `name`, read from
 >    the persisted `client` row when the connection registry no longer knows it.
-> 3. **Active desktop session (prepared desktop control, §5.51;
+> 3. **Active desktop session (desktop control, §5.51;
 >    [intent-hq/intentd#2245](https://github.com/intent-hq/intentd/pull/2245)).** Unpinned,
 >    but the workspace has an **active** desktop-control session (`desktop:session-changed`
 >    `status: "active"`): the target is the client running that session; a pending permission

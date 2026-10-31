@@ -108,7 +108,7 @@ credential revocation independently prevents admission even if a durable owner
 row remains. These changes do not cancel another person's running agent. Existing
 outcome shapes, timeout and first-resolution behavior are unchanged.
 
-### Prepared desktop consent
+### Desktop consent
 
 [Desktop control (§5.51)](./methods/desktop.md#consent-and-lifecycle) defines a
 separate asynchronous consent flow. ACP AllowAll/bypass policies and generic Q&A

@@ -92,15 +92,15 @@ of `scriptLifecycle`. Without it, clients must not send readiness options or
 interpret successful creation/URL detection as proof of readiness. Scripts
 without a contract omit `ready` and `readiness` even when support is advertised.
 
-**Desktop control (prepared additive extension).**
+**Desktop control (additive extension; macOS and Windows clients).**
 `server.capabilities.desktopControl: 1` and the execution connection’s
 `capabilities.desktopControl: 1` gate [§5.51](./desktop.md) independently.
 Resolve the existing workspace primary before testing this capability; never
 choose another computer because the primary lacks support. The flag grants no
-permission and does not assert current native readiness. Current browser-only
-capability behavior below remains unchanged until this extension is implemented.
+permission and does not assert current native readiness. The browser capability
+behavior below is unchanged apart from §5.51's active-session browser routing rule.
 
-**Secret requests (prepared additive extension).** Exactly integer
+**Secret requests (additive extension).** Exactly integer
 `server.capabilities.secretRequests: 1` advertises [§5.56](./secrets.md):
 secret-request resource blocks and the `secret.*` router methods. Clients render
 secret-request cards and call those methods only when it is present. The flag

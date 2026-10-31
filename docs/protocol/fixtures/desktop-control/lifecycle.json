@@ -1,5 +1,5 @@
 {
-  "status": "prepared-not-executed",
+  "status": "shipped-static-examples",
   "platforms": [
     "macos",
     "windows"

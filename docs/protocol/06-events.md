@@ -743,9 +743,9 @@ Initial/reconnect reconciliation remains required. Per-ID publication must preve
 stale predecessor events; timestamps/UUIDs are not row revisions. The script
 contract defines validation, persistence-failure and connection-generation rules.
 
-#### Prepared desktop control events (not implemented)
+#### Desktop control events
 
-[§5.51](./methods/desktop.md#events-and-agent-wakes) reserves
+[§5.51](./methods/desktop.md#events-and-agent-wakes) defines
 `desktop:permission-requested`, `desktop:permission-resolved`,
 `desktop:permission-changed` and `desktop:session-changed`. That section defines
 the complete payloads, transition deduplication and restricted principal/primary

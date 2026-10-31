@@ -1,8 +1,9 @@
 > Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.56 Secret requests.
 
-## 5.56 Secret requests *(prepared)*
+## 5.56 Secret requests
 
-This is a **prepared additive contract**, not implemented by the current pins.
+This is a **shipped additive contract**: the pinned intentd and cloudlands-fe
+implement it.
 It lets a top-level agent on any provider ask the user for a secret (an API key
 or token) through a masked input card, and use it in `ws.host.exec` without the
 model ever receiving the value.
@@ -10,7 +11,7 @@ model ever receiving the value.
 ### Status and discovery
 
 The daemon advertises `server.capabilities.secretRequests: 1` (§5.17) only when
-the complete contract below is implemented. Missing or unknown values mean
+it implements the contract below; the pinned intentd does. Missing or unknown values mean
 unsupported. Clients render secret-request cards and call the `secret.*` methods
 only when the capability is present. Capability describes implementation, not
 permission.
