@@ -277,7 +277,7 @@ list-row preview cap). A list-shaped `AgentLite` row carries
 can mark the text as a prefix or read the uncapped value with `agent.get`. Older daemons
 omit the flags; clients must not read their absence as proof a value is complete.
 
-**Worker observation stop and Claude support (prepared amendment).** The
+**Worker observation stop and Claude support (amendment).** The
 [worker observation contract (§5.5b)](./methods/agent-workers.md) reserves the router
 method `agent.workers.stop` and reclassifies `agent.workers.subscribe` from a router
 method to a fast-path method (it holds per-connection subscription state, like
@@ -351,8 +351,8 @@ unshipped summary/history reservations need no production removal. Daemon before
 frontend merge and a coordinated carrying release are required. An older daemon remains unsupported for these new list features;
 known-ID status/output may still be used. This draft grants no merge permission.
 
-**Prepared truncated note reads (independently gated additive extension).**
-[Truncated note reads](./methods/notes-tasks.md#truncated-note-reads-prepared-additive-contract)
+**Truncated note reads (independently gated additive extension).**
+[Truncated note reads](./methods/notes-tasks.md#truncated-note-reads-additive-contract)
 add the optional `maxContentBytes` param to `note.get` and `note.subscribe`, the
 `contentTruncated` / `contentBytes` response markers and the `baseContentBytes`
 whole-content write guard (`-32602` `content-base-mismatch`).
@@ -361,10 +361,10 @@ The method catalog, event catalog, surface counts and documented protocol versio
 are unchanged; requests without the new params are byte-identical.
 Catalog inclusion does not identify a carrying release.
 
-**Prepared generic stream recovery (independently gated additive extension).**
+**Generic stream recovery (independently gated additive extension).**
 [`eventStreamRecovery: 1`](./event-stream-recovery.md) adds an opt-in/ack to
 `events.subscribe`, the socket-private `events.lost` notification and the
-`events.fence` fast-path method. The prepared surface is **451 / 393 / 58**
+`events.fence` fast-path method. The documented surface is **451 / 393 / 58**
 (dispatchable / router / fast path); domain event catalog and current advertised
 protocol version are unchanged.
 Exact capability and lease negotiation gate adoption, including bounded recovery
@@ -385,7 +385,7 @@ projections (`notePageState` snapshots), and the `notePagingRead`,
 and `note-index-*` error codes. intentd removed the paging system
 ([intent-hq/intentd#2588](https://github.com/intent-hq/intentd/pull/2588)) and the
 reservation is withdrawn; clients that must bound large note loads use the
-[truncated note read contract](./methods/notes-tasks.md#truncated-note-reads-prepared-additive-contract).
+[truncated note read contract](./methods/notes-tasks.md#truncated-note-reads-additive-contract).
 
 **Version 13.8 — selected checkout configuration (additive).**
 Adds `sourceControl.checkout.repoConfig` and `gitlabCheckoutRepoConfig: 1` for a
@@ -439,19 +439,19 @@ methods are separately prepared. Neither count establishes support or a carrying
 desktop release. Earlier version snapshots below remain historical rather than
 live count assertions.
 
-**Version 13.4 — submission correlation (additive, prepared).**
-[Submission correlation and optimistic display](./methods/agents.md#submission-correlation-and-optimistic-display-prepared-additive-extension)
+**Version 13.4 — submission correlation (additive).**
+[Submission correlation and optimistic display](./methods/agents.md#submission-correlation-and-optimistic-display-additive-extension)
 adds optional queue `messageId`, public `submissionIds` on queue/reply/delivery
 surfaces, per-source `recoverySources` for combined retries and daemon-computed
 `mergeEligible` on full queue snapshots (false on draining overlays). Advertise
 `submissionCorrelation: 1` only for complete trusted, persisted end-to-end support;
 clients accept exactly integer `1`, independently of protocol version. This
-allocation follows the prepared Home 13.2 and GitLab 13.3 reservations; advertising
+allocation follows the Home 13.2 and GitLab 13.3 reservations; advertising
 13.4 does not imply either extension is implemented. Discover each surface under
 its independent capability and permission rules. No method/event names or catalog
 counts change: the documented surface remains **435 / 380 / 55**, while submission
 correlation alone leaves the 13.1 implementation's **404 / 349 / 55** unchanged.
-These prepared docs make no shipping claim.
+intentd advertises `submissionCorrelation: 1`.
 
 **Invitation account search (additive).** `host.invite.searchAccounts`
 (§5.49) adds bounded public suggestions for GitHub and the selected GitLab host.

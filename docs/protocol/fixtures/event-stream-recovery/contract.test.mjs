@@ -25,8 +25,8 @@ function expectedAdmission(example) {
   return BigInt(params.generation) > BigInt(example.lastGeneration ?? '0') ? 'invalidate' : 'ignore';
 }
 
-test('prepared corpus owns exact wire shapes without domain event payloads', () => {
-  assert.equal(corpus.status, 'prepared-not-executed');
+test('corpus owns exact wire shapes without domain event payloads', () => {
+  assert.equal(corpus.status, 'shipped-static-examples');
   assert.deepEqual(corpus.capability, { eventStreamRecovery: 1 });
   for (const example of corpus.admission) {
     assert.deepEqual(Object.keys(example.frame).sort(), ['jsonrpc', 'method', 'params']);

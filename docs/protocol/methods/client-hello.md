@@ -42,9 +42,9 @@ workspace role. Missing, malformed or unknown capability values hide role
 mutation controls. Refresh on each admitted connection; older remote hosts are
 not upgraded by installing a newer desktop client.
 
-**Submission correlation (prepared).**
+**Submission correlation.**
 `server.capabilities.submissionCorrelation: 1` gates the complete
-[optimistic submission contract](./agents.md#submission-correlation-and-optimistic-display-prepared-additive-extension):
+[optimistic submission contract](./agents.md#submission-correlation-and-optimistic-display-additive-extension):
 optional queue `messageId`, full submission alias sets across replies/queue/delivery,
 per-source `recoverySources` for combined retries, and trustworthy live-row merge
 eligibility with false flags on draining overlays. Enable queue optimism only for exact integer
@@ -78,7 +78,7 @@ an unknown create option was
 honored just because creation succeeded. Gate lifecycle controls/options on this
 capability, independently of numeric version.
 
-**Worker observations (prepared additive extension).**
+**Worker observations (additive extension).**
 `server.capabilities.agentWorkers: 1` advertises the list/subscription/stop
 contract in [§5.5b](./agent-workers.md), not process liveness or exit evidence.
 Provider-session support is reported independently; older daemons omit this flag.
@@ -606,7 +606,7 @@ and whole-envelope wake/history replay gating. Neither side advertises support y
 
 ### Generic event stream recovery capability
 
-**Prepared additive contract.** `server.capabilities.eventStreamRecovery: 1`
+**Additive contract.** `server.capabilities.eventStreamRecovery: 1`
 (exact integer) advertises the complete [generic loss contract](../event-stream-recovery.md).
 It also guarantees `events.fence` raw-bus/bulk-lane boundaries for recovery reads.
 Each recovering `events.subscribe` lease must separately request and acknowledge

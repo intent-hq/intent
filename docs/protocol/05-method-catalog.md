@@ -22,7 +22,7 @@ changes omitted purpose for new commands to `oneOff`, retaining stored upsert an
 legacy hydration defaults. It changes no catalog names or counts;
 `scriptLifecycle: 1` alone does not distinguish defaults.
 
-The prepared [worker observation contract (§5.5b)](./methods/agent-workers.md)
+The [worker observation contract (§5.5b)](./methods/agent-workers.md)
 adds a list, a subscription and a provider-mediated stop; `agentWorkers: 1` gates support.
 
 The [compact script list contract](./methods/scripts.md#active-only-compact-lists-protocol-14-breaking-contract)
@@ -54,7 +54,7 @@ The prepared [startup readiness contract](./startup-readiness.md) adds owner-onl
 `system.startupStatus` and a restricted pre-Store bootstrap dispatcher. Ordinary
 hello does not succeed until ready; `startupStatus: 1` gates the full contract.
 
-The prepared [generic stream recovery contract](./event-stream-recovery.md) adds
+The [generic stream recovery contract](./event-stream-recovery.md) adds
 one fast-path method, `events.fence`, under `eventStreamRecovery: 1`. Its bulk-lane
 response brackets recovery reads with actual event-delivery boundaries.
 
@@ -109,7 +109,7 @@ The documented surface reserves **486 dispatchable method names** across the fol
 
 Additionally, the protocol includes:
 
-- **Server→client notifications:** 7 notifications: prepared `events.lost` ([loss contract](./event-stream-recovery.md)), `events.event` (§6.3) and the socket-private `workspace.repositoryContext.retired`, `workspace.repositorySelection.retired`, `accept-changes.retired`, `sourceControl.read.retired`, `sourceControl.read.invalidated` controls (§6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
+- **Server→client notifications:** 7 notifications: `events.lost` ([loss contract](./event-stream-recovery.md)), `events.event` (§6.3) and the socket-private `workspace.repositoryContext.retired`, `workspace.repositorySelection.retired`, `accept-changes.retired`, `sourceControl.read.retired`, `sourceControl.read.invalidated` controls (§6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
 - **Client-served reverse RPCs:** 6 methods total — 2 are **dual-role** and counted within the 486 dispatchable names (`browser.exec`, `host.openInEditor`), and 4 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) — see §5.9, §5.14 and the reverse-RPC list below
 
 **Total:** 486 dispatchable names + 7 notifications. Of the 6 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 4 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) are daemon→client-only reverse RPCs, never dispatched client→server.

@@ -1,5 +1,5 @@
 {
-  "status": "prepared-specification-only",
+  "status": "shipped-specification-examples",
   "capability": { "noteTruncatedRead": 1 },
   "cases": [
     { "id": "empty", "content": "", "maxContentBytes": 1, "expect": { "content": "" } },

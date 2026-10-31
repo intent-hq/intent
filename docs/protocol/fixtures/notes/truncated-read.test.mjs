@@ -49,8 +49,9 @@ test('param validation vectors are rejected', () => {
 });
 
 test('docs name the capability, markers, guard and error code', () => {
+  assert.equal(fixture.status, 'shipped-specification-examples');
   assert.equal(fixture.capability.noteTruncatedRead, 1);
-  for (const needle of ['### Truncated note reads (prepared additive contract)', 'server.capabilities.noteTruncatedRead',
+  for (const needle of ['### Truncated note reads (additive contract)', 'server.capabilities.noteTruncatedRead',
     '`maxContentBytes`', 'contentTruncated: true', '`contentBytes`', '`baseContentBytes`',
     'content-base-mismatch', 'resolvedBaseBytes', '**Not covered.**', 'fixtures/notes/truncated-read.json'])
     assert.ok(docs.includes(needle), needle);
