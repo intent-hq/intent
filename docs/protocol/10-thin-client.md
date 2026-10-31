@@ -325,7 +325,7 @@ only for workspaces they currently manage, matching snapshot/answer authority (Â
 That grant does not admit host creation/administration, guest-denied script RPCs,
 or unrelated management events.
 
-The prepared [guest role extension](methods/multiplayer.md#workspace-guest-roles-prepared)
+The [guest role extension](methods/multiplayer.md#workspace-guest-roles)
 adds separately gated agent creation/model controls and saved-script operations
 for `myRole: "manager"` under exact `workspaceGuestRoles: 1`. This role does not
 override `canManage: false`. Keep raw terminal and script-definition controls

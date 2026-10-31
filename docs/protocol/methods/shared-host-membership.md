@@ -69,7 +69,7 @@ roles to unlock it.
 
 #### Effective workspace membership
 
-The prepared [workspace guest role extension](./multiplayer.md#workspace-guest-roles-prepared)
+The [workspace guest role extension](./multiplayer.md#workspace-guest-roles)
 adds `manager` alongside the existing guest `collaborator` role. Its scoped agent
 and saved-script permissions do not change the `canManage` precedence below.
 Under `workspaceGuestRoles: 1`, guest roster rows and caller-relative `myRole`
@@ -190,7 +190,7 @@ type HostInvite = {
 };
 ```
 
-##### Invitation account search (additive, prepared)
+##### Invitation account search (additive)
 
 `host.invite.searchAccounts` is a daemon-global read. It uses the same
 administrator authorization as `host.invite.create`: owner wire callers and

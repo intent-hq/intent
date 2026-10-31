@@ -33,9 +33,9 @@ hello completes. Initial hydration and reconnect/event-gap recovery remain requi
 A bundled daemon upgrade does not upgrade older remote hosts. This capability
 does not change experimental Multiplayer readiness.
 
-**Workspace guest roles (prepared).** Exact integer
+**Workspace guest roles.** Exact integer
 `server.capabilities.workspaceGuestRoles: 1`, also returned by
-`system.capabilities`, gates the complete [Participant/Manager contract](./multiplayer.md#workspace-guest-roles-prepared).
+`system.capabilities`, gates the complete [Participant/Manager contract](./multiplayer.md#workspace-guest-roles).
 It is support discovery, not caller authority. Guest Managers retain
 `canManage: false`; clients derive narrowly scoped controls from the current
 workspace role. Missing, malformed or unknown capability values hide role
@@ -132,7 +132,7 @@ protocol-14 active-only replacement; `1` was the protocol-13 contract with
 terminal history. Independent of scriptLifecycle/scriptReadiness;
 absence means unavailable, not permission to infer support from version numbers.
 
-**Workspace discussions (prepared additive extension).**
+**Workspace discussions (additive extension).**
 Exactly integer `server.capabilities.discussionConversations: 1` advertises the
 [§5.55 contract](./multiplayer.md#555-workspace-discussions): conversation and
 recipient discovery, participant-gated history and delivery, and conversation-scoped
@@ -618,11 +618,11 @@ readiness. It is advertised only after the transport and membership-loss cases p
 Exactly integer `discussionAgentActivity: 1`, on hello and `system.capabilities`,
 adds request-correlated discussion activity, immutable selected mention spans,
 and human `discussion.stopAgent` / `discussion.retryAgent` controls. This is a
-prepared Multiplayer Labs extension; see [the activity contract](./multiplayer.md#correlated-agent-activity-and-controls-prepared).
+prepared Multiplayer Labs extension; see [the activity contract](./multiplayer.md#correlated-agent-activity-and-controls).
 
 Exactly integer `discussionPrincipalMentions: 1`, on hello and
 `system.capabilities`, enables explicit human discussion notification identities.
-See [person mentions](./multiplayer.md#explicit-person-mentions-prepared) for
+See [person mentions](./multiplayer.md#explicit-person-mentions) for
 selected UTF-16 spans, membership checks, retry identity, and import behavior.
 Clients must preserve selected drafts on absent or unknown capability values.
 This remains an unreleased Multiplayer Labs feature and grants no access.

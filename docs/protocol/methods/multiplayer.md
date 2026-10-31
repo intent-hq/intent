@@ -10,7 +10,7 @@ implicit identity lifecycle, rotating returning-credential behavior and global
 event/device restrictions. The existing identity triples, proof engines, guest
 rights and workspace-invitation lifetime rules remain the baseline.
 
-**Prepared guest role extension:** [Workspace guest roles](#workspace-guest-roles-prepared)
+**Guest role extension:** [Workspace guest roles](#workspace-guest-roles)
 add an owner-assigned `manager` role under exact integer `workspaceGuestRoles: 1`.
 The existing `collaborator` wire role is displayed as Participant. This extension
 does not grant host membership or broaden `canManage`.
@@ -40,10 +40,10 @@ Every method below is workspace-scoped unless stated otherwise. Five are **fast 
 | invite.challenge *(fast path, `/invite` only)* | inviteId (req), secret (req) | `{ workspaceId, workspaceTitle, hostname, prettyHostname, collaborationName, pinIdentity, nonce, nonceExpiresAt }` — validates the open invite like `inspect` and issues a **single-use nonce** bound to it: 32 random bytes (base64url, unpadded), valid **10 minutes**, consumed by the first `invite.prove` that names it. `pinIdentity` (10.8) has the same required-triple-or-null semantics as `inspect`. No forge is contacted ([#1965](https://github.com/intent-hq/intentd/pull/1965)). At most 8 outstanding nonces per invite and 256 daemon-wide (`invite-flow-busy` past either cap) |
 | invite.prove *(fast path, `/invite` only)* | inviteId (req), secret (req), nonce (req), login (req), gistId? *(github)*, provider?: `"github"` \| `"gitlab"` *(10.8, default `"github"`)*, host? *(10.8)*, proofId? *(10.8; alias of `gistId` — exactly one of the two is required)* | The guest published `nonce` in a proof it owns on the named forge (§ "The identity proof") and names it; the host verifies the proof, resolves the account it belongs to and commits the join → `{ status: "authorized", token, principalId, login, workspaceId }` — the **token exactly once**. Refusals: `proof-invalid`, `proof-expired`, `github-unreachable` (the nonce survives for a retry), `identity-unverifiable` *(10.8)*, `owner-self-join`, `invite-pin-mismatch`, `workspace-full`, `workspace-archived` (the shared join transaction found the workspace archived — a proof that validated before a `workspace.archive` and commits after it; a proof validated after the sweep fails earlier with the invite's closed state `invite-revoked`, § "The join commit"), or the invite's closed state ([#1965](https://github.com/intent-hq/intentd/pull/1965), [#1986](https://github.com/intent-hq/intentd/pull/1986)) |
 
-#### Workspace guest roles (prepared)
+#### Workspace guest roles
 
-This extension is part of experimental Multiplayer; the contract does not claim
-a carrying release. Exact integer `workspaceGuestRoles: 1` on both `client.hello`
+This extension is part of experimental Multiplayer; intentd implements it, but
+the desktop feature stays in Labs. Exact integer `workspaceGuestRoles: 1` on both `client.hello`
 (`server.capabilities`) and `system.capabilities` advertises the complete role
 mutation and scoped authorization contract. Missing, malformed or unknown values
 disable role changes. Read support per connection, and refresh authority after
@@ -370,7 +370,7 @@ See [the setting contract](./settings.md#collaborator-facing-machine-name).
 
 ### 5.55 Workspace discussions
 
-**Additive, prepared for protocol 15.1.** A workspace has a default discussion for
+**Additive in protocol 15.1.** A workspace has a default discussion for
 all current members. Under `discussionManagement: 1`, every new conversation is
 workspace-wide; earlier direct/group histories remain private and read-only.
 These are separate from agent conversations and note comments. The desktop entry point remains behind Multiplayer Labs. Replies and reactions use
@@ -421,7 +421,7 @@ accessible conversation remains. Recipient discovery remains available for
 person mentions, using ascending principal ID order, search and membership
 filtering before the limit. Both queries are bounded in storage.
 
-#### Workspace-wide creation and management (prepared)
+#### Workspace-wide creation and management
 
 Exactly integer `discussionManagement: 1` on hello and `system.capabilities`
 requires the complete workspace-wide creation, naming, deletion, and legacy
@@ -595,7 +595,7 @@ in the plain-text body and rendered as navigable chips. The client must preserve
 the target workspace/backend and validate link kinds; reference text is never
 HTML, executable code, or permission to invoke an agent.
 
-#### Correlated agent activity and controls (prepared)
+#### Correlated agent activity and controls
 
 Exactly integer `discussionAgentActivity: 1` on hello and `system.capabilities`
 adds durable activity and selected mention snapshots to the unreleased Multiplayer
@@ -642,7 +642,7 @@ retry identity. They never grant delivery or access independently of recipients.
 Import preserves mention text as historical attribution but clears activity and
 does not restore invocation receipts, grants, or pending addressed work.
 
-#### Explicit person mentions (prepared)
+#### Explicit person mentions
 
 Exactly integer `discussionPrincipalMentions: 1` on `client.hello` server
 capabilities and `system.capabilities` enables human notification identities in
@@ -687,7 +687,7 @@ Import clears all `principalMentions` notification identities, even when a sourc
 ID happens to equal a destination ID. The body and author/reply text remain
 historical content. Legacy archives with no such field import as `[]`.
 
-#### Explicit agent messaging (prepared)
+#### Explicit agent messaging
 
 Exactly integer `discussionAgentMessaging: 1` on both hello and
 `system.capabilities` gates explicit agent recipients and agent-authored replies.
@@ -833,7 +833,7 @@ legacy event without a conversation ID can only belong to the default discussion
 #### Typing indicators
 
 Discussion typing uses the existing transient [presence channel
-(§5.47)](./presence.md#discussion-typing-151-prepared). A human connection reports
+(§5.47)](./presence.md#discussion-typing-151). A human connection reports
 `presence.update` with `discussionTyping: { workspaceId, conversationId }`;
 omitting `conversationId` selects the default discussion. Human roster rows
 carry `discussionTyping: [{ source, conversationId, since, pulse }]`, projected
@@ -890,7 +890,7 @@ version compatibility gate; it does not transfer membership or credentials.
 #### Access and compatibility
 
 Human calls require an authenticated client connection and current workspace
-membership, including inherited host membership. The prepared agent-messaging
+membership, including inherited host membership. The agent-messaging
 extension permits bound agents to discover granted conversations, read their
 history, and send replies as agents. Recipient discovery remains human-only.
 Under exact `discussionReactions: 1`, a bound agent may also react in a

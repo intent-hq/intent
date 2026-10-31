@@ -53,7 +53,7 @@ The note-presence channel pair is a §6.9 subscription channel (intercepted on t
 - A connection's close — clean close, heartbeat reap (§4) and daemon shutdown alike — drops its presence row and **every note lease it held**: `left` deltas first, then `presence:changed` to every member workspace when it was the principal's **last** connection, or only to the workspaces its own focus / typing touched otherwise.
 - `presence.snapshot` is Member+ (`-32602 { code: "not-found" }` for a non-member or an unknown workspace); `members` lists only the workspace's currently **online** members, each with the `PresenceMember` row above.
 
-#### Discussion typing *(15.1, prepared)*
+#### Discussion typing *(15.1)*
 
 The [workspace discussion](./multiplayer.md#555-workspace-discussions) composer
 uses the existing presence channel.
