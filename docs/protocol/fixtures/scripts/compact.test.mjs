@@ -6,14 +6,14 @@ import { scriptSummary, monitorSummary, page, representativeRows, bytes } from '
 const fixture = JSON.parse(await readFile(new URL('./compact.json', import.meta.url), 'utf8'));
 
 test('portable goldens pin exact full/detail versus summary shapes', () => {
-  assert.equal(fixture.status, 'prepared-not-executed');
+  assert.equal(fixture.status, 'shipped-static-examples');
   assert.deepEqual(fixture.capability, { scriptActiveLists: 1, scriptMonitors: 2 });
   for (const example of fixture.examples)
     assert.deepEqual((example.kind === 'script' ? scriptSummary : monitorSummary)(example.full), example.summary);
   assert.equal(new Set(fixture.componentScenarios.map(row => row.id)).size, fixture.componentScenarios.length);
 });
 
-// Prepared contract oracle only: component tests must feed real service responses
+// Contract oracle only: component tests must feed real service responses
 // into these assertions. Passing this model does not prove daemon/renderer support.
 test('compact scripts cannot carry definitions or output, even with oversized fields', () => {
   const { scripts } = representativeRows();
@@ -203,7 +203,7 @@ test('reference reductions cover eligible definitions and active monitor configu
   }
 });
 
-test('prepared method tables document the summary discriminator and detail reads', async () => {
+test('method tables document the summary discriminator and detail reads', async () => {
   const scriptDoc = await readFile(new URL('../../methods/scripts.md', import.meta.url), 'utf8');
   const monitorDoc = await readFile(new URL('../../methods/script-monitors.md', import.meta.url), 'utf8');
   assert.ok(scriptDoc.includes('| script.get |'));

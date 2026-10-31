@@ -17,7 +17,7 @@ agent extension covers the default discussion; `discussionManagement: 1` extends
 it to named workspace-wide conversations, with per-conversation grants. Older daemons may
 reject its methods.
 
-The [compact script list contract](./methods/scripts.md#active-only-compact-lists-prepared-breaking-contract)
+The [compact script list contract](./methods/scripts.md#active-only-compact-lists-protocol-14-breaking-contract)
 requires `scriptActiveLists: 1` and `scriptMonitors: 2`; archived lists and terminal monitor history are removed. Known-ID output and full lifecycle events remain available.
 
 The [onboarding adapter preparation request](./05-method-catalog.md#hostprepareprovideradapters-136-prepared) adds an owner-only, best-effort background optimization. Clients tolerate an unsupported method; it adds no capability flag and does not establish support for the independently gated extensions above.
@@ -98,7 +98,7 @@ and is gated by `remoteMachines: 1`
 | §5.6 `git.*` | [methods/git.md](./methods/git.md) |
 | §5.7 `pr.*` | [methods/pr.md](./methods/pr.md) |
 | §5.8 `script.*` | [methods/scripts.md](./methods/scripts.md) |
-| §5.8a Script run monitors (prepared) | [methods/script-monitors.md](./methods/script-monitors.md) |
+| §5.8a Script run monitors | [methods/script-monitors.md](./methods/script-monitors.md) |
 | §5.9 `browser.*`, `terminal.*`, `file.*` | [methods/files-terminal-browser.md](./methods/files-terminal-browser.md) |
 | §5.10 `event.*` (query/aggregation) | [methods/events-query.md](./methods/events-query.md) |
 | §5.11 `crossWorkspace.*`, `primitive.*`, `specialist.*`, `repo.*` | [methods/misc-namespaces.md](./methods/misc-namespaces.md) |
