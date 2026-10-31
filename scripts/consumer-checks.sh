@@ -6,9 +6,10 @@
 # Used by `make consumer-checks` (the monorepo CI job) and by the reusable
 # upstream workflow, so the two lists cannot drift.
 #
-# `docs-check` keeps its Makefile prerequisites (event-catalog-check and
-# check-mcp-bindings) for standalone `make docs-check`; here both run as their
-# own rows first and docs-check is invoked with `make -o <prerequisite>`
+# `docs-check` keeps its Makefile prerequisites (event-catalog-check,
+# check-mcp-bindings and check-protocol-status-labels) for standalone
+# `make docs-check`; here they run as their own rows first and docs-check is
+# invoked with `make -o <prerequisite>`
 # (--assume-old), which tells make the prerequisite is already up to date so
 # only the docs-check recipe itself runs (scripts/docs-check.sh, the protocol
 # line-length ratchet, and its fixture tests). That is what lets check-mcp-bindings be
@@ -39,7 +40,7 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 cd "$repo_root"
 
-checks="event-catalog-check check-mcp-bindings docs-check check-protocol-catalog check-makefile-targets check-protocol-field-parity check-agent-feature-toggles check-transfer-selection-contract check-backend-keychain-contract check-agent-worker-contract check-app-ui-targets check-app-guide-sources check-note-truncated-read-contract check-browser-routing-contract check-suggested-prompts-contract check-turn-start-contract check-fixture-copies"
+checks="event-catalog-check check-mcp-bindings check-protocol-status-labels docs-check check-protocol-catalog check-makefile-targets check-protocol-field-parity check-agent-feature-toggles check-transfer-selection-contract check-backend-keychain-contract check-agent-worker-contract check-app-ui-targets check-app-guide-sources check-note-truncated-read-contract check-browser-routing-contract check-suggested-prompts-contract check-turn-start-contract check-fixture-copies"
 advisory=${CONSUMER_CHECKS_ADVISORY:-}
 context=${CONSUMER_CHECKS_CONTEXT:-monorepo}
 make_bin=${MAKE:-make}
@@ -88,6 +89,7 @@ fix_path() {
     event-catalog-check) echo "docs/protocol/event-types.json + docs/protocol/06-events.md" ;;
     check-mcp-bindings) echo "docs/protocol/methods/mcp-bindings.md (make mcp-bindings-doc) + prose under docs/protocol/" ;;
     docs-check) echo "AGENTS.md / README.md / docs/fe/DEVELOPER_GUIDE.md (make targets, sandbox knobs) + docs/protocol/methods/files-terminal-browser.md (browser errorCode contract) + docs/protocol/**/*.md lines over 2,000 characters (one sentence or bullet per line; baseline scripts/doc-line-length-baseline.txt) + docs/protocol/**/*.md table rows whose cell count differs from the header (escape a literal pipe as \\|) + docs/protocol/fixtures/**/*.test.mjs failures (make check-protocol-fixture-tests; a node:test file must be named fixtures/**/*.test.mjs)" ;;
+    check-protocol-status-labels) echo "docs/protocol/**/*.md + fixtures/**/*.json \"prepared\" / \"not implemented\" labels on capabilities the pinned intentd advertises (drop the label; a really unfinished part gets a reasoned UNFINISHED entry in scripts/check-protocol-status-labels.mjs; baseline scripts/protocol-status-labels-baseline.txt only ratchets down)" ;;
     check-protocol-catalog) echo "docs/protocol/05-method-catalog.md + docs/protocol/methods/*.md" ;;
     check-makefile-targets) echo "Makefile intentd crate / --test references (must exist at the pinned intentd gitlink in the monorepo / at the caller head upstream)" ;;
     check-protocol-field-parity) echo "docs/protocol/versioning.md staged row fields table (daemon-first field), scripts/check-protocol-field-parity.mjs PAIRS ignore (field the FE never reads), or the cloudlands-fe type that consumes the row struct" ;;
@@ -114,7 +116,7 @@ fix_path() {
 # keeps the strict pinned-gitlink reads.
 make_args() {
   case "$1" in
-    docs-check) echo "-o event-catalog-check -o check-mcp-bindings docs-check" ;;
+    docs-check) echo "-o event-catalog-check -o check-mcp-bindings -o check-protocol-status-labels docs-check" ;;
     check-makefile-targets)
       if [ "$context" = "upstream" ]; then
         echo "CHECK_MAKEFILE_TARGETS_GITLINK=HEAD $1"

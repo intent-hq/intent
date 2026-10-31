@@ -75,6 +75,21 @@ in `docs/protocol/methods/settings.md` (the paths before "— booleans"). For a 
 addition, a `(prepared addition)` bullet that opens with the path also counts; once the
 daemon registers that setting, the check warns until the path is in the list.
 
+A capability the pinned intentd advertises in `client.hello` `server.capabilities` (the
+`server_json()` literal in `packages/intentd/crates/intent-transport/src/client.rs`) must
+not be described as "prepared" or "not implemented" anywhere under `docs/protocol/`. This
+is checked by `scripts/check-protocol-status-labels.mjs` (`make check-protocol-status-labels`,
+part of `make docs-check` and `make consumer-checks`). A label's subject is the first
+capability code span in its sentence (or the next sentence after an emphasized lead-in),
+from its table cell to the end of a row, or in a heading's section; a `§N.N` reference or
+a link counts as the capability that dominates the referenced section. Fixture JSON whose
+`status` starts with `prepared` is checked too. Drop a stale label when the feature ships;
+for a part of a shipped feature that really is unfinished, add a reasoned `UNFINISHED`
+entry to the script. Labels that were already stale when the check was added are
+grandfathered in `scripts/protocol-status-labels-baseline.txt`, which only ratchets
+down. Docs lead the pin: an intentd PR that starts advertising a capability fails its
+`monorepo-consumer-checks` job until the monorepo docs drop the label.
+
 ## Harness Versioning — `HARNESS.md`
 
 **[HARNESS.md](./HARNESS.md)** explains the harness versioning system: the permanent

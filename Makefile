@@ -169,7 +169,7 @@ CDP_PORT ?= $(call dev_port_value,CDP_PORT)
 # An explicit INTENTD_SOCKET always takes precedence.
 BRIDGE_PLATFORM ?= $(shell uname -s)
 
-.PHONY: check-app-ui-targets check-app-guide-sources check-agent-feature-toggles check-doc-links check-note-truncated-read-contract check-browser-routing-contract check-suggested-prompts-contract check-turn-start-contract check-fixture-copies check-agent-worker-contract test-transfer-selection-contract check-transfer-selection-contract check-backend-keychain-contract ports status consumer-checks docs-check check-protocol-catalog check-mcp-bindings mcp-bindings-doc check-makefile-targets check-protocol-field-parity check-rulesets event-catalog-check shipped-in release-status rpc
+.PHONY: check-app-ui-targets check-app-guide-sources check-agent-feature-toggles check-protocol-status-labels check-doc-links check-note-truncated-read-contract check-browser-routing-contract check-suggested-prompts-contract check-turn-start-contract check-fixture-copies check-agent-worker-contract test-transfer-selection-contract check-transfer-selection-contract check-backend-keychain-contract ports status consumer-checks docs-check check-protocol-catalog check-mcp-bindings mcp-bindings-doc check-makefile-targets check-protocol-field-parity check-rulesets event-catalog-check shipped-in release-status rpc
 ports: ## Print this worktree's resolved development ports
 	@set -- .dev/sandbox/*.json; if [ -e "$$1" ]; then \
 		echo "[ports] Note: these ports are for the next start; read running ports from 'make sandbox-status' or .dev/sandbox/<mode>.json." >&2; \
@@ -247,7 +247,18 @@ check-protocol-fixture-tests: ## Run every docs/protocol/fixtures/**/*.test.mjs 
 	@node --test scripts/protocol-fixture-tests.test.mjs
 	@node scripts/protocol-fixture-tests.mjs
 
-docs-check: event-catalog-check check-mcp-bindings check-protocol-fixture-tests ## Check documented development targets, knobs, remote-host guidance, protocol-doc line lengths, protocol table cell counts, and every protocol fixture test
+# A capability the pinned intentd advertises in client.hello server.capabilities
+# must not be labelled "prepared" or "not implemented" in docs/protocol/. Labels
+# that were already stale are grandfathered in
+# scripts/protocol-status-labels-baseline.txt (ratchets down); an accurate label
+# on an unfinished part of a shipped feature gets a reasoned UNFINISHED entry in
+# the script. Docs lead the pin: drop the label before the intentd PR that
+# starts advertising the capability.
+check-protocol-status-labels: ensure-intentd-submodule ## Check that docs/protocol does not label a capability the pinned intentd advertises as "prepared" or "not implemented" (baseline scripts/protocol-status-labels-baseline.txt)
+	@node --test scripts/check-protocol-status-labels.test.mjs
+	@node scripts/check-protocol-status-labels.mjs --intentd-dir "$(INTENTD_DIR)"
+
+docs-check: event-catalog-check check-mcp-bindings check-protocol-fixture-tests check-protocol-status-labels ## Check documented development targets, knobs, remote-host guidance, protocol-doc line lengths, protocol table cell counts, every protocol fixture test, and protocol status labels against the pinned intentd capabilities
 	@scripts/docs-check.sh
 	@node scripts/check-doc-line-length.mjs
 	@node --test scripts/check-doc-line-length.test.mjs
