@@ -300,3 +300,12 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
+
+      # A failed rerun can be stale: "Re-run failed jobs" keeps the monorepo
+      # commit the first attempt resolved (see "Recovery for callers using
+      # @main" in the header). Say so in an ::error:: when HEAD is behind main.
+      - name: Explain a failed rerun against an old monorepo commit
+        if: failure() && steps.monorepo.outcome == 'success'
+        env:
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: bash scripts/consumer-checks-stale-rerun.sh

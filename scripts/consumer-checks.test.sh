@@ -438,8 +438,10 @@ queue_gate_line="        if: github.event_name == 'merge_group' && steps.monorep
 # then the steps it selects (scripts/test_consumer_checks_shell_suites.py).
 suites_select_line="        if: inputs.component == 'intentd' && steps.monorepo.outcome == 'success'"
 suites_gate_line="        if: steps.shell-suites.outputs.selected == 'true' && steps.monorepo.outcome == 'success'"
+# The stale-rerun explainer runs only after a failed step (see below).
+stale_gate_line="        if: failure() && steps.monorepo.outcome == 'success'"
 downstream_gates=$(awk -v queue_gate="$queue_gate_line" -v gate="$gate_line" -v guard="- name: $guard_name" \
-  -v suites_select="$suites_select_line" -v suites_gate="$suites_gate_line" '
+  -v suites_select="$suites_select_line" -v suites_gate="$suites_gate_line" -v stale_gate="$stale_gate_line" '
   function flush() { if (after_guard && name != "") print (gated ? "gated " : "ungated ") name }
   /^      - / {
     flush()
@@ -450,13 +452,74 @@ downstream_gates=$(awk -v queue_gate="$queue_gate_line" -v gate="$gate_line" -v 
     if (index($0, guard)) guard_seen = 1
     next
   }
-  $0 == gate || $0 == queue_gate || $0 == suites_select || $0 == suites_gate { gated = 1 }
+  $0 == gate || $0 == queue_gate || $0 == suites_select || $0 == suites_gate || $0 == stale_gate { gated = 1 }
   END { flush() }
 ' "$workflow")
 grep -q '^ungated ' <<<"$downstream_gates" &&
   fail "every step after the guard must carry \"$gate_line\":"$'\n'"$downstream_gates"
-[ "$(grep -c '^gated ' <<<"$downstream_gates")" -eq 12 ] ||
-  fail "expected 12 gated steps after the guard (lightweight, shell-suite and connected checks):"$'\n'"$downstream_gates"
+[ "$(grep -c '^gated ' <<<"$downstream_gates")" -eq 13 ] ||
+  fail "expected 13 gated steps after the guard (lightweight, shell-suite, connected checks and the stale-rerun explainer):"$'\n'"$downstream_gates"
+
+# A failed rerun that reused an old monorepo commit must say how to recover:
+# "Re-run failed jobs" keeps the reusable workflow SHA of the first attempt
+# (intentd#2825, run 41041440483). The step must be the last one, run after
+# any failed step, and pass the attempt number to the explainer.
+stale_name='Explain a failed rerun against an old monorepo commit'
+stale_block=$(workflow_step "$stale_name")
+[[ -n "$stale_block" ]] || fail "workflow step '$stale_name' not found in $workflow"
+[ "$(awk '/^      - name: / { last = $0 } END { print last }' "$workflow")" = "      - name: $stale_name" ] ||
+  fail "'$stale_name' must be the last step so it sees every earlier failure"
+grep -qFx "$stale_gate_line" <<<"$stale_block" ||
+  fail "'$stale_name' must run on failure after a successful monorepo checkout:"$'\n'"$stale_block"
+grep -qFx '          RUN_ATTEMPT: ${{ github.run_attempt }}' <<<"$stale_block" ||
+  fail "'$stale_name' must pass github.run_attempt as RUN_ATTEMPT:"$'\n'"$stale_block"
+grep -qFx '        run: bash scripts/consumer-checks-stale-rerun.sh' <<<"$stale_block" ||
+  fail "'$stale_name' must run scripts/consumer-checks-stale-rerun.sh:"$'\n'"$stale_block"
+
+stale_script=$repo_root/scripts/consumer-checks-stale-rerun.sh
+stale_repo=$temp_dir/stale-rerun
+git init -q "$stale_repo"
+stale_commit() {
+  git -C "$stale_repo" -c user.name=test -c user.email=test@example.invalid commit -q --allow-empty -m "$1"
+}
+stale_commit first
+stale_first=$(git -C "$stale_repo" rev-parse HEAD)
+stale_commit docs-fix
+stale_commit another
+stale_main=$(git -C "$stale_repo" rev-parse HEAD)
+git -C "$stale_repo" branch -q fake-main "$stale_main"
+# run_stale <attempt> <checkout> [main ref]; sets stale_status and stale_output.
+run_stale() {
+  git -C "$stale_repo" checkout -q --detach "$2"
+  stale_status=0
+  stale_output=$(cd "$stale_repo" && RUN_ATTEMPT="$1" MAIN_REF="${3:-fake-main}" \
+    "$script_bash" --noprofile --norc -e "$stale_script" 2>&1) || stale_status=$?
+}
+run_stale 2 "$stale_first"
+[ "$stale_status" -eq 0 ] || fail "stale-rerun explainer exited $stale_status:"$'\n'"$stale_output"
+[ "$stale_output" = "::error::consumer-checks: attempt 2 reused intent-hq/intent@${stale_first:0:8}, which is 2 commits behind main (${stale_main:0:8}). \"Re-run failed jobs\" keeps the monorepo commit from the first attempt, so a monorepo fix merged since then is not in this run. Start a new run (for example, push to the PR branch) or use \"Re-run all jobs\"." ] ||
+  fail "stale rerun did not get the recovery error:"$'\n'"$stale_output"
+run_stale 2 "$stale_main~1"
+grep -qF 'which is 1 commit behind main' <<<"$stale_output" ||
+  fail "one commit behind must be singular:"$'\n'"$stale_output"
+# expect_silent <description>: the last run_stale exited 0 with no output.
+expect_silent() {
+  if [ "$stale_status" -ne 0 ] || [ -n "$stale_output" ]; then
+    fail "stale-rerun explainer must be silent for $1 (exit $stale_status):"$'\n'"$stale_output"
+  fi
+}
+run_stale 1 "$stale_first"
+expect_silent "a first attempt"
+run_stale 2 "$stale_main"
+expect_silent "a current monorepo commit"
+run_stale 2 "$stale_first" missing-ref
+expect_silent "a missing main ref"
+run_stale x "$stale_first"
+expect_silent "a non-numeric attempt"
+# A HEAD not on main (the self-test's merge-queue commit) is not a stale rerun.
+stale_commit side
+run_stale 2 HEAD
+expect_silent "a HEAD not behind main"
 
 step_name='Run the consumer checks (upstream context)'
 step_block=$(workflow_step "$step_name")
@@ -524,13 +587,14 @@ echo "consumer-checks tests passed under $("$script_bash" -c 'echo "bash $BASH_V
 # it a failure instead.
 bash -n "$script" || fail "consumer-checks.sh does not parse"
 bash -n "${BASH_SOURCE[0]}" || fail "consumer-checks.test.sh does not parse"
+bash -n "$repo_root/scripts/consumer-checks-stale-rerun.sh" || fail "consumer-checks-stale-rerun.sh does not parse"
 bash4_constructs='(^|[^A-Za-z0-9_])(declare|local|typeset)([[:blank:]]+-[A-Za-z]+)*[[:blank:]]+-[A-Za-z]*[An][A-Za-z]*([^A-Za-z]|$)|(^|[^A-Za-z0-9_])(mapfile|readarray|coproc)([^A-Za-z0-9_]|$)|\$\{([A-Za-z_][A-Za-z_0-9]*|[0-9]+|[@*#?!$-])(\[[^]]*\])?(\^\^?|,,?)[^}]*\}|&>>|\|&|;;?&'
 # Full-line comments and the pattern itself are not scanned.
 gate_matches() {
   grep -nE "$bash4_constructs" "$@" | grep -vE '^([^:]*:)?[0-9]+:[[:blank:]]*#' |
     grep -v -F -e 'bash4_constructs' || true
 }
-gate_hits=$(gate_matches "$script" "${BASH_SOURCE[0]}")
+gate_hits=$(gate_matches "$script" "${BASH_SOURCE[0]}" "$repo_root/scripts/consumer-checks-stale-rerun.sh")
 [[ -z "$gate_hits" ]] || fail "Bash 4+ constructs found (stock macOS bash is 3.2):"$'\n'"$gate_hits"
 
 # shellcheck source=scripts/find-bash3.sh
