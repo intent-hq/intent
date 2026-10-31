@@ -719,7 +719,7 @@ the terminal `agent:stream:end` carries the drained blocks as `trailingBlocks` (
 so a client that finalizes the in-flight message from accumulated chunks can append them
 immediately instead of waiting for a transcript re-fetch.
 
-**Secret-request resource blocks (`AtTurnEnd`, prepared).** A third resource MIME type,
+**Secret-request resource blocks (`AtTurnEnd`).** A third resource MIME type,
 `application/vnd.intent.secret-request+json`, carries requests an agent makes with the MCP
 `ws.secret.request` binding. These blocks use the same `AtTurnEnd` drain, ordering and
 `trailingBlocks` delivery as question blocks, with an `intent-secret-request://<requestId>` URI and

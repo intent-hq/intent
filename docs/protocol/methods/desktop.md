@@ -4,12 +4,12 @@
 
 This is a **shipped additive contract**: the pinned intentd and cloudlands-fe
 implement it. Native execution is supported on macOS and Windows only; Linux is
-not supported, and a Linux client never advertises the client capability. No
-currently advertised protocol version changes here.
+not supported, and the desktop client does not advertise the client capability
+on Linux. No currently advertised protocol version changes here.
 
-The daemon advertises `server.capabilities.desktopControl: 1` because it
-implements the complete session, consent, agent-binding and revocation contract.
-Electron advertises `client.hello.capabilities.desktopControl: 1` only on its
+The daemon advertises `server.capabilities.desktopControl: 1` only when it
+implements the session, consent, agent-binding and revocation contract; the
+pinned intentd does. Electron advertises `client.hello.capabilities.desktopControl: 1` only on its
 execution connection, alongside `browserExec: true`, and only on macOS or Windows
 when its bundled native desktop helper is present. Missing/unknown capability
 versions mean unsupported. Capability describes implementation, not permission

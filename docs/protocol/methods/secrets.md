@@ -10,8 +10,8 @@ model ever receiving the value.
 
 ### Status and discovery
 
-The daemon advertises `server.capabilities.secretRequests: 1` (§5.17) because it
-implements the complete contract below. Missing or unknown values mean
+The daemon advertises `server.capabilities.secretRequests: 1` (§5.17) only when
+it implements the contract below; the pinned intentd does. Missing or unknown values mean
 unsupported. Clients render secret-request cards and call the `secret.*` methods
 only when the capability is present. Capability describes implementation, not
 permission.

@@ -1524,7 +1524,7 @@ A set never carries `target`; a clear reports the recomputed unpinned route, `ta
 `browser:tab-opened` / `browser:tab-updated` / `browser:tab-closed`, and `client:connected` /
 `client:disconnected`. Older daemons omit the field.
 
-**Prepared desktop-consent addition:** [desktop control](./desktop.md#unassigned-workspace-consent-claims-the-primary)
+**Desktop-consent addition:** [desktop control](./desktop.md#unassigned-workspace-consent-claims-the-primary)
 uses the same `browserClientId` column, setter authorization boundaries and committed
 workspace delta. First authenticated same-owner Allow atomically claims it only
 when there is no saved pin, active desktop or agent-owned browser host; the

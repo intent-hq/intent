@@ -146,9 +146,9 @@ keys its write refusal on the existing `-32602` code.
 | --- | --- | --- |
 | -32602 | content-base-mismatch | A whole-content write's `baseContentBytes` does not match the resolved base, or the base is unknown. `data` adds `baseContentBytes` and `resolvedBaseBytes` (base size or `null`; never copy it into `baseContentBytes`). Nothing was written; re-read the full note before writing. |
 
-### Prepared desktop control errors
+### Desktop control errors
 
-[§5.51](./methods/desktop.md#errors-and-verification) reserves typed `desktop-*`
+[§5.51](./methods/desktop.md#errors-and-verification) defines typed `desktop-*`
 errors under existing numeric codes: `-32602` for inactive/stale operations and
 `desktop-display-selection-required` / `desktop-display-unavailable` (ambiguous
 selection or missing display, with no capture/input),
@@ -162,7 +162,7 @@ have been delivered, so replaying the whole input is unsafe),
 `-32003` for authority refusal. Action failures distinguish not-started, partial
 and unknown execution; an uncertain input outcome must never be replayed.
 
-### Prepared secret request errors
+### Secret request errors
 
 [§5.56](./methods/secrets.md#client-facing-router-methods) uses `-32602` with
 `data.code: "secret-request-unknown"` when `secret.provide` or `secret.dismiss`
