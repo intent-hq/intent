@@ -230,8 +230,10 @@ with no rollback.
   merge queue — in this repo or any submodule repo — without explicit permission from
   a human**. Approved + green checks is not enough. Repo-owned automation is exempt
   (auto-bump-submodules, auto-pin-intentd, intentd's auto-pin-acp-adapters,
-  auto-cut-alpha, and the release PR workflows merge their own rolling PRs; see
-  [guarded direct release merges](docs/RELEASING.md#guarded-direct-release-merges)).
+  auto-cut-alpha, and the release PR workflows merge their own rolling PRs). Component
+  auto-cut and fe auto-pin may merge validated release metadata or sidecar pins directly
+  under the approved CI exemption and readiness guards
+  ([guarded direct release merges](docs/RELEASING.md#guarded-direct-release-merges)).
   - Ordinary `main` PRs in all three repos use a **merge queue**: after human
     permission, `gh pr merge --squash --auto` enqueues once pending checks pass (its
     "merge strategy … is set by the merge queue" output is informational). A red gate
