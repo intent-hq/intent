@@ -8,8 +8,8 @@ capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `15.3` — plain-folder workspaces, on top of 15.2's retired workspaces and 15.1's prepared discussions, guest roles, scoped repository pages and GitLab child Git policy; not a shipped-version claim.
-Other prepared extensions retain their independent support gates.
+**Documented version:** `15.3` — plain-folder workspaces, on top of 15.2's retired workspaces and 15.1's discussions, guest roles, scoped repository pages and GitLab child Git policy (intentd advertises all four at protocol 15.2); 15.3 is not a shipped-version claim.
+Every extension retains its independent support gate.
 
 **Version 15.3 — plain-folder workspaces (additive).**
 [Plain-folder workspaces](./methods/workspace.md#plain-folder-workspaces) work directly in
@@ -131,7 +131,7 @@ whether an Assistant chat settings-change card may change the setting. Older dae
 it. Clients then refuse card changes to daemon settings outside their own schema and keep
 their previous behavior for settings they map.
 
-**Version 15.1 — workspace discussions (additive, prepared).**
+**Version 15.1 — workspace discussions (additive).**
 [Workspace discussions](./methods/multiplayer.md#555-workspace-discussions) add
 `discussion.conversations`, `discussion.recipients`, `discussion.list`,
 `discussion.send`, `discussion.react`, `discussion:message`, and `discussion:reaction` for a default workspace-wide discussion
@@ -152,7 +152,7 @@ Discussion typing extends the existing `presence.update` and human roster
 shapes with transient, conversation-scoped `discussionTyping`, projected per
 recipient; typing adds no method or event type.
 Agent/daemon snapshots omit that field, and older rosters without it remain valid.
-The prepared `discussionAgentMessaging: 1` extension adds explicit per-message
+The `discussionAgentMessaging: 1` extension adds explicit per-message
 agent recipients and bound agent replies to workspace-wide discussions
 (named conversations additionally require `discussionManagement: 1`).
 Addressed agents may read that conversation's history on demand; other messages
@@ -160,13 +160,13 @@ never dispatch a turn automatically. Legacy private histories remain human-only 
 agent transcripts have workspace-wide visibility. This adds no router method or
 event type; agent tools use the existing conversation/list/send operations.
 Clients tolerate unsupported methods without sending to an agent instead. The
-documented surface, including prepared startup, generic stream recovery,
+documented surface, including startup, generic stream recovery,
 PR workspace lookup, provider profiles, discussion activity, and guest role additions,
 is now **474 / 416 / 58**
 (dispatchable / router / fast path). This reservation does not identify a carrying
 release or change independent capability gates.
 
-The prepared `discussionManagement: 1` extension adds `discussion.rename` and
+The `discussionManagement: 1` extension adds `discussion.rename` and
 `discussion.delete`, first-send `discussion.send { createConversation: true }`,
 optional conversation names, and `discussion:created`, `discussion:updated`,
 `discussion:deleted`. New conversations are workspace-wide; legacy direct/group
@@ -178,7 +178,7 @@ reactions and Stop/Retry with per-conversation grants. This coordinated change t
 unreleased Multiplayer Labs retains older capability gates, does not establish
 readiness, and reserves **474 / 416 / 58** dispatchable / router / fast-path names.
 
-The prepared [workspace guest role extension](./methods/multiplayer.md#workspace-guest-roles-prepared)
+The [workspace guest role extension](./methods/multiplayer.md#workspace-guest-roles)
 adds `workspace.members.setRole` under exact `workspaceGuestRoles: 1` on both
 discovery surfaces. `collaborator` remains the default wire role, displayed as
 Participant; owner-assigned `manager` grants scoped agent and saved-script
@@ -454,7 +454,7 @@ counts change: the documented surface remains **435 / 380 / 55**, while submissi
 correlation alone leaves the 13.1 implementation's **404 / 349 / 55** unchanged.
 These prepared docs make no shipping claim.
 
-**Invitation account search (additive, prepared).** `host.invite.searchAccounts`
+**Invitation account search (additive).** `host.invite.searchAccounts`
 (§5.49) adds bounded public suggestions for GitHub and the selected GitLab host.
 `client.hello.server.capabilities.invitationAccountSearch: 1` advertises support;
 older daemons retain manual invitation account entry. Search never replaces
@@ -1610,7 +1610,7 @@ them on demand. The `noteIds` param shape is unchanged.
 
 The method surface is enforced by golden tests in `crates/intent-transport/src/catalog.rs`. Any drift (added, removed, or renamed methods) causes CI failure with the instruction: "Update ROUTER_METHODS in catalog.rs, update docs/protocol/05-method-catalog.md, and bump the protocol version." Additive response fields on an existing method (e.g., the optional `system.status` resource fields, §5 fast-path notes) do not change the golden-test-enforced catalog and ship within the current version; clients must detect them by **presence**, not by protocol version.
 
-The prepared `discussionAgentActivity: 1` extension adds per-message/recipient
+The `discussionAgentActivity: 1` extension adds per-message/recipient
 activity and selected mention snapshots, transient `discussion:activity`, and
 human-only `discussion.stopAgent` / `discussion.retryAgent`. The attempt fences
 controls; the version orders event, response, and history races. Legacy messages

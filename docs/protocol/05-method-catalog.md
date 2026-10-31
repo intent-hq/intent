@@ -58,7 +58,7 @@ The prepared [generic stream recovery contract](./event-stream-recovery.md) adds
 one fast-path method, `events.fence`, under `eventStreamRecovery: 1`. Its bulk-lane
 response brackets recovery reads with actual event-delivery boundaries.
 
-The prepared [workspace discussion contract (§5.55)](./methods/multiplayer.md#555-workspace-discussions)
+The [workspace discussion contract (§5.55)](./methods/multiplayer.md#555-workspace-discussions)
 adds workspace-scoped router methods for conversation discovery, history and
 message actions, gated by exactly integer
 `discussionConversations: 1`. Replies and reactions additionally require
@@ -79,7 +79,7 @@ Its transient typing indicators extend existing presence parameters and human
 roster rows without adding another method or event type (§5.47).
 Older daemons reject these methods with `-32601`; no agent chat fallback is allowed.
 
-The prepared [workspace guest role contract](./methods/multiplayer.md#workspace-guest-roles-prepared)
+The [workspace guest role contract](./methods/multiplayer.md#workspace-guest-roles)
 adds one owner-authorized router method, `workspace.members.setRole`, under exact
 `workspaceGuestRoles: 1`. The `manager` role grants scoped agent and saved-script
 controls while preserving the existing Participant default and full-management boundary.

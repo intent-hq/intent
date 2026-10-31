@@ -145,7 +145,7 @@ and is gated by `remoteMachines: 1`
 | §5.52 Explicit GitLab resource reads (prepared) | [methods/repository-resources.md](./methods/repository-resources.md) |
 | §5.53 GitLab project checkout (prepared) | [methods/repository-checkout.md](./methods/repository-checkout.md) |
 | §5.54 Provider profiles (prepared) | [methods/provider-profiles.md](./methods/provider-profiles.md) |
-| §5.55 Workspace discussions (prepared) | [methods/multiplayer.md](./methods/multiplayer.md#555-workspace-discussions) |
+| §5.55 Workspace discussions | [methods/multiplayer.md](./methods/multiplayer.md#555-workspace-discussions) |
 | §5.56 Secret requests | [methods/secrets.md](./methods/secrets.md) |
 | MCP `ws.*` binding signature index (generated; not wire-routable) | [methods/mcp-bindings.md](./methods/mcp-bindings.md) |
 
