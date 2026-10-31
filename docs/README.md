@@ -73,7 +73,7 @@ toggle the daemon does not register, or a stale `EXEMPT` entry, is only a warnin
 The same check fails when a registered setting is missing from the Agent features list
 in `docs/protocol/methods/settings.md` (the paths before "— booleans"). For a docs-first
 addition, a `(prepared addition)` bullet that opens with the path also counts; once the
-daemon registers it, a bullet still saying "not implemented by the current pins" warns.
+daemon registers that setting, the check warns until the path is in the list.
 
 ## Harness Versioning — `HARNESS.md`
 

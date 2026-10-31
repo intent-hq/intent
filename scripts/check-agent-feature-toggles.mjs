@@ -38,8 +38,9 @@
 //     bullet fails (docs lead: write the prepared bullet before the intentd
 //     PR). EXEMPT does not apply; every setting is documented;
 //   - a documented path the daemon does not register only warns, and so does
-//     a prepared bullet still saying "not implemented by the current pins"
-//     about a setting the daemon now registers (move it into the list).
+//     a registered setting the list omits but a prepared bullet names (move it
+//     into the list; the message calls out a leftover "not implemented by the
+//     current pins").
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -278,11 +279,13 @@ export function compare({ daemon, known = daemon, featurePaths, featureEntries, 
     const prepared = new Set(docs.prepared.map((d) => d.path));
     for (const p of daemon) {
       if (listed.has(p) || prepared.has(p)) documented += 1;
-      else errors.push(`${p} is registered by intentd (${f.definitions} definitions()) but missing from the Agent features list in ${f.docs}; add it to that list with its default`);
+      else errors.push(`${p} is registered by intentd (${f.definitions} definitions()) but missing from the Agent features list in ${f.docs}; add it to that list with its default (a prepared-addition bullet counts only when it opens with the path, as \`- **... (prepared addition)**: \`${p}\`\`)`);
     }
     for (const p of docs.listed) if (!registered.has(p)) warnings.push(`${p} is in the Agent features list of ${f.docs} but intentd does not register it (docs-first addition: use a prepared-addition bullet; or left over after a daemon removal)`);
     for (const { path: p, notImplemented } of docs.prepared) {
-      if (notImplemented && registered.has(p)) warnings.push(`${p} has a prepared-addition bullet in ${f.docs} that says "not implemented by the current pins", but intentd registers it; move it into the Agent features list and drop that wording`);
+      if (!registered.has(p)) continue;
+      if (notImplemented) warnings.push(`${p} has a prepared-addition bullet in ${f.docs} that says "not implemented by the current pins", but intentd registers it; move it into the Agent features list and drop that wording`);
+      else if (!listed.has(p)) warnings.push(`${p} is registered by intentd but documented only by a prepared-addition bullet in ${f.docs}; move it into the Agent features list`);
     }
   }
   return { errors, warnings, matched, exempted, documented };

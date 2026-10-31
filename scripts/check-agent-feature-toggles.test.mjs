@@ -288,9 +288,13 @@ test('a prepared-addition bullet documents a setting, and warns once the daemon 
   assert.equal(stale.documented, 4);
   assert.equal(stale.warnings.length, 1);
   assert.match(stale.warnings[0], /agentFeatures\.brandNew has a prepared-addition bullet .* "not implemented by the current pins", but intentd registers it/);
-  const updated = compare({ ...l, docs: parseDocsPaths(settingsMd(BASE, [{ path: 'agentFeatures.brandNew', notImplemented: false }])) });
-  assert.deepEqual(updated.errors, []);
-  assert.deepEqual(updated.warnings, []);
+  const unlisted = compare({ ...l, docs: parseDocsPaths(settingsMd(BASE, [{ path: 'agentFeatures.brandNew', notImplemented: false }])) });
+  assert.deepEqual(unlisted.errors, []);
+  assert.equal(unlisted.warnings.length, 1, 'warns without the "not implemented" phrase too');
+  assert.match(unlisted.warnings[0], /agentFeatures\.brandNew is registered by intentd but documented only by a prepared-addition bullet/);
+  const listed = compare({ ...l, docs: parseDocsPaths(settingsMd(daemon, [{ path: 'agentFeatures.brandNew', notImplemented: false }])) });
+  assert.deepEqual(listed.errors, []);
+  assert.deepEqual(listed.warnings, []);
 });
 
 test('a docs-first prepared bullet for an unregistered setting is silent', () => {
