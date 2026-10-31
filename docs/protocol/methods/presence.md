@@ -9,7 +9,7 @@ Ephemeral who-is-here state for shared (multi-principal) workspaces ([intent-hq/
 
 | Method | Params | Result |
 | --- | --- | --- |
-| presence.update *(fast path)* | focus (req, array of `{ workspaceId (req), agentId?, noteId? }`), typing?: `{ agentId (req) }` \| `null`, discussionTyping?: `{ workspaceId (req), conversationId? }` \| `null` *(15.1, prepared)* | `{ ok: true, typingSource }` — replaces the **connection's own** focus set and typing targets; `typingSource` is the connection's opaque typing handle (`ts-…`), the `source` its own entries carry in every roster |
+| presence.update *(fast path)* | focus (req, array of `{ workspaceId (req), agentId?, noteId? }`), typing?: `{ agentId (req) }` \| `null`, discussionTyping?: `{ workspaceId (req), conversationId? }` \| `null` *(15.1)* | `{ ok: true, typingSource }` — replaces the **connection's own** focus set and typing targets; `typingSource` is the connection's opaque typing handle (`ts-…`), the `source` its own entries carry in every roster |
 | presence.snapshot | workspaceId (req) | `{ workspaceId, members: PresenceMember[] }` — the current `presence:changed` roster of a member workspace, on demand |
 | note.presence.update *(fast path)* | workspaceId (req), noteId (req), rev (req), anchor (req), head (req) — each of the three a non-negative integer | `{ ok: true }` — the caller's own caret on a note this connection is subscribed to |
 

@@ -8,8 +8,8 @@ capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `15.3` — plain-folder workspaces, on top of 15.2's retired workspaces and 15.1's prepared discussions, guest roles, scoped repository pages and GitLab child Git policy; not a shipped-version claim.
-Other prepared extensions retain their independent support gates.
+**Documented version:** `15.3` — plain-folder workspaces, on top of 15.2's retired workspaces and 15.1's discussions, guest roles, scoped repository pages and GitLab child Git policy (intentd advertises all four at protocol 15.2); 15.3 is not a shipped-version claim.
+Every extension retains its independent support gate.
 
 **Version 15.3 — plain-folder workspaces (additive).**
 [Plain-folder workspaces](./methods/workspace.md#plain-folder-workspaces) work directly in
@@ -454,7 +454,7 @@ counts change: the documented surface remains **435 / 380 / 55**, while submissi
 correlation alone leaves the 13.1 implementation's **404 / 349 / 55** unchanged.
 These prepared docs make no shipping claim.
 
-**Invitation account search (additive, prepared).** `host.invite.searchAccounts`
+**Invitation account search (additive).** `host.invite.searchAccounts`
 (§5.49) adds bounded public suggestions for GitHub and the selected GitLab host.
 `client.hello.server.capabilities.invitationAccountSearch: 1` advertises support;
 older daemons retain manual invitation account entry. Search never replaces
