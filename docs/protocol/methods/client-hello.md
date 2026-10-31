@@ -33,18 +33,18 @@ hello completes. Initial hydration and reconnect/event-gap recovery remain requi
 A bundled daemon upgrade does not upgrade older remote hosts. This capability
 does not change experimental Multiplayer readiness.
 
-**Workspace guest roles (prepared).** Exact integer
+**Workspace guest roles.** Exact integer
 `server.capabilities.workspaceGuestRoles: 1`, also returned by
-`system.capabilities`, gates the complete [Participant/Manager contract](./multiplayer.md#workspace-guest-roles-prepared).
+`system.capabilities`, gates the complete [Participant/Manager contract](./multiplayer.md#workspace-guest-roles).
 It is support discovery, not caller authority. Guest Managers retain
 `canManage: false`; clients derive narrowly scoped controls from the current
 workspace role. Missing, malformed or unknown capability values hide role
 mutation controls. Refresh on each admitted connection; older remote hosts are
 not upgraded by installing a newer desktop client.
 
-**Submission correlation (prepared).**
+**Submission correlation.**
 `server.capabilities.submissionCorrelation: 1` gates the complete
-[optimistic submission contract](./agents.md#submission-correlation-and-optimistic-display-prepared-additive-extension):
+[optimistic submission contract](./agents.md#submission-correlation-and-optimistic-display-additive-extension):
 optional queue `messageId`, full submission alias sets across replies/queue/delivery,
 per-source `recoverySources` for combined retries, and trustworthy live-row merge
 eligibility with false flags on draining overlays. Enable queue optimism only for exact integer
@@ -58,7 +58,7 @@ only when this capability is present; older daemons omit it. This is a server su
 flag, independent of the model's `agentFeatures.peerAgents` gate, and does not grant
 caller authority: workspace lifecycle permissions still apply.
 
-**PR workspace lookup (prepared).** `server.capabilities.prWorkspaceLookup: 1`
+**PR workspace lookup.** `server.capabilities.prWorkspaceLookup: 1`
 advertises [§5.1 `workspace.findByPullRequest`](./workspace.md#pull-request-workspace-lookup)
 and the PR-to-workspace link recording behind it. Clients offer the
 "Open in Original Workspace" link action only for exact integer `1`; older daemons
@@ -78,7 +78,7 @@ an unknown create option was
 honored just because creation succeeded. Gate lifecycle controls/options on this
 capability, independently of numeric version.
 
-**Worker observations (prepared additive extension).**
+**Worker observations (additive extension).**
 `server.capabilities.agentWorkers: 1` advertises the list/subscription/stop
 contract in [§5.5b](./agent-workers.md), not process liveness or exit evidence.
 Provider-session support is reported independently; older daemons omit this flag.
@@ -122,15 +122,17 @@ optional `Workspace.autoArchiveDisabled` field, the `autoArchiveDisabled` param 
 have not opted out omit the field, so clients cannot detect support by presence; they offer
 the opt-out only for exact integer `1`, and older daemons omit it.
 
-**Script run monitoring (prepared additive extension).**
-`server.capabilities.scriptMonitors: 1` advertises the entire
+**Script run monitoring (additive extension).**
+`server.capabilities.scriptMonitors` advertises the entire
 [§5.8a contract](./script-monitors.md): durable run identity, required one-shot
 TTL, optional single-line regex/line-count triggers, single-owner registration,
 guarded run cancellation and silent lifecycle
-cleanup including queued wakes. Independent of scriptLifecycle/scriptReadiness;
+cleanup including queued wakes. intentd advertises `scriptMonitors: 2`, the
+protocol-14 active-only replacement; `1` was the protocol-13 contract with
+terminal history. Independent of scriptLifecycle/scriptReadiness;
 absence means unavailable, not permission to infer support from version numbers.
 
-**Workspace discussions (prepared additive extension).**
+**Workspace discussions (additive extension).**
 Exactly integer `server.capabilities.discussionConversations: 1` advertises the
 [§5.55 contract](./multiplayer.md#555-workspace-discussions): conversation and
 recipient discovery, participant-gated history and delivery, and conversation-scoped
@@ -275,7 +277,7 @@ Ordinary hellos retain their existing profile-update behavior.
 
 #### GitLab checkout capability
 
-**Prepared additive contract, protocol 13.5.**
+**Additive contract, protocol 13.5.**
 `server.capabilities.gitlabCheckout: 1` announces the complete
 [pre-workspace project checkout contract](repository-checkout.md). Accept exactly
 integer `1` on the selected destination's original physical connection. The
@@ -285,7 +287,7 @@ existing repository resource/context capabilities, or a guest's collaboration
 identity cannot substitute for it.
 
 Require this same capability before sending `instanceBaseUrl` to the
-[prepared full-instance auth operations](integrations.md#full-instance-gitlab-authentication-prepared-v135),
+[full-instance auth operations](integrations.md#full-instance-gitlab-authentication-v135),
 including auth-status reads. An older parser may ignore an unknown field;
 request success alone cannot establish full-root support. Its historical
 bare-host behavior does not authorize a prefix-bearing instance.
@@ -293,31 +295,31 @@ bare-host behavior does not authorize a prefix-bearing instance.
 Capture before browsing and retain the original destination through pagination,
 warming, creation and release. Reconnect, host/auth/settings changes or
 retirement require a new capture; a stable client ID cannot transfer the old
-reference. See the [client lifecycle](../10-thin-client.md#gitlab-checkout-lifecycle-prepared).
+reference. See the [client lifecycle](../10-thin-client.md#gitlab-checkout-lifecycle).
 
 #### GitLab checkout owner-avatar capability
 
-**Prepared additive extension, protocol 13.7.**
+**Additive extension, protocol 13.7.**
 `server.capabilities.gitlabCheckoutOwnerAvatar: 1` allows an explicit
 `includeOwnerAvatar: true` on checkout capture. Require exactly integer `1` on
 the same original socket, in addition to `gitlabCheckout: 1`. Only opted-in
 captures may receive optional `ownerAvatarUrl` on project page/detail rows.
 Legacy captures keep their original shape, including on a newer daemon.
 Clients connected to older daemons omit the request member and retain image
-fallbacks. See the [owner-avatar contract](repository-checkout.md#owner-avatar-extension-prepared-protocol-137).
+fallbacks. See the [owner-avatar contract](repository-checkout.md#owner-avatar-extension-protocol-137).
 
 #### GitLab checkout configuration capability
 
-**Prepared additive extension, protocol 13.8.**
+**Additive extension, protocol 13.8.**
 `server.capabilities.gitlabCheckoutRepoConfig: 1`, alongside `gitlabCheckout: 1`,
 allows the fixed pre-workspace configuration read on the original socket.
 Require exactly integer `1` for both capabilities. A numeric protocol version,
 method catalog entry or successful unrelated call is insufficient. See the
-[configuration contract](repository-checkout.md#selected-repository-configuration-prepared-protocol-138).
+[configuration contract](repository-checkout.md#selected-repository-configuration-protocol-138).
 
 #### Repository context capability
 
-**Prepared additive contract.** `server.capabilities.repositoryContext: 1`
+**Additive contract.** `server.capabilities.repositoryContext: 1`
 announces the complete context-read lifecycle. Feature-detect the capability
 on the physical connection captured for the
 [repository context lifecycle](workspace.md#repository-context).
@@ -331,7 +333,7 @@ frontend clients implement the feature.
 
 #### Repository selection capability
 
-**Prepared additive contract.** `server.capabilities.repositorySelection: 1`
+**Additive contract.** `server.capabilities.repositorySelection: 1`
 is separate from `repositoryContext: 1`.
 Feature-detect it on the original confirmed physical connection used for the
 [selection editing operation](workspace.md#repository-selection).
@@ -348,13 +350,13 @@ specifies required integration behavior, not an already shipped frontend flow.
 
 #### Native review capability
 
-**Prepared additive contract.** `server.capabilities.nativeReview: 1` announces
+**Additive contract.** `server.capabilities.nativeReview: 1` announces
 qualified native review preparation, execution and receipts. Feature-detect it on
 the original confirmed physical connection before the
 [qualified native review workflow](change-tracking.md#native-review-preparation-and-receipts).
 It announces the contract, not current host/workspace permission, configured
-provider readiness or unconditional admission. Prepared facts and the public
-capability cannot replace fresh server checks.
+provider readiness or unconditional admission. Facts returned by preparation and
+the public capability cannot replace fresh server checks.
 
 Install that connection's [private retirement handler](../06-events.md#private-native-review-retirement)
 before preparation, and retain the same connection through confirmation,
@@ -367,7 +369,7 @@ provider guarantee. Capabilities, rather than an older experimental version numb
 
 #### Commit companion capability
 
-**Prepared additive contract.** `server.capabilities.nativeReviewCompanion: 1`
+**Additive contract.** `server.capabilities.nativeReviewCompanion: 1`
 is advertised alongside `nativeReview: 1`.
 Check the companion capability on the original confirmed physical connection
 **before** a [marked commit preparation](change-tracking.md#commit-companion-preparation).
@@ -385,7 +387,7 @@ guarantee. The companion does not add method or notification names.
 
 #### Resource-read capability
 
-**Prepared additive contract.** The hello response advertises
+**Additive contract.** The hello response advertises
 `result.server.capabilities.repositoryResourceRead: 1` for the
 [explicit GitLab resource-read contract](repository-resources.md). Documentation alone does not establish availability. Detect support on the original physical connection before
 capture and install that connection's [private retirement handler](../06-events.md#private-resource-read-retirement)
@@ -401,22 +403,22 @@ native review capabilities do not imply this explicit-resource capability.
 These are client integration obligations, not a shipped frontend guarantee;
 documentation alone does not establish deployed availability.
 
-The separate [prepared project-page and discussion extension](repository-resources.md#prepared-project-pages-and-discussions)
+The separate [project-page and discussion extension](repository-resources.md#project-pages-and-discussions)
 is additive in protocol 15.1 and uses `repositoryResourcePages: 1`. Keep
 `repositoryResourceRead: 1` unchanged for
 detail-only clients; it does not imply support for the new operations. Detect
 the page capability on the same physical connection that supplies the read
-lifetime. Its prepared `context` is either an explicitly authorized workspace or
+lifetime. Its `context` is either an explicitly authorized workspace or
 the original durable Host Owner; Home cannot borrow a workspace or infer the
 owner role from checkout access. A capability cannot authorize another instance
 or account, or supply a fallback after denial. A numeric protocol version or
 catalog entry does not replace the exact capability check.
 
-#### GitLab child Git policy capability (prepared)
+#### GitLab child Git policy capability
 
 The protocol 15.1 capability `result.server.capabilities.gitlabChildGitPolicy: 1`
 gates the separate
-[owner-only policy control](settings.md#prepared-gitlab-child-git-credential-policy).
+[owner-only policy control](settings.md#gitlab-child-git-credential-policy).
 An absent or unsupported value means the control is unsupported, not disabled.
 Detect it on the connection whose policy binding will be read and changed.
 Neither this capability nor `gitlabCheckout` grants the owner role, enables the
@@ -604,7 +606,7 @@ and whole-envelope wake/history replay gating. Neither side advertises support y
 
 ### Generic event stream recovery capability
 
-**Prepared additive contract.** `server.capabilities.eventStreamRecovery: 1`
+**Additive contract.** `server.capabilities.eventStreamRecovery: 1`
 (exact integer) advertises the complete [generic loss contract](../event-stream-recovery.md).
 It also guarantees `events.fence` raw-bus/bulk-lane boundaries for recovery reads.
 Each recovering `events.subscribe` lease must separately request and acknowledge
@@ -616,11 +618,11 @@ readiness. It is advertised only after the transport and membership-loss cases p
 Exactly integer `discussionAgentActivity: 1`, on hello and `system.capabilities`,
 adds request-correlated discussion activity, immutable selected mention spans,
 and human `discussion.stopAgent` / `discussion.retryAgent` controls. This is a
-prepared Multiplayer Labs extension; see [the activity contract](./multiplayer.md#correlated-agent-activity-and-controls-prepared).
+Multiplayer Labs extension; see [the activity contract](./multiplayer.md#correlated-agent-activity-and-controls).
 
 Exactly integer `discussionPrincipalMentions: 1`, on hello and
 `system.capabilities`, enables explicit human discussion notification identities.
-See [person mentions](./multiplayer.md#explicit-person-mentions-prepared) for
+See [person mentions](./multiplayer.md#explicit-person-mentions) for
 selected UTF-16 spans, membership checks, retry identity, and import behavior.
 Clients must preserve selected drafts on absent or unknown capability values.
 This remains an unreleased Multiplayer Labs feature and grants no access.

@@ -27,7 +27,7 @@ Errors use the standard JSON-RPC 2.0 `error` object `{ code, message, data? }`.
   `workspace.retire` on a workspace whose folder holds the only copy of its repository or is not daemon-owned (`cow` / `direct` checkouts, `skipIsolation`, remote) uses this numeric code with `error.data = { code: "retire-unsupported", checkoutMode? }` and changes nothing.
   On a plain-folder workspace that refusal adds `plainFolder: true` to `error.data`, with the message `workspace.retire is not available in plain-folder workspaces` (protocol 15.3).
   An operation that needs git or a forge, called for a plain-folder workspace (`workspace.duplicate`, and the agent MCP bindings `ws.git.*`, `ws.pr.*`, `ws.mr.*` and `ws.workspace.proposeSibling`), uses this numeric code with `error.data = { code: "plain-folder-unsupported", operation }` and the message `<operation> is not available in plain-folder workspaces`, and changes nothing (protocol 15.3; §5.1 [Plain-folder workspaces](./methods/workspace.md#plain-folder-workspaces)).
-  A `workspace.create { plainFolder: true }` whose `repositoryPath` cannot hold a plain folder uses this numeric code with `error.data = { code: "plain-folder-path-rejected", reason, path, repositoryRoot? }` before any side effect; `reason` is `inside-git-repo` (with `repositoryRoot`), `inside-workspaces-root`, `not-a-directory` or `parent-missing`, and clients show `message` for an unknown value.
+  A `workspace.create { plainFolder: true }` whose `repositoryPath` cannot hold a plain folder uses this numeric code with `error.data = { code: "plain-folder-path-rejected", reason, path, repositoryRoot? }` before any side effect; `reason` is `inside-git-repo` (with `repositoryRoot`), `inside-workspaces-root`, `contains-workspaces-root`, `not-a-directory` or `parent-missing`, and clients show `message` for an unknown value.
   User-fixable clone failures (`path-invalid`, `destination-exists-non-empty`) also use this numeric code — see the clone failure taxonomy below.
   A `git.showFile` path resolving to a non-blob tree entry (a `160000` gitlink / submodule pin, or a `040000` tree) also uses this numeric code with `error.data = { code: "not-a-file", path, mode }` — `mode` is the octal tree-entry mode string (monorepo#1739; §5.6).
   The invite / join flow (§5.48) keeps its own user-actionable discriminators on this numeric code — `invite-not-found`, `invite-expired`, `invite-revoked`, `invite-redeemed`, `invite-pin-mismatch`, `invite-pin-unknown`, `guest-limit` / `workspace-full`, `workspace-archived` (`workspace.members.add` / `workspace.invite.create` / the `invite.prove` / `invite.accept` join commit on an archived workspace — archiving detached every guest and closed every open invite; [intent-hq/intentd#2066](https://github.com/intent-hq/intentd/pull/2066)), and the `invite.prove` / `invite.accept` outcomes `proof-invalid` / `proof-expired` / `credential-invalid` / `owner-self-join` — with the kind's fixed prose as `message`; its infrastructure-side refusals (`github-identity-required`, `primary-identity-locked`, `invite-flow-busy`, `github-unreachable`, `identity-unverifiable`, `listener-down`, `tunnel-down`) are `-32603` with the same `error.data.code` convention.
@@ -141,9 +141,9 @@ gains `limit: "count" | "memory"` with its counts or bytes. `-32603`:
 `unconfirmedStops` from `remoteMachines.remove` when stops go unacknowledged. `-32003` with `data.code: "node-mode"` refuses
 a method outside the node-mode list. No new numeric error is introduced.
 
-### Prepared truncated note read errors
+### Truncated note read errors
 
-The opt-in [truncated note read contract](./methods/notes-tasks.md#truncated-note-reads-prepared-additive-contract)
+The opt-in [truncated note read contract](./methods/notes-tasks.md#truncated-note-reads-additive-contract)
 keys its write refusal on the existing `-32602` code.
 
 | Numeric code | data.code | Meaning / client action |

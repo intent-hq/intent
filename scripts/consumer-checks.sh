@@ -13,7 +13,10 @@
 # (--assume-old), which tells make the prerequisite is already up to date so
 # only the docs-check recipe itself runs (scripts/docs-check.sh, the protocol
 # line-length ratchet, and its fixture tests). That is what lets check-mcp-bindings be
-# advisory on its own without touching the Makefile graph.
+# advisory on its own without touching the Makefile graph. The docs-check
+# prerequisite check-doc-links runs inside the docs-check row in the monorepo
+# (it replaces the ci.yml docs-check job's separate doc link step); upstream it
+# is assumed old too, so the component PR gates do not change.
 #
 # Options (each also settable through the environment):
 #   --advisory=<targets>   CONSUMER_CHECKS_ADVISORY  space-separated targets
@@ -88,7 +91,7 @@ fix_path() {
   case "$1" in
     event-catalog-check) echo "docs/protocol/event-types.json + docs/protocol/06-events.md" ;;
     check-mcp-bindings) echo "docs/protocol/methods/mcp-bindings.md (make mcp-bindings-doc) + prose under docs/protocol/" ;;
-    docs-check) echo "AGENTS.md / README.md / docs/fe/DEVELOPER_GUIDE.md (make targets, sandbox knobs) + docs/protocol/methods/files-terminal-browser.md (browser errorCode contract) + docs/protocol/**/*.md lines over 2,000 characters (one sentence or bullet per line; baseline scripts/doc-line-length-baseline.txt) + docs/protocol/**/*.md table rows whose cell count differs from the header (escape a literal pipe as \\|) + docs/protocol/fixtures/**/*.test.mjs failures (make check-protocol-fixture-tests; a node:test file must be named fixtures/**/*.test.mjs)" ;;
+    docs-check) echo "AGENTS.md / README.md / docs/fe/DEVELOPER_GUIDE.md (make targets, sandbox knobs) + Markdown links and backticked docs/ scripts/ .github/ packages/ paths that do not resolve (make check-doc-links; monorepo only) + docs/protocol/methods/files-terminal-browser.md (browser errorCode contract) + docs/protocol/**/*.md lines over 2,000 characters (one sentence or bullet per line; baseline scripts/doc-line-length-baseline.txt) + docs/protocol/**/*.md table rows whose cell count differs from the header (escape a literal pipe as \\|) + docs/protocol/fixtures/**/*.test.mjs failures (make check-protocol-fixture-tests; a node:test file must be named fixtures/**/*.test.mjs)" ;;
     check-protocol-status-labels) echo "docs/protocol/**/*.md + fixtures/**/*.json \"prepared\" / \"not implemented\" labels on capabilities the pinned intentd advertises (drop the label; a really unfinished part gets a reasoned UNFINISHED entry in scripts/check-protocol-status-labels.mjs; baseline scripts/protocol-status-labels-baseline.txt only ratchets down)" ;;
     check-protocol-catalog) echo "docs/protocol/05-method-catalog.md + docs/protocol/methods/*.md" ;;
     check-makefile-targets) echo "Makefile intentd crate / --test references (must exist at the pinned intentd gitlink in the monorepo / at the caller head upstream)" ;;
@@ -116,7 +119,12 @@ fix_path() {
 # keeps the strict pinned-gitlink reads.
 make_args() {
   case "$1" in
-    docs-check) echo "-o event-catalog-check -o check-mcp-bindings -o check-protocol-status-labels docs-check" ;;
+    docs-check)
+      if [ "$context" = "upstream" ]; then
+        echo "-o event-catalog-check -o check-mcp-bindings -o check-protocol-status-labels -o check-doc-links docs-check"
+      else
+        echo "-o event-catalog-check -o check-mcp-bindings -o check-protocol-status-labels docs-check"
+      fi ;;
     check-makefile-targets)
       if [ "$context" = "upstream" ]; then
         echo "CHECK_MAKEFILE_TARGETS_GITLINK=HEAD $1"

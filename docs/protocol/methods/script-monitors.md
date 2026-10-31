@@ -1,11 +1,11 @@
-> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.8a Script run monitors (prepared active-only replacement).
+> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.8a Script run monitors (active-only, protocol 14).
 
 ### 5.8a Script run monitors
 
-#### Active-only monitors (prepared protocol 14)
+#### Active-only monitors (protocol 14)
 
 **This section supersedes protocol-13 history/retention and fast-final retry
-semantics below.** Exact integer `scriptMonitors: 2` gates the whole replacement,
+semantics below.** Exact integer `scriptMonitors: 2`, which intentd advertises, gates the whole replacement,
 including storage migration, queue fences and recovery. `scriptMonitors: 1` is
 not sufficient. Do not expose the new capability until all boundaries work.
 
@@ -16,7 +16,7 @@ transition. `scriptMonitor.get`/`ws.script.monitorDetails` retrieves a known
 active ID only; finished/unknown/foreign IDs yield `-32602` after workspace and
 MCP-owner authorization. No history endpoint, terminal cache or retention TTL.
 Read calls remain read-only (an overdue active row may await maintenance).
-Use the [shared active-only paging contract](./scripts.md#active-only-compact-lists-prepared-breaking-contract).
+Use the [shared active-only paging contract](./scripts.md#active-only-compact-lists-protocol-14-breaking-contract).
 `agentId?` remains the wire owner filter; MCP fixes it to the caller. Optional
 `state` accepts only `active` in either view; reject all/terminal/null/invalid
 values before any row fetch. Active filtering must occur in storage selection,
@@ -234,8 +234,8 @@ too; their exact syntax, limits and framing are defined below.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| scriptMonitor.list | workspaceId (req), agentId?, view? (`full` \| `summary`), state? (`active` only in v14), limit?, cursor? | Full `{ monitors: ScriptMonitor[] }` by default; prepared summary extension below |
-| scriptMonitor.get | workspaceId (req), monitorId (req) | Prepared: full active `ScriptMonitor`; `scriptMonitors: 2` required |
+| scriptMonitor.list | workspaceId (req), agentId?, view? (`full` \| `summary`), state? (`active` only in v14), limit?, cursor? | Full `{ monitors: ScriptMonitor[] }` by default; summary extension below |
+| scriptMonitor.get | workspaceId (req), monitorId (req) | Full active `ScriptMonitor`; `scriptMonitors: 2` required |
 | scriptMonitor.cancel | workspaceId (req), monitorId (req) | `{ ok: true, monitor }`; stop observation silently, same transition as the owner helper |
 | scriptMonitor.cancelRun | workspaceId (req), monitorId (req) | `{ ok: true, monitor, runStopped: boolean }`; stop only the active monitor's bound run and notify its owner |
 
@@ -440,7 +440,7 @@ An overlong control string needs only parser state, not a growing buffer.
 Completion/TTL/cleanup must remain schedulable under sustained output. A monitor
 without either output option does not accumulate line text or count.
 
-Example agent use (prepared helper, same mandatory TTL in every case):
+Example agent use (same mandatory TTL in every case):
 
 ```javascript
 const { scriptId, runId } = await ws.script.start("checks");

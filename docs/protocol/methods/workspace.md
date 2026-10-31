@@ -23,10 +23,10 @@ unchanged. Host-administration virtual workspaces retain their existing boundary
 
 | Method | Params | Result |
 | --- | --- | --- |
-| workspace.list | includeArchived?: boolean (default false), includeRetired?: boolean (default false) — `includeArchived: true` alone never returns `status: "Retired"` rows; see [Retired workspaces](#retired-workspaces) | { workspaces: Workspace[] } — triggers background backfill: existing workspaces with a repositoryPath but missing repositoryOwner/Name are enriched from the origin remote URL (same GitHub derivation as workspace.create, non-blocking spawn, deduped per workspace per daemon lifecycle, skips non-GitHub remotes, persists updates, emits workspace:updated with changed fields). **Membership-narrowed** for a non-administrator caller: only workspaces the bound principal is a member of are returned, and every `Workspace` row carries `myRole` (`"owner"` \| `"collaborator"` \| prepared `"manager"` under `workspaceGuestRoles: 1`), `memberCount` and `openInviteCount` (§5.48) |
-| workspace.findByPullRequest *(prepared; `prWorkspaceLookup: 1`)* | url (req): string — a GitHub-form pull-request URL, `https://<host>/<owner>/<repo>/pull/<number>` (trailing path, query or fragment ignored). No `workspaceId`: daemon-global | { workspaces: PullRequestWorkspace[] } — every workspace the daemon has linked to that PR, most recently linked first; `[]` when none. Archived workspaces are included; deleted and remote workspaces never are, and retired workspaces only with the additive `includeRetired: true` param ([Retired workspaces](#retired-workspaces)). Membership-narrowed like `workspace.list`. `-32602 { code: "invalid-params" }` when `url` is missing or not a pull-request URL. See [PR workspace lookup](#pull-request-workspace-lookup) |
+| workspace.list | includeArchived?: boolean (default false), includeRetired?: boolean (default false) — `includeArchived: true` alone never returns `status: "Retired"` rows; see [Retired workspaces](#retired-workspaces) | { workspaces: Workspace[] } — triggers background backfill: existing workspaces with a repositoryPath but missing repositoryOwner/Name are enriched from the origin remote URL (same GitHub derivation as workspace.create, non-blocking spawn, deduped per workspace per daemon lifecycle, skips non-GitHub remotes, persists updates, emits workspace:updated with changed fields). **Membership-narrowed** for a non-administrator caller: only workspaces the bound principal is a member of are returned, and every `Workspace` row carries `myRole` (`"owner"` \| `"collaborator"` \| `"manager"` under `workspaceGuestRoles: 1`), `memberCount` and `openInviteCount` (§5.48) |
+| workspace.findByPullRequest *(`prWorkspaceLookup: 1`)* | url (req): string — a GitHub-form pull-request URL, `https://<host>/<owner>/<repo>/pull/<number>` (trailing path, query or fragment ignored). No `workspaceId`: daemon-global | { workspaces: PullRequestWorkspace[] } — every workspace the daemon has linked to that PR, most recently linked first; `[]` when none. Archived workspaces are included; deleted and remote workspaces never are, and retired workspaces only with the additive `includeRetired: true` param ([Retired workspaces](#retired-workspaces)). Membership-narrowed like `workspace.list`. `-32602 { code: "invalid-params" }` when `url` is missing or not a pull-request URL. See [PR workspace lookup](#pull-request-workspace-lookup) |
 | workspace.get | workspaceId (req) | { workspace: Workspace } — -32602 if not found, **or** if the caller is not a member of it (same `{ code: "not-found" }`, indistinguishable by design; §5.48) |
-| workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipIsolation? (canonical; deprecated alias skipWorktree?), githubUrl?, repositoryCheckout? (prepared GitLab selection; see [GitLab project checkout](#gitlab-project-checkout)), clonePath?, isNewRepo?, progressId? (string — arms the unified provisioning progress stream; see notes), contextLinks? (ContextLink[] — issue/PR context links persisted on the row; a pr-kind link additionally makes the create **PR-aware** — an omitted `branch`/`baseRef` defaults to the PR's head/base branch — see the `contextLinks` and PR-aware create notes below), origin? ({ kind: "proposal", agentId, proposalId } — see "Proposal origin" below)); optional initialAgent: { prompt? *(a blank/whitespace-only prompt reads as absent; the agent is still created — see "Initial-agent orchestration" in the notes)*, name?, model?, reasoningEffort? (string — creation-time effort; omitted inherits, blank clears; see notes), specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks? *(within v7.4, monorepo#3338: entries may carry an attachment-registry `attachmentId` reference instead of inline `data`, under the same exactly-one-of validation + registry check and daemon-side prompt-assembly resolution as `agent.sendMessage` — §5.5; a bad reference rejects `-32602` pre-side-effect)*, fileBlocks? *(v6.12; attachment references only since v10.0 — same per-entry validation as `agent.sendMessage`: every entry must carry a non-empty `attachmentId`, an entry carrying inline `data` or missing `attachmentId` is `-32602` naming the block index — §5.5)*, metadata? } — no `agentId`: agent IDs are server-assigned, and a request carrying `initialAgent.agentId` is rejected with `-32602` (see notes). Every `-32602` rejection is validated before any side effect (see "Pre-side-effect validation" in the notes) | { workspace: Workspace, initialAgent?: AgentLite, proposalOrigin? } — details below. |
+| workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipIsolation? (canonical; deprecated alias skipWorktree?), githubUrl?, repositoryCheckout? (GitLab selection; see [GitLab project checkout](#gitlab-project-checkout)), clonePath?, isNewRepo?, progressId? (string — arms the unified provisioning progress stream; see notes), contextLinks? (ContextLink[] — issue/PR context links persisted on the row; a pr-kind link additionally makes the create **PR-aware** — an omitted `branch`/`baseRef` defaults to the PR's head/base branch — see the `contextLinks` and PR-aware create notes below), origin? ({ kind: "proposal", agentId, proposalId } — see "Proposal origin" below)); optional initialAgent: { prompt? *(a blank/whitespace-only prompt reads as absent; the agent is still created — see "Initial-agent orchestration" in the notes)*, name?, model?, reasoningEffort? (string — creation-time effort; omitted inherits, blank clears; see notes), specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks? *(within v7.4, monorepo#3338: entries may carry an attachment-registry `attachmentId` reference instead of inline `data`, under the same exactly-one-of validation + registry check and daemon-side prompt-assembly resolution as `agent.sendMessage` — §5.5; a bad reference rejects `-32602` pre-side-effect)*, fileBlocks? *(v6.12; attachment references only since v10.0 — same per-entry validation as `agent.sendMessage`: every entry must carry a non-empty `attachmentId`, an entry carrying inline `data` or missing `attachmentId` is `-32602` naming the block index — §5.5)*, metadata? } — no `agentId`: agent IDs are server-assigned, and a request carrying `initialAgent.agentId` is rejected with `-32602` (see notes). Every `-32602` rejection is validated before any side effect (see "Pre-side-effect validation" in the notes) | { workspace: Workspace, initialAgent?: AgentLite, proposalOrigin? } — details below. |
 | workspace.update | workspaceId (req) + fields to change — the skip toggle uses the same wire names as create: skipIsolation? (canonical; deprecated alias skipWorktree?, either set ⇒ same behavior); the `workspace:updated { changes }` delta serializes it under the canonical skipIsolation name; `statusImageAssetId?: string \| null` is clearable (missing = untouched, `null` = clear, string = set — see the `statusImageAssetId` notes below); `label?: string \| null` is clearable the same way ([notes](#workspace-labels)); `autoArchiveDisabled?: boolean` ([notes](#auto-archive-opt-out)). A **collaborator** member may change only `title`, `tags`, `statusMessage`, `statusImageAssetId` — any other key is `-32003 { code: "forbidden", detail }` (§5.48). **Archive lifecycle delegation** ([intent-hq/intentd#2066](https://github.com/intent-hq/intentd/pull/2066)): the generic row write never touches `archived` / `archivedAt` and holds `status` while the row is archived — lifecycle state moves only through `workspace.archive` / `workspace.unarchive`. An update carrying `archived` and/or `status: "Archived"` / `"Active"` applies the other fields first, then delegates the flip to those paths: `archived: true` or `status: "Archived"` runs the full `workspace.archive` teardown (guests detached, open invites revoked, hooks / monitors / turns torn down); `archived: false`, or a non-archived `status` on an archived row, runs `workspace.unarchive`. The delegated path publishes the `{ archived, status, archivedAt }` delta itself (`archivedAt` is set by the archive/unarchive path, never by a generic update field), so the update's own `workspace:updated` delta has `archived` and `status` removed from it — both arrive only in the delegated lifecycle delta — and is skipped entirely when nothing else changed. A contradictory pair (e.g. `archived: true` + `status: "Active"`) is `-32602 { code: "invalid-params" }` and nothing is written | { workspace: Workspace } |
 | workspace.delete | workspaceId (req), undoDelayMs? *(v6.7)* | { success: true } — details below the table. |
 | workspace.cancelDelete *(v6.7)* | workspaceId (req) | { cancelled: boolean } — cancels a pending (grace-window) deletion scheduled by `workspace.delete` with `undoDelayMs`. `true` clears the pending deletion, emits `workspace:delete-cancelled { workspaceId }` (§6.5), and drops `pendingDeleteAt` from the row; `false` is the race-safe non-error when no deletion is pending (never scheduled, already cancelled, or already committed) |
@@ -1996,7 +1996,7 @@ attention is never fabricated.
    metadata read, not a transcript tail walk — modulo the one-time pre-upgrade fallback,
    §5.5 — and pendingness survives later user messages
    and agent turns) — or (c, new in intentd#945) the workspace
-   `attention` flag reads `review_required` — or (d, prepared, §5.56) a session has a
+   `attention` flag reads `review_required` — or (d, §5.56) a session has a
    pending secret request in the daemon's memory whose card was persisted at turn end
    (a request whose card was never persisted does not count). The cheap session-metadata check (attention
    requests) runs over every candidate first; pending-questions probes only
@@ -2519,7 +2519,7 @@ daemon never emits it. Support is detected by the `workspace.retire` method answ
 
 #### Pull request workspace lookup
 
-*(prepared, additive)* The daemon records which workspaces a pull request belongs
+*(additive)* The daemon records which workspaces a pull request belongs
 to, so a client can offer to open the workspace behind a PR link. Support is gated
 by the server hello capability `prWorkspaceLookup: 1`; clients must not call the
 method, or offer the action, without it.
@@ -2823,6 +2823,9 @@ validation"), when:
     repository or inside one; `repositoryRoot` names that repository's top level;
   - `"inside-workspaces-root"`: the path is the daemon workspaces root
     (`$INTENTD_WORKSPACES_DIR`, else `~/intent/workspaces`) or inside it;
+  - `"contains-workspaces-root"`: the folder contains a daemon workspaces root — the
+    daemon workspaces root above or the configured `workspace.worktreesLocation` (§5.12) —
+    for example the user's home folder;
   - `"not-a-directory"`: the path exists and is not a directory;
   - `"parent-missing"`: the path does not exist and neither does its parent.
 
@@ -2861,7 +2864,7 @@ fall back to its legacy non-git create path.
 
 #### GitLab project checkout
 
-**Prepared additive contract, protocol 13.5.** `workspace.create` accepts optional
+**Additive contract, protocol 13.5.** `workspace.create` accepts optional
 `repositoryCheckout` under the
 [`gitlabCheckout: 1` contract](repository-checkout.md#warming-and-exact-checkout).
 It contains the original `checkoutId` and `revision`, full `projectPath`, exact
@@ -2901,7 +2904,7 @@ GitHub cache behavior above does not authorize the new GitLab selection path.
 | workspace.repositoryContext | workspaceId, gitRootId?, repositoryLifetimeId | RepositoryContext |
 | workspace.repositoryContext.release | workspaceId, gitRootId?, repositoryLifetimeId | {released: true} |
 
-**Prepared additive contract.** Detect
+**Additive contract.** Detect
 [`server.capabilities.repositoryContext: 1`](client-hello.md#repository-context-capability)
 on the original physical connection before using it.
 
@@ -3070,7 +3073,7 @@ including reconciliation while capture awaits. Release uses that same connection
 | workspace.repositorySelection.reconcile | workspaceId, gitRootId?, selectionId | Original SelectionAttempt, without another write |
 | workspace.repositorySelection.release | workspaceId, gitRootId?, selectionId | {released: true} |
 
-**Prepared additive contract.** Detect
+**Additive contract.** Detect
 [`server.capabilities.repositorySelection: 1`](client-hello.md#repository-selection-capability)
 on the original confirmed physical connection before use. Availability and permission must be checked on that connection.
 

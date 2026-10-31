@@ -8,8 +8,8 @@ capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `15.3` — plain-folder workspaces, on top of 15.2's retired workspaces and 15.1's prepared discussions, guest roles, scoped repository pages and GitLab child Git policy; not a shipped-version claim.
-Other prepared extensions retain their independent support gates.
+**Documented version:** `15.3` — plain-folder workspaces, on top of 15.2's retired workspaces and 15.1's discussions, guest roles, scoped repository pages and GitLab child Git policy (intentd advertises all four at protocol 15.2); 15.3 is not a shipped-version claim.
+Every extension retains its independent support gate.
 
 **Version 15.3 — plain-folder workspaces (additive).**
 [Plain-folder workspaces](./methods/workspace.md#plain-folder-workspaces) work directly in
@@ -131,7 +131,7 @@ whether an Assistant chat settings-change card may change the setting. Older dae
 it. Clients then refuse card changes to daemon settings outside their own schema and keep
 their previous behavior for settings they map.
 
-**Version 15.1 — workspace discussions (additive, prepared).**
+**Version 15.1 — workspace discussions (additive).**
 [Workspace discussions](./methods/multiplayer.md#555-workspace-discussions) add
 `discussion.conversations`, `discussion.recipients`, `discussion.list`,
 `discussion.send`, `discussion.react`, `discussion:message`, and `discussion:reaction` for a default workspace-wide discussion
@@ -152,7 +152,7 @@ Discussion typing extends the existing `presence.update` and human roster
 shapes with transient, conversation-scoped `discussionTyping`, projected per
 recipient; typing adds no method or event type.
 Agent/daemon snapshots omit that field, and older rosters without it remain valid.
-The prepared `discussionAgentMessaging: 1` extension adds explicit per-message
+The `discussionAgentMessaging: 1` extension adds explicit per-message
 agent recipients and bound agent replies to workspace-wide discussions
 (named conversations additionally require `discussionManagement: 1`).
 Addressed agents may read that conversation's history on demand; other messages
@@ -160,13 +160,13 @@ never dispatch a turn automatically. Legacy private histories remain human-only 
 agent transcripts have workspace-wide visibility. This adds no router method or
 event type; agent tools use the existing conversation/list/send operations.
 Clients tolerate unsupported methods without sending to an agent instead. The
-documented surface, including prepared startup, generic stream recovery,
+documented surface, including startup, generic stream recovery,
 PR workspace lookup, provider profiles, discussion activity, and guest role additions,
 is now **474 / 416 / 58**
 (dispatchable / router / fast path). This reservation does not identify a carrying
 release or change independent capability gates.
 
-The prepared `discussionManagement: 1` extension adds `discussion.rename` and
+The `discussionManagement: 1` extension adds `discussion.rename` and
 `discussion.delete`, first-send `discussion.send { createConversation: true }`,
 optional conversation names, and `discussion:created`, `discussion:updated`,
 `discussion:deleted`. New conversations are workspace-wide; legacy direct/group
@@ -178,7 +178,7 @@ reactions and Stop/Retry with per-conversation grants. This coordinated change t
 unreleased Multiplayer Labs retains older capability gates, does not establish
 readiness, and reserves **474 / 416 / 58** dispatchable / router / fast-path names.
 
-The prepared [workspace guest role extension](./methods/multiplayer.md#workspace-guest-roles-prepared)
+The [workspace guest role extension](./methods/multiplayer.md#workspace-guest-roles)
 adds `workspace.members.setRole` under exact `workspaceGuestRoles: 1` on both
 discovery surfaces. `collaborator` remains the default wire role, displayed as
 Participant; owner-assigned `manager` grants scoped agent and saved-script
@@ -195,13 +195,13 @@ event type. The documented surface is now **478 / 420 / 58** (dispatchable /
 router / fast path). The pinned intentd implements it; this entry does not
 identify a carrying release.
 
-**Version 15.1 — scoped repository pages and GitLab child Git policy (additive, prepared).**
+**Version 15.1 — scoped repository pages and GitLab child Git policy (additive).**
 This extension builds on protocol 15.0 without restoring legacy workspace import
-or replacing startup readiness and script or monitor list semantics. The [scoped resource-read contract](./methods/repository-resources.md#prepared-project-pages-and-discussions)
+or replacing startup readiness and script or monitor list semantics. The [scoped resource-read contract](./methods/repository-resources.md#project-pages-and-discussions)
 adds six operations: `sourceControl.read.captureScoped`,
 `sourceControl.read.detailScoped`, `sourceControl.read.releaseScoped`,
 `sourceControl.read.resolveKnownRepository`, `sourceControl.read.list` and
-`sourceControl.read.discussions`. The [owner-only child Git policy](./methods/settings.md#prepared-gitlab-child-git-credential-policy)
+`sourceControl.read.discussions`. The [owner-only child Git policy](./methods/settings.md#gitlab-child-git-credential-policy)
 adds `sourceControl.gitlab.childGit.get` and `sourceControl.gitlab.childGit.set`.
 
 Require exactly `repositoryResourcePages: 1` or `gitlabChildGitPolicy: 1`, as
@@ -214,7 +214,7 @@ including the private invalidation/retirement feed. Child Git policy retains its
 owner-only binding and defaults; native Git remains independent of that policy.
 
 These eight router operations extend the documented surface to **464 / 406 / 58**
-(dispatchable / router / fast path), including other independently prepared
+(dispatchable / router / fast path), including other independently gated
 additions. The private `sourceControl.read.invalidated` notification shares the
 original resource-read retirement feed; it is not a global event subscription.
 Catalog inclusion does not identify a carrying release, advance component pins
@@ -277,7 +277,7 @@ list-row preview cap). A list-shaped `AgentLite` row carries
 can mark the text as a prefix or read the uncapped value with `agent.get`. Older daemons
 omit the flags; clients must not read their absence as proof a value is complete.
 
-**Worker observation stop and Claude support (prepared amendment).** The
+**Worker observation stop and Claude support (amendment).** The
 [worker observation contract (§5.5b)](./methods/agent-workers.md) reserves the router
 method `agent.workers.stop` and reclassifies `agent.workers.subscribe` from a router
 method to a fast-path method (it holds per-connection subscription state, like
@@ -310,14 +310,13 @@ block gains `skipped` and `skippedNames`, `MergeRequirements.checks` and the mon
 readiness. Previously skipped runs counted as passed (intentd#2581, run 39724275631).
 Older daemons omit the new keys and count skipped runs as `passed`.
 
-**PR workspace lookup (additive, prepared).** The
-[PR workspace lookup](./methods/workspace.md#pull-request-workspace-lookup) reserves
+**PR workspace lookup (additive).** The
+[PR workspace lookup](./methods/workspace.md#pull-request-workspace-lookup) adds
 the read-only router method `workspace.findByPullRequest`, bringing the documented
-surface, including the prepared discussions and provider profiles, to
+surface, including the discussion and provider-profile reservations of the time, to
 **460 / 403 / 57**
 (dispatchable / router / fast path). The server hello
-capability `prWorkspaceLookup: 1` gates support. No shipped numeric version is
-claimed here.
+capability `prWorkspaceLookup: 1` gates support. No numeric version is assigned.
 
 **Version 14.1 — startup readiness (additive).** The [startup contract](./startup-readiness.md)
 adds `system.startupStatus` and numeric error `-32012`, with exact
@@ -327,8 +326,8 @@ Store or grant guest access to owner progress. The daemon implementation uses
 counts including this addition were **450 / 393 / 57** (dispatchable / router /
 fast path); the version-specific counts below describe their original deltas.
 
-**Version 14.0 — active-only script and monitor lists (breaking, prepared).**
-The [replacement contract](./methods/scripts.md#active-only-compact-lists-prepared-breaking-contract)
+**Version 14.0 — active-only script and monitor lists (breaking).**
+The [replacement contract](./methods/scripts.md#active-only-compact-lists-protocol-14-breaking-contract)
 adds script.get and scriptMonitor.get, optional bounded summary pages, and removes
 archived list selection and terminal monitor storage/history reads. Exact gates
 are `scriptActiveLists: 1` and `scriptMonitors: 2`. Earlier unshipped 13.11 /
@@ -352,8 +351,8 @@ unshipped summary/history reservations need no production removal. Daemon before
 frontend merge and a coordinated carrying release are required. An older daemon remains unsupported for these new list features;
 known-ID status/output may still be used. This draft grants no merge permission.
 
-**Prepared truncated note reads (independently gated additive extension).**
-[Truncated note reads](./methods/notes-tasks.md#truncated-note-reads-prepared-additive-contract)
+**Truncated note reads (independently gated additive extension).**
+[Truncated note reads](./methods/notes-tasks.md#truncated-note-reads-additive-contract)
 add the optional `maxContentBytes` param to `note.get` and `note.subscribe`, the
 `contentTruncated` / `contentBytes` response markers and the `baseContentBytes`
 whole-content write guard (`-32602` `content-base-mismatch`).
@@ -362,10 +361,10 @@ The method catalog, event catalog, surface counts and documented protocol versio
 are unchanged; requests without the new params are byte-identical.
 Catalog inclusion does not identify a carrying release.
 
-**Prepared generic stream recovery (independently gated additive extension).**
+**Generic stream recovery (independently gated additive extension).**
 [`eventStreamRecovery: 1`](./event-stream-recovery.md) adds an opt-in/ack to
 `events.subscribe`, the socket-private `events.lost` notification and the
-`events.fence` fast-path method. The prepared surface is **451 / 393 / 58**
+`events.fence` fast-path method. The documented surface is **451 / 393 / 58**
 (dispatchable / router / fast path); domain event catalog and current advertised
 protocol version are unchanged.
 Exact capability and lease negotiation gate adoption, including bounded recovery
@@ -386,17 +385,17 @@ projections (`notePageState` snapshots), and the `notePagingRead`,
 and `note-index-*` error codes. intentd removed the paging system
 ([intent-hq/intentd#2588](https://github.com/intent-hq/intentd/pull/2588)) and the
 reservation is withdrawn; clients that must bound large note loads use the
-[truncated note read contract](./methods/notes-tasks.md#truncated-note-reads-prepared-additive-contract).
+[truncated note read contract](./methods/notes-tasks.md#truncated-note-reads-additive-contract).
 
-**Version 13.8 — selected checkout configuration (additive, prepared).**
+**Version 13.8 — selected checkout configuration (additive).**
 Adds `sourceControl.checkout.repoConfig` and `gitlabCheckoutRepoConfig: 1` for a
 fixed `.intent/config.json` read at an observed immutable SHA. The original
 checkout capability and authority remain required. Missing config is distinct
 from unavailable reads; old clients and old-daemon fallback remain compatible.
-See the [configuration contract](./methods/repository-checkout.md#selected-repository-configuration-prepared-protocol-138).
+See the [configuration contract](./methods/repository-checkout.md#selected-repository-configuration-protocol-138).
 
-**Version 13.7 — checkout owner avatars (additive, prepared).**
-The [owner-avatar extension](./methods/repository-checkout.md#owner-avatar-extension-prepared-protocol-137)
+**Version 13.7 — checkout owner avatars (additive).**
+The [owner-avatar extension](./methods/repository-checkout.md#owner-avatar-extension-protocol-137)
 adds optional `includeOwnerAvatar` to checkout capture and optional
 `ownerAvatarUrl` to its project page/detail projection. Exactly integer
 `gitlabCheckoutOwnerAvatar: 1` on the original connection permits the opt-in;
@@ -420,7 +419,7 @@ their independent gates, and discovery remains unchanged. The documented surface
 is now **443 / 387 / 56** (dispatchable / router / fast path). This reservation
 does not advertise runtime implementation or change the pinned daemon version.
 
-**Version 13.5 — GitLab project checkout (additive, prepared).**
+**Version 13.5 — GitLab project checkout (additive).**
 [Pre-workspace checkout](./methods/repository-checkout.md) adds six router methods:
 `sourceControl.checkout.capture`, `projects`, `project`, `branches`, `warm` and
 `release`. `workspace.create.repositoryCheckout` carries the original checkout
@@ -440,51 +439,51 @@ methods are separately prepared. Neither count establishes support or a carrying
 desktop release. Earlier version snapshots below remain historical rather than
 live count assertions.
 
-**Version 13.4 — submission correlation (additive, prepared).**
-[Submission correlation and optimistic display](./methods/agents.md#submission-correlation-and-optimistic-display-prepared-additive-extension)
+**Version 13.4 — submission correlation (additive).**
+[Submission correlation and optimistic display](./methods/agents.md#submission-correlation-and-optimistic-display-additive-extension)
 adds optional queue `messageId`, public `submissionIds` on queue/reply/delivery
 surfaces, per-source `recoverySources` for combined retries and daemon-computed
 `mergeEligible` on full queue snapshots (false on draining overlays). Advertise
 `submissionCorrelation: 1` only for complete trusted, persisted end-to-end support;
 clients accept exactly integer `1`, independently of protocol version. This
-allocation follows the prepared Home 13.2 and GitLab 13.3 reservations; advertising
+allocation follows the Home 13.2 and GitLab 13.3 reservations; advertising
 13.4 does not imply either extension is implemented. Discover each surface under
 its independent capability and permission rules. No method/event names or catalog
 counts change: the documented surface remains **435 / 380 / 55**, while submission
 correlation alone leaves the 13.1 implementation's **404 / 349 / 55** unchanged.
-These prepared docs make no shipping claim.
+intentd advertises `submissionCorrelation: 1`.
 
-**Invitation account search (additive, prepared).** `host.invite.searchAccounts`
+**Invitation account search (additive).** `host.invite.searchAccounts`
 (§5.49) adds bounded public suggestions for GitHub and the selected GitLab host.
 `client.hello.server.capabilities.invitationAccountSearch: 1` advertises support;
 older daemons retain manual invitation account entry. Search never replaces
 create-time identity pinning or owner authorization. This is one additional router
 method; the historical version counts below describe their respective snapshots.
 
-**Version 13.3 — GitLab repository extension (additive, prepared).** The catalog adds
+**Version 13.3 — GitLab repository extension (additive).** The catalog adds
 thirteen router methods: repository context capture/read/release, selection
 capture/save/reset/reconcile/release, native review reconcile/release, and explicit
 resource capture/detail/release. This brings the documented surface, including
-other prepared additions, to **435 / 380 / 55** (dispatchable / router / fast path).
+other additions documented at the time, to **435 / 380 / 55** (dispatchable / router / fast path).
 Four retirement controls are private to the original connection; they are not
 global event subscriptions. `repositoryContext: 1`, `repositorySelection: 1`,
 `nativeReview: 1`, `nativeReviewCompanion: 1` and `repositoryResourceRead: 1` gate
 their respective complete contracts independently. The companion extends existing
 qualified preparation/execution without adding another method or notification.
-These docs lead the component pin and make no installed-version claim. Earlier
+intentd implements all five contracts. Earlier
 experimental 10.10–10.14 labels for this work are not public compatibility gates;
 existing protocol history and retired methods remain unchanged.
-The separately prepared Home 13.2 additions below are not implied by a daemon
+The separately gated Home 13.2 additions below are not implied by a daemon
 advertising 13.3: discover each surface as its own contract specifies. Relative
 to the 13.1 implementation's 404 / 349 / 55, these thirteen additions alone yield
 417 / 362 / 55; the documented 435 / 380 / 55 also includes eighteen independently
-prepared methods. Neither count substitutes for capability and permission checks.
+gated methods. Neither count substitutes for capability and permission checks.
 
-**Version 13.2 — Home backend prerequisites (additive, prepared).**
+**Version 13.2 — Home backend prerequisites (additive).**
 Adds `github.pulls.checks`, `github.pulls.reviews`, and `github.pulls.files`
 (§5.27): three read-only router methods, for **407 / 352 / 55** implemented
-dispatchable / router / fast-path names once the backend lands. Including other
-prepared additions the documented surface is **422 / 367 / 55**. Owner-wide
+dispatchable / router / fast-path names. Including other additions documented at
+the time, the documented surface was **422 / 367 / 55**. Owner-wide
 `github.pulls.search({org, ...})` and optional `Workspace.lastContentActivity`
 extend existing shapes; older daemons cannot serve those additions. Exact PR-head
 checkout is a behavior fix to workspace creation, with no additional method.
@@ -548,7 +547,7 @@ below remains prepared, independently capability-gated; advertising 11.3
 does not claim platform scheduling or any other prepared feature is implemented.
 
 **Version 11.2 — self-contained script changes.**
-[`script:changed` (§5.8)](./methods/scripts.md#self-contained-script-changes-prepared-additive-extension)
+[`script:changed` (§5.8)](./methods/scripts.md#self-contained-script-changes-additive-extension)
 adds optional `data.script` as a complete list-row snapshot on create/update,
 including runtime, archive metadata and latest result. Removal keeps its existing
 ID-only shape. Consumers presence-detect each valid snapshot and apply it without
@@ -624,23 +623,18 @@ because 6 was never released, so a version-6-only peer gets
 is claimed by these docs; allocate it against daemon main before
 implementation merges, and land daemon protocol consumers before frontend ones.
 
-**Prepared command-default change — recommended 11.0, not shipped.**
-[Script creation defaults (§5.8)](./methods/scripts.md#command-creation-defaults-prepared-breaking-change)
+**Command-default change (breaking).**
+[Script creation defaults (§5.8)](./methods/scripts.md#command-creation-defaults-breaking-change)
 change omission on a new command from `saved` to `oneOff`; new services remain
 saved. Upserts preserve stored purpose when omitted, and legacy hydration/import
 still defaults to saved. Reusable and autostart command creators must send
 explicit `saved`; omitted-purpose new autostart commands now fail validation.
 This breaks an existing request's retention/acceptance behavior, so recommend the
 next major under the compatibility policy, despite unchanged methods and fields.
-Allocate against daemon main before merge. `scriptLifecycle: 1` alone cannot
-identify the default generation; explicit purpose is portable across supporting
-daemons. No capability or version claim here establishes release or deployment.
-
-Land the prepared contract first so reviewers can verify component expectations;
-there are no catalog additions/removals requiring count changes. Then land the
-daemon change before the frontend change, with human authorization for every
-merge. Automation owns subsequent pins and the generated MCP index. This change
-neither upgrades clients nor reclassifies existing workspace definitions.
+intentd implements it. `scriptLifecycle: 1` alone cannot identify the default
+generation; explicit purpose is portable across supporting daemons. There are no
+catalog additions/removals requiring count changes. This change neither upgrades
+clients nor reclassifies existing workspace definitions.
 
 **Version 10.11 — script lifecycle (additive, implemented candidate).** The
 [script lifecycle extension (§5.8)](./methods/scripts.md#saved-scripts-and-one-off-history-protocol-13-baseline)
@@ -1615,7 +1609,7 @@ them on demand. The `noteIds` param shape is unchanged.
 
 The method surface is enforced by golden tests in `crates/intent-transport/src/catalog.rs`. Any drift (added, removed, or renamed methods) causes CI failure with the instruction: "Update ROUTER_METHODS in catalog.rs, update docs/protocol/05-method-catalog.md, and bump the protocol version." Additive response fields on an existing method (e.g., the optional `system.status` resource fields, §5 fast-path notes) do not change the golden-test-enforced catalog and ship within the current version; clients must detect them by **presence**, not by protocol version.
 
-The prepared `discussionAgentActivity: 1` extension adds per-message/recipient
+The `discussionAgentActivity: 1` extension adds per-message/recipient
 activity and selected mention snapshots, transient `discussion:activity`, and
 human-only `discussion.stopAgent` / `discussion.retryAgent`. The attempt fences
 controls; the version orders event, response, and history races. Legacy messages

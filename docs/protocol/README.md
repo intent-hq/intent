@@ -17,7 +17,7 @@ agent extension covers the default discussion; `discussionManagement: 1` extends
 it to named workspace-wide conversations, with per-conversation grants. Older daemons may
 reject its methods.
 
-The [compact script list contract](./methods/scripts.md#active-only-compact-lists-prepared-breaking-contract)
+The [compact script list contract](./methods/scripts.md#active-only-compact-lists-protocol-14-breaking-contract)
 requires `scriptActiveLists: 1` and `scriptMonitors: 2`; archived lists and terminal monitor history are removed. Known-ID output and full lifecycle events remain available.
 
 The [onboarding adapter preparation request](./05-method-catalog.md#hostprepareprovideradapters-136-prepared) adds an owner-only, best-effort background optimization. Clients tolerate an unsupported method; it adds no capability flag and does not establish support for the independently gated extensions above.
@@ -94,11 +94,11 @@ and is gated by `remoteMachines: 1`
 | §5.4 `task.*` | [methods/notes-tasks.md](./methods/notes-tasks.md) |
 | §5.5 `agent.*` | [methods/agents.md](./methods/agents.md) |
 | §5.5a `sandbox.cow.*` (CoW agent sandboxes) | [methods/agents.md](./methods/agents.md) |
-| §5.5b Worker observations (prepared) | [methods/agent-workers.md](./methods/agent-workers.md) |
+| §5.5b Worker observations | [methods/agent-workers.md](./methods/agent-workers.md) |
 | §5.6 `git.*` | [methods/git.md](./methods/git.md) |
 | §5.7 `pr.*` | [methods/pr.md](./methods/pr.md) |
 | §5.8 `script.*` | [methods/scripts.md](./methods/scripts.md) |
-| §5.8a Script run monitors (prepared) | [methods/script-monitors.md](./methods/script-monitors.md) |
+| §5.8a Script run monitors | [methods/script-monitors.md](./methods/script-monitors.md) |
 | §5.9 `browser.*`, `terminal.*`, `file.*` | [methods/files-terminal-browser.md](./methods/files-terminal-browser.md) |
 | §5.10 `event.*` (query/aggregation) | [methods/events-query.md](./methods/events-query.md) |
 | §5.11 `crossWorkspace.*`, `primitive.*`, `specialist.*`, `repo.*` | [methods/misc-namespaces.md](./methods/misc-namespaces.md) |
@@ -142,10 +142,10 @@ and is gated by `remoteMachines: 1`
 | §5.49 Shared host membership, scoped invitations, collaboration identity and personal pairing | [methods/shared-host-membership.md](./methods/shared-host-membership.md) |
 | §5.50 Static/local nodes, placement, hub merge/discard/publish and CoW retirement (prepared) | [methods/nodes.md](./methods/nodes.md) |
 | §5.51 Desktop control (macOS and Windows) | [methods/desktop.md](./methods/desktop.md) |
-| §5.52 Explicit GitLab resource reads (prepared) | [methods/repository-resources.md](./methods/repository-resources.md) |
-| §5.53 GitLab project checkout (prepared) | [methods/repository-checkout.md](./methods/repository-checkout.md) |
+| §5.52 Explicit GitLab resource reads | [methods/repository-resources.md](./methods/repository-resources.md) |
+| §5.53 GitLab project checkout | [methods/repository-checkout.md](./methods/repository-checkout.md) |
 | §5.54 Provider profiles (prepared) | [methods/provider-profiles.md](./methods/provider-profiles.md) |
-| §5.55 Workspace discussions (prepared) | [methods/multiplayer.md](./methods/multiplayer.md#555-workspace-discussions) |
+| §5.55 Workspace discussions | [methods/multiplayer.md](./methods/multiplayer.md#555-workspace-discussions) |
 | §5.56 Secret requests | [methods/secrets.md](./methods/secrets.md) |
 | MCP `ws.*` binding signature index (generated; not wire-routable) | [methods/mcp-bindings.md](./methods/mcp-bindings.md) |
 
@@ -407,7 +407,7 @@ but do not establish that a not-yet-landed counterpart pin passes.
 
 The [explicit GitLab resource-read contract](./methods/repository-resources.md)
 covers a specified merge request or issue on an already configured instance,
-independent of the workspace's default review project. These prepared additions
+independent of the workspace's default review project. These additions
 use the daemon's shared detail caches and require the original connection's
 `repositoryResourceRead: 1` capability. The catalog includes their three methods;
 documentation and version numbers alone do not establish deployed availability.

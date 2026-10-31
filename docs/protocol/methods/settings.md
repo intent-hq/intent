@@ -339,12 +339,12 @@ settings must name the same authority; for example, `host: "gitlab.example:8443"
 and `instanceBaseUrl: "https://gitlab.example:8443/forge"`. The prefix is part of
 repository and credential identity, not a project namespace. The separate
 `sourceControl.gitlab.apiBaseUrl` transport override cannot supply or change this
-logical identity. The [prepared checkout contract](repository-checkout.md)
+logical identity. The [checkout contract](repository-checkout.md)
 retains the exact instance and credential continuity through browsing, warming
 and native creation; a same-host prefix change is not authority to reuse the
 previous connection.
 
-The [prepared full-instance auth operations](integrations.md#full-instance-gitlab-authentication-prepared-v135)
+The [full-instance auth operations](integrations.md#full-instance-gitlab-authentication-v135)
 accept this root as `instanceBaseUrl`. A successful PAT or device connection
 publishes host and root together; clients must not perform two independent
 settings writes to emulate connection setup.
@@ -637,17 +637,17 @@ The desktop client no longer has a Multiplayer preference: the retired
 `labs:multiplayerEnabled` key was never a daemon setting or permission, and
 collaboration UI visibility follows server capabilities and role only.
 
-### Prepared GitLab child Git credential policy
+### GitLab child Git credential policy
 
-The prepared [protocol 15.1](../versioning.md) per-connection GitLab policy
+The [protocol 15.1](../versioning.md) per-connection GitLab policy
 controls use of Intent's managed Git credential helper by agents and terminals.
 Only the connected host's owner may
 change it; member access to repositories, checkout or workspace operations does
-not grant permission to enable the helper or manage credentials. This prepared
+not grant permission to enable the helper or manage credentials. This
 policy does not extend the existing GitHub-only `GitCredentialPolicy` projection
 above or imply that older daemons expose a GitLab policy control.
 
-The separate prepared capability is `gitlabChildGitPolicy: 1` on the original
+The separate capability is `gitlabChildGitPolicy: 1` on the original
 connection. `sourceControl.gitlab.childGit.get` accepts an empty params object
 `{}`; `sourceControl.gitlab.childGit.set` accepts exactly `binding` and Boolean
 `enabled`. These operations are not an arbitrary `settings.update` path, a
@@ -680,7 +680,7 @@ The illustrative explicit write is:
 {"jsonrpc":"2.0","id":222,"method":"sourceControl.gitlab.childGit.set","params":{"binding":{"instanceBaseUrl":"https://gitlab.example:8443/gitlab","connection":{"connectionId":"original-connection-example","accountId":"account-example","connectionGeneration":"7"},"revision":"policy-example"},"enabled":true}}
 ```
 
-The prepared response union is `connected` with exactly `binding`, `enabled`
+The response union is `connected` with exactly `binding`, `enabled`
 and `effective`, or `unavailable` with exactly `reason`. Both connected flags
 are Booleans. Display the returned effective state independently of the stored
 choice; do not infer it from connected authentication or an earlier write.

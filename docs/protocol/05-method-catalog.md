@@ -17,15 +17,15 @@ The 10.11 [script lifecycle candidate (§5.8)](./methods/scripts.md#saved-script
 implements archive/restore ahead of the monorepo pin; `scriptLifecycle: 1`
 advertises complete support, not catalog presence or a numeric version alone.
 
-The prepared [command creation default change (§5.8)](./methods/scripts.md#command-creation-defaults-prepared-breaking-change)
+The [command creation default change (§5.8)](./methods/scripts.md#command-creation-defaults-breaking-change)
 changes omitted purpose for new commands to `oneOff`, retaining stored upsert and
-legacy hydration defaults. It changes no catalog names or counts and makes no
-shipped-version claim; `scriptLifecycle: 1` alone does not distinguish defaults.
+legacy hydration defaults. It changes no catalog names or counts;
+`scriptLifecycle: 1` alone does not distinguish defaults.
 
-The prepared [worker observation contract (§5.5b)](./methods/agent-workers.md)
+The [worker observation contract (§5.5b)](./methods/agent-workers.md)
 adds a list, a subscription and a provider-mediated stop; `agentWorkers: 1` gates support.
 
-The prepared [compact script list contract](./methods/scripts.md#active-only-compact-lists-prepared-breaking-contract)
+The [compact script list contract](./methods/scripts.md#active-only-compact-lists-protocol-14-breaking-contract)
 adds `script.get` and `scriptMonitor.get`, plus optional bounded summary views on
 the existing lists under `scriptActiveLists: 1` / `scriptMonitors: 2`. Protocol 14 removes archived list selection and terminal monitor history; full event payloads remain unchanged.
 
@@ -33,13 +33,13 @@ The [desktop control contract (§5.51)](./methods/desktop.md) adds four
 user/executor router methods and one daemon-only reverse RPC. Agent lifecycle
 and actions are MCP-only; `desktopControl: 1` gates support independently at both ends.
 
-The prepared [GitLab checkout contract (§5.53)](./methods/repository-checkout.md)
+The [GitLab checkout contract (§5.53)](./methods/repository-checkout.md)
 adds six original pre-workspace router methods, plus the independently gated
 `sourceControl.checkout.repoConfig` read (`gitlabCheckoutRepoConfig: 1`). `gitlabCheckout: 1` gates the complete
 contract on the selected destination; it does not confer host or project access.
 
-The prepared [PR workspace lookup](./methods/workspace.md#pull-request-workspace-lookup)
-adds one read-only router method, `workspace.findByPullRequest`, ahead of the pin.
+The [PR workspace lookup](./methods/workspace.md#pull-request-workspace-lookup)
+adds one read-only router method, `workspace.findByPullRequest`.
 `prWorkspaceLookup: 1` gates support.
 
 The [retired workspace state](./methods/workspace.md#retired-workspaces) (protocol 15.2)
@@ -54,11 +54,11 @@ The prepared [startup readiness contract](./startup-readiness.md) adds owner-onl
 `system.startupStatus` and a restricted pre-Store bootstrap dispatcher. Ordinary
 hello does not succeed until ready; `startupStatus: 1` gates the full contract.
 
-The prepared [generic stream recovery contract](./event-stream-recovery.md) adds
+The [generic stream recovery contract](./event-stream-recovery.md) adds
 one fast-path method, `events.fence`, under `eventStreamRecovery: 1`. Its bulk-lane
 response brackets recovery reads with actual event-delivery boundaries.
 
-The prepared [workspace discussion contract (§5.55)](./methods/multiplayer.md#555-workspace-discussions)
+The [workspace discussion contract (§5.55)](./methods/multiplayer.md#555-workspace-discussions)
 adds workspace-scoped router methods for conversation discovery, history and
 message actions, gated by exactly integer
 `discussionConversations: 1`. Replies and reactions additionally require
@@ -79,14 +79,14 @@ Its transient typing indicators extend existing presence parameters and human
 roster rows without adding another method or event type (§5.47).
 Older daemons reject these methods with `-32601`; no agent chat fallback is allowed.
 
-The prepared [workspace guest role contract](./methods/multiplayer.md#workspace-guest-roles-prepared)
+The [workspace guest role contract](./methods/multiplayer.md#workspace-guest-roles)
 adds one owner-authorized router method, `workspace.members.setRole`, under exact
 `workspaceGuestRoles: 1`. The `manager` role grants scoped agent and saved-script
 controls while preserving the existing Participant default and full-management boundary.
 
-The prepared [protocol 15.1 scoped resource reads](./methods/repository-resources.md#prepared-project-pages-and-discussions)
+The [protocol 15.1 scoped resource reads](./methods/repository-resources.md#project-pages-and-discussions)
 add six router methods and one socket-private invalidation notification. The
-[owner-only child Git policy](./methods/settings.md#prepared-gitlab-child-git-credential-policy)
+[owner-only child Git policy](./methods/settings.md#gitlab-child-git-credential-policy)
 adds two router methods. Require `repositoryResourcePages: 1` and
 `gitlabChildGitPolicy: 1` for their respective contracts; legacy detail reads
 retain `repositoryResourceRead: 1`. Neither capability grants authority or
@@ -109,21 +109,20 @@ The documented surface reserves **486 dispatchable method names** across the fol
 
 Additionally, the protocol includes:
 
-- **Server→client notifications:** 7 notifications: prepared `events.lost` ([loss contract](./event-stream-recovery.md)), `events.event` (§6.3) and the socket-private `workspace.repositoryContext.retired`, `workspace.repositorySelection.retired`, `accept-changes.retired`, `sourceControl.read.retired`, `sourceControl.read.invalidated` controls (§6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
+- **Server→client notifications:** 7 notifications: `events.lost` ([loss contract](./event-stream-recovery.md)), `events.event` (§6.3) and the socket-private `workspace.repositoryContext.retired`, `workspace.repositorySelection.retired`, `accept-changes.retired`, `sourceControl.read.retired`, `sourceControl.read.invalidated` controls (§6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
 - **Client-served reverse RPCs:** 6 methods total — 2 are **dual-role** and counted within the 486 dispatchable names (`browser.exec`, `host.openInEditor`), and 4 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) — see §5.9, §5.14 and the reverse-RPC list below
 
 **Total:** 486 dispatchable names + 7 notifications. Of the 6 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 4 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
 The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.56) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
 
-**Prepared GitLab repository additions:** the [repository context and selection
+**GitLab repository additions:** the [repository context and selection
 contracts](methods/workspace.md#repository-context), [native review and commit
 companion](methods/change-tracking.md#native-review-preparation-and-receipts),
 and [explicit resource reads](methods/repository-resources.md) add thirteen router
 methods and four socket-private control notifications. Their individual hello
 capabilities gate support; catalog entries do not grant permission or establish
-which desktop release contains the feature. The methods below lead the component
-pin, while all existing methods and prepared extensions remain present.
+which desktop release contains the feature. All existing methods remain present.
 
 ### Router methods by namespace (428 total)
 
@@ -167,13 +166,13 @@ pin, while all existing methods and prepared extensions remain present.
 | rules | 3 | get, list, update |
 | sandbox | 2 | cow.discard, cow.merge |
 | script | 12 | archive, create, get, list, output, remove, restart, restore, run, start, status, stop |
-| scriptMonitor | 4 | cancel, cancelRun, get, list — prepared script run monitors (§5.8a); registration is MCP-only |
+| scriptMonitor | 4 | cancel, cancelRun, get, list — script run monitors (§5.8a); registration is MCP-only |
 | search | 7 | cancel, codebase, events, fileNames, inFiles, messages, notes |
 | secret | 4 | dismiss, forget, list, provide — secret requests (§5.56); values held in daemon memory only, request creation is MCP-only |
 | sentry | 8 | assignIssue, authStatus, getIssue, ignoreIssue, listIssues, listProjects, resolveIssue, searchIssues |
 | settings | 4 | get, list, reset, update |
 | skill | 1 | list |
-| sourceControl | 25 | authStatus, cancelAuth, checkout.branches, checkout.capture, checkout.project, checkout.projects, checkout.release, checkout.repoConfig, checkout.warm, connect, getUser, gitlab.childGit.get, gitlab.childGit.set, identityProof.create, identityProof.delete, read.capture, read.captureScoped, read.detail, read.detailScoped, read.discussions, read.list, read.release, read.releaseScoped, read.resolveKnownRepository, revoke — the provider-generic forge auth surface (§5.27 "Provider-generic auth — `sourceControl.*`"; v10.5, daemon-global; optional routing-only `workspaceId` on `authStatus` / `getUser` only) plus, in v10.8, the provider-generic guest half of the invite identity proof (`identityProof.create` / `identityProof.delete`, §5.27 "Identity proof"; `github.identityProof.*` are their `provider: "github"` aliases, separate dispatchable names like the auth rows). The `github.authStatus` / `connect` / `cancelAuth` / `revoke` / `getUser` rows of the `github` namespace are aliases of these with `provider: "github"` pinned; they remain separate dispatchable names (not `METHOD_ALIASES` entries) because their result shapes are the byte-identical pre-v10.5 projections. The seven prepared `checkout.*` methods (§5.53) require an explicit destination and original connection, without workspace routing |
+| sourceControl | 25 | authStatus, cancelAuth, checkout.branches, checkout.capture, checkout.project, checkout.projects, checkout.release, checkout.repoConfig, checkout.warm, connect, getUser, gitlab.childGit.get, gitlab.childGit.set, identityProof.create, identityProof.delete, read.capture, read.captureScoped, read.detail, read.detailScoped, read.discussions, read.list, read.release, read.releaseScoped, read.resolveKnownRepository, revoke — the provider-generic forge auth surface (§5.27 "Provider-generic auth — `sourceControl.*`"; v10.5, daemon-global; optional routing-only `workspaceId` on `authStatus` / `getUser` only) plus, in v10.8, the provider-generic guest half of the invite identity proof (`identityProof.create` / `identityProof.delete`, §5.27 "Identity proof"; `github.identityProof.*` are their `provider: "github"` aliases, separate dispatchable names like the auth rows). The `github.authStatus` / `connect` / `cancelAuth` / `revoke` / `getUser` rows of the `github` namespace are aliases of these with `provider: "github"` pinned; they remain separate dispatchable names (not `METHOD_ALIASES` entries) because their result shapes are the byte-identical pre-v10.5 projections. The seven `checkout.*` methods (§5.53) require an explicit destination and original connection, without workspace routing |
 | specialist | 5 | create, delete, edit, get, list |
 | stats | 2 | getRateHistory, getUsage — `getRateHistory` is daemon-global (§5.39; v2.9, no `workspaceId`) |
 | system (router) | 1 | capabilities — machine-level capabilities, optional routing-only workspaceId; distinct from the `system.*` fast-path controls below (v2.3, see the note after the fast-path catalog) |

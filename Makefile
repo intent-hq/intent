@@ -258,7 +258,10 @@ check-protocol-status-labels: ensure-intentd-submodule ## Check that docs/protoc
 	@node --test scripts/check-protocol-status-labels.test.mjs
 	@node scripts/check-protocol-status-labels.mjs --intentd-dir "$(INTENTD_DIR)"
 
-docs-check: event-catalog-check check-mcp-bindings check-protocol-fixture-tests check-protocol-status-labels ## Check documented development targets, knobs, remote-host guidance, protocol-doc line lengths, protocol table cell counts, every protocol fixture test, and protocol status labels against the pinned intentd capabilities
+# check-doc-links is a prerequisite so a local docs-check gives the answer of
+# the ci.yml docs-check job's doc link check before a push (PR #8244 passed
+# locally, then failed CI on placeholder paths read as real ones).
+docs-check: event-catalog-check check-mcp-bindings check-protocol-fixture-tests check-protocol-status-labels check-doc-links ## Check documented development targets, knobs, remote-host guidance, doc links, protocol-doc line lengths, protocol table cell counts, every protocol fixture test, and protocol status labels against the pinned intentd capabilities
 	@scripts/docs-check.sh
 	@node scripts/check-doc-line-length.mjs
 	@node --test scripts/check-doc-line-length.test.mjs
