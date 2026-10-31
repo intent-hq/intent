@@ -2244,7 +2244,7 @@ Frames are those of the [single-node link](#frames), with these changes:
 | `capabilities` | backend → machine | New, control lane, empty body: ask for a fresh report |
 | `capabilitiesReply` | machine → backend | New, control lane: `capabilities: MachineCapabilities` |
 | `stop` | backend → machine | Protocol 7: adds the required `stopId`; see [stop acknowledgement](#stop-acknowledgement-nodeprotocol-7) |
-| `stopAck` | machine → backend | New in protocol 7, control lane: `acks: StopAckEntry[]` |
+| `stopAck` | machine → backend | New in protocol 7, control lane: `stopId`, `agentId`, `outcome` |
 
 The executor credential admits exactly these link requests, enumerated in one
 constant with a golden test: `hello`, `heartbeat` / `heartbeatReply`, `launch`,
@@ -2276,36 +2276,37 @@ that is not a UUID, is `node-link-protocol`.
 **Acknowledgement frame.**
 
 ```ts
-interface StopAckFrame { type: "stopAck"; acks: StopAckEntry[] } // 1 to 256 entries
-interface StopAckEntry {
+interface StopAckFrame {
+  type: "stopAck";
   stopId: string;                       // echoed from the stop
   agentId: string;                      // echoed from the stop
   outcome: "stopped" | "not-running";
 }
 ```
 
-The machine sends an entry once the stop is applied for that agent on the
-binding that received it:
+The machine sends one `stopAck` per received `stop`, once that stop is applied
+for the agent on the binding that received it:
 
 - `stopped`: the agent was running; its provider process (with its process
   group) has exited and the agent is gone from the binding's running set.
   The machine appends the agent's `exited` journal record before it sends this
-  ack.
+  ack, but the two travel on different lanes, so the backend may receive them
+  in either order.
 - `not-running`: the agent was not running on this binding when the stop was
   applied: it had already exited, was never launched there, or is unknown to
-  the machine. The machine stops nothing and appends no journal record.
+  the machine. The machine stops nothing, appends no journal record and acks at
+  once.
 
 Either outcome tells the backend the same thing: after the ack, the agent has no
-process on the machine for this binding. The machine may batch entries for
-several stops into one frame and may ack as soon as each stop is applied.
-A machine that cannot stop the process (for example, it is still exiting)
+process on the machine for this binding. A machine that cannot stop the process (for example, it is still exiting)
 does not ack yet; the backend's resend covers the wait.
 
 **Ordering and duplicates.**
 
 - `stopAck` frames may arrive in any order relative to journal, heartbeat,
-  `capabilitiesReply` and other `stopAck` frames, and entries within one frame
-  are unordered. The backend correlates only by `stopId`.
+  `capabilitiesReply` and other `stopAck` frames. The backend correlates only
+  by `stopId`: an ack confirms its own stop and never an older or newer stop
+  for the same agent.
 - The machine applies control frames in the order received, so a `launch` or
   `prompt` the backend sends after a `stop` for the same agent is handled after
   that stop. The ack confirms the stop, not any later request.
@@ -2313,6 +2314,9 @@ does not ack yet; the backend's resend covers the wait.
   applied it joins it; afterwards it is applied again and, the agent no longer
   running, acks `not-running`. The machine needs no durable record of stop ids.
   The machine may therefore ack one `stopId` more than once.
+- A `stop` that reaches the machine on a link whose binding has been replaced
+  by a newer generation is dropped without an ack; the backend resends it on
+  the new link.
 - The backend ignores an entry whose `stopId` is not queued (already confirmed,
   or from an earlier link), and an entry whose `agentId` differs from the
   queued stop's; it logs both. Neither is a protocol error.
