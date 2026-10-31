@@ -770,8 +770,8 @@ test-scripts: ## Run the Python script unit tests (Python 3.11+, no submodules n
 
 # The script checks CI would run for this change (lint-shell, the ci.yml
 # shell-tests suites, node:test for changed scripts/*.mjs); see CONTRIBUTING.md.
-test-scripts-changed: ## Run CI's script checks for files changed vs BASE (default origin/main; DRY_RUN=1 prints the plan)
-	@BASE="$(BASE)" DRY_RUN="$(DRY_RUN)" bash scripts/changed-script-tests.sh
+test-scripts-changed: ## Run the script checks a change affects vs BASE (default origin/main; DRY_RUN=1 prints the plan, FULL=1 runs every suite)
+	@BASE="$(BASE)" DRY_RUN="$(DRY_RUN)" FULL="$(FULL)" bash scripts/changed-script-tests.sh
 
 # Runs under nextest so local full-suite runs pick up the same
 # .config/nextest.toml protections CI uses (timing-serial test group,
