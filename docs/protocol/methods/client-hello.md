@@ -58,7 +58,7 @@ only when this capability is present; older daemons omit it. This is a server su
 flag, independent of the model's `agentFeatures.peerAgents` gate, and does not grant
 caller authority: workspace lifecycle permissions still apply.
 
-**PR workspace lookup (prepared).** `server.capabilities.prWorkspaceLookup: 1`
+**PR workspace lookup.** `server.capabilities.prWorkspaceLookup: 1`
 advertises [§5.1 `workspace.findByPullRequest`](./workspace.md#pull-request-workspace-lookup)
 and the PR-to-workspace link recording behind it. Clients offer the
 "Open in Original Workspace" link action only for exact integer `1`; older daemons
@@ -277,7 +277,7 @@ Ordinary hellos retain their existing profile-update behavior.
 
 #### GitLab checkout capability
 
-**Prepared additive contract, protocol 13.5.**
+**Additive contract, protocol 13.5.**
 `server.capabilities.gitlabCheckout: 1` announces the complete
 [pre-workspace project checkout contract](repository-checkout.md). Accept exactly
 integer `1` on the selected destination's original physical connection. The
@@ -287,7 +287,7 @@ existing repository resource/context capabilities, or a guest's collaboration
 identity cannot substitute for it.
 
 Require this same capability before sending `instanceBaseUrl` to the
-[prepared full-instance auth operations](integrations.md#full-instance-gitlab-authentication-prepared-v135),
+[full-instance auth operations](integrations.md#full-instance-gitlab-authentication-v135),
 including auth-status reads. An older parser may ignore an unknown field;
 request success alone cannot establish full-root support. Its historical
 bare-host behavior does not authorize a prefix-bearing instance.
@@ -295,31 +295,31 @@ bare-host behavior does not authorize a prefix-bearing instance.
 Capture before browsing and retain the original destination through pagination,
 warming, creation and release. Reconnect, host/auth/settings changes or
 retirement require a new capture; a stable client ID cannot transfer the old
-reference. See the [client lifecycle](../10-thin-client.md#gitlab-checkout-lifecycle-prepared).
+reference. See the [client lifecycle](../10-thin-client.md#gitlab-checkout-lifecycle).
 
 #### GitLab checkout owner-avatar capability
 
-**Prepared additive extension, protocol 13.7.**
+**Additive extension, protocol 13.7.**
 `server.capabilities.gitlabCheckoutOwnerAvatar: 1` allows an explicit
 `includeOwnerAvatar: true` on checkout capture. Require exactly integer `1` on
 the same original socket, in addition to `gitlabCheckout: 1`. Only opted-in
 captures may receive optional `ownerAvatarUrl` on project page/detail rows.
 Legacy captures keep their original shape, including on a newer daemon.
 Clients connected to older daemons omit the request member and retain image
-fallbacks. See the [owner-avatar contract](repository-checkout.md#owner-avatar-extension-prepared-protocol-137).
+fallbacks. See the [owner-avatar contract](repository-checkout.md#owner-avatar-extension-protocol-137).
 
 #### GitLab checkout configuration capability
 
-**Prepared additive extension, protocol 13.8.**
+**Additive extension, protocol 13.8.**
 `server.capabilities.gitlabCheckoutRepoConfig: 1`, alongside `gitlabCheckout: 1`,
 allows the fixed pre-workspace configuration read on the original socket.
 Require exactly integer `1` for both capabilities. A numeric protocol version,
 method catalog entry or successful unrelated call is insufficient. See the
-[configuration contract](repository-checkout.md#selected-repository-configuration-prepared-protocol-138).
+[configuration contract](repository-checkout.md#selected-repository-configuration-protocol-138).
 
 #### Repository context capability
 
-**Prepared additive contract.** `server.capabilities.repositoryContext: 1`
+**Additive contract.** `server.capabilities.repositoryContext: 1`
 announces the complete context-read lifecycle. Feature-detect the capability
 on the physical connection captured for the
 [repository context lifecycle](workspace.md#repository-context).
@@ -333,7 +333,7 @@ frontend clients implement the feature.
 
 #### Repository selection capability
 
-**Prepared additive contract.** `server.capabilities.repositorySelection: 1`
+**Additive contract.** `server.capabilities.repositorySelection: 1`
 is separate from `repositoryContext: 1`.
 Feature-detect it on the original confirmed physical connection used for the
 [selection editing operation](workspace.md#repository-selection).
@@ -350,13 +350,13 @@ specifies required integration behavior, not an already shipped frontend flow.
 
 #### Native review capability
 
-**Prepared additive contract.** `server.capabilities.nativeReview: 1` announces
+**Additive contract.** `server.capabilities.nativeReview: 1` announces
 qualified native review preparation, execution and receipts. Feature-detect it on
 the original confirmed physical connection before the
 [qualified native review workflow](change-tracking.md#native-review-preparation-and-receipts).
 It announces the contract, not current host/workspace permission, configured
-provider readiness or unconditional admission. Prepared facts and the public
-capability cannot replace fresh server checks.
+provider readiness or unconditional admission. Facts returned by preparation and
+the public capability cannot replace fresh server checks.
 
 Install that connection's [private retirement handler](../06-events.md#private-native-review-retirement)
 before preparation, and retain the same connection through confirmation,
@@ -369,7 +369,7 @@ provider guarantee. Capabilities, rather than an older experimental version numb
 
 #### Commit companion capability
 
-**Prepared additive contract.** `server.capabilities.nativeReviewCompanion: 1`
+**Additive contract.** `server.capabilities.nativeReviewCompanion: 1`
 is advertised alongside `nativeReview: 1`.
 Check the companion capability on the original confirmed physical connection
 **before** a [marked commit preparation](change-tracking.md#commit-companion-preparation).
@@ -387,7 +387,7 @@ guarantee. The companion does not add method or notification names.
 
 #### Resource-read capability
 
-**Prepared additive contract.** The hello response advertises
+**Additive contract.** The hello response advertises
 `result.server.capabilities.repositoryResourceRead: 1` for the
 [explicit GitLab resource-read contract](repository-resources.md). Documentation alone does not establish availability. Detect support on the original physical connection before
 capture and install that connection's [private retirement handler](../06-events.md#private-resource-read-retirement)
@@ -403,22 +403,22 @@ native review capabilities do not imply this explicit-resource capability.
 These are client integration obligations, not a shipped frontend guarantee;
 documentation alone does not establish deployed availability.
 
-The separate [prepared project-page and discussion extension](repository-resources.md#prepared-project-pages-and-discussions)
+The separate [project-page and discussion extension](repository-resources.md#project-pages-and-discussions)
 is additive in protocol 15.1 and uses `repositoryResourcePages: 1`. Keep
 `repositoryResourceRead: 1` unchanged for
 detail-only clients; it does not imply support for the new operations. Detect
 the page capability on the same physical connection that supplies the read
-lifetime. Its prepared `context` is either an explicitly authorized workspace or
+lifetime. Its `context` is either an explicitly authorized workspace or
 the original durable Host Owner; Home cannot borrow a workspace or infer the
 owner role from checkout access. A capability cannot authorize another instance
 or account, or supply a fallback after denial. A numeric protocol version or
 catalog entry does not replace the exact capability check.
 
-#### GitLab child Git policy capability (prepared)
+#### GitLab child Git policy capability
 
 The protocol 15.1 capability `result.server.capabilities.gitlabChildGitPolicy: 1`
 gates the separate
-[owner-only policy control](settings.md#prepared-gitlab-child-git-credential-policy).
+[owner-only policy control](settings.md#gitlab-child-git-credential-policy).
 An absent or unsupported value means the control is unsupported, not disabled.
 Detect it on the connection whose policy binding will be read and changed.
 Neither this capability nor `gitlabCheckout` grants the owner role, enables the

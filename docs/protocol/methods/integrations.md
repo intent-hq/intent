@@ -128,7 +128,7 @@ forwarded with `provider: "github"`; the result projected to the documented `git
 
 #### Provider-generic auth — `sourceControl.*` *(v10.5)*
 
-The [prepared GitLab checkout surface (§5.53)](repository-checkout.md) uses the
+The [GitLab checkout surface (§5.53)](repository-checkout.md) uses the
 selected destination's repository connection before a workspace exists. Its
 full instance identity, original host/caller/socket authority and cache rules
 are distinct from the `github.*` browse contracts and collaboration identity
@@ -191,10 +191,10 @@ interface SourceControlUser {  // derived identity — never carries a token
 `SourceControlUser` is deliberately narrower than `GithubUser` (no `htmlUrl`); `github.getUser` keeps
 returning `GithubUser`.
 
-#### Full-instance GitLab authentication (prepared v13.5)
+#### Full-instance GitLab authentication (v13.5)
 
-This prepared extension accompanies [GitLab checkout](repository-checkout.md);
-it is not a claim that older or published daemons accept the new field. It keeps
+This extension accompanies [GitLab checkout](repository-checkout.md);
+older daemons do not accept the new field. It keeps
 the existing host-only request forms above and adds optional `instanceBaseUrl`
 to `sourceControl.authStatus`, `sourceControl.connect`, `sourceControl.cancelAuth`,
 `sourceControl.revoke` and `sourceControl.getUser` for `provider: "gitlab"`.
@@ -258,7 +258,7 @@ view, re-read `sourceControl.authStatus` for the originally selected full
 context changed while awaiting it. The event cannot choose a new instance or
 revive a checkout reference.
 
-The [prepared child Git credential policy](settings.md#prepared-gitlab-child-git-credential-policy)
+The [child Git credential policy](settings.md#gitlab-child-git-credential-policy)
 is a separate owner-controlled grant for the current account and full instance.
 A successful connection, status read or native checkout does not enable it.
 Credential refresh for the same identity preserves the explicit choice;

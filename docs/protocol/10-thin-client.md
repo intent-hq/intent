@@ -50,9 +50,9 @@ it does not claim the frontend already implements them.
    revision, selection or account identity. Server entry/final validation remains
    authoritative regardless of notification timing.
 
-#### Scoped repository pages (prepared)
+#### Scoped repository pages
 
-The [prepared resource-page contract](methods/repository-resources.md#prepared-project-pages-and-discussions)
+The [resource-page contract](methods/repository-resources.md#project-pages-and-discussions)
 keeps the original physical connection, caller context and read lifetime for
 capture, detail, every page and release. Require `repositoryResourcePages: 1`;
 the unchanged detail-only capability does not imply these operations.
@@ -71,7 +71,7 @@ omitted section is not a successful empty collection. Fence late results after
 denial, disposal or account/connection replacement. Success in a summary or
 discussion cannot refresh an older detail observation.
 
-The [child Git policy control](methods/settings.md#prepared-gitlab-child-git-credential-policy)
+The [child Git policy control](methods/settings.md#gitlab-child-git-credential-policy)
 has separate owner authority and capability. Retain its complete original
 binding across an explicit toggle; unavailable, pending and failed state is not
 off. Discard stale read/write results after a full-instance/account transition
@@ -220,7 +220,7 @@ disclosure. Stable display facts and a previous successful action cannot authori
 another one. Neither this workflow nor its capability establishes live provider
 readiness or unconditional native admission.
 
-#### GitLab checkout lifecycle (prepared)
+#### GitLab checkout lifecycle
 
 The [pre-workspace checkout contract](methods/repository-checkout.md) requires
 exactly integer [`gitlabCheckout: 1`](methods/client-hello.md#gitlab-checkout-capability)
@@ -241,7 +241,7 @@ warming a cache or creating a workspace. A stored draft is selection intent,
 not a credential or permission grant.
 
 Connection setup, status, cancellation and reconnection retain that same full
-root through the [prepared public auth contract](methods/integrations.md#full-instance-gitlab-authentication-prepared-v135).
+root through the [public auth contract](methods/integrations.md#full-instance-gitlab-authentication-v135).
 Honor the actual `cancelled` result: `false` does not undo a begun or settled PAT
 write, and closing the form does not prove cancellation. Preserve the connect
 result and current status before starting a new checkout capture.
