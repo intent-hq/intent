@@ -622,12 +622,17 @@ are tracked separately, never per model.
   - If every candidate is marked, nothing moves: the turn tries its current reference
     and fails over as usual.
 - **Edited.** When `providers.profiles.update` or `providers.profiles.updateDefault`
-  saves a change (name, `backup` or environment), the edited reference's state is
-  cleared before the call returns, so the next turn of every conversation treats it as
-  neither out of quota nor working. `providers.profiles.delete` clears the
-  deleted profile's state. A call that saves nothing, or fails, leaves it unchanged.
-  Other references, including the same base provider's Default or other profiles,
-  keep their state.
+  saves a change (the name, the environment, or a profile's `backup`), the edited
+  reference's state is cleared before the call returns, so the next turn of every
+  conversation treats it as neither out of quota nor working.
+  `providers.profiles.delete` clears the deleted profile's state. A call that saves
+  nothing, or fails, leaves it unchanged. Other references, including the same base
+  provider's Default or other profiles, keep their state.
+  - A process still running on settings from before an environment change or a
+    delete (`usingEarlierProfileSettings`) does not mark the reference again: its
+    quota failures and output leave the shared state unchanged. After a change to
+    only the name or `backup`, running processes use the same settings, so they
+    still mark it.
 - **Advisory and in-memory.** Marks never make a turn fail without an attempt. They
   are not persisted: after a daemon restart, each conversation's stored timer applies
   as before. No method or event exposes them.
