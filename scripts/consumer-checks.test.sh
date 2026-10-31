@@ -337,12 +337,12 @@ if ! grep -qFx 'trusted node --test scripts/lib/markdown-tables.test.mjs' "$trus
   ! grep -qFx 'trusted node --test scripts/check-doc-table-cells.test.mjs' "$trusted_log"; then
   fail "the shared Markdown table scanner tests and the protocol table cell-count check did not run with the trusted node:"$'\n'"$(cat "$trusted_log")"
 fi
-grep -qFx 'trusted node --test docs/protocol/fixtures/scripts/monitors.test.mjs docs/protocol/fixtures/scripts/contract.test.mjs' "$trusted_log" ||
-  fail "script monitor and compact contract tests did not run with the trusted node:"$'\n'"$(cat "$trusted_log")"
+if ! grep -qFx 'trusted node --test scripts/protocol-fixture-tests.test.mjs' "$trusted_log" ||
+  ! grep -qFx 'trusted node scripts/protocol-fixture-tests.mjs' "$trusted_log"; then
+  fail "the shared protocol fixture test runner did not run with the trusted node:"$'\n'"$(cat "$trusted_log")"
+fi
 grep -qFx 'trusted node --test docs/protocol/fixtures/browser-routing/contract.test.mjs' "$trusted_log" ||
   fail "browser-routing contract tests did not run with the trusted node:"$'\n'"$(cat "$trusted_log")"
-grep -q '^trusted node --test docs/protocol/fixtures/submission-correlation/contract.test.mjs$' "$trusted_log" ||
-  fail "submission correlation contract tests did not run with the trusted node:"$'\n'"$(cat "$trusted_log")"
 grep -q '^trusted docs-check$' "$trusted_log" || fail "docs-check.sh did not run:"$'\n'"$(cat "$trusted_log")"
 grep -q '^  check-protocol-catalog  *FAIL  ' <<<"$real_output" ||
   fail "the trusted checker's failure did not reach the summary table:"$'\n'"$real_output"

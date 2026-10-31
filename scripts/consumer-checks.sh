@@ -87,7 +87,7 @@ fix_path() {
   case "$1" in
     event-catalog-check) echo "docs/protocol/event-types.json + docs/protocol/06-events.md" ;;
     check-mcp-bindings) echo "docs/protocol/methods/mcp-bindings.md (make mcp-bindings-doc) + prose under docs/protocol/" ;;
-    docs-check) echo "AGENTS.md / README.md / docs/fe/DEVELOPER_GUIDE.md (make targets, sandbox knobs) + docs/protocol/methods/files-terminal-browser.md (browser errorCode contract) + docs/protocol/**/*.md lines over 2,000 characters (one sentence or bullet per line; baseline scripts/doc-line-length-baseline.txt) + docs/protocol/**/*.md table rows whose cell count differs from the header (escape a literal pipe as \\|)" ;;
+    docs-check) echo "AGENTS.md / README.md / docs/fe/DEVELOPER_GUIDE.md (make targets, sandbox knobs) + docs/protocol/methods/files-terminal-browser.md (browser errorCode contract) + docs/protocol/**/*.md lines over 2,000 characters (one sentence or bullet per line; baseline scripts/doc-line-length-baseline.txt) + docs/protocol/**/*.md table rows whose cell count differs from the header (escape a literal pipe as \\|) + docs/protocol/fixtures/**/*.test.mjs failures (make check-protocol-fixture-tests; a node:test file must be named fixtures/**/*.test.mjs)" ;;
     check-protocol-catalog) echo "docs/protocol/05-method-catalog.md + docs/protocol/methods/*.md" ;;
     check-makefile-targets) echo "Makefile intentd crate / --test references (must exist at the pinned intentd gitlink in the monorepo / at the caller head upstream)" ;;
     check-protocol-field-parity) echo "docs/protocol/versioning.md staged row fields table (daemon-first field), scripts/check-protocol-field-parity.mjs PAIRS ignore (field the FE never reads), or the cloudlands-fe type that consumes the row struct" ;;

@@ -238,15 +238,22 @@ check-agent-worker-contract: ## Validate synthetic worker observation goldens, m
 check-backend-keychain-contract: ## Validate canonical backend Keychain fixtures and any adopted component mirrors without compilation
 	@node scripts/backend-keychain-contract.mjs check
 
-docs-check: event-catalog-check check-mcp-bindings ## Check documented development targets, knobs, remote-host guidance, protocol-doc line lengths, and protocol table cell counts
+# Every docs/protocol/fixtures/**/*.test.mjs, discovered by
+# scripts/protocol-fixture-tests.mjs (no hand-kept list). It fails when a file
+# under docs/protocol/ imports node:test without matching that pattern, so no
+# fixture test is silently skipped. docs-check depends on it and the ci.yml
+# docs-check job calls it, so a local pass means the CI step passes too.
+check-protocol-fixture-tests: ## Run every docs/protocol/fixtures/**/*.test.mjs (found by glob) and fail on node:test files nothing runs
+	@node --test scripts/protocol-fixture-tests.test.mjs
+	@node scripts/protocol-fixture-tests.mjs
+
+docs-check: event-catalog-check check-mcp-bindings check-protocol-fixture-tests ## Check documented development targets, knobs, remote-host guidance, protocol-doc line lengths, protocol table cell counts, and every protocol fixture test
 	@scripts/docs-check.sh
 	@node scripts/check-doc-line-length.mjs
 	@node --test scripts/check-doc-line-length.test.mjs
 	@node --test scripts/lib/markdown-tables.test.mjs
 	@node scripts/check-doc-table-cells.mjs
 	@node --test scripts/check-doc-table-cells.test.mjs
-	@node --test docs/protocol/fixtures/scripts/monitors.test.mjs docs/protocol/fixtures/scripts/contract.test.mjs
-	@node --test docs/protocol/fixtures/submission-correlation/contract.test.mjs
 
 check-protocol-catalog: ## Check docs/protocol method catalog against methods/*.md and intentd's catalog.rs
 	@node scripts/check-protocol-catalog.mjs
