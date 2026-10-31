@@ -17,15 +17,15 @@ The 10.11 [script lifecycle candidate (§5.8)](./methods/scripts.md#saved-script
 implements archive/restore ahead of the monorepo pin; `scriptLifecycle: 1`
 advertises complete support, not catalog presence or a numeric version alone.
 
-The prepared [command creation default change (§5.8)](./methods/scripts.md#command-creation-defaults-prepared-breaking-change)
+The [command creation default change (§5.8)](./methods/scripts.md#command-creation-defaults-breaking-change)
 changes omitted purpose for new commands to `oneOff`, retaining stored upsert and
-legacy hydration defaults. It changes no catalog names or counts and makes no
-shipped-version claim; `scriptLifecycle: 1` alone does not distinguish defaults.
+legacy hydration defaults. It changes no catalog names or counts;
+`scriptLifecycle: 1` alone does not distinguish defaults.
 
 The prepared [worker observation contract (§5.5b)](./methods/agent-workers.md)
 adds a list, a subscription and a provider-mediated stop; `agentWorkers: 1` gates support.
 
-The prepared [compact script list contract](./methods/scripts.md#active-only-compact-lists-prepared-breaking-contract)
+The [compact script list contract](./methods/scripts.md#active-only-compact-lists-protocol-14-breaking-contract)
 adds `script.get` and `scriptMonitor.get`, plus optional bounded summary views on
 the existing lists under `scriptActiveLists: 1` / `scriptMonitors: 2`. Protocol 14 removes archived list selection and terminal monitor history; full event payloads remain unchanged.
 
@@ -167,7 +167,7 @@ pin, while all existing methods and prepared extensions remain present.
 | rules | 3 | get, list, update |
 | sandbox | 2 | cow.discard, cow.merge |
 | script | 12 | archive, create, get, list, output, remove, restart, restore, run, start, status, stop |
-| scriptMonitor | 4 | cancel, cancelRun, get, list — prepared script run monitors (§5.8a); registration is MCP-only |
+| scriptMonitor | 4 | cancel, cancelRun, get, list — script run monitors (§5.8a); registration is MCP-only |
 | search | 7 | cancel, codebase, events, fileNames, inFiles, messages, notes |
 | secret | 4 | dismiss, forget, list, provide — secret requests (§5.56); values held in daemon memory only, request creation is MCP-only |
 | sentry | 8 | assignIssue, authStatus, getIssue, ignoreIssue, listIssues, listProjects, resolveIssue, searchIssues |

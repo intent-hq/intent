@@ -2,9 +2,9 @@
 
 ### 5.8 `script.*`
 
-The prepared [script monitor extension (§5.8a)](./script-monitors.md) adds
-run identity, one-shot agent monitoring and guarded user cancellation under
-`scriptMonitors: 2` in the prepared protocol-14 contract. The protocol-13
+The [script monitor extension (§5.8a)](./script-monitors.md) adds run
+identity, one-shot agent monitoring and guarded user cancellation under
+`scriptMonitors: 2`, shipped with the protocol-14 contract. The protocol-13
 baseline below is historical where explicitly superseded.
 
 The [prepared service readiness extension](#service-readiness-prepared-additive-extension)
@@ -29,14 +29,14 @@ not remove the owner's definition or output.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| script.list | workspaceId (req), archive? (`active` only; other values rejected in prepared v14), view? (`full` \| `summary`), limit?, cursor? (prepared summary extension below) | { scripts: [...] } — definition plus `runtime` by default; summary pages are discriminated `{ view: "summary", scripts: ScriptSummary[], nextCursor? } |
-| script.get | workspaceId (req), scriptId (req) | Prepared: full unarchived definition plus `runtime`; `scriptActiveLists: 1` required |
+| script.list | workspaceId (req), archive? (`active` only; other values rejected since v14), view? (`full` \| `summary`), limit?, cursor? (summary extension below) | { scripts: [...] } — definition plus `runtime` by default; summary pages are discriminated `{ view: "summary", scripts: ScriptSummary[], nextCursor? } |
+| script.get | workspaceId (req), scriptId (req) | Full unarchived definition plus `runtime`; `scriptActiveLists: 1` required |
 | script.create | workspaceId (req), name (req), command (req), mode (req: `service` \| `command`), cwd?, env?, category?, autoStart?, scriptId?, purpose? (`saved` \| `oneOff`), healthUrl?, readyPattern?, clearReadiness? (prepared; see below) | { id, workspaceId, name, command, mode, source, createdAt, cwd?, env?, category?, autoStart?, updatedAt?, purpose?, archivedAt?, lastRun?, healthUrl?, readyPattern? } — the persisted `WorkspaceScript` record |
 | script.archive | workspaceId (req), scriptIds (req: nonempty string array) | { archived: [scriptId, ...], skipped: [{ scriptId, reason }] } — 10.11 candidate; inactive commands only |
 | script.restore | workspaceId (req), scriptIds (req: nonempty string array) | { restored: [scriptId, ...], skipped: [{ scriptId, reason }] } — 10.11 candidate; restores visibility without starting |
 | script.remove | workspaceId (req), scriptId (req) | { ok, scriptId } |
 | script.start | workspaceId (req), scriptId (req) | { ok, scriptId } — the runtime status is flipped to `starting` (new in intentd, within v9.12 — intent-hq/intent#4858) **before the reply**, atomically with the supervisor's registration and with the previous run's terminal fields (`pid`, `startedAt`, `exitCode`, `stoppedAt`, `error`, `detectedUrl`) cleared, so a `script.status` read after the reply never observes the pre-launch `idle`; the owned launch task publishes the `starting` transition as `script:state` strictly ahead of the spawn's `running` (or `exited` + `error` on a launch failure). A script already `running` or `starting` is a no-op |
-| script.stop | workspaceId (req), scriptId (req) | { ok, scriptId } — stops an active run; resetting a finished script from `exited` to `idle` emits a `script:state` snapshot (§6.5; prepared event-authority extension below). On a **non-running** script that carries the was-running marker this is the **dismiss** affordance: it clears the marker (`previouslyRunning` on a service row, the hydrated `lost` reading on a command row; in memory plus a best-effort row write), emits the cleared runtime snapshot, and returns ok instead of erroring. Stopping an already idle, unmarked script is a no-op with no state event |
+| script.stop | workspaceId (req), scriptId (req) | { ok, scriptId } — stops an active run; resetting a finished script from `exited` to `idle` emits a `script:state` snapshot (§6.5; see the self-contained change extension below). On a **non-running** script that carries the was-running marker this is the **dismiss** affordance: it clears the marker (`previouslyRunning` on a service row, the hydrated `lost` reading on a command row; in memory plus a best-effort row write), emits the cleared runtime snapshot, and returns ok instead of erroring. Stopping an already idle, unmarked script is a no-op with no state event |
 | script.restart | workspaceId (req), scriptId (req) | { ok, scriptId } |
 | script.output | workspaceId (req), scriptId (req), maxLines? | output text of the latest run, read from its on-disk log (see *Script output persistence*) |
 | script.status | workspaceId (req), scriptId (req) | { status, restartCount, pid?, exitCode?, startedAt?, stoppedAt?, error?, detectedUrl?, previouslyRunning?, ready?, readiness? } — the `ScriptRuntimeState` snapshot; `status` and `restartCount` are always present, every other field is **omitted when unset** (never `null` — a cleared `exitCode` is absent, so hooks test `exitCode !== undefined`); `status` is one of `idle \| starting \| running \| restarting \| exited`. `exited` **always** carries `exitCode` (new in intentd, unreleased): when the real status was not observable it is the sentinel `-1` together with an `error` naming the cause — see the total exit contract note below. `starting` (new in intentd, within v9.12 — intent-hq/intent#4858) is the `script.start` launch window: set synchronously before `script.start` replies, with the previous run's terminal fields cleared, and held until the spawn's `running` (or `exited` on a launch failure), so a poll issued right after `start` never reads the pre-launch `idle` or a stale `exitCode`. `restarting` (new in intentd, monorepo#1318) is the transient restart-in-flight state between an exit and the next spawn attempt — the service auto-restart backoff window and the `script.restart` stop→start gap — so a poll taken mid-restart never reads as a final `exited`/`idle`; the respawn flips it back to `running`. `previouslyRunning?: true` (new in intentd, within v5.1) marks a **service** script that was running when the daemon last stopped; a command script in the same situation hydrates as `exited` / `exitCode: -1` / `error` instead — see the was-running marker note below |
@@ -69,9 +69,9 @@ across daemon restarts. No wire shape changes.
 - **Live attach.** A script PTY keeps only a 64 KiB in-memory scrollback for late live
   attaches; exited script PTY sessions are released. Use `script.output` for the full output.
 
-#### Active-only compact lists (prepared breaking contract)
+#### Active-only compact lists (protocol 14 breaking contract)
 
-**Prepared protocol 14.0; not implemented by the pinned components.** This
+**Shipped in protocol 14.0; intentd advertises `scriptActiveLists: 1`.** This
 replaces the withdrawn, unshipped 13.11 compact/history proposal. Advertise exact
 integer `scriptActiveLists: 1` for script pages/details and `scriptMonitors: 2`
 for active-only monitors with reliable notification delivery. Do not advertise
@@ -207,7 +207,7 @@ must obtain complete selected unarchived definitions explicitly; previews can
 never become commands or overwrite omitted env/cwd. An explicit bulk operation
 may fetch complete unarchived definitions, but normal hydration must not.
 
-Prepared portable examples/models live in `fixtures/scripts/compact*` and
+Portable examples/models live in `fixtures/scripts/compact*` and
 `active-monitors*`. Component tests must exercise actual storage predicates,
 transaction rollback/restart and renderer read counts; model tests alone do not
 prove production behavior. `payload-audit.mjs` preserves aggregate-only legacy
@@ -473,14 +473,14 @@ WSS tests must cover create/status/list/state-event envelopes, authorization,
 validation errors and capability negotiation. Persistence tests use isolated DBs.
 Run the daemon gates and consumer checks before advertising support.
 
-#### Command creation defaults (prepared breaking change)
+#### Command creation defaults (breaking change)
 
-This change leads implementation; it does not claim released or installed support.
-It changes the 10.11 creation default described by the original lifecycle candidate.
-Recommend protocol **11.0** against the reviewed 10.11 baseline: an omitted-purpose
-command changes retention, and a previously valid new autostart command now fails
-validation. No method, field, enum value or event is added or removed. Confirm the
-version against daemon main before implementation lands; see [versioning](../versioning.md).
+intentd implements this default: a new command with omitted purpose is `oneOff`.
+It changes the 10.11 creation default described by the original lifecycle candidate:
+an omitted-purpose command changes retention, and a previously valid new autostart
+command now fails validation, so it was a major change under the compatibility
+policy. No method, field, enum value or event is added or removed; see
+[versioning](../versioning.md).
 
 | Creation input | Resulting purpose |
 | --- | --- |
@@ -518,7 +518,7 @@ omits purpose on a new command receives the new one-off behavior after a daemon
 upgrade. Its unfiltered list still returns archived definitions and its known-ID
 status/output reads still work; this does not preserve the old creation default.
 
-Prepared examples (execute only against a daemon supporting lifecycle):
+Examples (execute only against a daemon supporting lifecycle):
 
 ```javascript
 // Explicit retention works across old and new lifecycle-capable defaults.
@@ -556,10 +556,10 @@ protocol `10.11` and `client.hello.server.capabilities.scriptLifecycle: 1`.
 This covers persistence, all settled command outcomes, durable admission recovery,
 concurrency protection and the agent bindings. The lifecycle-aware frontend is
 [`25c9335afd3032b6782b2f52155f95710e89ed76`](https://github.com/intent-hq/cloudlands-fe/commit/25c9335afd3032b6782b2f52155f95710e89ed76)
-([PR #3041](https://github.com/intent-hq/cloudlands-fe/pull/3041)). These are
-component candidates, not a claim of merged, pinned, released or installed support;
-combined client/runtime acceptance and deployment remain separate gates. See
-[versioning](../versioning.md) for the reviewed pin baseline and merge order.
+([PR #3041](https://github.com/intent-hq/cloudlands-fe/pull/3041)). Both have
+since merged, and the pinned intentd advertises `scriptLifecycle: 1`; installed
+support still depends on the connected daemon's capability. See
+[versioning](../versioning.md) for the original pin baseline and merge order.
 Only advertise the capability for the complete extension. Existing methods and status enum remain;
 `script.archive` and `script.restore` are the only new RPC names. History is a view
 of retained definitions and their latest result, **not a per-run log archive**.
@@ -571,7 +571,7 @@ of retained definitions and their latest result, **not a per-run log archive**.
 persisted command result described below; it is absent if no result is known.
 These fields belong to the definition, not `ScriptRuntimeState`.
 
-- Under the prepared [creation default change](#command-creation-defaults-prepared-breaking-change),
+- Under the [creation default change](#command-creation-defaults-breaking-change),
   new commands default to `oneOff` and services to `saved` when purpose is omitted.
   The original 10.11 candidate defaulted both to `saved`. Every pre-existing,
   imported or repository-config definition without explicit purpose stays `saved`.
@@ -588,7 +588,7 @@ These fields belong to the definition, not `ScriptRuntimeState`.
   can silently ignore unknown fields: a successful create is **not** proof that
   one-off retirement is supported. Never fall back to `script.remove`.
 - Old clients on a supporting daemon can start/status/output known IDs as before.
-  With the prepared default change, omitted-purpose new commands become one-off;
+  With the creation default change, omitted-purpose new commands become one-off;
   earlier lifecycle daemons create saved definitions. Old clients ignore additive
   fields and
   continue receiving **all definitions when the wire filter is omitted**, even
@@ -665,8 +665,8 @@ process and launch/run reservation have ended and no restart is pending. Never
 retire a never-run `idle` definition or a transient idle/exit during restart.
 Saved commands and services never auto-archive. Publish the final runtime state
 where the existing path emits `script:state` before the archive change event;
-all prior output chunks keep their existing ordering. Under the prepared
-event-authority extension below, a stop that resets a finished script from
+all prior output chunks keep their existing ordering. Under the
+self-contained change extension below, a stop that resets a finished script from
 `exited` to `idle` publishes that runtime transition. Any archive change event
 still follows settlement. Do not hide a run before final output/state can be read.
 
@@ -754,7 +754,7 @@ including `restarting`. Do not schedule a second launch to restore an already
 live entry. Restore-only leaves terminal status/output untouched. A
 `script.create` upsert with the same ID intentionally replaces the definition
 and restores it, preserving existing source/creation identity behavior. Omitted
-purpose preserves the existing purpose (the prepared default change applies only
+purpose preserves the existing purpose (the creation default change applies only
 to new IDs: commands default to `oneOff`, services to `saved`);
 explicit purpose replaces it, subject to mode validation. Changing an existing
 one-off to service therefore requires explicit `purpose: "saved"`. Existing
@@ -762,8 +762,8 @@ upsert teardown behavior is unchanged: unlike archive, replacement can stop the
 old process. Completion from the replaced run cannot retire its replacement.
 
 **Events and completion hooks.** `script:changed` retains `scriptId` and
-`action: "created" | "updated" | "removed"`. The prepared additive
-[self-contained change contract](#self-contained-script-changes-prepared-additive-extension)
+`action: "created" | "updated" | "removed"`. The additive
+[self-contained change contract](#self-contained-script-changes-additive-extension)
 below adds the complete row for create/update, including archive/restore and
 latest results. Legacy ID-only create/update events still invalidate the selected
 list. Archive is never removal; `script:state` alone never proves durable
@@ -812,33 +812,32 @@ caller-supplied cross-workspace escape is added. Existing no-argument `list()`
 and create/start/status/output signatures remain valid. Send explicit `purpose: "saved"`
 for reusable/autostart commands; explicit `oneOff` gives throwaway checks the same
 retention on both lifecycle-capable default generations. New commands may omit
-purpose once the prepared default change is implemented. Never use
+purpose on daemons with the creation default change. Never use
 remove as automatic cleanup. The generated MCP binding index reflects the
 monorepo pin, not necessarily the installed daemon. Automatic pin advancement
 regenerates it; this candidate documentation does not manually advance it. Use
 the connected daemon's capability and installed helper help to establish support.
 
-Prepared examples and race expectations are in
+Examples and race expectations are in
 [`fixtures/scripts/lifecycle.json`](../fixtures/scripts/lifecycle.json).
 They are synthetic contract inputs, not evidence of implemented runtime behavior.
 Run their static consistency checks with
 `node --test docs/protocol/fixtures/scripts/contract.test.mjs`; component tests
 exercise the implemented lifecycle with isolated databases and controlled
-launch/completion race barriers. The JSON remains a prepared scenario catalog;
+launch/completion race barriers. The JSON remains a static scenario catalog;
 its static checker does not execute those component tests.
 
-#### Self-contained script changes (prepared additive extension)
+#### Self-contained script changes (additive extension)
 
 For protocol 14, full event payloads remain unchanged, but references below to
 all/history list recovery are superseded by known-ID output/status. Archived
 rows received in events never enter list membership; selected output survives.
 
-This contract is **prepared, not a shipped implementation claim**. It extends
-`script:changed` without adding a method, event type, capability, database field,
-or wire revision counter. Detect support from each event's payload; neither
-`scriptLifecycle: 1` nor a numeric protocol version proves snapshot support.
-Lifecycle controls still require their existing capability. Allocate the additive
-minor against daemon main at implementation time; docs land before consumers.
+intentd implements this contract. It extends `script:changed` without adding a
+method, event type, capability, database field, or wire revision counter. Detect
+support from each event's payload; neither `scriptLifecycle: 1` nor a numeric
+protocol version proves snapshot support, because older daemons send ID-only
+events. Lifecycle controls still require their existing capability.
 
 **Payload.** Keep the §6.3 envelope and workspace authorization unchanged:
 
@@ -846,8 +845,8 @@ minor against daemon main at implementation time; docs land before consumers.
 | --- | --- | --- |
 | `created` | `{ scriptId, action: "created", script }` | Insert the committed definition and current runtime |
 | `updated` | `{ scriptId, action: "updated", script }` | Replace the complete row after definition edit, archive, restore or result commit |
-| `removed` | `{ scriptId, action: "removed", purpose? }` | Delete the definition by ID; omit `script`. The prepared guest-role extension adds `purpose: "saved" \| "oneOff"` for scoped delivery after deletion. |
-| `guest-access-revoked` | `{ scriptId, action: "guest-access-revoked" }` | Prepared guest-role extension: retire a previously saved row from a Manager's view after conversion to `oneOff`; no definition or output is disclosed. |
+| `removed` | `{ scriptId, action: "removed", purpose? }` | Delete the definition by ID; omit `script`. The guest-role extension adds `purpose: "saved" \| "oneOff"` for scoped delivery after deletion. |
+| `guest-access-revoked` | `{ scriptId, action: "guest-access-revoked" }` | Guest-role extension: retire a previously saved row from a Manager's view after conversion to `oneOff`; no definition or output is disclosed. |
 
 On a committed saved-to-one-off transition, publish `guest-access-revoked` before
 the ordinary `updated` snapshot under the same per-ID publication lock. A current

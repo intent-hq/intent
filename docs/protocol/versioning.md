@@ -327,8 +327,8 @@ Store or grant guest access to owner progress. The daemon implementation uses
 counts including this addition were **450 / 393 / 57** (dispatchable / router /
 fast path); the version-specific counts below describe their original deltas.
 
-**Version 14.0 — active-only script and monitor lists (breaking, prepared).**
-The [replacement contract](./methods/scripts.md#active-only-compact-lists-prepared-breaking-contract)
+**Version 14.0 — active-only script and monitor lists (breaking).**
+The [replacement contract](./methods/scripts.md#active-only-compact-lists-protocol-14-breaking-contract)
 adds script.get and scriptMonitor.get, optional bounded summary pages, and removes
 archived list selection and terminal monitor storage/history reads. Exact gates
 are `scriptActiveLists: 1` and `scriptMonitors: 2`. Earlier unshipped 13.11 /
@@ -548,7 +548,7 @@ below remains prepared, independently capability-gated; advertising 11.3
 does not claim platform scheduling or any other prepared feature is implemented.
 
 **Version 11.2 — self-contained script changes.**
-[`script:changed` (§5.8)](./methods/scripts.md#self-contained-script-changes-prepared-additive-extension)
+[`script:changed` (§5.8)](./methods/scripts.md#self-contained-script-changes-additive-extension)
 adds optional `data.script` as a complete list-row snapshot on create/update,
 including runtime, archive metadata and latest result. Removal keeps its existing
 ID-only shape. Consumers presence-detect each valid snapshot and apply it without
@@ -624,23 +624,18 @@ because 6 was never released, so a version-6-only peer gets
 is claimed by these docs; allocate it against daemon main before
 implementation merges, and land daemon protocol consumers before frontend ones.
 
-**Prepared command-default change — recommended 11.0, not shipped.**
-[Script creation defaults (§5.8)](./methods/scripts.md#command-creation-defaults-prepared-breaking-change)
+**Command-default change (breaking).**
+[Script creation defaults (§5.8)](./methods/scripts.md#command-creation-defaults-breaking-change)
 change omission on a new command from `saved` to `oneOff`; new services remain
 saved. Upserts preserve stored purpose when omitted, and legacy hydration/import
 still defaults to saved. Reusable and autostart command creators must send
 explicit `saved`; omitted-purpose new autostart commands now fail validation.
 This breaks an existing request's retention/acceptance behavior, so recommend the
 next major under the compatibility policy, despite unchanged methods and fields.
-Allocate against daemon main before merge. `scriptLifecycle: 1` alone cannot
-identify the default generation; explicit purpose is portable across supporting
-daemons. No capability or version claim here establishes release or deployment.
-
-Land the prepared contract first so reviewers can verify component expectations;
-there are no catalog additions/removals requiring count changes. Then land the
-daemon change before the frontend change, with human authorization for every
-merge. Automation owns subsequent pins and the generated MCP index. This change
-neither upgrades clients nor reclassifies existing workspace definitions.
+intentd implements it. `scriptLifecycle: 1` alone cannot identify the default
+generation; explicit purpose is portable across supporting daemons. There are no
+catalog additions/removals requiring count changes. This change neither upgrades
+clients nor reclassifies existing workspace definitions.
 
 **Version 10.11 — script lifecycle (additive, implemented candidate).** The
 [script lifecycle extension (§5.8)](./methods/scripts.md#saved-scripts-and-one-off-history-protocol-13-baseline)

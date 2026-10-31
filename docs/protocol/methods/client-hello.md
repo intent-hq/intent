@@ -122,12 +122,14 @@ optional `Workspace.autoArchiveDisabled` field, the `autoArchiveDisabled` param 
 have not opted out omit the field, so clients cannot detect support by presence; they offer
 the opt-out only for exact integer `1`, and older daemons omit it.
 
-**Script run monitoring (prepared additive extension).**
-`server.capabilities.scriptMonitors: 1` advertises the entire
+**Script run monitoring (additive extension).**
+`server.capabilities.scriptMonitors` advertises the entire
 [§5.8a contract](./script-monitors.md): durable run identity, required one-shot
 TTL, optional single-line regex/line-count triggers, single-owner registration,
 guarded run cancellation and silent lifecycle
-cleanup including queued wakes. Independent of scriptLifecycle/scriptReadiness;
+cleanup including queued wakes. intentd advertises `scriptMonitors: 2`, the
+protocol-14 active-only replacement; `1` was the protocol-13 contract with
+terminal history. Independent of scriptLifecycle/scriptReadiness;
 absence means unavailable, not permission to infer support from version numbers.
 
 **Workspace discussions (prepared additive extension).**
