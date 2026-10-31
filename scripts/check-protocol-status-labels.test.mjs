@@ -339,3 +339,32 @@ test('CLI: exit codes and --print-baseline', (t) => {
   assert.equal(passed.status, 0, passed.stderr);
   assert.match(passed.stdout, /no new "prepared"\/"not implemented" labels on the 2 capabilities intentd advertises \(0 allowlisted as unfinished, 1 grandfathered/);
 });
+
+test('each sentence counts, so a second stale sentence in one paragraph raises the count', () => {
+  const one = docsWith({ 'docs/protocol/a.md': 'The `secretRequests` contract is prepared.\n' });
+  const two = docsWith({ 'docs/protocol/a.md': 'The `secretRequests` contract is prepared. The `secretRequests` handlers are not implemented.\n' });
+  assert.deepEqual(labels(one), ['docs/protocol/a.md:1 secretRequests prepared']);
+  assert.deepEqual(labels(two), ['docs/protocol/a.md:1 secretRequests prepared', 'docs/protocol/a.md:1 secretRequests not implemented']);
+  const entries = [{ file: 'docs/protocol/a.md', capability: 'secretRequests', count: 1, line: 1 }];
+  assert.notDeepEqual(compare(findLabels({ docs: two }, SHIPPED), { entries, unfinished: [] }).errors, []);
+  // Two labels in one sentence are one statement.
+  const same = docsWith({ 'docs/protocol/b.md': 'The prepared `secretRequests` contract is not implemented yet.\n' });
+  assert.deepEqual(labels(same), ['docs/protocol/b.md:1 secretRequests prepared']);
+});
+
+test('the next-sentence fallback applies only to a label inside the opening emphasized lead-in', () => {
+  const docs = docsWith({
+    'docs/protocol/a.md': [
+      '**Note:** The streaming mode is not implemented. `secretRequests` is unrelated.',
+      '',
+      '*(prepared, additive)* The daemon records links. Support is gated by `desktopControl: 1`.',
+      '',
+      '**Workspace roles (prepared).** Exact `liveState` gates the contract.',
+      '',
+    ].join('\n'),
+  });
+  assert.deepEqual(labels(docs), [
+    'docs/protocol/a.md:3 desktopControl prepared',
+    'docs/protocol/a.md:5 liveState prepared',
+  ]);
+});

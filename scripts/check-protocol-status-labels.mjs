@@ -37,8 +37,8 @@
 // code spans, link destinations and HTML. Each label has one subject
 // capability, the first mention or resolvable reference in its scope, nearest
 // to the label first (those after it in order, then those before it):
-//   - in a paragraph or list item: its sentence; when the label sits in an
-//     emphasized lead-in that opens the block ("**Prepared additive
+//   - in a paragraph or list item: its sentence; when the label sits inside
+//     the emphasized lead-in that opens the block ("**Prepared additive
 //     contract.** `capabilities.x: 1` ..."), else the next sentence;
 //   - in a table row: from the label's cell to the end of the row
 //     ("| discussion (prepared) | ... | requires `x: 1` |", or a README index
@@ -47,7 +47,8 @@
 //     the next heading of the same or a higher level);
 //   - in a fixture: a top-level `status` starting with "prepared", whose
 //     subject is the first known capability name the file quotes.
-// A label whose subject is advertised is a finding.
+// A label whose subject is advertised is a finding, counted once per
+// sentence and subject.
 //
 // Two lists let findings through:
 //   - UNFINISHED below: a part of a shipped feature that really is
@@ -117,9 +118,18 @@ const CODE_SPAN_RE = /(`+)([\s\S]*?[^`])\1(?!`)/g;
 // bracket or a quote) followed by whitespace, or a table cell boundary.
 const SENTENCE_END_RE = /[.!?][*_)\]"']*(?=\s)|(?<!\\)\|/g;
 const ABBREVIATION_RE = /\b(?:e\.g|i\.e|etc|vs|cf)\.$/i;
-// A block that opens with an emphasized lead-in ("**Prepared additive
+// An emphasized lead-in that opens a block ("**Prepared additive
 // contract.** ...", "*(prepared, additive)* ..."), after any list marker.
-const LEAD_IN_RE = /^[ \t]*(?:(?:[-+*]|\d{1,9}[.)])[ \t]+)?[*_]/;
+const LEAD_IN_RE = /^([ \t]*(?:(?:[-+*]|\d{1,9}[.)])[ \t]+)?)(\*\*|__|\*|_)(?=\S)/;
+
+/** End offset of the emphasized lead-in that opens `text`, or -1. */
+function leadInEnd(text) {
+  const m = text.match(LEAD_IN_RE);
+  if (!m) return -1;
+  const start = m[1].length + m[2].length;
+  const close = text.indexOf(m[2], start);
+  return close === -1 ? -1 : close + m[2].length;
+}
 
 const blank = (s) => s.replace(/[^\n]/g, ' ');
 
@@ -408,7 +418,7 @@ function subjectIn(ctx, file, text, { from = 0, to = undefined, at = from } = {}
 
 /**
  * Status labels in one Markdown file: `[{ file, line, capability, label,
- * block }]`, one per label and subject whose subject is a known capability.
+ * block }]`, one per sentence and subject whose subject is a known capability.
  * `ctx` is `{ docs, known, numbered }` from `buildContext`.
  */
 export function labelsIn(file, ctx) {
@@ -432,10 +442,14 @@ export function labelsIn(file, ctx) {
         subject = subjectIn(ctx, file, block.text, { from: own, at: label.index });
       } else {
         subject = subjectIn(ctx, file, block.text, { from: own, to: next, at: label.index });
-        if (!subject && next !== undefined && own === 0 && LEAD_IN_RE.test(block.text)) subject = subjectIn(ctx, file, block.text, { from: next, to: starts.find((s) => s > next) });
+        if (!subject && next !== undefined && label.index < leadInEnd(block.text)) subject = subjectIn(ctx, file, block.text, { from: next, to: starts.find((s) => s > next) });
       }
-      if (!subject || subjects.has(subject)) continue;
-      subjects.add(subject);
+      // One finding per sentence (a row cell onward, a heading) and subject:
+      // two labels in one sentence are one statement, while a second stale
+      // sentence in a grandfathered paragraph raises the count.
+      const key = `${block.kind === 'heading' ? 0 : own} ${subject}`;
+      if (!subject || subjects.has(key)) continue;
+      subjects.add(key);
       found.push({ file, line: lineAt(block, label.index), capability: subject, label: label[0], block: block.text });
     }
   });

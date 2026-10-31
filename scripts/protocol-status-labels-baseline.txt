@@ -99,7 +99,7 @@ docs/protocol/versioning.md eventStreamRecovery 1
 docs/protocol/versioning.md gitlabCheckout 2
 docs/protocol/versioning.md gitlabCheckoutRepoConfig 1
 docs/protocol/versioning.md noteTruncatedRead 1
-docs/protocol/versioning.md prWorkspaceLookup 1
+docs/protocol/versioning.md prWorkspaceLookup 2
 docs/protocol/versioning.md scriptLifecycle 1
 docs/protocol/versioning.md submissionCorrelation 1
 docs/protocol/versioning.md workspaceGuestRoles 1
