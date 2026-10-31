@@ -24,7 +24,8 @@ folder. The option is refused before any side effect with git-only create option
 `workspace.duplicate` plus the agent bindings `ws.git.*`, `ws.pr.*`, `ws.mr.*` and
 `ws.workspace.proposeSibling` return the new `plain-folder-unsupported` error. No
 `changes:*`, `git:*`, `gitRoot:*`, `pr:*` or `prMonitor:*` events are emitted for these
-workspaces (§6.5). No method-catalog change, so the 15.2 counts stand. The minor bump is
+workspaces (§6.5). No method-catalog change: the documented surface stays
+**486 / 428 / 58** (dispatchable / router / fast path). The minor bump is
 the support signal: an older daemon ignores the unknown create option, so clients send
 `plainFolder` only when `protocolVersion` is at least `15.3`.
 
