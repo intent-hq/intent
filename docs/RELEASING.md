@@ -132,6 +132,21 @@ for drift inspection, not a release-merge credential. To record an intentional
 ruleset change, run `make check-rulesets UPDATE=1` with that credential and review
 the generated diff; this reads live rules and writes local snapshots only.
 
+### Ruleset snapshots and drift
+
+Main rules are committed in `.github/rulesets/*.main.json`; the bypass contract in
+`.github/rulesets/*.bypass.json` allows `intent-hq-ci` on the two component Default
+rulesets only (none for the monorepo or organization). The `ruleset-check` CI job and
+the daily `ruleset-drift.yml` compare them with the live configuration; after an
+intended change, run `make check-rulesets UPDATE=1` and commit the result in the same
+PR. The bypass half needs `RULESET_ADMIN_TOKEN` (a fine-grained PAT with administration
+read on intent, intentd and cloudlands-fe — GitHub returns `bypass_actors` only to such
+a caller) and is fail-soft: without it the bypass actors are skipped with a warning, so
+set it locally too when running `UPDATE=1` for a bypass change. The bypass-actor
+comparison is confined to `ruleset-drift.yml`, which runs main's code; `ruleset-check`
+runs the script from the PR head or merged tree, so it never receives the token and
+skips the bypass actors.
+
 ## Intel Mac release policy — pending rollout
 
 The approved policy builds Intel Mac binaries only for actual tagged daemon,
@@ -620,6 +635,26 @@ triggered by pushing a `sitter-vX.Y.Z` tag.
   `intent-hq/cloudlands-fe` — the PR reads power the completeness gate) in both
   component repos. Notifier steps are fail-soft (`continue-on-error`; skipped with a
   warning when the secret is absent) — they never block a release.
+
+## Submodule pin auto-bump
+
+`auto-bump-submodules.yml` detects submodule tips ahead of the recorded pins and lands
+the bump via a single rolling PR on `auto/submodule-bump` with auto-merge armed; repeat
+runs update that PR instead of opening new ones. Each submodule repo triggers it via
+`repository_dispatch` (`submodule-update`) on push to its `main`, using the
+`MONOREPO_DISPATCH_TOKEN` secret stored in each submodule repo (a fine-grained PAT with
+contents:write on `intent-hq/intent`). Monorepo `main` pushes that change submodule
+gitlinks trigger a continuation to pick up deferred tips after a queued bump merges. A
+cron run every 30 minutes is the backstop, and `workflow_dispatch` handles urgent bumps.
+
+The workflow authenticates with `SUBMODULE_BUMP_TOKEN` — a fine-grained PAT with
+contents:read on `intent-hq/intentd`, `intent-hq/cloudlands-fe`, and `intent-hq/ios`,
+plus contents:write and pull-requests:write on `intent-hq/intent`. Like
+`MONOREPO_DISPATCH_TOKEN`, `INTENTD_RELEASES_TOKEN` and `MONOREPO_ISSUES_TOKEN`, it is
+fail-soft: when the secret is absent the step logs a warning and exits successfully (the
+cron backstop still advances the pins when dispatch is skipped). The private
+`packages/ios` submodule is best-effort — if its tip cannot be read, it is skipped with
+a warning and never fails the run.
 
 ## Coordinated Release Ordering
 

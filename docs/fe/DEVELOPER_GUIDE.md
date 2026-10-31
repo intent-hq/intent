@@ -322,8 +322,30 @@ Run the focused avatar component test from `packages/cloudlands-fe`:
 corepack pnpm run test:ct -- src/features/agent/components/agent-avatar/__tests__/agent-avatar-waiting.ct.spec.ts
 ```
 
-The component-test harness defaults to port 3100; set `CT_PORT` to override it. If the
-chosen port is occupied, stop the process that owns it before rerunning the command.
+The component-test harness defaults to port 3100; set `CT_PORT` to override it. A second
+run on an occupied port waits for the `ct-<CT_PORT>` lock; pick a free `CT_PORT` to run
+concurrently.
+
+### Sandbox probe and shot options
+
+These apply to `pnpm sandbox:probe` and `pnpm sandbox:shot` in `packages/cloudlands-fe`.
+
+The sandbox route and Playwright CT harness use the repo-bundled `Inter Variable` font, and
+capture stability waits for `document.fonts.ready`, so geometry does not depend on host fonts.
+Shared options are `--theme light|dark|system` (default `light`), `--width 240..1600`
+(default `720`), `--motion reduced|full` (default `reduced`), `--scale 1|2` (default
+`1`), `--timeout <milliseconds>` (default `30000`), `--out <path>`, and
+`--allow-console-errors`. Set `SANDBOX_DEBUG=1` for runner diagnostics.
+
+The in-process server, like every `test/*.spec.ts` Vite harness, uses its own optimizer
+cache under `node_modules/.vite-harness/<harness>` (via `test/vite-harness-cache.mjs`)
+instead of the shared `node_modules/.vite`, so a probe never invalidates a running
+`dev:ui` / `dev:web` server's optimized deps or vice versa. The runner fails fast with the
+cause named — a `504 Outdated Optimize Dep` / `Optimize Deps Processing Error` on a module
+URL, or an esbuild dependency-scan / optimizer failure from the dev-server log — instead
+of a generic ready-marker timeout. `SANDBOX_GOMAXPROCS=<n>` exports `GOMAXPROCS` to the
+esbuild service for that run; it is a diagnostic knob for the dependency-scan crashes in
+intent-hq/intent#4617, not a fix, so leave it unset normally.
 
 ## Project Structure
 
@@ -533,6 +555,189 @@ main during that rollout; the reusable workflow uses its own resolved workflow c
 To inspect prerequisites without building, run
 `node scripts/test-transfer-selection-contract.mjs --preflight` at the activation
 revision. Local selected-head success does not establish that earlier live pins pass.
+
+### What verify:changed selects
+
+The command runs scoped Prettier and ESLint,
+related Vitest tests, colocated component tests that import the changed file directly or
+through a host `.svelte` they import (one hop, `.svelte` imports only — a change to a `.ts`
+module the host imports, or to a component two hops deep, does not select the spec), and
+only the renderer/main/preload TypeScript boundaries that changed. Ambiguous or high-risk files
+select a conservative suite instead of silently skipping coverage. Any code change (or a
+`knip.jsonc` / `package.json` / `tsconfig*.json` change) also runs knip repo-wide (~3 s,
+also chained into `pnpm run lint`): dead-code detection is a whole-program check, so it
+cannot be scoped to changed files — dropping an import in one file can make an export in
+another unused. knip resolves `m.*()` imports against the gitignored i18n bundle, so
+`lint:dead-code` first runs `generate:i18n --if-stale`, which compiles only while the
+bundle is missing or its recorded input hash no longer matches `messages/*.json`. The gate
+fails when knip stops reporting its canary files
+([details](../../docs/fe/DEVELOPER_GUIDE.md#changed-file-verification-receipts)).
+
+Any renderer source change also runs `pnpm run test:ui-invariants` (chained into
+`validate:architecture` too): the repo-wide UI ratchets and the component-catalog
+`*.meta.ts` caller ledgers. Membership is derived, not listed:
+`scripts/ui-invariant-suites.mjs` scans the vitest test files under `scripts/` and `src/`
+(`*.{test,spec}.*`, minus the Playwright `*.ct.spec.*` / `*.visual.spec.*` suites), runs
+every one whose leading comments carry `// @ui-invariant`, and fails when a test whose
+parsed code (comments, string bodies, and regex literals never count) references
+`buildUiComponentInventory` or imports a `*.meta` module and reads a `.callers` ledger has
+neither that marker nor `// @ui-invariant-exempt: <reason>`. Add the marker to any new
+inventory or ledger suite; `node scripts/ui-invariant-suites.mjs --list` shows the current
+set and `--check` validates markers without running anything. Likewise, any code change
+under `src/`, any `AGENTS.md` change (root or nested — `lint:instruction-themis-pins` scans
+them all), and any edit to the `scripts/check-*.mjs` gates themselves also runs
+`pnpm run lint:architecture` — the repo-wide static architecture scans CI runs through
+`validate:architecture` (its only architecture step; new gates go into `lint:architecture`
+in `package.json`, never into a separate workflow step, so local and CI cannot diverge —
+`scripts/check-ci-architecture-gate.test.ts` fails on any other scanner or wrapper-script
+step in `intent-pr.yml`, and an edit to that workflow runs it locally) —
+because those scans are cross-file graph checks that per-file linting cannot see:
+cloudlands-fe#2315 passed `verify:changed` locally and failed CI in
+`lint:saga-watcher-ownership`. One of those gates, `lint:protocol-version-literals`, fails
+any `src/` line carrying a `v`-prefixed version literal (`v10.1`), and a bare one (`10.1`)
+when the same line mentions protocol/intentd/daemon(s): reference the method/field name,
+the `§` section, or the capability, not protocol version numbers — they are provisional
+until merge and went stale in cloudlands-fe#2447. A deliberate exception appends a
+`// protocol-version-ok: <reason>` comment to the line, or puts
+`// protocol-version-ok-file: <reason>` in the first 10 lines of a fixture-heavy file —
+only a comment with a non-empty reason exempts; a bare token or one inside a string does
+not. A
+change to `scripts/type-check.ts` additionally runs `pnpm run type-check:validate`, since
+`lint:architecture` omits that wrapper and the
+per-boundary checks invoke `tsc` directly.
+
+`vitest related` follows the import graph, so a suite that reads the tree from disk is
+invisible to `verify:changed` (cloudlands-fe#2256 and #2314 both failed only on CI). Such a
+suite declares its triggers in its leading comments —
+`// @verify-changed-triggers: src/preload/index.template.ts, src/lib/components/**`
+(repo-relative paths or globs; `./` and `../` entries resolve from the test file's
+directory) — or opts out with `// @verify-changed-exempt: <reason>`; `// @ui-invariant`
+suites are already covered by the renderer trigger. `pnpm run lint:verify-changed-triggers`
+(in `validate:architecture`) fails an undeclared disk-reading suite. `src/preload/index.ts`
+is untracked and generated by `pnpm run generate:ipc-channels` (run by `dev`, `build`, and
+CI before it is needed), so a hand edit to it can no longer be committed by accident, and
+the generator's guard rejects a locally edited copy on regeneration (cloudlands-fe#2314
+edited it, and only CI caught it).
+
+Only checks that genuinely conflict use host-wide locks, held for one check at a time:
+Playwright CT uses `ct-<CT_PORT>` (default `ct-3100`) and the full Vitest fallback uses
+`vitest-full`. CT runs on different ports can proceed concurrently — even within one
+worktree, since the port keys the component server, the lock, and the
+`playwright/.cache-<CT_PORT>` bundle cache; Svelte and TypeScript checks do not lock. The default waits are 240 seconds for CT and 120 seconds for full
+Vitest. `VERIFY_CHANGED_LOCK_TIMEOUT_MS` overrides either wait but remains capped at
+300000 ms, and the command never stops the process that owns a lock. Direct
+`pnpm run test:ct` runs hold the same `ct-<CT_PORT>` lock (`scripts/verification-lock.mjs`),
+because the CT runtime reuses any server already listening on its port — an unlocked
+second run from another worktree would test that tree's component registry and then fail
+with ECONNREFUSED when the first run exits (intent-hq/intent#4964). A second run on an
+occupied port waits, then fails naming the owner's pid and worktree; pick a free `CT_PORT`
+to run concurrently.
+
+### Changed-file verification receipts
+
+Each run prints `record: <path>` for its attempt under `.dev/verify-changed/attempts/`:
+`run.json` holds the source, configuration, command and resolved-selection identities;
+`results.jsonl` appends check outcomes and each unit file's result as it finishes; and
+`coverage.json` lists every current check and resolved unit file per lane as
+`executed-passed`, `resumed-passed` (with its source attempt), `failed` or `unfinished`.
+The run passes only when every entry is satisfied. To continue after a failure or
+interruption, rerun with `--resume`; never hand-pick stages. It reruns anything not
+proven compatible. A configuration, lockfile, Node, Vitest setup or runner change voids
+all credit. A non-unit check needs an identical command on identical sources. A unit
+file keeps its pass unless the plan for the changes since then would select it (direct
+edit, `vitest related`, declared trigger, UI invariant, full-risk fallback or deleted
+module). Credit follows the file across lanes, so an edited test that moves from the
+declared to the direct lane simply reruns there (cloudlands-fe#3439).
+`--resolved-plan --resume` previews the continuation; `--max-unit-files` still bounds
+the full resolved plan. Attempts untouched for seven days are pruned.
+
+The dead-code gate runs knip through `scripts/check-dead-code.mjs`, which drops two
+known-unused canary files under `src/lib/components/__knip-canary__/` for the run and fails when knip does not
+report them — the masks fixed in cloudlands-fe#2695 (`.svelte` in vite
+`resolve.extensions`, an `import.meta.glob` over the component tree, an unanchored
+gitignore rule) had silently zeroed knip's Svelte coverage for months.
+
+### Component test browser pin
+
+CT keeps compiler/runner 1.58.2 and explicitly launches Chromium 153.0.8010.12
+(revision 1243), supplied by the exact `ct-browser` alias for Playwright core 1.63.0.
+`scripts/ct-browser.mjs` owns the checked identity, OS-specific executable resolution,
+cache key and dependency marker. Install with
+`node scripts/run-ct-tests.mjs --install-browsers chromium` (add `--with-deps` when
+needed); `--print-browser-plan` reports the resolved plan. Use the same
+`PLAYWRIGHT_BROWSERS_PATH` for installation and tests, including per-runner caches.
+The shared fixture rejects missing installs and wrong `Browser.getVersion` results;
+each attempt attaches `ct-runtime.json` with runner/browser versions and source hashes.
+The two-line `playwright-core@1.58.2` patch backports error classification from
+[Playwright PR 41868](https://github.com/microsoft/playwright/pull/41868), without
+retaining or intercepting promises. This browser is an integration experiment for
+intent-hq/intent#5481: the opt-in weak-inner-promise diagnostic still fails completion.
+
+Traces use `retain-on-first-failure`: the original failed attempt survives a passing
+retry. The opt-in `playwright-ct-evidence.config.ts` control requires a fresh
+`CT_EVIDENCE_OUTPUT` directory and is expected to fail the strict flaky gate with
+`--retries=1 --fail-on-flaky-tests`. The separate lifetime diagnostic config requires
+`CT_LIFETIME_EXECUTABLE`, `CT_LIFETIME_VERSION` and `CT_LIFETIME_OUTPUT`; these
+diagnostics are outside default discovery and do not change the ordinary pin.
+
+### Component test fresh-context guard
+
+Every CT spec imports `test` / `expect` from `src/test/ct-test.ts`. The module sets
+`_optionContextReuseMode: 'none'` for the whole suite, so every test mounts into a fresh browser context: ct-core's
+per-worker context reuse resets the page between tests, and that reset raced the next
+`mount()` and surfaced as a pass-on-retry "Execution context was destroyed, most likely
+because of a navigation" at the `mount(` line (intent-hq/intent#4373, #4783, #5236,
+#5249, #5279, #5481). The cost is ~0.2 s per test (critical-path CI shard +10%), accepted
+suite-wide; `CT_CONTEXT_REUSE=1` restores reuse for local wall-time measurement only and
+is never set on CI. Two auto fixtures ride along:
+
+- _Guard_: asserts via CDP that each test's `browserContextId` is new to the worker. A
+  failure `browser context <id> was already used by an earlier test in this worker …`
+  means reuse is back for the suite — typically a Playwright upgrade no longer honoring
+  the private option, or `PW_TEST_REUSE_CONTEXT` in the environment — so fix the
+  module, not the spec. A destroyed-context failure with the guard passing is therefore
+  a residual incident to investigate, not one to quarantine or retry away.
+- _Recorder_: on a failure it attaches `cdp-lifecycle.json` to the test's attachments in
+  the HTML report (`playwright-report/`; nothing under `test-results/`), covering
+  execution-context and navigation events from the moment the `page` fixture was ready
+  — the leading `Runtime.executionContextCreated` entries replay contexts that already
+  existed at attach. A `Page.frameRequestedNavigation` / `Runtime.executionContextsCleared`
+  / `Page.frameNavigated` (to `about:blank` or the CT host) sequence just before the
+  failing mount confirms a reuse reset; `Inspector.targetCrashed` is a renderer crash. No
+  navigation or clear after attach is inconclusive, not exoneration — the recorded
+  methods are a selection — so inspect a `DEBUG=pw:protocol` run or a trace before
+  drawing a conclusion. The recorder never fails a test; a `cdp-lifecycle-recorder`
+  annotation reports when it could not start or attach.
+
+### Nightly browser-test reporting
+
+All browser lanes retain JSON, HTML and traces for seven days; the nightly
+manifest and per-lane outcomes distinguish missing reports from successful runs.
+`nightly-browser-report.yml` processes every nightly/main manual completion,
+including green runs with retries or quarantine failures. Its isolated writer
+uses main's code and `MONOREPO_ISSUES_TOKEN` (central-tracker Issues write, with
+permission to set Bug Type, labels and assignees). New issues go to
+`intent-hq/intent`, owned by @panghy; matched issues retain their owners and human
+text. Exact markers and complete open/closed issue/comment listings deduplicate
+occurrences using each job's own attempt and completion time; retained shards
+do not count again. Fixed regressions reopen, current duplicates follow their
+canonical issue, and an explicit duplicate undo overrides old comments.
+Not-planned closures stay closed with recurrence evidence. No green run
+automatically closes an issue. Quarantine failures reuse an existing strong
+match or an `issue`/`quarantine` annotation containing its tracking issue URL.
+Missing reports or stale rerun evidence produce a separate CI incident.
+Collection and publication bind the triggering attempt; a later source attempt
+fails reporting with saved event/evidence-gap metadata instead of replacing it.
+For read-only diagnosis, run
+`node scripts/nightly-test-failures.mjs collect --run <id> --out /tmp/nightly-report`
+(add `--attempt <n>` to pin the source attempt, or `--historical` for older/non-nightly artifacts).
+`publish --out /tmp/nightly-report` previews issue actions; writes
+require the trusted completion workflow. Its saved plan, receipts, summary and
+original archives survive reporting errors; rerun that workflow after correcting
+auth/API failures. Python 3 reads bounded ZIP members without extracting files.
+Writers use GitHub's `concurrency.queue: max` to retain pending completions;
+`.github/actionlint.yaml` ignores only actionlint's unknown-`queue` diagnostic for
+this [documented key](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
 
 ## Debugging Notes
 
