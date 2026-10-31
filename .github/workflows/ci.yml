@@ -210,11 +210,11 @@ jobs:
   # cloudlands-fe must exist at the pins, and the components' own AGENTS.md
   # links must resolve. Bare paths are never looked up in the private
   # packages/ios (`update = none`), so a missing one fails instead of being
-  # skipped. It runs last, even after a failed step, so a red bump still shows
-  # the consumer-checks table. It is deliberately not part of
-  # `make consumer-checks`, so component PRs are never failed by monorepo
-  # docs; a component change that breaks such a link turns the
-  # auto/submodule-bump PR red instead. Rename a linked component
+  # skipped. It runs inside the docs-check row of `make consumer-checks` (a
+  # `make docs-check` prerequisite, so a local run matches this job; PR #8244
+  # passed locally and failed here). The upstream context assumes it old, so
+  # component PRs are never failed by monorepo docs; a component change that
+  # breaks such a link turns the auto/submodule-bump PR red instead. Rename a linked component
   # heading as an addition — keep `<a id="old-slug"></a>` beside it until the
   # bump lands and the monorepo link moves — and if a bump is already red,
   # land a monorepo fix that resolves at both pins (drop the anchor, link a
