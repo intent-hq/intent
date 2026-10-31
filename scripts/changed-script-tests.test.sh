@@ -2,8 +2,8 @@
 #
 # Self-test for scripts/changed-script-tests.sh (`make test-scripts-changed`).
 # It copies the selector into a throwaway git repo with a minimal ci.yml
-# shell-tests job, makes changes on a branch, and pins the DRY_RUN plan for
-# each selection rule plus the exit code of a real run with a failing step.
+# shell-tests job, makes changes on a branch, and pins the DRY_RUN plan (and
+# the printed reason) for each selection rule plus the exit code of a real run with a failing step.
 
 set -euo pipefail
 
@@ -39,6 +39,7 @@ jobs:
           bash scripts/alpha.test.sh
 
           python3 -S -B scripts/test_beta.py
+          bash scripts/lint-fixed-sleeps.sh
       - name: later step
         run: |
           bash scripts/later-step-not-selected.sh
@@ -48,7 +49,18 @@ jobs:
 EOF
 printf 'lint-shell:\n\t@echo lint ok\n' >"$fixture/Makefile"
 printf 'echo alpha ok\n' >"$fixture/scripts/alpha.test.sh"
-printf 'print("beta ok")\n' >"$fixture/scripts/test_beta.py"
+# test_beta.py names gamma.sh by file name and delta.py by module name.
+printf '# runs gamma.sh\nimport delta\nprint("beta ok")\n' >"$fixture/scripts/test_beta.py"
+printf 'echo lint-sleeps ok\n' >"$fixture/scripts/lint-fixed-sleeps.sh"
+printf 'echo alpha\n' >"$fixture/scripts/alpha.sh"
+printf 'x = 1\n' >"$fixture/scripts/beta.py"
+printf 'echo gamma\n' >"$fixture/scripts/gamma.sh"
+printf 'x = 1\n' >"$fixture/scripts/delta.py"
+printf 'echo orphan\n' >"$fixture/scripts/orphan.sh"
+# helper.sh is named by alpha.test.sh, but run.sh (not a test) sources it.
+printf 'echo helper\n' >"$fixture/scripts/helper.sh"
+printf '. scripts/helper.sh\n' >"$fixture/scripts/run.sh"
+printf '# also covers helper.sh and run.sh\n' >>"$fixture/scripts/alpha.test.sh"
 printf 'export const x = 1;\n' >"$fixture/scripts/tool.mjs"
 printf "import test from 'node:test';\ntest('tool', () => {});\n" >"$fixture/scripts/tool.test.mjs"
 printf 'export const y = 1;\n' >"$fixture/scripts/untested.mjs"
@@ -80,13 +92,84 @@ expect_plan() {
 
 all_suites='make lint-shell
 bash scripts/alpha.test.sh
-python3 -S -B scripts/test_beta.py'
+python3 -S -B scripts/test_beta.py
+bash scripts/lint-fixed-sleeps.sh'
 
 expect_plan "no change runs lint-shell only" "make lint-shell"
 
-printf '# edit\n' >>"$fixture/scripts/alpha.test.sh"
-expect_plan "unstaged scripts/*.sh change runs every shell suite" "$all_suites"
+expect_reason() {
+  local label=$1 want=$2 output
+  output=$(plan) || fail "$label: dry run exited non-zero: $output"
+  case "$output" in
+    *"$want"*) echo "ok - $label" ;;
+    *) fail "$label: output lacks '$want': $output" ;;
+  esac
+}
+
+printf '# edit\n' >>"$fixture/scripts/alpha.sh"
+expect_plan "scripts/X.sh selects its own X.test.sh" 'make lint-shell
+bash scripts/alpha.test.sh'
+expect_reason "own-test selection says why" "selected scripts/alpha.test.sh: own test of scripts/alpha.sh"
 reset_fixture
+
+printf '# edit\n' >>"$fixture/scripts/beta.py"
+expect_plan "scripts/X.py selects its own test_X.py" 'make lint-shell
+python3 -S -B scripts/test_beta.py'
+reset_fixture
+
+printf '# edit\n' >>"$fixture/scripts/gamma.sh"
+expect_plan "a suite that names the script by file is selected" 'make lint-shell
+python3 -S -B scripts/test_beta.py'
+expect_reason "mention selection says why" "selected scripts/test_beta.py: mentions gamma.sh"
+reset_fixture
+
+printf '# edit\n' >>"$fixture/scripts/delta.py"
+expect_plan "a suite that imports the .py module is selected" 'make lint-shell
+python3 -S -B scripts/test_beta.py'
+reset_fixture
+
+printf '# edit\n' >>"$fixture/scripts/alpha.sh"
+printf '# edit\n' >>"$fixture/scripts/gamma.sh"
+expect_plan "two scripts select the union of their suites in ci.yml order" 'make lint-shell
+bash scripts/alpha.test.sh
+python3 -S -B scripts/test_beta.py'
+reset_fixture
+
+printf '# edit\n' >>"$fixture/scripts/alpha.test.sh"
+expect_plan "unstaged suite change runs it and the fixed-sleep lint" 'make lint-shell
+bash scripts/alpha.test.sh
+bash scripts/lint-fixed-sleeps.sh'
+expect_reason "fixed-sleep lint selection says why" "scans every scripts/*.test.sh"
+reset_fixture
+
+printf '# edit\n' >>"$fixture/scripts/test_beta.py"
+expect_plan "python suite change runs only that suite" 'make lint-shell
+python3 -S -B scripts/test_beta.py'
+reset_fixture
+
+printf '# edit\n' >>"$fixture/scripts/helper.sh"
+expect_plan "shared helper runs every shell suite" "$all_suites"
+expect_reason "shared helper says who uses it" "scripts/helper.sh (shared helper: scripts/run.sh names it)"
+reset_fixture
+
+printf '# edit\n' >>"$fixture/scripts/orphan.sh"
+expect_plan "script no suite names runs every shell suite" "$all_suites"
+expect_reason "unnamed script says why" "scripts/orphan.sh (no suite names it)"
+reset_fixture
+
+printf '# edit\n' >>"$fixture/scripts/alpha.sh"
+output=$(cd "$fixture" && BASE=main DRY_RUN=1 FULL=1 "$script_bash" scripts/changed-script-tests.sh 2>&1) ||
+  fail "FULL=1 dry run exited non-zero: $output"
+[ "$(printf '%s\n' "$output" | sed -n 's/^  //p')" = "$all_suites" ] ||
+  fail "FULL=1 did not select every suite: $output"
+echo "ok - FULL=1 runs every shell suite"
+reset_fixture
+
+output=$(cd "$fixture" && BASE=main DRY_RUN=1 FULL=1 "$script_bash" scripts/changed-script-tests.sh 2>&1) ||
+  fail "FULL=1 without changes exited non-zero: $output"
+[ "$(printf '%s\n' "$output" | sed -n 's/^  //p')" = "$all_suites" ] ||
+  fail "FULL=1 without changes did not select every suite: $output"
+echo "ok - FULL=1 runs every shell suite with no change"
 
 printf '# edit\n' >>"$fixture/Makefile"
 git_fixture commit -q -am "edit Makefile"
@@ -98,16 +181,17 @@ git_fixture add -A
 expect_plan "staged ci.yml change runs every shell suite" "$all_suites"
 reset_fixture
 
-printf '# edit\n' >>"$fixture/scripts/test_beta.py"
-expect_plan "scripts/*.py change runs every shell suite" "$all_suites"
-reset_fixture
-
 printf 'more\n' >>"$fixture/scripts/fixtures/data.txt"
 expect_plan "scripts/fixtures change runs every shell suite" "$all_suites"
 reset_fixture
 
 printf 'new\n' >"$fixture/scripts/new-helper.sh"
-expect_plan "untracked scripts/*.sh runs every shell suite" "$all_suites"
+expect_plan "untracked script no suite names runs every shell suite" "$all_suites"
+reset_fixture
+
+git_fixture rm -q scripts/gamma.sh
+expect_plan "deleted script still selects the suites that name it" 'make lint-shell
+python3 -S -B scripts/test_beta.py'
 reset_fixture
 
 printf '# edit\n' >>"$fixture/scripts/sub/nested.sh"
@@ -129,8 +213,7 @@ expect_plan "deleted test file adds no node step" "make lint-shell"
 reset_fixture
 
 # A real run executes every step and fails when one fails.
-printf '# edit\n' >>"$fixture/scripts/alpha.test.sh"
-output=$(cd "$fixture" && BASE=main "$script_bash" scripts/changed-script-tests.sh 2>&1) ||
+output=$(cd "$fixture" && BASE=main FULL=1 "$script_bash" scripts/changed-script-tests.sh 2>&1) ||
   fail "passing run exited non-zero: $output"
 case "$output" in
   *"lint ok"*"alpha ok"*"beta ok"*"all selected checks passed"*) echo "ok - passing run runs every step" ;;
@@ -157,7 +240,7 @@ reset_fixture
 printf '# edit\n' >>"$fixture/scripts/alpha.test.sh"
 printf 'exit 7\n' >>"$fixture/scripts/alpha.test.sh"
 status=0
-output=$(cd "$fixture" && BASE=main "$script_bash" scripts/changed-script-tests.sh 2>&1) || status=$?
+output=$(cd "$fixture" && BASE=main FULL=1 "$script_bash" scripts/changed-script-tests.sh 2>&1) || status=$?
 [ "$status" = 1 ] || fail "failing run exit $status, want 1: $output"
 case "$output" in
   *"beta ok"*"FAILED steps:"*"bash scripts/alpha.test.sh"*) echo "ok - failing step fails the run after the rest ran" ;;
