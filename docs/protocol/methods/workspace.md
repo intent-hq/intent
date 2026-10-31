@@ -26,8 +26,8 @@ unchanged. Host-administration virtual workspaces retain their existing boundary
 | workspace.list | includeArchived?: boolean (default false), includeRetired?: boolean (default false) — `includeArchived: true` alone never returns `status: "Retired"` rows; see [Retired workspaces](#retired-workspaces) | { workspaces: Workspace[] } — triggers background backfill: existing workspaces with a repositoryPath but missing repositoryOwner/Name are enriched from the origin remote URL (same GitHub derivation as workspace.create, non-blocking spawn, deduped per workspace per daemon lifecycle, skips non-GitHub remotes, persists updates, emits workspace:updated with changed fields). **Membership-narrowed** for a non-administrator caller: only workspaces the bound principal is a member of are returned, and every `Workspace` row carries `myRole` (`"owner"` \| `"collaborator"` \| prepared `"manager"` under `workspaceGuestRoles: 1`), `memberCount` and `openInviteCount` (§5.48) |
 | workspace.findByPullRequest *(prepared; `prWorkspaceLookup: 1`)* | url (req): string — a GitHub-form pull-request URL, `https://<host>/<owner>/<repo>/pull/<number>` (trailing path, query or fragment ignored). No `workspaceId`: daemon-global | { workspaces: PullRequestWorkspace[] } — every workspace the daemon has linked to that PR, most recently linked first; `[]` when none. Archived workspaces are included; deleted and remote workspaces never are, and retired workspaces only with the additive `includeRetired: true` param ([Retired workspaces](#retired-workspaces)). Membership-narrowed like `workspace.list`. `-32602 { code: "invalid-params" }` when `url` is missing or not a pull-request URL. See [PR workspace lookup](#pull-request-workspace-lookup) |
 | workspace.get | workspaceId (req) | { workspace: Workspace } — -32602 if not found, **or** if the caller is not a member of it (same `{ code: "not-found" }`, indistinguishable by design; §5.48) |
-| workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipIsolation? (canonical; deprecated alias skipWorktree?), githubUrl?, repositoryCheckout? (prepared GitLab selection; see [GitLab project checkout](#gitlab-project-checkout)), clonePath?, isNewRepo?, progressId? (string — arms the unified provisioning progress stream; see notes), contextLinks? (ContextLink[] — issue/PR context links persisted on the row; a pr-kind link additionally makes the create **PR-aware** — an omitted `branch`/`baseRef` defaults to the PR's head/base branch — see the `contextLinks` and PR-aware create notes below)); optional initialAgent: { prompt? *(a blank/whitespace-only prompt reads as absent; the agent is still created — see "Initial-agent orchestration" in the notes)*, name?, model?, reasoningEffort? (string — creation-time effort; omitted inherits, blank clears; see notes), specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks? *(within v7.4, monorepo#3338: entries may carry an attachment-registry `attachmentId` reference instead of inline `data`, under the same exactly-one-of validation + registry check and daemon-side prompt-assembly resolution as `agent.sendMessage` — §5.5; a bad reference rejects `-32602` pre-side-effect)*, fileBlocks? *(v6.12; attachment references only since v10.0 — same per-entry validation as `agent.sendMessage`: every entry must carry a non-empty `attachmentId`, an entry carrying inline `data` or missing `attachmentId` is `-32602` naming the block index — §5.5)*, metadata? } — no `agentId`: agent IDs are server-assigned, and a request carrying `initialAgent.agentId` is rejected with `-32602` (see notes). Every `-32602` rejection is validated before any side effect (see "Pre-side-effect validation" in the notes) | { workspace: Workspace, initialAgent?: AgentLite } — details below the table. |
-| workspace.update | workspaceId (req) + fields to change — the skip toggle uses the same wire names as create: skipIsolation? (canonical; deprecated alias skipWorktree?, either set ⇒ same behavior); the `workspace:updated { changes }` delta serializes it under the canonical skipIsolation name; `statusImageAssetId?: string \| null` is clearable (missing = untouched, `null` = clear, string = set — see the `statusImageAssetId` notes below); `label?: string \| null` is clearable the same way — see the [`label` notes](#workspace-labels) below. A **collaborator** member may change only `title`, `tags`, `statusMessage`, `statusImageAssetId` — any other key is `-32003 { code: "forbidden", detail }` (§5.48). **Archive lifecycle delegation** ([intent-hq/intentd#2066](https://github.com/intent-hq/intentd/pull/2066)): the generic row write never touches `archived` / `archivedAt` and holds `status` while the row is archived — lifecycle state moves only through `workspace.archive` / `workspace.unarchive`. An update carrying `archived` and/or `status: "Archived"` / `"Active"` applies the other fields first, then delegates the flip to those paths: `archived: true` or `status: "Archived"` runs the full `workspace.archive` teardown (guests detached, open invites revoked, hooks / monitors / turns torn down); `archived: false`, or a non-archived `status` on an archived row, runs `workspace.unarchive`. The delegated path publishes the `{ archived, status, archivedAt }` delta itself (`archivedAt` is set by the archive/unarchive path, never by a generic update field), so the update's own `workspace:updated` delta has `archived` and `status` removed from it — both arrive only in the delegated lifecycle delta — and is skipped entirely when nothing else changed. A contradictory pair (e.g. `archived: true` + `status: "Active"`) is `-32602 { code: "invalid-params" }` and nothing is written | { workspace: Workspace } |
+| workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipIsolation? (canonical; deprecated alias skipWorktree?), githubUrl?, repositoryCheckout? (prepared GitLab selection; see [GitLab project checkout](#gitlab-project-checkout)), clonePath?, isNewRepo?, progressId? (string — arms the unified provisioning progress stream; see notes), contextLinks? (ContextLink[] — issue/PR context links persisted on the row; a pr-kind link additionally makes the create **PR-aware** — an omitted `branch`/`baseRef` defaults to the PR's head/base branch — see the `contextLinks` and PR-aware create notes below), origin? ({ kind: "proposal", agentId, proposalId } — see "Proposal origin" below)); optional initialAgent: { prompt? *(a blank/whitespace-only prompt reads as absent; the agent is still created — see "Initial-agent orchestration" in the notes)*, name?, model?, reasoningEffort? (string — creation-time effort; omitted inherits, blank clears; see notes), specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks? *(within v7.4, monorepo#3338: entries may carry an attachment-registry `attachmentId` reference instead of inline `data`, under the same exactly-one-of validation + registry check and daemon-side prompt-assembly resolution as `agent.sendMessage` — §5.5; a bad reference rejects `-32602` pre-side-effect)*, fileBlocks? *(v6.12; attachment references only since v10.0 — same per-entry validation as `agent.sendMessage`: every entry must carry a non-empty `attachmentId`, an entry carrying inline `data` or missing `attachmentId` is `-32602` naming the block index — §5.5)*, metadata? } — no `agentId`: agent IDs are server-assigned, and a request carrying `initialAgent.agentId` is rejected with `-32602` (see notes). Every `-32602` rejection is validated before any side effect (see "Pre-side-effect validation" in the notes) | { workspace: Workspace, initialAgent?: AgentLite, proposalOrigin? } — details below. |
+| workspace.update | workspaceId (req) + fields to change — the skip toggle uses the same wire names as create: skipIsolation? (canonical; deprecated alias skipWorktree?, either set ⇒ same behavior); the `workspace:updated { changes }` delta serializes it under the canonical skipIsolation name; `statusImageAssetId?: string \| null` is clearable (missing = untouched, `null` = clear, string = set — see the `statusImageAssetId` notes below); `label?: string \| null` is clearable the same way ([notes](#workspace-labels)); `autoArchiveDisabled?: boolean` ([notes](#auto-archive-opt-out)). A **collaborator** member may change only `title`, `tags`, `statusMessage`, `statusImageAssetId` — any other key is `-32003 { code: "forbidden", detail }` (§5.48). **Archive lifecycle delegation** ([intent-hq/intentd#2066](https://github.com/intent-hq/intentd/pull/2066)): the generic row write never touches `archived` / `archivedAt` and holds `status` while the row is archived — lifecycle state moves only through `workspace.archive` / `workspace.unarchive`. An update carrying `archived` and/or `status: "Archived"` / `"Active"` applies the other fields first, then delegates the flip to those paths: `archived: true` or `status: "Archived"` runs the full `workspace.archive` teardown (guests detached, open invites revoked, hooks / monitors / turns torn down); `archived: false`, or a non-archived `status` on an archived row, runs `workspace.unarchive`. The delegated path publishes the `{ archived, status, archivedAt }` delta itself (`archivedAt` is set by the archive/unarchive path, never by a generic update field), so the update's own `workspace:updated` delta has `archived` and `status` removed from it — both arrive only in the delegated lifecycle delta — and is skipped entirely when nothing else changed. A contradictory pair (e.g. `archived: true` + `status: "Active"`) is `-32602 { code: "invalid-params" }` and nothing is written | { workspace: Workspace } |
 | workspace.delete | workspaceId (req), undoDelayMs? *(v6.7)* | { success: true } — details below the table. |
 | workspace.cancelDelete *(v6.7)* | workspaceId (req) | { cancelled: boolean } — cancels a pending (grace-window) deletion scheduled by `workspace.delete` with `undoDelayMs`. `true` clears the pending deletion, emits `workspace:delete-cancelled { workspaceId }` (§6.5), and drops `pendingDeleteAt` from the row; `false` is the race-safe non-error when no deletion is pending (never scheduled, already cancelled, or already committed) |
 | workspace.archive | workspaceId (req) | { workspace: Workspace } — returns the refreshed record with `archived: true` / `status: "Archived"` / `archivedAt` set, so callers do not need to follow up with `workspace.get`. Emits `workspace:updated` with the full applied delta `changes: { archived: true, status: "Archived", archivedAt: <ts> }` where `<ts>` is the same ISO timestamp persisted on the row (§6.5). **Archive stops active work** ([intent-hq/intentd#896](https://github.com/intent-hq/intentd/pull/896); PR monitors: [intent-hq/intentd#1067](https://github.com/intent-hq/intentd/pull/1067)): in-flight agent turns are gracefully interrupted, ACTIVE background hooks and ACTIVE PR monitors (§5.42) are cancelled, and queued messages/wakes park while the workspace stays archived — see the archive active-work teardown block below. **Archive removes guests** ([intent-hq/intentd#2066](https://github.com/intent-hq/intentd/pull/2066)): the archived flip, the detach of every `collaborator` membership and the revocation of every open invite commit in **one** store transaction — atomic, so a store failure fails the call with the workspace still active — and are announced before the `archived` delta: one `workspace:updated { changes: { members: true, removedPrincipalId, memberCount } }` per detached collaborator (its queued messages dropped, as for `workspace.members.remove`), then one `{ invites: true }` when at least one invite was revoked (§5.48). The returned record's `memberCount` / `openInviteCount` are the post-sweep values. -32602 if not found. |
@@ -39,7 +39,7 @@ unchanged. Host-administration virtual workspaces retain their existing boundary
 | workspace.updateContext | workspaceId (req), items (req): ContextItem[] | { items: ContextItem[] } — atomic full-list replacement (matches the FE's `hydrate/add/remove/update` collapsed to a single authoritative-list write). Order is preserved. Emits `workspace:context-changed` with the persisted list. -32602 on missing workspace, malformed `items`, or an item with an empty `id`. |
 | workspace.getAutoCommit *(v2.7)* | workspaceId (req) | { autoCommit: { enabled: boolean, source: "workspace" \| "global" } } — the effective per-workspace auto-commit state: the persisted workspace override when set (`source: "workspace"`), else the current global `git.autoCommit` setting (`source: "global"` — pre-migration rows and the virtual Chief workspace). -32602 if the workspace is absent. |
 | workspace.setAutoCommit *(v2.7)* | workspaceId (req), enabled (req): boolean | { autoCommit: { enabled: boolean, source: "workspace" } } — echoes the persisted override (`enabled` is the boolean just written; `source` is always `"workspace"`), persists it across daemon restarts, and emits `workspace:updated` with `changes: { autoCommitEnabled: boolean }` (§6.5). -32602 on missing workspace, missing/non-boolean `enabled`, or the virtual Chief workspace. |
-| workspace.getBrowserClient *(v9.9)* | workspaceId (req) | { browserClient: { clientId?, source: "workspace" \| "default", resolved: { clientId, name? } \| null } } — the workspace's **browser-client pin** and the **driving client** an agent `browser.exec` (§5.9) would reach right now. `source: "workspace"` + `clientId` when a pin is persisted; `source: "default"` (no `clientId`) when unpinned. `resolved` is the live client the REV-2 resolution (§5.9: pin → client of an active desktop session → host of the workspace's claimed tabs → first-connected eligible client) lands on, or **`null`** when that client is offline or no eligible client is connected — so `source: "workspace"` with `resolved: null` reads "pinned but not connected". The virtual Chief workspace has no row and always answers `source: "default"`. -32602 if the workspace is absent. See the browser-client-pin block below. |
+| workspace.getBrowserClient *(v9.9)* | workspaceId (req) | { browserClient: { clientId?, source: "workspace" \| "default", resolved: { clientId, name? } \| null, target?: { clientId, via: "desktop" \| "tabs" } } } — the workspace's **browser-client pin** and the **driving client** an agent `browser.exec` (§5.9) would reach right now. `source: "workspace"` + `clientId` when a pin is persisted; `source: "default"` (no `clientId`) when unpinned. `resolved` is the live client the REV-2 resolution (§5.9: pin → client of an active desktop session → host of the workspace's claimed tabs → first-connected eligible client) lands on, or **`null`** when that client is offline or no eligible client is connected — so `source: "workspace"` with `resolved: null` reads "pinned but not connected". `target` (additive) names the routed client of an unpinned workspace — see **Routed client (`target`)** below. The virtual Chief workspace has no row and always answers `source: "default"`. -32602 if the workspace is absent. See the browser-client-pin block below. |
 | workspace.setBrowserClient *(v9.9)* | workspaceId (req), clientId (req): string \| null | same `{ browserClient }` shape as `workspace.getBrowserClient`, built from the committed state — pins agent `browser.exec` for this workspace to the logical `clientId` (§5.17), or **clears** the pin when `clientId` is JSON `null` (the field is required: omitted → -32602 `Missing required parameter: clientId (string \| null)`; a non-string non-null or an empty/whitespace string → -32602 `Invalid parameter: clientId must be a non-empty string or null`). Persists across daemon restarts, emits `workspace:updated` with `changes: { browserClientId: string \| null }` (§6.5; `null` spells the clear) and, when setting, re-homes every **claimed** tab of the workspace to the new pin (§5.45 driving-client switch — one `browser:tab-updated { changes: { hostClientId } }` per moved tab; clearing moves nothing). -32602 on a missing workspace, the virtual Chief workspace, or a `clientId` the daemon has never seen complete `client.hello` (a client row minted only by anonymous `drafts.*` traffic is not pinnable); an **offline but known** client is accepted. |
 | workspace.diskUsage *(v4.2)* | workspaceId (req) | { diskUsage?: { bytes, fileCount, computedAt, breakdown }, refreshing: boolean } — on-demand poll of the workspace's cached whole-directory disk footprint (see the workspace-disk-usage block below for the payload shape and cache semantics). `diskUsage` is **omitted** (absent, never `null`) until the first walk completes and for non-qualifying rows; `refreshing: true` means a background walk is in flight (stale or first-ever poll — poll again shortly). Non-qualifying workspaces — remote, skip-isolation, the virtual Chief workspace, or a never-provisioned directory — answer `{ refreshing: false }` with the field omitted, without arming a walk. -32602 if the workspace is absent. |
 | workspace.localChanges *(v9.7)* | workspaceId (req) | { roots: LocalChangesRoot[], hasUnpushedCommits: boolean, hasUncommittedChanges: boolean } — the local git work that archiving or deleting the workspace would lose or orphan, aggregated over the primary worktree and every registered secondary git root in one round-trip (see the workspace-local-changes block below for the row shape and evaluation rules). Each `roots[]` row is `{ kind: "primary" \| "secondary", gitRootId?, path, branch?, hasRemoteRefs, unpushedCount, uncommittedCount, error? }`; the two booleans are ORs over the rows' counts. `unpushedCount` is **remote-ref-relative** — commits reachable from `HEAD` but from no `refs/remotes/*` ref, saturating at 1000 (exact for never-pushed branches; commits behind a pruned squash-merged branch still count; a repo with no remote refs reports its whole history with `hasRemoteRefs: false`). Root 0 is the primary worktree when evaluated (skipped when there is no daemon-owned checkout — `isRemote` or `skipWorktree` — or the worktree is not a git repository), followed by every `gitRoot.list` root in list order — secondary roots are **always** evaluated. Per-root failures are fail-soft (`error` on that row, counts `0`; a primary whose `.git` exists but cannot be read is an `error` row, not skipped); a workspace with nothing evaluable answers `{ roots: [], hasUnpushedCommits: false, hasUncommittedChanges: false }`. -32602 if the workspace is absent. |
@@ -312,8 +312,10 @@ under the workspace it creates — so exactly one create runs and every caller r
 identical stored result
 ([intent-hq/intentd#2000](https://github.com/intent-hq/intentd/pull/2000)). The create runs through
 the same `workspace.create` deserialization as the
-router (a non-null `initialAgent.agentId` is rejected), and on success the binding calls
-the same `agent.resolveProposal` path the client-driven Apply uses, requesting
+router (a non-null `initialAgent.agentId` is rejected; a wire `origin` carried in the
+proposal params is discarded in favour of the binding's own provenance), and on success the
+binding calls the same `agent.resolveProposal` path a card Apply's `origin` triggers
+(see "Proposal origin"), requesting
 `outcome: "applied"` with `detail` `"Created workspace <id> (<title>) via
 ws.workspace.applyProposal"` (suffixed ` with overridden title` / ` with overridden
 prompt` / ` with overridden title and prompt` when overrides were used) — so the
@@ -444,7 +446,8 @@ Provisioning is skipped — prior row-only behavior — for `skipIsolation: true
 (canonical name; `skipWorktree` is accepted as a deprecated alias, either set ⇒ direct
 mode), `isRemote: true`, a caller-supplied `worktreePath`, a missing `repositoryPath`, or
 a `repositoryPath` that is not a local git repository (unless `isNewRepo: true`
-initializes it first — see new-repository initialization below). `workspace.update` follows the
+initializes it first — see new-repository initialization below). A `plainFolder: true`
+create never provisions a checkout ([Plain-folder workspaces](#plain-folder-workspaces)). `workspace.update` follows the
 same rename: `skipIsolation` is the canonical param (deprecated alias `skipWorktree`),
 and the persisted column keeps its historical `skip_worktree` name
 (`Workspace.skipWorktree`) — the rename is wire-level only, no migration.
@@ -780,6 +783,47 @@ another provider), the explicit or specialist-derived reasoning-effort check, an
 `workspace:created` event, or agent session is persisted, so a rejected create never
 leaves a partially created workspace behind. The per-field notes below inherit this
 invariant rather than restating it.
+
+**Proposal origin (`workspace.create { origin }`,
+[intent-hq/intent#8086](https://github.com/intent-hq/intent/issues/8086)).** A client applying a
+`workspace-create` proposal card passes `origin: { kind: "proposal", agentId, proposalId }`:
+`agentId` is the agent whose message carries the proposal and `proposalId` its
+`pendingProposals` key (`applyToolCallId`, else `preview.title`). The shape is validated
+before any side effect: `kind` other than `"proposal"`, a missing or blank `agentId` /
+`proposalId`, or a `proposalId` over the `agent.resolveProposal` length cap rejects `-32602`
+and nothing is created. A client-sent `sourceWorkspaceId` is ignored: the daemon derives the
+source workspace from the agent's session. The origin is accepted only when the named
+proposal is still pending on that agent, is a `workspace-create` proposal
+(`payload.operation: "workspace.create"`), and — when its `payload.params` carry an
+`idempotencyKey` — the create uses that same key, so neither another kind of card nor a
+replay naming a different card can be marked applied. An idempotent replay (the stored
+workspace returned without re-running the create) honours the origin only when the card
+carries its own `idempotencyKey`; a replay naming a key-less pending card reports
+`"notResolved"`, since it cannot prove the replayed workspace was created for that card.
+After a successful create — or an accepted replay — the daemon runs the
+`agent.resolveProposal` path (§5.5 "Pending proposals" in [agents.md](./agents.md)) with `outcome: "applied"` and
+`detail` `"Created workspace <id>."`, so the proposing agent receives the `proposal_resolved`
+notice and `agent:updated` carries the shrunken `pendingProposals` without the proposing
+conversation being open in any client. The resolution is **fail-soft**: an unknown agent, a
+caller who is not a member of the source workspace, or a proposal failing the checks above
+logs a warning and the create still succeeds with nothing resolved (an already-resolved
+proposal keeps its persisted outcome and gets no second notice); any other store error
+during these lookups fails the create with `-32603` before any side effect, so the client
+can retry. A failed create resolves nothing, so the card
+stays pending for Retry. The `workspace:created` event carries the resolved provenance as
+`data.origin` (§6.5). Whenever the request carried a well-formed `origin`, the result adds
+`proposalOrigin: { proposalId, outcome }` — computed per request (an idempotent replay
+reports its own `origin`), never persisted — where `outcome` is the proposal's state after
+this create: `"applied"`, `"dismissed"` (an earlier resolution kept), or `"notResolved"`
+when the daemon declined the origin (any of the fail-soft cases above). The one exception:
+when the daemon accepted the origin but the resolution write itself failed, `proposalOrigin`
+is omitted, so the client fallback below retries the resolution — safe, because the card
+already passed the checks above. **Client fallback:** daemons without this field ignore `origin` (unknown
+keys are ignored) and return no `proposalOrigin`, so a client may call `agent.resolveProposal`
+itself after a successful apply **only when the result has no `proposalOrigin`**; when it is
+present the daemon has handled the card, and a client-side resolve after `"notResolved"`
+would mark applied a card the daemon deliberately refused (e.g. a replay naming another
+card, or a non-`workspace-create` card).
 
 **Initial-agent orchestration (`workspace.create`).** When `initialAgent` is supplied the
 daemon **always** creates and persists the agent session (honoring `name`/`model`/
@@ -1334,7 +1378,7 @@ each with a dedicated change event (§6.5) that carries the new value:
 **`status` wire form.** `Workspace.status` serializes as the PascalCase TS `WorkspaceStatus`
 string enum — `"Active" | "Inactive" | "Archived" | "Retired" | "Deleted"` (src/shared/types.ts; `"Retired"` is additive, see [Retired workspaces](#retired-workspaces)) — both on
 the wire and as the stored DB word (matching the `PullRequestStatus` precedent). Optional
-`Workspace` fields (`statusMessage`, `statusImageAssetId`, `label`, `baseRef`, `prUrl`, `prNumber`,
+`Workspace` fields (`statusMessage`, `statusImageAssetId`, `label`, `autoArchiveDisabled`, `plainFolder`, `baseRef`, `prUrl`, `prNumber`,
 `prStatus`, `activePullRequest`, `pullRequests`, `pullRequestsTotal` (list rows only, see
 **List-row slimming** below), `contextLinks`, `archivedAt`, `retiredAt`, `cowSupported`,
 `checkoutMode`, repository/worktree fields, …) are
@@ -1442,7 +1486,7 @@ worktree, `"cow"` a standalone copy-on-write clone, `"direct"` a standalone plai
 clone (the cache-hydration fallback when CoW is unsupported) or an `isNewRepo`
 initialization working in the repository folder itself. It is omitted for rows
 without a daemon-provisioned checkout (skip-isolation, remote, caller-supplied
-`worktreePath`, non-git repository paths, pre-existing rows). `"cow"` and `"direct"` are
+`worktreePath`, non-git repository paths, plain-folder workspaces, pre-existing rows). `"cow"` and `"direct"` are
 both **standalone** repositories: `workspace.delete` skips the worktree-registration
 prune and the source-repo branch-delete guard for both, and both are sandbox-eligible
 (§5.5).
@@ -1465,7 +1509,24 @@ Reading the pin **together with** the live resolution is `workspace.getBrowserCl
 candidates a picker offers are `client.list` (§5.17). The virtual Chief workspace cannot be
 pinned (-32602) and never carries the field.
 
-**Prepared desktop-consent addition:** [desktop control](./desktop.md#unassigned-workspace-consent-claims-the-primary)
+**Routed client (`target`) — additive, presence-detected.** `workspace.getBrowserClient` /
+`workspace.setBrowserClient` add `browserClient.target: { clientId, via }` when an **unpinned**
+workspace is routed to a specific client: `via: "desktop"` for the client of an active
+desktop-control session, `via: "tabs"` for the host of the oldest claimed tab. These are the
+`"desktop"` / `"tabs"` rule labels `ws.browser.clients()` reports as `workspace.source` (§6.8).
+`target` is omitted when pinned (`clientId` already names the target), when the
+first-connected-eligible fallback applies, and always for the virtual Chief workspace.
+`source: "default"` with `target` and `resolved: null` reads "routed to a client that has no
+eligible live connection" (offline, or connected without `capabilities.browserExec` or
+browser-hosting authority), distinct from "no eligible client".
+`via` is an open string: `target.clientId` is authoritative whatever `via` says, so a client that
+does not recognise a `via` value still treats `target` as the routed client.
+A set never carries `target`; a clear reports the recomputed unpinned route, `target` included.
+`target` changes without a `workspace:updated`: re-read on `desktop:session-changed`,
+`browser:tab-opened` / `browser:tab-updated` / `browser:tab-closed`, and `client:connected` /
+`client:disconnected`. Older daemons omit the field.
+
+**Desktop-consent addition:** [desktop control](./desktop.md#unassigned-workspace-consent-claims-the-primary)
 uses the same `browserClientId` column, setter authorization boundaries and committed
 workspace delta. First authenticated same-owner Allow atomically claims it only
 when there is no saved pin, active desktop or agent-owned browser host; the
@@ -1936,7 +1997,9 @@ attention is never fabricated.
    metadata read, not a transcript tail walk — modulo the one-time pre-upgrade fallback,
    §5.5 — and pendingness survives later user messages
    and agent turns) — or (c, new in intentd#945) the workspace
-   `attention` flag reads `review_required`. The cheap session-metadata check (attention
+   `attention` flag reads `review_required` — or (d, prepared, §5.56) a session has a
+   pending secret request in the daemon's memory whose card was persisted at turn end
+   (a request whose card was never persisted does not count). The cheap session-metadata check (attention
    requests) runs over every candidate first; pending-questions probes only
    happen when no session already flagged.
 3. **Agent running** —
@@ -2229,9 +2292,11 @@ successful `updateContext` emits `workspace:context-changed` with the persisted 
 
 *(Additive, protocol 15.2; behavior only, no wire-shape change.)* The daemon archives
 workspaces that have been idle for `workspace.autoArchiveIdleAfterDays` days (§5.12
-[settings](./settings.md); absent means 7, `0` turns the sweep off). The setting is read
+[settings](./settings.md); absent or `0` means off, the default). The setting is read
 live at every sweep, which runs about once an hour (the first run shortly after startup).
 
+- **Opt-out.** A workspace with `autoArchiveDisabled: true` ([below](#auto-archive-opt-out)) is
+  never due, so it is filtered out before the skip checks and is not counted as skipped.
 - **Idle clock.** A workspace is due when the newest of `lastContentActivity`,
   `lastActivity` and `createdAt` is older than the cutoff. Unparseable timestamps are
   ignored; a workspace with no parseable timestamp is never due.
@@ -2239,15 +2304,58 @@ live at every sweep, which runs about once an hour (the first run shortly after 
   archived, retired or deleted; a workspace with a pending grace-window delete; a
   workspace with collaborators or open invites (archiving would remove them); and a
   workspace with work in flight — a running agent turn, a running script
-  (`scriptsRunning`), an active background hook or an active PR monitor.
+  (`scriptsRunning`), an active background hook or an active PR monitor; and a workspace
+  with local git work in its folder, read from one `workspace.localChanges` evaluation
+  over the primary worktree and the secondary roots inside the folder (roots outside it
+  never block): any such root with `uncommittedCount > 0`, with `unpushedCount > 0` and
+  `hasRemoteRefs: true` (a repository with no remote refs has nothing to push), or with
+  an `error`. A failed evaluation also skips the workspace until the next sweep.
+- **Merged PRs.** Unpushed commits in a root stop blocking when a merged PR the daemon
+  already knows covers that root's `HEAD`: the PR's head SHA equals `HEAD` or descends
+  from it. This lets a workspace archive after its squash-merged branch was deleted and
+  pruned on the remote, which leaves every original commit on no remote ref. Merged PRs
+  come only from stored data, with no forge call per sweep: the workspace's and its
+  secondary roots' `pullRequests` entries with `status: "Merged"`, and PR monitors whose
+  last snapshot shows the PR merged. Commits made after the merge, a missing head SHA or
+  commit, and uncommitted changes still block. The automatic purge applies the same rule
+  to secondary roots.
 - **Path.** A due workspace is archived through `workspace.archive`, with the same
   active-work teardown and the same `workspace:updated` delta. The sweep re-reads the row
   and re-checks that it is still idle with no agent turn running right before archiving.
+  The archive transaction then checks `autoArchiveDisabled` once more, in the same
+  transaction as the Archived write: an opt-out committed before that final check (including
+  one committed after the sweep's re-read) prevents the automatic archive, and nothing is
+  written. An opt-out committed after the archive transaction has committed does not undo it;
+  the workspace stays archived, keeps the flag, and is not archived automatically again once
+  unarchived.
 - Each workspace is archived independently; a failure is logged and retried on the next
   sweep.
 
 Clients may surface auto-archived workspaces like any other archived workspace; the
 existing auto-unarchive (a message to an agent) and `workspace.unarchive` bring them back.
+
+##### Auto-archive opt-out
+
+**`autoArchiveDisabled` (new in intentd).** A per-workspace boolean that exempts the
+workspace from the automatic archive sweep. It is **off by default**: `Workspace` payloads
+**omit** the field while it is `false` and carry `autoArchiveDisabled: true` while it is on.
+An opted-out workspace is never due, so the sweep neither archives it nor counts it as
+skipped. The flag has no other effect: manual `workspace.archive`, auto-unarchive and the
+automatic purge of already-archived workspaces are unchanged.
+
+`workspace.update` accepts `autoArchiveDisabled?: boolean`: **missing** leaves the stored
+value untouched, `true` turns the opt-out on and `false` turns it off. Any other JSON type,
+including `null`, is `-32602 { code: "invalid-params" }`, and so is carrying the key at all (either
+value) on the virtual Chief workspace, which is never persisted or auto-archived; in both cases
+the whole update is refused and nothing is written. A write that matches the stored value still
+succeeds and carries the value on the delta. Writes are **owner-only**: `autoArchiveDisabled` is not in
+the collaborator allowlist, so a collaborator update carrying it is
+`-32003 { code: "forbidden" }` (§5.48). The applied value travels on `workspace:updated` as
+`changes.autoArchiveDisabled: boolean` (§6.5). The flag is part of the workspace row: it
+survives `workspace.archive` / `workspace.unarchive` and daemon restarts, and rides
+workspace transfer/export with the row. Support is advertised by the exact-integer
+capability `workspaceAutoArchiveOptOut: 1` ([client.hello](./client-hello.md)); older daemons
+omit both the capability and the field.
 
 #### Workspace labels
 
@@ -2315,6 +2423,8 @@ stateDiagram-v2
   nothing changes, when deleting the folder would destroy the only copy of the repository
   or a folder the daemon does not own: standalone `cow` / `direct` checkouts (the folder
   *is* the repository), `skipIsolation` workspaces (the folder is the user's repository),
+  plain-folder workspaces (the folder is the user's; `error.data` adds `plainFolder: true`,
+  see [Plain-folder workspaces](#plain-folder-workspaces)),
   workspaces without a daemon-owned checkout, and remote workspaces. The automatic purge sweep skips these workspaces.
 - **Purge status message.** The retire write also sets the workspace `statusMessage` to
   `"Workspace folder purged to free disk space."`, replacing the previous message, so the
@@ -2332,7 +2442,10 @@ whose `archivedAt` is older than that many days, through the same path and delta
 workspaces are skipped, and so is any workspace whose folder holds work the purge would
 destroy: the `workspace.localChanges` evaluation reports uncommitted changes in any root,
 unpushed commits in a **secondary** root (it lives inside the folder; the primary branch
-is kept), or fails. Skipped workspaces are retried on the next sweep. Manual
+is kept), or fails. A secondary root's unpushed commits stop blocking when a merged PR
+the daemon already knows covers that root's `HEAD`, with the same evidence and coverage
+test as the automatic archive's **Merged PRs** rule: those commits survive on the forge.
+Skipped workspaces are retried on the next sweep. Manual
 `workspace.retire` does not apply this check; clients confirm with the user first.
 
 **Strict list opt-in (normative).** Retired workspaces are absent from **every** surface
@@ -2658,6 +2771,91 @@ assistant, tool or system rows, or agent/automatic-origin messages, as human.
 Message content and other recorded authors remain unchanged. This transfer-scoped
 source tagging does not authorize guessing or mass-backfilling unknown legacy
 [comment authors (§5.3)](./notes-tasks.md#qualified-human-comment-attribution-109-additive-docs-lead-implementation).
+
+#### Plain-folder workspaces
+
+*(Additive, protocol 15.3.)* A **plain-folder** workspace works directly in an ordinary
+folder with no git repository, no checkout and no forge. Clients request it explicitly at
+create time. The daemon accepts the option regardless of any client Labs setting.
+
+**Row field.** `Workspace.plainFolder?: boolean` is `true` on a plain-folder workspace and
+**omitted** otherwise (omitted = `false`, presence-detected). It is the single source of
+truth for the mode: clients and the daemon read this field and never infer the mode from
+the folder's contents, `checkoutMode`, `worktreePath` or `skipWorktree`.
+
+- It is set only by `workspace.create` and never changes afterwards. It stays `true` if a
+  `.git` directory later appears in the folder; there is no conversion to a git workspace.
+- `workspace.update` never writes it: an update carrying a `plainFolder` key is rejected
+  with `-32602 { code: "invalid-params" }` and nothing is written. Because the value never
+  changes, `workspace:updated` has no `plainFolder` change key.
+- It is carried on every `Workspace` payload, including `workspace:created`, list rows and
+  the lite `workspace.subscribe` projection (it is not a detail-only field).
+- The folder path is `repositoryPath`. A plain-folder row omits `worktreePath`,
+  `checkoutMode`, `branch`, `baseRef`, `baseCommitSha`, `remote` and every pull-request
+  field; the daemon never stores the user's folder as `worktreePath`.
+- Agents run with the folder as their working directory. The MCP
+  `ws.workspace.details()` result omits `branch`.
+
+**Create option.** `workspace.create` accepts `plainFolder?: boolean`. Only `true`
+selects the mode; `false` or omitted keeps today's behavior. `repositoryPath` is required
+and names either:
+
+- an **existing folder** that is not a git repository: the daemon creates only the row
+  and leaves the folder's contents untouched; or
+- a **new folder** that does not exist yet: the daemon creates that one directory with no
+  `.git` (its parent must already exist), then creates the row.
+
+The request is rejected with `-32602`, before any side effect (see "Pre-side-effect
+validation"), when:
+
+- it also sets a git-only option — `githubUrl`, `repositoryCheckout`, `clonePath`,
+  `isNewRepo: true`, `baseRef`, `branch`, `worktreePath` or `isRemote: true` —
+  `{ code: "invalid-params" }` with a message naming the option;
+- it carries a pr-kind `contextLinks` entry, which would make the create PR-aware and
+  derive `branch` / `baseRef` and PR fields from the forge — `{ code: "invalid-params" }`;
+  issue-kind links are accepted and persisted as for any create;
+- `repositoryPath` is missing — `{ code: "invalid-params" }`;
+- the path cannot hold a plain folder —
+  `{ code: "plain-folder-path-rejected", reason, path }`, where `reason` is one of:
+  - `"inside-git-repo"`: the folder (or, for a new folder, its parent) is a git
+    repository or inside one; `repositoryRoot` names that repository's top level;
+  - `"inside-workspaces-root"`: the path is the daemon workspaces root
+    (`$INTENTD_WORKSPACES_DIR`, else `~/intent/workspaces`) or inside it;
+  - `"not-a-directory"`: the path exists and is not a directory;
+  - `"parent-missing"`: the path does not exist and neither does its parent.
+
+`reason` is open: clients show `message` for an unknown value. The rest of the create
+contract is unchanged: the spec note is seeded, `initialAgent` and `progressId` work as
+for any create, and `workspace:created` carries the row. A request **without**
+`plainFolder` on a non-git `repositoryPath` keeps its existing behavior; this option does
+not relax the client guard against accidental non-git creates.
+
+**The folder is never deleted, moved or modified by Intent.**
+
+- `workspace.delete`, `workspace.archive` and the automatic archive remove or update only
+  database rows; the folder and its files are left as they are.
+- `workspace.retire` (manual **Purge workspace folder**) is refused with
+  `-32602 { code: "retire-unsupported", plainFolder: true }` and the message
+  `workspace.retire is not available in plain-folder workspaces`; nothing changes. The
+  automatic purge skips plain-folder workspaces.
+- `workspace.duplicate` is refused with the plain-folder error below.
+
+**Plain-folder error.** An operation that needs git or a forge, called for a plain-folder
+workspace, fails with `-32602 { code: "plain-folder-unsupported", operation }` and the
+message `<operation> is not available in plain-folder workspaces`; nothing changes.
+`operation` names the refused method or binding. It applies to `workspace.duplicate` and
+to the agent MCP bindings `ws.git.*`, `ws.pr.*`, `ws.mr.*` and
+`ws.workspace.proposeSibling`, which are also left out of the `workspace_api` tool
+description and `ws.help` output in these workspaces.
+
+**Events.** The daemon runs no git status refresh, git metadata watcher, auto-commit, PR
+monitoring or automatic PR refresh for a plain-folder workspace, so it never emits
+`changes:*`, `git:*`, `gitRoot:*`, `pr:*` or `prMonitor:*` events for it. `file:*`,
+`task:*`, `note:*`, `agent:*` and `workspace:*` events are unchanged (§6.5).
+
+**Support detection.** Clients send `plainFolder` only to a daemon whose
+`protocolVersion` is at least `15.3`; an older daemon ignores the unknown option and would
+fall back to its legacy non-git create path.
 
 #### GitLab project checkout
 

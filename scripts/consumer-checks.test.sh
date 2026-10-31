@@ -90,6 +90,10 @@ grep -q -- '--no-print-directory RUSTUP_CARGO= check-makefile-targets$' "$stub_l
   fail "monorepo context did not run check-makefile-targets at the pinned gitlink: $(cat "$stub_log")"
 grep -q 'CHECK_MAKEFILE_TARGETS_GITLINK' "$stub_log" &&
   fail "monorepo context overrode the check-makefile-targets gitlink: $(cat "$stub_log")"
+grep -q -- '--no-print-directory RUSTUP_CARGO= check-app-guide-sources$' "$stub_log" ||
+  fail "monorepo context did not run check-app-guide-sources at the pinned gitlinks: $(cat "$stub_log")"
+grep -q 'CHECK_APP_GUIDE_SOURCES_UPSTREAM' "$stub_log" &&
+  fail "monorepo context ran check-app-guide-sources in upstream mode: $(cat "$stub_log")"
 [ "$(grep -c '^  [a-z-]*  *pass  ' <<<"$check_output")" -eq "$check_count" ] ||
   fail "summary table did not list $check_count passing rows: $check_output"
 grep -q '::warning::' <<<"$check_output" && fail "all-green run printed a warning: $check_output"
@@ -205,6 +209,12 @@ grep -q -- '--no-print-directory RUSTUP_CARGO= CHECK_MAKEFILE_TARGETS_GITLINK=HE
   fail "upstream context did not point check-makefile-targets at the caller head: $(cat "$stub_log")"
 [ "$(grep -c 'CHECK_MAKEFILE_TARGETS_GITLINK' "$stub_log")" -eq 1 ] ||
   fail "the gitlink override leaked into another make invocation: $(cat "$stub_log")"
+# check-app-guide-sources reads the checkout HEADs upstream and only warns for
+# a cloudlands-fe file the pin does not carry.
+grep -q -- '--no-print-directory RUSTUP_CARGO= CHECK_APP_GUIDE_SOURCES_UPSTREAM=1 check-app-guide-sources$' "$stub_log" ||
+  fail "upstream context did not run check-app-guide-sources in upstream mode: $(cat "$stub_log")"
+[ "$(grep -c 'CHECK_APP_GUIDE_SOURCES_UPSTREAM' "$stub_log")" -eq 1 ] ||
+  fail "the app guide upstream override leaked into another make invocation: $(cat "$stub_log")"
 
 if run_check STUB_FAIL=docs-check CONSUMER_CHECKS_CONTEXT=upstream; then
   fail "upstream context masked a non-advisory failure"
@@ -327,12 +337,12 @@ if ! grep -qFx 'trusted node --test scripts/lib/markdown-tables.test.mjs' "$trus
   ! grep -qFx 'trusted node --test scripts/check-doc-table-cells.test.mjs' "$trusted_log"; then
   fail "the shared Markdown table scanner tests and the protocol table cell-count check did not run with the trusted node:"$'\n'"$(cat "$trusted_log")"
 fi
-grep -qFx 'trusted node --test docs/protocol/fixtures/scripts/monitors.test.mjs docs/protocol/fixtures/scripts/contract.test.mjs' "$trusted_log" ||
-  fail "script monitor and compact contract tests did not run with the trusted node:"$'\n'"$(cat "$trusted_log")"
+if ! grep -qFx 'trusted node --test scripts/protocol-fixture-tests.test.mjs' "$trusted_log" ||
+  ! grep -qFx 'trusted node scripts/protocol-fixture-tests.mjs' "$trusted_log"; then
+  fail "the shared protocol fixture test runner did not run with the trusted node:"$'\n'"$(cat "$trusted_log")"
+fi
 grep -qFx 'trusted node --test docs/protocol/fixtures/browser-routing/contract.test.mjs' "$trusted_log" ||
   fail "browser-routing contract tests did not run with the trusted node:"$'\n'"$(cat "$trusted_log")"
-grep -q '^trusted node --test docs/protocol/fixtures/submission-correlation/contract.test.mjs$' "$trusted_log" ||
-  fail "submission correlation contract tests did not run with the trusted node:"$'\n'"$(cat "$trusted_log")"
 grep -q '^trusted docs-check$' "$trusted_log" || fail "docs-check.sh did not run:"$'\n'"$(cat "$trusted_log")"
 grep -q '^  check-protocol-catalog  *FAIL  ' <<<"$real_output" ||
   fail "the trusted checker's failure did not reach the summary table:"$'\n'"$real_output"

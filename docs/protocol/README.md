@@ -1,6 +1,6 @@
 # Intent Backend — JSON-RPC Protocol
 
-**Documented Protocol Version:** `15.1` (prepared workspace discussions; not a shipped-version claim; the protocol-12, protocol-13.0, protocol-14.0 and protocol-15.0 retirements remain in force — see [compatibility and installed-frontend limits](./versioning.md#protocol-version--compatibility)). [GitLab checkout](./methods/repository-checkout.md) requires exactly integer `gitlabCheckout: 1`; optional owner images additionally require `gitlabCheckoutOwnerAvatar: 1` and an opted-in capture; submission correlation retains its independent `submissionCorrelation: 1` gate. The single-node platform launch remains prepared and capability-gated; its earlier 11.2 reservation does not imply implementation (daemon 11.2 carries script lifecycle snapshots). Other prepared extensions retain their own rollout status and capability gates, including the [shared-host capability contract](./methods/shared-host-membership.md#authority-and-discovery). The documented version does not imply implementation of the separately prepared Home 13.2, GitLab 13.3 or submission-correlation 13.4 additions.
+**Documented Protocol Version:** `15.3` (plain-folder workspaces; not a shipped-version claim; the protocol-12, protocol-13.0, protocol-14.0 and protocol-15.0 retirements remain in force — see [compatibility and installed-frontend limits](./versioning.md#protocol-version--compatibility)). [GitLab checkout](./methods/repository-checkout.md) requires exactly integer `gitlabCheckout: 1`; optional owner images additionally require `gitlabCheckoutOwnerAvatar: 1` and an opted-in capture; submission correlation retains its independent `submissionCorrelation: 1` gate. The single-node platform launch remains prepared and capability-gated; its earlier 11.2 reservation does not imply implementation (daemon 11.2 carries script lifecycle snapshots). Other prepared extensions retain their own rollout status and capability gates, including the [shared-host capability contract](./methods/shared-host-membership.md#authority-and-discovery). The documented version does not imply implementation of the separately prepared Home 13.2, GitLab 13.3 or submission-correlation 13.4 additions.
 
 The [workspace discussion contract](./methods/multiplayer.md#555-workspace-discussions)
 adds workspace-wide conversations, authenticated authors, and access-checked live
@@ -72,6 +72,14 @@ Public protocol and checkpoint/journal formats stay unchanged. [Capture fixtures
 and [their static tests](./fixtures/nodes/checkpoint-capture.test.mjs) establish
 structural integrity only, not executed native capture or durable ACK acceptance. Run the standalone prepared-data checks with
 `node --test docs/protocol/fixtures/nodes/checkpoint-capture.test.mjs`.
+The experimental [single-node private link](./node-link.md#single-node-private-link-nodeprotocol-5)
+is a separate nodeProtocol 5 for one hand-configured node; it advertises no
+capability and makes no public version claim.
+
+The prepared [daemon-to-daemon executor link](./node-link.md#daemon-to-daemon-executor-link-nodeprotocol-6)
+lets an owner expose a regular daemon to a backend daemon; it negotiates a
+nodeProtocol range starting at 6 and is gated by `remoteMachines: 1`
+([§5.50](./methods/nodes.md#daemon-to-daemon-remote-machines-prepared)).
 
 ### §5.x subsections (`methods/`)
 
@@ -131,16 +139,24 @@ structural integrity only, not executed native capture or durable ACK acceptance
 | §5.48 Multiplayer — `principal.*` / `workspace.invite.*` / `invite.*` / `workspace.members.*` (principals, invite links, the `/invite` proof join, membership, the collaborator allowlists) | [methods/multiplayer.md](./methods/multiplayer.md) |
 | §5.49 Shared host membership, scoped invitations, collaboration identity and personal pairing | [methods/shared-host-membership.md](./methods/shared-host-membership.md) |
 | §5.50 Static/local nodes, placement, hub merge/discard/publish and CoW retirement (prepared) | [methods/nodes.md](./methods/nodes.md) |
-| §5.51 Desktop control (prepared) | [methods/desktop.md](./methods/desktop.md) |
+| §5.51 Desktop control (macOS and Windows) | [methods/desktop.md](./methods/desktop.md) |
 | §5.52 Explicit GitLab resource reads (prepared) | [methods/repository-resources.md](./methods/repository-resources.md) |
 | §5.53 GitLab project checkout (prepared) | [methods/repository-checkout.md](./methods/repository-checkout.md) |
 | §5.54 Provider profiles (prepared) | [methods/provider-profiles.md](./methods/provider-profiles.md) |
 | §5.55 Workspace discussions (prepared) | [methods/multiplayer.md](./methods/multiplayer.md#555-workspace-discussions) |
+| §5.56 Secret requests | [methods/secrets.md](./methods/secrets.md) |
 | MCP `ws.*` binding signature index (generated; not wire-routable) | [methods/mcp-bindings.md](./methods/mcp-bindings.md) |
 
 `make check-protocol-catalog` (run by CI's `docs-check` job) enforces that the [05-method-catalog.md](./05-method-catalog.md) tables, the method tables in `methods/*.md`, and intentd's `intent-transport` catalog stay in sync (read from the `packages/intentd` checkout; like `check-event-catalog` and `check-protocol-field-parity`, the run names the checkout and the recorded pin on stdout and warns on stderr when they differ): every method documented in a `methods/*.md` table must appear in the catalog, and every method the pinned intentd catalog dispatches must have a catalog entry. The docs lead the pin: document a new method here first — a `methods/*.md` table row plus its catalog entry in one monorepo change; the checker only warns while the pinned `catalog.rs` does not carry it yet — then merge the intentd PR, and the automatic submodule bump passes once both exist. The reverse order fails: a pinned method with no docs row is a CI error, and once the `CI Gate` check is required it holds the rolling bump PR at the merge queue until the docs row lands. The same checks also run upstream: every intentd and cloudlands-fe PR calls the monorepo's reusable `.github/workflows/consumer-checks.yml` (`monorepo-consumer-checks`) with its own head in place of the pin, so a missing docs row is red on that PR before it merges, not on the bump afterwards.
 
 `make check-mcp-bindings` (a prerequisite of `make docs-check`) covers the MCP-only `ws.*` surface the catalog does not: it parses the `WORKSPACE_API_DESCRIPTION` / `WORKSPACE_API_DESCRIPTION_CHIEF` help-text constants in intentd's `crates/intent-acp/src/mcp_server/tools.rs` — from the `packages/intentd` checkout by default (the run names the checkout and the recorded pin on stdout and warns on stderr when they differ), or from the recorded gitlink through git objects with `PINNED=1 make check-mcp-bindings` (`node scripts/check-mcp-bindings.mjs --pinned`; CI runs at the pin) — and enforces that (1) the generated signature index [methods/mcp-bindings.md](./methods/mcp-bindings.md) matches the help text line for line, (2) every `ws.<namespace>.<method>` name mentioned in prose under `docs/protocol/` exists in the help text (renamed bindings are listed in the script's `RENAMED_BINDINGS` map), and (3) every parameter or option name used in an inline-code signature mention such as `` `ws.pr.snapshot(prNumber, { repo? })` `` is a parameter/option of that binding. A change to a binding's help line (new option, new result field) therefore fails CI until `make mcp-bindings-doc` regenerates the index — and the regeneration diff names the binding whose prose paragraph needs updating. An uninitialized `packages/intentd` fails the check with an init hint rather than skipping it, so a local run cannot pass without comparing against intentd; `ALLOW_MISSING_INTENTD=1` (`--allow-missing-intentd`) is the deliberate opt-out for this check only (it never skips a checked-out intentd whose `tools.rs` has moved) and prints that the bindings were not checked.
+
+## Fixture tests
+
+`make check-protocol-fixture-tests` runs every `fixtures/**/*.test.mjs`, found by
+[`scripts/protocol-fixture-tests.mjs`](../../scripts/protocol-fixture-tests.mjs) rather than a list.
+`make docs-check` depends on it and the CI docs-check job calls it, so a new static test runs everywhere once it matches that name.
+The target fails when a file under `docs/protocol/` imports `node:test` under any other name.
 
 ## Copied fixtures
 
@@ -155,7 +171,7 @@ canonical change here first, then re-export each copy.
 | Provenance | Copy | Used by |
 |---|---|---|
 | `commit` | Exact bytes plus a lock naming the full monorepo commit and the copy's SHA-256 hashes. Component CI runs `verify` against the monorepo at that commit. | [suggested-prompts](./suggested-prompts.md#distribution), [backend-keychain](./backend-keychain.md#distribution-and-verification) |
-| `commit`, single file | One file of exact bytes, under any name, plus a lock with its `fileSha256`. The lock alone marks the copy as adopted. | intentd's scripts-compact, note-truncated-read, checkout-repo-config and event-stream-recovery copies (`scripts/<name>-contract.mjs`) |
+| `commit`, single file | One file of exact bytes, under any name, plus a lock with its `fileSha256`. The lock alone marks the copy as adopted. | intentd's scripts-compact, note-truncated-read, checkout-repo-config and event-stream-recovery copies; cloudlands-fe's turn-start copy (`scripts/<name>-contract.mjs`) |
 | `revision` | One JSON file carrying the canonical file's integer `revision`. A case change bumps it. | browser-routing (`scripts/browser-routing-contract.mjs`) |
 
 Each contract script's `check` (part of `make consumer-checks`) applies the same rules
@@ -408,9 +424,18 @@ The protocol version is a `major.minor` pair: **additive** changes (new methods,
 
 The shared-host extension is [§5.49 Shared host membership](./methods/shared-host-membership.md): roles, scoped invitations, collaboration credential purpose, personal pairing, authenticated devices and client compatibility. Its behavioral conformance table is the implementation test contract for desktop, daemon and iOS consumers.
 
-### Prepared desktop control
+### Desktop control
 
 [§5.51 Desktop control](./methods/desktop.md) defines capability-gated macOS and
 Windows sessions, agent startControl/endControl, local Stop, consent and native
 execution. Its [static fixtures](./fixtures/desktop-control/contract.test.mjs)
 are contract checks, not proof of packaged native support.
+
+### Secret requests
+
+[§5.56 Secret requests](./methods/secrets.md) lets a top-level agent ask the
+user for a secret through a masked card. The daemon holds values in memory only,
+scoped to the requesting agent, and passes them only to that agent's
+`ws.host.exec` calls. Intent itself never stores or sends a value, and redacts
+exact matches from that output; a command that prints a transformed value, or
+writes one to disk, is outside that protection.

@@ -1466,6 +1466,163 @@ class ResumableNextestTests(unittest.TestCase):
                 {("alpha::one", "passes"), ("alpha::one", "fails"), ("other", "elsewhere")},
             )
 
+    @staticmethod
+    def _filtered_listing(testcases):
+        return json.dumps({"rust-suites": {"alpha::one": {
+            "package-name": "alpha", "binary-name": "one", "binary-id": "alpha::one",
+            "testcases": testcases}}})
+
+    def test_fresh_skipped_only_selection_passes_with_warning(self):
+        # Regression: a branch changing only an all-#[ignore] test file failed a
+        # fresh run with nextest's exit 4 ("no tests to run") while CI passed it.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            # Mirrors cargo-nextest 0.9.143 for an ignored-only selection: the
+            # binary still runs, reporting the skipped test in its suite summary.
+            lines = [
+                suite_event("started", test_count=1),
+                event("started", "alpha::one$skipped"),
+                suite_event("ok", passed=0, failed=0, ignored=1, measured=0, filtered_out=0),
+            ]
+            harness = PlannedRunHarness(root, [(lines, 0)])
+            harness.listing = self._filtered_listing({
+                "skipped": {"ignored": True, "filter-match": {"status": "mismatch", "reason": "ignored"}},
+                "unrelated": {"ignored": False, "filter-match": {"status": "mismatch", "reason": "expression"}},
+            })
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(harness.execute(make_args(root)), 0)
+            self.assertEqual(harness.run_commands[0][-2:], ["--no-tests", "warn"])
+            self.assertIn("[test-changed] WARNING: selection 1 matched only skipped/ignored tests (1); "
+                          "passed with no tests run", stderr.getvalue())
+
+            run_dir = root / "cache" / KEY
+            record_dir = run_dir / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
+            self.assertTrue((record_dir / "complete").is_file())
+            attempt = latest_attempt(record_dir)
+            proof = json.loads((attempt / "coverage.json").read_text())
+            self.assertTrue(proof["complete"], proof["errors"])
+            self.assertEqual(proof["categories"]["ignored"], [["alpha::one", "skipped"]])
+            self.assertEqual(proof["categories"]["executed-passed"], [])
+            self.assertEqual(gate.load_passed(run_dir / "passed.jsonl"), set())
+
+            # The saved receipt validates against its verified listing; a dropped
+            # or altered empty-run policy is rejected.
+            receipt = json.loads((attempt / "run.json").read_text())
+            result = receipt["results"][0]
+            members = gate.receipt_inventories(attempt, receipt)[0]
+            gate.validate_result_config(attempt, receipt, result, set(), members)
+            for command in (result["command"][:-2], [*result["command"][:-1], "pass"]):
+                with self.assertRaisesRegex(ValueError, "saved command disagrees"):
+                    gate.validate_result_config(attempt, receipt, dict(result, command=command), set(), members)
+
+    def test_failed_skipped_only_selection_does_not_claim_a_pass(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = PlannedRunHarness(root, [([], 101)])
+            harness.listing = self._filtered_listing({
+                "skipped": {"ignored": True, "filter-match": {"status": "mismatch", "reason": "ignored"}},
+            })
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(harness.execute(make_args(root)), 101)
+            self.assertEqual(harness.run_commands[0][-2:], ["--no-tests", "warn"])
+            self.assertNotIn("WARNING", stderr.getvalue())
+
+    def test_fresh_empty_selection_still_fails_closed(self):
+        # Nothing matched at all usually means a selection or change-map bug:
+        # keep nextest's default so the run fails instead of passing vacuously.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = PlannedRunHarness(root, [([], 4)])
+            harness.listing = self._filtered_listing({
+                "unrelated": {"ignored": False, "filter-match": {"status": "mismatch", "reason": "expression"}},
+                "skipped": {"ignored": True, "filter-match": {"status": "mismatch", "reason": "expression"}},
+            })
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(harness.execute(make_args(root)), 4)
+            self.assertNotIn("--no-tests", harness.run_commands[0])
+            self.assertNotIn("WARNING", stderr.getvalue())
+            record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
+            self.assertFalse((record_dir / "complete").exists())
+
+    def test_resumed_empty_selection_fails_unless_it_reuses_its_own_passes(self):
+        # Regression: a sibling selection's reused pass gave a matched-nothing
+        # selection `--no-tests pass`, so a resumed run passed it vacuously.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            seed = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+            self.assertEqual(seed.execute(make_args(root, resume="1")), 0)
+
+            plans = ["-p alpha --test one", "-p beta --test two"]
+            listings = {
+                "alpha": json.dumps({"rust-suites": {"alpha::one": {
+                    "package-name": "alpha", "binary-name": "one", "binary-id": "alpha::one",
+                    "testcases": {"passes": {"ignored": False, "filter-match": {"status": "matches"}}}}}}),
+                "beta": json.dumps({"rust-suites": {"beta::two": {
+                    "package-name": "beta", "binary-name": "two", "binary-id": "beta::two",
+                    "testcases": {"unrelated": {"ignored": False, "filter-match": {
+                        "status": "mismatch", "reason": "expression"}}}}}}),
+            }
+            harness = PlannedRunHarness(root, [([], 0), ([], 0)])
+            original_run = harness.fake_run
+
+            def fake_run(command, cwd, env=None):
+                if command[:3] == ["cargo", "nextest", "list"]:
+                    harness.list_commands.append(command)
+                    return listings[command[command.index("-p") + 1]]
+                return original_run(command, cwd, env)
+
+            def fake_popen(command, **kwargs):
+                # nextest exits 4 for an empty run unless --no-tests relaxes it.
+                harness.run_commands.append(command)
+                harness.runs.pop(0)
+                empty_ok = command[-2:] in (["--no-tests", "pass"], ["--no-tests", "warn"])
+                return FakeProcess([], 0 if empty_ok else 4)
+
+            harness.fake_run = fake_run
+            harness.fake_popen = fake_popen
+            self.assertEqual(harness.execute(make_args(root, plan=plans, resume="1")), 4)
+            self.assertEqual(len(harness.run_commands), 2)
+            self.assertEqual(harness.run_commands[0][-2:], ["--no-tests", "pass"])
+            self.assertNotIn("--no-tests", harness.run_commands[1])
+
+            record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(plans))
+            self.assertFalse((record_dir / "complete").exists())
+            attempt = latest_attempt(record_dir)
+            receipt = json.loads((attempt / "run.json").read_text())
+            resumed = gate.identity_set(receipt["resumed_tests"])
+            self.assertEqual(resumed, {("alpha::one", "passes")})
+            inventories = gate.receipt_inventories(attempt, receipt)
+            for result in receipt["results"]:
+                gate.validate_result_config(attempt, receipt, result, resumed,
+                                            inventories[result["selection_index"] - 1])
+            # A saved command that relaxes the empty selection is rejected.
+            empty = receipt["results"][1]
+            legacy = dict(empty, command=[*empty["command"], "--no-tests", "pass"])
+            with self.assertRaisesRegex(ValueError, "saved command disagrees"):
+                gate.validate_result_config(attempt, receipt, legacy, resumed, inventories[1])
+
+    def test_skipped_only_policy_requires_matched_tests(self):
+        skipped = {"active": True, "skipped": True}
+        runnable = {"active": True, "skipped": False}
+        unmatched = {"active": False, "skipped": False}
+        self.assertTrue(gate.skipped_only({"a": skipped, "b": unmatched}))
+        self.assertFalse(gate.skipped_only({}))
+        self.assertFalse(gate.skipped_only({"b": unmatched}))
+        self.assertFalse(gate.skipped_only({"a": skipped, "c": runnable}))
+        self.assertEqual(gate.no_tests_args(set(), {"a": skipped}), ["--no-tests", "warn"])
+        self.assertEqual(gate.no_tests_args(set(), {"b": unmatched}), [])
+        # Only passes reused by this selection's runnable members relax the policy.
+        self.assertEqual(gate.no_tests_args({("x", "y")}, {"a": skipped}), ["--no-tests", "warn"])
+        self.assertEqual(gate.no_tests_args({("x", "y")}, {"b": unmatched}), [])
+        self.assertEqual(gate.no_tests_args({"b"}, {"b": unmatched}), [])
+        self.assertEqual(gate.no_tests_args({"a"}, {"a": skipped}), ["--no-tests", "warn"])
+        self.assertEqual(gate.no_tests_args({"c"}, {"b": unmatched, "c": runnable}), ["--no-tests", "pass"])
+        # A selection that runs real tests but reused none keeps nextest's default.
+        self.assertEqual(gate.no_tests_args({"a"}, {"c": runnable}), [])
+
     def test_planned_complete_marker_short_circuits_unless_forced(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -2431,11 +2588,13 @@ class ResumeSelectionTests(unittest.TestCase):
                 resumed = set(map(tuple, receipt['resumed_tests']))
                 receipt['receipt_schema'] = 3
                 with self.assertRaisesRegex(ValueError, 'config disagrees'):
-                    gate.validate_result_config(completed, receipt, receipt['results'][0], resumed)
+                    gate.validate_result_config(completed, receipt, receipt['results'][0], resumed,
+                                                gate.receipt_inventories(completed, receipt)[0])
                 receipt['receipt_schema'] = schema
                 receipt['results'][0]['command'].extend(['-E', gate.remaining_filter(resumed)])
                 with self.assertRaisesRegex(ValueError, 'command disagrees'):
-                    gate.validate_result_config(completed, receipt, receipt['results'][0], resumed)
+                    gate.validate_result_config(completed, receipt, receipt['results'][0], resumed,
+                                                gate.receipt_inventories(completed, receipt)[0])
 
 
 class ProjectDefaultFilterTests(unittest.TestCase):

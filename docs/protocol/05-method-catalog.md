@@ -29,7 +29,7 @@ The prepared [compact script list contract](./methods/scripts.md#active-only-com
 adds `script.get` and `scriptMonitor.get`, plus optional bounded summary views on
 the existing lists under `scriptActiveLists: 1` / `scriptMonitors: 2`. Protocol 14 removes archived list selection and terminal monitor history; full event payloads remain unchanged.
 
-The prepared [desktop control contract (§5.51)](./methods/desktop.md) adds four
+The [desktop control contract (§5.51)](./methods/desktop.md) adds four
 user/executor router methods and one daemon-only reverse RPC. Agent lifecycle
 and actions are MCP-only; `desktopControl: 1` gates support independently at both ends.
 
@@ -92,20 +92,29 @@ adds two router methods. Require `repositoryResourcePages: 1` and
 retain `repositoryResourceRead: 1`. Neither capability grants authority or
 implies a carrying release.
 
-The documented surface reserves **474 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
+The prepared [daemon-to-daemon remote machines contract (§5.50)](./methods/nodes.md#daemon-to-daemon-remote-machines-prepared)
+adds eight owner-only router methods: `executor.*` on the machine that runs
+remote agents, `remoteMachines.*` on the backend. `remoteMachines: 1` gates the
+backend side; catalog presence does not imply `agentNodes`.
 
-- **Router methods:** 416 methods dispatched via the main router (`router::dispatch`)
+The [secret request contract (§5.56)](./methods/secrets.md) adds four
+workspace router methods for answering, dismissing, listing and forgetting
+agent-requested secrets. Requests are MCP-only; `secretRequests: 1` gates support.
+
+The documented surface reserves **486 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
+
+- **Router methods:** 428 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 58 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 0; use canonical Git read names
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 7 notifications: prepared `events.lost` ([loss contract](./event-stream-recovery.md)), `events.event` (§6.3) and the socket-private `workspace.repositoryContext.retired`, `workspace.repositorySelection.retired`, `accept-changes.retired`, `sourceControl.read.retired`, `sourceControl.read.invalidated` controls (§6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 6 methods total — 2 are **dual-role** and counted within the 474 dispatchable names (`browser.exec`, `host.openInEditor`), and 4 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) — see §5.9, §5.14 and the reverse-RPC list below
+- **Client-served reverse RPCs:** 6 methods total — 2 are **dual-role** and counted within the 486 dispatchable names (`browser.exec`, `host.openInEditor`), and 4 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) — see §5.9, §5.14 and the reverse-RPC list below
 
-**Total:** 474 dispatchable names + 7 notifications. Of the 6 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 4 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) are daemon→client-only reverse RPCs, never dispatched client→server.
+**Total:** 486 dispatchable names + 7 notifications. Of the 6 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 4 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
-The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.55) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
+The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.56) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
 
 **Prepared GitLab repository additions:** the [repository context and selection
 contracts](methods/workspace.md#repository-context), [native review and commit
@@ -116,7 +125,7 @@ capabilities gate support; catalog entries do not grant permission or establish
 which desktop release contains the feature. The methods below lead the component
 pin, while all existing methods and prepared extensions remain present.
 
-### Router methods by namespace (416 total)
+### Router methods by namespace (428 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
@@ -126,9 +135,10 @@ pin, while all existing methods and prepared extensions remain present.
 | comment | 6 | add, delete, getThread, list, resolveThread, respond |
 | crossWorkspace | 3 | listNotes, listSiblings, readNote |
 | debug | 1 | sampleStacks — point-in-time sample of the daemon's own thread stacks rendered as a text report (§5.43; v6.3, daemon-global — no `workspaceId`) |
-| desktop | 4 | getState, respondPermission, revoke, setPermission — prepared desktop control (§5.51); user/executor only |
+| desktop | 4 | getState, respondPermission, revoke, setPermission — desktop control (§5.51); user/executor only |
 | discussion | 9 | conversations, delete, list, react, recipients, rename, retryAgent, send, stopAgent — workspace-wide discussions and participant-restricted legacy histories (§5.55); authenticated humans, plus explicitly addressed agents in the default discussion under `discussionAgentMessaging: 1` |
 | event | 3 | agentActivity, query, workspaceSummary |
+| executor | 3 | list, mint, revoke — prepared daemon-to-daemon executor credentials (§5.50), owner-only, daemon-global |
 | file | 16 | attachmentUpload.abort, attachmentUpload.begin, attachmentUpload.chunk, attachmentUpload.commit, delete, exists, getAttachmentInfo, list, mkdir, placeAttachment, read, readChunk, rename, stat, tree, write |
 | file-tracking | 5 | getAgentLocks, getChanges, loadCommits, stage, unstage — the per-file audit-trail reads with agent attribution (§5.19; `workspaceId` req). The attribution writer `trackChange` is internal (no wire method), per the §6.8 principle |
 | git | 27 | agentCommit, branchDiff, branchStatus, changes, checkMergeConflicts, checkoutBranch, clone, commitDetails, commits, createBranch, diffs, discard, fetch, getBranches, getConfig, getRemoteUrl, numstat, pull, push, removeLockFile, renameBranch, showFile, stage, stageHunk, status, unstage, unstageHunk |
@@ -151,6 +161,7 @@ pin, while all existing methods and prepared extensions remain present.
 | primitive | 4 | addAgentAction, addCli, addPatch, addReference |
 | principal | 3 | list, me, revokeSelf — `me` is the principal this connection was bound to at admission (`{ id, login: string \| null, displayName: string \| null, avatarUrl: string \| null, isAdministrator, identity? }` — the profile fields are always present, `null` until a forge identity is cached; `identity?` is the v10.8 provider-neutral triple `{ provider, host, externalUserId }`, omitted while unlinked; §5.46; v10.3, [intent-hq/intentd#1869](https://github.com/intent-hq/intentd/pull/1869), no params, daemon-global — no `workspaceId`). Fails closed (`-32603`) when no caller is bound. `list` ([intent-hq/intentd#2023](https://github.com/intent-hq/intentd/pull/2023); §5.48) is the administrator-only roster of credentialed guests `{ principals: [{ principalId, login: string \| null, displayName: string \| null, avatarUrl: string \| null, githubUserId: integer \| null, identity? }] }` the direct member add draws from (the four profile keys always present, `null` when uncached — the `me` convention; `identity?` omitted while unlinked). `revokeSelf` (shipped in intentd b518d31; §5.48) revokes the caller's **own** credentials and drops its collaborator memberships (each publishing the `removedPrincipalId` `workspace:updated`, §6.5); self-directed only (no target parameter), the administrator is refused in the service layer |
 | providers | 7 | catalog, profiles.create, profiles.delete, profiles.list, profiles.reorder, profiles.update, profiles.updateDefault — `catalog` is the static provider registry served over the wire (§5.38; v2.6, daemon-global result; optional routing-only `workspaceId`); `profiles.*` manage named Codex/Claude Code profiles and the Default configuration's name and environment overrides (§5.54; prepared, administrator-only) |
+| remoteMachines | 5 | add, backendInfo, list, refresh, remove — prepared daemon-to-daemon exposed machines (§5.50), owner-only, daemon-global |
 | repo | 3 | list, remove, warmCache — opportunistic background repo-cache refresh for one GitHub repo (§5.11; v6.10, daemon-global — no `workspaceId`) |
 | repoConfig | 4 | ensureDir, get, has, save |
 | rules | 3 | get, list, update |
@@ -158,6 +169,7 @@ pin, while all existing methods and prepared extensions remain present.
 | script | 12 | archive, create, get, list, output, remove, restart, restore, run, start, status, stop |
 | scriptMonitor | 4 | cancel, cancelRun, get, list — prepared script run monitors (§5.8a); registration is MCP-only |
 | search | 7 | cancel, codebase, events, fileNames, inFiles, messages, notes |
+| secret | 4 | dismiss, forget, list, provide — secret requests (§5.56); values held in daemon memory only, request creation is MCP-only |
 | sentry | 8 | assignIssue, authStatus, getIssue, ignoreIssue, listIssues, listProjects, resolveIssue, searchIssues |
 | settings | 4 | get, list, reset, update |
 | skill | 1 | list |
@@ -847,7 +859,7 @@ No entries remain in this alias catalog. Use `git.diffs` and `git.commits` for G
 Of these 6 method names, `browser.exec` and `host.openInEditor` are **client-callable triggers**: the daemon validates the envelope, then serves the request. `browser.exec`'s real work always happens on the connected frontend via a reverse RPC (synthetic `rev-<n>` request id) whose result is echoed back to the original caller. `host.openInEditor`'s real work happens on the daemon host on a local connection (no reverse RPC is dispatched, §5.14) and on the connected frontend via that same reverse RPC mechanism on a remote connection. These 2 method names are **dual-role**: they appear in the dispatchable method catalog AND are also issued daemon→client as reverse RPCs on remote connections. `host.openExternal`, `host.pickApplication`, `providers.setup.openLogin` and `desktop.control` are **daemon→client-only**: they are never dispatched client→server and do not appear in the dispatchable method catalog. On a remote connection the daemon is always the requester (synthetic `rev-<n>` id) and the connected client returns the result; on a local connection the daemon serves the `host.*` intents directly on the daemon host without a reverse dispatch (§5.14).
 
 - `browser.exec` — browser automation (Chrome DevTools) — §5.9 (dual-role). When the caller is a client connection the reverse RPC goes back on that same connection; when the caller is an **agent** (MCP `ws.browser.exec`) or a tab-addressed `browser.navigateTab` / `browser.closeTab` (§5.45), the daemon selects the target connection under the REV-2 rules in §5.9 (capability gate `capabilities.browserExec`, §5.17; workspace pin `workspace.setBrowserClient`, §5.1)
-- `desktop.control` — typed desktop preparation, startControl/endControl, lease renewal and action execution (§5.51; prepared, daemon→client only)
+- `desktop.control` — typed desktop preparation, startControl/endControl, lease renewal and action execution (§5.51; daemon→client only)
 - `host.openExternal` — open a URL in the default browser — §5.14 (daemon→client only)
 - `host.openInEditor` — open a file or directory in the user's editor — §5.14 (dual-role)
 - `host.pickApplication` — prompt the user to select an application — §5.14 (daemon→client only)
@@ -865,4 +877,4 @@ Conventions used below: parameters marked **(req)** are required (a missing/`nul
 
 ### §5.x subsection index
 
-The per-namespace subsections (§5.1–§5.55) live in the [methods/](./methods/) directory; the canonical § → file map is the [§5.x subsections table in the README](./README.md#5x-subsections-methods).
+The per-namespace subsections (§5.1–§5.56) live in the [methods/](./methods/) directory; the canonical § → file map is the [§5.x subsections table in the README](./README.md#5x-subsections-methods).

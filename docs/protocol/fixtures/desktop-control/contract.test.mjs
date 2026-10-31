@@ -1,5 +1,5 @@
-// Static prepared-contract checks only. Component tests must execute these
-// cases against real code; this suite makes no runtime/native support claim.
+// Static checks of the shipped contract's examples. Component tests must execute
+// these cases against real code; this suite is not runtime/native evidence.
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
@@ -34,11 +34,13 @@ function validateState(state) {
   }
 }
 
-test('prepared additions have catalog, routing and event documentation without claiming runtime support', () => {
-  assert.equal(fixture.status, 'prepared-not-executed');
+test('shipped contract has catalog, routing and event documentation', () => {
+  assert.equal(fixture.status, 'shipped-static-examples');
   assert.deepEqual(fixture.platforms, ['macos', 'windows']);
   assert.deepEqual(fixture.capability, { desktopControl: 1 });
-  assert.match(doc, /prepared additive contract/);
+  assert.match(doc, /shipped additive contract/);
+  assert.doesNotMatch(doc, /prepared additive contract|not implemented or qualified/);
+  assert.match(doc, /Linux is\s+not supported/);
   for (const method of fixture.routerMethods) {
     assert.ok(doc.includes(`| ${method} |`), method);
     assert.ok(routing.includes(`\`${method}\``), method);
@@ -367,10 +369,10 @@ test('ownership boundary examples reject every identity fallback and invalidate 
   }
 });
 
-test('desktop feature is explicitly prepared, default on and independent of consent and capabilities', async () => {
+test('desktop feature is documented in settings, default on and independent of consent and capabilities', async () => {
   const settings = await read('../../methods/settings.md');
   assert.ok(doc.includes('agentFeatures.desktopControl'));
-  assert.ok(settings.includes('**Desktop control agent feature (prepared addition)**'));
+  assert.ok(settings.includes('**Desktop control agent feature:** `agentFeatures.desktopControl` *(boolean, default `true`'));
   const feature = fixture.agentFeature;
   assert.equal(feature.path, 'agentFeatures.desktopControl');
   assert.equal(feature.defaultValue, true);

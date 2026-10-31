@@ -58,6 +58,23 @@ still fails, with a note to `git fetch origin main` if that ref may be stale.
 `make check` / `make gate` a parity failure no longer stops make: fmt, clippy and the
 source lints still run, and `check` fails at the end naming the parity step.
 
+Every `agentFeatures.*` setting intentd registers for `settings.list` (`definitions()` in
+`packages/intentd/crates/intent-services/src/settings.rs`) must have a Settings → Agent
+features toggle in cloudlands-fe (`FEATURE_PATHS` and `FEATURES` in
+`src/lib/components/settings/agent-feature-definitions.ts`). This is checked by
+`scripts/check-agent-feature-toggles.mjs` (`make check-agent-feature-toggles`, part of
+`make consumer-checks`). It also fails when `FEATURE_PATHS` and `FEATURES` disagree, or
+when the `agentFeatures.*` entries of intentd's `KNOWN_PATHS` differ from what it read in
+`definitions()`, so an unrecognized registration form fails instead of being skipped. A
+setting without a toggle fails both here and on the upstream intentd PR. For a setting
+that intentionally has no toggle, or whose toggle lands later, add it with a one-line
+reason to the script's `EXEMPT` map, and land that change before the intentd PR. A
+toggle the daemon does not register, or a stale `EXEMPT` entry, is only a warning.
+The same check fails when a registered setting is missing from the Agent features list
+in `docs/protocol/methods/settings.md` (the paths before "— booleans"). For a docs-first
+addition, a `(prepared addition)` bullet that opens with the path also counts; once the
+daemon registers that setting, the check warns until the path is in the list.
+
 ## Harness Versioning — `HARNESS.md`
 
 **[HARNESS.md](./HARNESS.md)** explains the harness versioning system: the permanent

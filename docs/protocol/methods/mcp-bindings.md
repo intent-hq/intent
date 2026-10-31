@@ -153,6 +153,7 @@ ws.comment.respond(noteId, { threadId?, commentId?, comment, type?, author?, aut
 ws.crossWorkspace.listNotes(targetWorkspaceId) → [notes]
 ws.crossWorkspace.listSiblings({ includeRetired? }?) → [workspaces]
 ws.crossWorkspace.readNote(targetWorkspaceId, noteId) → note
+ws.crossWorkspace.search({ query?, pr?, includeRetired?, limit? }) → { matches, truncated }
 ```
 
 ### ws.desktop
@@ -254,7 +255,7 @@ ws.note.edit(id, { old, new }) → { ... }
 ws.note.editLines(id, { start, end, content }) → { ... }
 ws.note.list(tag?) → [{ id, title, tags, ... }]
 ws.note.listTasks(id) → [{ text, status, taskNoteId, linkedTaskNoteId, lineNumber, ... }]
-ws.note.read(id) → { id, title, content, rawContent, tags, ... }
+ws.note.read(id, { startLine?, maxLines? }?) → { id, title, content, rawContent, tags, totalLines, ... }
 ws.note.readAsset(asset) → { assetId, mimeType, data, sizeKb }
 ws.note.saveAsset({ data, mimeType, originalName? }) → { assetId, path, url }
 ws.note.setContent(id, content, confirmReplacement?) → { ... }
@@ -300,6 +301,14 @@ ws.script.start(scriptId) → { ok, scriptId, runId? }
 ws.script.status(scriptId) → status
 ws.script.stop(scriptId) → { ok, scriptId }
 ws.script.unmonitor(monitorId) → { ok, monitorId }
+```
+
+### ws.secret
+
+```text
+ws.secret.forget(name) → { ok, forgotten }
+ws.secret.list() → { secrets, pendingRequests }
+ws.secret.request({ name, reason }) → { ok, requestId, message }
 ```
 
 ### ws.task

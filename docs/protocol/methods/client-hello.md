@@ -92,13 +92,19 @@ of `scriptLifecycle`. Without it, clients must not send readiness options or
 interpret successful creation/URL detection as proof of readiness. Scripts
 without a contract omit `ready` and `readiness` even when support is advertised.
 
-**Desktop control (prepared additive extension).**
+**Desktop control (additive extension; macOS and Windows clients).**
 `server.capabilities.desktopControl: 1` and the execution connection’s
 `capabilities.desktopControl: 1` gate [§5.51](./desktop.md) independently.
 Resolve the existing workspace primary before testing this capability; never
 choose another computer because the primary lacks support. The flag grants no
-permission and does not assert current native readiness. Current browser-only
-capability behavior below remains unchanged until this extension is implemented.
+permission and does not assert current native readiness. The browser capability
+behavior below is unchanged apart from §5.51's active-session browser routing rule.
+
+**Secret requests (additive extension).** Exactly integer
+`server.capabilities.secretRequests: 1` advertises [§5.56](./secrets.md):
+secret-request resource blocks and the `secret.*` router methods. Clients render
+secret-request cards and call those methods only when it is present. The flag
+grants no permission and says nothing about the agent feature setting.
 
 **Workspace labels (additive).** Exactly integer `server.capabilities.workspaceLabels: 1`,
 also returned by `system.capabilities`, advertises the
@@ -107,6 +113,14 @@ also returned by `system.capabilities`, advertises the
 `changes.label` on `workspace:updated`. Unlabeled workspaces omit the field, so clients
 cannot detect support by presence; they offer label actions only for exact integer `1`,
 and older daemons omit it.
+
+**Workspace auto-archive opt-out (additive).** Exactly integer
+`server.capabilities.workspaceAutoArchiveOptOut: 1`, also returned by `system.capabilities`,
+advertises the [§5.1 auto-archive opt-out contract](./workspace.md#auto-archive-opt-out): the
+optional `Workspace.autoArchiveDisabled` field, the `autoArchiveDisabled` param on
+`workspace.update` and `changes.autoArchiveDisabled` on `workspace:updated`. Workspaces that
+have not opted out omit the field, so clients cannot detect support by presence; they offer
+the opt-out only for exact integer `1`, and older daemons omit it.
 
 **Script run monitoring (prepared additive extension).**
 `server.capabilities.scriptMonitors: 1` advertises the entire
@@ -161,6 +175,21 @@ subscribe to discussion events, and private discussions remain human-only.
   `clientId` is namespaced as `{principalId}:{presented}` — idempotent, so a client that persists
   the returned id re-hellos to the same identity — and a collaborator can only ever act as a
   client id inside its own namespace; the administrator, agents and the daemon keep the raw id.
+- **Superseded-id tab rehome.** A `clientId` carrying earlier namespace prefixes
+  (`{a}:{b}:{raw}`) still names the device that once hello'd as each shorter `:`-suffix
+  (`{b}:{raw}`, `{raw}`). On a successful hello the daemon moves the **open** browser tabs
+  (§5.45) hosted by such a suffix to the presented id and publishes `browser:tab-updated
+  { changes: { hostClientId, displayed?: null } }` for each, so a device whose id was
+  re-prefixed recovers its tabs ([intent-hq/intent#8045](https://github.com/intent-hq/intent/issues/8045)).
+  A suffix qualifies only when the caller currently holds browser-management authority
+  (the same host-role check as the `browser.*` methods; a collaborator must also manage the
+  browser in every workspace that suffix has open tabs in), the caller may already act as
+  it (the namespacing above would return it unchanged), it has no live connection (when liveness cannot be determined
+  nothing moves), and the move does not change who may act as the host: an id's namespace
+  owner is its head segment when that names a principal of this daemon, and a suffix moves
+  only when its namespace owner equals the presented id's (prefixes left by other
+  backends' principals add no one). Tombstoned rows stay with their old host. A failed
+  rehome is logged and never fails the hello.
 - **Connection → client mapping.** The daemon maps each live connection to its logical
   `clientId`; **multiple connections may share one `clientId`** (the same client reconnecting, or
   several windows of one app).

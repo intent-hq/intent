@@ -312,7 +312,7 @@ API gains root support; all other file APIs retain their existing scope.
 >    this workspace is not connected` when no name is known) — **never** a silent
 >    fallback to another client. The name is the client's last hello `name`, read from
 >    the persisted `client` row when the connection registry no longer knows it.
-> 3. **Active desktop session (prepared desktop control, §5.51;
+> 3. **Active desktop session (desktop control, §5.51;
 >    [intent-hq/intentd#2245](https://github.com/intent-hq/intentd/pull/2245)).** Unpinned,
 >    but the workspace has an **active** desktop-control session (`desktop:session-changed`
 >    `status: "active"`): the target is the client running that session; a pending permission
@@ -350,9 +350,10 @@ API gains root support; all other file APIs retain their existing scope.
 > `browser.exec` would go right now, with the read-only `ws.browser.clients()` binding (§6.8).
 >
 > `workspace.getBrowserClient` (§5.1) runs the same resolution without dispatching
-> (`resolved: null` for the two offline outcomes). Client-triggered `browser.exec` is
-> **unchanged**: it still reverse-dispatches on the caller's own connection, whatever
-> the workspace's pin says.
+> (`resolved: null` for the two offline outcomes; an unpinned workspace routed by the
+> desktop or claimed-tab rule also reports that client as `target: { clientId, via }`).
+> Client-triggered `browser.exec` is **unchanged**: it still reverse-dispatches on the
+> caller's own connection, whatever the workspace's pin says.
 >
 > **Registry-backed agent actions (v9.11).** Because the daemon owns the tab registry
 > (§5.45), two parts of an agent's batch are handled daemon-side before / after the
@@ -880,7 +881,10 @@ registry is the shared source of truth every client renders from: a host reports
 tabs, any client reads the workspace's tabs across hosts, and navigation / close requests
 about a tab are **routed** by the daemon to the client that must perform them. All six
 methods are **fast-path** (§5 catalog): the host-only reports are keyed by the
-connection's `client.hello` identity, never by a wire parameter.
+connection's `client.hello` identity, never by a wire parameter. A host row can also move without
+a report: `workspace.setBrowserClient` migrates claimed tabs, and `client.hello` rehomes open
+tabs still hosted by a superseded id of the same device (§5.17) — both emit
+`browser:tab-updated { changes: { hostClientId } }`.
 
 | Method | Params | Result |
 | --- | --- | --- |
@@ -963,11 +967,17 @@ successful `claimTab` re-homes the row to the workspace's **driving client** (§
 REV-2 rule order; `browser:tab-updated { changes: { hostClientId, ownerAgentId } }`), and
 `workspace.setBrowserClient` (§5.1) moves **every claimed tab** of the workspace to the
 new pin (`changes: { hostClientId }` per moved tab; clearing the pin moves nothing).
-Either re-home also **clears the moved tab's `displayed`** (the previous host's layout
+Independently of the driving client, a successful `client.hello` moves the **open** tabs —
+claimed **and** unclaimed — still hosted by a superseded id of the same device (a shorter
+`:`-suffix of the presented `clientId` the caller may act as, with no live connection;
+§5.17) to the presented id, one `browser:tab-updated { changes: { hostClientId } }` per
+moved tab ([intent-hq/intent#8045](https://github.com/intent-hq/intent/issues/8045)).
+Every re-home also **clears the moved tab's `displayed`** (the previous host's layout
 fact is no longer vouched for): the same `browser:tab-updated` carries `changes: {
 displayed: null }` when it was set, and the row reads with `displayed` absent until the
 new host reports it via `browser.upsertTab` / `browser.syncTabs`.
-Unclaimed (user) tabs never move. A host that receives a `browser:tab-updated` naming
+Apart from that superseded-id rehome, unclaimed (user) tabs never move: a driving-client
+switch leaves them on their physical host. A host that receives a `browser:tab-updated` naming
 another `hostClientId` for one of its tabs stops treating that tab as its own; the new
 host materialises it from the canonical row.
 

@@ -187,5 +187,9 @@ test('private enrollment and capture supported sets are unchanged by LOCAL examp
   const capture = JSON.parse(read('./checkpoint-capture.json'));
   assert.equal(capture.checkpointFormat, 1); assert.equal(capture.nodeProtocol, 3);
   const versioning = read('../../versioning.md');
-  assert.ok(!versioning.includes('nodeProtocol 5'));
+  // nodeProtocol 5 belongs to the experimental single-node link, never to the
+  // LOCAL source contract.
+  const mentions = versioning.split('\n\n').filter((p) => p.includes('nodeProtocol 5'));
+  assert.ok(mentions.every((p) => p.includes('single-node link')));
+  assert.ok(!mentions.some((p) => /LOCAL|local source|local-source/.test(p)));
 });

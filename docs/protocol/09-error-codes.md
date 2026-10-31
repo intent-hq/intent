@@ -25,6 +25,9 @@ Errors use the standard JSON-RPC 2.0 `error` object `{ code, message, data? }`.
   Errors that already attach a more specific `error.data.code` keep theirs: a `workspace.create` failure from an unresolvable base ref keeps this numeric code and its human message but adds `error.data = { code: "base-ref-unresolvable", baseRef }` so clients detect the condition from `error.data.code` instead of parsing the message; `baseRef` is the canonical (remote-prefix-stripped) ref — the same value interpolated into the human message (§5.1 worktree provisioning + `baseRef` canonicalisation).
   Every mutating call scoped to a retired workspace — database-only writes (notes, tasks, comments) included — uses this numeric code with `error.data = { code: "workspace-retired", workspaceId }` (protocol 15.2; §5.1 [Retired workspaces](./methods/workspace.md#retired-workspaces)); reads, `workspace.delete` / `workspace.cancelDelete`, the revive triggers (`workspace.unarchive`, `workspace.restore`, a user message to an agent) and per-viewer seen/attention bookkeeping are never refused with it.
   `workspace.retire` on a workspace whose folder holds the only copy of its repository or is not daemon-owned (`cow` / `direct` checkouts, `skipIsolation`, remote) uses this numeric code with `error.data = { code: "retire-unsupported", checkoutMode? }` and changes nothing.
+  On a plain-folder workspace that refusal adds `plainFolder: true` to `error.data`, with the message `workspace.retire is not available in plain-folder workspaces` (protocol 15.3).
+  An operation that needs git or a forge, called for a plain-folder workspace (`workspace.duplicate`, and the agent MCP bindings `ws.git.*`, `ws.pr.*`, `ws.mr.*` and `ws.workspace.proposeSibling`), uses this numeric code with `error.data = { code: "plain-folder-unsupported", operation }` and the message `<operation> is not available in plain-folder workspaces`, and changes nothing (protocol 15.3; §5.1 [Plain-folder workspaces](./methods/workspace.md#plain-folder-workspaces)).
+  A `workspace.create { plainFolder: true }` whose `repositoryPath` cannot hold a plain folder uses this numeric code with `error.data = { code: "plain-folder-path-rejected", reason, path, repositoryRoot? }` before any side effect; `reason` is `inside-git-repo` (with `repositoryRoot`), `inside-workspaces-root`, `not-a-directory` or `parent-missing`, and clients show `message` for an unknown value.
   User-fixable clone failures (`path-invalid`, `destination-exists-non-empty`) also use this numeric code — see the clone failure taxonomy below.
   A `git.showFile` path resolving to a non-blob tree entry (a `160000` gitlink / submodule pin, or a `040000` tree) also uses this numeric code with `error.data = { code: "not-a-file", path, mode }` — `mode` is the octal tree-entry mode string (monorepo#1739; §5.6).
   The invite / join flow (§5.48) keeps its own user-actionable discriminators on this numeric code — `invite-not-found`, `invite-expired`, `invite-revoked`, `invite-redeemed`, `invite-pin-mismatch`, `invite-pin-unknown`, `guest-limit` / `workspace-full`, `workspace-archived` (`workspace.members.add` / `workspace.invite.create` / the `invite.prove` / `invite.accept` join commit on an archived workspace — archiving detached every guest and closed every open invite; [intent-hq/intentd#2066](https://github.com/intent-hq/intentd/pull/2066)), and the `invite.prove` / `invite.accept` outcomes `proof-invalid` / `proof-expired` / `credential-invalid` / `owner-self-join` — with the kind's fixed prose as `message`; its infrastructure-side refusals (`github-identity-required`, `primary-identity-locked`, `invite-flow-busy`, `github-unreachable`, `identity-unverifiable`, `listener-down`, `tunnel-down`) are `-32603` with the same `error.data.code` convention.
@@ -125,6 +128,18 @@ structured `data.code` values for node placement, checkpoints and uncertain RPC
 outcomes using existing numeric codes. No new numeric error is introduced.
 These errors are future contracts; current CoW errors remain until retirement.
 
+### Prepared remote machine errors
+
+The [daemon-to-daemon remote machines contract](./methods/nodes.md#remote-machine-errors)
+adds structured `data.code` values on existing numeric codes. `-32602`:
+`model-unavailable`, `machine-update-required`, `machine-in-use`,
+`remote-agents-disabled`, and the `placement-unavailable` reasons
+`machine-unreachable`, `machine-unknown` and `machine-revoked`; `no-capacity`
+gains `limit: "count" | "memory"` with its counts or bytes. `-32603`:
+`machine-unreachable` (with the routes tried) and `machine-revoked` from
+`remoteMachines.add` / `refresh`. `-32003` with `data.code: "node-mode"` refuses
+a method outside the node-mode list. No new numeric error is introduced.
+
 ### Prepared truncated note read errors
 
 The opt-in [truncated note read contract](./methods/notes-tasks.md#truncated-note-reads-prepared-additive-contract)
@@ -134,9 +149,9 @@ keys its write refusal on the existing `-32602` code.
 | --- | --- | --- |
 | -32602 | content-base-mismatch | A whole-content write's `baseContentBytes` does not match the resolved base, or the base is unknown. `data` adds `baseContentBytes` and `resolvedBaseBytes` (base size or `null`; never copy it into `baseContentBytes`). Nothing was written; re-read the full note before writing. |
 
-### Prepared desktop control errors
+### Desktop control errors
 
-[§5.51](./methods/desktop.md#errors-and-verification) reserves typed `desktop-*`
+[§5.51](./methods/desktop.md#errors-and-verification) defines typed `desktop-*`
 errors under existing numeric codes: `-32602` for inactive/stale operations and
 `desktop-display-selection-required` / `desktop-display-unavailable` (ambiguous
 selection or missing display, with no capture/input),
@@ -149,6 +164,16 @@ have been delivered, so replaying the whole input is unsafe),
 `-32603` for offline, busy, unsupported and native/transport failures, and
 `-32003` for authority refusal. Action failures distinguish not-started, partial
 and unknown execution; an uncertain input outcome must never be replayed.
+
+### Secret request errors
+
+[§5.56](./methods/secrets.md#client-facing-router-methods) uses `-32602` with
+`data.code: "secret-request-unknown"` when `secret.provide` or `secret.dismiss`
+names a request that is unknown, already answered, or lost on restart, and with
+`data.code: "invalid-params"` for an empty or oversized value or an invalid name.
+`-32003` means the caller lacks send authority for the target agent. No error
+message or `data` ever contains the submitted value. The agent-facing
+`secret-unavailable` tool error is described in §5.56.
 
 ### Prepared provider profile errors
 

@@ -47,6 +47,10 @@ streamed passes. Old run.json counters remain native per-child diagnostic totals
 not unique coverage totals. A completed shortcut revalidates its execution source
 and records that source on the report, including each selection's evidence owner.
 No later invocation repairs unfinished receipts; only tree expiry removes them.
+
+`--stress-count N` (make test-stress) hands one `--filterset` to
+scripts/nextest_stress.py: the same fixtures and Cargo outputs, N iterations with
+retries off, an optional `--load 1` CPU + fsync load, and no resume records.
 """
 
 from __future__ import annotations
@@ -69,6 +73,7 @@ import sys
 import tempfile
 import threading
 import time
+from types import SimpleNamespace
 import uuid
 import xml.etree.ElementTree as ET
 try:
@@ -727,6 +732,35 @@ def inventory(text: str):
     return identities, aliases
 
 
+def skipped_only(members: dict) -> bool:
+    """True when a selection matched real tests and every one is skipped by default.
+
+    An empty selection (nothing active) is not skipped-only: it usually means a
+    selection or change-map bug, so it keeps nextest's fail-closed default.
+    """
+    active = [meta for meta in members.values() if meta["active"]]
+    return bool(active) and all(meta["skipped"] for meta in active)
+
+
+def runnable(members: dict) -> set:
+    """Identities a selection actually runs: active and not skipped by default."""
+    return {identity for identity, meta in members.items() if meta["active"] and not meta["skipped"]}
+
+
+def no_tests_args(resumed: set, members: dict) -> list[str]:
+    """nextest's empty-run policy for one selection.
+
+    An empty run passes only when this selection reused passes of its own
+    runnable members, and warns when it matched only skipped tests. Another
+    selection's reused passes never excuse a selection that matched nothing.
+    """
+    if not resumed.isdisjoint(runnable(members)):
+        return ["--no-tests", "pass"]
+    if skipped_only(members):
+        return ["--no-tests", "warn"]
+    return []
+
+
 CATEGORIES = ("executed-passed", "resumed-passed", "ignored", "failed", "unfinished")
 COMPATIBILITY_FIELDS = ("tree_key", "cargo_output_args", "cargo_config_args", "test_stack",
                         "callback_fixture", "transfer_fixture")
@@ -764,7 +798,7 @@ def receipt_inventories(directory: Path, receipt: dict):
 
 
 
-def validate_result_config(directory: Path, receipt: dict, result: dict, resumed: set) -> None:
+def validate_result_config(directory: Path, receipt: dict, result: dict, resumed: set, members: dict) -> None:
     index = result["selection_index"]
     for field in ("native_exit_code", "exit_code"):
         if result[field] is not None and type(result[field]) is not int:
@@ -797,8 +831,9 @@ def validate_result_config(directory: Path, receipt: dict, result: dict, resumed
                "--message-format-version", "0.1", *receipt["cargo_config_args"], *receipt["cargo_output_args"]]
     if receipt["no_fail_fast"]:
         command.append("--no-fail-fast")
-    if resumed:
-        command.extend(["--no-tests", "pass"])
+    # An older receipt for a skipped-only selection carries no flag and fails
+    # here; that run exited 4, so at most its sibling selections' passes rerun.
+    command.extend(no_tests_args(resumed, members))
     if result["command"] != command or result["plan"] != " ".join(receipt["selections"][index - 1]):
         raise ValueError("saved command disagrees with receipt")
 
@@ -992,7 +1027,7 @@ class Evidence:
             index = result["selection_index"]
             if type(index) is not int or index in results or not 1 <= index <= len(inventories):
                 raise ValueError("duplicate or invalid result selection")
-            validate_result_config(directory, receipt, result, resumed)
+            validate_result_config(directory, receipt, result, resumed, inventories[index - 1])
             outcomes, history, junit = selection_evidence(directory, result, inventories[index - 1], resumed)
             results[index] = (outcomes, history, junit)
         return receipt, inventories, results
@@ -1072,7 +1107,7 @@ def coverage_report(directory: Path, receipt: dict, credits: dict):
             result = results.get(index)
             if result is not None:
                 try:
-                    validate_result_config(directory, receipt, result, resumed)
+                    validate_result_config(directory, receipt, result, resumed, members)
                     outcomes, history, junit = selection_evidence(directory, result, members, resumed)
                 except (OSError, ValueError, KeyError, TypeError, AttributeError, ET.ParseError) as error:
                     report["errors"].append(f"selection {index}: {error}")
@@ -1585,18 +1620,16 @@ def prune_stale_executables(output_args: list[str], listings: list[str],
     return freed
 
 
-def run_nextest(args: argparse.Namespace) -> int:
-    label = args.label
-    no_fail_fast = args.no_fail_fast == "1"
-    repo_root = Path(args.repo_root).resolve()
-    intentd_dir = (repo_root / args.intentd_dir).resolve()
-    cache_dir = Path(args.cache_dir).expanduser().resolve()
-    plans = split_plans(args.plan)
+def prepare_test_env(repo_root: Path, intentd_dir: Path, plans: list[list[str]], label: str):
+    """Fixture preparation and child env shared by every runner mode (test, stress).
+
+    Returns (env, callback fixture identity, transfer fixture identity, compact
+    Cargo config args); the identities are None when the plans cannot need them.
+    """
     fixture_identity = callback_fixture_identity(intentd_dir) if needs_callback_fixture(plans) else None
     transfer_identity = transfer_fixture_identity(repo_root) if needs_transfer_fixture(plans) else None
     cargo_config = compact_config(intentd_dir)
     announce_compact()
-    prune(cache_dir)
     env = nextest_env()
     if fixture_identity is not None:
         env[CALLBACK_FIXTURE_ENV] = fixture_identity["root"]
@@ -1609,6 +1642,19 @@ def run_nextest(args: argparse.Namespace) -> int:
         env[TRANSFER_FIXTURE_ENV] = transfer_identity["root"]
     if cargo_config:
         env["CARGO_INCREMENTAL"] = "0"
+    return env, fixture_identity, transfer_identity, cargo_config
+
+
+def run_nextest(args: argparse.Namespace) -> int:
+    label = args.label
+    no_fail_fast = args.no_fail_fast == "1"
+    repo_root = Path(args.repo_root).resolve()
+    intentd_dir = (repo_root / args.intentd_dir).resolve()
+    cache_dir = Path(args.cache_dir).expanduser().resolve()
+    plans = split_plans(args.plan)
+    env, fixture_identity, transfer_identity, cargo_config = prepare_test_env(
+        repo_root, intentd_dir, plans, label)
+    prune(cache_dir)
     # Resolve before accepting resume evidence: unchanged config text can expand
     # to different paths (Cargo home templates or retargeted output symlinks).
     try:
@@ -1781,6 +1827,7 @@ def run_nextest(args: argparse.Namespace) -> int:
                 "source_root": str(intentd_dir), "args": output_args,
             }, indent=2) + "\n")
             binary_ids: dict[tuple[str, str], str] = {}
+            inventories: list[dict] = []
             for index, selection in enumerate(selections, start=1):
                 list_output = run(
                     [
@@ -1794,7 +1841,8 @@ def run_nextest(args: argparse.Namespace) -> int:
                 )
                 write_atomic(record_dir / f"listing-{index}.json", list_output + "\n")
                 listings.append(list_output)
-                selected_ids = test_binary_ids(list_output)
+                members, selected_ids = inventory(list_output)
+                inventories.append(members)
                 run_record["selection_membership"][index - 1] = sorted(
                     {(binary_id, test) for (_, test), binary_id in selected_ids.items()})
                 save_receipt()
@@ -1802,8 +1850,7 @@ def run_nextest(args: argparse.Namespace) -> int:
                     if identity in binary_ids and binary_ids[identity] != binary:
                         raise RuntimeError("ambiguous nextest identity across selections")
                     binary_ids[identity] = binary
-            known_tests = set().union(*({i for i, meta in inventory((record_dir / f"listing-{n}.json").read_text())[0].items()
-                                        if meta["active"] and not meta["skipped"]} for n in range(1, len(selections) + 1)))
+            known_tests = set().union(*(runnable(members) for members in inventories))
             # Shared credit applies only to this invocation's active selection.
             resumed &= known_tests
             run_record["resumed_tests"] = sorted(resumed)
@@ -1853,8 +1900,8 @@ def run_nextest(args: argparse.Namespace) -> int:
                     ]
                     if no_fail_fast:
                         command.append("--no-fail-fast")
-                    if resumed:
-                        command.extend(["--no-tests", "pass"])
+                    policy = no_tests_args(resumed, inventories[index - 1])
+                    command.extend(policy)
                     outcomes: dict[str, str] = {}
                     suite_ignored: dict[str, int] = {}
                     result: dict[str, object] = {
@@ -1877,6 +1924,10 @@ def run_nextest(args: argparse.Namespace) -> int:
                     finally:
                         result.update(tally(outcomes, suite_ignored), exit_code=status)
                         save_receipt()
+                    if status == 0 and policy == ["--no-tests", "warn"]:
+                        count = sum(1 for meta in inventories[index - 1].values() if meta["active"])
+                        print(f"[{label}] WARNING: selection {index} matched only skipped/ignored tests "
+                              f"({count}); passed with no tests run", file=sys.stderr, flush=True)
                     if status != 0:
                         if not no_fail_fast:
                             break
@@ -1924,6 +1975,12 @@ def run_nextest(args: argparse.Namespace) -> int:
         if gate_lock is not None:
             os.close(gate_lock)
     return status
+
+
+def positive_int(value: str) -> int:
+    if not re.fullmatch(r"[1-9][0-9]*", value):
+        raise argparse.ArgumentTypeError(f"expected a positive integer, got {value!r}")
+    return int(value)
 
 
 def main() -> int:
@@ -1988,7 +2045,37 @@ def main() -> int:
         "the same as --plan '--workspace -E EXPR', so it cannot be combined with --plan",
     )
     parser.add_argument("--base", metavar="REF", help="base ref recorded in run.json")
+    parser.add_argument(
+        "--stress-count",
+        type=positive_int,
+        metavar="N",
+        help="stress mode (make test-stress): run --filterset N times with retries off and "
+        "print pass/fail counts and panic locations; never reads or writes resume records",
+    )
+    parser.add_argument("--load", choices=("0", "1"), default="0",
+                        help="stress mode: 1 runs a built-in CPU + fsync load during the tests")
+    parser.add_argument("--load-cpus", type=positive_int, metavar="N",
+                        help="stress mode: CPU spinners for --load 1 (default: 2 x CPUs)")
     args = parser.parse_args()
+    if args.stress_count is None and (args.load != "0" or args.load_cpus is not None):
+        parser.error("--load and --load-cpus need --stress-count")
+    if args.stress_count is not None:
+        if args.filterset is None or args.plan:
+            parser.error("--stress-count needs --filterset and cannot be combined with --plan")
+        if not args.filterset.strip():
+            parser.error("--filterset needs a nextest filterset expression, e.g. 'test(/name/)'")
+        if __package__:
+            from . import nextest_stress
+        else:
+            import nextest_stress
+        try:
+            gate = sys.modules.get(__name__)
+            if gate is None or getattr(gate, "run_nextest", None) is not run_nextest:
+                gate = SimpleNamespace(**globals())
+            return nextest_stress.run_stress(args, gate)
+        except (OSError, RuntimeError, ValueError) as error:
+            print(f"[{args.label}] ERROR: {error}", file=sys.stderr)
+            return HANDLED_ERROR_EXIT
     if args.filterset is not None:
         if args.plan:
             parser.error("--filterset cannot be combined with --plan")

@@ -46,7 +46,7 @@ INTENTD_DIR = packages/intentd
 # any recipe runs, as does CI. A recursive make (gate -> test) inherits the
 # wrapper; INNER keeps a caller's own RUSTC_WRAPPER (e.g. sccache) chained.
 PARALLEL_THREADS ?= 8
-PARALLEL_GOALS := all build build-intentd check clippy lint-sources gate test test-intentd test-changed test-select
+PARALLEL_GOALS := all build build-intentd check clippy lint-sources gate test test-intentd test-changed test-select test-stress
 PARALLEL_WRAPPER := $(CURDIR)/scripts/rustc-parallel.sh
 ifeq ($(PARALLEL),1)
 ifneq ($(CI)$(GITHUB_ACTIONS),)
@@ -169,7 +169,7 @@ CDP_PORT ?= $(call dev_port_value,CDP_PORT)
 # An explicit INTENTD_SOCKET always takes precedence.
 BRIDGE_PLATFORM ?= $(shell uname -s)
 
-.PHONY: check-app-ui-targets check-doc-links check-note-truncated-read-contract check-browser-routing-contract check-suggested-prompts-contract check-fixture-copies check-agent-worker-contract test-transfer-selection-contract check-transfer-selection-contract check-backend-keychain-contract ports status consumer-checks docs-check check-protocol-catalog check-mcp-bindings mcp-bindings-doc check-makefile-targets check-protocol-field-parity check-rulesets event-catalog-check shipped-in release-status rpc
+.PHONY: check-app-ui-targets check-app-guide-sources check-agent-feature-toggles check-doc-links check-note-truncated-read-contract check-browser-routing-contract check-suggested-prompts-contract check-turn-start-contract check-fixture-copies check-agent-worker-contract test-transfer-selection-contract check-transfer-selection-contract check-backend-keychain-contract ports status consumer-checks docs-check check-protocol-catalog check-mcp-bindings mcp-bindings-doc check-makefile-targets check-protocol-field-parity check-rulesets event-catalog-check shipped-in release-status rpc
 ports: ## Print this worktree's resolved development ports
 	@set -- .dev/sandbox/*.json; if [ -e "$$1" ]; then \
 		echo "[ports] Note: these ports are for the next start; read running ports from 'make sandbox-status' or .dev/sandbox/<mode>.json." >&2; \
@@ -198,6 +198,16 @@ check-transfer-selection-contract: ## Validate transfer-selection fixtures and p
 check-app-ui-targets: ## Check Assistant navigation against the frontend registry
 	@node scripts/check-app-ui-targets.mjs
 
+# Every file intentd's assistant-app-guide.md cites in a `<!-- Sources: ... -->`
+# comment must exist in the component it names at the recorded gitlink (git
+# objects only; packages/ios citations are skipped). The upstream consumer job
+# sets CHECK_APP_GUIDE_SOURCES_UPSTREAM=1: each checkout's HEAD is read, and a
+# missing cloudlands-fe file only warns there (docs leading or trailing the
+# pin); the auto/submodule-bump PR stays strict.
+CHECK_APP_GUIDE_SOURCES_UPSTREAM ?=
+check-app-guide-sources: ensure-intentd-submodule ensure-fe-submodule ## Check that the assistant app guide's Sources comments cite files present at the pinned components (CHECK_APP_GUIDE_SOURCES_UPSTREAM=1 reads checkout HEADs and warns for cloudlands-fe)
+	@node scripts/check-app-guide-sources.mjs $(if $(filter 1,$(CHECK_APP_GUIDE_SOURCES_UPSTREAM)),--upstream)
+
 check-doc-links: ## Check agent-facing Markdown links, paths, and heading anchors (CI: repo-hygiene without submodules, docs-check with the component pins)
 	@node --test scripts/check-doc-links.test.mjs
 	@node scripts/check-doc-links.mjs
@@ -213,6 +223,10 @@ check-suggested-prompts-contract: ## Validate the shared suggested-prompts block
 	@node --test scripts/suggested-prompts-contract.test.mjs
 	@node scripts/suggested-prompts-contract.mjs check
 
+check-turn-start-contract: ## Check the turn-start events fixture against event-types.json and the 06-events.md §6.6 table (no component runtime proof)
+	@node --test scripts/turn-start-contract.test.mjs
+	@node scripts/check-turn-start-contract.mjs
+
 check-fixture-copies: ## Fail when a component copies a docs/protocol fixture without the shared fixture-copy tool, then check every registered copy
 	@node --test scripts/lib/fixture-copy.test.mjs scripts/check-fixture-copies.test.mjs
 	@node scripts/check-fixture-copies.mjs
@@ -224,15 +238,22 @@ check-agent-worker-contract: ## Validate synthetic worker observation goldens, m
 check-backend-keychain-contract: ## Validate canonical backend Keychain fixtures and any adopted component mirrors without compilation
 	@node scripts/backend-keychain-contract.mjs check
 
-docs-check: event-catalog-check check-mcp-bindings ## Check documented development targets, knobs, remote-host guidance, protocol-doc line lengths, and protocol table cell counts
+# Every docs/protocol/fixtures/**/*.test.mjs, discovered by
+# scripts/protocol-fixture-tests.mjs (no hand-kept list). It fails when a file
+# under docs/protocol/ imports node:test without matching that pattern, so no
+# fixture test is silently skipped. docs-check depends on it and the ci.yml
+# docs-check job calls it, so a local pass means the CI step passes too.
+check-protocol-fixture-tests: ## Run every docs/protocol/fixtures/**/*.test.mjs (found by glob) and fail on node:test files nothing runs
+	@node --test scripts/protocol-fixture-tests.test.mjs
+	@node scripts/protocol-fixture-tests.mjs
+
+docs-check: event-catalog-check check-mcp-bindings check-protocol-fixture-tests ## Check documented development targets, knobs, remote-host guidance, protocol-doc line lengths, protocol table cell counts, and every protocol fixture test
 	@scripts/docs-check.sh
 	@node scripts/check-doc-line-length.mjs
 	@node --test scripts/check-doc-line-length.test.mjs
 	@node --test scripts/lib/markdown-tables.test.mjs
 	@node scripts/check-doc-table-cells.mjs
 	@node --test scripts/check-doc-table-cells.test.mjs
-	@node --test docs/protocol/fixtures/scripts/monitors.test.mjs docs/protocol/fixtures/scripts/contract.test.mjs
-	@node --test docs/protocol/fixtures/submission-correlation/contract.test.mjs
 
 check-protocol-catalog: ## Check docs/protocol method catalog against methods/*.md and intentd's catalog.rs
 	@node scripts/check-protocol-catalog.mjs
@@ -274,6 +295,13 @@ check-makefile-targets: ensure-intentd-submodule ## Check Makefile-referenced in
 PARITY_BASE ?= $(if $(filter-out false 0,$(CI)),,origin/main)
 check-protocol-field-parity: ensure-intentd-submodule ensure-fe-submodule ## Check intentd row struct fields against the cloudlands-fe types that consume them (PARITY_BASE=<ref> for off-pin checkouts, default origin/main)
 	@node scripts/check-protocol-field-parity.mjs --intentd-dir "$(INTENTD_DIR)" --fe-dir "$(FE_DIR)" $(if $(PARITY_BASE),--base "$(PARITY_BASE)")$(CHECK_DEFER_PARITY)
+
+# Every agentFeatures.* setting intentd registers for settings.list must have a
+# Settings -> Agent features toggle in cloudlands-fe (FEATURE_PATHS / FEATURES),
+# or an EXEMPT entry with a reason in the script, landed before the intentd PR.
+# An FE-only toggle or a stale EXEMPT entry warns; see docs/README.md.
+check-agent-feature-toggles: ensure-intentd-submodule ensure-fe-submodule ## Check every intentd agentFeatures.* setting has a cloudlands-fe Agent features toggle (or a reasoned EXEMPT entry) and appears in the settings.md Agent features list
+	@node scripts/check-agent-feature-toggles.mjs --intentd-dir "$(INTENTD_DIR)" --fe-dir "$(FE_DIR)"
 
 # The live main-branch rulesets of intent, intentd and cloudlands-fe (required
 # CI Gate check, thread resolution, merge queue) are snapshotted under
@@ -331,7 +359,7 @@ WORKSPACES_DIR ?= $(HOME)/intent/workspaces
 SWEEP_DAYS ?= 3
 
 # Parallelism caps shared by the Rust build/test/coverage targets
-# (build-intentd, clippy, test-intentd, test-changed, test-select, coverage-changed,
+# (build-intentd, clippy, test-intentd, test-changed, test-select, test-stress, coverage-changed,
 # coverage-e2e, coverage-all).
 # Negative values mean "logical CPUs minus N" (clamped to at least 1):
 # cargo-nextest accepts them for test threads (NEXTEST_TEST_THREADS /
@@ -352,14 +380,14 @@ BUILD_JOBS ?= -2
 # human at a terminal can restore the bars with
 # `make test NEXTEST_SHOW_PROGRESS=bar CARGO_TERM_PROGRESS_WHEN=auto`.
 # CI already sets CI=true, under which both tools are non-interactive anyway.
-gate test test-intentd test-changed test-select coverage-changed coverage-e2e coverage-all list-tests: export NEXTEST_SHOW_PROGRESS ?= none
-gate check clippy check-windows lint-sources build-intentd test test-intentd test-changed test-select coverage-changed coverage-e2e coverage-all list-tests: export CARGO_TERM_PROGRESS_WHEN ?= never
+gate test test-intentd test-changed test-select test-stress coverage-changed coverage-e2e coverage-all list-tests: export NEXTEST_SHOW_PROGRESS ?= none
+gate check clippy check-windows lint-sources build-intentd test test-intentd test-changed test-select test-stress coverage-changed coverage-e2e coverage-all list-tests: export CARGO_TERM_PROGRESS_WHEN ?= never
 # Pagers on the same targets. A saved-script PTY has no keyboard, so any
 # git/gh step that pages to `less` stalls forever waiting for a keypress.
 # nextest ignores PAGER (only --no-pager / user config disable its paging),
 # hence the explicit --no-pager on list-tests.
-gate check clippy check-windows lint-sources build-intentd test test-intentd test-changed test-select coverage-changed coverage-e2e coverage-all list-tests: export PAGER ?= cat
-gate check clippy check-windows lint-sources build-intentd test test-intentd test-changed test-select coverage-changed coverage-e2e coverage-all list-tests: export GIT_PAGER ?= cat
+gate check clippy check-windows lint-sources build-intentd test test-intentd test-changed test-select test-stress coverage-changed coverage-e2e coverage-all list-tests: export PAGER ?= cat
+gate check clippy check-windows lint-sources build-intentd test test-intentd test-changed test-select test-stress coverage-changed coverage-e2e coverage-all list-tests: export GIT_PAGER ?= cat
 
 # Test time limits on the local test targets. Hang-guard budgets in intentd
 # tests scale with INTENTD_TEST_TIMEOUT_MULTIPLIER (intentd-test-support's
@@ -374,7 +402,7 @@ gate check clippy check-windows lint-sources build-intentd test test-intentd tes
 # other targets keep the caller's environment. The runner prints the value and
 # keys resume records by the effective stretch, so passes never mix across
 # multipliers.
-test test-intentd test-changed test-select: export INTENTD_TEST_TIMEOUT_MULTIPLIER ?= 3
+test test-intentd test-changed test-select test-stress: export INTENTD_TEST_TIMEOUT_MULTIPLIER ?= 3
 
 # Resumable local test runs are opt-in. Records are keyed by the complete
 # monorepo + intentd worktree state and kept outside the checkout. Each invocation
@@ -417,9 +445,9 @@ HERMETIC_PREFLIGHT = if [ "$(HERMETIC)" = 1 ]; then \
 FE_BUILD_HEAP_MB ?= 16384
 
 .PHONY: all help doctor bootstrap-dev-host ensure-submodules ensure-intentd-submodule ensure-fe-submodule ensure-ios-submodule \
-	ensure-fe-toolchain \
+	ensure-fe-toolchain fe-verify-changed \
 	update \
-	build build-intentd build-sidecar gate test test-intentd test-scripts test-scripts-changed test-changed test-select list-tests coverage-changed coverage-e2e coverage-all \
+	build build-intentd build-sidecar gate test test-intentd test-scripts test-scripts-changed test-changed test-select test-stress list-tests coverage-changed coverage-e2e coverage-all \
 	fmt clippy check-windows lint-sources lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child lint-shell-sleeps lint-shell lint-workflows bash3 check clean clean-dev \
 	sweep sweep-all seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
 	run-intentd dev-ui dev-sandbox-ui dev-sandbox-app dev-sandbox-stack dev-fe fe-launch \
@@ -431,11 +459,11 @@ all: build
 
 help: ## List documented targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
-	@printf '\nLocal Rust gates: COMPACT=1 make gate (also check, test, test-changed, test-select; Python 3.10+).\n'
+	@printf '\nLocal Rust gates: COMPACT=1 make gate (also check, test, test-changed, test-select, test-stress; Python 3.10+).\n'
 	@printf '  Opt-in dev/test debug=0 and CARGO_INCREMENTAL=0; caller Rust flags retain precedence.\n'
 	@printf '  Default: COMPACT=0. Compact/default resume records are separate; coverage rejects COMPACT=1.\n'
 	@printf '  See CONTRIBUTING.md for debugging tradeoffs and the component mixed-goal boundary.\n'
-	@printf 'Opt-in faster local compiles: PARALLEL=1 make build (also check, clippy, lint-sources, gate, test, test-changed, test-select).\n'
+	@printf 'Opt-in faster local compiles: PARALLEL=1 make build (also check, clippy, lint-sources, gate, test, test-changed, test-select, test-stress).\n'
 	@printf '  rustc -Zthreads=N (PARALLEL_THREADS=N, default 8) for intentd crates only; ~1-2 GB more RAM per rustc; builds into target/parallel-tN; never CI or release (CONTRIBUTING.md).\n'
 
 doctor: ## Report missing intentd + cloudlands-fe development prerequisites
@@ -727,7 +755,7 @@ gate: check | check-callback-fixture check-transfer-fixture ## Run all local Rus
 test: test-intentd ## Run Rust tests; after interruption use RESUME=1 (GATE_FORCE=1 runs all, NO_FAIL_FAST=1 continues past failures, HERMETIC=1 hides provider CLIs like CI)
 
 test-scripts: ## Run the Python script unit tests (Python 3.11+, no submodules needed)
-	python3 -S -B -m unittest -v scripts.test_resumable_nextest scripts.test_compact_gate scripts.test_rust_test_policy scripts.test_seed_dev_providers scripts.test_seed_dev_workspaces scripts.test_cleanup_prereleases scripts.test_script_test_target scripts.test_test_select_target scripts.test_watch_capacity
+	python3 -S -B -m unittest -v scripts.test_resumable_nextest scripts.test_compact_gate scripts.test_rust_test_policy scripts.test_seed_dev_providers scripts.test_seed_dev_workspaces scripts.test_cleanup_prereleases scripts.test_script_test_target scripts.test_test_select_target scripts.test_test_stress_target scripts.test_nextest_stress scripts.test_watch_capacity
 
 # The script checks CI would run for this change (lint-shell, the ci.yml
 # shell-tests suites, node:test for changed scripts/*.mjs); see CONTRIBUTING.md.
@@ -745,7 +773,7 @@ test-scripts-changed: ## Run CI's script checks for files changed vs BASE (defau
 # above); `make test NEXTEST_SHOW_PROGRESS=bar` restores nextest's.
 # Apply the shared caller policy before the runner fingerprints resume evidence.
 # Changed/coverage scripts apply this same wrapper at their test boundaries.
-# test-select reuses this exact invocation, so its knobs cannot drift from test.
+# test-select and test-stress reuse this exact invocation, so their knobs cannot drift from test.
 RUST_TEST_RUNNER = bash "$(INTENTD_DIR)/scripts/with-test-policy.sh" $(HERMETIC_WRAP) \
 	python3 scripts/resumable_nextest.py --repo-root "$(CURDIR)" --intentd-dir "$(INTENTD_DIR)" \
 	--cache-dir "$(GATE_CACHE_DIR)" --resume "$(RESUME)" --force "$(GATE_FORCE)" \
@@ -803,6 +831,24 @@ test-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd br
 	echo "[test-changed] falling back to the full 'make test'"; \
 	exec $(MAKE) --no-print-directory test
 
+# Frontend counterpart of test-changed: cloudlands-fe's `pnpm run
+# verify:changed` (selection, records and --resume are documented in
+# $(FE_DIR)/AGENTS.md → Verification). With no BASE it verifies the working
+# tree, or the commits since origin/main on a clean branch ahead of it; BASE is
+# a cloudlands-fe ref. DRY_RUN=1 maps to --resolved-plan, which lists every
+# selected unit-test file without running checks (cloudlands-fe#3876's missed
+# two-window console test was in that list). Nothing masks the exit status:
+# pnpm passes the script's code through to make ("Error 2" = empty change set). FE_VERIFY_BASE escapes
+# apostrophes for the single-quoted hand-off; scripts/fe-verify-changed.test.sh
+# pins the mapping.
+FE_VERIFY_BASE = $(subst ','\'',$(BASE))
+fe-verify-changed: ensure-fe-submodule ensure-fe-toolchain ## Run only the frontend checks and unit tests the cloudlands-fe branch changed (BASE=<fe ref>, DRY_RUN=1 lists the selected tests)
+	@$(FE_DEPS_FRESH) || (echo "[fe-verify-changed] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
+	@set --; \
+	if [ -n "$(DRY_RUN)" ] && [ "$(DRY_RUN)" != 0 ]; then set -- "$$@" --resolved-plan; fi; \
+	if [ -n '$(FE_VERIFY_BASE)' ]; then set -- "$$@" --base '$(FE_VERIFY_BASE)'; fi; \
+	cd "$(FE_DIR)" && exec corepack pnpm run verify:changed -- "$$@"
+
 # A chosen subset of the Rust tests, e.g. while fixing one test before the full
 # gate: E is one nextest filterset, run across the workspace
 # (`make test-select E='test(/repository_selection/)'`,
@@ -817,12 +863,12 @@ test-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd br
 # never reaches Cargo or test processes.
 TEST_SELECT_E = $(subst ','\'',$(value E))
 unexport E
-ifneq ($(filter test-select,$(MAKECMDGOALS)),)
+ifneq ($(filter test-select test-stress,$(MAKECMDGOALS)),)
 ifneq ($(origin E),command line)
-$(error make test-select needs E='<nextest filterset>' on the make command line, e.g. make test-select E='test(/repository_selection/)')
+$(error make $(firstword $(filter test-select test-stress,$(MAKECMDGOALS))) needs E='<nextest filterset>' on the make command line, e.g. make $(firstword $(filter test-select test-stress,$(MAKECMDGOALS))) E='test(/repository_selection/)')
 endif
 ifeq ($(strip $(value E)),)
-$(error make test-select needs a non-empty E='<nextest filterset>', e.g. make test-select E='test(/repository_selection/)')
+$(error make $(firstword $(filter test-select test-stress,$(MAKECMDGOALS))) needs a non-empty E='<nextest filterset>', e.g. make $(firstword $(filter test-select test-stress,$(MAKECMDGOALS))) E='test(/repository_selection/)')
 endif
 endif
 
@@ -834,6 +880,46 @@ test-select: ensure-intentd-submodule | check-transfer-fixture ## Run only the R
 	}
 	@$(HERMETIC_PREFLIGHT)
 	@$(RUST_TEST_RUNNER) --label test-select --filterset '$(TEST_SELECT_E)'
+
+# Repeat the tests matching E COUNT times with retries off (nextest
+# --stress-count), optionally under a built-in load, to prove a flake or its fix
+# (`make test-stress E='test(/watchdog_ends_control_once/)' COUNT=200 LOAD=1`)
+# or to check whether a CI failure is an unrelated flake. Same runner, caller
+# policy, fixtures, HERMETIC/COMPACT/BUILD_JOBS/TEST_THREADS and 3x time-limit
+# default as test-select; E is validated and unexported as above. LOAD=1 runs
+# LOAD_CPUS `yes` spinners (default 2 x CPUs) plus an fsync writer after the
+# build, and stops them when the run ends. Prints one summary line (iterations,
+# passes, failures, distinct panic locations) and the record path; never
+# writes resume records, so RESUME/GATE_FORCE/NO_FAIL_FAST do not apply.
+COUNT ?= 100
+LOAD ?= 0
+LOAD_CPUS ?=
+unexport COUNT LOAD LOAD_CPUS
+# Non-empty when $(1) is one positive decimal integer (checked without a shell).
+POSITIVE_INT = $(and $(strip $(1)),$(if $(word 2,$(1)),,ok),$(if $(filter 0%,$(1)),,ok),$(if $(subst 0,,$(subst 1,,$(subst 2,,$(subst 3,,$(subst 4,,$(subst 5,,$(subst 6,,$(subst 7,,$(subst 8,,$(subst 9,,$(1))))))))))),,ok))
+ifneq ($(filter test-stress,$(MAKECMDGOALS)),)
+ifeq ($(call POSITIVE_INT,$(COUNT)),)
+$(error make test-stress needs COUNT to be a positive integer, got '$(COUNT)')
+endif
+ifneq ($(words $(LOAD))$(filter 0 1,$(LOAD)),1$(strip $(LOAD)))
+$(error make test-stress needs LOAD=0 or LOAD=1, got '$(LOAD)')
+endif
+ifneq ($(strip $(LOAD_CPUS)),)
+ifeq ($(call POSITIVE_INT,$(LOAD_CPUS)),)
+$(error make test-stress needs LOAD_CPUS to be a positive integer, got '$(LOAD_CPUS)')
+endif
+endif
+endif
+
+test-stress: ensure-intentd-submodule | check-transfer-fixture ## Repeat the Rust tests matching E='<filterset>' COUNT times (default 100) with retries off, LOAD=1 adds CPU + disk load; prints passes, failures and panic locations
+	@python3 scripts/check_watch_capacity.py --quiet
+	@cargo nextest --version >/dev/null 2>&1 || { \
+		echo "[test-stress] ERROR: cargo-nextest is not installed — run 'cargo install cargo-nextest --locked'"; \
+		exit 1; \
+	}
+	@$(HERMETIC_PREFLIGHT)
+	@$(RUST_TEST_RUNNER) --label test-stress --filterset '$(TEST_SELECT_E)' \
+		--stress-count '$(COUNT)' --load '$(strip $(LOAD))'$(if $(strip $(LOAD_CPUS)), --load-cpus '$(strip $(LOAD_CPUS))')
 
 # Local equivalent of intentd's pull_request `coverage-changed` CI job: the
 # same changed-tests.sh selection as test-changed, run under the cargo-llvm-cov

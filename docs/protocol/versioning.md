@@ -8,7 +8,7 @@ capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `15.2` — retired workspaces, on top of 15.1's prepared discussions, guest roles, scoped repository pages and GitLab child Git policy; not a shipped-version claim.
+**Documented version:** `15.3` — plain-folder workspaces, on top of 15.2's retired workspaces and 15.1's prepared discussions, guest roles, scoped repository pages and GitLab child Git policy; not a shipped-version claim.
 Other prepared extensions retain their independent support gates.
 
 **Prepared Lead specialist role (additive; no method-catalog change).**
@@ -19,6 +19,24 @@ restrictions, and `"internal"` and explicit `""` retain their behavior. Harness
 and adding `lead` as aliases; prior session snapshots and harness bundles remain
 unchanged. Deploy matching daemon and frontend support, daemon first. See
 [specialist picker metadata](./methods/misc-namespaces.md).
+
+**Version 15.3 — plain-folder workspaces (additive).**
+[Plain-folder workspaces](./methods/workspace.md#plain-folder-workspaces) work directly in
+an ordinary folder with no git repository. They add the presence-detected
+`Workspace.plainFolder` row field (omitted = `false`; set only at create, never by
+`workspace.update`, and kept if `.git` appears later) and the `workspace.create` option
+`plainFolder: true` with `repositoryPath` naming an existing non-git folder or a new
+folder. The option is refused before any side effect with git-only create options, a pr-kind
+`contextLinks` entry, or a path inside a git repository or the daemon workspaces root
+(`plain-folder-path-rejected`). Intent never deletes, moves or modifies the folder:
+`workspace.retire` keeps its `retire-unsupported` refusal with `plainFolder: true`, and
+`workspace.duplicate` plus the agent bindings `ws.git.*`, `ws.pr.*`, `ws.mr.*` and
+`ws.workspace.proposeSibling` return the new `plain-folder-unsupported` error. No
+`changes:*`, `git:*`, `gitRoot:*`, `pr:*` or `prMonitor:*` events are emitted for these
+workspaces (§6.5). No method-catalog change: the documented surface stays
+**486 / 428 / 58** (dispatchable / router / fast path). The minor bump is
+the support signal: an older daemon ignores the unknown create option, so clients send
+`plainFolder` only when `protocolVersion` is at least `15.3`.
 
 **Version 15.2 — retired workspaces (additive).**
 [Retired workspaces](./methods/workspace.md#retired-workspaces) add the `"Retired"`
@@ -85,6 +103,35 @@ unlabeled workspaces omit the field, support is detected by the exact-integer ca
 `workspaceLabels: 1` on `client.hello` `server.capabilities` and `system.capabilities`;
 older daemons omit it.
 
+Also within 15.2 (additive optional row field, update param and `workspace:updated` key;
+capability-gated; no method-catalog change, so no version bump): **workspace auto-archive
+opt-out** ([§5.1](./methods/workspace.md#auto-archive-opt-out)). `Workspace.autoArchiveDisabled`
+is a per-workspace boolean, omitted while `false` (the default); while `true` the automatic
+archive sweep skips the workspace. `workspace.update` sets it with
+`autoArchiveDisabled?: boolean` (owner-only), and `workspace:updated` carries
+`changes.autoArchiveDisabled: boolean`. Support is detected by the exact-integer capability
+`workspaceAutoArchiveOptOut: 1` on `client.hello` `server.capabilities` and
+`system.capabilities`; older daemons omit it.
+
+Also within 15.2 (additive optional result field; presence-detected; no method-catalog
+change, so no version bump): **`models.list` `warningKind`**
+([§5.30](./methods/models-providers.md#530-modelslist--model-catalog)). A provider-scoped
+`models.list` response may carry `warningKind: "cli-missing" | "prerequisite-missing"` next to
+`warning` when the daemon knows why a catalog fetch failed (emitted for `codex` and
+`claude-code`), so clients show an "install the CLI" notice only for a genuinely missing CLI
+instead of matching the human-readable `warning` text. Absent for every other failure, for
+informational warnings on a successful list and on the legacy no-`providerId` path; never
+persisted. Older daemons omit it; clients treat an absent or unknown value as a generic load
+failure, so later values are additive.
+
+Also within 15.2 (additive optional response field; presence-detected; no method-catalog
+change, so no version bump): **`browserClient.target`** on `workspace.getBrowserClient` /
+`workspace.setBrowserClient` ([§5.1](./methods/workspace.md#51-workspace)) names the client
+an unpinned workspace is routed to by the desktop-session or claimed-tab rule
+(`{ clientId, via: "desktop" | "tabs" }`), so `resolved: null` with `target` reads "routed
+to a client with no eligible live connection" rather than "no eligible client". Older
+daemons omit it; clients then cannot tell the two apart.
+
 **Version 15.1 — workspace discussions (additive, prepared).**
 [Workspace discussions](./methods/multiplayer.md#555-workspace-discussions) add
 `discussion.conversations`, `discussion.recipients`, `discussion.list`,
@@ -139,6 +186,15 @@ Participant; owner-assigned `manager` grants scoped agent and saved-script
 operations without broadening `canManage` or granting raw terminal access.
 Role changes invalidate membership projections on existing connections. This
 extends the unreleased 15.1 contract and does not establish Multiplayer readiness.
+
+The [secret request extension (§5.56)](./methods/secrets.md) adds
+`secret.provide`, `secret.dismiss`, `secret.list` and `secret.forget`, the
+`application/vnd.intent.secret-request+json` turn-end resource, the
+`agentFeatures.secretRequests` setting and the agent-only `secretEnv` option on
+`ws.host.exec`, under exact `server.capabilities.secretRequests: 1`. It adds no
+event type. The documented surface is now **478 / 420 / 58** (dispatchable /
+router / fast path). The pinned intentd implements it; this entry does not
+identify a carrying release.
 
 **Version 15.1 — scoped repository pages and GitLab child Git policy (additive, prepared).**
 This extension builds on protocol 15.0 without restoring legacy workspace import
@@ -529,6 +585,41 @@ Enrollment is private, excluded from public method and workspace-routing catalog
 These additive docs precede consumer merges/contract acceptance; authorized local
 development and draft preparation may proceed in parallel. Static fixtures do not
 qualify a listener, fresh-workspace source, provider or ready/ACK behavior.
+
+**Private nodeProtocol 5 — experimental single-node link, unadvertised.** The
+[single-node private link](./node-link.md#single-node-private-link-nodeprotocol-5)
+launches agents on one hand-configured node, only when the daemon starts with
+`INTENTD_EXPERIMENTAL_REMOTE_LAUNCH=1` and a node configuration file. It is a
+separate private protocol (peers match exactly 5), outside the `{2,3,4}`, `{3,4}`
+and `4` sets above, and changes no checkpoint or journal format. It makes **no
+public version claim and advertises no capability**: `agentNodes`,
+`agentPlatformRouting` and `localNodeIsolation` stay absent, so clients keep
+placement and hub controls gated off. The `agentNodes: 1` rule is unchanged: it
+still requires the complete static-node, hub, placement and recovery contract of
+[§5.50](./methods/nodes.md). The public surface it adds is the documented
+`placement` subset on agent creation, `placement-unavailable` errors and the
+optional placed-agent projection fields
+([experimental subset](./methods/nodes.md#experimental-single-node-subset)); a
+client must not infer remote support from their presence.
+
+**Prepared daemon-to-daemon remote agents — capability `remoteMachines: 1`, nodeProtocol 6.**
+[Remote machines (§5.50)](./methods/nodes.md#daemon-to-daemon-remote-machines-prepared)
+let a machine's owner expose a regular daemon to a backend daemon through a
+scoped [executor credential](./02-authentication.md#26-executor-credentials).
+It adds eight owner-only router methods (`executor.*`, `remoteMachines.*`), the
+`remoteMachine:changed` event, settings `remoteAgents.enabled`,
+`remoteAgents.permission`, `daemon.mode` and `experimental.remoteAgents`, and
+the errors `model-unavailable`, `machine-update-required` and new
+`placement-unavailable` reasons, taking the documented surface to
+**486 / 428 / 58** (dispatchable / router / fast path). The backend advertises
+`remoteMachines: 1` only when it implements the backend methods and
+`experimental.remoteAgents` is on; the flag is separate from `agentNodes`, whose
+complete-contract rule is unchanged, and it grants no authority. The private
+[executor link](./node-link.md#daemon-to-daemon-executor-link-nodeprotocol-6)
+negotiates a `{ min, max }` range that starts at 6; it is a new link family,
+outside the prepared `{2,3,4}`, `{3,4}` and `4` sets. No public version number
+is claimed by these docs; allocate it against daemon main before
+implementation merges, and land daemon protocol consumers before frontend ones.
 
 **Prepared command-default change — recommended 11.0, not shipped.**
 [Script creation defaults (§5.8)](./methods/scripts.md#command-creation-defaults-prepared-breaking-change)
@@ -1548,4 +1639,6 @@ the `ignore` map of `scripts/check-protocol-field-parity.mjs`, not here.
 | `Workspace` | `retiredAt` | [Retired workspaces](./methods/workspace.md#retired-workspaces) | Pending cloudlands-fe retired-workspaces PR (home, search and workspace view) |
 | `Workspace` | `scriptsRunning` | [Workspace fields](./methods/workspace.md#51-workspace) | Pending cloudlands-fe Home Running/Waiting groups PR |
 | `Workspace` | `backgroundTasksRunning` | [Workspace fields](./methods/workspace.md#51-workspace) | Pending cloudlands-fe Home background-task Running PR |
-| `Workspace` | `label` | [Workspace labels](./methods/workspace.md#workspace-labels) | Pending cloudlands-fe Home workspace labels PR |
+| `Workspace` | `autoArchiveDisabled` | [Auto-archive opt-out](./methods/workspace.md#auto-archive-opt-out) | Pending [cloudlands-fe#3863](https://github.com/intent-hq/cloudlands-fe/pull/3863) (Home Disable auto-archive toggle) |
+| `Workspace` | `plainFolder` | [Plain-folder workspaces](./methods/workspace.md#plain-folder-workspaces) | Pending cloudlands-fe plain-folder workspaces PR (Labs git toggle and hidden git UI) |
+| `AgentLite` | `nodeName` | [Placed agent projection](./methods/nodes.md#placement-and-creation) | Pending: the complete node contract that advertises `agentNodes`; the experimental single-node remote launch advertises no capability, so the app stays gated off |

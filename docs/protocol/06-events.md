@@ -546,7 +546,7 @@ The session persist, linked-task transition, parent wake, and watcher fan-out st
 **workspace details.**
 
 - :delete-scheduled / :delete-cancelled (v6.7, §5.1 delete grace window) → data { workspaceId, deleteAt } / { workspaceId } — self-sufficient payloads so clients flip the pending-delete state without a follow-up read;
-  the committed deletion still emits the ordinary `workspace:deleted`. :created → data { workspaceId, workspace, origin? } — optional `origin` is daemon-set provenance for a create made on someone's behalf, never accepted from `workspace.create` params and never persisted on the row: today only `ws.workspace.applyProposal` sets it, as `{ kind: "proposal", proposalId, agentId, sourceWorkspaceId }` (the applied `workspace-create` proposal, the agent that proposed it, and the workspace whose conversation holds it), so clients can surface the new workspace beside its source (cloudlands-fe opens it as an unfocused tab in windows showing `sourceWorkspaceId`);
+  the committed deletion still emits the ordinary `workspace:deleted`. :created → data { workspaceId, workspace, origin? } — optional `origin` is provenance for a create made from a proposal, never persisted on the row: `ws.workspace.applyProposal` sets it in-process, and a client card Apply supplies it through the validated `workspace.create` `origin` param (`sourceWorkspaceId` is always daemon-derived from the agent, never taken from params), as `{ kind: "proposal", proposalId, agentId, sourceWorkspaceId }` (the applied `workspace-create` proposal, the agent that proposed it, and the workspace whose conversation holds it), so clients can surface the new workspace beside its source (cloudlands-fe opens it as an unfocused tab in windows showing `sourceWorkspaceId`);
   absent on every other create, and clients ignore unknown `kind` values;
   :updated → data { workspaceId, changes } where `changes` is the applied `WorkspaceUpdate` delta — untouched (Option::is_none) fields are omitted, but a field may also carry an explicit JSON `null` to signal a clear (the same omitted = untouched / `null` = clear / present = set tri-state as the §5.1 explicit-null-clear contract).
   A **debounced `lastActivity`-only delta** also rides this type ([intent-hq/intentd#1489](https://github.com/intent-hq/intentd/pull/1489); §5.1 `lastActivity` push cadence): `changes: { lastActivity }` emitted at most once per 3-second window per workspace, scheduled **only at turn boundaries** — an agent turn end (status persist transitioning out of active), a user-origin message send (direct send, user-origin queue drain, user-role append, user-origin `agent.sendQueuedMessageNow` force-send), or an attention raise — never on mid-turn mutations (agent-origin appends, wake deliveries, agent-op mutations, token-usage recomputes), and only when the recomputed value actually changed; the read-path derivation stays fresh regardless (§5.1).
@@ -555,6 +555,7 @@ The session persist, linked-task transition, parent wake, and watcher fan-out st
   A **revive** of a retired workspace emits `changes: { archived: false, status: "Active", archivedAt: null, retiredAt: null, branch, revived: { reason } }` (plus `statusMessage: null` when the revive cleared the unchanged purge status text) — `reason` is `"agent_activity"` (with `agentId`, `agentName`) or `"manual"`; `revived` is absent on every other unarchive and `autoUnarchive` is absent on a revive.
   A **confirmed** auto-unarchive flip additionally persists an `auto_unarchived` system row in the triggering agent's transcript (`role: "system"`, metadata `{ "type": "auto_unarchived", "reason": "agent_activity" }`, emitting the standard `agent:message` event) and injects a one-turn `[SYSTEM NOTICE]` block into that same turn's outbound prompt — both best-effort; see the §5.1 auto-unarchive transcript-notice block.
   A `workspace.update` that sets or clears the [workspace label](./methods/workspace.md#workspace-labels) carries `changes: { label: string | null }` — the stored trimmed value, or an explicit `null` for a clear.
+  A `workspace.update` carrying the [auto-archive opt-out](./methods/workspace.md#auto-archive-opt-out) carries `changes: { autoArchiveDisabled: boolean }` — the applied value, also when it matches the stored one.
   A workspace-scoped `mcp.servers.toggle` (§5.22 per-workspace disable) also rides this type with a **non-column delta**: `changes: { mcpServerToggled: { serverId, workspaceDisabled } }` — `serverId` the toggled server, `workspaceDisabled` the resulting per-workspace state (`true` = disabled in that workspace).
   `mcpServerToggled` is not a `WorkspaceUpdate` column — no workspace-row field changes, so it never appears in `workspace.get`/`workspace.list` payloads; it is a self-sufficient notification carried on the `changes` object so clients mirroring the workspace-scoped MCP layer update without a follow-up `mcp.servers.list` read (clients that only project known workspace columns can ignore the key).
   Emitted on every scoped toggle, including idempotent no-ops (marker already in the requested state); the global (unscoped) toggle emits no `workspace:updated`.
@@ -652,7 +653,7 @@ Actor: system.
 **browser tab registry (new in intentd, v9.10) details.**
 
 `browser:tab-opened` / `browser:tab-closed` → data { tab }; `browser:tab-updated` → data { tab, changes } — `tab` is the full canonical `BrowserTab` row (`tabId`, `workspaceId`, `hostClientId`, `url`, `requestedUrl?`, `title?`, `ownerAgentId?`, `ownerAgentName?`, `visibility`, `emulatedSize?`, `displayed?` — within v9.12, [intent-hq/intent#4835](https://github.com/intent-hq/intent/issues/4835); process-local, omitted whenever the daemon holds no current host report for it —, `createdAt`, `updatedAt`) and `changes` the **field-wise diff** — the host-reported fields that differed (`url`, `requestedUrl`, `title`, `ownerAgentId`, `ownerAgentName`, `visibility`, `emulatedSize`, `displayed`; a cleared optional field rides as an explicit `null`) or, on a daemon-side re-home, `hostClientId` (+ `ownerAgentId` for an agent `claimTab`, §5.9).
-Emitted from the host reports `browser.upsertTab` / `browser.removeTab` / `browser.syncTabs` (one event per created / changed / closed row; a report that changes nothing emits nothing), from the `claimTab` re-home and the `workspace.setBrowserClient` claimed-tab migration (`browser:tab-updated`), and from a daemon-side tombstone (`browser.closeTab { force: true }` **only** — regardless of host connectivity; `browser:tab-closed`).
+Emitted from the host reports `browser.upsertTab` / `browser.removeTab` / `browser.syncTabs` (one event per created / changed / closed row; a report that changes nothing emits nothing), from the `claimTab` re-home, the `workspace.setBrowserClient` claimed-tab migration and the `client.hello` superseded-id rehome (§5.17, [intent-hq/intent#8045](https://github.com/intent-hq/intent/issues/8045); `browser:tab-updated`, actor = the new host), and from a daemon-side tombstone (`browser.closeTab { force: true }` **only** — regardless of host connectivity; `browser:tab-closed`).
 A `browser.closeTab` without `force` never tombstones: its close is routed to the host, whose own `browser.removeTab` emits the `browser:tab-closed`, and an offline target is the -32603 not-connected error with **no** mutation and **no** event.
 **Workspace-scoped** (the tab's `workspaceId` — a `tabId` never moves between workspaces, so no workspace is left with a ghost tab); self-sufficient payloads (§6.7).
 Actor: `{ type: "user", id: <hostClientId> }` — the reporting host client.
@@ -666,6 +667,16 @@ Actor: `{ type: "user", id: <hostClientId> }` — the reporting host client.
 - **Channel-only**: it is never delivered on the `events.subscribe` firehose — owner and collaborator alike, whatever the pattern — and reaches only the note's `note.presence.subscribe` lease holders (§6.9), as a payload-only `{ kind, viewer }` delta; `updated` is coalesced daemon-side to ≤1 per 100 ms per (principal, note), last writer wins with a trailing flush.
   Actor: `{ type: "user" }` with no `id` on both.
   `note:presence` identifies the acting viewer via the payload's `principalId`; `presence:changed` does **not** identify the principal whose transition caused it — `members[]` is the set of principals currently online (a principal whose last connection just closed is absent from the roster it triggered).
+
+#### Plain-folder workspaces *(15.3)*
+
+The daemon never emits `changes:*`, `git:*`, `gitRoot:*`, `pr:*` or `prMonitor:*` events
+for a plain-folder workspace (`Workspace.plainFolder: true`, §5.1
+[Plain-folder workspaces](./methods/workspace.md#plain-folder-workspaces)): it runs no git
+status refresh, git metadata watcher, auto-commit, PR monitoring or automatic PR refresh
+for it. `file:*`, `task:*`, `note:*`, `agent:*` and `workspace:*` events are emitted as for
+any other workspace. Subscriptions to the suppressed patterns are still accepted; they
+simply receive nothing for that workspace.
 
 #### Payload-bearing task updates
 
@@ -742,9 +753,9 @@ Initial/reconnect reconciliation remains required. Per-ID publication must preve
 stale predecessor events; timestamps/UUIDs are not row revisions. The script
 contract defines validation, persistence-failure and connection-generation rules.
 
-#### Prepared desktop control events (not implemented)
+#### Desktop control events
 
-[§5.51](./methods/desktop.md#events-and-agent-wakes) reserves
+[§5.51](./methods/desktop.md#events-and-agent-wakes) defines
 `desktop:permission-requested`, `desktop:permission-resolved`,
 `desktop:permission-changed` and `desktop:session-changed`. That section defines
 the complete payloads, transition deduplication and restricted principal/primary
@@ -764,6 +775,14 @@ new stream-end/interruption reason. `workspace:updated.data.changes` adds
 `defaultAgentPlacement` when that optional workspace default changes. These are
 future additions, not emitted by the pinned daemon. Existing `sandbox:cow:created`
 and `sandbox:cow:merged` remain catalogued until backend retirement and the pin bump.
+
+#### Prepared remote machine events (not implemented)
+
+The [daemon-to-daemon remote machines contract (§5.50)](./methods/nodes.md#daemon-to-daemon-remote-machines-prepared)
+reserves `remoteMachine:changed` on the backend: `{ machine: RemoteMachine }`
+on add, state changes and new capability reports, or `{ machineId, removed: true }`
+after removal. It is delivered to owner connections only, never to members or
+guests, and never carries the executor token. It is not emitted by the pinned daemon.
 
 #### Shared-host delivery and invalidation *(10.9)*
 
@@ -917,6 +936,32 @@ Explicit user link clicks still activate content. Settings navigation and
 `openInNewWindow: true` retain their explicit navigation behavior.
 
 ### 6.6 Turn/event lifecycle & batching window
+
+**Turn-start signals.** A client treats each event below as the start of an agent turn: an idle
+agent reads as running as soon as it sees one, without waiting for a later event. The paragraphs
+that follow give the detail. The user-row `agent:message` echo is not listed. For a direct send
+or wake delivery the daemon persists it after claiming the turn slot, so the running status edge
+comes first. Two held-slot continuations are the exception: the prompt idle-timeout warning turn
+(below) and the truncation auto-redrive (the nudge a delegated agent gets after a turn that looks
+cut off, [monorepo#2863](https://github.com/intent-hq/monorepo/issues/2863)). Each persists a new
+user row with a fresh `turnId` after the previous turn's `agent:stream:end`, without a new running
+edge or an `agent:queue:processing`.
+For those turns this table guarantees nothing before the first `agent:stream:activity`. The
+machine-readable list, with one replayable example per row, is
+[`fixtures/turn-start/turn-start-events.json`](./fixtures/turn-start/turn-start-events.json).
+`make check-turn-start-contract` (part of `make consumer-checks`) keeps this table, that file and
+[`event-types.json`](./event-types.json) in step; a `path: value` code span in the Condition cell
+is the entry's payload condition. Components keep a copy through the shared fixture-copy tool
+(see [Copied fixtures](./README.md#copied-fixtures)) and replay every entry. A new turn-start
+signal goes into this table, the fixture and `REQUIRED_TYPES` in `scripts/turn-start-contract.mjs`,
+docs first.
+
+| Turn-start event | Condition | Turn | Fixture id |
+|---|---|---|---|
+| `agent:stream:start` | `data.reason: "harness-wake"`; opens the assistant message `data.messageId` | `agent-initiated` | `harness-wake-start` |
+| `agent:status-changed` | Only the running edge: `data.status: "active"`, `data.isActive: true`; sent when a turn claims the slot | `any` | `running-status-edge` |
+| `agent:stream:activity` | Any ping of a live turn (§7); the first one opens the turn when nothing earlier did | `any` | `first-activity-ping` |
+| `agent:queue:processing` | Always; the queue-drain start, which can arrive with no running status edge before it | `prompt` | `queue-drain-start` |
 
 **Prompt (user-initiated) turns.** A turn opened by a daemon-dispatched `session/prompt`
 (`agent.sendMessage`, queue drain, wake delivery) emits **no** `agent:stream:start` — that event
