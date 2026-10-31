@@ -304,15 +304,15 @@ with no rollback.
 
 - `make gate` runs `make check` then the full nextest suite; `make test` is
   test-only (resume records apply only to nextest — `gate` always reruns the lints).
-- When the full suite is impractical, run `make test-changed` before enqueueing: it
-  runs the nextest targets intentd's `scripts/changed-tests.sh` picks vs `origin/main`
-  (`BASE=<ref>`; `DRY_RUN=1` prints the plan), falling back to the full suite on
-  manifest/lockfile/nextest-config changes; `make coverage-changed` runs it under
-  llvm-cov like the PR `coverage-changed` job. To iterate on a few tests use
-  `make test-select E='<nextest filterset>'`, not raw `cargo nextest`, which skips the
-  fixture setup so fixture tests fail in bulk (95 bogus failures, intentd#2559). To prove
-  a flake, its fix, or that a CI failure is not yours, use
-  `make test-stress E=... COUNT=200 LOAD=1` (retries off, optional CPU + fsync load).
+- When the full suite is impractical, run the changed-tests target before enqueueing, never
+  a hand-picked list (one missed a two-window test that failed CI on cloudlands-fe#3876):
+  Rust `make test-changed` (intentd's `scripts/changed-tests.sh` vs `origin/main`, full
+  suite on manifest/lockfile/nextest-config changes; `make coverage-changed` = the PR job)
+  or frontend `make fe-verify-changed` (cloudlands-fe `verify:changed`, working tree first).
+  Both take `BASE=<ref>`; `DRY_RUN=1` prints the plan. Iterate on Rust tests with
+  `make test-select E='<filterset>'`, not raw `cargo nextest`, which skips fixture setup (95
+  bogus failures, intentd#2559); to prove a flake, its fix, or that a CI failure is not
+  yours, use `make test-stress E=... COUNT=200 LOAD=1` (retries off, optional CPU + fsync load).
 - `make test` / `test-changed` / `test-select` print a unique `record:` attempt path, including
   fully resumed runs. [Receipt and coverage details](CONTRIBUTING.md#test-attempt-receipts-and-resume-coverage)
   explain evidence, interruption and seven-day tree retention. `RESUME=1` skips verified
