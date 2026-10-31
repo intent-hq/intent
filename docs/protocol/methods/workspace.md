@@ -446,7 +446,8 @@ Provisioning is skipped — prior row-only behavior — for `skipIsolation: true
 (canonical name; `skipWorktree` is accepted as a deprecated alias, either set ⇒ direct
 mode), `isRemote: true`, a caller-supplied `worktreePath`, a missing `repositoryPath`, or
 a `repositoryPath` that is not a local git repository (unless `isNewRepo: true`
-initializes it first — see new-repository initialization below). `workspace.update` follows the
+initializes it first — see new-repository initialization below). A `plainFolder: true`
+create never provisions a checkout ([Plain-folder workspaces](#plain-folder-workspaces)). `workspace.update` follows the
 same rename: `skipIsolation` is the canonical param (deprecated alias `skipWorktree`),
 and the persisted column keeps its historical `skip_worktree` name
 (`Workspace.skipWorktree`) — the rename is wire-level only, no migration.
@@ -1376,7 +1377,7 @@ each with a dedicated change event (§6.5) that carries the new value:
 **`status` wire form.** `Workspace.status` serializes as the PascalCase TS `WorkspaceStatus`
 string enum — `"Active" | "Inactive" | "Archived" | "Retired" | "Deleted"` (src/shared/types.ts; `"Retired"` is additive, see [Retired workspaces](#retired-workspaces)) — both on
 the wire and as the stored DB word (matching the `PullRequestStatus` precedent). Optional
-`Workspace` fields (`statusMessage`, `statusImageAssetId`, `label`, `autoArchiveDisabled`, `baseRef`, `prUrl`, `prNumber`,
+`Workspace` fields (`statusMessage`, `statusImageAssetId`, `label`, `autoArchiveDisabled`, `plainFolder`, `baseRef`, `prUrl`, `prNumber`,
 `prStatus`, `activePullRequest`, `pullRequests`, `pullRequestsTotal` (list rows only, see
 **List-row slimming** below), `contextLinks`, `archivedAt`, `retiredAt`, `cowSupported`,
 `checkoutMode`, repository/worktree fields, …) are
@@ -1484,7 +1485,7 @@ worktree, `"cow"` a standalone copy-on-write clone, `"direct"` a standalone plai
 clone (the cache-hydration fallback when CoW is unsupported) or an `isNewRepo`
 initialization working in the repository folder itself. It is omitted for rows
 without a daemon-provisioned checkout (skip-isolation, remote, caller-supplied
-`worktreePath`, non-git repository paths, pre-existing rows). `"cow"` and `"direct"` are
+`worktreePath`, non-git repository paths, plain-folder workspaces, pre-existing rows). `"cow"` and `"direct"` are
 both **standalone** repositories: `workspace.delete` skips the worktree-registration
 prune and the source-repo branch-delete guard for both, and both are sandbox-eligible
 (§5.5).
@@ -2421,6 +2422,8 @@ stateDiagram-v2
   nothing changes, when deleting the folder would destroy the only copy of the repository
   or a folder the daemon does not own: standalone `cow` / `direct` checkouts (the folder
   *is* the repository), `skipIsolation` workspaces (the folder is the user's repository),
+  plain-folder workspaces (the folder is the user's; `error.data` adds `plainFolder: true`,
+  see [Plain-folder workspaces](#plain-folder-workspaces)),
   workspaces without a daemon-owned checkout, and remote workspaces. The automatic purge sweep skips these workspaces.
 - **Purge status message.** The retire write also sets the workspace `statusMessage` to
   `"Workspace folder purged to free disk space."`, replacing the previous message, so the
@@ -2767,6 +2770,91 @@ assistant, tool or system rows, or agent/automatic-origin messages, as human.
 Message content and other recorded authors remain unchanged. This transfer-scoped
 source tagging does not authorize guessing or mass-backfilling unknown legacy
 [comment authors (§5.3)](./notes-tasks.md#qualified-human-comment-attribution-109-additive-docs-lead-implementation).
+
+#### Plain-folder workspaces
+
+*(Additive, protocol 15.3.)* A **plain-folder** workspace works directly in an ordinary
+folder with no git repository, no checkout and no forge. Clients request it explicitly at
+create time. The daemon accepts the option regardless of any client Labs setting.
+
+**Row field.** `Workspace.plainFolder?: boolean` is `true` on a plain-folder workspace and
+**omitted** otherwise (omitted = `false`, presence-detected). It is the single source of
+truth for the mode: clients and the daemon read this field and never infer the mode from
+the folder's contents, `checkoutMode`, `worktreePath` or `skipWorktree`.
+
+- It is set only by `workspace.create` and never changes afterwards. It stays `true` if a
+  `.git` directory later appears in the folder; there is no conversion to a git workspace.
+- `workspace.update` never writes it: an update carrying a `plainFolder` key is rejected
+  with `-32602 { code: "invalid-params" }` and nothing is written. Because the value never
+  changes, `workspace:updated` has no `plainFolder` change key.
+- It is carried on every `Workspace` payload, including `workspace:created`, list rows and
+  the lite `workspace.subscribe` projection (it is not a detail-only field).
+- The folder path is `repositoryPath`. A plain-folder row omits `worktreePath`,
+  `checkoutMode`, `branch`, `baseRef`, `baseCommitSha`, `remote` and every pull-request
+  field; the daemon never stores the user's folder as `worktreePath`.
+- Agents run with the folder as their working directory. The MCP
+  `ws.workspace.details()` result omits `branch`.
+
+**Create option.** `workspace.create` accepts `plainFolder?: boolean`. Only `true`
+selects the mode; `false` or omitted keeps today's behavior. `repositoryPath` is required
+and names either:
+
+- an **existing folder** that is not a git repository: the daemon creates only the row
+  and leaves the folder's contents untouched; or
+- a **new folder** that does not exist yet: the daemon creates that one directory with no
+  `.git` (its parent must already exist), then creates the row.
+
+The request is rejected with `-32602`, before any side effect (see "Pre-side-effect
+validation"), when:
+
+- it also sets a git-only option — `githubUrl`, `repositoryCheckout`, `clonePath`,
+  `isNewRepo: true`, `baseRef`, `branch`, `worktreePath` or `isRemote: true` —
+  `{ code: "invalid-params" }` with a message naming the option;
+- it carries a pr-kind `contextLinks` entry, which would make the create PR-aware and
+  derive `branch` / `baseRef` and PR fields from the forge — `{ code: "invalid-params" }`;
+  issue-kind links are accepted and persisted as for any create;
+- `repositoryPath` is missing — `{ code: "invalid-params" }`;
+- the path cannot hold a plain folder —
+  `{ code: "plain-folder-path-rejected", reason, path }`, where `reason` is one of:
+  - `"inside-git-repo"`: the folder (or, for a new folder, its parent) is a git
+    repository or inside one; `repositoryRoot` names that repository's top level;
+  - `"inside-workspaces-root"`: the path is the daemon workspaces root
+    (`$INTENTD_WORKSPACES_DIR`, else `~/intent/workspaces`) or inside it;
+  - `"not-a-directory"`: the path exists and is not a directory;
+  - `"parent-missing"`: the path does not exist and neither does its parent.
+
+`reason` is open: clients show `message` for an unknown value. The rest of the create
+contract is unchanged: the spec note is seeded, `initialAgent` and `progressId` work as
+for any create, and `workspace:created` carries the row. A request **without**
+`plainFolder` on a non-git `repositoryPath` keeps its existing behavior; this option does
+not relax the client guard against accidental non-git creates.
+
+**The folder is never deleted, moved or modified by Intent.**
+
+- `workspace.delete`, `workspace.archive` and the automatic archive remove or update only
+  database rows; the folder and its files are left as they are.
+- `workspace.retire` (manual **Purge workspace folder**) is refused with
+  `-32602 { code: "retire-unsupported", plainFolder: true }` and the message
+  `workspace.retire is not available in plain-folder workspaces`; nothing changes. The
+  automatic purge skips plain-folder workspaces.
+- `workspace.duplicate` is refused with the plain-folder error below.
+
+**Plain-folder error.** An operation that needs git or a forge, called for a plain-folder
+workspace, fails with `-32602 { code: "plain-folder-unsupported", operation }` and the
+message `<operation> is not available in plain-folder workspaces`; nothing changes.
+`operation` names the refused method or binding. It applies to `workspace.duplicate` and
+to the agent MCP bindings `ws.git.*`, `ws.pr.*`, `ws.mr.*` and
+`ws.workspace.proposeSibling`, which are also left out of the `workspace_api` tool
+description and `ws.help` output in these workspaces.
+
+**Events.** The daemon runs no git status refresh, git metadata watcher, auto-commit, PR
+monitoring or automatic PR refresh for a plain-folder workspace, so it never emits
+`changes:*`, `git:*`, `gitRoot:*`, `pr:*` or `prMonitor:*` events for it. `file:*`,
+`task:*`, `note:*`, `agent:*` and `workspace:*` events are unchanged (§6.5).
+
+**Support detection.** Clients send `plainFolder` only to a daemon whose
+`protocolVersion` is at least `15.3`; an older daemon ignores the unknown option and would
+fall back to its legacy non-git create path.
 
 #### GitLab project checkout
 

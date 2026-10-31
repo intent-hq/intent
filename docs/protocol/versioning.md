@@ -8,8 +8,26 @@ capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `15.2` — retired workspaces, on top of 15.1's prepared discussions, guest roles, scoped repository pages and GitLab child Git policy; not a shipped-version claim.
+**Documented version:** `15.3` — plain-folder workspaces, on top of 15.2's retired workspaces and 15.1's prepared discussions, guest roles, scoped repository pages and GitLab child Git policy; not a shipped-version claim.
 Other prepared extensions retain their independent support gates.
+
+**Version 15.3 — plain-folder workspaces (additive).**
+[Plain-folder workspaces](./methods/workspace.md#plain-folder-workspaces) work directly in
+an ordinary folder with no git repository. They add the presence-detected
+`Workspace.plainFolder` row field (omitted = `false`; set only at create, never by
+`workspace.update`, and kept if `.git` appears later) and the `workspace.create` option
+`plainFolder: true` with `repositoryPath` naming an existing non-git folder or a new
+folder. The option is refused before any side effect with git-only create options, a pr-kind
+`contextLinks` entry, or a path inside a git repository or the daemon workspaces root
+(`plain-folder-path-rejected`). Intent never deletes, moves or modifies the folder:
+`workspace.retire` keeps its `retire-unsupported` refusal with `plainFolder: true`, and
+`workspace.duplicate` plus the agent bindings `ws.git.*`, `ws.pr.*`, `ws.mr.*` and
+`ws.workspace.proposeSibling` return the new `plain-folder-unsupported` error. No
+`changes:*`, `git:*`, `gitRoot:*`, `pr:*` or `prMonitor:*` events are emitted for these
+workspaces (§6.5). No method-catalog change: the documented surface stays
+**486 / 428 / 58** (dispatchable / router / fast path). The minor bump is
+the support signal: an older daemon ignores the unknown create option, so clients send
+`plainFolder` only when `protocolVersion` is at least `15.3`.
 
 **Version 15.2 — retired workspaces (additive).**
 [Retired workspaces](./methods/workspace.md#retired-workspaces) add the `"Retired"`
@@ -1613,4 +1631,5 @@ the `ignore` map of `scripts/check-protocol-field-parity.mjs`, not here.
 | `Workspace` | `scriptsRunning` | [Workspace fields](./methods/workspace.md#51-workspace) | Pending cloudlands-fe Home Running/Waiting groups PR |
 | `Workspace` | `backgroundTasksRunning` | [Workspace fields](./methods/workspace.md#51-workspace) | Pending cloudlands-fe Home background-task Running PR |
 | `Workspace` | `autoArchiveDisabled` | [Auto-archive opt-out](./methods/workspace.md#auto-archive-opt-out) | Pending [cloudlands-fe#3863](https://github.com/intent-hq/cloudlands-fe/pull/3863) (Home Disable auto-archive toggle) |
+| `Workspace` | `plainFolder` | [Plain-folder workspaces](./methods/workspace.md#plain-folder-workspaces) | Pending cloudlands-fe plain-folder workspaces PR (Labs git toggle and hidden git UI) |
 | `AgentLite` | `nodeName` | [Placed agent projection](./methods/nodes.md#placement-and-creation) | Pending: the complete node contract that advertises `agentNodes`; the experimental single-node remote launch advertises no capability, so the app stays gated off |
