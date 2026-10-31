@@ -195,7 +195,7 @@ event type. The documented surface is now **478 / 420 / 58** (dispatchable /
 router / fast path). The pinned intentd implements it; this entry does not
 identify a carrying release.
 
-**Version 15.1 — scoped repository pages and GitLab child Git policy (additive, prepared).**
+**Version 15.1 — scoped repository pages and GitLab child Git policy (additive).**
 This extension builds on protocol 15.0 without restoring legacy workspace import
 or replacing startup readiness and script or monitor list semantics. The [scoped resource-read contract](./methods/repository-resources.md#project-pages-and-discussions)
 adds six operations: `sourceControl.read.captureScoped`,
@@ -214,7 +214,7 @@ including the private invalidation/retirement feed. Child Git policy retains its
 owner-only binding and defaults; native Git remains independent of that policy.
 
 These eight router operations extend the documented surface to **464 / 406 / 58**
-(dispatchable / router / fast path), including other independently prepared
+(dispatchable / router / fast path), including other independently gated
 additions. The private `sourceControl.read.invalidated` notification shares the
 original resource-read retirement feed; it is not a global event subscription.
 Catalog inclusion does not identify a carrying release, advance component pins
@@ -394,7 +394,7 @@ checkout capability and authority remain required. Missing config is distinct
 from unavailable reads; old clients and old-daemon fallback remain compatible.
 See the [configuration contract](./methods/repository-checkout.md#selected-repository-configuration-protocol-138).
 
-**Version 13.7 — checkout owner avatars (additive, prepared).**
+**Version 13.7 — checkout owner avatars (additive).**
 The [owner-avatar extension](./methods/repository-checkout.md#owner-avatar-extension-protocol-137)
 adds optional `includeOwnerAvatar` to checkout capture and optional
 `ownerAvatarUrl` to its project page/detail projection. Exactly integer
@@ -460,24 +460,24 @@ older daemons retain manual invitation account entry. Search never replaces
 create-time identity pinning or owner authorization. This is one additional router
 method; the historical version counts below describe their respective snapshots.
 
-**Version 13.3 — GitLab repository extension (additive, prepared).** The catalog adds
+**Version 13.3 — GitLab repository extension (additive).** The catalog adds
 thirteen router methods: repository context capture/read/release, selection
 capture/save/reset/reconcile/release, native review reconcile/release, and explicit
 resource capture/detail/release. This brings the documented surface, including
-other prepared additions, to **435 / 380 / 55** (dispatchable / router / fast path).
+other additions documented at the time, to **435 / 380 / 55** (dispatchable / router / fast path).
 Four retirement controls are private to the original connection; they are not
 global event subscriptions. `repositoryContext: 1`, `repositorySelection: 1`,
 `nativeReview: 1`, `nativeReviewCompanion: 1` and `repositoryResourceRead: 1` gate
 their respective complete contracts independently. The companion extends existing
 qualified preparation/execution without adding another method or notification.
-These docs lead the component pin and make no installed-version claim. Earlier
+intentd implements all five contracts. Earlier
 experimental 10.10–10.14 labels for this work are not public compatibility gates;
 existing protocol history and retired methods remain unchanged.
-The separately prepared Home 13.2 additions below are not implied by a daemon
+The separately gated Home 13.2 additions below are not implied by a daemon
 advertising 13.3: discover each surface as its own contract specifies. Relative
 to the 13.1 implementation's 404 / 349 / 55, these thirteen additions alone yield
 417 / 362 / 55; the documented 435 / 380 / 55 also includes eighteen independently
-prepared methods. Neither count substitutes for capability and permission checks.
+gated methods. Neither count substitutes for capability and permission checks.
 
 **Version 13.2 — Home backend prerequisites (additive).**
 Adds `github.pulls.checks`, `github.pulls.reviews`, and `github.pulls.files`

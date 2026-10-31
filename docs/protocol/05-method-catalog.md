@@ -84,7 +84,7 @@ adds one owner-authorized router method, `workspace.members.setRole`, under exac
 `workspaceGuestRoles: 1`. The `manager` role grants scoped agent and saved-script
 controls while preserving the existing Participant default and full-management boundary.
 
-The prepared [protocol 15.1 scoped resource reads](./methods/repository-resources.md#project-pages-and-discussions)
+The [protocol 15.1 scoped resource reads](./methods/repository-resources.md#project-pages-and-discussions)
 add six router methods and one socket-private invalidation notification. The
 [owner-only child Git policy](./methods/settings.md#gitlab-child-git-credential-policy)
 adds two router methods. Require `repositoryResourcePages: 1` and
