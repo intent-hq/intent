@@ -2823,6 +2823,9 @@ validation"), when:
     repository or inside one; `repositoryRoot` names that repository's top level;
   - `"inside-workspaces-root"`: the path is the daemon workspaces root
     (`$INTENTD_WORKSPACES_DIR`, else `~/intent/workspaces`) or inside it;
+  - `"contains-workspaces-root"`: the folder contains a daemon workspaces root — the
+    daemon workspaces root above or the configured `workspace.worktreesLocation` (§5.12) —
+    for example the user's home folder;
   - `"not-a-directory"`: the path exists and is not a directory;
   - `"parent-missing"`: the path does not exist and neither does its parent.
 
