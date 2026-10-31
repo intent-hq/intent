@@ -727,7 +727,7 @@ success, and stale process-attempt results must never publish. Repeated failed
 HTTP polls update status/list metadata without emitting durable polling events.
 Existing process-state events still fire. Services without contracts keep their
 existing runtime payload shape. Readiness does not itself require `script:changed`;
-its separate prepared snapshot extension is described below.
+its separate snapshot extension is described below.
 
 #### Self-contained script changes
 

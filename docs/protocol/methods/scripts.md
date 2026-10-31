@@ -556,10 +556,10 @@ protocol `10.11` and `client.hello.server.capabilities.scriptLifecycle: 1`.
 This covers persistence, all settled command outcomes, durable admission recovery,
 concurrency protection and the agent bindings. The lifecycle-aware frontend is
 [`25c9335afd3032b6782b2f52155f95710e89ed76`](https://github.com/intent-hq/cloudlands-fe/commit/25c9335afd3032b6782b2f52155f95710e89ed76)
-([PR #3041](https://github.com/intent-hq/cloudlands-fe/pull/3041)). These are
-component candidates, not a claim of merged, pinned, released or installed support;
-combined client/runtime acceptance and deployment remain separate gates. See
-[versioning](../versioning.md) for the reviewed pin baseline and merge order.
+([PR #3041](https://github.com/intent-hq/cloudlands-fe/pull/3041)). Both have
+since merged, and the pinned intentd advertises `scriptLifecycle: 1`; installed
+support still depends on the connected daemon's capability. See
+[versioning](../versioning.md) for the original pin baseline and merge order.
 Only advertise the capability for the complete extension. Existing methods and status enum remain;
 `script.archive` and `script.restore` are the only new RPC names. History is a view
 of retained definitions and their latest result, **not a per-run log archive**.
