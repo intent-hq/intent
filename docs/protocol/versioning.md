@@ -446,12 +446,12 @@ surfaces, per-source `recoverySources` for combined retries and daemon-computed
 `mergeEligible` on full queue snapshots (false on draining overlays). Advertise
 `submissionCorrelation: 1` only for complete trusted, persisted end-to-end support;
 clients accept exactly integer `1`, independently of protocol version. This
-allocation follows the prepared Home 13.2 and GitLab 13.3 reservations; advertising
+allocation follows the Home 13.2 and GitLab 13.3 reservations; advertising
 13.4 does not imply either extension is implemented. Discover each surface under
 its independent capability and permission rules. No method/event names or catalog
 counts change: the documented surface remains **435 / 380 / 55**, while submission
 correlation alone leaves the 13.1 implementation's **404 / 349 / 55** unchanged.
-These prepared docs make no shipping claim.
+intentd advertises `submissionCorrelation: 1`.
 
 **Invitation account search (additive).** `host.invite.searchAccounts`
 (§5.49) adds bounded public suggestions for GitHub and the selected GitLab host.
