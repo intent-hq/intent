@@ -2193,7 +2193,7 @@ Revoking a credential closes its live `/node/*` connections with `1008`
 `hello.protocol` is a range instead of one number:
 
 ```ts
-interface ProtocolRange { min: number; max: number } // inclusive; this contract defines 6
+interface ProtocolRange { min: number; max: number } // inclusive; this contract defines 6 and 7
 ```
 
 The machine picks the highest version in both ranges and returns it as
@@ -2225,6 +2225,14 @@ public error `machine-update-required`
 message "Update Intent on <machine> (it runs X; this backend needs Y or newer)."
 `update` names the side whose range is older.
 
+**nodeProtocol 7** is protocol 6 plus [stop acknowledgement](#stop-acknowledgement-nodeprotocol-7).
+It changes what a `stop` means to the backend, so it is a new version, not an
+optional field. A daemon that implements stop acknowledgement offers
+`{ min: 7, max: 7 }` on both sides: version 6 was never released, so no peer
+keeps it, and a backend never runs a link on which stops cannot be confirmed.
+A version-6-only peer finds no common version and gets
+`machine-update-required` as above.
+
 ### Executor frames
 
 Frames are those of the [single-node link](#frames), with these changes:
@@ -2235,12 +2243,115 @@ Frames are those of the [single-node link](#frames), with these changes:
 | `welcome` | machine → backend | `protocol: 6` (the chosen version); adds `capabilities: MachineCapabilities`, `hosts: string[]`, `tcAddress?`; keeps `runningAgents: AgentId[]` for this binding only |
 | `capabilities` | backend → machine | New, control lane, empty body: ask for a fresh report |
 | `capabilitiesReply` | machine → backend | New, control lane: `capabilities: MachineCapabilities` |
+| `stop` | backend → machine | Protocol 7: adds the required `stopId`; see [stop acknowledgement](#stop-acknowledgement-nodeprotocol-7) |
+| `stopAck` | machine → backend | New in protocol 7, control lane: `acks: StopAckEntry[]` |
 
 The executor credential admits exactly these link requests, enumerated in one
 constant with a golden test: `hello`, `heartbeat` / `heartbeatReply`, `launch`,
 `prompt`, `cancel`, `stop`, `ack`, `capabilities`, `response` (to the machine's
 `workspace.call` requests), and git sessions on `/node/git` for agents on that
 credential's binding. Any other frame is `node-link-protocol`.
+`stopAck` travels machine → backend, so it is not in that list; the backend
+accepts it only on a protocol 7 link.
+
+### Stop acknowledgement (nodeProtocol 7)
+
+A `stop` the backend sends is confirmed only by an explicit, correlated
+`stopAck` from the machine. Nothing else confirms it: not a sent frame, an
+empty send queue, a later `capabilitiesReply`, a journal `exited` record or a
+missing entry in `welcome.runningAgents`.
+
+**Stop frame.**
+
+```ts
+interface StopFrame { type: "stop"; agentId: string; stopId: string } // protocol 7: both required
+```
+
+The backend chooses `stopId`, a UUID, when it queues the stop. It is unique
+within the binding (the credential), not only within one link session, and the
+backend reuses the same `stopId` every time it resends that stop, on the same
+link or after a reconnect. A protocol 7 `stop` without a `stopId`, or with one
+that is not a UUID, is `node-link-protocol`.
+
+**Acknowledgement frame.**
+
+```ts
+interface StopAckFrame { type: "stopAck"; acks: StopAckEntry[] } // 1 to 256 entries
+interface StopAckEntry {
+  stopId: string;                       // echoed from the stop
+  agentId: string;                      // echoed from the stop
+  outcome: "stopped" | "not-running";
+}
+```
+
+The machine sends an entry once the stop is applied for that agent on the
+binding that received it:
+
+- `stopped`: the agent was running; its provider process (with its process
+  group) has exited and the agent is gone from the binding's running set.
+  The machine appends the agent's `exited` journal record before it sends this
+  ack.
+- `not-running`: the agent was not running on this binding when the stop was
+  applied: it had already exited, was never launched there, or is unknown to
+  the machine. The machine stops nothing and appends no journal record.
+
+Either outcome tells the backend the same thing: after the ack, the agent has no
+process on the machine for this binding. The machine may batch entries for
+several stops into one frame and may ack as soon as each stop is applied.
+A machine that cannot stop the process (for example, it is still exiting)
+does not ack yet; the backend's resend covers the wait.
+
+**Ordering and duplicates.**
+
+- `stopAck` frames may arrive in any order relative to journal, heartbeat,
+  `capabilitiesReply` and other `stopAck` frames, and entries within one frame
+  are unordered. The backend correlates only by `stopId`.
+- The machine applies control frames in the order received, so a `launch` or
+  `prompt` the backend sends after a `stop` for the same agent is handled after
+  that stop. The ack confirms the stop, not any later request.
+- A duplicate `stop` (same `stopId`) is idempotent: while the first is being
+  applied it joins it; afterwards it is applied again and, the agent no longer
+  running, acks `not-running`. The machine needs no durable record of stop ids.
+  The machine may therefore ack one `stopId` more than once.
+- The backend ignores an entry whose `stopId` is not queued (already confirmed,
+  or from an earlier link), and an entry whose `agentId` differs from the
+  queued stop's; it logs both. Neither is a protocol error.
+
+**Backend without an ack.**
+
+- Every stop stays queued per binding until its `stopId` is acknowledged.
+  A link with queued stops counts as a link with a live agent: it is not idle
+  disconnected, and if it drops the backend reconnects with the usual backoff.
+- On a live link, an unacknowledged stop is resent after 5 s, then with the
+  delay doubling to 60 s (±20% jitter) for as long as that link stays bound.
+- On every accepted bind, the backend resends all queued stops right after
+  `welcome`, before any `launch` or `prompt` on the new link, and restarts
+  their resend timers. It never treats a stop as confirmed because the agent is
+  missing from `welcome.runningAgents`.
+- The queue is held in memory. After a backend restart, the
+  [existing reconciliation](#launch-and-agent-lifecycle) applies: the backend
+  sends a new stop, with a new `stopId`, for every agent in
+  `welcome.runningAgents` that it no longer has attached, and those stops are
+  acknowledged and resent like any other.
+- When the machine revokes the credential (`401`, or a `1008` close), the queue
+  for that binding is dropped: revocation stops the binding's agents on the
+  machine ([binding per credential](#binding-per-credential)).
+
+**Removing a machine.** `remoteMachines.remove` with `stopAgents: true` queues a
+stop for each live agent on the machine, connects on demand if needed, and
+waits at most 30 s in total (including the 10 s connect) for every stop to be
+acknowledged:
+
+- All acknowledged: it deletes the machine, its credential token and its lease,
+  and returns `{ ok: true, credentialId }`.
+- The machine has revoked this backend's credential: the stops are moot, so
+  removal proceeds as above.
+- Otherwise (unreachable, or reachable but not every stop acknowledged in
+  time): it fails `-32603` `machine-unreachable` with `attempts` (empty when the
+  link was up but the acks did not come) and `unconfirmedStops: string[]`, the
+  agent ids still unconfirmed. It deletes nothing: the machine, credential and
+  queued stops stay, the backend keeps resending them, and the caller can retry
+  `remove` or revoke the credential on the machine.
 
 ### Capabilities report
 

@@ -137,7 +137,8 @@ adds structured `data.code` values on existing numeric codes. `-32602`:
 `machine-unreachable`, `machine-unknown` and `machine-revoked`; `no-capacity`
 gains `limit: "count" | "memory"` with its counts or bytes. `-32603`:
 `machine-unreachable` (with the routes tried) and `machine-revoked` from
-`remoteMachines.add` / `refresh`. `-32003` with `data.code: "node-mode"` refuses
+`remoteMachines.add` / `refresh`, and `machine-unreachable` with
+`unconfirmedStops` from `remoteMachines.remove` when stops go unacknowledged. `-32003` with `data.code: "node-mode"` refuses
 a method outside the node-mode list. No new numeric error is introduced.
 
 ### Prepared truncated note read errors
