@@ -33,13 +33,13 @@ The [desktop control contract (§5.51)](./methods/desktop.md) adds four
 user/executor router methods and one daemon-only reverse RPC. Agent lifecycle
 and actions are MCP-only; `desktopControl: 1` gates support independently at both ends.
 
-The prepared [GitLab checkout contract (§5.53)](./methods/repository-checkout.md)
+The [GitLab checkout contract (§5.53)](./methods/repository-checkout.md)
 adds six original pre-workspace router methods, plus the independently gated
 `sourceControl.checkout.repoConfig` read (`gitlabCheckoutRepoConfig: 1`). `gitlabCheckout: 1` gates the complete
 contract on the selected destination; it does not confer host or project access.
 
-The prepared [PR workspace lookup](./methods/workspace.md#pull-request-workspace-lookup)
-adds one read-only router method, `workspace.findByPullRequest`, ahead of the pin.
+The [PR workspace lookup](./methods/workspace.md#pull-request-workspace-lookup)
+adds one read-only router method, `workspace.findByPullRequest`.
 `prWorkspaceLookup: 1` gates support.
 
 The [retired workspace state](./methods/workspace.md#retired-workspaces) (protocol 15.2)
@@ -84,9 +84,9 @@ adds one owner-authorized router method, `workspace.members.setRole`, under exac
 `workspaceGuestRoles: 1`. The `manager` role grants scoped agent and saved-script
 controls while preserving the existing Participant default and full-management boundary.
 
-The prepared [protocol 15.1 scoped resource reads](./methods/repository-resources.md#prepared-project-pages-and-discussions)
+The prepared [protocol 15.1 scoped resource reads](./methods/repository-resources.md#project-pages-and-discussions)
 add six router methods and one socket-private invalidation notification. The
-[owner-only child Git policy](./methods/settings.md#prepared-gitlab-child-git-credential-policy)
+[owner-only child Git policy](./methods/settings.md#gitlab-child-git-credential-policy)
 adds two router methods. Require `repositoryResourcePages: 1` and
 `gitlabChildGitPolicy: 1` for their respective contracts; legacy detail reads
 retain `repositoryResourceRead: 1`. Neither capability grants authority or
@@ -116,14 +116,13 @@ Additionally, the protocol includes:
 
 The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.56) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
 
-**Prepared GitLab repository additions:** the [repository context and selection
+**GitLab repository additions:** the [repository context and selection
 contracts](methods/workspace.md#repository-context), [native review and commit
 companion](methods/change-tracking.md#native-review-preparation-and-receipts),
 and [explicit resource reads](methods/repository-resources.md) add thirteen router
 methods and four socket-private control notifications. Their individual hello
 capabilities gate support; catalog entries do not grant permission or establish
-which desktop release contains the feature. The methods below lead the component
-pin, while all existing methods and prepared extensions remain present.
+which desktop release contains the feature. All existing methods remain present.
 
 ### Router methods by namespace (428 total)
 
@@ -173,7 +172,7 @@ pin, while all existing methods and prepared extensions remain present.
 | sentry | 8 | assignIssue, authStatus, getIssue, ignoreIssue, listIssues, listProjects, resolveIssue, searchIssues |
 | settings | 4 | get, list, reset, update |
 | skill | 1 | list |
-| sourceControl | 25 | authStatus, cancelAuth, checkout.branches, checkout.capture, checkout.project, checkout.projects, checkout.release, checkout.repoConfig, checkout.warm, connect, getUser, gitlab.childGit.get, gitlab.childGit.set, identityProof.create, identityProof.delete, read.capture, read.captureScoped, read.detail, read.detailScoped, read.discussions, read.list, read.release, read.releaseScoped, read.resolveKnownRepository, revoke — the provider-generic forge auth surface (§5.27 "Provider-generic auth — `sourceControl.*`"; v10.5, daemon-global; optional routing-only `workspaceId` on `authStatus` / `getUser` only) plus, in v10.8, the provider-generic guest half of the invite identity proof (`identityProof.create` / `identityProof.delete`, §5.27 "Identity proof"; `github.identityProof.*` are their `provider: "github"` aliases, separate dispatchable names like the auth rows). The `github.authStatus` / `connect` / `cancelAuth` / `revoke` / `getUser` rows of the `github` namespace are aliases of these with `provider: "github"` pinned; they remain separate dispatchable names (not `METHOD_ALIASES` entries) because their result shapes are the byte-identical pre-v10.5 projections. The seven prepared `checkout.*` methods (§5.53) require an explicit destination and original connection, without workspace routing |
+| sourceControl | 25 | authStatus, cancelAuth, checkout.branches, checkout.capture, checkout.project, checkout.projects, checkout.release, checkout.repoConfig, checkout.warm, connect, getUser, gitlab.childGit.get, gitlab.childGit.set, identityProof.create, identityProof.delete, read.capture, read.captureScoped, read.detail, read.detailScoped, read.discussions, read.list, read.release, read.releaseScoped, read.resolveKnownRepository, revoke — the provider-generic forge auth surface (§5.27 "Provider-generic auth — `sourceControl.*`"; v10.5, daemon-global; optional routing-only `workspaceId` on `authStatus` / `getUser` only) plus, in v10.8, the provider-generic guest half of the invite identity proof (`identityProof.create` / `identityProof.delete`, §5.27 "Identity proof"; `github.identityProof.*` are their `provider: "github"` aliases, separate dispatchable names like the auth rows). The `github.authStatus` / `connect` / `cancelAuth` / `revoke` / `getUser` rows of the `github` namespace are aliases of these with `provider: "github"` pinned; they remain separate dispatchable names (not `METHOD_ALIASES` entries) because their result shapes are the byte-identical pre-v10.5 projections. The seven `checkout.*` methods (§5.53) require an explicit destination and original connection, without workspace routing |
 | specialist | 5 | create, delete, edit, get, list |
 | stats | 2 | getRateHistory, getUsage — `getRateHistory` is daemon-global (§5.39; v2.9, no `workspaceId`) |
 | system (router) | 1 | capabilities — machine-level capabilities, optional routing-only workspaceId; distinct from the `system.*` fast-path controls below (v2.3, see the note after the fast-path catalog) |

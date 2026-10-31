@@ -107,7 +107,7 @@ captured bus boundaries. See the [causal boundary](event-stream-recovery.md#caus
 
 #### Private repository context retirement
 
-**Prepared additive contract:** the
+**Additive contract:** the
 [repository context contract](methods/workspace.md#repository-context)
 adds `workspace.repositoryContext.retired` on the original physical connection.
 It is a socket-private JSON-RPC control notification, not an `events.event`
@@ -136,7 +136,7 @@ not replace the server's entry and consuming-reply checks.
 
 #### Private repository selection retirement
 
-**Prepared additive contract:** the
+**Additive contract:** the
 [repository selection contract](methods/workspace.md#repository-selection)
 adds `workspace.repositorySelection.retired` on its original physical connection.
 This is a separate private feed from repository context retirement. It is not a
@@ -173,7 +173,7 @@ bounded to 64 notices and each forward has a 5-second timeout.
 
 #### Private native review retirement
 
-**Prepared additive contract:** the [native review contract](methods/change-tracking.md#native-review-preparation-and-receipts)
+**Additive contract:** the [native review contract](methods/change-tracking.md#native-review-preparation-and-receipts)
 adds `accept-changes.retired` on the original physical socket. This is its own
 control feed, separate from context/selection feeds and global `events.event`.
 There is no `events.subscribe` call, `event-types.json` entry, MCP registration,
@@ -230,7 +230,7 @@ either as evidence that a committed effect was rolled back.
 
 #### Private resource-read retirement
 
-**Prepared additive contract:** the [explicit resource-read contract](methods/repository-resources.md)
+**Additive contract:** the [explicit resource-read contract](methods/repository-resources.md)
 uses `sourceControl.read.retired` on the physical connection that captured the
 read lifetime. It is a private control feed, separate from repository inventory,
 selection and native review feeds. It has no global subscription, event envelope,

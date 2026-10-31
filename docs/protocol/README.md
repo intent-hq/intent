@@ -142,8 +142,8 @@ and is gated by `remoteMachines: 1`
 | §5.49 Shared host membership, scoped invitations, collaboration identity and personal pairing | [methods/shared-host-membership.md](./methods/shared-host-membership.md) |
 | §5.50 Static/local nodes, placement, hub merge/discard/publish and CoW retirement (prepared) | [methods/nodes.md](./methods/nodes.md) |
 | §5.51 Desktop control (macOS and Windows) | [methods/desktop.md](./methods/desktop.md) |
-| §5.52 Explicit GitLab resource reads (prepared) | [methods/repository-resources.md](./methods/repository-resources.md) |
-| §5.53 GitLab project checkout (prepared) | [methods/repository-checkout.md](./methods/repository-checkout.md) |
+| §5.52 Explicit GitLab resource reads | [methods/repository-resources.md](./methods/repository-resources.md) |
+| §5.53 GitLab project checkout | [methods/repository-checkout.md](./methods/repository-checkout.md) |
 | §5.54 Provider profiles (prepared) | [methods/provider-profiles.md](./methods/provider-profiles.md) |
 | §5.55 Workspace discussions | [methods/multiplayer.md](./methods/multiplayer.md#555-workspace-discussions) |
 | §5.56 Secret requests | [methods/secrets.md](./methods/secrets.md) |
@@ -407,7 +407,7 @@ but do not establish that a not-yet-landed counterpart pin passes.
 
 The [explicit GitLab resource-read contract](./methods/repository-resources.md)
 covers a specified merge request or issue on an already configured instance,
-independent of the workspace's default review project. These prepared additions
+independent of the workspace's default review project. These additions
 use the daemon's shared detail caches and require the original connection's
 `repositoryResourceRead: 1` capability. The catalog includes their three methods;
 documentation and version numbers alone do not establish deployed availability.

@@ -197,11 +197,11 @@ identify a carrying release.
 
 **Version 15.1 — scoped repository pages and GitLab child Git policy (additive, prepared).**
 This extension builds on protocol 15.0 without restoring legacy workspace import
-or replacing startup readiness and script or monitor list semantics. The [scoped resource-read contract](./methods/repository-resources.md#prepared-project-pages-and-discussions)
+or replacing startup readiness and script or monitor list semantics. The [scoped resource-read contract](./methods/repository-resources.md#project-pages-and-discussions)
 adds six operations: `sourceControl.read.captureScoped`,
 `sourceControl.read.detailScoped`, `sourceControl.read.releaseScoped`,
 `sourceControl.read.resolveKnownRepository`, `sourceControl.read.list` and
-`sourceControl.read.discussions`. The [owner-only child Git policy](./methods/settings.md#prepared-gitlab-child-git-credential-policy)
+`sourceControl.read.discussions`. The [owner-only child Git policy](./methods/settings.md#gitlab-child-git-credential-policy)
 adds `sourceControl.gitlab.childGit.get` and `sourceControl.gitlab.childGit.set`.
 
 Require exactly `repositoryResourcePages: 1` or `gitlabChildGitPolicy: 1`, as
@@ -310,14 +310,13 @@ block gains `skipped` and `skippedNames`, `MergeRequirements.checks` and the mon
 readiness. Previously skipped runs counted as passed (intentd#2581, run 39724275631).
 Older daemons omit the new keys and count skipped runs as `passed`.
 
-**PR workspace lookup (additive, prepared).** The
-[PR workspace lookup](./methods/workspace.md#pull-request-workspace-lookup) reserves
+**PR workspace lookup (additive).** The
+[PR workspace lookup](./methods/workspace.md#pull-request-workspace-lookup) adds
 the read-only router method `workspace.findByPullRequest`, bringing the documented
-surface, including the prepared discussions and provider profiles, to
+surface, including the discussion and provider-profile reservations of the time, to
 **460 / 403 / 57**
 (dispatchable / router / fast path). The server hello
-capability `prWorkspaceLookup: 1` gates support. No shipped numeric version is
-claimed here.
+capability `prWorkspaceLookup: 1` gates support. No numeric version is assigned.
 
 **Version 14.1 — startup readiness (additive).** The [startup contract](./startup-readiness.md)
 adds `system.startupStatus` and numeric error `-32012`, with exact
@@ -388,15 +387,15 @@ and `note-index-*` error codes. intentd removed the paging system
 reservation is withdrawn; clients that must bound large note loads use the
 [truncated note read contract](./methods/notes-tasks.md#truncated-note-reads-prepared-additive-contract).
 
-**Version 13.8 — selected checkout configuration (additive, prepared).**
+**Version 13.8 — selected checkout configuration (additive).**
 Adds `sourceControl.checkout.repoConfig` and `gitlabCheckoutRepoConfig: 1` for a
 fixed `.intent/config.json` read at an observed immutable SHA. The original
 checkout capability and authority remain required. Missing config is distinct
 from unavailable reads; old clients and old-daemon fallback remain compatible.
-See the [configuration contract](./methods/repository-checkout.md#selected-repository-configuration-prepared-protocol-138).
+See the [configuration contract](./methods/repository-checkout.md#selected-repository-configuration-protocol-138).
 
 **Version 13.7 — checkout owner avatars (additive, prepared).**
-The [owner-avatar extension](./methods/repository-checkout.md#owner-avatar-extension-prepared-protocol-137)
+The [owner-avatar extension](./methods/repository-checkout.md#owner-avatar-extension-protocol-137)
 adds optional `includeOwnerAvatar` to checkout capture and optional
 `ownerAvatarUrl` to its project page/detail projection. Exactly integer
 `gitlabCheckoutOwnerAvatar: 1` on the original connection permits the opt-in;
@@ -420,7 +419,7 @@ their independent gates, and discovery remains unchanged. The documented surface
 is now **443 / 387 / 56** (dispatchable / router / fast path). This reservation
 does not advertise runtime implementation or change the pinned daemon version.
 
-**Version 13.5 — GitLab project checkout (additive, prepared).**
+**Version 13.5 — GitLab project checkout (additive).**
 [Pre-workspace checkout](./methods/repository-checkout.md) adds six router methods:
 `sourceControl.checkout.capture`, `projects`, `project`, `branches`, `warm` and
 `release`. `workspace.create.repositoryCheckout` carries the original checkout
@@ -480,11 +479,11 @@ to the 13.1 implementation's 404 / 349 / 55, these thirteen additions alone yiel
 417 / 362 / 55; the documented 435 / 380 / 55 also includes eighteen independently
 prepared methods. Neither count substitutes for capability and permission checks.
 
-**Version 13.2 — Home backend prerequisites (additive, prepared).**
+**Version 13.2 — Home backend prerequisites (additive).**
 Adds `github.pulls.checks`, `github.pulls.reviews`, and `github.pulls.files`
 (§5.27): three read-only router methods, for **407 / 352 / 55** implemented
-dispatchable / router / fast-path names once the backend lands. Including other
-prepared additions the documented surface is **422 / 367 / 55**. Owner-wide
+dispatchable / router / fast-path names. Including other additions documented at
+the time, the documented surface was **422 / 367 / 55**. Owner-wide
 `github.pulls.search({org, ...})` and optional `Workspace.lastContentActivity`
 extend existing shapes; older daemons cannot serve those additions. Exact PR-head
 checkout is a behavior fix to workspace creation, with no additional method.

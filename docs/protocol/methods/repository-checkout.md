@@ -2,7 +2,7 @@
 
 ## 5.53 GitLab project checkout
 
-**Prepared additive contract, protocol 13.5.** Require exactly integer
+**Additive contract, protocol 13.5.** Require exactly integer
 [`server.capabilities.gitlabCheckout: 1`](client-hello.md#gitlab-checkout-capability)
 on the destination connection. A numeric protocol version or a method in the
 catalog does not establish support, enable the GitLab experiment or authorize a
@@ -89,7 +89,7 @@ slash-separated segment is nonempty and uses only letters, digits, `.`, `_` or
 | `Branch.commitSha` | Full commit selected with that branch. |
 | `Branch.protected` | Optional boolean from provider-observed metadata, not a grant to push. Omitted when only the exact cached name and SHA are known; absence means unknown, never `false`. |
 
-#### Owner-avatar extension (prepared, protocol 13.7)
+#### Owner-avatar extension (protocol 13.7)
 
 Require exactly integer `server.capabilities.gitlabCheckoutOwnerAvatar: 1` on
 the original destination connection before sending `includeOwnerAvatar: true`
@@ -266,12 +266,12 @@ delivery revalidates private results; server refusal remains authoritative even
 when the client has not yet observed a transition. There is no new global event
 or portable retirement subscription in this contract.
 
-Follow the [checkout client lifecycle](../10-thin-client.md#gitlab-checkout-lifecycle-prepared)
+Follow the [checkout client lifecycle](../10-thin-client.md#gitlab-checkout-lifecycle)
 for draft restoration, stale-response rejection and progress. These wire and
 client obligations do not claim live hosted/self-managed acceptance or a carrying
 desktop release.
 
-### Selected repository configuration (prepared, protocol 13.8)
+### Selected repository configuration (protocol 13.8)
 
 Require exactly integer `server.capabilities.gitlabCheckoutRepoConfig: 1` **and**
 `gitlabCheckout: 1` on the original destination connection before calling
