@@ -528,9 +528,9 @@ BASE=<ref> make test-scripts-changed # compare with another base
 ```
 
 It always runs `make lint-shell`. From the ci.yml `shell-tests` job (read from
-that job, so the lists cannot drift) it picks, for each changed `scripts/X.sh`
-or `scripts/X.py`, the suites that are X itself, X's own test (`X.test.sh` or
-`test_X.py`) or a file that names X; a changed `scripts/*.test.sh` also runs
+that job, so the lists cannot drift) it picks, for each changed `.sh` or `.py`
+script directly under `scripts/`, the suites that are the script itself, its
+own test (`<name>.test.sh` or `test_<name>.py`) or a file that names it; a changed `scripts/*.test.sh` also runs
 `lint-fixed-sleeps.sh`. It prints why each suite was picked. It runs every
 suite when the `Makefile`, `ci.yml` or `scripts/fixtures/` changed, when a
 changed script is a shared helper that another script names, when no suite
