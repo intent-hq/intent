@@ -2307,18 +2307,21 @@ does not ack yet; the backend's resend covers the wait.
   `capabilitiesReply` and other `stopAck` frames. The backend correlates only
   by `stopId`: an ack confirms its own stop and never an older or newer stop
   for the same agent.
-- The machine applies control frames in the order received, so a `launch` or
-  `prompt` the backend sends after a `stop` for the same agent is handled after
-  that stop. The ack confirms the stop, not any later request.
+- **No launch behind an unconfirmed stop.** While a stop for an agent is
+  queued, the backend sends no `launch` or `prompt` for that agent on any link;
+  a launch or prompt it needs waits until the stop is acknowledged (or the queue
+  is dropped on revocation). So every copy of a `stop` reaches the machine
+  before any later launch of that agent, and a resent copy can never stop a
+  newer process.
 - A duplicate `stop` (same `stopId`) is idempotent: while the first is being
-  applied it joins it; afterwards it is applied again and, the agent no longer
-  running, acks `not-running`. The machine needs no durable record of stop ids.
-  The machine may therefore ack one `stopId` more than once.
+  applied it joins it; afterwards it is applied again and, by the rule above,
+  finds the agent not running and acks `not-running`. The machine needs no
+  durable record of stop ids, and may ack one `stopId` more than once.
 - A `stop` that reaches the machine on a link whose binding has been replaced
   by a newer generation is dropped without an ack; the backend resends it on
   the new link.
-- The backend ignores an entry whose `stopId` is not queued (already confirmed,
-  or from an earlier link), and an entry whose `agentId` differs from the
+- The backend ignores a `stopAck` whose `stopId` is not queued (already
+  confirmed, or from an earlier link), and one whose `agentId` differs from the
   queued stop's; it logs both. Neither is a protocol error.
 
 **Backend without an ack.**
