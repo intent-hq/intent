@@ -78,7 +78,7 @@ if ! run_check; then
   fail "all-green run exited non-zero: $check_output"
 fi
 expect_all_ran "all-green run"
-grep -q -- '--no-print-directory RUSTUP_CARGO= -o event-catalog-check -o check-mcp-bindings docs-check$' "$stub_log" ||
+grep -q -- '--no-print-directory RUSTUP_CARGO= -o event-catalog-check -o check-mcp-bindings -o check-protocol-status-labels docs-check$' "$stub_log" ||
   fail "docs-check was not invoked with its prerequisites assumed old: $(cat "$stub_log")"
 [ "$(grep -c . "$stub_log")" -eq "$check_count" ] || fail "expected $check_count make invocations: $(cat "$stub_log")"
 # The Makefile prepends the rust-toolchain.toml toolchain's bin/ to every
