@@ -125,6 +125,7 @@ ws.app.workspaces.delete(id) → ProposalCard
 ws.app.workspaces.get(id) → workspace
 ws.app.workspaces.list({ filter?, sort? }) → workspaces[]
 ws.app.workspaces.open(id, { openInNewWindow? }?) → { ok, queued }
+ws.app.workspaces.search(query | { query?, pr?, repository?, includeRetired?, limit? }) → { matches: [{ id, title, branch, status, archived, updatedAt, repository, repositoryPath, matchedOn, pullRequests?, notes?, link, markdownLink }], truncated }
 ws.app.workspaces.transfer(id, { destination? }?) → ProposalCard
 ```
 
