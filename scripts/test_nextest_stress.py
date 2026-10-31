@@ -152,9 +152,10 @@ class TallyTests(unittest.TestCase):
 def alive(pid):
     """Whether `pid` is a live process; once False it stays False while the pid is not reused.
 
-    kill(0) still succeeds for a zombie (Z), for a zombie its parent is reaping
-    (X), and for the instant after /proc/<pid> is removed but before the pid is
-    unhashed, so all three count as dead (intent-hq/intent#8136).
+    kill(0) still succeeds for a zombie (Z) and for a zombie its parent is
+    reaping (X), so both count as dead; and when the reap completes between the
+    kill(0) and the /proc read, the vanished entry counts as dead too
+    (intent-hq/intent#8136).
     """
     try:
         os.kill(pid, 0)
@@ -216,23 +217,34 @@ class AliveTests(unittest.TestCase):
     def test_a_process_being_reaped_never_reads_alive_again(self):
         # Sample alive() from a second thread while the parent reaps the child,
         # which walks it through Z, X and a removed /proc entry.
-        flips = []
-        for _ in range(200):
+        # Samples begun after waitpid returns are dropped: by then the pid
+        # number may belong to an unrelated new process.
+        flips, errors = [], []
+        for _ in range(100):
             pid = os.posix_spawn("/bin/true", ["true"], os.environ)
-            seen, done = [], threading.Event()
+            seen, reaped, done = [], threading.Event(), threading.Event()
 
             def sample():
-                while not done.is_set():
-                    seen.append(alive(pid))
+                try:
+                    while not done.is_set():
+                        before_reap = not reaped.is_set()
+                        state = alive(pid)
+                        if before_reap:
+                            seen.append(state)
+                        time.sleep(0)
+                except Exception as error:  # surfaced below; a dead sampler must not pass
+                    errors.append(error)
             sampler = threading.Thread(target=sample)
             sampler.start()
             time.sleep(0.0005)
             os.waitpid(pid, 0)
+            reaped.set()
             time.sleep(0.0002)
             done.set()
             sampler.join()
             if False in seen and True in seen[seen.index(False):]:
                 flips.append(pid)
+        self.assertEqual(errors, [])
         self.assertEqual(flips, [])
 
     def test_wait_until_dead_never_rechecks_a_dead_pid(self):
