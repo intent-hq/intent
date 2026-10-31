@@ -240,21 +240,26 @@ never resurrects shipped bundles the operator excluded.
   tool description (the `ws.agent.delegate` docs), and the delegating agent passes its pick as
   the explicit `model` param (resolution step 1).
 - **Picker metadata (`role?` / `teamAgents?` / `icon?`) (additive,
-  [intent-hq/intentd#1477](https://github.com/intent-hq/intentd/pull/1477))** — render-only
+  [intent-hq/intentd#1477](https://github.com/intent-hq/intentd/pull/1477))** —
   metadata for client specialist pickers; none of the three fields is ever consulted at
   delegation time.
-  - **`role?`** — the picker-orchestration enum: `"orchestrator"` (powers the team-mode card)
+  - **`role?`** — the picker-orchestration enum: `"lead"` or `"orchestrator"` (powers the team-mode card)
     or `"internal"` (excluded from the New Workspace modal's **single-agent** picker only);
     absent ⇒ a standard pickable specialist. An inherited config scalar (the fold above:
     omit inherits, explicit `""` clears). Writes are **strict**: `create`/`edit` reject any
-    value other than `"orchestrator"`, `"internal"`, or `""` (including non-strings) with
+    value other than `"lead"`, `"orchestrator"`, `"internal"`, or `""` (including non-strings) with
     `-32602`. Reads are **lenient**: an out-of-enum on-disk value is normalized to an
     **omitted** key (which inherits), like an unparseable `teamAgents` — `list`/`get` never
     serve a value the strict write validation would reject when a client echoes the def back.
+    Only `"orchestrator"` applies the spawn-time file-editing tool restrictions;
+    `"lead"` uses ordinary editing tools and can delegate as needed. This decision is
+    captured in the session's existing `specialistIsOrchestrator` metadata. The additive
+    `"lead"` value requires matching daemon and frontend support; older sessions retain
+    their captured role and harness-pinned defaults.
   - **`icon?`** — names a client-side avatar design. An inherited config scalar (omit
     inherits, explicit `""` clears). Icon names are free-form — no enum — but `create`/`edit`
     reject a non-string value with `-32602`.
-  - **`teamAgents?`** — the orchestrator's **advisory team roster**: the specialist ids it
+  - **`teamAgents?`** — the lead or orchestrator's **advisory team roster**: the specialist ids it
     delegates to, used by clients to render the team-mode card; never enforced at delegation
     time. On the wire it is an array of non-empty (non-whitespace) strings — `create`/`edit`
     reject any other shape with `-32602` — emitted on `list`/`get` only when the resolved
@@ -274,6 +279,11 @@ never resurrects shipped bundles the operator excluded.
     `icon`. The picker/routing-metadata keys (including `aliases`, below) are the only
     frontmatter allowed to diverge between the v1 and v1.1 bundled copies (the goldens pin
     every other key to its v1 value).
+    Harness 3.6 changes the bundled `spec-writer` display name to **Lead**, its role to
+    `"lead"`, and accepts both `coordinator` and `lead` aliases. The canonical ID stays
+    `spec-writer`; older harness bundles keep Coordinator and `"orchestrator"`.
+    Its advisory roster is `teamAgents: ["implementor"]`. The current bundle no
+    longer includes `verifier`; historical bundles still resolve that ID.
 - **Specialist aliases (`aliases?`) (additive,
   [intent-hq/intentd#1488](https://github.com/intent-hq/intentd/pull/1488))** — a
   specialist's alternate ids: spawn/delegation callers may address the specialist by any
