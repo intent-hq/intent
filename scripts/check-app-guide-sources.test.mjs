@@ -49,6 +49,32 @@ test('parseGuide reads absolute, relative, annotated and skipped citations', () 
   ]);
 });
 
+test('cleanToken unwraps parenthesized paths and drops location suffixes', () => {
+  assert.equal(cleanToken('(packages/intentd/crates/x.rs).'), 'packages/intentd/crates/x.rs');
+  assert.equal(cleanToken('packages/intentd/src/agent_ops.rs:120'), 'packages/intentd/src/agent_ops.rs');
+  assert.equal(cleanToken('packages/intentd/src/agent_ops.rs:120-140;'), 'packages/intentd/src/agent_ops.rs');
+  assert.equal(cleanToken('src/ChatPanel.svelte#L40'), 'src/ChatPanel.svelte');
+});
+
+test('parseGuide checks packages paths in other comments and ignores prose slashes', () => {
+  const guide = [
+    '<!-- Auggie visibility: packages/cloudlands-fe/src/shared/provider-visibility.ts; see src/bare.ts and read/write. -->',
+    '<!-- Sources: packages/intentd/a.rs (read/write path, Settings/Agents); (packages/intentd/b.rs). -->',
+    '<!-- Sources (paths relative to packages/cloudlands-fe): src/x.ts (Home/Workspaces view); src/dir/. -->',
+    '<!-- A plain comment without paths. -->',
+  ].join('\n');
+  const { comments, citations, problems } = parseGuide(guide);
+  assert.deepEqual(problems, []);
+  assert.equal(comments, 2, 'only Sources comments are counted as Sources comments');
+  assert.deepEqual(citations.map(c => [c.line, c.file]), [
+    [1, 'packages/cloudlands-fe/src/shared/provider-visibility.ts'],
+    [2, 'packages/intentd/a.rs'],
+    [2, 'packages/intentd/b.rs'],
+    [3, 'packages/cloudlands-fe/src/x.ts'],
+    [3, 'packages/cloudlands-fe/src/dir'],
+  ]);
+});
+
 test('parseGuide reports guide-format problems', () => {
   const guide = [
     '<!-- Sources: messages/en.json. -->',
@@ -57,9 +83,11 @@ test('parseGuide reports guide-format problems', () => {
     '<!-- Sources packages/intentd/x.rs -->',
     '<!-- Sources: packages/intentd/{a,b.rs. -->',
     '<!-- Sources: packages/intentd/../x.rs. -->',
+    '<!-- Source: packages/intentd/x.rs. -->',
   ].join('\n');
   const messages = parseGuide(guide).problems.map(p => `${p.line} ${p.message}`);
-  assert.equal(messages.length, 6, messages.join('\n'));
+  assert.equal(messages.length, 7, messages.join('\n'));
+  assert.match(messages[6], /^7 malformed Sources comment/);
   assert.match(messages[0], /^1 unqualified path 'messages\/en.json'/);
   assert.match(messages[1], /^2 .*names no known component/);
   assert.match(messages[2], /^3 unknown relative base 'packages\/nope'/);
@@ -163,4 +191,24 @@ test('a missing component commit is a usage error naming the fix', t => {
   const result = checkAt(fx.root);
   assert.equal(result.status, 2, result.stdout + result.stderr);
   assert.match(result.stderr, /git submodule update --init packages\/cloudlands-fe/);
+});
+
+test('an uninitialized submodule directory is a usage error, not the monorepo tree', t => {
+  for (const args of [[], ['--upstream']]) {
+    const fx = fixture(t, { guide: GOOD, ...GOOD_FILES });
+    rmSync(fx.fe, { recursive: true, force: true });
+    mkdirSync(fx.fe);
+    const result = checkAt(fx.root, ...args);
+    assert.equal(result.status, 2, `${args}: ${result.stdout}${result.stderr}`);
+    assert.match(result.stderr, /packages\/cloudlands-fe is not a checked-out repository; run 'git submodule update --init packages\/cloudlands-fe'/);
+  }
+});
+
+test('a missing guide is reported as such', t => {
+  const fx = fixture(t, { guide: GOOD, ...GOOD_FILES });
+  fx.run(fx.intentd, 'rm', '-q', GUIDE);
+  fx.commit(fx.intentd, []);
+  const result = checkAt(fx.root, '--upstream');
+  assert.equal(result.status, 2, result.stdout + result.stderr);
+  assert.match(result.stderr, /assistant-app-guide\.md is missing at intentd [0-9a-f]{7}/);
 });

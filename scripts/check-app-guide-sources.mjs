@@ -22,6 +22,7 @@
 // pinned yet, or the frontend PR removes a cited file before the guide
 // follows. The auto/submodule-bump PR runs in monorepo mode and stays strict.
 import { execFileSync } from 'node:child_process';
+import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -34,8 +35,9 @@ export const COMPONENTS = { 'packages/intentd': 'intentd', 'packages/cloudlands-
 // packages/ios is private (`update = none`) and absent from CI checkouts.
 export const SKIPPED = { 'packages/ios': 'ios' };
 
-const COMMENT = /<!--\s*Sources\b([\s\S]*?)-->/g;
-const HEADER = /^\s*(?:\(paths relative to ([^)\s]+)\))?\s*:/;
+const COMMENT = /<!--([\s\S]*?)-->/g;
+const SOURCES = /^\s*Sources?\b/i;
+const HEADER = /^\s*Sources\s*(?:\(paths relative to ([^)\s]+)\))?\s*:/;
 
 export function expandBraces(text) {
   const open = text.indexOf('{');
@@ -66,23 +68,31 @@ export function expandBraces(text) {
 
 const count = (text, char) => text.split(char).length - 1;
 
-// One whitespace-delimited word of a Sources comment, without the prose
-// punctuation around it: `see packages/intentd/NOTICE).` cites NOTICE, while
-// `src/routes/(app)/settings/+page.svelte` keeps its balanced parentheses.
+// One whitespace-delimited word of a comment, without the prose punctuation
+// around it or a `:120` / `#L40` location suffix: `see packages/intentd/NOTICE).`
+// cites NOTICE, while `src/routes/(app)/settings/+page.svelte` keeps its
+// balanced parentheses.
 export function cleanToken(word) {
-  let token = word.replace(/^`+|`+$/g, '');
+  let token = word;
   for (;;) {
     const before = token;
-    token = token.replace(/[.;,:`]+$/, '');
+    token = token.replace(/^`+|`+$/g, '').replace(/[.;,:`]+$/, '');
+    if (token.startsWith('(') && token.endsWith(')') && count(token, '(') === count(token, ')')) token = token.slice(1, -1);
     if (token.endsWith(')') && count(token, ')') > count(token, '(')) token = token.slice(0, -1);
     if (token.startsWith('(') && count(token, '(') > count(token, ')')) token = token.slice(1);
-    token = token.replace(/^`+/, '');
+    token = token.replace(/#[^/]*$/, '').replace(/:\d+(?:-\d+)?$/, '');
     if (token === before) return token;
   }
 }
 
+// A word that names a file or directory rather than prose like `read/write`:
+// a `packages/` path, or a relative path whose last segment has an extension
+// or a brace group, or that ends in `/`. A top-level file under a relative
+// base (`README.md`) has no `/` and must be cited as `packages/<component>/...`.
 function isCitation(token) {
-  return token.includes('/') && !token.includes('://') && !token.startsWith('/');
+  if (token.includes('://') || token.startsWith('/')) return false;
+  if (token.startsWith('packages/')) return true;
+  return token.includes('/') && (token.includes('{') || /\/$|\.[A-Za-z0-9]+$/.test(token));
 }
 
 function componentOf(file) {
@@ -97,26 +107,36 @@ function componentOf(file) {
 
 // Every cited file of the guide: [{ line, citation, file, component, path, skipped }]
 // plus guide-format problems as [{ line, message }].
+//
+// Sources comments may set a relative base and must qualify every other path.
+// Any other comment (for example `<!-- Auggie visibility: packages/... -->`)
+// is free-form: only its `packages/...` paths are checked.
 export function parseGuide(text) {
   const citations = [];
   const problems = [];
   let comments = 0;
   for (const match of text.matchAll(COMMENT)) {
-    comments += 1;
     const line = text.slice(0, match.index).split('\n').length;
-    const header = HEADER.exec(match[1]);
-    if (!header) {
-      problems.push({ line, message: "malformed Sources comment: expected 'Sources:' or 'Sources (paths relative to packages/<component>):'" });
-      continue;
+    let body = match[1];
+    let base;
+    const sources = SOURCES.test(body);
+    if (sources) {
+      comments += 1;
+      const header = HEADER.exec(body);
+      if (!header) {
+        problems.push({ line, message: "malformed Sources comment: expected 'Sources:' or 'Sources (paths relative to packages/<component>):'" });
+        continue;
+      }
+      base = header[1]?.replace(/\/+$/, '');
+      if (base !== undefined && !(base in COMPONENTS) && !(base in SKIPPED)) {
+        problems.push({ line, message: `unknown relative base '${base}' (expected one of ${[...Object.keys(COMPONENTS), ...Object.keys(SKIPPED)].join(', ')})` });
+        continue;
+      }
+      body = body.slice(header[0].length);
     }
-    const base = header[1]?.replace(/\/+$/, '');
-    if (base !== undefined && !(base in COMPONENTS) && !(base in SKIPPED)) {
-      problems.push({ line, message: `unknown relative base '${base}' (expected one of ${[...Object.keys(COMPONENTS), ...Object.keys(SKIPPED)].join(', ')})` });
-      continue;
-    }
-    for (const word of match[1].slice(header[0].length).split(/\s+/)) {
+    for (const word of body.split(/\s+/)) {
       const citation = cleanToken(word);
-      if (!isCitation(citation)) continue;
+      if (!isCitation(citation) || (!sources && !citation.startsWith('packages/'))) continue;
       let qualified = citation;
       if (!citation.startsWith('packages/')) {
         if (base === undefined) {
@@ -166,6 +186,15 @@ function git(args, cwd) {
 // the checkout's own HEAD.
 export function resolveRevision(root, dir, { upstream }) {
   const checkout = path.join(root, dir);
+  let toplevel;
+  try {
+    toplevel = git(['rev-parse', '--show-toplevel'], checkout).trim();
+  } catch {
+    toplevel = '';
+  }
+  if (!toplevel || realpathSync(toplevel) !== realpathSync(checkout)) {
+    throw new CheckError(`${dir} is not a checked-out repository; run 'git submodule update --init ${dir}' and retry`);
+  }
   let rev;
   try {
     rev = upstream ? git(['rev-parse', 'HEAD'], checkout).trim() : git(['rev-parse', `HEAD:${dir}`], root).trim();
@@ -199,12 +228,10 @@ export function check({ root, upstream = false }) {
     trees[name] = listTree(path.join(root, dir), revisions[name]);
   }
   const guideDir = Object.keys(COMPONENTS).find(dir => COMPONENTS[dir] === GUIDE_COMPONENT);
-  let text;
-  try {
-    text = git(['cat-file', 'blob', `${revisions[GUIDE_COMPONENT]}:${GUIDE_PATH}`], path.join(root, guideDir));
-  } catch {
+  if (!trees[GUIDE_COMPONENT].has(GUIDE_PATH)) {
     throw new CheckError(`${guideDir}/${GUIDE_PATH} is missing at ${GUIDE_COMPONENT} ${revisions[GUIDE_COMPONENT].slice(0, 7)}`);
   }
+  const text = git(['cat-file', 'blob', `${revisions[GUIDE_COMPONENT]}:${GUIDE_PATH}`], path.join(root, guideDir));
   const { comments, citations, problems } = parseGuide(text);
   const guide = `${guideDir}/${GUIDE_PATH}`;
   const errors = problems.map(({ line, message }) => `${guide}:${line}: error: ${message}`);
