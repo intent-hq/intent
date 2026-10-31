@@ -2790,8 +2790,11 @@ the folder's contents, `checkoutMode`, `worktreePath` or `skipWorktree`.
 - It is carried on every `Workspace` payload, including `workspace:created`, list rows and
   the lite `workspace.subscribe` projection (it is not a detail-only field).
 - The folder path is `repositoryPath`. A plain-folder row omits `worktreePath`,
-  `checkoutMode`, `branch`, `baseRef`, `baseCommitSha`, `remote` and every pull-request
-  field; the daemon never stores the user's folder as `worktreePath`.
+  `checkoutMode`, `baseRef`, `baseCommitSha`, `remote` and every pull-request field; the
+  daemon never stores the user's folder as `worktreePath`.
+- `branch` is always serialized as the empty string `""` on a plain-folder row (as on the
+  virtual Chief workspace), so `branch` stays a required string. Clients must key
+  plain-folder behavior on `plainFolder`, never on an empty or missing `branch`.
 - Agents run with the folder as their working directory. The MCP
   `ws.workspace.details()` result omits `branch`.
 
