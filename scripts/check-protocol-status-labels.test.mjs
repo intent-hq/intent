@@ -368,3 +368,153 @@ test('the next-sentence fallback applies only to a label inside the opening emph
     'docs/protocol/a.md:5 liveState prepared',
   ]);
 });
+
+// Patterns that slipped through while the baseline was drained (#8245, #8246):
+// each was found by a reviewer, not by this check.
+const DISCUSSION = ['discussionConversations', 'discussionManagement', 'discussionReactions'];
+
+const multiplayerMd = `> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.55 Workspace discussions.
+
+### 5.55 Workspace discussions
+
+Gated by \`server.capabilities.discussionConversations: 1\`, \`discussionManagement: 1\`
+and \`discussionReactions: 1\`; managers also need \`discussionManagement: 1\`.
+
+#### Message history
+
+Pages are bounded.
+
+### 5.59 Mixed flags
+
+Gated by \`server.capabilities.discussionReactions: 1\` and \`server.capabilities.futureThing: 1\`.
+`;
+
+test('a label pointing at a section that names several flags, all advertised, is a finding', () => {
+  const advertised = [...SHIPPED, ...DISCUSSION];
+  const docs = docsWith({
+    'docs/protocol/methods/multiplayer.md': multiplayerMd,
+    'docs/protocol/README.md': [
+      '| Section | File |',
+      '| --- | --- |',
+      '| §5.55 Workspace discussions (prepared) | [methods/multiplayer.md](./methods/multiplayer.md#555-workspace-discussions) |',
+      '| §5.59 Mixed flags (prepared) | [methods/multiplayer.md](./methods/multiplayer.md#559-mixed-flags) |',
+      '',
+    ].join('\n'),
+  });
+  // The most mentioned flag is charged; §5.59 also names an unadvertised flag, so it has no subject.
+  assert.deepEqual(labels(docs, {}, advertised), ['docs/protocol/README.md:3 discussionManagement prepared']);
+  assert.deepEqual(labels(docs), [], 'with one discussion flag unadvertised, §5.55 has no subject');
+
+  // A broad section reached only by climbing from a subsection that names
+  // nothing, or met while scanning a heading's section, does not count.
+  const loose = docsWith({
+    'docs/protocol/methods/multiplayer.md': multiplayerMd,
+    'docs/protocol/a.md': [
+      'The prepared [history paging](./methods/multiplayer.md#message-history) is separate.',
+      '',
+      '### Provider profiles (prepared)',
+      '',
+      'Profiles run beside discussions (§5.55).',
+      '',
+    ].join('\n'),
+  });
+  assert.deepEqual(labels(loose, {}, advertised), []);
+});
+
+test('a label in a version lead-in with no capability of its own takes the paragraph that follows', () => {
+  const docs = docsWith({
+    'docs/protocol/methods/checkout.md': '### 5.60 Checkout\n\n#### Owner avatars\n\nOptional images.\n',
+    'docs/protocol/versioning.md': [
+      '**Version 13.7 — checkout owner avatars (additive, prepared).**',
+      'The [owner-avatar extension](./methods/checkout.md#owner-avatars) adds an optional field.',
+      'Exactly integer `liveState: 1` permits the opt-in.',
+      '',
+      '**Version 14.0 — active-only script lists (breaking, prepared).**',
+      '',
+      'Exact gates are `desktopControl: 1` and `secretRequests: 1`; `desktopControl` first.',
+      '',
+      '**Version 14.1 — reserved (additive, prepared).**',
+      '',
+      '**Version 14.2 — other (additive).** `secretRequests: 1` is not about 14.1.',
+      '',
+    ].join('\n'),
+  });
+  assert.deepEqual(labels(docs), [
+    'docs/protocol/versioning.md:1 liveState prepared',
+    'docs/protocol/versioning.md:5 desktopControl prepared',
+  ]);
+});
+
+test('a protocol version next to a label stands for that version\'s entries', () => {
+  const advertised = [...SHIPPED, ...DISCUSSION];
+  const versioning = (intro) => [
+    '## Protocol Version & Compatibility',
+    '',
+    intro,
+    '',
+    '**Version 15.1 — workspace discussions (additive).**',
+    '`discussionConversations: 1` and `discussionManagement: 1` gate it; managers need `discussionManagement: 1`.',
+    '',
+    '**Version 15.1 — scoped repository pages (additive).** `discussionReactions: 1` also applies.',
+    '',
+    '**Version 15.0 — retirements (breaking).** `server.capabilities.futureThing: 1` stays reserved.',
+    '',
+  ].join('\n');
+  const intro = '**Documented version:** `15.3` — on top of 15.1\'s prepared discussions and scoped pages; not a shipped-version claim.';
+  assert.deepEqual(labels(docsWith({ 'docs/protocol/versioning.md': versioning(intro) }), {}, advertised), ['docs/protocol/versioning.md:3 discussionManagement prepared']);
+  // Other phrasings of the same version, in another doc.
+  const elsewhere = docsWith({
+    'docs/protocol/versioning.md': versioning('Intro.'),
+    'docs/protocol/a.md': [
+      '#### Discussion typing *(15.1, prepared)*',
+      '',
+      'Typing renews a lease.',
+      '',
+      'The prepared [protocol 15.1 extension](./versioning.md) adds pages.',
+      '',
+    ].join('\n'),
+  });
+  assert.deepEqual(labels(elsewhere, {}, advertised), ['docs/protocol/a.md:1 discussionManagement prepared', 'docs/protocol/a.md:5 discussionManagement prepared']);
+  // A version whose entries name an unadvertised flag, or one far from the label, is no subject.
+  const quiet = docsWith({
+    'docs/protocol/versioning.md': versioning('Intro.'),
+    'docs/protocol/a.md': [
+      'The 15.0 retirements stay prepared.',
+      '',
+      'Counts were recorded at protocol 15.1; the remaining fifteen documented methods are separately prepared.',
+      '',
+    ].join('\n'),
+  });
+  assert.deepEqual(labels(quiet, {}, advertised), []);
+});
+
+test('"This is a prepared ... extension" after a capability sentence resolves through its link', () => {
+  const advertised = [...SHIPPED, ...DISCUSSION];
+  const docs = docsWith({
+    'docs/protocol/methods/multiplayer.md': multiplayerMd,
+    'docs/protocol/methods/client-hello.md': [
+      'Exactly integer `server.capabilities.liveState: 1` adds request-correlated activity.',
+      'This is a prepared Multiplayer Labs extension; see [the activity contract](./multiplayer.md#555-workspace-discussions).',
+      '',
+    ].join('\n'),
+  });
+  assert.deepEqual(labels(docs, {}, advertised), ['docs/protocol/methods/client-hello.md:2 discussionManagement prepared']);
+});
+
+test('a quoted "see ..." heading is a reference, ahead of a broad § number later in the row', () => {
+  const advertised = [...SHIPPED, 'noteTruncatedRead'];
+  const docs = docsWith({
+    'docs/protocol/09-error-codes.md': '> Part of the [Intent JSON-RPC protocol docs](./README.md) — §9 Error Codes.\n\n## 9. Error Codes\n\nShared-host refusals need `server.capabilities.liveState: 1`.\n',
+    'docs/protocol/methods/notes-tasks.md': [
+      '| Method | Params | Result |',
+      '| --- | --- | --- |',
+      '| note.update | noteId (req), baseContentBytes?: int *(prepared)* | { note } — a mismatch → `-32602` (see "Truncated note reads" below). A stale `expectedVersion` → `-32005` (§9) |',
+      '',
+      '### Truncated note reads',
+      '',
+      '`server.capabilities.noteTruncatedRead` equal to `1` gates it.',
+      '',
+    ].join('\n'),
+  });
+  assert.deepEqual(labels(docs, {}, advertised), ['docs/protocol/methods/notes-tasks.md:3 noteTruncatedRead prepared']);
+});
