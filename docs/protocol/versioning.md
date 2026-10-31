@@ -608,7 +608,11 @@ the errors `model-unavailable`, `machine-update-required` and new
 complete-contract rule is unchanged, and it grants no authority. The private
 [executor link](./node-link.md#daemon-to-daemon-executor-link-nodeprotocol-6)
 negotiates a `{ min, max }` range that starts at 6; it is a new link family,
-outside the prepared `{2,3,4}`, `{3,4}` and `4` sets. No public version number
+outside the prepared `{2,3,4}`, `{3,4}` and `4` sets. nodeProtocol 7 adds
+[stop acknowledgement](./node-link.md#stop-acknowledgement-nodeprotocol-7)
+(`stop.stopId` and the `stopAck` frame); daemons that implement it offer only 7,
+because 6 was never released, so a version-6-only peer gets
+`machine-update-required`. No public version number
 is claimed by these docs; allocate it against daemon main before
 implementation merges, and land daemon protocol consumers before frontend ones.
 

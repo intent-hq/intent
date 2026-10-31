@@ -355,7 +355,7 @@ while `experimental.remoteAgents` is off.
 | remoteMachines.backendInfo | — | `{ backendId, backendName, fingerprint? }`; the backend's persisted head id and display name, for `executor.mint` |
 | remoteMachines.add | machineId (req), name (req), hosts (req, string[]), port (req), tcAddress?, fingerprint (req), credentialId (req), token (req, secret) | `{ machine: RemoteMachine, replacedCredentialId? }`; probes before saving (route race, pin, token, bind, capabilities); on failure saves nothing and fails with `machine-unreachable` or `machine-update-required`; an existing `machineId` is replaced only after a successful probe, and `replacedCredentialId` names the old credential for the caller to revoke |
 | remoteMachines.list | — | `{ machines: RemoteMachine[] }`; never returns tokens |
-| remoteMachines.remove | machineId (req), stopAgents? (boolean, default false) | `{ ok: true, credentialId }`; with live agents on the machine and no `stopAgents: true` fails `-32602` `machine-in-use` with `runningAgents`; the caller revokes `credentialId` on the machine; unknown id is a no-op |
+| remoteMachines.remove | machineId (req), stopAgents? (boolean, default false) | `{ ok: true, credentialId }`; with live agents on the machine and no `stopAgents: true` fails `-32602` `machine-in-use` with `runningAgents`; with `stopAgents: true` it deletes nothing until the machine [acknowledges every stop](../node-link.md#stop-acknowledgement-nodeprotocol-7) (at most 30 s), else fails `-32603` `machine-unreachable` with `unconfirmedStops`; the caller revokes `credentialId` on the machine; unknown id is a no-op |
 | remoteMachines.refresh | machineId (req) | `{ machine: RemoteMachine }`; connects on demand and reads fresh capabilities; failures update `state` and fail with `machine-unreachable`, `machine-revoked` or `machine-update-required` |
 
 ```ts
@@ -486,6 +486,10 @@ it has: …", naming each machine's provider status.
 `machine-unreachable` from `remoteMachines.add` / `refresh` is `-32603` with
 `attempts: [{ route, error }]`, where `error` is the executor link's code (for
 example `node-link-certificate-mismatch` or `node-link-unauthorized`).
+From `remoteMachines.remove` with `stopAgents: true` it also carries
+`unconfirmedStops: string[]` (agent ids whose stop the machine has not
+acknowledged), and `attempts` is empty when the link was up but the
+acknowledgements did not arrive in time.
 `machine-revoked` from `refresh` is `-32603`. `machine-in-use`,
 `remote-agents-disabled` and `not-found` are `-32602`. Errors never include the
 token.
