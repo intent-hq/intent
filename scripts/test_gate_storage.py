@@ -87,6 +87,21 @@ class GateStorageTests(unittest.TestCase):
         finally:
             gate.release_gate_lock(lock)
 
+    def test_runner_gate_lock_covers_a_separate_build_dir_tree(self):
+        target = self.tree("a")
+        build = self.tree("b", parent=self.root / "build/intent-gates")
+        output_args = ["--target-dir", str(target), "--config", f'build.build-dir="{build}"']
+        lock = gate.acquire_gate_lock(output_args)
+        try:
+            for root in (target, build):
+                self.assertEqual(storage.reclaim(root, idle_before=float("inf")),
+                                 (None, "kept: a gate is using it"), root)
+        finally:
+            gate.release_gate_lock(lock)
+        self.assertEqual(storage.reclaim(build, idle_before=time.time() - 3600),
+                         (None, "kept: used recently"), "release restamps the build tree too")
+        self.assertTrue(target.is_dir() and build.is_dir())
+
     def test_held_cargo_build_lock_keeps_the_tree(self):
         root = self.tree()
         with (root / "debug" / ".cargo-lock").open("rb") as handle:

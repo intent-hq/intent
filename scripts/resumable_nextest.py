@@ -1464,12 +1464,33 @@ def acquire_gate_lock(output_args: list[str]) -> int | None:
     # when the target directory lives unignored inside the checkout.
     # No lock only means no pruning; Cargo reports unusable outputs itself.
     # The lock also stamps the tree as in use, keeping gate_storage sweeps away.
-    return gate_storage.lock_shared(roots[0])
+    # A separate build-dir tree holds the test executables, so lock it too: a
+    # sweep of its intent-gates parent must not see it idle mid-gate.
+    descriptor = gate_storage.lock_shared(roots[0])
+    if descriptor is not None and len(roots) > 1:
+        try:
+            extras = [extra for extra in map(gate_storage.lock_shared, roots[1:]) if extra is not None]
+        except BaseException:
+            gate_storage.release(descriptor)
+            raise
+        if extras:
+            EXTRA_GATE_LOCKS[descriptor] = extras
+    return descriptor
+
+
+# Shared locks on further output roots, keyed by the primary gate-lock descriptor.
+EXTRA_GATE_LOCKS: dict[int, list[int]] = {}
 
 
 def release_gate_lock(descriptor: int | None) -> None:
-    """Stamp the tree as just used (idle time starts now) and drop the gate lock."""
-    gate_storage.release(descriptor)
+    """Stamp the trees as just used (idle time starts now) and drop the gate locks."""
+    if descriptor is None:
+        return
+    try:
+        for extra in EXTRA_GATE_LOCKS.pop(descriptor, []):
+            gate_storage.release(extra)
+    finally:
+        gate_storage.release(descriptor)
 
 
 def apply_storage_policy(output_args: list[str], label: str) -> None:

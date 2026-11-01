@@ -32,8 +32,9 @@ Policies built on it:
   cutoff, optionally stopping once a free-space goal is met; a cron or the
   daemon can run it with the same safety checks.
 
-Only the target-directory tree carries the gate lock. A separately configured
-Cargo build-dir tree is never deleted here.
+Gates lock every output root they own, including a separately configured
+Cargo build-dir tree, so a sweep of either parent sees them in use. The size cap
+only applies when target and build directory share one tree.
 """
 from __future__ import annotations
 

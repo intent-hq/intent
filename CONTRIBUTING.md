@@ -220,8 +220,9 @@ finish) and every Cargo build lock inside it are free, its idle stamp is
 re-checked under that lock, and no process executes, has open or has its
 working directory in a file under it. Platforms without `flock` or `/proc`
 never delete. The tree is renamed aside before deletion, so a gate that was
-waiting for the lock starts a fresh tree. A separately configured Cargo
-`build-dir` tree is left alone. `GATE_SWEEP=0` turns the cap and the sweep off.
+waiting for the lock starts a fresh tree. With a separately configured Cargo
+`build-dir`, gates lock both trees and the size cap does not apply.
+`GATE_SWEEP=0` turns the cap and the sweep off.
 
 #### Parallel compiler front end
 
