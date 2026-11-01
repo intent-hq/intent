@@ -383,8 +383,11 @@ release-status: ## Print the release train: latest tags, channel versions, fe da
 # need cargo-sweep (`cargo install cargo-sweep --locked`). cargo-sweep goes by
 # day-granular access times, so it cannot reclaim gate trees that filled a disk
 # within hours; `sweep-gates` deletes whole idle intent-gates/<checkout-id>
-# trees instead (scripts/gate_storage.py; gates also do this themselves when
-# the disk runs low). Overridable, e.g. `make sweep SWEEP_DAYS=7`,
+# trees instead (scripts/gate_storage.py). Gates also apply that policy before
+# each build, tuned by environment knobs: GATE_TREE_MAX_GB (default 60) caps
+# the checkout's own tree, and below GATE_SWEEP_LOW_GB (150) free they reclaim
+# trees idle GATE_SWEEP_MIN_IDLE_MINUTES (60) until GATE_SWEEP_GOAL_GB (300)
+# is free; GATE_SWEEP=0 disables both. Overridable, e.g. `make sweep SWEEP_DAYS=7`,
 # `make sweep-all WORKSPACES_DIR=/elsewhere/workspaces` or
 # `make sweep-gates GATE_SWEEP_IDLE_HOURS=6 FREE_GB=300 DRY_RUN=1`.
 WORKSPACES_DIR ?= $(HOME)/intent/workspaces
