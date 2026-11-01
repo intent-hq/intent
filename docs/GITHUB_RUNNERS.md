@@ -573,8 +573,11 @@ LaunchDaemon com.intent.github-runner.slot-<n> ─ macos/supervisor.sh slot-<n> 
 Re-run `install.sh` after changing `provision.sh` or `MAC_BASE_IMAGE` (a new
 runner version, a new Xcode base): the image name changes with either, so
 it bakes `intent-mac-runner-<new hash>`, records it in
-`/etc/github-runners/macos-image` and deletes older images. Running jobs keep
-their VM; each slot's next job clones the new image. Use `--no-build` for a
+`/etc/github-runners/macos-image` and deletes older images. The bake VM is a
+macOS guest too, so with both slots loaded the installer first drains slot 2
+(it waits for a running job) and loads it again after the bake, or right away
+if the bake fails. Slot 1 keeps its job; each slot's next job clones the new
+image. Use `--no-build` for a
 config-only change. To move to a new base, take the digest of the new tag
 (`ghcr.io/cirruslabs/macos-tahoe-xcode`) and update all three host files.
 

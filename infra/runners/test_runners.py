@@ -1664,6 +1664,10 @@ if sub == 'clone':
     os.makedirs(os.path.join(vms, dst))
 elif sub == 'run':
     name = pos[0]
+    others = [v for v in os.listdir(vms) if v != name and os.path.exists(os.path.join(vms, v, 'running'))]
+    if len(others) >= 2:
+        record(event='refused-third-guest', running=sorted(others))
+        sys.exit(1)
     open(os.path.join(vms, name, 'running'), 'w').close()
     open(os.path.join(d, 'run.pid'), 'w').write(str(os.getpid()))
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
@@ -1760,6 +1764,10 @@ class MacSupervisor(Stubbed):
     def vms(self):
         return sorted(p.name for p in (self.dir / 'vms').iterdir())
 
+    def assert_deregistered_once(self):
+        deletes = [c for c in self.calls('curl') if (c['method'], c['path']) == ('DELETE', '/orgs/example-org/actions/runners/42')]
+        self.assertEqual(len(deletes), 1, "this run's runner is deregistered exactly once")
+
     def wait_for_runner(self, proc):
         deadline = time.time() + 120
         while not (self.dir / 'exec.pid').exists():
@@ -1836,9 +1844,17 @@ class MacSupervisor(Stubbed):
             self.assertNotIn(JIT, ' '.join(call['argv']))
             self.assertFalse(call.get('jit_in_env'), call)
         self.assertEqual(self.vms(), [MAC_IMAGE])
+        self.assert_deregistered_once()
         self.assert_no_secret(out, err)
 
     assert_no_secret = Supervisor.assert_no_secret
+
+    def test_failed_job_still_deregisters_once(self):
+        rc, out, err = self.run_supervisor('slot-1', STUB_RUN_RC='3')
+        self.assertEqual(rc, 0, err)
+        self.assertIn('runner exited (3)', out)
+        self.assert_deregistered_once()
+        self.assert_vm_gone()
 
     def test_leftover_vm_is_removed_first(self):
         (self.dir / 'vms' / 'intent-slot-1').mkdir()
@@ -1863,10 +1879,16 @@ class MacSupervisor(Stubbed):
         self.assert_vm_gone()
 
     def test_drain_idle_runner_stops_at_once(self):
+        self.drain_idle(signal.SIGTERM)
+
+    def test_interrupt_drains_like_term(self):
+        self.drain_idle(signal.SIGINT)
+
+    def drain_idle(self, sig):
         proc = self.start('slot-1', STUB_RUN_SECONDS='600')
         self.wait_for_runner(proc)
         start = time.time()
-        proc.send_signal(signal.SIGTERM)
+        proc.send_signal(sig)
         out, err = proc.communicate(timeout=120)
         self.assertEqual(proc.returncode, 0, err)
         self.assertLess(time.time() - start, 50)
@@ -1874,6 +1896,7 @@ class MacSupervisor(Stubbed):
                       [(c['method'], c['path']) for c in self.calls('curl')])
         self.assertIn('stopping idle runner', out)
         self.assertIn('drained', out)
+        self.assert_deregistered_once()
         self.assert_vm_gone()
 
     def test_drain_busy_runner_waits_for_job(self):
@@ -1891,6 +1914,7 @@ class MacSupervisor(Stubbed):
         done = [i for i, c in enumerate(calls) if c.get('event') == 'exec-done'][0]
         stops = [i for i, c in enumerate(calls) if c['argv'][0] == 'stop' and 'intent-slot-1' in c['argv']]
         self.assertGreater(min(stops), done, 'the VM is stopped only after the job ends')
+        self.assert_deregistered_once()
         self.assert_vm_gone()
 
     def test_early_exit_still_deletes_the_vm(self):
@@ -1900,6 +1924,7 @@ class MacSupervisor(Stubbed):
         proc.send_signal(signal.SIGHUP)
         proc.communicate(timeout=120)
         self.assert_vm_gone()
+        self.assert_deregistered_once()
 
     def test_plan(self):
         rc, out, err = self.run_supervisor('--plan')
@@ -2116,8 +2141,10 @@ class MacInstaller(Stubbed):
                   'exec "$@"\n')
         write_exe(self.bin / 'launchctl', '#!/bin/sh\n'
                   'printf \'{"cmd": "launchctl", "argv": ["%s", "%s", "%s"]}\\n\' "$1" "$2" "$3" >> "$STUB_LOG"\n'
-                  'case "$1" in print) [ -e "$STUB_DIR/loaded-${2##*.}" ] ;; bootstrap) touch "$STUB_DIR/loaded-$(basename "$3" .plist | sed "s/.*\\.//")" ;; '
-                  'bootout) rm -f "$STUB_DIR/loaded-${2##*.}" ;; esac\n')
+                  'case "$1" in print) [ -e "$STUB_DIR/loaded-${2##*.}" ] ;; '
+                  'bootstrap) s=$(basename "$3" .plist | sed "s/.*\\.//"); touch "$STUB_DIR/loaded-$s"; '
+                  'mkdir -p "$STUB_DIR/vms/intent-$s"; touch "$STUB_DIR/vms/intent-$s/running" ;; '
+                  'bootout) rm -f "$STUB_DIR/loaded-${2##*.}"; rm -rf "$STUB_DIR/vms/intent-${2##*.}" ;; esac\n')
         responses = self.dir / 'responses.json'
         responses.write_text(json.dumps({
             **{f'GET /repos/intent-hq/{r}': [200, {'id': 101 + i}] for i, r in enumerate(('intent', 'intentd', 'cloudlands-fe'))},
@@ -2225,13 +2252,57 @@ class MacInstaller(Stubbed):
         self.assertEqual(builds, 1)
         # Dropping to one slot drains and removes slot-2 and its VM.
         (self.etc / 'runners.env').write_text((self.etc / 'runners.env').read_text().replace('MAC_SLOTS=2', 'MAC_SLOTS=1'))
-        (self.dir / 'vms' / 'intent-slot-2').mkdir()
+        (self.dir / 'vms' / 'intent-slot-2').mkdir(exist_ok=True)
         result = self.install('--no-build')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(['bootout', 'system/com.intent.github-runner.slot-2', ''], [c['argv'] for c in self.calls('launchctl')])
         self.assertFalse((self.daemons / 'com.intent.github-runner.slot-2.plist').exists())
         self.assertTrue((self.daemons / 'com.intent.github-runner.slot-1.plist').exists())
         self.assertFalse((self.dir / 'vms' / 'intent-slot-2').exists())
+
+    def test_rebuild_frees_a_guest_slot_before_baking(self):
+        # Both slots loaded means two running guests; the bake VM would be a third.
+        self.place_credential()
+        result = self.install()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(sorted(p.name for p in (self.dir / 'vms').iterdir() if (p / 'running').exists()),
+                         ['intent-slot-1', 'intent-slot-2'])
+        env_file = self.etc / 'runners.env'
+        base = read_env(env_file)['MAC_BASE_IMAGE']
+        env_file.write_text(env_file.read_text().replace(base, base[:-64] + 'cd' * 32))
+        self.log.write_text('')
+        result = self.install()
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertFalse([c for c in self.calls('tart') if c.get('event') == 'refused-third-guest'])
+        rows = self.calls()
+        argv = [r['argv'] for r in rows]
+        clone = next(i for i, r in enumerate(rows) if r['cmd'] == 'tart' and r['argv'][0] == 'clone')
+        rename = next(i for i, r in enumerate(rows) if r['cmd'] == 'tart' and r['argv'][0] == 'rename')
+        bootouts = [i for i, r in enumerate(rows) if r['cmd'] == 'launchctl' and r['argv'][0] == 'bootout']
+        self.assertEqual([argv[i][1] for i in bootouts], ['system/com.intent.github-runner.slot-2'],
+                         'one slot drains to free a guest; the other keeps running jobs')
+        self.assertLess(bootouts[0], clone)
+        boots = [i for i, r in enumerate(rows) if r['cmd'] == 'launchctl' and r['argv'][0] == 'bootstrap']
+        self.assertEqual([argv[i][2] for i in boots], [f'{self.daemons}/com.intent.github-runner.slot-2.plist'])
+        self.assertGreater(boots[0], rename, 'the slot comes back after the bake')
+        # A config-only run touches no running slot.
+        self.log.write_text('')
+        result = self.install('--no-build')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse([c for c in self.calls('launchctl') if c['argv'][0] in ('bootout', 'bootstrap')])
+
+    def test_failed_bake_reloads_the_drained_slot(self):
+        self.place_credential()
+        self.assertEqual(self.install().returncode, 0)
+        env_file = self.etc / 'runners.env'
+        base = read_env(env_file)['MAC_BASE_IMAGE']
+        env_file.write_text(env_file.read_text().replace(base, base[:-64] + 'cd' * 32))
+        self.log.write_text('')
+        write_exe(self.brew_prefix / 'bin' / 'tart', TART_STUB.replace("if sub == 'clone':", "if sub == 'clone' and pos[1].endswith('-build'): sys.exit(1)\nif sub == 'clone':"))
+        result = self.install()
+        self.assertNotEqual(result.returncode, 0)
+        boots = [c['argv'] for c in self.calls('launchctl') if c['argv'][0] == 'bootstrap']
+        self.assertEqual(boots, [['bootstrap', 'system', f'{self.daemons}/com.intent.github-runner.slot-2.plist']])
 
     def test_refuses_readable_credential(self):
         self.place_credential()

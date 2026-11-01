@@ -177,9 +177,11 @@ build_image() {
     [ -f "$image_file" ] || [ "$plan_only" = 1 ] || die "--no-build, but no image is recorded in $image_file yet"
     return 0
   fi
-  would "build the VM image from $MAC_BASE_IMAGE as $MAC_HOST_USER (build-image.sh) and record it in $image_file" && return 0
+  would "build the VM image from $MAC_BASE_IMAGE as $MAC_HOST_USER (build-image.sh) and record it in $image_file, first draining one slot if $mac_max_slots guests are running" && return 0
   local name old
-  name="$(as_user /bin/bash "$here/build-image.sh" "$MAC_BASE_IMAGE")" || die "image build failed (see above)"
+  name="$(as_user /bin/bash "$here/build-image.sh" --name "$MAC_BASE_IMAGE")" || die "cannot name the image"
+  if ! as_user tart list --source local --quiet | grep -qx -- "$name"; then free_guest_for_bake; fi
+  name="$(as_user /bin/bash "$here/build-image.sh" "$MAC_BASE_IMAGE")" || { reload_drained; die "image build failed (see above)"; }
   [[ "$name" =~ ^intent-mac-runner-[0-9a-f]{12}$ ]] || die "build-image.sh printed an unexpected name: $name"
   printf '%s\n' "$name" > "$image_file.tmp"
   chmod 0644 "$image_file.tmp"
@@ -191,6 +193,36 @@ build_image() {
     [ "$old" = "$name" ] && continue
     log "deleting old image $old"
     as_user tart delete "$old" || log "warning: could not delete $old"
+  done
+}
+
+# The bake VM is a macOS guest too, and a Mac runs at most mac_max_slots of
+# them: drain loaded slots, highest first, until one guest is free. bootout
+# waits for a running job (the supervisor drains on TERM) and the supervisor
+# deletes its VM. apply_slots loads them again after the bake.
+drained=""
+free_guest_for_bake() {
+  local n running="" count=0
+  for n in $(loaded_slots); do
+    if loaded "$n"; then running="$n $running"; count=$((count + 1)); fi
+  done
+  for n in $running; do
+    [ "$count" -ge "$mac_max_slots" ] || break
+    log "draining slot $n to free a guest for the image build (waits for a running job)"
+    launchctl bootout "system/$label_prefix.$n" >/dev/null 2>&1 || true
+    as_user tart stop "intent-$n" --timeout 30 >/dev/null 2>&1 || true
+    as_user tart delete "intent-$n" >/dev/null 2>&1 || true
+    drained="$drained $n"
+    count=$((count - 1))
+  done
+}
+
+# After a failed build: put the drained slots back on their old image.
+reload_drained() {
+  local n
+  for n in $drained; do
+    log "reloading slot $n"
+    launchctl bootstrap system "$daemon_dir/$label_prefix.$n.plist" || log "warning: could not reload slot $n"
   done
 }
 

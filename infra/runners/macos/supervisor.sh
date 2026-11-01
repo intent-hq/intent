@@ -149,8 +149,19 @@ vm=""
 vm_pid=""
 runner_pid=""
 draining=0
+
+# Deregister this run's runner once, from whichever exit path comes first
+# (end of job, TERM/INT on an idle runner, or the EXIT trap). Best effort: a
+# failure leaves an offline registration that the slot's next start removes.
+deregister_once() {
+  [ -n "${runner_id:-}" ] || return 0
+  ( deregister ) || log "warning: could not deregister runner $runner_id"
+  runner_id=""
+}
+
 # Runs on every exit, including a fatal signal: the VM must never outlive the
-# supervisor (the next start removes a leftover one too).
+# supervisor (the next start removes a leftover one too), and this run's
+# runner is deregistered.
 # shellcheck disable=SC2317  # invoked by the EXIT trap
 mac_cleanup() {
   if [ -n "$vm" ]; then
@@ -158,6 +169,7 @@ mac_cleanup() {
     tart delete "$vm" >/dev/null 2>&1 || true
   fi
   if [ -n "$vm_pid" ]; then kill "$vm_pid" 2>/dev/null || true; fi
+  deregister_once
 }
 
 # shellcheck disable=SC2317  # invoked by the TERM/INT trap
@@ -171,7 +183,7 @@ mac_on_term() {
     return 0
   fi
   log "stopping idle runner"
-  deregister
+  deregister_once
   tart stop "$vm" --timeout 30 >/dev/null 2>&1 || true
 }
 
@@ -244,7 +256,7 @@ mac_main() {
   vm_pid=""
   tart delete "$vm" >/dev/null 2>&1 || log "warning: could not delete VM $vm"
   vm=""
-  deregister
+  deregister_once
   if [ "$draining" = 1 ]; then log "drained"; fi
   exit 0
 }

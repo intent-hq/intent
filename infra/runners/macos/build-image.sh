@@ -6,7 +6,8 @@
 # (everything else goes to stderr). Idempotent: an image with the name already
 # present is kept as is.
 #
-# Usage: build-image.sh <base image>   e.g. ghcr.io/cirruslabs/macos-tahoe-xcode@sha256:...
+# Usage: build-image.sh <base image>          e.g. ghcr.io/cirruslabs/macos-tahoe-xcode@sha256:...
+#        build-image.sh --name <base image>   print the image name only, build nothing
 # Run as the host user that owns ~/.tart (install.sh does). Stock /bin/bash 3.2.
 set -euo pipefail
 
@@ -18,14 +19,16 @@ poll_seconds="${RUNNERS_MAC_POLL_SECONDS:-2}"
 log() { echo "build-image: $*" >&2; }
 die() { echo "build-image: error: $*" >&2; exit 1; }
 
+name_only=0
+if [ "${1:-}" = --name ]; then name_only=1; shift; fi
 base="${1:-}"
 [[ "$base" =~ ^[a-z0-9.-]+(/[a-z0-9._-]+)+@sha256:[0-9a-f]{64}$ ]] || die "usage: $0 <registry>/<name>@sha256:<digest>"
-[ "$(id -u)" != 0 ] || die "run as the host user that owns ~/.tart, not root"
-command -v tart >/dev/null 2>&1 || die "tart is not installed"
-
 sha256() { if command -v shasum >/dev/null 2>&1; then shasum -a 256; else sha256sum; fi; }
 hash="$({ cat "$provision"; printf '%s\n' "$base"; } | sha256 | cut -c1-12)"
 name="intent-mac-runner-$hash"
+if [ "$name_only" = 1 ]; then echo "$name"; exit 0; fi
+[ "$(id -u)" != 0 ] || die "run as the host user that owns ~/.tart, not root"
+command -v tart >/dev/null 2>&1 || die "tart is not installed"
 build="$name-build"
 
 vm_exists() { tart list --source local --quiet 2>/dev/null | grep -qx -- "$1"; }
