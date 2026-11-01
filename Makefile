@@ -35,7 +35,11 @@ COMPACT ?= 0
 else
 COMPACT ?= 1
 endif
-export COMPACT
+# Export only to the Rust compiler/gate recipes (see COMPACT_TARGETS below):
+# a global export of the default would leak COMPACT=1 into unrelated recipes
+# and into any make they start, where a coverage goal then rejects it.
+COMPACT_TARGETS := gate check clippy check-windows lint-sources build-intentd test test-intentd test-changed test-select test-stress list-tests coverage-changed coverage-e2e coverage-all
+$(COMPACT_TARGETS): export COMPACT := $(COMPACT)
 ifeq ($(COMPACT),1)
 ifneq ($(filter coverage-%,$(MAKECMDGOALS)),)
 $(error COMPACT=1 is incompatible with coverage targets; rerun coverage with COMPACT=0)
