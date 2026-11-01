@@ -49,8 +49,7 @@ The reference travels in the **existing provider fields**. No parallel
 - `models.list` `providerId` and `ModelInfo.provider` (§5.30)
 - `host.providerAuthStatus` and `host.providerTestPrompt` `providerId` (§5.14)
 
-`providers.enabled`, `providers.paths` and the access-token settings stay keyed by
-the base provider id. Qualified references are rejected there; a profile inherits
+`providers.enabled` and `providers.paths` stay keyed by the base provider id. Qualified references are rejected there; a profile inherits
 those values from its base provider. `providers.fastMode` is the exception: its keys
 also accept profile references, and a profile never inherits its base provider's
 entry (see [References in settings](#references-in-settings)).
@@ -73,7 +72,7 @@ entry (see [References in settings](#references-in-settings)).
 **Why `@`.** `:` is the legacy compound `provider:model` separator. The daemon's
 settings normalizer, specialist `modelOptions` parsing and the frontend's
 `splitLegacyCompoundId` all split on the first `:`. `.` separates dotted setting
-paths such as `providers.codex.accessToken`. No registered provider id contains `@`.
+paths such as `voice.openai.model`. No registered provider id contains `@`.
 Some model ids do, such as Vertex AI Claude ids like `claude-…@20250514`. That is
 harmless because references appear only in provider fields and model ids remain
 separate bare fields; clients must never parse a reference out of a model id.
