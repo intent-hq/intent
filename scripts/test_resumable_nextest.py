@@ -149,7 +149,11 @@ class PlannedRunHarness:
 
     def execute(self, args):
         self.selection_index = 0
-        with mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
+        # The storage policy logs (and may sweep) when the machine running the
+        # tests has little free disk, leaking host state into exact stdout
+        # expectations (a CI runner with 86 GiB free did); test_gate_storage covers it.
+        with mock.patch.object(gate, "apply_storage_policy"), mock.patch.object(
+            gate, "tree_key", return_value=KEY), mock.patch.object(
             gate, "run", side_effect=self.fake_run
         ), mock.patch.object(
             gate.subprocess, "Popen", side_effect=self.fake_popen
