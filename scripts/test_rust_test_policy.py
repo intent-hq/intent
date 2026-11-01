@@ -65,7 +65,7 @@ class RustTestPolicyTests(unittest.TestCase):
         (self.bin / "node").write_text(
             '#!/bin/sh\ncase "$1" in *check-transfer-selection-contract.mjs) exec '
             + shlex.quote(shutil.which("node")) + ' "$@";; esac\n')
-        for name in ("resumable_nextest.py", "check_watch_capacity.py"):
+        for name in ("resumable_nextest.py", "gate_storage.py", "check_watch_capacity.py"):
             shutil.copy(ROOT / "scripts" / name, self.root / "scripts")
         shutil.copytree(ROOT / "scripts/_vendor", self.root / "scripts/_vendor",
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))

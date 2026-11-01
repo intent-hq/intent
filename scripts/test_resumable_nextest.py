@@ -750,7 +750,7 @@ class CallbackValidatorTests(unittest.TestCase):
         # Keep imports by the child harness outside both source worktrees.
         runner = self.root / "runner"
         runner.mkdir()
-        for name in ("resumable_nextest.py", "test_resumable_nextest.py"):
+        for name in ("resumable_nextest.py", "gate_storage.py", "test_resumable_nextest.py"):
             shutil.copy(SCRIPT.parent / name, runner)
         shutil.copytree(SCRIPT.parent / "_vendor", runner / "_vendor",
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))

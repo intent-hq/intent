@@ -313,6 +313,7 @@ else
   g checkout -q -b feature
   cp "$repo_root/Makefile" "$mono/Makefile"
   cp "$repo_root/scripts/resumable_nextest.py" "$mono/scripts/resumable_nextest.py"
+  cp "$repo_root/scripts/gate_storage.py" "$mono/scripts/gate_storage.py"
   cp "$repo_root/scripts/check_watch_capacity.py" "$mono/scripts/"
   cp "$repo_root/scripts/check-transfer-selection-contract.mjs" "$mono/scripts/"
   mkdir -p "$mono/docs/protocol/fixtures"

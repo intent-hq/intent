@@ -133,14 +133,24 @@ build lock or another gate of the same checkout is active. Coverage targets and
 custom bare-Cargo scripts do not use this runner and still need distinct output
 directories or an outer lock covering every build and execution.
 
-For less local Rust build storage, opt in with `COMPACT=1 make gate` (check +
-tests), `COMPACT=1 make test`, or `COMPACT=1 make test-changed`. Compact mode
-supports Python 3.10+ and disables dev/test debug information and incremental
-compilation through Cargo settings, including package overrides. Explicit caller
-Rust debug/incremental flags still take precedence. This reduces debugging detail
-and can slow rebuilds; disk savings depend on the workload. Leaving `COMPACT`
-unset or setting `COMPACT=0` preserves ordinary behavior. Coverage rejects
-`COMPACT=1`; compact/default test resume records are separate. See
+Gate trees are bounded: before building, a gate deletes its own tree when it
+exceeds `GATE_TREE_MAX_GB` (default 60), and when the disk has less than
+`GATE_SWEEP_LOW_GB` (default 150) free it deletes other worktrees' idle trees,
+oldest first, until `GATE_SWEEP_GOAL_GB` (default 300) is free. `make sweep-gates`
+deletes every tree idle for `GATE_SWEEP_IDLE_HOURS` (default 24) and suits a
+cron job. A tree is only deleted when no gate holds its lock, Cargo is not
+building in it, and no process uses its files; `GATE_SWEEP=0` turns the
+automatic policy off. See [gate build storage](CONTRIBUTING.md#gate-build-storage).
+
+Local Rust gates build compact artifacts by default: `make gate` (check +
+tests), `make test` and `make test-changed` disable dev/test debug information
+and incremental compilation through Cargo settings, including package
+overrides, which makes test executables about 40% smaller. Panic messages keep
+their file and line; backtrace frames lose them. `COMPACT=0 make test` restores
+line-table debug info when you need source-line backtraces or a debugger.
+Explicit caller Rust debug/incremental flags still take precedence. Compact mode
+supports Python 3.10+. Coverage targets default to `COMPACT=0` and reject an
+explicit `COMPACT=1`; compact/default test resume records are separate. See
 [local Rust gates](CONTRIBUTING.md#local-rust-gates) for flag precedence, resume
 options and the component forwarder's mixed-goal boundary.
 
