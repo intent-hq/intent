@@ -1270,9 +1270,11 @@ each with a dedicated change event (§6.5) that carries the new value:
   `workspace:attention-changed` (§6.5). This is shared BE state rather than
   per-client local state. The reason-aware acknowledgement below is separate from
   these shared flags and conversation seen markers.
-- `attentionReminder?` — **caller-relative, read-only reminder projection.** Present
+- `attentionReminder?` — **caller-relative, read-only reminder projection.** Available
   for bound wire callers on list/get, mutation responses and workspace subscription
-  snapshots; older daemons may omit it. Shape:
+  snapshots. Omitted when the complete current reason set is empty or the projection
+  is unavailable; older daemons may omit it. Nonempty fully acknowledged sets remain
+  present. Shape:
   `{ reasons: AttentionReminderReason[], dismissed: boolean, displayStatus: WorkspaceDisplayStatus | "waiting" }`.
   Each reason is `{ id: string, revision: string }`. Clients treat both strings as
   opaque and replay the snapshot observed when opening the workspace actions menu.
