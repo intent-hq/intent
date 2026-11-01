@@ -29,6 +29,18 @@ workspaces (§6.5). No method-catalog change: the documented surface stays
 the support signal: an older daemon ignores the unknown create option, so clients send
 `plainFolder` only when `protocolVersion` is at least `15.3`.
 
+Also within 15.3 (additive optional params and result field; presence-detected; no
+method-catalog change, so no version bump; fixes
+[intent-hq/intent#8278](https://github.com/intent-hq/intent/issues/8278)):
+**slimmer `agent.listUserMessages`** ([§5.5](./methods/agents.md)). Item `metadata` is
+now projected inside SQLite to the classification fields clients read — string `type`,
+`source`, `fromAgentId`, `fromPrincipalId`, and `queueInfo.{queuedAt, waitedMs, batchId}`
+— instead of the whole persisted `messageMetadata`, so heavy keys such as an event
+notification's `events` no longer ride the wire. The optional `limit` / `nextToken`
+params page the index newest-first, and paged results carry `nextToken` (`null` once
+no older rows remain). Older daemons ignore the params and omit `nextToken`; clients
+treat its absence as a complete index.
+
 **Version 15.2 — retired workspaces (additive).**
 [Retired workspaces](./methods/workspace.md#retired-workspaces) add the `"Retired"`
 `WorkspaceStatus`, the presence-detected `Workspace.retiredAt`, the router method
