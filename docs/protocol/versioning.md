@@ -261,6 +261,12 @@ The same change adds the UI-only event **`prMonitor:refreshed`** (§6.5 prMonito
 emitted when a poll changed only the `mergeQueue` entry, so clients re-read
 `prMonitor.list`; it is never a wake and agent-owned subscriptions cannot request it.
 
+Also within 15.0 (behavior only; no wire shape or method-catalog change, so no version bump):
+**an unmergeable merge-queue entry wakes the owner** (§5.42 `mergeQueue`). The entry `state`
+turning `unmergeable` — the PR conflicts with an entry ahead and its branch is locked while
+queued — is now a monitor change line with dequeue / fix / re-enqueue steps, and a still-queued
+recovery reports once. Position, size and estimate movement stay informational.
+
 Also within 15.0 (additive optional event field; presence-detected; no method-catalog
 change, so no version bump): **`workspace:created` carries `origin?`** (§6.5 workspace
 row). `ws.workspace.applyProposal` stamps `{ kind: "proposal", proposalId, agentId,
