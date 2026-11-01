@@ -43,7 +43,9 @@ endpoints, OAuth clients, credential routing, primary identity), `accounts.*`, e
 and locations (`providers.paths`, `context.auggiePath`, `workspace.defaultShell`,
 `workspace.sshKeyPath`, `storage.dataDir`, `workspaces.root`,
 `workspace.worktreesLocation`), `permissions.rules`, the prompt rules injected into every
-agent (`userRules`, `workspaceRules`), and opaque state
+agent (`userRules`, `workspaceRules`), the
+[remote agent settings](#remote-agent-settings-prepared-daemon-to-daemon-remote-agents)
+(`remoteAgents.*`, `experimental.remoteAgents`, `daemon.mode`), and opaque state
 (`quickActions.providerSettings`, `repos.known`, `workspace.changeHistory`,
 `workspaceInitializer.state`, `hardwareConsole.state`). Every other setting is `true`.
 
@@ -802,7 +804,9 @@ only a live eligible account can establish provider acceptance.
 
 These keys belong to [remote machines (§5.50)](./nodes.md#daemon-to-daemon-remote-machines-prepared).
 They are not registered at the pinned daemon. Like the other host settings they
-are owner-only.
+are owner-only. None of them is proposable: an Assistant chat settings-change card
+can never turn remote agents on, change their permission policy or switch the daemon
+mode (see "Chat settings proposals" above).
 
 - `remoteAgents.enabled` (boolean, default `false`). Machine side: serve the
   executor link (`/node/link`, `/node/git`) and allow `executor.mint`. Off
