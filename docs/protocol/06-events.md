@@ -1199,7 +1199,7 @@ Opt-in progressive delivery starts with the newest row and `initialHistory` prog
 Clients suppress extra history reads until initial completion.
 Under writer backpressure, buffered same-block chunk deltas conflate losslessly: latest-entity-wins in full mode, **concat-merge** in incremental mode (fragments append in arrival order onto one pending entity's `textDelta`, capped at 256 KiB — an over-cap merge seals the pending entity and the newer fragment starts a fresh one; tool calls, terminal reconciles, and message-row deltas are barriers) — §7.1.
 
-**Worker observations (prepared).** `agent.workers.subscribe` takes required
+**Worker observations.** `agent.workers.subscribe` takes required
 `workspaceId` and `agentId`, then sends seq-0 and increasing-seq complete
 `WorkerSnapshot` replacements using `kind: "snapshot"`. It does not use entity
 deltas; teardown is `events.unsubscribe`. Observation times survive every snapshot;

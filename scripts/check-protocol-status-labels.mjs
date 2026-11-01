@@ -26,20 +26,32 @@
 //
 // A section reference is a link to a protocol doc (its anchor, else the
 // heading numbered like a `§N.N` in the link text, else the file's numbered
-// section) or a bare `§N.N`. A file whose `> Part of ... — §N.N Title` banner
+// section), a bare `§N.N`, or a quoted same-file heading (`see "Truncated
+// note reads" below`: exact, else ignoring a trailing parenthetical, else a
+// unique prefix). A file whose `> Part of ... — §N.N Title` banner
 // names one number is that section (methods/desktop.md is §5.51 with no
 // numbered heading). A reference stands for the capability with more than
 // half the mentions in the referenced section, climbing to enclosing
-// sections while one mentions none but never past a numbered section; a
-// section that names several flags (§5.17 client.hello) has no subject.
+// sections while one mentions none but never past a numbered section. A
+// section that names several flags (§5.17 client.hello) has no subject,
+// except for a reference in the label's own scope (below) whose section
+// itself, not one reached by climbing, names only advertised flags: then
+// it stands for the most mentioned one (§5.55 names six discussion flags,
+// so "§5.55 Workspace discussions (prepared)" is stale whichever it meant).
+//
+// A protocol version within 40 characters of a label ("15.1's prepared
+// discussions", "(15.1, prepared)", "prepared [protocol 15.1](...)") stands
+// for its `**Version N.N — ...**` entries in versioning.md taken together,
+// with the same rules as a section reference in the label's scope.
 //
 // A status label is "prepared" or "not (yet) implemented" in prose, outside
 // code spans, link destinations and HTML. Each label has one subject
 // capability, the first mention or resolvable reference in its scope, nearest
 // to the label first (those after it in order, then those before it):
 //   - in a paragraph or list item: its sentence; when the label sits inside
-//     the emphasized lead-in that opens the block ("**Prepared additive
-//     contract.** `capabilities.x: 1` ..."), else the next sentence;
+//     the emphasized lead-in that opens the block ("**Version 13.7 — owner
+//     avatars (additive, prepared).**"), else the rest of the block, then
+//     the blocks after it up to a heading or the next lead-in;
 //   - in a table row: from the label's cell to the end of the row
 //     ("| discussion (prepared) | ... | requires `x: 1` |", or a README index
 //     row "| §5.56 Secret requests (prepared) | [secrets.md](...) |");
@@ -47,6 +59,8 @@
 //     the next heading of the same or a higher level);
 //   - in a fixture: a top-level `status` starting with "prepared", whose
 //     subject is the first known capability name the file quotes.
+// Exact subjects (a mention, a majority section) anywhere in that order win
+// over a several-flag section, which wins over a protocol version.
 // A label whose subject is advertised is a finding, counted once per
 // sentence and subject.
 //
@@ -265,6 +279,13 @@ function lineAt(block, offset) {
 
 const HEADING_NUMBER_RE = /^(\d+(?:\.\d+)*[a-z]?)\s/;
 const SECTION_NUMBER = '(\\d+(?:\\.\\d+)*[a-z]?)';
+const SEE_QUOTED_RE = /\bsee\s+"([^"\n]+)"/gi;
+const VERSION_REF_RE = /(?<![§\d.])\b(\d+\.\d+)\b(?!\.\d)/g;
+// How far (in characters) a protocol version may sit from the label it names.
+const VERSION_REF_REACH = 40;
+// A version entry of versioning.md opens a paragraph: "**Version 15.1 — title (additive).**".
+const VERSION_ENTRY_RE = /^(?:\*\*|__)Version\s+(\d+\.\d+)\b/;
+export const VERSIONING_FILE = `${SCAN_DIR}/versioning.md`;
 
 /**
  * Heading sections of a parsed document: `{ heading, index, slug, number,
@@ -334,26 +355,71 @@ function referencesIn(text) {
     if (linked.some(([a, b]) => m.index >= a && m.index < b)) continue;
     refs.push({ offset: m.index, end: m.index + m[0].length, number: m[1] });
   }
+  // `(see "Truncated note reads" below)`: a quoted same-file heading. The
+  // quote is matched in prose but read from the source, so it may hold code.
+  for (const m of p.matchAll(SEE_QUOTED_RE)) {
+    const open = m.index + m[0].length - m[1].length - 2;
+    refs.push({ offset: open, end: m.index + m[0].length, path: null, anchor: null, number: null, heading: text.slice(open + 1, m.index + m[0].length - 1) });
+  }
   return refs.sort((a, b) => a.offset - b.offset);
 }
 
 /**
- * The capability a run of blocks is about: the one with more than half of
- * its capability mentions. `{ name }` (name null when no capability has a
- * majority) or null when the blocks mention no capability.
+ * Protocol version references in `text`: `{ offset, version }` for each
+ * `N.N` in prose that is not a `§` section ("15.1's ...", "(15.1,
+ * prepared)", "protocol 15.1"). They are weak: a label falls back to one
+ * within reach only when nothing else in its scope resolves, and a number
+ * with no versioning.md entry resolves to nothing.
  */
-function dominant(blocks, from, to, ctx) {
+function versionRefsIn(text) {
+  const p = prose(text);
+  return [...p.matchAll(VERSION_REF_RE)].map((m) => ({ offset: m.index, version: m[1] }));
+}
+
+/** Heading text without a leading section number, lowercased, for quoted references. */
+const headingKey = (text) => text.replace(HEADING_NUMBER_RE, '').trim().toLowerCase();
+/** `headingKey` without a trailing parenthetical such as `(prepared additive contract)` or `*(10.9)*`. */
+const headingCore = (text) => headingKey(text).replace(/\s*[*_]*\([^()]*\)[*_]*$/, '').trim();
+
+/**
+ * The section a quoted heading names: an exact heading, else one equal
+ * once its trailing parenthetical is dropped, else the only heading the
+ * quote prefixes. An ambiguous quote names nothing.
+ */
+function quotedSection(doc, quoted) {
+  const q = quoted.trim().toLowerCase();
+  for (const key of [headingKey, headingCore]) {
+    const hits = doc.sections.filter((s) => key(s.heading.text) === q);
+    if (hits.length) return hits.length === 1 ? hits[0] : null;
+  }
+  const prefixed = doc.sections.filter((s) => headingKey(s.heading.text).startsWith(q));
+  return prefixed.length === 1 ? prefixed[0] : null;
+}
+
+/**
+ * The capability a run of blocks is about: the one with more than half of
+ * its capability mentions, else, with `loose` and every capability it names
+ * advertised, the most mentioned one (the first of a tie): a label pointing
+ * at a section that only names shipped flags (§5.55 names six discussion
+ * flags) is stale whichever flag it meant. `{ name }` (name null when no
+ * capability qualifies) or null when the blocks mention no capability.
+ * `ranges` is a list of `[from, to)` block index ranges.
+ */
+function dominant(blocks, ranges, ctx, loose = false) {
   const counts = new Map();
   let total = 0;
-  for (let i = from; i < to; i += 1) {
-    for (const m of codeMentions(blocks[i].text, ctx.known)) {
-      counts.set(m.name, (counts.get(m.name) ?? 0) + 1);
-      total += 1;
+  for (const [from, to] of ranges) {
+    for (let i = from; i < to; i += 1) {
+      for (const m of codeMentions(blocks[i].text, ctx.known)) {
+        counts.set(m.name, (counts.get(m.name) ?? 0) + 1);
+        total += 1;
+      }
     }
   }
   if (!total) return null;
   const [name, count] = [...counts].sort((x, y) => y[1] - x[1])[0];
-  return { name: count * 2 > total ? name : null };
+  if (count * 2 > total) return { name };
+  return { name: loose && [...counts.keys()].every((n) => ctx.advertised.has(n)) ? name : null };
 }
 
 /**
@@ -362,16 +428,20 @@ function dominant(blocks, from, to, ctx) {
  * a section mentions none, but never past the nearest numbered section
  * (`5.56 Secret requests`). A link to a file with no anchor or `§` number
  * means the file's first numbered section. References are not followed
- * further.
+ * further. `loose` (a reference in the label's own sentence or row) lets the
+ * referenced section itself, not an enclosing one reached by climbing, name
+ * several flags when all of them are advertised: a broad parent such as
+ * §5.5 `agent.*` says nothing about one contract inside it.
  */
-function resolveReference(ctx, fromFile, ref) {
+function resolveReference(ctx, fromFile, ref, loose = false) {
   let file = fromFile;
   let section = null;
   if ('path' in ref) {
     if (ref.path) file = path.posix.normalize(path.posix.join(path.posix.dirname(fromFile), ref.path));
     const doc = ctx.docs.get(file);
     if (!doc) return null;
-    if (ref.anchor) section = doc.sections.find((s) => s.slug === safeDecode(ref.anchor)) ?? null;
+    if (ref.heading) section = quotedSection(doc, ref.heading);
+    else if (ref.anchor) section = doc.sections.find((s) => s.slug === safeDecode(ref.anchor)) ?? null;
     else if (ref.number) section = doc.sections.find((s) => s.number === ref.number) ?? null;
     else section = doc.root ?? doc.sections.find((s) => s.number) ?? null;
   } else {
@@ -381,10 +451,40 @@ function resolveReference(ctx, fromFile, ref) {
   }
   const { blocks } = ctx.docs.get(file);
   for (let s = section; s; s = s.number ? null : s.parent) {
-    const hit = dominant(blocks, s.from, s.to, ctx);
+    const hit = dominant(blocks, [[s.from, s.to]], ctx, loose && s === section);
     if (hit) return hit.name;
   }
   return null;
+}
+
+/**
+ * The capability a protocol version describes: the dominant capability of
+ * all of its versioning.md entries together, or null.
+ */
+function resolveVersion(ctx, version) {
+  const entries = ctx.versions.get(version);
+  if (!entries) return null;
+  return dominant(ctx.docs.get(VERSIONING_FILE).blocks, entries, ctx, true)?.name ?? null;
+}
+
+/**
+ * Version entries of a parsed versioning.md: number → `[from, to)` block
+ * ranges, each from its `**Version N.N — ...**` paragraph to the next entry
+ * or heading.
+ */
+function versionEntries(doc) {
+  const out = new Map();
+  if (!doc) return out;
+  const { blocks } = doc;
+  blocks.forEach((b, i) => {
+    const m = b.kind === 'paragraph' && b.text.match(VERSION_ENTRY_RE);
+    if (!m) return;
+    let to = i + 1;
+    while (to < blocks.length && blocks[to].kind !== 'heading' && !(blocks[to].kind === 'paragraph' && VERSION_ENTRY_RE.test(blocks[to].text))) to += 1;
+    if (!out.has(m[1])) out.set(m[1], []);
+    out.get(m[1]).push([i, to]);
+  });
+  return out;
 }
 
 function safeDecode(anchor) {
@@ -401,16 +501,18 @@ function safeDecode(anchor) {
  * nearest to the label first (those at or after offset `at` in text order,
  * then those before it, closest first), or null.
  */
-function subjectIn(ctx, file, text, { from = 0, to = undefined, at = from } = {}) {
+function subjectIn(ctx, file, text, { from = 0, to = undefined, at = from, weak = false, loose = false } = {}) {
   const within = (o) => o >= from && (to === undefined || o < to);
-  const items = [
-    ...codeMentions(text, ctx.known).filter((m) => within(m.offset)).map((m) => ({ offset: m.offset, name: m.name })),
-    ...referencesIn(text).filter((r) => within(r.offset)).map((r) => ({ offset: r.offset, ref: r })),
-  ];
+  const items = weak
+    ? versionRefsIn(text).filter((v) => within(v.offset) && Math.abs(v.offset - at) <= VERSION_REF_REACH)
+    : [
+        ...codeMentions(text, ctx.known).filter((m) => within(m.offset)).map((m) => ({ offset: m.offset, name: m.name })),
+        ...referencesIn(text).filter((r) => within(r.offset)).map((r) => ({ offset: r.offset, ref: r })),
+      ];
   const after = items.filter((i) => i.offset >= at).sort((a, b) => a.offset - b.offset);
   const before = items.filter((i) => i.offset < at).sort((a, b) => b.offset - a.offset);
   for (const item of [...after, ...before]) {
-    const name = item.name ?? resolveReference(ctx, file, item.ref);
+    const name = item.name ?? (item.version ? resolveVersion(ctx, item.version) : resolveReference(ctx, file, item.ref, loose));
     if (name) return name;
   }
   return null;
@@ -433,17 +535,31 @@ export function labelsIn(file, ctx) {
     for (const label of labels) {
       const own = starts.filter((s) => s <= label.index).at(-1) ?? 0;
       const next = starts.find((s) => s > label.index);
-      let subject = null;
+      // The label's own scope: its sentence, its row from its cell on, or its heading.
+      const scope = block.kind === 'heading' ? { at: label.index } : block.kind === 'row' ? { from: own, at: label.index } : { from: own, to: next, at: label.index };
+      // What else a label is about when its scope names nothing: a heading's
+      // section in order; for a label in the opening lead-in ("**Version 13.7 —
+      // owner avatars (additive, prepared).**") the rest of the block, then the
+      // blocks after it up to a heading or the next lead-in.
+      const follow = [];
       if (block.kind === 'heading') {
-        subject = subjectIn(ctx, file, block.text, { at: label.index });
         const section = doc.sections.find((s) => s.index === index);
-        for (let i = section?.from ?? 0; !subject && section && i < section.to; i += 1) subject = subjectIn(ctx, file, blocks[i].text);
-      } else if (block.kind === 'row') {
-        subject = subjectIn(ctx, file, block.text, { from: own, at: label.index });
-      } else {
-        subject = subjectIn(ctx, file, block.text, { from: own, to: next, at: label.index });
-        if (!subject && next !== undefined && label.index < leadInEnd(block.text)) subject = subjectIn(ctx, file, block.text, { from: next, to: starts.find((s) => s > next) });
+        if (section) for (let i = section.from; i < section.to; i += 1) follow.push({ text: blocks[i].text, opts: {}, loose: false });
+      } else if (block.kind !== 'row' && label.index < leadInEnd(block.text)) {
+        follow.push({ text: block.text, opts: { from: starts.find((s) => s >= leadInEnd(block.text)) ?? block.text.length }, loose: true });
+        for (let i = index + 1; i < blocks.length && blocks[i].kind !== 'heading' && leadInEnd(blocks[i].text) === -1; i += 1) follow.push({ text: blocks[i].text, opts: {}, loose: true });
       }
+      // Exact subjects first, then a referenced section naming only shipped
+      // flags, then a protocol version ("15.1's prepared discussions").
+      const attempts = [
+        () => subjectIn(ctx, file, block.text, scope),
+        ...follow.map((f) => () => subjectIn(ctx, file, f.text, f.opts)),
+        () => subjectIn(ctx, file, block.text, { ...scope, loose: true }),
+        ...follow.filter((f) => f.loose).map((f) => () => subjectIn(ctx, file, f.text, { ...f.opts, loose: true })),
+        () => subjectIn(ctx, file, block.text, { ...scope, weak: true }),
+      ];
+      let subject = null;
+      for (const attempt of attempts) if (!subject) subject = attempt();
       // One finding per sentence (a row cell onward, a heading) and subject:
       // two labels in one sentence are one statement, while a second stale
       // sentence in a grandfathered paragraph raises the count.
@@ -457,14 +573,17 @@ export function labelsIn(file, ctx) {
 }
 
 /**
- * `{ docs, known, numbered }` for a set of `{ file: source }` protocol docs:
- * parsed documents, the known capability names (`advertised` plus every
- * `capabilities.<name>` the docs write) and numbered sections by number.
+ * `{ docs, known, numbered, advertised, versions }` for a set of `{ file:
+ * source }` protocol docs: parsed documents, the known capability names
+ * (`advertised` plus every `capabilities.<name>` the docs write), numbered
+ * sections by number, the advertised names, and versioning.md's version
+ * entries by number.
  */
 export function buildContext(sources, advertised) {
   const docs = new Map();
   for (const [file, source] of Object.entries(sources)) docs.set(file, parseDoc(source));
   const known = new Set(advertised);
+  const shipped = new Set(advertised);
   for (const { blocks } of docs.values()) for (const b of blocks) for (const n of qualifiedNames(b.text)) known.add(n);
   const numbered = new Map();
   for (const [file, doc] of docs) {
@@ -479,7 +598,7 @@ export function buildContext(sources, advertised) {
     const top = Math.min(...hits.map((h) => h.section.heading.level));
     numbered.set(number, hits.filter((h) => h.section.heading.level === top));
   }
-  return { docs, known, numbered };
+  return { docs, known, numbered, advertised: shipped, versions: versionEntries(docs.get(VERSIONING_FILE)) };
 }
 
 /** A fixture's stale status: `[{ file, line, capability, label, block }]` (zero or one). */
