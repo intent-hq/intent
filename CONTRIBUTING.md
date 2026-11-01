@@ -190,6 +190,12 @@ root makes per goal: `make -C packages/intentd test coverage-changed COMPACT=1` 
 run the noncoverage goal before rejecting coverage. It still never starts compact
 coverage. Use separate invocations with the appropriate mode for each goal.
 
+`DRY_RUN=1` on any coverage target prints its plan and exits without starting
+cargo. `make check-dry-run-targets` (CI: `scripts/check-dry-run-targets.test.sh`)
+runs every target that documents or reads `DRY_RUN`, and every `coverage-*`,
+with a stub cargo and fails on any cargo call, so a new target cannot accept
+the flag and still start real work.
+
 #### Gate build storage
 
 Each checkout's gate builds live in `intent-gates/<checkout-id>` under Cargo's

@@ -795,6 +795,12 @@ test: test-intentd ## Run Rust tests; after interruption use RESUME=1 (GATE_FORC
 test-scripts: ## Run the Python script unit tests (Python 3.11+, no submodules needed)
 	python3 -S -B -m unittest -v scripts.test_resumable_nextest scripts.test_compact_gate scripts.test_gate_storage scripts.test_rust_test_policy scripts.test_seed_dev_providers scripts.test_seed_dev_workspaces scripts.test_cleanup_prereleases scripts.test_script_test_target scripts.test_test_select_target scripts.test_test_stress_target scripts.test_nextest_stress scripts.test_watch_capacity
 
+# DRY_RUN must never start real work: run every target whose help or recipe
+# mentions DRY_RUN, plus every coverage-*, with DRY_RUN=1 and stub cargo/rustup,
+# and fail on any cargo call or hang. Self-test: scripts/check-dry-run-targets.test.sh.
+check-dry-run-targets: ensure-intentd-submodule ## Check every DRY_RUN target (and coverage-*) exits under DRY_RUN=1 without running cargo
+	@bash scripts/check-dry-run-targets.sh
+
 # The script checks CI would run for this change (lint-shell, the ci.yml
 # shell-tests suites, node:test for changed scripts/*.mjs); see CONTRIBUTING.md.
 test-scripts-changed: ## Run the script checks a change affects vs BASE (default origin/main; DRY_RUN=1 prints the plan, FULL=1 runs every suite)
@@ -847,11 +853,13 @@ test-intentd: ensure-intentd-submodule | check-transfer-fixture
 # nested quote; the script execs the runner from this directory, so the
 # relative scripts/ path resolves against the monorepo root.
 test-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd branch changed vs BASE, recording the run (RESUME=1 resumes, NO_FAIL_FAST=1 continues past failures, HERMETIC=1 hides provider CLIs like CI, DRY_RUN=1 prints the plan)
-	@if [ -z "$(DRY_RUN)" ] || [ "$(DRY_RUN)" = 0 ]; then python3 scripts/check_watch_capacity.py --quiet; fi
-	@cargo nextest --version >/dev/null 2>&1 || { \
-		echo "[test-changed] ERROR: cargo-nextest is not installed — run 'cargo install cargo-nextest --locked'"; \
-		exit 1; \
-	}
+	@if [ -z "$(DRY_RUN)" ] || [ "$(DRY_RUN)" = 0 ]; then \
+		python3 scripts/check_watch_capacity.py --quiet || exit $$?; \
+		cargo nextest --version >/dev/null 2>&1 || { \
+			echo "[test-changed] ERROR: cargo-nextest is not installed — run 'cargo install cargo-nextest --locked'"; \
+			exit 1; \
+		}; \
+	fi
 	@if [ -n "$(DRY_RUN)" ] && [ "$(DRY_RUN)" != 0 ] && [ "$(NO_FAIL_FAST)" = 1 ]; then \
 		echo "[test-changed] NO_FAIL_FAST=1: nextest runs with --no-fail-fast"; \
 	fi
@@ -1009,15 +1017,38 @@ list-tests: ensure-intentd-submodule ## List nextest tests without a pager (ARGS
 # Optional COVERAGE_FLOOR passes the scripts' positional fail-under-lines
 # floor (CI uses 40), e.g. `make coverage-e2e COVERAGE_FLOOR=40`; when unset
 # it expands to nothing and no floor is enforced locally.
-coverage-e2e: ensure-intentd-submodule ## Reproduce CI e2e coverage locally (slow, instrumented; not part of make test)
-	@python3 scripts/check_watch_capacity.py --quiet
-	cd $(INTENTD_DIR) && NEXTEST_TEST_THREADS=$(TEST_THREADS) CARGO_BUILD_JOBS=$(BUILD_JOBS) \
-		./scripts/coverage-e2e.sh $(COVERAGE_FLOOR)
+# DRY_RUN=1 prints the plan and exits before the watch-capacity check and the
+# script: the scripts themselves ignore DRY_RUN, and a dry run once started an
+# untracked hour-long instrumented run on a shared host.
+# scripts/check-dry-run-targets.sh runs every DRY_RUN target with a stub cargo.
+COVERAGE_SCOPE_coverage-e2e = intentd's integration-test binaries (crates/intentd/tests), minus auggie_context_e2e
+COVERAGE_SCOPE_coverage-all = every workspace test (unit + integration + e2e)
+define COVERAGE_RECIPE
+@if [ -n "$(DRY_RUN)" ] && [ "$(DRY_RUN)" != 0 ]; then \
+	echo "[$@] DRY_RUN: nothing started. Without DRY_RUN this target would:"; \
+	echo "  1. check inotify watch capacity (scripts/check_watch_capacity.py)"; \
+	echo "  2. run, from $(INTENTD_DIR):"; \
+	echo "       NEXTEST_TEST_THREADS=$(TEST_THREADS) CARGO_BUILD_JOBS=$(BUILD_JOBS) ./scripts/$@.sh $(COVERAGE_FLOOR)"; \
+	echo "     which installs cargo-llvm-cov / cargo-nextest / llvm-tools if missing, wipes the existing"; \
+	echo "     coverage data (cargo llvm-cov clean --workspace), runs $(COVERAGE_SCOPE_$@)"; \
+	echo "     instrumented under nextest (slow), and prints a line-coverage summary to"; \
+	echo "     $(INTENTD_DIR)/coverage-summary.txt$(if $(strip $(COVERAGE_FLOOR)), failing below $(strip $(COVERAGE_FLOOR))% lines, with no coverage floor)"; \
+	for tool in cargo-llvm-cov cargo-nextest; do \
+		command -v "$$tool" >/dev/null 2>&1 || echo "  note: $$tool is not on PATH; the script would install it"; \
+	done; \
+	exit 0; \
+fi; \
+python3 scripts/check_watch_capacity.py --quiet || exit $$?; \
+echo "cd $(INTENTD_DIR) && NEXTEST_TEST_THREADS=$(TEST_THREADS) CARGO_BUILD_JOBS=$(BUILD_JOBS) ./scripts/$@.sh $(COVERAGE_FLOOR)"; \
+cd $(INTENTD_DIR) && NEXTEST_TEST_THREADS=$(TEST_THREADS) CARGO_BUILD_JOBS=$(BUILD_JOBS) \
+	./scripts/$@.sh $(COVERAGE_FLOOR)
+endef
 
-coverage-all: ensure-intentd-submodule ## Reproduce CI full-workspace coverage locally (slow, instrumented; not part of make test)
-	@python3 scripts/check_watch_capacity.py --quiet
-	cd $(INTENTD_DIR) && NEXTEST_TEST_THREADS=$(TEST_THREADS) CARGO_BUILD_JOBS=$(BUILD_JOBS) \
-		./scripts/coverage-all.sh $(COVERAGE_FLOOR)
+coverage-e2e: ensure-intentd-submodule ## Reproduce CI e2e coverage locally (slow, instrumented; not part of make test; DRY_RUN=1 prints the plan)
+	$(COVERAGE_RECIPE)
+
+coverage-all: ensure-intentd-submodule ## Reproduce CI full-workspace coverage locally (slow, instrumented; not part of make test; DRY_RUN=1 prints the plan)
+	$(COVERAGE_RECIPE)
 
 clean: ## Remove cargo build artifacts (packages/intentd/target)
 	rm -rf $(INTENTD_DIR)/target
