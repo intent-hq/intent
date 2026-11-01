@@ -282,6 +282,7 @@ def run_stress(args, gate) -> int:
     with gate.terminate_on_signal():
         try:
             output_args = gate.isolated_output_args(intentd_dir, cargo_config, env)
+            gate.apply_storage_policy(output_args, label)
             gate_lock = gate.acquire_gate_lock(output_args)
             print(f"[{label}] {gate.timeout_description(env)}", flush=True)
             # Fail before the build when this nextest cannot stress-test.
@@ -318,7 +319,7 @@ def run_stress(args, gate) -> int:
             status = gate.failure_exit_code(error)
         finally:
             if gate_lock is not None:
-                os.close(gate_lock)
+                gate.release_gate_lock(gate_lock)
             counts = tally.counts()
             if status == 0 and counts["failed"]:
                 status = 1

@@ -23,10 +23,23 @@
 
 .DEFAULT_GOAL := all
 
-# Reject before running ANY recipe, including parallel/mixed gate + coverage
-# goals. Coverage needs its own debug/instrumentation settings.
+# Local Rust gates build compact artifacts by default (dev/test debug=0,
+# CARGO_INCREMENTAL=0): test executables are ~40% debug info, and per-worktree
+# gate trees filled the shared dev host's disk (CONTRIBUTING.md -> "Local Rust
+# gates"). COMPACT=0 restores line-table debug info. Coverage needs its own
+# debug/instrumentation settings, so any coverage goal defaults to COMPACT=0 and
+# an explicit COMPACT=1 is rejected before running ANY recipe, including
+# parallel/mixed gate + coverage goals.
+ifneq ($(filter coverage-%,$(MAKECMDGOALS)),)
 COMPACT ?= 0
-export COMPACT
+else
+COMPACT ?= 1
+endif
+# Export only to the Rust compiler/gate recipes (see COMPACT_TARGETS below):
+# a global export of the default would leak COMPACT=1 into unrelated recipes
+# and into any make they start, where a coverage goal then rejects it.
+COMPACT_TARGETS := gate check clippy check-windows lint-sources build-intentd test test-intentd test-changed test-select test-stress list-tests coverage-changed coverage-e2e coverage-all
+$(COMPACT_TARGETS): export COMPACT := $(COMPACT)
 ifeq ($(COMPACT),1)
 ifneq ($(filter coverage-%,$(MAKECMDGOALS)),)
 $(error COMPACT=1 is incompatible with coverage targets; rerun coverage with COMPACT=0)
@@ -365,12 +378,21 @@ release-status: ## Print the release train: latest tags, channel versions, fe da
 # Build-artifact GC (cargo-sweep). Rust target/ dirs grow without bound as
 # deps and toolchains churn; `sweep` prunes artifacts older than SWEEP_DAYS
 # days in this worktree's intentd, and `sweep-all` does the same across every
-# sibling worktree under WORKSPACES_DIR (the per-worktree monorepo checkouts
-# live at $(WORKSPACES_DIR)/<name>/monorepo). Both need cargo-sweep
-# (`cargo install cargo-sweep --locked`). Overridable, e.g. `make sweep SWEEP_DAYS=7`
-# or `make sweep-all WORKSPACES_DIR=/elsewhere/workspaces`.
+# sibling worktree under WORKSPACES_DIR (the per-worktree checkouts live at
+# $(WORKSPACES_DIR)/<name>/intent, or <name>/monorepo in older layouts). Both
+# need cargo-sweep (`cargo install cargo-sweep --locked`). cargo-sweep goes by
+# day-granular access times, so it cannot reclaim gate trees that filled a disk
+# within hours; `sweep-gates` deletes whole idle intent-gates/<checkout-id>
+# trees instead (scripts/gate_storage.py). Gates also apply that policy before
+# each build, tuned by environment knobs: GATE_TREE_MAX_GB (default 60) caps
+# the checkout's own tree, and below GATE_SWEEP_LOW_GB (150) free they reclaim
+# trees idle GATE_SWEEP_MIN_IDLE_MINUTES (60) until GATE_SWEEP_GOAL_GB (300)
+# is free; GATE_SWEEP=0 disables both. Overridable, e.g. `make sweep SWEEP_DAYS=7`,
+# `make sweep-all WORKSPACES_DIR=/elsewhere/workspaces` or
+# `make sweep-gates GATE_SWEEP_IDLE_HOURS=6 FREE_GB=300 DRY_RUN=1`.
 WORKSPACES_DIR ?= $(HOME)/intent/workspaces
 SWEEP_DAYS ?= 3
+GATE_SWEEP_IDLE_HOURS ?= 24
 
 # Parallelism caps shared by the Rust build/test/coverage targets
 # (build-intentd, clippy, test-intentd, test-changed, test-select, test-stress, coverage-changed,
@@ -402,6 +424,8 @@ gate check clippy check-windows lint-sources build-intentd test test-intentd tes
 # hence the explicit --no-pager on list-tests.
 gate check clippy check-windows lint-sources build-intentd test test-intentd test-changed test-select test-stress coverage-changed coverage-e2e coverage-all list-tests: export PAGER ?= cat
 gate check clippy check-windows lint-sources build-intentd test test-intentd test-changed test-select test-stress coverage-changed coverage-e2e coverage-all list-tests: export GIT_PAGER ?= cat
+# The gate runner's low-disk sweep also reclaims idle sibling worktrees' trees.
+gate test test-intentd test-changed test-select test-stress: export WORKSPACES_DIR := $(WORKSPACES_DIR)
 
 # Test time limits on the local test targets. Hang-guard budgets in intentd
 # tests scale with INTENTD_TEST_TIMEOUT_MULTIPLIER (intentd-test-support's
@@ -463,7 +487,7 @@ FE_BUILD_HEAP_MB ?= 16384
 	update \
 	build build-intentd build-sidecar gate test test-intentd test-scripts test-scripts-changed test-changed test-select test-stress list-tests coverage-changed coverage-e2e coverage-all \
 	fmt clippy check-windows lint-sources lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child lint-shell-sleeps lint-shell lint-workflows bash3 check clean clean-dev \
-	sweep sweep-all seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
+	sweep sweep-all sweep-gates seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
 	run-intentd dev-ui dev-sandbox-ui dev-sandbox-app dev-sandbox-stack dev-fe fe-launch \
 	sandbox-status sandbox-stop \
 	run-fe-local uds-to-unauthed-wss-bridge dev-web-live dev dev-prod \
@@ -473,9 +497,9 @@ all: build
 
 help: ## List documented targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
-	@printf '\nLocal Rust gates: COMPACT=1 make gate (also check, test, test-changed, test-select, test-stress; Python 3.10+).\n'
-	@printf '  Opt-in dev/test debug=0 and CARGO_INCREMENTAL=0; caller Rust flags retain precedence.\n'
-	@printf '  Default: COMPACT=0. Compact/default resume records are separate; coverage rejects COMPACT=1.\n'
+	@printf '\nLocal Rust gates: make gate (also check, test, test-changed, test-select, test-stress; Python 3.10+) build compact.\n'
+	@printf '  Default COMPACT=1: dev/test debug=0 and CARGO_INCREMENTAL=0; COMPACT=0 keeps line-table debug info.\n'
+	@printf '  Caller Rust flags retain precedence. Compact/default resume records are separate; coverage defaults to COMPACT=0.\n'
 	@printf '  See CONTRIBUTING.md for debugging tradeoffs and the component mixed-goal boundary.\n'
 	@printf 'Opt-in faster local compiles: PARALLEL=1 make build (also check, clippy, lint-sources, gate, test, test-changed, test-select, test-stress).\n'
 	@printf '  rustc -Zthreads=N (PARALLEL_THREADS=N, default 8) for intentd crates only; ~1-2 GB more RAM per rustc; builds into target/parallel-tN; never CI or release (CONTRIBUTING.md).\n'
@@ -769,7 +793,7 @@ gate: check | check-callback-fixture check-transfer-fixture ## Run all local Rus
 test: test-intentd ## Run Rust tests; after interruption use RESUME=1 (GATE_FORCE=1 runs all, NO_FAIL_FAST=1 continues past failures, HERMETIC=1 hides provider CLIs like CI)
 
 test-scripts: ## Run the Python script unit tests (Python 3.11+, no submodules needed)
-	python3 -S -B -m unittest -v scripts.test_resumable_nextest scripts.test_compact_gate scripts.test_rust_test_policy scripts.test_seed_dev_providers scripts.test_seed_dev_workspaces scripts.test_cleanup_prereleases scripts.test_script_test_target scripts.test_test_select_target scripts.test_test_stress_target scripts.test_nextest_stress scripts.test_watch_capacity
+	python3 -S -B -m unittest -v scripts.test_resumable_nextest scripts.test_compact_gate scripts.test_gate_storage scripts.test_rust_test_policy scripts.test_seed_dev_providers scripts.test_seed_dev_workspaces scripts.test_cleanup_prereleases scripts.test_script_test_target scripts.test_test_select_target scripts.test_test_stress_target scripts.test_nextest_stress scripts.test_watch_capacity
 
 # The script checks CI would run for this change (lint-shell, the ci.yml
 # shell-tests suites, node:test for changed scripts/*.mjs); see CONTRIBUTING.md.
@@ -1026,6 +1050,12 @@ sweep-all: ## Sweep intentd build artifacts in every worktree under $(WORKSPACES
 			echo "[sweep-all] skipping $$dir (no target/ dir)"; \
 		fi; \
 	done
+
+sweep-gates: ## Delete Rust gate build trees (intent-gates/<checkout-id>) idle $(GATE_SWEEP_IDLE_HOURS)h+ here and under $(WORKSPACES_DIR) (FREE_GB=N stops at N GiB free, DRY_RUN=1 lists)
+	@python3 scripts/gate_storage.py --workspaces-dir "$(WORKSPACES_DIR)" \
+		--parent "$(or $(CARGO_TARGET_DIR),$(CURDIR)/$(INTENTD_DIR)/target)/intent-gates" \
+		--idle-hours "$(GATE_SWEEP_IDLE_HOURS)" $(if $(FREE_GB),--free-gb "$(FREE_GB)") \
+		$(if $(filter 1,$(DRY_RUN)),--dry-run)
 
 # Optional: inherit non-secret provider choices from the packaged seat into an
 # empty $(DEV_DATA_DIR). Existing contents always win; missing prod config is a

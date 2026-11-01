@@ -138,12 +138,12 @@ and records it in the summary and `run.json`. Resume credit is kept separate
 per effective multiplier, so a pass at 3x never resumes a 1x run (or the
 reverse); `3` and `3.0` share it.
 
-Opt in to smaller local build artifacts with:
+Local gates build smaller artifacts by default (`COMPACT=1`); opt out with:
 
 ```bash
-COMPACT=1 make gate
-COMPACT=1 make test-changed
-make -C packages/intentd test COMPACT=1
+COMPACT=0 make gate
+COMPACT=0 make test-changed
+make -C packages/intentd test COMPACT=0
 ```
 
 Compact and ordinary gates support **Python 3.10+**. The runner uses a bundled
@@ -153,8 +153,11 @@ needed. Compact applies to the compiler steps in `check`, `test`,
 It sets `CARGO_INCREMENTAL=0` and dev/test profile `debug=0`, including discovered
 package and build overrides. `strip=none` preserves the existing macOS
 proc-macro workaround. Test selection, changed-test fallback and failure handling
-are unchanged. Leaving `COMPACT` unset or setting `COMPACT=0` keeps ordinary
-gate behavior; release profiles are unaffected.
+are unchanged; release profiles are unaffected. It is the default because line
+tables are about 40% of every test executable (for example 336 of 822 MB in
+`intent_services`), and the per-worktree gate trees of a busy shared host filled
+its disk. Panic messages still carry `file:line:column`; only backtrace frames
+and debuggers lose source lines, so use `COMPACT=0` when you need those.
 
 These are Cargo profile/environment settings. Caller Rust flags are preserved
 with Cargo's normal precedence, including `RUSTFLAGS`,
@@ -162,15 +165,15 @@ with Cargo's normal precedence, including `RUSTFLAGS`,
 configuration. An effective explicit `-C debuginfo=2` can therefore retain debug
 information, and `-C incremental=/path` can re-enable incremental artifacts even
 though compact sets `CARGO_INCREMENTAL=0`. Conflicting flags reduce or remove the
-storage benefit. Without those overrides, compact trades source-line backtraces
-and debugger detail for smaller artifacts; disabling incremental compilation can
-make rebuilds slower. It neither guarantees a disk bound nor deletes existing
-targets or caches. Switching modes in one target directory may retain artifacts
-from both; use a task-owned `CARGO_TARGET_DIR` when measuring or isolating builds.
+storage benefit. Disabling incremental compilation can make rebuilds slower
+(hosts that use sccache already disable it). Switching modes in one target
+directory keeps artifacts from both until pruning or the
+[gate build storage](#gate-build-storage) policy removes them; use a task-owned
+`CARGO_TARGET_DIR` when measuring or isolating builds.
 
 `RESUME=1 make test` (or `make test-changed`) skips tests recorded as passed for
 the same worktree and effective build settings; `GATE_FORCE=1` runs them again.
-Use `COMPACT=1 RESUME=1 make test` to resume a compact run. Compact/default runs
+Use `COMPACT=0 RESUME=1 make test` to resume an ordinary (non-compact) run. Compact/default runs
 have separate resume identities, including profile/incremental settings and
 effective Cargo config contents, so switching modes cannot reuse the other
 mode's passes. Records live under `GATE_CACHE_DIR` (default
@@ -178,13 +181,48 @@ mode's passes. Records live under `GATE_CACHE_DIR` (default
 continues past failures while preserving the nonzero exit status. `make gate`
 always reruns its checks before the resumable test phase.
 
-Coverage targets (`coverage-changed`, `coverage-e2e`, `coverage-all`) reject
-`COMPACT=1` before instrumentation; run them with `COMPACT=0`. At the monorepo
+Coverage targets (`coverage-changed`, `coverage-e2e`, `coverage-all`) default to
+`COMPACT=0`, as does every goal of a make invocation that includes one, and
+reject an explicit `COMPACT=1` before instrumentation. At the monorepo
 root, even mixed goals such as `make test coverage-all COMPACT=1` reject before
 any recipe runs. The unchanged `packages/intentd` forwarder invokes separate
 root makes per goal: `make -C packages/intentd test coverage-changed COMPACT=1` may
 run the noncoverage goal before rejecting coverage. It still never starts compact
 coverage. Use separate invocations with the appropriate mode for each goal.
+
+#### Gate build storage
+
+Each checkout's gate builds live in `intent-gates/<checkout-id>` under Cargo's
+target directory (`packages/intentd/target/intent-gates/...` by default), and
+Cargo never deletes superseded outputs. To keep a shared host's disk bounded,
+the gate runner (`scripts/gate_storage.py`) applies two rules before every
+build of `make test`, `test-changed`, `test-select` and `test-stress`:
+
+- **Size cap.** If this checkout's tree is larger than `GATE_TREE_MAX_GB`
+  (default 60; a fresh compact tree is far smaller), the gate deletes it and
+  builds fresh. With sccache that costs mostly linking.
+- **Low-disk sweep.** If the filesystem has less than `GATE_SWEEP_LOW_GB`
+  (default 150) GiB free, the gate deletes idle trees, oldest first, until
+  `GATE_SWEEP_GOAL_GB` (default 300) GiB are free. It looks in its own
+  `intent-gates` directory and in every worktree under `WORKSPACES_DIR`
+  (default `~/intent/workspaces`). A tree counts as idle when no gate has
+  started or finished in it for `GATE_SWEEP_MIN_IDLE_MINUTES` (default 60). A
+  gate never deletes its own tree for space.
+
+`make sweep-gates` deletes every tree idle for `GATE_SWEEP_IDLE_HOURS` (default
+24) from a cron job or by hand; `FREE_GB=N` stops once N GiB are free and
+`DRY_RUN=1` only lists. `make sweep` / `sweep-all` (cargo-sweep) work from
+day-granular access times and cannot reclaim trees that fill a disk within hours.
+
+A tree is deleted only while its gate lock (an exclusive `flock` on the tree
+directory, which every gate holds shared from before its build until its tests
+finish) and every Cargo build lock inside it are free, its idle stamp is
+re-checked under that lock, and no process executes, has open or has its
+working directory in a file under it. Platforms without `flock` or `/proc`
+never delete. The tree is renamed aside before deletion, so a gate that was
+waiting for the lock starts a fresh tree. With a separately configured Cargo
+`build-dir`, gates lock both trees and the size cap does not apply.
+`GATE_SWEEP=0` turns the cap and the sweep off.
 
 #### Parallel compiler front end
 

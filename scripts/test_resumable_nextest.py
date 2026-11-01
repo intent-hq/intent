@@ -149,7 +149,11 @@ class PlannedRunHarness:
 
     def execute(self, args):
         self.selection_index = 0
-        with mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
+        # The storage policy logs (and may sweep) when the machine running the
+        # tests has little free disk, leaking host state into exact stdout
+        # expectations (a CI runner with 86 GiB free did); test_gate_storage covers it.
+        with mock.patch.object(gate, "apply_storage_policy"), mock.patch.object(
+            gate, "tree_key", return_value=KEY), mock.patch.object(
             gate, "run", side_effect=self.fake_run
         ), mock.patch.object(
             gate.subprocess, "Popen", side_effect=self.fake_popen
@@ -750,7 +754,7 @@ class CallbackValidatorTests(unittest.TestCase):
         # Keep imports by the child harness outside both source worktrees.
         runner = self.root / "runner"
         runner.mkdir()
-        for name in ("resumable_nextest.py", "test_resumable_nextest.py"):
+        for name in ("resumable_nextest.py", "gate_storage.py", "test_resumable_nextest.py"):
             shutil.copy(SCRIPT.parent / name, runner)
         shutil.copytree(SCRIPT.parent / "_vendor", runner / "_vendor",
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))

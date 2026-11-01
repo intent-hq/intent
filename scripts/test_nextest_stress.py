@@ -364,7 +364,8 @@ class RunStressTests(unittest.TestCase):
         return SimpleNamespace(
             prepare_test_env=prepare_test_env, TIMEOUT_MULTIPLIER_ENV=gate.TIMEOUT_MULTIPLIER_ENV,
             isolated_output_args=lambda *_: ["--target-dir", str(self.root / "target")],
-            acquire_gate_lock=lambda _o: None, timeout_description=gate.timeout_description,
+            acquire_gate_lock=lambda _o: None, release_gate_lock=gate.release_gate_lock,
+            apply_storage_policy=lambda *_: None, timeout_description=gate.timeout_description,
             run=gate.run, terminate_on_signal=gate.terminate_on_signal,
             failure_exit_code=gate.failure_exit_code, Terminated=gate.Terminated)
 

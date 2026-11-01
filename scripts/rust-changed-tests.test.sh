@@ -313,6 +313,7 @@ else
   g checkout -q -b feature
   cp "$repo_root/Makefile" "$mono/Makefile"
   cp "$repo_root/scripts/resumable_nextest.py" "$mono/scripts/resumable_nextest.py"
+  cp "$repo_root/scripts/gate_storage.py" "$mono/scripts/gate_storage.py"
   cp "$repo_root/scripts/check_watch_capacity.py" "$mono/scripts/"
   cp "$repo_root/scripts/check-transfer-selection-contract.mjs" "$mono/scripts/"
   mkdir -p "$mono/docs/protocol/fixtures"
@@ -480,8 +481,10 @@ PY
 
   # $1 = RESUME, $2 = GATE_FORCE. CARGO_BIN_DIR puts the e2e stubs ahead of the
   # plain ones on the recipe's PATH.
+  # Cases pin the ordinary mode unless they pass COMPACT themselves (the last
+  # command-line assignment wins); E2E_COMPACT_DEFAULT= exercises the default.
   e2e_make() {
-    local resume=$1 force=$2
+    local resume=$1 force=$2 compact_default=${E2E_COMPACT_DEFAULT-COMPACT=0}
     shift 2
     : >"$temp_dir/cargo.log"
     : >"$temp_dir/compact.log"
@@ -489,7 +492,8 @@ PY
     set +e
     PATH="$bin_dir" CARGO_TEST_LOG="$temp_dir/cargo.log" \
       "$make_bin" -C "${E2E_CWD:-$mono}" --no-print-directory "${E2E_GOAL:-test-changed}" CARGO_BIN_DIR="$e2e_bin" RUSTUP_CARGO= \
-      GATE_CACHE_DIR="$cache" RESUME="$resume" GATE_FORCE="$force" BUILD_JOBS=2 TEST_THREADS=1 "$@" \
+      GATE_CACHE_DIR="$cache" RESUME="$resume" GATE_FORCE="$force" BUILD_JOBS=2 TEST_THREADS=1 \
+      ${compact_default:+"$compact_default"} "$@" \
       >"$temp_dir/stdout" 2>"$temp_dir/stderr" </dev/null
     status=$?
     set -e
@@ -568,6 +572,11 @@ PY
   [[ "$(grep -c '^nextest .*incremental=0' "$temp_dir/compact.log")" -eq 2 ]] || fail "$case_name: list/run missing incremental override"
   compact_record=${stdout##*"[test-changed] record: "}
   [[ "${compact_record%/changed/*}" != "${changed_record%/changed/*}" ]] || fail "$case_name: default/compact tree identities collide"
+
+  case_name="default changed run is compact and resumes the compact record"
+  E2E_COMPACT_DEFAULT='' e2e_make 1 0
+  expect_ok
+  [[ "$stdout" == *"COMPACT=1"* && "$stdout" == *"resumed: skipped 2 tests"* && "$cargo_log" != *"nextest run"* ]] || fail "$case_name: $stdout $cargo_log"
 
   case_name="compact changed resume skips matching record through the real component forwarder"
   E2E_CWD="$mono/packages/intentd" e2e_make 1 0 COMPACT=1

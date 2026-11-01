@@ -84,9 +84,11 @@ except ImportError:  # Windows: no flock, so never prune.
 # Use the pinned parser offline, including direct-script/importlib invocation.
 if __package__:
     from ._vendor import tomli as cargo_toml
+    from . import gate_storage
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from _vendor import tomli as cargo_toml
+    import gate_storage
 
 # Schema 2 isolated executables across checkouts (#6496); schema 3 also separates
 # effective test policy. Schema 4 binds passes to the child's stack setting;
@@ -1461,20 +1463,39 @@ def acquire_gate_lock(output_args: list[str]) -> int | None:
     # Lock the directory itself: a lock file would be an untracked tree input
     # when the target directory lives unignored inside the checkout.
     # No lock only means no pruning; Cargo reports unusable outputs itself.
-    try:
-        roots[0].mkdir(parents=True, exist_ok=True)
-        descriptor = os.open(roots[0], os.O_RDONLY | os.O_DIRECTORY)
-    except OSError:
-        return None
-    try:
-        fcntl.flock(descriptor, fcntl.LOCK_SH)
-    except OSError:
-        os.close(descriptor)
-        return None
-    except BaseException:
-        os.close(descriptor)
-        raise
+    # The lock also stamps the tree as in use, keeping gate_storage sweeps away.
+    # A separate build-dir tree holds the test executables, so lock it too: a
+    # sweep of its intent-gates parent must not see it idle mid-gate.
+    descriptor = gate_storage.lock_shared(roots[0])
+    if descriptor is not None and len(roots) > 1:
+        try:
+            extras = [extra for extra in map(gate_storage.lock_shared, roots[1:]) if extra is not None]
+        except BaseException:
+            gate_storage.release(descriptor)
+            raise
+        if extras:
+            EXTRA_GATE_LOCKS[descriptor] = extras
     return descriptor
+
+
+# Shared locks on further output roots, keyed by the primary gate-lock descriptor.
+EXTRA_GATE_LOCKS: dict[int, list[int]] = {}
+
+
+def release_gate_lock(descriptor: int | None) -> None:
+    """Stamp the trees as just used (idle time starts now) and drop the gate locks."""
+    if descriptor is None:
+        return
+    try:
+        for extra in EXTRA_GATE_LOCKS.pop(descriptor, []):
+            gate_storage.release(extra)
+    finally:
+        gate_storage.release(descriptor)
+
+
+def apply_storage_policy(output_args: list[str], label: str) -> None:
+    """Before building: cap this checkout's tree and reclaim idle trees on low disk."""
+    gate_storage.before_build(gate_output_roots(output_args), label)
 
 
 def whole_workspace(selections: list[list[str]]) -> bool:
@@ -1560,6 +1581,8 @@ def prune_stale_executables(output_args: list[str], listings: list[str],
     lock = held_lock if held_lock is not None else os.open(roots[0], os.O_RDONLY | os.O_DIRECTORY)
     removed = freed = 0
     try:
+        # Restamp first: a sweep that wins the lock below re-checks the stamp.
+        gate_storage.stamp(lock)
         fcntl.flock(lock, fcntl.LOCK_UN)
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -1665,6 +1688,7 @@ def run_nextest(args: argparse.Namespace) -> int:
         print(f"[{label}] ERROR: resolving Cargo outputs: {error}", file=sys.stderr, flush=True)
         return failure_exit_code(error)
     print(f"[{label}] {timeout_description(env)}", flush=True)
+    apply_storage_policy(output_args, label)
     key = tree_key(repo_root, intentd_dir, output_args, fixture_identity,
                    transfer_identity=transfer_identity, child_env=env)
     run_dir = cache_dir / key
@@ -1953,13 +1977,13 @@ def run_nextest(args: argparse.Namespace) -> int:
         raise
     finally:
         if gate_lock is not None and not listed_and_ran:
-            os.close(gate_lock)
+            release_gate_lock(gate_lock)
     assert status is not None
     try:
         status = finalize(status)
     except BaseException:
         if gate_lock is not None:
-            os.close(gate_lock)
+            release_gate_lock(gate_lock)
         raise
     # Every listed build is complete, so older hashes of those targets are dead
     # weight. Best effort and after finalize: pruning never changes the run's
@@ -1973,7 +1997,7 @@ def run_nextest(args: argparse.Namespace) -> int:
         print(f"[{label}] warning: stale executables kept: {error!r}", file=sys.stderr, flush=True)
     finally:
         if gate_lock is not None:
-            os.close(gate_lock)
+            release_gate_lock(gate_lock)
     return status
 
 
