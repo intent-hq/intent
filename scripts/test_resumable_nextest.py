@@ -120,6 +120,8 @@ class PlannedRunHarness:
             return LISTING
         suites = {}
         for line in rows:
+            if not line.startswith("{"):
+                continue
             item = json.loads(line)
             if item.get("type") == "test":
                 alias, _, name = item["name"].partition("$")
@@ -1673,6 +1675,34 @@ class ResumableNextestTests(unittest.TestCase):
                 gate.load_passed(run_dir / "passed.jsonl"), {("alpha::one", "passes")}
             )
 
+    def test_terminal_output_omits_raw_json_events_but_keeps_them_on_disk(self):
+        # Agents pipe a noisy gate through `| tail`, which hides its exit code
+        # (two failing runs looked green). The events file keeps every line.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            lines = [
+                event("ok", "alpha::one$passes"),
+                suite_event("failed", passed=1, failed=1, ignored=0),
+                "not json from the child\n",
+                event("failed", "alpha::one$fails"),
+            ]
+            harness = PlannedRunHarness(root, [(lines, 100)])
+            self.assertEqual(harness.execute(make_args(root)), 100)
+            record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
+            raw = [line for line in harness.output_lines if line.lstrip().startswith("{")]
+            self.assertEqual(raw, [], harness.output_lines)
+            self.assertIn("not json from the child", harness.output_lines)
+            self.assertEqual(
+                harness.output_lines[-2:],
+                [
+                    "[test-changed] summary: 1 passed, 1 failed, 0 skipped/ignored, 0 resumed "
+                    "(tests already passed for this tree); "
+                    "test time limits x1 (INTENTD_TEST_TIMEOUT_MULTIPLIER unset)",
+                    f"[test-changed] record: {latest_attempt(record_dir)}",
+                ],
+            )
+            self.assertEqual((latest_attempt(record_dir) / "events-1.jsonl").read_text(), "".join(lines))
+
     def test_no_fail_fast_flag_is_forwarded_only_when_enabled(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -2075,8 +2105,6 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
                 harness.output_lines[2:],
                 [
                     "[test-intentd] no passed-test record for this tree; running the complete suite",
-                    event("ok", "alpha::one$passes").rstrip("\n"),
-                    event("ignored", "alpha::one$skipped").rstrip("\n"),
                     summary,
                     f"[test-intentd] record: {latest_attempt(run_dir)}",
                 ],

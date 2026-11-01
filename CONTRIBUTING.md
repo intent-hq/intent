@@ -392,7 +392,9 @@ Every invocation that resolves a tree/plan identity creates a new attempt:
 - Changed plan: `GATE_CACHE_DIR/<tree-key>/changed/<plan-key>/attempts/<attempt-id>/`
 
 Normal exits, handled failures and interruptions print `[<label>] record: <path>`.
-A fully resumed run also creates and prints its new record, alongside
+The terminal shows nextest's readable status lines and the summary; the raw JSON
+test events go only to the attempt's `events-N.jsonl`, so run the target directly
+and trust its exit code instead of piping it through `tail` or `grep`. A fully resumed run also creates and prints its new record, alongside
 `resumed: skipped N tests already passed for this tree`; it has no child results
 or new JUnit file. Failures before identity resolution have no attempt. SIGKILL
 or daemon loss can prevent final output, so inspect the attempt directories.
