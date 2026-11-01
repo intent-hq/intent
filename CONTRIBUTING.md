@@ -118,23 +118,32 @@ runs tests only; `make test-changed` selects tests changed against `BASE`
 matching tests `COUNT` times (default 100) with retries off, through the same
 runner and fixtures as `test-select`. Use it to show a test fails only under
 load, to prove a flake fix, or to check whether a CI failure is an unrelated
-flake. `LOAD=1` starts `LOAD_CPUS` `yes` spinners (default twice the CPU count)
-plus an fsync disk writer once the build is done, and stops them when the run
-ends. `STALL=1` (Linux) instead mimics a briefly frozen CI runner: at random
-gaps averaging `STALL_EVERY_MS` (default 2000) it freezes every test process
-(and their children, but not nextest) with `SIGSTOP` for `STALL_MS` (default
-1000), then resumes them with `SIGCONT`. Use it for a flake that needs one long
-pause at an exact point: the attachment-reclaim flake fixed in intentd#2917
-passed 200/200 under `LOAD=1` but needed a single pause over 0.75 s. Raise
-`STALL_MS` past the margin the test assumes; lower `STALL_EVERY_MS` (or raise
-`COUNT`) for short tests, since a `STALL=1` run in which no stall froze a test
-is reported `INVALID` (exit 3), like a load worker that died. The two combine.
-The run prints one comparable line, for example
-`[test-stress] stress: 200/200 iterations (120 failed), 1 test, LOAD=1 (64 cpu + fsync), STALL=0: 80 passed, 120 failed; failures: workspace_lifecycle.rs:68 ×116, workspace_lifecycle.rs:59 ×4`,
+flake. `LOAD=1` starts `LOAD_CPUS` `yes` spinners plus an fsync disk writer
+once the build is done, and stops them when the run ends. On Linux the load
+and the tests under stress share `LOAD_CORES` CPUs (default a quarter of the
+usable CPUs, at least two; spinners default to twice that), so the tests see
+2:1 contention while other workspaces on a shared dev host keep the remaining
+cores. An unpinned run once held a 32-core host at a load of 95-120 for three
+hours and turned another workspace's 12-minute component-test check into 225
+timeouts. `LOAD_CORES=all` restores the whole-host load; use it only on a host
+you have to yourself. `STALL=1` (Linux) instead mimics a briefly frozen CI
+runner: at random gaps averaging `STALL_EVERY_MS` (default 2000) it freezes
+every test process (and their children, but not nextest) with `SIGSTOP` for
+`STALL_MS` (default 1000), then resumes them with `SIGCONT`. Use it for a flake
+that needs one long pause at an exact point: the attachment-reclaim flake fixed
+in intentd#2917 passed 200/200 under `LOAD=1` but needed a single pause over
+0.75 s. Raise `STALL_MS` past the margin the test assumes; lower
+`STALL_EVERY_MS` (or raise `COUNT`) for short tests, since a `STALL=1` run in
+which no stall froze a test is reported `INVALID` (exit 3), like a load worker
+that died. The two combine. The run prints one comparable line, for example
+`[test-stress] stress: 200/200 iterations (120 failed), 1 test, LOAD=1 (16 cpu + fsync on 8 cores), STALL=0: 80 passed, 120 failed; failures: workspace_lifecycle.rs:68 ×116, workspace_lifecycle.rs:59 ×4`,
 and keeps the full output under `$(GATE_CACHE_DIR)/stress/` (with `STALL=1`,
 `stall.log` lists every stall and the summary names their count and longest
 pause). It never writes resume records, so `RESUME`, `GATE_FORCE` and
-`NO_FAIL_FAST` do not apply.
+`NO_FAIL_FAST` do not apply. When the host's 1-minute load is already at least
+1.5 times its CPU count, the run starts with a warning naming the busiest
+commands (and a failed summary line repeats it), because timeouts then may come
+from another workspace; the same check is `python3 scripts/host_load.py`.
 
 These four (and `make test-intentd`, which `make test` runs, and the test
 phase of `make gate`) default `INTENTD_TEST_TIMEOUT_MULTIPLIER` to `3`, the

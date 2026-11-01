@@ -793,7 +793,7 @@ gate: check | check-callback-fixture check-transfer-fixture ## Run all local Rus
 test: test-intentd ## Run Rust tests; after interruption use RESUME=1 (GATE_FORCE=1 runs all, NO_FAIL_FAST=1 continues past failures, HERMETIC=1 hides provider CLIs like CI)
 
 test-scripts: ## Run the Python script unit tests (Python 3.11+, no submodules needed)
-	python3 -S -B -m unittest -v scripts.test_resumable_nextest scripts.test_compact_gate scripts.test_gate_storage scripts.test_rust_test_policy scripts.test_seed_dev_providers scripts.test_seed_dev_workspaces scripts.test_cleanup_prereleases scripts.test_script_test_target scripts.test_test_select_target scripts.test_test_stress_target scripts.test_nextest_stress scripts.test_watch_capacity
+	python3 -S -B -m unittest -v scripts.test_resumable_nextest scripts.test_compact_gate scripts.test_gate_storage scripts.test_rust_test_policy scripts.test_seed_dev_providers scripts.test_seed_dev_workspaces scripts.test_cleanup_prereleases scripts.test_script_test_target scripts.test_test_select_target scripts.test_test_stress_target scripts.test_nextest_stress scripts.test_host_load scripts.test_watch_capacity
 
 # DRY_RUN must never start real work: run every target whose help or recipe
 # mentions DRY_RUN, plus every coverage-*, with DRY_RUN=1 and stub cargo/rustup,
@@ -937,22 +937,28 @@ test-select: ensure-intentd-submodule | check-transfer-fixture ## Run only the R
 # or to check whether a CI failure is an unrelated flake. Same runner, caller
 # policy, fixtures, HERMETIC/COMPACT/BUILD_JOBS/TEST_THREADS and 3x time-limit
 # default as test-select; E is validated and unexported as above. LOAD=1 runs
-# LOAD_CPUS `yes` spinners (default 2 x CPUs) plus an fsync writer after the
-# build, and stops them when the run ends. STALL=1 (Linux) freezes every test
-# process with SIGSTOP for STALL_MS (default 1000) and resumes it, at random
-# gaps averaging STALL_EVERY_MS (default 2000), like a briefly frozen CI runner:
-# it reproduces flakes that need one long pause at an exact point, which LOAD
-# rarely produces (intentd#2917). Prints one summary line (iterations,
-# passes, failures, distinct panic locations, load and stall settings) and the
-# record path; never writes resume records, so RESUME/GATE_FORCE/NO_FAIL_FAST
-# do not apply.
+# LOAD_CPUS `yes` spinners (default 2 x LOAD_CORES) plus an fsync writer after
+# the build, and stops them when the run ends. On Linux the load and the tests
+# under stress are pinned to LOAD_CORES CPUs (default a quarter of the usable
+# CPUs, at least 2; LOAD_CORES=all for the whole host) so other workspaces on a
+# shared dev host keep the rest: an unpinned run held one 32-core host at a
+# load of 95-120 for three hours and timed out another workspace's component
+# tests. STALL=1 (Linux) freezes every test process with SIGSTOP for STALL_MS
+# (default 1000) and resumes it, at random gaps averaging STALL_EVERY_MS
+# (default 2000), like a briefly frozen CI runner: it reproduces flakes that
+# need one long pause at an exact point, which LOAD rarely produces
+# (intentd#2917). A host already far busier than its CPU count is reported
+# first. Prints one summary line (iterations, passes, failures, distinct panic
+# locations, load and stall settings) and the record path; never writes resume
+# records, so RESUME/GATE_FORCE/NO_FAIL_FAST do not apply.
 COUNT ?= 100
 LOAD ?= 0
 LOAD_CPUS ?=
+LOAD_CORES ?=
 STALL ?= 0
 STALL_MS ?=
 STALL_EVERY_MS ?=
-unexport COUNT LOAD LOAD_CPUS STALL STALL_MS STALL_EVERY_MS
+unexport COUNT LOAD LOAD_CPUS LOAD_CORES STALL STALL_MS STALL_EVERY_MS
 # Non-empty when $(1) is one positive decimal integer (checked without a shell).
 POSITIVE_INT = $(and $(strip $(1)),$(if $(word 2,$(1)),,ok),$(if $(filter 0%,$(1)),,ok),$(if $(subst 0,,$(subst 1,,$(subst 2,,$(subst 3,,$(subst 4,,$(subst 5,,$(subst 6,,$(subst 7,,$(subst 8,,$(subst 9,,$(1))))))))))),,ok))
 ifneq ($(filter test-stress,$(MAKECMDGOALS)),)
@@ -965,6 +971,11 @@ endif
 ifneq ($(strip $(LOAD_CPUS)),)
 ifeq ($(call POSITIVE_INT,$(LOAD_CPUS)),)
 $(error make test-stress needs LOAD_CPUS to be a positive integer, got '$(LOAD_CPUS)')
+endif
+endif
+ifneq ($(strip $(LOAD_CORES)),)
+ifeq ($(if $(call POSITIVE_INT,$(LOAD_CORES)),ok,$(if $(filter-out all,$(LOAD_CORES)),,$(if $(word 2,$(LOAD_CORES)),,ok))),)
+$(error make test-stress needs LOAD_CORES to be a positive integer or all, got '$(LOAD_CORES)')
 endif
 endif
 ifneq ($(words $(STALL))$(filter 0 1,$(STALL)),1$(strip $(STALL)))
@@ -982,7 +993,7 @@ endif
 endif
 endif
 
-test-stress: ensure-intentd-submodule | check-transfer-fixture ## Repeat the Rust tests matching E='<filterset>' COUNT times (default 100) with retries off, LOAD=1 adds CPU + disk load, STALL=1 freezes tests at random (STALL_MS, STALL_EVERY_MS); prints passes, failures and panic locations
+test-stress: ensure-intentd-submodule | check-transfer-fixture ## Repeat the Rust tests matching E='<filterset>' COUNT times (default 100) with retries off, LOAD=1 adds CPU + disk load pinned to LOAD_CORES CPUs, STALL=1 freezes tests at random (STALL_MS, STALL_EVERY_MS); prints passes, failures and panic locations
 	@python3 scripts/check_watch_capacity.py --quiet
 	@cargo nextest --version >/dev/null 2>&1 || { \
 		echo "[test-stress] ERROR: cargo-nextest is not installed — run 'cargo install cargo-nextest --locked'"; \
@@ -990,7 +1001,7 @@ test-stress: ensure-intentd-submodule | check-transfer-fixture ## Repeat the Rus
 	}
 	@$(HERMETIC_PREFLIGHT)
 	@$(RUST_TEST_RUNNER) --label test-stress --filterset '$(TEST_SELECT_E)' \
-		--stress-count '$(COUNT)' --load '$(strip $(LOAD))'$(if $(strip $(LOAD_CPUS)), --load-cpus '$(strip $(LOAD_CPUS))') \
+		--stress-count '$(COUNT)' --load '$(strip $(LOAD))'$(if $(strip $(LOAD_CPUS)), --load-cpus '$(strip $(LOAD_CPUS))')$(if $(strip $(LOAD_CORES)), --load-cores '$(strip $(LOAD_CORES))') \
 		--stall '$(strip $(STALL))'$(if $(strip $(STALL_MS)), --stall-ms '$(strip $(STALL_MS))')$(if $(strip $(STALL_EVERY_MS)), --stall-every-ms '$(strip $(STALL_EVERY_MS))')
 
 # Local equivalent of intentd's pull_request `coverage-changed` CI job: the

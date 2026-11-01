@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 RUNNER_STUB = """import json, os, sys
 with open(os.environ["TEST_STRESS_LOG"], "a") as log:
     log.write(json.dumps({"runner": sys.argv[1:], "policy": os.environ.get("POLICY_WRAPPED"),
-                          "leaked": {k: os.environ.get(k) for k in ("E", "COUNT", "LOAD", "LOAD_CPUS",
+                          "leaked": {k: os.environ.get(k) for k in ("E", "COUNT", "LOAD", "LOAD_CPUS", "LOAD_CORES",
                                                                      "STALL", "STALL_MS", "STALL_EVERY_MS")},
                           "multiplier": os.environ.get("INTENTD_TEST_TIMEOUT_MULTIPLIER")}) + "\\n")
 """
@@ -56,7 +56,8 @@ class TestStressTargetTests(unittest.TestCase):
         environment = {k: v for k, v in os.environ.items()
                        if k not in {"MAKEFLAGS", "MFLAGS", "MAKELEVEL", "E", "RESUME", "GATE_FORCE",
                                     "NO_FAIL_FAST", "HERMETIC", "COMPACT", "BUILD_JOBS", "TEST_THREADS",
-                                    "GATE_CACHE_DIR", "COUNT", "LOAD", "LOAD_CPUS", "STALL", "STALL_MS", "STALL_EVERY_MS",
+                                    "GATE_CACHE_DIR", "COUNT", "LOAD", "LOAD_CPUS", "LOAD_CORES", "STALL", "STALL_MS",
+                                    "STALL_EVERY_MS",
                                     "INTENTD_TEST_TIMEOUT_MULTIPLIER"}}
         environment.update(TEST_STRESS_LOG=str(self.log), TEST_STRESS_CARGO_LOG=str(self.cargo_log),
                            **(env or {}))
@@ -75,7 +76,7 @@ class TestStressTargetTests(unittest.TestCase):
     def test_filterset_and_stress_options_reach_runner_under_caller_policy(self):
         expression = "test(/it's a $/) | (package(intent-acp) & test(=a  b))"
         result, calls = self.run_make(f"E={expression}", "COUNT=200", "LOAD=1", "LOAD_CPUS=64",
-                                      "STALL=1", "STALL_MS=1100", "STALL_EVERY_MS=300",
+                                      "LOAD_CORES=8", "STALL=1", "STALL_MS=1100", "STALL_EVERY_MS=300",
                                       "BUILD_JOBS=3", "TEST_THREADS=4")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(calls[0]["runner"], ["--check-transfer-fixture", str(self.root)],
@@ -83,7 +84,7 @@ class TestStressTargetTests(unittest.TestCase):
         call = self.stress_call(calls)
         argv = call["runner"]
         for flag, value in (("--filterset", expression), ("--label", "test-stress"),
-                            ("--stress-count", "200"), ("--load", "1"), ("--load-cpus", "64"),
+                            ("--stress-count", "200"), ("--load", "1"), ("--load-cpus", "64"), ("--load-cores", "8"),
                             ("--stall", "1"), ("--stall-ms", "1100"), ("--stall-every-ms", "300"),
                             ("--build-jobs", "3"), ("--test-threads", "4"),
                             ("--repo-root", str(self.root)), ("--intentd-dir", "packages/intentd")):
@@ -91,7 +92,14 @@ class TestStressTargetTests(unittest.TestCase):
         self.assertEqual(call["policy"], "1", "the runner must run under with-test-policy.sh")
         self.assertEqual(call["multiplier"], "3", "same 3x time-limit default as test-select")
         self.assertEqual(call["leaked"], {"E": None, "COUNT": None, "LOAD": None, "LOAD_CPUS": None,
-                                          "STALL": None, "STALL_MS": None, "STALL_EVERY_MS": None})
+                                          "LOAD_CORES": None, "STALL": None, "STALL_MS": None,
+                                          "STALL_EVERY_MS": None})
+
+    def test_load_cores_all_opts_out_of_pinning(self):
+        result, calls = self.run_make("E=test(/one/)", "LOAD=1", "LOAD_CORES=all")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        argv = self.stress_call(calls)["runner"]
+        self.assertEqual(argv[argv.index("--load-cores") + 1], "all")
 
     def test_defaults_are_100_iterations_without_load_or_stalls(self):
         result, calls = self.run_make("E=test(/one/)")
@@ -100,6 +108,7 @@ class TestStressTargetTests(unittest.TestCase):
         self.assertEqual(argv[argv.index("--stress-count") + 1], "100")
         self.assertEqual(argv[argv.index("--load") + 1], "0")
         self.assertNotIn("--load-cpus", argv)
+        self.assertNotIn("--load-cores", argv, "the runner picks the default core set")
         self.assertEqual(argv[argv.index("--stall") + 1], "0")
         self.assertNotIn("--stall-ms", argv)
         self.assertNotIn("--stall-every-ms", argv)
@@ -114,6 +123,11 @@ class TestStressTargetTests(unittest.TestCase):
                  (("E=test(/x/)", "LOAD=2"), None, "LOAD=0 or LOAD=1"),
                  (("E=test(/x/)", "LOAD="), None, "LOAD=0 or LOAD=1"),
                  (("E=test(/x/)", "LOAD_CPUS=-1"), None, "LOAD_CPUS to be a positive integer"),
+                 (("E=test(/x/)", "LOAD_CORES=0"), None, "LOAD_CORES to be a positive integer or all"),
+                 (("E=test(/x/)", "LOAD_CORES=half"), None, "LOAD_CORES to be a positive integer or all"),
+                 (("E=test(/x/)", "LOAD_CORES=all all"), None, "LOAD_CORES to be a positive integer or all"),
+                 (("E=test(/x/)", "LOAD_CORES=2'; touch pwned; '"), None,
+                  "LOAD_CORES to be a positive integer or all"),
                  (("E=test(/x/)", "STALL=yes"), None, "STALL=0 or STALL=1"),
                  (("E=test(/x/)", "STALL="), None, "STALL=0 or STALL=1"),
                  (("E=test(/x/)", "STALL_MS=0.5"), None, "STALL_MS to be a positive integer"),
