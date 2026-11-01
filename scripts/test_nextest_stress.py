@@ -473,6 +473,21 @@ class StallProcessTests(unittest.TestCase):
             self.assertEqual(stall.failures, [f"stall helper (pid {helper.pid}) exited -9"])
             self.assertTrue(wait_for(lambda: "T" not in (state(child), state(grandchild))))
 
+    def test_a_helper_killed_mid_stall_resumes_the_tests_while_nextest_still_runs(self):
+        # Review of #8291: the runner sits in stream() until nextest exits, so
+        # recovery must not wait for the attach() exit (or a nextest timeout).
+        root, child, grandchild = self.tree()
+        with tempfile.TemporaryDirectory() as record:
+            stall = stress.Stall(30000, 20, Path(record))
+            with stall.attach(root) as helper:
+                self.assertTrue(wait_for(lambda: state(grandchild) == "T"), "a stall never started")
+                helper.kill()
+                # Within 5 s, far short of the 30 s stall the dead helper began.
+                self.assertTrue(wait_for(lambda: "T" not in (state(child), state(grandchild))),
+                                "tests stayed frozen after the helper died mid-run")
+                self.assertTrue(wait_for(lambda: bool(stall.failures)), "the dead helper went unreported")
+            self.assertEqual(stall.failures, [f"stall helper (pid {helper.pid}) exited -9"])
+
     def test_the_helper_stops_on_terminate_and_ignores_a_terminal_interrupt(self):
         root, child, _ = self.tree()
         with tempfile.TemporaryDirectory() as record:
@@ -619,10 +634,12 @@ class RunStressTests(unittest.TestCase):
         self.assertIn("exited 28", summary["load_failures"][0])
 
     # A timing test that, like intentd#2917's reclaim test, fails when one gap
-    # between two steps exceeds its margin; nothing else can slow it that much.
+    # between two steps exceeds its margin. Its loop (1 s) outlasts the longest
+    # gap between stalls (1.5 x 300 ms), so a stall always lands inside it; the
+    # 1 s margin leaves a loaded CI host room in the control run.
     TIMING_TEST = ("import time\n"
                    "last = time.monotonic()\n"
-                   "for _ in range(12):\n"
+                   "for _ in range(20):\n"
                    "    time.sleep(0.05); now = time.monotonic()\n"
                    "    if now - last > {margin}: raise SystemExit('gap %.2fs' % (now - last))\n"
                    "    last = now\n")
@@ -630,28 +647,28 @@ class RunStressTests(unittest.TestCase):
 
     @unittest.skipUnless(sys.platform.startswith("linux"), "stalls find processes through /proc")
     def test_stalls_reproduce_a_timing_flake_that_a_wider_margin_survives(self):
-        for margin, expected in ((0.25, 1), (2.0, 0)):
+        for margin, expected in ((1.0, 1), (4.0, 0)):
             with self.subTest(margin=margin):
                 status, stdout, _ = self.run_stress(
                     self.TIMING_OUTPUT, test_code=self.TIMING_TEST.format(margin=margin),
-                    stall="1", stall_ms=400, stall_every_ms=50)
+                    stall="1", stall_ms=1500, stall_every_ms=300)
                 self.assertEqual(status, expected, stdout)
                 line = next(line for line in stdout.splitlines() if "] stress:" in line)
-                self.assertRegex(line, r"LOAD=0, STALL=1 \(400 ms pauses every ~50 ms, \d+ stalls?, "
+                self.assertRegex(line, r"LOAD=0, STALL=1 \(1500 ms pauses every ~300 ms, \d+ stalls?, "
                                        r"longest \d+ ms\): " + ("0 passed, 1 failed" if expected else
                                                                 "1 passed, 0 failed$"))
-                self.assertIn("LOAD=0, STALL=1 (400 ms pauses every ~50 ms); running", stdout)
+                self.assertIn("LOAD=0, STALL=1 (1500 ms pauses every ~300 ms); running", stdout)
                 record = max((self.cache / "stress").iterdir(), key=lambda path: path.stat().st_mtime)
                 summary = json.loads((record / "summary.json").read_text())
                 self.assertEqual((summary["stall"], summary["stall_ms"], summary["stall_every_ms"],
-                                  summary["stall_failures"]), (True, 400, 50, []))
+                                  summary["stall_failures"]), (True, 1500, 300, []))
                 self.assertGreaterEqual(summary["stalls"], 1)
                 stalls = stress.read_stalls(record / "stall.log")
                 self.assertEqual(len(stalls), summary["stalls"])
-                self.assertTrue(all(stall["held_ms"] >= 400 for stall in stalls), stalls)
+                self.assertTrue(all(stall["held_ms"] >= 1500 for stall in stalls), stalls)
 
     def test_the_same_timing_test_passes_without_stalls(self):
-        status, stdout, _ = self.run_stress(self.TIMING_OUTPUT, test_code=self.TIMING_TEST.format(margin=0.25))
+        status, stdout, _ = self.run_stress(self.TIMING_OUTPUT, test_code=self.TIMING_TEST.format(margin=1.0))
         self.assertEqual(status, 0, stdout)
         self.assertIn("LOAD=0, STALL=0: 1 passed, 0 failed", stdout)
 

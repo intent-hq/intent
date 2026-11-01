@@ -28,6 +28,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 
@@ -231,6 +232,8 @@ STALL_SPINE = frozenset({"cargo", "cargo-nextest", "rustup"})
 # Passes over the process table per stall, so a child forked during one pass
 # is frozen by the next; a frozen process forks no more.
 STALL_PASSES = 5
+# How often the runner checks that the stall helper is still alive.
+HELPER_POLL_SECONDS = 0.05
 
 
 def stall_supported(proc: Path = PROC) -> bool:
@@ -316,6 +319,12 @@ def thaw(stopped: dict[int, int], proc: Path = PROC) -> None:
     for pid, start in list(stopped.items()):
         signal_same(pid, start, signal.SIGCONT, proc)
     stopped.clear()
+
+
+def resume_all(root: int) -> None:
+    """SIGCONT every test process under `root`; harmless for the ones already running."""
+    with contextlib.suppress(OSError):
+        thaw(stall_targets(root, read_processes()))
 
 
 def stall_gap(every_ms: int, rng: random.Random) -> float:
@@ -408,11 +417,27 @@ class Stall:
                 [sys.executable, "-I", "-B", str(Path(__file__).resolve()), "--stall-helper",
                  str(root), str(self.pause_ms), str(self.every_ms), str(self.log_path)],
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=errors, preexec_fn=preexec)
+            # The runner blocks in stream() until nextest exits, so a helper
+            # killed mid-stall (e.g. by the OOM killer) is noticed here, not at
+            # exit: otherwise its frozen tests would wait for a nextest timeout.
+            # Polled, not wait()ed: a blocked wait() would hold Popen's lock.
+            stopping = threading.Event()
+
+            def watch() -> None:
+                while not stopping.wait(HELPER_POLL_SECONDS):
+                    if helper.poll() is not None:
+                        self._helper_died(helper)
+                        resume_all(root)
+                        return
+            watcher = threading.Thread(target=watch, name="stall-helper-watch", daemon=True)
+            watcher.start()
             try:
                 yield helper
             finally:
+                stopping.set()
+                watcher.join()
                 if helper.poll() is not None:
-                    self.failures.append(f"stall helper (pid {helper.pid}) exited {helper.returncode}")
+                    self._helper_died(helper)
                 else:
                     helper.terminate()
                     try:
@@ -420,11 +445,14 @@ class Stall:
                     except subprocess.TimeoutExpired:
                         helper.kill()
                         helper.wait()
-                # The helper resumes what it froze; this sweep covers a helper
-                # that was killed mid-stall while nextest still runs.
-                with contextlib.suppress(OSError):
-                    stopped = stall_targets(root, read_processes())
-                    thaw(stopped)
+                # The helper resumes what it froze on SIGTERM; this sweep also
+                # covers one killed in the moment before it was stopped.
+                resume_all(root)
+
+    def _helper_died(self, helper: subprocess.Popen) -> None:
+        failure = f"stall helper (pid {helper.pid}) exited {helper.returncode}"
+        if failure not in self.failures:
+            self.failures.append(failure)
 
 
 def prune(stress_dir: Path, now: float | None = None) -> None:
