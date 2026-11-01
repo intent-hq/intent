@@ -875,15 +875,19 @@ test-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd br
 # tree, or the commits since origin/main on a clean branch ahead of it; BASE is
 # a cloudlands-fe ref. DRY_RUN=1 maps to --resolved-plan, which lists every
 # selected unit-test file without running checks (cloudlands-fe#3876's missed
-# two-window console test was in that list). Nothing masks the exit status:
+# two-window console test was in that list). RESUME=1 maps to --resume, which
+# reuses passing receipts from earlier attempts and runs only what remains, as
+# RESUME=1 does for the Rust targets (with DRY_RUN=1 it previews the
+# continuation). Nothing masks the exit status:
 # pnpm passes the script's code through to make ("Error 2" = empty change set). FE_VERIFY_BASE escapes
 # apostrophes for the single-quoted hand-off; scripts/fe-verify-changed.test.sh
 # pins the mapping.
 FE_VERIFY_BASE = $(subst ','\'',$(BASE))
-fe-verify-changed: ensure-fe-submodule ensure-fe-toolchain ## Run only the frontend checks and unit tests the cloudlands-fe branch changed (BASE=<fe ref>, DRY_RUN=1 lists the selected tests)
+fe-verify-changed: ensure-fe-submodule ensure-fe-toolchain ## Run only the frontend checks and unit tests the cloudlands-fe branch changed (BASE=<fe ref>, DRY_RUN=1 lists the selected tests, RESUME=1 resumes after a failed run)
 	@$(FE_DEPS_FRESH) || (echo "[fe-verify-changed] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
 	@set --; \
 	if [ -n "$(DRY_RUN)" ] && [ "$(DRY_RUN)" != 0 ]; then set -- "$$@" --resolved-plan; fi; \
+	if [ -n "$(RESUME)" ] && [ "$(RESUME)" != 0 ]; then set -- "$$@" --resume; fi; \
 	if [ -n '$(FE_VERIFY_BASE)' ]; then set -- "$$@" --base '$(FE_VERIFY_BASE)'; fi; \
 	cd "$(FE_DIR)" && exec corepack pnpm run verify:changed -- "$$@"
 

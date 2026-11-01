@@ -4,15 +4,15 @@
 # cloudlands-fe's `pnpm run verify:changed` (the frontend counterpart of
 # `make test-changed`). It runs the real recipe from a copy of the Makefile in
 # a throwaway checkout whose frontend is a stub `corepack` recording its argv,
-# and pins how BASE / DRY_RUN map onto verify:changed flags plus that a failing
+# and pins how BASE / DRY_RUN / RESUME map onto verify:changed flags plus that a failing
 # run fails make with the script's own code. The selection itself is
 # cloudlands-fe's scripts/verify-changed.test.ts.
 
 set -euo pipefail
 
 # The caller's environment must not steer the recipe under test (a shell with
-# BASE=HEAD or DRY_RUN=1 exported would change every expected argv).
-unset BASE DRY_RUN FE_DIR MAKEFLAGS MFLAGS
+# BASE=HEAD, DRY_RUN=1 or RESUME=1 exported would change every expected argv).
+unset BASE DRY_RUN RESUME FE_DIR MAKEFLAGS MFLAGS
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 temp_dir=$(cd "$(mktemp -d)" && pwd -P)
@@ -109,10 +109,30 @@ run_make DRY_RUN=0
 expect_ok
 expect_verify_argv
 
-case_name="an exported BASE / DRY_RUN reaches the recipe like a make variable"
-BASE=main DRY_RUN=1 run_make
+case_name="RESUME=1 becomes --resume"
+run_make RESUME=1
 expect_ok
-expect_verify_argv --resolved-plan --base main
+expect_verify_argv --resume
+
+case_name="RESUME=0 starts a fresh attempt"
+run_make RESUME=0
+expect_ok
+expect_verify_argv
+
+case_name="DRY_RUN=1 RESUME=1 previews the continuation"
+run_make DRY_RUN=1 RESUME=1
+expect_ok
+expect_verify_argv --resolved-plan --resume
+
+case_name="RESUME=1 and BASE combine"
+run_make RESUME=1 BASE=origin/main
+expect_ok
+expect_verify_argv --resume --base origin/main
+
+case_name="an exported BASE / DRY_RUN / RESUME reaches the recipe like a make variable"
+BASE=main DRY_RUN=1 RESUME=1 run_make
+expect_ok
+expect_verify_argv --resolved-plan --resume --base main
 
 case_name="a failing verify:changed fails make with its own code"
 COREPACK_STUB_EXIT=2 run_make
@@ -131,5 +151,7 @@ case_name="make help lists the target"
   || fail "$case_name: make help failed: $(<"$temp_dir/help")"
 grep -q '^  fe-verify-changed ' "$temp_dir/help" \
   || fail "$case_name: target missing from make help"
+grep -q '^  fe-verify-changed .*RESUME=1' "$temp_dir/help" \
+  || fail "$case_name: make help does not mention RESUME=1 for the target"
 
 echo "fe-verify-changed tests passed"

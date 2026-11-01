@@ -267,7 +267,7 @@ with no rollback.
   Rust `make test-changed` (intentd's `scripts/changed-tests.sh` vs `origin/main`, full
   suite on manifest/lockfile/nextest-config changes; `make coverage-changed` = the PR job)
   or frontend `make fe-verify-changed` (cloudlands-fe `verify:changed`, working tree first).
-  Both take `BASE=<ref>`; `DRY_RUN=1` prints the plan. Iterate on Rust tests with
+  Both take `BASE=<ref>`, `DRY_RUN=1` (prints the plan) and `RESUME=1`. Iterate on Rust tests with
   `make test-select E='<filterset>'`, not raw `cargo nextest`, which skips fixture setup (95
   bogus failures, intentd#2559); to prove a flake, its fix, or that a CI failure is not
   yours, use `make test-stress E=... COUNT=200 LOAD=1` (retries off, optional CPU + fsync load).
