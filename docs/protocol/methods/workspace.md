@@ -2853,6 +2853,20 @@ to the agent MCP bindings `ws.git.*`, `ws.pr.*`, `ws.mr.*` and
 `ws.workspace.proposeSibling`, which are also left out of the `workspace_api` tool
 description and `ws.help` output in these workspaces.
 
+The same refusal, with `operation` set to the method name, applies to these JSON-RPC
+methods when their target workspace is a plain folder:
+
+- `accept-changes.addRemote`, `accept-changes.execute`, `accept-changes.mergePR`,
+  `accept-changes.prepare`, `accept-changes.reconcile`, `accept-changes.release`;
+- `git.agentCommit`, `git.checkoutBranch`, `git.createBranch`, `git.discard`,
+  `git.fetch`, `git.push`, `git.removeLockFile`, `git.renameBranch`, `git.stage`,
+  `git.stageHunk`, `git.unstage`, `git.unstageHunk`;
+- `file-tracking.stage`, `file-tracking.unstage`;
+- `pr.refresh`.
+
+Read-only git methods are not refused; they answer as they do for any folder without a
+repository.
+
 **Events.** The daemon runs no git status refresh, git metadata watcher, auto-commit, PR
 monitoring or automatic PR refresh for a plain-folder workspace, so it never emits
 `changes:*`, `git:*`, `gitRoot:*`, `pr:*` or `prMonitor:*` events for it. `file:*`,
