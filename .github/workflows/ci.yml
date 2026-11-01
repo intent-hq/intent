@@ -317,6 +317,7 @@ jobs:
           bash scripts/auto-bump-submodules.test.sh
           bash scripts/bootstrap-dev-host.test.sh
           bash scripts/ci-gate.test.sh
+          bash scripts/check-dry-run-targets.test.sh
           python3 -S -B scripts/test_hosted_runners.py
           python3 -S -B scripts/test_ci_bash3.py
           python3 -S -B scripts/test_consumer_checks_shell_suites.py
