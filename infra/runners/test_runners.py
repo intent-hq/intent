@@ -1606,5 +1606,683 @@ class Static(unittest.TestCase):
                     for path in [HERE / 'runners.env', *sorted(HOSTS.glob('*.env'))]]
         self.assertEqual(len(prefixes), len(set(prefixes)), 'every host has its own name prefix')
 
+
+# ---------------------------------------------------------------------------
+# macOS hosts (macos/): Tart VMs instead of containers, LaunchDaemons instead
+# of systemd. Runs on Linux with stubbed tart, sysctl and launchctl; under a
+# real Bash 3.2 (stock macOS /bin/bash) when one is found.
+MACOS = HERE / 'macos'
+MAC_SUPERVISOR = MACOS / 'supervisor.sh'
+MAC_INSTALL = MACOS / 'install.sh'
+MAC_HOSTS = sorted((MACOS / 'hosts').glob('*.env'))
+MAC_IMAGE = 'intent-mac-runner-0123456789ab'
+MAC_BASE = 'ghcr.io/cirruslabs/macos-tahoe-xcode@sha256:' + 'ab' * 32
+GUEST_RUNNER = '/Users/admin/actions-runner/run-jit.sh'
+# An M4 Pro Mac mini: 14 cores, 64 GB.
+SYSCTL_STUB = r'''#!/bin/sh
+case "$*" in
+  "-n hw.ncpu") echo "${STUB_NCPU:-14}" ;;
+  "-n hw.memsize") echo "${STUB_MEMSIZE:-68719476736}" ;;
+  *) exit 1 ;;
+esac
+'''
+
+# tart: VMs are directories under $STUB_DIR/vms; `run` blocks until `stop`.
+TART_STUB = r'''#!/usr/bin/env python3
+import json, os, shutil, signal, sys, time
+d = os.environ['STUB_DIR']
+vms = os.path.join(d, 'vms')
+os.makedirs(vms, exist_ok=True)
+args = sys.argv[1:]
+def record(**kw):
+    kw.update(cmd='tart', argv=args, jit_in_env=any(os.environ.get('STUB_JIT', '\0') in v for k, v in os.environ.items() if k != 'STUB_JIT'))
+    with open(os.environ['STUB_LOG'], 'a') as f: f.write(json.dumps(kw) + '\n')
+sub = args[0]
+pos = [a for a in args[1:] if not a.startswith('-')]
+if sub == 'list':
+    for name in sorted(os.listdir(vms)): print(name)
+    sys.exit(0)
+if sub == 'exec' and args[-1] == '/usr/bin/true':
+    sys.exit(0)
+if sub == 'exec' and '-i' in args:
+    data = sys.stdin.read()
+    record(stdin=data)
+    open(os.path.join(d, 'exec.pid'), 'w').write(str(os.getpid()))
+    name = [a for a in args[1:] if not a.startswith('-')][0]
+    def done(*_):
+        record(event='exec-done')
+        sys.exit(int(os.environ.get('STUB_RUN_RC', '0')) if not _ else 143)
+    signal.signal(signal.SIGTERM, done)
+    end = time.time() + float(os.environ.get('STUB_RUN_SECONDS', '0'))
+    while time.time() < end and os.path.exists(os.path.join(vms, name, 'running')):
+        time.sleep(0.01)
+    done()
+record()
+if sub == 'clone':
+    src, dst = pos[0], pos[1]
+    if not src.startswith('ghcr.io/') and not os.path.isdir(os.path.join(vms, src)): sys.exit(1)
+    os.makedirs(os.path.join(vms, dst))
+elif sub == 'run':
+    name = pos[0]
+    open(os.path.join(vms, name, 'running'), 'w').close()
+    open(os.path.join(d, 'run.pid'), 'w').write(str(os.getpid()))
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+    while os.path.exists(os.path.join(vms, name, 'running')):
+        time.sleep(0.01)
+elif sub == 'ip':
+    print('192.168.64.2')
+elif sub == 'stop':
+    try: os.remove(os.path.join(vms, pos[0], 'running'))
+    except OSError: pass
+elif sub == 'delete':
+    if not os.path.isdir(os.path.join(vms, pos[0])): sys.exit(1)
+    shutil.rmtree(os.path.join(vms, pos[0]))
+elif sub == 'rename':
+    os.rename(os.path.join(vms, pos[0]), os.path.join(vms, pos[1]))
+'''
+
+
+def bash3():
+    """A Bash 3.2 (stock macOS /bin/bash) if one is found (scripts/find-bash3.sh order), else None."""
+    cache = os.environ.get('BASH3_CACHE_DIR') or os.path.join(
+        os.environ.get('XDG_CACHE_HOME') or os.path.join(os.environ.get('HOME', ''), '.cache'), 'intent-bash3')
+    for candidate in (os.environ.get('BASH3_BIN'), os.path.join(cache, 'bash'), shutil.which('bash3')):
+        if candidate and os.access(candidate, os.X_OK) and subprocess.run(
+                [candidate, '-c', '[ "${BASH_VERSINFO[0]}" -eq 3 ]'], capture_output=True).returncode == 0:
+            return candidate
+    if os.environ.get('REQUIRE_BASH3'):
+        raise RuntimeError('no Bash 3 interpreter found and REQUIRE_BASH3 is set')
+    return None
+
+
+MAC_BASH = bash3() or 'bash'
+
+
+def mac_config(**overrides):
+    import pwd
+    values = {'GITHUB_ORG': 'example-org', 'RUNNER_NAME_PREFIX': 'intent-mac1', 'MAC_SLOTS': '2',
+              'MAC_LABELS': 'self-hosted,macOS,ARM64,intent-mac', 'MAC_VM_CPU': '6', 'MAC_VM_MEMORY_MB': '24576',
+              'MAC_HOST_USER': pwd.getpwuid(os.getuid()).pw_name, 'MAC_BASE_IMAGE': MAC_BASE}
+    values.update(overrides)
+    return ''.join(f'{k}={v}\n' for k, v in values.items() if v is not None)
+
+
+@unittest.skipUnless(HAVE_TOOLS, 'needs bash, jq and openssl')
+class MacSupervisor(Stubbed):
+    def setUp(self):
+        super().setUp()
+        write_exe(self.bin / 'tart', TART_STUB)
+        write_exe(self.bin / 'sysctl', SYSCTL_STUB)
+        (self.dir / 'vms' / MAC_IMAGE).mkdir(parents=True)
+        self.image_file = self.dir / 'macos-image'
+        self.image_file.write_text(MAC_IMAGE + '\n')
+        self.creds = self.dir / 'credentials'
+        self.creds.write_text(f'GITHUB_TOKEN={PAT}\n')
+        self.creds.chmod(0o600)
+        self.config = self.dir / 'runners.env'
+        self.config.write_text(mac_config())
+        self.responses = {
+            'GET /orgs/example-org/actions/runners': [200, {'runners': [
+                {'id': 11, 'name': 'intent-mac1-slot-1-100', 'status': 'offline'},
+                {'id': 12, 'name': 'intent-mac1-slot-1-200', 'status': 'online'},
+                {'id': 13, 'name': 'intent-mac1-slot-2-100', 'status': 'offline'},
+                {'id': 14, 'name': 'intent-mac10-slot-1-100', 'status': 'offline'},
+            ]}],
+            'GET /orgs/example-org/actions/runner-groups': [200, {'runner_groups': [
+                {'id': 1, 'name': 'Default', 'visibility': 'all'},
+                {'id': 3, 'name': 'intent-cache', 'visibility': 'selected'}]}],
+            'GET /orgs/example-org/actions/runner-groups/3/repositories': [200, {'repositories': [
+                {'name': 'intent'}, {'name': 'intentd'}, {'name': 'cloudlands-fe'}]}],
+            'DELETE /orgs/example-org/actions/runners/11': [204, None],
+            'POST /orgs/example-org/actions/runners/generate-jitconfig': [201, {
+                'runner': {'id': 42, 'name': 'intent-mac1-slot-1-x'}, 'encoded_jit_config': JIT}],
+            'GET /orgs/example-org/actions/runners/42': [200, {'id': 42, 'busy': False}],
+            'DELETE /orgs/example-org/actions/runners/42': [204, None],
+        }
+        self.env.update(RUNNERS_CONFIG=str(self.config), RUNNERS_CREDENTIALS=str(self.creds),
+                        RUNNERS_MAC_IMAGE_FILE=str(self.image_file), RUNNERS_RETRY_DELAY='0',
+                        RUNNERS_MAC_BOOT_TIMEOUT='90', RUNNERS_MAC_POLL_SECONDS='0.1',
+                        STUB_RESPONSES=str(self.dir / 'responses.json'), STUB_JIT=JIT)
+
+    def start(self, *args, **env):
+        (self.dir / 'responses.json').write_text(json.dumps(self.responses))
+        return subprocess.Popen([MAC_BASH, str(MAC_SUPERVISOR), *args], env={**self.env, **env},
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    def run_supervisor(self, *args, **env):
+        proc = self.start(*args, **env)
+        out, err = proc.communicate(timeout=240)
+        return proc.returncode, out, err
+
+    def tart(self):
+        return [c['argv'] for c in self.calls('tart')]
+
+    def vms(self):
+        return sorted(p.name for p in (self.dir / 'vms').iterdir())
+
+    def wait_for_runner(self, proc):
+        deadline = time.time() + 120
+        while not (self.dir / 'exec.pid').exists():
+            if proc.poll() is not None:
+                self.fail(f'supervisor exited early: {proc.communicate()}')
+            self.assertLess(time.time(), deadline)
+            time.sleep(0.05)
+
+    def assert_vm_gone(self):
+        """The slot's VM is stopped and deleted, and no supervisor or tart process outlives the test."""
+        tart = self.tart()
+        self.assertIn(['delete', 'intent-slot-1'], tart[tart.index(['clone', MAC_IMAGE, 'intent-slot-1']):])
+        self.assertEqual(self.vms(), [MAC_IMAGE])
+        deadline = time.time() + 60
+        while True:
+            left = [cmd for cmd in map(self.ours, os.listdir('/proc')) if cmd]
+            if not left:
+                break
+            self.assertLess(time.time(), deadline, f'processes left behind: {left}')
+            time.sleep(0.1)
+
+    def ours(self, pid):
+        try:
+            env = Path(f'/proc/{pid}/environ').read_bytes().split(b'\0')
+            cmd = Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
+        except OSError:
+            return None
+        if f'STUB_DIR={self.dir}'.encode() not in env:
+            return None
+        return cmd if str(MAC_SUPERVISOR).encode() in cmd or str(self.bin / 'tart').encode() in cmd else None
+
+    def test_runs_under_bash_3_2_when_available(self):
+        # The LaunchDaemon starts the supervisor with the stock /bin/bash 3.2.
+        if os.environ.get('REQUIRE_BASH3'):
+            self.assertNotEqual(MAC_BASH, 'bash')
+        self.assertIn('<string>/bin/bash</string>', (MACOS / 'com.intent.github-runner.plist').read_text())
+
+    def test_one_job_lifecycle(self):
+        rc, out, err = self.run_supervisor('slot-1')
+        self.assertEqual(rc, 0, err)
+        api = [(c['method'], c['path']) for c in self.calls('curl')]
+        self.assertEqual(api, [
+            ('GET', '/orgs/example-org/actions/runner-groups?per_page=100'),
+            ('GET', '/orgs/example-org/actions/runner-groups/3/repositories?per_page=100&page=1'),
+            ('GET', '/orgs/example-org/actions/runners?per_page=100&page=1'),
+            ('DELETE', '/orgs/example-org/actions/runners/11'),
+            ('POST', '/orgs/example-org/actions/runners/generate-jitconfig'),
+            ('DELETE', '/orgs/example-org/actions/runners/42'),
+        ], 'stale cleanup takes only this slot of this host')
+        for call in self.calls('curl'):
+            self.assertEqual(call['auth'], PAT)
+            self.assertNotIn(PAT, ' '.join(call['argv']))
+        body = json.loads([c for c in self.calls('curl') if c['method'] == 'POST'][0]['body'])
+        self.assertEqual(body['labels'], ['self-hosted', 'macOS', 'ARM64', 'intent-mac', 'intent-host-intent-mac1'])
+        self.assertEqual(body['runner_group_id'], 3)
+        self.assertEqual(body['work_folder'], '/Users/admin/work')
+        self.assertRegex(body['name'], r'^intent-mac1-slot-1-\d+$')
+        tart = [a for a in self.tart() if a[0] != 'exec' or '-i' in a]
+        self.assertEqual(tart[:2], [
+            ['clone', MAC_IMAGE, 'intent-slot-1'],
+            ['set', 'intent-slot-1', '--cpu', '6', '--memory', '24576'],
+        ])
+        # `run` is in the background, so it may log after `ip`.
+        self.assertEqual(sorted(tart[2:4]), [
+            ['ip', 'intent-slot-1', '--wait', '90'],
+            ['run', '--no-graphics', '--net-softnet', 'intent-slot-1'],
+        ])
+        self.assertEqual(tart[4], ['exec', '-i', 'intent-slot-1', GUEST_RUNNER])
+        self.assertEqual(tart[-2:], [['stop', 'intent-slot-1', '--timeout', '30'], ['delete', 'intent-slot-1']])
+        # The JIT config reaches the guest only on stdin: never argv or environment.
+        (exec_call,) = [c for c in self.calls('tart') if 'stdin' in c]
+        self.assertEqual(exec_call['stdin'], JIT + '\n')
+        for call in self.calls():
+            self.assertNotIn(JIT, ' '.join(call['argv']))
+            self.assertFalse(call.get('jit_in_env'), call)
+        self.assertEqual(self.vms(), [MAC_IMAGE])
+        self.assert_no_secret(out, err)
+
+    assert_no_secret = Supervisor.assert_no_secret
+
+    def test_leftover_vm_is_removed_first(self):
+        (self.dir / 'vms' / 'intent-slot-1').mkdir()
+        rc, _, err = self.run_supervisor('slot-1')
+        self.assertEqual(rc, 0, err)
+        tart = self.tart()
+        clone = tart.index(['clone', MAC_IMAGE, 'intent-slot-1'])
+        self.assertIn(['stop', 'intent-slot-1', '--timeout', '30'], tart[:clone])
+        self.assertIn(['delete', 'intent-slot-1'], tart[:clone])
+        calls = self.calls()
+        first_api = [i for i, c in enumerate(calls) if c['cmd'] == 'curl'][0]
+        self.assertLess([i for i, c in enumerate(calls) if c['argv'] == ['delete', 'intent-slot-1']][0], first_api,
+                        'the leftover VM goes before anything is registered')
+        self.assertEqual(self.vms(), [MAC_IMAGE])
+
+    def test_registration_failure_still_deletes_the_vm(self):
+        self.responses['POST /orgs/example-org/actions/runners/generate-jitconfig'] = [403, {'message': 'Resource not accessible'}]
+        rc, out, _ = self.run_supervisor('slot-1')
+        self.assertEqual(rc, 1)
+        self.assertIn('HTTP 403', out)
+        self.assertFalse([a for a in self.tart() if a[0] == 'exec' and '-i' in a])
+        self.assert_vm_gone()
+
+    def test_drain_idle_runner_stops_at_once(self):
+        proc = self.start('slot-1', STUB_RUN_SECONDS='600')
+        self.wait_for_runner(proc)
+        start = time.time()
+        proc.send_signal(signal.SIGTERM)
+        out, err = proc.communicate(timeout=120)
+        self.assertEqual(proc.returncode, 0, err)
+        self.assertLess(time.time() - start, 50)
+        self.assertIn(('DELETE', '/orgs/example-org/actions/runners/42'),
+                      [(c['method'], c['path']) for c in self.calls('curl')])
+        self.assertIn('stopping idle runner', out)
+        self.assertIn('drained', out)
+        self.assert_vm_gone()
+
+    def test_drain_busy_runner_waits_for_job(self):
+        self.responses['GET /orgs/example-org/actions/runners/42'] = [200, {'id': 42, 'busy': True}]
+        proc = self.start('slot-1', STUB_RUN_SECONDS='8')
+        self.wait_for_runner(proc)
+        start = time.time()
+        proc.send_signal(signal.SIGTERM)
+        out, err = proc.communicate(timeout=120)
+        self.assertEqual(proc.returncode, 0, err)
+        self.assertGreater(time.time() - start, 3)
+        self.assertIn('waiting for the running job', out)
+        self.assertIn('drained', out)
+        calls = self.calls('tart')
+        done = [i for i, c in enumerate(calls) if c.get('event') == 'exec-done'][0]
+        stops = [i for i, c in enumerate(calls) if c['argv'][0] == 'stop' and 'intent-slot-1' in c['argv']]
+        self.assertGreater(min(stops), done, 'the VM is stopped only after the job ends')
+        self.assert_vm_gone()
+
+    def test_early_exit_still_deletes_the_vm(self):
+        proc = self.start('slot-1', STUB_RUN_SECONDS='600')
+        self.wait_for_runner(proc)
+        time.sleep(0.3)
+        proc.send_signal(signal.SIGHUP)
+        proc.communicate(timeout=120)
+        self.assert_vm_gone()
+
+    def test_plan(self):
+        rc, out, err = self.run_supervisor('--plan')
+        self.assertEqual((rc, out), (0, 'slot-1\nslot-2\n'), err)
+        self.config.write_text(mac_config(MAC_SLOTS='1'))
+        rc, out, err = self.run_supervisor('--plan')
+        self.assertEqual((rc, out), (0, 'slot-1\n'), err)
+
+    def test_refuses_more_than_two_slots(self):
+        for slots in ('3', '4'):
+            with self.subTest(slots=slots):
+                self.config.write_text(mac_config(MAC_SLOTS=slots))
+                for args in (['--plan'], ['slot-1'], ['slot-3']):
+                    rc, _, err = self.run_supervisor(*args)
+                    self.assertNotEqual(rc, 0)
+                    self.assertIn('at most 2 macOS guests', err)
+        self.assertEqual(self.calls('curl'), [])
+        self.assertEqual(self.tart(), [])
+
+    def test_config_validation(self):
+        cases = {
+            'MAC_SLOTS must be at least 1': {'MAC_SLOTS': '0'},
+            'MAC_SLOTS must be a number': {'MAC_SLOTS': 'two'},
+            'must include self-hosted, macOS and ARM64': {'MAC_LABELS': 'self-hosted,macOS,intent-mac'},
+            'must not include a host label': {'MAC_LABELS': 'self-hosted,macOS,ARM64,intent-host-intent-mac1'},
+            'must not include m1mac': {'MAC_LABELS': 'self-hosted,macOS,ARM64,m1mac'},
+            'MAC_VM_CPU must be': {'MAC_VM_CPU': '0'},
+            'MAC_VM_MEMORY_MB must be': {'MAC_VM_MEMORY_MB': '2048'},
+            'MAC_HOST_USER must name': {'MAC_HOST_USER': 'root'},
+            'pinned by digest': {'MAC_BASE_IMAGE': 'ghcr.io/cirruslabs/macos-tahoe-xcode:26.5'},
+            'RUNNER_NAME_PREFIX must start with': {'RUNNER_NAME_PREFIX': 'mac1'},
+            'unknown key HEAVY_SLOTS': {'HEAVY_SLOTS': '3'},
+        }
+        for message, overrides in cases.items():
+            with self.subTest(message=message):
+                self.config.write_text(mac_config(**overrides))
+                rc, _, err = self.run_supervisor('--plan')
+                self.assertNotEqual(rc, 0)
+                self.assertIn(message, err)
+        # The host user is required (no default) and labels match case-insensitively.
+        self.config.write_text(mac_config(MAC_HOST_USER=None))
+        rc, _, err = self.run_supervisor('--plan')
+        self.assertIn('MAC_HOST_USER must name', err)
+        self.config.write_text(mac_config(MAC_LABELS='self-hosted,macos,arm64,M1MAC'))
+        rc, _, err = self.run_supervisor('--plan')
+        self.assertIn('must not include m1mac', err)
+        marker = self.dir / 'pwned'
+        self.config.write_text(mac_config(MAC_LABELS=f'$(touch {marker})'))
+        rc, _, _ = self.run_supervisor('--plan')
+        self.assertNotEqual(rc, 0)
+        self.assertFalse(marker.exists())
+
+    def test_bad_and_unconfigured_slots(self):
+        for slot in ('', 'slot-0', 'heavy-1', 'slot-1;x', 'Slot-1', '1'):
+            with self.subTest(slot=slot):
+                rc, _, _ = self.run_supervisor(slot)
+                self.assertEqual(rc, 2)
+        self.config.write_text(mac_config(MAC_SLOTS='1'))
+        rc, _, err = self.run_supervisor('slot-2')
+        self.assertNotEqual(rc, 0)
+        self.assertIn('slot-2 is not a configured slot', err)
+
+    def test_refuses_another_user(self):
+        self.config.write_text(mac_config(MAC_HOST_USER='someone-else'))
+        rc, _, err = self.run_supervisor('slot-1')
+        self.assertNotEqual(rc, 0)
+        self.assertIn('run as someone-else', err)
+        self.assertEqual(self.calls('curl'), [])
+
+    def test_refuses_readable_credential(self):
+        self.creds.chmod(0o644)
+        rc, out, err = self.run_supervisor('slot-1')
+        self.assertNotEqual(rc, 0)
+        self.assertIn('chmod 600', err)
+        self.assertEqual(self.tart(), [])
+        self.assert_no_secret(out, err)
+
+    def test_missing_image(self):
+        self.image_file.unlink()
+        rc, _, err = self.run_supervisor('slot-1')
+        self.assertNotEqual(rc, 0)
+        self.assertIn('no VM image recorded', err)
+        self.image_file.write_text('intent-mac-runner-ffffffffffff\n')
+        rc, _, err = self.run_supervisor('slot-1')
+        self.assertIn('VM image intent-mac-runner-ffffffffffff is missing', err)
+        self.image_file.write_text('../../etc\n')
+        rc, _, err = self.run_supervisor('slot-1')
+        self.assertIn('must name an intent-mac-runner-<hash> image', err)
+        self.assertEqual(self.calls('curl'), [])
+
+    def host_check(self, **env):
+        return self.run_supervisor('--host-check', **env)
+
+    def test_host_check(self):
+        rc, _, err = self.host_check()
+        self.assertEqual(rc, 0, err)
+        self.config.write_text(mac_config(MAC_VM_CPU='7'))
+        rc, _, err = self.host_check()
+        self.assertNotEqual(rc, 0)
+        self.assertIn('slots need 14 vCPUs (2 x 7) but this Mac has 14', err)
+        self.config.write_text(mac_config(MAC_VM_MEMORY_MB='28672'))
+        rc, _, err = self.host_check()
+        self.assertIn('slots need 57344 MiB (2 x 28672)', err)
+        self.config.write_text(mac_config(MAC_SLOTS='1', MAC_VM_CPU='12', MAC_VM_MEMORY_MB='53248'))
+        rc, _, err = self.host_check()
+        self.assertEqual(rc, 0, 'one slot may take everything but the reserve: ' + err)
+        self.config.write_text(mac_config())
+        rc, _, err = self.host_check(STUB_MEMSIZE=str(32 * 2 ** 30))
+        self.assertNotEqual(rc, 0, 'a 32 GB Mac cannot hold two 24 GB guests')
+
+    def test_committed_mac_hosts(self):
+        self.assertEqual([p.name for p in MAC_HOSTS], ['intent-mac1.env', 'intent-mac2.env', 'intent-mac3.env'])
+        for path in MAC_HOSTS:
+            with self.subTest(config=path.name):
+                env = read_env(path)
+                self.assertEqual(env['RUNNER_NAME_PREFIX'], path.stem)
+                self.assertEqual(env['RUNNER_GROUP'], 'intent-cache')
+                self.assertEqual(env['RUNNER_GROUP_REPOS'], 'intent,intentd,cloudlands-fe')
+                self.assertEqual(env['MAC_LABELS'], 'self-hosted,macOS,ARM64,intent-mac')
+                self.assertEqual((env['MAC_SLOTS'], env['MAC_VM_CPU'], env['MAC_VM_MEMORY_MB']), ('2', '6', '24576'))
+                self.assertEqual(path.read_text().replace(path.stem, 'intent-mac1'), MAC_HOSTS[0].read_text())
+                text = path.read_text().replace('GITHUB_ORG=intent-hq', 'GITHUB_ORG=example-org')
+                import pwd
+                self.config.write_text(text.replace(f"MAC_HOST_USER={env['MAC_HOST_USER']}",
+                                                    f'MAC_HOST_USER={pwd.getpwuid(os.getuid()).pw_name}'))
+                rc, out, err = self.run_supervisor('--plan')
+                self.assertEqual((rc, out), (0, 'slot-1\nslot-2\n'), err)
+                rc, _, err = self.host_check()
+                self.assertEqual(rc, 0, err)
+        prefixes = [read_env(p).get('RUNNER_NAME_PREFIX', 'intent-cache')
+                    for p in [HERE / 'runners.env', *HOSTS.glob('*.env'), *MAC_HOSTS]]
+        self.assertEqual(len(prefixes), len(set(prefixes)), 'every host, Linux or macOS, has its own name prefix')
+
+    def test_group_check_counts_mac_slots_as_fleet_runners(self):
+        # The fleet pattern in the shared group_check matches <prefix>-slot-<n>-<time>.
+        self.responses.update({
+            'GET /orgs/example-org/actions/runner-groups/3': [200, {
+                'id': 3, 'name': 'intent-cache', 'visibility': 'selected',
+                'allows_public_repositories': True, 'restricted_to_workflows': False}],
+            'GET /orgs/example-org/actions/runners': [200, {'runners': [
+                {'id': 1, 'name': 'intent-mac1-slot-1-100'}, {'id': 2, 'name': 'intent-ci1-heavy-1-100'}]}],
+            'GET /orgs/example-org/actions/runner-groups/3/runners': [200, {'runners': [
+                {'id': 2, 'name': 'intent-ci1-heavy-1-100'}]}],
+        })
+        rc, out, _ = self.run_supervisor('--group-check')
+        self.assertNotEqual(rc, 0)
+        report = json.loads(out)
+        self.assertEqual(report['outside_group'], ['intent-mac1-slot-1-100'])
+
+
+@unittest.skipUnless(HAVE_TOOLS, 'needs bash, jq and openssl')
+class PortableStat(Stubbed):
+    """load_credentials reads the mode and owner with GNU stat or, on macOS, BSD stat."""
+    BSD_STAT = r'''#!/usr/bin/env python3
+import os, sys
+if sys.argv[1] != '-f' or sys.argv[2] != '%Lp %u': sys.exit(1)
+st = os.stat(sys.argv[3])
+print('%o %d' % (st.st_mode & 0o777, st.st_uid))
+'''
+
+    def check(self, mode, bsd):
+        creds = self.dir / 'credentials'
+        creds.write_text(f'GITHUB_TOKEN={PAT}\n')
+        creds.chmod(mode)
+        if bsd:
+            write_exe(self.bin / 'stat', self.BSD_STAT)
+        script = f'. {SUPERVISOR}; credentials_file={creds}; load_credentials; file_mode_uid {creds}'
+        return subprocess.run([MAC_BASH if bsd else 'bash', '-c', script], env=self.env, capture_output=True, text=True)
+
+    def test_gnu_and_bsd_stat_agree(self):
+        for bsd in (False, True):
+            with self.subTest(bsd=bsd):
+                result = self.check(0o600, bsd)
+                self.assertEqual((result.returncode, result.stdout), (0, f'600 {os.getuid()}\n'), result.stderr)
+                result = self.check(0o640, bsd)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('chmod 600', result.stderr)
+                self.assertNotIn(PAT, result.stdout + result.stderr)
+
+    def test_linux_supervisor_still_uses_gnu_stat(self):
+        result = self.check(0o600, False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.bin / 'stat').exists())
+
+
+@unittest.skipUnless(HAVE_TOOLS, 'needs bash, jq and openssl')
+class MacInstaller(Stubbed):
+    def setUp(self):
+        super().setUp()
+        import pwd
+        self.user = pwd.getpwuid(os.getuid()).pw_name
+        self.prefix = self.dir / 'root'
+        self.prefix.mkdir()
+        self.brew_prefix = self.dir / 'homebrew'
+        (self.brew_prefix / 'bin').mkdir(parents=True)
+        for name in ('brew', 'softnet', 'jq'):
+            write_exe(self.brew_prefix / 'bin' / name, LOG_STUB if name != 'jq' else f'#!/bin/sh\nexec {shutil.which("jq")} "$@"\n')
+        write_exe(self.brew_prefix / 'bin' / 'tart', TART_STUB)
+        write_exe(self.brew_prefix / 'bin' / 'curl', CURL_STUB)
+        write_exe(self.bin / 'sysctl', SYSCTL_STUB)
+        for name in ('pmset', 'visudo', 'chown'):
+            write_exe(self.bin / name, LOG_STUB)
+        write_exe(self.bin / 'uname', '#!/bin/sh\ncase "$1" in -s) echo Darwin ;; -m) echo arm64 ;; esac\n')
+        write_exe(self.bin / 'sw_vers', '#!/bin/sh\necho "${STUB_MACOS:-26.1}"\n')
+        write_exe(self.bin / 'dscl', f'#!/bin/sh\necho "NFSHomeDirectory: {self.dir}/home"\n')
+        (self.dir / 'home').mkdir()
+        uid = os.getuid()
+        write_exe(self.bin / 'id', f'#!/bin/sh\ncase "$*" in "-u") echo 0 ;; "-u {self.user}") echo {uid} ;; '
+                                   f'"-un") echo {self.user} ;; *) exit 1 ;; esac\n')
+        # sudo -n -u USER -H CMD...: log, then run CMD as this user.
+        write_exe(self.bin / 'sudo', '#!/bin/sh\n'
+                  'printf \'{"cmd": "sudo", "argv": ["%s"]}\\n\' "$*" >> "$STUB_LOG"\n'
+                  'while [ "$#" -gt 0 ]; do case "$1" in -n|-H) shift ;; -u) shift 2 ;; -l) exit 0 ;; *) break ;; esac; done\n'
+                  'exec "$@"\n')
+        write_exe(self.bin / 'launchctl', '#!/bin/sh\n'
+                  'printf \'{"cmd": "launchctl", "argv": ["%s", "%s", "%s"]}\\n\' "$1" "$2" "$3" >> "$STUB_LOG"\n'
+                  'case "$1" in print) [ -e "$STUB_DIR/loaded-${2##*.}" ] ;; bootstrap) touch "$STUB_DIR/loaded-$(basename "$3" .plist | sed "s/.*\\.//")" ;; '
+                  'bootout) rm -f "$STUB_DIR/loaded-${2##*.}" ;; esac\n')
+        responses = self.dir / 'responses.json'
+        responses.write_text(json.dumps({
+            **{f'GET /repos/intent-hq/{r}': [200, {'id': 101 + i}] for i, r in enumerate(('intent', 'intentd', 'cloudlands-fe'))},
+            'GET /orgs/intent-hq/actions/runner-groups': [200, {'runner_groups': [{'id': 3, 'name': 'intent-cache'}]}],
+            'PATCH /orgs/intent-hq/actions/runner-groups/3': [200, {'id': 3}],
+            'PUT /orgs/intent-hq/actions/runner-groups/3/repositories': [204, None]}))
+        self.seed = self.dir / 'intent-mac1.env'
+        self.seed.write_text((MACOS / 'hosts/intent-mac1.env').read_text().replace('MAC_HOST_USER=ci', f'MAC_HOST_USER={self.user}'))
+        self.env.update(INSTALL_PREFIX=str(self.prefix), INSTALL_BREW_PREFIX=str(self.brew_prefix),
+                        RUNNERS_OWNER_UID=str(uid), STUB_RESPONSES=str(responses),
+                        RUNNERS_MAC_POLL_SECONDS='0.05', RUNNERS_MAC_BOOT_TIMEOUT='90')
+        self.etc = self.prefix / 'etc/github-runners'
+        self.daemons = self.prefix / 'Library/LaunchDaemons'
+
+    def install(self, *args, **env):
+        return subprocess.run([MAC_BASH, str(MAC_INSTALL), '--config', str(self.seed), *args],
+                              env={**self.env, **env}, capture_output=True, text=True, timeout=600)
+
+    def place_credential(self):
+        self.etc.mkdir(parents=True, exist_ok=True)
+        creds = self.etc / 'credentials'
+        creds.write_text(f'GITHUB_TOKEN={PAT}\n')
+        creds.chmod(0o600)
+
+    def test_plan_renders_one_daemon_per_slot_and_changes_nothing(self):
+        result = self.install('--plan')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(list(self.prefix.iterdir()), [], 'the plan writes nothing')
+        self.assertFalse([c for c in self.calls() if c['cmd'] in ('launchctl', 'brew', 'tart', 'pmset', 'visudo', 'curl')],
+                         'the plan runs nothing that changes the host')
+        out = result.stdout
+        self.assertIn('plan: would build the VM image from ' + read_env(self.seed)['MAC_BASE_IMAGE'], out)
+        self.assertIn('plan: credential missing', out)
+        plists = re.findall(r'plan: would load slot (slot-\d) from (\S+):\n(.*?</plist>)', out, re.S)
+        self.assertEqual([p[0] for p in plists], ['slot-1', 'slot-2'])
+        for slot, path, xml in plists:
+            with self.subTest(slot=slot):
+                self.assertEqual(path, f'{self.daemons}/com.intent.github-runner.{slot}.plist')
+                import plistlib
+                plist = plistlib.loads(xml.encode())
+                self.assertEqual(plist['Label'], f'com.intent.github-runner.{slot}')
+                self.assertEqual(plist['ProgramArguments'],
+                                 ['/bin/bash', '/usr/local/lib/github-runners/macos/supervisor.sh', slot])
+                self.assertEqual(plist['UserName'], self.user)
+                self.assertEqual(plist['EnvironmentVariables']['HOME'], f'{self.dir}/home')
+                self.assertIn('/opt/homebrew/bin', plist['EnvironmentVariables']['PATH'].split(':'))
+                self.assertIs(plist['KeepAlive'], True)
+                self.assertIs(plist['RunAtLoad'], True)
+                self.assertGreaterEqual(plist['ThrottleInterval'], 5)
+                self.assertEqual(plist['ExitTimeOut'], 6 * 3600, 'drains like TimeoutStopSec=6h')
+                self.assertEqual(plist['StandardOutPath'], f'/var/log/github-runner-{slot}.log')
+                self.assertNotIn('@', xml)
+
+    def test_plan_refuses_bad_hosts(self):
+        for env, message in (({'STUB_MACOS': '15.5'}, 'expected macOS 26 or later'),
+                             ({'STUB_NCPU': '10'}, 'slots need 12 vCPUs')):
+            with self.subTest(message=message):
+                result = self.install('--plan', **env)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+        self.seed.write_text(self.seed.read_text().replace('MAC_SLOTS=2', 'MAC_SLOTS=3'))
+        result = self.install('--plan')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('at most 2 macOS guests', result.stderr)
+
+    def test_install_without_credential_loads_nothing(self):
+        result = self.install()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        lib = self.prefix / 'usr/local/lib/github-runners'
+        self.assertEqual((lib / 'supervisor.sh').read_bytes(), SUPERVISOR.read_bytes())
+        self.assertEqual((lib / 'macos/supervisor.sh').read_bytes(), MAC_SUPERVISOR.read_bytes())
+        self.assertEqual((self.etc / 'runners.env').read_bytes(), self.seed.read_bytes())
+        self.assertEqual(stat.S_IMODE(self.etc.stat().st_mode), 0o700)
+        sudoers = (self.prefix / 'etc/sudoers.d/github-runners-softnet').read_text()
+        self.assertIn(f'{self.user} ALL=(root) NOPASSWD: {self.brew_prefix}/bin/softnet\n', sudoers)
+        image = (self.etc / 'macos-image').read_text().strip()
+        self.assertRegex(image, r'^intent-mac-runner-[0-9a-f]{12}$')
+        tart = [c['argv'] for c in self.calls('tart')]
+        self.assertIn(['clone', read_env(self.seed)['MAC_BASE_IMAGE'], f'{image}-build'], tart)
+        self.assertIn(['run', '--no-graphics', '--net-softnet', f'{image}-build'], tart)
+        provision = [c for c in self.calls('tart') if 'stdin' in c]
+        self.assertEqual(provision[0]['stdin'], (MACOS / 'provision.sh').read_text())
+        self.assertIn(['rename', f'{image}-build', image], tart)
+        self.assertEqual(sorted(p.name for p in (self.dir / 'vms').iterdir()), [image])
+        self.assertFalse([c for c in self.calls('launchctl') if c['argv'][0] == 'bootstrap'])
+        self.assertIn('credential missing', result.stdout)
+
+    def test_install_loads_the_slots_and_reruns_converge(self):
+        self.place_credential()
+        result = self.install()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        boots = [c['argv'] for c in self.calls('launchctl') if c['argv'][0] == 'bootstrap']
+        self.assertEqual(boots, [['bootstrap', 'system', f'{self.daemons}/com.intent.github-runner.slot-{n}.plist'] for n in (1, 2)])
+        self.assertIn(('PUT', '/orgs/intent-hq/actions/runner-groups/3/repositories'),
+                      [(c['method'], c['path']) for c in self.calls('curl')], 'the runner group is applied first')
+        image = (self.etc / 'macos-image').read_text().strip()
+        builds = len([c for c in self.calls('tart') if c['argv'][0] == 'clone'])
+        self.log.write_text('')
+        result = self.install()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse([c for c in self.calls('launchctl') if c['argv'][0] in ('bootstrap', 'bootout')],
+                         'an unchanged, loaded slot is left alone')
+        self.assertFalse([c for c in self.calls('tart') if c['argv'][0] == 'clone'], 'the image is not rebuilt')
+        self.assertEqual((self.etc / 'macos-image').read_text().strip(), image)
+        self.assertEqual(builds, 1)
+        # Dropping to one slot drains and removes slot-2 and its VM.
+        (self.etc / 'runners.env').write_text((self.etc / 'runners.env').read_text().replace('MAC_SLOTS=2', 'MAC_SLOTS=1'))
+        (self.dir / 'vms' / 'intent-slot-2').mkdir()
+        result = self.install('--no-build')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(['bootout', 'system/com.intent.github-runner.slot-2', ''], [c['argv'] for c in self.calls('launchctl')])
+        self.assertFalse((self.daemons / 'com.intent.github-runner.slot-2.plist').exists())
+        self.assertTrue((self.daemons / 'com.intent.github-runner.slot-1.plist').exists())
+        self.assertFalse((self.dir / 'vms' / 'intent-slot-2').exists())
+
+    def test_refuses_readable_credential(self):
+        self.place_credential()
+        (self.etc / 'credentials').chmod(0o644)
+        (self.etc / 'macos-image').write_text(MAC_IMAGE + '\n')
+        result = self.install('--no-build')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('mode 600', result.stderr)
+
+
+class MacStatic(unittest.TestCase):
+    def test_runner_and_rustup_are_pinned_with_checksums(self):
+        text = (MACOS / 'provision.sh').read_text()
+        dockerfile = (HERE / 'Dockerfile').read_text()
+        version = re.search(r'^ARG RUNNER_VERSION=(\S+)$', dockerfile, re.M)[1]
+        self.assertIn(f'\nRUNNER_VERSION={version}\n', text, 'same runner as the Linux image')
+        rustup = re.search(r'^ARG RUSTUP_VERSION=(\S+)$', dockerfile, re.M)[1]
+        self.assertIn(f'\nRUSTUP_VERSION={rustup}\n', text)
+        for tool in ('RUNNER', 'RUSTUP'):
+            self.assertRegex(text, rf'\n{tool}_SHA256=[0-9a-f]{{64}}\n')
+        self.assertIn('actions-runner-osx-arm64-', text)
+        self.assertIn('aarch64-apple-darwin/rustup-init', text)
+        self.assertEqual(text.count('check_sha256 "$tmp/'), 2)
+        self.assertIn('--default-toolchain none', text)
+
+    def test_base_image_is_pinned_by_digest(self):
+        for path in MAC_HOSTS:
+            self.assertRegex(read_env(path)['MAC_BASE_IMAGE'],
+                             r'^ghcr\.io/cirruslabs/macos-tahoe-xcode@sha256:[0-9a-f]{64}$', path.name)
+
+    def test_no_bash4_only_syntax(self):
+        # Stock macOS /bin/bash is 3.2; the shared helpers are sourced into it.
+        for path in (*MACOS.glob('*.sh'), SUPERVISOR):
+            code = '\n'.join(l for l in path.read_text().splitlines() if not l.lstrip().startswith('#'))
+            for pattern in (r'\bmapfile\b', r'\breadarray\b', r'declare -A', r'local -n', r'\$\{[A-Za-z_]+,,',
+                            r'\$\{[A-Za-z_]+\^\^', r'\|&', r'&>>', r'\bwait -n\b', r'\bcoproc\b'):
+                self.assertNotRegex(code, pattern, f'{path.name}: {pattern}')
+
+    def test_guest_gets_the_jit_config_on_stdin(self):
+        text = (MACOS / 'provision.sh').read_text()
+        self.assertIn('IFS= read -r ACTIONS_RUNNER_INPUT_JITCONFIG', text)
+        self.assertIn('export ACTIONS_RUNNER_INPUT_JITCONFIG', text)
+        self.assertIn('exec ./run.sh </dev/null', text)
+        self.assertIn(GUEST_RUNNER, text.replace('$runner_dir', '/Users/admin/actions-runner'))
+
+    def test_ci_lints_and_tests_the_mac_scripts(self):
+        ci = (HERE.parents[1] / '.github/workflows/ci.yml').read_text()
+        self.assertIn('shellcheck infra/runners/*.sh infra/runners/macos/*.sh', ci)
+        job = ci.split('  shell-tests-bash3:\n', 1)[1].split('\n  repo-hygiene:', 1)[0]
+        self.assertIn('REQUIRE_BASH3=1 python3 -S -B infra/runners/test_runners.py MacSupervisor PortableStat MacInstaller', job)
+
+
 if __name__ == '__main__':
     unittest.main()

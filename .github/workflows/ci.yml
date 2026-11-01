@@ -365,7 +365,7 @@ jobs:
           set -euo pipefail
           python3 -S -B infra/runners/test_runners.py -v
           command -v shellcheck >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q shellcheck; }
-          shellcheck infra/runners/*.sh
+          shellcheck infra/runners/*.sh infra/runners/macos/*.sh
 
   # shellcheck over scripts/*.sh. Quoting and Bash-3 portability slips in the
   # repo scripts reached main because nothing linted them (intent-hq/intent#5638);
@@ -457,6 +457,8 @@ jobs:
           REQUIRE_BASH3=1 bash packages/intentd/scripts/test-changed-tests.sh
           REQUIRE_BASH3=1 python3 -S -B scripts/test_consumer_checks_shell_suites.py
           "$BASH3_BIN" scripts/rustc-parallel.test.sh
+          # The macOS runner supervisor and installer run on the hosts' stock /bin/bash 3.2.
+          REQUIRE_BASH3=1 python3 -S -B infra/runners/test_runners.py MacSupervisor PortableStat MacInstaller
 
   # Agent-facing documentation links and root hygiene are checked without
   # dependencies or initialized submodules (docs-check reruns the link

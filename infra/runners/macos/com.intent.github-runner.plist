@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  One macOS GitHub Actions runner slot: a fresh Tart VM per job, then restart.
+  Template: install.sh renders @SLOT@, @USER@, @HOME@, @SUPERVISOR@ and @LOG@ into
+  /Library/LaunchDaemons/com.intent.github-runner.@SLOT@.plist.
+  `launchctl bootout` drains: the supervisor lets a running job finish (up to
+  ExitTimeOut, as the Linux unit's TimeoutStopSec) and always deletes its VM.
+  See docs/GITHUB_RUNNERS.md, "macOS hosts (Tart)".
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.intent.github-runner.@SLOT@</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>@SUPERVISOR@</string>
+    <string>@SLOT@</string>
+  </array>
+  <!-- The account that owns ~/.tart; Tart VMs belong to their user. -->
+  <key>UserName</key>
+  <string>@USER@</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>@HOME@</string>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>ExitTimeOut</key>
+  <integer>21600</integer>
+  <key>ProcessType</key>
+  <string>Standard</string>
+  <key>StandardOutPath</key>
+  <string>@LOG@</string>
+  <key>StandardErrorPath</key>
+  <string>@LOG@</string>
+</dict>
+</plist>

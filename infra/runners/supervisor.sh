@@ -85,13 +85,18 @@ load_config() {
     read_kv "$config_file" "GITHUB_ORG RUNNER_GROUP RUNNER_GROUP_REPOS RUNNER_NAME_PREFIX RUNNER_FLEET_PREFIX RUNNER_IMAGE RUNNER_NETWORK RUNNER_BRIDGE RUNNER_POOLS" \
       "^[A-Z][A-Z0-9]*_($POOL_KEYS)\$"
   fi
+  validate_common_config
+  [[ "$RUNNER_POOLS" =~ ^[a-z][a-z0-9]*( [a-z][a-z0-9]*)*$ ]] || die "RUNNER_POOLS must be space-separated lowercase names"
+}
+
+# The org, group and naming keys every supervisor shares (macos/supervisor.sh too).
+validate_common_config() {
   [[ "$GITHUB_ORG" =~ ^[A-Za-z0-9-]+$ ]] || die "GITHUB_ORG is invalid"
   [[ "$RUNNER_GROUP" =~ ^[A-Za-z0-9._\ -]+$ ]] || die "RUNNER_GROUP is invalid"
   [[ "$RUNNER_GROUP_REPOS" =~ ^[A-Za-z0-9._-]+(,[A-Za-z0-9._-]+)*$ ]] || die "RUNNER_GROUP_REPOS must be a comma-separated list of repository names"
   [[ "$RUNNER_NAME_PREFIX" =~ ^[A-Za-z0-9-]+$ ]] || die "RUNNER_NAME_PREFIX is invalid"
   [[ "$RUNNER_FLEET_PREFIX" =~ ^[A-Za-z0-9-]+$ ]] || die "RUNNER_FLEET_PREFIX is invalid"
   [[ "$RUNNER_NAME_PREFIX" == "$RUNNER_FLEET_PREFIX"* ]] || die "RUNNER_NAME_PREFIX must start with RUNNER_FLEET_PREFIX ($RUNNER_FLEET_PREFIX)"
-  [[ "$RUNNER_POOLS" =~ ^[a-z][a-z0-9]*( [a-z][a-z0-9]*)*$ ]] || die "RUNNER_POOLS must be space-separated lowercase names"
 }
 
 # pool_value POOL KEY: the value of <POOL>_<KEY>, or empty.
@@ -220,6 +225,12 @@ host_check() {
   memory_check
 }
 
+# file_mode_uid FILE: "<octal mode> <owner uid>", e.g. "600 0", with GNU stat
+# (Linux) or BSD stat (macOS, which has no -c).
+file_mode_uid() {
+  stat -c '%a %u' "$1" 2>/dev/null || stat -f '%Lp %u' "$1"
+}
+
 load_credentials() {
   GITHUB_TOKEN=""
   GITHUB_APP_ID=""
@@ -227,8 +238,7 @@ load_credentials() {
   GITHUB_APP_PRIVATE_KEY_FILE=""
   [ -f "$credentials_file" ] || die "missing $credentials_file (see docs/GITHUB_RUNNERS.md, Credential)"
   local mode owner
-  mode="$(stat -c %a "$credentials_file")"
-  owner="$(stat -c %u "$credentials_file")"
+  read -r mode owner <<<"$(file_mode_uid "$credentials_file")"
   if [ "$owner" != "${RUNNERS_OWNER_UID:-$(id -u)}" ] || [[ ! "$mode" =~ ^[0-7]00$ ]]; then
     die "$credentials_file must be owned by $(id -un) and not readable by others (chmod 600)"
   fi

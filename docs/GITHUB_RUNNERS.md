@@ -7,7 +7,8 @@ of them register into one runner group and share the pool labels, so a job
 targeting a label runs on whichever host has a free slot. Each slot also
 registers a host label, `intent-host-<name prefix>` (for example
 `intent-host-intent-ci3`), which nothing routes on; the smoke workflow's `host`
-input uses it to test one host.
+input uses it to test one host. macOS slots run in Tart VMs on Mac minis; see
+[macOS hosts (Tart)](#macos-hosts-tart).
 
 | Host | Location | Hardware | Pools (slots) | Labels | Name prefix | Config |
 |---|---|---|---|---|---|---|
@@ -453,12 +454,14 @@ several units holds the idle ones down until the busy ones finish.
 GitHub stops sending jobs to runners more than 30 days behind the latest
 release, so bump the pin at least monthly:
 
-1. Take the version and the `linux-x64` SHA-256 from the
+1. Take the version and the `linux-x64` and `osx-arm64` SHA-256s from the
    [release notes](https://github.com/actions/runner/releases/latest).
 2. Update `RUNNER_VERSION` and `RUNNER_SHA256` in `infra/runners/Dockerfile`
-   (likewise `RUSTUP_*` and `RUST_TOOLCHAIN` when they change) and land the PR.
-3. Re-run the installer. The smoke workflow runs on the PR when
-   `infra/runners/` changes.
+   and in `infra/runners/macos/provision.sh` (`test_runners.py` keeps the
+   versions equal; likewise `RUSTUP_*` and `RUST_TOOLCHAIN` when they change)
+   and land the PR.
+3. Re-run the installer on every host (on a Mac it bakes a new image). The
+   smoke workflow runs on the PR when `infra/runners/` changes.
 
 ## Troubleshoot
 
@@ -482,3 +485,142 @@ systemctl status 'github-runner@*' github-runners-egress --no-pager
 docker ps --format '{{.Names}} {{.Status}}'
 systemd-cgtop -1 runners.slice
 ```
+
+## macOS hosts (Tart)
+
+macOS slots serve intentd's routed macOS jobs (runner-route's `macos` fleet:
+`macos-26-xlarge`, which otherwise bursts to `warp-macos-26-arm64-6x`). Each
+slot runs one job in a fresh [Tart](https://tart.run) VM cloned from a baked
+image, then deletes the VM, so jobs never see another job's files, as in the
+Linux containers.
+
+| Host | Hardware | Slots | Labels | Name prefix | Config |
+|---|---|---|---|---|---|
+| intent-mac1 | Mac mini, M4 Pro 14-core (10P + 4E), 64 GB, 2 TB, 10GbE | 2 x (6 vCPU, 24 GB) | `self-hosted`, `macOS`, `ARM64`, `intent-mac` | `intent-mac1` | [`macos/hosts/intent-mac1.env`](../infra/runners/macos/hosts/intent-mac1.env) |
+| intent-mac2 | same | same | same | `intent-mac2` | [`macos/hosts/intent-mac2.env`](../infra/runners/macos/hosts/intent-mac2.env) |
+| intent-mac3 | same | same | same | `intent-mac3` | [`macos/hosts/intent-mac3.env`](../infra/runners/macos/hosts/intent-mac3.env) |
+
+Why this shape:
+
+- **Two slots per Mac.** Apple's macOS licence allows two macOS guests per
+  host and Virtualization.framework refuses a third; `supervisor.sh` refuses
+  `MAC_SLOTS` above 2.
+- **6 vCPU, 24 GB guests.** The same size as `warp-macos-26-arm64-6x`. Two of
+  them leave 2 cores and 16 GB to the host (`--host-check` keeps at least 2
+  cores and 12 GiB).
+- **2 TB.** The cirruslabs base is about 70 GB to pull and a 140 GB disk once
+  cloned; the baked image and each slot's VM are APFS copy-on-write clones, so
+  they cost only what a job writes. Room for a rebuilt image next to the
+  current one and two large Rust target directories.
+- **Image.** `ghcr.io/cirruslabs/macos-tahoe-xcode` (macOS 26 with Xcode
+  26.5, like `warp-macos-26-arm64-6x`), pinned by digest in `MAC_BASE_IMAGE`.
+  The host must run macOS 26 or later (a guest cannot be newer than its host).
+- **Network.** `tart run --net-softnet`: the guest reaches the internet but
+  not the host's LAN or private ranges, the counterpart of `egress.sh`.
+- **sudo.** The guest's `admin` user keeps the base image's passwordless sudo:
+  the VM is thrown away after one job, and `actions/setup-python` needs it on
+  macOS (it failed on the old persistent `m1mac`). The `m1mac` label is never
+  used here: `macos-prune.yml` and `provision-m1mac.yml` target that runner.
+
+```
+LaunchDaemon com.intent.github-runner.slot-<n> ─ macos/supervisor.sh slot-<n> ─┬─ tart clone <image> intent-slot-<n>; tart run --net-softnet
+                                                                              ├─ GitHub API: JIT registration (one job)
+                                                                              ├─ tart exec -i: run-jit.sh (JIT config on stdin) ─ job ─ exits
+                                                                              └─ VM stopped and deleted, runner deregistered
+```
+
+| File | Installed as | Role |
+|---|---|---|
+| `macos/supervisor.sh` | `/usr/local/lib/github-runners/macos/` (with `supervisor.sh` beside it, whose credential, API and group helpers it sources) | One slot, one job in a fresh VM, drain on `launchctl bootout`; `--plan`, `--host-check` (vCPUs and memory against `sysctl`), `--group-apply`, `--group-check`. Runs on the stock `/bin/bash` 3.2 |
+| `macos/provision.sh` | baked into the image | Pinned, checksummed runner (`osx-arm64`) and rustup (no default toolchain); `gh`, `jq`, `zstd`, `git-lfs`; no sleep, no Spotlight indexing; `run-jit.sh` |
+| `macos/build-image.sh` | — | Clones the base, runs `provision.sh` in it, keeps it as `intent-mac-runner-<hash of provision.sh and base>` |
+| `macos/hosts/*.env` | `/etc/github-runners/runners.env` (once, `install.sh --config`) | Slots, labels, VM size, host user, base image (not secret). Kept out of `hosts/`, whose files are Linux layouts |
+| `macos/com.intent.github-runner.plist` | `/Library/LaunchDaemons/com.intent.github-runner.slot-<n>.plist` | Runs the supervisor as `MAC_HOST_USER`, `KeepAlive`, `ExitTimeOut` 6 h (the drain window); logs in `/var/log/github-runner-slot-<n>.log` |
+| `macos/install.sh` | — | Idempotent installer; `--plan` prints every step and the rendered plists without changing anything |
+
+### First-time host setup
+
+1. **Host user.** Create a standard (non-admin) account for the slots, `ci`
+   in the committed configs (`MAC_HOST_USER`), and install
+   [Homebrew](https://brew.sh) in `/opt/homebrew` so that account can run
+   `brew`. Tart VMs live in that user's `~/.tart`. Turn on automatic login
+   only if a real Mac shows Tart needs a GUI session (see Open questions).
+2. **Credential.** The same credential as the Linux hosts (see Credential),
+   owned by the host user:
+
+   ```bash
+   sudo install -d -m 700 -o ci /etc/github-runners
+   sudo -u ci sh -c 'umask 077; cat > /etc/github-runners/credentials'   # paste, then Ctrl-D
+   ```
+
+3. **Install** from a checkout on the Mac:
+
+   ```bash
+   sudo infra/runners/macos/install.sh --config infra/runners/macos/hosts/intent-mac1.env --plan
+   sudo infra/runners/macos/install.sh --config infra/runners/macos/hosts/intent-mac1.env
+   ```
+
+   It checks arm64 and macOS 26+, runs `--host-check`, installs `tart`,
+   `softnet` and `jq` with Homebrew as the host user, writes
+   `/etc/sudoers.d/github-runners-softnet` (the host user may run `softnet`, and
+   only it, as root: Tart starts it with sudo) and checks it, turns host sleep
+   off, bakes the image (the first pull takes a while), applies the runner
+   group and loads one LaunchDaemon per slot. Without the credential it stops
+   before loading slots.
+
+### Image rebuilds
+
+Re-run `install.sh` after changing `provision.sh` or `MAC_BASE_IMAGE` (a new
+runner version, a new Xcode base): the image name changes with either, so
+it bakes `intent-mac-runner-<new hash>`, records it in
+`/etc/github-runners/macos-image` and deletes older images. Running jobs keep
+their VM; each slot's next job clones the new image. Use `--no-build` for a
+config-only change. To move to a new base, take the digest of the new tag
+(`ghcr.io/cirruslabs/macos-tahoe-xcode`) and update all three host files.
+
+### Drain and stop
+
+```bash
+sudo launchctl bootout system/com.intent.github-runner.slot-2     # one slot; a busy slot finishes its job first
+sudo launchctl bootstrap system /Library/LaunchDaemons/com.intent.github-runner.slot-2.plist
+tail -f /var/log/github-runner-slot-1.log
+sudo -u ci tart list
+```
+
+The supervisor stops and deletes its VM on every exit; the next start removes
+a leftover `intent-slot-<n>` and any offline `<prefix>-slot-<n>-*`
+registration.
+
+intentd's self-hosted macOS steps (`CARGO_TARGET_DIR` under `$HOME/ci-target`
+and `scripts/macos-ci-cleanup.py --apply`) were written for the persistent
+`m1mac` runner; in a throwaway VM they are harmless no-ops (the target
+directory is simply not reused).
+
+### Go-live checklist
+
+1. All six slots are online in the `intent-cache` group with `self-hosted`,
+   `macOS`, `ARM64` (`supervisor.sh --group-check` on any host, or
+   `gh api orgs/intent-hq/actions/runners`).
+2. Clear `CI_MACOS_RUNNER_DISABLED` (and `CI_MACOS_RUNNER_DISABLED_REASON`)
+   on `intent-hq/intentd`.
+3. In the next merge-queue run, the route job's log shows
+   `macos routing: burst=false`, and the macOS build job runs on an
+   `intent-mac*-slot-*` runner. runner-route treats macOS as a native pool:
+   it bursts to WarpBuild when queued macOS jobs exceed idle runners minus one.
+4. Keep cloudlands-fe's signed macOS 15 release builds (`macos-15-xlarge`) on
+   WarpBuild for now: they read runner-route's `cloud` map and never take a
+   self-hosted slot.
+
+### Open questions (need a real Mac)
+
+- Tart under a LaunchDaemon with `UserName`, outside a login session: whether
+  Virtualization.framework boots guests there, or slots need a LaunchAgent in
+  an auto-logged-in session.
+- softnet as root through the sudoers drop-in (rather than a SUID binary that
+  `brew upgrade` resets), and whether its default rules also block the tailnet
+  (100.64.0.0/10) as `egress.sh` does; add `--net-softnet-block` if not.
+- `tart exec` needs the Tart Guest Agent in the pinned base image; whether it
+  runs commands as `admin` (`run-jit.sh` drops from root to `admin` if not).
+- Paths: jobs run as `admin` in `/Users/admin/work`, unlike hosted runners'
+  `/Users/runner`, so sccache entries are not shared with WarpBuild's macOS
+  runners.
