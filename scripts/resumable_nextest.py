@@ -1314,6 +1314,22 @@ def invalidate_completion_markers(run_dir: Path) -> None:
             marker.unlink(missing_ok=True)
 
 
+def is_json_event(line: str) -> bool:
+    """True for a machine event line; the events file keeps it, the terminal does not.
+
+    nextest prints its readable PASS/FAIL lines and summary on stderr, which the
+    runner inherits. Echoing thousands of stdout events made callers pipe the
+    gate through `tail`, hiding its exit code. Anything else on stdout still
+    reaches the terminal.
+    """
+    if not line.lstrip().startswith("{"):
+        return False
+    try:
+        return isinstance(json.loads(line), dict)
+    except ValueError:
+        return False
+
+
 def stream_nextest(
     command: list[str],
     cwd: Path,
@@ -1332,8 +1348,9 @@ def stream_nextest(
         for line_number, line in enumerate(process.stdout, 1):
             events.write(line)
             events.flush()
-            sys.stdout.write(line)
-            sys.stdout.flush()
+            if not is_json_event(line):
+                sys.stdout.write(line)
+                sys.stdout.flush()
             outcome = test_outcome(line)
             if outcome is not None:
                 outcomes[outcome[0]] = outcome[1]
