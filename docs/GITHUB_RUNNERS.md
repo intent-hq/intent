@@ -601,13 +601,16 @@ directory is simply not reused).
 1. All six slots are online in the `intent-cache` group with `self-hosted`,
    `macOS`, `ARM64` (`supervisor.sh --group-check` on any host, or
    `gh api orgs/intent-hq/actions/runners`).
-2. Clear `CI_MACOS_RUNNER_DISABLED` (and `CI_MACOS_RUNNER_DISABLED_REASON`)
+2. Take the old persistent `m1mac` runner offline (or remove its
+   `self-hosted`/`macOS`/`ARM64` registration): it carries the same labels, so
+   once routing is on, routed jobs could land on it instead of a VM slot.
+3. Clear `CI_MACOS_RUNNER_DISABLED` (and `CI_MACOS_RUNNER_DISABLED_REASON`)
    on `intent-hq/intentd`.
-3. In the next merge-queue run, the route job's log shows
+4. In the next merge-queue run, the route job's log shows
    `macos routing: burst=false`, and the macOS build job runs on an
    `intent-mac*-slot-*` runner. runner-route treats macOS as a native pool:
    it bursts to WarpBuild when queued macOS jobs exceed idle runners minus one.
-4. Keep cloudlands-fe's signed macOS 15 release builds (`macos-15-xlarge`) on
+5. Keep cloudlands-fe's signed macOS 15 release builds (`macos-15-xlarge`) on
    WarpBuild for now: they read runner-route's `cloud` map and never take a
    self-hosted slot.
 
