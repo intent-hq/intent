@@ -1,8 +1,10 @@
 """Stress mode for scripts/resumable_nextest.py (`make test-stress`).
 
 Repeats one nextest filterset COUNT times with retries off, optionally under a
-built-in CPU and disk load, and prints one summary line: iterations, passes,
-failures and the distinct panic locations of the failures.
+built-in CPU and disk load and/or random stalls (every test process frozen
+with SIGSTOP for a fixed pause, then resumed, the way a briefly frozen CI
+runner behaves), and prints one summary line: iterations, passes, failures and
+the distinct panic locations of the failures.
 
 It reuses the gate's fixture preparation, caller environment and isolated Cargo
 outputs, so fixture tests behave as under `make test-select`. It never reads
@@ -19,6 +21,7 @@ import contextlib
 import json
 import os
 from pathlib import Path
+import random
 import re
 import shutil
 import signal
@@ -123,12 +126,12 @@ class StressTally:
         }
 
 
-def summary_line(label: str, counts: dict[str, object], load: str, status: int | None = 0) -> str:
+def summary_line(label: str, counts: dict[str, object], conditions: str, status: int | None = 0) -> str:
     total = counts["total_iterations"] or counts["iterations"]
     tests = counts["tests"]
     text = (
         f"[{label}] stress: {counts['iterations']}/{total} iterations "
-        f"({counts['failed_iterations']} failed), {tests} test{'' if tests == 1 else 's'}, {load}: "
+        f"({counts['failed_iterations']} failed), {tests} test{'' if tests == 1 else 's'}, {conditions}: "
         f"{counts['passed']} passed, {counts['failed']} failed"
     )
     failures = counts["failures"]
@@ -145,7 +148,9 @@ def summary_line(label: str, counts: dict[str, object], load: str, status: int |
     return text
 
 
-LOAD_INVALID_EXIT = 3
+# The run's failures and passes are not evidence: the advertised load or
+# stalls did not hold.
+INVALID_EXIT = 3
 PR_SET_PDEATHSIG = 1
 
 
@@ -161,8 +166,11 @@ def _libc_prctl():
         return None
 
 
-def die_with_parent(parent_pid: int, prctl):
-    """preexec_fn: SIGKILL the load process when the runner dies without cleanup (Linux).
+def die_with_parent(parent_pid: int, prctl, death_signal: int = signal.SIGKILL):
+    """preexec_fn: signal the load process when the runner dies without cleanup (Linux).
+
+    Load workers get SIGKILL; the stall helper gets SIGTERM, which it handles by
+    resuming every process it froze before exiting.
 
     Registering after the runner already died would never fire, so the child
     compares getppid() with the runner's pid after registering and exits if it
@@ -172,7 +180,7 @@ def die_with_parent(parent_pid: int, prctl):
     def preexec() -> None:
         if prctl is None:
             return
-        if prctl(PR_SET_PDEATHSIG, signal.SIGKILL) != 0 or os.getppid() != parent_pid:
+        if prctl(PR_SET_PDEATHSIG, death_signal) != 0 or os.getppid() != parent_pid:
             os._exit(1)
     return preexec
 
@@ -212,6 +220,212 @@ def stress_load(cpus: int, scratch: Path, stderr_path: Path | None = None):
         if stderr_path:
             errors.close()
 
+DEFAULT_STALL_MS = 1000
+DEFAULT_STALL_EVERY_MS = 2000
+PROC = Path("/proc")
+# The processes that run the tests rather than being tests: cargo (or the
+# rustup proxy) and cargo-nextest, including its double-spawn intermediate.
+# Freezing nextest itself would also stop its timers and job-control handling,
+# so only processes below this chain are stalled.
+STALL_SPINE = frozenset({"cargo", "cargo-nextest", "rustup"})
+# Passes over the process table per stall, so a child forked during one pass
+# is frozen by the next; a frozen process forks no more.
+STALL_PASSES = 5
+
+
+def stall_supported(proc: Path = PROC) -> bool:
+    """Stalls find test processes through /proc, so they are Linux only."""
+    return (proc / "self" / "stat").is_file()
+
+
+def parse_stat(text: str) -> tuple[int, str, str, int] | None:
+    """(ppid, comm, state, starttime) from /proc/<pid>/stat; comm may contain ")"."""
+    head, _, rest = text.rpartition(")")
+    fields = rest.split()
+    if "(" not in head or len(fields) < 20:
+        return None
+    try:
+        return int(fields[1]), head.partition("(")[2], fields[0], int(fields[19])
+    except ValueError:
+        return None
+
+
+def read_processes(proc: Path = PROC) -> dict[int, tuple[int, str, str, int]]:
+    table = {}
+    for entry in proc.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            parsed = parse_stat((entry / "stat").read_text())
+        except OSError:
+            continue
+        if parsed is not None:
+            table[int(entry.name)] = parsed
+    return table
+
+
+def stall_targets(root: int, table: dict[int, tuple[int, str, str, int]]) -> dict[int, int]:
+    """pid -> starttime of every live process below the cargo/nextest chain under `root`."""
+    children: dict[int, list[int]] = {}
+    for pid, (ppid, *_rest) in table.items():
+        children.setdefault(ppid, []).append(pid)
+    targets = {}
+    pending = [(root, True)]
+    while pending:
+        parent, on_spine = pending.pop()
+        for child in children.get(parent, ()):
+            _ppid, comm, state, start = table[child]
+            child_on_spine = on_spine and comm in STALL_SPINE
+            if not child_on_spine and state not in ("Z", "X"):
+                targets[child] = start
+            pending.append((child, child_on_spine))
+    return targets
+
+
+def signal_same(pid: int, start: int, signum: int, proc: Path = PROC) -> bool:
+    """Signal `pid` only while it is still the process that started at `start` (no pid reuse)."""
+    try:
+        current = parse_stat((proc / str(pid) / "stat").read_text())
+    except OSError:
+        return False
+    if current is None or current[3] != start:
+        return False
+    try:
+        os.kill(pid, signum)
+    except OSError:
+        return False
+    return True
+
+
+def freeze(root: int, stopped: dict[int, int], proc: Path = PROC) -> None:
+    """SIGSTOP every test process under `root`, recording each in `stopped` before signaling it."""
+    for _ in range(STALL_PASSES):
+        fresh = {pid: start for pid, start in stall_targets(root, read_processes(proc)).items()
+                 if pid not in stopped}
+        if not fresh:
+            return
+        for pid, start in fresh.items():
+            # Record first: an exit signal landing between the two steps must
+            # still find this pid to resume (SIGCONT on a running one is harmless).
+            stopped[pid] = start
+            if not signal_same(pid, start, signal.SIGSTOP, proc):
+                del stopped[pid]
+
+
+def thaw(stopped: dict[int, int], proc: Path = PROC) -> None:
+    for pid, start in list(stopped.items()):
+        signal_same(pid, start, signal.SIGCONT, proc)
+    stopped.clear()
+
+
+def stall_gap(every_ms: int, rng: random.Random) -> float:
+    """Seconds until the next stall: uniform in [every/2, 3*every/2], so stalls never merge."""
+    return rng.uniform(every_ms / 2, every_ms * 1.5) / 1000
+
+
+def stall_loop(root: int, pause_ms: int, every_ms: int, log, proc: Path = PROC,
+               rng: random.Random | None = None, sleep=time.sleep, clock=time.monotonic) -> None:
+    """Freeze the tests under `root` for pause_ms at random intervals until interrupted.
+
+    Logs one JSON line per stall that froze anything; whatever is frozen when
+    the loop is interrupted (by SystemExit from a signal) is resumed first.
+    """
+    rng = rng or random.Random()
+    stopped: dict[int, int] = {}
+    began = clock()
+    try:
+        while True:
+            sleep(stall_gap(every_ms, rng))
+            start = clock()
+            freeze(root, stopped, proc)
+            frozen = len(stopped)
+            if frozen:
+                sleep(pause_ms / 1000)
+            thaw(stopped, proc)
+            if frozen:
+                log.write(json.dumps({"at_ms": round((start - began) * 1000), "processes": frozen,
+                                      "held_ms": round((clock() - start) * 1000)}) + "\n")
+                log.flush()
+    finally:
+        thaw(stopped, proc)
+
+
+def stall_main(argv: list[str]) -> int:
+    """Entry point of the stall helper process: ROOT_PID PAUSE_MS EVERY_MS LOG."""
+    root, pause_ms, every_ms = (int(value) for value in argv[:3])
+
+    def stop(signum, _frame):
+        raise SystemExit(0)
+    # The runner owns the helper's lifetime: SIGTERM (also the parent-death
+    # signal) and SIGHUP resume and exit; a terminal ^C goes to the runner.
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGHUP, stop)
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    with open(argv[3], "a", encoding="utf-8") as log:
+        stall_loop(root, pause_ms, every_ms, log)
+    return 0
+
+
+def read_stalls(log_path: Path) -> list[dict[str, int]]:
+    if not log_path.is_file():
+        return []
+    stalls = []
+    for line in log_path.read_text(encoding="utf-8").splitlines():
+        with contextlib.suppress(ValueError):
+            stalls.append(json.loads(line))
+    return stalls
+
+
+class Stall:
+    """STALL=1: a helper process that freezes the run's test processes at random intervals."""
+
+    def __init__(self, pause_ms: int, every_ms: int, record_dir: Path) -> None:
+        self.pause_ms = pause_ms
+        self.every_ms = every_ms
+        self.log_path = record_dir / "stall.log"
+        self.err_path = record_dir / "stall.err"
+        self.failures: list[str] = []
+
+    def settings(self) -> str:
+        return f"STALL=1 ({self.pause_ms} ms pauses every ~{self.every_ms} ms)"
+
+    def describe(self) -> str:
+        stalls = read_stalls(self.log_path)
+        longest = max((stall.get("held_ms", 0) for stall in stalls), default=0)
+        text = f"STALL=1 ({self.pause_ms} ms pauses every ~{self.every_ms} ms, {len(stalls)} stall"
+        text += "" if len(stalls) == 1 else "s"
+        return text + (f", longest {longest} ms)" if stalls else ")")
+
+    def count(self) -> int:
+        return len(read_stalls(self.log_path))
+
+    @contextlib.contextmanager
+    def attach(self, root: int):
+        """Stall the tests under `root` (the nextest command) for the duration."""
+        preexec = die_with_parent(os.getpid(), _libc_prctl(), signal.SIGTERM)
+        with open(self.err_path, "w", encoding="utf-8") as errors:
+            helper = subprocess.Popen(
+                [sys.executable, "-I", "-B", str(Path(__file__).resolve()), "--stall-helper",
+                 str(root), str(self.pause_ms), str(self.every_ms), str(self.log_path)],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=errors, preexec_fn=preexec)
+            try:
+                yield helper
+            finally:
+                if helper.poll() is not None:
+                    self.failures.append(f"stall helper (pid {helper.pid}) exited {helper.returncode}")
+                else:
+                    helper.terminate()
+                    try:
+                        helper.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        helper.kill()
+                        helper.wait()
+                # The helper resumes what it froze; this sweep covers a helper
+                # that was killed mid-stall while nextest still runs.
+                with contextlib.suppress(OSError):
+                    stopped = stall_targets(root, read_processes())
+                    thaw(stopped)
+
 
 def prune(stress_dir: Path, now: float | None = None) -> None:
     cutoff = (time.time() if now is None else now) - MAX_AGE_SECONDS
@@ -237,17 +451,21 @@ def default_load_cpus() -> int:
     return 2 * usable_cpus()
 
 
-def stream(command: list[str], cwd: Path, env: dict[str, str], log, tally: StressTally) -> int:
+def stream(command: list[str], cwd: Path, env: dict[str, str], log, tally: StressTally,
+           during=None) -> int:
+    """Run nextest, teeing its output into the tally; `during(pid)` wraps the run (stalls)."""
     process = subprocess.Popen(command, cwd=cwd, env=env, text=True, errors="replace",
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     assert process.stdout is not None
     try:
-        for line in process.stdout:
-            log.write(ANSI_RE.sub("", line))
-            sys.stdout.write(line)
-            sys.stdout.flush()
-            tally.feed(line)
-        return process.wait()
+        # Exiting `during` first resumes any frozen test before nextest is told to cancel.
+        with during(process.pid) if during else contextlib.nullcontext():
+            for line in process.stdout:
+                log.write(ANSI_RE.sub("", line))
+                sys.stdout.write(line)
+                sys.stdout.flush()
+                tally.feed(line)
+            return process.wait()
     except BaseException:
         # Keep draining nextest's output while it cancels: a full pipe would block
         # it before it can clean up the test processes it started.
@@ -275,6 +493,8 @@ def run_stress(args, gate) -> int:
     prune(stress_dir)
     record_dir = stress_dir / uuid.uuid4().hex
     record_dir.mkdir(parents=True)
+    stall = (Stall(args.stall_ms or DEFAULT_STALL_MS, args.stall_every_ms or DEFAULT_STALL_EVERY_MS, record_dir)
+             if args.stall == "1" else None)
     tally = StressTally()
     load_failures: list[str] = []
     status: int | None = None
@@ -303,12 +523,13 @@ def run_stress(args, gate) -> int:
                 *cargo_config, *output_args,
             ]
             (record_dir / "command.json").write_text(json.dumps(command, indent=2) + "\n")
-            print(f"[{label}] {load}; running {args.stress_count} iterations with retries off", flush=True)
+            print(f"[{label}] {load}, {stall.settings() if stall else 'STALL=0'}; "
+                  f"running {args.stress_count} iterations with retries off", flush=True)
             with open(record_dir / "output.log", "w", encoding="utf-8") as log, \
                     tempfile.TemporaryDirectory(prefix="load-", dir=stress_dir) as scratch, \
                     (stress_load(cpus, Path(scratch), record_dir / "load.err") if args.load == "1"
                      else contextlib.nullcontext([])) as workers:
-                status = stream(command, intentd_dir, env, log, tally)
+                status = stream(command, intentd_dir, env, log, tally, stall.attach if stall else None)
                 # A worker that died mid-run means the advertised load did not hold.
                 load_failures = exited_early(workers)
         except subprocess.CalledProcessError as error:
@@ -323,19 +544,40 @@ def run_stress(args, gate) -> int:
             counts = tally.counts()
             if status == 0 and counts["failed"]:
                 status = 1
-            line = summary_line(label, counts, load, status)
+            line = summary_line(label, counts, f"{load}, {stall.describe() if stall else 'STALL=0'}", status)
+            invalid = False
             if load_failures:
-                if status == 0:
-                    status = LOAD_INVALID_EXIT
+                invalid = True
                 print(f"[{label}] ERROR: load worker(s) stopped during the run: {'; '.join(load_failures)} "
                       f"(stderr in {record_dir / 'load.err'})", file=sys.stderr, flush=True)
                 line += f"; INVALID: {len(load_failures)} load worker(s) stopped early, so the load did not hold"
+            if stall and stall.failures:
+                invalid = True
+                print(f"[{label}] ERROR: {'; '.join(stall.failures)} during the run "
+                      f"(stderr in {stall.err_path})", file=sys.stderr, flush=True)
+                line += "; INVALID: the stall helper stopped early, so the stalls did not hold"
+            elif stall and counts["iterations"] and not stall.count():
+                invalid = True
+                line += ("; INVALID: no stall froze a test process "
+                         "(raise COUNT or lower STALL_EVERY_MS so stalls overlap the tests)")
+            if invalid and status == 0:
+                status = INVALID_EXIT
             (record_dir / "summary.txt").write_text(line + "\n", encoding="utf-8")
             (record_dir / "summary.json").write_text(json.dumps({
                 **counts, "filterset": args.filterset, "stress_count": args.stress_count,
                 "load": args.load == "1", "load_cpus": cpus if args.load == "1" else 0,
-                "load_failures": load_failures, "exit_code": status, "test_timeout_multiplier": env.get(gate.TIMEOUT_MULTIPLIER_ENV),
+                "load_failures": load_failures, "stall": stall is not None,
+                "stall_ms": stall.pause_ms if stall else 0, "stall_every_ms": stall.every_ms if stall else 0,
+                "stalls": stall.count() if stall else 0, "stall_failures": stall.failures if stall else [],
+                "exit_code": status, "test_timeout_multiplier": env.get(gate.TIMEOUT_MULTIPLIER_ENV),
             }, indent=2) + "\n", encoding="utf-8")
             print(line, flush=True)
             print(f"[{label}] record: {record_dir}", flush=True)
     return status if status is not None else 1
+
+
+if __name__ == "__main__":
+    if sys.argv[1:2] != ["--stall-helper"] or len(sys.argv) != 6:
+        sys.exit("usage: nextest_stress.py --stall-helper ROOT_PID PAUSE_MS EVERY_MS LOG "
+                 "(started by make test-stress STALL=1)")
+    sys.exit(stall_main(sys.argv[2:]))

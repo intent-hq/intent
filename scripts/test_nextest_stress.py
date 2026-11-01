@@ -324,6 +324,169 @@ class LoadTests(unittest.TestCase):
             self.assertEqual(wait_until_dead(pids), [])
 
 
+def state(pid):
+    """The /proc state letter of a live pid ("T" while stopped)."""
+    return Path(f"/proc/{pid}/stat").read_text().rpartition(")")[2].split()[0]
+
+
+def wait_for(predicate, polls=200, interval=0.025):
+    for _ in range(polls):
+        if predicate():
+            return True
+        time.sleep(interval)
+    return predicate()
+
+
+# A stand-in for the nextest command: a root that runs a "test" child, which
+# runs a grandchild of its own. Prints "child grandchild" pids.
+TREE = ("import subprocess, sys, time\n"
+        "grand = \"import subprocess, sys, time; g = subprocess.Popen([sys.executable, '-c', "
+        "'import time; time.sleep(60)']); print(g.pid, flush=True); time.sleep(60)\"\n"
+        "child = subprocess.Popen([sys.executable, '-c', grand], stdout=subprocess.PIPE, text=True)\n"
+        "print(child.pid, child.stdout.readline().strip(), flush=True)\n"
+        "time.sleep(60)\n")
+
+
+class StallTargetTests(unittest.TestCase):
+    def test_parse_stat_reads_fields_after_a_comm_with_spaces_and_parens(self):
+        stat = "77 (a) b (c)) S 12 77 77 0 -1 4194560 1 0 0 0 0 0 0 0 20 0 1 0 98765 1 2\n"
+        self.assertEqual(stress.parse_stat(stat), (12, "a) b (c)", "S", 98765))
+        self.assertIsNone(stress.parse_stat("garbage"))
+        self.assertIsNone(stress.parse_stat("1 (x) S 0 1\n"))
+
+    def test_targets_are_everything_below_the_cargo_nextest_chain(self):
+        table = {
+            100: (1, "cargo", "S", 1),          # root (the Popen'd cargo)
+            101: (100, "cargo-nextest", "S", 2),
+            102: (101, "cargo-nextest", "S", 3),  # double-spawn, not yet exec'd
+            110: (101, "intent_services", "S", 4),
+            111: (110, "intentd", "S", 5),       # a test's own child
+            112: (110, "cargo", "S", 6),         # a test running cargo is still a test
+            113: (112, "rustc", "R", 7),
+            120: (101, "intent_store-ab", "Z", 8),
+            200: (1, "intent_services", "S", 9),  # not ours
+        }
+        self.assertEqual(stress.stall_targets(100, table), {110: 4, 111: 5, 112: 6, 113: 7})
+        self.assertEqual(stress.stall_targets(999, table), {})
+
+    def test_a_reused_pid_is_never_signaled(self):
+        with tempfile.TemporaryDirectory() as proc:
+            (Path(proc) / "4242").mkdir()
+            (Path(proc) / "4242" / "stat").write_text(
+                "4242 (other) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 555 1 2\n")
+            with mock.patch.object(stress.os, "kill") as kill:
+                self.assertFalse(stress.signal_same(4242, 554, stress.signal.SIGSTOP, Path(proc)))
+                self.assertFalse(stress.signal_same(4243, 555, stress.signal.SIGSTOP, Path(proc)))
+                kill.assert_not_called()
+                self.assertTrue(stress.signal_same(4242, 555, stress.signal.SIGSTOP, Path(proc)))
+                kill.assert_called_once_with(4242, stress.signal.SIGSTOP)
+
+    def test_gaps_stay_between_half_and_one_and_a_half_intervals(self):
+        rng = stress.random.Random(7)
+        gaps = [stress.stall_gap(2000, rng) for _ in range(2000)]
+        self.assertGreaterEqual(min(gaps), 1.0)
+        self.assertLessEqual(max(gaps), 3.0)
+        self.assertAlmostEqual(sum(gaps) / len(gaps), 2.0, delta=0.1)
+
+
+@unittest.skipUnless(sys.platform.startswith("linux"), "stalls find processes through /proc")
+class StallProcessTests(unittest.TestCase):
+    def tree(self):
+        root = subprocess.Popen([sys.executable, "-c", TREE], stdout=subprocess.PIPE, text=True)
+        child, grandchild = (int(pid) for pid in root.stdout.readline().split())
+
+        def cleanup():
+            for pid in (grandchild, child, root.pid):
+                with contextlib.suppress(ProcessLookupError):
+                    os.kill(pid, 9)
+            root.wait()
+            root.stdout.close()
+        self.addCleanup(cleanup)
+        return root.pid, child, grandchild
+
+    def test_freeze_stops_the_tests_but_not_the_root_and_thaw_resumes_them(self):
+        root, child, grandchild = self.tree()
+        stopped = {}
+        stress.freeze(root, stopped)
+        self.assertEqual(set(stopped), {child, grandchild})
+        self.assertTrue(wait_for(lambda: state(child) == "T" and state(grandchild) == "T"))
+        self.assertNotEqual(state(root), "T")
+        stress.thaw(stopped)
+        self.assertEqual(stopped, {})
+        self.assertTrue(wait_for(lambda: "T" not in (state(child), state(grandchild))))
+
+    def test_loop_logs_each_stall_and_resumes_when_interrupted_mid_stall(self):
+        root, child, grandchild = self.tree()
+        sleeps, states = [], []
+
+        def sleep(seconds):
+            sleeps.append(seconds)
+            if len(sleeps) % 2 == 0:  # a pause: the tests are frozen right now
+                states.append((state(child), state(grandchild)))
+            if len(sleeps) == 4:
+                raise SystemExit(0)   # SIGTERM arriving during the second stall
+        log = io.StringIO()
+        with self.assertRaises(SystemExit):
+            stress.stall_loop(root, 700, 100, log, rng=stress.random.Random(1), sleep=sleep)
+        self.assertEqual(states, [("T", "T"), ("T", "T")])
+        self.assertEqual(sleeps[1], 0.7)
+        self.assertTrue(0.05 <= sleeps[0] <= 0.15)
+        self.assertTrue(wait_for(lambda: "T" not in (state(child), state(grandchild))),
+                        "an interrupted stall must resume what it froze")
+        stalls = [json.loads(line) for line in log.getvalue().splitlines()]
+        self.assertEqual([stall["processes"] for stall in stalls], [2], "only the completed stall is logged")
+
+    def run_attached(self, record, root, body):
+        code = ("import sys, time; sys.path.insert(0, sys.argv[1]); import nextest_stress as s\n"
+                "from pathlib import Path\n"
+                "with s.Stall(30000, 20, Path(sys.argv[2])).attach(int(sys.argv[3])) as helper:\n"
+                "    print(helper.pid, flush=True); time.sleep(60)\n")
+        runner = subprocess.Popen([sys.executable, "-c", code, str(HERE), record, str(root)],
+                                  stdout=subprocess.PIPE, text=True)
+        try:
+            helper = int(runner.stdout.readline())
+            body(runner, helper)
+        finally:
+            runner.kill()
+            runner.wait()
+            runner.stdout.close()
+
+    def test_the_helper_resumes_the_tests_when_the_runner_is_killed(self):
+        root, child, grandchild = self.tree()
+        with tempfile.TemporaryDirectory() as record:
+            def body(runner, helper):
+                self.assertTrue(wait_for(lambda: state(child) == "T"), "a stall never started")
+                runner.kill()
+                self.assertEqual(wait_until_dead([helper]), [], "the helper outlived the runner")
+                self.assertTrue(wait_for(lambda: "T" not in (state(child), state(grandchild))),
+                                "a runner killed mid-stall left the tests frozen")
+            self.run_attached(record, root, body)
+
+    def test_a_helper_killed_mid_stall_is_reported_and_its_tests_resumed(self):
+        root, child, grandchild = self.tree()
+        with tempfile.TemporaryDirectory() as record:
+            stall = stress.Stall(30000, 20, Path(record))
+            with stall.attach(root) as helper:
+                self.assertTrue(wait_for(lambda: state(grandchild) == "T"), "a stall never started")
+                helper.kill()
+                helper.wait()
+            self.assertEqual(stall.failures, [f"stall helper (pid {helper.pid}) exited -9"])
+            self.assertTrue(wait_for(lambda: "T" not in (state(child), state(grandchild))))
+
+    def test_the_helper_stops_on_terminate_and_ignores_a_terminal_interrupt(self):
+        root, child, _ = self.tree()
+        with tempfile.TemporaryDirectory() as record:
+            stall = stress.Stall(30000, 20, Path(record))
+            with stall.attach(root) as helper:
+                self.assertTrue(wait_for(lambda: state(child) == "T"), "a stall never started")
+                os.kill(helper.pid, stress.signal.SIGINT)
+                time.sleep(0.2)
+                self.assertIsNone(helper.poll(), "^C belongs to the runner, which stops the helper")
+            self.assertEqual(stall.failures, [])
+            self.assertEqual(helper.returncode, 0)
+            self.assertNotEqual(state(child), "T")
+
+
 FAKE_CARGO = """#!/usr/bin/env python3
 import json, os, sys
 with open(os.environ["FAKE_CARGO_LOG"], "a") as log:
@@ -331,9 +494,14 @@ with open(os.environ["FAKE_CARGO_LOG"], "a") as log:
 if sys.argv[2:4] == ["run", "--help"]:
     print(os.environ.get("FAKE_CARGO_HELP", "--retries <N>\\n--stress-count <COUNT>"))
 elif sys.argv[2] == "run":
-    import time
+    import subprocess, time
     time.sleep(float(os.environ.get("FAKE_CARGO_SLEEP", "0")))
-    sys.stderr.write(os.environ["FAKE_CARGO_OUTPUT"])
+    output = os.environ["FAKE_CARGO_OUTPUT"]
+    if os.environ.get("FAKE_CARGO_TEST"):
+        # One "test process" below cargo, as nextest runs each test.
+        passed = subprocess.run([sys.executable, "-c", os.environ["FAKE_CARGO_TEST"]]).returncode == 0
+        output = output.replace("STATUS", "PASS" if passed else "FAIL")
+    sys.stderr.write(output)
     sys.exit(int(os.environ.get("FAKE_CARGO_EXIT", "0")))
 """
 
@@ -369,15 +537,16 @@ class RunStressTests(unittest.TestCase):
             run=gate.run, terminate_on_signal=gate.terminate_on_signal,
             failure_exit_code=gate.failure_exit_code, Terminated=gate.Terminated)
 
-    def run_stress(self, output, exit_code=0, help_text=None, sleep=0, **overrides):
+    def run_stress(self, output, exit_code=0, help_text=None, sleep=0, test_code="", **overrides):
         args = SimpleNamespace(label="test-stress", repo_root=str(self.root),
                                intentd_dir="packages/intentd", cache_dir=str(self.cache),
                                filterset="test(/it's $/)", stress_count=3, load="0",
-                               load_cpus=None, build_jobs="2", test_threads="5")
+                               load_cpus=None, stall="0", stall_ms=None, stall_every_ms=None,
+                               build_jobs="2", test_threads="5")
         vars(args).update(overrides)
         stdout = io.StringIO()
         fake = {"FAKE_CARGO_OUTPUT": output, "FAKE_CARGO_EXIT": str(exit_code),
-                "FAKE_CARGO_SLEEP": str(sleep)}
+                "FAKE_CARGO_SLEEP": str(sleep), "FAKE_CARGO_TEST": test_code}
         if help_text is not None:
             fake["FAKE_CARGO_HELP"] = help_text
         with mock.patch.dict(os.environ, fake), \
@@ -401,12 +570,13 @@ class RunStressTests(unittest.TestCase):
             self.assertEqual(run[run.index(flag) + 1], value, flag)
         self.assertIn("--no-fail-fast", run)
         self.assertEqual(calls[2]["fixture"], "set")
-        self.assertIn("[test-stress] stress: 3/3 iterations (3 failed), 2 tests, LOAD=0: "
+        self.assertIn("[test-stress] stress: 3/3 iterations (3 failed), 2 tests, LOAD=0, STALL=0: "
                       "3 passed, 3 failed; failures: src/lib.rs:1 ×2, TIMEOUT ×1", stdout)
         records = list((self.cache / "stress").iterdir())
         self.assertEqual(len(records), 1)
         summary = json.loads((records[0] / "summary.json").read_text())
-        self.assertEqual((summary["failed"], summary["exit_code"], summary["load"]), (3, 100, False))
+        self.assertEqual((summary["failed"], summary["exit_code"], summary["load"], summary["stall"]),
+                         (3, 100, False, False))
         self.assertIn("panicked at src/lib.rs", (records[0] / "output.log").read_text())
         self.assertEqual(sorted(p.name for p in self.cache.iterdir()), ["stress"],
                          "stress runs never write resume journals or completion markers")
@@ -419,7 +589,8 @@ class RunStressTests(unittest.TestCase):
         text = "".join(f"        PASS [   0.002s] [{i}/3] (1/1) probe one\n" for i in (1, 2, 3))
         status, stdout, _ = self.run_stress(text, load="1", load_cpus=2)
         self.assertEqual(status, 0)
-        self.assertIn("3/3 iterations (0 failed), 1 test, LOAD=1 (2 cpu + fsync): 3 passed, 0 failed", stdout)
+        self.assertIn("3/3 iterations (0 failed), 1 test, LOAD=1 (2 cpu + fsync), STALL=0: 3 passed, 0 failed",
+                      stdout)
 
     def test_nextest_without_stress_support_fails_before_the_build(self):
         with self.assertRaisesRegex(RuntimeError, "no --stress-count"):
@@ -438,14 +609,61 @@ class RunStressTests(unittest.TestCase):
         failing_writer = "import sys; sys.stderr.write('No space left on device'); sys.exit(28)"
         with mock.patch.object(stress, "FSYNC_WRITER", failing_writer):
             status, stdout, _ = self.run_stress(text, load="1", load_cpus=1, sleep=1)
-        self.assertEqual(status, stress.LOAD_INVALID_EXIT)
+        self.assertEqual(status, stress.INVALID_EXIT)
         self.assertIn("3 passed, 0 failed; INVALID: 1 load worker(s) stopped early", stdout)
         record = next((self.cache / "stress").iterdir())
         self.assertIn("No space left on device", (record / "load.err").read_text())
         summary = json.loads((record / "summary.json").read_text())
-        self.assertEqual(summary["exit_code"], stress.LOAD_INVALID_EXIT)
+        self.assertEqual(summary["exit_code"], stress.INVALID_EXIT)
         self.assertEqual(len(summary["load_failures"]), 1)
         self.assertIn("exited 28", summary["load_failures"][0])
+
+    # A timing test that, like intentd#2917's reclaim test, fails when one gap
+    # between two steps exceeds its margin; nothing else can slow it that much.
+    TIMING_TEST = ("import time\n"
+                   "last = time.monotonic()\n"
+                   "for _ in range(12):\n"
+                   "    time.sleep(0.05); now = time.monotonic()\n"
+                   "    if now - last > {margin}: raise SystemExit('gap %.2fs' % (now - last))\n"
+                   "    last = now\n")
+    TIMING_OUTPUT = "        STATUS [   0.600s] [1/1] (1/1) probe timing\n"
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "stalls find processes through /proc")
+    def test_stalls_reproduce_a_timing_flake_that_a_wider_margin_survives(self):
+        for margin, expected in ((0.25, 1), (2.0, 0)):
+            with self.subTest(margin=margin):
+                status, stdout, _ = self.run_stress(
+                    self.TIMING_OUTPUT, test_code=self.TIMING_TEST.format(margin=margin),
+                    stall="1", stall_ms=400, stall_every_ms=50)
+                self.assertEqual(status, expected, stdout)
+                line = next(line for line in stdout.splitlines() if "] stress:" in line)
+                self.assertRegex(line, r"LOAD=0, STALL=1 \(400 ms pauses every ~50 ms, \d+ stalls?, "
+                                       r"longest \d+ ms\): " + ("0 passed, 1 failed" if expected else
+                                                                "1 passed, 0 failed$"))
+                self.assertIn("LOAD=0, STALL=1 (400 ms pauses every ~50 ms); running", stdout)
+                record = max((self.cache / "stress").iterdir(), key=lambda path: path.stat().st_mtime)
+                summary = json.loads((record / "summary.json").read_text())
+                self.assertEqual((summary["stall"], summary["stall_ms"], summary["stall_every_ms"],
+                                  summary["stall_failures"]), (True, 400, 50, []))
+                self.assertGreaterEqual(summary["stalls"], 1)
+                stalls = stress.read_stalls(record / "stall.log")
+                self.assertEqual(len(stalls), summary["stalls"])
+                self.assertTrue(all(stall["held_ms"] >= 400 for stall in stalls), stalls)
+
+    def test_the_same_timing_test_passes_without_stalls(self):
+        status, stdout, _ = self.run_stress(self.TIMING_OUTPUT, test_code=self.TIMING_TEST.format(margin=0.25))
+        self.assertEqual(status, 0, stdout)
+        self.assertIn("LOAD=0, STALL=0: 1 passed, 0 failed", stdout)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "stalls find processes through /proc")
+    def test_a_stall_run_in_which_no_stall_froze_a_test_is_invalid(self):
+        text = "".join(f"        PASS [   0.002s] [{i}/3] (1/1) probe one\n" for i in (1, 2, 3))
+        status, stdout, _ = self.run_stress(text, stall="1", stall_every_ms=600000)
+        self.assertEqual(status, stress.INVALID_EXIT)
+        self.assertIn("STALL=1 (1000 ms pauses every ~600000 ms, 0 stalls): 3 passed, 0 failed; "
+                      "INVALID: no stall froze a test process", stdout)
+        summary = json.loads((next((self.cache / "stress").iterdir()) / "summary.json").read_text())
+        self.assertEqual((summary["exit_code"], summary["stalls"]), (stress.INVALID_EXIT, 0))
 
     def test_real_gate_provides_every_helper_stress_mode_uses(self):
         for name in vars(self.fake_gate()):
@@ -472,12 +690,33 @@ class ArgumentTests(unittest.TestCase):
         args = run_stress.call_args.args[0]
         self.assertEqual((args.stress_count, args.load, args.load_cpus, args.filterset),
                          (20, "1", 8, "test(/a/)"))
+        self.assertEqual((args.stall, args.stall_ms, args.stall_every_ms), ("0", None, None))
+
+    def test_stall_options_dispatch_and_need_linux(self):
+        argv = ("--filterset", "test(/a/)", "--stress-count", "2", "--stall", "1",
+                "--stall-ms", "1100", "--stall-every-ms", "300")
+        with mock.patch("nextest_stress.stall_supported", return_value=True):
+            status, run_stress, _ = self.main(*argv)
+        self.assertEqual(status, 7)
+        args = run_stress.call_args.args[0]
+        self.assertEqual((args.stall, args.stall_ms, args.stall_every_ms), ("1", 1100, 300))
+        with mock.patch("nextest_stress.stall_supported", return_value=False):
+            status, run_stress, stderr = self.main(*argv)
+        self.assertEqual(status, 2)
+        self.assertIn("needs Linux", stderr)
+        run_stress.assert_not_called()
 
     def test_bad_stress_arguments_are_refused(self):
         for argv, message in ((("--stress-count", "5"), "needs --filterset"),
                               (("--filterset", "test(/a/)", "--stress-count", "0"), "positive integer"),
                               (("--filterset", "test(/a/)", "--stress-count", "x"), "positive integer"),
                               (("--filterset", "test(/a/)", "--load", "1"), "need --stress-count"),
+                              (("--filterset", "test(/a/)", "--stall", "1"), "need --stress-count"),
+                              (("--filterset", "test(/a/)", "--stall-ms", "5"), "need --stress-count"),
+                              (("--filterset", "test(/a/)", "--stress-count", "2", "--stall", "2"),
+                               "invalid choice"),
+                              (("--filterset", "test(/a/)", "--stress-count", "2", "--stall-every-ms", "0"),
+                               "positive integer"),
                               (("--filterset", " ", "--stress-count", "2"), "filterset expression")):
             with self.subTest(argv=argv):
                 status, run_stress, stderr = self.main(*argv)

@@ -938,13 +938,21 @@ test-select: ensure-intentd-submodule | check-transfer-fixture ## Run only the R
 # policy, fixtures, HERMETIC/COMPACT/BUILD_JOBS/TEST_THREADS and 3x time-limit
 # default as test-select; E is validated and unexported as above. LOAD=1 runs
 # LOAD_CPUS `yes` spinners (default 2 x CPUs) plus an fsync writer after the
-# build, and stops them when the run ends. Prints one summary line (iterations,
-# passes, failures, distinct panic locations) and the record path; never
-# writes resume records, so RESUME/GATE_FORCE/NO_FAIL_FAST do not apply.
+# build, and stops them when the run ends. STALL=1 (Linux) freezes every test
+# process with SIGSTOP for STALL_MS (default 1000) and resumes it, at random
+# gaps averaging STALL_EVERY_MS (default 2000), like a briefly frozen CI runner:
+# it reproduces flakes that need one long pause at an exact point, which LOAD
+# rarely produces (intentd#2917). Prints one summary line (iterations,
+# passes, failures, distinct panic locations, load and stall settings) and the
+# record path; never writes resume records, so RESUME/GATE_FORCE/NO_FAIL_FAST
+# do not apply.
 COUNT ?= 100
 LOAD ?= 0
 LOAD_CPUS ?=
-unexport COUNT LOAD LOAD_CPUS
+STALL ?= 0
+STALL_MS ?=
+STALL_EVERY_MS ?=
+unexport COUNT LOAD LOAD_CPUS STALL STALL_MS STALL_EVERY_MS
 # Non-empty when $(1) is one positive decimal integer (checked without a shell).
 POSITIVE_INT = $(and $(strip $(1)),$(if $(word 2,$(1)),,ok),$(if $(filter 0%,$(1)),,ok),$(if $(subst 0,,$(subst 1,,$(subst 2,,$(subst 3,,$(subst 4,,$(subst 5,,$(subst 6,,$(subst 7,,$(subst 8,,$(subst 9,,$(1))))))))))),,ok))
 ifneq ($(filter test-stress,$(MAKECMDGOALS)),)
@@ -959,9 +967,22 @@ ifeq ($(call POSITIVE_INT,$(LOAD_CPUS)),)
 $(error make test-stress needs LOAD_CPUS to be a positive integer, got '$(LOAD_CPUS)')
 endif
 endif
+ifneq ($(words $(STALL))$(filter 0 1,$(STALL)),1$(strip $(STALL)))
+$(error make test-stress needs STALL=0 or STALL=1, got '$(STALL)')
+endif
+ifneq ($(strip $(STALL_MS)),)
+ifeq ($(call POSITIVE_INT,$(STALL_MS)),)
+$(error make test-stress needs STALL_MS to be a positive integer, got '$(STALL_MS)')
+endif
+endif
+ifneq ($(strip $(STALL_EVERY_MS)),)
+ifeq ($(call POSITIVE_INT,$(STALL_EVERY_MS)),)
+$(error make test-stress needs STALL_EVERY_MS to be a positive integer, got '$(STALL_EVERY_MS)')
+endif
+endif
 endif
 
-test-stress: ensure-intentd-submodule | check-transfer-fixture ## Repeat the Rust tests matching E='<filterset>' COUNT times (default 100) with retries off, LOAD=1 adds CPU + disk load; prints passes, failures and panic locations
+test-stress: ensure-intentd-submodule | check-transfer-fixture ## Repeat the Rust tests matching E='<filterset>' COUNT times (default 100) with retries off, LOAD=1 adds CPU + disk load, STALL=1 freezes tests at random (STALL_MS, STALL_EVERY_MS); prints passes, failures and panic locations
 	@python3 scripts/check_watch_capacity.py --quiet
 	@cargo nextest --version >/dev/null 2>&1 || { \
 		echo "[test-stress] ERROR: cargo-nextest is not installed — run 'cargo install cargo-nextest --locked'"; \
@@ -969,7 +990,8 @@ test-stress: ensure-intentd-submodule | check-transfer-fixture ## Repeat the Rus
 	}
 	@$(HERMETIC_PREFLIGHT)
 	@$(RUST_TEST_RUNNER) --label test-stress --filterset '$(TEST_SELECT_E)' \
-		--stress-count '$(COUNT)' --load '$(strip $(LOAD))'$(if $(strip $(LOAD_CPUS)), --load-cpus '$(strip $(LOAD_CPUS))')
+		--stress-count '$(COUNT)' --load '$(strip $(LOAD))'$(if $(strip $(LOAD_CPUS)), --load-cpus '$(strip $(LOAD_CPUS))') \
+		--stall '$(strip $(STALL))'$(if $(strip $(STALL_MS)), --stall-ms '$(strip $(STALL_MS))')$(if $(strip $(STALL_EVERY_MS)), --stall-every-ms '$(strip $(STALL_EVERY_MS))')
 
 # Local equivalent of intentd's pull_request `coverage-changed` CI job: the
 # same changed-tests.sh selection as test-changed, run under the cargo-llvm-cov
