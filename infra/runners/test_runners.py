@@ -1469,8 +1469,10 @@ class Static(unittest.TestCase):
     def test_image_has_tools_routed_jobs_call_without_setup(self):
         text = (HERE / 'Dockerfile').read_text()
         packages = text.split('apt-get install -y --no-install-recommends')[1].split('&&')[0].split()
-        for package in ('bison', 'build-essential', 'git', 'iproute2', 'jq', 'lsof', 'procps', 'python3-pip', 'python3-venv',
-                        'rsync', 'shellcheck', 'unzip', 'xz-utils', 'zip', 'zstd'):
+        # gcc-mingw-w64-x86-64: intentd's windows-cross-lint (Clippy for
+        # x86_64-pc-windows-gnu) needs the target C compiler and cannot apt-get.
+        for package in ('bison', 'build-essential', 'gcc-mingw-w64-x86-64', 'git', 'iproute2', 'jq', 'lsof', 'procps',
+                        'python3-pip', 'python3-venv', 'rsync', 'shellcheck', 'unzip', 'xz-utils', 'zip', 'zstd'):
             self.assertIn(package, packages)
         for tool in ('GH', 'NODE', 'PWSH'):
             self.assertIn(f'ARG {tool}_VERSION=', text)

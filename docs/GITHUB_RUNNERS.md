@@ -227,7 +227,8 @@ and refuse an intent-cache slot.
 
 Routed jobs call these without a setup step, as they would on GitHub-hosted
 `ubuntu-24.04`: bash, git, git-lfs, curl, jq, gh, make, gcc/g++
-(build-essential), bison/yacc, procps (ps, pgrep, pkill), iproute2 (ss), lsof, pkg-config, libssl-dev, shellcheck, tar, zip,
+(build-essential), the MinGW-w64 x86_64 C compiler (`x86_64-w64-mingw32-gcc`,
+for Windows GNU cross lint), bison/yacc, procps (ps, pgrep, pkill), iproute2 (ss), lsof, pkg-config, libssl-dev, shellcheck, tar, zip,
 unzip, xz, zstd, rsync, file, dpkg-deb, python3 with pip and venv, Node with
 npm and corepack (in `/opt/node`, owned by `runner`, so `corepack enable` and
 `npm install -g` work without sudo), PowerShell (`pwsh`), and rustup with the
