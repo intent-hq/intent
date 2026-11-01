@@ -574,7 +574,7 @@ PY
   [[ "${compact_record%/changed/*}" != "${changed_record%/changed/*}" ]] || fail "$case_name: default/compact tree identities collide"
 
   case_name="default changed run is compact and resumes the compact record"
-  E2E_COMPACT_DEFAULT= e2e_make 1 0
+  E2E_COMPACT_DEFAULT='' e2e_make 1 0
   expect_ok
   [[ "$stdout" == *"COMPACT=1"* && "$stdout" == *"resumed: skipped 2 tests"* && "$cargo_log" != *"nextest run"* ]] || fail "$case_name: $stdout $cargo_log"
 
