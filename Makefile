@@ -801,8 +801,9 @@ test-scripts: ## Run the Python script unit tests (Python 3.11+, no submodules n
 check-dry-run-targets: ensure-intentd-submodule ## Check every DRY_RUN target (and coverage-*) exits under DRY_RUN=1 without running cargo
 	@bash scripts/check-dry-run-targets.sh
 
-# The script checks CI would run for this change (lint-shell, the ci.yml
-# shell-tests suites, node:test for changed scripts/*.mjs); see CONTRIBUTING.md.
+# The script checks CI would run for this change (lint-shell, the affected
+# test-scripts modules, the ci.yml shell-tests suites, node:test for changed
+# scripts/*.mjs); see CONTRIBUTING.md.
 test-scripts-changed: ## Run the script checks a change affects vs BASE (default origin/main; DRY_RUN=1 prints the plan, FULL=1 runs every suite)
 	@BASE="$(BASE)" DRY_RUN="$(DRY_RUN)" FULL="$(FULL)" bash scripts/changed-script-tests.sh
 

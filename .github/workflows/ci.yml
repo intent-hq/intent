@@ -36,7 +36,7 @@ jobs:
         [
         {"key":"shell-tests","label":"ubuntu-24.04","minutes":4,"events":["merge_group"]},
         {"key":"shell-tests-bash3","label":"ubuntu-24.04","minutes":3,"events":["merge_group"]},
-        {"key":"python-tests","label":"ubuntu-24.04","minutes":1,"events":["merge_group"]},
+        {"key":"python-tests","label":"ubuntu-24.04","minutes":1},
         {"key":"docs-check","label":"ubuntu-24.04","minutes":1},
         {"key":"pr-title","label":"ubuntu-24.04","events":["pull_request"]},
         {"key":"bridge-test","label":"ubuntu-24.04","events":["merge_group"]},
@@ -129,21 +129,43 @@ jobs:
   # entry point locally and in CI; tomllib requires Python 3.11 or newer.
   # Includes offline prerelease retention/deletion tests and a functional check
   # that their failures fail this target. No cleanup credentials or live scan.
+  # Runs on PRs too, so a broken test is not first found in the merge queue
+  # (intent PR 8290). A PR runs it only when a file the tests read changed: the
+  # Python and shell scripts, their fixtures, the vendored tomli (LICENSE and
+  # provenance included), the Makefile or this workflow.
+  # The queue always runs it.
   python-tests:
-    if: github.event_name == 'merge_group'
     needs: [runner-route]
     runs-on: ${{ fromJSON(needs.runner-route.outputs.slots || '{}')['python-tests'] || fromJSON('["ubuntu-24.04"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: false
-      - uses: actions/setup-node@v7
+          fetch-depth: 2
+      - name: Select Python test changes
+        id: select
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          selected=true
+          # A PR checks out its merge commit: parent 1 is the base tip, so the
+          # diff to it is exactly the PR's change. Anything else runs the tests.
+          if [ "$EVENT" = pull_request ] && git rev-parse -q --verify HEAD^2 >/dev/null; then
+            changed=$(git diff --name-only HEAD^1 HEAD -- 'scripts/*.py' 'scripts/*.sh' scripts/fixtures scripts/_vendor Makefile .github/workflows/ci.yml)
+            if [ -z "$changed" ]; then selected=false; fi
+          fi
+          echo "selected=$selected" >> "$GITHUB_OUTPUT"
+      - if: steps.select.outputs.selected == 'true'
+        uses: actions/setup-node@v7
         with:
           node-version: '24'
-      - uses: actions/setup-python@v6
+      - if: steps.select.outputs.selected == 'true'
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
-      - run: make test-scripts
+      - if: steps.select.outputs.selected == 'true'
+        run: make test-scripts
 
   # Always prepare on both PR and queue runs. Read the pin from the same
   # tested tree as the local reusable call; a failed diff/read must fail CI,

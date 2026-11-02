@@ -12,7 +12,7 @@ from unittest import mock
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-QUEUE_JOBS = {'bridge-test', 'python-tests', 'shell-tests', 'shell-tests-bash3', 'bootstrap-install'}
+QUEUE_JOBS = {'bridge-test', 'shell-tests', 'shell-tests-bash3', 'bootstrap-install'}
 RUNTIME_STEPS = {'Verify connected harnesses and source revisions', 'Prepare the connected test toolchains',
                  'Configure the self-hosted compiler cache', 'Install the selected renderer dependencies',
                  'Run the connected transfer selection contract'}
@@ -335,6 +335,65 @@ class EventPolicy(unittest.TestCase):
             git('rm','scripts/bootstrap-dev-host.sh')
             git('commit','-qm','test: removal')
             self.assertEqual(run('merge_group',git('rev-parse','HEAD'),head), (0, 'selected=true\n'))
+
+    def test_python_tests_run_on_pull_requests_and_always_in_the_queue(self):
+        # intent PR 8290 changed scripts/nextest_stress.py, but python-tests ran
+        # only in merge_group, so its tests first ran after the PR was queued.
+        doc = workflow('ci.yml')
+        job = doc['jobs']['python-tests']
+        self.assertNotIn('if', job)
+        self.assertIn('python-tests', doc['jobs']['gate']['needs'])
+        self.assertFalse(job.get('continue-on-error'))
+        route = next(line for line in (ROOT / '.github/workflows/ci.yml').read_text().splitlines()
+                     if '"key":"python-tests"' in line)
+        self.assertNotIn('"events"', route)
+        steps = job['steps']
+        self.assertEqual(steps[0]['with'].get('fetch-depth'), 2)
+        tests = next(s for s in steps if s.get('run') == 'make test-scripts')
+        self.assertEqual(tests['if'], "steps.select.outputs.selected == 'true'")
+
+    def test_python_tests_selection_executes_real_diff_and_fails_open(self):
+        steps = workflow('ci.yml')['jobs']['python-tests']['steps']
+        command = next(s['run'] for s in steps if s.get('name') == 'Select Python test changes')
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            def git(*args):
+                return subprocess.check_output(['git', '-C', temp, *args], text=True, stderr=subprocess.DEVNULL).strip()
+            git('init', '-q', '-b', 'main')
+            git('config', 'user.name', 'Fixture')
+            git('config', 'user.email', 'fixture@example.invalid')
+            git('config', 'commit.gpgsign', 'false')
+            (root/'scripts').mkdir()
+            (root/'scripts/nextest_stress.py').write_text('x = 1\n')
+            (root/'docs.md').write_text('a\n')
+            git('add', '.')
+            git('commit', '-qm', 'test: base')
+            def run(event):
+                output = root/'output'
+                output.unlink(missing_ok=True)
+                result = subprocess.run(['bash', '-e', '-o', 'pipefail', '-c', command], cwd=root,
+                    env={**os.environ, 'EVENT': event, 'GITHUB_OUTPUT': str(output)}, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                return output.read_text()
+            def pr_merge(path, text):
+                git('checkout', '-q', '-B', 'pr', 'main')
+                (root/path).parent.mkdir(parents=True, exist_ok=True)
+                (root/path).write_text(text)
+                git('add', '.')
+                git('commit', '-qm', 'test: pr ' + path)
+                git('checkout', '-q', 'main')
+                git('checkout', '-q', '--detach', 'main')
+                git('merge', '-q', '--no-ff', '--no-edit', 'pr')
+            pr_merge('docs.md', 'b\n')
+            self.assertEqual(run('pull_request'), 'selected=false\n')
+            self.assertEqual(run('merge_group'), 'selected=true\n')
+            for path in ('scripts/nextest_stress.py', 'scripts/test_host_load.py', 'scripts/with-test-policy.sh',
+                         'scripts/fixtures/a.json', 'scripts/_vendor/tomli/LICENSE',
+                         'scripts/_vendor/tomli.provenance.json', 'Makefile', '.github/workflows/ci.yml'):
+                pr_merge(path, 'changed ' + path + '\n')
+                self.assertEqual(run('pull_request'), 'selected=true\n', path)
+            git('checkout', '-q', 'main')
+            self.assertEqual(run('pull_request'), 'selected=true\n', 'a non-merge checkout must run the tests')
 
     def test_bootstrap_container_receives_ci_without_a_terminal(self):
         steps = workflow('bootstrap-install.yml')['jobs']['bootstrap-install']['steps']

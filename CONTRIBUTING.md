@@ -582,7 +582,8 @@ The interpreter is isolated; the build does not replace the system shell.
 
 ### Script checks for your change
 
-CI runs the shell suites only in the merge queue, so a broken suite or a new
+CI runs the shell suites only in the merge queue, and the Python unit tests
+(`make test-scripts`) only once a PR is pushed, so a broken test or a new
 shellcheck finding otherwise shows up after a push. Before pushing changes to
 `scripts/`, the `Makefile` or `.github/workflows/ci.yml`, run:
 
@@ -593,14 +594,23 @@ FULL=1 make test-scripts-changed     # run every shell suite
 BASE=<ref> make test-scripts-changed # compare with another base
 ```
 
-It always runs `make lint-shell`. From the ci.yml `shell-tests` job (read from
+It always runs `make lint-shell`. From the `test-scripts` recipe in the
+`Makefile` it picks, for each changed `.sh` or `.py` script directly under
+`scripts/`, the unittest modules that are the script itself, its own
+`test_<name>.py` or a file that names it, and runs them with that recipe's
+command; it runs all of `make test-scripts` for the same full-run reasons as the
+shell suites below, except when no module names the script (then it skips them).
+On pull requests, CI runs `make test-scripts` when a `scripts/*.py`,
+`scripts/*.sh`, `scripts/fixtures/` or `scripts/_vendor/` file, the `Makefile`
+or `ci.yml` changed; a local `scripts/_vendor/` change runs all of it too.
+From the ci.yml `shell-tests` job (read from
 that job, so the lists cannot drift) it picks, for each changed `.sh` or `.py`
 script directly under `scripts/`, the suites that are the script itself, its
 own test (`<name>.test.sh` or `test_<name>.py`) or a file that names it; a changed `scripts/*.test.sh` also runs
 `lint-fixed-sleeps.sh`. It prints why each suite was picked. It runs every
 suite when the `Makefile`, `ci.yml` or `scripts/fixtures/` changed, when a
-changed script is a shared helper that another script names, when no suite
-names a changed script, or with `FULL=1`. The merge queue still runs every
+changed script is a shared helper that another script names, when neither a
+suite nor a `test-scripts` module names a changed script, or with `FULL=1`. The merge queue still runs every
 suite. For each changed `scripts/*.mjs` with a sibling `.test.mjs`, it runs
 that test with `node --test`. Every step runs; the failures are listed at the
 end. Like CI it needs node, shellcheck and the `packages/intentd`

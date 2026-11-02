@@ -26,8 +26,8 @@ fail() {
   exit 1
 }
 
-always_on="runner-route docs-check event-catalog-check shell-lint workflow-lint repo-hygiene ruleset-check triage-parser-test consumer-checks-prepare ci-policy"
-queue_only="bridge-test python-tests shell-tests shell-tests-bash3 bootstrap-install"
+always_on="runner-route docs-check event-catalog-check shell-lint workflow-lint repo-hygiene ruleset-check triage-parser-test consumer-checks-prepare ci-policy python-tests"
+queue_only="bridge-test shell-tests shell-tests-bash3 bootstrap-install"
 pr_only="pr-title breaking-token submodule-pins"
 path_selected="consumer-checks-exercise"
 
