@@ -416,6 +416,13 @@ repository instead of a separate hub.
 
 ##### Placement across machines
 
+The agent's provider reference must first be
+[remote-compatible](./provider-profiles.md#remote-compatibility): a profile, or
+a bare base provider whose Default configuration overrides set, an account
+folder (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`) fails with `-32602`
+`profile-not-remote-compatible` before any write, lease or launch, whatever
+machine was named.
+
 `placement.nodeId` names an exposed machine; `os` / `arch` filter. With
 `target: "remote"` and no `nodeId`, the backend:
 
@@ -434,6 +441,46 @@ candidate, and a profile whose credentials fail does so at launch without
 marking the machine's healthy default account `auth-failed`. The tool descriptions and
 `ws.help("agent")` discovery are in
 [model-platform routing](../model-platform-routing.md#exposed-machines).
+
+##### Switching a remote agent's model
+
+`agent.setModel` on a remote agent may change the model, the provider, or both,
+including to a profile reference or another base provider. It is accepted when
+all of these hold, judged on the agent's machine's cached
+[capabilities report](../node-link.md#capabilities-report) without connecting:
+
+1. the target reference is
+   [remote-compatible](./provider-profiles.md#remote-compatibility);
+2. the machine reports the target base provider as usable under the placement
+   rules: installed (not `cli-missing` or `prerequisite-missing`), and for a
+   target without profile environment also not `signed-out` or `auth-failed`;
+3. the machine lists the model, under the same alias rule as placement; the
+   `"default"` sentinel skips this check.
+
+The other `agent.setModel` checks (model ownership, the cross-provider
+availability gate, §5.5) still apply. On success the result and the
+`agent:updated` event are unchanged. The current turn finishes on the old
+configuration. The next turn stops the agent's provider process on the machine
+and starts it again **on the same machine**, in the same checkout, with the new
+provider, model and profile environment, replaying the Intent history like a
+local [switch](./provider-profiles.md#agent-state-switches-and-replacement). A
+remote agent never moves to another machine. If that start fails, the failure
+surfaces as any remote start failure does.
+
+Refusals are `-32602` and change nothing:
+
+- `profile-not-remote-compatible` when the target is not remote-compatible;
+- `model-unavailable` when the provider is not usable on the agent's machine or
+  the model is not listed; `machines` holds only the agent's machine;
+- `placement-unavailable` with reason `machine-unknown` or `machine-revoked`
+  when the agent's machine is no longer exposed.
+
+`remote-model-change-unsupported` is no longer returned by `agent.setModel`. It
+remains a start-path safety net: a remote start whose provider or model changed
+by any route other than a validated `agent.setModel` or
+[quota failover](./provider-profiles.md#backup-failover) fails with a message
+starting `remote-model-change-unsupported:`. Quota failover is the other
+accepted switch, and it too picks only remote-compatible backups.
 
 ##### Node mode
 
@@ -471,8 +518,31 @@ With several candidates, `machines[]` carries those fields per machine.
 {"code":-32602,"message":"No capacity on Build box: 4 of 4 agents running","data":{"code":"placement-unavailable","reason":"no-capacity","nodeId":"d-build-box","limit":"count","runningAgents":4,"agentCap":4,"retryable":true,"observedAt":"2026-10-30T00:00:00Z"}}
 ```
 
+`profile-not-remote-compatible` is `-32602`, raised before any write by
+placement (`agent.create`, `agent.delegate`, `agent.wakeOrCreate`'s creation
+branch) and by `agent.setModel` on a remote agent when the provider reference
+is not [remote-compatible](./provider-profiles.md#remote-compatibility):
+
+```ts
+interface ProfileNotRemoteCompatibleData {
+  code: "profile-not-remote-compatible";
+  providerRef: string;               // the reference as given (a profile ref or a bare base id)
+  reason: "account-folder" | string; // open enum, as on RemoteIncompatibility
+  keys: string[];                    // variable names only, never values
+}
+```
+
+Its message names the configuration and the variable and points to a
+configuration that uses the machine's own sign-in or an API key, for example
+"Work uses an account folder (CLAUDE_CONFIG_DIR) that only exists on this
+backend, so it can't run on another machine; pick a profile that uses the
+machine's own sign-in or an API key." It is not retryable: the configuration
+must change first.
+
 `model-unavailable` is `-32602`, raised before any launch when no candidate
-lists the requested model:
+lists the requested model, and by `agent.setModel` on a remote agent whose
+machine does not offer the target provider or model (then `machines` lists
+only that machine):
 
 ```ts
 interface ModelUnavailableData {

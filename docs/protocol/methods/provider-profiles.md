@@ -231,6 +231,12 @@ interface ProviderProfile {
   createdAt: string;          // RFC 3339
   updatedAt: string;
   activation?: { runningProcesses: number }; // see "Activation on reads"
+  remoteCompatible?: boolean; // see "Remote compatibility"; present on implementing daemons
+  remoteIncompatibility?: RemoteIncompatibility; // present exactly when remoteCompatible is false
+}
+interface RemoteIncompatibility {
+  reason: "account-folder" | string; // open enum; "account-folder" is the only value today
+  keys: string[];                   // the variable names that cause it, as saved; never values
 }
 type EnvEntryRead =
   | { key: string; kind: "set"; value: string } // "********" (masked) or "" (saved empty string); CLAUDE_CONFIG_DIR / CODEX_HOME: the stored value
@@ -304,6 +310,30 @@ interface ProfileActivation {
     last known state; omission does not mean `0`.
   - The `update` result's top-level `activation` additionally carries `envChanged`.
   - `ProviderProfileSummary` (catalog rows and events) does not carry activation.
+- <a id="remote-compatibility"></a>**Remote compatibility.** Every `ProviderProfile`
+  and `DefaultConfig` read carries `remoteCompatible`: whether the configuration can
+  run an agent on another machine (a [remote agent](./nodes.md#daemon-to-daemon-remote-machines)).
+  That covers `list` (profiles and `defaults`), the `profile` in `create` and
+  `update` results, the `profiles` in `reorder` results, and the `defaultConfig` in
+  `updateDefault` results.
+  - A configuration that **sets** an account folder (`CLAUDE_CONFIG_DIR` or
+    `CODEX_HOME`, compared ignoring ASCII case, under either base provider) is not
+    remote-compatible: `remoteCompatible: false` with
+    `remoteIncompatibility: { reason: "account-folder", keys }`, where `keys` lists
+    those variable names as saved. The folder is signed in on this backend; another
+    machine may lack it or hold a different account under the same path, so the rule
+    holds whether or not the folder exists on any machine.
+  - Everything else is `remoteCompatible: true` with no `remoteIncompatibility`: the
+    Default configuration with no overrides (the machine's own sign-in), an
+    environment of other values such as API keys or base URLs, and an `unset`
+    account folder.
+  - The value follows the saved environment, so it is recomputed on every read and
+    changes only through an `env` write.
+  - `reason` is an open string enum. Clients treat an unknown reason as not
+    remote-compatible and show `keys` when present.
+  - It is value-free: `keys` carries variable names only. Daemons that predate it
+    omit both fields; clients then treat the configuration as compatible and let
+    placement decide.
 
 **Validation.** Invalid input returns `-32602` with `data.code: "invalid-params"` and
 `data.fieldErrors: [{ field, code, message }]`, listing every failure found:
@@ -389,6 +419,17 @@ never removes external account directories.
 - `providers.catalog` gains an additive top-level `defaultNames?` map naming each
   renamed Default configuration (see
   [Default configuration overrides](#default-configuration-overrides)).
+- **Remote compatibility in the catalog.** Each `profiles` row
+  (`ProviderProfileSummary`) also carries `remoteCompatible` and, when it is `false`,
+  `remoteIncompatibility`, as on `ProviderProfile`
+  ([Remote compatibility](#remote-compatibility)). The catalog gains an additive
+  top-level `defaultRemoteIncompatibility?: { "<baseProviderId>": RemoteIncompatibility }`,
+  holding only the base providers whose Default configuration is not remote-compatible
+  and omitted when every Default is compatible, like `defaultNames`. A base provider
+  absent from it is compatible. Member reads may include both, since they carry no
+  values. A provider picker for a remote agent reads these to mark or hide
+  configurations that cannot run there. `providers:profiles-changed` invalidates them;
+  its `profile` summary does not carry the two fields, so clients re-read the catalog.
 - `models.list { providerId: providerRef }` returns that profile's catalog with
   `ModelInfo.provider = providerRef`. Cache keys and the version key include the
   profile's resolved environment fingerprint. Catalogs and cached status never cross
@@ -430,6 +471,9 @@ never removes external account directories.
   turn starts a fresh provider process and a native session owned by the new
   reference, with Intent history replayed. A native session id is never reused across
   references or across an account-relevant settings change.
+  For a remote agent the target must also be remote-compatible and offered by the
+  agent's machine, and the next turn relaunches it on that machine
+  ([switching a remote agent's model](./nodes.md#switching-a-remote-agents-model)).
 - **Activation.** Provider processes read the saved profile when they start. This
   includes processes recreated after idle reaping or a crash. Running processes keep
   their settings. Saving never interrupts a turn or restarts anything.
@@ -653,6 +697,8 @@ interface DefaultConfig {
   env: EnvEntryRead[];         // masked except folder paths; in stored order; [] when none saved
   settingsFingerprint: string; // opaque; "" exactly when no entries are saved
   activation?: { runningProcesses: number }; // as on ProviderProfile
+  remoteCompatible?: boolean;                // as on ProviderProfile
+  remoteIncompatibility?: RemoteIncompatibility; // as on ProviderProfile
 }
 ```
 
@@ -772,9 +818,18 @@ a reconnect. A failover switch changes no profile and emits no
 An agent placed on a remote machine over the daemon-to-daemon executor link runs
 with the same selected profile or Default overrides, resolved on the backend and
 sent to the machine as an environment overlay; with neither, the machine uses its
-own provider login. Account folders expand `~` against the machine's home and must
-exist there, and nothing falls back to another account. See
+own provider login. Nothing falls back to another account. See
 [provider credentials](../node-link.md#provider-credentials-profile-environment).
+
+Only a [remote-compatible](#remote-compatibility) configuration runs on a remote
+machine. Choosing one that sets an account folder for a remote agent, at placement
+or through `agent.setModel`, fails before any write with `-32602`
+`profile-not-remote-compatible`
+([remote machine errors](./nodes.md#remote-machine-errors)). A remote agent can
+switch to another remote-compatible configuration or model that its machine offers;
+see [switching a remote agent's model](./nodes.md#switching-a-remote-agents-model).
+Quota failover on a remote agent likewise passes over backups that are not
+remote-compatible.
 
 #### Compatibility
 
@@ -794,6 +849,13 @@ Default name and environment controls (with nothing saved); an older daemon reje
 failed save. Older clients ignore `defaults`, `defaultNames`
 and the two Default event changes (they re-list on any revision), and keep labelling
 the original configuration `Default`.
+
+Clients detect remote compatibility by the presence of `remoteCompatible` on
+`ProviderProfile`, `DefaultConfig` and `ProviderProfileSummary` rows. When it is
+absent, they treat every configuration as compatible and rely on the
+`profile-not-remote-compatible` refusal. Older clients ignore `remoteCompatible`,
+`remoteIncompatibility` and `defaultRemoteIncompatibility`, and surface the refusal's
+message.
 
 Clients detect backup failover support by the presence of `backup` on
 `ProviderProfile` and `ProviderProfileSummary`. When it is absent, they hide the

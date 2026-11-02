@@ -385,7 +385,8 @@ this backend. This section governs only backends that advertise
 
 **Selection.** `placement.nodeId` names one exposed machine and never falls
 back to another. Without it, `target: "remote"` considers every exposed machine
-that is not revoked:
+that is not revoked, once the provider reference is
+[remote-compatible](./methods/provider-profiles.md#remote-compatibility):
 
 1. platform matches `os` / `arch`;
 2. the provider is installed: `cli-missing` and `prerequisite-missing` are
@@ -405,7 +406,8 @@ deciding. `node-configuration-ambiguous` does not apply: several machines are
 an ordinary candidate set. An explicit remote placement never falls back to
 the local daemon.
 
-**Errors.** When no machine lists the model, admission fails before any launch
+**Errors.** A provider reference that sets an account folder fails first with
+`profile-not-remote-compatible`, naming the variables. When no machine lists the model, admission fails before any launch
 with `model-unavailable`, listing each machine's provider status and models
 (at most 50 per machine). Otherwise a definite no match is
 `placement-unavailable` with reason `no-capacity`, `unsupported-platform`,

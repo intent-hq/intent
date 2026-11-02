@@ -644,6 +644,24 @@ because 6 was never released, so a version-6-only peer gets
 `machine-update-required`. It shipped without a public protocol version bump:
 clients detect it only through `remoteMachines: 1`.
 
+**Remote-compatible profiles and switching a remote agent's model (additive, one narrowing).**
+[Provider profiles](./methods/provider-profiles.md#remote-compatibility) and
+Default configurations gain `remoteCompatible` and `remoteIncompatibility`
+(`{ reason: "account-folder", keys }`) on `providers.profiles.*` reads and on
+catalog `profiles` rows, and `providers.catalog` gains
+`defaultRemoteIncompatibility`. A configuration that sets an account folder is
+never placed on a remote machine: placement and `agent.setModel` refuse it with
+`-32602` `profile-not-remote-compatible`. `agent.setModel` on a remote agent is
+now accepted when the target is remote-compatible and its machine offers the
+provider and model, relaunching on the same machine
+([switching a remote agent's model](./methods/nodes.md#switching-a-remote-agents-model));
+otherwise it fails with `profile-not-remote-compatible` or `model-unavailable`.
+The narrowing: `agent.setModel` no longer returns
+`remote-model-change-unsupported`, which remains only a start-path safety net.
+No methods, events, numeric codes or nodeProtocol change, and the surface
+counts are unchanged. Clients detect it by the presence of `remoteCompatible`
+on profile rows; there is no public protocol version bump.
+
 **Command-default change (breaking).**
 [Script creation defaults (§5.8)](./methods/scripts.md#command-creation-defaults-breaking-change)
 change omission on a new command from `saved` to `oneOff`; new services remain
