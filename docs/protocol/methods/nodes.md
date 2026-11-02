@@ -457,8 +457,10 @@ all of these hold, judged on the agent's machine's cached
 3. the machine lists the model, under the same alias rule as placement; the
    `"default"` sentinel skips this check.
 
-The other `agent.setModel` checks (model ownership, the cross-provider
-availability gate, §5.5) still apply. On success the result and the
+The provider must still be selectable (registered, enabled, a resolvable
+profile) and own the model (§5.5). The cross-provider availability gate does
+not apply: the backend's own install and sign-in do not matter, because step 2
+judges the machine instead. On success the result and the
 `agent:updated` event are unchanged. The current turn finishes on the old
 configuration. The next turn stops the agent's provider process on the machine
 and starts it again **on the same machine**, in the same checkout, with the new
