@@ -38,7 +38,7 @@ templates: [`hosts/epyc-4545p-3heavy.env`](../infra/runners/hosts/epyc-4545p-3he
 has three heavy slots (cores 0-3, 4-7, 8-11), 32 GB each, and
 [`hosts/epyc-4545p-64g-4heavy.env`](../infra/runners/hosts/epyc-4545p-64g-4heavy.env)
 has four 12 GB heavy slots for a 64 GB box, 48 GB under its 51G slice cap. The
-64 GB intent-ci3 ran that layout until it was retired. Its slots do not carry
+64 GB intent-ci3 ran that layout until it was retired. The 64 GB layout's slots do not carry
 `intent-cache-bigmem`: one rustc in intentd's 16-core `check` and
 `coverage-changed` passed 12 GB and was OOM-killed there when those jobs
 overflowed from busy xl slots. Prefer 128 GB for a new EPYC host.
@@ -423,7 +423,8 @@ runner-only host, leaving a core or two unpinned is optional.
    every host's slots (add `-f xl=true` to include the xl pool).
 7. **Route jobs to it** by raising `CI_LINUX_HEAVY_SLOTS` / `CI_LINUX_XL_SLOTS`
    / `CI_LINUX_BIGMEM_SLOTS` to the fleet's total slots per pool (see the
-   variables above).
+   variables above), in every repository that defines them (see Retire a
+   runner host, step 1).
 
 ## Retire a runner host
 
@@ -436,8 +437,9 @@ under the same name):
    not overcommitted. A repository variable overrides the organization one,
    so set it wherever it is defined (`gh variable list --repo intent-hq/<repo>`
    for `intent`, `intentd` and `cloudlands-fe`):
-   `gh variable set CI_LINUX_HEAVY_SLOTS --repo intent-hq/<repo> --body <n>`,
-   and `--org intent-hq` for the organization default.
+   `gh variable set CI_LINUX_HEAVY_SLOTS --repo intent-hq/<repo> --body <n>`.
+   For the organization default add `--org intent-hq --visibility all`:
+   `gh` otherwise makes it private, hiding it from these public repositories.
 2. **Drain its slots.** `systemctl disable` takes unit names, not globs, so
    list the enabled slots first (as `install.sh` does):
 
@@ -462,12 +464,13 @@ under the same name):
 4. **Remove the credential:** `shred -u /etc/github-runners/credentials` (and
    the App key it names, if any). If the box cannot be wiped before the
    provider reclaims it, rotate the credential instead (see Credential).
-5. **Leave the tailnet:** `tailscale logout` on the box, then delete the
-   machine in the Tailscale admin console, so a replacement can take the name
-   (Tailscale renames a duplicate to `<host>-1`).
+5. **Leave the tailnet,** last, since SSH reaches the box only over Tailscale:
+   `nohup sh -c 'sleep 2; tailscale logout' >/dev/null 2>&1 &`, then delete
+   the machine in the Tailscale admin console, so a replacement can take the
+   name (Tailscale renames a duplicate to `<host>-1`).
 6. **Remove its config:** delete `infra/runners/hosts/<host>.env`, its row in
-   the fleet table and its cases in `test_runners.py`. The smoke workflow then
-   rejects `-f host=<host>`.
+   the fleet table, any mention in the pool table and its cases in
+   `test_runners.py`. The smoke workflow then rejects `-f host=<host>`.
 7. **Cancel the server** with the provider.
 
 A replacement under the same name then follows Add a runner host.
