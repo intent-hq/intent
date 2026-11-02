@@ -23,7 +23,7 @@ unchanged. Host-administration virtual workspaces retain their existing boundary
 
 | Method | Params | Result |
 | --- | --- | --- |
-| workspace.list | includeArchived?: boolean (default false), includeRetired?: boolean (default false) — `includeArchived: true` alone never returns `status: "Retired"` rows; see [Retired workspaces](#retired-workspaces) | { workspaces: Workspace[] } — triggers background backfill: existing workspaces with a repositoryPath but missing repositoryOwner/Name are enriched from the origin remote URL (same GitHub derivation as workspace.create, non-blocking spawn, deduped per workspace per daemon lifecycle, skips non-GitHub remotes, persists updates, emits workspace:updated with changed fields). **Membership-narrowed** for a non-administrator caller: only workspaces the bound principal is a member of are returned, and every `Workspace` row carries `myRole` (`"owner"` \| `"collaborator"` \| `"manager"` under `workspaceGuestRoles: 1`), `memberCount` and `openInviteCount` (§5.48) |
+| workspace.list | includeArchived?: boolean (default false), includeRetired?: boolean (default false) — `includeArchived: true` alone never returns `status: "Retired"` rows; see [Retired workspaces](#retired-workspaces); limit?: integer, nextToken?: string *(see [Paged workspace lists](#paged-workspace-lists))* | { workspaces: Workspace[], nextToken } — triggers background backfill: existing workspaces with a repositoryPath but missing repositoryOwner/Name are enriched from the origin remote URL (same GitHub derivation as workspace.create, non-blocking spawn, deduped per workspace per daemon lifecycle, skips non-GitHub remotes, persists updates, emits workspace:updated with changed fields). **Membership-narrowed** for a non-administrator caller: only workspaces the bound principal is a member of are returned, and every `Workspace` row carries `myRole` (`"owner"` \| `"collaborator"` \| `"manager"` under `workspaceGuestRoles: 1`), `memberCount` and `openInviteCount` (§5.48) |
 | workspace.findByPullRequest *(`prWorkspaceLookup: 1`)* | url (req): string — a GitHub-form pull-request URL, `https://<host>/<owner>/<repo>/pull/<number>` (trailing path, query or fragment ignored). No `workspaceId`: daemon-global | { workspaces: PullRequestWorkspace[] } — every workspace the daemon has linked to that PR, most recently linked first; `[]` when none. Archived workspaces are included; deleted and remote workspaces never are, and retired workspaces only with the additive `includeRetired: true` param ([Retired workspaces](#retired-workspaces)). Membership-narrowed like `workspace.list`. `-32602 { code: "invalid-params" }` when `url` is missing or not a pull-request URL. See [PR workspace lookup](#pull-request-workspace-lookup) |
 | workspace.get | workspaceId (req) | { workspace: Workspace } — -32602 if not found, **or** if the caller is not a member of it (same `{ code: "not-found" }`, indistinguishable by design; §5.48) |
 | workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipIsolation? (canonical; deprecated alias skipWorktree?), githubUrl?, repositoryCheckout? (GitLab selection; see [GitLab project checkout](#gitlab-project-checkout)), clonePath?, isNewRepo?, progressId? (string — arms the unified provisioning progress stream; see notes), contextLinks? (ContextLink[] — issue/PR context links persisted on the row; a pr-kind link additionally makes the create **PR-aware** — an omitted `branch`/`baseRef` defaults to the PR's head/base branch — see the `contextLinks` and PR-aware create notes below), origin? ({ kind: "proposal", agentId, proposalId } — see "Proposal origin" below)); optional initialAgent: { prompt? *(a blank/whitespace-only prompt reads as absent; the agent is still created — see "Initial-agent orchestration" in the notes)*, name?, model?, reasoningEffort? (string — creation-time effort; omitted inherits, blank clears; see notes), specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks? *(within v7.4, monorepo#3338: entries may carry an attachment-registry `attachmentId` reference instead of inline `data`, under the same exactly-one-of validation + registry check and daemon-side prompt-assembly resolution as `agent.sendMessage` — §5.5; a bad reference rejects `-32602` pre-side-effect)*, fileBlocks? *(v6.12; attachment references only since v10.0 — same per-entry validation as `agent.sendMessage`: every entry must carry a non-empty `attachmentId`, an entry carrying inline `data` or missing `attachmentId` is `-32602` naming the block index — §5.5)*, metadata? } — no `agentId`: agent IDs are server-assigned, and a request carrying `initialAgent.agentId` is rejected with `-32602` (see notes). Every `-32602` rejection is validated before any side effect (see "Pre-side-effect validation" in the notes) | { workspace: Workspace, initialAgent?: AgentLite, proposalOrigin? } — details below. |
@@ -2385,6 +2385,29 @@ clear). The label is part of the workspace row: it survives `workspace.archive` 
 `workspace.unarchive` and daemon restarts, and rides workspace transfer/export with the
 row. Support is advertised by the exact-integer capability `workspaceLabels: 1`
 ([client.hello](./client-hello.md)); older daemons omit both the capability and the field.
+
+#### Paged workspace lists
+
+**Behaviour change ([bounded reads](./client-hello.md)).** `workspace.list` answers one page
+for **every caller**. Before, it returned every row in one reply (2 MB on a 1,300-workspace
+host); now a reply without params is the first page and carries `nextToken`. Older apps that
+ignore `nextToken` see only the first page.
+
+- **Order:** rows ascend by `(createdAt, id)`. Pass the same `includeArchived` /
+  `includeRetired` with each `nextToken`.
+- **`limit`:** integer, default **100**, maximum **200** (larger values clamp down, values
+  below 1 clamp to 1); a non-integer is `-32602` `limit must be an integer`.
+- **Byte budget:** a page also stops once its rows would exceed **480,000 bytes** of serialized
+  JSON, so the frame stays under 512,000 bytes; it always serves at least one row while rows
+  remain.
+- **`nextToken`:** an opaque string, always present in the reply — `null` after the last page.
+  A malformed token, or one minted for other filter flags, is `-32602`
+  `invalid or mismatched nextToken`. Tokens are keyset cursors: rows created or deleted
+  between pages never shift the remaining pages.
+- **Membership narrowing:** for a non-administrator caller a page can carry fewer than
+  `limit` rows (rows it may not see are skipped after the page is read) and still carry a
+  `nextToken`; clients keep following the token until it is `null`.
+- Row shape is unchanged: paged rows are the same enriched, list-slimmed `Workspace` rows.
 
 #### Retired workspaces
 
