@@ -106,6 +106,14 @@ secret-request resource blocks and the `secret.*` router methods. Clients render
 secret-request cards and call those methods only when it is present. The flag
 grants no permission and says nothing about the agent feature setting.
 
+**Capped message block reads (additive).** Exactly integer
+`server.capabilities.messageBlockPages: 1`, also returned by `system.capabilities`, advertises the
+[§5.5 capped and paged `agent.getMessageBlock` contract](./agents.md#55-agent) (`offset` /
+`maxBytes`, the `truncated` / `field` / `encoding` / `totalBytes` / `nextOffset` result fields, a
+480,000-byte cap on the served block) and the stored image block references accepted by
+`agent.editAndRegenerate`. Clients page large blocks and regenerate by reference only for exact
+integer `1`; older daemons omit it and serve every block whole.
+
 **Workspace labels (additive).** Exactly integer `server.capabilities.workspaceLabels: 1`,
 also returned by `system.capabilities`, advertises the
 [§5.1 workspace label contract](./workspace.md#workspace-labels): the optional
