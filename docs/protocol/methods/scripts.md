@@ -30,7 +30,7 @@ not remove the owner's definition or output.
 | Method | Params | Result |
 | --- | --- | --- |
 | script.list | workspaceId (req), archive? (`active` only; other values rejected since v14), view? (`full` \| `summary`), limit?, cursor? (summary extension below; full-view pages with `boundedReads: 1`) | { scripts: [...], nextCursor? } — one page of definitions plus `runtime` (default 100 rows, max 200, ≤ 480,000 bytes; see *Full-view pages*); summary pages are discriminated `{ view: "summary", scripts: ScriptSummary[], nextCursor? } |
-| script.get | workspaceId (req), scriptId (req) | Full unarchived definition plus `runtime`; `scriptActiveLists: 1` required |
+| script.get | workspaceId (req), scriptId (req), commandOffset? (positive integer, `boundedReads: 1`) | Full unarchived definition plus `runtime`; `scriptActiveLists: 1` required. A `command` too big for one reply is served in parts (see *Paged commands* below) |
 | script.create | workspaceId (req), name (req), command (req), mode (req: `service` \| `command`), cwd?, env?, category?, autoStart?, scriptId?, purpose? (`saved` \| `oneOff`), healthUrl?, readyPattern?, clearReadiness? (prepared; see below) | { id, workspaceId, name, command, mode, source, createdAt, cwd?, env?, category?, autoStart?, updatedAt?, purpose?, archivedAt?, lastRun?, healthUrl?, readyPattern? } — the persisted `WorkspaceScript` record |
 | script.archive | workspaceId (req), scriptIds (req: nonempty string array) | { archived: [scriptId, ...], skipped: [{ scriptId, reason }] } — 10.11 candidate; inactive commands only |
 | script.restore | workspaceId (req), scriptIds (req: nonempty string array) | { restored: [scriptId, ...], skipped: [{ scriptId, reason }] } — 10.11 candidate; restores visibility without starting |
@@ -87,6 +87,21 @@ too big on its own is split on a UTF-8 boundary: the page serves the line's last
 fits and adds `lineContinues: true`, and `nextToken` resumes inside that line, so the next
 page's newest item is the line's earlier part. Prepend that item to the previous page's
 oldest item to rebuild the line; no output is dropped.
+
+#### Paged commands
+
+With `boundedReads: 1`, a `script.get` reply stays within 480,000 bytes. When the whole
+definition fits, the reply is unchanged. Otherwise `command` holds the next part of the
+command and the reply adds `commandTruncated: true`, `commandBytes` (the full command's
+UTF-8 size), `commandOffset` (the byte where this part starts) and `nextCommandOffset`
+(where the next part starts, always on a UTF-8 boundary; `null` after the last part).
+Request the next part with `commandOffset: <nextCommandOffset>` and append each part's
+`command`: the parts rebuild the command byte for byte. Other fields ride every part.
+A `commandOffset` that is not a positive integer, not a UTF-8 boundary, or not inside the
+command fails `-32602`. A client restarts from the first part when `commandBytes` changes
+between parts (the definition was replaced) and treats a result whose UTF-8 size does not
+equal `commandBytes` as incomplete. The full-view `script.list` row of such a definition
+carries `commandOmitted` / `commandBytes` instead; clients read it whole with `script.get`.
 
 #### Active-only compact lists (protocol 14 breaking contract)
 

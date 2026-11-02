@@ -157,7 +157,8 @@ holds at most `limit` rows and at most 480,000 bytes of row JSON, but always at
 least one row, so a reply stays under the 500 KiB read budget. A hook too big on its own
 drops its largest fields (usually `code`), largest first, until it fits: each becomes
 `<field>Omitted: true` plus `<field>Bytes` (a string's UTF-8 length, otherwise its JSON
-size); `ws.hook.get(hookId)` returns the hook whole. Rows keep the order above
+size); `ws.hook.get(hookId)` returns the hook whole: it reads `code` too big for one
+reply in parts and joins them. Rows keep the order above
 (oldest first, ties by `hookId`) and their shapes; `nextCursor` is present only while more
 rows follow. The cursor is bound to the workspace and `includeRetired`; reuse the same
 `includeRetired` with it. Clients that show every hook (the hook chip row, delete
