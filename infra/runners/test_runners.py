@@ -130,6 +130,33 @@ if args and args[0] in ('enable', 'disable'):
         link = os.path.join(wants, unit)
         if args[0] == 'enable' and not os.path.lexists(link): os.symlink('/dev/null', link)
         if args[0] == 'disable' and os.path.lexists(link): os.remove(link)
+# Unit states, only when STUB_UNITS names a JSON file {unit: ActiveState}
+# (otherwise every unit counts as active). A unit in STUB_BUSY ({unit: n})
+# drains: a stop leaves it deactivating for its next n `show` calls.
+if os.environ.get('STUB_UNITS') and args:
+    import fnmatch
+    path = os.environ['STUB_UNITS']
+    with open(path) as f: units = json.load(f)
+    busy = json.loads(os.environ.get('STUB_BUSY') or '{}')
+    left_path = path + '.busy'
+    left = json.load(open(left_path)) if os.path.exists(left_path) else busy
+    if args[0] == 'list-units':
+        for unit in sorted(units):
+            if fnmatch.fnmatch(unit, args[1]): print(f'{unit} loaded {units[unit]} running slot')
+    elif args[0] == 'stop' or (args[0] == 'disable' and '--now' in sys.argv):
+        for unit in args[1:]:
+            if units.get(unit, 'inactive') != 'inactive':
+                units[unit] = 'deactivating' if left.get(unit) else 'inactive'
+    elif args[0] == 'show':
+        unit = args[-1]
+        print(units.get(unit, 'inactive'))
+        if units.get(unit) == 'deactivating':
+            left[unit] -= 1
+            if left[unit] <= 0: units[unit] = 'inactive'
+    elif args[0] == 'is-active':
+        sys.exit(0 if units.get(args[-1]) == 'active' else 3)
+    with open(path, 'w') as f: json.dump(units, f)
+    with open(left_path, 'w') as f: json.dump(left, f)
 '''
 
 
@@ -1208,6 +1235,77 @@ class Installer(Stubbed):
         self.assertFalse(any(a[0] in ('disable', 'enable', 'start', 'stop') and 'runner@' in a[-1] for a in self.systemctl()))
         self.assertIn('\nMemoryMax=51G\n', (self.prefix / 'etc/systemd/system/runners.slice.d/memory.conf').read_text())
 
+    def retire_host(self, units, busy=None, **env):
+        """An installed host: `units` {slot: ActiveState}, enabled unless
+        started by hand ('xl-1'). Returns the path of the unit-state file."""
+        wants = self.prefix / 'etc/systemd/system/multi-user.target.wants'
+        wants.mkdir(parents=True, exist_ok=True)
+        for slot in units:
+            if slot != 'xl-1':
+                (wants / f'github-runner@{slot}.service').symlink_to('/dev/null')
+        state = self.dir / 'units.json'
+        state.write_text(json.dumps({f'github-runner@{s}.service': st for s, st in units.items()}))
+        self.env.update(STUB_UNITS=str(state), RETIRE_POLL_SECONDS='0',
+                        STUB_BUSY=json.dumps({f'github-runner@{s}.service': n for s, n in (busy or {}).items()}))
+        self.env_file.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.env_file.write_text((HERE / 'hosts/intent-ci3.env').read_text())
+        return state
+
+    def test_retire_drains_every_slot_then_removes_the_credential_and_app_key(self):
+        # The intent-ci3 retirement (PR #8293): one slot still runs a job, one
+        # was started by hand, so it is not in the wants directory.
+        state = self.retire_host({'heavy-1': 'active', 'heavy-2': 'active', 'heavy-3': 'inactive', 'xl-1': 'active'},
+                                 busy={'heavy-2': 3})
+        key = self.prefix / 'etc/github-runners/app.pem'
+        key.write_text('-----BEGIN PRIVATE KEY-----\n')
+        self.place_credential()
+        self.creds.write_text('GITHUB_APP_ID=1\nGITHUB_APP_INSTALLATION_ID=2\n'
+                              'GITHUB_APP_PRIVATE_KEY_FILE=/etc/github-runners/app.pem\n')
+        result = self.install('--retire')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        slots = [f'github-runner@{s}.service' for s in ('heavy-1', 'heavy-2', 'heavy-3', 'xl-1')]
+        self.assertIn(['disable', '--now', '--no-block', *slots], self.systemctl(),
+                      'one non-blocking disable names every unit (systemctl does not expand globs)')
+        self.assertEqual(self.enabled(), [])
+        self.assertEqual(set(json.loads(state.read_text()).values()), {'inactive'})
+        self.assertIn('waiting for running slots to finish their job: github-runner@heavy-2.service (deactivating)',
+                      result.stdout)
+        self.assertFalse(self.creds.exists())
+        self.assertFalse(key.exists())
+        self.assertIn('deleted GitHub App key /etc/github-runners/app.pem', result.stdout)
+        self.assertIn('may merge now', result.stdout)
+        for step in ('select(.name | startswith("intent-ci3-"))', 'gh api -X DELETE orgs/intent-hq/actions/runners/<id>',
+                     'tailscale logout', 'Tailscale admin console', 'Cancel the server'):
+            self.assertIn(step, result.stdout)
+        self.assertFalse(self.calls('docker') + self.calls('apt-get') + self.calls('sysctl'),
+                         'retiring installs nothing')
+
+    def test_retire_keeps_the_credential_while_a_slot_drains(self):
+        self.retire_host({'heavy-1': 'active', 'heavy-2': 'active'}, busy={'heavy-1': 3})
+        self.place_credential()
+        result = self.install('--retire', RETIRE_TIMEOUT_SECONDS='0')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('github-runner@heavy-1.service (deactivating)', result.stderr)
+        self.assertNotIn('heavy-2', result.stderr)
+        self.assertIn('keeping the credential', result.stderr)
+        self.assertTrue(self.creds.exists(), 'a draining slot needs the credential to deregister')
+        self.assertNotIn('may merge now', result.stdout)
+        self.assertEqual(self.enabled(), [])
+
+        # Re-running resumes: the slot is disabled but still loaded.
+        result = self.install('--retire')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.creds.exists())
+        self.assertIn('may merge now', result.stdout)
+
+    def test_retire_with_nothing_left(self):
+        self.retire_host({})
+        result = self.install('--retire')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('no runner slots on this host', result.stdout)
+        self.assertIn('no credential at', result.stdout)
+        self.assertFalse([a for a in self.systemctl() if a[0] == 'disable'])
+
     def test_refuses_non_ubuntu_and_bad_args(self):
         other = self.dir / 'debian'
         other.write_text('ID=debian\n')
@@ -1215,7 +1313,7 @@ class Installer(Stubbed):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("expected Ubuntu, found 'debian'", result.stderr)
         self.assertEqual(self.calls(), [])
-        for args in (['--slots', '2'], ['--bogus'], ['--config']):
+        for args in (['--slots', '2'], ['--bogus'], ['--config'], ['--retire', '--no-build'], ['--no-build', '--retire']):
             with self.subTest(args=args):
                 self.assertEqual(self.install(*args).returncode, 2)
 
