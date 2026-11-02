@@ -73,6 +73,11 @@ class RustTestPolicyTests(unittest.TestCase):
         shutil.copy(COMPONENT / "Makefile", self.component)
         for name in ("with-test-policy.sh", "changed-tests.sh", "coverage-all.sh", "coverage-e2e.sh"):
             shutil.copy(COMPONENT / "scripts" / name, self.component / "scripts")
+        # intentd#2896 wraps the coverage builds in this retry helper; older
+        # pins do not have it, so copy it only when the component ships it.
+        retry = COMPONENT / "scripts/ci-killed-rustc-retry.sh"
+        if retry.is_file():
+            shutil.copy(retry, self.component / "scripts")
         # Isolate policy/wrapper behavior from the Linux-only fixture payload.
         # Canonical inventory validation is exercised in CallbackValidatorTests.
         (self.component / "scripts/prepare-acp-callback-fixture.py").write_text('''
