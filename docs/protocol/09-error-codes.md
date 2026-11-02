@@ -153,16 +153,18 @@ keys its write refusal on the existing `-32602` code.
 ### Message block page errors
 
 The [capped `agent.getMessageBlock` contract](./methods/agents.md#55-agent) (`messageBlockPages: 1`)
-uses the existing `-32602` code with no `data.code`; nothing is read or changed on any of them.
+uses the existing `-32602` code with `data.code: "invalid-params"`; nothing is changed on any of them.
+The two param-shape errors are checked before any read and carry the bare message. The others
+are raised after the block is read and carry the standard `invalid params: ` message prefix.
 
-| Numeric code | Message | Meaning / client action |
+| Numeric code | Exact `error.message` | Meaning / client action |
 | --- | --- | --- |
 | -32602 | `maxBytes must be a positive integer` | Send a positive integer or omit it; values are clamped into [4,096, 480,000]. |
 | -32602 | `offset must be a non-negative integer` | Send `0` or a `nextOffset` from the previous page. |
-| -32602 | `offset <n> is past the end of the block body (<totalBytes> bytes)` | The offset is beyond the body; restart from `0`. |
-| -32602 | `offset <n> is not on a UTF-8 character boundary` | Only use offsets returned as `nextOffset`. |
-| -32602 | `offset is not supported for this block` | The block has no pageable body (an image or another type); call without `offset`. |
-| -32602 | `` agent.editAndRegenerate: imageBlocks[<i>] … `` | A malformed block reference, or one that names a block that is not an image with stored bytes (see [§5.5](./methods/agents.md#55-agent)). |
+| -32602 | `invalid params: offset <n> is past the end of the block body (<totalBytes> bytes)` | The offset is beyond the body; restart from `0`. |
+| -32602 | `invalid params: offset <n> is not on a UTF-8 character boundary` | Only use offsets returned as `nextOffset`. |
+| -32602 | `invalid params: offset is not supported for this block` | The block has no pageable body (an image or another type); call without `offset`. |
+| -32602 | `` invalid params: agent.editAndRegenerate: imageBlocks[<i>] … `` | A malformed block reference, or one that names a block that is not an image with stored bytes (see [§5.5](./methods/agents.md#55-agent)). |
 
 ### Desktop control errors
 
