@@ -154,7 +154,10 @@ by default. Wire `hook.list` is then **always paged**: it accepts `limit?` (inte
 list was unpaged; a client that does not follow `nextCursor` now sees only the first
 page. A page
 holds at most `limit` rows and at most 480,000 bytes of row JSON, but always at
-least one row, so a reply stays under the 500 KiB read budget. Rows keep the order above
+least one row, so a reply stays under the 500 KiB read budget. A hook too big on its own
+drops its largest fields (usually `code`), largest first, until it fits: each becomes
+`<field>Omitted: true` plus `<field>Bytes` (a string's UTF-8 length, otherwise its JSON
+size). Rows keep the order above
 (oldest first, ties by `hookId`) and their shapes; `nextCursor` is present only while more
 rows follow. The cursor is bound to the workspace and `includeRetired`; reuse the same
 `includeRetired` with it. Clients that show every hook (the hook chip row, delete

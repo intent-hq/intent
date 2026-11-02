@@ -80,7 +80,11 @@ whole line. `script.output` and `terminal.readOutput` keep their bare-string res
 and say so in the header: `[showing last <n> of <total> lines; older output omitted to fit
 the reply size limit]` (`terminal.readOutput` puts the bracket after its `Terminal …
 (cwd: …)` prefix). `script.run` sets `outputTruncated: true`. To read older output, use
-the paginated form (`paginate: true` / `pageToken`), whose pages are already small.
+the paginated form (`paginate: true` / `pageToken`). Its `{ items, nextToken }` pages are
+bounded the same way: lines are taken newest first until their JSON-escaped text would
+pass 480,000 bytes, and `nextToken` then resumes at the first line left out. A newest line
+too big on its own is cut to its first part that fits and the page adds `truncated: true`;
+the rest of that one line is not served.
 
 #### Active-only compact lists (protocol 14 breaking contract)
 
@@ -158,7 +162,9 @@ opaque) are validated as for summary pages, and a request with neither returns t
 first page. Before this change the full view was an unpaged list; a client that does
 not follow `nextCursor` now sees only the first page. A page holds at most `limit`
 rows and at most 480,000 bytes of row JSON, but always at least one row, so a reply stays under the 500 KiB read
-budget unless a single definition is larger. Rows keep the full shape and ascending
+budget. A definition too big on its own drops its largest fields, largest first, until
+it fits: each becomes `<field>Omitted: true` plus `<field>Bytes` (a string's UTF-8 length,
+otherwise its JSON size), and `script.get` returns it whole. Other rows keep the full shape and ascending
 UTF-8 lexical `(createdAt, id)` order; the result is `{ scripts, nextCursor? }`, with
 `nextCursor` only while more rows follow (no `view` discriminator). Full-view cursors are
 bound to the method, workspace and the full view; a summary cursor is rejected here and
