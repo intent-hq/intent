@@ -2,8 +2,9 @@
 #
 # Self-test for scripts/changed-script-tests.sh (`make test-scripts-changed`).
 # It copies the selector into a throwaway git repo with a minimal ci.yml
-# shell-tests job, makes changes on a branch, and pins the DRY_RUN plan (and
-# the printed reason) for each selection rule plus the exit code of a real run with a failing step.
+# shell-tests job and a Makefile test-scripts recipe, makes changes on a branch,
+# and pins the DRY_RUN plan (and the printed reason) for each selection rule plus
+# the exit code of a real run with a failing step.
 
 set -euo pipefail
 
@@ -47,7 +48,14 @@ jobs:
     steps:
       - run: bash scripts/after.sh
 EOF
-printf 'lint-shell:\n\t@echo lint ok\n' >"$fixture/Makefile"
+# test-scripts lists its modules over a continuation line, as the real one may.
+printf 'lint-shell:\n\t@echo lint ok\n\ntest-scripts: ## unit tests\n\tpython3 -S -B -m unittest -v scripts.test_eps \\\n\t  scripts.test_zeta\n\nother:\n\t@echo not a module scripts.test_other\n' >"$fixture/Makefile"
+# test_eps.py is eps.py's own module; test_zeta.py names kappa.py by module.
+: >"$fixture/scripts/__init__.py"
+printf 'x = 1\n' >"$fixture/scripts/eps.py"
+printf 'x = 1\n' >"$fixture/scripts/kappa.py"
+printf 'import unittest\nclass T(unittest.TestCase):\n    def test_ok(self):\n        self.assertTrue(True)\n' >"$fixture/scripts/test_eps.py"
+printf 'import unittest\nfrom scripts import kappa\nclass T(unittest.TestCase):\n    def test_ok(self):\n        self.assertEqual(kappa.x, 1)\n' >"$fixture/scripts/test_zeta.py"
 printf 'echo alpha ok\n' >"$fixture/scripts/alpha.test.sh"
 # test_beta.py names gamma.sh by file name and delta.py by module name.
 printf '# runs gamma.sh\nimport delta\nprint("beta ok")\n' >"$fixture/scripts/test_beta.py"
@@ -90,7 +98,12 @@ expect_plan() {
   echo "ok - $label"
 }
 
+all_shell='make lint-shell
+bash scripts/alpha.test.sh
+python3 -S -B scripts/test_beta.py
+bash scripts/lint-fixed-sleeps.sh'
 all_suites='make lint-shell
+make test-scripts
 bash scripts/alpha.test.sh
 python3 -S -B scripts/test_beta.py
 bash scripts/lint-fixed-sleeps.sh'
@@ -148,13 +161,47 @@ python3 -S -B scripts/test_beta.py'
 reset_fixture
 
 printf '# edit\n' >>"$fixture/scripts/helper.sh"
-expect_plan "shared helper runs every shell suite" "$all_suites"
+expect_plan "shared helper runs every shell suite and make test-scripts" "$all_suites"
 expect_reason "shared helper says who uses it" "scripts/helper.sh (shared helper: scripts/run.sh names it)"
 reset_fixture
 
 printf '# edit\n' >>"$fixture/scripts/orphan.sh"
-expect_plan "script no suite names runs every shell suite" "$all_suites"
-expect_reason "unnamed script says why" "scripts/orphan.sh (no suite names it)"
+expect_plan "script no suite names runs every shell suite" "$all_shell"
+expect_reason "unnamed script says why" "scripts/orphan.sh (no suite or test-scripts module names it)"
+expect_reason "unnamed script skips the Python unit tests" "no make test-scripts module names a changed script"
+reset_fixture
+
+# The make test-scripts modules (intent PR 8290 changed nextest_stress.py and
+# no local step ran its scripts.test_nextest_stress).
+printf '# edit\n' >>"$fixture/scripts/eps.py"
+expect_plan "scripts/X.py runs its own test-scripts module, not every shell suite" 'make lint-shell
+python3 -S -B -m unittest -v scripts.test_eps'
+expect_reason "module selection says why" "selected scripts.test_eps (make test-scripts): own test of scripts/eps.py"
+reset_fixture
+
+printf '# edit\n' >>"$fixture/scripts/test_eps.py"
+expect_plan "a changed test-scripts module runs itself" 'make lint-shell
+python3 -S -B -m unittest -v scripts.test_eps'
+expect_reason "changed module says why" "selected scripts.test_eps (make test-scripts): the suite itself changed"
+reset_fixture
+
+printf '# edit\n' >>"$fixture/scripts/kappa.py"
+expect_plan "a module that imports the changed script is selected" 'make lint-shell
+python3 -S -B -m unittest -v scripts.test_zeta'
+expect_reason "module mention says why" "selected scripts.test_zeta (make test-scripts): mentions kappa.py"
+reset_fixture
+
+printf '# edit\n' >>"$fixture/scripts/kappa.py"
+printf '# edit\n' >>"$fixture/scripts/eps.py"
+expect_plan "two scripts run their modules in one command, in Makefile order" 'make lint-shell
+python3 -S -B -m unittest -v scripts.test_eps scripts.test_zeta'
+reset_fixture
+
+printf '# edit\n' >>"$fixture/scripts/beta.py"
+printf '# edit\n' >>"$fixture/scripts/eps.py"
+expect_plan "a module and a shell suite are both selected" 'make lint-shell
+python3 -S -B -m unittest -v scripts.test_eps
+python3 -S -B scripts/test_beta.py'
 reset_fixture
 
 printf '# edit\n' >>"$fixture/scripts/alpha.sh"
@@ -162,7 +209,7 @@ output=$(cd "$fixture" && BASE=main DRY_RUN=1 FULL=1 "$script_bash" scripts/chan
   fail "FULL=1 dry run exited non-zero: $output"
 [ "$(printf '%s\n' "$output" | sed -n 's/^  //p')" = "$all_suites" ] ||
   fail "FULL=1 did not select every suite: $output"
-echo "ok - FULL=1 runs every shell suite"
+echo "ok - FULL=1 runs every shell suite and make test-scripts"
 reset_fixture
 
 output=$(cd "$fixture" && BASE=main DRY_RUN=1 FULL=1 "$script_bash" scripts/changed-script-tests.sh 2>&1) ||
@@ -174,6 +221,7 @@ echo "ok - FULL=1 runs every shell suite with no change"
 printf '# edit\n' >>"$fixture/Makefile"
 git_fixture commit -q -am "edit Makefile"
 expect_plan "committed Makefile change runs every shell suite" "$all_suites"
+expect_reason "Makefile change says why make test-scripts runs" "all make test-scripts modules selected (full run: Makefile)"
 reset_fixture
 
 printf '# edit\n' >>"$fixture/.github/workflows/ci.yml"
@@ -186,7 +234,7 @@ expect_plan "scripts/fixtures change runs every shell suite" "$all_suites"
 reset_fixture
 
 printf 'new\n' >"$fixture/scripts/new-helper.sh"
-expect_plan "untracked script no suite names runs every shell suite" "$all_suites"
+expect_plan "untracked script no suite names runs every shell suite" "$all_shell"
 reset_fixture
 
 git_fixture rm -q scripts/gamma.sh
@@ -216,7 +264,7 @@ reset_fixture
 output=$(cd "$fixture" && BASE=main FULL=1 "$script_bash" scripts/changed-script-tests.sh 2>&1) ||
   fail "passing run exited non-zero: $output"
 case "$output" in
-  *"lint ok"*"alpha ok"*"beta ok"*"all selected checks passed"*) echo "ok - passing run runs every step" ;;
+  *"lint ok"*"Ran 2 tests"*"alpha ok"*"beta ok"*"all selected checks passed"*) echo "ok - passing run runs every step" ;;
   *) fail "passing run output: $output" ;;
 esac
 
@@ -245,6 +293,17 @@ output=$(cd "$fixture" && BASE=main FULL=1 "$script_bash" scripts/changed-script
 case "$output" in
   *"beta ok"*"FAILED steps:"*"bash scripts/alpha.test.sh"*) echo "ok - failing step fails the run after the rest ran" ;;
   *) fail "failing run output: $output" ;;
+esac
+reset_fixture
+
+printf '# edit\n' >>"$fixture/scripts/eps.py"
+printf 'class Broken(unittest.TestCase):\n    def test_fails(self):\n        self.fail("broken")\n' >>"$fixture/scripts/test_eps.py"
+status=0
+output=$(cd "$fixture" && BASE=main "$script_bash" scripts/changed-script-tests.sh 2>&1) || status=$?
+[ "$status" = 1 ] || fail "failing module run exit $status, want 1: $output"
+case "$output" in
+  *"FAIL: test_fails"*"FAILED steps:"*"python3 -S -B -m unittest -v scripts.test_eps"*) echo "ok - failing test-scripts module fails the run" ;;
+  *) fail "failing module run output: $output" ;;
 esac
 reset_fixture
 
