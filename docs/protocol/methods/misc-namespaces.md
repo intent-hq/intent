@@ -7,7 +7,7 @@ Routing-only `workspaceId?` additions below are [prepared contract fields](../wo
 | Method | Params | Result |
 | --- | --- | --- |
 | crossWorkspace.listSiblings | workspaceId (req), includeRetired?: boolean (default false, protocol 15.2) | sibling workspaces of the given workspace; retired workspaces only with `includeRetired: true` ([Retired workspaces](./workspace.md#retired-workspaces)). Siblings are workspaces with the same non-empty GitHub `repositoryOwner`/`repositoryName` (case-insensitive, trailing `.git` tolerated) OR an identical non-empty source `repositoryPath`; a caller with neither errors as not associated with a repository |
-| crossWorkspace.readNote | targetWorkspaceId (req), noteId (req), startLine?: int, maxLines?: int *(bounded reads)* | `{ id, title, content, numberedContent, sourceWorkspaceId, sourceWorkspaceTitle, branch, lineCount }` for a note in a sibling workspace (same sibling rule as `listSiblings`; a non-sibling target is denied). Bounded: see "Bounded `crossWorkspace.readNote`" below |
+| crossWorkspace.readNote | targetWorkspaceId (req), noteId (req), startLine?: int, maxLines?: int, startOffset?: int *(bounded reads)* | `{ id, title, content, numberedContent, sourceWorkspaceId, sourceWorkspaceTitle, branch, lineCount }` for a note in a sibling workspace (same sibling rule as `listSiblings`; a non-sibling target is denied). Bounded: see "Bounded `crossWorkspace.readNote`" below |
 | crossWorkspace.listNotes | targetWorkspaceId (req) | notes in a sibling workspace (same sibling rule as `listSiblings`; a non-sibling target is denied) |
 | primitive.addReference | noteId (req), semanticId (req), description (req), snapshot? | { ok, primitiveId, noteId } |
 | primitive.addCli | noteId (req), command (req), description (req), workingDirectory? | { ok, primitiveId, noteId } |
@@ -25,20 +25,29 @@ Routing-only `workspaceId?` additions below are [prepared contract fields](../wo
 **Bounded `crossWorkspace.readNote`** *(behaviour change; bounded reads, see §5.2 "Bounded note and comment reads")*. Every read
 fits the 500 KiB read payload budget. `content` and `numberedContent` carry a window of the
 note's lines (split on `\n`, numbered from 1 like `ws.note.read` and `note.editLines`):
-from `startLine` (default 1), at most `maxLines` lines (default: as many as fit), and
+from `startLine` (default 1; resumed at byte `startOffset` of that line when given), at
+most `maxLines` lines (default: as many as fit), and
 together at most 480,000 JSON-escaped bytes. `lineCount` is always the note's total line
 count.
 
-- A note that fits, read without `startLine` / `maxLines`, answers exactly as before
+- A note that fits, read without `startLine` / `maxLines` / `startOffset`, answers exactly as before
   (no page fields).
 - Otherwise the reply adds `startLine` and `endLine` (the served lines), `truncated`
-  (`true` when the page is less than the whole note) and `nextStartLine` (the
-  `startLine` to read the next page, or `null` at the end).
-- A single line larger than the budget is served as a prefix with `truncated: true`;
-  `nextStartLine` moves past it.
-- `startLine` / `maxLines` that are not positive integers are `-32602`
+  (`true` when the page is less than the whole note), `nextStartLine` (the
+  `startLine` to read the next page, or `null` at the end) and `nextStartOffset`.
+- A line larger than the budget is served in pieces. The page ends inside the line:
+  `nextStartLine` is that same line and `nextStartOffset` is the UTF-8 byte offset
+  (always on a character boundary) where the rest begins; pass both as `startLine` /
+  `startOffset`. `nextStartOffset` is `null` when the page ends at a line end. A page
+  read with a `startOffset` echoes it as `startOffset`, and its `numberedContent`
+  repeats the line's number.
+- Following the cursor rebuilds the note byte for byte: append a page that carries
+  `startOffset` directly to the previous page's `content`; join any other page with `\n`.
+- `startLine` / `maxLines` / `startOffset` that are not positive integers are `-32602`
   (`<name> must be a positive integer`); a `startLine` past the last line is `-32602`
-  (`startLine (<n>) exceeds total lines in note (<total>)`).
+  (`startLine (<n>) exceeds total lines in note (<total>)`); a `startOffset` that is not
+  a character boundary strictly inside the start line is `-32602`
+  (`startOffset (<n>) is not a character boundary inside the start line (<len> bytes)`).
 
 ```json
 // → request — `provider` is the optional resolution context for the preview fields
