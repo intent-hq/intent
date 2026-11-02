@@ -84,6 +84,17 @@ github-runner@<pool>-<n>.service ─ supervisor.sh <pool>-<n> ─┬─ GitHub A
 | `install.sh` | — | Idempotent installer for all of the above and the slot count |
 | `test_runners.py` | — | Supervisor and installer tests with stubbed system commands (monorepo CI `shell-tests`) |
 
+Run the whole suite after every change to these files, as CI does. It takes
+seconds, one test per CPU (`-j N` to change), so no `-k` filter is needed:
+
+```bash
+python3 -S -B infra/runners/test_runners.py        # add -v to list each test
+```
+
+`-S` keeps a host's `sitecustomize` out of the runner itself (Datadog's APM
+injector loads one, and its unittest hook crashes the run).
+`python3 -m unittest test_runners` runs the same tests one at a time.
+
 Logs go to journald: `journalctl -u 'github-runner@*' -f` (supervisor and the
 runner output, tagged `github-runner-<pool>-<n>`).
 
