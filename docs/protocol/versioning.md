@@ -11,6 +11,15 @@ capability; documentation alone does not identify a carrying desktop release.
 **Documented version:** `15.3` — plain-folder workspaces, on top of 15.2's retired workspaces and 15.1's discussions, guest roles, scoped repository pages and GitLab child Git policy (intentd advertises all four at protocol 15.2); 15.3 is not a shipped-version claim.
 Every extension retains its independent support gate.
 
+**Prepared Lead specialist role (additive; no method-catalog change).**
+The specialist `role` enum also accepts `"lead"`: a planning-first team entry
+with ordinary file-editing tools. `"orchestrator"` keeps its existing tool
+restrictions, and `"internal"` and explicit `""` retain their behavior. Harness
+3.6 introduces the Lead display name for `spec-writer`, retaining `coordinator`
+and adding `lead` as aliases; prior session snapshots and harness bundles remain
+unchanged. Deploy matching daemon and frontend support, daemon first. See
+[specialist picker metadata](./methods/misc-namespaces.md).
+
 **Version 15.3 — plain-folder workspaces (additive).**
 [Plain-folder workspaces](./methods/workspace.md#plain-folder-workspaces) work directly in
 an ordinary folder with no git repository. They add the presence-detected
