@@ -4,10 +4,18 @@
 `curl`, `docker`, `systemctl` and friends are replaced by stubs on PATH that
 log their calls, so no network, Docker or root is needed. Needs bash, jq and
 openssl (the GitHub App path signs a real JWT).
+
+`python3 test_runners.py` runs every test in parallel, one test per worker
+process (`-j N` sets the worker count; default every CPU this process may use).
+It takes the usual unittest arguments; `python3 -m unittest test_runners` runs
+the same tests serially.
 """
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 import base64
+import io
 import json
+import multiprocessing
 import re
 import os
 import signal
@@ -38,7 +46,9 @@ JIT = 'jit' + 'j' * 60
 APP_TOKEN = 'ghs_' + 'a' * 36
 HAVE_TOOLS = all(shutil.which(t) for t in ('bash', 'jq', 'openssl'))
 
-CURL_STUB = r'''#!/usr/bin/env python3
+# The Python stubs run isolated (-I): nothing on PYTHONPATH, such as an APM
+# tracer a host injects into every Python process, loads in each call.
+CURL_STUB = r'''#!/usr/bin/env -S python3 -I
 import json, os, sys
 args = sys.argv[1:]
 method, out, body, auth, url = 'GET', None, None, None, None
@@ -73,7 +83,7 @@ open(out, 'w').write('' if payload is None else json.dumps(payload))
 sys.stdout.write(str(status))
 '''
 
-DOCKER_STUB = r'''#!/usr/bin/env python3
+DOCKER_STUB = r'''#!/usr/bin/env -S python3 -I
 import json, os, signal, sys, time
 log = os.environ['STUB_LOG']
 pidfile = os.environ['STUB_DIR'] + '/run.pid'
@@ -104,7 +114,7 @@ if sub == ['container', 'inspect']:
     print(CONTAINER_ID)
 '''
 
-LOG_STUB = r'''#!/usr/bin/env python3
+LOG_STUB = r'''#!/usr/bin/env -S python3 -I
 import json, os, sys
 with open(os.environ['STUB_LOG'], 'a') as f:
     f.write(json.dumps({'cmd': os.path.basename(sys.argv[0]), 'argv': sys.argv[1:]}) + '\n')
@@ -118,7 +128,7 @@ printf '{"cmd": "%s", "argv": [%s]}\n' "$(basename "$0")" "$args" >> "$STUB_LOG"
 '''
 
 # systemctl: enable/disable maintain the wants/ symlinks like the real one.
-SYSTEMCTL_STUB = r'''#!/usr/bin/env python3
+SYSTEMCTL_STUB = r'''#!/usr/bin/env -S python3 -I
 import json, os, sys
 with open(os.environ['STUB_LOG'], 'a') as f:
     f.write(json.dumps({'cmd': 'systemctl', 'argv': sys.argv[1:]}) + '\n')
@@ -237,6 +247,32 @@ class Stubbed(unittest.TestCase):
     def calls(self, cmd=None):
         rows = [json.loads(line) for line in self.log.read_text().splitlines()]
         return [r for r in rows if cmd is None or r['cmd'] == cmd]
+
+
+class Stubs(Stubbed):
+    def test_python_stubs_ignore_injected_site_packages(self):
+        # Datadog's APM injector puts its tracer on PYTHONPATH for every Python
+        # process. Loading it in each stub call (~0.4 s, hundreds of calls)
+        # turned a 30 s run of this suite into 12-16 min on intent1 (#8304).
+        site = self.dir / 'site'
+        site.mkdir()
+        marker = self.dir / 'site-loaded'
+        (site / 'sitecustomize.py').write_text(f'open({str(marker)!r}, "a").write("x")\n')
+        responses = self.dir / 'responses.json'
+        responses.write_text('{}')
+        env = {**self.env, 'PYTHONPATH': str(site), 'STUB_RESPONSES': str(responses),
+               'INSTALL_PREFIX': str(self.dir / 'root')}
+        subprocess.run([sys.executable, '-c', 'pass'], env=env, check=True)
+        self.assertTrue(marker.exists(), 'a plain python3 loads the injected sitecustomize')
+        marker.unlink()
+        write_exe(self.bin / 'apt-get', LOG_STUB)
+        write_exe(self.bin / 'systemctl', SYSTEMCTL_STUB)
+        for argv in (['curl', '-o', str(self.dir / 'out'), 'https://api.test/x'], ['docker', 'info'],
+                     ['apt-get', 'update'], ['systemctl', 'daemon-reload']):
+            with self.subTest(stub=argv[0]):
+                subprocess.run(argv, env=env, check=True, capture_output=True)
+                self.assertEqual(self.calls()[-1]['cmd'], argv[0])
+                self.assertFalse(marker.exists(), f'{argv[0]} stub loaded the injected sitecustomize')
 
 
 @unittest.skipUnless(HAVE_TOOLS, 'needs bash, jq and openssl')
@@ -1858,5 +1894,98 @@ class Static(unittest.TestCase):
                     for path in [HERE / 'runners.env', *sorted(HOSTS.glob('*.env'))]]
         self.assertEqual(len(prefixes), len(set(prefixes)), 'every host has its own name prefix')
 
+class _Outcome:
+    """A test or subtest reported by a worker, as the parent's result prints it."""
+    def __init__(self, description):
+        self.description = description
+
+    def __str__(self):
+        return self.description
+
+    def shortDescription(self):
+        return None
+
+
+class _Lines(io.StringIO):
+    def writeln(self, text=''):
+        self.write(text + '\n')
+
+
+_TESTS, _RUNNER = [], None
+
+
+def _run_one(index):
+    """Run _TESTS[index] in a forked worker; return what the parent prints and counts."""
+    test, runner = _TESTS[index], _RUNNER
+    stream = _Lines()
+    result = runner.resultclass(stream, runner.descriptions, runner.verbosity)
+    result.buffer, result.tb_locals = runner.buffer, runner.tb_locals
+    test(result)
+    described = lambda pairs: [(result.getDescription(t), text) for t, text in pairs]
+    return {'progress': stream.getvalue(), 'run': result.testsRun,
+            'failures': described(result.failures), 'errors': described(result.errors),
+            'skipped': described(result.skipped), 'expectedFailures': described(result.expectedFailures),
+            'unexpectedSuccesses': [result.getDescription(t) for t in result.unexpectedSuccesses],
+            'durations': getattr(result, 'collectedDurations', [])}
+
+
+def _tests(suite):
+    for item in suite:
+        if isinstance(item, unittest.TestSuite):
+            yield from _tests(item)
+        else:
+            yield item
+
+
+class ParallelRunner(unittest.TextTestRunner):
+    """TextTestRunner whose tests run in forked workers, one test per task.
+
+    Each Installer test runs install.sh against its own temp INSTALL_PREFIX and
+    stub directory, so tests share no state. Only the report is merged.
+    """
+    jobs = 1
+
+    def run(self, test):
+        global _TESTS, _RUNNER
+        _TESTS, _RUNNER = list(_tests(test)), self
+        if self.jobs < 2 or len(_TESTS) < 2 or 'fork' not in multiprocessing.get_all_start_methods():
+            return super().run(test)
+
+        def run_all(result):
+            # A worker that dies (rather than failing a test) breaks the pool:
+            # the run raises BrokenProcessPool instead of hanging on its test.
+            with ProcessPoolExecutor(min(self.jobs, len(_TESTS)), multiprocessing.get_context('fork')) as pool:
+                pending = [pool.submit(_run_one, index) for index in range(len(_TESTS))]
+                for future in as_completed(pending):
+                    outcome = future.result()
+                    self.stream.write(outcome['progress'])
+                    self.stream.flush()
+                    result.testsRun += outcome['run']
+                    for kind in ('failures', 'errors', 'skipped', 'expectedFailures'):
+                        getattr(result, kind).extend((_Outcome(d), text) for d, text in outcome[kind])
+                    result.unexpectedSuccesses.extend(_Outcome(d) for d in outcome['unexpectedSuccesses'])
+                    if hasattr(result, 'collectedDurations'):
+                        result.collectedDurations.extend(outcome['durations'])
+                    if result.failfast and (result.failures or result.errors):
+                        pool.shutdown(cancel_futures=True)
+                        break
+        return super().run(run_all)
+
+
+def main(argv):
+    """unittest.main over ParallelRunner; -j/--jobs N picks the worker count."""
+    jobs = len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else os.cpu_count() or 1
+    rest, args = argv[:1], iter(argv[1:])
+    for arg in args:
+        if arg in ('-j', '--jobs'):
+            jobs = int(next(args))
+        elif re.fullmatch(r'-j\d+|--jobs=\d+', arg):
+            jobs = int(re.sub(r'\D', '', arg))
+        else:
+            rest.append(arg)
+    ParallelRunner.jobs = jobs
+    unittest.main(module='__main__', argv=rest, testRunner=ParallelRunner)
+
+
 if __name__ == '__main__':
-    unittest.main()
+    main(sys.argv)
