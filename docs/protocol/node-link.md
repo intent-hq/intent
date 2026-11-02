@@ -1870,9 +1870,11 @@ Each WebSocket binary message on `/node/link` is one JSON frame of at most
 `intentdVersion` is recorded for diagnostics and is not a compatibility gate.
 Heartbeats run every 15 s and a link silent for 45 s is dead. The backend
 redials with exponential backoff from 0.5 s to 30 s (±20% jitter).
-Certificate, token, ownership and version failures are permanent: they end that
-backoff run, and while the link is wanted the backend tries a fresh bind every
-60 s.
+Only two connect failures wait longer: a credential the machine rejects (`401`
+on any route, so the machine is `revoked`) and no common protocol version
+(`machine-update-required`). While the link is wanted, the backend retries those
+every 60 s; every other failure, including certificate and ownership mismatches,
+retries with the backoff above.
 
 The executor credential admits exactly these link requests, enumerated in one
 constant with a golden test: `hello`, `heartbeat` / `heartbeatReply`, `launch`,
@@ -2274,15 +2276,15 @@ and `refresh` report them per route in `machine-unreachable`'s `attempts`:
 | Code | Meaning | The backend redials |
 | --- | --- | --- |
 | `node-link-unavailable` | Unreachable, dropped or timed out | With backoff |
-| `node-link-certificate-mismatch` | The machine's certificate does not match the stored fingerprint | Every 60 s |
+| `node-link-certificate-mismatch` | The machine's certificate does not match the stored fingerprint | With backoff |
 | `node-link-unauthorized` | The machine rejected the executor credential (`401`) | Every 60 s |
 | `node-link-stale` | Generation not newer, or a binding no longer current | With backoff |
-| `node-link-other-head` / `node-link-wrong-node` | The credential belongs to another backend, or the binding names another machine | Every 60 s |
+| `node-link-other-head` / `node-link-wrong-node` | The credential belongs to another backend, or the binding names another machine | With backoff |
 | `node-link-version-mismatch` | The peers have no common link protocol version | Every 60 s |
 | `node-link-protocol` | The peer broke the protocol | With backoff |
-| `node-link-config` | A malformed stored route, pin or token | Every 60 s |
+| `node-link-config` | A malformed stored route, pin or token | With backoff |
 | `node-link-closed` / `node-link-timeout` | The link closed or a request timed out before completing | With backoff |
-| `node-link-binding-store` | The machine cannot read or persist the binding | Every 60 s |
+| `node-link-binding-store` | The machine cannot read or persist the binding | With backoff |
 | `node-link-frame-too-large` / `node-link-frame-invalid` | A frame over 8 MiB, or malformed | n/a (frame rejected) |
 
 Without a connected machine an agent cannot start (`node-unavailable`); an
