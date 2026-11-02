@@ -94,7 +94,10 @@ graceful null/exists result** (e.g. `github.repos.get` → `{ repo: null }`, `gi
 GitHub/service failure → `-32603` with a descriptive `message`
 (e.g. `"GitHub is not configured."`). There are **no** custom numeric codes.
 
-**Byte-budgeted pages.** The reads whose items carry long free text — `github.pulls.list`,
+**Byte-budgeted pages (behaviour change, every client).** Applies unconditionally — no opt-in; a
+daemon that pages by default advertises `server.capabilities.boundedReads: 1`. Before: `limit` up
+to 200 (GitHub served at most 100; Linear issue reads at most 250) and no byte limit, so a page of
+long bodies reached 1.7 MB (GitHub) or 4.3 MB (Linear). After: the limits below. The reads whose items carry long free text — `github.pulls.list`,
 `github.pulls.search` (repo and `org` forms), `github.pulls.files`, `github.pulls.reviews`,
 `github.issues.list`, `github.issues.search`, `github.listReviewComments`,
 `github.getReviewThreads` (and `linear.listIssues` / `linear.searchIssues`, §5.28) — keep one
