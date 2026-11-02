@@ -62,9 +62,8 @@ in their separate purpose. No new unauthenticated endpoint is introduced.
 
 ### 2.6 Executor credentials
 
-*Prepared for daemon-to-daemon remote agents; not implemented at the pinned daemon.*
 An executor credential lets one backend daemon run remote agents on this
-machine over the [executor link](./node-link.md#daemon-to-daemon-executor-link-nodeprotocol-6).
+machine over the [executor link](./node-link.md#daemon-to-daemon-executor-link-nodeprotocol-7).
 It is a separate credential kind, not a `principal_credential` row and not a
 principal with a host role, so no collaborator or member allowlist ever sees it.
 

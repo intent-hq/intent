@@ -776,13 +776,13 @@ new stream-end/interruption reason. `workspace:updated.data.changes` adds
 future additions, not emitted by the pinned daemon. Existing `sandbox:cow:created`
 and `sandbox:cow:merged` remain catalogued until backend retirement and the pin bump.
 
-#### Prepared remote machine events (not implemented)
+#### Remote machine events
 
-The [daemon-to-daemon remote machines contract (§5.50)](./methods/nodes.md#daemon-to-daemon-remote-machines-prepared)
-reserves `remoteMachine:changed` on the backend: `{ machine: RemoteMachine }`
+The [daemon-to-daemon remote machines contract (§5.50)](./methods/nodes.md#daemon-to-daemon-remote-machines)
+defines `remoteMachine:changed` on the backend: `{ machine: RemoteMachine }`
 on add, state changes and new capability reports, or `{ machineId, removed: true }`
 after removal. It is delivered to owner connections only, never to members or
-guests, and never carries the executor token. It is not emitted by the pinned daemon.
+guests, and never carries the executor token.
 
 #### Shared-host delivery and invalidation *(10.9)*
 

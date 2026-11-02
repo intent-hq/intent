@@ -271,9 +271,9 @@ The baseline counts/list above predate this addition. It permits user-initiated 
 of an existing agent; it does not grant collaborator access to `agent.delete` or MCP
 retirement of another agent. See [§5.5 Direct user retirement](./agents.md#direct-user-retirement).
 
-**Prepared remote machine administration:** `executor.mint`, `executor.list`,
+**Remote machine administration:** `executor.mint`, `executor.list`,
 `executor.revoke` and the five `remoteMachines.*` methods
-([§5.50](./nodes.md#daemon-to-daemon-remote-machines-prepared)) join the
+([§5.50](./nodes.md#daemon-to-daemon-remote-machines)) join the
 owner-only refused remainder. They are on neither the collaborator nor the
 member allowlist: a machine shared with you is someone else's computer, so only
 its owner can lend it to a backend.

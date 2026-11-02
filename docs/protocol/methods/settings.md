@@ -44,8 +44,8 @@ and locations (`providers.paths`, `context.auggiePath`, `workspace.defaultShell`
 `workspace.sshKeyPath`, `storage.dataDir`, `workspaces.root`,
 `workspace.worktreesLocation`), `permissions.rules`, the prompt rules injected into every
 agent (`userRules`, `workspaceRules`), the
-[remote agent settings](#remote-agent-settings-prepared-daemon-to-daemon-remote-agents)
-(`remoteAgents.*`, `experimental.remoteAgents`, `daemon.mode`), and opaque state
+[remote agent settings](#remote-agent-settings)
+(`remoteAgents.permission`, `daemon.mode`), and opaque state
 (`quickActions.providerSettings`, `repos.known`, `workspace.changeHistory`,
 `workspaceInitializer.state`, `hardwareConsole.state`). Every other setting is `true`.
 
@@ -752,18 +752,17 @@ existing status polling and reconnect path; `null` must clear a cached override.
 There is no new RPC, event or broader guest settings access.
 
 
-### Remote agent settings *(prepared, daemon-to-daemon remote agents)*
+### Remote agent settings
 
-These keys belong to [remote machines (§5.50)](./nodes.md#daemon-to-daemon-remote-machines-prepared).
-They are not registered at the pinned daemon. Like the other host settings they
-are owner-only. None of them is proposable: an Assistant chat settings-change card
-can never turn remote agents on, change their permission policy or switch the daemon
-mode (see "Chat settings proposals" above).
+These keys belong to [remote machines (§5.50)](./nodes.md#daemon-to-daemon-remote-machines).
+Like the other host settings they are owner-only. Neither is proposable: an
+Assistant chat settings-change card can never change the remote-agent permission
+policy or switch the daemon mode (see "Chat settings proposals" above). No setting
+switches remote agents on or off: a backend advertises `remoteMachines: 1`
+whenever it implements them outside node mode, the frontend offers them behind
+its Labs flag, and a machine serves a backend only once its owner mints an
+executor credential for it.
 
-- `remoteAgents.enabled` (boolean, default `false`). Machine side: serve the
-  executor link (`/node/link`, `/node/git`) and allow `executor.mint`. Off
-  refuses those upgrades with `403`; turning it off closes live executor
-  connections.
 - `remoteAgents.permission` (enum `allowAll` | `autoByRisk` | `denyAll`, default
   `allowAll`). Machine side: how provider permission prompts of remote agents are
   answered, since no client is attached. Applies in regular and node mode.
@@ -772,10 +771,12 @@ mode (see "Chat settings proposals" above).
   Changeable only over the local UDS seat (WSS updates fail `-32003`); takes
   effect at the next daemon start. `intentd serve --node` selects node mode for
   that process without changing the setting.
-- `experimental.remoteAgents` (boolean, default `false`). Backend side: enables
-  the `remoteMachines.*` mutations, remote placement on exposed machines and the
-  `remoteMachines: 1` capability. Off by default until the feature leaves
-  experimental.
+
+The former switches `remoteAgents.enabled` and `experimental.remoteAgents` are
+**retired**: they have no catalog entry, so `settings.get` and `settings.update`
+on either path fail `-32602` as unknown settings. A settings file that still
+holds them loads; the daemon discards both with one warning at boot and strips
+them from the file.
 
 There is no remote-agent cap. Remote agents count against the machine's
 existing `agents.maxConcurrent` process cap and `agents.memoryBudgetMb`

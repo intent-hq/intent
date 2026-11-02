@@ -72,16 +72,12 @@ Public protocol and checkpoint/journal formats stay unchanged. [Capture fixtures
 and [their static tests](./fixtures/nodes/checkpoint-capture.test.mjs) establish
 structural integrity only, not executed native capture or durable ACK acceptance. Run the standalone prepared-data checks with
 `node --test docs/protocol/fixtures/nodes/checkpoint-capture.test.mjs`.
-The experimental [single-node private link](./node-link.md#single-node-private-link-nodeprotocol-5)
-is a separate nodeProtocol 5 for one hand-configured node; it advertises no
-capability and makes no public version claim.
-
-The prepared [daemon-to-daemon executor link](./node-link.md#daemon-to-daemon-executor-link-nodeprotocol-6)
+The [daemon-to-daemon executor link](./node-link.md#daemon-to-daemon-executor-link-nodeprotocol-7)
 lets an owner expose a regular daemon to a backend daemon; it negotiates a
-nodeProtocol range starting at 6 (7 adds
+nodeProtocol range (daemons offer exactly 7, which adds
 [stop acknowledgement](./node-link.md#stop-acknowledgement-nodeprotocol-7))
 and is gated by `remoteMachines: 1`
-([§5.50](./methods/nodes.md#daemon-to-daemon-remote-machines-prepared)).
+([§5.50](./methods/nodes.md#daemon-to-daemon-remote-machines)).
 
 ### §5.x subsections (`methods/`)
 

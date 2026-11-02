@@ -769,11 +769,11 @@ a reconnect. A failover switch changes no profile and emits no
 
 #### Remote execution nodes
 
-An agent placed on the experimental single-node link runs with the same selected
-profile or Default overrides, resolved on head and sent to the node as an
-environment overlay; with neither, the node uses its own provider login. Account
-folders expand `~` against the node's home and must exist there, and nothing
-falls back to another account. See
+An agent placed on a remote machine over the daemon-to-daemon executor link runs
+with the same selected profile or Default overrides, resolved on the backend and
+sent to the machine as an environment overlay; with neither, the machine uses its
+own provider login. Account folders expand `~` against the machine's home and must
+exist there, and nothing falls back to another account. See
 [provider credentials](../node-link.md#provider-credentials-profile-environment).
 
 #### Compatibility

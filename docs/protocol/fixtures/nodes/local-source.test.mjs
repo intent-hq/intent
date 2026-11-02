@@ -187,9 +187,12 @@ test('private enrollment and capture supported sets are unchanged by LOCAL examp
   const capture = JSON.parse(read('./checkpoint-capture.json'));
   assert.equal(capture.checkpointFormat, 1); assert.equal(capture.nodeProtocol, 3);
   const versioning = read('../../versioning.md');
-  // nodeProtocol 5 belongs to the experimental single-node link, never to the
-  // LOCAL source contract.
-  const mentions = versioning.split('\n\n').filter((p) => p.includes('nodeProtocol 5'));
-  assert.ok(mentions.every((p) => p.includes('single-node link')));
+  // nodeProtocol 6 and 7 belong to the daemon-to-daemon executor link, never
+  // to the LOCAL source contract; the unshipped nodeProtocol 5 is gone.
+  const paragraphs = versioning.split('\n\n');
+  assert.ok(!paragraphs.some((p) => p.includes('nodeProtocol 5')));
+  const mentions = paragraphs.filter((p) => /nodeProtocol [67]/.test(p));
+  assert.ok(mentions.length > 0);
+  assert.ok(mentions.every((p) => p.includes('executor link')));
   assert.ok(!mentions.some((p) => /LOCAL|local source|local-source/.test(p)));
 });
