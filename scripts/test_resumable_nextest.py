@@ -99,8 +99,11 @@ class PlannedRunHarness:
         self.root = root
         self.runs = list(runs)
         self.listing = None
+        self.ignored_listing = None
         self.selection_index = 0
         self.list_commands = []
+        self.ignored_list_commands = []
+        self.relist_pending = False
         self.run_commands = []
         self.run_environments = []
         self.stdout = io.StringIO()
@@ -109,8 +112,22 @@ class PlannedRunHarness:
         if command[:2] == ["cargo", "metadata"]:
             return json.dumps({"target_directory": str(self.root / "target")})
         assert command[:3] == ["cargo", "nextest", "list"], command
+        if self.relist_pending:
+            # The --run-ignored all re-listing; by default the filter matched
+            # every test the selection listing skipped as ignored.
+            self.relist_pending = False
+            self.ignored_list_commands.append(command)
+            if self.ignored_listing is not None:
+                return self.ignored_listing
+            data = json.loads(self.listing)
+            for suite in data["rust-suites"].values():
+                for metadata in suite["testcases"].values():
+                    if metadata.get("filter-match", {}).get("reason") == "ignored":
+                        metadata["filter-match"] = {"status": "matches"}
+            return json.dumps(data)
         self.list_commands.append(command)
         if self.listing is not None:
+            self.relist_pending = gate.ignored_filter_pending(self.listing)
             return self.listing
         # These transport/policy tests use tiny canned children. Give each one
         # its actual inventory; coverage tests supply independent explicit lists.
@@ -1552,6 +1569,151 @@ class ResumableNextestTests(unittest.TestCase):
             self.assertNotIn("WARNING", stderr.getvalue())
             record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
             self.assertFalse((record_dir / "complete").exists())
+
+    def test_filter_matching_nothing_fails_despite_ignored_tests(self):
+        # Regression (intentd#2941): nextest reports every #[ignore] test as
+        # mismatch reason "ignored" before evaluating the filter, so a filter
+        # matching nothing passed as "matched only skipped/ignored tests".
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            # Mirrors cargo-nextest 0.9.143 for a filter matching nothing: it
+            # still announces each ignored test, then exits 4 (no tests to run).
+            lines = [
+                suite_event("started", test_count=1),
+                event("started", "alpha::one$skipped"),
+                suite_event("ok", passed=0, failed=0, ignored=1, measured=0, filtered_out=0),
+            ]
+            harness = PlannedRunHarness(root, [(lines, 4)])
+            harness.listing = self._filtered_listing({
+                "skipped": {"ignored": True, "filter-match": {"status": "mismatch", "reason": "ignored"}},
+                "unrelated": {"ignored": False, "filter-match": {"status": "mismatch", "reason": "expression"}},
+            })
+            harness.ignored_listing = self._filtered_listing({
+                "skipped": {"ignored": True, "filter-match": {"status": "mismatch", "reason": "expression"}},
+                "unrelated": {"ignored": False, "filter-match": {"status": "mismatch", "reason": "expression"}},
+            })
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(harness.execute(make_args(root)), 4)
+            self.assertEqual(len(harness.ignored_list_commands), 1)
+            relist = harness.ignored_list_commands[0]
+            self.assertEqual(relist[3:8], ["-p", "alpha", "--test", "one", "--run-ignored"])
+            self.assertEqual(relist[8], "all")
+            self.assertNotIn("--no-tests", harness.run_commands[0])
+            self.assertNotIn("WARNING", stderr.getvalue())
+            self.assertIn("[test-changed] ERROR: selection 1 matched no tests: -p alpha --test one; "
+                          "check the filter", stderr.getvalue())
+
+            record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
+            self.assertFalse((record_dir / "complete").exists())
+            attempt = latest_attempt(record_dir)
+            self.assertTrue((attempt / "listing-1-run-ignored.json").is_file())
+            receipt = json.loads((attempt / "run.json").read_text())
+            members = gate.receipt_inventories(attempt, receipt)[0]
+            self.assertFalse(any(meta["active"] for meta in members.values()))
+            gate.validate_result_config(attempt, receipt, receipt["results"][0], set(), members)
+            proof = json.loads((attempt / "coverage.json").read_text())
+            self.assertFalse(proof["complete"])
+            self.assertEqual(proof["errors"], [])
+            self.assertEqual(proof["active"], [])
+
+    def test_filter_matching_a_real_ignored_test_still_warns_and_passes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            lines = [
+                suite_event("started", test_count=1),
+                event("started", "alpha::one$skipped"),
+                event("started", "alpha::one$other_ignored"),
+                suite_event("ok", passed=0, failed=0, ignored=2, measured=0, filtered_out=0),
+            ]
+            harness = PlannedRunHarness(root, [(lines, 0)])
+            harness.listing = self._filtered_listing({
+                "skipped": {"ignored": True, "filter-match": {"status": "mismatch", "reason": "ignored"}},
+                "other_ignored": {"ignored": True, "filter-match": {"status": "mismatch", "reason": "ignored"}},
+            })
+            harness.ignored_listing = self._filtered_listing({
+                "skipped": {"ignored": True, "filter-match": {"status": "matches"}},
+                "other_ignored": {"ignored": True, "filter-match": {"status": "mismatch", "reason": "expression"}},
+            })
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(harness.execute(make_args(root)), 0)
+            self.assertEqual(harness.run_commands[0][-2:], ["--no-tests", "warn"])
+            self.assertIn("matched only skipped/ignored tests (1); passed with no tests run", stderr.getvalue())
+            record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
+            self.assertTrue((record_dir / "complete").is_file())
+            attempt = latest_attempt(record_dir)
+            proof = json.loads((attempt / "coverage.json").read_text())
+            self.assertTrue(proof["complete"], proof["errors"])
+            self.assertEqual(proof["active"], [["alpha::one", "skipped"]])
+            self.assertEqual(proof["categories"]["ignored"], [["alpha::one", "skipped"]])
+
+    def test_unmatched_ignored_test_cannot_report_an_outcome(self):
+        # Announcements of unmatched ignored tests are tolerated, but a pass or
+        # failure reported for one is not evidence for the selection.
+        for outcome, expected in (("ignored", 0), ("ok", 2), ("failed", 2)):
+            with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                lines = [
+                    suite_event("started", test_count=2),
+                    event("started", "alpha::one$skipped"),
+                    event(outcome, "alpha::one$skipped"),
+                    event("started", "alpha::one$passes"),
+                    event("ok", "alpha::one$passes"),
+                    suite_event("ok", passed=1, failed=0, ignored=1, measured=0, filtered_out=0),
+                ]
+                harness = PlannedRunHarness(root, [(lines, 0)])
+                harness.listing = self._filtered_listing({
+                    "skipped": {"ignored": True, "filter-match": {"status": "mismatch", "reason": "ignored"}},
+                    "passes": {"ignored": False, "filter-match": {"status": "matches"}},
+                })
+                harness.ignored_listing = self._filtered_listing({
+                    "skipped": {"ignored": True, "filter-match": {"status": "mismatch", "reason": "expression"}},
+                    "passes": {"ignored": False, "filter-match": {"status": "matches"}},
+                })
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(harness.execute(make_args(root)), expected)
+                attempt = latest_attempt(root / "cache" / KEY / "changed" /
+                                         gate.plan_key(gate.split_plans(["-p alpha --test one"])))
+                proof = json.loads((attempt / "coverage.json").read_text())
+                self.assertEqual(proof["active"], [["alpha::one", "passes"]])
+                self.assertEqual(proof["complete"], expected == 0, proof["errors"])
+                if expected == 0:
+                    self.assertEqual(proof["categories"]["executed-passed"], [["alpha::one", "passes"]])
+                    self.assertEqual(proof["categories"]["ignored"], [])
+
+    def test_listing_without_ignored_reason_is_not_relisted(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = PlannedRunHarness(root, [([], 4)])
+            harness.listing = self._filtered_listing({
+                "unrelated": {"ignored": False, "filter-match": {"status": "mismatch", "reason": "expression"}},
+            })
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(harness.execute(make_args(root)), 4)
+            self.assertEqual(harness.ignored_list_commands, [])
+
+    def test_run_ignored_selection_replaces_existing_policy(self):
+        self.assertEqual(gate.run_ignored_selection(["-E", "test(=a)"]), ["-E", "test(=a)", "--run-ignored", "all"])
+        self.assertEqual(gate.run_ignored_selection(["--run-ignored", "only", "-E", "x"]),
+                         ["-E", "x", "--run-ignored", "all"])
+        self.assertEqual(gate.run_ignored_selection(["--run-ignored=only", "-E", "x"]),
+                         ["-E", "x", "--run-ignored", "all"])
+
+    def test_inventory_counts_ignored_tests_only_when_the_filter_matches(self):
+        listing = self._filtered_listing({
+            "hit": {"ignored": True, "filter-match": {"status": "mismatch", "reason": "ignored"}},
+            "miss": {"ignored": True, "filter-match": {"status": "mismatch", "reason": "ignored"}},
+        })
+        members, _ = gate.inventory(listing, {("alpha::one", "hit")})
+        self.assertEqual({i for i, m in members.items() if m["active"]}, {("alpha::one", "hit")})
+        self.assertTrue(gate.skipped_only(members))
+        nothing, _ = gate.inventory(listing, set())
+        self.assertFalse(any(m["active"] for m in nothing.values()))
+        self.assertEqual(gate.no_tests_args(set(), nothing), [])
+        # Legacy receipts (no re-listing) keep their original reading.
+        legacy, _ = gate.inventory(listing)
+        self.assertTrue(all(m["active"] for m in legacy.values()))
 
     def test_resumed_empty_selection_fails_unless_it_reuses_its_own_passes(self):
         # Regression: a sibling selection's reused pass gave a matched-nothing
@@ -4109,7 +4271,7 @@ class CapturedNextestTests(unittest.TestCase):
             listings = iter(fixtures)
             original_run = harness.fake_run
             def run(command, cwd, env=None):
-                if command[:3] == ['cargo', 'nextest', 'list']:
+                if command[:3] == ['cargo', 'nextest', 'list'] and not harness.relist_pending:
                     harness.listing = next(listings)['listing']
                 return original_run(command, cwd, env)
             harness.fake_run = run

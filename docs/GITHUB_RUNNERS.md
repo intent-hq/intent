@@ -378,7 +378,13 @@ runner-only host, leaving a core or two unpinned is optional.
    `ufw allow in on tailscale0 to any port 22 proto tcp`, `ufw enable`, and confirm
    `ssh root@<host>` works over the tailnet before ending the provider's
    console session. Runner jobs never reach the tailnet (the egress filter
-   drops 100.64/10).
+   drops 100.64/10). The installer (step 5) checks this before it changes
+   anything: it stops unless `ufw status verbose` shows ufw active, incoming
+   denied (or rejected) by default, an SSH allow rule on `tailscale0`, and no
+   rule admitting port 22 anywhere else (a 22, `OpenSSH` or port-range rule,
+   or an every-port rule from an address). The error names the rule to fix.
+   `--skip-lockdown-check` overrides it for a host firewalled some other
+   way; say why in the fleet table.
 3. **Write its config.** Copy the closest file in `infra/runners/hosts/`, set
    `RUNNER_NAME_PREFIX` to the host's name (it must start with `intent-` and be
    unique in the fleet), and fit the CPU sets and memory to the host: whole
@@ -403,8 +409,9 @@ runner-only host, leaving a core or two unpinned is optional.
    ```
 
    On a host without the cache services the installer skips their drop-ins.
-   It runs `supervisor.sh --host-check` and changes no slot if the CPU sets or
-   the total memory do not fit the host.
+   It refuses a host that is not locked down (step 2) before installing
+   anything. It runs `supervisor.sh --host-check` and changes no slot if the
+   CPU sets or the total memory do not fit the host.
 6. **Smoke test** right after installing: an online slot takes any queued job
    carrying its labels, whatever the variables in step 7 say (they only cap how
    many jobs `runner-route` sends to a pool), so if this fails, stop the slots

@@ -162,6 +162,26 @@ if os.environ.get('STUB_UNITS') and args:
 '''
 
 
+# `ufw status verbose` on a host locked down per the runbook (intent-ci1's
+# rules); the intent-cache box adds the public 80/443 rules.
+UFW_LOCKED = '''Status: active
+Logging: on (low)
+Default: deny (incoming), allow (outgoing), deny (routed)
+New profiles: skip
+
+To                         Action      From
+--                         ------      ----
+22/tcp on tailscale0       ALLOW IN    Anywhere
+80/tcp                     ALLOW IN    Anywhere
+443/tcp                    ALLOW IN    Anywhere
+22/tcp (v6) on tailscale0  ALLOW IN    Anywhere (v6)
+80/tcp (v6)                ALLOW IN    Anywhere (v6)
+443/tcp (v6)               ALLOW IN    Anywhere (v6)
+'''
+# Prints $STUB_UFW_STATUS for `ufw status verbose`; logs nothing.
+UFW_STUB = '#!/bin/sh\n[ "$*" = "status verbose" ] || exit 9\ncat "$STUB_UFW_STATUS"\n'
+
+
 def write_exe(path, text):
     path.write_text(text)
     path.chmod(0o755)
@@ -950,6 +970,9 @@ class Installer(Stubbed):
             write_exe(self.bin / name, SH_LOG_STUB)
         write_exe(self.bin / 'systemctl', SYSTEMCTL_STUB)
         write_exe(self.bin / 'id', '#!/bin/sh\necho 0\n')
+        write_exe(self.bin / 'ufw', UFW_STUB)
+        self.ufw_status = self.dir / 'ufw-status'
+        self.ufw_status.write_text(UFW_LOCKED)
         os_release = self.dir / 'os-release'
         os_release.write_text('ID=ubuntu\nVERSION_ID="24.04"\nVERSION_CODENAME=noble\n')
         responses = self.dir / 'responses.json'
@@ -968,7 +991,7 @@ class Installer(Stubbed):
         self.env.update(INSTALL_PREFIX=str(self.prefix), OS_RELEASE=str(os_release),
                         INSTALL_OWNER_UID=str(os.getuid()), RUNNERS_OWNER_UID=str(os.getuid()),
                         STUB_RESPONSES=str(responses), MEMINFO=str(self.meminfo),
-                        RUNNERS_SYSFS_CPU=str(self.sysfs),
+                        RUNNERS_SYSFS_CPU=str(self.sysfs), STUB_UFW_STATUS=str(self.ufw_status),
                         STUB_DOCKER_FAIL='network inspect')
         self.creds = self.prefix / 'etc/github-runners/credentials'
         self.env_file = self.prefix / 'etc/github-runners/runners.env'
@@ -1314,7 +1337,9 @@ class Installer(Stubbed):
                 (self.dir / 'units.json.busy').unlink(missing_ok=True)
 
     def test_retire_with_nothing_left(self):
+        # intent-ci3 had no firewall: retiring must not need the lockdown.
         self.retire_host({})
+        self.ufw_status.write_text('Status: inactive\n')
         result = self.install('--retire')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('no runner slots on this host', result.stdout)
@@ -1334,6 +1359,98 @@ class Installer(Stubbed):
         self.assertIn('startswith("<host>-")', result.stdout)
         self.assertNotIn('intent-cache-', result.stdout)
         self.assertIn('Cancel the server', result.stdout)
+    def assert_refused_untouched(self, result, message):
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn(message, result.stderr)
+        self.assertIn('--skip-lockdown-check', result.stderr, 'names the override')
+        self.assertEqual(self.calls(), [], 'nothing installed, no slot enabled')
+        self.assertFalse((self.prefix / 'usr/local/lib/github-runners').exists())
+        self.assertFalse((self.prefix / 'etc/systemd/system/github-runner@.service').exists())
+        self.assertEqual(self.enabled(), [])
+
+    def test_refuses_a_host_that_is_not_locked_down(self):
+        rules = UFW_LOCKED.split('--                         ------      ----\n')[0] + '--                         ------      ----\n'
+        tailnet = '22/tcp on tailscale0       ALLOW IN    Anywhere\n'
+        cases = {
+            # intent-ci3 (Nov 2026): no firewall at all, sshd on 0.0.0.0:22.
+            'ufw is not active': 'Status: inactive\n',
+            'ufw does not deny incoming traffic by default': UFW_LOCKED.replace('Default: deny (incoming)', 'Default: allow (incoming)'),
+            'no rule allowing SSH on tailscale0': rules + '80/tcp                     ALLOW IN    Anywhere\n',
+        }
+        public = {
+            'port': '22/tcp                     ALLOW IN    Anywhere',
+            'v6 port': '22/tcp (v6)                ALLOW IN    Anywhere (v6)',
+            'tcp and udp': '22                         ALLOW IN    Anywhere',
+            'app profile': 'OpenSSH                    ALLOW IN    Anywhere',
+            'rate limit': '22/tcp                     LIMIT IN    Anywhere',
+            'range': '20:30/tcp                  ALLOW IN    Anywhere',
+            'list': '80,22,443/tcp              ALLOW IN    Anywhere',
+            'every port from an address': 'Anywhere                   ALLOW IN    203.0.113.7',
+            'other interface': '22/tcp on eth0             ALLOW IN    Anywhere',
+            'to an address': '203.0.113.5 22/tcp         ALLOW IN    Anywhere',
+            'long interface name': 'Anywhere (v6) on enp1s0f0np0 ALLOW IN    Anywhere (v6)',
+            # PR #8304 review: a comment must not supply the action, a verbose
+            # profile annotation must not hide the port, and every-port TCP counts.
+            'comment with another action': '22/tcp                     ALLOW IN    Anywhere                   # was DENY IN',
+            'comment with an outbound action': '22/tcp                     ALLOW IN    Anywhere                   # not ALLOW OUT',
+            'profile annotation': '22/tcp (RemoteAdmin)       ALLOW IN    Anywhere',
+            'profile list annotation': '80,22/tcp (Admin Tools)    ALLOW IN    Anywhere',
+            'every tcp port': 'Anywhere/tcp               ALLOW IN    Anywhere/tcp',
+            'every tcp port v6': 'Anywhere/tcp (v6)          ALLOW IN    Anywhere/tcp (v6)',
+            'every tcp port to an address': '203.0.113.0/24/tcp         ALLOW IN    Anywhere',
+            'action without direction': '22/tcp                     ALLOW       Anywhere',
+        }
+        for name, rule in public.items():
+            cases[f'ufw allows SSH outside tailscale0: [{rule}]'] = rules + tailnet + rule + '\n'
+        for message, status in cases.items():
+            with self.subTest(message=message):
+                self.ufw_status.write_text(status)
+                self.place_credential()
+                self.log.write_text('')
+                result = self.install('--no-build')
+                self.assert_refused_untouched(result, message)
+        with self.subTest('ufw missing'):
+            if shutil.which('ufw', path='/usr/bin:/bin'):
+                self.skipTest('ufw installed in /usr/bin or /bin on this machine')
+            (self.bin / 'ufw').unlink()
+            result = self.install('--no-build', PATH=f'{self.bin}:/usr/bin:/bin')
+            self.assert_refused_untouched(result, 'ufw is not installed')
+            self.assertIn('apt-get install -y ufw', result.stderr)
+
+    def test_lockdown_ignores_rules_that_do_not_open_ssh(self):
+        rules = UFW_LOCKED + ''.join(r + '\n' for r in (
+            '22/udp                     ALLOW IN    Anywhere',
+            '22/tcp                     DENY IN     Anywhere',
+            '22/tcp                     ALLOW OUT   Anywhere',
+            '2200:2300/tcp              ALLOW IN    Anywhere',
+            'Nginx Full                 ALLOW IN    Anywhere',
+            'Anywhere on tailscale0     ALLOW IN    Anywhere',
+            'Anywhere (v6) on tailscale0 ALLOW IN    Anywhere (v6)',
+            'Anywhere/udp               ALLOW IN    Anywhere/udp',
+            'Anywhere/esp               ALLOW IN    Anywhere/esp',
+            '80/tcp (WWW)               ALLOW IN    Anywhere                   # not ssh: ALLOW IN',
+            '443/tcp                    DENY IN     Anywhere                   # was ALLOW IN',
+        ))
+        self.ufw_status.write_text(rules.replace('Default: deny (incoming)', 'Default: reject (incoming)'))
+        self.place_credential()
+        result = self.install('--no-build')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('lockdown: ufw active, incoming denied, SSH only on tailscale0', result.stdout)
+        self.assertEqual(len(self.enabled()), 3)
+
+    def test_skip_lockdown_check_installs_an_open_host(self):
+        self.ufw_status.write_text('Status: inactive\n')
+        self.place_credential()
+        result = self.install('--no-build')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.enabled(), [])
+        result = self.install('--no-build', '--skip-lockdown-check')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('WARNING: --skip-lockdown-check', result.stdout)
+        self.assertEqual(len(self.enabled()), 3)
+        (self.bin / 'ufw').unlink()
+        result = self.install('--no-build', '--skip-lockdown-check')
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_refuses_non_ubuntu_and_bad_args(self):
         other = self.dir / 'debian'

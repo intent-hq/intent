@@ -6,7 +6,7 @@
 # sets, memory), draining and disabling any others.
 #
 # Usage (as root, from a checkout of this repo):
-#   infra/runners/install.sh [--no-build] [--config FILE]
+#   infra/runners/install.sh [--no-build] [--config FILE] [--skip-lockdown-check]
 #   infra/runners/install.sh --retire
 #
 #   --no-build     Skip the image build (config-only change).
@@ -19,6 +19,14 @@
 #                  steps left to do by hand. Re-run it to resume a wait that
 #                  timed out. See "Retire a runner host" in
 #                  docs/GITHUB_RUNNERS.md.
+#   --skip-lockdown-check
+#                  Install even though ufw does not show the host locked down
+#                  (below). Only for a host firewalled some other way.
+#
+# Installing refuses to touch the host unless ufw is active, denies incoming traffic by
+# default and allows SSH only on tailscale0 (docs/GITHUB_RUNNERS.md, Add a
+# runner host, step 2): the slots hold an org runner credential. --retire
+# skips this check: it only takes slots and the credential away.
 #
 # Runs on the cache box (intent-cache) or on a runner-only host: the cache
 # services get their priority drop-in only where they are installed. The
@@ -54,11 +62,12 @@ retire_poll="${RETIRE_POLL_SECONDS:-15}"
 
 build=1
 retire=0
+lockdown_check=1
 seed_config="$here/runners.env"
 
 log() { echo "install: $*"; }
 die() { echo "install: error: $*" >&2; exit 1; }
-usage() { echo "usage: $0 [--no-build] [--config FILE] | --retire" >&2; exit 2; }
+usage() { echo "usage: $0 [--no-build] [--config FILE] [--skip-lockdown-check] | --retire" >&2; exit 2; }
 
 parse_args() {
   if [ "${1:-}" = --retire ]; then
@@ -69,6 +78,7 @@ parse_args() {
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --no-build) build=0 ;;
+      --skip-lockdown-check) lockdown_check=0 ;;
       --config)
         [ "$#" -ge 2 ] || usage
         [ -f "$2" ] || die "--config: no such file $2"
@@ -88,6 +98,72 @@ check_os() {
   # shellcheck disable=SC1090
   id="$(. "$os_release" && echo "${ID:-}")"
   [ "$id" = ubuntu ] || die "expected Ubuntu, found '${id:-unknown}'"
+}
+
+# True if a ufw "To" field (interface already removed) admits TCP port 22: a
+# port list or range holding 22, an address or Anywhere with no port (every
+# port, of every protocol or of TCP), or an SSH app profile. Parenthesized
+# annotations such as "(v6)" or a verbose profile name "(RemoteAdmin)" are
+# dropped so the numeric port behind them decides.
+admits_ssh() {
+  local to="$1" spec ports part lo hi parts
+  [[ "${to,,}" == *ssh* ]] && return 0
+  while [[ "$to" =~ ^(.*)\ ?\([^\)]*\)(.*)$ ]]; do to="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"; done
+  read -ra parts <<<"$to"
+  [ "${#parts[@]}" -gt 0 ] || return 1
+  spec="${parts[-1]}"
+  if [[ "$spec" =~ ^[0-9]+(:[0-9]+)?(,[0-9]+(:[0-9]+)?)*(/(tcp|udp))?$ ]]; then
+    [[ "$spec" == */udp ]] && return 1
+    ports="${spec%/*}"
+    for part in ${ports//,/ }; do
+      lo="${part%%:*}"; hi="${part##*:}"
+      [ "$lo" -le 22 ] && [ "$hi" -ge 22 ] && return 0
+    done
+    return 1
+  fi
+  [[ "$spec" =~ ^(Anywhere|[0-9a-fA-F.:]+(/[0-9]+)?)(/([a-z][a-z0-9]*))?$ ]] || return 1
+  [[ -z "${BASH_REMATCH[4]}" || "${BASH_REMATCH[4]}" == tcp ]]
+}
+
+# The runbook's lockdown (docs/GITHUB_RUNNERS.md, Add a runner host, step 2):
+# ufw active, incoming denied by default, SSH allowed only on tailscale0. Runs
+# before anything changes on the host.
+check_lockdown() {
+  if [ "$lockdown_check" = 0 ]; then
+    log "WARNING: --skip-lockdown-check: not checking that ufw keeps SSH off the public internet"
+    return 0
+  fi
+  local fix="lock the host down first (docs/GITHUB_RUNNERS.md, Add a runner host, step 2): apt-get install -y ufw; ufw default deny incoming; ufw allow in on tailscale0 to any port 22 proto tcp; ufw enable. If the host is firewalled some other way, re-run with --skip-lockdown-check"
+  command -v ufw >/dev/null 2>&1 || die "ufw is not installed, so nothing keeps SSH off the public internet; $fix"
+  local status line to action direction words i open=() tailnet=0 rules=0
+  status="$(LC_ALL=C ufw status verbose 2>&1)" || die "ufw status failed: $status"
+  grep -qx 'Status: active' <<<"$status" || die "ufw is not active, so every listening port (SSH included) is open; $fix"
+  grep -Eq '^Default: (deny|reject) \(incoming\)' <<<"$status" \
+    || die "ufw does not deny incoming traffic by default ($(grep '^Default:' <<<"$status" || echo 'no Default line')); $fix"
+  while IFS= read -r line; do
+    if [ "$rules" = 0 ]; then
+      [[ "$line" =~ ^--+\  ]] && rules=1
+      continue
+    fi
+    # A comment ("# ...") may hold anything, including action words.
+    read -ra words <<<"${line%%#*}"
+    i=0
+    while [ "$i" -lt "${#words[@]}" ] && [[ ! "${words[i]}" =~ ^(ALLOW|LIMIT|DENY|REJECT)$ ]]; do i=$((i + 1)); done
+    if [ "$i" = 0 ] || [ "$i" = "${#words[@]}" ]; then continue; fi
+    to="${words[*]:0:i}"; action="${words[i]}"; direction=IN
+    [[ "${words[i + 1]:-}" =~ ^(IN|OUT|FWD)$ ]] && direction="${words[i + 1]}"
+    case "$action $direction" in 'ALLOW IN'|'LIMIT IN') ;; *) continue ;; esac
+    if [[ "$to" == *" on tailscale0" ]]; then
+      admits_ssh "${to% on tailscale0}" && tailnet=1
+      continue
+    fi
+    admits_ssh "${to% on *}" && open+=("$line")
+  done <<<"$status"
+  if [ "${#open[@]}" -gt 0 ]; then
+    die "ufw allows SSH outside tailscale0: $(printf '[%s] ' "${open[@]}")- delete those rules (ufw status numbered; ufw delete N) and keep only 'ufw allow in on tailscale0 to any port 22 proto tcp'; if the host is firewalled some other way, re-run with --skip-lockdown-check"
+  fi
+  [ "$tailnet" = 1 ] || die "ufw has no rule allowing SSH on tailscale0; $fix"
+  log "lockdown: ufw active, incoming denied, SSH only on tailscale0"
 }
 
 install_packages() {
@@ -364,6 +440,7 @@ main() {
     retire_host
     return 0
   fi
+  check_lockdown
   install_packages
   configure_docker
   configure_sysctl
