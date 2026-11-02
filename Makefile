@@ -1235,7 +1235,8 @@ sandbox-status: ## Show live sandbox state (SANDBOX_JSON=1 for JSON)
 sandbox-stop: ## Stop sandboxes in this worktree (optionally MODE=ui|app|stack)
 	@MODE="$(MODE)" scripts/dev-sandbox.sh stop
 
-# Builds dist/web when missing or older than its sources, then runs
+# Builds dist/web unless dist/.web-serve-fingerprint matches the checkout's
+# HEAD, uncommitted diff and untracked files (so any build input counts), then runs
 # packages/cloudlands-fe/scripts/web-serve.mjs: static files plus the
 # same-origin /intentd/ws bridge to the installed daemon (INTENTD_SOCKET
 # overrides). It never authenticates; the 0600 socket keeps other local
@@ -1251,12 +1252,17 @@ web-serve: ensure-fe-submodule ensure-fe-toolchain ## Serve the web build on an 
 	fi
 	@$(FE_DEPS_FRESH) || (echo "[web-serve] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
 	@cd $(FE_DIR) && \
+	stamp=dist/.web-serve-fingerprint; \
+	fingerprint="$$( { git rev-parse HEAD && git diff HEAD --binary && \
+		git ls-files --others --exclude-standard -z | xargs -0 cksum; } 2>/dev/null | cksum)"; \
 	if [ "$(WEB_SERVE_REBUILD)" = "1" ] || [ ! -f dist/web/index.html ] || \
-		[ -n "$$(find src static messages package.json pnpm-lock.yaml svelte.config.js vite.config.mjs -newer dist/web/index.html -print 2>/dev/null | head -n 1)" ]; then \
+		[ "$$(cat "$$stamp" 2>/dev/null)" != "$$fingerprint" ]; then \
 		echo "[web-serve] building dist/web (takes a few minutes)"; \
+		rm -f "$$stamp"; \
 		NODE_OPTIONS="--max-old-space-size=$(FE_BUILD_HEAP_MB) $$NODE_OPTIONS" corepack pnpm run build:web || exit 1; \
+		printf '%s\n' "$$fingerprint" > "$$stamp"; \
 	else \
-		echo "[web-serve] dist/web is up to date (WEB_SERVE_REBUILD=1 forces a rebuild)"; \
+		echo "[web-serve] dist/web matches this checkout (WEB_SERVE_REBUILD=1 forces a rebuild)"; \
 	fi
 	@cd $(FE_DIR) && WEB_SERVE_SOCKET="$(WEB_SERVE_SOCKET)" exec node scripts/web-serve.mjs
 
