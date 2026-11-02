@@ -795,6 +795,14 @@ conversation descriptor still present so restored panes can recover their title
 and participants. Queries are bounded
 by the page limit; the server does not load the entire conversation.
 
+A page is also bounded by size: when its messages would serialize past 448 KiB
+(under the daemon's 500 KiB read payload budget), the daemon returns fewer than
+`limit` messages and sets `hasMore: true`. A latest or `beforeSequence` page
+keeps its newest messages and an `afterSequence` page its oldest, so the usual
+cursor (the oldest or newest returned `sequence`) continues at the cut. A page
+always holds at least one message. Clients must page by `hasMore`, never by
+comparing the page length with `limit`.
+
 `discussion.send` persists the row before replying and publishes
 `discussion:message` with
 `data = { workspaceId, conversationId, conversation, message }`. The event carries
