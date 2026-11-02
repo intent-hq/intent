@@ -39,7 +39,11 @@ class RustTestPolicyTests(unittest.TestCase):
             ("CARGO_", "RUST", "NEXTEST_", "INTENTD_")) and k not in {
                 "MAKEFLAGS", "MFLAGS", "MAKELEVEL", "COMPACT", "BASE", "DRY_RUN",
                 "GATE_CACHE_DIR", "RESUME", "GATE_FORCE", "NO_FAIL_FAST", "PYTHONPATH",
-                "TRANSFER_SELECTION_FIXTURE_ROOT", "NODE_OPTIONS"}}
+                "TRANSFER_SELECTION_FIXTURE_ROOT", "NODE_OPTIONS",
+                # Under GitHub Actions, intentd's ci-killed-rustc-retry.sh
+                # merges the child's stderr into stdout; these tests model the
+                # local pass-through, so the child must not see the runner flag.
+                "GITHUB_ACTIONS"}}
         self.env.update(PATH=str(self.bin) + os.pathsep + os.environ["PATH"],
                         HOME=temporary.name, POLICY_LOG=str(self.log),
                         GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
