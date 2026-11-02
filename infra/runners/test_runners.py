@@ -141,6 +141,7 @@ if os.environ.get('STUB_UNITS') and args:
     left_path = path + '.busy'
     left = json.load(open(left_path)) if os.path.exists(left_path) else busy
     if args[0] == 'list-units':
+        if os.environ.get('STUB_LIST_FAIL'): sys.exit(1)
         for unit in sorted(units):
             if fnmatch.fnmatch(unit, args[1]): print(f'{unit} loaded {units[unit]} running slot')
     elif args[0] == 'stop' or (args[0] == 'disable' and '--now' in sys.argv):
@@ -148,6 +149,7 @@ if os.environ.get('STUB_UNITS') and args:
             if units.get(unit, 'inactive') != 'inactive':
                 units[unit] = 'deactivating' if left.get(unit) else 'inactive'
     elif args[0] == 'show':
+        if os.environ.get('STUB_SHOW_FAIL'): sys.exit(1)
         unit = args[-1]
         print(units.get(unit, 'inactive'))
         if units.get(unit) == 'deactivating':
@@ -1297,6 +1299,19 @@ class Installer(Stubbed):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(self.creds.exists())
         self.assertIn('may merge now', result.stdout)
+
+    def test_retire_keeps_the_credential_when_slot_states_are_unreadable(self):
+        # A failing systemctl must not read as "no slot running".
+        for fail in ('STUB_SHOW_FAIL', 'STUB_LIST_FAIL'):
+            with self.subTest(fail=fail):
+                self.retire_host({'heavy-1': 'active'}, busy={'heavy-1': 5})
+                self.place_credential()
+                result = self.install('--retire', **{fail: '1'})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('keeping the credential', result.stderr)
+                self.assertTrue(self.creds.exists())
+                self.assertNotIn('drained', result.stdout)
+                (self.dir / 'units.json.busy').unlink(missing_ok=True)
 
     def test_retire_with_nothing_left(self):
         self.retire_host({})

@@ -270,12 +270,18 @@ known_slots() {
 
 # Slots not yet stopped, as "unit (state)". A draining slot is
 # "deactivating", which `systemctl is-active` counts as inactive, so read
-# ActiveState instead.
+# ActiveState instead. Fails if systemd cannot be read: errexit is off where
+# callers test this, and an unread state must never count as stopped.
 running_slots() {
-  local unit state
-  for unit in $(known_slots); do
-    state="$(systemctl show -p ActiveState --value "$unit")"
-    case "$state" in ''|inactive|failed) ;; *) echo "$unit ($state)" ;; esac
+  local units unit state
+  units="$(known_slots)" || return 1
+  for unit in $units; do
+    state="$(systemctl show -p ActiveState --value "$unit")" || return 1
+    case "$state" in
+      inactive|failed) ;;
+      '') return 1 ;;
+      *) echo "$unit ($state)" ;;
+    esac
   done
 }
 
@@ -305,7 +311,7 @@ remove_credential() {
 
 retire_host() {
   local slots running name_prefix waited=0
-  slots="$(known_slots)"
+  slots="$(known_slots)" || die "cannot list the runner slots; keeping the credential"
   if [ -n "$slots" ]; then
     log "disabling and draining: $(tr '\n' ' ' <<<"$slots")"
     # --no-block queues every stop at once; the loop below waits. A busy
@@ -315,7 +321,9 @@ retire_host() {
   else
     log "no runner slots on this host"
   fi
-  while running="$(running_slots)" && [ -n "$running" ]; do
+  while :; do
+    running="$(running_slots)" || die "cannot read the runner slots' state; keeping the credential"
+    [ -n "$running" ] || break
     if [ "$waited" -ge "$retire_timeout" ]; then
       echo "install: error: slots still running after ${waited}s; keeping the credential (a draining slot needs it to deregister):" >&2
       echo "  ${running//$'\n'/$'\n  '}" >&2
