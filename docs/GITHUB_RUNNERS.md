@@ -448,20 +448,30 @@ under the same name):
    `gh variable set CI_LINUX_HEAVY_SLOTS --repo intent-hq/<repo> --body <n>`.
    For the organization default add `--org intent-hq --visibility all`:
    `gh` otherwise makes it private, hiding it from these public repositories.
-2. **Drain its slots.** `systemctl disable` takes unit names, not globs, so
-   list the enabled slots first (as `install.sh` does):
+2. **Drain it and remove its credential** with one command on the host:
 
    ```bash
    ssh root@<host>
-   slots=$(cd /etc/systemd/system/multi-user.target.wants && ls github-runner@*.service)
-   systemctl disable --now $slots
+   cd <checkout> && infra/runners/install.sh --retire
    ```
 
-   Idle slots deregister at once; busy ones finish their job first (see
-   Drain and stop). Go on only once `systemctl list-units 'github-runner@*'`
-   lists none running.
-3. **Check that no runner is left** under its prefix, and delete leftovers
-   (offline runners from a crash or reboot):
+   It disables every slot at once (busy ones finish their job first, idle
+   ones deregister at once; see Drain and stop), waits until none is
+   running, then deletes `/etc/github-runners/credentials` and the GitHub
+   App key it names. If a job outlasts the wait (6 hours and 10 minutes) it
+   exits non-zero and keeps the credential, which a draining slot needs to
+   deregister; re-run it to resume. If the box cannot be wiped before the
+   provider reclaims it, rotate the credential as well (see Credential).
+3. **Only then remove its config.** Merge the PR that deletes
+   `infra/runners/hosts/<host>.env`, its row in the fleet table, any mention
+   in the pool table and its cases in `test_runners.py` only after
+   `--retire` prints `drained`. Until then the box still takes jobs, and the
+   PR's own checks can land on it and fail against its old layout (PR #8293:
+   "Isolation and paths" failed on `intent-ci3-heavy-1` until the drain).
+   The smoke workflow then rejects `-f host=<host>`.
+4. **Check that no runner is left** under its prefix, and delete leftovers
+   (offline runners from a crash or reboot). `--retire` prints these
+   commands with the host's prefix filled in:
 
    ```bash
    gh api --paginate orgs/intent-hq/actions/runners \
@@ -469,17 +479,11 @@ under the same name):
    gh api -X DELETE orgs/intent-hq/actions/runners/<id>
    ```
 
-4. **Remove the credential:** `shred -u /etc/github-runners/credentials` (and
-   the App key it names, if any). If the box cannot be wiped before the
-   provider reclaims it, rotate the credential instead (see Credential).
 5. **Leave the tailnet,** last, since SSH reaches the box only over Tailscale:
    `nohup sh -c 'sleep 2; tailscale logout' >/dev/null 2>&1 &`, then delete
    the machine in the Tailscale admin console, so a replacement can take the
    name (Tailscale renames a duplicate to `<host>-1`).
-6. **Remove its config:** delete `infra/runners/hosts/<host>.env`, its row in
-   the fleet table, any mention in the pool table and its cases in
-   `test_runners.py`. The smoke workflow then rejects `-f host=<host>`.
-7. **Cancel the server** with the provider.
+6. **Cancel the server** with the provider.
 
 A replacement under the same name then follows Add a runner host.
 
