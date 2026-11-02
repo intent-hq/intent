@@ -50,7 +50,8 @@ No later invocation repairs unfinished receipts; only tree expiry removes them.
 
 `--stress-count N` (make test-stress) hands one `--filterset` to
 scripts/nextest_stress.py: the same fixtures and Cargo outputs, N iterations with
-retries off, an optional `--load 1` CPU + fsync load, and no resume records.
+retries off, an optional `--load 1` CPU + fsync load, optional `--stall 1`
+random SIGSTOP/SIGCONT pauses of the test processes, and no resume records.
 """
 
 from __future__ import annotations
@@ -2097,9 +2098,18 @@ def main() -> int:
                         help="stress mode: 1 runs a built-in CPU + fsync load during the tests")
     parser.add_argument("--load-cpus", type=positive_int, metavar="N",
                         help="stress mode: CPU spinners for --load 1 (default: 2 x CPUs)")
+    parser.add_argument("--stall", choices=("0", "1"), default="0",
+                        help="stress mode: 1 freezes the test processes (SIGSTOP/SIGCONT) at random "
+                        "intervals, like a briefly frozen CI runner (Linux)")
+    parser.add_argument("--stall-ms", type=positive_int, metavar="MS",
+                        help="stress mode: length of each --stall 1 pause (default: 1000)")
+    parser.add_argument("--stall-every-ms", type=positive_int, metavar="MS",
+                        help="stress mode: mean gap between --stall 1 pauses, drawn uniformly "
+                        "from half to 1.5x (default: 2000)")
     args = parser.parse_args()
-    if args.stress_count is None and (args.load != "0" or args.load_cpus is not None):
-        parser.error("--load and --load-cpus need --stress-count")
+    stall_options = args.stall != "0" or args.stall_ms is not None or args.stall_every_ms is not None
+    if args.stress_count is None and (args.load != "0" or args.load_cpus is not None or stall_options):
+        parser.error("--load, --load-cpus and the --stall options need --stress-count")
     if args.stress_count is not None:
         if args.filterset is None or args.plan:
             parser.error("--stress-count needs --filterset and cannot be combined with --plan")
@@ -2109,6 +2119,8 @@ def main() -> int:
             from . import nextest_stress
         else:
             import nextest_stress
+        if args.stall == "1" and not nextest_stress.stall_supported():
+            parser.error("--stall 1 finds test processes through /proc, so it needs Linux")
         try:
             gate = sys.modules.get(__name__)
             if gate is None or getattr(gate, "run_nextest", None) is not run_nextest:

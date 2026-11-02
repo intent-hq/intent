@@ -270,7 +270,8 @@ with no rollback.
   Both take `BASE=<ref>`, `DRY_RUN=1` (prints the plan) and `RESUME=1`. Iterate on Rust tests with
   `make test-select E='<filterset>'`, not raw `cargo nextest`, which skips fixture setup (95
   bogus failures, intentd#2559); to prove a flake, its fix, or that a CI failure is not
-  yours, use `make test-stress E=... COUNT=200 LOAD=1` (retries off, optional CPU + fsync load).
+  yours, use `make test-stress E=... COUNT=200 LOAD=1` (retries off, optional CPU + fsync load;
+  `STALL=1` freezes the tests at random like a stalled CI runner, which LOAD missed for intentd#2917).
 - `make test` / `test-changed` / `test-select` print a unique `record:` attempt path, including
   fully resumed runs. [Receipt and coverage details](CONTRIBUTING.md#test-attempt-receipts-and-resume-coverage)
   explain evidence, interruption and seven-day tree retention. `RESUME=1` skips verified
