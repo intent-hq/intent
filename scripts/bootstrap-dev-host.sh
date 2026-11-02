@@ -559,6 +559,38 @@ bash3_build_tools_ready() {
   [[ -z "$(bash3_build_tools_missing)" ]]
 }
 
+# cloudlands-fe pnpm run electron:headless re-runs itself under xvfb-run on a
+# Linux host with no display (packages/cloudlands-fe/scripts/headless-electron.mjs).
+# Nothing else needs it, so the doctor row is [optional] and a failed install
+# only warns. macOS Electron needs no virtual display.
+xvfb_needed() {
+  [[ "$(uname -s)" == Linux ]]
+}
+
+xvfb_ready() {
+  xvfb_needed || return 0
+  command -v xvfb-run >/dev/null 2>&1
+}
+
+# Prints the package-manager command that provides xvfb-run on this host, or
+# fails when bootstrap has no simple install for it.
+xvfb_install_command() {
+  if command -v apt-get >/dev/null 2>&1; then
+    echo "apt-get install -y xvfb"
+  elif command -v dnf >/dev/null 2>&1; then
+    echo "dnf install -y xorg-x11-server-Xvfb"
+  elif command -v yum >/dev/null 2>&1; then
+    echo "yum install -y xorg-x11-server-Xvfb"
+  else
+    return 1
+  fi
+}
+
+# Bootstrap can close the gap only with a known package manager.
+xvfb_installable_gap() {
+  ! xvfb_ready && xvfb_install_command >/dev/null
+}
+
 # The first line of actionlint --version is the version: bare for release
 # archives, v-prefixed for a `go install ...@vX.Y.Z` build.
 actionlint_version() {
@@ -680,6 +712,7 @@ installable_gap_exists() {
   if [[ "$WITH_COVERAGE" == 1 ]]; then
     coverage_tooling_ready || return 0
   fi
+  xvfb_installable_gap && return 0
   return 1
 }
 
@@ -899,6 +932,13 @@ check_all() {
       optional "bubblewrap: installed (make test HERMETIC=1 hides provider CLIs like CI)"
     else
       optional "bubblewrap: $(command -v bwrap) cannot create a sandbox (unprivileged user namespaces blocked?), so make test HERMETIC=1 will fail"
+    fi
+  fi
+  if xvfb_needed; then
+    if xvfb_ready; then
+      optional "xvfb-run: installed (cloudlands-fe pnpm run electron:headless uses it when the host has no display)"
+    else
+      optional "xvfb-run: not installed (only cloudlands-fe pnpm run electron:headless needs it, on a host with no display); run make bootstrap-dev-host, or Debian/Ubuntu: sudo apt-get install -y xvfb"
     fi
   fi
   if command -v sccache >/dev/null 2>&1; then
@@ -1254,6 +1294,34 @@ install_bash3_build_tools() {
   }
 }
 
+# Optional: an unsupported package manager or a failed install warns and lets
+# bootstrap continue, since only pnpm run electron:headless needs xvfb-run.
+install_xvfb() {
+  if ! xvfb_needed; then
+    echo "[skip] xvfb-run: not needed outside Linux"
+    return
+  fi
+  if xvfb_ready; then
+    echo "[skip] xvfb-run already installed"
+    return
+  fi
+
+  local install_command
+  if ! install_command=$(xvfb_install_command); then
+    echo "[warn] xvfb-run: unsupported Linux package manager; install the package that provides xvfb-run for cloudlands-fe pnpm run electron:headless"
+    return
+  fi
+  local -a install_args
+  read -r -a install_args <<<"$install_command"
+  echo "[install] xvfb-run for cloudlands-fe pnpm run electron:headless"
+  if ! as_root "${install_args[@]}"; then
+    echo "[warn] xvfb-run: '$install_command' failed; pnpm run electron:headless needs it on a host with no display"
+    return
+  fi
+  hash -r
+  xvfb_ready || echo "[warn] xvfb-run: still not on PATH after '$install_command'"
+}
+
 # The pinned release binary goes to $CARGO_HOME/bin, which this script already
 # puts on PATH; the archive is verified against the pinned checksum first.
 install_actionlint() {
@@ -1372,6 +1440,7 @@ install_jq
 install_shellcheck
 install_bash3_build_tools
 install_actionlint
+install_xvfb
 
 echo
 check_all
