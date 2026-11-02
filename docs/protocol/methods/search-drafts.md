@@ -10,10 +10,10 @@ Routing-only `workspaceId?` additions below are [prepared contract fields](../wo
 
 | Method | Params | Result |
 | --- | --- | --- |
-| search.inFiles | workspaceId (req), query (req), opts? { caseSensitive?, regex?, globs?, maxResults? }, requestId? | { requestId, matches: SearchMatch[], truncated } — ripgrep content search. `maxResults` absent → 500, larger than 2,000 → 2,000; size bounds below |
+| search.inFiles | workspaceId (req), query (req), opts? { caseSensitive?, regex?, globs?, maxResults? }, requestId? | { requestId, matches: SearchMatch[], truncated } — ripgrep content search. Size bounds and bounded defaults below |
 | search.fileNames | workspaceId (req), pattern (req), limit?, requestId? | { requestId, files: string[], truncated } — path/glob search |
-| search.messages | query (req), workspaceId?, preferWorkspaceId?, agentId?, role?, limit?, requestId? | { requestId, matches: MessageMatch[] } — **FTS5/bm25-ranked** full-text search over persisted agent transcripts (BE owns session storage). `workspaceId` is **optional**: absent → **global** search across all workspaces; present → hard scope filter. `preferWorkspaceId` is a **soft ranking boost** — matches from that workspace outrank equally-relevant matches from other workspaces, but results stay global (nothing is excluded). Matches from **archived** workspaces carry a fixed soft rank penalty, giving the default tier order preferred workspace → other active → archived (relevance can still override). `agentId`/`role` narrow further (hard filters); `limit` caps the match count (absent → 50, larger than 200 → 200, negative → 0). Semantics block below |
-| search.events | query (req), workspaceId?, limit?, requestId? | { requestId, matches: EventMatch[] } — over the BE event log. `limit` absent → 50, larger than 200 → 200, negative → 0 |
+| search.messages | query (req), workspaceId?, preferWorkspaceId?, agentId?, role?, limit?, requestId? | { requestId, matches: MessageMatch[] } — **FTS5/bm25-ranked** full-text search over persisted agent transcripts (BE owns session storage). `workspaceId` is **optional**: absent → **global** search across all workspaces; present → hard scope filter. `preferWorkspaceId` is a **soft ranking boost** — matches from that workspace outrank equally-relevant matches from other workspaces, but results stay global (nothing is excluded). Matches from **archived** workspaces carry a fixed soft rank penalty, giving the default tier order preferred workspace → other active → archived (relevance can still override). `agentId`/`role` narrow further (hard filters); `limit` caps the match count (absent → no cap; bounded defaults below). Semantics block below |
+| search.events | query (req), workspaceId?, limit?, requestId? | { requestId, matches: EventMatch[] } — over the BE event log. `limit` caps the match count (absent → no cap; bounded defaults below) |
 | search.notes | query (req), workspaceId?, preferWorkspaceId?, limit?, includeArchived?, requestId? | { requestId, matches: NoteMatch[], indexed: true } — **FTS5/bm25-ranked** title, body and tag search across accessible workspaces; always inline. `workspaceId` hard-filters; `preferWorkspaceId` softly boosts. `limit` absent → no cap; `includeArchived` absent → true (individual note archives). Indexed contract and compatibility below |
 | search.codebase | workspaceId (req), query (req), requestId? | { requestId, matches: CodebaseMatch[] } — **ripgrep/symbol-backed** search. auggie exposes no structured codebase-retrieval CLI, so `AuggieContextEngine::retrieve()` returns `Unavailable` instantly and ripgrep is the backing; the `ContextEngine` trait is retained as forward-looking infra |
 | search.cancel | requestId (req), workspaceId? | { ok: true } — aborts an in-flight search by its `requestId` |
@@ -190,8 +190,14 @@ payload budget. `search.inFiles` stops collecting once its matches would seriali
 448 KiB, or at `maxResults`, and answers `truncated: true` either way; a longer matching line
 is windowed to a 400-character `preview` (`col` still counts from the start of the line).
 `search.messages`, `search.events` and `search.codebase` cut an inline `matches` array at the
-same 448 KiB and then add `truncated: true` (absent when nothing was cut). Before this bound an
-absent `limit` meant no cap; the app's palette always sends `limit: 10`, so it is unaffected.
+same 448 KiB and then add `truncated: true` (absent when nothing was cut). These ceilings apply
+to every caller.
+
+**Bounded defaults (prepared).** On a connection whose `client.hello` declares
+`params.capabilities.boundedReads: 1`, counts are bounded too: `search.inFiles` `maxResults`
+absent → 500 and larger than 2,000 → 2,000; `search.messages` / `search.events` `limit` absent →
+50, larger than 200 → 200, negative → 0. Other connections keep the values above. The daemon
+does not read the declaration yet, so today every connection keeps them.
 
 ```json
 // → content search across a workspace
