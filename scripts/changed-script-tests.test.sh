@@ -2,7 +2,7 @@
 #
 # Self-test for scripts/changed-script-tests.sh (`make test-scripts-changed`).
 # It copies the selector into a throwaway git repo with a minimal ci.yml
-# shell-tests job and a Makefile test-scripts recipe, makes changes on a branch,
+# shell-tests job and python-tests pathspec step and a Makefile test-scripts recipe, makes changes on a branch,
 # and pins the DRY_RUN plan (and the printed reason) for each selection rule plus
 # the exit code of a real run with a failing step.
 
@@ -44,6 +44,16 @@ jobs:
       - name: later step
         run: |
           bash scripts/later-step-not-selected.sh
+  python-tests:
+    steps:
+      - name: Decoy step
+        run: |
+          changed=$(git diff --name-only HEAD^1 HEAD -- decoy-not-selected)
+      - name: Select Python test changes
+        run: |
+          if true; then
+            changed=$(git diff --name-only HEAD^1 HEAD -- 'scripts/*.py' 'scripts/*.sh' scripts/fixtures scripts/_vendor "docs/py data" Makefile .github/workflows/ci.yml)
+          fi
   after-job:
     steps:
       - run: bash scripts/after.sh
@@ -74,6 +84,9 @@ printf "import test from 'node:test';\ntest('tool', () => {});\n" >"$fixture/scr
 printf 'export const y = 1;\n' >"$fixture/scripts/untested.mjs"
 printf 'nested\n' >"$fixture/scripts/sub/nested.sh"
 printf 'data\n' >"$fixture/scripts/fixtures/data.txt"
+mkdir -p "$fixture/docs/py data"
+printf 'data\n' >"$fixture/docs/py data/input.json"
+printf 'decoy\n' >"$fixture/decoy-not-selected"
 : >"$fixture/packages/intentd/Cargo.toml"
 git_fixture init -q -b main
 git_fixture add -A
@@ -249,7 +262,29 @@ python3 -S -B scripts/test_beta.py'
 reset_fixture
 
 printf '# edit\n' >>"$fixture/scripts/sub/nested.sh"
-expect_plan "nested scripts/sub/*.sh is not a shell-tests input" "make lint-shell"
+expect_plan "nested scripts/sub/*.sh is no shell-tests input but matches the python-tests pathspec" 'make lint-shell
+make test-scripts'
+reset_fixture
+
+printf 'more\n' >>"$fixture/docs/py data/input.json"
+expect_plan "a file the ci.yml python-tests pathspec names runs only make test-scripts" 'make lint-shell
+make test-scripts'
+expect_reason "python-tests pathspec match says why" "all make test-scripts modules selected (full run: docs/py data/input.json)"
+reset_fixture
+
+printf 'more\n' >>"$fixture/decoy-not-selected"
+expect_plan "another step's git diff pathspec is not read" "make lint-shell"
+reset_fixture
+
+sed 's/name: Select Python test changes/name: Renamed step/' "$fixture/.github/workflows/ci.yml" >"$temp_dir/ci.yml"
+cp "$temp_dir/ci.yml" "$fixture/.github/workflows/ci.yml"
+status=0
+output=$(plan) || status=$?
+case "$status:$output" in
+  "2:"*"no git diff pathspec found in the .github/workflows/ci.yml python-tests 'Select Python test changes' step"*)
+    echo "ok - a missing python-tests pathspec fails instead of skipping" ;;
+  *) fail "missing python-tests pathspec: exit $status: $output" ;;
+esac
 reset_fixture
 
 printf '// edit\n' >>"$fixture/scripts/tool.mjs"

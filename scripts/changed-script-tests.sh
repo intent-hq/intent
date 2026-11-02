@@ -16,8 +16,10 @@
 #      scripts/X.sh or scripts/X.py it selects the modules whose file is X
 #      itself, X's own test_X.py, or a file that names X, as in step 3, and
 #      runs them with the recipe's own command. The whole `make test-scripts`
-#      runs instead when the Makefile, ci.yml, scripts/fixtures/** or
-#      scripts/_vendor/** (vendored tomli, checked by test_compact_gate) changed,
+#      runs instead when a changed file other than a top-level scripts/X.sh or
+#      scripts/X.py matches the pathspec of the ci.yml python-tests "Select
+#      Python test changes" step (read from it, so there is no second list; for
+#      example the Makefile, ci.yml, scripts/fixtures/** or scripts/_vendor/**),
 #      when a changed non-test script is a shared helper, or when FULL=1.
 #   3. Suites of the ci.yml `shell-tests` job (read from its first run step, so
 #      there is no second list to drift). For each changed top-level
@@ -77,6 +79,25 @@ shell_suites() {
       match($0, /^ */); block_indent = RLENGTH; in_block = 1
     }
   ' "$ci_file"
+}
+
+# The python-tests "Select Python test changes" `git diff` pathspec, one
+# unquoted entry per line: the words between ` -- ` and the closing `)`.
+python_pathspec() {
+  [ -f "$ci_file" ] || die "$ci_file not found"
+  awk '
+    /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { in_job = ($1 == "python-tests:"); in_step = 0; next }
+    !in_job { next }
+    /^[[:space:]]*- / { in_step = 0 }
+    /^[[:space:]]*(- )?name: Select Python test changes[[:space:]]*$/ { in_step = 1; next }
+    in_step && /git diff --name-only .* -- .*\)/ {
+      line = $0
+      sub(/^.* -- /, "", line)
+      sub(/\).*$/, "", line)
+      print line
+      exit
+    }
+  ' "$ci_file" | xargs -n 1 printf '%s\n'
 }
 
 # The `test-scripts` recipe as words, one per line (backslash continuations
@@ -170,15 +191,37 @@ if [ -n "${FULL:-}" ] && [ "${FULL}" != 0 ]; then
   run_all_shell=1; full_reasons="$full_reasons FULL=1"
   run_all_py=1; py_full_reasons="$py_full_reasons FULL=1"
 fi
+# Changed files the python-tests pathspec matches, by git itself (its
+# wildcards match across `/`, as in CI). Top-level scripts get the targeted
+# selection of step 2; any other match runs every module, as CI would.
+py_spec=()
+while IFS= read -r entry; do
+  [ -n "$entry" ] && py_spec+=("$entry")
+done <<EOF
+$(python_pathspec)
+EOF
+[ "${#py_spec[@]}" -gt 0 ] ||
+  die "no git diff pathspec found in the $ci_file python-tests 'Select Python test changes' step"
+py_triggers=$( {
+  git diff --name-only "$merge_base" -- "${py_spec[@]}"
+  git ls-files --others --exclude-standard -- "${py_spec[@]}"
+} | LC_ALL=C sort -u)
+while IFS= read -r path; do
+  [ -n "$path" ] || continue
+  case "$path" in
+    scripts/*/*) ;;
+    scripts/*.sh | scripts/*.py) continue ;;
+  esac
+  run_all_py=1; py_full_reasons="$py_full_reasons $path"
+done <<EOF
+$py_triggers
+EOF
+
 while IFS= read -r path; do
   [ -n "$path" ] || continue
   case "$path" in
     Makefile | "$ci_file" | scripts/fixtures/*)
-      run_all_shell=1; full_reasons="$full_reasons $path"
-      run_all_py=1; py_full_reasons="$py_full_reasons $path" ;;
-    # test_compact_gate verifies the vendored tomli files, LICENSE included.
-    scripts/_vendor/*)
-      run_all_py=1; py_full_reasons="$py_full_reasons $path" ;;
+      run_all_shell=1; full_reasons="$full_reasons $path" ;;
     scripts/*/*) ;;
     scripts/*.sh | scripts/*.py)
       changed_scripts="$changed_scripts$path"$'\n' ;;
