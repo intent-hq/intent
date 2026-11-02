@@ -397,8 +397,15 @@ documented `placement-unavailable` data (`no-capacity` or
 
 Placed agents carry `nodeId`, `leaseId`, `nodeName`, the resolved `placement`,
 `effectiveIsolation` (`pending` until the machine reports its checkout ready,
-then `isolated`) and `placementError` on detail reads; `agent.list` rows omit
-them. The create result adds a `notice` saying the agent starts from the
+then `isolated`) and `placementError` on detail reads. `agent.list` rows (every
+scope) and the [agent collection channel](../06-events.md#69-snapshotdelta-subscription-channels-new-in-intentd)
+snapshot rows and `added` / `updated` deltas carry the same `nodeId`,
+`nodeName`, `placement`, `effectiveIsolation` and `placementError`, so a list
+can show where an agent runs, and its move from `pending` to `isolated`,
+without opening it: when the machine reports the checkout ready or a start
+failure, the backend publishes `agent:updated`, which reaches the channel as an
+`updated` delta. `leaseId` stays detail-only. Local agents omit all of them
+(absent, never `null`). The create result adds a `notice` saying the agent starts from the
 workspace's last commit and that uncommitted changes are not carried; delegate
 and wakeOrCreate results copy `notice`, `nodeId`, `nodeName` and
 `effectiveIsolation`. `nodeState`, `checkpoint`, `nodePath`, the `halted` /
