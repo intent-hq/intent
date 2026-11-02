@@ -31,6 +31,9 @@ and finished_at. Native status is the Popen wait result (negative for signals);
 result exit_code remains null when streaming raises, even if cleanup reaps the
 child. events-N.jsonl retains stdout lines, flushed before journal updates.
 listing-N.json retains nextest's inventory, including ignored/filter metadata;
+listing-N-run-ignored.json, kept only when nextest skipped filter evaluation for
+ignored tests, re-lists the selection with --run-ignored all so an ignored test
+counts only when the filter really matches it;
 selection_membership holds listed binary/test pairs, or null before discovery.
 resume_candidates is the initial shared credit; resumed_tests is the credit
 used after listing, or null when not resolved. Completed-resume receipts contain
@@ -710,8 +713,63 @@ def strict_json(text: str):
     return json.loads(text, object_pairs_hook=pairs)
 
 
-def inventory(text: str):
-    """Identity plus activation metadata; duplicates within a listing are invalid."""
+def ignored_filter_pending(text: str) -> bool:
+    """True when nextest skipped filter evaluation for an ignored test.
+
+    nextest reports an #[ignore] test as mismatch reason "ignored" before it
+    evaluates the user's filter, so such a listing cannot say whether the
+    filter matched the test.
+    """
+    return any(metadata.get("filter-match", {}).get("reason") == "ignored"
+               for suite in strict_json(text)["rust-suites"].values()
+               for metadata in suite["testcases"].values())
+
+
+def run_ignored_selection(selection: list[str]) -> list[str]:
+    """The selection re-listed with every ignored test evaluated against its filter."""
+    result, skip = [], False
+    for token in selection:
+        if skip:
+            skip = False
+        elif token == "--run-ignored":
+            skip = True
+        elif not token.startswith("--run-ignored="):
+            result.append(token)
+    return [*result, "--run-ignored", "all"]
+
+
+def filter_matched(text: str) -> set[tuple[str, str]]:
+    """Identities whose filter-match is "matches" in a --run-ignored all listing."""
+    return {(suite["binary-id"], test)
+            for suite in strict_json(text)["rust-suites"].values()
+            for test, metadata in suite["testcases"].items()
+            if metadata.get("filter-match", {"status": "matches"})["status"] == "matches"}
+
+
+def ignored_listing_name(index: int) -> str:
+    return f"listing-{index}-run-ignored.json"
+
+
+def load_inventory(directory: Path, index: int):
+    """A saved selection's inventory, using its --run-ignored all re-listing when kept.
+
+    Receipts written before that re-listing existed keep their original
+    semantics so their saved empty-run policy still validates.
+    """
+    text = (directory / f"listing-{index}.json").read_text()
+    relisted = directory / ignored_listing_name(index)
+    matched = filter_matched(relisted.read_text()) if relisted.exists() else None
+    return inventory(text, matched)
+
+
+def inventory(text: str, ignored_matches: set[tuple[str, str]] | None = None):
+    """Identity plus activation metadata; duplicates within a listing are invalid.
+
+    A test nextest skipped as ignored counts toward the selection only when
+    ignored_matches (from a --run-ignored all listing of the same selection)
+    shows the user's filter matched it. None keeps the legacy reading, where
+    every such test counts.
+    """
     data = strict_json(text)
     identities, aliases = {}, {}
     for suite in data["rust-suites"].values():
@@ -727,8 +785,10 @@ def inventory(text: str):
             match = filtering["status"]
             if match not in ("matches", "mismatch") or type(metadata.get("ignored", False)) is not bool:
                 raise ValueError("unknown inventory activation metadata")
-            ignored_filter = match == "mismatch" and filtering.get("reason") == "ignored"
+            unevaluated = match == "mismatch" and filtering.get("reason") == "ignored"
+            ignored_filter = unevaluated and (ignored_matches is None or identity in ignored_matches)
             identities[identity] = {"active": match == "matches" or ignored_filter,
+                "unevaluated": unevaluated,
                 "ignored": metadata.get("ignored", False), "annotation_known": "ignored" in metadata,
                 "skipped": ignored_filter or ("filter-match" not in metadata and metadata.get("ignored", False)),
                 "filter_known": "filter-match" in metadata, "alias": alias}
@@ -790,7 +850,7 @@ def receipt_inventories(directory: Path, receipt: dict):
     if not selections or len(receipt["selection_membership"]) != len(selections):
         raise ValueError("missing selection membership")
     for index in range(1, len(selections) + 1):
-        members, names = inventory((directory / f"listing-{index}.json").read_text())
+        members, names = load_inventory(directory, index)
         if set(members) != identity_set(receipt["selection_membership"][index - 1]):
             raise ValueError("listing and recorded membership differ")
         for name, binary in names.items():
@@ -898,6 +958,12 @@ def selection_evidence(directory: Path, result: dict, members: dict, resumed: se
             retry = RETRY_SUFFIX_RE.search(test)
             test = RETRY_SUFFIX_RE.sub("", test)
             identity = aliases.get((alias, test))
+            if (sep and identity is not None and not members[identity]["active"] and
+                    members[identity].get("unevaluated") and event["event"] in ("started", "ignored")):
+                # nextest announces every test it skips as ignored, before and
+                # regardless of the filter; such a test outside the filter is
+                # not selection evidence. A reported pass or failure still is.
+                continue
             if (not sep or identity is None or not members[identity]["active"] or
                     identity in resumed and not members[identity]["skipped"]):
                 raise ValueError(f"unselected or resumed terminal event: {name}")
@@ -1142,7 +1208,7 @@ def coverage_report(directory: Path, receipt: dict, credits: dict):
         if not report["membership_complete"]:
             for index in range(1, len(receipt["selections"]) + 1):
                 try:
-                    members, _ = inventory((directory / f"listing-{index}.json").read_text())
+                    members, _ = load_inventory(directory, index)
                     if set(members) != identity_set(receipt["selection_membership"][index - 1]):
                         continue
                     active.update(i for i, meta in members.items() if meta["active"])
@@ -1848,7 +1914,9 @@ def run_nextest(args: argparse.Namespace) -> int:
                     if not proof["complete"] or not passed <= credits.keys():
                         raise ValueError("completion evidence no longer validates")
                     for index in range(1, len(selections) + 1):
-                        (record_dir / f"listing-{index}.json").write_bytes((source_dir / f"listing-{index}.json").read_bytes())
+                        for name in (f"listing-{index}.json", ignored_listing_name(index)):
+                            if (source_dir / name).exists():
+                                (record_dir / name).write_bytes((source_dir / name).read_bytes())
                     proof.update(attempt_id=profile, kind="completed-resume", source_attempt=str(source_dir.relative_to(run_dir)))
                     proof["categories"]["executed-passed"] = []
                     proof["categories"]["resumed-passed"] = sorted(passed)
@@ -1884,7 +1952,21 @@ def run_nextest(args: argparse.Namespace) -> int:
                 )
                 write_atomic(record_dir / f"listing-{index}.json", list_output + "\n")
                 listings.append(list_output)
-                members, selected_ids = inventory(list_output)
+                matched: set[tuple[str, str]] = set()
+                if ignored_filter_pending(list_output):
+                    relisted = run(
+                        [
+                            "cargo", "nextest", "list", *run_ignored_selection(selection),
+                            "--build-jobs", args.build_jobs,
+                            "--message-format", "json",
+                            *cargo_config, *output_args,
+                        ],
+                        intentd_dir,
+                        env,
+                    )
+                    write_atomic(record_dir / ignored_listing_name(index), relisted + "\n")
+                    matched = filter_matched(relisted)
+                members, selected_ids = inventory(list_output, matched)
                 inventories.append(members)
                 run_record["selection_membership"][index - 1] = sorted(
                     {(binary_id, test) for (_, test), binary_id in selected_ids.items()})
@@ -1971,6 +2053,11 @@ def run_nextest(args: argparse.Namespace) -> int:
                         count = sum(1 for meta in inventories[index - 1].values() if meta["active"])
                         print(f"[{label}] WARNING: selection {index} matched only skipped/ignored tests "
                               f"({count}); passed with no tests run", file=sys.stderr, flush=True)
+                    if status != 0 and not any(meta["active"] for meta in inventories[index - 1].values()):
+                        print(f"[{label}] ERROR: selection {index} matched no tests: {shlex.join(selection)}; "
+                              "check the filter (test names include their module path, "
+                              "e.g. test(=module::name) or test(/name$/))",
+                              file=sys.stderr, flush=True)
                     if status != 0:
                         if not no_fail_fast:
                             break
