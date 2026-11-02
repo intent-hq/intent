@@ -611,44 +611,26 @@ These additive docs precede consumer merges/contract acceptance; authorized loca
 development and draft preparation may proceed in parallel. Static fixtures do not
 qualify a listener, fresh-workspace source, provider or ready/ACK behavior.
 
-**Private nodeProtocol 5 — experimental single-node link, unadvertised.** The
-[single-node private link](./node-link.md#single-node-private-link-nodeprotocol-5)
-launches agents on one hand-configured node, only when the daemon starts with
-`INTENTD_EXPERIMENTAL_REMOTE_LAUNCH=1` and a node configuration file. It is a
-separate private protocol (peers match exactly 5), outside the `{2,3,4}`, `{3,4}`
-and `4` sets above, and changes no checkpoint or journal format. It makes **no
-public version claim and advertises no capability**: `agentNodes`,
-`agentPlatformRouting` and `localNodeIsolation` stay absent, so clients keep
-placement and hub controls gated off. The `agentNodes: 1` rule is unchanged: it
-still requires the complete static-node, hub, placement and recovery contract of
-[§5.50](./methods/nodes.md). The public surface it adds is the documented
-`placement` subset on agent creation, `placement-unavailable` errors and the
-optional placed-agent projection fields
-([experimental subset](./methods/nodes.md#experimental-single-node-subset)); a
-client must not infer remote support from their presence.
-
-**Prepared daemon-to-daemon remote agents — capability `remoteMachines: 1`, nodeProtocol 6.**
-[Remote machines (§5.50)](./methods/nodes.md#daemon-to-daemon-remote-machines-prepared)
+**Daemon-to-daemon remote agents — capability `remoteMachines: 1`, nodeProtocol 7.**
+[Remote machines (§5.50)](./methods/nodes.md#daemon-to-daemon-remote-machines)
 let a machine's owner expose a regular daemon to a backend daemon through a
 scoped [executor credential](./02-authentication.md#26-executor-credentials).
 It adds eight owner-only router methods (`executor.*`, `remoteMachines.*`), the
-`remoteMachine:changed` event, settings `remoteAgents.enabled`,
-`remoteAgents.permission`, `daemon.mode` and `experimental.remoteAgents`, and
-the errors `model-unavailable`, `machine-update-required` and new
+`remoteMachine:changed` event, settings `remoteAgents.permission` and
+`daemon.mode`, and the errors `model-unavailable`, `machine-update-required` and new
 `placement-unavailable` reasons, taking the documented surface to
 **486 / 428 / 58** (dispatchable / router / fast path). The backend advertises
-`remoteMachines: 1` only when it implements the backend methods and
-`experimental.remoteAgents` is on; the flag is separate from `agentNodes`, whose
-complete-contract rule is unchanged, and it grants no authority. The private
-[executor link](./node-link.md#daemon-to-daemon-executor-link-nodeprotocol-6)
+`remoteMachines: 1` only when it implements the backend methods and is not in
+node mode, and no setting switches it. The flag is separate from `agentNodes`,
+whose complete-contract rule is unchanged, and it grants no authority. The private
+[executor link](./node-link.md#daemon-to-daemon-executor-link-nodeprotocol-7)
 negotiates a `{ min, max }` range that starts at 6; it is a new link family,
 outside the prepared `{2,3,4}`, `{3,4}` and `4` sets. nodeProtocol 7 adds
 [stop acknowledgement](./node-link.md#stop-acknowledgement-nodeprotocol-7)
 (`stop.stopId` and the `stopAck` frame); daemons that implement it offer only 7,
 because 6 was never released, so a version-6-only peer gets
-`machine-update-required`. No public version number
-is claimed by these docs; allocate it against daemon main before
-implementation merges, and land daemon protocol consumers before frontend ones.
+`machine-update-required`. It shipped without a public protocol version bump:
+clients detect it only through `remoteMachines: 1`.
 
 **Command-default change (breaking).**
 [Script creation defaults (§5.8)](./methods/scripts.md#command-creation-defaults-breaking-change)
@@ -1666,4 +1648,4 @@ the `ignore` map of `scripts/check-protocol-field-parity.mjs`, not here.
 | `Workspace` | `autoArchiveDisabled` | [Auto-archive opt-out](./methods/workspace.md#auto-archive-opt-out) | Pending [cloudlands-fe#3863](https://github.com/intent-hq/cloudlands-fe/pull/3863) (Home Disable auto-archive toggle) |
 | `Workspace` | `plainFolder` | [Plain-folder workspaces](./methods/workspace.md#plain-folder-workspaces) | Pending cloudlands-fe plain-folder workspaces PR (Labs git toggle and hidden git UI) |
 | `AgentLite` | `pinned` | [Agent sidebar pins](./methods/agents.md) | Pending cloudlands-fe sidebar pin PR (Pin to top in the agent row menu) |
-| `AgentLite` | `nodeName` | [Placed agent projection](./methods/nodes.md#placement-and-creation) | Pending: the complete node contract that advertises `agentNodes`; the experimental single-node remote launch advertises no capability, so the app stays gated off |
+| `AgentLite` | `nodeName` | [Placed agent projection](./methods/nodes.md#placement-and-creation) | Pending: the complete node contract that advertises `agentNodes`; agents placed on [remote machines](./methods/nodes.md#placement-subset) carry it on detail reads, but the app does not read it yet |

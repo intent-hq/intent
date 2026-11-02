@@ -152,36 +152,6 @@ node names when available and retain neutral identity otherwise. No manual
 placement picker or required-choice dialog is specified. Existing management and
 hub merge/discard remain available.
 
-##### Experimental single-node subset
-
-The experimental [single-node private link](../node-link.md#single-node-private-link-nodeprotocol-5)
-implements part of this section without advertising `agentNodes`. Behind its
-daemon switch, `agent.create`, single `agent.delegate` and `agent.wakeOrCreate`'s
-creation branch (public RPC and MCP) accept the closed `placement` object with
-the same validation. A remote placement needs `target` omitted or `"remote"` and
-`checkout` omitted or `"isolated"`, with optional `os`, `arch` and `nodeId`;
-`exclusive: true`, `target: "local"`, and on `agent.delegate` a batch with a
-placement or `placement` combined with `isolation` fail with `-32602`. An omitted
-placement stays local; `null` is rejected. Admission checks the configured
-node's connection, platform and capacity and fails with the documented
-`placement-unavailable` data (`no-capacity` or `unsupported-platform`,
-`availablePlatforms`, `supportedPlatforms`, `availableOs`, `retryable`,
-`observedAt`); `node-configuration-ambiguous` cannot occur with one node. While
-a node is configured, the full `workspace_api` tool description names it, its
-platforms and current capacity, and how to place an agent.
-
-Placed agents carry `nodeId`, `leaseId`, `nodeName`, the resolved `placement`,
-`effectiveIsolation` (`pending` until the node reports its checkout ready, then
-`isolated`) and `placementError` on detail reads; `agent.list` rows omit them.
-The create result adds a `notice` saying the agent starts from the workspace's
-last commit and that uncommitted changes are not carried; delegate and
-wakeOrCreate results copy `notice`, `nodeId`, `nodeName` and
-`effectiveIsolation`. `nodeState`, `checkpoint`, `nodePath`, the `halted` / `resuming`
-statuses, the node and hub events, `node.*`, `lease.*`, `hub.*`,
-`Workspace.defaultAgentPlacement` and specialist `runsOn` are not part of the
-subset. Agent work is exchanged as the hub ref names in the workspace's own
-repository instead of a separate hub.
-
 #### Lifecycle and events
 
 Add `halted` and `resuming` to persisted/wire AgentStatus, alongside existing
@@ -305,22 +275,23 @@ of the old per-agent sandbox path. No alias, live migration or automatic legacy
 directory cleanup is introduced. Disabling remote placement after retirement
 leaves the new local node available; it does not restore per-agent CoW.
 
-#### Daemon-to-daemon remote machines (prepared)
+#### Daemon-to-daemon remote machines
 
-Prepared, not implemented at the pinned daemon. Any regular daemon can run
+Any regular daemon can run
 agents for another daemon (the *backend*), but only after the machine's
 **owner** exposes it to that backend. The machine mints a scoped, revocable
 executor credential for one backend; the backend stores the machine's routes,
 certificate pin and credential, and connects on demand over the
-[executor link](../node-link.md#daemon-to-daemon-executor-link-nodeprotocol-6).
-This contract does not advertise or require `agentNodes`; it reuses the
-documented `placement` object and the
-[experimental subset](#experimental-single-node-subset)'s placed-agent fields.
+[executor link](../node-link.md#daemon-to-daemon-executor-link-nodeprotocol-7).
+This contract does not advertise or require `agentNodes`; it uses the
+documented `placement` object through the [placement subset](#placement-subset).
+No daemon setting switches it on: the frontend offers remote agents behind its
+Labs flag, and the executor credential is the machine owner's consent.
 
 ##### Capability
 
 `client.hello.server.capabilities.remoteMachines: 1` means the daemon
-implements the backend methods below **and** `experimental.remoteAgents` is on.
+implements the backend methods below and is not in [node mode](#node-mode).
 It is separate from `agentNodes`, whose complete-contract rule is unchanged.
 The frontend offers **Make available to <current backend>** only while the
 current backend advertises it. The machine-side `executor.*` methods are not
@@ -335,7 +306,7 @@ and members get `-32003`, and the service rechecks the owner role.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| executor.mint | backendId (req), backendName (req, 1-128 UTF-8 bytes), backendFingerprint? | `{ credentialId, token, machine: { daemonId, name, platform: { os, arch }, port, hosts, tcAddress?, fingerprint } }`; creates one credential for that backend; `token` (32 random bytes, hex) is returned once and never logged; fails `-32602` `remote-agents-disabled` while `remoteAgents.enabled` is off |
+| executor.mint | backendId (req), backendName (req, 1-128 UTF-8 bytes), backendFingerprint? | `{ credentialId, token, machine: { daemonId, name, platform: { os, arch }, port, hosts, tcAddress?, fingerprint } }`; creates one credential for that backend; `token` (32 random bytes, hex) is returned once and never logged |
 | executor.list | — | `{ backends: [{ credentialId, backendId, backendName, backendFingerprint?, createdAt, lastUsedAt?, connected, runningAgents }] }`; unrevoked credentials only; never returns tokens |
 | executor.revoke | credentialId (req) | `{ ok: true }`; sets the credential revoked, closes its live executor connections with `1008`, stops its agents and refuses replays with `401`; an already revoked id is a no-op; an unknown id is `-32602` `not-found` |
 
@@ -347,8 +318,7 @@ WSS certificate fingerprint (§1.2).
 ##### Backend methods: exposed machines
 
 Owner-only on the backend, with the same classification as the executor
-methods. Mutations fail `-32602` with `data.code: "remote-agents-disabled"`
-while `experimental.remoteAgents` is off.
+methods.
 
 | Method | Params | Result |
 | --- | --- | --- |
@@ -407,6 +377,36 @@ reports.
    machine's own settings with `executor.list` / `executor.revoke`, even when
    the backend is gone.
 
+##### Placement subset
+
+Remote placement implements part of [placement and creation](#placement-and-creation)
+without advertising `agentNodes`. On a backend that advertises
+`remoteMachines: 1`, `agent.create`, single `agent.delegate` and
+`agent.wakeOrCreate`'s creation branch (public RPC and MCP) accept the closed
+`placement` object with the same validation. A remote placement needs `target`
+omitted or `"remote"` and `checkout` omitted or `"isolated"`, with optional `os`,
+`arch` and `nodeId`; `exclusive: true`, `target: "local"`, and on
+`agent.delegate` a batch with a placement or `placement` combined with
+`isolation` fail with `-32602`. An omitted placement stays local; `null` is
+rejected. Admission picks a machine as in
+[placement across machines](#placement-across-machines) and fails with the
+documented `placement-unavailable` data (`no-capacity` or
+`unsupported-platform`, `availablePlatforms`, `supportedPlatforms`,
+`availableOs`, `retryable`, `observedAt`, plus the
+[remote machine reasons](#remote-machine-errors)).
+
+Placed agents carry `nodeId`, `leaseId`, `nodeName`, the resolved `placement`,
+`effectiveIsolation` (`pending` until the machine reports its checkout ready,
+then `isolated`) and `placementError` on detail reads; `agent.list` rows omit
+them. The create result adds a `notice` saying the agent starts from the
+workspace's last commit and that uncommitted changes are not carried; delegate
+and wakeOrCreate results copy `notice`, `nodeId`, `nodeName` and
+`effectiveIsolation`. `nodeState`, `checkpoint`, `nodePath`, the `halted` /
+`resuming` statuses, the node and hub events, `node.*`, `lease.*`, `hub.*`,
+`Workspace.defaultAgentPlacement` and specialist `runsOn` are not part of the
+subset. Agent work is exchanged as the hub ref names in the workspace's own
+repository instead of a separate hub.
+
 ##### Placement across machines
 
 `placement.nodeId` names an exposed machine; `os` / `arch` filter. With
@@ -426,7 +426,7 @@ So a machine with no default login but a valid selected profile stays a
 candidate, and a profile whose credentials fail does so at launch without
 marking the machine's healthy default account `auth-failed`. The tool descriptions and
 `ws.help("agent")` discovery are in
-[model-platform routing](../model-platform-routing.md#exposed-machines-prepared).
+[model-platform routing](../model-platform-routing.md#exposed-machines).
 
 ##### Node mode
 
@@ -439,8 +439,8 @@ every cataloged method is either listed or refused:
 
 - `client.hello`, `system.status`, `host.status`, `principal.me`;
 - `server.pairingInfo` and the `pairing.*` methods, local-only as today;
-- `settings.get` / `settings.update` for the `remoteAgents.*`, `daemon.*` and
-  `server.*` keys;
+- `settings.get` / `settings.update` for the `remoteAgents.*` (that is,
+  `remoteAgents.permission`), `daemon.*` and `server.*` keys;
 - `providers.catalog`, `models.list` and the provider-profile reads;
 - `executor.mint`, `executor.list`, `executor.revoke`;
 - the update methods the sitter uses.
@@ -490,6 +490,6 @@ From `remoteMachines.remove` with `stopAgents: true` it also carries
 `unconfirmedStops: string[]` (agent ids whose stop the machine has not
 acknowledged), and `attempts` is empty when the link was up but the
 acknowledgements did not arrive in time.
-`machine-revoked` from `refresh` is `-32603`. `machine-in-use`,
-`remote-agents-disabled` and `not-found` are `-32602`. Errors never include the
+`machine-revoked` from `refresh` is `-32603`. `machine-in-use` and `not-found`
+are `-32602`. Errors never include the
 token.

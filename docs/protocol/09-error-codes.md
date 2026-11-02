@@ -128,12 +128,12 @@ structured `data.code` values for node placement, checkpoints and uncertain RPC
 outcomes using existing numeric codes. No new numeric error is introduced.
 These errors are future contracts; current CoW errors remain until retirement.
 
-### Prepared remote machine errors
+### Remote machine errors
 
 The [daemon-to-daemon remote machines contract](./methods/nodes.md#remote-machine-errors)
 adds structured `data.code` values on existing numeric codes. `-32602`:
-`model-unavailable`, `machine-update-required`, `machine-in-use`,
-`remote-agents-disabled`, and the `placement-unavailable` reasons
+`model-unavailable`, `machine-update-required`, `machine-in-use`, and the
+`placement-unavailable` reasons
 `machine-unreachable`, `machine-unknown` and `machine-revoked`; `no-capacity`
 gains `limit: "count" | "memory"` with its counts or bytes. `-32603`:
 `machine-unreachable` (with the routes tried) and `machine-revoked` from

@@ -376,9 +376,9 @@ Resolved create/get/list/subscription data carries fully resolved placement
 No configured target ID, pool projection or manual placement selector is added.
 Existing effectiveIsolation and pending/error semantics remain unchanged.
 
-## Exposed machines (prepared)
+## Exposed machines
 
-[Daemon-to-daemon remote machines](./methods/nodes.md#daemon-to-daemon-remote-machines-prepared)
+[Daemon-to-daemon remote machines](./methods/nodes.md#daemon-to-daemon-remote-machines)
 widen the candidate set from one configured node to every machine exposed to
 this backend. This section governs only backends that advertise
 `remoteMachines: 1`; the single-node rules above stay in force elsewhere.

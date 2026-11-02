@@ -161,7 +161,7 @@ into wire methods.
 | `host.prepareProviderAdapters` | Exclude | — | Prepared owner-only onboarding optimization on the captured daemon connection before workspace creation; accepts only provider IDs, never workspace routing or arbitrary execution inputs. |
 | `sourceControl.checkout.capture`, `sourceControl.checkout.projects`, `sourceControl.checkout.project`, `sourceControl.checkout.branches`, `sourceControl.checkout.repoConfig`, `sourceControl.checkout.warm`, `sourceControl.checkout.release` | Exclude | — | Prepared pre-workspace GitLab checkout on an explicitly selected destination. Preserve the original physical connection, host Owner/Member authority and checkout reference; no fabricated workspace ID, focused-host fallback or cross-connection cursor/cleanup adoption. A forge instance URL is not a daemon routing address. |
 | `node.register`, `node.drain`, `node.remove`, `lease.list`, `lease.release` | Exclude | — | Prepared owner-only node/lease administration (§5.50), bound to the contacted head installation; no workspace routing context or authority is inferred from node/lease IDs. |
-| `executor.mint`, `executor.list`, `executor.revoke`, `remoteMachines.backendInfo`, `remoteMachines.add`, `remoteMachines.list`, `remoteMachines.remove`, `remoteMachines.refresh` | Exclude | — | Prepared owner-only daemon-to-daemon remote machine administration (§5.50), bound to the contacted daemon; no workspace routing context or authority is inferred from machine, backend or credential IDs. |
+| `executor.mint`, `executor.list`, `executor.revoke`, `remoteMachines.backendInfo`, `remoteMachines.add`, `remoteMachines.list`, `remoteMachines.remove`, `remoteMachines.refresh` | Exclude | — | Owner-only daemon-to-daemon remote machine administration (§5.50), bound to the contacted daemon; no workspace routing context or authority is inferred from machine, backend or credential IDs. |
 | `node.list` | Exclude | — | Prepared owner inventory variant without `workspaceId` (§5.50); host-wide result, distinct from the workspace-manager safe capacity projection. |
 | `host.members.list`, `host.members.remove`, `host.invite.create`, `host.invite.list`, `host.invite.revoke`, `host.invite.searchAccounts`, `pairing.getInfo`, `pairing.getSelfInfo`, `server.pairingInfo`, `server.rotateToken` | Exclude | — | Host membership, pairing and host invitation bootstrap. |
 | `identity.authStatus`, `identity.connect`, `identity.cancelAuth`, `identity.revoke`, `identity.getUser`, `identity.select`, `principal.me`, `principal.list`, `principal.revokeSelf`, `invite.inspect`, `invite.challenge`, `invite.accept`, `invite.prove`, `github.identityProof.create`, `github.identityProof.delete`, `sourceControl.identityProof.create`, `sourceControl.identityProof.delete` | Exclude | — | Connection identity, guest join and credential-holder proof flows require a separate destination/identity contract. |
@@ -243,31 +243,31 @@ workspace ID, and do not confuse the export session ID with the routing key.
 `workspace.transfer.plan` already takes the source workspace and is unchanged.
 Import destination routing and transfer orchestration remain outside this contract.
 
-## Remote agents on the single-node link
+## Remote agents on the executor link
 
-The experimental [single-node private link](./node-link.md#single-node-private-link-nodeprotocol-5)
-runs a remote agent's `workspace_api` code on its execution node and routes each
+The daemon-to-daemon [executor link](./node-link.md#workspace-api-on-the-machine)
+runs a remote agent's `workspace_api` code on its machine and routes each
 `host({ method, args })` frame by method. This is agent-binding routing over a
 private link, not the aggregator routing above, and adds nothing to the public
 method inventory:
 
 | Frames | Where they run |
 | --- | --- |
-| `file.read`, `file.write`, `file.list`, `file.delete`, `file.mkdir`, `file.rename`, `git.commit`, `host.exec`, `help.*` | On the node, against the agent's own checkout and host |
-| `note.*`, `task.*`, `agent.*`, `pr.*` (and its `mr.*` alias), `comment.*`, `event.*` | Forwarded to head as one `workspace.call` link request with params `{ method, args }` |
+| `file.read`, `file.write`, `file.list`, `file.delete`, `file.mkdir`, `file.rename`, `git.commit`, `host.exec`, `help.*` | On the machine, against the agent's own checkout and host |
+| `note.*`, `task.*`, `agent.*`, `pr.*` (and its `mr.*` alias), `comment.*`, `event.*` | Forwarded to the backend as one `workspace.call` link request with params `{ method, args }` |
 | Everything else, including other `git.*`, `script.*`, `terminal.*`, `browser.*`, `hook.*`, `desktop.*`, `search.*`, `crossWorkspace.*`, `mcp.*`, `workspace.*` and `file.getAttachment` | Refused, never run on another host |
 
 A refused frame fails with a message starting `remote-agent-unsupported:` that
-names the method and lists what remote agents can use. Head serves a forwarded
-frame only on the node's current binding, only for an agent recorded on that
+names the method and lists what remote agents can use. The backend serves a forwarded
+frame only on the machine's current binding, only for an agent recorded on that
 binding's lease, and only when its own copy of this table forwards the method;
 the frame then runs through the same host dispatch as a local agent's bridge, as
 that agent and in its workspace. The agent's `agentFeatures` snapshot and the
 sub-agent gates apply as they do locally. Before an agent-initiated `git.commit`,
-the node forwards the internal frame `git.commitPolicy` (refused from agent code)
-and head answers `{ "autoCommit": boolean }` with the workspace's effective
-auto-commit policy. Tool outputs too large for a reply are written on the node,
-next to the agent's worktree. Attachments are not materialized on nodes, so a
+the machine forwards the internal frame `git.commitPolicy` (refused from agent code)
+and the backend answers `{ "autoCommit": boolean }` with the workspace's effective
+auto-commit policy. Tool outputs too large for a reply are written on the machine,
+next to the agent's worktree. Attachments are not materialized on machines, so a
 message with attachments to a remote agent fails with `-32602` before any state
 change.
 
