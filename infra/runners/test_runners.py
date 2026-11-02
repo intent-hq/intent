@@ -1321,6 +1321,20 @@ class Installer(Stubbed):
         self.assertIn('no credential at', result.stdout)
         self.assertFalse([a for a in self.systemctl() if a[0] == 'disable'])
 
+    def test_retire_without_a_runner_config(self):
+        # The config may already be gone; the manual steps still print, with
+        # a placeholder rather than the intent-cache default prefix.
+        self.retire_host({})
+        self.env_file.unlink()
+        self.place_credential()
+        result = self.install('--retire')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.creds.exists())
+        self.assertIn('may merge now', result.stdout)
+        self.assertIn('startswith("<host>-")', result.stdout)
+        self.assertNotIn('intent-cache-', result.stdout)
+        self.assertIn('Cancel the server', result.stdout)
+
     def test_refuses_non_ubuntu_and_bad_args(self):
         other = self.dir / 'debian'
         other.write_text('ID=debian\n')

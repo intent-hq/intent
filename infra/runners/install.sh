@@ -335,8 +335,13 @@ retire_host() {
   done
   log "all slots stopped"
   remove_credential
-  name_prefix="$(sed -n 's/^RUNNER_NAME_PREFIX=//p' "$etc_dir/runners.env" 2>/dev/null | tail -n 1)"
-  name_prefix="${name_prefix:-intent-cache}"
+  # The supervisor's default prefix applies only when the config exists;
+  # without it, leave a placeholder rather than name another host.
+  name_prefix="<host>"
+  if [ -r "$etc_dir/runners.env" ]; then
+    name_prefix="$(sed -n 's/^RUNNER_NAME_PREFIX=//p' "$etc_dir/runners.env" | tail -n 1)"
+    name_prefix="${name_prefix:-intent-cache}"
+  fi
   cat <<EOF
 install: drained. The PR that removes this host's config may merge now.
 Left to do by hand (docs/GITHUB_RUNNERS.md, Retire a runner host):
