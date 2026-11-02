@@ -6,7 +6,7 @@ All `note.*` methods require `workspaceId`. All except `list` and `create` addit
 
 | Method | Params | Result |
 | --- | --- | --- |
-| note.list | workspaceId (req), projection?: "slim" \| "full" *(v8.1)*, limit?: int, nextToken?: string *(additive; bounded reads)* | { notes: NoteSummary[] } — details below the table. A paged read (see [Bounded note and comment reads](#bounded-note-and-comment-reads)) adds `nextToken` |
+| note.list | workspaceId (req), projection?: "slim" \| "full" *(v8.1)*, limit?: int, nextToken?: string *(`boundedReads: 1`)* | { notes: NoteSummary[], nextToken } — one page (see [Bounded note and comment reads](#bounded-note-and-comment-reads)); details below the table. |
 | note.get | noteId (req), maxContentBytes?: int *(`noteTruncatedRead: 1`)* | { note: Note } — -32602 with `error.data.code: "not-found"` if not found. `maxContentBytes` opts in to a truncated read that adds `contentTruncated` / `contentBytes` (see "Truncated note reads" below). A task note with `dependsOn` edges carries the computed `metadata.task.unmetDependsOn` (within v6.8, monorepo#1979; presence-detected, omitted when empty; read/push shapes only — see the note.list row) |
 | note.create | title (req), content?, tags?: string[], parentId?, idempotencyKey? | { note, convertedCount, createdTaskNoteIds, createdTasks, warnings } — within v6.14 ([intent-hq/intentd#1162](https://github.com/intent-hq/intentd/pull/1162), monorepo#2129) the result carries the `@@@task` auto-conversion outcome for the initial content, **additive** over the old `{ note }` shape (clients reading `.note` are unaffected): same shapes and warning contract as the four content-write ops (see "`@@@task` auto-conversion on note writes" below and the `task.convertBlocks` row, §5.4), with all four fields always present (`convertedCount: 0` plus empty arrays when the content converts nothing). `note` is the refetched post-conversion row, so its `rev`/`updatedAt` reflect the conversion write. An `idempotencyKey` replay returns the stored result without re-executing; a replayed key recorded before the conversion fields existed decodes the stored bare note as a zeroed conversion outcome. `-32602` when `content` is the line-numbered `note.read` display (see below) |
 | note.update | noteId (req); content? or title?/tags?; expectedVersion?: int; baseContentBytes?: int *(`noteTruncatedRead: 1`)* | { note } — content present → full content replace; else metadata update. A content-arm `baseContentBytes` that does not match the base → `-32602` `content-base-mismatch`, no write (see "Truncated note reads" below). `expectedVersion` is a strict compare-and-set on **both** arms: a stale value → `-32005` Conflict with `error.data = { code: "conflict", current }` and no write (§9) — unlike `note.setContent`, the content arm never merges. `-32602` when `content` is the line-numbered `note.read` display (see "Numbered `note.read` display rejected on content writes" below) |
@@ -16,7 +16,7 @@ All `note.*` methods require `workspaceId`. All except `list` and `create` addit
 | note.setContent | noteId (req), content (req), confirmReplacement?: boolean, expectedVersion?: int, baseContentBytes?: int *(`noteTruncatedRead: 1`)* | { ok, noteId, title, previousTitle?, updatedAt, oldContent?, newContent, convertedCount, createdTaskNoteIds, createdTasks, warnings, rev } (full replace). `rev` (additive) is the note's post-write `rev` — after any `@@@task` auto-conversion refetch — i.e. the value a follow-up conditional write sends as `expectedVersion`; `newContent` is the persisted (possibly merged) text. `expectedVersion` is the base the writer read: absent or equal to the current `rev` → `content` replaces the note as-is; **stale** → the write is **merged, not rejected** (see "Three-way merge on stale `expectedVersion`" below) — the writer's intent (`diff(base → content)`, base = the retained snapshot at that rev) is applied onto the current text, or degrades to last-writer-wins when no snapshot survives for that rev. The reduction guard (`> 50 %` shorter without `confirmReplacement`, `-32603`) is measured `base → content` when a base is recoverable and `current → content` otherwise. `-32005` (no write) in exactly two cases: an `expectedVersion` **above** the current `rev` — a rev this note never served — is rejected immediately, and a bounded read-merge-persist loop (5 attempts) whose every attempt misses its rev gate surfaces the last `Conflict`. `-32602` when `content` is the line-numbered `note.read` display (see below). A `baseContentBytes` that does not match the resolved base → `-32602` `content-base-mismatch`, no write (see "Truncated note reads" below) |
 | note.updateMetadata | noteId (req), title?, tags?: string \| string[], expectedVersion?: int | { ok, noteId, title?, tags?, updatedAt?, skipped?, reason? } — metadata-only write (no version snapshot); emits `note:updated`. A stale `expectedVersion` → `-32005` Conflict with `error.data = { code: "conflict", current }` and no write (§9) |
 | note.delete | noteId (req), expectedVersion?: int | { ok, noteId, deleted } — a stale `expectedVersion` → `-32005` Conflict with `error.data = { code: "conflict", current }` and no delete (§9). Emits `note:deleted`. Deleting a **task note** additionally recomputes + emits `task:ready-tasks-changed` (§6.5) after the `note:deleted`, with the additive trigger `triggeredBy: { noteId, reason: "note-deleted" }` (monorepo#1981; generalized by intentd#1121, monorepo#2006), whenever the delete actually **moves** the ready set: deleting a task that was itself ready drops its id from `readyTaskIds`, deleting the last incomplete task child of a parent readies the parent (tree rule), and deleting a task note that other tasks `dependsOn` keeps the #1981 always-emit contract — the dangling edge counts as unmet, so deleting a previously-`complete` dep drops its dependents out of `readyTaskIds`. The pre-delete and post-delete ready sets are compared, so a delete that provably cannot move the set (e.g. a terminal task nobody depends on) emits no recompute. Deleting a **`complete`** dep also re-announces each dependent task note via `note:updated` (the computed `unmetDependsOn` projection moved, monorepo#1979) after the ready-set event — same ordering as the status-transition path (`task:*` first, dependent `note:updated` last) |
-| note.listTasks | noteId (req), limit?: int, nextToken?: string *(additive; bounded reads)* | the checkbox/task rows + taskNoteId as a bare array; a paged read (see [Bounded note and comment reads](#bounded-note-and-comment-reads)) answers `{ tasks: [...], nextToken }` instead. Rows with a linked task note also carry the linked task's `dependsOn?` / `conflictsWith?` / computed `unmetDependsOn?` (v6.8; presence-detected, omitted when empty — see §5.4 task.setRelations). A row's `status` word (`done` / `in-progress` / `todo`) is read from the line's checkbox marker; on a row with a `taskNoteId` that marker is the daemon-materialized projection of the task note's status (§5.4 "Linked checkboxes are projections of the task note") |
+| note.listTasks | noteId (req), limit?: int, nextToken?: string *(`boundedReads: 1`)* | `{ tasks: [...], nextToken }` — one page of the checkbox/task rows + taskNoteId (see [Bounded note and comment reads](#bounded-note-and-comment-reads)). Rows with a linked task note also carry the linked task's `dependsOn?` / `conflictsWith?` / computed `unmetDependsOn?` (v6.8; presence-detected, omitted when empty — see §5.4 task.setRelations). A row's `status` word (`done` / `in-progress` / `todo`) is read from the line's checkbox marker; on a row with a `taskNoteId` that marker is the daemon-materialized projection of the task note's status (§5.4 "Linked checkboxes are projections of the task note") |
 | note.readAsset | asset (req) — asset id or workspace-asset:// URL, maxBytes? *(15.4)* | { assetId, mimeType, data, sizeKb } (image assets returned as data). Without `maxBytes` the whole asset, as before; with `maxBytes` the result adds `truncated` and `totalBytes`, and an asset that does not fit is sent with `data: ""` ([Bounded object reads](./files-terminal-browser.md#bounded-object-reads-154)) |
 | note.readAssetChunk *(15.4)* | asset (req), offset (req), length (req; positive, ≤ 16 MiB decoded) | { assetId, mimeType, content (base64), bytesRead, size } — one offset window of the asset's raw bytes with the `note.readAsset` resolution and the `file.readChunk` window rules; sent over a transfer connection |
 | note.saveAsset | data (req, base64 — a `data:<mime>;base64,` URL prefix is accepted and stripped), mimeType (req), originalName? | { assetId, path, url } — **additive asset write** (no `noteId`; ports the legacy `assets:save` IPC behind note image paste/upload). Writes the decoded bytes under the workspace assets root plus an `<assetId>.meta.json` sidecar (`{ id, originalName, mimeType, size, createdAt }`); `assetId` is `<timestamp36>-<hash8><ext>` with `<ext>` derived from `mimeType` (default `.png`), `url` is `workspace-asset://<workspaceId>/<assetId>` and round-trips through `note.readAsset`. `-32602` on missing params; `-32603` on invalid base64 or when asset storage is not configured |
@@ -317,21 +317,24 @@ transform the stored content and take no base size.
 
 #### Bounded note and comment reads
 
-*(Additive; bounded reads.)* Every page below fits the 500 KiB read payload budget:
-its rows serialize to at most 480,000 bytes, and a page stops early (keeping at least
-one row) rather than exceed it.
+*(Behaviour change; `server.capabilities.boundedReads: 1`.)* Every read below fits the
+500 KiB read payload budget **by default**, for every caller: its rows serialize to at
+most 480,000 bytes, and a page stops early (keeping at least one row) rather than exceed
+it. A daemon with this behaviour advertises the exact integer `server.capabilities.boundedReads: 1`
+on `client.hello` and in `system.capabilities`; a client that sees it must drain
+`nextToken` (and page the rest of a paged subscription snapshot) to read a whole list.
+Against a daemon without it, the same requests answer whole lists, because older
+daemons ignore `limit` / `nextToken`. A client built before this change sees only the
+first page of each list.
 
-**When a read is paged.** A list read is paged when the caller passes `limit` or
-`nextToken`, or when it has bounded read defaults (connections whose `client.hello`
-declares `capabilities.boundedReads: 1` — prepared, not yet honoured). Any other read
-answers exactly as before. A paged read adds `nextToken`: an opaque string to pass back
-for the next page, or `null` on the last page.
+**Paged lists.** Every list read below is paged and answers `nextToken`: an opaque
+string to pass back for the next page, or `null` on the last page.
 
-| Method | Order | `limit` default / maximum | Paged result |
+| Method | Order | `limit` default / maximum | Result |
 | --- | --- | --- | --- |
 | note.list | `createdAt`, then `id` | 200 / 500 notes | `{ notes, nextToken }` |
 | comment.list | latest activity first, then `threadId` | 100 / 500 threads | `{ threads, totalThreads, totalComments, nextToken }` |
-| note.listTasks | line order | 1,000 / 2,000 rows | `{ tasks, nextToken }` |
+| note.listTasks | line order | 1,000 / 2,000 rows | `{ tasks, nextToken }` (was a bare array) |
 
 - `limit` above the maximum is clamped to it. `limit` that is not a positive integer
   is `-32602` (`limit must be a positive integer`); `nextToken` that is not a non-empty
@@ -342,18 +345,33 @@ for the next page, or `null` on the last page.
 - Paging is a keyset walk over the current rows, not a snapshot: a row created or
   moved behind the cursor between pages is not served on a later page. Use the
   subscription deltas (or a fresh first page) to stay complete.
+- `totalThreads` / `totalComments` count every thread the `comment.list` filters keep,
+  not just the page.
 - **Oversized rows.** A `note.list` full row that alone overflows the budget is served
   with its `content` cut under the [Truncated note reads](#truncated-note-reads-additive-contract) rule
   (`contentTruncated`, `contentBytes`). A `comment.list` thread whose `comments` alone
   overflow keeps the oldest comments that fit and adds `commentsTruncated: true`; read
   the rest with `comment.getThread`. A `note.listTasks` row whose `text` alone overflows
   is served with `text` cut on a character boundary and `textTruncated: true`.
-- **`note.get`** keeps its contract for every other caller. For a caller with bounded
-  read defaults, a row that would overflow the budget (with or without
-  `maxContentBytes`) is cut to fit with the same markers.
-- **Subscriptions.** `note.subscribe` and `comment.subscribe` accept `limit` (same
-  defaults and maximums as `note.list` / `comment.list`); see
-  [§6.9 paged snapshots](../06-events.md#69-snapshotdelta-subscription-channels-new-in-intentd).
+
+**`note.get`.** A note whose row would overflow the budget (with or without
+`maxContentBytes`) is served cut to fit, with the same `contentTruncated` /
+`contentBytes` markers. A note that fits answers as before.
+
+**Write guard for cut notes.** Because a default read of a large note now serves a
+prefix, a whole-content write to such a note — `note.setContent`, or `note.update` with
+`content` — must send `baseContentBytes` (see "Write guard" in Truncated note reads).
+Without it the write is refused with no change: `-32602`, `error.data = { code:
+"content-base-required", contentBytes }` (the stored UTF-8 size). The guard applies
+when the note's default read would be cut (its serialized row is within 16 bytes of the
+480,000-byte budget or over it). Writes to smaller notes, metadata-only `note.update`
+calls, and the partial writes (`note.add`, `note.edit`, `note.editLines`) are unchanged.
+This keeps a client that only ever saw the cut prefix from replacing the full text.
+
+**Subscriptions.** `note.subscribe` and `comment.subscribe` page their seq-0 snapshot by
+default and accept `limit` (same defaults and maximums as `note.list` /
+`comment.list`); see
+[§6.9 paged snapshots](../06-events.md#69-snapshotdelta-subscription-channels-new-in-intentd).
 
 ### 5.2.1 `note.lineAttribution.*`
 
@@ -363,7 +381,7 @@ render "who last touched each line" without re-implementing the diff.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| note.lineAttribution.load | noteId (req), startLine?: int, maxLines?: int *(additive; bounded reads)* | `LineAttributionData \| null` — see payload below; `null` when the daemon has not computed attributions yet. Bounded on opt-in: see "Bounded loads" below |
+| note.lineAttribution.load | noteId (req), startLine?: int, maxLines?: int *(`boundedReads: 1`)* | `LineAttributionData \| null` — see payload below; `null` when the daemon has not computed attributions yet. Bounded: see "Bounded loads" below |
 | note.lineAttribution.computeNow | noteId (req) | `{ ok: true }` — force an immediate recompute + persist + `line-attribution:updated` emit (bypasses the debounce) |
 
 **Payload shape (`LineAttributionData`).** Identical to the FE JSON the
@@ -390,10 +408,8 @@ epoch. `author.type` is `user` / `agent` / `system`; `turnNumber` is emitted whe
 available (currently omitted because `note.*` writes still stamp the system author —
 see §5.2 version-history extensions).
 
-**Bounded loads** *(additive; bounded reads)*. A load with `startLine` or `maxLines`, or
-from a connection whose `client.hello` declares `capabilities.boundedReads: 1`
-(prepared), fits the 500 KiB read payload budget; any other load serves every attributed
-line as before. A bounded load carries the attributed lines from `startLine` (default 1), in line
+**Bounded loads** *(behaviour change; `boundedReads: 1`)*. Every load fits the 500 KiB
+read payload budget. It carries the attributed lines from `startLine` (default 1), in line
 order, at most `maxLines` of them (default: as many as fit), with the serialized
 `attributions` map at most 480,000 bytes. When every attributed line fits, the reply is
 unchanged. Otherwise it adds `truncated: true` and `nextStartLine` (the next attributed
@@ -417,7 +433,7 @@ each recompute so the read path is O(1) and survives restart. `note.delete` casc
 | Method | Params | Result |
 | --- | --- | --- |
 | comment.add | noteId (req), searchContext (req), commentTarget (req), comment (req), type?, author?, authorType? ("user" \| "agent", default "agent"), idempotencyKey?, commentId? (UUID) | { success, message, commentId, anchored, noteRev, location: { line, anchoredText } } (anchors by text search). A replay with the same `(workspaceId, idempotencyKey)` returns the stored result without re-executing (no duplicate comment, no second `comment:added` / `note:updated`); empty/whitespace-only keys are treated as absent. When `commentId` is supplied, the daemon uses it as the canonical id — comment row, `threadId`, anchor `startId`/`endId`, and the embedded `<!--anchor:{id}:start/end-->` markers — instead of minting a fresh UUID, so a client that already inserted optimistic editor anchors under that id converges with the daemon's note rewrite. A non-canonical-UUID value (only the hyphenated 8-4-4-4-12 form is accepted; e.g. the 32-hex simple form is rejected) or a collision with an existing comment id is rejected with `-32602` InvalidParams (after the idempotency replay check, which still returns the cached result first). Omitting it keeps the mint-a-UUID behavior. |
-| comment.list | noteId (req), since?, authorType?, status?, includeComments?, limit?: int, nextToken?: string *(additive; bounded reads)* | `{ threads: CommentThreadSummary[], totalThreads, totalComments }` — `comments: CommentWire[]` on each summary only when `includeComments: true`. A paged read (see [Bounded note and comment reads](#bounded-note-and-comment-reads)) adds `nextToken`; `totalThreads` / `totalComments` still count every thread the filters keep |
+| comment.list | noteId (req), since?, authorType?, status?, includeComments?, limit?: int, nextToken?: string *(`boundedReads: 1`)* | `{ threads: CommentThreadSummary[], totalThreads, totalComments, nextToken }` — one page (see [Bounded note and comment reads](#bounded-note-and-comment-reads)); `comments: CommentWire[]` on each summary only when `includeComments: true`; `totalThreads` / `totalComments` count every thread the filters keep |
 | comment.getThread | noteId (req), threadId? or commentId? | `{ threadId, noteId, rootComment: CommentWire, replies: CommentWire[], totalComments, status }` |
 | comment.respond | noteId (req), comment (req), threadId? or commentId?, type?, author?, authorType? ("user" \| "agent", default "agent"), suggestionOriginal?, suggestionProposed? | `{ success, message, comment: CommentWire, thread: { threadId, totalComments } }` — the reply carries **no** `anchor`/`anchorText` (see "Reply anchoring" below) |
 | comment.delete | noteId (req), commentId (req) | { ok, ... } |

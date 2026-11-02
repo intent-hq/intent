@@ -7,7 +7,7 @@ Routing-only `workspaceId?` additions below are [prepared contract fields](../wo
 | Method | Params | Result |
 | --- | --- | --- |
 | crossWorkspace.listSiblings | workspaceId (req), includeRetired?: boolean (default false, protocol 15.2) | sibling workspaces of the given workspace; retired workspaces only with `includeRetired: true` ([Retired workspaces](./workspace.md#retired-workspaces)). Siblings are workspaces with the same non-empty GitHub `repositoryOwner`/`repositoryName` (case-insensitive, trailing `.git` tolerated) OR an identical non-empty source `repositoryPath`; a caller with neither errors as not associated with a repository |
-| crossWorkspace.readNote | targetWorkspaceId (req), noteId (req), startLine?: int, maxLines?: int *(additive; bounded reads)* | `{ id, title, content, numberedContent, sourceWorkspaceId, sourceWorkspaceTitle, branch, lineCount }` for a note in a sibling workspace (same sibling rule as `listSiblings`; a non-sibling target is denied). Bounded on opt-in: see "Bounded `crossWorkspace.readNote`" below |
+| crossWorkspace.readNote | targetWorkspaceId (req), noteId (req), startLine?: int, maxLines?: int *(bounded reads)* | `{ id, title, content, numberedContent, sourceWorkspaceId, sourceWorkspaceTitle, branch, lineCount }` for a note in a sibling workspace (same sibling rule as `listSiblings`; a non-sibling target is denied). Bounded: see "Bounded `crossWorkspace.readNote`" below |
 | crossWorkspace.listNotes | targetWorkspaceId (req) | notes in a sibling workspace (same sibling rule as `listSiblings`; a non-sibling target is denied) |
 | primitive.addReference | noteId (req), semanticId (req), description (req), snapshot? | { ok, primitiveId, noteId } |
 | primitive.addCli | noteId (req), command (req), description (req), workingDirectory? | { ok, primitiveId, noteId } |
@@ -22,11 +22,8 @@ Routing-only `workspaceId?` additions below are [prepared contract fields](../wo
 | repo.remove | path (req) — no workspaceId | { removed: bool } — deletes one known-repo registry entry; `false` when the path was not registered (not an error) |
 | repo.warmCache *(v6.10)* | githubUrl (req) — no workspaceId | { started: true, owner, repo } — opportunistic **background** refresh of the daemon-managed repo cache (`.repo-cache/<owner>/<repo>`; [intent-hq/intentd#1105](https://github.com/intent-hq/intentd/pull/1105)): the RPC returns immediately while the fetch (the same `ensure_cached_repo` pipeline `workspace.create` hydrates from — fetch + prune + hard reset + recursive submodule sync, self-healing by re-clone; token resolution matching `workspace.create`) runs as a detached task. Deliberately **silent**: no `git:clone:*` frames and no events are emitted — the outcome is only logged daemon-side. **Global single-flight (never queued):** at most one opportunistic warm runs daemon-wide; a second call while one is in flight is rejected with `-32603` (`"repo cache warm already in flight for <owner>/<repo>"`) carrying machine-readable `error.data = { code: "warm-in-flight", owner, repo }` naming the repo currently being warmed, so clients key off `error.data.code` instead of prose. A missing/non-string `githubUrl`, a URL with no owner/repo pair, or an invalid owner/repo path segment (empty, `.`/`..`, leading `-`, separators) is `-32602` and never claims the single-flight slot, so a malformed URL can never block valid warms. **Never blocks `workspace.create`:** the create path is not gated by the in-flight flag — its cache ensure simply serializes behind an in-flight warm for the same repo on the existing per-repo cache lock |
 
-**Bounded `crossWorkspace.readNote`** *(additive; bounded reads)*. A read with
-`startLine` or `maxLines`, or from a caller with bounded read defaults (agent bindings,
-and connections whose `client.hello` declares `capabilities.boundedReads: 1` — prepared),
-fits the 500 KiB read payload budget. Any other read serves the whole note as before.
-In a bounded read, `content` and `numberedContent` carry a window of the
+**Bounded `crossWorkspace.readNote`** *(behaviour change; bounded reads, see §5.2 "Bounded note and comment reads")*. Every read
+fits the 500 KiB read payload budget. `content` and `numberedContent` carry a window of the
 note's lines (split on `\n`, numbered from 1 like `ws.note.read` and `note.editLines`):
 from `startLine` (default 1), at most `maxLines` lines (default: as many as fit), and
 together at most 480,000 JSON-escaped bytes. `lineCount` is always the note's total line
