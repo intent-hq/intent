@@ -101,7 +101,7 @@ GitHub/service failure → `-32603` with a descriptive `message`
 reply under the 500 KiB read payload budget without cutting data that has no other read path:
 
 - Items are served in forge order until the next one would push the page's items past
-  **448 KiB** of compact JSON. A page can therefore hold **fewer items than `limit`** while
+  **477,952 bytes** of compact JSON, so the whole result stays under **480,000 bytes**. A page can therefore hold **fewer items than `limit`** while
   `nextToken` is non-null; clients MUST page on `nextToken`, never on `items.length < limit`.
 - When a page stops short, its `nextToken` resumes **inside the same forge page**, so every item is
   served exactly once and in order. A resume token also fixes the page size it was cut from: a
