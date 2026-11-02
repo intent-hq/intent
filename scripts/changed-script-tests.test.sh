@@ -187,7 +187,7 @@ python3 -S -B scripts/test_beta.py'
 reset_fixture
 
 # A shared helper selects the checks of its users, not every suite (intent
-# PR 8305 changed resumable_nextest.py and ran every suite for over 30 min).
+# PR 8305 changed the shared test runner and ran every suite for over 30 min).
 printf '# edit\n' >>"$fixture/scripts/helper.sh"
 expect_plan "shared helper runs the checks that name it or its users, not every suite" 'make lint-shell
 bash scripts/alpha.test.sh'
@@ -225,8 +225,8 @@ expect_reason "unnamed script says why" "scripts/orphan.sh (no suite or test-scr
 expect_reason "unnamed script skips the Python unit tests" "no make test-scripts module names a changed script"
 reset_fixture
 
-# The make test-scripts modules (intent PR 8290 changed nextest_stress.py and
-# no local step ran its scripts.test_nextest_stress).
+# The make test-scripts modules (intent PR 8290 changed the stress runner and
+# no local step ran its own unittest module).
 printf '# edit\n' >>"$fixture/scripts/eps.py"
 expect_plan "scripts/X.py runs its own test-scripts module, not every shell suite" 'make lint-shell
 python3 -S -B -m unittest -v scripts.test_eps'
