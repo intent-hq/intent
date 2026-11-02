@@ -7,7 +7,7 @@ name: intent-cache runner smoke
 # committed host configs. Without a host, jobs run wherever a pool slot is
 # free, three cache readers run at once, and each pool's limits are checked
 # against the range of every host's slots. With a host (dispatch
-# -f host=intent-ci3), every self-hosted job targets that host's label
+# -f host=intent-ci1), every self-hosted job targets that host's label
 # (intent-host-<host>, registered by supervisor.sh): one isolation leg per
 # slot, checked against that host's own config exactly, and one cache reader
 # per heavy slot.
@@ -23,7 +23,7 @@ on:
         type: boolean
         default: false
       host:
-        description: Run every self-hosted job on this host (its RUNNER_NAME_PREFIX, e.g. intent-ci3) and check its own config; empty for any host
+        description: Run every self-hosted job on this host (its RUNNER_NAME_PREFIX, e.g. intent-ci1) and check its own config; empty for any host
         type: string
         default: ''
   pull_request:
