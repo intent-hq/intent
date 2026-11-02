@@ -167,6 +167,10 @@ DEV_PORT ?= $(call dev_port_value,DEV_PORT)
 DEV_TCP_PORT ?= $(call dev_port_value,DEV_TCP_PORT)
 SANDBOX_READY_TIMEOUT ?= 60
 SANDBOX_WARM_TIMEOUT ?= 60
+# `make web-serve` listens on this owner-only Unix socket (WEB_SERVE_PORT opts
+# into loopback TCP instead). WEB_SERVE_REBUILD=1 forces a fresh build:web.
+WEB_SERVE_SOCKET ?= $(CURDIR)/.dev/web-serve/web.sock
+WEB_SERVE_REBUILD ?=
 INTENTD_PROFILE ?= dev
 # Injectable platform seam for dev-prod's packaged-daemon socket default.
 # An explicit INTENTD_SOCKET always takes precedence.
@@ -489,7 +493,7 @@ FE_BUILD_HEAP_MB ?= 16384
 	fmt clippy check-windows lint-sources lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child lint-shell-sleeps lint-shell lint-workflows bash3 check clean clean-dev \
 	sweep sweep-all sweep-gates seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
 	run-intentd dev-ui dev-sandbox-ui dev-sandbox-app dev-sandbox-stack dev-fe fe-launch \
-	sandbox-status sandbox-stop \
+	sandbox-status sandbox-stop web-serve \
 	run-fe-local uds-to-unauthed-wss-bridge dev-web-live dev dev-prod \
 	ios-open ios-info ios-build-ios ios-build-visionos ios-test dist-mac
 
@@ -793,7 +797,7 @@ gate: check | check-callback-fixture check-transfer-fixture ## Run all local Rus
 test: test-intentd ## Run Rust tests; after interruption use RESUME=1 (GATE_FORCE=1 runs all, NO_FAIL_FAST=1 continues past failures, HERMETIC=1 hides provider CLIs like CI)
 
 test-scripts: ## Run the Python script unit tests (Python 3.11+, no submodules needed)
-	python3 -S -B -m unittest -v scripts.test_resumable_nextest scripts.test_compact_gate scripts.test_gate_storage scripts.test_rust_test_policy scripts.test_seed_dev_providers scripts.test_seed_dev_workspaces scripts.test_cleanup_prereleases scripts.test_script_test_target scripts.test_test_select_target scripts.test_test_stress_target scripts.test_nextest_stress scripts.test_host_load scripts.test_watch_capacity
+	python3 -S -B -m unittest -v scripts.test_resumable_nextest scripts.test_compact_gate scripts.test_gate_storage scripts.test_rust_test_policy scripts.test_seed_dev_providers scripts.test_seed_dev_workspaces scripts.test_cleanup_prereleases scripts.test_script_test_target scripts.test_test_select_target scripts.test_test_stress_target scripts.test_nextest_stress scripts.test_host_load scripts.test_watch_capacity scripts.test_web_serve_target
 
 # DRY_RUN must never start real work: run every target whose help or recipe
 # mentions DRY_RUN, plus every coverage-*, with DRY_RUN=1 and stub cargo/rustup,
@@ -1230,6 +1234,31 @@ sandbox-status: ## Show live sandbox state (SANDBOX_JSON=1 for JSON)
 
 sandbox-stop: ## Stop sandboxes in this worktree (optionally MODE=ui|app|stack)
 	@MODE="$(MODE)" scripts/dev-sandbox.sh stop
+
+# Builds dist/web when missing or older than its sources, then runs
+# packages/cloudlands-fe/scripts/web-serve.mjs: static files plus the
+# same-origin /intentd/ws bridge to the installed daemon (INTENTD_SOCKET
+# overrides). It never authenticates; the 0600 socket keeps other local
+# users out and a front-end supplies reach and TLS, e.g.
+#   tailscale serve --bg unix:<WEB_SERVE_SOCKET>
+# WEB_SERVE_REQUIRE_HEADER='Tailscale-User-Login=you@example.com' requires a
+# front-end identity header; WEB_SERVE_PORT=<n> serves loopback TCP instead.
+# Long-running; does not exit until you stop it (Ctrl-C).
+web-serve: ensure-fe-submodule ensure-fe-toolchain ## Serve the web build on an owner-only Unix socket for tailscale serve / ssh -L
+	@if [ ! -f "$(FE_DIR)/scripts/web-serve.mjs" ]; then \
+		echo "[web-serve] ERROR: this cloudlands-fe pin has no scripts/web-serve.mjs; update the submodule to a newer main."; \
+		exit 1; \
+	fi
+	@$(FE_DEPS_FRESH) || (echo "[web-serve] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
+	@cd $(FE_DIR) && \
+	if [ "$(WEB_SERVE_REBUILD)" = "1" ] || [ ! -f dist/web/index.html ] || \
+		[ -n "$$(find src static messages package.json pnpm-lock.yaml svelte.config.js vite.config.mjs -newer dist/web/index.html -print 2>/dev/null | head -n 1)" ]; then \
+		echo "[web-serve] building dist/web (takes a few minutes)"; \
+		NODE_OPTIONS="--max-old-space-size=$(FE_BUILD_HEAP_MB) $$NODE_OPTIONS" corepack pnpm run build:web || exit 1; \
+	else \
+		echo "[web-serve] dist/web is up to date (WEB_SERVE_REBUILD=1 forces a rebuild)"; \
+	fi
+	@cd $(FE_DIR) && WEB_SERVE_SOCKET="$(WEB_SERVE_SOCKET)" exec node scripts/web-serve.mjs
 
 dev-fe: ensure-fe-submodule ## Run the FE dev stack against dev-daemon's UDS socket (two-terminal pair)
 	# Two-terminal counterpart of `make dev-daemon`: launches only the FE dev
