@@ -7,7 +7,7 @@ All `note.*` methods require `workspaceId`. All except `list` and `create` addit
 | Method | Params | Result |
 | --- | --- | --- |
 | note.list | workspaceId (req), projection?: "slim" \| "full" *(v8.1)*, limit?: int, nextToken?: string *(`boundedReads: 1`)* | { notes: NoteSummary[], nextToken } — one page (see [Bounded note and comment reads](#bounded-note-and-comment-reads)); details below the table. |
-| note.get | noteId (req), maxContentBytes?: int *(`noteTruncatedRead: 1`)* | { note: Note } — -32602 with `error.data.code: "not-found"` if not found. `maxContentBytes` opts in to a truncated read that adds `contentTruncated` / `contentBytes` (see "Truncated note reads" below). A task note with `dependsOn` edges carries the computed `metadata.task.unmetDependsOn` (within v6.8, monorepo#1979; presence-detected, omitted when empty; read/push shapes only — see the note.list row) |
+| note.get | noteId (req), maxContentBytes?: int *(`noteTruncatedRead: 1`)*, contentOffset?: int *(`boundedReads: 1`)* | { note: Note } — -32602 with `error.data.code: "not-found"` if not found. `maxContentBytes` opts in to a truncated read that adds `contentTruncated` / `contentBytes` (see "Truncated note reads" below); a cut row also carries `contentOffset` / `nextContentOffset`, and `contentOffset` reads on (see [Bounded note and comment reads](#bounded-note-and-comment-reads)). A task note with `dependsOn` edges carries the computed `metadata.task.unmetDependsOn` (within v6.8, monorepo#1979; presence-detected, omitted when empty; read/push shapes only — see the note.list row) |
 | note.create | title (req), content?, tags?: string[], parentId?, idempotencyKey? | { note, convertedCount, createdTaskNoteIds, createdTasks, warnings } — within v6.14 ([intent-hq/intentd#1162](https://github.com/intent-hq/intentd/pull/1162), monorepo#2129) the result carries the `@@@task` auto-conversion outcome for the initial content, **additive** over the old `{ note }` shape (clients reading `.note` are unaffected): same shapes and warning contract as the four content-write ops (see "`@@@task` auto-conversion on note writes" below and the `task.convertBlocks` row, §5.4), with all four fields always present (`convertedCount: 0` plus empty arrays when the content converts nothing). `note` is the refetched post-conversion row, so its `rev`/`updatedAt` reflect the conversion write. An `idempotencyKey` replay returns the stored result without re-executing; a replayed key recorded before the conversion fields existed decodes the stored bare note as a zeroed conversion outcome. `-32602` when `content` is the line-numbered `note.read` display (see below) |
 | note.update | noteId (req); content? or title?/tags?; expectedVersion?: int; baseContentBytes?: int *(`noteTruncatedRead: 1`)* | { note } — content present → full content replace; else metadata update. A content-arm `baseContentBytes` that does not match the base → `-32602` `content-base-mismatch`, no write (see "Truncated note reads" below). `expectedVersion` is a strict compare-and-set on **both** arms: a stale value → `-32005` Conflict with `error.data = { code: "conflict", current }` and no write (§9) — unlike `note.setContent`, the content arm never merges. `-32602` when `content` is the line-numbered `note.read` display (see "Numbered `note.read` display rejected on content writes" below) |
 | note.add | noteId (req), content (req), heading?, position?: "end" \| "start" | { ok, ... } — `-32602` when `content` is the line-numbered `note.read` display (see below) |
@@ -352,11 +352,29 @@ string to pass back for the next page, or `null` on the last page.
   (`contentTruncated`, `contentBytes`). A `comment.list` thread whose `comments` alone
   overflow keeps the oldest comments that fit and adds `commentsTruncated: true`; read
   the rest with `comment.getThread`. A `note.listTasks` row whose `text` alone overflows
-  is served with `text` cut on a character boundary and `textTruncated: true`.
+  is served with a prefix of its `text` (cut on a character boundary) and
+  `textTruncated: true`, and its `nextToken` resumes inside that text: the next page
+  starts with the same row (same `lineNumber`) carrying the rest of `text` from UTF-8
+  byte `textOffset`. Concatenate the `text` of consecutive rows that share a
+  `lineNumber` to rebuild the full text; nothing is skipped.
+- **Full `content` of a cut list row.** A cut `note.list` / `note.subscribe` row is
+  completed through `note.get`: request `contentOffset` = the UTF-8 byte length of the
+  served `content` and follow `nextContentOffset` (below).
 
 **`note.get`.** A note whose row would overflow the budget (with or without
 `maxContentBytes`) is served cut to fit, with the same `contentTruncated` /
-`contentBytes` markers. A note that fits answers as before.
+`contentBytes` markers. A note that fits answers as before. Nothing is lost: a cut row
+also carries `contentOffset` (the UTF-8 byte offset in the note content where `content`
+starts, `0` for the first read) and `nextContentOffset` (where the next read starts,
+always on a character boundary, or `null` once `content` reaches the end). Pass
+`nextContentOffset` back as `contentOffset` to read on; every row read with a
+`contentOffset` is marked `contentTruncated` and carries `contentBytes`. Concatenating
+the `content` of the reads, in order, rebuilds the note byte for byte; compare `rev`
+across the reads and restart if the note changed. `maxContentBytes` still caps each
+read. `contentOffset` that is not a positive integer is `-32602`
+(`contentOffset must be a positive integer`); one that is not a character boundary
+strictly inside the content is `-32602`
+(`contentOffset (<n>) is not a character boundary inside the note content (<len> bytes)`).
 
 **Write guard for cut notes.** Because a default read of a large note now serves a
 prefix, a whole-content write to such a note — `note.setContent`, or `note.update` with
