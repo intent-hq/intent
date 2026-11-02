@@ -38,6 +38,7 @@ jobs:
       - run: |
           echo "shell tests: banner is not a step"
           bash scripts/alpha.test.sh
+          bash scripts/top.test.sh
 
           python3 -S -B scripts/test_beta.py
           bash scripts/lint-fixed-sleeps.sh
@@ -59,7 +60,7 @@ jobs:
       - run: bash scripts/after.sh
 EOF
 # test-scripts lists its modules over a continuation line, as the real one may.
-printf 'lint-shell:\n\t@echo lint ok\n\ntest-scripts: ## unit tests\n\tpython3 -S -B -m unittest -v scripts.test_eps \\\n\t  scripts.test_zeta\n\nother:\n\t@echo not a module scripts.test_other\n' >"$fixture/Makefile"
+printf 'lint-shell:\n\t@echo lint ok\n\ntest-scripts: ## unit tests\n\tpython3 -S -B -m unittest -v scripts.test_eps \\\n\t  scripts.test_zeta scripts.test_middle\n\nother:\n\t@echo not a module scripts.test_other\n' >"$fixture/Makefile"
 # test_eps.py is eps.py's own module; test_zeta.py names kappa.py by module.
 : >"$fixture/scripts/__init__.py"
 printf 'x = 1\n' >"$fixture/scripts/eps.py"
@@ -79,6 +80,16 @@ printf 'echo orphan\n' >"$fixture/scripts/orphan.sh"
 printf 'echo helper\n' >"$fixture/scripts/helper.sh"
 printf '. scripts/helper.sh\n' >"$fixture/scripts/run.sh"
 printf '# also covers helper.sh and run.sh\n' >>"$fixture/scripts/alpha.test.sh"
+# base.py is a helper no check names: middle.py imports it and top.sh runs
+# middle.py. scripts.test_middle and top.test.sh cover base.py through them.
+printf 'x = 1\n' >"$fixture/scripts/base.py"
+printf '# import base\nx = 1\n' >"$fixture/scripts/middle.py"
+printf 'python3 scripts/middle.py\n' >"$fixture/scripts/top.sh"
+printf 'echo top ok\n' >"$fixture/scripts/top.test.sh"
+printf 'import unittest\nfrom scripts import middle\nclass T(unittest.TestCase):\n    def test_ok(self):\n        self.assertEqual(middle.x, 1)\n' >"$fixture/scripts/test_middle.py"
+# loop-a.sh and loop-b.sh source each other and no check names either.
+printf '. scripts/loop-b.sh\n' >"$fixture/scripts/loop-a.sh"
+printf '. scripts/loop-a.sh\n' >"$fixture/scripts/loop-b.sh"
 printf 'export const x = 1;\n' >"$fixture/scripts/tool.mjs"
 printf "import test from 'node:test';\ntest('tool', () => {});\n" >"$fixture/scripts/tool.test.mjs"
 printf 'export const y = 1;\n' >"$fixture/scripts/untested.mjs"
@@ -113,11 +124,13 @@ expect_plan() {
 
 all_shell='make lint-shell
 bash scripts/alpha.test.sh
+bash scripts/top.test.sh
 python3 -S -B scripts/test_beta.py
 bash scripts/lint-fixed-sleeps.sh'
 all_suites='make lint-shell
 make test-scripts
 bash scripts/alpha.test.sh
+bash scripts/top.test.sh
 python3 -S -B scripts/test_beta.py
 bash scripts/lint-fixed-sleeps.sh'
 
@@ -173,9 +186,37 @@ expect_plan "python suite change runs only that suite" 'make lint-shell
 python3 -S -B scripts/test_beta.py'
 reset_fixture
 
+# A shared helper selects the checks of its users, not every suite (intent
+# PR 8305 changed resumable_nextest.py and ran every suite for over 30 min).
 printf '# edit\n' >>"$fixture/scripts/helper.sh"
-expect_plan "shared helper runs every shell suite and make test-scripts" "$all_suites"
-expect_reason "shared helper says who uses it" "scripts/helper.sh (shared helper: scripts/run.sh names it)"
+expect_plan "shared helper runs the checks that name it or its users, not every suite" 'make lint-shell
+bash scripts/alpha.test.sh'
+expect_reason "shared helper says who uses it" "scripts/helper.sh is a shared helper; also selecting the checks of the scripts that use it: scripts/run.sh"
+reset_fixture
+
+printf '# edit\n' >>"$fixture/scripts/base.py"
+expect_plan "shared helper follows its users through other scripts" 'make lint-shell
+python3 -S -B -m unittest -v scripts.test_middle
+bash scripts/top.test.sh'
+expect_reason "transitive helper lists every user" "scripts/base.py is a shared helper; also selecting the checks of the scripts that use it: scripts/middle.py scripts/top.sh"
+expect_reason "transitive module selection says how" "selected scripts.test_middle (make test-scripts): own test of scripts/middle.py, which uses base.py"
+expect_reason "transitive suite selection says how" "selected scripts/top.test.sh: own test of scripts/top.sh, which uses middle.py, which uses base.py"
+reset_fixture
+
+printf '# edit\n' >>"$fixture/scripts/middle.py"
+expect_plan "a user in the middle selects its own checks and its users', not its helper's" 'make lint-shell
+python3 -S -B -m unittest -v scripts.test_middle
+bash scripts/top.test.sh'
+reset_fixture
+
+printf '# edit\n' >>"$fixture/scripts/loop-a.sh"
+expect_plan "helpers that use each other terminate and fall back to every shell suite" "$all_shell"
+expect_reason "uncovered helper says why" "scripts/loop-a.sh (no suite or test-scripts module names it or a script that uses it)"
+reset_fixture
+
+printf '# edit\n' >>"$fixture/scripts/base.py"
+printf '# edit\n' >>"$fixture/Makefile"
+expect_plan "a Makefile change still runs everything next to a shared helper" "$all_suites"
 reset_fixture
 
 printf '# edit\n' >>"$fixture/scripts/orphan.sh"
@@ -305,7 +346,7 @@ reset_fixture
 output=$(cd "$fixture" && BASE=main FULL=1 "$script_bash" scripts/changed-script-tests.sh 2>&1) ||
   fail "passing run exited non-zero: $output"
 case "$output" in
-  *"lint ok"*"Ran 2 tests"*"alpha ok"*"beta ok"*"all selected checks passed"*) echo "ok - passing run runs every step" ;;
+  *"lint ok"*"Ran 3 tests"*"alpha ok"*"top ok"*"beta ok"*"all selected checks passed"*) echo "ok - passing run runs every step" ;;
   *) fail "passing run output: $output" ;;
 esac
 
