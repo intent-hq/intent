@@ -540,8 +540,8 @@ test('pool limits come from Actions variables with the old values as defaults', 
   }
 });
 // The bigmem pool: heavy slots with 30 GB or more. 16-core jobs that find no
-// free xl slot overflow only to these; a 12 GB heavy slot (intent-ci3)
-// OOM-killed their rustc.
+// free xl slot overflow only to these; a 12 GB heavy slot (the retired
+// 64 GB intent-ci3) OOM-killed their rustc.
 const bigJob = (id, status = 'in_progress') => ({ id, status, labels: BIG, created_at: new Date().toISOString() });
 const BIG_ON = { THRESHOLD: '4', XL_THRESHOLD: '1', BIGMEM_THRESHOLD: '2' };
 const COV = { key: 'coverage', label: 'gh-linux-16x', rust: true, minutes: 13 };
@@ -765,7 +765,7 @@ test('a host label on self-hosted slots changes neither capacity nor routed labe
     ...todaysFleet().map((r, i) => (i < 2 ? host(r, 'intent-cache') : r)),
     host(xlSlot(), 'intent-ci1'),
     host(bigSlot(), 'intent-ci2'),
-    host(cacheSlot(true), 'intent-ci3'),
+    host(cacheSlot(true), 'intent-ci4'),
   ];
   // xl full, so the 16-core job overflows to the bigmem slot either way.
   const fixture = { env: slotEnv([...MIXED, UNIT], BIG_ON), jobs: [heavyJob(3), xlJob(4)] };

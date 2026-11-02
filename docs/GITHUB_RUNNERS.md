@@ -6,7 +6,7 @@ runs them next to the sccache server; runner-only hosts run nothing else. All
 of them register into one runner group and share the pool labels, so a job
 targeting a label runs on whichever host has a free slot. Each slot also
 registers a host label, `intent-host-<name prefix>` (for example
-`intent-host-intent-ci3`), which nothing routes on; the smoke workflow's `host`
+`intent-host-intent-ci1`), which nothing routes on; the smoke workflow's `host`
 input uses it to test one host.
 
 | Host | Location | Hardware | Pools (slots) | Labels | Name prefix | Config |
@@ -14,13 +14,12 @@ input uses it to test one host.
 | intent-cache | ReliableSite, Los Angeles | Ryzen 9 3900X, 12 cores / 24 threads, 128 GB | heavy (3) | `intent-cache` + `intent-cache-bigmem` | `intent-cache` | [`runners.env`](../infra/runners/runners.env) |
 | intent-ci1 | ReliableSite, Los Angeles | EPYC 4545P, 16 cores / 32 threads, 128 GB | xl (1), heavy (2) | `intent-cache-xl`, `intent-cache` + `intent-cache-bigmem` | `intent-ci1` | [`hosts/intent-ci1.env`](../infra/runners/hosts/intent-ci1.env) |
 | intent-ci2 | ReliableSite, Los Angeles | EPYC 4545P, 16 cores / 32 threads, 128 GB | xl (1), heavy (2) | `intent-cache-xl`, `intent-cache` + `intent-cache-bigmem` | `intent-ci2` | [`hosts/intent-ci2.env`](../infra/runners/hosts/intent-ci2.env) |
-| intent-ci3 | ReliableSite, Los Angeles | EPYC 4545P, 16 cores / 32 threads, 64 GB | heavy (4) | `intent-cache` only (12 GB slots: no bigmem) | `intent-ci3` | [`hosts/intent-ci3.env`](../infra/runners/hosts/intent-ci3.env) |
 | intent-ci4 | ReliableSite, Los Angeles | EPYC 4545P, 16 cores / 32 threads, 128 GB | xl (1), heavy (2) | `intent-cache-xl`, `intent-cache` + `intent-cache-bigmem` | `intent-ci4` | [`hosts/intent-ci4.env`](../infra/runners/hosts/intent-ci4.env) |
 
 | Pool | Label | Serves jobs asking for | Bursts to | Per slot |
 |---|---|---|---|---|
-| heavy | `intent-cache` | `gh-linux-8x` | `warp-ubuntu-2404-x64-8x` | 8 CPUs = 4 whole cores; 36 GB on intent-cache, 30 GB on intent-ci1, intent-ci2 and intent-ci4, 12 GB on intent-ci3, 32 GB in the three-heavy EPYC layout |
-| bigmem | `intent-cache` + `intent-cache-bigmem` | `gh-linux-16x` when no xl slot is free | `warp-ubuntu-2404-x64-16x` | heavy slots with 30 GB or more; never intent-ci3 |
+| heavy | `intent-cache` | `gh-linux-8x` | `warp-ubuntu-2404-x64-8x` | 8 CPUs = 4 whole cores; 36 GB on intent-cache, 30 GB on intent-ci1, intent-ci2 and intent-ci4, 32 GB in the three-heavy EPYC layout, 12 GB in the 64 GB layout |
+| bigmem | `intent-cache` + `intent-cache-bigmem` | `gh-linux-16x` when no xl slot is free | `warp-ubuntu-2404-x64-16x` | heavy slots with 30 GB or more |
 | xl | `intent-cache-xl` | `gh-linux-16x` | `warp-ubuntu-2404-x64-16x` | 16 CPUs = 8 whole cores (one CCD), 52 GB |
 | small | `intent-cache-small` | nothing routed (free `ubuntu-*` jobs run on GitHub) | — | no slots on any host |
 
@@ -34,15 +33,15 @@ On intent-ci1, intent-ci2 and intent-ci4 (same layout; `test_runners.py` keeps
 the files identical but the name) the xl slot owns cores 0-7
 (CPUs 0-7,16-23, 52 GB) and the two heavy slots split CCD 1: cores 8-11
 (8-11,24-27) and 12-15 (12-15,28-31), 30 GB each. Every core is pinned; about
-13 GB stays with the system and Docker. intent-ci3 has the same CPU with
-64 GB and no xl slot: four heavy slots (cores 0-3, 4-7, 8-11, 12-15), 12 GB
-each, every core pinned, 48 GB under its 51G slice cap (it reports 60 GiB). That is well under the
-other heavy slots, so its slots do not carry `intent-cache-bigmem`: one rustc
-in intentd's 16-core `check` and `coverage-changed` passed 12 GB and was
-OOM-killed there when those jobs overflowed from busy xl slots. Every
-8-core job fits; if one is OOM-killed, drop to three slots of 16 GB
-(`HEAVY_SLOTS=3`, `HEAVY_MEMORY=16g`). [`hosts/epyc-4545p-3heavy.env`](../infra/runners/hosts/epyc-4545p-3heavy.env)
-is the other EPYC layout: three heavy slots (cores 0-3, 4-7, 8-11), 32 GB each.
+13 GB stays with the system and Docker. Two other EPYC layouts are kept as
+templates: [`hosts/epyc-4545p-3heavy.env`](../infra/runners/hosts/epyc-4545p-3heavy.env)
+has three heavy slots (cores 0-3, 4-7, 8-11), 32 GB each, and
+[`hosts/epyc-4545p-64g-4heavy.env`](../infra/runners/hosts/epyc-4545p-64g-4heavy.env)
+has four 12 GB heavy slots for a 64 GB box, 48 GB under its 51G slice cap. The
+64 GB intent-ci3 ran that layout until it was retired. The 64 GB layout's slots do not carry
+`intent-cache-bigmem`: one rustc in intentd's 16-core `check` and
+`coverage-changed` passed 12 GB and was OOM-killed there when those jobs
+overflowed from busy xl slots. Prefer 128 GB for a new EPYC host.
 
 The routing probe (`runner-route.yml`) caps how many jobs it sends to each
 pool with GitHub Actions variables (repository overrides organization), so a
@@ -363,7 +362,7 @@ The installer enables exactly the planned slots and drains and disables the
 rest; an invalid file, or one that does not fit the host, changes no slot.
 Keep CPU sets disjoint and the total memory (each pool's slots × its memory)
 at or under the `runners.slice` cap (the host's RAM in whole GiB minus 9 GiB:
-116G on a 128 GB box, 51G on intent-ci3); `--host-check` enforces both.
+116G on a 128 GB box, 51G on a 64 GB box); `--host-check` enforces both.
 intent-cache pins every CPU and relies on the cache's cgroup weights; on a
 runner-only host, leaving a core or two unpinned is optional.
 
@@ -424,7 +423,57 @@ runner-only host, leaving a core or two unpinned is optional.
    every host's slots (add `-f xl=true` to include the xl pool).
 7. **Route jobs to it** by raising `CI_LINUX_HEAVY_SLOTS` / `CI_LINUX_XL_SLOTS`
    / `CI_LINUX_BIGMEM_SLOTS` to the fleet's total slots per pool (see the
-   variables above).
+   variables above), in every repository that defines them (see Retire a
+   runner host, step 1).
+
+## Retire a runner host
+
+To take a host out of the fleet (for example to replace it with a larger box
+under the same name):
+
+1. **Stop routing to it.** Lower `CI_LINUX_HEAVY_SLOTS`, `CI_LINUX_XL_SLOTS`
+   and `CI_LINUX_BIGMEM_SLOTS` by the host's slots in each pool (a bigmem slot
+   counts in both the heavy and the bigmem variable), so the other hosts are
+   not overcommitted. A repository variable overrides the organization one,
+   so set it wherever it is defined (`gh variable list --repo intent-hq/<repo>`
+   for `intent`, `intentd` and `cloudlands-fe`):
+   `gh variable set CI_LINUX_HEAVY_SLOTS --repo intent-hq/<repo> --body <n>`.
+   For the organization default add `--org intent-hq --visibility all`:
+   `gh` otherwise makes it private, hiding it from these public repositories.
+2. **Drain its slots.** `systemctl disable` takes unit names, not globs, so
+   list the enabled slots first (as `install.sh` does):
+
+   ```bash
+   ssh root@<host>
+   slots=$(cd /etc/systemd/system/multi-user.target.wants && ls github-runner@*.service)
+   systemctl disable --now $slots
+   ```
+
+   Idle slots deregister at once; busy ones finish their job first (see
+   Drain and stop). Go on only once `systemctl list-units 'github-runner@*'`
+   lists none running.
+3. **Check that no runner is left** under its prefix, and delete leftovers
+   (offline runners from a crash or reboot):
+
+   ```bash
+   gh api --paginate orgs/intent-hq/actions/runners \
+     -q '.runners[] | select(.name | startswith("<host>-")) | "\(.id) \(.name) \(.status)"'
+   gh api -X DELETE orgs/intent-hq/actions/runners/<id>
+   ```
+
+4. **Remove the credential:** `shred -u /etc/github-runners/credentials` (and
+   the App key it names, if any). If the box cannot be wiped before the
+   provider reclaims it, rotate the credential instead (see Credential).
+5. **Leave the tailnet,** last, since SSH reaches the box only over Tailscale:
+   `nohup sh -c 'sleep 2; tailscale logout' >/dev/null 2>&1 &`, then delete
+   the machine in the Tailscale admin console, so a replacement can take the
+   name (Tailscale renames a duplicate to `<host>-1`).
+6. **Remove its config:** delete `infra/runners/hosts/<host>.env`, its row in
+   the fleet table, any mention in the pool table and its cases in
+   `test_runners.py`. The smoke workflow then rejects `-f host=<host>`.
+7. **Cancel the server** with the provider.
+
+A replacement under the same name then follows Add a runner host.
 
 ## Drain and stop
 
