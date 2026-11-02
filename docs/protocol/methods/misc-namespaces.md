@@ -13,7 +13,7 @@ Routing-only `workspaceId?` additions below are [prepared contract fields](../wo
 | primitive.addCli | noteId (req), command (req), description (req), workingDirectory? | { ok, primitiveId, noteId } |
 | primitive.addPatch | noteId (req), filePath (req), diff (req), description (req) | { ok, primitiveId, noteId } |
 | primitive.addAgentAction | noteId (req), agentId (req), goal (req), description (req) | { ok, primitiveId, noteId } |
-| specialist.list | provider?, workspaceId?, includeProject?: boolean | { specialists: SpecialistDef[], importDiagnostics?: ImportDiagnostic[] } (user files override bundled; explicit project scope overrides user) — each entry may carry the additive `resolvedModel`/`resolvedProvider` preview fields (below); unknown `provider` → -32602 |
+| specialist.list | provider?, workspaceId?, includeProject?: boolean, limit? (default and max 500), nextToken? *(paged — see [Catalog list pages](#catalog-list-pages))* | { specialists: SpecialistDef[], importDiagnostics?: ImportDiagnostic[], nextToken: string\|null } (user files override bundled; explicit project scope overrides user) — each entry may carry the additive `resolvedModel`/`resolvedProvider` preview fields (below); `importDiagnostics` rides the first page only; unknown `provider` → -32602 |
 | specialist.get | id (req), workspacePath?, provider?, workspaceId? | { specialist: SpecialistDef } — resolved view, with the `resolvedModel`/`resolvedProvider` preview fields when applicable; -32602 if not found; unknown `provider` → -32602 |
 | specialist.create | id (req), spec (req): SpecialistDef, workspacePath?, scope?: "project"\|"user" (default "user"), workspaceId? (routing for explicit project scope only) | { specialist: SpecialistDef } |
 | specialist.edit | id (req), spec (req): SpecialistDef, workspacePath?, scope (req): "project"\|"user", workspaceId? (routing for explicit project scope only) | { specialist: SpecialistDef } |
@@ -31,6 +31,40 @@ Routing-only `workspaceId?` additions below are [prepared contract fields](../wo
     "reasoningEffort":"high",
     "resolvedModel":"gpt-5.3-codex","resolvedProvider":"codex" } ] } }
 ```
+
+#### Catalog list pages
+
+**Behaviour change (bounded reads, advertised in the [`client.hello`](./client-hello.md) server capabilities).** `specialist.list`,
+`rules.list` and `skill.list` return one **page** of their catalog, sized so no
+reply exceeds the 500 KiB read budget (512,000 bytes). Before this change they
+returned the whole catalog. A catalog that fits in one page is still returned
+whole, with `nextToken: null`.
+
+- `limit?` — rows per page, clamped into `[1, 500]`; default **500** (the maximum).
+- **Byte budget** — a page also ends before the row that would take the serialized
+  result past **480,000 bytes**, so the frame stays under 512,000. Every page holds
+  at least one row.
+- `nextToken?` — the opaque token from the previous page; `nextToken: null` marks
+  the end. A token is scoped to its method and resource (the workspace for
+  `rules.list` and `skill.list`); a malformed token or one from another method or
+  resource is `-32602`. Tokens are offsets into the current catalog: a catalog that
+  changes between pages can skip or repeat rows, so refetch from the first page on
+  the method's changed event.
+- **Reply shapes** — `specialist.list` adds `nextToken` and sends
+  `importDiagnostics` on the first page only; `rules.list` adds a top-level
+  `nextToken` and pages `RuleSet.rules`. `skill.list` keeps its bare array (the
+  first page, with no token) when called without paging params; send `limit` or
+  `nextToken` to get `{ skills, nextToken }` and continue.
+- **Oversized row** — a row that alone is larger than the byte budget is sent
+  without its body: the field is removed and replaced with `<field>Omitted: true`
+  and `<field>Bytes` (UTF-8 length). The body field is `behaviorPrompt` (and
+  `prompt`) for `specialist.list`, `content` for `rules.list`, and `description`
+  for `skill.list`. Read a specialist body with `specialist.get`; a rule file at
+  its `path`.
+- **Clients** — follow `nextToken` until it is `null` (send `limit` on
+  `skill.list`). A daemon that does not advertise bounded reads ignores both params and returns
+  the whole catalog without a token, so the same loop works against both. Older
+  clients that do not page see only the first page of a large catalog.
 
 **`specialist.*` full CRUD.** Beyond `specialist.list`, the namespace carries
 `get` / `create` / `edit` / `delete`. Definitions resolve in **3 tiers** — **project**
@@ -367,13 +401,14 @@ special-cases) remains internal — no method or shape changes.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| rules.list | workspaceId? | { rules: RuleSet } — all rule sources for the workspace (or global when omitted) |
+| rules.list | workspaceId?, limit? (default and max 500), nextToken? *(paged — see [Catalog list pages](#catalog-list-pages))* | { rules: RuleSet, nextToken: string\|null } — one page of the rule sources for the workspace (or global when omitted); the page applies to `RuleSet.rules` |
 | rules.get | workspaceId (req), ruleType (req): user-override key — "base-system-prompt", a per-agent-type specialization key, "workspace", … | { enabled, content, updatedAt } for that one user-override type |
 | rules.update | workspaceId (req), ruleType (req): user-override key (as in rules.get), content (req): string, enabled?: boolean | { rules: RuleSet } — upserts the user-override body (+ enabled) and re-reads the set |
 
 **RuleSet** — `{ workspaceId?, rules: RuleEntry[] }` where **RuleEntry** =
 `{ ruleType: string, source: string, path?, content, enabled: boolean, updatedAt: number,
-editable: boolean }`. `ruleType` is the user-override key the entry is stored under (e.g.
+editable: boolean }` (`rules.list` replaces an oversized `content` with `contentOmitted: true`
+and `contentBytes`; see [Catalog list pages](#catalog-list-pages)). `ruleType` is the user-override key the entry is stored under (e.g.
 `"base-system-prompt"`, a per-agent-type specialization key, or `"workspace"`); `source` names the
 origin (e.g. `"AGENTS.md"`, `".augment/guidelines.md"`, a specialist id, or `"user-override"`);
 `path?` is the backing file when one exists; `enabled` toggles whether the override is applied and
