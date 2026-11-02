@@ -689,8 +689,8 @@ class Supervisor(Stubbed):
         self.assertIn('\n  RUNNER_NAME_PREFIX=intent-cache\n', text)
 
     def test_xl_pool_slot(self):
-        # intent-ci1, intent-ci2 and intent-ci4 share this layout: one xl slot and two 30 GB heavy slots.
-        for config, host in ((INTENT_CI1, 'intent-ci1'), (INTENT_CI4, 'intent-ci4')):
+        # intent-ci1, intent-ci2, intent-ci3 and intent-ci4 share this layout: one xl slot and two 30 GB heavy slots.
+        for config, host in ((INTENT_CI1, 'intent-ci1'), (INTENT_CI3, 'intent-ci3'), (INTENT_CI4, 'intent-ci4')):
             with self.subTest(host=host):
                 self.use_host_config(config)
                 self.responses['GET /orgs/example-org/actions/runners'] = [200, {'runners': []}]
