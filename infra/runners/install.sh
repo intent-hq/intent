@@ -82,14 +82,18 @@ check_os() {
   [ "$id" = ubuntu ] || die "expected Ubuntu, found '${id:-unknown}'"
 }
 
-# True if a ufw "To" field (address, port spec, interface and "(v6)" already
-# stripped of the interface) admits TCP port 22: a port list or range holding
-# 22, an address or Anywhere with no port (every port), or an SSH app profile.
+# True if a ufw "To" field (interface already removed) admits TCP port 22: a
+# port list or range holding 22, an address or Anywhere with no port (every
+# port, of every protocol or of TCP), or an SSH app profile. Parenthesized
+# annotations such as "(v6)" or a verbose profile name "(RemoteAdmin)" are
+# dropped so the numeric port behind them decides.
 admits_ssh() {
-  local to="${1/ (v6)/}" spec ports part lo hi
-  to="${to% }"
+  local to="$1" spec ports part lo hi parts
   [[ "${to,,}" == *ssh* ]] && return 0
-  spec="${to##* }"
+  while [[ "$to" =~ ^(.*)\ ?\([^\)]*\)(.*)$ ]]; do to="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"; done
+  read -ra parts <<<"$to"
+  [ "${#parts[@]}" -gt 0 ] || return 1
+  spec="${parts[-1]}"
   if [[ "$spec" =~ ^[0-9]+(:[0-9]+)?(,[0-9]+(:[0-9]+)?)*(/(tcp|udp))?$ ]]; then
     [[ "$spec" == */udp ]] && return 1
     ports="${spec%/*}"
@@ -99,7 +103,8 @@ admits_ssh() {
     done
     return 1
   fi
-  [[ "$spec" =~ ^(Anywhere|[0-9a-fA-F.:]+(/[0-9]+)?)$ ]]
+  [[ "$spec" =~ ^(Anywhere|[0-9a-fA-F.:]+(/[0-9]+)?)(/([a-z][a-z0-9]*))?$ ]] || return 1
+  [[ -z "${BASH_REMATCH[4]}" || "${BASH_REMATCH[4]}" == tcp ]]
 }
 
 # The runbook's lockdown (docs/GITHUB_RUNNERS.md, Add a runner host, step 2):
@@ -112,7 +117,7 @@ check_lockdown() {
   fi
   local fix="lock the host down first (docs/GITHUB_RUNNERS.md, Add a runner host, step 2): apt-get install -y ufw; ufw default deny incoming; ufw allow in on tailscale0 to any port 22 proto tcp; ufw enable. If the host is firewalled some other way, re-run with --skip-lockdown-check"
   command -v ufw >/dev/null 2>&1 || die "ufw is not installed, so nothing keeps SSH off the public internet; $fix"
-  local status line to action direction open=() tailnet=0 rules=0
+  local status line to action direction words i open=() tailnet=0 rules=0
   status="$(LC_ALL=C ufw status verbose 2>&1)" || die "ufw status failed: $status"
   grep -qx 'Status: active' <<<"$status" || die "ufw is not active, so every listening port (SSH included) is open; $fix"
   grep -Eq '^Default: (deny|reject) \(incoming\)' <<<"$status" \
@@ -122,8 +127,13 @@ check_lockdown() {
       [[ "$line" =~ ^--+\  ]] && rules=1
       continue
     fi
-    [[ "$line" =~ ^(.*[^\ ])\ +(ALLOW|LIMIT|DENY|REJECT)(\ (IN|OUT|FWD))?\ +[^\ ] ]] || continue
-    to="${BASH_REMATCH[1]}"; action="${BASH_REMATCH[2]}"; direction="${BASH_REMATCH[4]:-IN}"
+    # A comment ("# ...") may hold anything, including action words.
+    read -ra words <<<"${line%%#*}"
+    i=0
+    while [ "$i" -lt "${#words[@]}" ] && [[ ! "${words[i]}" =~ ^(ALLOW|LIMIT|DENY|REJECT)$ ]]; do i=$((i + 1)); done
+    if [ "$i" = 0 ] || [ "$i" = "${#words[@]}" ]; then continue; fi
+    to="${words[*]:0:i}"; action="${words[i]}"; direction=IN
+    [[ "${words[i + 1]:-}" =~ ^(IN|OUT|FWD)$ ]] && direction="${words[i + 1]}"
     case "$action $direction" in 'ALLOW IN'|'LIMIT IN') ;; *) continue ;; esac
     if [[ "$to" == *" on tailscale0" ]]; then
       admits_ssh "${to% on tailscale0}" && tailnet=1

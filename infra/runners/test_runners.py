@@ -1261,6 +1261,16 @@ class Installer(Stubbed):
             'other interface': '22/tcp on eth0             ALLOW IN    Anywhere',
             'to an address': '203.0.113.5 22/tcp         ALLOW IN    Anywhere',
             'long interface name': 'Anywhere (v6) on enp1s0f0np0 ALLOW IN    Anywhere (v6)',
+            # PR #8304 review: a comment must not supply the action, a verbose
+            # profile annotation must not hide the port, and every-port TCP counts.
+            'comment with another action': '22/tcp                     ALLOW IN    Anywhere                   # was DENY IN',
+            'comment with an outbound action': '22/tcp                     ALLOW IN    Anywhere                   # not ALLOW OUT',
+            'profile annotation': '22/tcp (RemoteAdmin)       ALLOW IN    Anywhere',
+            'profile list annotation': '80,22/tcp (Admin Tools)    ALLOW IN    Anywhere',
+            'every tcp port': 'Anywhere/tcp               ALLOW IN    Anywhere/tcp',
+            'every tcp port v6': 'Anywhere/tcp (v6)          ALLOW IN    Anywhere/tcp (v6)',
+            'every tcp port to an address': '203.0.113.0/24/tcp         ALLOW IN    Anywhere',
+            'action without direction': '22/tcp                     ALLOW       Anywhere',
         }
         for name, rule in public.items():
             cases[f'ufw allows SSH outside tailscale0: [{rule}]'] = rules + tailnet + rule + '\n'
@@ -1288,6 +1298,10 @@ class Installer(Stubbed):
             'Nginx Full                 ALLOW IN    Anywhere',
             'Anywhere on tailscale0     ALLOW IN    Anywhere',
             'Anywhere (v6) on tailscale0 ALLOW IN    Anywhere (v6)',
+            'Anywhere/udp               ALLOW IN    Anywhere/udp',
+            'Anywhere/esp               ALLOW IN    Anywhere/esp',
+            '80/tcp (WWW)               ALLOW IN    Anywhere                   # not ssh: ALLOW IN',
+            '443/tcp                    DENY IN     Anywhere                   # was ALLOW IN',
         ))
         self.ufw_status.write_text(rules.replace('Default: deny (incoming)', 'Default: reject (incoming)'))
         self.place_credential()
