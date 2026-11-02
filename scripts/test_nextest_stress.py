@@ -123,6 +123,53 @@ class TallyTests(unittest.TestCase):
             self.assertEqual(stress.default_load_cpus(), 16)
         self.assertLessEqual(stress.usable_cpus(), os.cpu_count())
 
+    def test_confined_load_defaults_to_two_spinners_per_core(self):
+        self.assertEqual(stress.default_load_cpus([28, 29, 30, 31]), 8)
+
+    def test_a_failed_run_on_a_busy_host_says_so(self):
+        host = {"load1": 112.4, "cpus": 32, "busiest": [{"command": "yes", "processes": 64, "cpu_percent": 6387}]}
+        failed = stress.summary_line("s", tally(OUTPUT), "LOAD=0", 100, host)
+        self.assertTrue(failed.endswith("; NOTE: host load was 112.4 on 32 CPUs at the start "
+                                        "(busiest: yes ×64 (6387% CPU)), so timeouts may be co-tenant load"), failed)
+        clean = "".join(f"        PASS [   0.002s] [{i}/2] (1/1) probe one\n" for i in (1, 2))
+        self.assertNotIn("NOTE", stress.summary_line("s", tally(clean), "LOAD=0", 0, host))
+
+
+class LoadCoresTests(unittest.TestCase):
+    """LOAD=1 stays on a few CPUs so other workspaces on the host keep the rest."""
+
+    def test_default_is_a_quarter_of_the_usable_cpus_at_least_two(self):
+        for allowed, expected in ((32, list(range(24, 32))), (64, list(range(48, 64))),
+                                  (8, [6, 7]), (4, [2, 3]), (2, None), (1, None)):
+            with self.subTest(allowed=allowed):
+                self.assertEqual(stress.choose_load_cores(None, list(range(allowed))), expected)
+
+    def test_explicit_counts_all_and_unpinnable_platforms(self):
+        allowed = [0, 2, 4, 6, 8, 10]
+        self.assertEqual(stress.choose_load_cores("2", allowed), [8, 10])
+        self.assertIsNone(stress.choose_load_cores("6", allowed), "every allowed CPU needs no pin")
+        self.assertIsNone(stress.choose_load_cores("99", allowed))
+        self.assertIsNone(stress.choose_load_cores("all", allowed))
+        with mock.patch.object(stress, "allowed_cpus", return_value=None):
+            self.assertIsNone(stress.choose_load_cores("2"), "macOS cannot pin")
+
+    def test_cpu_list_uses_kernel_notation(self):
+        self.assertEqual(stress.cpu_list([31, 24, 25, 26, 27, 28, 29, 30]), "24-31")
+        self.assertEqual(stress.cpu_list([0, 1, 2, 5, 7, 8]), "0-2,5,7-8")
+        self.assertEqual(stress.cpu_list([3]), "3")
+
+    @unittest.skipUnless(hasattr(os, "sched_setaffinity") and len(os.sched_getaffinity(0)) > 1,
+                         "needs CPU affinity and two CPUs")
+    def test_spinners_and_fsync_writer_stay_on_the_chosen_cores(self):
+        core = max(os.sched_getaffinity(0))
+        with tempfile.TemporaryDirectory() as scratch, \
+                stress.stress_load(3, Path(scratch), cores=[core]) as processes:
+            self.assertEqual(len(processes), 4)
+            for process in processes:
+                self.assertEqual(os.sched_getaffinity(process.pid), {core}, process.args)
+                self.assertIsNone(process.poll())
+        self.assertGreater(len(os.sched_getaffinity(0)), 1, "the runner itself is never pinned")
+
     def test_colored_single_test_output_from_a_pty_is_parsed(self):
         # Captured from make test-stress under a ws.script PTY (nextest 0.9.143):
         # colors on, and no "(k/M)" column when one test is selected.
@@ -505,7 +552,8 @@ class StallProcessTests(unittest.TestCase):
 FAKE_CARGO = """#!/usr/bin/env python3
 import json, os, sys
 with open(os.environ["FAKE_CARGO_LOG"], "a") as log:
-    log.write(json.dumps({"argv": sys.argv[1:], "fixture": os.environ.get("FIXTURE")}) + "\\n")
+    log.write(json.dumps({"argv": sys.argv[1:], "fixture": os.environ.get("FIXTURE"),
+                          "affinity": sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None}) + "\\n")
 if sys.argv[2:4] == ["run", "--help"]:
     print(os.environ.get("FAKE_CARGO_HELP", "--retries <N>\\n--stress-count <COUNT>"))
 elif sys.argv[2] == "run":
@@ -539,6 +587,11 @@ class RunStressTests(unittest.TestCase):
             "FAKE_CARGO_LOG": str(self.log)})
         patcher.start()
         self.addCleanup(patcher.stop)
+        # A quiet host unless a test says otherwise: CI hosts may be busy.
+        self.host = None
+        host_patch = mock.patch.object(stress.host_load, "check", side_effect=lambda: self.host)
+        host_patch.start()
+        self.addCleanup(host_patch.stop)
 
     def fake_gate(self):
         def prepare_test_env(_repo, _intentd, plans, _label):
@@ -556,7 +609,7 @@ class RunStressTests(unittest.TestCase):
         args = SimpleNamespace(label="test-stress", repo_root=str(self.root),
                                intentd_dir="packages/intentd", cache_dir=str(self.cache),
                                filterset="test(/it's $/)", stress_count=3, load="0",
-                               load_cpus=None, stall="0", stall_ms=None, stall_every_ms=None,
+                               load_cpus=None, load_cores=None, stall="0", stall_ms=None, stall_every_ms=None,
                                build_jobs="2", test_threads="5")
         vars(args).update(overrides)
         stdout = io.StringIO()
@@ -602,10 +655,44 @@ class RunStressTests(unittest.TestCase):
 
     def test_clean_run_under_load_exits_zero(self):
         text = "".join(f"        PASS [   0.002s] [{i}/3] (1/1) probe one\n" for i in (1, 2, 3))
-        status, stdout, _ = self.run_stress(text, load="1", load_cpus=2)
+        status, stdout, _ = self.run_stress(text, load="1", load_cpus=2, load_cores="all")
         self.assertEqual(status, 0)
         self.assertIn("3/3 iterations (0 failed), 1 test, LOAD=1 (2 cpu + fsync), STALL=0: 3 passed, 0 failed",
                       stdout)
+        self.assertIn("the load spans every CPU", stdout)
+
+    @unittest.skipUnless(hasattr(os, "sched_setaffinity") and len(os.sched_getaffinity(0)) > 1,
+                         "needs CPU affinity and two CPUs")
+    def test_load_pins_the_tests_under_stress_but_not_the_build(self):
+        text = "".join(f"        PASS [   0.002s] [{i}/3] (1/1) probe one\n" for i in (1, 2, 3))
+        allowed = sorted(os.sched_getaffinity(0))
+        status, stdout, calls = self.run_stress(text, load="1", load_cores="1")
+        self.assertEqual(status, 0, stdout)
+        self.assertEqual(calls[1]["argv"][1], "list")
+        self.assertEqual(calls[1]["affinity"], allowed, "the build before the load uses every CPU")
+        self.assertEqual(calls[2]["argv"][1], "run")
+        self.assertEqual(calls[2]["affinity"], allowed[-1:], "nextest and its tests share the load's cores")
+        self.assertIn("LOAD=1 (2 cpu + fsync on 1 cores), STALL=0: 3 passed, 0 failed", stdout)
+        self.assertIn(f"run on CPUs {allowed[-1]} (1 of {len(allowed)}) so other workspaces keep the rest", stdout)
+        summary = json.loads((next((self.cache / "stress").iterdir()) / "summary.json").read_text())
+        self.assertEqual((summary["load_cpus"], summary["load_cores"]), (2, allowed[-1:]))
+
+    def test_without_load_nothing_is_pinned(self):
+        status, _, calls = self.run_stress(OUTPUT, exit_code=100, load_cores="1")
+        self.assertEqual(status, 100)
+        if hasattr(os, "sched_getaffinity"):
+            self.assertEqual(calls[2]["affinity"], sorted(os.sched_getaffinity(0)))
+
+    def test_a_busy_host_is_reported_before_the_run_and_on_a_failed_summary(self):
+        self.host = {"load1": 112.4, "cpus": 32,
+                     "busiest": [{"command": "yes", "processes": 64, "cpu_percent": 6387}]}
+        status, stdout, _ = self.run_stress(OUTPUT, exit_code=100)
+        self.assertEqual(status, 100)
+        self.assertTrue(stdout.startswith("[test-stress] WARNING: host load is 112.4 on 32 CPUs (3.5x); "
+                                          "busiest commands: yes ×64 (6387% CPU)."), stdout)
+        self.assertIn("; NOTE: host load was 112.4 on 32 CPUs at the start", stdout)
+        summary = json.loads((next((self.cache / "stress").iterdir()) / "summary.json").read_text())
+        self.assertEqual(summary["host_load"], self.host)
 
     def test_nextest_without_stress_support_fails_before_the_build(self):
         with self.assertRaisesRegex(RuntimeError, "no --stress-count"):
@@ -702,12 +789,16 @@ class ArgumentTests(unittest.TestCase):
 
     def test_stress_dispatches_with_parsed_options(self):
         status, run_stress, _ = self.main("--filterset", "test(/a/)", "--stress-count", "20",
-                                          "--load", "1", "--load-cpus", "8")
+                                          "--load", "1", "--load-cpus", "8", "--load-cores", "4")
         self.assertEqual(status, 7)
         args = run_stress.call_args.args[0]
-        self.assertEqual((args.stress_count, args.load, args.load_cpus, args.filterset),
-                         (20, "1", 8, "test(/a/)"))
+        self.assertEqual((args.stress_count, args.load, args.load_cpus, args.load_cores, args.filterset),
+                         (20, "1", 8, "4", "test(/a/)"))
         self.assertEqual((args.stall, args.stall_ms, args.stall_every_ms), ("0", None, None))
+        _, run_stress, _ = self.main("--filterset", "test(/a/)", "--stress-count", "2", "--load-cores", "all")
+        self.assertEqual(run_stress.call_args.args[0].load_cores, "all")
+        _, run_stress, _ = self.main("--filterset", "test(/a/)", "--stress-count", "2")
+        self.assertIsNone(run_stress.call_args.args[0].load_cores)
 
     def test_stall_options_dispatch_and_need_linux(self):
         argv = ("--filterset", "test(/a/)", "--stress-count", "2", "--stall", "1",
@@ -728,6 +819,11 @@ class ArgumentTests(unittest.TestCase):
                               (("--filterset", "test(/a/)", "--stress-count", "0"), "positive integer"),
                               (("--filterset", "test(/a/)", "--stress-count", "x"), "positive integer"),
                               (("--filterset", "test(/a/)", "--load", "1"), "need --stress-count"),
+                              (("--filterset", "test(/a/)", "--load-cores", "2"), "need --stress-count"),
+                              (("--filterset", "test(/a/)", "--stress-count", "2", "--load-cores", "0"),
+                               "positive integer"),
+                              (("--filterset", "test(/a/)", "--stress-count", "2", "--load-cores", "half"),
+                               "positive integer"),
                               (("--filterset", "test(/a/)", "--stall", "1"), "need --stress-count"),
                               (("--filterset", "test(/a/)", "--stall-ms", "5"), "need --stress-count"),
                               (("--filterset", "test(/a/)", "--stress-count", "2", "--stall", "2"),

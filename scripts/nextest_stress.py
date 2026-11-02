@@ -6,6 +6,15 @@ with SIGSTOP for a fixed pause, then resumed, the way a briefly frozen CI
 runner behaves), and prints one summary line: iterations, passes, failures and
 the distinct panic locations of the failures.
 
+The load stays inside the run that asked for it: on Linux the spinners, the
+fsync writer and the tests under stress are pinned to the same LOAD_CORES CPUs
+(default a quarter of the CPUs this process may use, at least two), so other
+workspaces on a shared dev host keep the rest. The spinners still outnumber
+those cores 2:1, so the tests see the same contention a whole-host load gave
+them. LOAD_CORES=all restores the whole-host load. A host already loaded well
+past its CPU count is reported before the run (scripts/host_load.py) and again
+on the summary line when the run failed.
+
 It reuses the gate's fixture preparation, caller environment and isolated Cargo
 outputs, so fixture tests behave as under `make test-select`. It never reads
 or writes the resume journal or completion markers: a stress pass is not
@@ -31,6 +40,13 @@ import tempfile
 import threading
 import time
 import uuid
+
+if __package__:
+    from . import host_load
+elif __name__ != "__main__":
+    import host_load
+# else: the --stall-helper process, which runs this file in isolated mode
+# (python -I, so scripts/ is not on sys.path) and never reports host load.
 
 # A status line of nextest's human reporter in stress mode, e.g.
 # "        FAIL [   0.002s] [3/6] (2/2) crate::binary module::test". Statuses
@@ -127,7 +143,8 @@ class StressTally:
         }
 
 
-def summary_line(label: str, counts: dict[str, object], conditions: str, status: int | None = 0) -> str:
+def summary_line(label: str, counts: dict[str, object], conditions: str, status: int | None = 0,
+                 host: dict[str, object] | None = None) -> str:
     total = counts["total_iterations"] or counts["iterations"]
     tests = counts["tests"]
     text = (
@@ -146,6 +163,9 @@ def summary_line(label: str, counts: dict[str, object], conditions: str, status:
         text += "; ERROR: the run did not complete (see the error above)"
     elif status != 0 and not failures:
         text += f"; ERROR: exited {status} without a test failure (build, selection or setup; see output above)"
+    if host and status != 0:
+        text += (f"; NOTE: host load was {host['load1']:g} on {host['cpus']} CPUs at the start "
+                 f"(busiest: {host_load.describe_busiest(host['busiest'])}), so timeouts may be co-tenant load")
     return text
 
 
@@ -167,7 +187,8 @@ def _libc_prctl():
         return None
 
 
-def die_with_parent(parent_pid: int, prctl, death_signal: int = signal.SIGKILL):
+def die_with_parent(parent_pid: int, prctl, death_signal: int = signal.SIGKILL, *,
+                    cores: list[int] | None = None):
     """preexec_fn: signal the load process when the runner dies without cleanup (Linux).
 
     Load workers get SIGKILL; the stall helper gets SIGTERM, which it handles by
@@ -176,14 +197,88 @@ def die_with_parent(parent_pid: int, prctl, death_signal: int = signal.SIGKILL):
     Registering after the runner already died would never fire, so the child
     compares getppid() with the runner's pid after registering and exits if it
     was reparented in that window. A failed registration exits too, rather than
-    starting a load process nothing can reap.
+    starting a load process nothing can reap. With `cores`, the process is also
+    pinned to them (see pin_to); a failed pin exits rather than load every CPU.
     """
+    pin = pin_to(cores)
+
     def preexec() -> None:
+        if pin is not None:
+            pin()
         if prctl is None:
             return
         if prctl(PR_SET_PDEATHSIG, death_signal) != 0 or os.getppid() != parent_pid:
             os._exit(1)
     return preexec
+
+
+def pin_to(cores: list[int] | None):
+    """preexec_fn pinning the child (and everything it starts) to `cores`, or None.
+
+    Children inherit the affinity, so pinning nextest pins every test process.
+    The cores come from this process's own affinity, so the kernel only refuses
+    them if the cpuset shrank meanwhile; the child then exits instead of
+    running unconfined (a load worker that exits invalidates the run).
+    """
+    if not cores:
+        return None
+    cpu_set = frozenset(cores)
+
+    def preexec() -> None:
+        try:
+            os.sched_setaffinity(0, cpu_set)
+        except OSError:
+            os._exit(1)
+    return preexec
+
+
+def allowed_cpus() -> list[int] | None:
+    """The CPU ids this process may run on, or None where affinity cannot be set (macOS)."""
+    if not (hasattr(os, "sched_getaffinity") and hasattr(os, "sched_setaffinity")):
+        return None
+    try:
+        return sorted(os.sched_getaffinity(0))
+    except OSError:
+        return None
+
+
+def default_load_cores(allowed: int) -> int:
+    """A quarter of the usable CPUs, at least two: spinners at 2x these cores plus the
+    tests keep the host's own load average under its CPU count."""
+    return max(1, min(allowed, max(2, allowed // 4)))
+
+
+def choose_load_cores(requested: str | None, allowed: list[int] | None = None) -> list[int] | None:
+    """The CPUs a LOAD=1 run is confined to, or None for no confinement.
+
+    `requested` is LOAD_CORES: None for the default, "all" to opt out, or a count.
+    The highest-numbered CPUs are used: CPU 0 tends to service interrupts, and
+    concurrent stress runs in other workspaces then share one set instead of
+    each claiming more of the host.
+    """
+    allowed = allowed_cpus() if allowed is None else allowed
+    if not allowed or requested == "all":
+        return None
+    count = default_load_cores(len(allowed)) if requested is None else int(requested)
+    if count >= len(allowed):
+        return None
+    return allowed[-count:]
+
+
+def cpu_list(cores: list[int]) -> str:
+    """Kernel cpulist notation, e.g. [0, 1, 2, 5] -> "0-2,5"."""
+    ranges: list[str] = []
+    start = previous = None
+    for core in sorted(cores):
+        if previous is not None and core == previous + 1:
+            previous = core
+            continue
+        if start is not None:
+            ranges.append(str(start) if start == previous else f"{start}-{previous}")
+        start = previous = core
+    if start is not None:
+        ranges.append(str(start) if start == previous else f"{start}-{previous}")
+    return ",".join(ranges)
 
 
 def _stop(processes: list[subprocess.Popen]) -> None:
@@ -202,10 +297,10 @@ def exited_early(processes: list[subprocess.Popen]) -> list[str]:
 
 
 @contextlib.contextmanager
-def stress_load(cpus: int, scratch: Path, stderr_path: Path | None = None):
-    """Run `cpus` CPU spinners plus one fsync writer for the duration."""
+def stress_load(cpus: int, scratch: Path, stderr_path: Path | None = None, cores: list[int] | None = None):
+    """Run `cpus` CPU spinners plus one fsync writer for the duration, pinned to `cores` if given."""
     processes: list[subprocess.Popen] = []
-    preexec = die_with_parent(os.getpid(), _libc_prctl())
+    preexec = die_with_parent(os.getpid(), _libc_prctl(), cores=cores)
     errors = open(stderr_path, "w", encoding="utf-8") if stderr_path else subprocess.DEVNULL
     try:
         for _ in range(cpus):
@@ -475,15 +570,19 @@ def usable_cpus() -> int:
     return os.cpu_count() or 1
 
 
-def default_load_cpus() -> int:
-    return 2 * usable_cpus()
+def default_load_cpus(cores: list[int] | None = None) -> int:
+    """Two spinners per CPU the load may use: the confined cores, else every usable CPU."""
+    return 2 * (len(cores) if cores else usable_cpus())
 
 
 def stream(command: list[str], cwd: Path, env: dict[str, str], log, tally: StressTally,
-           during=None) -> int:
-    """Run nextest, teeing its output into the tally; `during(pid)` wraps the run (stalls)."""
+           during=None, cores: list[int] | None = None) -> int:
+    """Run nextest, teeing its output into the tally; `during(pid)` wraps the run (stalls).
+
+    With `cores`, nextest and so every test process it starts is pinned to them.
+    """
     process = subprocess.Popen(command, cwd=cwd, env=env, text=True, errors="replace",
-                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, preexec_fn=pin_to(cores))
     assert process.stdout is not None
     try:
         # Exiting `during` first resumes any frozen test before nextest is told to cancel.
@@ -515,9 +614,21 @@ def run_stress(args, gate) -> int:
     intentd_dir = (repo_root / args.intentd_dir).resolve()
     stress_dir = Path(args.cache_dir).expanduser().resolve() / "stress"
     selection = ["--workspace", "-E", args.filterset]
+    host = host_load.check()
+    if host:
+        print(host_load.warning(host, label), flush=True)
     env, _, _, cargo_config = gate.prepare_test_env(repo_root, intentd_dir, [selection], label)
-    cpus = args.load_cpus if args.load_cpus is not None else default_load_cpus()
-    load = f"LOAD=1 ({cpus} cpu + fsync)" if args.load == "1" else "LOAD=0"
+    loaded = args.load == "1"
+    load_cores = getattr(args, "load_cores", None)
+    allowed = allowed_cpus()
+    cores = choose_load_cores(load_cores, allowed) if loaded else None
+    cpus = args.load_cpus if args.load_cpus is not None else default_load_cpus(cores)
+    if not loaded:
+        load = "LOAD=0"
+    elif cores:
+        load = f"LOAD=1 ({cpus} cpu + fsync on {len(cores)} cores)"
+    else:
+        load = f"LOAD=1 ({cpus} cpu + fsync)"
     prune(stress_dir)
     record_dir = stress_dir / uuid.uuid4().hex
     record_dir.mkdir(parents=True)
@@ -553,11 +664,20 @@ def run_stress(args, gate) -> int:
             (record_dir / "command.json").write_text(json.dumps(command, indent=2) + "\n")
             print(f"[{label}] {load}, {stall.settings() if stall else 'STALL=0'}; "
                   f"running {args.stress_count} iterations with retries off", flush=True)
+            if cores:
+                print(f"[{label}] the load and the tests under stress run on CPUs {cpu_list(cores)} "
+                      f"({len(cores)} of {len(allowed)}) so other workspaces keep the rest; "
+                      "LOAD_CORES=<n> or LOAD_CORES=all changes that", flush=True)
+            elif loaded and allowed is None:
+                print(f"[{label}] this platform cannot pin CPUs, so the load spans every CPU", flush=True)
+            elif loaded:
+                print(f"[{label}] the load spans every CPU (LOAD_CORES={load_cores or len(allowed)}); "
+                      "other workspaces on this host will slow down", flush=True)
             with open(record_dir / "output.log", "w", encoding="utf-8") as log, \
                     tempfile.TemporaryDirectory(prefix="load-", dir=stress_dir) as scratch, \
-                    (stress_load(cpus, Path(scratch), record_dir / "load.err") if args.load == "1"
+                    (stress_load(cpus, Path(scratch), record_dir / "load.err", cores) if loaded
                      else contextlib.nullcontext([])) as workers:
-                status = stream(command, intentd_dir, env, log, tally, stall.attach if stall else None)
+                status = stream(command, intentd_dir, env, log, tally, stall.attach if stall else None, cores)
                 # A worker that died mid-run means the advertised load did not hold.
                 load_failures = exited_early(workers)
         except subprocess.CalledProcessError as error:
@@ -572,7 +692,8 @@ def run_stress(args, gate) -> int:
             counts = tally.counts()
             if status == 0 and counts["failed"]:
                 status = 1
-            line = summary_line(label, counts, f"{load}, {stall.describe() if stall else 'STALL=0'}", status)
+            line = summary_line(label, counts, f"{load}, {stall.describe() if stall else 'STALL=0'}", status,
+                                host)
             invalid = False
             if load_failures:
                 invalid = True
@@ -593,7 +714,8 @@ def run_stress(args, gate) -> int:
             (record_dir / "summary.txt").write_text(line + "\n", encoding="utf-8")
             (record_dir / "summary.json").write_text(json.dumps({
                 **counts, "filterset": args.filterset, "stress_count": args.stress_count,
-                "load": args.load == "1", "load_cpus": cpus if args.load == "1" else 0,
+                "load": loaded, "load_cpus": cpus if loaded else 0,
+                "load_cores": cores if loaded else None, "host_load": host,
                 "load_failures": load_failures, "stall": stall is not None,
                 "stall_ms": stall.pause_ms if stall else 0, "stall_every_ms": stall.every_ms if stall else 0,
                 "stalls": stall.count() if stall else 0, "stall_failures": stall.failures if stall else [],

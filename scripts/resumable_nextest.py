@@ -50,8 +50,9 @@ No later invocation repairs unfinished receipts; only tree expiry removes them.
 
 `--stress-count N` (make test-stress) hands one `--filterset` to
 scripts/nextest_stress.py: the same fixtures and Cargo outputs, N iterations with
-retries off, an optional `--load 1` CPU + fsync load, optional `--stall 1`
-random SIGSTOP/SIGCONT pauses of the test processes, and no resume records.
+retries off, an optional `--load 1` CPU + fsync load confined to `--load-cores`
+CPUs, optional `--stall 1` random SIGSTOP/SIGCONT pauses of the test processes,
+and no resume records.
 """
 
 from __future__ import annotations
@@ -2025,6 +2026,13 @@ def positive_int(value: str) -> int:
     return int(value)
 
 
+def cores_or_all(value: str) -> str:
+    """LOAD_CORES: 'all' or a positive integer, kept as text for nextest_stress."""
+    if value == "all":
+        return value
+    return str(positive_int(value))
+
+
 def main() -> int:
     if sys.argv[1:2] == ["--check-callback-fixture"]:
         parser = argparse.ArgumentParser()
@@ -2097,7 +2105,10 @@ def main() -> int:
     parser.add_argument("--load", choices=("0", "1"), default="0",
                         help="stress mode: 1 runs a built-in CPU + fsync load during the tests")
     parser.add_argument("--load-cpus", type=positive_int, metavar="N",
-                        help="stress mode: CPU spinners for --load 1 (default: 2 x CPUs)")
+                        help="stress mode: CPU spinners for --load 1 (default: 2 x the --load-cores CPUs)")
+    parser.add_argument("--load-cores", type=cores_or_all, metavar="N|all",
+                        help="stress mode: pin --load 1 and the tests to N CPUs (Linux; default: a "
+                        "quarter of the usable CPUs, at least 2), or 'all' for the whole host")
     parser.add_argument("--stall", choices=("0", "1"), default="0",
                         help="stress mode: 1 freezes the test processes (SIGSTOP/SIGCONT) at random "
                         "intervals, like a briefly frozen CI runner (Linux)")
@@ -2108,8 +2119,9 @@ def main() -> int:
                         "from half to 1.5x (default: 2000)")
     args = parser.parse_args()
     stall_options = args.stall != "0" or args.stall_ms is not None or args.stall_every_ms is not None
-    if args.stress_count is None and (args.load != "0" or args.load_cpus is not None or stall_options):
-        parser.error("--load, --load-cpus and the --stall options need --stress-count")
+    load_options = args.load != "0" or args.load_cpus is not None or args.load_cores is not None
+    if args.stress_count is None and (load_options or stall_options):
+        parser.error("--load, --load-cpus, --load-cores and the --stall options need --stress-count")
     if args.stress_count is not None:
         if args.filterset is None or args.plan:
             parser.error("--stress-count needs --filterset and cannot be combined with --plan")
