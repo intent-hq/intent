@@ -388,6 +388,18 @@ The method catalog, event catalog, surface counts and documented protocol versio
 are unchanged; requests without the new params are byte-identical.
 Catalog inclusion does not identify a carrying release.
 
+**Capped message block reads (independently gated additive extension).**
+[Capped and paged block reads](./methods/agents.md#55-agent) cap every
+`agent.getMessageBlock` response at a 480,000-byte served block (under the 500 KiB read
+budget), add the optional `offset` / `maxBytes` params and the `truncated` / `field` /
+`encoding` / `totalBytes` / `nextOffset` result fields, serve an over-cap image without `data`
+(with `dataTruncated` / `dataBytes`), and let `agent.editAndRegenerate` take
+`{ type: "image", messageId, blockId }` stored block references.
+Exact integer `messageBlockPages: 1` gates the contract.
+The method catalog, event catalog, surface counts and documented protocol version are
+unchanged. A block that fits the cap is served byte-identical inside `block`; the cap applies
+to callers that omit the new params too.
+
 **Generic stream recovery (independently gated additive extension).**
 [`eventStreamRecovery: 1`](./event-stream-recovery.md) adds an opt-in/ack to
 `events.subscribe`, the socket-private `events.lost` notification and the
