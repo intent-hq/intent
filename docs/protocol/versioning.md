@@ -15,7 +15,7 @@ Other prepared extensions retain their independent support gates.
 The specialist `role` enum also accepts `"lead"`: a planning-first team entry
 with ordinary file-editing tools. `"orchestrator"` keeps its existing tool
 restrictions, and `"internal"` and explicit `""` retain their behavior. Harness
-3.6 introduces the Lead display name for `spec-writer`, retaining `coordinator`
+3.7 introduces the Lead display name for `spec-writer`, retaining `coordinator`
 and adding `lead` as aliases; prior session snapshots and harness bundles remain
 unchanged. Deploy matching daemon and frontend support, daemon first. See
 [specialist picker metadata](./methods/misc-namespaces.md).

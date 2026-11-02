@@ -279,7 +279,7 @@ never resurrects shipped bundles the operator excluded.
     `icon`. The picker/routing-metadata keys (including `aliases`, below) are the only
     frontmatter allowed to diverge between the v1 and v1.1 bundled copies (the goldens pin
     every other key to its v1 value).
-    Harness 3.6 changes the bundled `spec-writer` display name to **Lead**, its role to
+    Harness 3.7 changes the bundled `spec-writer` display name to **Lead**, its role to
     `"lead"`, and accepts both `coordinator` and `lead` aliases. The canonical ID stays
     `spec-writer`; older harness bundles keep Coordinator and `"orchestrator"`.
     Its advisory roster is `teamAgents: ["implementor"]`. The current bundle no

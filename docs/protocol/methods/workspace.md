@@ -889,7 +889,7 @@ rejected before provisioning. See [manual specialist memory](./agents.md#manual-
 
 When `initialAgent.name` is omitted but a `specialist` is supplied, the agent's name
 defaults to the specialist's resolved display name (frontmatter `name`, 3-tier
-project > user > bundled — e.g. "Lead" for `spec-writer` with harness 3.6,
+project > user > bundled — e.g. "Lead" for `spec-writer` with harness 3.7,
 "Coordinator" in earlier bundles) and remains a
 generated name eligible for the opening-turn self-rename (same rename-guard
 semantics as `agent.create` §5.5); an UNKNOWN `specialist` — one that
