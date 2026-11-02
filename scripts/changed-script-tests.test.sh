@@ -90,6 +90,17 @@ printf 'import unittest\nfrom scripts import middle\nclass T(unittest.TestCase):
 # loop-a.sh and loop-b.sh source each other and no check names either.
 printf '. scripts/loop-b.sh\n' >"$fixture/scripts/loop-a.sh"
 printf '. scripts/loop-a.sh\n' >"$fixture/scripts/loop-b.sh"
+# split.sh has a user alpha.test.sh names and a user no check names.
+printf 'echo split\n' >"$fixture/scripts/split.sh"
+printf '. scripts/split.sh\n' >"$fixture/scripts/named-user.sh"
+printf '. scripts/split.sh\n' >"$fixture/scripts/bare-user.sh"
+printf '# also covers named-user.sh\n' >>"$fixture/scripts/alpha.test.sh"
+# pyhelp.py is used only by kappa.py, which only the scripts.test_zeta module covers.
+printf 'x = 1\n' >"$fixture/scripts/pyhelp.py"
+printf '# import pyhelp\n' >>"$fixture/scripts/kappa.py"
+# The lint-fixed-sleeps.sh suite is itself a user of doze.sh.
+printf 'echo sleep helper\n' >"$fixture/scripts/doze.sh"
+printf '# uses doze.sh\n' >>"$fixture/scripts/lint-fixed-sleeps.sh"
 printf 'export const x = 1;\n' >"$fixture/scripts/tool.mjs"
 printf "import test from 'node:test';\ntest('tool', () => {});\n" >"$fixture/scripts/tool.test.mjs"
 printf 'export const y = 1;\n' >"$fixture/scripts/untested.mjs"
@@ -212,6 +223,22 @@ reset_fixture
 printf '# edit\n' >>"$fixture/scripts/loop-a.sh"
 expect_plan "helpers that use each other terminate and fall back to every shell suite" "$all_shell"
 expect_reason "uncovered helper says why" "scripts/loop-a.sh (no suite or test-scripts module names it or a script that uses it)"
+reset_fixture
+
+printf '# edit\n' >>"$fixture/scripts/split.sh"
+expect_plan "a helper with a user no check names runs every shell suite, as that user would" "$all_shell"
+expect_reason "uncovered user says why" "scripts/split.sh (used by scripts/bare-user.sh, which no suite or test-scripts module names)"
+reset_fixture
+
+printf '# edit\n' >>"$fixture/scripts/pyhelp.py"
+expect_plan "a helper whose user only a test-scripts module covers skips the shell suites" 'make lint-shell
+python3 -S -B -m unittest -v scripts.test_zeta'
+reset_fixture
+
+printf '# edit\n' >>"$fixture/scripts/doze.sh"
+expect_plan "a suite that is itself a user of the helper is selected" 'make lint-shell
+bash scripts/lint-fixed-sleeps.sh'
+expect_reason "suite user says why" "it is lint-fixed-sleeps.sh, which uses doze.sh"
 reset_fixture
 
 printf '# edit\n' >>"$fixture/scripts/base.py"

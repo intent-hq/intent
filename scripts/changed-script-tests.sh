@@ -36,7 +36,11 @@
 #   helper. Its users, and their users in turn, count as changed for the
 #   selection, so X gets the modules and suites of every script that uses it
 #   directly or through other scripts, not a full run (intent PR 8305 ran
-#   every suite for over 30 minutes after a resumable_nextest.py fix).
+#   every suite for over 30 minutes after a resumable_nextest.py fix). Every
+#   suite still runs when one of those users reaches no check, as it would if
+#   that user changed. Only top-level scripts count as users: a check that
+#   reaches X through a Makefile recipe or a *.fixture.sh without naming X or
+#   one of its users is not selected, for a helper as for any changed script.
 #      The merge queue still runs every suite.
 #   4. `node --test scripts/X.test.mjs` for each changed scripts/X.mjs or
 #      scripts/X.test.mjs whose test file exists.
@@ -225,7 +229,7 @@ covers_member() {
     return 0
   fi
   if [ "$file" = "$member" ]; then
-    reason="is $member"
+    reason="it is ${member##*/}"
   else
     reason=$(covers "$file" "$member")
   fi
@@ -316,13 +320,28 @@ members_of() {
   printf '%s' "$members" | awk -F '\t' -v s="$1" '$1 == s { print $2 "\t" $3 }'
 }
 
+# "changed<TAB>member" lines for each member some module or suite covers.
+covered=""
+
+# Whether member $2 of changed script $1, or a script that uses $2, has a check.
+member_reaches_check() {
+  local script=$1 member=$2 user
+  case "$nl$covered" in *"$nl$script$tab$member$nl"*) return 0 ;; esac
+  while IFS="$tab" read -r user _; do
+    [ -n "$user" ] || continue
+    case "$nl$covered" in *"$nl$script$tab$user$nl"*) return 0 ;; esac
+  done <<USERS
+$(script_and_users "$member")
+USERS
+  return 1
+}
+
 # Step 2: the `make test-scripts` modules. "module<TAB>reason" per pick, and
-# the changed scripts some module covers (they need no shell-suite fallback).
+# the members some module covers (in covered).
 recipe=$(script_test_recipe)
 py_modules=$(printf '%s\n' "$recipe" | grep -E '^scripts\.test_[A-Za-z0-9_]+$' || true)
 py_command=$(printf '%s\n' "$recipe" | grep -vE '^scripts\.test_' | tr '\n' ' ' | sed 's/ *$//')
 py_picks=""
-py_covered=""
 if [ -n "$changed_scripts" ] && [ -n "$py_modules" ]; then
   while IFS= read -r script; do
     [ -n "$script" ] || continue
@@ -333,7 +352,7 @@ if [ -n "$changed_scripts" ] && [ -n "$py_modules" ]; then
         reason=$(covers_member "scripts/${module#scripts.}.py" "$member" "$script" "$chain")
         if [ -n "$reason" ]; then
           py_picks="$py_picks$module"$'\t'"$reason"$'\n'
-          py_covered="$py_covered$script"$'\n'
+          covered=$covered$script$tab$member$nl
         fi
       done <<MODULES
 $py_modules
@@ -355,9 +374,7 @@ if [ -n "$changed_scripts" ]; then
     [ -n "$script" ] || continue
     [ "$run_all_shell" = 1 ] && break
     name=${script##*/}
-    found=0
     shared=0
-    if printf '%s' "$py_covered" | grep -qxF -- "$script"; then found=1; fi
     while IFS="$tab" read -r member chain; do
       [ -n "$member" ] || continue
       [ "$member" = "$script" ] || shared=1
@@ -370,7 +387,7 @@ if [ -n "$changed_scripts" ]; then
           reason="scans every scripts/*.test.sh ($name changed)"
         fi
         if [ -n "$reason" ]; then
-          found=1
+          covered=$covered$script$tab$member$nl
           picks="$picks$suite"$'\t'"$reason"$'\n'
         fi
       done <<SUITES
@@ -379,13 +396,27 @@ SUITES
     done <<MEMBERS
 $(members_of "$script")
 MEMBERS
-    if [ "$found" = 0 ]; then
+    # Every member must reach a check, through itself or a script that uses
+    # it: a changed member no check reaches would run every suite itself.
+    if ! member_reaches_check "$script" "$script"; then
+      run_all_shell=1
       if [ "$shared" = 1 ]; then
-        run_all_shell=1; full_reasons="$full_reasons $script (no suite or test-scripts module names it or a script that uses it)"
+        full_reasons="$full_reasons $script (no suite or test-scripts module names it or a script that uses it)"
       else
-        run_all_shell=1; full_reasons="$full_reasons $script (no suite or test-scripts module names it)"
+        full_reasons="$full_reasons $script (no suite or test-scripts module names it)"
       fi
+      continue
     fi
+    while IFS="$tab" read -r member _; do
+      if [ -z "$member" ] || [ "$member" = "$script" ]; then continue; fi
+      if ! member_reaches_check "$script" "$member"; then
+        run_all_shell=1
+        full_reasons="$full_reasons $script (used by $member, which no suite or test-scripts module names)"
+        break
+      fi
+    done <<MEMBERS
+$(members_of "$script")
+MEMBERS
   done <<SCRIPTS
 $changed_scripts
 SCRIPTS

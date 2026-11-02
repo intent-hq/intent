@@ -600,7 +600,9 @@ It always runs `make lint-shell`. From the `test-scripts` recipe in the
 `test_<name>.py` or a file that names it, and runs them with that recipe's
 command. A shared helper, a script another script names, also gets the
 modules and suites of every script that uses it, directly or through other
-scripts, instead of a full run. It runs all of `make test-scripts` for `FULL=1`
+scripts, instead of a full run. Only top-level scripts count as users, so a
+check that reaches the script only through a `Makefile` recipe is not picked;
+the merge queue still runs it. It runs all of `make test-scripts` for `FULL=1`
 and for any other changed file that matches the pathspec of the ci.yml
 `python-tests` "Select Python test changes" step (read from that step, so the
 lists cannot drift), and skips them when no module names the script.
