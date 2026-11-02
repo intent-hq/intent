@@ -223,6 +223,12 @@ git_fixture commit -q -am "edit Makefile"
 expect_plan "committed Makefile change runs every shell suite" "$all_suites"
 expect_reason "Makefile change says why make test-scripts runs" "all make test-scripts modules selected (full run: Makefile)"
 reset_fixture
+mkdir -p "$fixture/scripts/_vendor/tomli"
+printf 'license\n' >"$fixture/scripts/_vendor/tomli/LICENSE"
+expect_plan "vendored file change runs only make test-scripts" 'make lint-shell
+make test-scripts'
+expect_reason "vendored file change says why make test-scripts runs" "all make test-scripts modules selected (full run: scripts/_vendor/tomli/LICENSE)"
+reset_fixture
 
 printf '# edit\n' >>"$fixture/.github/workflows/ci.yml"
 git_fixture add -A

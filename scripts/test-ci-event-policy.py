@@ -388,7 +388,8 @@ class EventPolicy(unittest.TestCase):
             self.assertEqual(run('pull_request'), 'selected=false\n')
             self.assertEqual(run('merge_group'), 'selected=true\n')
             for path in ('scripts/nextest_stress.py', 'scripts/test_host_load.py', 'scripts/with-test-policy.sh',
-                         'scripts/fixtures/a.json', 'Makefile', '.github/workflows/ci.yml'):
+                         'scripts/fixtures/a.json', 'scripts/_vendor/tomli/LICENSE',
+                         'scripts/_vendor/tomli.provenance.json', 'Makefile', '.github/workflows/ci.yml'):
                 pr_merge(path, 'changed ' + path + '\n')
                 self.assertEqual(run('pull_request'), 'selected=true\n', path)
             git('checkout', '-q', 'main')

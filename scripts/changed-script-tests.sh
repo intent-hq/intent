@@ -16,7 +16,8 @@
 #      scripts/X.sh or scripts/X.py it selects the modules whose file is X
 #      itself, X's own test_X.py, or a file that names X, as in step 3, and
 #      runs them with the recipe's own command. The whole `make test-scripts`
-#      runs instead when the Makefile, ci.yml or scripts/fixtures/** changed,
+#      runs instead when the Makefile, ci.yml, scripts/fixtures/** or
+#      scripts/_vendor/** (vendored tomli, checked by test_compact_gate) changed,
 #      when a changed non-test script is a shared helper, or when FULL=1.
 #   3. Suites of the ci.yml `shell-tests` job (read from its first run step, so
 #      there is no second list to drift). For each changed top-level
@@ -174,6 +175,9 @@ while IFS= read -r path; do
   case "$path" in
     Makefile | "$ci_file" | scripts/fixtures/*)
       run_all_shell=1; full_reasons="$full_reasons $path"
+      run_all_py=1; py_full_reasons="$py_full_reasons $path" ;;
+    # test_compact_gate verifies the vendored tomli files, LICENSE included.
+    scripts/_vendor/*)
       run_all_py=1; py_full_reasons="$py_full_reasons $path" ;;
     scripts/*/*) ;;
     scripts/*.sh | scripts/*.py)

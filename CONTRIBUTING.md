@@ -601,7 +601,8 @@ It always runs `make lint-shell`. From the `test-scripts` recipe in the
 command; it runs all of `make test-scripts` for the same full-run reasons as the
 shell suites below, except when no module names the script (then it skips them).
 On pull requests, CI runs `make test-scripts` when a `scripts/*.py`,
-`scripts/*.sh`, `scripts/fixtures/` file, the `Makefile` or `ci.yml` changed.
+`scripts/*.sh`, `scripts/fixtures/` or `scripts/_vendor/` file, the `Makefile`
+or `ci.yml` changed; a local `scripts/_vendor/` change runs all of it too.
 From the ci.yml `shell-tests` job (read from
 that job, so the lists cannot drift) it picks, for each changed `.sh` or `.py`
 script directly under `scripts/`, the suites that are the script itself, its
