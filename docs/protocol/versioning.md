@@ -41,6 +41,15 @@ params page the index newest-first, and paged results carry `nextToken` (`null` 
 no older rows remain). Older daemons ignore the params and omit `nextToken`; clients
 treat its absence as a complete index.
 
+Also within 15.3 (additive row field and `agent.update` key; presence-detected; no
+method-catalog change, so no version bump): **agent sidebar pins**
+([§5.5](./methods/agents.md)). `AgentLite.pinned` is a daemon-owned per-session
+boolean set through `agent.update { changes: { pinned } }`. It is always present on
+`AgentLite` rows from a supporting daemon, so clients detect support by the field's
+presence; older daemons omit it and reject the key with `-32602`. The
+`agent.getSession` form carries it only when `true`. A pin-only update does not
+advance `updatedAt`.
+
 **Version 15.2 — retired workspaces (additive).**
 [Retired workspaces](./methods/workspace.md#retired-workspaces) add the `"Retired"`
 `WorkspaceStatus`, the presence-detected `Workspace.retiredAt`, the router method
@@ -1656,4 +1665,5 @@ the `ignore` map of `scripts/check-protocol-field-parity.mjs`, not here.
 | `Workspace` | `backgroundTasksRunning` | [Workspace fields](./methods/workspace.md#51-workspace) | Pending cloudlands-fe Home background-task Running PR |
 | `Workspace` | `autoArchiveDisabled` | [Auto-archive opt-out](./methods/workspace.md#auto-archive-opt-out) | Pending [cloudlands-fe#3863](https://github.com/intent-hq/cloudlands-fe/pull/3863) (Home Disable auto-archive toggle) |
 | `Workspace` | `plainFolder` | [Plain-folder workspaces](./methods/workspace.md#plain-folder-workspaces) | Pending cloudlands-fe plain-folder workspaces PR (Labs git toggle and hidden git UI) |
+| `AgentLite` | `pinned` | [Agent sidebar pins](./methods/agents.md) | Pending cloudlands-fe sidebar pin PR (Pin to top in the agent row menu) |
 | `AgentLite` | `nodeName` | [Placed agent projection](./methods/nodes.md#placement-and-creation) | Pending: the complete node contract that advertises `agentNodes`; the experimental single-node remote launch advertises no capability, so the app stays gated off |
