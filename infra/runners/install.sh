@@ -7,18 +7,26 @@
 #
 # Usage (as root, from a checkout of this repo):
 #   infra/runners/install.sh [--no-build] [--config FILE] [--skip-lockdown-check]
+#   infra/runners/install.sh --retire
 #
 #   --no-build     Skip the image build (config-only change).
 #   --config FILE  Seed /etc/github-runners/runners.env from FILE instead of
 #                  runners.env (the intent-cache layout), e.g. a file under
 #                  hosts/. Like the default, used only if none exists yet.
+#   --retire       Take this host out of the fleet: disable and drain every
+#                  slot, wait until none is running, then delete the
+#                  credential and the GitHub App key it names, and print the
+#                  steps left to do by hand. Re-run it to resume a wait that
+#                  timed out. See "Retire a runner host" in
+#                  docs/GITHUB_RUNNERS.md.
 #   --skip-lockdown-check
 #                  Install even though ufw does not show the host locked down
 #                  (below). Only for a host firewalled some other way.
 #
-# Refuses to touch the host unless ufw is active, denies incoming traffic by
+# Installing refuses to touch the host unless ufw is active, denies incoming traffic by
 # default and allows SSH only on tailscale0 (docs/GITHUB_RUNNERS.md, Add a
-# runner host, step 2): the slots hold an org runner credential.
+# runner host, step 2): the slots hold an org runner credential. --retire
+# skips this check: it only takes slots and the credential away.
 #
 # Runs on the cache box (intent-cache) or on a runner-only host: the cache
 # services get their priority drop-in only where they are installed. The
@@ -47,16 +55,26 @@ network=gh-runners
 bridge=gh-runners0
 subnet=172.30.250.0/24
 image=intent-gh-runner
+# --retire: how long to wait for draining slots (TimeoutStopSec is 6h, then
+# ExecStopPost removes the container) and how often to check.
+retire_timeout="${RETIRE_TIMEOUT_SECONDS:-22200}"
+retire_poll="${RETIRE_POLL_SECONDS:-15}"
 
 build=1
+retire=0
 lockdown_check=1
 seed_config="$here/runners.env"
 
 log() { echo "install: $*"; }
 die() { echo "install: error: $*" >&2; exit 1; }
-usage() { echo "usage: $0 [--no-build] [--config FILE] [--skip-lockdown-check]" >&2; exit 2; }
+usage() { echo "usage: $0 [--no-build] [--config FILE] [--skip-lockdown-check] | --retire" >&2; exit 2; }
 
 parse_args() {
+  if [ "${1:-}" = --retire ]; then
+    [ "$#" = 1 ] || usage
+    retire=1
+    return 0
+  fi
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --no-build) build=0 ;;
@@ -317,9 +335,111 @@ apply_slots() {
   log "slots enabled: $(tr '\n' ' ' <<<"$wanted")"
 }
 
+# Every slot unit systemd has loaded plus every enabled one: a slot started
+# by hand is not in the wants directory.
+known_slots() {
+  {
+    enabled_slots | sed 's/.*/github-runner@&.service/'
+    systemctl list-units --all --plain --no-legend 'github-runner@*.service' | awk '{print $1}'
+  } | { grep -x 'github-runner@.*\.service' || true; } | sort -uV
+}
+
+# Slots not yet stopped, as "unit (state)". A draining slot is
+# "deactivating", which `systemctl is-active` counts as inactive, so read
+# ActiveState instead. Fails if systemd cannot be read: errexit is off where
+# callers test this, and an unread state must never count as stopped.
+running_slots() {
+  local units unit state
+  units="$(known_slots)" || return 1
+  for unit in $units; do
+    state="$(systemctl show -p ActiveState --value "$unit")" || return 1
+    case "$state" in
+      inactive|failed) ;;
+      '') return 1 ;;
+      *) echo "$unit ($state)" ;;
+    esac
+  done
+}
+
+# Delete the credential, after the GitHub App private key it names. A
+# bare-token credential names no key.
+remove_credential() {
+  local key
+  if [ ! -e "$credentials" ]; then
+    log "no credential at $credentials"
+    return 0
+  fi
+  key="$(sed -n 's/^GITHUB_APP_PRIVATE_KEY_FILE=//p' "$credentials" | tail -n 1)"
+  case "$key" in
+    '') ;;
+    /*)
+      if [ -f "$prefix$key" ]; then
+        shred -u "$prefix$key"
+        log "deleted GitHub App key $key"
+      else
+        log "GitHub App key $key is already gone"
+      fi ;;
+    *) log "warning: GITHUB_APP_PRIVATE_KEY_FILE=$key is not an absolute path; delete that key by hand" ;;
+  esac
+  shred -u "$credentials"
+  log "deleted $credentials"
+}
+
+retire_host() {
+  local slots running name_prefix waited=0
+  slots="$(known_slots)" || die "cannot list the runner slots; keeping the credential"
+  if [ -n "$slots" ]; then
+    log "disabling and draining: $(tr '\n' ' ' <<<"$slots")"
+    # --no-block queues every stop at once; the loop below waits. A busy
+    # slot finishes its job first, an idle one deregisters within seconds.
+    # shellcheck disable=SC2086
+    systemctl disable --now --no-block $slots >/dev/null
+  else
+    log "no runner slots on this host"
+  fi
+  while :; do
+    running="$(running_slots)" || die "cannot read the runner slots' state; keeping the credential"
+    [ -n "$running" ] || break
+    if [ "$waited" -ge "$retire_timeout" ]; then
+      echo "install: error: slots still running after ${waited}s; keeping the credential (a draining slot needs it to deregister):" >&2
+      echo "  ${running//$'\n'/$'\n  '}" >&2
+      die "re-run $0 --retire once they finish (systemctl list-units 'github-runner@*')"
+    fi
+    log "waiting for running slots to finish their job: $(tr '\n' ' ' <<<"$running")"
+    sleep "$retire_poll"
+    waited=$((waited + retire_poll))
+  done
+  log "all slots stopped"
+  remove_credential
+  # The supervisor's default prefix applies only when the config exists;
+  # without it, leave a placeholder rather than name another host.
+  name_prefix="<host>"
+  if [ -r "$etc_dir/runners.env" ]; then
+    name_prefix="$(sed -n 's/^RUNNER_NAME_PREFIX=//p' "$etc_dir/runners.env" | tail -n 1)"
+    name_prefix="${name_prefix:-intent-cache}"
+  fi
+  cat <<EOF
+install: drained. The PR that removes this host's config may merge now.
+Left to do by hand (docs/GITHUB_RUNNERS.md, Retire a runner host):
+  1. Delete leftover runner registrations (offline runners from a crash or reboot):
+       gh api --paginate orgs/intent-hq/actions/runners \\
+         -q '.runners[] | select(.name | startswith("$name_prefix-")) | "\\(.id) \\(.name) \\(.status)"'
+       gh api -X DELETE orgs/intent-hq/actions/runners/<id>
+  2. Leave the tailnet, last (SSH reaches the box only over Tailscale):
+       nohup sh -c 'sleep 2; tailscale logout' >/dev/null 2>&1 &
+     then delete the machine in the Tailscale admin console, so a
+     replacement can take the name.
+  3. Cancel the server with the provider.
+EOF
+}
+
 main() {
   parse_args "$@"
   check_os
+  if [ "$retire" = 1 ]; then
+    retire_host
+    return 0
+  fi
   check_lockdown
   install_packages
   configure_docker
