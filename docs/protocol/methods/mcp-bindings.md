@@ -23,7 +23,7 @@ ws.help(namespace?) → string
 ws.agent.create(name, message, opts?) → { ok, id?, text?, ... }
 ws.agent.delegate({ taskNoteId?, noteId?, taskText?, agentInstructions?, specialist?, model?, provider?, reasoningEffort?, behaviorPrompt?, waitMode?, skipAutoCommit?, tasks? }) → { ok, text?, ... }
 ws.agent.diagnostics({ agentId?, taskNoteId?, includeCompleted?, staleRespondingAfterMs? }?) → { diagnostics, text }
-ws.agent.getMessageBlock(agentId, messageId, blockId) → { block }
+ws.agent.getMessageBlock(agentId, messageId, blockId, { offset?, maxBytes? }?) → { block, truncated, field, encoding, totalBytes, nextOffset }
 ws.agent.getQueue(agentId) → { ok, agentId, queueLength, queue }
 ws.agent.list(optsOrIncludeCompleted?) → [agents]
 ws.agent.listSpecialists() → [specialists]
