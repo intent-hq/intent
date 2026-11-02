@@ -85,4 +85,5 @@ jobs:
                 "jq:"; do
                 grep -F "[ok]       $prefix" check.log
               done
+              grep -F "[optional] xvfb-run: installed" check.log
             '

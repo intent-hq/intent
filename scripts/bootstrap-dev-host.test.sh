@@ -383,6 +383,28 @@ reject_line "bubblewrap:"
 rm -f "$bin_dir/bwrap" "$bin_dir/uname"
 ln -s "$(command -v uname)" "$bin_dir/uname"
 
+# cloudlands-fe pnpm run electron:headless needs xvfb-run on a Linux host with
+# no display: an optional row naming that command, never a required gap, and
+# absent off Linux.
+rm -f "$bin_dir/uname"
+write_launcher uname '[ "$1" = -m ] && { echo x86_64; exit 0; }; echo Linux'
+run_doctor
+expect_line "[optional] xvfb-run: not installed (only cloudlands-fe pnpm run electron:headless needs it, on a host with no display); run make bootstrap-dev-host, or Debian/Ubuntu: sudo apt-get install -y xvfb"
+gaps_without_xvfb=$(sed -n 's/^Doctor found \([0-9][0-9]*\) required gap(s)\.$/\1/p' "$output")
+write_launcher xvfb-run 'exit 0'
+run_doctor
+expect_line "[optional] xvfb-run: installed (cloudlands-fe pnpm run electron:headless uses it when the host has no display)"
+reject_line "xvfb-run: not installed"
+gaps_with_xvfb=$(sed -n 's/^Doctor found \([0-9][0-9]*\) required gap(s)\.$/\1/p' "$output")
+[[ "$gaps_with_xvfb" == "$gaps_without_xvfb" ]] \
+  || fail "xvfb-run changed the required gap count: $gaps_without_xvfb without vs $gaps_with_xvfb with"
+rm -f "$bin_dir/xvfb-run"
+write_launcher uname '[ "$1" = -m ] && { echo arm64; exit 0; }; echo Darwin'
+run_doctor
+reject_line "xvfb-run:"
+rm -f "$bin_dir/uname"
+ln -s "$(command -v uname)" "$bin_dir/uname"
+
 # cloudlands-fe lint:workflows pins actionlint exactly; absent, unrunnable, or
 # another version is one required gap each, and only the pin is ready.
 run_doctor
@@ -779,6 +801,97 @@ expect_line "[skip] Bash 3.2 build tools: stock /bin/bash is already Bash 3.2"
 rm -f "$bin_dir/apt-get" "$bin_dir/uname"
 ln -s "$(command -v uname)" "$bin_dir/uname"
 
+# install_xvfb installs xvfb-run through the host's package manager. It is
+# optional, so an unsupported package manager or a failed install warns and
+# returns success; a ready or macOS host is left alone.
+xvfb_log="$temp_dir/xvfb.log"
+run_install_xvfb() {
+  : >"$xvfb_log"
+  PATH="$bin_dir" HOME="$temp_dir/home" INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
+    CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT='' MAKELEVEL='' TOOL_LOG="$xvfb_log" BIN_DIR="$bin_dir" CHMOD_BIN="$(command -v chmod)" \
+    bash -c 'funcs=$1; set --; source "$funcs"
+      as_root() {
+        echo "as_root $*" >>"$TOOL_LOG"
+        [ -n "${XVFB_INSTALL_ERRORS:-}" ] && return 1
+        [ -n "${XVFB_INSTALL_FAILS:-}" ] && return 0
+        printf "#!/bin/sh\nexit 0\n" >"$BIN_DIR/xvfb-run"; "$CHMOD_BIN" +x "$BIN_DIR/xvfb-run"
+      }
+      install_xvfb' bash "$bootstrap_funcs" >"$output" 2>&1
+  local status=$?
+  rm -f "$bin_dir/xvfb-run"
+  return "$status"
+}
+grep -q '^install_xvfb() {' "$bootstrap_funcs" || fail "could not extract install_xvfb"
+rm -f "$bin_dir/uname"
+write_launcher uname 'echo Linux'
+write_launcher apt-get 'exit 0'
+run_install_xvfb || fail "install_xvfb failed with apt-get"
+expect_line "[install] xvfb-run for cloudlands-fe pnpm run electron:headless"
+[[ "$(cat "$xvfb_log")" == "as_root apt-get install -y xvfb" ]] \
+  || fail "apt hosts should install xvfb: $(cat "$xvfb_log")"
+reject_line "[warn]"
+rm -f "$bin_dir/apt-get"
+write_launcher dnf 'exit 0'
+run_install_xvfb || fail "install_xvfb failed with dnf"
+[[ "$(cat "$xvfb_log")" == "as_root dnf install -y xorg-x11-server-Xvfb" ]] \
+  || fail "dnf hosts should install xorg-x11-server-Xvfb: $(cat "$xvfb_log")"
+rm -f "$bin_dir/dnf"
+write_launcher yum 'exit 0'
+run_install_xvfb || fail "install_xvfb failed with yum"
+[[ "$(cat "$xvfb_log")" == "as_root yum install -y xorg-x11-server-Xvfb" ]] \
+  || fail "yum hosts should install xorg-x11-server-Xvfb: $(cat "$xvfb_log")"
+XVFB_INSTALL_FAILS=1 run_install_xvfb || fail "install_xvfb failed bootstrap although xvfb-run is optional"
+expect_line "[warn] xvfb-run: still not on PATH after 'yum install -y xorg-x11-server-Xvfb'"
+XVFB_INSTALL_ERRORS=1 run_install_xvfb || fail "install_xvfb failed bootstrap when the package install failed"
+expect_line "[warn] xvfb-run: 'yum install -y xorg-x11-server-Xvfb' failed; pnpm run electron:headless needs it on a host with no display"
+rm -f "$bin_dir/yum"
+run_install_xvfb || fail "install_xvfb failed bootstrap without a package manager"
+expect_line "[warn] xvfb-run: unsupported Linux package manager; install the package that provides xvfb-run"
+[[ ! -s "$xvfb_log" ]] || fail "install_xvfb ran an install without a package manager: $(cat "$xvfb_log")"
+write_launcher apt-get 'exit 0'
+write_launcher xvfb-run 'exit 0'
+run_install_xvfb || fail "install_xvfb failed on a ready host"
+expect_line "[skip] xvfb-run already installed"
+[[ ! -s "$xvfb_log" ]] || fail "a ready host ran an xvfb install: $(cat "$xvfb_log")"
+rm -f "$bin_dir/uname"
+write_launcher uname 'echo Darwin'
+run_install_xvfb || fail "install_xvfb failed on macOS"
+expect_line "[skip] xvfb-run: not needed outside Linux"
+[[ ! -s "$xvfb_log" ]] || fail "macOS ran an xvfb install: $(cat "$xvfb_log")"
+
+# A missing xvfb-run makes an otherwise ready Linux host worth bootstrapping
+# when a package manager can install it, so existing hosts get offered it.
+run_xvfb_gap() {
+  PATH="$bin_dir" HOME="$temp_dir/home" INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
+    CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT='' MAKELEVEL='' \
+    bash -c 'funcs=$1; set --; source "$funcs"
+      for name in required_submodules_ready load_versions python_ready openssl_dev_ready rust_toolchain_ready active_toolchain_ready nextest_ready node_ready pnpm_ready frontend_dependencies_ready gh_ready jq_ready shellcheck_ready bash3_build_tools_ready actionlint_ready; do
+        eval "$name() { return 0; }"
+      done
+      installable_gap_exists' bash "$bootstrap_funcs" >"$output" 2>&1
+}
+for tool in rustup cargo corepack; do
+  if [[ -e "$bin_dir/$tool" ]]; then mv "$bin_dir/$tool" "$temp_dir/saved-$tool"; fi
+  write_launcher "$tool" 'exit 0'
+done
+rm -f "$bin_dir/uname"
+write_launcher uname 'echo Linux'
+write_launcher xvfb-run 'exit 0'
+! run_xvfb_gap || fail "a host with xvfb-run was an installable gap"
+rm -f "$bin_dir/xvfb-run"
+run_xvfb_gap || fail "a missing xvfb-run with apt-get was not an installable gap"
+rm -f "$bin_dir/apt-get"
+! run_xvfb_gap || fail "a missing xvfb-run without a package manager was an installable gap"
+rm -f "$bin_dir/uname"
+write_launcher uname 'echo Darwin'
+! run_xvfb_gap || fail "macOS without xvfb-run was an installable gap"
+for tool in rustup cargo corepack; do
+  rm -f "$bin_dir/$tool"
+  if [[ -e "$temp_dir/saved-$tool" ]]; then mv "$temp_dir/saved-$tool" "$bin_dir/$tool"; fi
+done
+rm -f "$bin_dir/uname"
+ln -s "$(command -v uname)" "$bin_dir/uname"
+
 # install_coverage_tooling is a no-op unless opted in; opted in, it skips a
 # complete host and runs cargo install / rustup component add for the gaps.
 grep -q '^install_coverage_tooling() {' "$bootstrap_funcs" || fail "could not extract bootstrap functions for the install_coverage_tooling fixture"
@@ -793,7 +906,7 @@ run_nextest_gap() {
   PATH="$bin_dir" HOME="$temp_dir/home" INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
     CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT='' MAKELEVEL='' \
     bash -c 'funcs=$1; set --; source "$funcs"
-      for name in required_submodules_ready load_versions python_ready openssl_dev_ready rust_toolchain_ready active_toolchain_ready node_ready pnpm_ready frontend_dependencies_ready gh_ready jq_ready shellcheck_ready bash3_build_tools_ready actionlint_ready; do
+      for name in required_submodules_ready load_versions python_ready openssl_dev_ready rust_toolchain_ready active_toolchain_ready node_ready pnpm_ready frontend_dependencies_ready gh_ready jq_ready shellcheck_ready bash3_build_tools_ready actionlint_ready xvfb_ready; do
         eval "$name() { return 0; }"
       done
       installable_gap_exists' bash "$bootstrap_funcs" >"$output" 2>&1
