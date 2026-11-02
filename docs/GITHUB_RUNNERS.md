@@ -433,11 +433,23 @@ under the same name):
 1. **Stop routing to it.** Lower `CI_LINUX_HEAVY_SLOTS`, `CI_LINUX_XL_SLOTS`
    and `CI_LINUX_BIGMEM_SLOTS` by the host's slots in each pool (a bigmem slot
    counts in both the heavy and the bigmem variable), so the other hosts are
-   not overcommitted:
-   `gh variable set CI_LINUX_HEAVY_SLOTS --org intent-hq --body <n>`.
-2. **Drain its slots:** `ssh root@<host> "systemctl disable --now 'github-runner@*'"`.
+   not overcommitted. A repository variable overrides the organization one,
+   so set it wherever it is defined (`gh variable list --repo intent-hq/<repo>`
+   for `intent`, `intentd` and `cloudlands-fe`):
+   `gh variable set CI_LINUX_HEAVY_SLOTS --repo intent-hq/<repo> --body <n>`,
+   and `--org intent-hq` for the organization default.
+2. **Drain its slots.** `systemctl disable` takes unit names, not globs, so
+   list the enabled slots first (as `install.sh` does):
+
+   ```bash
+   ssh root@<host>
+   slots=$(cd /etc/systemd/system/multi-user.target.wants && ls github-runner@*.service)
+   systemctl disable --now $slots
+   ```
+
    Idle slots deregister at once; busy ones finish their job first (see
-   Drain and stop).
+   Drain and stop). Go on only once `systemctl list-units 'github-runner@*'`
+   lists none running.
 3. **Check that no runner is left** under its prefix, and delete leftovers
    (offline runners from a crash or reboot):
 
