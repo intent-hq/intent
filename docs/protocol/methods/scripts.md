@@ -83,8 +83,10 @@ the reply size limit]` (`terminal.readOutput` puts the bracket after its `Termin
 the paginated form (`paginate: true` / `pageToken`). Its `{ items, nextToken }` pages are
 bounded the same way: lines are taken newest first until their JSON-escaped text would
 pass 480,000 bytes, and `nextToken` then resumes at the first line left out. A newest line
-too big on its own is cut to its first part that fits and the page adds `truncated: true`;
-the rest of that one line is not served.
+too big on its own is split on a UTF-8 boundary: the page serves the line's last part that
+fits and adds `lineContinues: true`, and `nextToken` resumes inside that line, so the next
+page's newest item is the line's earlier part. Prepend that item to the previous page's
+oldest item to rebuild the line; no output is dropped.
 
 #### Active-only compact lists (protocol 14 breaking contract)
 
