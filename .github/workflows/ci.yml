@@ -151,8 +151,11 @@ jobs:
           selected=true
           # A PR checks out its merge commit: parent 1 is the base tip, so the
           # diff to it is exactly the PR's change. Anything else runs the tests.
+          # The pathspec must cover every tracked file a test-scripts module names
+          # (scripts/test-ci-event-policy.py checks), and scripts/changed-script-tests.sh
+          # reads it as its full-run triggers: keep it on one line ending in `)`.
           if [ "$EVENT" = pull_request ] && git rev-parse -q --verify HEAD^2 >/dev/null; then
-            changed=$(git diff --name-only HEAD^1 HEAD -- 'scripts/*.py' 'scripts/*.sh' scripts/fixtures scripts/_vendor Makefile .github/workflows/ci.yml)
+            changed=$(git diff --name-only HEAD^1 HEAD -- 'scripts/*.py' 'scripts/*.sh' scripts/fixtures scripts/_vendor scripts/check-transfer-selection-contract.mjs docs/protocol/fixtures/transfer-selection Makefile .github/workflows/ci.yml)
             if [ -z "$changed" ]; then selected=false; fi
           fi
           echo "selected=$selected" >> "$GITHUB_OUTPUT"

@@ -598,11 +598,13 @@ It always runs `make lint-shell`. From the `test-scripts` recipe in the
 `Makefile` it picks, for each changed `.sh` or `.py` script directly under
 `scripts/`, the unittest modules that are the script itself, its own
 `test_<name>.py` or a file that names it, and runs them with that recipe's
-command; it runs all of `make test-scripts` for the same full-run reasons as the
-shell suites below, except when no module names the script (then it skips them).
-On pull requests, CI runs `make test-scripts` when a `scripts/*.py`,
-`scripts/*.sh`, `scripts/fixtures/` or `scripts/_vendor/` file, the `Makefile`
-or `ci.yml` changed; a local `scripts/_vendor/` change runs all of it too.
+command. It runs all of `make test-scripts` for a shared helper, for `FULL=1`,
+and for any other changed file that matches the pathspec of the ci.yml
+`python-tests` "Select Python test changes" step (read from that step, so the
+lists cannot drift), and skips them when no module names the script.
+On pull requests, CI runs `make test-scripts` only when a file in that pathspec
+changed; `scripts/test-ci-event-policy.py` fails when a module names a tracked
+file (such as the vendored tomli `LICENSE`) the pathspec misses.
 From the ci.yml `shell-tests` job (read from
 that job, so the lists cannot drift) it picks, for each changed `.sh` or `.py`
 script directly under `scripts/`, the suites that are the script itself, its

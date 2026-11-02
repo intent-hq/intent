@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Regression proof for the monorepo PR/queue boundary and bootstrap selection."""
 from pathlib import Path
+import ast
 import functools
 import json
 import os
+import posixpath
 import re
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -35,6 +38,80 @@ SHELL_LOOP = re.compile(r'^[ \t]*for[ \t]+\w+[ \t]+in[ \t]+\$\{?(\w+)\}?[ \t]*(?
 MAKE_CALL = re.compile(r'(?:\bmake|\$\(MAKE\))(?:[ \t]+(?:-[Cf][ \t]*\S+|-\S+|[A-Z_]+=\S*))*[ \t]+([a-z][\w-]*)')
 SCRIPT_FILE = re.compile(r'(?<![\w./-])(?:\.github/)?scripts/[\w./-]+\.(?:py|sh)\b')
 PY_MODULE = re.compile(r'\bscripts\.(test_\w+)')
+
+
+def python_tests_pathspec():
+    """The pathspec of the python-tests "Select Python test changes" `git diff`, unquoted."""
+    steps = workflow('ci.yml')['jobs']['python-tests']['steps']
+    command = next(s['run'] for s in steps if s.get('name') == 'Select Python test changes')
+    match = re.search(r'git diff --name-only [^\n]*? -- ([^\n)]*)\)', command)
+    if not match:
+        raise AssertionError('no `git diff --name-only ... -- <pathspec>)` in Select Python test changes')
+    return shlex.split(match.group(1))
+
+
+def tracked_entries():
+    """Tracked path -> git mode (160000 is a submodule gitlink)."""
+    out = subprocess.check_output(['git', '-C', str(ROOT), 'ls-files', '-s', '-z'], text=True)
+    return {path: meta.split()[0] for meta, path in (e.split('\t', 1) for e in out.split('\0') if e)}
+
+
+def test_scripts_modules():
+    rule = re.search(r'^test-scripts:.*\n((?:\t.*\n)+)', (ROOT / 'Makefile').read_text(), re.M)
+    if not rule:
+        raise AssertionError('no Makefile test-scripts recipe')
+    return re.findall(r'\bscripts\.(test_\w+)', rule.group(1))
+
+
+def named_paths(source, module_dir, tracked):
+    """(tracked path, literal) pairs a module names: a string resolved against its own
+    directory, against the repo root when it has a `/` or is joined to a
+    `Path(__file__)...parents[1]` name, a directory meaning every tracked file in it.
+    The module's own directory and its ancestors are join bases, not reads."""
+    tree = ast.parse(source)
+    roots = {t.id for node in tree.body if isinstance(node, ast.Assign)
+             for t in node.targets if isinstance(t, ast.Name)
+             if '__file__' in ast.unparse(node.value) and 'parents[1]' in ast.unparse(node.value)}
+    root_joined = {id(node.right) for node in ast.walk(tree)
+                   if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div)
+                   and isinstance(node.left, ast.Name) and node.left.id in roots}
+    bases = {'.'} | {str(p) for p in Path(module_dir).parents} | {module_dir}
+    under = {}
+    for path in tracked:
+        for directory in [path, *(str(p) for p in Path(path).parents)]:
+            under.setdefault(directory, []).append(path)
+    named = set()
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
+            continue
+        literal = node.value
+        if not literal or literal.startswith('/') or '\n' in literal:
+            continue
+        candidates = [posixpath.join(module_dir, literal)]
+        if '/' in literal.rstrip('/') or id(node) in root_joined:
+            candidates.append(literal)
+        for candidate in candidates:
+            candidate = posixpath.normpath(candidate)
+            if candidate in bases or candidate.startswith('..'):
+                continue
+            named.update((path, literal) for path in under.get(candidate, ()))
+    return named
+
+
+def uncovered_test_reads(pathspec):
+    """Tracked files a make test-scripts module names that the pathspec misses:
+    path -> sorted 'module (literal)' notes. Gitlinks are exempt: python-tests
+    checks out without submodules, so a test that reads one skips there."""
+    tracked = tracked_entries()
+    covered = set(subprocess.check_output(['git', '-C', str(ROOT), 'ls-files', '-z', '--', *pathspec],
+                                          text=True).split('\0'))
+    missing = {}
+    for module in test_scripts_modules():
+        source = (ROOT / 'scripts' / f'{module}.py').read_text()
+        for path, literal in named_paths(source, 'scripts', tracked):
+            if path not in covered and tracked[path] != '160000':
+                missing.setdefault(path, set()).add(f'scripts/{module}.py ({literal!r})')
+    return {path: sorted(notes) for path, notes in sorted(missing.items())}
 
 
 def runs_on_merge_group(condition):
@@ -389,11 +466,43 @@ class EventPolicy(unittest.TestCase):
             self.assertEqual(run('merge_group'), 'selected=true\n')
             for path in ('scripts/nextest_stress.py', 'scripts/test_host_load.py', 'scripts/with-test-policy.sh',
                          'scripts/fixtures/a.json', 'scripts/_vendor/tomli/LICENSE',
-                         'scripts/_vendor/tomli.provenance.json', 'Makefile', '.github/workflows/ci.yml'):
+                         'scripts/_vendor/tomli.provenance.json', 'scripts/check-transfer-selection-contract.mjs',
+                         'docs/protocol/fixtures/transfer-selection/contract.json', 'Makefile',
+                         '.github/workflows/ci.yml'):
                 pr_merge(path, 'changed ' + path + '\n')
                 self.assertEqual(run('pull_request'), 'selected=true\n', path)
             git('checkout', '-q', 'main')
             self.assertEqual(run('pull_request'), 'selected=true\n', 'a non-merge checkout must run the tests')
+
+    def test_python_tests_selection_covers_every_file_a_test_names(self):
+        # intent PR 8294: test_compact_gate reads the vendored tomli files, but the
+        # first pathspec omitted scripts/_vendor; only a review caught it.
+        steps = workflow('ci.yml')['jobs']['python-tests']['steps']
+        checkout = next(s for s in steps if str(s.get('uses', '')).startswith('actions/checkout@'))
+        self.assertIs(checkout.get('with', {}).get('submodules'), False,
+                      'gitlinks are exempt only because python-tests checks out without submodules')
+        missing = uncovered_test_reads(python_tests_pathspec())
+        if missing:
+            self.fail('add these tracked files a make test-scripts module names to the python-tests '
+                      '"Select Python test changes" pathspec in ci.yml:\n'
+                      + '\n'.join(f'  {path}: named by {", ".join(notes)}' for path, notes in missing.items()))
+
+    def test_python_tests_coverage_scan_sees_the_vendored_tomli_reads(self):
+        pathspec = python_tests_pathspec()
+        self.assertIn('scripts/_vendor', pathspec)
+        missing = uncovered_test_reads([p for p in pathspec if p != 'scripts/_vendor'])
+        for path in ('scripts/_vendor/tomli/LICENSE', 'scripts/_vendor/tomli.provenance.json'):
+            self.assertIn(path, missing)
+            self.assertIn("scripts/test_compact_gate.py ('scripts/_vendor')", missing[path])
+
+    def test_named_paths_resolution_rules(self):
+        tracked = {'Makefile': '100644', 'LICENSE': '100644', 'scripts/a.py': '100644',
+                   'scripts/sub/x.json': '100644', 'docs/f/one.json': '100644', 'scripts/b.mjs': '100644'}
+        source = ('from pathlib import Path\nROOT = Path(__file__).resolve().parents[1]\n'
+                  'ROOT / "Makefile"\nROOT / "scripts" / "b.mjs"\n"a.py"\n"LICENSE"\n"sub"\n'
+                  '"docs/f"\n"/abs/path"\n"../escape"\n"scripts/"\n')
+        self.assertEqual({path for path, _ in named_paths(source, 'scripts', tracked)},
+                         {'Makefile', 'scripts/a.py', 'scripts/b.mjs', 'scripts/sub/x.json', 'docs/f/one.json'})
 
     def test_bootstrap_container_receives_ci_without_a_terminal(self):
         steps = workflow('bootstrap-install.yml')['jobs']['bootstrap-install']['steps']
