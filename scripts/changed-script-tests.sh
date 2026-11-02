@@ -20,7 +20,7 @@
 #      scripts/X.py matches the pathspec of the ci.yml python-tests "Select
 #      Python test changes" step (read from it, so there is no second list; for
 #      example the Makefile, ci.yml, scripts/fixtures/** or scripts/_vendor/**),
-#      when a changed non-test script is a shared helper, or when FULL=1.
+#      or when FULL=1.
 #   3. Suites of the ci.yml `shell-tests` job (read from its first run step, so
 #      there is no second list to drift). For each changed top-level
 #      scripts/X.sh or scripts/X.py it selects the suites whose file is X
@@ -29,9 +29,18 @@
 #      name as a word). A changed scripts/*.test.sh also selects the
 #      lint-fixed-sleeps.sh step, which scans every suite.
 #      Every suite runs instead when the Makefile, ci.yml or scripts/fixtures/**
-#      changed, when a changed non-test script is a shared helper (another
-#      non-test top-level script other than this one names it), when neither
-#      a suite nor a step 2 module names a changed script, or when FULL=1.
+#      changed, when neither a suite nor a step 2 module names a changed
+#      script (or, for a shared helper, any script that uses it), or when FULL=1.
+#   Shared helpers (steps 2 and 3): when another non-test top-level script
+#   other than this one names a changed non-test script X, X is a shared
+#   helper. Its users, and their users in turn, count as changed for the
+#   selection, so X gets the modules and suites of every script that uses it
+#   directly or through other scripts, not a full run (intent PR 8305 ran
+#   every suite for over 30 minutes after a resumable_nextest.py fix). Every
+#   suite still runs when one of those users reaches no check, as it would if
+#   that user changed. Only top-level scripts count as users: a check that
+#   reaches X through a Makefile recipe or a *.fixture.sh without naming X or
+#   one of its users is not selected, for a helper as for any changed script.
 #      The merge queue still runs every suite.
 #   4. `node --test scripts/X.test.mjs` for each changed scripts/X.mjs or
 #      scripts/X.test.mjs whose test file exists.
@@ -144,18 +153,48 @@ mentions() {
   return 1
 }
 
-# The first non-test top-level script, other than $1 and this selector, that
-# names $1; empty when none does.
-shared_user() {
-  local script=$1 other
+# Non-test top-level scripts, other than $1 and this selector, that name $1
+# (as mentions reads it), one per line; none for a test file.
+direct_users() {
+  local script=$1 name other
   is_test_file "$script" && return 0
-  for other in scripts/*.sh scripts/*.py; do
-    [ -f "$other" ] || continue
+  name=${script##*/}
+  {
+    grep -lF -- "$name" scripts/*.sh scripts/*.py 2>/dev/null || true
+    case "$name" in
+      *.py) grep -lw -- "${name%.py}" scripts/*.sh scripts/*.py 2>/dev/null || true ;;
+    esac
+  } | LC_ALL=C sort -u | while IFS= read -r other; do
     [ "$other" = "$script" ] && continue
     # This selector names suite files only to pick them.
     [ "$other" = scripts/changed-script-tests.sh ] && continue
     is_test_file "$other" && continue
-    if mentions "$other" "$script"; then printf '%s' "$other"; return 0; fi
+    printf '%s\n' "$other"
+  done
+}
+
+# Script $1 and every script that uses it, directly or through other users,
+# as "script<TAB>chain" lines: the chain is empty for $1 itself and otherwise
+# says how the user reaches $1 (", which uses b.py, which uses a.py").
+script_and_users() {
+  local start=$1 queue line member chain user seen
+  seen=$start$nl
+  queue=$start$tab$nl
+  printf '%s\t\n' "$start"
+  while [ -n "$queue" ]; do
+    line=${queue%%"$nl"*}
+    queue=${queue#*"$nl"}
+    member=${line%%"$tab"*}
+    chain=${line#*"$tab"}
+    while IFS= read -r user; do
+      [ -n "$user" ] || continue
+      case "$nl$seen" in *"$nl$user$nl"*) continue ;; esac
+      seen=$seen$user$nl
+      queue=$queue$user$tab", which uses ${member##*/}$chain"$nl
+      printf '%s\t%s\n' "$user" ", which uses ${member##*/}$chain"
+    done <<USERS
+$(direct_users "$member")
+USERS
   done
 }
 
@@ -181,6 +220,25 @@ covers() {
   fi
 }
 
+# Why file $1 covers changed script $3 through $2, a member of
+# script_and_users $3 whose chain is $4; empty when it does not.
+covers_member() {
+  local file=$1 member=$2 script=$3 chain=$4 reason
+  if [ "$member" = "$script" ]; then
+    covers "$file" "$script"
+    return 0
+  fi
+  if [ "$file" = "$member" ]; then
+    reason="it is ${member##*/}"
+  else
+    reason=$(covers "$file" "$member")
+  fi
+  [ -n "$reason" ] && printf '%s%s\n' "$reason" "$chain"
+  return 0
+}
+
+nl=$'\n'
+tab=$'\t'
 run_all_shell=0
 full_reasons=""
 run_all_py=0
@@ -235,30 +293,73 @@ done <<EOF
 $changed
 EOF
 
+# Each changed script with its users (script_and_users), as
+# "changed<TAB>member<TAB>chain" lines: a shared helper's checks are those of
+# every script that uses it, directly or through other scripts.
+members=""
+helpers=""
+while IFS= read -r script; do
+  [ -n "$script" ] || continue
+  users=""
+  while IFS="$tab" read -r member chain; do
+    [ -n "$member" ] || continue
+    members=$members$script$tab$member$tab$chain$nl
+    [ "$member" = "$script" ] || users="$users $member"
+  done <<MEMBERS
+$(script_and_users "$script")
+MEMBERS
+  if [ -n "$users" ]; then
+    helpers="${helpers}test-scripts-changed: $script is a shared helper; also selecting the checks of the scripts that use it:$users"$nl
+  fi
+done <<SCRIPTS
+$changed_scripts
+SCRIPTS
+
+# The members of changed script $1, as "member<TAB>chain" lines.
+members_of() {
+  printf '%s' "$members" | awk -F '\t' -v s="$1" '$1 == s { print $2 "\t" $3 }'
+}
+
+# "changed<TAB>member" lines for each member some module or suite covers.
+covered=""
+
+# Whether member $2 of changed script $1, or a script that uses $2, has a check.
+member_reaches_check() {
+  local script=$1 member=$2 user
+  case "$nl$covered" in *"$nl$script$tab$member$nl"*) return 0 ;; esac
+  while IFS="$tab" read -r user _; do
+    [ -n "$user" ] || continue
+    case "$nl$covered" in *"$nl$script$tab$user$nl"*) return 0 ;; esac
+  done <<USERS
+$(script_and_users "$member")
+USERS
+  return 1
+}
+
 # Step 2: the `make test-scripts` modules. "module<TAB>reason" per pick, and
-# the changed scripts some module covers (they need no shell-suite fallback).
+# the members some module covers (in covered).
 recipe=$(script_test_recipe)
 py_modules=$(printf '%s\n' "$recipe" | grep -E '^scripts\.test_[A-Za-z0-9_]+$' || true)
 py_command=$(printf '%s\n' "$recipe" | grep -vE '^scripts\.test_' | tr '\n' ' ' | sed 's/ *$//')
 py_picks=""
-py_covered=""
 if [ -n "$changed_scripts" ] && [ -n "$py_modules" ]; then
   while IFS= read -r script; do
     [ -n "$script" ] || continue
-    user=$(shared_user "$script")
-    if [ -n "$user" ]; then
-      run_all_py=1; py_full_reasons="$py_full_reasons $script (shared helper: $user names it)"
-    fi
-    while IFS= read -r module; do
-      [ -n "$module" ] || continue
-      reason=$(covers "scripts/${module#scripts.}.py" "$script")
-      if [ -n "$reason" ]; then
-        py_picks="$py_picks$module"$'\t'"$reason"$'\n'
-        py_covered="$py_covered$script"$'\n'
-      fi
-    done <<MODULES
+    while IFS="$tab" read -r member chain; do
+      [ -n "$member" ] || continue
+      while IFS= read -r module; do
+        [ -n "$module" ] || continue
+        reason=$(covers_member "scripts/${module#scripts.}.py" "$member" "$script" "$chain")
+        if [ -n "$reason" ]; then
+          py_picks="$py_picks$module"$'\t'"$reason"$'\n'
+          covered=$covered$script$tab$member$nl
+        fi
+      done <<MODULES
 $py_modules
 MODULES
+    done <<MEMBERS
+$(members_of "$script")
+MEMBERS
   done <<SCRIPTS
 $changed_scripts
 SCRIPTS
@@ -273,31 +374,49 @@ if [ -n "$changed_scripts" ]; then
     [ -n "$script" ] || continue
     [ "$run_all_shell" = 1 ] && break
     name=${script##*/}
-    user=$(shared_user "$script")
-    if [ -n "$user" ]; then
-      run_all_shell=1; full_reasons="$full_reasons $script (shared helper: $user names it)"
-      break
-    fi
-    found=0
-    if printf '%s' "$py_covered" | grep -qxF -- "$script"; then found=1; fi
-    while IFS= read -r suite; do
-      [ -n "$suite" ] || continue
-      file=$(suite_file "$suite")
-      [ -n "$file" ] || continue
-      reason=$(covers "$file" "$script")
-      if [ -z "$reason" ] && [ "$file" = scripts/lint-fixed-sleeps.sh ] && case "$name" in *.test.sh) true ;; *) false ;; esac; then
-        reason="scans every scripts/*.test.sh ($name changed)"
-      fi
-      if [ -n "$reason" ]; then
-        found=1
-        picks="$picks$suite"$'\t'"$reason"$'\n'
-      fi
-    done <<SUITES
+    shared=0
+    while IFS="$tab" read -r member chain; do
+      [ -n "$member" ] || continue
+      [ "$member" = "$script" ] || shared=1
+      while IFS= read -r suite; do
+        [ -n "$suite" ] || continue
+        file=$(suite_file "$suite")
+        [ -n "$file" ] || continue
+        reason=$(covers_member "$file" "$member" "$script" "$chain")
+        if [ -z "$reason" ] && [ "$member" = "$script" ] && [ "$file" = scripts/lint-fixed-sleeps.sh ] && case "$name" in *.test.sh) true ;; *) false ;; esac; then
+          reason="scans every scripts/*.test.sh ($name changed)"
+        fi
+        if [ -n "$reason" ]; then
+          covered=$covered$script$tab$member$nl
+          picks="$picks$suite"$'\t'"$reason"$'\n'
+        fi
+      done <<SUITES
 $suites
 SUITES
-    if [ "$found" = 0 ]; then
-      run_all_shell=1; full_reasons="$full_reasons $script (no suite or test-scripts module names it)"
+    done <<MEMBERS
+$(members_of "$script")
+MEMBERS
+    # Every member must reach a check, through itself or a script that uses
+    # it: a changed member no check reaches would run every suite itself.
+    if ! member_reaches_check "$script" "$script"; then
+      run_all_shell=1
+      if [ "$shared" = 1 ]; then
+        full_reasons="$full_reasons $script (no suite or test-scripts module names it or a script that uses it)"
+      else
+        full_reasons="$full_reasons $script (no suite or test-scripts module names it)"
+      fi
+      continue
     fi
+    while IFS="$tab" read -r member _; do
+      if [ -z "$member" ] || [ "$member" = "$script" ]; then continue; fi
+      if ! member_reaches_check "$script" "$member"; then
+        run_all_shell=1
+        full_reasons="$full_reasons $script (used by $member, which no suite or test-scripts module names)"
+        break
+      fi
+    done <<MEMBERS
+$(members_of "$script")
+MEMBERS
   done <<SCRIPTS
 $changed_scripts
 SCRIPTS
@@ -352,6 +471,7 @@ fi
 
 changed_count=$(printf '%s\n' "$changed" | grep -c . || true)
 echo "test-scripts-changed: $changed_count changed file(s) vs $base_ref (merge base ${merge_base:0:12})"
+printf '%s' "$helpers"
 if [ "$run_all_py" = 1 ]; then
   echo "test-scripts-changed: all make test-scripts modules selected (full run:$py_full_reasons)"
 elif [ -n "$py_selection" ]; then
