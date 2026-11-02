@@ -84,13 +84,35 @@ are normalized to camelCase: `html_url → htmlUrl`, `created_at → createdAt`,
 
 **Conventions.** Unless noted, `owner` + `repo` are **(req)** string params (and `number` is the
 **(req)** PR/issue number where applicable). Reads that paginate follow the uniform pagination
-contract: an optional `limit` (default **50**, max **200**) plus an opaque `nextToken` cursor echoed
-in the result (`nextToken: null` when there are no further pages). Errors reuse the §9 conventions:
+contract: an optional `limit` (default **50**, max **100** — GitHub's own `per_page` maximum; larger
+values are clamped, values below 1 become 1) plus an opaque `nextToken` cursor echoed
+in the result (`nextToken: null` when there are no further pages). See **Byte-budgeted pages** below
+for the reads that can stop short of `limit`. Errors reuse the §9 conventions:
 missing/invalid params and "not found" (404) lookups → `-32602` **unless a method row documents a
 graceful null/exists result** (e.g. `github.repos.get` → `{ repo: null }`, `github.repoConfig.get`
 → `{ config: null, exists: false }`); a token that is absent or fails `GET /user`, and any other
 GitHub/service failure → `-32603` with a descriptive `message`
 (e.g. `"GitHub is not configured."`). There are **no** custom numeric codes.
+
+**Byte-budgeted pages.** The reads whose items carry long free text — `github.pulls.list`,
+`github.pulls.search` (repo and `org` forms), `github.pulls.files`, `github.pulls.reviews`,
+`github.issues.list`, `github.issues.search`, `github.listReviewComments`,
+`github.getReviewThreads` (and `linear.listIssues` / `linear.searchIssues`, §5.28) — keep one
+reply under the 500 KiB read payload budget without cutting data that has no other read path:
+
+- Items are served in forge order until the next one would push the page's items past
+  **448 KiB** of compact JSON. A page can therefore hold **fewer items than `limit`** while
+  `nextToken` is non-null; clients MUST page on `nextToken`, never on `items.length < limit`.
+- When a page stops short, its `nextToken` resumes **inside the same forge page**, so every item is
+  served exactly once and in order. A resume token also fixes the page size it was cut from: a
+  `limit` sent alongside it is ignored until the forge page is exhausted.
+- The first item of a page is always served. If that one item alone exceeds the budget (for
+  example a review thread with many long comments or a huge patch), its longest strings are cut
+  to a common length on a UTF-8 boundary and the item gains **`contentTruncated: true`** (absent
+  otherwise). `github.pulls.get` / `github.issues.get` / `linear.getIssue` still return the full
+  body of a single PR or issue.
+- Older tokens (from a daemon without byte budgets) still decode. Clients that already follow
+  `nextToken` need no change.
 
 #### Repos & branches
 
@@ -575,7 +597,12 @@ so the rewire is zero-FE-change: nested Linear relations (`team` / `state` / `as
 (`None`) optional fields are **omitted** from the JSON.
 
 **Conventions.** All list-style reads take an optional `limit` (a cap on the number of items
-returned). The two issue reads — `linear.listIssues` and `linear.searchIssues` — are
+returned). For `linear.listIssues`, `linear.searchIssues` and `linear.listProjects` the `limit`
+defaults to **50** and is clamped to **[1, 100]** (Linear itself allows 250). The two issue reads
+are also **byte-budgeted** like the `github.*` list reads (§5.27 "Byte-budgeted pages"): a page
+can hold fewer issues than `limit` with a non-null `nextToken` that resumes inside the same
+Linear page, and an issue too large to fit alone is served with its long strings cut and
+`contentTruncated: true` (`linear.getIssue` returns it whole). The two issue reads — `linear.listIssues` and `linear.searchIssues` — are
 **cursor-paginated** per the §5.5 conventions: they accept an optional **opaque base64**
 `nextToken` (the token echoed by a previous page; a malformed token degrades to the first
 page, matching the `github.*` reads) and return a
@@ -626,7 +653,7 @@ forward-looking surface for a future create/edit UI.
 | linear.viewer | workspaceId? | LinearUser — the authenticated user |
 | linear.listTeams | limit?, workspaceId? | LinearTeam[] |
 | linear.listWorkflowStates | limit?, workspaceId? | LinearWorkflowState[] |
-| linear.listProjects | limit?, workspaceId? | LinearProject[] |
+| linear.listProjects | limit?, workspaceId? | LinearProject[] — `limit` default **50**, max **100** (clamped; values below 1 become 1). No cursor. |
 | linear.listLabels | limit?, workspaceId? | LinearLabel[] |
 
 #### DTO schemas
