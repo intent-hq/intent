@@ -257,6 +257,7 @@ No method, event or error number is added; the method catalog is unchanged.
 - **Result fields** (always present with the capability): `truncated` (boolean — the served block is not the complete stored block), `field` (`string | null` — the body field name, `null` when the block has no body or does not carry its body field), `encoding` (`"text" | "json" | null` — `null` for an image or no body), `totalBytes` (`number | null`), `nextOffset` (`number | null`).
 - Paging reads the same single message row on every call; the cost contract above is unchanged. Pages of a block that is still streaming (the in-progress row) can shift between calls; page a finished block.
 - `agent.getConversation` is unchanged: its slim pages keep their own byte budget and flags.
+- **Agent page size.** The `ws.agent.getMessageBlock(agentId, messageId, blockId, { offset?, maxBytes? }?)` MCP binding (§6.8) pages in **102,400-byte (100 KiB)** pieces: an absent or `null` `maxBytes` defaults to 102,400 and a larger value is clamped down to 102,400 before the call (smaller values still clamp up to 4,096). The RPC default and maximum for apps stay at 480,000.
 
 **`agent.listUserMessages` details.**
 
