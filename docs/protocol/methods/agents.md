@@ -1283,13 +1283,15 @@ agent's live work for both direct user retirement and MCP self-retirement:
   included — is still running a turn, with the error naming each active child
   (`cannot retire: N active child agent(s) still running a turn: <name> (<id>), …`).
   Retired descendants are inert and never count; idle/waiting children pass the guard.
-- **Last top-level guard (MCP self-retirement only)**: `ws.agent.retire` FAILS (`-32602`,
-  nothing mutated) when the caller is the workspace's last active top-level agent — no
-  other session with no `parent_agent_id`, not background, not deleted, and not retired —
-  with `cannot retire: this is the last active top-level agent in the workspace…`.
-  Concurrent top-level self-retires in one workspace are serialized, so they cannot all
-  pass. Child agents may still self-retire, and direct user `agent.retire` is not subject
-  to this guard.
+- **Last top-level guard (MCP self-retirement only)**: `ws.agent.retire` FAILS (an
+  invalid-params tool error, nothing mutated) when the caller is the workspace's last
+  active top-level agent — no other session with no `parent_agent_id`, not background,
+  not deleted, and not retired — with
+  `cannot retire: this is the last active top-level agent in the workspace…`. The guard
+  applies equally when the call comes from the agent's background hook. Concurrent
+  top-level self-retires in one workspace are serialized, so they cannot all pass. Child
+  agents may still self-retire, and direct user `agent.retire` is not subject to this
+  guard.
 - **Child cascade**: on success every non-terminal, not-already-retired descendant is
   cascade-retired with the parent, each through the same full per-session cleanup and its
   own `agent:retired` emit with `reason: "parent <name> retired"`. A child that started a
