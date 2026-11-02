@@ -132,14 +132,20 @@ These errors are future contracts; current CoW errors remain until retirement.
 
 The [daemon-to-daemon remote machines contract](./methods/nodes.md#remote-machine-errors)
 adds structured `data.code` values on existing numeric codes. `-32602`:
-`model-unavailable`, `machine-update-required`, `machine-in-use`, and the
+`model-unavailable` (also from `agent.setModel` on a remote agent),
+`profile-not-remote-compatible` (a profile or Default configuration that sets an
+account folder, at placement or `agent.setModel`; data `{ providerRef, reason, keys }`),
+`machine-update-required`, `machine-in-use`, and the
 `placement-unavailable` reasons
 `machine-unreachable`, `machine-unknown` and `machine-revoked`; `no-capacity`
 gains `limit: "count" | "memory"` with its counts or bytes. `-32603`:
 `machine-unreachable` (with the routes tried) and `machine-revoked` from
 `remoteMachines.add` / `refresh`, and `machine-unreachable` with
 `unconfirmedStops` from `remoteMachines.remove` when stops go unacknowledged. `-32003` with `data.code: "node-mode"` refuses
-a method outside the node-mode list. No new numeric error is introduced.
+a method outside the node-mode list. The message-prefixed
+`remote-model-change-unsupported` (`-32602`, no `data.code`) is no longer
+returned by `agent.setModel`; it remains only as a remote start failure when
+the identity changed outside `agent.setModel` or quota failover. No new numeric error is introduced.
 
 ### Truncated note read errors
 

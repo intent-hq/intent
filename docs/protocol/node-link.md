@@ -2058,7 +2058,10 @@ It fetches `baseCommit` over the git connection into a per-repository bare
 cache named by `repoKey`, creates the agent's worktree, spawns the provider and
 journals `started`. The machine opens the provider session without prompt
 injection, so the backend sends the agent's assembled instructions with its
-first prompt. A remote agent's model cannot be switched after creation.
+first prompt. A remote agent's provider, profile or model changes only through
+a validated `agent.setModel` or quota failover; the backend then stops the run
+and sends a new `launch` to the same machine
+([switching a remote agent's model](./methods/nodes.md#switching-a-remote-agents-model)).
 
 Machine failures are journaled as `"<code>: <detail>"`. A failure that ends the
 agent's process before its checkout is ready (an `exited` record with an error
@@ -2161,9 +2164,12 @@ interface ProfileEnvOverlay {
   never falls back to another account or to the machine's login.
 - **Freshness.** The overlay is resolved again at every start, so the machine
   runs with the profile's current values.
-- **Account folders.** `CLAUDE_CONFIG_DIR` and `CODEX_HOME` are sent as typed.
-  The machine expands a leading `~` or `~/` against its own home and requires
-  each such folder to exist there; a missing one fails the start with
+- **Account folders.** The backend never launches a configuration that sets
+  `CLAUDE_CONFIG_DIR` or `CODEX_HOME` on a machine: such a configuration is not
+  [remote-compatible](./methods/provider-profiles.md#remote-compatibility) and is
+  refused before any launch. A machine that still receives one (from an older
+  backend) expands a leading `~` or `~/` against its own home and requires each
+  such folder to exist there; a missing one fails the start with
   `node-profile-unavailable` naming the variable only. Login files never leave
   the machine: only environment values are sent.
 - **Application.** The machine parses the overlay strictly (any unknown,
