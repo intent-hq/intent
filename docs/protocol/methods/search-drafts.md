@@ -187,14 +187,14 @@ final, complete answer is the `search:done` event (or the inline result when not
 
 **Size bounds (read payload budget).** An inline reply stays under the daemon's 500 KiB read
 payload budget. `search.inFiles` stops collecting once its matches would serialize past
-448 KiB, or at `maxResults`, and answers `truncated: true` either way; a longer matching line
+480,000 bytes, or at `maxResults`, and answers `truncated: true` either way; a longer matching line
 is windowed to a 400-character `preview` (`col` still counts from the start of the line).
 `search.messages`, `search.events` and `search.codebase` cut an inline `matches` array at the
-same 448 KiB and then add `truncated: true` (absent when nothing was cut). These ceilings apply
+same 480,000 bytes and then add `truncated: true` (absent when nothing was cut). These ceilings apply
 to every caller.
 
 **Bounded defaults (prepared).** On a connection whose `client.hello` declares
-`params.capabilities.boundedReads: 1`, counts are bounded too: `search.inFiles` `maxResults`
+`params.capabilities.boundedReads: 1` (the daemon will advertise `server.capabilities.boundedReads: 1`), counts are bounded too: `search.inFiles` `maxResults`
 absent → 500 and larger than 2,000 → 2,000; `search.messages` / `search.events` `limit` absent →
 50, larger than 200 → 200, negative → 0. Other connections keep the values above. The daemon
 does not read the declaration yet, so today every connection keeps them.

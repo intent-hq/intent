@@ -795,7 +795,7 @@ conversation descriptor still present so restored panes can recover their title
 and participants. Queries are bounded
 by the page limit; the server does not load the entire conversation.
 
-A page is also bounded by size: when its messages would serialize past 448 KiB
+A page is also bounded by size: when its messages would serialize past 480,000 bytes
 (under the daemon's 500 KiB read payload budget), the daemon returns fewer than
 `limit` messages and sets `hasMore: true`. A latest or `beforeSequence` page
 keeps its newest messages and an `afterSequence` page its oldest, so the usual
