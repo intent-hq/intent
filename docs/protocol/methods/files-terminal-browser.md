@@ -11,7 +11,7 @@ Routing-only `workspaceId?` additions below are [prepared contract fields](../wo
 | browser.docs | topic (req) | docs string — **not exposed**: no router arm; see the `browser.docs — not exposed` block below |
 | terminal.list | workspaceId (req) | `{ terminals: [{ id, name, cwd, isExecutingCommand }], daemonBootId }` (v4.0 envelope — the pre-4.0 bare terminals array is retired; monorepo#1334). `daemonBootId` is the daemon's per-boot identifier (UUID v4, minted once per daemon process; never persisted): stable within one daemon lifetime and fresh after a restart, so equal values across responses prove the same daemon lifetime and an **empty `terminals` list is authoritative** for that lifetime (not a restarted daemon that lost its PTYs). `name` is **always present** on each entry: the PTY's daemon-tracked display name when one was assigned at spawn (e.g. **"Setup Script"** for the workspace setup terminal, §5.1/§5.25), else the constant `"Terminal"`. The underlying PTY display name is optional spawn metadata (§5.13); the `name` field is not (clients may still fall back to `"Terminal"` defensively). The agent-facing MCP `ws.terminal.list` binding unwraps the envelope internally — agents still see the bare terminals array (§6.8) |
 | terminal.readOutput | workspaceId (req), terminalId (req), maxLines? | output buffer text — the newest `maxLines` lines (default 200, 1–10,000), further cut to the newest whole lines whose JSON-escaped size fits 480,000 bytes; a cut says `older output omitted to fit the reply size limit` in the header (see *Bounded output reads* in [scripts.md](./scripts.md#bounded-output-reads)) |
-| file.read | path (req), gitRootId? (v11.1 registered-root selector; see below) | file contents as a bare UTF-8 string — paths outside the selected root rejected (-32603); unknown/foreign gitRootId rejected (-32602) |
+| file.read | path (req), gitRootId? (v11.1 registered-root selector; see below), maxBytes? *(15.4)* | file contents as a bare UTF-8 string — paths outside the selected root rejected (-32603); unknown/foreign gitRootId rejected (-32602). With `maxBytes` the result is `{ content, truncated, totalBytes }` with `content` capped at 480,000 bytes as a JSON string; without it the whole file, as before (see [Bounded object reads](#bounded-object-reads-154)) |
 | file.readChunk *(v6.18)* | path (req), offset (req; 0-based byte offset), length (req; positive, ≤ 16 MiB decoded), gitRootId? (v11.1; see below) | { content (base64), bytesRead, size } — one offset-windowed slice of the file's raw bytes (the binary counterpart of the UTF-8-only `file.read`; monorepo#2458). `size` is the file's total byte length; a window at/past EOF is `{ content: "", bytesRead: 0, size }` (never an error) and a window crossing EOF returns just the remaining bytes. Zero/over-cap `length` and directory paths are -32602 naming the cause; paths outside the selected root rejected (-32603); unknown/foreign gitRootId rejected (-32602); missing file → -32603 per the file-op convention |
 | file.write | path (req), content (req) | { ok, path, size } |
 | file.list | path? (default .) | [{ name, type }] |
@@ -88,6 +88,82 @@ API gains root support; all other file APIs retain their existing scope.
 // ← response
 { "jsonrpc":"2.0","id":40,"result":{ "ok": true, "path": "notes/out.txt", "size": 5 } }
 ```
+
+### Bounded object reads *(15.4)*
+
+`file.read`, `git.showFile` ([§5.6](./git.md)) and `note.readAsset`
+([§5.2](./notes-tasks.md)) return a whole object on the client's main connection,
+where one large reply delays the heartbeat and every other call queued behind it.
+From protocol 15.4 a client that sends `maxBytes` gets a reply under the 500 KiB read
+budget and reads the whole object in chunks over a separate transfer connection. A
+caller that omits `maxBytes` keeps the earlier whole-object reply. The shared exact
+integer `server.capabilities.boundedReads: 1` (also in `system.capabilities`) tells a
+client the daemon bounds its read defaults.
+
+**Cap.** The object field of one reply (`file.read`'s string, `git.showFile`'s
+`content`, `note.readAsset`'s base64 `data`) takes at most 480,000 bytes as a JSON
+string, quotes and escapes included. The rest of the frame stays well under 512,000
+bytes.
+
+**`maxBytes` (optional).** A positive integer, clamped into [4,096, 480,000].
+`0`, a negative or fractional number, or a non-number is `-32602`
+(`maxBytes must be a positive integer`), with no read.
+
+- `file.read` and `git.showFile` with `maxBytes` return
+  `{ content, truncated, totalBytes }`. `content` is the longest prefix of the text,
+  ending on a UTF-8 character boundary, whose JSON string is at most `maxBytes`
+  bytes. `totalBytes` is the UTF-8 size of the whole text (`git.showFile` text is
+  the blob decoded with replacement characters, as before). `truncated` is `true`
+  when `content` is shorter than the whole text.
+- `note.readAsset` with `maxBytes` adds `truncated` and `totalBytes` (decoded asset
+  bytes) to its result. An asset whose `data` would exceed `maxBytes` is sent with
+  `data: ""` and `truncated: true`; a partial image is not useful.
+- The empty fallbacks of `git.showFile` (missing path, unknown, remote or non-repo
+  workspace) return `{ content: "", truncated: false, totalBytes: 0 }`.
+
+**Without `maxBytes` (legacy).** The reply is unchanged: the whole object in its earlier
+shape, up to the 40 MiB frame cap, so older apps and other callers keep working. Such
+a reply rides the main connection, so a client that can send `maxBytes` should. A
+shortened legacy reply is never sent, because a client could save it back over the
+file. Daemons before 15.4 ignore `maxBytes`, so a client that always sends it handles
+both shapes: a bare string or an object without `truncated` is a whole object.
+
+**Reading the whole object.** These chunk methods return
+`{ content (base64), bytesRead, size }` with the `file.readChunk` window rules
+(0-based `offset`, positive `length` of at most 16 MiB decoded, an empty chunk
+at or past the end, a shortened chunk across it, zero or over-cap `length` is
+`-32602`):
+
+| Method | Params | Notes |
+|---|---|---|
+| `file.readChunk` | path, offset, length, gitRootId? | The file's raw bytes (§5.9 above). |
+| `git.showFileChunk` *(15.4)* | workspaceId, filePath, ref, offset, length, gitRootId? | The raw blob bytes `git.showFile` decodes, with its path, ref, root, fallback and `not-a-file` rules; a fallback is an empty blob (`size: 0`). |
+| `note.readAssetChunk` *(15.4)* | workspaceId, asset, offset, length | The asset's raw bytes, plus `assetId` and `mimeType`. |
+
+`size` is the whole object's byte length. A client reads windows from offset 0
+until `bytesRead` is short or the offset reaches `size`, then decodes the bytes.
+For `git.showFile` text, decode with replacement characters to match its
+`content`. An object can change between reads; a client that needs a consistent
+copy compares `size` across windows.
+
+**Transfer connections.** Over a remote (WSS) connection, the app sends every
+method that may carry more than the read budget on a short-lived connection of
+its own, so a large frame never blocks the main connection: `file.readChunk`,
+`git.showFileChunk`, `note.readAssetChunk`, `workspace.export.read`, and the
+attachment uploads (`file.placeAttachment`, `file.attachmentUpload.*`). A
+transfer connection carries requests only: no `client.hello` beyond what a
+scoped read needs, no subscriptions and no heartbeat. Over the local Unix socket
+the app keeps one connection: there is no uplink to saturate, and the same-host
+socket drains a 16 MiB chunk in milliseconds. The monorepo consumer check
+`check-transfer-methods` fails when a method intentd classifies as a bulk
+transfer (`BulkTransfer` in `PAYLOAD_CLASSES`) is called by the app but missing
+from the app's `TRANSFER_METHODS`, or when `TRANSFER_METHODS` lists a capped read.
+It enforces only once both pinned components carry this work (intentd classifies
+`git.showFileChunk` and the app routes it); until then it reports the same findings
+as warnings and passes, so these docs can land ahead of the pins.
+
+**Not bounded.** Agent tools (`ws.file.read`, `ws.note.readAsset`) call the
+services directly and are unchanged.
 
 > **`file.placeAttachment` — daemon-mediated attachment placement (v6.5;
 > [monorepo#1948](https://github.com/intent-hq/monorepo/issues/1948)).** Places a chat
