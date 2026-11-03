@@ -1876,10 +1876,10 @@ Each WebSocket binary message on `/node/link` is one JSON frame of at most
 | `response` | backend → machine | rpc | `requestId`, `outcome: { ok: value } \| { err: { code, message, data? } }` |
 | `cancelRequest` | machine → backend | rpc | `requestId` |
 | `scriptStart` | backend → machine | script | Protocol 8: see [saved scripts](#saved-scripts-nodeprotocol-8) |
-| `scriptStop` | backend → machine | script | Protocol 8: `scriptId`, `spawnId` |
-| `scriptStarted` | machine → backend | script | Protocol 8: `scriptId`, `spawnId`, `pid` |
-| `scriptOutput` | machine → backend | script | Protocol 8: `scriptId`, `spawnId`, `seq`, `data` |
-| `scriptExited` | machine → backend | script | Protocol 8: `scriptId`, `spawnId`, `exitCode?`, `error?` |
+| `scriptStop` | backend → machine | script | Protocol 8: `agentId`, `scriptId`, `spawnId` |
+| `scriptStarted` | machine → backend | script | Protocol 8: `agentId`, `scriptId`, `spawnId`, `pid` |
+| `scriptOutput` | machine → backend | script | Protocol 8: `agentId`, `scriptId`, `spawnId`, `seq`, `data` |
+| `scriptExited` | machine → backend | script | Protocol 8: `agentId`, `scriptId`, `spawnId`, `exitCode?`, `error?` |
 
 `intentdVersion` is recorded for diagnostics and is not a compatibility gate.
 Heartbeats run every 15 s and a link silent for 45 s is dead. The backend

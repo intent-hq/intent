@@ -25,15 +25,21 @@ not after materializing old terminal records.
 `ScriptMonitorSummary` contains only `monitorId`, `workspaceId`, `agentId`,
 `scriptId`, `runId`, `scriptName`, `mode`, `state: "active"`, `createdAt`,
 `expiresAt`, optional `lineCount`; if configured, `outputPatternPreview`
-(≤160 UTF-8 bytes) and `outputPatternTruncated` (boolean). Omit outputPattern,
+(≤160 UTF-8 bytes) and `outputPatternTruncated` (boolean); and, with
+[`remoteScripts: 1`](./scripts.md#scripts-of-remote-agents-remotescripts-1),
+`remoteAgentId` and `nodeId` on a monitor of a machine run (omitted otherwise). Omit outputPattern,
 settledAt, reason, result and trigger. Full active detail retains the complete
 pattern but has no terminal fields. Never fetch details to render collapsed
 badges. There is no matched-line history read: terminal notification/event
 snapshots carry the existing bounded matched line, and script.output reads the
 available process buffer by known script ID, not by monitor ID or past run ID.
 
-**Registration and retries.** TTL/options/ownership/run checks and at most one
-active monitor per workspace/script remain unchanged. Same-owner retries of an
+**Registration and retries.** TTL/options/ownership/run checks remain unchanged.
+There is at most one active monitor per workspace/script, or, with
+[`remoteScripts: 1`](./scripts.md#scripts-of-remote-agents-remotescripts-1), per
+workspace/script/run place (the home run, or one remote agent's machine run), so
+a monitor on the home run and one on each remote agent's machine run never
+contend, and neither do two remote agents' monitors of the same script. Same-owner retries of an
 active registration return that row unchanged; another owner is refused.
 Registration of an already-final latest run returns
 `{ ok: false, refused: true, reason: "run-finished", scriptId, runId }`, creates
