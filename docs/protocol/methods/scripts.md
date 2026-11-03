@@ -1138,7 +1138,9 @@ restarting or running a machine run fails with:
 
 - `-32602` `machine-update-required` (the
   [remote machine error](./nodes.md#remote-machine-errors) data,
-  `update: "machine"`) when the machine's link negotiated nodeProtocol 7;
+  `update: "machine"`) when an existing machine run's machine now links with
+  nodeProtocol 7 (a remote agent on a protocol 7 machine cannot reach
+  `script.*` at all: its machine refuses the call with `remote-agent-unsupported:`);
 - `-32603` `machine-unreachable` with `attempts` when no link is up after the
   on-demand connect.
 

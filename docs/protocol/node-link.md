@@ -2234,11 +2234,21 @@ dropped.
   The backend records the exit with the existing total exit contract:
   `status: "exited"` with `exitCode`, or `exitCode: -1` and `error` when the
   machine reported none.
-- **Stop.** `scriptStop` kills the run's process group (`SIGTERM`, then
-  `SIGKILL` after the local grace) and the machine answers with that run's
-  `scriptExited`. A `scriptStop` for a run that is not running is answered with
-  `scriptExited` `{ exitCode: -1, error: "node-script-not-running: …" }`.
-  Frames for a `spawnId` other than the current one are ignored by both sides.
+- **Matching.** A `spawnId` is a UUID the backend picks, unique within the
+  binding, and it alone names one process: several agents on one binding can
+  run the same `scriptId` at once, each under its own `spawnId`. `scriptId` in
+  the machine's frames is a consistency check; a frame whose `scriptId` does
+  not match its `spawnId`'s is `node-link-protocol`. The backend ignores
+  `scriptStarted`, `scriptOutput` and `scriptExited` for a `spawnId` that is no
+  longer the current process of a machine run (an earlier restart, or a run it
+  has already settled).
+- **Stop.** `scriptStop` kills that process's group (`SIGTERM`, then `SIGKILL`
+  after the local grace), and the machine acknowledges it with that
+  `spawnId`'s `scriptExited`. The machine answers every `scriptStop`: one
+  whose `spawnId` is not running there (already exited, never started, or
+  stale) is answered at once with `scriptExited`
+  `{ exitCode: -1, error: "node-script-not-running: …" }`, which the backend
+  then ignores under the rule above if it has already settled that process.
   A `spawnId` names one process; the [§5.8a](./methods/script-monitors.md#run-identity-and-fast-completion)
   `runId` the backend reports for the machine run spans its automatic restarts,
   exactly as for a home run, and never crosses the link.
@@ -2250,12 +2260,25 @@ dropped.
   reattached after a reconnect. A later start sends a new `scriptStart`.
 - **Lease end.** Before the backend deletes a remote agent, and before
   `remoteMachines.remove`, it sends `scriptStop` for each of the agent's live
-  machine runs. Revocation (`401` or a `1008` close) ends the link, so the machine stops
-  that binding's scripts as above. The machine also stops an agent's scripts
-  before it removes the agent's worktree. In every case no script process stays
-  on the machine.
-- **Older machines.** On a link that negotiated protocol 7, starting,
-  restarting or running a machine run fails with `-32602`
+  machine runs on the live link and settles those runs; it does not wait for
+  the `scriptExited` acknowledgements, and it does not queue or resend script
+  stops. None is needed: on a live link the machine applies the stop, and when
+  the link is down the machine has already stopped, or stops once it notices
+  the dead link (at most 45 s without heartbeats), every script of that
+  binding. Revocation (`401` or a `1008` close) ends the link the same way. The
+  machine also stops an agent's scripts before it removes the agent's
+  worktree, including on the agent's own `stop`. In every case no script
+  process stays on the machine.
+- **Mixed versions.** The machine routes `workspace_api` frames with its own
+  table ([workspace API on the machine](#workspace-api-on-the-machine)), so a
+  remote agent's `ws.script.*` calls reach the backend only from a machine that
+  implements protocol 8 **and** on a link that negotiated 8. On a protocol 7
+  machine, or on a link to a backend that offers only 7, every `ws.script.*`
+  call (list and create included) fails on the machine with
+  `remote-agent-unsupported:`, as before this contract; the agent's other calls
+  are unaffected. Only a machine run that already exists can meet a protocol 7
+  link (its machine was downgraded, or relinked to an older daemon): starting,
+  restarting or running it from the app then fails with `-32602`
   `machine-update-required` (the [remote machine error](./methods/nodes.md#remote-machine-errors)
   data, `update: "machine"`), and the backend sends nothing. With no link up
   after the usual on-demand connect, it fails with `-32603`

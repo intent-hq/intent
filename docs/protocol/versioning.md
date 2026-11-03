@@ -727,8 +727,11 @@ transitions are published only as `script:changed`, never `script:state` or
 `remote-script-start-remote-only` and `remote-script-author-readonly`. Link
 traffic capture also masks script environments. nodeProtocol 8 is a new link
 version because older peers reject unknown frame types; daemons offer
-`{ min: 7, max: 8 }`, so protocol 7 machines keep running agents and only their
-machine runs fail with `machine-update-required`. The backend advertises
+`{ min: 7, max: 8 }`, so protocol 7 machines keep running agents. A remote
+agent's `ws.script.*` calls work only on a link that negotiated 8; otherwise its
+machine refuses them with `remote-agent-unsupported:` as before, and an existing
+machine run that meets a protocol 7 link fails to start with
+`machine-update-required`. The backend advertises
 `remoteScripts: 1` only together with `remoteMachines: 1`. No methods or events
 are added, the surface counts are unchanged, and there is no public protocol
 version bump: clients detect it only through `remoteScripts: 1`.
