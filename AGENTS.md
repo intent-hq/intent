@@ -71,6 +71,8 @@ Start the smallest long-running target as a workspace service:
   `INTENTD_SOCKET`.
 - `make dev-sandbox-stack` — isolated intentd plus renderer; dev profile by default,
   `INTENTD_PROFILE=release` opt-in, or `INTENTD_BIN=/path/to/intentd` for a prebuilt binary.
+  `MOCK_AGENT=1` makes the scripted test agent the default provider, so chats reply
+  without a provider sign-in.
 
 Each ready sandbox records `.dev/sandbox/<mode>.json`. Use `make sandbox-stop` only for
 an unmanaged or orphaned sandbox;
