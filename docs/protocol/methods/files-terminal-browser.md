@@ -10,7 +10,7 @@ Routing-only `workspaceId?` additions below are [prepared contract fields](../wo
 | browser.listTabs *(v9.10)*, browser.upsertTab *(v9.10)*, browser.removeTab *(v9.10)*, browser.syncTabs *(v9.10)*, browser.navigateTab *(v9.11)*, browser.closeTab *(v9.11)* | see §5.45 | the daemon-owned **browser tab registry** — fast-path methods (no `workspaceId` envelope requirement; the host-only reports are keyed by the connection's `client.hello` identity). Documented in §5.45 at the end of this file |
 | browser.docs | topic (req) | docs string — **not exposed**: no router arm; see the `browser.docs — not exposed` block below |
 | terminal.list | workspaceId (req) | `{ terminals: [{ id, name, cwd, isExecutingCommand }], daemonBootId }` (v4.0 envelope — the pre-4.0 bare terminals array is retired; monorepo#1334). `daemonBootId` is the daemon's per-boot identifier (UUID v4, minted once per daemon process; never persisted): stable within one daemon lifetime and fresh after a restart, so equal values across responses prove the same daemon lifetime and an **empty `terminals` list is authoritative** for that lifetime (not a restarted daemon that lost its PTYs). `name` is **always present** on each entry: the PTY's daemon-tracked display name when one was assigned at spawn (e.g. **"Setup Script"** for the workspace setup terminal, §5.1/§5.25), else the constant `"Terminal"`. The underlying PTY display name is optional spawn metadata (§5.13); the `name` field is not (clients may still fall back to `"Terminal"` defensively). The agent-facing MCP `ws.terminal.list` binding unwraps the envelope internally — agents still see the bare terminals array (§6.8) |
-| terminal.readOutput | workspaceId (req), terminalId (req), maxLines? | output buffer text |
+| terminal.readOutput | workspaceId (req), terminalId (req), maxLines? | output buffer text — the newest `maxLines` lines (default 200, 1–10,000), further cut to the newest whole lines whose JSON-escaped size fits 480,000 bytes; a cut says `older output omitted to fit the reply size limit` in the header (see *Bounded output reads* in [scripts.md](./scripts.md#bounded-output-reads)) |
 | file.read | path (req), gitRootId? (v11.1 registered-root selector; see below) | file contents as a bare UTF-8 string — paths outside the selected root rejected (-32603); unknown/foreign gitRootId rejected (-32602) |
 | file.readChunk *(v6.18)* | path (req), offset (req; 0-based byte offset), length (req; positive, ≤ 16 MiB decoded), gitRootId? (v11.1; see below) | { content (base64), bytesRead, size } — one offset-windowed slice of the file's raw bytes (the binary counterpart of the UTF-8-only `file.read`; monorepo#2458). `size` is the file's total byte length; a window at/past EOF is `{ content: "", bytesRead: 0, size }` (never an error) and a window crossing EOF returns just the remaining bytes. Zero/over-cap `length` and directory paths are -32602 naming the cause; paths outside the selected root rejected (-32603); unknown/foreign gitRootId rejected (-32602); missing file → -32603 per the file-op convention |
 | file.write | path (req), content (req) | { ok, path, size } |
@@ -784,7 +784,7 @@ API gains root support; all other file APIs retain their existing scope.
 | terminal.write | terminalId (req), data (req, base64), workspaceId? | { ok: true } — `data` is base64-encoded input bytes |
 | terminal.resize | terminalId (req), cols (req,int), rows (req,int), workspaceId? | { ok: true } |
 | terminal.kill | terminalId (req), workspaceId? | { ok: true } — signals the PTY; emits `terminal:exit` (§6.5) |
-| terminal.getBuffer | terminalId (req), maxBytes?, workspaceId? | { terminalId, data, daemonBootId, startOffset, endOffset } — base64 scrollback and atomic byte range for replay |
+| terminal.getBuffer | terminalId (req), maxBytes?, workspaceId? | { terminalId, data, daemonBootId, startOffset, endOffset } — base64 scrollback and atomic byte range for replay; at most the newest 359,424 bytes (351 KiB, the **serve window**; base64 479,232 bytes), so the reply fits the 480,000-byte page budget |
 
 **Base64 framing.** Terminal payloads are **binary-safe**: input (`terminal.write` `data`),
 scrollback (`terminal.getBuffer` `data`), and streamed output (`terminal:data` `chunk`, §6.5)
@@ -816,8 +816,10 @@ This contract does not imply that existing clients already use cursors.
   bytes' actual range, which need not start at zero.
 - Scrollback is bounded. Eviction never resets the counter; snapshot `startOffset`
   identifies the oldest returned byte. `maxBytes` selects a trailing byte window
-  without changing `endOffset`; omitted or legacy negative bounds return all
-  retained bytes. Zero returns an empty range at the current end. An empty stream
+  without changing `endOffset`. Omitted, legacy negative or larger bounds return
+  the newest 359,424 bytes (351 KiB, the serve window) of retained output; output
+  older than the serve window counts as no longer retained for replay and recovery.
+  Zero returns an empty range at the current end. An empty stream
   returns `startOffset = endOffset = "0"`. Snapshot boundaries may split UTF-8 or
   escape sequences, so clients must preserve binary framing.
 
@@ -835,7 +837,7 @@ suffix. For **both** queued and subsequently arriving events:
    Identical byte sequences at different positions are distinct output.
 3. A range with `startOffset > next` reveals a gap. Before continuing, request
    `terminal.getBuffer` **without `maxBytes`**, so recovery includes all retained
-   output. A capped snapshot alone cannot prove eviction: its requested window
+   output within the serve window. A capped snapshot alone cannot prove eviction: its requested window
    may exclude bytes still available in the ring. Apply the uncapped snapshot's
    unseen suffix using step 2. Only when this uncapped snapshot also starts beyond
    `next` is that prefix no longer retained. Indicate truncation and reset the

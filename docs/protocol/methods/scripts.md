@@ -29,8 +29,8 @@ not remove the owner's definition or output.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| script.list | workspaceId (req), archive? (`active` only; other values rejected since v14), view? (`full` \| `summary`), limit?, cursor? (summary extension below) | { scripts: [...] } — definition plus `runtime` by default; summary pages are discriminated `{ view: "summary", scripts: ScriptSummary[], nextCursor? } |
-| script.get | workspaceId (req), scriptId (req) | Full unarchived definition plus `runtime`; `scriptActiveLists: 1` required |
+| script.list | workspaceId (req), archive? (`active` only; other values rejected since v14), view? (`full` \| `summary`), limit?, cursor? (summary extension below; full-view pages with `boundedReads: 1`) | { scripts: [...], nextCursor? } — one page of definitions plus `runtime` (default 100 rows, max 200, ≤ 480,000 bytes; see *Full-view pages*); summary pages are discriminated `{ view: "summary", scripts: ScriptSummary[], nextCursor? } |
+| script.get | workspaceId (req), scriptId (req), commandOffset? (positive integer, `boundedReads: 1`) | Full unarchived definition plus `runtime`; `scriptActiveLists: 1` required. A `command` too big for one reply is served in parts (see *Paged commands* below) |
 | script.create | workspaceId (req), name (req), command (req), mode (req: `service` \| `command`), cwd?, env?, category?, autoStart?, scriptId?, purpose? (`saved` \| `oneOff`), healthUrl?, readyPattern?, clearReadiness? (prepared; see below) | { id, workspaceId, name, command, mode, source, createdAt, cwd?, env?, category?, autoStart?, updatedAt?, purpose?, archivedAt?, lastRun?, healthUrl?, readyPattern? } — the persisted `WorkspaceScript` record |
 | script.archive | workspaceId (req), scriptIds (req: nonempty string array) | { archived: [scriptId, ...], skipped: [{ scriptId, reason }] } — 10.11 candidate; inactive commands only |
 | script.restore | workspaceId (req), scriptIds (req: nonempty string array) | { restored: [scriptId, ...], skipped: [{ scriptId, reason }] } — 10.11 candidate; restores visibility without starting |
@@ -38,9 +38,9 @@ not remove the owner's definition or output.
 | script.start | workspaceId (req), scriptId (req) | { ok, scriptId } — the runtime status is flipped to `starting` (new in intentd, within v9.12 — intent-hq/intent#4858) **before the reply**, atomically with the supervisor's registration and with the previous run's terminal fields (`pid`, `startedAt`, `exitCode`, `stoppedAt`, `error`, `detectedUrl`) cleared, so a `script.status` read after the reply never observes the pre-launch `idle`; the owned launch task publishes the `starting` transition as `script:state` strictly ahead of the spawn's `running` (or `exited` + `error` on a launch failure). A script already `running` or `starting` is a no-op |
 | script.stop | workspaceId (req), scriptId (req) | { ok, scriptId } — stops an active run; resetting a finished script from `exited` to `idle` emits a `script:state` snapshot (§6.5; see the self-contained change extension below). On a **non-running** script that carries the was-running marker this is the **dismiss** affordance: it clears the marker (`previouslyRunning` on a service row, the hydrated `lost` reading on a command row; in memory plus a best-effort row write), emits the cleared runtime snapshot, and returns ok instead of erroring. Stopping an already idle, unmarked script is a no-op with no state event |
 | script.restart | workspaceId (req), scriptId (req) | { ok, scriptId } |
-| script.output | workspaceId (req), scriptId (req), maxLines? | output text of the latest run, read from its on-disk log (see *Script output persistence*) |
+| script.output | workspaceId (req), scriptId (req), maxLines? | output text of the latest run, read from its on-disk log (see *Script output persistence*): the newest `maxLines` lines (default 100, 1–10,000) under a `[... lines]` header, cut to fit 480,000 bytes (see *Bounded output reads*) |
 | script.status | workspaceId (req), scriptId (req) | { status, restartCount, pid?, exitCode?, startedAt?, stoppedAt?, error?, detectedUrl?, previouslyRunning?, ready?, readiness? } — the `ScriptRuntimeState` snapshot; `status` and `restartCount` are always present, every other field is **omitted when unset** (never `null` — a cleared `exitCode` is absent, so hooks test `exitCode !== undefined`); `status` is one of `idle \| starting \| running \| restarting \| exited`. `exited` **always** carries `exitCode` (new in intentd, unreleased): when the real status was not observable it is the sentinel `-1` together with an `error` naming the cause — see the total exit contract note below. `starting` (new in intentd, within v9.12 — intent-hq/intent#4858) is the `script.start` launch window: set synchronously before `script.start` replies, with the previous run's terminal fields cleared, and held until the spawn's `running` (or `exited` on a launch failure), so a poll issued right after `start` never reads the pre-launch `idle` or a stale `exitCode`. `restarting` (new in intentd, monorepo#1318) is the transient restart-in-flight state between an exit and the next spawn attempt — the service auto-restart backoff window and the `script.restart` stop→start gap — so a poll taken mid-restart never reads as a final `exited`/`idle`; the respawn flips it back to `running`. `previouslyRunning?: true` (new in intentd, within v5.1) marks a **service** script that was running when the daemon last stopped; a command script in the same situation hydrates as `exited` / `exitCode: -1` / `error` instead — see the was-running marker note below |
-| script.run | workspaceId (req), scriptId (req), maxLines?, timeoutSeconds? (alias timeout?) | { exitCode?, output, timedOut?, warning? } — `exitCode` follows the same total exit contract as the runtime state (new in intentd, unreleased): `-1` when the exit was unobservable — see the total exit contract note below |
+| script.run | workspaceId (req), scriptId (req), maxLines?, timeoutSeconds? (alias timeout?) | { exitCode?, output, outputTruncated?, timedOut?, warning? } — `output` keeps the newest bytes that fit 480,000 bytes once JSON-escaped, and `outputTruncated: true` (absent otherwise) marks a cut (see *Bounded output reads*); `exitCode` follows the same total exit contract as the runtime state (new in intentd, unreleased): `-1` when the exit was unobservable — see the total exit contract note below |
 
 #### Script output persistence (new in intentd, unreleased)
 
@@ -69,6 +69,47 @@ across daemon restarts. No wire shape changes.
 - **Live attach.** A script PTY keeps only a 64 KiB in-memory scrollback for late live
   attaches; exited script PTY sessions are released. Use `script.output` for the full output.
 
+#### Bounded output reads
+
+`script.output`, `script.run`'s `output` and `terminal.readOutput` (§5.9) cap the text
+they return so each reply stays under the 500 KiB read payload budget. After the line
+limit, the text is cut to the newest part whose **JSON-escaped** size is at most
+480,000 bytes (a control character such as ESC counts as the six bytes of
+`\u001b`). A cut inside a line drops the rest of that line, so the text starts on a
+whole line. `script.output` and `terminal.readOutput` keep their bare-string results
+and say so in the header: `[showing last <n> of <total> lines; older output omitted to fit
+the reply size limit]` (`terminal.readOutput` puts the bracket after its `Terminal …
+(cwd: …)` prefix). `script.run` sets `outputTruncated: true`. To read older output, use
+the paginated form (`paginate: true` / `pageToken`). Its `{ items, nextToken }` pages are
+bounded the same way: lines are taken newest first until their JSON-escaped text would
+pass 480,000 bytes, and `nextToken` then resumes at the first line left out. A newest line
+too big on its own is split on a UTF-8 boundary: the page serves the line's last part that
+fits and adds `lineContinues: true`, and `nextToken` resumes inside that line, so the next
+page's newest item is the line's earlier part. Prepend that item to the previous page's
+oldest item to rebuild the line; no output is dropped.
+
+#### Paged commands
+
+With `boundedReads: 1`, a `script.get` reply stays within 480,000 bytes. When the whole
+definition fits, the reply is unchanged. Otherwise `command` holds the next part of the
+command and the reply adds `commandTruncated: true`, `commandBytes` (the full command's
+UTF-8 size), `commandOffset` (the byte where this part starts) and `nextCommandOffset`
+(where the next part starts, always on a UTF-8 boundary; `null` after the last part).
+Request the next part with `commandOffset: <nextCommandOffset>` and append each part's
+`command`: the parts rebuild the command byte for byte. Other fields ride every part.
+A `commandOffset` that is not a positive integer, not a UTF-8 boundary, or not inside the
+command fails `-32602`. Every part carries the row's other fields, and every
+`script.create` replacement stamps a new `updatedAt`. A client restarts from the first part
+when `commandBytes` **or** `updatedAt` changes between parts (the definition was replaced;
+a same-size replacement changes only `updatedAt`), and treats a result whose UTF-8 size does
+not equal `commandBytes` as incomplete. Each part carries at least 64 KiB of
+JSON-escaped command, even when the row's other fields already fill the budget (only
+possible for a definition saved before the field size limits; such a reply can exceed the
+budget by those fields' own size), so a command takes a bounded number of parts. Clients
+stop after 4,096 parts, or on a `nextCommandOffset` that does not move forward, and treat
+the read as incomplete. The full-view `script.list` row of such a definition
+carries `commandOmitted` / `commandBytes` instead; clients read it whole with `script.get`.
+
 #### Active-only compact lists (protocol 14 breaking contract)
 
 **Shipped in protocol 14.0; intentd advertises `scriptActiveLists: 1`.** This
@@ -89,8 +130,10 @@ not conforming. Do not delete archived definitions. Internal targeted recovery
 of a known run is distinct from list enumeration. Empty lists must not seed
 replacement scripts merely because archived definitions exist.
 
-**Compatibility and shape.** Omitted `view` and `view: "full"` keep the unpaged
-`{ scripts: [...] }` / `{ monitors: [...] }` shapes and ascending UTF-8 lexical
+**Compatibility and shape.** Omitted `view` and `view: "full"` keep the
+`{ scripts: [...] }` / `{ monitors: [...] }` shapes (on a host advertising
+`boundedReads: 1` a `script.list` full view is always paged, with or without
+`limit`/`cursor`; see *Full-view pages*) and ascending UTF-8 lexical
 `(createdAt, id/monitorId)` order, but now only for unarchived scripts / active
 monitors. This intentional semantic removal requires a major version, even
 though JSON shapes remain compatible. Summary requests use `view: "summary"`;
@@ -105,7 +148,7 @@ assumptions are not supported. Explicit known-ID output/status remain available.
 **Pages.** `limit?: integer` is 1–200, default 100. `cursor?: string` is nonempty
 and opaque. Invalid view, null, types, fractional/out-of-range limits and
 malformed/mismatched cursors fail `-32602`; do not clamp. `limit`/`cursor` with
-full/omitted view also fail. No `purpose` server filter is introduced. Monitors
+full/omitted view also fail, except on `script.list` with `boundedReads: 1` (below). No `purpose` server filter is introduced. Monitors
 accept the existing `agentId?` filter; optional `state: "active"` is redundant,
 and every other supplied state (including `all` and `terminal`) fails in either
 view. Filters apply before paging; unknown owners return empty. Read at most
@@ -135,6 +178,26 @@ is added; absent legacy `purpose` means saved. Refresh/reconnect resets the
 boundary, reads one page and preserves selected IDs. Only explicit user-requested
 full-data operations such as export may traverse cursors automatically, and
 those operations are still unarchived-only. There is no archive/history view.
+
+**Full-view pages (`boundedReads: 1`) — behaviour change.** Exact integer
+`server.capabilities.boundedReads: 1` in `client.hello` means this host pages its
+lists by default. The `script.list` full view (omitted `view` or `view: "full"`) is
+then **always paged**: `limit?` (1–200, **default 100**) and `cursor?` (nonempty,
+opaque) are validated as for summary pages, and a request with neither returns the
+first page. Before this change the full view was an unpaged list; a client that does
+not follow `nextCursor` now sees only the first page. A page holds at most `limit`
+rows and at most 480,000 bytes of row JSON, but always at least one row, so a reply stays under the 500 KiB read
+budget. A definition too big on its own drops its largest fields, largest first, until
+it fits: each becomes `<field>Omitted: true` plus `<field>Bytes` (a string's UTF-8 length,
+otherwise its JSON size), and `script.get` returns it whole. Other rows keep the full shape and ascending
+UTF-8 lexical `(createdAt, id)` order; the result is `{ scripts, nextCursor? }`, with
+`nextCursor` only while more rows follow (no `view` discriminator). Full-view cursors are
+bound to the method, workspace and the full view; a summary cursor is rejected here and
+vice versa. Callers that need every definition (repository script detection, saving
+scripts to the repository config, explicit bulk operations) follow `nextCursor` until it
+is absent. Hosts without the capability serve the unpaged list and reject `limit` /
+`cursor` on the full view with `-32602`, so clients send them only when
+`boundedReads: 1` is advertised. `scriptMonitor.list` full views are unchanged.
 
 **ScriptSummary.** A distinct read type, never an editable/upsert definition:
 
@@ -223,6 +286,25 @@ an existing definition, or stopping its process. The error suggests `.` or
 omitting `cwd` for the workspace root. This validation checks path syntax, not
 directory existence, and does not normalize paths. Launch-time validation is
 retained for previously stored definitions.
+
+**Field size limits.** `script.create` (including an upsert of an existing
+`scriptId`) refuses an oversized field with `InvalidParams` (`-32602`) whose message
+names the field and its limit, before anything is written, replaced or stopped. Sizes
+are UTF-8 bytes, not characters:
+
+| Field | Limit |
+|---|---|
+| `name`, `cwd`, `category` | 4 KiB (4,096 bytes) each |
+| `env` | 64 KiB (65,536 bytes): every key plus every value |
+| `command` | none; an oversized command is read in parts (see *Paged commands*) |
+
+The same limits apply when a workspace's first `script.list` seeds definitions from the
+repository's `.intent/config.json`: an over-limit entry is skipped (and logged) while the
+others still seed. The prepared `healthUrl` and `readyPattern` fields are not stored by
+this daemon, so no limit applies to them yet. **Known limit:** definitions saved before these limits
+existed are not rewritten or dropped. `script.get` and `script.list` keep serving them
+as stored, a workspace transfer import copies them unchanged, and the limits apply the
+next time such a definition is saved through `script.create`.
 
 > **Implemented lifecycle candidate (10.11).** The additive purpose/archive fields, filters and
 > archive/restore methods above are gated by `scriptLifecycle: 1`, as specified
