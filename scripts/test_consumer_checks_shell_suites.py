@@ -6,7 +6,10 @@ intent#7900 five times ("exec: env: not found") until intent#7905, because
 scripts/rust-changed-tests.test.sh ran only in the monorepo queue. The
 reusable consumer-checks workflow now runs it (and intentd's own suite) on the
 intentd PR when scripts/changed-tests.sh or scripts/with-test-policy.sh
-change. These tests keep those steps in place and exercise the selection.
+change. intentd#2896 then broke scripts/test_rust_test_policy.py the same way
+(intent#8277, ejected 31 times), so the workflow also runs that test when a
+file scripts/rust_test_policy_manifest.py lists changes. These tests keep
+those steps in place and exercise the selection.
 """
 from pathlib import Path
 import os
@@ -109,6 +112,8 @@ class WorkflowShape(unittest.TestCase):
             'status=0',
             'REQUIRE_BASH3=1 bash scripts/rust-changed-tests.test.sh || status=1',
             'REQUIRE_BASH3=1 bash packages/intentd/scripts/test-changed-tests.sh || status=1',
+            # intentd#2896 broke this one only in the queue (intent#8277).
+            'python3 -S -B scripts/test_rust_test_policy.py || status=1',
             'exit "$status"',
         ])
 
@@ -116,6 +121,8 @@ class WorkflowShape(unittest.TestCase):
         header = self.text.split('\nname: ', 1)[0]
         self.assertIn('Changed-tests shell suites', header)
         self.assertIn('intent#7900', header)
+        self.assertIn('intent#8277', header)
+        self.assertIn('scripts/rust_test_policy_manifest.py', header)
         self.assertIn('intent#7191', header)
 
     def test_monorepo_shell_tests_run_this_test(self):
@@ -130,7 +137,8 @@ class WorkflowShape(unittest.TestCase):
 
 
 GIT_ENV = {**{k: v for k, v in os.environ.items()
-              if k not in ('GITHUB_OUTPUT', 'SELF_TEST', 'COMPONENT', 'INTENTD_DIR')},
+              if k not in ('GITHUB_OUTPUT', 'SELF_TEST', 'COMPONENT', 'INTENTD_DIR',
+                           'RUST_TEST_POLICY_MANIFEST')},
            'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_CONFIG_NOSYSTEM': '1',
            'GIT_AUTHOR_NAME': 'fixture', 'GIT_AUTHOR_EMAIL': 'fixture@example.invalid',
            'GIT_COMMITTER_NAME': 'fixture', 'GIT_COMMITTER_EMAIL': 'fixture@example.invalid'}
@@ -192,11 +200,14 @@ class Selection(unittest.TestCase):
             git(child, 'remote', 'set-url', 'origin', origin_url)
         return mono
 
-    def select(self, mono, base='', test='', component='intentd', self_test=None, bash='bash'):
+    def select(self, mono, base='', test='', component='intentd', self_test=None, bash='bash',
+               manifest=None):
         output = self.temp / 'github-output'
         output.write_text('')
         env = {**GIT_ENV, 'GITHUB_OUTPUT': str(output), 'COMPONENT': component,
                'BASE_SHA': base, 'TEST_SHA': test}
+        if manifest is not None:
+            env['RUST_TEST_POLICY_MANIFEST'] = str(manifest)
         if self_test is not None:
             env['SELF_TEST'] = self_test
         result = subprocess.run([bash, str(SELECT)], cwd=mono, env=env, capture_output=True, text=True)
@@ -218,6 +229,40 @@ class Selection(unittest.TestCase):
                 self.assertEqual(values['selected'], 'true')
                 self.assertEqual(values['reason'], f'this change touches {path}')
                 git(self.origin, 'branch', '-q', '-D', 'pr')
+
+    def test_policy_launcher_helpers_select_and_new_ones_are_watched(self):
+        # The intentd#2896 shape: coverage-all.sh starts calling a helper.
+        base, merge = self.pr({'scripts/coverage-all.sh': 'bash scripts/ci-killed-rustc-retry.sh cargo\n',
+                               'scripts/ci-killed-rustc-retry.sh': 'exec "$@"\n'})
+        values, _ = self.select(self.checkout(), base, merge)
+        self.assertEqual(values['selected'], 'true')
+        self.assertEqual(values['reason'], 'this change touches scripts/ci-killed-rustc-retry.sh '
+                                           'scripts/coverage-all.sh')
+        git(self.origin, 'merge', '-q', '--ff-only', 'pr')
+        git(self.origin, 'branch', '-q', '-D', 'pr')
+        # A later change to only the helper (its CI-only stderr merge) selects too.
+        base, merge = self.pr({'scripts/ci-killed-rustc-retry.sh': 'exec "$@" 2>&1\n'})
+        values, _ = self.select(self.checkout(), base, merge)
+        self.assertEqual(values['selected'], 'true')
+        self.assertEqual(values['reason'], 'this change touches scripts/ci-killed-rustc-retry.sh')
+
+    def test_unreferenced_policy_neighbour_skips(self):
+        # Mentioned only in a comment, as a prose cross-reference.
+        base, merge = self.pr({'scripts/coverage-e2e.sh': '# like scripts/other.sh\ncargo\n'})
+        git(self.origin, 'merge', '-q', '--ff-only', 'pr')
+        git(self.origin, 'branch', '-q', '-D', 'pr')
+        base, merge = self.pr({'scripts/other.sh': 'changed\n'})
+        values, _ = self.select(self.checkout(), base, merge)
+        self.assertEqual(values['selected'], 'false')
+
+    def test_failed_manifest_selects_with_a_notice(self):
+        base, merge = self.pr({'README.md': 'changed\n'})
+        broken = self.temp / 'broken-manifest.py'
+        broken.write_text('raise SystemExit(2)\n')
+        values, stdout = self.select(self.checkout(), base, merge, manifest=broken)
+        self.assertEqual(values['selected'], 'true')
+        self.assertIn('::notice::', stdout)
+        self.assertIn('could not list the rust-test-policy files', values['reason'])
 
     def test_deleting_a_watched_script_selects(self):
         main = git(self.origin, 'rev-parse', 'main')

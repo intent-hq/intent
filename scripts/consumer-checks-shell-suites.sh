@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 #
 # Decide whether monorepo-consumer-checks runs the changed-tests shell suites
-# (scripts/rust-changed-tests.test.sh and intentd's scripts/test-changed-tests.sh)
-# for an intentd caller. Those suites otherwise run only in the monorepo merge
-# queue, so an intentd change to the scripts they drive surfaced as a failed
-# rolling pin bump instead of on its own PR: intentd#2720 added an `env` call
-# that the monorepo stub PATH did not allow, and intent#7900 was ejected from
-# the queue five times until intent#7905.
+# (scripts/rust-changed-tests.test.sh, scripts/test_rust_test_policy.py and
+# intentd's scripts/test-changed-tests.sh) for an intentd caller. Those suites
+# otherwise run only in the monorepo merge queue, so an intentd change to the
+# scripts they drive surfaced as a failed rolling pin bump instead of on its
+# own PR: intentd#2720 added an `env` call that the monorepo stub PATH did not
+# allow, and intent#7900 was ejected from the queue five times until
+# intent#7905; intentd#2896 added a coverage helper the policy test did not
+# copy, and intent#8277 was ejected 31 times until intent#8301 and intent#8303.
 #
 # Selects when the caller's own change touches a watched file: the diff from
 # BASE_SHA (the PR base, or the merge group's base) to TEST_SHA (the commit
@@ -28,12 +30,16 @@ self_test=${SELF_TEST:-false}
 base=${BASE_SHA:-}
 test_sha=${TEST_SHA:-}
 intentd_dir=${INTENTD_DIR:-packages/intentd}
-# The scripts under test, intentd's own suite and the files the two suites
-# copy or name: rust-changed-tests.test.sh copies the Makefile and expects
+# The scripts under test, intentd's own suite and the files the suites copy or
+# name: rust-changed-tests.test.sh copies the Makefile and expects
 # test-without-provider-clis.sh in runner argv; test-changed-tests.sh copies
-# coverage-storage.py.
+# coverage-storage.py. test_rust_test_policy.py copies the files that
+# scripts/rust_test_policy_manifest.py derives from the caller head (a new
+# helper the launchers reference is added and so watched), appended below.
 watched="scripts/changed-tests.sh scripts/with-test-policy.sh scripts/test-changed-tests.sh
 scripts/coverage-storage.py scripts/test-without-provider-clis.sh Makefile"
+# RUST_TEST_POLICY_MANIFEST overrides the lister for the selection tests.
+manifest=${RUST_TEST_POLICY_MANIFEST:-$(dirname "${BASH_SOURCE[0]}")/rust_test_policy_manifest.py}
 
 decide() {
   printf 'selected=%s\nreason=%s\n' "$1" "$2" >>"$GITHUB_OUTPUT"
@@ -71,11 +77,18 @@ for sha in "$base" "$test_sha"; do
   fi
 done
 
+# The manifest's names match [A-Za-z0-9_.-]+ under scripts/, so word
+# splitting $watched below is safe.
+policy_files=$(python3 -I -B "$manifest" --watched --component "$intentd_dir" --repo-root .) ||
+  unknown "could not list the rust-test-policy files"
+watched="$watched
+$policy_files"
+
 status=0
-# shellcheck disable=SC2086 # $watched is a fixed list of literal paths.
+# shellcheck disable=SC2086 # $watched is a list of literal paths without spaces.
 git -C "$intentd_dir" diff --quiet "$base" "$test_sha" -- $watched || status=$?
 case "$status" in
-  0) decide false "this change does not touch the watched changed-tests files" ;;
+  0) decide false "this change does not touch the watched changed-tests or test-policy files" ;;
   1)
     # shellcheck disable=SC2086
     changed=$(git -C "$intentd_dir" diff --name-only "$base" "$test_sha" -- $watched | tr '\n' ' ')
