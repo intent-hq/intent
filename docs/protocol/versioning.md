@@ -741,6 +741,13 @@ secrets are masked before a record is kept. No frame, nodeProtocol or error
 code changes, and there is no public protocol version bump: clients detect it
 only through `remoteLinkTraffic: 1`.
 
+**Terminal programs (additive).** `terminal.list` rows gain `foregroundProcess` and
+`lastProcess` (the running program and the previous one, `null` while only the shell
+runs), and the owner-only transient `terminal:process` event reports each change
+([terminal methods](./methods/files-terminal-browser.md)). No method, error code or
+surface count changes, and there is no public protocol version bump: clients detect it
+by the presence of `foregroundProcess` on `terminal.list` rows.
+
 **Remote scripts — capability `remoteScripts: 1` (additive), nodeProtocol 8.**
 A remote agent's `script.*` calls are now [forwarded](./workspace-routing.md#remote-agents-on-the-executor-link)
 to the backend instead of refused. When a remote agent starts a saved script,
