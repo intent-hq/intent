@@ -85,8 +85,10 @@ default, so new chats and agents reply with a fixed message after a few seconds.
 `MOCK_AGENT_BEHAVIOR` (JSON) or `MOCK_AGENT_BEHAVIOR_FILE` (re-read every turn) to change
 the reply; the script header lists the options. The mock default lives in its own
 `$DEV_DATA_DIR/config.mock-agent.toml` (recorded as `mockAgentConfig`), so a later run
-without the switch keeps its ordinary settings. The switch is stack-only: app mode uses
-the installed daemon, which it cannot reconfigure.
+without the switch keeps its ordinary settings. Chats created on the mock provider stay in
+the shared database and fail to resume without the switch; use a separate `DEV_DATA_DIR`
+to keep them apart. The switch is stack-only: app mode uses the installed daemon, which it
+cannot reconfigure.
 
 ### Open a Chat or Note in the App Sandbox
 

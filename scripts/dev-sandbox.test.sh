@@ -187,6 +187,10 @@ import sys
 if os.environ.get("FE_SOCKET_LOG"):
     with open(os.environ["FE_SOCKET_LOG"], "w", encoding="utf-8") as handle:
         handle.write(os.environ["INTENTD_SOCKET"])
+if os.environ.get("FE_ENV_LOG"):
+    keys = ("INTENTD_CONFIG", "MOCK_AGENT_SCRIPT_PATH", "MOCK_AGENT_BEHAVIOR")
+    with open(os.environ["FE_ENV_LOG"], "w", encoding="utf-8") as handle:
+        json.dump({key: os.environ.get(key) for key in keys}, handle)
 if os.environ.get("FE_IGNORE_TERM") == "1":
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -258,6 +262,10 @@ record = {"args": sys.argv[1:], "INTENTD_DATA_DIR": os.environ.get("INTENTD_DATA
 with open(os.path.join(os.environ["INTENTD_DATA_DIR"], "settings-calls.jsonl"), "a", encoding="utf-8") as handle:
     handle.write(json.dumps(record) + "\n")
 PY
+  if [[ ${FAKE_SETTINGS_HANG:-0} == 1 ]]; then
+    # timing-guard: stands in for a daemon that never answers; the sandbox must kill it
+    exec python3 -c 'import time; time.sleep(120)' fake-settings-hang
+  fi
   exit "${FAKE_SETTINGS_EXIT:-0}"
 fi
 exec python3 - "$INTENTD_DATA_DIR/intentd.sock" <<'PY'
@@ -459,6 +467,7 @@ PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" DEV_DATA_DIR="
   SANDBOX_STATE_DIR="$state_dir" MOCK_AGENT=1 \
   INTENTD_WORKSPACES_DIR="$temp_dir/ordinary workspaces" INTENTD_ASSERT_HERMETIC_ROOT=0 \
   INTENTD_BIN="$temp_dir/fake intentd" HEALTH_MODE=ok SANDBOX_READY_TIMEOUT="$ready_timeout" \
+  FE_ENV_LOG="$temp_dir/mock-fe-env.json" \
   "$BASH" "$script" stack >"$temp_dir/mock.out" 2>&1 &
 sandbox_pid=$!
 wait_for_ready "$temp_dir/mock.out" || fail "MOCK_AGENT=1 stack did not become ready: $(cat "$temp_dir/mock.out")"
@@ -482,6 +491,12 @@ state = json.load(open(state_path, encoding="utf-8"))
 assert state["mockAgent"] is True and state["mockAgentConfig"] == config, state
 PY
 grep -q "Mock agent: .* is the default provider" "$temp_dir/mock.out" || fail "MOCK_AGENT=1 was not announced"
+python3 - "$temp_dir/mock-fe-env.json" <<'PY' || fail "mock-agent settings leaked into the frontend: $(cat "$temp_dir/mock-fe-env.json")"
+import json
+import sys
+values = json.load(open(sys.argv[1], encoding="utf-8"))
+assert all(value is None for value in values.values()), values
+PY
 SANDBOX_STATE_DIR="$state_dir" "$BASH" "$script" status >"$temp_dir/mock-status.out" 2>&1 || fail "mock stack status failed"
 grep -q "mockAgent=1" "$temp_dir/mock-status.out" || fail "status did not report the mock agent: $(cat "$temp_dir/mock-status.out")"
 kill -TERM "$sandbox_pid"
@@ -523,6 +538,23 @@ grep -q "could not make the mock agent the default provider" "$temp_dir/mock-fai
 [[ ! -e "$state_dir/stack.json" ]] || fail "failed mock default left stack state"
 wait_until no_process_matches "$temp_dir/mock-fail data/intentd.sock" || true
 pgrep -f "$temp_dir/mock-fail data/intentd.sock" >/dev/null && fail "failed mock default left an intentd descendant"
+
+# A settings call that never answers fails within the readiness budget and
+# is cleaned up, instead of holding the sandbox (and its signal traps) forever.
+port=$(free_port)
+set +e
+PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" DEV_DATA_DIR="$temp_dir/mock-hang data" \
+  SANDBOX_STATE_DIR="$state_dir" MOCK_AGENT=1 FAKE_SETTINGS_HANG=1 \
+  INTENTD_BIN="$temp_dir/fake intentd" HEALTH_MODE=ok SANDBOX_READY_TIMEOUT=3 \
+  "$BASH" "$script" stack >"$temp_dir/mock-hang.out" 2>&1
+status=$?
+set -e
+[[ "$status" -eq 1 ]] || fail "hung mock default returned $status instead of 1: $(cat "$temp_dir/mock-hang.out")"
+grep -q "did not accept the mock default provider within 3s" "$temp_dir/mock-hang.out" || fail "hung mock default was not explained: $(cat "$temp_dir/mock-hang.out")"
+[[ ! -e "$state_dir/stack.json" ]] || fail "hung mock default left stack state"
+wait_until no_process_matches "fake-settings-hang" "$temp_dir/mock-hang data/intentd.sock" || true
+pgrep -f "fake-settings-hang" >/dev/null && fail "hung mock default left the settings call running"
+pgrep -f "$temp_dir/mock-hang data/intentd.sock" >/dev/null && fail "hung mock default left an intentd descendant"
 
 # A missing agent script, a bad value, or a non-stack mode is rejected up front.
 rm "$temp_dir/fe/e2e/mock-acp-agent.js"
