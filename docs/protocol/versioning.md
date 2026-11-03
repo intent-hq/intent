@@ -8,8 +8,20 @@ capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `15.3` — plain-folder workspaces, on top of 15.2's retired workspaces and 15.1's discussions, guest roles, scoped repository pages and GitLab child Git policy (intentd advertises all four at protocol 15.2); 15.3 is not a shipped-version claim.
+**Documented version:** `15.4` — bounded object reads, on top of 15.3's plain-folder workspaces, 15.2's retired workspaces and 15.1's discussions, guest roles, scoped repository pages and GitLab child Git policy (intentd advertises all four at protocol 15.2); 15.4 is not a shipped-version claim.
 Every extension retains its independent support gate.
+
+**Version 15.4 — bounded object reads (additive methods, capped replies).**
+[Bounded object reads](./methods/files-terminal-browser.md#bounded-object-reads-154) let a
+client keep `file.read`, `git.showFile` and `note.readAsset` replies under the 500 KiB read
+budget (480,000 bytes for the object field) so they no longer block the main connection.
+They add the optional `maxBytes` param (result markers `truncated` and `totalBytes`), and two
+router methods that read the whole object in windows over a transfer connection:
+`git.showFileChunk` and `note.readAssetChunk`. Requests without `maxBytes` are
+byte-identical to before (the whole object), so older callers keep working. The shared
+`boundedReads: 1` capability advertises the bounded read defaults. The
+documented surface is **491 / 433 / 58** (dispatchable / router / fast path).
+
 
 **Version 15.3 — plain-folder workspaces (additive).**
 [Plain-folder workspaces](./methods/workspace.md#plain-folder-workspaces) work directly in

@@ -182,7 +182,7 @@ CDP_PORT ?= $(call dev_port_value,CDP_PORT)
 # An explicit INTENTD_SOCKET always takes precedence.
 BRIDGE_PLATFORM ?= $(shell uname -s)
 
-.PHONY: check-app-ui-targets check-app-guide-sources check-agent-feature-toggles check-protocol-status-labels check-doc-links check-note-truncated-read-contract check-browser-routing-contract check-suggested-prompts-contract check-turn-start-contract check-fixture-copies check-agent-worker-contract test-transfer-selection-contract check-transfer-selection-contract check-backend-keychain-contract ports status consumer-checks docs-check check-protocol-catalog check-mcp-bindings mcp-bindings-doc check-makefile-targets check-protocol-field-parity check-rulesets event-catalog-check shipped-in release-status rpc
+.PHONY: check-app-ui-targets check-app-guide-sources check-agent-feature-toggles check-transfer-methods check-protocol-status-labels check-doc-links check-note-truncated-read-contract check-browser-routing-contract check-suggested-prompts-contract check-turn-start-contract check-fixture-copies check-agent-worker-contract test-transfer-selection-contract check-transfer-selection-contract check-backend-keychain-contract ports status consumer-checks docs-check check-protocol-catalog check-mcp-bindings mcp-bindings-doc check-makefile-targets check-protocol-field-parity check-rulesets event-catalog-check shipped-in release-status rpc
 ports: ## Print this worktree's resolved development ports
 	@set -- .dev/sandbox/*.json; if [ -e "$$1" ]; then \
 		echo "[ports] Note: these ports are for the next start; read running ports from 'make sandbox-status' or .dev/sandbox/<mode>.json." >&2; \
@@ -329,6 +329,9 @@ check-protocol-field-parity: ensure-intentd-submodule ensure-fe-submodule ## Che
 # An FE-only toggle or a stale EXEMPT entry warns; see docs/README.md.
 check-agent-feature-toggles: ensure-intentd-submodule ensure-fe-submodule ## Check every intentd agentFeatures.* setting has a cloudlands-fe Agent features toggle (or a reasoned EXEMPT entry) and appears in the settings.md Agent features list
 	@node scripts/check-agent-feature-toggles.mjs --intentd-dir "$(INTENTD_DIR)" --fe-dir "$(FE_DIR)"
+
+check-transfer-methods: ensure-intentd-submodule ensure-fe-submodule ## Check every intentd BulkTransfer method the app calls rides a cloudlands-fe transfer connection (TRANSFER_METHODS), and that TRANSFER_METHODS lists no capped read
+	@node scripts/check-transfer-methods.mjs --intentd-dir "$(INTENTD_DIR)" --fe-dir "$(FE_DIR)"
 
 # The live main-branch rulesets of intent, intentd and cloudlands-fe (required
 # CI Gate check, thread resolution, merge queue) are snapshotted under
