@@ -414,6 +414,32 @@ and wakeOrCreate results copy `notice`, `nodeId`, `nodeName` and
 subset. Agent work is exchanged as the hub ref names in the workspace's own
 repository instead of a separate hub.
 
+`workspace.create` accepts `initialAgent.placement` on the same backend, with
+the same closed object and validation as `agent.create`. The placement checks,
+the [remote-compatibility](./provider-profiles.md#remote-compatibility) check
+and the model check of [placement across machines](#placement-across-machines),
+and admission all run under `workspace.create`'s
+[pre-side-effect validation](./workspace.md#51-workspace) ("Pre-side-effect
+validation" in its notes): a `-32602` (a malformed or `null` placement, `placement-unavailable`,
+`profile-not-remote-compatible` or `model-unavailable`) creates no workspace,
+worktree, event or agent. After the workspace commits, the initial agent is
+created on the chosen machine as by `agent.create`: the result's
+`initialAgent` carries `nodeId`, `nodeName`, `placement` and
+`effectiveIsolation`, and the result adds the same `notice`. If the launch
+fails before the reply, the workspace and the initial agent are kept (the
+agent keeps its placement with `placementError` and never falls back to
+local), and the reply is the subset form of the
+[post-creation error envelope](../model-platform-routing.md#per-method-launch-responses):
+`-32603` with `data: { code: "launch-failed", retryable: false, workspaceId,
+launch: { agentId, state: "failed" }, cause: { code, message } }`, where
+`workspaceId` is the created workspace, `agentId` the kept initial agent and
+`cause.code` the `placementError.code` (for example `remote-launch-failed`).
+No result accompanies the error and it is never `-32602`; the caller fetches
+the workspace by `workspaceId`. A failure the machine reports after the reply
+surfaces on the initial agent like any remote start failure (`placementError`
+and `agent:updated`). An omitted `initialAgent.placement` keeps the initial
+agent local, as before.
+
 ##### Placement across machines
 
 The agent's provider reference must first be
