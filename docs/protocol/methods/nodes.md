@@ -312,7 +312,7 @@ on its machine as machine runs
 ([scripts of remote agents](./scripts.md#scripts-of-remote-agents-remotescripts-1)).
 The backend advertises it only together with `remoteMachines: 1`. Without it,
 a remote agent's `script.*` calls are refused and no script row carries
-`machineRuns`. The machine side also needs nodeProtocol 8: a protocol 7
+`machineRuns`. The machine side also needs nodeProtocol 8 or later: a protocol 7
 machine refuses its agents' `ws.script.*` calls itself, with
 `remote-agent-unsupported:`
 ([mixed versions](../node-link.md#saved-scripts-nodeprotocol-8)). A backend

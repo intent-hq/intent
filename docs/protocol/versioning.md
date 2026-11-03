@@ -762,7 +762,7 @@ transitions are published only as `script:changed`, never `script:state` or
 traffic capture also masks script environments. nodeProtocol 8 is a new link
 version because older peers reject unknown frame types; daemons offer
 `{ min: 7, max: 8 }`, so protocol 7 machines keep running agents. A remote
-agent's `ws.script.*` calls work only on a link that negotiated 8; otherwise its
+agent's `ws.script.*` calls work only on a link that negotiated 8 or later; otherwise its
 machine refuses them with `remote-agent-unsupported:` as before, and an existing
 machine run that meets a protocol 7 link fails to restart with
 `machine-update-required`. `RemoteMachine` rows gain `nodeProtocol`, the version
@@ -798,7 +798,8 @@ credentials no longer active on it (revoked or unknown) at `executor.revoke`,
 at bind and at startup, never another active credential's.
 nodeProtocol 9 adds `stop.final`, `stopAck.finalPush` and `hello.leaseAgents`;
 it is a new link version because a final stop removes the checkout, which an
-older machine would not do while still acknowledging. Daemons offer
+older machine would not do while still acknowledging. Protocol 9 keeps every
+protocol 8 frame, so saved scripts work on a link that negotiated 8 or 9. Daemons offer
 `{ min: 7, max: 9 }`; on a lower link the backend sends a plain stop, the final push is
 best-effort (accepted for 120 s after the acknowledgement), and the checkout
 stays until a later protocol 9 bind.

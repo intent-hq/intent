@@ -1838,8 +1838,8 @@ message "Update Intent on <machine> (it runs X; this backend needs Y or newer)."
 **nodeProtocol 7** is protocol 6 plus [stop acknowledgement](#stop-acknowledgement-nodeprotocol-7).
 It changes what a `stop` means to the backend, so it is a new version, not an
 optional field. A daemon that implements stop acknowledgement offers
-`{ min: 7, max: 7 }` on both sides (or `{ min: 7, max: 8 }` once it also
-implements protocol 8, below): version 6 was never released, so no peer
+`{ min: 7, max: 7 }` on both sides (or a higher `max` once it also
+implements protocol 8 or 9, below): version 6 was never released, so no peer
 keeps it, and a backend never runs a link on which stops cannot be confirmed.
 A version-6-only peer finds no common version and gets
 `machine-update-required` as above.
@@ -1848,8 +1848,9 @@ A version-6-only peer finds no common version and gets
 (the `script*` frames). Those are new frame types, which a protocol 7 peer
 rejects as `node-link-protocol`, so they need a new version. A daemon that
 implements them offers `{ min: 7, max: 8 }` on both sides, so a protocol 7
-peer still binds and runs agents. On a link that negotiated 7 the backend sends
-no script frame, and starting a remote agent's script fails as described in
+peer still binds and runs agents. Protocol 9 keeps them: on any link that
+negotiated 8 or later the script frames work, and on a link that negotiated 7
+the backend sends no script frame, and starting a remote agent's script fails as described in
 [saved scripts](#saved-scripts-nodeprotocol-8).
 
 **nodeProtocol 9** is protocol 8 plus the [final stop](#final-stop-nodeprotocol-9):
@@ -1883,11 +1884,11 @@ Each WebSocket binary message on `/node/link` is one JSON frame of at most
 | `request` | machine → backend | rpc | `requestId` (UUID), `agentId`, `method`, `params`, `timeoutMs` |
 | `response` | backend → machine | rpc | `requestId`, `outcome: { ok: value } \| { err: { code, message, data? } }` |
 | `cancelRequest` | machine → backend | rpc | `requestId` |
-| `scriptStart` | backend → machine | script | Protocol 8: see [saved scripts](#saved-scripts-nodeprotocol-8) |
-| `scriptStop` | backend → machine | script | Protocol 8: `agentId`, `scriptId`, `spawnId` |
-| `scriptStarted` | machine → backend | script | Protocol 8: `agentId`, `scriptId`, `spawnId`, `pid` |
-| `scriptOutput` | machine → backend | script | Protocol 8: `agentId`, `scriptId`, `spawnId`, `seq`, `data` |
-| `scriptExited` | machine → backend | script | Protocol 8: `agentId`, `scriptId`, `spawnId`, `exitCode?`, `error?` |
+| `scriptStart` | backend → machine | script | Protocol 8 or later: see [saved scripts](#saved-scripts-nodeprotocol-8) |
+| `scriptStop` | backend → machine | script | Protocol 8 or later: `agentId`, `scriptId`, `spawnId` |
+| `scriptStarted` | machine → backend | script | Protocol 8 or later: `agentId`, `scriptId`, `spawnId`, `pid` |
+| `scriptOutput` | machine → backend | script | Protocol 8 or later: `agentId`, `scriptId`, `spawnId`, `seq`, `data` |
+| `scriptExited` | machine → backend | script | Protocol 8 or later: `agentId`, `scriptId`, `spawnId`, `exitCode?`, `error?` |
 
 `intentdVersion` is recorded for diagnostics and is not a compatibility gate.
 Heartbeats run every 15 s and a link silent for 45 s is dead. The backend
@@ -1901,12 +1902,12 @@ retries with the backoff above.
 The executor credential admits exactly these link requests, enumerated in one
 constant with a golden test: `hello`, `heartbeat` / `heartbeatReply`, `launch`,
 `prompt`, `cancel`, `stop`, `ack`, `capabilities`, `response` (to the machine's
-`workspace.call` requests), `scriptStart` and `scriptStop` (protocol 8 only),
+`workspace.call` requests), `scriptStart` and `scriptStop` (protocol 8 or later; refused on 7),
 and git sessions on `/node/git` for agents on that credential's binding. Any
 other frame is `node-link-protocol`.
 `stopAck` travels machine → backend, so it is not in that list; the backend
 accepts it only on a protocol 7 or later link. Likewise the backend accepts
-`scriptStarted`, `scriptOutput` and `scriptExited` only on a protocol 8 link.
+`scriptStarted`, `scriptOutput` and `scriptExited` only on a protocol 8 or later link.
 
 ### Stop acknowledgement (nodeProtocol 7)
 
@@ -2507,7 +2508,7 @@ dropped.
 - **Mixed versions.** The machine routes `workspace_api` frames with its own
   table ([workspace API on the machine](#workspace-api-on-the-machine)), so a
   remote agent's `ws.script.*` calls reach the backend only from a machine that
-  implements protocol 8 **and** on a link that negotiated 8. On a protocol 7
+  implements protocol 8 or later **and** on a link that negotiated 8 or later. On a protocol 7
   machine, or on a link to a backend that offers only 7, every `ws.script.*`
   call (list and create included) fails on the machine with
   `remote-agent-unsupported:`, as before this contract; the agent's other calls

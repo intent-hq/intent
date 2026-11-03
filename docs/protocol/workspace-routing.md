@@ -272,10 +272,10 @@ Before an agent-initiated `git.commit`,
 the machine forwards the internal frame `git.commitPolicy` (refused from agent code)
 and the backend answers `{ "autoCommit": boolean }` with the workspace's effective
 auto-commit policy. The machine forwards `script.*` only on a link that
-negotiated nodeProtocol 8; a protocol 7 machine, or a link to a backend that
+negotiated nodeProtocol 8 or later; a protocol 7 machine, or a link to a backend that
 offers only 7, refuses it on the machine with `remote-agent-unsupported:`
 ([mixed versions](./node-link.md#saved-scripts-nodeprotocol-8)). A backend that
-negotiates 8 advertises [`remoteScripts: 1`](./methods/scripts.md#scripts-of-remote-agents-remotescripts-1); it keeps
+negotiates 8 or later advertises [`remoteScripts: 1`](./methods/scripts.md#scripts-of-remote-agents-remotescripts-1); it keeps
 the script, and the agent's runs of it happen on its machine over the
 [script frames](./node-link.md#saved-scripts-nodeprotocol-8). Tool outputs too large for a reply are written on the machine,
 next to the agent's worktree. Attachments are not materialized on machines, so a
