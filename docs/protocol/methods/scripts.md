@@ -102,7 +102,12 @@ command fails `-32602`. Every part carries the row's other fields, and every
 `script.create` replacement stamps a new `updatedAt`. A client restarts from the first part
 when `commandBytes` **or** `updatedAt` changes between parts (the definition was replaced;
 a same-size replacement changes only `updatedAt`), and treats a result whose UTF-8 size does
-not equal `commandBytes` as incomplete. The full-view `script.list` row of such a definition
+not equal `commandBytes` as incomplete. Each part carries at least 64 KiB of
+JSON-escaped command, even when the row's other fields already fill the budget (only
+possible for a definition saved before the field size limits; such a reply can exceed the
+budget by those fields' own size), so a command takes a bounded number of parts. Clients
+stop after 4,096 parts, or on a `nextCommandOffset` that does not move forward, and treat
+the read as incomplete. The full-view `script.list` row of such a definition
 carries `commandOmitted` / `commandBytes` instead; clients read it whole with `script.get`.
 
 #### Active-only compact lists (protocol 14 breaking contract)
@@ -126,8 +131,9 @@ of a known run is distinct from list enumeration. Empty lists must not seed
 replacement scripts merely because archived definitions exist.
 
 **Compatibility and shape.** Omitted `view` and `view: "full"` keep the
-`{ scripts: [...] }` / `{ monitors: [...] }` shapes (a `script.list` full view is paged
-when the caller sends `limit`/`cursor`; see *Full-view pages*) and ascending UTF-8 lexical
+`{ scripts: [...] }` / `{ monitors: [...] }` shapes (on a host advertising
+`boundedReads: 1` a `script.list` full view is always paged, with or without
+`limit`/`cursor`; see *Full-view pages*) and ascending UTF-8 lexical
 `(createdAt, id/monitorId)` order, but now only for unarchived scripts / active
 monitors. This intentional semantic removal requires a major version, even
 though JSON shapes remain compatible. Summary requests use `view: "summary"`;
