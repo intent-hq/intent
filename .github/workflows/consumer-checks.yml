@@ -52,14 +52,20 @@
 # Changed-tests shell suites (intentd callers only): the monorepo drives
 # intentd's scripts/changed-tests.sh and scripts/with-test-policy.sh through
 # scripts/rust-changed-tests.test.sh, whose stub PATH is a deliberate command
-# allowlist. When an intentd PR's own diff (base to the tested merge commit,
-# from the caller's github context) changes either script or a file the suites
-# copy, scripts/consumer-checks-shell-suites.sh selects that suite and
-# intentd's own scripts/test-changed-tests.sh, each run with REQUIRE_BASH3=1
-# against a pinned Bash 3.2, so the PR that breaks them is red here. Before
-# this, intentd#2720 merged green and the monorepo merge queue ejected the pin
-# bump intent#7900 five times ("exec: env: not found") until intent#7905. Other
-# intentd PRs pay only for the selection step; cloudlands-fe skips it. Monorepo
+# allowlist, and the root and intentd launchers (coverage-*.sh and every
+# helper they reference) through scripts/test_rust_test_policy.py. When an
+# intentd PR's own diff (base to the tested merge commit, from the caller's
+# github context) changes one of those scripts or a file the suites copy —
+# for the policy test, the list scripts/rust_test_policy_manifest.py derives
+# from the caller head — scripts/consumer-checks-shell-suites.sh selects these
+# suites and intentd's own scripts/test-changed-tests.sh (the Bash suites run
+# with REQUIRE_BASH3=1 against a pinned Bash 3.2), so the PR that breaks them
+# is red here. Before this, intentd#2720 merged green and the monorepo merge
+# queue ejected the pin bump intent#7900 five times ("exec: env: not found")
+# until intent#7905, and intentd#2896 ejected intent#8277 31 times (an
+# uncopied helper, then CI-only stderr merging) until intent#8301 and
+# intent#8303. Other intentd PRs pay only for the selection step;
+# cloudlands-fe skips it. Monorepo
 # PRs still defer these suites to the merge queue (intent#7191); the self-test
 # exercise runs them. Fix order when a change needs both sides (new expected
 # argv or output): first land a monorepo rust-changed-tests.test.sh that
@@ -240,6 +246,7 @@ jobs:
           status=0
           REQUIRE_BASH3=1 bash scripts/rust-changed-tests.test.sh || status=1
           REQUIRE_BASH3=1 bash packages/intentd/scripts/test-changed-tests.sh || status=1
+          python3 -S -B scripts/test_rust_test_policy.py || status=1
           exit "$status"
 
       - name: Verify connected harnesses and source revisions
