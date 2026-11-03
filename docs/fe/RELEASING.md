@@ -142,6 +142,16 @@ The following secrets must be configured in the `intent-hq/cloudlands-fe` reposi
    curl -sL https://github.com/intent-hq/cloudlands-releases/releases/download/beta/latest-mac.yml | grep version
    ```
 
+5. **Verify the npm dist-tags**
+
+   `publish-intent-web.yml` publishes `@intent-hq/web` under the `alpha` dist-tag after each tag-push Release Alpha, and moves `beta` to the beta channel version after Promote Beta. Check both match:
+
+   ```bash
+   npm view @intent-hq/web dist-tags --json   # alpha = the new version, beta = the beta feed version
+   ```
+
+   If a tag lags, re-run [Publish Intent Web](https://github.com/intent-hq/cloudlands-fe/actions/workflows/publish-intent-web.yml) or, as the fallback, `npm dist-tag add @intent-hq/web@<version> beta` from an npm account with publish rights. `make release-status` in the monorepo flags the same drift.
+
 ## Promoting to Stable
 
 After verifying a beta release, promote it to the stable channel using the **Release Stable** workflow:
@@ -203,7 +213,12 @@ when the requested CPU's asset is absent. Website changes need their own PR.
 
    # View aggregated release notes
    gh release view stable --repo intent-hq/cloudlands-releases
+
+   # The npm `latest` dist-tag follows stable (moved by publish-intent-web.yml)
+   npm view @intent-hq/web dist-tags --json   # latest = ${VERSION}
    ```
+
+   If `latest` lags, re-run [Publish Intent Web](https://github.com/intent-hq/cloudlands-fe/actions/workflows/publish-intent-web.yml) or, as the fallback, `npm dist-tag add @intent-hq/web@${VERSION} latest` from an npm account with publish rights.
 
 4. **Propose the website release notes PR**
 
