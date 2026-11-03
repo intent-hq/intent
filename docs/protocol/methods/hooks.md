@@ -180,7 +180,11 @@ the next fire and the TTL are computed:
   (≥ 10 000), `ttlMs` clamped into `[10000, 86400000]` with the 24-hour default/cap.
 - **`cron`** is a recurring standard **5-field** cron expression (minute hour
   day-of-month month day-of-week — no seconds field), evaluated in **UTC**. Invalid or
-  six-field expressions are rejected at schedule time. The next fire is recomputed from
+  six-field expressions are rejected at schedule time, as is an expression longer than
+  **4 KiB** (4,096 UTF-8 bytes, measured before trimming), with `-32602` naming `cron` and
+  the limit. Hooks scheduled before that limit keep their stored expression and stay
+  readable. `name` keeps its 50-character limit and `code` has none (`ws.hook.get` joins
+  oversized code read in parts). The next fire is recomputed from
   the expression after **every** run — natural ticks, `hook.runNow`, and the perpetual
   dispatch re-arm alike — so a triggered early run never skews the cadence. An
   expression with no computable future occurrence at schedule time is rejected; one

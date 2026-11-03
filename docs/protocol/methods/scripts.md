@@ -279,6 +279,23 @@ omitting `cwd` for the workspace root. This validation checks path syntax, not
 directory existence, and does not normalize paths. Launch-time validation is
 retained for previously stored definitions.
 
+**Field size limits.** `script.create` (including an upsert of an existing
+`scriptId`) refuses an oversized field with `InvalidParams` (`-32602`) whose message
+names the field and its limit, before anything is written, replaced or stopped. Sizes
+are UTF-8 bytes, not characters:
+
+| Field | Limit |
+|---|---|
+| `name`, `cwd`, `category` | 4 KiB (4,096 bytes) each |
+| `env` | 64 KiB (65,536 bytes): every key plus every value |
+| `command` | none; an oversized command is read in parts (see *Paged commands*) |
+
+The prepared `healthUrl` and `readyPattern` fields are not stored by this daemon, so no
+limit applies to them yet. **Known limit:** definitions saved before these limits
+existed are not rewritten or dropped. `script.get` and `script.list` keep serving them
+as stored, a workspace transfer import copies them unchanged, and the limits apply the
+next time such a definition is saved through `script.create`.
+
 > **Implemented lifecycle candidate (10.11).** The additive purpose/archive fields, filters and
 > archive/restore methods above are gated by `scriptLifecycle: 1`, as specified
 > below. Archive preserves the existing runtime and manual-stop semantics;
