@@ -504,6 +504,9 @@ every cataloged method is either listed or refused:
 - `executor.mint`, `executor.list`, `executor.revoke`;
 - the update methods the sitter uses.
 
+`remoteLinkTraffic.*` ([link traffic capture](#link-traffic-capture)) is not on
+the list.
+
 Any other method is `-32003` with `data.code: "node-mode"`. Adding a method is a
 deliberate one-line opt-in plus a test update. The executor link's request list
 is a second, separate opt-in.
@@ -575,3 +578,94 @@ acknowledgements did not arrive in time.
 `machine-revoked` from `refresh` is `-32603`. `machine-in-use` and `not-found`
 are `-32602`. Errors never include the
 token.
+
+##### Link traffic capture
+
+The owner can record the frames of this daemon's
+[executor links](../node-link.md#daemon-to-daemon-executor-link-nodeprotocol-7)
+to see what crosses them, for example in the frontend's developer console.
+Capture is off until the owner starts it, holds a bounded in-memory buffer,
+masks secrets before a record enters the buffer, and is cleared when it stops.
+It is never persisted and does not survive a daemon restart. While it is off,
+the links do no capture work.
+
+`client.hello.server.capabilities.remoteLinkTraffic: 1` means the daemon
+implements the methods and event below. A daemon advertises it only together
+with `remoteMachines: 1`, so never in [node mode](#node-mode). One daemon
+records both roles: as a backend, the links it dials to exposed machines
+(`peer.kind: "machine"`); as a machine, the links backends hold to it
+(`peer.kind: "backend"`). Only `/node/link` frames are recorded, including the
+`hello` / `welcome` handshake; `/node/git` sessions are not.
+
+The methods are owner-only and daemon-global, with the same classification
+and refusal as `remoteMachines.*`. In node mode they fail with `-32003`
+`data.code: "node-mode"`.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| remoteLinkTraffic.start | payloads? (boolean, default `true`) | `{ capture: LinkTrafficCapture }`; turns capture on. While it is already on, it keeps the buffer and only updates `payloads` |
+| remoteLinkTraffic.stop | — | `{ capture: LinkTrafficCapture }`; turns capture off and clears the buffer and counters, returning `active: false`, `retained: 0`; a no-op when off |
+| remoteLinkTraffic.snapshot | afterSeq? (exclusive), limit? (default 500, max 2000) | `{ capture: LinkTrafficCapture, records: LinkTrafficRecord[] }`; retained records with `seq > afterSeq`, oldest first; empty while off |
+
+```ts
+interface LinkTrafficCapture {
+  active: boolean;
+  startedAt?: string;       // RFC 3339 UTC, while active
+  payloads: boolean;        // whether records carry `payload`
+  maxRecords: number;       // buffer size, 2000
+  maxPayloadBytes: number;  // 65536, measured on the redacted JSON
+  retained: number;         // records in the buffer now
+  evicted: number;          // records pushed out of the full buffer by newer ones
+  dropped: number;          // records lost because the capture queue was full
+  oversized: number;        // records kept without their payload because it was too large
+  nextSeq: number;          // the seq the next record gets
+}
+
+interface LinkTrafficRecord {
+  seq: number;              // starts at 1 after each start, increases by one per record
+  at: string;               // RFC 3339 UTC, millisecond precision
+  direction: "in" | "out";  // relative to this daemon
+  peer: { kind: "machine" | "backend"; id: string; name?: string };
+  frameType: string;        // the frame's `type`, for example "launch" or "journal"
+  agentId?: string;         // when the frame names an agent
+  requestId?: string;       // on request, response and cancelRequest frames
+  bytes: number;            // the frame's encoded size on the wire
+  summary: string;          // one short line, already redacted; names the method on request frames
+  payload?: unknown;        // the redacted frame, when `payloads` is on and it fits
+  truncated?: boolean;      // true when `payload` was omitted for size
+}
+```
+
+`peer.id` is the machine's id on a backend and the backend's daemon id on a
+machine. `peer.name` is the exposed machine's name on a backend and the
+executor credential's backend name on a machine, when it has one.
+`frameType` is open: clients show an unknown type as text.
+
+The links hand records to capture without waiting: a full capture queue drops
+the record and counts it in `dropped`, so capture never delays a frame. A
+payload larger than `maxPayloadBytes` is omitted, the record is kept with
+`truncated: true`, and `oversized` counts it.
+
+`remoteLinkTraffic:records` carries `{ records: LinkTrafficRecord[], capture:
+LinkTrafficCapture }`. It is batched (at most every 250 ms, at most 100
+records per event), emitted only while capture is on, and delivered to owner
+connections only. A client calls `snapshot` with the last `seq` it holds to
+fill a gap. There is no separate start or stop event: `capture` on
+`snapshot` and on each event carries the state.
+
+**Redaction.** Secrets are masked as `"***"` before a record enters the buffer,
+in `payload` and `summary` alike, and this cannot be turned off:
+
+- `launch.profileEnv.env[].value` (a `null` value stays `null`; keys,
+  `providerRef` and `fingerprint` stay visible);
+- at any depth of any frame, including request params and response results,
+  the value of every key matching
+  `token|secret|password|credential|authorization|cookie|private.?key|cert`
+  (case-insensitive), except the identifiers `fingerprint`, `credentialId`,
+  `stopId` and `requestId`;
+- every string value that starts with `-----BEGIN` (certificates and keys).
+
+The executor token travels in the upgrade request, not in a frame, so it is
+never recorded. These rules cover the
+[profile environment](../node-link.md#provider-credentials-profile-environment)
+and any secret a frame carries.

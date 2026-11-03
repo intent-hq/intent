@@ -129,6 +129,7 @@
     "presence:changed",
     "principal:identity-changed",
     "providers:profiles-changed",
+    "remoteLinkTraffic:records",
     "remoteMachine:changed",
     "script:changed",
     "script:output",

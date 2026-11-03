@@ -78,6 +78,9 @@ nodeProtocol range (daemons offer exactly 7, which adds
 [stop acknowledgement](./node-link.md#stop-acknowledgement-nodeprotocol-7))
 and is gated by `remoteMachines: 1`
 ([§5.50](./methods/nodes.md#daemon-to-daemon-remote-machines)).
+The owner can record its frames with
+[link traffic capture](./methods/nodes.md#link-traffic-capture)
+(`remoteLinkTraffic: 1`).
 
 ### §5.x subsections (`methods/`)
 

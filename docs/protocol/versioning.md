@@ -684,6 +684,18 @@ No methods, events, numeric codes or nodeProtocol change, and the surface
 counts are unchanged. Clients detect it by the presence of `remoteCompatible`
 on profile rows; there is no public protocol version bump.
 
+**Daemon-link traffic capture — capability `remoteLinkTraffic: 1` (additive).**
+[Link traffic capture](./methods/nodes.md#link-traffic-capture) lets the owner
+record a daemon's executor-link frames in both directions. It adds three
+owner-only router methods (`remoteLinkTraffic.start`, `stop`, `snapshot`) and
+the owner-only `remoteLinkTraffic:records` event, taking the documented surface
+to **489 / 431 / 58** (dispatchable / router / fast path). A daemon advertises
+`remoteLinkTraffic: 1` only together with `remoteMachines: 1`, so never in node
+mode. Capture is off by default, bounded, never persisted and cleared on stop;
+secrets are masked before a record is kept. No frame, nodeProtocol or error
+code changes, and there is no public protocol version bump: clients detect it
+only through `remoteLinkTraffic: 1`.
+
 **Command-default change (breaking).**
 [Script creation defaults (§5.8)](./methods/scripts.md#command-creation-defaults-breaking-change)
 change omission on a new command from `saved` to `oneOff`; new services remain
