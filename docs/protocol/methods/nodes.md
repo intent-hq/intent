@@ -312,7 +312,7 @@ on its machine as machine runs
 ([scripts of remote agents](./scripts.md#scripts-of-remote-agents-remotescripts-1)).
 The backend advertises it only together with `remoteMachines: 1`. Without it,
 a remote agent's `script.*` calls are refused and no script row carries
-`machineRuns`. The machine side also needs nodeProtocol 8: a protocol 7
+`machineRuns`. The machine side also needs nodeProtocol 8 or later: a protocol 7
 machine refuses its agents' `ws.script.*` calls itself, with
 `remote-agent-unsupported:`
 ([mixed versions](../node-link.md#saved-scripts-nodeprotocol-8)). A backend
@@ -330,7 +330,7 @@ and members get `-32003`, and the service rechecks the owner role.
 | --- | --- | --- |
 | executor.mint | backendId (req), backendName (req, 1-128 UTF-8 bytes), backendFingerprint? | `{ credentialId, token, machine: { daemonId, name, platform: { os, arch }, port, hosts, tcAddress?, fingerprint } }`; creates one credential for that backend; `token` (32 random bytes, hex) is returned once and never logged |
 | executor.list | — | `{ backends: [{ credentialId, backendId, backendName, backendFingerprint?, createdAt, lastUsedAt?, connected, runningAgents }] }`; unrevoked credentials only; never returns tokens |
-| executor.revoke | credentialId (req) | `{ ok: true }`; sets the credential revoked, closes its live executor connections with `1008`, stops its agents and refuses replays with `401`; an already revoked id is a no-op; an unknown id is `-32602` `not-found` |
+| executor.revoke | credentialId (req) | `{ ok: true }`; sets the credential revoked, closes its live executor connections with `1008`, stops its agents, removes its journal and agent checkouts (as for any [inactive credential](../node-link.md#final-stop-nodeprotocol-9)) and refuses replays with `401`; an already revoked id is a no-op; an unknown id is `-32602` `not-found` |
 
 Minting again for the same `backendId` creates another credential; the earlier
 one stays valid until revoked. The machine's `agent.memoryUsage` (§5.5) lists the
@@ -350,7 +350,7 @@ methods.
 | remoteMachines.backendInfo | — | `{ backendId, backendName, fingerprint? }`; the backend's persisted head id and display name, for `executor.mint` |
 | remoteMachines.add | machineId (req), name (req), hosts (req, string[]), port (req), tcAddress?, fingerprint (req), credentialId (req), token (req, secret) | `{ machine: RemoteMachine, replacedCredentialId? }`; probes before saving (route race, pin, token, bind, capabilities); on failure saves nothing and fails with `machine-unreachable` or `machine-update-required`; an existing `machineId` is replaced only after a successful probe, and `replacedCredentialId` names the old credential for the caller to revoke |
 | remoteMachines.list | — | `{ machines: RemoteMachine[] }`; never returns tokens |
-| remoteMachines.remove | machineId (req), stopAgents? (boolean, default false) | `{ ok: true, credentialId }`; with live agents on the machine and no `stopAgents: true` fails `-32602` `machine-in-use` with `runningAgents`; with `stopAgents: true` it deletes nothing until the machine [acknowledges every stop](../node-link.md#stop-acknowledgement-nodeprotocol-7) (at most 30 s), else fails `-32603` `machine-unreachable` with `unconfirmedStops`; the caller revokes `credentialId` on the machine; unknown id is a no-op |
+| remoteMachines.remove | machineId (req), stopAgents? (boolean, default false) | `{ ok: true, credentialId }`; with live agents on the machine and no `stopAgents: true` fails `-32602` `machine-in-use` with `runningAgents`; with `stopAgents: true` it deletes nothing until the machine [acknowledges every stop](../node-link.md#stop-acknowledgement-nodeprotocol-7) (at most 30 s; from nodeProtocol 9 these are [final stops](../node-link.md#final-stop-nodeprotocol-9) and the wait is at most 90 s), else fails `-32603` `machine-unreachable` with `unconfirmedStops`; the caller revokes `credentialId` on the machine; unknown id is a no-op |
 | remoteMachines.refresh | machineId (req) | `{ machine: RemoteMachine }`; connects on demand and reads fresh capabilities; failures update `state` and fail with `machine-unreachable`, `machine-revoked` or `machine-update-required` |
 
 ```ts
@@ -594,6 +594,46 @@ by any route other than a validated `agent.setModel` or
 [quota failover](./provider-profiles.md#backup-failover) fails with a message
 starting `remote-model-change-unsupported:`. Quota failover is the other
 accepted switch, and it too picks only remote-compatible backups.
+
+##### Ending a remote agent for good
+
+`agent.delete`, `agent.retire`, `workspace.retire`, `workspace.delete` and
+`remoteMachines.remove` with `stopAgents: true` end a remote agent for good.
+Each sends the agent a [final stop](../node-link.md#final-stop-nodeprotocol-9)
+instead of a plain stop:
+
+1. The backend durably records the pending final stop, in the same
+   transaction that retires or deletes the session.
+2. The machine stops the agent's script runs and provider, and makes a final
+   push of `head` and `wip` (at most 60 s). The backend accepts that push while
+   the record exists, into the workspace's repository, even though the session
+   or workspace worktree is already gone.
+3. The machine removes the agent's checkout, then acknowledges.
+4. The backend drops the record only after the acknowledgement, or after 7
+   days without one. It drops the agent's lease row with it for a delete or a
+   machine removal; after a retire the lease row stays, so a restored agent
+   can launch again: with no checkout on the machine, its launch checks out
+   its saved `head` ref (else its base) and restores the `wip` changes on top
+   ([relaunch without a checkout](../node-link.md#relaunch-without-a-checkout)). The agent's
+   `refs/intent/ws/<workspaceId>/agents/<agentId>/{base,head,wip}` refs stay,
+   and so do its `unapplied/<sha>` refs: when a relaunch cannot apply the saved
+   `wip`, the machine first pins it there (create-only) and only then starts the
+   agent's first turn, whose notice names that ref.
+
+The methods' results and errors are unchanged. Apart from
+`remoteMachines.remove`, which waits for the acknowledgements as above, they
+return without waiting for the machine. A machine that is offline is redialed
+with the usual backoff and gets the final stop after it binds, also after a
+backend restart; at that bind an agent whose session is retired or deleted is
+stopped for good, never resumed. At each nodeProtocol 9 bind the machine also
+removes checkouts of agents the backend no longer records, including a retired
+agent with no pending final stop. On a machine below
+nodeProtocol 9 the agent is stopped, its work is pushed on a best-effort
+basis (the backend accepts the push for 120 s after the acknowledgement), and
+its checkout stays until that machine is updated and binds again. The machine
+removes the checkouts of a credential that is no longer active on it (revoked
+or unknown) at revoke, at bind and at startup, never another active
+credential's.
 
 ##### Node mode
 

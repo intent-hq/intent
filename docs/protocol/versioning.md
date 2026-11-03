@@ -762,7 +762,7 @@ transitions are published only as `script:changed`, never `script:state` or
 traffic capture also masks script environments. nodeProtocol 8 is a new link
 version because older peers reject unknown frame types; daemons offer
 `{ min: 7, max: 8 }`, so protocol 7 machines keep running agents. A remote
-agent's `ws.script.*` calls work only on a link that negotiated 8; otherwise its
+agent's `ws.script.*` calls work only on a link that negotiated 8 or later; otherwise its
 machine refuses them with `remote-agent-unsupported:` as before, and an existing
 machine run that meets a protocol 7 link fails to restart with
 `machine-update-required`. `RemoteMachine` rows gain `nodeProtocol`, the version
@@ -773,6 +773,46 @@ removing a machine waits, within its existing bound, for the script stops'
 `remoteScripts: 1` only together with `remoteMachines: 1`. No methods or events
 are added, the surface counts are unchanged, and there is no public protocol
 version bump: clients detect it only through `remoteScripts: 1`.
+
+**Final stop for remote agents — nodeProtocol 9 (behavior change, no capability).**
+`agent.delete`, `agent.retire`, `workspace.retire`, `workspace.delete` and
+`remoteMachines.remove` with `stopAgents: true` now end a remote agent with a
+[final stop](./node-link.md#final-stop-nodeprotocol-9)
+([ending a remote agent for good](./methods/nodes.md#ending-a-remote-agent-for-good)):
+the backend persists the pending stop, the machine stops the agent's scripts
+and provider, makes a final `head` / `wip` push (at most 60 s) that the backend
+accepts while the record exists, removes the agent's checkout and then
+acknowledges. The backend drops the record only after the acknowledgement or
+after 7 days (checked hourly and before each redial, so a machine offline that
+long stops being redialed), and keeps the agent's refs. It drops the agent's
+lease row with the record only for a delete or a machine removal; after a
+retire the lease row stays, so `agent.restore` or a workspace revive still
+works; a relaunched agent with no checkout checks out its saved `head` ref
+(else its base) and restores its `wip` changes on top, or, when they do not
+apply cleanly, keeps `head`, pins that `wip` commit to the create-only ref
+`refs/intent/ws/<workspaceId>/agents/<agentId>/unapplied/<full wip sha>` before
+any other push (idempotent when the ref already holds that commit; a failed pin
+fails the launch with `node-checkout-failed`), and
+gets a first-turn notice naming that ref; `unapplied/` refs are kept like
+`head` and `wip`. At bind, an agent whose session is retired or deleted is stopped for
+good instead of re-attached, and the machine sweeps checkouts of agents not in
+the new `hello.leaseAgents` (live sessions on the lease plus retired or deleted
+agents with a pending final stop, so a retired agent's leftover checkout is
+swept). The machine also removes the directories of
+credentials no longer active on it (revoked or unknown) at `executor.revoke`,
+at bind and at startup, never another active credential's.
+nodeProtocol 9 adds `stop.final`, `stopAck.finalPush` and `hello.leaseAgents`;
+it is a new link version because a final stop removes the checkout, which an
+older machine would not do while still acknowledging. Protocol 9 keeps every
+protocol 8 frame, so saved scripts work on a link that negotiated 8 or 9. Daemons offer
+`{ min: 7, max: 9 }`; on a lower link the backend sends a plain stop, the final push is
+best-effort (accepted for 120 s after the acknowledgement), and the checkout
+stays until a later protocol 9 bind.
+`remoteMachines.remove`'s stop wait grows from 30 s to 90 s on protocol 9 and
+stays 30 s on a lower link.
+`RemoteMachine.nodeProtocol` reads `9` from an updated machine. No methods,
+events, fields of public results or error codes change, the surface counts are
+unchanged, and there is no public protocol version bump.
 
 **Command-default change (breaking).**
 [Script creation defaults (§5.8)](./methods/scripts.md#command-creation-defaults-breaking-change)
