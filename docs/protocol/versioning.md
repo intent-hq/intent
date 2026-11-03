@@ -50,6 +50,18 @@ presence; older daemons omit it and reject the key with `-32602`. The
 `agent.getSession` form carries it only when `true`. A pin-only update does not
 advance `updatedAt`.
 
+Also within 15.3 (additive optional row and result fields; presence-detected; no
+method-catalog change, so no version bump): **remote agents in memory attribution and
+connected-daemon counts** ([§5.5](./methods/agents.md), [§5.7](./05-method-catalog.md),
+[remote machines](./methods/nodes.md#daemon-to-daemon-remote-machines)). On a machine
+exposed to another daemon, `agent.memoryUsage` also lists the agents the executor runs
+for that backend, each tagged `remoteOwner: { backendId, backendName }` and built from
+the launch (fields the launch did not carry, today `agentName`, are omitted, never
+`null`); their bytes count in `totalBytes` and `system.status.agentMemoryBytes`.
+Local rows omit the tag. `system.status` gains `remoteLinks: { backends, machines }`,
+the live inbound backend links and outbound machine links. Older daemons omit both
+the remote rows and `remoteLinks`.
+
 Also within 15.3 (behavior change only; no wire-shape or method-catalog change, so no
 version bump): **any merge-queued PR wins the `displayStatus` PR rung**
 ([§5.1](./methods/workspace.md) step 4). The rung now reads `pr_queued` when any of its
