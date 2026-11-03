@@ -630,7 +630,7 @@ interface LinkTrafficRecord {
   agentId?: string;         // when the frame names an agent
   requestId?: string;       // on request, response and cancelRequest frames
   bytes: number;            // the frame's encoded size on the wire
-  summary: string;          // one short line, already redacted; names the method on request frames
+  summary: string;          // one short line, already redacted; on a request frame, names the forwarded workspace method
   payload?: unknown;        // the redacted frame, when `payloads` is on and it fits
   truncated?: boolean;      // true when `payload` was omitted for size
 }
@@ -640,6 +640,8 @@ interface LinkTrafficRecord {
 machine. `peer.name` is the exposed machine's name on a backend and the
 executor credential's backend name on a machine, when it has one.
 `frameType` is open: clients show an unknown type as text.
+Every `request` frame's method is `workspace.call`, so its `summary` names the
+forwarded method from its params instead, for example `note.read`.
 
 The links hand records to capture without waiting: a full capture queue drops
 the record and counts it in `dropped`, so capture never delays a frame. A
@@ -648,11 +650,13 @@ payload larger than `maxPayloadBytes` is omitted, the record is kept with
 
 `remoteLinkTraffic:records` carries `{ records: LinkTrafficRecord[], capture:
 LinkTrafficCapture }`. It is batched (at most every 250 ms, at most 100
-records per event), emitted only while capture is on, and delivered like any
-other event through [`events.subscribe`](../06-events.md#61-eventssubscribe),
-to owner connections only. A client calls `snapshot` with the last `seq` it holds to
-fill a gap. There is no separate start or stop event: `capture` on
-`snapshot` and on each event carries the state.
+records per event) while capture is on, and delivered like any other event
+through [`events.subscribe`](../06-events.md#61-eventssubscribe), to owner
+connections only. Every `start` (including one that only changes `payloads`)
+and every `stop` that turns capture off also emits it with `records: []` and
+the new `capture` state, so every owner client sees capture start and stop; there is
+no separate start or stop event. A client calls `snapshot` with the last `seq`
+it holds to fill a gap.
 
 **Redaction.** Secrets are masked as `"***"` before a record enters the buffer,
 in `payload` and `summary` alike, and this cannot be turned off:
@@ -660,10 +664,12 @@ in `payload` and `summary` alike, and this cannot be turned off:
 - `launch.profileEnv.env[].value` (a `null` value stays `null`; keys,
   `providerRef` and `fingerprint` stay visible);
 - at any depth of any frame, including request params and response results,
-  the value of every key matching
+  the value of every key whose name contains a match for
   `token|secret|password|credential|authorization|cookie|private.?key|cert`
-  (case-insensitive), except the identifiers `fingerprint`, `credentialId`,
-  `stopId` and `requestId`;
+  (case-insensitive, unanchored), except the identifiers `fingerprint`,
+  `credentialId`, `stopId` and `requestId`. A string value becomes `"***"`
+  and an object or array value is replaced whole; number, boolean and `null`
+  values stay, so usage counts such as `inputTokens` remain readable;
 - every string value that starts with `-----BEGIN` (certificates and keys).
 
 The executor token travels in the upgrade request, not in a frame, so it is

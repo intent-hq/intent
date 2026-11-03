@@ -786,8 +786,9 @@ guests, and never carries the executor token.
 
 [Link traffic capture](./methods/nodes.md#link-traffic-capture) defines
 `remoteLinkTraffic:records`: `{ records: LinkTrafficRecord[], capture }`,
-batched (at most every 250 ms, at most 100 records), emitted only while
-capture is on, and delivered to owner connections only. Records are redacted
+batched (at most every 250 ms, at most 100 records) while capture is on, and
+also emitted with `records: []` on every start and stop; it is delivered to owner
+connections only. Records are redacted
 before they are kept.
 
 #### Shared-host delivery and invalidation *(10.9)*
