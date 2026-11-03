@@ -144,13 +144,13 @@ The following secrets must be configured in the `intent-hq/cloudlands-fe` reposi
 
 5. **Verify the npm dist-tags**
 
-   `publish-intent-web.yml` publishes `@intent-hq/web` under the `alpha` dist-tag after each tag-push Release Alpha, and moves `beta` to the beta channel version after Promote Beta. Check both match:
+   `publish-intent-web.yml` publishes `@intent-hq/web` under the `alpha` dist-tag after each tag-push Release Alpha, and its `sync-channel` job moves `beta` to the version the beta feed serves after a successful Promote Beta. Check both match:
 
    ```bash
    npm view @intent-hq/web dist-tags --json   # alpha = the new version, beta = the beta feed version
    ```
 
-   If a tag lags, re-run [Publish Intent Web](https://github.com/intent-hq/cloudlands-fe/actions/workflows/publish-intent-web.yml) or, as the fallback, `npm dist-tag add @intent-hq/web@<version> beta` from an npm account with publish rights. `make release-status` in the monorepo flags the same drift.
+   If `beta` lags, sync it with `gh workflow run publish-intent-web.yml --repo intent-hq/cloudlands-fe -f channel=beta`. If npm rejects the move (the Trusted Publisher's **Allow npm dist-tag** setting is off), an `@intent-hq` npm owner runs `npm dist-tag add @intent-hq/web@<version> beta`. A channel version older than the first npm publish is skipped. `make release-status` in the monorepo shows the same drift.
 
 ## Promoting to Stable
 
@@ -214,11 +214,11 @@ when the requested CPU's asset is absent. Website changes need their own PR.
    # View aggregated release notes
    gh release view stable --repo intent-hq/cloudlands-releases
 
-   # The npm `latest` dist-tag follows stable (moved by publish-intent-web.yml)
+   # The npm `latest` dist-tag follows stable (publish-intent-web.yml sync-channel job)
    npm view @intent-hq/web dist-tags --json   # latest = ${VERSION}
    ```
 
-   If `latest` lags, re-run [Publish Intent Web](https://github.com/intent-hq/cloudlands-fe/actions/workflows/publish-intent-web.yml) or, as the fallback, `npm dist-tag add @intent-hq/web@${VERSION} latest` from an npm account with publish rights.
+   If `latest` lags, sync it with `gh workflow run publish-intent-web.yml --repo intent-hq/cloudlands-fe -f channel=stable`. If npm rejects the move (the Trusted Publisher's **Allow npm dist-tag** setting is off), an `@intent-hq` npm owner runs `npm dist-tag add @intent-hq/web@${VERSION} latest`. Tags never move backwards, so `latest` stays ahead of stable while it still points at the first published alpha.
 
 4. **Propose the website release notes PR**
 

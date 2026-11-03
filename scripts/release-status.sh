@@ -562,7 +562,8 @@ def npm_dist_tags(channels):
     """@intent-hq/web dist-tags against the cloudlands-fe channel versions.
     published is False when npm answers E404 (not on npm yet), None when
     the lookup failed. drift lists each dist-tag that differs from a known
-    channel version (a missing dist-tag counts)."""
+    channel version: behind, ahead (the sync never moves a tag backwards, so
+    `latest` stays on the bootstrap alpha until stable passes it) or unset."""
     section = "cloudlands-fe.npm"
     data = {"package": NPM_PACKAGE, "published": None,
             "distTags": {tag: None for tag, _ in NPM_TAGS}, "drift": []}
@@ -583,7 +584,15 @@ def npm_dist_tags(channels):
         data["distTags"][tag] = tags.get(tag)
         expected = channels.get(channel)
         if expected and tags.get(tag) != expected:
-            data["drift"].append({"distTag": tag, "npm": tags.get(tag), "channel": channel, "channelVersion": expected})
+            got = tags.get(tag)
+            if not got:
+                direction = "unset"
+            elif version_key(got) and version_key(expected) and version_key(got) > version_key(expected):
+                direction = "ahead"
+            else:
+                direction = "behind"
+            data["drift"].append({"distTag": tag, "npm": got, "channel": channel, "channelVersion": expected,
+                                  "direction": direction})
     return data
 
 
@@ -784,9 +793,10 @@ def npm_line(npm):
     line = "%s %s" % (npm["package"], " · ".join(
         "%s %s" % (tag, npm["distTags"][tag] or "unset") for tag, _ in NPM_TAGS))
     if npm["drift"]:
-        line += " — drift: " + ", ".join("%s %s vs %s channel %s" % (
-            item["distTag"], item["npm"] or "unset", item["channel"], item["channelVersion"])
-            for item in npm["drift"])
+        relation = {"unset": "unset,", "ahead": "ahead of", "behind": "behind"}
+        line += " — drift: " + ", ".join("%s %s %s channel %s" % (
+            item["distTag"], " ".join(filter(None, [item["npm"], relation[item["direction"]]])),
+            item["channel"], item["channelVersion"]) for item in npm["drift"])
     else:
         line += " (matches the channels)"
     return line

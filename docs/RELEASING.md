@@ -588,14 +588,20 @@ triggered by pushing a `sitter-vX.Y.Z` tag.
   [fe/RELEASING.md § Promoting to Stable](./fe/RELEASING.md#promoting-to-stable)).
 - npm package: `publish-intent-web.yml` publishes `@intent-hq/web` (the standalone
   browser server) at the cloudlands-fe version after each successful tag-push
-  Release Alpha, under the `alpha` dist-tag. After Promote Beta / Release Stable,
-  the same workflow moves `beta` / `latest` to the version read from the beta /
-  stable channel feeds, so each dist-tag follows its channel (`latest` = stable).
-  `make release-status` flags drift (a package not on npm yet is reported as such,
-  not as an error). Verify with `npm view @intent-hq/web dist-tags --json`; if a
-  tag lags, re-run the workflow or, as the fallback, run
-  `npm dist-tag add @intent-hq/web@<version> <beta|latest>` from an npm account
-  with publish rights. Setup and trusted publishing:
+  Release Alpha, under the `alpha` dist-tag (a publish never sets `beta` or
+  `latest`). After a successful Promote Beta / Release Stable, its `sync-channel`
+  job moves `beta` / `latest` to the version the beta / stable feed on
+  `intent-hq/cloudlands-releases` serves, so each dist-tag follows its channel
+  (`latest` = stable). No dist-tag moves backwards, so `latest` stays on the
+  first published alpha until stable serves a newer version. `make release-status`
+  shows each tag behind, ahead of or missing from its channel (a package not on
+  npm yet is its own state, not an error). Verify with
+  `npm view @intent-hq/web dist-tags --json`. If a tag lags, sync it by hand with
+  `gh workflow run publish-intent-web.yml --repo intent-hq/cloudlands-fe -f channel=<beta|stable>`.
+  If npm rejects the move (the Trusted Publisher's **Allow npm dist-tag** setting
+  is off), an `@intent-hq` npm owner runs
+  `npm dist-tag add @intent-hq/web@<version> <beta|latest>`. Setup and the full
+  dist-tag model:
   [cloudlands-fe docs/intent-web-package.md](https://github.com/intent-hq/cloudlands-fe/blob/main/docs/intent-web-package.md).
 
 ## Release notifier

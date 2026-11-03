@@ -329,15 +329,18 @@ json=1 run_script
 expect_json 'r["components"]["cloudlands-fe"]["npm"]["published"]' 'false'
 expect_json 'r["errors"]' '[]'
 
-# --- npm: dist-tags that lag or miss their channel are drift; an unknown
-# channel version is never called drift
+# --- npm: dist-tags that lag, lead or miss their channel are drift (`latest`
+# stays on the bootstrap alpha until stable passes it); an unknown channel
+# version is never called drift
 reset_stub
 echo '{"alpha":"2.220.2","latest":"2.221.0"}' | put npm/dist-tags.json
-echo 'HTTP 502: Server Error' | put download/cloudlands-releases/stable.fail
 json="" run_script
-expect_line "  npm          @intent-hq/web alpha 2.220.2 · beta unset · latest 2.221.0 — drift: alpha 2.220.2 vs alpha channel 2.221.0, beta unset vs beta channel 2.219.8"
+expect_line "  npm          @intent-hq/web alpha 2.220.2 · beta unset · latest 2.221.0 — drift: alpha 2.220.2 behind alpha channel 2.221.0, beta unset, beta channel 2.219.8, latest 2.221.0 ahead of stable channel 2.219.1"
 json=1 run_script
-expect_json 'r["components"]["cloudlands-fe"]["npm"]["drift"]' '[{"distTag": "alpha", "npm": "2.220.2", "channel": "alpha", "channelVersion": "2.221.0"}, {"distTag": "beta", "npm": null, "channel": "beta", "channelVersion": "2.219.8"}]'
+expect_json 'r["components"]["cloudlands-fe"]["npm"]["drift"]' '[{"distTag": "alpha", "npm": "2.220.2", "channel": "alpha", "channelVersion": "2.221.0", "direction": "behind"}, {"distTag": "beta", "npm": null, "channel": "beta", "channelVersion": "2.219.8", "direction": "unset"}, {"distTag": "latest", "npm": "2.221.0", "channel": "stable", "channelVersion": "2.219.1", "direction": "ahead"}]'
+echo 'HTTP 502: Server Error' | put download/cloudlands-releases/stable.fail
+json=1 run_script
+expect_json '[d["distTag"] for d in r["components"]["cloudlands-fe"]["npm"]["drift"]]' '["alpha", "beta"]'
 
 # --- npm: a failed lookup or a missing npm is unavailable, fail-soft
 reset_stub
