@@ -594,7 +594,7 @@ or an unrecognized non-integer value must not enable addressed requests or GitLa
 monitor controls. Version 1 includes addressed snapshots, registration, list,
 cancellation, explicit refresh/flush, polling, restoration and qualified private
 output. Do not advertise it for a partial implementation. Existing
-`agentFeatures.prMonitor` and GitLab Labs/connection gates remain independent;
+`agentFeatures.prMonitor` and GitLab connection gates remain independent;
 capability is host support, not authorization, connection status or merge readiness.
 Older hosts continue to use the existing GitHub UI and calls. Unsupported/disabled
 GitLab behavior uses the established availability treatment in the shared flow.

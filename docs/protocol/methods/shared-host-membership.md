@@ -1096,7 +1096,7 @@ pairing/device controls are shown subject only to actual server capabilities and
 current role. Incoming invites never ask the user to enable Multiplayer: an invite
 that arrives before the originating window has published its collaboration policy
 waits for that window's automatic readiness acknowledgement (with a Try again action
-only if that acknowledgement fails), then continues. The GitLab lab is independent.
+only if that acknowledgement fails), then continues. GitLab has no client-side gate.
 No client-side policy grants daemon authority.
 
 #### Required behavioral conformance
@@ -1155,5 +1155,5 @@ the assertions; passing documentation gates is not runtime evidence.
 | Remove/rotate shared personal credential and reconnect every device | All affected links/sessions fail; unrelated people and work remain; TLS/route parity retained |
 | Device identity spoof and guest device query/subscription | Server-derived person/role; no unrelated device/principal leak through snapshots, live or durable events |
 | Desktop/iOS invited v2 migration and mixed-version fixture above | Both codecs/stores follow identical opaque keys, legacy alias recovery, independent removal retention and route/clock semantics; owner service remains v1. Run the complete old-reader logging/B/C/stale-writer fixture, then collect physical device sync evidence separately |
-| Lab missing/off/on, route aliases, runtime disable, both GitLab flag states | No hidden experimental content mounts; explicit recovery; owner legacy pairing and saved access preserved |
+| Lab missing/off/on, route aliases, runtime disable | No hidden experimental content mounts; explicit recovery; owner legacy pairing and saved access preserved |
 | Old daemon/client and different local/remote host setup | Legacy owner/guest behavior only; no unsupported purpose fallback; selected host supplies roles/models/repos/pairing after every reconnect |

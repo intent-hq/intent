@@ -5,8 +5,7 @@
 **Additive contract, protocol 13.5.** Require exactly integer
 [`server.capabilities.gitlabCheckout: 1`](client-hello.md#gitlab-checkout-capability)
 on the destination connection. A numeric protocol version or a method in the
-catalog does not establish support, enable the GitLab experiment or authorize a
-repository read. These methods browse an already configured GitLab connection
+catalog does not establish support or authorize a repository read. These methods browse an already configured GitLab connection
 before a workspace exists; they do not create a hosted project.
 
 | Method | Params | Result |
