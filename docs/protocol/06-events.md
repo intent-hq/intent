@@ -1170,6 +1170,29 @@ Spec-body edits refresh flipped flags *(within 6.17; [intent-hq/intentd#1224](ht
 Per-task events stamp only their own note id into the tracked set, so a task event whose fresh spec read races ahead of the spec's own `note:updated` cannot swallow another task's flip.
 Cost contract: the flag is derived from ONE spec-note read per snapshot / per delta batch (O(rows) overall), and a spec event costs one `list_notes` read that yields both the new link set and the rows to re-emit (O(rows), same as the snapshot — no per-task scans).
 
+#### Paged snapshots
+
+**Behaviour change ([bounded reads](./methods/client-hello.md)).** The `workspace` and `agent`
+collection snapshots serve the **first page** of the channel's list read rather than every row,
+for every subscriber, and the snapshot push carries `params.nextToken` beside
+`params.snapshot`: `null` when the snapshot is the whole collection, else the token for the
+remaining rows. The client fetches them with the list read, which serves the same
+`(createdAt, id)` order:
+
+- `workspace`: `workspace.list { includeArchived: true, includeRetired?, nextToken }` (same
+  `includeRetired` as the subscribe; [Paged workspace lists](./methods/workspace.md#paged-workspace-lists)).
+  Continuation rows are the enriched `workspace.list` rows, a superset of the lite snapshot rows.
+  A non-administrator subscriber's snapshot is paged the same way. Its pages hold only the
+  workspaces it belongs to (a page can hold fewer rows than the limit, or none, while
+  `nextToken` is still a string), and its `workspace:deleted` tombstones still cover
+  workspaces it loads from later pages.
+- `agent`: `agent.list { workspaceId, nextToken }` ([Paged agent lists and queues](./methods/agents.md#paged-agent-lists-and-queues)).
+
+Page sizes and the byte budget are those of the list reads (100 rows, 480,000 bytes). Deltas
+are not paged and keep arriving for every row, including rows on pages the client has not
+fetched yet; clients apply them as upserts. Older clients that ignore `nextToken` see only the
+first page until a delta adds a row.
+
 **`workspace.subscribe` / `workspace.unsubscribe` details.**
 
 - Snapshot and deltas are consistent on archived inclusion: deltas upsert archived workspaces as `updated`, and the seq-0 snapshot carries them too (matching the legacy `workspace.list { includeArchived: true }` fetch).
