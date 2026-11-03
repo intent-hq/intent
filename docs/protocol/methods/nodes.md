@@ -483,7 +483,12 @@ another machine or to the backend. Only the message changes: it adds that the
 sub-agent defaults to the parent's machine (by name) and that
 `placement: { target: "local" }` runs it on the backend instead.
 
-A remote agent's `agent.delegate` with `isolation` but no `placement` fails with
+This covers every child of a remote agent's batch `agent.delegate`
+(`tasks: [...]`) too. A batch still cannot carry a `placement` (not even
+`{ "target": "local" }`), so to run some children on the backend, delegate them
+one at a time with `placement: { target: "local" }`.
+
+A remote agent's `agent.delegate` (single or batch) with `isolation` but no `placement` fails with
 `-32602` before any write: its sub-agents run in their own checkout on the
 machine, so `isolation` does not apply; the message says to pass
 `placement: { target: "local" }` to use isolation on the backend. The
