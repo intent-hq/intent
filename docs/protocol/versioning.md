@@ -834,7 +834,8 @@ against current main when implementing; a numeric version alone is never proof o
 - The existing four `/invite` methods accept an optional scope, defaulting to workspace;
   host invites require explicit host scope and carry it in their link/preview/join result.
   Workspace response keys stay intact. A mismatched or legacy host-scope join fails closed.
-  Invitation issuance uses Intent authority, without a forge-connection prerequisite.
+  Invitation issuance uses Intent authority plus a connected owner forge (GitHub or
+  GitLab); with none connected, issuance and redemption are `github-identity-required`.
 - Collaboration sign-in has an isolated credential purpose. Existing forge-auth methods
   and GitHub aliases remain repository-purpose; proof methods gain a gated purpose and
   expected-identity check. Repository credential changes cannot silently re-key a person.
@@ -907,7 +908,7 @@ The guest half of the invite identity proof is generalized as two new router met
 `invite.prove` gains **`provider?` / `host?` / `proofId?`** (`proofId` aliases `gistId`, exactly one required), the host verifying a GitLab snippet anonymously or, when the instance refuses anonymous reads, through its own connection to the same host, else the new typed refusal **`-32603 { code: "identity-unverifiable", host }`** (`cannot verify identity on <host>`);
 the guest-side GitLab proof methods refuse with their own `gitlab-not-connected` / `gitlab-scope-missing` / `gitlab-unreachable` codes beside the kept `github-*` ones.
 Owner-self-join and pins compare triples.
-`invite.inspect` and `invite.challenge` additionally return **`pinIdentity: { provider, host, externalUserId } | null`** after validating the open invite and secret, without a forge call: legacy GitHub pins project to the triple, `null` means unpinned, and omission identifies an older host.
+`invite.inspect` and `invite.challenge` additionally return **`pinIdentity: { provider, host, externalUserId } | null`** after validating the open invite and secret, without a forge call for the pin (`invite.challenge` then runs only the owner-forge check, which refuses with `github-identity-required` or `github-unreachable` while no owner forge is connected): legacy GitHub pins project to the triple, `null` means unpinned, and omission identifies an older host.
 Guests select the matching connected account for a pin or, on a local daemon with the 10.8 identity seam, the chosen `principal.me` identity for an explicit null (older-host/sidecar fallbacks are documented in §5.48); malformed metadata is refused and the host retains its final pin enforcement ([intent-hq/intent#5817](https://github.com/intent-hq/intent/issues/5817)).
 Router catalog 330 → 336 (`principal.list`, `workspace.members.add`, `github.identityProof.*` and `sourceControl.identityProof.*` are the additions the catalog gains on this line's pin; 10.7 below left the 10.5 counts standing, so these deltas are 10.8's), fast path 53 → 57 (`invite.inspect` / `accept` / `challenge` / `prove`) — **395** dispatchable names while `invite.redeem` is still listed: it is retired from intentd and leaves the docs catalog once the pin advances past its removal, making the counts **394 / 336 / 56**.
 Every pre-10.8 shape is unchanged.

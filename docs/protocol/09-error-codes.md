@@ -93,8 +93,9 @@ have their own vetted allowlist; a non-administrator is not necessarily a guest.
 Reuse `invalid-params` for invalid host-invite fields or owner removal, `not-found`
 for hidden workspaces/wrong invitation namespace, the existing closed/pin/proof
 invite errors for failed joins, and `identity-unverifiable` with `host` for restricted
-pin or proof reads. No-forge/no-profile owner issuance no longer raises
-`github-identity-required` when `hostMembership: 1` is supported. Existing
+pin or proof reads. Invitation issuance and redemption (`invite.challenge`,
+`invite.prove`, `invite.accept`) with no connected owner forge (GitHub or GitLab)
+raise `github-identity-required`, including when `hostMembership: 1` is supported. Existing
 listener/tunnel failures, auth/scope/rate-limit errors and HTTP 401/403 semantics
 remain as described in §5.49; wrong-secret responses reveal no pin or scope preview.
 

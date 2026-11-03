@@ -244,10 +244,18 @@ Provider references: [GitLab Users API](https://docs.gitlab.com/api/users/),
 [GitLab REST authentication](https://docs.gitlab.com/api/rest/authentication/),
 and [GitHub user search](https://docs.github.com/en/rest/search/search#search-users).
 
-The creator's **Intent authority** suffices. Neither host nor workspace invitation
-issuance requires a repository connection, working repository token, or external
-owner profile. This intentionally replaces §5.48's live-forge prerequisite.
-An unpinned workspace invite makes no forge call. A pin is resolved at issuance
+Issuance needs the creator's **Intent authority** and a **connected owner forge**:
+the host's GitHub credential or its bound GitLab instance must answer for a live
+account when the invite is created (a cached owner profile or a rejected credential
+does not qualify). With neither connected, host and workspace invitation issuance
+(open and pinned) is `-32603 { code: "github-identity-required" }` and nothing is
+stored; when neither is connected but one could not be reached, the refusal is the
+retryable `-32603 { code: "github-unreachable" }`. The same check gates redemption: `invite.challenge`,
+`invite.prove` and `invite.accept` on a valid open invite refuse with that code
+while no owner forge is connected, leaving the invite open, so unused invites
+become redeemable again once a forge reconnects. Guests and members who already
+joined keep their access; `invite.inspect` is unchanged.
+An unpinned workspace invite makes no lookup beyond that connection check. A pin is resolved at issuance
 to the existing provider/canonical-instance/stable-ID triple, never just a login.
 For host invites `pinLogin` must be nonblank, `pinProvider` explicit, `pinHost`
 defaults to `github.com` or `gitlab.com` independently of connected repositories;
