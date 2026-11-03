@@ -2273,6 +2273,15 @@ machine creates a new agent.
 Running a remote agent runs code as the machine owner's OS user. The executor
 credential is narrow in API terms but not in effect.
 
+### Traffic capture
+
+The owner can record this daemon's `/node/link` frames, in both directions and
+on both roles, with [link traffic capture](./methods/nodes.md#link-traffic-capture)
+(`remoteLinkTraffic: 1`). Capture is off by default, bounded, cleared on stop,
+and masks secrets (profile environment values, credentials, tokens and
+certificates) before a record is kept. It observes frames only: it never
+delays, changes or reorders them, and it adds no frame type.
+
 ### Errors
 
 Link errors are stable codes at the start of the message; the text is fixed per
