@@ -98,9 +98,11 @@ UTF-8 size), `commandOffset` (the byte where this part starts) and `nextCommandO
 Request the next part with `commandOffset: <nextCommandOffset>` and append each part's
 `command`: the parts rebuild the command byte for byte. Other fields ride every part.
 A `commandOffset` that is not a positive integer, not a UTF-8 boundary, or not inside the
-command fails `-32602`. A client restarts from the first part when `commandBytes` changes
-between parts (the definition was replaced) and treats a result whose UTF-8 size does not
-equal `commandBytes` as incomplete. The full-view `script.list` row of such a definition
+command fails `-32602`. Every part carries the row's other fields, and every
+`script.create` replacement stamps a new `updatedAt`. A client restarts from the first part
+when `commandBytes` **or** `updatedAt` changes between parts (the definition was replaced;
+a same-size replacement changes only `updatedAt`), and treats a result whose UTF-8 size does
+not equal `commandBytes` as incomplete. The full-view `script.list` row of such a definition
 carries `commandOmitted` / `commandBytes` instead; clients read it whole with `script.get`.
 
 #### Active-only compact lists (protocol 14 breaking contract)
