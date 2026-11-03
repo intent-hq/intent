@@ -396,9 +396,13 @@ without advertising `agentNodes`. On a backend that advertises
 `agent.wakeOrCreate`'s creation branch (public RPC and MCP) accept the closed
 `placement` object with the same validation. A remote placement needs `target`
 omitted or `"remote"` and `checkout` omitted or `"isolated"`, with optional `os`,
-`arch` and `nodeId`; `exclusive: true`, `target: "local"`, and on
+`arch` and `nodeId`; `exclusive: true`, and on
 `agent.delegate` a batch with a placement or `placement` combined with
-`isolation` fail with `-32602`. An omitted placement stays local; `null` is
+`isolation` fail with `-32602`. `placement: { "target": "local" }` (no other
+members) means "run on the backend": it creates an ordinary local agent, as if
+no placement were sent; `target: "local"` with any other member fails with
+`-32602`. An omitted placement stays local, except for
+[sub-agents of remote agents](#sub-agents-of-remote-agents); `null` is
 rejected. Admission picks a machine as in
 [placement across machines](#placement-across-machines) and fails with the
 documented `placement-unavailable` data (`no-capacity` or
@@ -459,6 +463,32 @@ replays that error; it creates no second workspace and does not relaunch. A fail
 surfaces on the initial agent like any remote start failure (`placementError`
 and `agent:updated`). An omitted `initialAgent.placement` keeps the initial
 agent local, as before.
+
+##### Sub-agents of remote agents
+
+When a remote agent creates a sub-agent through its `workspace_api`
+(`ws.agent.create`, `ws.agent.delegate`, or `ws.agent.wakeOrCreate`'s creation
+branch, all [forwarded](../workspace-routing.md#remote-agents-on-the-executor-link)
+to the backend) without a `placement`, the default is the parent's machine: the
+backend admits the child as if it had sent `placement: { "target": "remote",
+"nodeId": <the parent's nodeId> }`. Every normal check runs, in order: the
+[remote-compatibility](./provider-profiles.md#remote-compatibility) check, the
+machine's state, provider and model checks of
+[placement across machines](#placement-across-machines), and its capacity. A
+failure returns the normal error (`profile-not-remote-compatible`,
+`placement-unavailable` or `model-unavailable`, with the same `data`) before any
+write; the backend never falls back to another machine or to the backend. The
+error message adds that `placement: { target: "local" }` runs the sub-agent on
+the backend instead. The child is a placed agent like any other: it carries
+`nodeId`, `nodeName`, `placement` and `effectiveIsolation`, the results carry
+the `notice`, and it starts from the workspace's last commit, not from the
+parent's checkout.
+
+An explicit `placement` wins: `{ "target": "local" }` creates the sub-agent on
+the backend, and a remote placement (another `nodeId`, or `os` / `arch`) is
+admitted as usual. A child of an agent that is not remote, and every create
+made by the user or another client, keeps the rules above: no placement means
+local.
 
 ##### Placement across machines
 

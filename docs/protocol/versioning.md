@@ -62,6 +62,21 @@ Local rows omit the tag. `system.status` gains `remoteLinks: { backends, machine
 the live inbound backend links and outbound machine links. Older daemons omit both
 the remote rows and `remoteLinks`.
 
+Also within 15.3 (behavior change and one accepted placement form; no method-catalog
+change, so no version bump): **sub-agents of remote agents inherit the machine, and
+remote agents read workspace details**
+([sub-agents of remote agents](./methods/nodes.md#sub-agents-of-remote-agents),
+[executor link routing](./workspace-routing.md#remote-agents-on-the-executor-link)).
+A remote agent's `ws.agent.create`, `ws.agent.delegate` or `ws.agent.wakeOrCreate`
+without a `placement` now creates the sub-agent on the parent's machine, with the
+normal checks and errors and no fallback; previously it ran on the backend. The
+placement subset now accepts `placement: { target: "local" }` to mean "run on the
+backend" instead of refusing it with `-32602`. On the executor link, `workspace.info`
+answers on the machine with the agent's checkout path and `workspace.details` is
+forwarded to the backend; the other `workspace.*` frames stay refused. Creates by the
+user, other clients and local agents are unchanged. Older backends keep sub-agents on
+the backend, refuse `target: "local"` and refuse both workspace reads.
+
 Also within 15.3 (behavior change only; no wire-shape or method-catalog change, so no
 version bump): **any merge-queued PR wins the `displayStatus` PR rung**
 ([§5.1](./methods/workspace.md) step 4). The rung now reads `pr_queued` when any of its
