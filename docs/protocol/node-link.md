@@ -1876,10 +1876,10 @@ Each WebSocket binary message on `/node/link` is one JSON frame of at most
 | `response` | backend → machine | rpc | `requestId`, `outcome: { ok: value } \| { err: { code, message, data? } }` |
 | `cancelRequest` | machine → backend | rpc | `requestId` |
 | `scriptStart` | backend → machine | script | Protocol 8: see [saved scripts](#saved-scripts-nodeprotocol-8) |
-| `scriptStop` | backend → machine | script | Protocol 8: `scriptId`, `runId` |
-| `scriptStarted` | machine → backend | script | Protocol 8: `scriptId`, `runId`, `pid` |
-| `scriptOutput` | machine → backend | script | Protocol 8: `scriptId`, `runId`, `seq`, `data` |
-| `scriptExited` | machine → backend | script | Protocol 8: `scriptId`, `runId`, `exitCode?`, `error?` |
+| `scriptStop` | backend → machine | script | Protocol 8: `scriptId`, `spawnId` |
+| `scriptStarted` | machine → backend | script | Protocol 8: `scriptId`, `spawnId`, `pid` |
+| `scriptOutput` | machine → backend | script | Protocol 8: `scriptId`, `spawnId`, `seq`, `data` |
+| `scriptExited` | machine → backend | script | Protocol 8: `scriptId`, `spawnId`, `exitCode?`, `error?` |
 
 `intentdVersion` is recorded for diagnostics and is not a compatibility gate.
 Heartbeats run every 15 s and a link silent for 45 s is dead. The backend
@@ -2174,17 +2174,17 @@ interface ScriptStartFrame {
   type: "scriptStart";
   agentId: string;                         // the remote agent whose machine run this is
   scriptId: string;
-  runId: string;                           // opaque; the backend picks a new one for each process it starts, including each restart
+  spawnId: string;                         // opaque; new for each process, including each automatic restart (not the §5.8a runId)
   command: string;
   mode: "command" | "service";
   cwd?: string;                            // relative to the agent's checkout
   env?: { key: string; value: string }[];  // the saved env, in saved order
 }
-interface ScriptStopFrame    { type: "scriptStop"; scriptId: string; runId: string }
-interface ScriptStartedFrame { type: "scriptStarted"; scriptId: string; runId: string; pid: number }
-interface ScriptOutputFrame  { type: "scriptOutput"; scriptId: string; runId: string; seq: number; data: string }
+interface ScriptStopFrame    { type: "scriptStop"; scriptId: string; spawnId: string }
+interface ScriptStartedFrame { type: "scriptStarted"; scriptId: string; spawnId: string; pid: number }
+interface ScriptOutputFrame  { type: "scriptOutput"; scriptId: string; spawnId: string; seq: number; data: string }
 interface ScriptExitedFrame  {
-  type: "scriptExited"; scriptId: string; runId: string;
+  type: "scriptExited"; scriptId: string; spawnId: string;
   exitCode?: number;                       // absent only together with error
   error?: string;                          // "<code>: <detail>"
 }
@@ -2214,10 +2214,10 @@ dropped.
   output.
   One `scriptStart` is one process: the machine never restarts a script. The
   backend's existing supervisor keeps the service restart policy and backoff
-  and sends a new `scriptStart`, with a new `runId`, for each restart.
+  and sends a new `scriptStart`, with a new `spawnId`, for each restart.
 - **Output.** The machine streams the process's combined output as UTF-8 text
   (invalid bytes replaced) in `scriptOutput` frames of at most 64 KiB of
-  `data`, `seq` counting from 0 per run. The backend appends them to the run's
+  `data`, `seq` counting from 0 per `spawnId`. The backend appends them to the run's
   output log, so `script.output`, `script.run` and monitor output triggers read
   it as they do locally. Output is not journaled: frames lost with a link are
   gone.
@@ -2238,7 +2238,10 @@ dropped.
   `SIGKILL` after the local grace) and the machine answers with that run's
   `scriptExited`. A `scriptStop` for a run that is not running is answered with
   `scriptExited` `{ exitCode: -1, error: "node-script-not-running: …" }`.
-  Frames for a `runId` other than the current one are ignored by both sides.
+  Frames for a `spawnId` other than the current one are ignored by both sides.
+  A `spawnId` names one process; the [§5.8a](./methods/script-monitors.md#run-identity-and-fast-completion)
+  `runId` the backend reports for the machine run spans its automatic restarts,
+  exactly as for a home run, and never crosses the link.
 - **Lost.** When the link drops, is replaced by a newer binding, or the machine
   goes unreachable, the backend marks every live run on it
   `status: "exited"`, `exitCode: -1`, with `error` starting

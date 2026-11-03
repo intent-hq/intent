@@ -1077,15 +1077,16 @@ over the executor link's [script frames](../node-link.md#saved-scripts-nodeproto
 
 **Where a run happens depends on who starts it**, not on who saved the script:
 
-- The app and local agents run a script on the backend, as before. This is the
-  script's **backend run**: the existing `runtime` and `lastRun`.
+- The app and local agents run a script in the workspace's **home checkout**
+  (today the backend's workspace checkout), as before. This is the script's
+  **home run**: the existing `runtime` and `lastRun`.
 - A remote agent that starts any saved script, including one saved by the user
   or a local agent, runs it on its own machine as a separate **machine run** of
   that script. Each remote agent has at most one machine run per script.
 
-So one script can have a backend run plus one machine run per remote agent,
+So one script can have a home run plus one machine run per remote agent,
 each with its own status, output log, `lastRun` and monitors. `autoStart`
-applies only to the backend run.
+applies only to the home run.
 
 **Machine runs on rows.** Rows carry
 
@@ -1114,12 +1115,21 @@ stopped. Clients name the machine by looking `nodeId` up in
 | Caller | `remoteAgentId` omitted | `remoteAgentId` supplied |
 | --- | --- | --- |
 | A remote agent | Its own machine run | Its own id: the same. Any other id: `-32602` `remote-script-not-owned` |
-| The app or a local agent | The backend run, unchanged | `status`, `output`, `stop` and `restart` act on that agent's existing machine run (`restart` reruns it on that machine); `start` and `run` fail `-32602` `remote-script-start-remote-only`; no such machine run: `-32602`, as for an unknown script |
+| The app or a local agent | The home run, unchanged | `status`, `output`, `stop` and `restart` act on that agent's existing machine run (`restart` reruns it on that machine); `start` and `run` fail `-32602` `remote-script-start-remote-only`; no such machine run: `-32602`, as for an unknown script |
 
-A remote agent never reads or drives the backend run. `scriptMonitor.create`
+A remote agent never reads or drives the home run. `scriptMonitor.create`
 takes no new parameter: a `runId` already names one run, and a remote agent's
 monitor without a `runId` watches its own machine run. A monitor row on a
-machine run carries `remoteAgentId` and `nodeId`.
+machine run carries `remoteAgentId` and `nodeId`. There is one active monitor per
+script **and run place**, so a monitor on the home run and one on each machine
+run do not contend
+([§5.8a uniqueness](./script-monitors.md#protocol-13-baseline-surfaces-and-authority)).
+
+**Changing or removing a definition.** An upsert or `script.remove` stops every
+live machine run of the script (`scriptStop` to each machine), settles each
+unfinished one as `cancelled` with an error naming the replacement or removal,
+exactly as for the home run, and drops all `machineRuns` entries. Later starts
+use the new definition. Archive and restore change no run.
 
 A machine run follows the usual runtime contract: `starting` before the
 `script.start` reply, `running` when the machine reports the process (`pid` is
@@ -1135,7 +1145,7 @@ restarting or running a machine run fails with:
 **Events.** Machine-run transitions are published as `script:changed` with
 `action: "updated"` and the full row in `data.script`, never as `script:state`
 or `script:output`, so a client that predates `machineRuns` never applies them
-to the backend run. Machine-run output is not broadcast; read it with
+to the home run. Machine-run output is not broadcast; read it with
 `script.output({ remoteAgentId })`.
 
 **Definitions from remote agents.** The backend sets
@@ -1158,8 +1168,8 @@ absolute `cwd`, or one that escapes the checkout, fails that run with
 **No autoStart from remote agents.** A remote agent's `script.create` or upsert
 with `autoStart: true`, or its upsert of a script whose stored `autoStart` is
 true, fails `-32602` `remote-script-autostart-unsupported`. So a remote agent
-can never cause a backend run without the user. The user and local agents can
-set `autoStart` on any script; it starts only the backend run, and daemon
+can never cause a home run without the user. The user and local agents can
+set `autoStart` on any script; it starts only the home run, and daemon
 startup starts no machine run.
 
 **Lost runs.** When the machine disconnects, each live machine run on it

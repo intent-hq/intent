@@ -251,7 +251,11 @@ A fresh registration requires an existing, nondeleted, nonretired owner in an
 active workspace. A failed/inert owner cannot register. A temporarily busy,
 question-held or idle owner is eligible. Lifecycle/read/persistence errors fail
 closed; never return success for a memory-only registration. There is one active
-monitor per **(workspaceId, scriptId)**, irrespective of runId. Registration and
+monitor per **(workspaceId, scriptId, run place)**, irrespective of runId. The run
+place is the home run, or one remote agent's machine run
+([scripts of remote agents](./scripts.md#scripts-of-remote-agents-remotescripts-1));
+without `remoteScripts: 1` every run is a home run, so this is one per
+(workspaceId, scriptId) as before. Registration and
 retirement enforce this atomically, including concurrent calls and recovery.
 Same-owner registration returns the existing active row, with no extra event or
 wake; an explicitly different runId is rejected (`-32602`), never rebound.
@@ -298,7 +302,8 @@ Upsert/remove settle any unfinished predecessor as `cancelled` with an error
 naming replacement/removal before discarding its definition. Ordinary script
 archive/restore does not change a run or monitor; workspace archive is different.
 
-Registration without runId binds atomically to the **latest accepted run** at
+Registration without runId binds atomically to the **latest accepted run** of
+the caller's own run place (a remote agent's machine run, otherwise the home run) at
 registration, including a retained final result after a fast exit or stop. It
 must not infer completion from status `idle` alone. A never-run script, a legacy
 result without a token, or an unavailable explicit run fails `-32602` with no

@@ -713,8 +713,8 @@ to the backend instead of refused. When a remote agent starts a saved script,
 the run happens on its machine over the new
 [script frames](./node-link.md#saved-scripts-nodeprotocol-8)
 (`scriptStart`, `scriptStop`, `scriptStarted`, `scriptOutput`, `scriptExited`)
-as a separate machine run; the app and local agents still run scripts on the
-backend ([scripts of remote agents](./methods/scripts.md#scripts-of-remote-agents-remotescripts-1)).
+as a separate machine run; the app and local agents still run scripts in the
+workspace's home checkout, today the backend's workspace checkout ([scripts of remote agents](./methods/scripts.md#scripts-of-remote-agents-remotescripts-1)).
 Script rows, summaries, `script.get` and `script:changed` snapshots gain the
 optional `machineRuns` and `remoteAuthor`; `script.status`, `output`, `start`,
 `stop`, `restart` and `run` gain the optional `remoteAgentId`; monitor rows on a
@@ -722,7 +722,7 @@ machine run carry `remoteAgentId` and `nodeId`. A machine run lost with its
 machine reads `exited` / `exitCode: -1` with an `error` starting
 `remote-script-lost:`, inside the existing total exit contract. Machine-run
 transitions are published only as `script:changed`, never `script:state` or
-`script:output`, so older clients never apply them to the backend run. New
+`script:output`, so older clients never apply them to the home run. New
 `-32602` reasons `remote-script-autostart-unsupported`, `remote-script-not-owned`,
 `remote-script-start-remote-only` and `remote-script-author-readonly`. Link
 traffic capture also masks script environments. nodeProtocol 8 is a new link
