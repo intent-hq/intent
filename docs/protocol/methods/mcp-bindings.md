@@ -153,7 +153,7 @@ ws.comment.respond(noteId, { threadId?, commentId?, comment, type?, author?, aut
 ```text
 ws.crossWorkspace.listNotes(targetWorkspaceId) → [notes]
 ws.crossWorkspace.listSiblings({ includeRetired? }?) → [workspaces]
-ws.crossWorkspace.readNote(targetWorkspaceId, noteId) → note
+ws.crossWorkspace.readNote(targetWorkspaceId, noteId, { startLine?, maxLines?, startOffset? }?) → note
 ws.crossWorkspace.search({ query?, pr?, includeRetired?, limit? }) → { matches, truncated }
 ```
 
