@@ -2130,8 +2130,8 @@ or a workspace revive can bring the session back; a restored agent's next
 launch has no checkout, so it [restores the saved work](#relaunch-without-a-checkout)
 from its `head` and `wip` refs. Below
 protocol 9 these deletes wait for a grace period (below). It never deletes the agent's
-`refs/intent/ws/<workspaceId>/agents/<agentId>/{base,head,wip}` refs here: they
-hold the work the final push just saved.
+`refs/intent/ws/<workspaceId>/agents/<agentId>/{base,head,wip}` refs, or any
+`unapplied/<sha>` ref, here: they hold the work the final push just saved.
 
 **Bound.** A `remote_final_stop` row older than **7 days** is dropped,
 acknowledged or not, together with the `remote_agent` row under the same rule
@@ -2296,9 +2296,16 @@ git connection (upload-pack under the normal launch authorization, not the
 final-stop record) and checks out `head` if it exists, else `baseCommit`. If a
 `wip` ref newer than `head` exists, the machine applies the `wip` working tree on
 top as uncommitted changes, so the work saved by the final push is not lost. If
-that cannot be applied cleanly, the machine keeps the `head` checkout, leaves the
-`wip` ref untouched, and the agent's first turn gets a notice naming the `wip`
-ref. The machine never overwrites or force-pushes over the saved `head`.
+that cannot be applied cleanly, the machine keeps the `head` checkout and,
+before any other push, pins that `wip` commit to a new ref
+`refs/intent/ws/<workspaceId>/agents/<agentId>/unapplied/<full wip sha>`
+(create-only: one name per commit, so a second failure never overwrites the
+first). Only after that push succeeds does the agent's first turn start, with a
+notice naming the `unapplied/<sha>` ref; the turn's own pushes may then replace
+`wip`. If the pin push fails, the launch fails with `node-git-unavailable`
+instead of starting and risking the saved `wip` being overwritten. The machine
+never overwrites or force-pushes over the saved `head`, and never updates or
+deletes an `unapplied/` ref.
 
 Machine failures are journaled as `"<code>: <detail>"`. A failure that ends the
 agent's process before its checkout is ready (an `exited` record with an error
@@ -2338,6 +2345,8 @@ under the documented hub names:
 refs/intent/ws/<workspaceId>/agents/<agentId>/base   the backend writes at launch
 refs/intent/ws/<workspaceId>/agents/<agentId>/head   the machine pushes the agent's commits
 refs/intent/ws/<workspaceId>/agents/<agentId>/wip    the machine pushes a commit of its dirty tree
+refs/intent/ws/<workspaceId>/agents/<agentId>/unapplied/<sha>
+                                                     the machine pins a saved wip a relaunch could not apply
 ```
 
 The machine names one agent's refs with the remote
@@ -2363,7 +2372,9 @@ are `node-git-invalid`, `node-git-failed` and `node-git-unavailable`. The
 backend answers with `git upload-pack` / `git receive-pack` on protocol v0,
 with no ambient `GIT_*` environment, hooks or global configuration, and with
 every ref outside that agent's prefix hidden: the machine cannot read, want or
-update anything else. A push is limited to 1 GiB. After each turn and when the
+update anything else. Under `unapplied/` a push may only create a ref, never
+update or delete one ([relaunch without a checkout](#relaunch-without-a-checkout)).
+A push is limited to 1 GiB. After each turn and when the
 agent exits, the machine pushes `head` and a `wip` commit of its working tree.
 
 Merging is ordinary git in the workspace: a parent agent or the user merges

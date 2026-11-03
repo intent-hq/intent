@@ -615,7 +615,10 @@ instead of a plain stop:
    can launch again: with no checkout on the machine, its launch checks out
    its saved `head` ref (else its base) and restores the `wip` changes on top
    ([relaunch without a checkout](../node-link.md#relaunch-without-a-checkout)). The agent's
-   `refs/intent/ws/<workspaceId>/agents/<agentId>/{base,head,wip}` refs stay.
+   `refs/intent/ws/<workspaceId>/agents/<agentId>/{base,head,wip}` refs stay,
+   and so do its `unapplied/<sha>` refs: when a relaunch cannot apply the saved
+   `wip`, the machine first pins it there (create-only) and only then starts the
+   agent's first turn, whose notice names that ref.
 
 The methods' results and errors are unchanged. Apart from
 `remoteMachines.remove`, which waits for the acknowledgements as above, they

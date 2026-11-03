@@ -789,7 +789,11 @@ lease row with the record only for a delete or a machine removal; after a
 retire the lease row stays, so `agent.restore` or a workspace revive still
 works; a relaunched agent with no checkout checks out its saved `head` ref
 (else its base) and restores its `wip` changes on top, or, when they do not
-apply cleanly, keeps `head` and gets a notice naming the `wip` ref. At bind, an agent whose session is retired or deleted is stopped for
+apply cleanly, keeps `head`, pins that `wip` commit to the create-only ref
+`refs/intent/ws/<workspaceId>/agents/<agentId>/unapplied/<full wip sha>` before
+any other push (a failed pin fails the launch with `node-git-unavailable`), and
+gets a first-turn notice naming that ref; `unapplied/` refs are kept like
+`head` and `wip`. At bind, an agent whose session is retired or deleted is stopped for
 good instead of re-attached, and the machine sweeps checkouts of agents not in
 the new `hello.leaseAgents` (live sessions on the lease plus retired or deleted
 agents with a pending final stop, so a retired agent's leftover checkout is
