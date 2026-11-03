@@ -445,7 +445,8 @@ local), and the reply is the subset form of the
 launch: { agentId, state: "failed" }, cause: { code, message } }`, where
 `workspaceId` is the created workspace, `agentId` the kept initial agent and
 `cause.code` the `placementError.code` (for example `remote-launch-failed`).
-No result accompanies the error and it is never `-32602`; the caller fetches
+No first turn starts; a supplied prompt stays on the agent as
+`metadata.initialMessage`. No result accompanies the error and it is never `-32602`; the caller fetches
 the workspace by `workspaceId`. A retry with the same `idempotencyKey`
 replays that error; it creates no second workspace and does not relaunch. A failure the machine reports after the reply
 surfaces on the initial agent like any remote start failure (`placementError`
