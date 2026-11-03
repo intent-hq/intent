@@ -1804,7 +1804,7 @@ Revoking a credential closes its live `/node/*` connections with `1008`
 `hello.protocol` is a range instead of one number:
 
 ```ts
-interface ProtocolRange { min: number; max: number } // inclusive; this contract defines 6, 7 and 8
+interface ProtocolRange { min: number; max: number } // inclusive; this contract defines 6, 7, 8 and 9
 ```
 
 The machine picks the highest version in both ranges and returns it as
@@ -1852,6 +1852,14 @@ peer still binds and runs agents. On a link that negotiated 7 the backend sends
 no script frame, and starting a remote agent's script fails as described in
 [saved scripts](#saved-scripts-nodeprotocol-8).
 
+**nodeProtocol 9** is protocol 8 plus the [final stop](#final-stop-nodeprotocol-9):
+`stop.final`, `stopAck.finalPush` and `hello.leaseAgents`. A final stop
+removes the agent's checkout, which a protocol 8 machine would not do while
+still acknowledging the stop, so it needs a new version, not an optional
+field. A daemon that implements it offers `{ min: 7, max: 9 }` on both sides,
+so protocol 7 and 8 peers still bind. On a link below 9 the backend sends a
+plain `stop` where it would send a final one, as the final stop describes.
+
 ### Frames
 
 Each WebSocket binary message on `/node/link` is one JSON frame of at most
@@ -1859,7 +1867,7 @@ Each WebSocket binary message on `/node/link` is one JSON frame of at most
 
 | `type` | Direction | Lane | Body |
 | --- | --- | --- | --- |
-| `hello` | backend → machine | control | `protocol: ProtocolRange`, `intentdVersion`, `binding`, `ackedSeq` |
+| `hello` | backend → machine | control | `protocol: ProtocolRange`, `intentdVersion`, `binding`, `ackedSeq`, `leaseAgents?: AgentId[]` (protocol 9: see [final stop](#final-stop-nodeprotocol-9)) |
 | `welcome` | machine → backend | control | `protocol` (the chosen version), `nodeId`, `runningAgents: AgentId[]` (this binding only), `capabilities: MachineCapabilities`, `hosts: string[]`, `tcAddress?` |
 | `heartbeat` / `heartbeatReply` | both | control | `nonce` |
 | `capabilities` | backend → machine | control | Empty: ask for a fresh [report](#capabilities-report) |
@@ -1867,8 +1875,8 @@ Each WebSocket binary message on `/node/link` is one JSON frame of at most
 | `launch` | backend → machine | control | See [launch](#launch-and-agent-lifecycle) |
 | `prompt` | backend → machine | control | `agentId`, `turnId`, `prompt` (ACP content blocks) |
 | `cancel` | backend → machine | control | `agentId`: cancel the running turn |
-| `stop` | backend → machine | control | `agentId`, `stopId`: stop the provider process; see [stop acknowledgement](#stop-acknowledgement-nodeprotocol-7) |
-| `stopAck` | machine → backend | control | `stopId`, `agentId`, `outcome` |
+| `stop` | backend → machine | control | `agentId`, `stopId`, `final?` (protocol 9): stop the provider process; see [stop acknowledgement](#stop-acknowledgement-nodeprotocol-7) and [final stop](#final-stop-nodeprotocol-9) |
+| `stopAck` | machine → backend | control | `stopId`, `agentId`, `outcome`, `finalPush?` (protocol 9) |
 | `journal` | machine → backend | journal | One [journal record](#journal-and-acknowledgements) |
 | `ack` | backend → machine | journal | `seq`: every record through `seq` is ingested |
 | `replayComplete` | machine → backend | journal | `throughSeq`: every record after the hello's `ackedSeq` was resent |
@@ -1981,7 +1989,8 @@ does not ack yet; the backend's resend covers the wait.
   `welcome`, before any `launch` or `prompt` on the new link, and restarts
   their resend timers. It never treats a stop as confirmed because the agent is
   missing from `welcome.runningAgents`.
-- The queue is held in memory. After a backend restart, the
+- The queue is held in memory, except for [final stops](#final-stop-nodeprotocol-9),
+  which the backend persists. After a backend restart, the
   [existing reconciliation](#launch-and-agent-lifecycle) applies: the backend
   sends a new stop, with a new `stopId`, for every agent in
   `welcome.runningAgents` that it no longer has attached, and those stops are
@@ -1993,7 +2002,9 @@ does not ack yet; the backend's resend covers the wait.
 **Removing a machine.** `remoteMachines.remove` with `stopAgents: true` queues a
 stop for each live agent on the machine, connects on demand if needed, and
 waits at most 30 s in total (including the 10 s connect) for every stop to be
-acknowledged:
+acknowledged. From protocol 9 these are [final stops](#final-stop-nodeprotocol-9)
+with reason `machine-removed`, and the total wait is 90 s, to fit the
+machine's 60 s final push:
 
 - All acknowledged: it deletes the machine, its credential token and its lease,
   and returns `{ ok: true, credentialId }`.
@@ -2005,6 +2016,199 @@ acknowledged:
   agent ids still unconfirmed. It deletes nothing: the machine, credential and
   queued stops stay, the backend keeps resending them, and the caller can retry
   `remove` or revoke the credential on the machine.
+
+### Final stop (nodeProtocol 9)
+
+A **final stop** ends a remote agent for good: its work is pushed, then its
+checkout is removed from the machine. The backend sends one, and never a plain
+`stop`, when:
+
+| `reason` | Trigger |
+| --- | --- |
+| `agent-deleted` | `agent.delete` of a remote agent |
+| `agent-retired` | `agent.retire` of a remote agent |
+| `workspace-retired` | `workspace.retire` of a workspace with remote agents |
+| `workspace-deleted` | `workspace.delete` of a workspace with remote agents |
+| `machine-removed` | `remoteMachines.remove` with `stopAgents: true` |
+
+Every other stop (a model switch, quota failover, cancel of a run, a bind
+reconciliation of an agent the backend still records) stays a plain `stop` and
+keeps the checkout.
+
+**Durable record on the backend.** In the same transaction that deletes or
+retires the session (or, for `machine-removed`, before it sends any stop), the
+backend writes one `remote_final_stop` row per agent:
+
+```ts
+interface RemoteFinalStop {
+  agentId: string;      // primary key
+  workspaceId: string;
+  machineId: string;
+  leaseId: string;      // the lease the agent is recorded on
+  stopId: string;       // UUID; every resend of this final stop reuses it
+  reason: "agent-deleted" | "agent-retired" | "workspace-retired" | "workspace-deleted" | "machine-removed";
+  repoPath: string;     // the workspace repository's path when the row was written
+  requestedAt: string;  // UTC RFC 3339
+}
+```
+
+The row is not tied to the session row, so it survives the session's delete.
+It replaces the in-memory queue for that stop: the backend resends it, with
+the same `stopId`, under the rules of [stop acknowledgement](#stop-acknowledgement-nodeprotocol-7),
+and also after a backend restart, right after the next `welcome`.
+`agent.delete`, `agent.retire`, `workspace.retire` and `workspace.delete`
+return once the row is written (after the [lease end](#saved-scripts-nodeprotocol-8)'s
+script-stop wait, for a delete); they never wait for the final stop's
+acknowledgement.
+
+A final stop takes over a plain stop already queued for the same agent: it is
+sent with the row's `stopId`, and the plain stop's id leaves the queue. A later
+plain stop for the same agent never replaces a queued final stop.
+
+**Frames.**
+
+```ts
+interface StopFrame    { type: "stop"; agentId: string; stopId: string; final?: true } // protocol 9
+interface StopAckFrame {
+  type: "stopAck"; stopId: string; agentId: string;
+  outcome: "stopped" | "not-running";
+  finalPush?: "pushed" | "failed" | "skipped"; // protocol 9; present exactly on a final stop's ack
+}
+```
+
+`final` is either absent or `true`; any other value, or `final` on a link below
+9, is `node-link-protocol`. A machine sends `finalPush` only in the ack of a
+final stop.
+
+**On the machine**, a final stop runs in this order:
+
+1. Stop the agent's [script runs](#saved-scripts-nodeprotocol-8): every
+   process of the agent's machine runs is stopped as by `scriptStop`, with its
+   `scriptExited`. This holds for every reason, including retires, for which
+   the backend sends no [lease end](#saved-scripts-nodeprotocol-8)
+   `scriptStop`, and when the lease end's frames were lost, so no script keeps
+   writing to the checkout or outlives the agent. The backend settles any of
+   the agent's machine runs it has not seen exit once the final stop is
+   acknowledged, as the lease end settles them.
+2. Stop the provider process (with its process group) as for a plain stop, and
+   journal `exited` if it was running.
+3. Push `head` and a `wip` commit of the working tree
+   ([agent refs over git](#agent-refs-over-git)), within **60 s** in total.
+   `finalPush` is `pushed` when both landed, `failed` when the push was
+   refused or timed out, and `skipped` when there is nothing to push: the
+   agent has no checkout, or it is not running and the machine no longer knows
+   its workspace (after a machine restart). An agent that was not running
+   already pushed when it exited.
+4. Remove the agent's checkout under
+   `<data_dir>/executor/<credentialId>/agents/<agentId>/`.
+5. Send `stopAck` with `outcome` (`stopped` or `not-running`, as for a plain
+   stop) and `finalPush`.
+
+A failed push does not stop the cleanup: the machine still removes the
+checkout and acks. A checkout it cannot remove gets no ack; the backend's
+resend retries the whole final stop, which now finds the agent stopped. A
+duplicate final stop after removal acks `not-running` with `finalPush:
+"skipped"`.
+
+**The final push.** The backend authorizes a `git-receive-pack` OPEN for an
+agent with a `remote_final_stop` row on the connection's binding's lease, even
+after its session was retired or deleted or its `remote_agent` row is gone; it
+refuses upload-pack for such an agent. The push targets `repoPath`, not the
+workspace worktree: `refs/intent/*` live in the repository's common git dir, so
+the refs land where the worktree saw them, and a retired or deleted workspace's
+removed worktree does not matter. `workspace.retire` and `workspace.delete`
+remove only the worktree, never the repository the push targets. If `repoPath`
+no longer exists, the OPEN fails `node-git-unavailable` and the machine
+reports `finalPush: "failed"`.
+
+**After the ack**, the backend deletes the agent's `remote_final_stop` row. It
+also deletes the agent's `remote_agent` row (if it is still there) for
+`agent-deleted`, `workspace-deleted` and `machine-removed`. For `agent-retired`
+and `workspace-retired` the `remote_agent` row stays, because `agent.restore`
+or a workspace revive can bring the session back; a restored agent's next
+launch checks out its base again, since its old checkout is gone. Below
+protocol 9 these deletes wait for a grace period (below). It never deletes the agent's
+`refs/intent/ws/<workspaceId>/agents/<agentId>/{base,head,wip}` refs here: they
+hold the work the final push just saved.
+
+**Bound.** A `remote_final_stop` row older than **7 days** is dropped,
+acknowledged or not, together with the `remote_agent` row under the same rule
+as after the ack; the refs stay. The bound does not depend on a bind: the
+backend checks it when the connector starts, at each bind, on an **hourly**
+timer and before each redial attempt. A machine offline for longer than 7 days
+therefore stops being redialed once its last pending row ages out (unless it
+still has live agents). A checkout left on
+a machine that never acknowledged is removed by the machine's sweep at its next
+protocol 9 bind.
+
+**Offline machine.** A pending final stop counts as a live agent for the link:
+the link stays wanted and the backend redials with the usual backoff, resending
+the final stop after each `welcome`, until the ack or the bound. Rows survive a
+backend restart, so an agent stopped for good while its machine was offline
+is never resumed: see bind below. `remoteMachines.remove` keeps its existing
+rule: with stops unconfirmed after its wait (90 s on protocol 9, 30 s below)
+it fails `machine-unreachable` with
+`unconfirmedStops` and deletes nothing (the rows stay and keep being resent);
+when the machine has revoked the credential the stops are moot, and removal
+deletes the rows with the machine. A revocation without removal (`401` or a
+`1008` close) drops nothing: the machine has stopped the binding's agents, no
+push can arrive, and the rows wait for the bound or `remoteMachines.remove`.
+
+**At bind.** The backend treats each agent in `welcome.runningAgents` as
+follows:
+
+- It sends a final stop, never re-attaches or parks the agent, when the agent
+  has a `remote_final_stop` row, its session is retired or deleted, or it is not
+  on the lease.
+- An agent on the lease whose session is retired or deleted but has no row
+  (for example, stopped by a backend older than 9) gets one first, so its push
+  is accepted and its rows are deleted after the ack like the others: reason
+  `agent-deleted` for a deleted session (its `remote_agent` row still has the
+  `workspaceId`), and for a retired one `workspace-retired` when its workspace
+  is retired, `agent-retired` otherwise.
+- An agent not on the lease (its rows are gone, or it was never recorded)
+  gets a final stop with a new `stopId` held in memory only, like the plain
+  stop it replaces. Its push is refused (`node-git-denied`); the machine still
+  removes the checkout and acks with `finalPush: "failed"`.
+- Otherwise it re-attaches the agent as before.
+
+The link counts as wanted only for agents whose session is not retired,
+deleted or completed, or that have a pending `remote_final_stop` row.
+
+**Orphan sweep.** On protocol 9 the backend sends `hello.leaseAgents`: the
+agents recorded on the lease whose session is live (not retired, deleted or
+completed), plus retired or deleted agents that still have a pending
+`remote_final_stop` row. A retired agent with no pending row is not listed, so
+its checkout is swept: this covers a below-9 ack, a row dropped at the 7-day
+bound, and any other leftover; a restored agent checks out its base again. At a
+protocol 9 bind the machine takes the list of directories under that
+credential's `agents/` **before** it handles any `launch` on the new link, and
+removes, after it has sent `welcome`, each listed directory whose agent is not
+in `leaseAgents`, is not running, and has no final stop in progress (which
+removes its own directory). It never removes the checkout of an agent launched,
+or being prepared for launch, on this binding, even when that agent was
+recorded on the lease after `hello` was built. An older backend's `hello`
+carries no `leaseAgents`, and the machine sweeps nothing.
+
+**Inactive credentials.** A revoked credential never binds again, so the
+machine cleans up after it itself. It removes the
+`<data_dir>/executor/<credentialId>/` directory (journal and checkouts) of
+every credential that is no longer active on the machine (revoked or unknown):
+at `executor.revoke`, once the binding's agents are stopped; at each bind; and
+at startup. It never touches the directories of another active credential,
+since one machine can serve several backends. No final push happens for an
+inactive credential.
+
+**Below protocol 9.** On a link that negotiated 7 or 8 the backend still writes
+the row and resends the stop, but sends it as a plain `stop` (no `final`). The
+machine stops the agent and pushes as it does after any stop; the push is
+authorized by the row as above; the ack carries no `finalPush`, and the
+checkout stays until the machine's sweep after a later protocol 9 bind. Below
+9 nothing orders that push before the ack, so after a below-9 ack the backend
+keeps the `remote_agent` and `remote_final_stop` rows, and with them the push
+authorization, for a **120 s** grace period, then deletes them as above. The
+final push is best-effort there: a push that arrives after the grace is refused
+(`node-git-denied`).
 
 ### Journal and acknowledgements
 
@@ -2100,7 +2304,9 @@ the backend records the launch sets `placementError.code` to
 | `node-shutting-down` | The machine is stopping and starts no more agents |
 
 At every bind the machine reports `runningAgents`; the backend keeps the agents
-it has recorded on that lease attached and stops the rest. A prompt sent during
+it has recorded on that lease attached and stops the rest. From protocol 9 an
+agent whose session is retired or deleted, or that has a pending final stop,
+is never kept: the backend sends it a [final stop](#final-stop-nodeprotocol-9). A prompt sent during
 a reconnect waits a short grace for the link; a turn whose link stays down past
 that grace fails with `node-link-unavailable` through the existing turn-error
 path. This link adds no `halted` / `resuming` agent status or `node_link_lost`
@@ -2132,7 +2338,9 @@ helper (git's `connect` helper protocol) through a local socket named in
 | `5` CLOSE | both | The backend's carries JSON `{ error? }` |
 
 The backend authorizes each OPEN against the connection's binding: the agent
-must be on that lease and the binding current, else `node-git-denied`. The
+must be on that lease and the binding current, else `node-git-denied`. The one
+exception is the push of a [final stop](#final-stop-nodeprotocol-9), authorized
+by the stop's durable record. The
 backend runs at most 8 sessions per machine (`node-git-busy`); other failures
 are `node-git-invalid`, `node-git-failed` and `node-git-unavailable`. The
 backend answers with `git upload-pack` / `git receive-pack` on protocol v0,
@@ -2263,7 +2471,8 @@ dropped.
   `remoteMachines.remove` with `stopAgents: true`, it sends `scriptStop` for
   each of the agent's live machine runs and waits for their `scriptExited`
   acknowledgements within the bound the call already has:
-  - `remoteMachines.remove` waits inside its existing 30 s budget, together
+  - `remoteMachines.remove` waits inside its existing 30 s budget (90 s from
+    protocol 9), together
     with the agents' [stop acknowledgements](#stop-acknowledgement-nodeprotocol-7).
     An agent whose script stop is unacknowledged counts as unconfirmed: removal
     fails `machine-unreachable` with that agent in `unconfirmedStops` and

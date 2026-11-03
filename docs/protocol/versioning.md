@@ -774,6 +774,38 @@ removing a machine waits, within its existing bound, for the script stops'
 are added, the surface counts are unchanged, and there is no public protocol
 version bump: clients detect it only through `remoteScripts: 1`.
 
+**Final stop for remote agents — nodeProtocol 9 (behavior change, no capability).**
+`agent.delete`, `agent.retire`, `workspace.retire`, `workspace.delete` and
+`remoteMachines.remove` with `stopAgents: true` now end a remote agent with a
+[final stop](./node-link.md#final-stop-nodeprotocol-9)
+([ending a remote agent for good](./methods/nodes.md#ending-a-remote-agent-for-good)):
+the backend persists the pending stop, the machine stops the agent's scripts
+and provider, makes a final `head` / `wip` push (at most 60 s) that the backend
+accepts while the record exists, removes the agent's checkout and then
+acknowledges. The backend drops the record only after the acknowledgement or
+after 7 days (checked hourly and before each redial, so a machine offline that
+long stops being redialed), and keeps the agent's refs. It drops the agent's
+lease row with the record only for a delete or a machine removal; after a
+retire the lease row stays, so `agent.restore` or a workspace revive still
+works. At bind, an agent whose session is retired or deleted is stopped for
+good instead of re-attached, and the machine sweeps checkouts of agents not in
+the new `hello.leaseAgents` (live sessions on the lease plus retired or deleted
+agents with a pending final stop, so a retired agent's leftover checkout is
+swept). The machine also removes the directories of
+credentials no longer active on it (revoked or unknown) at `executor.revoke`,
+at bind and at startup, never another active credential's.
+nodeProtocol 9 adds `stop.final`, `stopAck.finalPush` and `hello.leaseAgents`;
+it is a new link version because a final stop removes the checkout, which an
+older machine would not do while still acknowledging. Daemons offer
+`{ min: 7, max: 9 }`; on a lower link the backend sends a plain stop, the final push is
+best-effort (accepted for 120 s after the acknowledgement), and the checkout
+stays until a later protocol 9 bind.
+`remoteMachines.remove`'s stop wait grows from 30 s to 90 s on protocol 9 and
+stays 30 s on a lower link.
+`RemoteMachine.nodeProtocol` reads `9` from an updated machine. No methods,
+events, fields of public results or error codes change, the surface counts are
+unchanged, and there is no public protocol version bump.
+
 **Command-default change (breaking).**
 [Script creation defaults (§5.8)](./methods/scripts.md#command-creation-defaults-breaking-change)
 change omission on a new command from `saved` to `oneOff`; new services remain
