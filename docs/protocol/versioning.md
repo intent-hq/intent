@@ -730,8 +730,12 @@ version because older peers reject unknown frame types; daemons offer
 `{ min: 7, max: 8 }`, so protocol 7 machines keep running agents. A remote
 agent's `ws.script.*` calls work only on a link that negotiated 8; otherwise its
 machine refuses them with `remote-agent-unsupported:` as before, and an existing
-machine run that meets a protocol 7 link fails to start with
-`machine-update-required`. The backend advertises
+machine run that meets a protocol 7 link fails to restart with
+`machine-update-required`. `RemoteMachine` rows gain `nodeProtocol`, the version
+the last bind negotiated, so clients can show which machines need an update.
+Script frames carry `agentId`, `scriptId` and `spawnId`, and deleting an agent or
+removing a machine waits, within its existing bound, for the script stops'
+`scriptExited` acknowledgements. The backend advertises
 `remoteScripts: 1` only together with `remoteMachines: 1`. No methods or events
 are added, the surface counts are unchanged, and there is no public protocol
 version bump: clients detect it only through `remoteScripts: 1`.

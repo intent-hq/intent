@@ -2180,11 +2180,11 @@ interface ScriptStartFrame {
   cwd?: string;                            // relative to the agent's checkout
   env?: { key: string; value: string }[];  // the saved env, in saved order
 }
-interface ScriptStopFrame    { type: "scriptStop"; scriptId: string; spawnId: string }
-interface ScriptStartedFrame { type: "scriptStarted"; scriptId: string; spawnId: string; pid: number }
-interface ScriptOutputFrame  { type: "scriptOutput"; scriptId: string; spawnId: string; seq: number; data: string }
+interface ScriptStopFrame    { type: "scriptStop"; agentId: string; scriptId: string; spawnId: string }
+interface ScriptStartedFrame { type: "scriptStarted"; agentId: string; scriptId: string; spawnId: string; pid: number }
+interface ScriptOutputFrame  { type: "scriptOutput"; agentId: string; scriptId: string; spawnId: string; seq: number; data: string }
 interface ScriptExitedFrame  {
-  type: "scriptExited"; scriptId: string; spawnId: string;
+  type: "scriptExited"; agentId: string; scriptId: string; spawnId: string;
   exitCode?: number;                       // absent only together with error
   error?: string;                          // "<code>: <detail>"
 }
@@ -2234,21 +2234,22 @@ dropped.
   The backend records the exit with the existing total exit contract:
   `status: "exited"` with `exitCode`, or `exitCode: -1` and `error` when the
   machine reported none.
-- **Matching.** A `spawnId` is a UUID the backend picks, unique within the
-  binding, and it alone names one process: several agents on one binding can
-  run the same `scriptId` at once, each under its own `spawnId`. `scriptId` in
-  the machine's frames is a consistency check; a frame whose `scriptId` does
-  not match its `spawnId`'s is `node-link-protocol`. The backend ignores
-  `scriptStarted`, `scriptOutput` and `scriptExited` for a `spawnId` that is no
-  longer the current process of a machine run (an earlier restart, or a run it
-  has already settled).
+- **Matching.** Every script frame carries `agentId`, `scriptId` and
+  `spawnId`, and a process is identified by all three. `spawnId` is a UUID the
+  backend picks, new for each process and unique within the binding, so
+  several agents on one binding can run the same `scriptId` at once. The
+  backend ignores `scriptStarted`, `scriptOutput` and
+  `scriptExited` whose triple is not the current process of a machine run (an
+  earlier restart, or a run it has already settled).
 - **Stop.** `scriptStop` kills that process's group (`SIGTERM`, then `SIGKILL`
-  after the local grace), and the machine acknowledges it with that
-  `spawnId`'s `scriptExited`. The machine answers every `scriptStop`: one
-  whose `spawnId` is not running there (already exited, never started, or
-  stale) is answered at once with `scriptExited`
-  `{ exitCode: -1, error: "node-script-not-running: …" }`, which the backend
-  then ignores under the rule above if it has already settled that process.
+  after the local grace), and the machine acknowledges it with that process's
+  `scriptExited`, carrying its observed `exitCode`. The machine answers every
+  `scriptStop`, with one rule: when the triple names no running process there
+  (it already exited, never started, or is stale), it answers at once with
+  `scriptExited` `{ exitCode: -1, error: "node-script-not-running: …" }` for
+  that triple and stops nothing. The backend counts either answer as the
+  stop's acknowledgement, and otherwise ignores the second for a process it
+  has already settled.
   A `spawnId` names one process; the [§5.8a](./methods/script-monitors.md#run-identity-and-fast-completion)
   `runId` the backend reports for the machine run spans its automatic restarts,
   exactly as for a home run, and never crosses the link.
@@ -2259,16 +2260,25 @@ dropped.
   as that binding's link closes, so no script outlives its link and nothing is
   reattached after a reconnect. A later start sends a new `scriptStart`.
 - **Lease end.** Before the backend deletes a remote agent, and before
-  `remoteMachines.remove`, it sends `scriptStop` for each of the agent's live
-  machine runs on the live link and settles those runs; it does not wait for
-  the `scriptExited` acknowledgements, and it does not queue or resend script
-  stops. None is needed: on a live link the machine applies the stop, and when
-  the link is down the machine has already stopped, or stops once it notices
-  the dead link (at most 45 s without heartbeats), every script of that
-  binding. Revocation (`401` or a `1008` close) ends the link the same way. The
-  machine also stops an agent's scripts before it removes the agent's
-  worktree, including on the agent's own `stop`. In every case no script
-  process stays on the machine.
+  `remoteMachines.remove` with `stopAgents: true`, it sends `scriptStop` for
+  each of the agent's live machine runs and waits for their `scriptExited`
+  acknowledgements within the bound the call already has:
+  - `remoteMachines.remove` waits inside its existing 30 s budget, together
+    with the agents' [stop acknowledgements](#stop-acknowledgement-nodeprotocol-7).
+    An agent whose script stop is unacknowledged counts as unconfirmed: removal
+    fails `machine-unreachable` with that agent in `unconfirmedStops` and
+    deletes nothing.
+  - Deleting an agent waits at most 10 s, then settles the runs and deletes
+    the agent whether or not every acknowledgement arrived.
+
+  Script stops are never queued or resent. They need no retry: when the link
+  is down, the machine has already stopped, or stops once it notices the dead
+  link (at most 45 s without heartbeats), every script of that binding, so a
+  backend that cannot reach the machine sends nothing and waits for nothing.
+  Revocation (`401` or a `1008` close) ends the link the same way. The machine
+  also stops an agent's scripts before it removes the agent's worktree,
+  including on the agent's own `stop`. In every case no script process stays on
+  the machine.
 - **Mixed versions.** The machine routes `workspace_api` frames with its own
   table ([workspace API on the machine](#workspace-api-on-the-machine)), so a
   remote agent's `ws.script.*` calls reach the backend only from a machine that
@@ -2277,12 +2287,16 @@ dropped.
   call (list and create included) fails on the machine with
   `remote-agent-unsupported:`, as before this contract; the agent's other calls
   are unaffected. Only a machine run that already exists can meet a protocol 7
-  link (its machine was downgraded, or relinked to an older daemon): starting,
-  restarting or running it from the app then fails with `-32602`
+  link (its machine was downgraded, or relinked to an older daemon): a
+  `script.restart` of it from the app or a local agent then fails with `-32602`
   `machine-update-required` (the [remote machine error](./methods/nodes.md#remote-machine-errors)
   data, `update: "machine"`), and the backend sends nothing. With no link up
   after the usual on-demand connect, it fails with `-32603`
-  `machine-unreachable` and `attempts`.
+  `machine-unreachable` and `attempts`. The backend records the version each
+  bind negotiated in the machine's `nodeProtocol`
+  ([remote machines](./methods/nodes.md#backend-methods-exposed-machines)), so a
+  client can tell the owner that a machine needs an update before its agents
+  can use scripts.
 - **Ports.** A service's ports are not tunnelled. `detectedUrl` is reported as
   the process printed it and names the machine's loopback, not the backend's.
 

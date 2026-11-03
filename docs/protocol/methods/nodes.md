@@ -315,7 +315,10 @@ a remote agent's `script.*` calls are refused and no script row carries
 `machineRuns`. The machine side also needs nodeProtocol 8: a protocol 7
 machine refuses its agents' `ws.script.*` calls itself, with
 `remote-agent-unsupported:`
-([mixed versions](../node-link.md#saved-scripts-nodeprotocol-8)).
+([mixed versions](../node-link.md#saved-scripts-nodeprotocol-8)). A backend
+with `remoteScripts: 1` reports each machine's negotiated `nodeProtocol` on
+`RemoteMachine`; while it is below 8, clients show that the machine needs an
+update for its agents to use scripts (for example in Settings → Machines).
 
 ##### Machine methods: executor credentials
 
@@ -362,6 +365,7 @@ interface RemoteMachine {
   state: "connected" | "disconnected" | "unreachable" | "revoked" | "update-required";
   runningAgents: number;            // this backend's live agents on the machine
   capabilities?: MachineCapabilities; // last report, kept while disconnected
+  nodeProtocol?: number;            // link version negotiated at the last bind, kept while disconnected; absent before the first bind and from backends without remoteScripts
   observedAt?: string;              // when `capabilities` was reported
   addedAt: string;
   lastConnectedAt?: string;
