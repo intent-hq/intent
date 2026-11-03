@@ -601,7 +601,8 @@ triggered by pushing a `sitter-vX.Y.Z` tag.
   `gh workflow run publish-intent-web.yml --repo intent-hq/cloudlands-fe -f channel=<beta|stable>`.
   If `alpha` lags (a publish failed or was skipped), publish the tag again with
   `gh workflow run publish-intent-web.yml --repo intent-hq/cloudlands-fe -f tag=v<version>`.
-  If npm rejects the move (the Trusted Publisher's **Allow npm dist-tag** setting
+  If npm rejects the move (the trusted publisher's dist-tag permission, announced
+  as ["Allow npm dist-tag"](https://github.blog/changelog/2026-09-30-opt-in-dist-tag-permissions-for-npm-trusted-publishing),
   is off), an `@intent-hq` npm owner runs
   `npm dist-tag add @intent-hq/web@<version> <beta|latest>`. Setup and the full
   dist-tag model:
