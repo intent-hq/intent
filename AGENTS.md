@@ -134,7 +134,10 @@ addition — see Phase 2 → Docs lead the pin.
 1. **Make scoped commits in the submodule** on a feature branch. Group related changes into
    logical commits with conventional commit messages (`feat:`, `fix:`, `chore:`, etc.).
 2. **Push the feature branch** in the submodule repo.
-3. **File a PR** on the submodule's repo (e.g., `intent-hq/intentd`).
+3. **File a PR** on the submodule's repo (e.g., `intent-hq/intentd`). On every PR (intent, intentd,
+   cloudlands-fe) request the `intent-hq-service` review in the Reviewers picker or with
+   `gh pr edit <PR> --repo intent-hq/<repo> --add-reviewer intent-hq-service`: requested PRs get priority,
+   unrequested ones depend on discovery and spare review capacity (timing varies), and a request doesn't guarantee immediate completion.
 4. **Merge the PR** (squash merge preferred) — **only after explicit permission from a
    human** (see Conventions → Merging). Approved + green checks is not enough.
 
