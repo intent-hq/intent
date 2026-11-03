@@ -148,6 +148,14 @@ protocol-14 active-only replacement; `1` was the protocol-13 contract with
 terminal history. Independent of scriptLifecycle/scriptReadiness;
 absence means unavailable, not permission to infer support from version numbers.
 
+**Remote initial agent (additive).** Exact integer
+`server.capabilities.remoteInitialAgent: 1` means `workspace.create` accepts
+`initialAgent.placement` under the daemon-to-daemon
+[placement subset](./nodes.md#placement-subset). It is advertised only together with
+`remoteMachines: 1`. A backend with `remoteMachines: 1` and no `remoteInitialAgent`
+may ignore the field and start the initial agent locally, so clients offer a remote
+initial agent only when this flag is exactly `1`. It grants no caller authority.
+
 **Workspace discussions (additive extension).**
 Exactly integer `server.capabilities.discussionConversations: 1` advertises the
 [§5.55 contract](./multiplayer.md#555-workspace-discussions): conversation and

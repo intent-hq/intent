@@ -666,6 +666,17 @@ because 6 was never released, so a version-6-only peer gets
 `machine-update-required`. It shipped without a public protocol version bump:
 clients detect it only through `remoteMachines: 1`.
 
+**Remote initial agent — capability `remoteInitialAgent: 1` (additive).**
+`workspace.create` accepts `initialAgent.placement` under the
+[placement subset](./methods/nodes.md#placement-subset): the `agent.create`
+placement object, validated before any workspace effect, with a launch failure
+after the workspace commits returned as the `-32603` post-creation envelope.
+The backend advertises `remoteInitialAgent: 1` only together with
+`remoteMachines: 1`; `remoteMachines` is not bumped, because existing clients
+test it for exactly `1`. Older backends that advertise `remoteMachines: 1`
+ignore the field, so clients detect support only through this flag. No method
+is added and the public protocol version is unchanged.
+
 **Remote-compatible profiles and switching a remote agent's model (additive, one narrowing).**
 [Provider profiles](./methods/provider-profiles.md#remote-compatibility) and
 Default configurations gain `remoteCompatible` and `remoteIncompatibility`
