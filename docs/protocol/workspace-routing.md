@@ -254,8 +254,9 @@ method inventory:
 | Frames | Where they run |
 | --- | --- |
 | `file.read`, `file.write`, `file.list`, `file.delete`, `file.mkdir`, `file.rename`, `git.commit`, `host.exec`, `help.*` | On the machine, against the agent's own checkout and host |
-| `note.*`, `task.*`, `agent.*`, `pr.*` (and its `mr.*` alias), `comment.*`, `event.*`, `script.*` | Forwarded to the backend as one `workspace.call` link request with params `{ method, args }` |
-| Everything else, including other `git.*`, `terminal.*`, `browser.*`, `hook.*`, `desktop.*`, `search.*`, `crossWorkspace.*`, `mcp.*`, `workspace.*` and `file.getAttachment` | Refused, never run on another host |
+| `workspace.info` | On the machine: `{ id, path }`, where `path` is the agent's own checkout on the machine |
+| `note.*`, `task.*`, `agent.*`, `pr.*` (and its `mr.*` alias), `comment.*`, `event.*`, `script.*`, `workspace.details` | Forwarded to the backend as one `workspace.call` link request with params `{ method, args }` |
+| Everything else, including other `git.*`, `terminal.*`, `browser.*`, `hook.*`, `desktop.*`, `search.*`, `crossWorkspace.*`, `mcp.*`, the other `workspace.*` frames (the setters, `archive`, `unarchive`, `proposeSibling`, `applyProposal`) and `file.getAttachment` | Refused, never run on another host |
 
 A refused frame fails with a message starting `remote-agent-unsupported:` that
 names the method and lists what remote agents can use. The backend serves a forwarded
@@ -263,7 +264,11 @@ frame only on the machine's current binding, only for an agent recorded on that
 binding's lease, and only when its own copy of this table forwards the method;
 the frame then runs through the same host dispatch as a local agent's bridge, as
 that agent and in its workspace. The agent's `agentFeatures` snapshot and the
-sub-agent gates apply as they do locally. Before an agent-initiated `git.commit`,
+sub-agent gates apply as they do locally. A forwarded `agent.create`,
+`agent.delegate` or `agent.wakeOrCreate` without a `placement` creates the
+sub-agent on the agent's own machine; see
+[sub-agents of remote agents](./methods/nodes.md#sub-agents-of-remote-agents).
+Before an agent-initiated `git.commit`,
 the machine forwards the internal frame `git.commitPolicy` (refused from agent code)
 and the backend answers `{ "autoCommit": boolean }` with the workspace's effective
 auto-commit policy. The machine forwards `script.*` only on a link that

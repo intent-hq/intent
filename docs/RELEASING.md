@@ -15,7 +15,8 @@ cloudlands-fe).
 
 | Question | Run |
 |---|---|
-| Where is the release train? Latest tags and ages, alpha/beta/stable versions, the fe daemon pin, open Release and pin-bump PRs with CI Gate state and merge queue position, what the merge queue head is waiting on, unshipped commits, the last auto-cut decision line, the last auto-pin-intentd run and its failure reason, runner maintenance overrides | `make release-status` (`STATUS_JSON=1` for JSON; `NO_LOGS=1` skips the run-log fetch) |
+| Where is the release train? Latest tags and ages, alpha/beta/stable versions, the fe daemon pin, open Release and pin-bump PRs with CI Gate state and merge queue position, what the merge queue head is waiting on, unshipped commits, the last auto-cut decision line, the last auto-pin-intentd run and its failure reason, the `@intent-hq/web` npm dist-tags with drift from the fe channels, runner maintenance overrides | `make release-status` (`STATUS_JSON=1` for JSON; `NO_LOGS=1` skips the run-log fetch) |
+| Which `@intent-hq/web` version does each npm dist-tag (`alpha`, `beta`, `latest`) point at? | `npm view @intent-hq/web dist-tags --json` |
 | Which alpha carries my commit? | `make shipped-in COMPONENT=<intentd\|cloudlands-fe> SHA=<sha>` (hooks call `scripts/shipped-in.sh` for its exit codes) |
 
 ## Guarded direct release merges
@@ -585,6 +586,27 @@ triggered by pushing a `sitter-vX.Y.Z` tag.
   emergencies, logged as a warning. After the stable feed is verified, propose the
   website release notes PR on `intent-hq/intentapp.dev` for human review (see
   [fe/RELEASING.md § Promoting to Stable](./fe/RELEASING.md#promoting-to-stable)).
+- npm package: `publish-intent-web.yml` publishes `@intent-hq/web` (the standalone
+  browser server) at the cloudlands-fe version after each successful tag-push
+  Release Alpha, under the `alpha` dist-tag (a publish never sets `beta` or
+  `latest`). After a successful Promote Beta / Release Stable, its `sync-channel`
+  job moves `beta` / `latest` to the version the beta / stable feed on
+  `intent-hq/cloudlands-releases` serves, so each dist-tag follows its channel
+  (`latest` = stable). No dist-tag moves backwards, so `latest` stays on the
+  first published alpha until stable serves a newer version. `make release-status`
+  shows each tag behind, ahead of or missing from its channel (a package not on
+  npm yet is its own state, not an error). Verify with
+  `npm view @intent-hq/web dist-tags --json`. If `beta` or `latest` lags, sync it
+  by hand with
+  `gh workflow run publish-intent-web.yml --repo intent-hq/cloudlands-fe -f channel=<beta|stable>`.
+  If `alpha` lags (a publish failed or was skipped), publish the tag again with
+  `gh workflow run publish-intent-web.yml --repo intent-hq/cloudlands-fe -f tag=v<version>`.
+  If npm rejects the move (the trusted publisher's dist-tag permission, announced
+  as ["Allow npm dist-tag"](https://github.blog/changelog/2026-09-30-opt-in-dist-tag-permissions-for-npm-trusted-publishing),
+  is off), an `@intent-hq` npm owner runs
+  `npm dist-tag add @intent-hq/web@<version> <beta|latest>`. Setup and the full
+  dist-tag model:
+  [cloudlands-fe docs/intent-web-package.md](https://github.com/intent-hq/cloudlands-fe/blob/main/docs/intent-web-package.md).
 
 ## Release notifier
 
@@ -662,7 +684,9 @@ The pipeline is event-chained, with cron retries as backstops: intentd release P
 merge → tag + cargo-dist build → alpha manifest publish →
 `intentd-alpha-published` dispatch → cloudlands-fe pin bump
 (`auto-pin-intentd.yml`) → pin push to `main` → chained cloudlands-fe cut
-(`auto-cut-alpha.yml` push trigger) → promote each component's stable → monorepo
+(`auto-cut-alpha.yml` push trigger) → `@intent-hq/web` npm publish under `alpha`
+(`publish-intent-web.yml`) → promote each component's beta and stable (the fe
+promotions also move the npm `beta` / `latest` dist-tags) → monorepo
 pins advance automatically via the auto-bump workflow (no manual bump PR). Every
 link is fail-soft: when one is missing (e.g. `FE_DISPATCH_TOKEN` unset on intentd),
 the crons (hourly at :15 for pin bumps, every ten minutes for frontend cut

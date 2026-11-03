@@ -15,7 +15,9 @@
 # auto-pin-intentd.yml run with its failure streak and one-line failure
 # reason (e.g. GH006 when the queued pin branch is locked), and active
 # CI_*_RUNNER_DISABLED maintenance overrides with their reasons on intent,
-# intentd and cloudlands-fe.
+# intentd and cloudlands-fe. The @intent-hq/web npm dist-tags (alpha, beta,
+# latest) are checked against the cloudlands-fe alpha/beta/stable channels,
+# flagging drift; a package not on npm yet is its own state, not an error.
 #
 # Sources:
 #   intentd releases         intent-hq/intentd releases; channels from
@@ -28,6 +30,9 @@
 #                            publishes, so a tag newer than the newest release
 #                            is reported as "not published yet"
 #   pin                      intentd.version on intent-hq/cloudlands-fe main
+#   npm dist-tags            `npm view @intent-hq/web dist-tags --json` (npm
+#                            E404 = not published yet; no npm or a timeout,
+#                            15 s per request = unavailable)
 #   unshipped                compare <newest release>...main on each source repo
 #   merge queue              GraphQL repository.mergeQueue(branch: "main"):
 #                            entry positions/states/enqueue times, and the head
@@ -46,7 +51,7 @@
 # --no-logs skips the log fetches (the slowest part); the auto-cut section then
 # shows only the newest run, and the auto-pin section no failure reason. Every
 # lookup is independent and fail-soft: one that fails shows
-# `unavailable: <gh error>` (JSON: `errors[]`) and the rest of the report
+# `unavailable: <gh or npm error>` (JSON: `errors[]`) and the rest of the report
 # still prints. Exit codes: 0 = report printed; 1 = gh missing or
 # not authenticated; 2 = usage error. RELEASE_STATUS_NOW=<ISO-8601> pins the
 # clock (tests).
@@ -81,6 +86,7 @@ intentd_dist=intent-hq/intentd-releases
 fe_repo=intent-hq/cloudlands-fe
 fe_dist=intent-hq/cloudlands-releases
 monorepo=intent-hq/intent
+npm_package=@intent-hq/web
 max_runs=5
 max_pin_runs=10
 # auto-pin-intentd.yml run conclusions, shared by the log-fetch picker below
@@ -92,16 +98,23 @@ pin_ignored="cancelled skipped"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-# fetch <name> <gh args...>: stdout to <name>.out, stderr to <name>.err and
+# capture <name> <command...>: stdout to <name>.out, stderr to <name>.err and
 # the exit status to <name>.rc, never failing the script.
-fetch() {
+capture() {
   local name=$1
   shift
-  if gh "$@" >"$work/$name.out" 2>"$work/$name.err"; then
+  if "$@" >"$work/$name.out" 2>"$work/$name.err"; then
     echo 0 >"$work/$name.rc"
   else
     echo "$?" >"$work/$name.rc"
   fi
+}
+
+# fetch <name> <gh args...>: capture one gh call.
+fetch() {
+  local name=$1
+  shift
+  capture "$name" gh "$@"
 }
 
 ok() { [[ -f "$work/$1.rc" && "$(<"$work/$1.rc")" == 0 ]]; }
@@ -307,15 +320,27 @@ fetch fe.pin api -H "Accept: application/vnd.github.raw+json" \
 for repo in "$monorepo" "$intentd_repo" "$fe_repo"; do
   fetch "vars.${repo#intent-hq/}" variable list --repo "$repo" --json name,value &
 done
+if command -v npm >/dev/null 2>&1; then
+  # A short per-request timeout and one retry: a network that drops packets
+  # silently must not stall the report (npm's default waits 5 minutes).
+  capture npm npm view "$npm_package" dist-tags --json --fetch-retries=1 --fetch-timeout=15000 \
+    --no-update-notifier &
+else
+  echo "npm is not installed (run make bootstrap-dev-host)" >"$work/npm.err"
+  echo 127 >"$work/npm.rc"
+fi
 wait
 
 python3 - "$work" "${STATUS_JSON:-}" "${RELEASE_STATUS_NOW:-}" "$fetch_logs" "$max_pin_runs" \
-  "$pin_failed" "$pin_ignored" <<'PY'
+  "$pin_failed" "$pin_ignored" "$npm_package" <<'PY'
 import datetime, json, os, re, sys
 
 work, as_json, now_arg, fetch_logs = sys.argv[1], sys.argv[2] == "1", sys.argv[3], sys.argv[4] == "1"
 MAX_PIN_RUNS = int(sys.argv[5])
 PIN_FAILED, PIN_IGNORED = sys.argv[6].split(), sys.argv[7].split()
+NPM_PACKAGE = sys.argv[8]
+# npm dist-tag -> the cloudlands-fe channel it follows.
+NPM_TAGS = (("alpha", "alpha"), ("beta", "beta"), ("latest", "stable"))
 UTC = datetime.timezone.utc
 
 
@@ -537,6 +562,44 @@ def auto_pin():
             "newestRunId": runs[0]["databaseId"], "newestRunStatus": runs[0].get("status")}
 
 
+def npm_dist_tags(channels):
+    """@intent-hq/web dist-tags against the cloudlands-fe channel versions.
+    published is False when npm answers E404 (not on npm yet), None when
+    the lookup failed. drift lists each dist-tag that differs from a known
+    channel version: behind, ahead (the sync never moves a tag backwards, so
+    `latest` stays on the bootstrap alpha until stable passes it) or unset."""
+    section = "cloudlands-fe.npm"
+    data = {"package": NPM_PACKAGE, "published": None,
+            "distTags": {tag: None for tag, _ in NPM_TAGS}, "drift": []}
+    rc = (read("npm.rc") or "").strip()
+    if rc != "0":
+        text = (read("npm.out") or "") + (read("npm.err") or "")
+        if re.search(r"\bE404\b", text):
+            data["published"] = False
+            return data
+        lines = [line.strip() for line in (read("npm.err") or "").splitlines() if line.strip()]
+        errors.append({"section": section, "message": lines[0] if lines else "npm exited " + (rc or "?")})
+        return data
+    tags = load_json(read("npm.out") or "", section)
+    if not isinstance(tags, dict):
+        return data
+    data["published"] = True
+    for tag, channel in NPM_TAGS:
+        data["distTags"][tag] = tags.get(tag)
+        expected = channels.get(channel)
+        if expected and tags.get(tag) != expected:
+            got = tags.get(tag)
+            if not got:
+                direction = "unset"
+            elif version_key(got) and version_key(expected) and version_key(got) > version_key(expected):
+                direction = "ahead"
+            else:
+                direction = "behind"
+            data["drift"].append({"distTag": tag, "npm": got, "channel": channel, "channelVersion": expected,
+                                  "direction": direction})
+    return data
+
+
 def component(key):
     data = {"latestTag": None, "latestTagPublishedAt": None, "latestTagAgeMinutes": None,
             "newestGitTag": None, "newestGitTagAt": None, "newestGitTagAgeMinutes": None,
@@ -652,6 +715,7 @@ def component(key):
             "newestRunId": runs[0]["databaseId"], "newestRunStatus": runs[0].get("status")}
     if key == "cloudlands-fe":
         data["autoPin"] = auto_pin()
+        data["npm"] = npm_dist_tags(data["channels"])
     return data
 
 
@@ -722,6 +786,23 @@ def auto_pin_line(pin_run):
             "run %s %s" % (run["runId"], run["conclusion"]) for run in pin_run["newerIgnoredRuns"])
     if pin_run["newestRunId"] != pin_run["runId"] and pin_run["newestRunStatus"] != "completed":
         line += " (run %s %s)" % (pin_run["newestRunId"], pin_run["newestRunStatus"])
+    return line
+
+
+def npm_line(npm):
+    if npm["published"] is False:
+        return "%s not on npm yet" % npm["package"]
+    if npm["published"] is None:
+        return "%s %s" % (npm["package"], unavailable("cloudlands-fe.npm"))
+    line = "%s %s" % (npm["package"], " · ".join(
+        "%s %s" % (tag, npm["distTags"][tag] or "unset") for tag, _ in NPM_TAGS))
+    if npm["drift"]:
+        relation = {"unset": "unset,", "ahead": "ahead of", "behind": "behind"}
+        line += " — drift: " + ", ".join("%s %s %s channel %s" % (
+            item["distTag"], " ".join(filter(None, [item["npm"], relation[item["direction"]]])),
+            item["channel"], item["channelVersion"]) for item in npm["drift"])
+    else:
+        line += " (matches the channels)"
     return line
 
 
@@ -831,6 +912,7 @@ for key, data in components.items():
     out.append("  %-12s %s" % ("auto-cut", line))
     if key == "cloudlands-fe":
         out.append("  %-12s %s" % ("auto-pin", auto_pin_line(data["autoPin"])))
+        out.append("  %-12s %s" % ("npm", npm_line(data["npm"])))
 
 if overrides:
     out.append("runner overrides (CI_*_RUNNER_DISABLED)")
