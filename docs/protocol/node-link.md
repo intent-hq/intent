@@ -2126,7 +2126,8 @@ also deletes the agent's `remote_agent` row (if it is still there) for
 `agent-deleted`, `workspace-deleted` and `machine-removed`. For `agent-retired`
 and `workspace-retired` the `remote_agent` row stays, because `agent.restore`
 or a workspace revive can bring the session back; a restored agent's next
-launch checks out its base again, since its old checkout is gone. Below
+launch has no checkout, so it [restores the saved work](#relaunch-without-a-checkout)
+from its `head` and `wip` refs. Below
 protocol 9 these deletes wait for a grace period (below). It never deletes the agent's
 `refs/intent/ws/<workspaceId>/agents/<agentId>/{base,head,wip}` refs here: they
 hold the work the final push just saved.
@@ -2180,7 +2181,8 @@ agents recorded on the lease whose session is live (not retired, deleted or
 completed), plus retired or deleted agents that still have a pending
 `remote_final_stop` row. A retired agent with no pending row is not listed, so
 its checkout is swept: this covers a below-9 ack, a row dropped at the 7-day
-bound, and any other leftover; a restored agent checks out its base again. At a
+bound, and any other leftover; a restored agent
+[restores its saved work](#relaunch-without-a-checkout) from its refs. At a
 protocol 9 bind the machine takes the list of directories under that
 credential's `agents/` **before** it handles any `launch` on the new link, and
 removes, after it has sent `welcome`, each listed directory whose agent is not
@@ -2282,6 +2284,20 @@ first prompt. A remote agent's provider, profile or model changes only through
 a validated `agent.setModel` or quota failover; the backend then stops the run
 and sends a new `launch` to the same machine
 ([switching a remote agent's model](./methods/nodes.md#switching-a-remote-agents-model)).
+
+#### Relaunch without a checkout
+
+When a restored, or any relaunched, agent has no checkout on the machine (it
+was removed by a final stop or the orphan sweep), the launch does not start from
+`baseCommit` alone. The machine fetches the agent's
+`refs/intent/ws/<workspaceId>/agents/<agentId>/head` and `.../wip` refs over the
+git connection (upload-pack under the normal launch authorization, not the
+final-stop record) and checks out `head` if it exists, else `baseCommit`. If a
+`wip` ref newer than `head` exists, the machine applies the `wip` working tree on
+top as uncommitted changes, so the work saved by the final push is not lost. If
+that cannot be applied cleanly, the machine keeps the `head` checkout, leaves the
+`wip` ref untouched, and the agent's first turn gets a notice naming the `wip`
+ref. The machine never overwrites or force-pushes over the saved `head`.
 
 Machine failures are journaled as `"<code>: <detail>"`. A failure that ends the
 agent's process before its checkout is ready (an `exited` record with an error

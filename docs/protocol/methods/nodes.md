@@ -612,7 +612,9 @@ instead of a plain stop:
 4. The backend drops the record only after the acknowledgement, or after 7
    days without one. It drops the agent's lease row with it for a delete or a
    machine removal; after a retire the lease row stays, so a restored agent
-   can launch again from a fresh checkout of its base. The agent's
+   can launch again: with no checkout on the machine, its launch checks out
+   its saved `head` ref (else its base) and restores the `wip` changes on top
+   ([relaunch without a checkout](../node-link.md#relaunch-without-a-checkout)). The agent's
    `refs/intent/ws/<workspaceId>/agents/<agentId>/{base,head,wip}` refs stay.
 
 The methods' results and errors are unchanged. Apart from
