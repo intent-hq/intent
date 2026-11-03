@@ -271,9 +271,13 @@ The result is the existing `workspace-create` proposal resource with
 [intentd#1995](https://github.com/intent-hq/intentd/pull/1995)): the proposal's
 pending-tracking identity — its `applyToolCallId`, falling back to `preview.title` — which
 is the key of the `pendingProposals` entry and of the `proposalResolutions` map (§5.5
-"Pending proposals" in [agents.md](./agents.md)). The caller should retain it: it is the
+"Pending proposals" in [agents.md](./agents.md)). Follow-up proposals carry a unique
+`applyToolCallId` (`workspace-create-<uuid>`, additive), so two same-titled cards never
+share a pending entry, resolution or created-workspace link. The caller should retain it: it is the
 stable handle `ws.workspace.applyProposal` accepts before AND after the proposal is
-resolved, whereas the idempotency key addresses the proposal only while it is pending. The
+resolved, whereas the idempotency key addresses the proposal only while it is pending.
+While pending, `ws.workspace.applyProposal` also accepts the card's `preview.title` when
+exactly one pending proposal carries it. The
 title, prompt, specialist, and base ref
 remain editable; repository metadata is locked. The proposal stores one idempotency key,
 which its Apply and Retry actions reuse, so one proposal creates at most one workspace.
