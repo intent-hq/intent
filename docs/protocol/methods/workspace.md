@@ -826,7 +826,7 @@ would mark applied a card the daemon deliberately refused (e.g. a replay naming 
 card, or a non-`workspace-create` card).
 
 **Remote initial agent (`workspace.create { initialAgent.placement }`).** On a backend
-advertising `remoteMachines: 1`, `initialAgent.placement` takes the closed `agent.create`
+advertising `remoteInitialAgent: 1` (with `remoteMachines: 1`), `initialAgent.placement` takes the closed `agent.create`
 placement object and starts the initial agent on another machine. Its placement,
 remote-compatibility, model and admission checks join the pre-side-effect validation above.
 A launch failure after the workspace commits keeps the workspace and the initial agent and

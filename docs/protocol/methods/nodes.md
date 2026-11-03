@@ -298,6 +298,14 @@ current backend advertises it. The machine-side `executor.*` methods are not
 gated by the capability: an older machine answers `-32601`, which the frontend
 shows as "update Intent on <machine>".
 
+`client.hello.server.capabilities.remoteInitialAgent: 1` means
+`workspace.create` accepts `initialAgent.placement` under the
+[placement subset](#placement-subset). The backend advertises it only together
+with `remoteMachines: 1` and omits it otherwise. A backend with
+`remoteMachines: 1` but without this flag predates the contract and may ignore
+the field and start the initial agent locally, so a client offers a remote
+initial agent only for exact integer `1`. `remoteMachines` stays at `1`.
+
 ##### Machine methods: executor credentials
 
 Owner-only: the local UDS seat or a WSS connection admitted with the owner
@@ -414,16 +422,19 @@ and wakeOrCreate results copy `notice`, `nodeId`, `nodeName` and
 subset. Agent work is exchanged as the hub ref names in the workspace's own
 repository instead of a separate hub.
 
-`workspace.create` accepts `initialAgent.placement` on the same backend, with
-the same closed object and validation as `agent.create`. The placement checks,
+On a backend that also advertises `remoteInitialAgent: 1`, `workspace.create`
+accepts `initialAgent.placement` with the same closed object and validation as `agent.create`. The placement checks,
 the [remote-compatibility](./provider-profiles.md#remote-compatibility) check
 and the model check of [placement across machines](#placement-across-machines),
 and admission all run under `workspace.create`'s
 [pre-side-effect validation](./workspace.md#51-workspace) ("Pre-side-effect
 validation" in its notes): a `-32602` (a malformed or `null` placement, `placement-unavailable`,
 `profile-not-remote-compatible` or `model-unavailable`) creates no workspace,
-worktree, event or agent. After the workspace commits, the initial agent is
-created on the chosen machine as by `agent.create`: the result's
+worktree, event or agent. A placement on a create without a git repository (a
+[plain-folder workspace](./workspace.md#plain-folder-workspaces)) is also
+refused there with `-32602`, since there is no commit to start from. After the workspace commits, the initial agent is
+created on the chosen machine as by `agent.create`, starting from the new
+worktree's `HEAD`: the result's
 `initialAgent` carries `nodeId`, `nodeName`, `placement` and
 `effectiveIsolation`, and the result adds the same `notice`. If the launch
 fails before the reply, the workspace and the initial agent are kept (the
@@ -435,7 +446,8 @@ launch: { agentId, state: "failed" }, cause: { code, message } }`, where
 `workspaceId` is the created workspace, `agentId` the kept initial agent and
 `cause.code` the `placementError.code` (for example `remote-launch-failed`).
 No result accompanies the error and it is never `-32602`; the caller fetches
-the workspace by `workspaceId`. A failure the machine reports after the reply
+the workspace by `workspaceId`. A retry with the same `idempotencyKey`
+replays that error; it creates no second workspace and does not relaunch. A failure the machine reports after the reply
 surfaces on the initial agent like any remote start failure (`placementError`
 and `agent:updated`). An omitted `initialAgent.placement` keeps the initial
 agent local, as before.
