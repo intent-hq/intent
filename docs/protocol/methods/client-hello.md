@@ -305,8 +305,8 @@ Ordinary hellos retain their existing profile-update behavior.
 `server.capabilities.gitlabCheckout: 1` announces the complete
 [pre-workspace project checkout contract](repository-checkout.md). Accept exactly
 integer `1` on the selected destination's original physical connection. The
-capability does not enable the GitLab experiment, grant host membership or prove
-that a configured account can access a project. A higher protocol version, the
+capability does not grant host membership or prove that a configured account can
+access a project. A higher protocol version, the
 existing repository resource/context capabilities, or a guest's collaboration
 identity cannot substitute for it.
 
