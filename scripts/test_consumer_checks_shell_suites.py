@@ -245,6 +245,18 @@ class Selection(unittest.TestCase):
         values, _ = self.select(self.checkout(), base, merge)
         self.assertEqual(values['selected'], 'true')
         self.assertEqual(values['reason'], 'this change touches scripts/ci-killed-rustc-retry.sh')
+        # Deleting the helper while coverage-all.sh still calls it selects as well.
+        main = git(self.origin, 'rev-parse', 'main')
+        git(self.origin, 'checkout', '-q', '-b', 'delete-helper')
+        git(self.origin, 'rm', '-q', 'scripts/ci-killed-rustc-retry.sh')
+        git(self.origin, 'commit', '-qm', 'test: delete the helper')
+        git(self.origin, 'checkout', '-q', 'main')
+        git(self.origin, 'merge', '-q', '--no-ff', '--no-edit', 'delete-helper')
+        merge = git(self.origin, 'rev-parse', 'HEAD')
+        git(self.origin, 'reset', '-q', '--hard', main)
+        values, _ = self.select(self.checkout('delete-helper'), main, merge)
+        self.assertEqual(values['selected'], 'true')
+        self.assertEqual(values['reason'], 'this change touches scripts/ci-killed-rustc-retry.sh')
 
     def test_unreferenced_policy_neighbour_skips(self):
         # Mentioned only in a comment, as a prose cross-reference.

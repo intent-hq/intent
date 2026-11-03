@@ -12,10 +12,13 @@ followed transitively. A new helper is copied without a monorepo change.
 scripts/consumer-checks-shell-suites.sh reads the same list (``--watched``) to
 decide when an intentd PR runs the test in monorepo-consumer-checks.
 
-Limits: only literal ``scripts/<name>`` references are followed (a computed
-name such as the root Makefile's ``./scripts/$@.sh`` is not), and full-line
-``#`` comments are ignored so prose mentions do not widen the list. Add a
-helper reached only through a computed name to ENTRYPOINTS.
+Followed: literal ``scripts/<name>`` references, and inside scripts/ a sibling
+named relative to the script's directory (``"$script_dir/x.sh"``,
+``"$(dirname "$0")/x.py"``). Full-line ``#`` comments are ignored so prose
+mentions do not widen the list. A computed name such as the root Makefile's
+``./scripts/$@.sh`` is not followed: add such a helper to ENTRYPOINTS. The
+watch list also keeps references whose file is missing, so deleting a helper
+that a launcher still calls selects the test.
 
 Usage: rust_test_policy_manifest.py [--component DIR] [--repo-root DIR] [--watched]
 """
@@ -45,25 +48,35 @@ STUBBED = frozenset({"scripts/prepare-acp-callback-fixture.py"})
 # Root Makefile files that run intentd scripts in the test's routes.
 ROOT_LAUNCHERS = ("Makefile",)
 
-_COMPONENT_REFERENCE = re.compile(r"(?<![\w.-])scripts/([A-Za-z0-9_][A-Za-z0-9_.-]*)")
-_ROOT_REFERENCE = re.compile(r"INTENTD_DIR\)?\"?/scripts/([A-Za-z0-9_][A-Za-z0-9_.-]*)")
+_NAME = r"([A-Za-z0-9_][A-Za-z0-9_.-]*)"
+_COMPONENT_REFERENCE = re.compile(r"(?<![\w.-])scripts/" + _NAME)
+# Inside scripts/: a sibling named relative to the script's own directory, as
+# "$script_dir/x.sh", "${here}/x.py" or "$(dirname "${BASH_SOURCE[0]}")/x.py".
+_SIBLING_REFERENCE = re.compile(
+    r"(?:\$\{?\w+\}?|\))\"?/([A-Za-z0-9_][A-Za-z0-9_.-]*\.(?:sh|py|mjs|cjs|js|json))(?![\w.-])")
+_ROOT_REFERENCE = re.compile(r"INTENTD_DIR\)?\"?/scripts/" + _NAME)
 
 
 def _code(text: str) -> str:
     return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
 
 
-def _references(text: str, pattern: re.Pattern[str]) -> set[str]:
-    return {"scripts/" + name.rstrip(".") for name in pattern.findall(_code(text))}
+def _references(text: str, *patterns: re.Pattern[str]) -> set[str]:
+    code = _code(text)
+    names = {name.rstrip(".") for pattern in patterns for name in pattern.findall(code)}
+    # A name cut short by a glob or an expansion (scripts/test-*, scripts/x-$y)
+    # ends in punctuation; it names no file, so it is neither copied nor watched.
+    return {"scripts/" + name for name in names if name[-1:].isalnum()}
 
 
-def component_files(component: Path, repo_root: Path = ROOT) -> list[str]:
-    """Component-relative files to copy, sorted; missing entrypoints are skipped."""
+def _scan(component: Path, repo_root: Path) -> tuple[set[str], set[str]]:
+    """(files that exist and are copied, every path referenced on the way)."""
     pending = list(ENTRYPOINTS)
     for name in ROOT_LAUNCHERS:
         path = repo_root / name
         if path.is_file():
             pending += sorted(_references(path.read_text(errors="replace"), _ROOT_REFERENCE))
+    referenced = set(pending)
     found: set[str] = set()
     while pending:
         relative = pending.pop()
@@ -73,14 +86,26 @@ def component_files(component: Path, repo_root: Path = ROOT) -> list[str]:
         if not path.is_file():
             continue
         found.add(relative)
-        pending += sorted(_references(path.read_text(errors="replace"), _COMPONENT_REFERENCE))
-    return sorted(found)
+        patterns = [_COMPONENT_REFERENCE]
+        if relative.startswith("scripts/"):
+            patterns.append(_SIBLING_REFERENCE)
+        refs = _references(path.read_text(errors="replace"), *patterns)
+        referenced |= refs
+        pending += sorted(refs)
+    return found, referenced - STUBBED
+
+
+def component_files(component: Path, repo_root: Path = ROOT) -> list[str]:
+    """Component-relative files to copy, sorted; missing references are skipped."""
+    return sorted(_scan(component, repo_root)[0])
 
 
 def watched_files(component: Path, repo_root: Path = ROOT) -> list[str]:
-    """Paths whose change can break the test: every entrypoint (added, changed or
-    deleted) and every file it copies."""
-    return sorted({*ENTRYPOINTS, *component_files(component, repo_root)})
+    """Paths whose change can break the test: every entrypoint and every path the
+    launchers reference, whether it exists or not. A deleted helper that is
+    still called stays watched, so deleting it selects the test."""
+    found, referenced = _scan(component, repo_root)
+    return sorted({*ENTRYPOINTS, *found, *referenced})
 
 
 def main(argv: list[str]) -> int:

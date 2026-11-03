@@ -642,6 +642,42 @@ class ManifestTests(unittest.TestCase):
         self.assertNotIn("scripts/prepare-acp-callback-fixture.py", watched)
         self.assertNotIn("scripts/unrelated.sh", watched)
 
+    def test_deleted_but_referenced_helper_stays_watched(self):
+        # Deleting a helper a launcher still calls must select the test, so the
+        # dangling reference is watched though there is nothing to copy.
+        (self.component / "scripts/new-helper.sh").unlink()
+        self.assertNotIn("scripts/new-helper.sh",
+                         rust_test_policy_manifest.component_files(self.component, self.root))
+        watched = rust_test_policy_manifest.watched_files(self.component, self.root)
+        self.assertIn("scripts/new-helper.sh", watched)
+        self.assertIn("scripts/missing.py", watched)
+        self.assertNotIn("scripts/commented.sh", watched)
+
+    def test_globs_and_expansions_are_not_references(self):
+        self.files({"scripts/coverage-e2e.sh": 'for t in scripts/test-*; do bash "scripts/run-$t.sh"; done\n'})
+        watched = rust_test_policy_manifest.watched_files(self.component, self.root)
+        self.assertEqual([path for path in watched if not path[-1].isalnum()], [])
+        self.assertNotIn("scripts/test-", watched)
+
+    def test_follows_script_directory_relative_references(self):
+        # The styles intentd's own scripts use (publish-channel-manifest.sh,
+        # render-sitter-homebrew-formula.sh): relative to the script's directory.
+        self.files({
+            "scripts/with-test-policy.sh": (
+                'script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)\n'
+                '"$script_dir/dir-helper.sh"\n'
+                'python3 "$(dirname "${BASH_SOURCE[0]}")/dirname-helper.py"\n'
+                '"${script_dir}/gone.sh"\n'
+                'exec "$@"\n'),
+            "scripts/dir-helper.sh": "",
+            "scripts/dirname-helper.py": "",
+        })
+        files = rust_test_policy_manifest.component_files(self.component, self.root)
+        self.assertIn("scripts/dir-helper.sh", files)
+        self.assertIn("scripts/dirname-helper.py", files)
+        self.assertNotIn("scripts/gone.sh", files)
+        self.assertIn("scripts/gone.sh", rust_test_policy_manifest.watched_files(self.component, self.root))
+
     def test_cli_prints_one_path_per_line(self):
         for flag, expected in (((), rust_test_policy_manifest.component_files),
                                (("--watched",), rust_test_policy_manifest.watched_files)):
