@@ -486,7 +486,13 @@ sub-agent defaults to the parent's machine (by name) and that
 This covers every child of a remote agent's batch `agent.delegate`
 (`tasks: [...]`) too. A batch still cannot carry a `placement` (not even
 `{ "target": "local" }`), so to run some children on the backend, delegate them
-one at a time with `placement: { target: "local" }`.
+one at a time with `placement: { target: "local" }`. A batch admits each task
+it starts as its own delegation, so an inherited-placement failure fails only
+that child, with nothing written for it, while the others still start: its row
+is the usual error disposition `{ taskNoteId, title, disposition: "error",
+reason }`, where `reason` is the full error text (the message with the same
+suffix, then the error's `data` as JSON). The one batch-wide refusal is
+`isolation`, below, which fails the whole batch before anything starts.
 
 A remote agent's `agent.delegate` (single or batch) with `isolation` but no `placement` fails with
 `-32602` before any write: its sub-agents run in their own checkout on the

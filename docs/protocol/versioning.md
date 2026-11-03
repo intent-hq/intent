@@ -78,7 +78,11 @@ with `isolation`), and a remote agent's `agent.delegate` with `isolation` but no
 answers on the machine with the agent's checkout path and `workspace.details` is
 forwarded to the backend; the other `workspace.*` frames stay refused. Creates by the
 user, other clients and local agents are unchanged. Older backends keep sub-agents on
-the backend, refuse `target: "local"` and refuse both workspace reads.
+the backend and refuse `target: "local"`. `workspace.info` depends only on the machine:
+an older machine refuses it. `workspace.details` needs both sides, since the machine
+forwards it and the backend serves only the methods its own copy of the table forwards:
+an older machine refuses it, and a newer machine on an older backend gets the backend's
+`remote-agent-unsupported` refusal.
 
 Also within 15.3 (behavior change only; no wire-shape or method-catalog change, so no
 version bump): **any merge-queued PR wins the `displayStatus` PR rung**
