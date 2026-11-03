@@ -130,6 +130,14 @@ optional `Workspace.autoArchiveDisabled` field, the `autoArchiveDisabled` param 
 have not opted out omit the field, so clients cannot detect support by presence; they offer
 the opt-out only for exact integer `1`, and older daemons omit it.
 
+**Bounded reads (behaviour change).** Exactly integer `server.capabilities.boundedReads: 1`,
+also returned by `system.capabilities`, says the daemon answers read methods with bounded
+defaults: a default page size and a maximum where a method takes a limit, and a 480,000-byte
+budget per reply, so every reply stays under the 500 KiB read payload budget. Each method's
+section names its defaults, maximums and the marker (`truncated`, `hasMore` or `nextToken`)
+it sets when it cuts. The defaults apply to every caller; clients that see the flag page
+the rest, and older daemons omit it and keep their unbounded defaults.
+
 **Script run monitoring (additive extension).**
 `server.capabilities.scriptMonitors` advertises the entire
 [§5.8a contract](./script-monitors.md): durable run identity, required one-shot
