@@ -22,6 +22,22 @@ byte-identical to before (the whole object), so older callers keep working. The 
 `boundedReads: 1` capability advertises the bounded read defaults. The
 documented surface is **491 / 433 / 58** (dispatchable / router / fast path).
 
+Also within 15.4 (behaviour change plus additive optional param and row fields;
+capability-gated; no method-catalog change, so no version bump): **bounded git diff
+reads** ([§5.6](./methods/git.md)). `git.diffs` and `git.branchDiff` results are packed
+under 480,000 bytes of compact JSON by default, with at most 458,752 bytes for one file;
+the new optional `maxBytes?: int` lowers the budget (clamped into [65,536, 480,000]).
+When many files changed, the file list is paged: a cut result ends with a continuation
+entry `{ nextToken }`, and the optional `nextToken?: string` param returns the next files.
+Every changed file keeps its entry; an entry whose body does not fit carries
+`truncated: true` and `truncatedReason: "fileTooLarge" | "pageBudget"` with an empty
+body, and a truncated `git.branchDiff` entry adds `oldRef` / `newRef` commit SHAs for
+`git.showFile`. Previously `git.diffs` was capped at 4 MiB / 512 KiB per file with
+entries emptied silently, and `git.branchDiff` was unbounded. Support is signalled by
+`boundedReads: 1` on `client.hello` `server.capabilities` (shared by every read whose
+default became bounded); older daemons ignore `maxBytes` and never send the keys. Older
+apps see truncated entries as empty diffs.
+
 
 **Version 15.3 — plain-folder workspaces (additive).**
 [Plain-folder workspaces](./methods/workspace.md#plain-folder-workspaces) work directly in
