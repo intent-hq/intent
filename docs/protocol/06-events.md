@@ -1179,12 +1179,12 @@ Cost contract: the flag is derived from ONE spec-note read per snapshot / per de
 
 #### Paged snapshots
 
-**Behaviour change ([bounded reads](./methods/client-hello.md)).** The `workspace` and `agent`
-collection snapshots serve the **first page** of the channel's list read rather than every row,
-for every subscriber, and the snapshot push carries `params.nextToken` beside
-`params.snapshot`: `null` when the snapshot is the whole collection, else the token for the
-remaining rows. The client fetches them with the list read, which serves the same
-`(createdAt, id)` order:
+**Behaviour change ([bounded reads](./methods/client-hello.md)).** The `workspace`, `agent`,
+`note` and `comment` collection snapshots serve the **first page** of the channel's list read
+rather than every row, for every subscriber, and the snapshot push carries `params.nextToken`
+beside `params.snapshot`: `null` when the snapshot is the whole collection, else the token for
+the remaining rows. The client fetches them with the list read, in that read's order
+(`(createdAt, id)` unless noted):
 
 - `workspace`: `workspace.list { includeArchived: true, includeRetired?, nextToken }` (same
   `includeRetired` as the subscribe; [Paged workspace lists](./methods/workspace.md#paged-workspace-lists)).
@@ -1194,8 +1194,18 @@ remaining rows. The client fetches them with the list read, which serves the sam
   `nextToken` is still a string), and its `workspace:deleted` tombstones still cover
   workspaces it loads from later pages.
 - `agent`: `agent.list { workspaceId, nextToken }` ([Paged agent lists and queues](./methods/agents.md#paged-agent-lists-and-queues)).
+- `note`: `note.list { workspaceId, projection, limit?, nextToken }`, with the subscription's
+  `projection`.
+- `comment`: `comment.list { workspaceId, noteId, includeComments: true, limit?, nextToken }`,
+  latest activity first and walked in rounds, so a thread can appear again after a reply.
+- `note` and `comment` accept `limit?: int` on the subscribe to size the first page (default
+  and maximum as the list read; see
+  [Bounded note and comment reads](./methods/notes-tasks.md#bounded-note-and-comment-reads)).
+  A `limit` that is not a positive integer is `-32602` (`limit must be a positive integer`)
+  before the ack.
 
-Page sizes and the byte budget are those of the list reads (100 rows, 480,000 bytes). Deltas
+Page sizes and the byte budget are those of the list reads (100 rows for `workspace` /
+`agent`, 200 notes, 100 threads; 480,000 bytes). Deltas
 are not paged and keep arriving for every row, including rows on pages the client has not
 fetched yet; clients apply them as upserts. Older clients that ignore `nextToken` see only the
 first page until a delta adds a row.
@@ -1247,24 +1257,6 @@ see [§5.5b](./methods/agent-workers.md) for bounds, fallback and ordering.
 { "jsonrpc":"2.0","method":"subscription.push","params":{
   "subscriptionId":"sub-1","kind":"delta","seq":1,
   "delta":{ "added":[…], "updated":[…], "removedIds":[…] } } }
-```
-
-**Paged snapshots** *(behaviour change; `server.capabilities.boundedReads: 1`)*. A
-collection channel that pages (`note.subscribe`, `comment.subscribe`) always sends its
-seq-0 `snapshot` array as the first page of the channel's list method (default size,
-or the subscriber's `limit`), within the 500 KiB read payload budget, and the push
-params add `nextToken`: pass it to that list method (`note.list` / `comment.list`, with
-the same `projection` / `includeComments: true`) to read the remaining rows, or `null`
-when the page holds the whole collection. Deltas start at seq 1 as usual and cover every
-entity, paged or not, so a client merges the pages and the deltas into one collection;
-a delta is newer than any later page row for the same entity. `limit` that is not a
-positive integer is `-32602` (`limit must be a positive integer`) before the ack. A
-client built before this change sees only the first page.
-
-```json
-{ "jsonrpc":"2.0","method":"subscription.push","params":{
-  "subscriptionId":"sub-1","kind":"snapshot","seq":0,
-  "snapshot":[ /* first page */ ], "nextToken":"…" } }
 ```
 
 The prepared opt-in chat history mode (§7.1) additionally emits `kind: "history"`
