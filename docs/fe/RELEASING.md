@@ -142,6 +142,16 @@ The following secrets must be configured in the `intent-hq/cloudlands-fe` reposi
    curl -sL https://github.com/intent-hq/cloudlands-releases/releases/download/beta/latest-mac.yml | grep version
    ```
 
+5. **Verify the npm dist-tags**
+
+   `publish-intent-web.yml` publishes `@intent-hq/web` under the `alpha` dist-tag after each tag-push Release Alpha, and its `sync-channel` job moves `beta` to the version the beta feed serves after a successful Promote Beta. Check both match:
+
+   ```bash
+   npm view @intent-hq/web dist-tags --json   # alpha = the new version, beta = the beta feed version
+   ```
+
+   If `beta` lags, sync it with `gh workflow run publish-intent-web.yml --repo intent-hq/cloudlands-fe -f channel=beta`. If npm rejects the move (the trusted publisher's dist-tag permission, announced as ["Allow npm dist-tag"](https://github.blog/changelog/2026-09-30-opt-in-dist-tag-permissions-for-npm-trusted-publishing), is off), an `@intent-hq` npm owner runs `npm dist-tag add @intent-hq/web@<version> beta`. A channel version older than the first npm publish is skipped. If `alpha` lags, publish the tag again with `gh workflow run publish-intent-web.yml --repo intent-hq/cloudlands-fe -f tag=v<version>`. `make release-status` in the monorepo shows the same drift.
+
 ## Promoting to Stable
 
 After verifying a beta release, promote it to the stable channel using the **Release Stable** workflow:
@@ -203,7 +213,12 @@ when the requested CPU's asset is absent. Website changes need their own PR.
 
    # View aggregated release notes
    gh release view stable --repo intent-hq/cloudlands-releases
+
+   # The npm `latest` dist-tag follows stable (publish-intent-web.yml sync-channel job)
+   npm view @intent-hq/web dist-tags --json   # latest = ${VERSION}
    ```
+
+   If `latest` lags, sync it with `gh workflow run publish-intent-web.yml --repo intent-hq/cloudlands-fe -f channel=stable`. If npm rejects the move (the trusted publisher's dist-tag permission is off), an `@intent-hq` npm owner runs `npm dist-tag add @intent-hq/web@${VERSION} latest`. Tags never move backwards, so `latest` stays ahead of stable while it still points at the first published alpha.
 
 4. **Propose the website release notes PR**
 

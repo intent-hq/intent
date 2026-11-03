@@ -65,6 +65,27 @@ cat "$GH_STUB_DIR/$path"
 SH
 chmod +x "$bin_dir/gh"
 
+# Stub npm: `npm view <pkg> dist-tags --json` prints $GH_STUB_DIR/npm/dist-tags.json;
+# npm/dist-tags.json.fail prints its content to stderr and exits 1; neither is
+# npm's E404 (package not published). Every call is logged.
+cat >"$bin_dir/npm" <<'SH'
+#!/usr/bin/env bash
+printf 'npm %s\n' "$*" >>"$GH_TEST_LOG"
+[[ "$1 $2 $3 $4" == "view @intent-hq/web dist-tags --json" ]] || { echo "stub: unexpected npm $*" >&2; exit 1; }
+path="$GH_STUB_DIR/npm/dist-tags.json"
+if [[ -f "$path.fail" ]]; then
+  cat "$path.fail" >&2
+  exit 1
+fi
+if [[ ! -f "$path" ]]; then
+  echo 'npm error code E404' >&2
+  echo '{"error":{"code":"E404","summary":"Not Found - GET https://registry.npmjs.org/@intent-hq%2fweb - Not found"}}'
+  exit 1
+fi
+cat "$path"
+SH
+chmod +x "$bin_dir/npm"
+
 put() {
   mkdir -p "$(dirname "$stub_dir/$1")"
   cat >"$stub_dir/$1"
@@ -186,6 +207,7 @@ J
  {"name":"OTHER","value":"true"}]
 J
   echo '[{"name":"CI_LINUX_RUNNER_DISABLED","value":"true"}]' | put vars/cloudlands-fe.json
+  echo '{"alpha":"2.221.0","beta":"2.219.8","latest":"2.219.1","backfill":"2.200.0"}' | put npm/dist-tags.json
 }
 
 run_script() {
@@ -236,6 +258,7 @@ cloudlands-fe  v2.221.0 (3h00m ago), 1 unshipped commit on main since v2.221.0
   merge queue  2 queued; head #3537 feat: slow queue head — AWAITING_CHECKS, enqueued 3h05m ago, waiting on 3 checks (Unit Tests (shard 1/4), Type Check & Lint, legacy) running 20m, 1 failing check (lint)
   auto-cut     Pin-bump PR #3517 (auto/intentd-pin) is open; deferring the alpha cut until the new sidecar pin lands [run 201, schedule, 30m ago]
   auto-pin     failure (2 runs in a row): GH006: Protected branch update failed for refs/heads/auto/intentd-pin. (A pull request for this branch has been added to a merge queue. Branches that are queue… [run 302, schedule, 1h00m ago] (run 303 in_progress)
+  npm          @intent-hq/web alpha 2.221.0 · beta 2.219.8 · latest 2.219.1 (matches the channels)
 runner overrides (CI_*_RUNNER_DISABLED)
   intentd        macos    2026-10-14: m1mac too slow
   cloudlands-fe  linux    (no _REASON variable)
@@ -293,7 +316,54 @@ expect_json 'r["components"]["cloudlands-fe"]["autoPin"]["failedStreak"]' '2'
 expect_json 'r["components"]["cloudlands-fe"]["autoPin"]["failedStreakCapped"]' 'false'
 expect_json 'r["components"]["cloudlands-fe"]["autoPin"]["failureReason"]' '"GH006: Protected branch update failed for refs/heads/auto/intentd-pin. (A pull request for this branch has been added to a merge queue. Branches that are queued for merging cannot be updated.)"'
 expect_json 'r["components"]["cloudlands-fe"]["autoPin"]["newestRunStatus"]' '"in_progress"'
+expect_json 'r["components"]["cloudlands-fe"]["npm"]' '{"package": "@intent-hq/web", "published": true, "distTags": {"alpha": "2.221.0", "beta": "2.219.8", "latest": "2.219.1"}, "drift": []}'
+expect_json 'r["components"]["intentd"].get("npm", "absent")' '"absent"'
+grep -q '^npm view @intent-hq/web dist-tags --json .*--fetch-timeout=15000' "$temp_dir/gh.log" ||
+  fail "the npm lookup has no fetch timeout"
 expect_json 'r["errors"]' '[]'
+
+# --- npm: a package not published yet is its own state, not an error
+reset_stub
+rm "$stub_dir/npm/dist-tags.json"
+json="" run_script
+expect_line "  npm          @intent-hq/web not on npm yet"
+json=1 run_script
+expect_json 'r["components"]["cloudlands-fe"]["npm"]["published"]' 'false'
+expect_json 'r["errors"]' '[]'
+
+# --- npm: dist-tags that lag, lead or miss their channel are drift (`latest`
+# stays on the bootstrap alpha until stable passes it); an unknown channel
+# version is never called drift
+reset_stub
+echo '{"alpha":"2.220.2","latest":"2.221.0"}' | put npm/dist-tags.json
+json="" run_script
+expect_line "  npm          @intent-hq/web alpha 2.220.2 · beta unset · latest 2.221.0 — drift: alpha 2.220.2 behind alpha channel 2.221.0, beta unset, beta channel 2.219.8, latest 2.221.0 ahead of stable channel 2.219.1"
+json=1 run_script
+expect_json 'r["components"]["cloudlands-fe"]["npm"]["drift"]' '[{"distTag": "alpha", "npm": "2.220.2", "channel": "alpha", "channelVersion": "2.221.0", "direction": "behind"}, {"distTag": "beta", "npm": null, "channel": "beta", "channelVersion": "2.219.8", "direction": "unset"}, {"distTag": "latest", "npm": "2.221.0", "channel": "stable", "channelVersion": "2.219.1", "direction": "ahead"}]'
+echo 'HTTP 502: Server Error' | put download/cloudlands-releases/stable.fail
+json=1 run_script
+expect_json '[d["distTag"] for d in r["components"]["cloudlands-fe"]["npm"]["drift"]]' '["alpha", "beta"]'
+
+# --- npm: a failed or timed-out lookup or a missing npm is unavailable, fail-soft
+reset_stub
+printf 'npm error code ETIMEDOUT\nnpm error network request timed out\n' | put npm/dist-tags.json.fail
+json="" run_script
+[[ "$status" -eq 0 ]] || fail "npm timeout exited $status"
+expect_line "  npm          @intent-hq/web unavailable: npm error code ETIMEDOUT"
+reset_stub
+printf 'npm error code ENOTFOUND\nnpm error network request failed\n' | put npm/dist-tags.json.fail
+json="" run_script
+[[ "$status" -eq 0 ]] || fail "npm failure exited $status"
+expect_line "  npm          @intent-hq/web unavailable: npm error code ENOTFOUND"
+json=1 run_script
+expect_json '[e["section"] for e in r["errors"]]' '["cloudlands-fe.npm"]'
+expect_json 'r["components"]["cloudlands-fe"]["npm"]["published"]' 'null'
+reset_stub
+mv "$bin_dir/npm" "$temp_dir/npm.stub"
+json="" run_script
+mv "$temp_dir/npm.stub" "$bin_dir/npm"
+[[ "$status" -eq 0 ]] || fail "missing npm exited $status"
+expect_line "  npm          @intent-hq/web unavailable: npm is not installed (run make bootstrap-dev-host)"
 
 # --- auto-cut skip reasons from both repos' wording
 for line in \
