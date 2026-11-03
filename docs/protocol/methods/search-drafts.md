@@ -34,7 +34,7 @@ interface SearchMatch {
   file: string;        // workspace-relative path
   line: number;        // 1-based line number
   col: number;         // 1-based column of the match start
-  preview: string;     // the matching line (trimmed; at most 400 chars, windowed around the match with `…` at cut ends)
+  preview: string;     // the matching line (trimmed; windowed around the match to at most 400 chars plus a `…` at each cut end)
   before?: string[];   // optional context lines before
   after?: string[];    // optional context lines after
   score?: number;      // relevance (semantic/codebase results)
@@ -188,7 +188,8 @@ final, complete answer is the `search:done` event (or the inline result when not
 **Size bounds (read payload budget).** An inline reply stays under the daemon's 500 KiB read
 payload budget. `search.inFiles` stops collecting once its matches would serialize past
 480,000 bytes, or at `maxResults`, and answers `truncated: true` either way; a longer matching line
-is windowed to a 400-character `preview` (`col` still counts from the start of the line).
+is windowed to a `preview` of at most 400 characters plus a `…` at each cut end (`col` still
+counts from the start of the line).
 `search.messages`, `search.events` and `search.codebase` cut an inline `matches` array at the
 same 480,000 bytes and then add `truncated: true` (absent when nothing was cut). The default
 and maximum `limit` / `maxResults` above cap streamed results too. The app's palette sends
