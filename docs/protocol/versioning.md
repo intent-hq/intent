@@ -71,7 +71,9 @@ A remote agent's `ws.agent.create`, `ws.agent.delegate` or `ws.agent.wakeOrCreat
 without a `placement` now creates the sub-agent on the parent's machine, with the
 normal checks and errors and no fallback; previously it ran on the backend. The
 placement subset now accepts `placement: { target: "local" }` to mean "run on the
-backend" instead of refusing it with `-32602`. On the executor link, `workspace.info`
+backend" instead of refusing it with `-32602` (on `agent.delegate` it may be combined
+with `isolation`), and a remote agent's `agent.delegate` with `isolation` but no
+`placement` is refused with `-32602`. On the executor link, `workspace.info`
 answers on the machine with the agent's checkout path and `workspace.details` is
 forwarded to the backend; the other `workspace.*` frames stay refused. Creates by the
 user, other clients and local agents are unchanged. Older backends keep sub-agents on

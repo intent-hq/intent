@@ -397,11 +397,12 @@ without advertising `agentNodes`. On a backend that advertises
 `placement` object with the same validation. A remote placement needs `target`
 omitted or `"remote"` and `checkout` omitted or `"isolated"`, with optional `os`,
 `arch` and `nodeId`; `exclusive: true`, and on
-`agent.delegate` a batch with a placement or `placement` combined with
+`agent.delegate` a batch with a placement or a remote `placement` combined with
 `isolation` fail with `-32602`. `placement: { "target": "local" }` (no other
-members) means "run on the backend": it creates an ordinary local agent, as if
-no placement were sent; `target: "local"` with any other member fails with
-`-32602`. An omitted placement stays local, except for
+members), from any caller, means "run on the backend": it creates an ordinary
+local agent, as if no placement were sent, and on `agent.delegate` it may be
+combined with `isolation`. `target: "local"` with `os`, `arch`, `nodeId`,
+`checkout` or `exclusive` fails with `-32602`. An omitted placement stays local, except for
 [sub-agents of remote agents](#sub-agents-of-remote-agents); `null` is
 rejected. Admission picks a machine as in
 [placement across machines](#placement-across-machines) and fails with the
@@ -476,13 +477,21 @@ backend admits the child as if it had sent `placement: { "target": "remote",
 machine's state, provider and model checks of
 [placement across machines](#placement-across-machines), and its capacity. A
 failure returns the normal error (`profile-not-remote-compatible`,
-`placement-unavailable` or `model-unavailable`, with the same `data`) before any
-write; the backend never falls back to another machine or to the backend. The
-error message adds that `placement: { target: "local" }` runs the sub-agent on
-the backend instead. The child is a placed agent like any other: it carries
-`nodeId`, `nodeName`, `placement` and `effectiveIsolation`, the results carry
-the `notice`, and it starts from the workspace's last commit, not from the
-parent's checkout.
+`model-unavailable`, `placement-unavailable` or `machine-update-required`, with
+the same `code` and `data`) before any write; the backend never falls back to
+another machine or to the backend. Only the message changes: it adds that the
+sub-agent defaults to the parent's machine (by name) and that
+`placement: { target: "local" }` runs it on the backend instead.
+
+A remote agent's `agent.delegate` with `isolation` but no `placement` fails with
+`-32602` before any write: its sub-agents run in their own checkout on the
+machine, so `isolation` does not apply; the message says to pass
+`placement: { target: "local" }` to use isolation on the backend. The
+`workspace.cowIsolation` default never applies to an inherited placement.
+
+The child is a placed agent like any other: it carries `nodeId`, `nodeName`,
+`placement` and `effectiveIsolation`, the results carry the `notice`, and it
+starts from the workspace's last commit, not from the parent's checkout.
 
 An explicit `placement` wins: `{ "target": "local" }` creates the sub-agent on
 the backend, and a remote placement (another `nodeId`, or `os` / `arch`) is
