@@ -598,7 +598,7 @@ records both roles: as a backend, the links it dials to exposed machines
 `hello` / `welcome` handshake; `/node/git` sessions are not.
 
 The methods are owner-only and daemon-global, with the same classification
-and refusal as `remoteMachines.*`. In node mode they fail with `-32003`
+as `remoteMachines.*`: members and guests get `-32003`. In node mode they fail with `-32003`
 `data.code: "node-mode"`.
 
 | Method | Params | Result |
@@ -648,8 +648,9 @@ payload larger than `maxPayloadBytes` is omitted, the record is kept with
 
 `remoteLinkTraffic:records` carries `{ records: LinkTrafficRecord[], capture:
 LinkTrafficCapture }`. It is batched (at most every 250 ms, at most 100
-records per event), emitted only while capture is on, and delivered to owner
-connections only. A client calls `snapshot` with the last `seq` it holds to
+records per event), emitted only while capture is on, and delivered like any
+other event through [`events.subscribe`](../06-events.md#61-eventssubscribe),
+to owner connections only. A client calls `snapshot` with the last `seq` it holds to
 fill a gap. There is no separate start or stop event: `capture` on
 `snapshot` and on each event carries the state.
 
