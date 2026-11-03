@@ -596,8 +596,11 @@ triggered by pushing a `sitter-vX.Y.Z` tag.
   first published alpha until stable serves a newer version. `make release-status`
   shows each tag behind, ahead of or missing from its channel (a package not on
   npm yet is its own state, not an error). Verify with
-  `npm view @intent-hq/web dist-tags --json`. If a tag lags, sync it by hand with
+  `npm view @intent-hq/web dist-tags --json`. If `beta` or `latest` lags, sync it
+  by hand with
   `gh workflow run publish-intent-web.yml --repo intent-hq/cloudlands-fe -f channel=<beta|stable>`.
+  If `alpha` lags (a publish failed or was skipped), publish the tag again with
+  `gh workflow run publish-intent-web.yml --repo intent-hq/cloudlands-fe -f tag=v<version>`.
   If npm rejects the move (the Trusted Publisher's **Allow npm dist-tag** setting
   is off), an `@intent-hq` npm owner runs
   `npm dist-tag add @intent-hq/web@<version> <beta|latest>`. Setup and the full

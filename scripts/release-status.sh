@@ -31,7 +31,8 @@
 #                            is reported as "not published yet"
 #   pin                      intentd.version on intent-hq/cloudlands-fe main
 #   npm dist-tags            `npm view @intent-hq/web dist-tags --json` (npm
-#                            E404 = not published yet; no npm = unavailable)
+#                            E404 = not published yet; no npm or a timeout,
+#                            15 s per request = unavailable)
 #   unshipped                compare <newest release>...main on each source repo
 #   merge queue              GraphQL repository.mergeQueue(branch: "main"):
 #                            entry positions/states/enqueue times, and the head
@@ -320,7 +321,10 @@ for repo in "$monorepo" "$intentd_repo" "$fe_repo"; do
   fetch "vars.${repo#intent-hq/}" variable list --repo "$repo" --json name,value &
 done
 if command -v npm >/dev/null 2>&1; then
-  capture npm npm view "$npm_package" dist-tags --json --fetch-retries=1 --no-update-notifier &
+  # A short per-request timeout and one retry: a network that drops packets
+  # silently must not stall the report (npm's default waits 5 minutes).
+  capture npm npm view "$npm_package" dist-tags --json --fetch-retries=1 --fetch-timeout=15000 \
+    --no-update-notifier &
 else
   echo "npm is not installed (run make bootstrap-dev-host)" >"$work/npm.err"
   echo 127 >"$work/npm.rc"

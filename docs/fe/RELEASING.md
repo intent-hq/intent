@@ -150,7 +150,7 @@ The following secrets must be configured in the `intent-hq/cloudlands-fe` reposi
    npm view @intent-hq/web dist-tags --json   # alpha = the new version, beta = the beta feed version
    ```
 
-   If `beta` lags, sync it with `gh workflow run publish-intent-web.yml --repo intent-hq/cloudlands-fe -f channel=beta`. If npm rejects the move (the Trusted Publisher's **Allow npm dist-tag** setting is off), an `@intent-hq` npm owner runs `npm dist-tag add @intent-hq/web@<version> beta`. A channel version older than the first npm publish is skipped. `make release-status` in the monorepo shows the same drift.
+   If `beta` lags, sync it with `gh workflow run publish-intent-web.yml --repo intent-hq/cloudlands-fe -f channel=beta`. If npm rejects the move (the Trusted Publisher's **Allow npm dist-tag** setting is off), an `@intent-hq` npm owner runs `npm dist-tag add @intent-hq/web@<version> beta`. A channel version older than the first npm publish is skipped. If `alpha` lags, publish the tag again with `gh workflow run publish-intent-web.yml --repo intent-hq/cloudlands-fe -f tag=v<version>`. `make release-status` in the monorepo shows the same drift.
 
 ## Promoting to Stable
 

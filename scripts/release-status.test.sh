@@ -318,6 +318,8 @@ expect_json 'r["components"]["cloudlands-fe"]["autoPin"]["failureReason"]' '"GH0
 expect_json 'r["components"]["cloudlands-fe"]["autoPin"]["newestRunStatus"]' '"in_progress"'
 expect_json 'r["components"]["cloudlands-fe"]["npm"]' '{"package": "@intent-hq/web", "published": true, "distTags": {"alpha": "2.221.0", "beta": "2.219.8", "latest": "2.219.1"}, "drift": []}'
 expect_json 'r["components"]["intentd"].get("npm", "absent")' '"absent"'
+grep -q '^npm view @intent-hq/web dist-tags --json .*--fetch-timeout=15000' "$temp_dir/gh.log" ||
+  fail "the npm lookup has no fetch timeout"
 expect_json 'r["errors"]' '[]'
 
 # --- npm: a package not published yet is its own state, not an error
@@ -342,7 +344,12 @@ echo 'HTTP 502: Server Error' | put download/cloudlands-releases/stable.fail
 json=1 run_script
 expect_json '[d["distTag"] for d in r["components"]["cloudlands-fe"]["npm"]["drift"]]' '["alpha", "beta"]'
 
-# --- npm: a failed lookup or a missing npm is unavailable, fail-soft
+# --- npm: a failed or timed-out lookup or a missing npm is unavailable, fail-soft
+reset_stub
+printf 'npm error code ETIMEDOUT\nnpm error network request timed out\n' | put npm/dist-tags.json.fail
+json="" run_script
+[[ "$status" -eq 0 ]] || fail "npm timeout exited $status"
+expect_line "  npm          @intent-hq/web unavailable: npm error code ETIMEDOUT"
 reset_stub
 printf 'npm error code ENOTFOUND\nnpm error network request failed\n' | put npm/dist-tags.json.fail
 json="" run_script
