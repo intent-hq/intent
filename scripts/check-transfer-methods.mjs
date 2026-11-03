@@ -24,7 +24,11 @@
 //   - a TRANSFER_METHODS entry intentd does not classify only warns
 //     (app-first entry, or left over after a daemon removal);
 //   - an intentd without PAYLOAD_CLASSES (pins before the payload budget
-//     sweep) skips with a notice.
+//     sweep) skips with a notice;
+//   - docs lead the pin: until BOTH components carry the bounded-object-read
+//     work (intentd classifies ADOPTION_MARKER and the app lists it in
+//     TRANSFER_METHODS), every error is reported as a warning and the check
+//     passes. Once both pins have it, the rules above are enforced.
 //   - see docs/protocol/methods/files-terminal-browser.md "Bounded object reads".
 
 import fs from 'node:fs';
@@ -42,6 +46,8 @@ export const CATALOG_FILE = 'crates/intent-transport/src/catalog.rs';
 export const FE_FILE = 'src/features/backend/main/transfer-connections.ts';
 export const FE_SRC = 'src';
 const CHECK = 'check-transfer-methods';
+/** A method added by the bounded-object-read work on both sides. */
+export const ADOPTION_MARKER = 'git.showFileChunk';
 
 const CLASS_FNS = ['bounded', 'bulk', 'proxy', 'subscription', 'mutation'];
 const METHOD_RE = /^[a-zA-Z][\w-]*(?:\.[a-zA-Z][\w-]*)+$/;
@@ -100,8 +106,41 @@ export function collectCalledMethods(files) {
   return called;
 }
 
-/** Compare the sides. Returns `{ errors, warnings, routed }`. */
-export function compare({ classes, transfer, called, files = {} }) {
+/**
+ * Which components already carry the bounded-object-read work. Returns
+ * `{ intentd, fe, both }`.
+ */
+export function adoption({ classes, transfer }) {
+  const intentd = classes.has(ADOPTION_MARKER);
+  const fe = transfer.includes(ADOPTION_MARKER);
+  return { intentd, fe, both: intentd && fe };
+}
+
+/**
+ * Compare the sides. Returns `{ errors, warnings, routed, pending }`;
+ * `pending` names the components that have not adopted the contract yet, in
+ * which case every finding is a warning.
+ */
+export function compare(input) {
+  const result = compareStrict(input);
+  const adopted = adoption(input);
+  if (adopted.both) return { ...result, pending: null };
+  const missing = [!adopted.intentd && 'intentd', !adopted.fe && 'cloudlands-fe'].filter(Boolean);
+  const pending = missing.join(' and ');
+  const verb = missing.length > 1 ? 'do not carry' : 'does not carry';
+  return {
+    errors: [],
+    warnings: [
+      `not enforced yet: ${pending} ${verb} the bounded-object-read work (${ADOPTION_MARKER} classified bulk(...) and listed in TRANSFER_METHODS); the findings below become errors once both pins have it`,
+      ...result.errors.map((error) => `pending adoption: ${error}`),
+      ...result.warnings,
+    ],
+    routed: result.routed,
+    pending,
+  };
+}
+
+function compareStrict({ classes, transfer, called, files = {} }) {
   const f = { catalog: `${INTENTD_DIR}/${CATALOG_FILE}`, fe: `${FE_DIR}/${FE_FILE}`, ...files };
   const errors = [];
   const warnings = [];
@@ -185,6 +224,10 @@ function main() {
   for (const error of result.errors) console.error(`${CHECK}: error: ${error}`);
   if (result.errors.length) {
     process.exitCode = 1;
+    return;
+  }
+  if (result.pending) {
+    console.log(`${CHECK}: pass (not enforced yet; waiting on ${result.pending})`);
     return;
   }
   console.log(`${CHECK}: ${result.routed} BulkTransfer methods ride transfer connections`);

@@ -158,6 +158,9 @@ socket drains a 16 MiB chunk in milliseconds. The monorepo consumer check
 `check-transfer-methods` fails when a method intentd classifies as a bulk
 transfer (`BulkTransfer` in `PAYLOAD_CLASSES`) is called by the app but missing
 from the app's `TRANSFER_METHODS`, or when `TRANSFER_METHODS` lists a capped read.
+It enforces only once both pinned components carry this work (intentd classifies
+`git.showFileChunk` and the app routes it); until then it reports the same findings
+as warnings and passes, so these docs can land ahead of the pins.
 
 **Not bounded.** Agent tools (`ws.file.read`, `ws.note.readAsset`) call the
 services directly and are unchanged.
