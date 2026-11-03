@@ -345,6 +345,11 @@ string to pass back for the next page, or `null` on the last page.
 - Paging is a keyset walk over the current rows, not a snapshot: a row created or
   moved behind the cursor between pages is not served on a later page. Use the
   subscription deltas (or a fresh first page) to stay complete.
+- `comment.list` sorts by `lastActivity`, which a reply changes, so its walk runs in
+  rounds and never skips a thread replied to mid-walk. A round serves the threads whose
+  activity is no newer than the newest activity when the round began; threads that gain
+  activity during it are served by a follow-up round before the walk ends. A thread can
+  therefore appear more than once in one walk: keep the row from the later page.
 - `totalThreads` / `totalComments` count every thread the `comment.list` filters keep,
   not just the page.
 - **Oversized rows.** A `note.list` full row that alone overflows the budget is served
