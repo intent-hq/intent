@@ -311,7 +311,10 @@ and members get `-32003`, and the service rechecks the owner role.
 | executor.revoke | credentialId (req) | `{ ok: true }`; sets the credential revoked, closes its live executor connections with `1008`, stops its agents and refuses replays with `401`; an already revoked id is a no-op; an unknown id is `-32602` `not-found` |
 
 Minting again for the same `backendId` creates another credential; the earlier
-one stays valid until revoked. `machine.hosts`, `port` and `tcAddress` are the
+one stays valid until revoked. The machine's `agent.memoryUsage` (§5.5) lists the
+agents it runs for each backend, tagged `remoteOwner: { backendId, backendName }`,
+and `system.status` (§5.7) counts the live links in `remoteLinks`: `backends` on the
+machine, `machines` on the backend. `machine.hosts`, `port` and `tcAddress` are the
 routes the machine currently advertises for pairing, and `fingerprint` is its
 WSS certificate fingerprint (§1.2).
 

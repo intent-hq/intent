@@ -441,6 +441,26 @@ The `system.status` result additionally reports the daemon's **in-flight turn co
 - Timestamps are RFC 3339 UTC strings projected from the daemon's monotonic clock at read time (whole-second precision).
 - **Additive** response fields carrying the **v10.2** minor bump (the method surface is unchanged). **Absent on older daemons** — clients must detect them by **presence**, not by protocol version, and tolerate their absence.
 
+#### `system.status` — connected-daemon counts (additive)
+
+The `system.status` result additionally counts the live daemon-to-daemon links of [remote machines](./methods/nodes.md#daemon-to-daemon-remote-machines), in both directions:
+
+```jsonc
+{
+  "remoteLinks": {
+    "backends": 1, // other daemons (backends) this machine runs agents for, linked now
+    "machines": 2  // exposed machines this daemon, as backend, is linked to now
+  }
+  // ...existing status fields (running, listenMode, transports, port, ...)
+}
+```
+
+- `backends` counts the executor credentials with at least one open inbound link to this machine — the `executor.list` rows with `connected: true`. Each credential is minted for one backend, so this is one per linked backend; a backend holding two connected credentials counts twice.
+- `machines` counts exposed machines this daemon holds a live outbound link to — the `remoteMachines.list` rows in state `connected`.
+- Both are live counts: `0` when nothing is linked, and they drop as soon as a link closes.
+- Follows the **presence-detection convention**: a daemon that implements it always serves the object; older daemons **omit** `remoteLinks` (never `null`). Clients must detect it by **presence**, not by protocol version.
+- The per-agent memory of agents run for a backend is on `agent.memoryUsage` (§5.5), tagged `remoteOwner`.
+
 #### `system.gitCredential` (UDS-only, v2.5)
 
 Resolves the daemon-managed GitHub credential for the `intentd git-credential` helper (monorepo#884): the daemon-spawned children (PTY terminals, agent provider shells) run the helper as a github.com-scoped git credential helper, and the helper fetches the credential from the daemon over UDS on demand — no token bytes in child environments.
