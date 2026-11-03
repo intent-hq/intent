@@ -269,7 +269,7 @@ and the backend answers `{ "autoCommit": boolean }` with the workspace's effecti
 auto-commit policy. A forwarded `script.*` frame is served only when the backend
 advertises [`remoteScripts: 1`](./methods/scripts.md#scripts-of-remote-agents-remotescripts-1)
 (older backends refuse it with `remote-agent-unsupported:`); the backend keeps
-the script, and its runs happen on the agent's machine over the
+the script, and the agent's runs of it happen on its machine over the
 [script frames](./node-link.md#saved-scripts-nodeprotocol-8). Tool outputs too large for a reply are written on the machine,
 next to the agent's worktree. Attachments are not materialized on machines, so a
 message with attachments to a remote agent fails with `-32602` before any state

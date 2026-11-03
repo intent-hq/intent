@@ -307,11 +307,12 @@ the field and start the initial agent locally, so a client offers a remote
 initial agent only for exact integer `1`. `remoteMachines` stays at `1`.
 
 `client.hello.server.capabilities.remoteScripts: 1` means a remote agent's
-`ws.script.*` calls are forwarded to the backend and its scripts run on its
-machine ([scripts of remote agents](./scripts.md#scripts-of-remote-agents-remotescripts-1)).
+`ws.script.*` calls are forwarded to the backend and the scripts it starts run
+on its machine as machine runs
+([scripts of remote agents](./scripts.md#scripts-of-remote-agents-remotescripts-1)).
 The backend advertises it only together with `remoteMachines: 1`. Without it,
 a remote agent's `script.*` calls are refused and no script row carries
-`runsOn`. A machine also needs nodeProtocol 8 to run the scripts.
+`machineRuns`. A machine also needs nodeProtocol 8 to run the scripts.
 
 ##### Machine methods: executor credentials
 

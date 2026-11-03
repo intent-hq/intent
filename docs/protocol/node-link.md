@@ -2162,19 +2162,17 @@ agent's existing authority; it never trusts the machine's routing.
 ### Saved scripts (nodeProtocol 8)
 
 A remote agent's `ws.script.*` calls are [forwarded](#workspace-api-on-the-machine)
-to the backend, which keeps the script's definition, runtime state, output log
-and monitors exactly as for a local script. A script the remote agent creates
-is tied to that agent and its machine
-([`runsOn`](./methods/scripts.md#scripts-of-remote-agents-remotescripts-1)), and
-every run of it, whoever starts it, happens on that machine in the agent's own
-checkout. Only the process runs there; the backend drives it with these frames
-on the `script` lane, separate from the control lane so output never delays
-heartbeats, stops or launches:
+to the backend, which keeps the definitions, runtime state, output logs and
+monitors as for local scripts. When the remote agent starts a saved script
+(any script, whoever saved it), the backend starts that agent's
+[machine run](./methods/scripts.md#scripts-of-remote-agents-remotescripts-1)
+of it on the agent's machine, in the agent's own checkout. Only the process
+runs there; the backend drives it with these frames on the `script` lane:
 
 ```ts
 interface ScriptStartFrame {
   type: "scriptStart";
-  agentId: string;                         // the script's runsOn.agentId
+  agentId: string;                         // the remote agent whose machine run this is
   scriptId: string;
   runId: string;                           // opaque; the backend picks a new one for each process it starts, including each restart
   command: string;
@@ -2194,12 +2192,26 @@ interface ScriptExitedFrame  {
 
 All five bodies are closed: unknown or mistyped members are `node-link-protocol`.
 
+**Script lane.** The `script` lane has the lowest priority: control, journal
+and rpc frames are always sent ahead of queued script frames, so output never
+delays heartbeats, stops, launches or journal records. Each side bounds its
+queued `scriptOutput` frames at 4 MiB of `data` per link. When output outpaces
+the link and the bound is reached, the machine drops further output of that
+run until the queue drains, then sends one `scriptOutput` whose `data` is
+`[… <N> bytes of output dropped]`, and `seq` continues without a gap.
+`scriptStart`, `scriptStop`, `scriptStarted` and `scriptExited` are never
+dropped.
+
 - **Start.** The machine accepts a `scriptStart` only for an agent on the
   link's binding whose checkout exists. It resolves `cwd` inside that checkout
-  (an absolute path, or one that escapes the checkout, is refused), applies
-  `env` over the environment the agent's provider process starts from, and
+  (an absolute path, or one that escapes the checkout, is refused) and
   spawns `command` through the same shell, process group and output capture as
   a local saved script. It answers `scriptStarted` once the process is spawned.
+- **Environment.** The process gets the environment the machine daemon gives
+  its own local saved scripts, with `env` applied over it in order. It never
+  gets the agent's `launch.profileEnv` overlay or Intent's agent launch wiring,
+  so provider credentials sent for the agent never reach a script or its
+  output.
   One `scriptStart` is one process: the machine never restarts a script. The
   backend's existing supervisor keeps the service restart policy and backoff
   and sends a new `scriptStart`, with a new `runId`, for each restart.
@@ -2235,16 +2247,16 @@ All five bodies are closed: unknown or mistyped members are `node-link-protocol`
   reattached after a reconnect. A later start sends a new `scriptStart`.
 - **Lease end.** Before the backend deletes a remote agent, and before
   `remoteMachines.remove`, it sends `scriptStop` for each of the agent's live
-  runs. Revocation (`401` or a `1008` close) ends the link, so the machine stops
+  machine runs. Revocation (`401` or a `1008` close) ends the link, so the machine stops
   that binding's scripts as above. The machine also stops an agent's scripts
   before it removes the agent's worktree. In every case no script process stays
   on the machine.
-- **Older machines.** On a link that negotiated protocol 7, `script.start`,
-  `script.restart` and `script.run` of a remote script fail with `-32603`
+- **Older machines.** On a link that negotiated protocol 7, starting,
+  restarting or running a machine run fails with `-32602`
   `machine-update-required` (the [remote machine error](./methods/nodes.md#remote-machine-errors)
-  data, `update: "machine"`), and the backend sends nothing. With no connected
-  link they fail with `-32603` `node-unavailable`, after the usual on-demand
-  connect.
+  data, `update: "machine"`), and the backend sends nothing. With no link up
+  after the usual on-demand connect, it fails with `-32603`
+  `machine-unreachable` and `attempts`.
 - **Ports.** A service's ports are not tunnelled. `detectedUrl` is reported as
   the process printed it and names the machine's loopback, not the backend's.
 
