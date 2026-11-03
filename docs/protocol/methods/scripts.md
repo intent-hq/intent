@@ -298,8 +298,10 @@ are UTF-8 bytes, not characters:
 | `env` | 64 KiB (65,536 bytes): every key plus every value |
 | `command` | none; an oversized command is read in parts (see *Paged commands*) |
 
-The prepared `healthUrl` and `readyPattern` fields are not stored by this daemon, so no
-limit applies to them yet. **Known limit:** definitions saved before these limits
+The same limits apply when a workspace's first `script.list` seeds definitions from the
+repository's `.intent/config.json`: an over-limit entry is skipped (and logged) while the
+others still seed. The prepared `healthUrl` and `readyPattern` fields are not stored by
+this daemon, so no limit applies to them yet. **Known limit:** definitions saved before these limits
 existed are not rewritten or dropped. `script.get` and `script.list` keep serving them
 as stored, a workspace transfer import copies them unchanged, and the limits apply the
 next time such a definition is saved through `script.create`.
