@@ -419,6 +419,11 @@ never removes external account directories.
 - `providers.catalog` gains an additive top-level `defaultNames?` map naming each
   renamed Default configuration (see
   [Default configuration overrides](#default-configuration-overrides)).
+- **Guest reads.** Profile and Default configuration names are host settings. When
+  the caller's current durable host role is guest (re-read on every call, not the role
+  cached when the connection was admitted), `profiles` is `[]` and `defaultNames` is
+  omitted. Owner and host-member reads are unchanged. Clients name a guest's
+  configurations by base provider only.
 - **Remote compatibility in the catalog.** Each `profiles` row
   (`ProviderProfileSummary`) also carries `remoteCompatible` and, when it is `false`,
   `remoteIncompatibility`, as on `ProviderProfile`
