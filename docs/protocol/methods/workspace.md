@@ -2058,7 +2058,13 @@ attention is never fabricated.
       a workspace watching an open PR via `ws.pr.monitor` (including a cross-repo PR
       that never enters the workspace's own PR linkage) never falls through to
       `complete`/`idle`. A linked open PR wins the shared rung first (richer data);
-      the mapping is identical either way. The monitor signals are derived purely
+      the mapping is identical either way. **Queue membership is the exception:** the
+      rung reads `pr_queued` whenever *any* of its inputs shows an open, non-draft PR in
+      the merge queue — the linked PR, any open pool entry (not only the most recently
+      updated one), or an ACTIVE monitor's snapshot — even when the PR the rung would
+      otherwise pick reads `pr_ready`/`pr_open`. A workspace sequencing a cross-repo merge
+      (one PR queued, its follow-up mergeable once the first lands) is waiting on the
+      queue, not on the user. The monitor signals are derived purely
       from the persisted rows — no forge calls; an unparseable or missing snapshot
       (and an active row whose snapshot already shows a terminal state) contributes
       nothing, and a store read failure fails open to no signal.

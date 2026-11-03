@@ -50,6 +50,16 @@ presence; older daemons omit it and reject the key with `-32602`. The
 `agent.getSession` form carries it only when `true`. A pin-only update does not
 advance `updatedAt`.
 
+Also within 15.3 (behavior change only; no wire-shape or method-catalog change, so no
+version bump): **any merge-queued PR wins the `displayStatus` PR rung**
+([§5.1](./methods/workspace.md) step 4). The rung now reads `pr_queued` when any of its
+inputs — the linked `activePullRequest`, any open `pullRequests` / git-root pool entry,
+or an ACTIVE PR monitor's snapshot — shows an open, non-draft PR in the merge queue.
+Previously a linked open PR short-circuited the rung, so a workspace whose own PR was
+mergeable while it watched another PR in the queue read `pr_ready` (clients group that
+as needing the user) instead of `pr_queued` (waiting). Older daemons keep the old
+precedence; clients need no change.
+
 **Version 15.2 — retired workspaces (additive).**
 [Retired workspaces](./methods/workspace.md#retired-workspaces) add the `"Retired"`
 `WorkspaceStatus`, the presence-detected `Workspace.retiredAt`, the router method
