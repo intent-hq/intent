@@ -25,15 +25,21 @@ not after materializing old terminal records.
 `ScriptMonitorSummary` contains only `monitorId`, `workspaceId`, `agentId`,
 `scriptId`, `runId`, `scriptName`, `mode`, `state: "active"`, `createdAt`,
 `expiresAt`, optional `lineCount`; if configured, `outputPatternPreview`
-(≤160 UTF-8 bytes) and `outputPatternTruncated` (boolean). Omit outputPattern,
+(≤160 UTF-8 bytes) and `outputPatternTruncated` (boolean); and, with
+[`remoteScripts: 1`](./scripts.md#scripts-of-remote-agents-remotescripts-1),
+`remoteAgentId` and `nodeId` on a monitor of a machine run (omitted otherwise). Omit outputPattern,
 settledAt, reason, result and trigger. Full active detail retains the complete
 pattern but has no terminal fields. Never fetch details to render collapsed
 badges. There is no matched-line history read: terminal notification/event
 snapshots carry the existing bounded matched line, and script.output reads the
 available process buffer by known script ID, not by monitor ID or past run ID.
 
-**Registration and retries.** TTL/options/ownership/run checks and at most one
-active monitor per workspace/script remain unchanged. Same-owner retries of an
+**Registration and retries.** TTL/options/ownership/run checks remain unchanged.
+There is at most one active monitor per workspace/script, or, with
+[`remoteScripts: 1`](./scripts.md#scripts-of-remote-agents-remotescripts-1), per
+workspace/script/run place (the home run, or one remote agent's machine run), so
+a monitor on the home run and one on each remote agent's machine run never
+contend, and neither do two remote agents' monitors of the same script. Same-owner retries of an
 active registration return that row unchanged; another owner is refused.
 Registration of an already-final latest run returns
 `{ ok: false, refused: true, reason: "run-finished", scriptId, runId }`, creates
@@ -251,7 +257,11 @@ A fresh registration requires an existing, nondeleted, nonretired owner in an
 active workspace. A failed/inert owner cannot register. A temporarily busy,
 question-held or idle owner is eligible. Lifecycle/read/persistence errors fail
 closed; never return success for a memory-only registration. There is one active
-monitor per **(workspaceId, scriptId)**, irrespective of runId. Registration and
+monitor per **(workspaceId, scriptId, run place)**, irrespective of runId. The run
+place is the home run, or one remote agent's machine run
+([scripts of remote agents](./scripts.md#scripts-of-remote-agents-remotescripts-1));
+without `remoteScripts: 1` every run is a home run, so this is one per
+(workspaceId, scriptId) as before. Registration and
 retirement enforce this atomically, including concurrent calls and recovery.
 Same-owner registration returns the existing active row, with no extra event or
 wake; an explicitly different runId is rejected (`-32602`), never rebound.
@@ -298,7 +308,8 @@ Upsert/remove settle any unfinished predecessor as `cancelled` with an error
 naming replacement/removal before discarding its definition. Ordinary script
 archive/restore does not change a run or monitor; workspace archive is different.
 
-Registration without runId binds atomically to the **latest accepted run** at
+Registration without runId binds atomically to the **latest accepted run** of
+the caller's own run place (a remote agent's machine run, otherwise the home run) at
 registration, including a retained final result after a fast exit or stop. It
 must not infer completion from status `idle` alone. A never-run script, a legacy
 result without a token, or an unavailable explicit run fails `-32602` with no

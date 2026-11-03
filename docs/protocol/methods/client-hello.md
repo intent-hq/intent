@@ -156,6 +156,12 @@ absence means unavailable, not permission to infer support from version numbers.
 may ignore the field and start the initial agent locally, so clients offer a remote
 initial agent only when this flag is exactly `1`. It grants no caller authority.
 
+**Remote scripts (additive).** Exact integer `server.capabilities.remoteScripts: 1`
+means a remote agent's `ws.script.*` calls are forwarded and the scripts it starts run on
+its machine, listed in `machineRuns` on their rows ([§5.8](./scripts.md#scripts-of-remote-agents-remotescripts-1)).
+It is advertised only together with `remoteMachines: 1`. Clients show remote-script
+affordances only when it is exactly `1`; it grants no caller authority.
+
 **Workspace discussions (additive extension).**
 Exactly integer `server.capabilities.discussionConversations: 1` advertises the
 [§5.55 contract](./multiplayer.md#555-workspace-discussions): conversation and

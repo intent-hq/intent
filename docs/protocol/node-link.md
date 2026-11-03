@@ -1804,7 +1804,7 @@ Revoking a credential closes its live `/node/*` connections with `1008`
 `hello.protocol` is a range instead of one number:
 
 ```ts
-interface ProtocolRange { min: number; max: number } // inclusive; this contract defines 6 and 7
+interface ProtocolRange { min: number; max: number } // inclusive; this contract defines 6, 7 and 8
 ```
 
 The machine picks the highest version in both ranges and returns it as
@@ -1838,10 +1838,19 @@ message "Update Intent on <machine> (it runs X; this backend needs Y or newer)."
 **nodeProtocol 7** is protocol 6 plus [stop acknowledgement](#stop-acknowledgement-nodeprotocol-7).
 It changes what a `stop` means to the backend, so it is a new version, not an
 optional field. A daemon that implements stop acknowledgement offers
-`{ min: 7, max: 7 }` on both sides: version 6 was never released, so no peer
+`{ min: 7, max: 7 }` on both sides (or `{ min: 7, max: 8 }` once it also
+implements protocol 8, below): version 6 was never released, so no peer
 keeps it, and a backend never runs a link on which stops cannot be confirmed.
 A version-6-only peer finds no common version and gets
 `machine-update-required` as above.
+
+**nodeProtocol 8** is protocol 7 plus [saved scripts](#saved-scripts-nodeprotocol-8)
+(the `script*` frames). Those are new frame types, which a protocol 7 peer
+rejects as `node-link-protocol`, so they need a new version. A daemon that
+implements them offers `{ min: 7, max: 8 }` on both sides, so a protocol 7
+peer still binds and runs agents. On a link that negotiated 7 the backend sends
+no script frame, and starting a remote agent's script fails as described in
+[saved scripts](#saved-scripts-nodeprotocol-8).
 
 ### Frames
 
@@ -1866,6 +1875,11 @@ Each WebSocket binary message on `/node/link` is one JSON frame of at most
 | `request` | machine → backend | rpc | `requestId` (UUID), `agentId`, `method`, `params`, `timeoutMs` |
 | `response` | backend → machine | rpc | `requestId`, `outcome: { ok: value } \| { err: { code, message, data? } }` |
 | `cancelRequest` | machine → backend | rpc | `requestId` |
+| `scriptStart` | backend → machine | script | Protocol 8: see [saved scripts](#saved-scripts-nodeprotocol-8) |
+| `scriptStop` | backend → machine | script | Protocol 8: `agentId`, `scriptId`, `spawnId` |
+| `scriptStarted` | machine → backend | script | Protocol 8: `agentId`, `scriptId`, `spawnId`, `pid` |
+| `scriptOutput` | machine → backend | script | Protocol 8: `agentId`, `scriptId`, `spawnId`, `seq`, `data` |
+| `scriptExited` | machine → backend | script | Protocol 8: `agentId`, `scriptId`, `spawnId`, `exitCode?`, `error?` |
 
 `intentdVersion` is recorded for diagnostics and is not a compatibility gate.
 Heartbeats run every 15 s and a link silent for 45 s is dead. The backend
@@ -1879,10 +1893,12 @@ retries with the backoff above.
 The executor credential admits exactly these link requests, enumerated in one
 constant with a golden test: `hello`, `heartbeat` / `heartbeatReply`, `launch`,
 `prompt`, `cancel`, `stop`, `ack`, `capabilities`, `response` (to the machine's
-`workspace.call` requests), and git sessions on `/node/git` for agents on that
-credential's binding. Any other frame is `node-link-protocol`.
+`workspace.call` requests), `scriptStart` and `scriptStop` (protocol 8 only),
+and git sessions on `/node/git` for agents on that credential's binding. Any
+other frame is `node-link-protocol`.
 `stopAck` travels machine → backend, so it is not in that list; the backend
-accepts it only on a protocol 7 link.
+accepts it only on a protocol 7 or later link. Likewise the backend accepts
+`scriptStarted`, `scriptOutput` and `scriptExited` only on a protocol 8 link.
 
 ### Stop acknowledgement (nodeProtocol 7)
 
@@ -2143,6 +2159,150 @@ The backend treats a forwarded call as made by the agent named in the request
 only if that agent is on the link's lease, and routes it again under that
 agent's existing authority; it never trusts the machine's routing.
 
+### Saved scripts (nodeProtocol 8)
+
+A remote agent's `ws.script.*` calls are [forwarded](#workspace-api-on-the-machine)
+to the backend, which keeps the definitions, runtime state, output logs and
+monitors as for local scripts. When the remote agent starts a saved script
+(any script, whoever saved it), the backend starts that agent's
+[machine run](./methods/scripts.md#scripts-of-remote-agents-remotescripts-1)
+of it on the agent's machine, in the agent's own checkout. Only the process
+runs there; the backend drives it with these frames on the `script` lane:
+
+```ts
+interface ScriptStartFrame {
+  type: "scriptStart";
+  agentId: string;                         // the remote agent whose machine run this is
+  scriptId: string;
+  spawnId: string;                         // opaque; new for each process, including each automatic restart (not the §5.8a runId)
+  command: string;
+  mode: "command" | "service";
+  cwd?: string;                            // relative to the agent's checkout
+  env?: { key: string; value: string }[];  // the saved env, in saved order
+}
+interface ScriptStopFrame    { type: "scriptStop"; agentId: string; scriptId: string; spawnId: string }
+interface ScriptStartedFrame { type: "scriptStarted"; agentId: string; scriptId: string; spawnId: string; pid: number }
+interface ScriptOutputFrame  { type: "scriptOutput"; agentId: string; scriptId: string; spawnId: string; seq: number; data: string }
+interface ScriptExitedFrame  {
+  type: "scriptExited"; agentId: string; scriptId: string; spawnId: string;
+  exitCode?: number;                       // absent only together with error
+  error?: string;                          // "<code>: <detail>"
+}
+```
+
+All five bodies are closed: unknown or mistyped members are `node-link-protocol`.
+
+**Script lane.** The `script` lane has the lowest priority: control, journal
+and rpc frames are always sent ahead of queued script frames, so output never
+delays heartbeats, stops, launches or journal records. Each side bounds its
+queued `scriptOutput` frames at 4 MiB of `data` per link. When output outpaces
+the link and the bound is reached, the machine drops further output of that
+run until the queue drains, then sends one `scriptOutput` whose `data` is
+`[… <N> bytes of output dropped]`, and `seq` continues without a gap.
+`scriptStart`, `scriptStop`, `scriptStarted` and `scriptExited` are never
+dropped.
+
+- **Start.** The machine accepts a `scriptStart` only for an agent on the
+  link's binding whose checkout exists. It resolves `cwd` inside that checkout
+  (an absolute path, or one that escapes the checkout, is refused) and
+  spawns `command` through the same shell, process group and output capture as
+  a local saved script. It answers `scriptStarted` once the process is spawned.
+- **Environment.** The process gets the environment the machine daemon gives
+  its own local saved scripts, with `env` applied over it in order. It never
+  gets the agent's `launch.profileEnv` overlay or Intent's agent launch wiring,
+  so provider credentials sent for the agent never reach a script or its
+  output.
+  One `scriptStart` is one process: the machine never restarts a script. The
+  backend's existing supervisor keeps the service restart policy and backoff
+  and sends a new `scriptStart`, with a new `spawnId`, for each restart.
+- **Output.** The machine streams the process's combined output as UTF-8 text
+  (invalid bytes replaced) in `scriptOutput` frames of at most 64 KiB of
+  `data`, `seq` counting from 0 per `spawnId`. The backend appends them to the run's
+  output log, so `script.output`, `script.run` and monitor output triggers read
+  it as they do locally. Output is not journaled: frames lost with a link are
+  gone.
+- **Exit.** When the process exits the machine sends `scriptExited` with its
+  `exitCode`. A start the machine refuses is answered with `scriptExited`
+  (no `scriptStarted`) whose `error` code is:
+
+  | Code | Meaning |
+  | --- | --- |
+  | `node-script-agent-unknown` | The agent is not on this binding, or its checkout is gone |
+  | `node-script-invalid-cwd` | `cwd` is absolute or escapes the agent's checkout |
+  | `node-script-start-failed` | The process could not be spawned |
+
+  The backend records the exit with the existing total exit contract:
+  `status: "exited"` with `exitCode`, or `exitCode: -1` and `error` when the
+  machine reported none.
+- **Matching.** Every script frame carries `agentId`, `scriptId` and
+  `spawnId`, and a process is identified by all three. `spawnId` is a UUID the
+  backend picks, new for each process and unique within the binding, so
+  several agents on one binding can run the same `scriptId` at once. The
+  backend ignores `scriptStarted`, `scriptOutput` and
+  `scriptExited` whose triple is not the current process of a machine run (an
+  earlier restart, or a run it has already settled).
+- **Stop.** `scriptStop` kills that process's group (`SIGTERM`, then `SIGKILL`
+  after the local grace), and the machine acknowledges it with that process's
+  `scriptExited`, carrying its observed `exitCode`. The machine answers every
+  `scriptStop`, with one rule: when the triple names no running process there
+  (it already exited, never started, or is stale), it answers at once with
+  `scriptExited` `{ exitCode: -1, error: "node-script-not-running: …" }` for
+  that triple and stops nothing. The backend counts either answer as the
+  stop's acknowledgement, and otherwise ignores the second for a process it
+  has already settled.
+  A `spawnId` names one process; the [§5.8a](./methods/script-monitors.md#run-identity-and-fast-completion)
+  `runId` the backend reports for the machine run spans its automatic restarts,
+  exactly as for a home run, and never crosses the link.
+- **Lost.** When the link drops, is replaced by a newer binding, or the machine
+  goes unreachable, the backend marks every live run on it
+  `status: "exited"`, `exitCode: -1`, with `error` starting
+  `remote-script-lost:`. The machine stops every script of a binding as soon
+  as that binding's link closes, so no script outlives its link and nothing is
+  reattached after a reconnect. A later start sends a new `scriptStart`.
+- **Lease end.** Before the backend deletes a remote agent, and before
+  `remoteMachines.remove` with `stopAgents: true`, it sends `scriptStop` for
+  each of the agent's live machine runs and waits for their `scriptExited`
+  acknowledgements within the bound the call already has:
+  - `remoteMachines.remove` waits inside its existing 30 s budget, together
+    with the agents' [stop acknowledgements](#stop-acknowledgement-nodeprotocol-7).
+    An agent whose script stop is unacknowledged counts as unconfirmed: removal
+    fails `machine-unreachable` with that agent in `unconfirmedStops` and
+    deletes nothing.
+  - Deleting an agent waits at most 10 s, then settles the runs and deletes
+    the agent whether or not every acknowledgement arrived.
+
+  Script stops are never queued or resent. They need no retry: when the link
+  is down, the machine has already stopped, or stops once it notices the dead
+  link (at most 45 s without heartbeats), every script of that binding, so a
+  backend that cannot reach the machine sends nothing and waits for nothing.
+  Revocation (`401` or a `1008` close) ends the link the same way. The machine
+  also stops an agent's scripts before it removes the agent's worktree,
+  including on the agent's own `stop`. In every case no script process stays on
+  the machine.
+- **Mixed versions.** The machine routes `workspace_api` frames with its own
+  table ([workspace API on the machine](#workspace-api-on-the-machine)), so a
+  remote agent's `ws.script.*` calls reach the backend only from a machine that
+  implements protocol 8 **and** on a link that negotiated 8. On a protocol 7
+  machine, or on a link to a backend that offers only 7, every `ws.script.*`
+  call (list and create included) fails on the machine with
+  `remote-agent-unsupported:`, as before this contract; the agent's other calls
+  are unaffected. Only a machine run that already exists can meet a protocol 7
+  link (its machine was downgraded, or relinked to an older daemon): a
+  `script.restart` of it from the app or a local agent then fails with `-32602`
+  `machine-update-required` (the [remote machine error](./methods/nodes.md#remote-machine-errors)
+  data, `update: "machine"`), and the backend sends nothing. With no link up
+  after the usual on-demand connect, it fails with `-32603`
+  `machine-unreachable` and `attempts`. The backend records the version each
+  bind negotiated in the machine's `nodeProtocol`
+  ([remote machines](./methods/nodes.md#backend-methods-exposed-machines)), so a
+  client can tell the owner that a machine needs an update before its agents
+  can use scripts.
+- **Ports.** A service's ports are not tunnelled. `detectedUrl` is reported as
+  the process printed it and names the machine's loopback, not the backend's.
+
+Script runs count against no agent limit on the machine; they run as the
+machine owner's OS user, like the agent itself.
+
 ### Provider credentials: profile environment
 
 Auth is the selected [provider profile](./methods/provider-profiles.md)'s
@@ -2278,8 +2438,8 @@ credential is narrow in API terms but not in effect.
 The owner can record this daemon's `/node/link` frames, in both directions and
 on both roles, with [link traffic capture](./methods/nodes.md#link-traffic-capture)
 (`remoteLinkTraffic: 1`). Capture is off by default, bounded, cleared on stop,
-and masks secrets (profile environment values, credentials, tokens and
-certificates) before a record is kept. It observes frames only: it never
+and masks secrets (profile environment values, script environment values,
+credentials, tokens and certificates) before a record is kept. It observes frames only: it never
 delays, changes or reorders them, and it adds no frame type.
 
 ### Errors

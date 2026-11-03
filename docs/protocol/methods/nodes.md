@@ -306,6 +306,20 @@ with `remoteMachines: 1` and omits it otherwise. A backend with
 the field and start the initial agent locally, so a client offers a remote
 initial agent only for exact integer `1`. `remoteMachines` stays at `1`.
 
+`client.hello.server.capabilities.remoteScripts: 1` means a remote agent's
+`ws.script.*` calls are forwarded to the backend and the scripts it starts run
+on its machine as machine runs
+([scripts of remote agents](./scripts.md#scripts-of-remote-agents-remotescripts-1)).
+The backend advertises it only together with `remoteMachines: 1`. Without it,
+a remote agent's `script.*` calls are refused and no script row carries
+`machineRuns`. The machine side also needs nodeProtocol 8: a protocol 7
+machine refuses its agents' `ws.script.*` calls itself, with
+`remote-agent-unsupported:`
+([mixed versions](../node-link.md#saved-scripts-nodeprotocol-8)). A backend
+with `remoteScripts: 1` reports each machine's negotiated `nodeProtocol` on
+`RemoteMachine`; while it is below 8, clients show that the machine needs an
+update for its agents to use scripts (for example in Settings → Machines).
+
 ##### Machine methods: executor credentials
 
 Owner-only: the local UDS seat or a WSS connection admitted with the owner
@@ -351,6 +365,7 @@ interface RemoteMachine {
   state: "connected" | "disconnected" | "unreachable" | "revoked" | "update-required";
   runningAgents: number;            // this backend's live agents on the machine
   capabilities?: MachineCapabilities; // last report, kept while disconnected
+  nodeProtocol?: number;            // link version negotiated at the last bind, kept while disconnected; absent before the first bind and from backends without remoteScripts
   observedAt?: string;              // when `capabilities` was reported
   addedAt: string;
   lastConnectedAt?: string;
@@ -763,6 +778,12 @@ in `payload` and `summary` alike, and this cannot be turned off:
 
 - `launch.profileEnv.env[].value` (a `null` value stays `null`; keys,
   `providerRef` and `fingerprint` stay visible);
+- `scriptStart.env[].value` (keys stay visible);
+- at any depth of a `request` or `response` frame's params or result, every
+  value inside a member named `env`: in the `{ key, value }[]` form each
+  `value`, and in the object form each member's value (keys stay visible). This
+  covers saved-script environments in forwarded `script.create` params and in
+  script rows returned to a remote agent;
 - at any depth of any frame, including request params and response results,
   the value of every key whose name contains a match for
   `token|secret|password|credential|authorization|cookie|private.?key|cert`
@@ -774,5 +795,6 @@ in `payload` and `summary` alike, and this cannot be turned off:
 
 The executor token travels in the upgrade request, not in a frame, so it is
 never recorded. These rules cover the
-[profile environment](../node-link.md#provider-credentials-profile-environment)
+[profile environment](../node-link.md#provider-credentials-profile-environment),
+[script environments](../node-link.md#saved-scripts-nodeprotocol-8)
 and any secret a frame carries.

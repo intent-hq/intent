@@ -255,8 +255,8 @@ method inventory:
 | --- | --- |
 | `file.read`, `file.write`, `file.list`, `file.delete`, `file.mkdir`, `file.rename`, `git.commit`, `host.exec`, `help.*` | On the machine, against the agent's own checkout and host |
 | `workspace.info` | On the machine: `{ id, path }`, where `path` is the agent's own checkout on the machine |
-| `note.*`, `task.*`, `agent.*`, `pr.*` (and its `mr.*` alias), `comment.*`, `event.*`, `workspace.details` | Forwarded to the backend as one `workspace.call` link request with params `{ method, args }` |
-| Everything else, including other `git.*`, `script.*`, `terminal.*`, `browser.*`, `hook.*`, `desktop.*`, `search.*`, `crossWorkspace.*`, `mcp.*`, the other `workspace.*` frames (the setters, `archive`, `unarchive`, `proposeSibling`, `applyProposal`) and `file.getAttachment` | Refused, never run on another host |
+| `note.*`, `task.*`, `agent.*`, `pr.*` (and its `mr.*` alias), `comment.*`, `event.*`, `script.*`, `workspace.details` | Forwarded to the backend as one `workspace.call` link request with params `{ method, args }` |
+| Everything else, including other `git.*`, `terminal.*`, `browser.*`, `hook.*`, `desktop.*`, `search.*`, `crossWorkspace.*`, `mcp.*`, the other `workspace.*` frames (the setters, `archive`, `unarchive`, `proposeSibling`, `applyProposal`) and `file.getAttachment` | Refused, never run on another host |
 
 A refused frame fails with a message starting `remote-agent-unsupported:` that
 names the method and lists what remote agents can use. The backend serves a forwarded
@@ -271,7 +271,13 @@ sub-agent on the agent's own machine; see
 Before an agent-initiated `git.commit`,
 the machine forwards the internal frame `git.commitPolicy` (refused from agent code)
 and the backend answers `{ "autoCommit": boolean }` with the workspace's effective
-auto-commit policy. Tool outputs too large for a reply are written on the machine,
+auto-commit policy. The machine forwards `script.*` only on a link that
+negotiated nodeProtocol 8; a protocol 7 machine, or a link to a backend that
+offers only 7, refuses it on the machine with `remote-agent-unsupported:`
+([mixed versions](./node-link.md#saved-scripts-nodeprotocol-8)). A backend that
+negotiates 8 advertises [`remoteScripts: 1`](./methods/scripts.md#scripts-of-remote-agents-remotescripts-1); it keeps
+the script, and the agent's runs of it happen on its machine over the
+[script frames](./node-link.md#saved-scripts-nodeprotocol-8). Tool outputs too large for a reply are written on the machine,
 next to the agent's worktree. Attachments are not materialized on machines, so a
 message with attachments to a remote agent fails with `-32602` before any state
 change.
