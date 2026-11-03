@@ -254,8 +254,8 @@ method inventory:
 | Frames | Where they run |
 | --- | --- |
 | `file.read`, `file.write`, `file.list`, `file.delete`, `file.mkdir`, `file.rename`, `git.commit`, `host.exec`, `help.*` | On the machine, against the agent's own checkout and host |
-| `note.*`, `task.*`, `agent.*`, `pr.*` (and its `mr.*` alias), `comment.*`, `event.*` | Forwarded to the backend as one `workspace.call` link request with params `{ method, args }` |
-| Everything else, including other `git.*`, `script.*`, `terminal.*`, `browser.*`, `hook.*`, `desktop.*`, `search.*`, `crossWorkspace.*`, `mcp.*`, `workspace.*` and `file.getAttachment` | Refused, never run on another host |
+| `note.*`, `task.*`, `agent.*`, `pr.*` (and its `mr.*` alias), `comment.*`, `event.*`, `script.*` | Forwarded to the backend as one `workspace.call` link request with params `{ method, args }` |
+| Everything else, including other `git.*`, `terminal.*`, `browser.*`, `hook.*`, `desktop.*`, `search.*`, `crossWorkspace.*`, `mcp.*`, `workspace.*` and `file.getAttachment` | Refused, never run on another host |
 
 A refused frame fails with a message starting `remote-agent-unsupported:` that
 names the method and lists what remote agents can use. The backend serves a forwarded
@@ -266,7 +266,11 @@ that agent and in its workspace. The agent's `agentFeatures` snapshot and the
 sub-agent gates apply as they do locally. Before an agent-initiated `git.commit`,
 the machine forwards the internal frame `git.commitPolicy` (refused from agent code)
 and the backend answers `{ "autoCommit": boolean }` with the workspace's effective
-auto-commit policy. Tool outputs too large for a reply are written on the machine,
+auto-commit policy. A forwarded `script.*` frame is served only when the backend
+advertises [`remoteScripts: 1`](./methods/scripts.md#scripts-of-remote-agents-remotescripts-1)
+(older backends refuse it with `remote-agent-unsupported:`); the backend keeps
+the script, and its runs happen on the agent's machine over the
+[script frames](./node-link.md#saved-scripts-nodeprotocol-8). Tool outputs too large for a reply are written on the machine,
 next to the agent's worktree. Attachments are not materialized on machines, so a
 message with attachments to a remote agent fails with `-32602` before any state
 change.

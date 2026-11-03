@@ -707,6 +707,26 @@ secrets are masked before a record is kept. No frame, nodeProtocol or error
 code changes, and there is no public protocol version bump: clients detect it
 only through `remoteLinkTraffic: 1`.
 
+**Remote scripts — capability `remoteScripts: 1` (additive), nodeProtocol 8.**
+A remote agent's `script.*` calls are now [forwarded](./workspace-routing.md#remote-agents-on-the-executor-link)
+to the backend instead of refused, and its scripts run on its machine over the
+new [script frames](./node-link.md#saved-scripts-nodeprotocol-8)
+(`scriptStart`, `scriptStop`, `scriptStarted`, `scriptOutput`, `scriptExited`).
+Script rows, summaries, `script.get` and script events gain the optional
+`runsOn: { nodeId, agentId }`
+([scripts of remote agents](./methods/scripts.md#scripts-of-remote-agents-remotescripts-1));
+a run lost with its machine reads `exited` / `exitCode: -1` with an `error`
+starting `remote-script-lost:`, inside the existing total exit contract.
+New `-32602` reasons `remote-script-autostart-unsupported`,
+`remote-script-not-owned` and `remote-script-runs-on-readonly`. Link traffic
+capture also masks script environments. nodeProtocol 8 is a new link version
+because older peers reject unknown frame types; daemons offer `{ min: 7, max: 8 }`,
+so protocol 7 machines keep running agents and only their scripts fail with
+`machine-update-required`. The backend advertises `remoteScripts: 1` only
+together with `remoteMachines: 1`. No methods or events are added, the surface
+counts are unchanged, and there is no public protocol version bump: clients
+detect it only through `remoteScripts: 1`.
+
 **Command-default change (breaking).**
 [Script creation defaults (§5.8)](./methods/scripts.md#command-creation-defaults-breaking-change)
 change omission on a new command from `saved` to `oneOff`; new services remain

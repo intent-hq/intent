@@ -11,6 +11,10 @@ The [prepared service readiness extension](#service-readiness-prepared-additive-
 adds optional `healthUrl` / `readyPattern` definition inputs and `ready` /
 `readiness` runtime fields. These are capability-gated, not yet shipped.
 
+[Scripts of remote agents](#scripts-of-remote-agents-remotescripts-1)
+(`remoteScripts: 1`) let an agent on a remote machine create and run saved
+scripts that run on its machine, marked by `runsOn` on their rows.
+
 The [workspace guest role extension](./multiplayer.md#workspace-guest-roles)
 lets a workspace Manager operate existing saved scripts through scoped service
 checks. It grants no script-definition writes, arbitrary command/environment
@@ -204,7 +208,7 @@ is absent. Hosts without the capability serve the unpaged list and reject `limit
 | Fields | Summary meaning |
 | --- | --- |
 | `id`, `workspaceId`, `name`, `mode`, `source`, `createdAt` | Required identity/display metadata |
-| `category?`, `autoStart?`, `updatedAt?`, `purpose?` | Preserve presence and value |
+| `category?`, `autoStart?`, `updatedAt?`, `purpose?`, `runsOn?` | Preserve presence and value (`runsOn` only with [`remoteScripts: 1`](#scripts-of-remote-agents-remotescripts-1)) |
 | `commandPreview`, `commandTruncated` | Required display-only prefix ≤160 UTF-8 bytes and truncation boolean |
 | `runtime` | Preserve `status`, `restartCount`, optional `runId`, `pid`, `exitCode`, `startedAt`, `stoppedAt`, `detectedUrl`, `previouslyRunning`, `ready`, `readiness`; bound `error?` below |
 | `lastRun?` | Preserve `runId?`, `outcome`, `exitCode?`, `startedAt?`, `stoppedAt`; bound `error?` below |
@@ -1058,3 +1062,84 @@ They exercise snapshot application, omission clearing, output retention, legacy
 fallback and in-flight/reconnect races; they are **not** proof of daemon locking,
 persistence or frontend transport behavior. Component unit and WSS/transport
 regressions must execute those guarantees against real implementation code.
+
+#### Scripts of remote agents (`remoteScripts: 1`)
+
+**Additive; intentd advertises `remoteScripts: 1` only together with
+`remoteMachines: 1`.** An agent running on a
+[remote machine](./nodes.md#daemon-to-daemon-remote-machines) can use saved
+scripts. Its `ws.script.*` calls are
+[forwarded](../workspace-routing.md#remote-agents-on-the-executor-link) to the
+backend, which keeps the definition, runtime state, output log and
+[monitors (§5.8a)](./script-monitors.md) as for any script, so `script.status`,
+`script.output`, `script.run`, monitors, events and the app's script panel work
+unchanged. Each run happens on the agent's machine, in the agent's own checkout,
+over the executor link's [script frames](../node-link.md#saved-scripts-nodeprotocol-8).
+
+**`runsOn`.** A script a remote agent creates carries
+
+```ts
+runsOn?: { nodeId: string; agentId: string }; // nodeId: the remoteMachines row id (the agent's placement nodeId)
+```
+
+`runsOn` carries no machine name: clients look `nodeId` up in
+`remoteMachines.list`.
+
+on the persisted `WorkspaceScript` record, `script.list` rows (full and
+summary), `script.get`, the `script.create` result and `script:changed`
+snapshots. It is absent on every other script, and omitted rather than `null`.
+The backend sets it from the calling agent when that agent is remote; it is
+never a request parameter: a `runsOn` member in `script.create` params, from
+any caller, fails `-32602` `remote-script-runs-on-readonly`. Upserts by any caller keep the stored
+`runsOn`; a script never moves between machines or agents. `cwd` on such a
+script is relative to the agent's checkout: an absolute `cwd`, or one with a
+`..` segment, fails `-32602` at create.
+
+**Starting from anywhere.** `script.start`, `script.restart`, `script.stop`,
+`script.run` and monitor cancellation of a `runsOn` script are accepted from the
+app, from local agents and from the owning remote agent, and always act on the
+script's machine. A start returns as for a local script: `starting` before the
+reply, `running` when the machine reports the process (`pid` is the process id
+on the machine), `exited` when it ends. On a machine whose link negotiated
+nodeProtocol 7 they fail `-32603` `machine-update-required`; with no connected
+machine, after the on-demand connect, `-32603` `node-unavailable`.
+
+**Remote agents act on their own scripts.** A remote agent may read any script
+in its workspace (`script.list`, `script.get`, `script.status`,
+`script.output`). Its definition changes (an upsert of an existing script,
+`script.remove`, `archive`, `restore`) act only on scripts whose
+`runsOn.agentId` is that agent; any other script fails `-32602`
+`remote-script-not-owned`. On its own scripts it can also `script.start`,
+`restart`, `stop`, `run` and create monitors. A remote agent never runs a
+process on the backend.
+
+> **Open:** where a remote agent's start of a script *without* its `runsOn`
+> (saved by the user or a local agent) runs is not yet decided. Until it is,
+> `script.start`, `restart`, `run` and `scriptMonitor.create` from a remote
+> agent on such a script fail `-32602` `remote-script-not-owned`.
+
+**No autoStart.** A `runsOn` script never autostarts: `script.create` with
+`autoStart: true` from a remote agent, or an upsert by any caller that sets it
+on a `runsOn` script, fails `-32602` `remote-script-autostart-unsupported`. Daemon startup
+starts no `runsOn` script, and a `runsOn` service gets no `previouslyRunning`
+marker.
+
+**Lost runs.** When the machine disconnects, every live run of its scripts
+becomes `status: "exited"`, `exitCode: -1`, with `error` starting
+`remote-script-lost:`, under the total exit contract (above) as
+any unobservable exit: `remote-script-lost: the machine disconnected` when the
+link drops or a newer binding replaces it, and `remote-script-lost: the machine
+was removed` for `remoteMachines.remove`. A command's `lastRun.outcome` is
+`interrupted` with the same `error`. Monitors of those runs settle as exited,
+and the run is not reattached on reconnect. `script.stop` on such a script dismisses it to
+`idle`. Removing the machine (`remoteMachines.remove`), revoking its credential
+or deleting the agent stops every run of the agent's scripts on the machine
+first; the definitions stay on the backend, and a later start fails as above.
+
+**Services.** Service scripts run and restart under the usual policy, but their
+ports are not tunnelled: `detectedUrl` is the address the process printed on the
+machine. Clients should show the machine (from `runsOn.nodeId`) instead of an
+Open link for a `runsOn` script.
+
+Without `remoteScripts: 1` a remote agent's `script.*` calls are refused with
+`remote-agent-unsupported:` and no row carries `runsOn`.

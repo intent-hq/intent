@@ -74,8 +74,9 @@ structural integrity only, not executed native capture or durable ACK acceptance
 `node --test docs/protocol/fixtures/nodes/checkpoint-capture.test.mjs`.
 The [daemon-to-daemon executor link](./node-link.md#daemon-to-daemon-executor-link-nodeprotocol-7)
 lets an owner expose a regular daemon to a backend daemon; it negotiates a
-nodeProtocol range (daemons offer exactly 7, which adds
-[stop acknowledgement](./node-link.md#stop-acknowledgement-nodeprotocol-7))
+nodeProtocol range (daemons offer 7, which adds
+[stop acknowledgement](./node-link.md#stop-acknowledgement-nodeprotocol-7),
+through 8, which adds [saved scripts](./node-link.md#saved-scripts-nodeprotocol-8))
 and is gated by `remoteMachines: 1`
 ([§5.50](./methods/nodes.md#daemon-to-daemon-remote-machines)).
 The owner can record its frames with

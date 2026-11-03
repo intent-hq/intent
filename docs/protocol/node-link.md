@@ -1804,7 +1804,7 @@ Revoking a credential closes its live `/node/*` connections with `1008`
 `hello.protocol` is a range instead of one number:
 
 ```ts
-interface ProtocolRange { min: number; max: number } // inclusive; this contract defines 6 and 7
+interface ProtocolRange { min: number; max: number } // inclusive; this contract defines 6, 7 and 8
 ```
 
 The machine picks the highest version in both ranges and returns it as
@@ -1838,10 +1838,19 @@ message "Update Intent on <machine> (it runs X; this backend needs Y or newer)."
 **nodeProtocol 7** is protocol 6 plus [stop acknowledgement](#stop-acknowledgement-nodeprotocol-7).
 It changes what a `stop` means to the backend, so it is a new version, not an
 optional field. A daemon that implements stop acknowledgement offers
-`{ min: 7, max: 7 }` on both sides: version 6 was never released, so no peer
+`{ min: 7, max: 7 }` on both sides (or `{ min: 7, max: 8 }` once it also
+implements protocol 8, below): version 6 was never released, so no peer
 keeps it, and a backend never runs a link on which stops cannot be confirmed.
 A version-6-only peer finds no common version and gets
 `machine-update-required` as above.
+
+**nodeProtocol 8** is protocol 7 plus [saved scripts](#saved-scripts-nodeprotocol-8)
+(the `script*` frames). Those are new frame types, which a protocol 7 peer
+rejects as `node-link-protocol`, so they need a new version. A daemon that
+implements them offers `{ min: 7, max: 8 }` on both sides, so a protocol 7
+peer still binds and runs agents. On a link that negotiated 7 the backend sends
+no script frame, and starting a remote agent's script fails as described in
+[saved scripts](#saved-scripts-nodeprotocol-8).
 
 ### Frames
 
@@ -1866,6 +1875,11 @@ Each WebSocket binary message on `/node/link` is one JSON frame of at most
 | `request` | machine → backend | rpc | `requestId` (UUID), `agentId`, `method`, `params`, `timeoutMs` |
 | `response` | backend → machine | rpc | `requestId`, `outcome: { ok: value } \| { err: { code, message, data? } }` |
 | `cancelRequest` | machine → backend | rpc | `requestId` |
+| `scriptStart` | backend → machine | script | Protocol 8: see [saved scripts](#saved-scripts-nodeprotocol-8) |
+| `scriptStop` | backend → machine | script | Protocol 8: `scriptId`, `runId` |
+| `scriptStarted` | machine → backend | script | Protocol 8: `scriptId`, `runId`, `pid` |
+| `scriptOutput` | machine → backend | script | Protocol 8: `scriptId`, `runId`, `seq`, `data` |
+| `scriptExited` | machine → backend | script | Protocol 8: `scriptId`, `runId`, `exitCode?`, `error?` |
 
 `intentdVersion` is recorded for diagnostics and is not a compatibility gate.
 Heartbeats run every 15 s and a link silent for 45 s is dead. The backend
@@ -1879,10 +1893,12 @@ retries with the backoff above.
 The executor credential admits exactly these link requests, enumerated in one
 constant with a golden test: `hello`, `heartbeat` / `heartbeatReply`, `launch`,
 `prompt`, `cancel`, `stop`, `ack`, `capabilities`, `response` (to the machine's
-`workspace.call` requests), and git sessions on `/node/git` for agents on that
-credential's binding. Any other frame is `node-link-protocol`.
+`workspace.call` requests), `scriptStart` and `scriptStop` (protocol 8 only),
+and git sessions on `/node/git` for agents on that credential's binding. Any
+other frame is `node-link-protocol`.
 `stopAck` travels machine → backend, so it is not in that list; the backend
-accepts it only on a protocol 7 link.
+accepts it only on a protocol 7 or later link. Likewise the backend accepts
+`scriptStarted`, `scriptOutput` and `scriptExited` only on a protocol 8 link.
 
 ### Stop acknowledgement (nodeProtocol 7)
 
@@ -2143,6 +2159,98 @@ The backend treats a forwarded call as made by the agent named in the request
 only if that agent is on the link's lease, and routes it again under that
 agent's existing authority; it never trusts the machine's routing.
 
+### Saved scripts (nodeProtocol 8)
+
+A remote agent's `ws.script.*` calls are [forwarded](#workspace-api-on-the-machine)
+to the backend, which keeps the script's definition, runtime state, output log
+and monitors exactly as for a local script. A script the remote agent creates
+is tied to that agent and its machine
+([`runsOn`](./methods/scripts.md#scripts-of-remote-agents-remotescripts-1)), and
+every run of it, whoever starts it, happens on that machine in the agent's own
+checkout. Only the process runs there; the backend drives it with these frames
+on the `script` lane, separate from the control lane so output never delays
+heartbeats, stops or launches:
+
+```ts
+interface ScriptStartFrame {
+  type: "scriptStart";
+  agentId: string;                         // the script's runsOn.agentId
+  scriptId: string;
+  runId: string;                           // opaque; the backend picks a new one for each process it starts, including each restart
+  command: string;
+  mode: "command" | "service";
+  cwd?: string;                            // relative to the agent's checkout
+  env?: { key: string; value: string }[];  // the saved env, in saved order
+}
+interface ScriptStopFrame    { type: "scriptStop"; scriptId: string; runId: string }
+interface ScriptStartedFrame { type: "scriptStarted"; scriptId: string; runId: string; pid: number }
+interface ScriptOutputFrame  { type: "scriptOutput"; scriptId: string; runId: string; seq: number; data: string }
+interface ScriptExitedFrame  {
+  type: "scriptExited"; scriptId: string; runId: string;
+  exitCode?: number;                       // absent only together with error
+  error?: string;                          // "<code>: <detail>"
+}
+```
+
+All five bodies are closed: unknown or mistyped members are `node-link-protocol`.
+
+- **Start.** The machine accepts a `scriptStart` only for an agent on the
+  link's binding whose checkout exists. It resolves `cwd` inside that checkout
+  (an absolute path, or one that escapes the checkout, is refused), applies
+  `env` over the environment the agent's provider process starts from, and
+  spawns `command` through the same shell, process group and output capture as
+  a local saved script. It answers `scriptStarted` once the process is spawned.
+  One `scriptStart` is one process: the machine never restarts a script. The
+  backend's existing supervisor keeps the service restart policy and backoff
+  and sends a new `scriptStart`, with a new `runId`, for each restart.
+- **Output.** The machine streams the process's combined output as UTF-8 text
+  (invalid bytes replaced) in `scriptOutput` frames of at most 64 KiB of
+  `data`, `seq` counting from 0 per run. The backend appends them to the run's
+  output log, so `script.output`, `script.run` and monitor output triggers read
+  it as they do locally. Output is not journaled: frames lost with a link are
+  gone.
+- **Exit.** When the process exits the machine sends `scriptExited` with its
+  `exitCode`. A start the machine refuses is answered with `scriptExited`
+  (no `scriptStarted`) whose `error` code is:
+
+  | Code | Meaning |
+  | --- | --- |
+  | `node-script-agent-unknown` | The agent is not on this binding, or its checkout is gone |
+  | `node-script-invalid-cwd` | `cwd` is absolute or escapes the agent's checkout |
+  | `node-script-start-failed` | The process could not be spawned |
+
+  The backend records the exit with the existing total exit contract:
+  `status: "exited"` with `exitCode`, or `exitCode: -1` and `error` when the
+  machine reported none.
+- **Stop.** `scriptStop` kills the run's process group (`SIGTERM`, then
+  `SIGKILL` after the local grace) and the machine answers with that run's
+  `scriptExited`. A `scriptStop` for a run that is not running is answered with
+  `scriptExited` `{ exitCode: -1, error: "node-script-not-running: …" }`.
+  Frames for a `runId` other than the current one are ignored by both sides.
+- **Lost.** When the link drops, is replaced by a newer binding, or the machine
+  goes unreachable, the backend marks every live run on it
+  `status: "exited"`, `exitCode: -1`, with `error` starting
+  `remote-script-lost:`. The machine stops every script of a binding as soon
+  as that binding's link closes, so no script outlives its link and nothing is
+  reattached after a reconnect. A later start sends a new `scriptStart`.
+- **Lease end.** Before the backend deletes a remote agent, and before
+  `remoteMachines.remove`, it sends `scriptStop` for each of the agent's live
+  runs. Revocation (`401` or a `1008` close) ends the link, so the machine stops
+  that binding's scripts as above. The machine also stops an agent's scripts
+  before it removes the agent's worktree. In every case no script process stays
+  on the machine.
+- **Older machines.** On a link that negotiated protocol 7, `script.start`,
+  `script.restart` and `script.run` of a remote script fail with `-32603`
+  `machine-update-required` (the [remote machine error](./methods/nodes.md#remote-machine-errors)
+  data, `update: "machine"`), and the backend sends nothing. With no connected
+  link they fail with `-32603` `node-unavailable`, after the usual on-demand
+  connect.
+- **Ports.** A service's ports are not tunnelled. `detectedUrl` is reported as
+  the process printed it and names the machine's loopback, not the backend's.
+
+Script runs count against no agent limit on the machine; they run as the
+machine owner's OS user, like the agent itself.
+
 ### Provider credentials: profile environment
 
 Auth is the selected [provider profile](./methods/provider-profiles.md)'s
@@ -2278,8 +2386,8 @@ credential is narrow in API terms but not in effect.
 The owner can record this daemon's `/node/link` frames, in both directions and
 on both roles, with [link traffic capture](./methods/nodes.md#link-traffic-capture)
 (`remoteLinkTraffic: 1`). Capture is off by default, bounded, cleared on stop,
-and masks secrets (profile environment values, credentials, tokens and
-certificates) before a record is kept. It observes frames only: it never
+and masks secrets (profile environment values, script environment values,
+credentials, tokens and certificates) before a record is kept. It observes frames only: it never
 delays, changes or reorders them, and it adds no frame type.
 
 ### Errors

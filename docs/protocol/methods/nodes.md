@@ -306,6 +306,13 @@ with `remoteMachines: 1` and omits it otherwise. A backend with
 the field and start the initial agent locally, so a client offers a remote
 initial agent only for exact integer `1`. `remoteMachines` stays at `1`.
 
+`client.hello.server.capabilities.remoteScripts: 1` means a remote agent's
+`ws.script.*` calls are forwarded to the backend and its scripts run on its
+machine ([scripts of remote agents](./scripts.md#scripts-of-remote-agents-remotescripts-1)).
+The backend advertises it only together with `remoteMachines: 1`. Without it,
+a remote agent's `script.*` calls are refused and no script row carries
+`runsOn`. A machine also needs nodeProtocol 8 to run the scripts.
+
 ##### Machine methods: executor credentials
 
 Owner-only: the local UDS seat or a WSS connection admitted with the owner
@@ -713,6 +720,12 @@ in `payload` and `summary` alike, and this cannot be turned off:
 
 - `launch.profileEnv.env[].value` (a `null` value stays `null`; keys,
   `providerRef` and `fingerprint` stay visible);
+- `scriptStart.env[].value` (keys stay visible);
+- at any depth of a `request` or `response` frame's params or result, every
+  value inside a member named `env`: in the `{ key, value }[]` form each
+  `value`, and in the object form each member's value (keys stay visible). This
+  covers saved-script environments in forwarded `script.create` params and in
+  script rows returned to a remote agent;
 - at any depth of any frame, including request params and response results,
   the value of every key whose name contains a match for
   `token|secret|password|credential|authorization|cookie|private.?key|cert`
@@ -724,5 +737,6 @@ in `payload` and `summary` alike, and this cannot be turned off:
 
 The executor token travels in the upgrade request, not in a frame, so it is
 never recorded. These rules cover the
-[profile environment](../node-link.md#provider-credentials-profile-environment)
+[profile environment](../node-link.md#provider-credentials-profile-environment),
+[script environments](../node-link.md#saved-scripts-nodeprotocol-8)
 and any secret a frame carries.
