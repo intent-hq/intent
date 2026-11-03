@@ -622,7 +622,7 @@ interface LinkTrafficCapture {
 }
 
 interface LinkTrafficRecord {
-  seq: number;              // starts at 1 after each start, increases by one per record
+  seq: number;              // starts at 1 when capture turns on; a start while on keeps counting
   at: string;               // RFC 3339 UTC, millisecond precision
   direction: "in" | "out";  // relative to this daemon
   peer: { kind: "machine" | "backend"; id: string; name?: string };
@@ -639,6 +639,9 @@ interface LinkTrafficRecord {
 `peer.id` is the machine's id on a backend and the backend's daemon id on a
 machine. `peer.name` is the exposed machine's name on a backend and the
 executor credential's backend name on a machine, when it has one.
+`seq` restarts at 1 only when a `start` turns capture on from off; a `start`
+while capture is on (for example to change `payloads`) keeps the buffer and
+continues the sequence, so `snapshot({ afterSeq })` never skips a record.
 `frameType` is open: clients show an unknown type as text.
 Every `request` frame's method is `workspace.call`, so its `summary` names the
 forwarded method from its params instead, for example `note.read`.
