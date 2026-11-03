@@ -2300,12 +2300,15 @@ that cannot be applied cleanly, the machine keeps the `head` checkout and,
 before any other push, pins that `wip` commit to a new ref
 `refs/intent/ws/<workspaceId>/agents/<agentId>/unapplied/<full wip sha>`
 (create-only: one name per commit, so a second failure never overwrites the
-first). Only after that push succeeds does the agent's first turn start, with a
+first). The pin is idempotent: if the ref already exists at the same commit (a
+pin that landed but whose answer was lost), the backend accepts the push as a
+no-op and the machine treats an "already exists with the same commit" answer as
+success. Only after the pin succeeds does the agent's first turn start, with a
 notice naming the `unapplied/<sha>` ref; the turn's own pushes may then replace
-`wip`. If the pin push fails, the launch fails with `node-git-unavailable`
-instead of starting and risking the saved `wip` being overwritten. The machine
-never overwrites or force-pushes over the saved `head`, and never updates or
-deletes an `unapplied/` ref.
+`wip`. If the pin fails, the launch fails with `node-checkout-failed` instead
+of starting and risking the saved `wip` being overwritten. The machine never
+overwrites or force-pushes over the saved `head`, and never moves or deletes
+an `unapplied/` ref.
 
 Machine failures are journaled as `"<code>: <detail>"`. A failure that ends the
 agent's process before its checkout is ready (an `exited` record with an error
@@ -2321,7 +2324,7 @@ the backend records the launch sets `placementError.code` to
 | `node-capacity` | The machine's limits deny another agent ([capacity refusal](#capacity-and-permission)) |
 | `node-provider-unavailable` | The provider cannot run on the machine |
 | `node-profile-unavailable` | The selected profile cannot be used on the machine; no other account was used |
-| `node-checkout-failed` | The base commit's checkout could not be prepared |
+| `node-checkout-failed` | The agent's checkout could not be prepared (its base, or on a [relaunch](#relaunch-without-a-checkout) its saved refs, including a failed `unapplied/` pin) |
 | `node-agent-start-failed` | The provider process could not be started or set up (also any error without a code) |
 | `node-agent-not-running` / `node-agent-busy` | A prompt for a stopped agent, or while a turn runs |
 | `node-turn-failed` | The turn failed |
@@ -2372,8 +2375,8 @@ are `node-git-invalid`, `node-git-failed` and `node-git-unavailable`. The
 backend answers with `git upload-pack` / `git receive-pack` on protocol v0,
 with no ambient `GIT_*` environment, hooks or global configuration, and with
 every ref outside that agent's prefix hidden: the machine cannot read, want or
-update anything else. Under `unapplied/` a push may only create a ref, never
-update or delete one ([relaunch without a checkout](#relaunch-without-a-checkout)).
+update anything else. Under `unapplied/` a push may only create a ref (or
+re-push one at the commit it already holds, a no-op), never move or delete one ([relaunch without a checkout](#relaunch-without-a-checkout)).
 A push is limited to 1 GiB. After each turn and when the
 agent exits, the machine pushes `head` and a `wip` commit of its working tree.
 
