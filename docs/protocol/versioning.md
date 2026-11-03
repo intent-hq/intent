@@ -811,7 +811,8 @@ against current main when implementing; a numeric version alone is never proof o
 - The existing four `/invite` methods accept an optional scope, defaulting to workspace;
   host invites require explicit host scope and carry it in their link/preview/join result.
   Workspace response keys stay intact. A mismatched or legacy host-scope join fails closed.
-  Invitation issuance uses Intent authority, without a forge-connection prerequisite.
+  Invitation issuance uses Intent authority plus a connected owner forge (GitHub or
+  GitLab); with none connected, issuance and redemption are `github-identity-required`.
 - Collaboration sign-in has an isolated credential purpose. Existing forge-auth methods
   and GitHub aliases remain repository-purpose; proof methods gain a gated purpose and
   expected-identity check. Repository credential changes cannot silently re-key a person.
