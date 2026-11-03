@@ -607,6 +607,10 @@ as `remoteMachines.*`: members and guests get `-32003`. In node mode they fail w
 | remoteLinkTraffic.stop | — | `{ capture: LinkTrafficCapture }`; turns capture off and clears the buffer and counters, returning `active: false`, `retained: 0`; a no-op when off |
 | remoteLinkTraffic.snapshot | afterSeq? (exclusive), limit? (default 500, max 2000) | `{ capture: LinkTrafficCapture, records: LinkTrafficRecord[] }`; retained records with `seq > afterSeq`, oldest first; empty while off |
 
+A snapshot also stops before its records pass 448 KiB of JSON, so it can return
+fewer than `limit` records (always at least one when any match). Page with
+`afterSeq` until the last `seq` is `capture.nextSeq - 1`.
+
 ```ts
 interface LinkTrafficCapture {
   active: boolean;
