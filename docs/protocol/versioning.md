@@ -38,6 +38,12 @@ entries emptied silently, and `git.branchDiff` was unbounded. Support is signall
 default became bounded); older daemons ignore `maxBytes` and never send the keys. Older
 apps see truncated entries as empty diffs.
 
+Also within 15.4 (behaviour only, no wire-shape change): the **slim page byte budget**
+(`SLIM_PAGE_BUDGET_BYTES`, [§5.5](./methods/agents.md)) drops from 512 KiB to 480,000 bytes, so
+an `agent.getConversation` page and the seq-0 `chat.subscribe` snapshot fit their whole frame
+in the 500 KiB read budget. Pages may carry a few fewer messages; clients already follow
+`nextToken` / `prevToken`, so no client change is needed.
+
 
 **Version 15.3 — plain-folder workspaces (additive).**
 [Plain-folder workspaces](./methods/workspace.md#plain-folder-workspaces) work directly in
