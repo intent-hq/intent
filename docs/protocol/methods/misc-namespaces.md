@@ -54,7 +54,7 @@ count.
 { "jsonrpc":"2.0","id":50,"method":"specialist.list","params":{ "provider":"codex" } }
 // ← response — resolvedModel/resolvedProvider omitted when the provider CLI default applies
 { "jsonrpc":"2.0","id":50,"result":{ "specialists": [
-  { "id":"implementor","name":"Implementor","description":"...","source":"bundled",
+  { "id":"developer","name":"Developer","description":"...","source":"bundled",
     "reasoningEffort":"high",
     "resolvedModel":"gpt-5.3-codex","resolvedProvider":"codex" } ] } }
 ```
@@ -124,7 +124,7 @@ a hand-written `[specialists] dir` in config.toml; the `--specialists-dir` serve
 the env var pre-runtime, so the flag wins over an inherited env value, and an empty value counts
 as unset — no replacement) wholesale-**replaces** the base tier: the embedded bundle and the
 on-disk bundled `resources/specialists/` directory are both excluded, and the named directory
-becomes the sole base (`bundled`, read-only) tier — shipped ids (`implementor`, `spec-writer`, …)
+becomes the sole base (`bundled`, read-only) tier — shipped ids (`developer`, `pr-reviewer`, …)
 resolve only when present there or in the user/project tiers, which fold on top **unchanged**
 (same precedence, inherit-on-omit folds, and file watching as below; the replacement directory
 itself is static and unwatched, like the bundled tier it replaces). A missing or empty
@@ -301,7 +301,7 @@ never resurrects shipped bundles the operator excluded.
   tool description (the `ws.agent.delegate` docs), and the delegating agent passes its pick as
   the explicit `model` param (resolution step 1).
 - **Picker metadata (`role?` / `teamAgents?` / `icon?`) (additive,
-  [intent-hq/intentd#1477](https://github.com/intent-hq/intentd/pull/1477))** — render-only
+  [intent-hq/intentd#1477](https://github.com/intent-hq/intentd/pull/1477))** —
   metadata for client specialist pickers; none of the three fields is ever consulted at
   delegation time.
   - **`role?`** — the picker-orchestration enum: `"orchestrator"` (powers the team-mode card)
@@ -312,6 +312,9 @@ never resurrects shipped bundles the operator excluded.
     `-32602`. Reads are **lenient**: an out-of-enum on-disk value is normalized to an
     **omitted** key (which inherits), like an unparseable `teamAgents` — `list`/`get` never
     serve a value the strict write validation would reject when a client echoes the def back.
+    `"orchestrator"` applies the spawn-time file-editing tool restrictions, captured
+    in the session's `specialistIsOrchestrator` metadata. Older sessions retain
+    their captured role and harness-pinned defaults.
   - **`icon?`** — names a client-side avatar design. An inherited config scalar (omit
     inherits, explicit `""` clears). Icon names are free-form — no enum — but `create`/`edit`
     reject a non-string value with `-32602`.
@@ -335,6 +338,11 @@ never resurrects shipped bundles the operator excluded.
     `icon`. The picker/routing-metadata keys (including `aliases`, below) are the only
     frontmatter allowed to diverge between the v1 and v1.1 bundled copies (the goldens pin
     every other key to its v1 value).
+    Harness 3.8 no longer bundles `spec-writer` (Coordinator/Lead), `implementor`,
+    or `verifier`. Neither `coordinator` nor `lead` resolves from the current
+    bundled tier. Omit `specialist` when delegating to create a general agent.
+    Historical bundles and user/project definitions remain available in their
+    existing scopes.
 - **Specialist aliases (`aliases?`) (additive,
   [intent-hq/intentd#1488](https://github.com/intent-hq/intentd/pull/1488))** — a
   specialist's alternate ids: spawn/delegation callers may address the specialist by any

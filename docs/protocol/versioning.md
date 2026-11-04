@@ -64,6 +64,15 @@ index without `nextToken`, which clients read as complete. Older apps see the ne
 page only.
 
 
+**Prepared specialist simplification (no method-catalog change).**
+Harness 3.8 removes the built-in Coordinator/Lead (`spec-writer`), Implementor,
+and Verifier from the current catalog. Delegation without a `specialist` creates
+a general agent; callers may still explicitly select an available custom specialist.
+Developer plans and delegates as needed. Prior session snapshots and harness
+bundles remain unchanged. The `role` enum remains `"orchestrator"`, `"internal"`,
+or explicit `""`. Deploy matching daemon and frontend support, daemon first. See
+[specialist picker metadata](./methods/misc-namespaces.md).
+
 **Version 15.3 — plain-folder workspaces (additive).**
 [Plain-folder workspaces](./methods/workspace.md#plain-folder-workspaces) work directly in
 an ordinary folder with no git repository. They add the presence-detected

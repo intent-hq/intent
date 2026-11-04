@@ -901,7 +901,7 @@ rejected before provisioning. See [manual specialist memory](./agents.md#manual-
 
 When `initialAgent.name` is omitted but a `specialist` is supplied, the agent's name
 defaults to the specialist's resolved display name (frontmatter `name`, 3-tier
-project > user > bundled — e.g. "Coordinator" for `spec-writer`) and remains a
+project > user > bundled — e.g. "Developer" for `developer`) and remains a
 generated name eligible for the opening-turn self-rename (same rename-guard
 semantics as `agent.create` §5.5); an UNKNOWN `specialist` — one that
 resolves to no known id or alias — is rejected with `-32602` naming the id and the
