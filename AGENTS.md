@@ -281,7 +281,7 @@ with no rollback.
   explain evidence, interruption and seven-day tree retention. `RESUME=1` skips verified passes for
   the same worktree, submodule pointers, toolchain, lockfile and effective settings (`GATE_FORCE=1`
   ignores them). To continue past a known flake, `RESUME=1 NO_FAIL_FAST=1 make test-changed` (or
-  `make test`) runs the rest to completion, records them, and exits non-zero if anything failed ([intent-hq/intent#5645](https://github.com/intent-hq/intent/issues/5645)).
+  `make test`, `make fe-verify-changed`) runs the rest to completion, records them, and exits non-zero if anything failed ([intent-hq/intent#5645](https://github.com/intent-hq/intent/issues/5645)).
 - Run long gates as saved command-mode `ws.script` entries: `ws.script.start`, then
   `ws.script.monitor(scriptId, { ttlMs, runId })` with the start reply's `runId` and a TTL
   of expected runtime plus margin. End the turn only once registration succeeds; on a
