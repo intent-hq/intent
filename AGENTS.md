@@ -69,8 +69,8 @@ Start the smallest long-running target as a workspace service:
 - `make dev-sandbox-ui` — named component previews only.
 - `make dev-sandbox-app` — complete web renderer against the installed daemon or
   `INTENTD_SOCKET`.
-- `make dev-sandbox-stack` — isolated intentd plus renderer; dev profile by default,
-  `INTENTD_PROFILE=release` opt-in, or `INTENTD_BIN=/path/to/intentd` for a prebuilt binary.
+- `make dev-sandbox-stack` — isolated intentd plus renderer (`INTENTD_PROFILE=release`,
+  `INTENTD_BIN=/path`); `MOCK_AGENT=1` swaps in a scripted agent, no provider sign-in.
 
 Each ready sandbox records `.dev/sandbox/<mode>.json`. Use `make sandbox-stop` only for
 an unmanaged or orphaned sandbox;

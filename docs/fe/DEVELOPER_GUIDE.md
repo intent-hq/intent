@@ -78,6 +78,18 @@ gets a startup warning and a `null` `userSpecialistsDir` instead. The first tunn
 hydration of a fresh, pre-warmed app takes roughly one to three minutes depending on host
 load. Follow the root health wait and keep waiting if the splash remains.
 
+To test chat or agent UI without signing in to a real provider, start the stack with
+`MOCK_AGENT=1 make dev-sandbox-stack`. The daemon then runs the scripted e2e agent
+(`packages/cloudlands-fe/e2e/mock-acp-agent.js`) as provider `mock` and makes it the
+default, so new chats and agents reply with a fixed message after a few seconds. Set
+`MOCK_AGENT_BEHAVIOR` (JSON) or `MOCK_AGENT_BEHAVIOR_FILE` (re-read every turn) to change
+the reply; the script header lists the options. The mock default lives in its own
+`$DEV_DATA_DIR/config.mock-agent.toml` (recorded as `mockAgentConfig`), so a later run
+without the switch keeps its ordinary settings. Chats created on the mock provider stay in
+the shared database and fail to resume without the switch; use a separate `DEV_DATA_DIR`
+to keep them apart. The switch is stack-only: app mode uses the installed daemon, which it
+cannot reconfigure.
+
 ### Open a Chat or Note in the App Sandbox
 
 To check a change inside a real agent chat or note, open the workspace route with a

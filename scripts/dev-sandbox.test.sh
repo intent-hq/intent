@@ -6,7 +6,8 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 script="$repo_root/scripts/dev-sandbox.sh"
 temp_dir=$(mktemp -d)
 # Never inherit a real daemon override or filesystem root into these fixtures.
-unset INTENTD_BIN INTENTD_PROFILE INTENTD_SOCKET INTENTD_WORKSPACES_DIR INTENTD_ASSERT_HERMETIC_ROOT
+unset INTENTD_BIN INTENTD_PROFILE INTENTD_SOCKET INTENTD_WORKSPACES_DIR INTENTD_ASSERT_HERMETIC_ROOT \
+  INTENTD_CONFIG MOCK_AGENT MOCK_AGENT_SCRIPT_PATH MOCK_AGENT_BEHAVIOR MOCK_AGENT_BEHAVIOR_FILE
 export DEV_DATA_DIR="$temp_dir/default-data"
 sandbox_pid=""
 foreign_pid=""
@@ -186,6 +187,10 @@ import sys
 if os.environ.get("FE_SOCKET_LOG"):
     with open(os.environ["FE_SOCKET_LOG"], "w", encoding="utf-8") as handle:
         handle.write(os.environ["INTENTD_SOCKET"])
+if os.environ.get("FE_ENV_LOG"):
+    keys = ("INTENTD_CONFIG", "MOCK_AGENT_SCRIPT_PATH", "MOCK_AGENT_BEHAVIOR")
+    with open(os.environ["FE_ENV_LOG"], "w", encoding="utf-8") as handle:
+        json.dump({key: os.environ.get(key) for key in keys}, handle)
 if os.environ.get("FE_IGNORE_TERM") == "1":
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -246,6 +251,23 @@ chmod +x "$temp_dir/bin/cargo"
 
 cat >"$temp_dir/fake intentd" <<'SH'
 #!/usr/bin/env bash
+if [[ ${1:-} == settings ]]; then
+  # One-shot settings CLI: record what the sandbox asked for, then exit.
+  python3 - "$@" <<'PY'
+import json
+import os
+import sys
+record = {"args": sys.argv[1:], "INTENTD_DATA_DIR": os.environ.get("INTENTD_DATA_DIR"),
+          "INTENTD_CONFIG": os.environ.get("INTENTD_CONFIG")}
+with open(os.path.join(os.environ["INTENTD_DATA_DIR"], "settings-calls.jsonl"), "a", encoding="utf-8") as handle:
+    handle.write(json.dumps(record) + "\n")
+PY
+  if [[ ${FAKE_SETTINGS_HANG:-0} == 1 ]]; then
+    # timing-guard: stands in for a daemon that never answers; the sandbox must kill it
+    exec python3 -c 'import time; time.sleep(120)' fake-settings-hang
+  fi
+  exit "${FAKE_SETTINGS_EXIT:-0}"
+fi
 exec python3 - "$INTENTD_DATA_DIR/intentd.sock" <<'PY'
 import json
 import os
@@ -253,7 +275,8 @@ import socket
 import sys
 path = sys.argv[1]
 keys = ("INTENTD_DATA_DIR", "INTENTD_WORKSPACES_DIR", "INTENTD_ASSERT_HERMETIC_ROOT",
-        "INTENTD_LEGACY_IMPORT_ROOTS", "INTENTD_TCP_PORT", "INTENTD_USER_SPECIALISTS_DIR")
+        "INTENTD_LEGACY_IMPORT_ROOTS", "INTENTD_TCP_PORT", "INTENTD_USER_SPECIALISTS_DIR",
+        "INTENTD_CONFIG", "MOCK_AGENT_SCRIPT_PATH", "MOCK_AGENT_BEHAVIOR", "MOCK_AGENT_BEHAVIOR_FILE")
 with open(os.path.join(os.environ["INTENTD_DATA_DIR"], "daemon-env.json"), "w", encoding="utf-8") as handle:
     json.dump({key: os.environ.get(key) for key in keys}, handle)
 try: os.unlink(path)
@@ -285,6 +308,22 @@ expected = {"INTENTD_DATA_DIR": data_dir,
 for key, value in expected.items():
     assert values[key] == value, (key, values[key], value)
 assert os.path.isdir(os.path.join(data_dir, "specialists")), "sandbox specialists dir was not created"
+PY
+}
+
+# Without MOCK_AGENT the daemon sees no mock-provider setup at all and keeps
+# its ordinary config.toml.
+assert_mock_agent_off() {
+  python3 - "$1" <<'PY' || fail "a stack without MOCK_AGENT=1 received mock-agent settings"
+import json
+import os
+import sys
+data_dir = sys.argv[1]
+with open(os.path.join(data_dir, "daemon-env.json"), encoding="utf-8") as handle:
+    values = json.load(handle)
+for key in ("INTENTD_CONFIG", "MOCK_AGENT_SCRIPT_PATH", "MOCK_AGENT_BEHAVIOR", "MOCK_AGENT_BEHAVIOR_FILE"):
+    assert values[key] is None, (key, values[key])
+assert not os.path.exists(os.path.join(data_dir, "settings-calls.jsonl")), "default provider was changed"
 PY
 }
 
@@ -320,8 +359,11 @@ state = json.load(open(sys.argv[1], encoding="utf-8"))
 assert state["intentdSource"] == "dev" and state["tcpPort"] == 43211
 assert isinstance(state["socket"], str) and state["socket"].endswith("/intentd.sock")
 assert state["userSpecialistsDir"] == sys.argv[2], (state["userSpecialistsDir"], sys.argv[2])
+assert state["mockAgent"] is False and state["mockAgentConfig"] is None
 PY
+assert_mock_agent_off "$data_dir"
 SANDBOX_STATE_DIR="$state_dir" "$BASH" "$script" status >"$temp_dir/stack-status.out" 2>&1 || fail "stack status failed"
+! grep -q "mockAgent=1" "$temp_dir/stack-status.out" || fail "default stack status claimed a mock agent"
 grep -qF "specialists=$data_dir/specialists" "$temp_dir/stack-status.out" || fail "status did not report the sandbox specialists dir: $(cat "$temp_dir/stack-status.out")"
 grep -qF "Specialists (user tier): $data_dir/specialists" "$temp_dir/stack.out" || fail "stack did not log its specialists dir"
 assert_build_args "$cargo_log" dev
@@ -414,6 +456,128 @@ PY
 kill -TERM "$sandbox_pid"
 wait "$sandbox_pid" 2>/dev/null || true
 sandbox_pid=""
+
+# MOCK_AGENT=1 hands the isolated daemon the scripted e2e agent, a separate
+# config file, and makes "mock" its default provider once the socket is up.
+mkdir -p "$temp_dir/fe/e2e"
+touch "$temp_dir/fe/e2e/mock-acp-agent.js"
+port=$(free_port)
+mock_data_dir="$temp_dir/mock data"
+PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" DEV_DATA_DIR="$mock_data_dir" \
+  SANDBOX_STATE_DIR="$state_dir" MOCK_AGENT=1 \
+  INTENTD_WORKSPACES_DIR="$temp_dir/ordinary workspaces" INTENTD_ASSERT_HERMETIC_ROOT=0 \
+  INTENTD_BIN="$temp_dir/fake intentd" HEALTH_MODE=ok SANDBOX_READY_TIMEOUT="$ready_timeout" \
+  FE_ENV_LOG="$temp_dir/mock-fe-env.json" \
+  "$BASH" "$script" stack >"$temp_dir/mock.out" 2>&1 &
+sandbox_pid=$!
+wait_for_ready "$temp_dir/mock.out" || fail "MOCK_AGENT=1 stack did not become ready: $(cat "$temp_dir/mock.out")"
+assert_daemon_isolated "$mock_data_dir"
+python3 - "$mock_data_dir" "$temp_dir/fe/e2e/mock-acp-agent.js" "$state_dir/stack.json" <<'PY' || fail "MOCK_AGENT=1 did not configure the mock provider: $(cat "$temp_dir/mock.out")"
+import json
+import os
+import sys
+data_dir, script, state_path = sys.argv[1:]
+config = os.path.join(data_dir, "config.mock-agent.toml")
+with open(os.path.join(data_dir, "daemon-env.json"), encoding="utf-8") as handle:
+    values = json.load(handle)
+assert values["MOCK_AGENT_SCRIPT_PATH"] == script, values
+assert values["INTENTD_CONFIG"] == config, values
+assert "response" in json.loads(values["MOCK_AGENT_BEHAVIOR"]), values
+with open(os.path.join(data_dir, "settings-calls.jsonl"), encoding="utf-8") as handle:
+    calls = [json.loads(line) for line in handle]
+assert calls == [{"args": ["settings", "model.defaultProvider", "mock"],
+                  "INTENTD_DATA_DIR": data_dir, "INTENTD_CONFIG": config}], calls
+state = json.load(open(state_path, encoding="utf-8"))
+assert state["mockAgent"] is True and state["mockAgentConfig"] == config, state
+PY
+grep -q "Mock agent: .* is the default provider" "$temp_dir/mock.out" || fail "MOCK_AGENT=1 was not announced"
+python3 - "$temp_dir/mock-fe-env.json" <<'PY' || fail "mock-agent settings leaked into the frontend: $(cat "$temp_dir/mock-fe-env.json")"
+import json
+import sys
+values = json.load(open(sys.argv[1], encoding="utf-8"))
+assert all(value is None for value in values.values()), values
+PY
+SANDBOX_STATE_DIR="$state_dir" "$BASH" "$script" status >"$temp_dir/mock-status.out" 2>&1 || fail "mock stack status failed"
+grep -q "mockAgent=1" "$temp_dir/mock-status.out" || fail "status did not report the mock agent: $(cat "$temp_dir/mock-status.out")"
+kill -TERM "$sandbox_pid"
+wait "$sandbox_pid" 2>/dev/null || true
+sandbox_pid=""
+
+# A caller-supplied reply wins over the sandbox default.
+port=$(free_port)
+PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" DEV_DATA_DIR="$temp_dir/mock-file data" \
+  SANDBOX_STATE_DIR="$state_dir" MOCK_AGENT=1 MOCK_AGENT_BEHAVIOR_FILE="$temp_dir/behavior.json" \
+  INTENTD_BIN="$temp_dir/fake intentd" HEALTH_MODE=ok SANDBOX_READY_TIMEOUT="$ready_timeout" \
+  "$BASH" "$script" stack >"$temp_dir/mock-file.out" 2>&1 &
+sandbox_pid=$!
+wait_for_ready "$temp_dir/mock-file.out" || fail "MOCK_AGENT=1 stack with a behavior file did not become ready"
+python3 - "$temp_dir/mock-file data" "$temp_dir/behavior.json" <<'PY' || fail "MOCK_AGENT=1 overrode a caller-supplied behavior file"
+import json
+import os
+import sys
+with open(os.path.join(sys.argv[1], "daemon-env.json"), encoding="utf-8") as handle:
+    values = json.load(handle)
+assert values["MOCK_AGENT_BEHAVIOR"] is None and values["MOCK_AGENT_BEHAVIOR_FILE"] == sys.argv[2], values
+PY
+kill -TERM "$sandbox_pid"
+wait "$sandbox_pid" 2>/dev/null || true
+sandbox_pid=""
+
+# A failed settings call is fatal: the caller asked for a mock default.
+port=$(free_port)
+set +e
+PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" DEV_DATA_DIR="$temp_dir/mock-fail data" \
+  SANDBOX_STATE_DIR="$state_dir" MOCK_AGENT=1 FAKE_SETTINGS_EXIT=3 \
+  INTENTD_BIN="$temp_dir/fake intentd" HEALTH_MODE=ok SANDBOX_READY_TIMEOUT="$ready_timeout" \
+  "$BASH" "$script" stack >"$temp_dir/mock-fail.out" 2>&1
+status=$?
+set -e
+[[ "$status" -eq 1 ]] || fail "failed mock default returned $status instead of 1: $(cat "$temp_dir/mock-fail.out")"
+grep -q "could not make the mock agent the default provider" "$temp_dir/mock-fail.out" || fail "failed mock default was not explained"
+! grep -q '^Sandbox ready:' "$temp_dir/mock-fail.out" || fail "failed mock default still announced readiness"
+[[ ! -e "$state_dir/stack.json" ]] || fail "failed mock default left stack state"
+wait_until no_process_matches "$temp_dir/mock-fail data/intentd.sock" || true
+pgrep -f "$temp_dir/mock-fail data/intentd.sock" >/dev/null && fail "failed mock default left an intentd descendant"
+
+# A settings call that never answers fails within the readiness budget and
+# is cleaned up, instead of holding the sandbox (and its signal traps) forever.
+port=$(free_port)
+set +e
+PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" DEV_DATA_DIR="$temp_dir/mock-hang data" \
+  SANDBOX_STATE_DIR="$state_dir" MOCK_AGENT=1 FAKE_SETTINGS_HANG=1 \
+  INTENTD_BIN="$temp_dir/fake intentd" HEALTH_MODE=ok SANDBOX_READY_TIMEOUT=3 \
+  "$BASH" "$script" stack >"$temp_dir/mock-hang.out" 2>&1
+status=$?
+set -e
+[[ "$status" -eq 1 ]] || fail "hung mock default returned $status instead of 1: $(cat "$temp_dir/mock-hang.out")"
+grep -q "did not accept the mock default provider within 3s" "$temp_dir/mock-hang.out" || fail "hung mock default was not explained: $(cat "$temp_dir/mock-hang.out")"
+[[ ! -e "$state_dir/stack.json" ]] || fail "hung mock default left stack state"
+wait_until no_process_matches "fake-settings-hang" "$temp_dir/mock-hang data/intentd.sock" || true
+pgrep -f "fake-settings-hang" >/dev/null && fail "hung mock default left the settings call running"
+pgrep -f "$temp_dir/mock-hang data/intentd.sock" >/dev/null && fail "hung mock default left an intentd descendant"
+
+# A missing agent script, a bad value, or a non-stack mode is rejected up front.
+rm "$temp_dir/fe/e2e/mock-acp-agent.js"
+set +e
+PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$(free_port)" DEV_DATA_DIR="$temp_dir/mock-missing data" \
+  SANDBOX_STATE_DIR="$state_dir" MOCK_AGENT=1 INTENTD_BIN="$temp_dir/fake intentd" \
+  "$BASH" "$script" stack >"$temp_dir/mock-missing.out" 2>&1
+status=$?
+set -e
+{ [[ "$status" -eq 1 ]] && grep -q "needs the scripted agent at" "$temp_dir/mock-missing.out"; } \
+  || fail "missing mock agent script was not rejected: $status $(cat "$temp_dir/mock-missing.out")"
+for mock_case in stack:yes app:1 ui:1; do
+  mock_mode=${mock_case%%:*}
+  mock_value=${mock_case#*:}
+  set +e
+  PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$(free_port)" SANDBOX_STATE_DIR="$state_dir" \
+    MOCK_AGENT="$mock_value" INTENTD_BIN="$temp_dir/fake intentd" INTENTD_SOCKET="$temp_dir/absent.sock" \
+    "$BASH" "$script" "$mock_mode" >"$temp_dir/mock-reject.out" 2>&1
+  status=$?
+  set -e
+  { [[ "$status" -eq 2 ]] && grep -q "MOCK_AGENT" "$temp_dir/mock-reject.out"; } \
+    || fail "MOCK_AGENT=$mock_value for $mock_mode was not rejected: $status $(cat "$temp_dir/mock-reject.out")"
+done
 
 # App mode connects to the selected installed daemon and leaves its lifetime
 # alone. This independent stub stands in for that daemon inside the fixture.
