@@ -135,7 +135,7 @@ migrated from `packages/cloudlands-fe/docs/` after an accuracy audit:
 
 **Release engineering**
 
-- [RELEASING.md](./RELEASING.md) — cross-component release pipeline (channels, workflows, secrets, ordering, guardrails, release notifier and how to link fix PRs to issues)
+- [RELEASING.md](./RELEASING.md) — cross-component release pipeline (channels, workflows, secrets, ordering, guardrails, release notifier and how to link fix PRs to issues, landing security fixes)
 - [fe/RELEASING.md](./fe/RELEASING.md) — release process (beta/stable channels)
 - [fe/DEPLOYING.md](./fe/DEPLOYING.md) — deployment infrastructure, runners, and feeds
 - [SCCACHE_SERVER.md](./SCCACHE_SERVER.md) — self-hosted sccache WebDAV cache server: provisioning, tokens and rotation, prune tuning, health check, rollback (config in `infra/sccache/`)

@@ -149,6 +149,47 @@ comparison is confined to `ruleset-drift.yml`, which runs main's code; `ruleset-
 runs the script from the PR head or merged tree, so it never receives the token and
 skips the bypass actors.
 
+## Landing a security fix
+
+A privately reported vulnerability is discussed in private, but its fix lands on `main`
+like any other change. Plan for that from the start: a pull request opened in a GitHub
+Security Advisory's temporary private fork **cannot be merged**. The `main` rules of
+intent, intentd and cloudlands-fe (`.github/rulesets/*.main.json`) require the merge
+queue and required status checks, and the only bypass actor is the `intent-hq-ci`
+release account on the two component rulesets (`.github/rulesets/*.bypass.json`). An
+advisory merge is therefore always refused by the repository rules, which keep CI on
+`main` on purpose. Discovering that at merge time means rebasing the work and reopening
+it as ordinary PRs.
+
+| Stage | Where | Notes |
+|---|---|---|
+| Report, triage, impact, severity, credit | The draft advisory on [intent-hq/intent](https://github.com/intent-hq/intent/security/advisories) ([SECURITY.md](../SECURITY.md)), or on the affected component repo | Keep reproduction details and exploit discussion here only. |
+| Draft and private review of the fix | The advisory's temporary private fork | Private forks run **no CI** and accept **reviews only, no PR comments**: leave feedback as a review, and run the gates locally (`make gate`, `make fe-verify-changed`). |
+| Land the fix | An ordinary PR on the component repo, through the merge queue | See the neutral-wording rules below. Merging still needs explicit human permission. |
+| Ship | The normal alpha train | Track it with `make shipped-in` like any fix ([AGENTS.md](../AGENTS.md#release-process)). |
+| Disclose | Publish the advisory | Only after the fixed build is released; name the fixed version and link the fix PRs. |
+
+Rules for the public PR, until the advisory is published:
+
+- Branch from the component's `origin/main` (push the private-fork branch there if it
+  was drafted in the fork), and file the PR on the component repo.
+- Use a neutral conventional-commit title, PR body and commit messages that describe
+  the behavior change (for example `fix: validate request parameters`), not the
+  attack. Do not mention the vulnerability, its impact, an exploit, the advisory or
+  its GHSA ID.
+- Do not add a regression test or fixture that is a working exploit; test the
+  corrected behavior instead.
+- There is no public issue to close, so the `Fixes intent-hq/intent#N` rule does not
+  apply. Do not file one.
+- Cross-component fixes follow the usual
+  [ordering](../AGENTS.md#cross-component-features-intentd--cloudlands-fe): open the
+  intentd and cloudlands-fe PRs in parallel and land intentd first when the protocol
+  changes.
+
+After the fix ships in an alpha, publish the advisory with the carrying cloudlands-fe
+version as the first patched release. The fix PRs and their commits can then be linked
+from the advisory.
+
 ## Intel Mac release policy — pending rollout
 
 The approved policy builds Intel Mac binaries only for actual tagged daemon,
