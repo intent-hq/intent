@@ -537,7 +537,9 @@ machine was named.
 `placement.nodeId` names an exposed machine; `os` / `arch` filter. With
 `target: "remote"` and no `nodeId`, the backend:
 
-1. keeps machines whose platform matches, whose provider is installed (not
+1. keeps machines whose platform matches, whose report lists the provider (a
+   machine leaves out providers disabled in its own settings, see
+   [enabled providers](../node-link.md#capabilities-report)) as installed (not
    `cli-missing` or `prerequisite-missing`), and that list the requested model
    (or no model was requested);
 2. for a launch without a profile, also skips machines whose provider status is
@@ -562,7 +564,8 @@ all of these hold, judged on the agent's machine's cached
 
 1. the target reference is
    [remote-compatible](./provider-profiles.md#remote-compatibility);
-2. the machine reports the target base provider as usable under the placement
+2. the machine's report lists the target base provider (it omits providers
+   disabled in the machine's own settings) as usable under the placement
    rules: installed (not `cli-missing` or `prerequisite-missing`), and for a
    target without profile environment also not `signed-out` or `auth-failed`;
 3. the machine lists the model, under the same alias rule as placement; the
@@ -593,7 +596,11 @@ remains a start-path safety net: a remote start whose provider or model changed
 by any route other than a validated `agent.setModel` or
 [quota failover](./provider-profiles.md#backup-failover) fails with a message
 starting `remote-model-change-unsupported:`. Quota failover is the other
-accepted switch, and it too picks only remote-compatible backups.
+accepted switch, and it too picks only remote-compatible backups. A switch or
+failover that still reaches the machine on a provider disabled there (its
+settings changed after the cached report) is refused by the machine with
+`node-provider-unavailable` before any process starts, and surfaces as a remote
+start failure.
 
 ##### Ending a remote agent for good
 
