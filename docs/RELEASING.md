@@ -171,8 +171,9 @@ it as ordinary PRs.
 
 Rules for the public PR, until the advisory is published:
 
-- Branch from the component's `origin/main` (push the private-fork branch there if it
-  was drafted in the fork), and file the PR on the component repo.
+- Branch from the component's `origin/main` under a neutral branch name (if the fix
+  was drafted in the private fork, push its commits to a new neutral branch rather than
+  reusing the fork's branch name), and file the PR on the component repo.
 - Use a neutral conventional-commit title, PR body and commit messages that describe
   the behavior change (for example `fix: validate request parameters`), not the
   attack. Do not mention the vulnerability, its impact, an exploit, the advisory or
