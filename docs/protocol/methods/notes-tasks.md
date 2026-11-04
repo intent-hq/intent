@@ -335,6 +335,7 @@ string to pass back for the next page, or `null` on the last page.
 | note.list | `createdAt`, then `id` | 200 / 500 notes | `{ notes, nextToken }` |
 | comment.list | latest activity first, then `threadId` | 100 / 500 threads | `{ threads, totalThreads, totalComments, nextToken }` |
 | note.listTasks | line order | 1,000 / 2,000 rows | `{ tasks, nextToken }` (was a bare array) |
+| task.list *(paged only with `limit` or `nextToken`)* | `createdAt`, then `id` | 200 / 1,000 tasks | `{ tasks, stats, nextToken }` |
 
 - `limit` above the maximum is clamped to it. `limit` that is not a positive integer
   is `-32602` (`limit must be a positive integer`); `nextToken` that is not a non-empty
@@ -345,6 +346,11 @@ string to pass back for the next page, or `null` on the last page.
 - Paging is a keyset walk over the current rows, not a snapshot: a row created or
   moved behind the cursor between pages is not served on a later page. Use the
   subscription deltas (or a fresh first page) to stay complete.
+- `task.list` keeps its whole-list reply `{ tasks, stats }` when neither `limit` nor
+  `nextToken` is sent. With either, it answers one page plus `nextToken`; each paged row
+  also carries `workspaceId`, `stats` is the same workspace-wide rollup on every page,
+  and `status` filters each page. The
+  `task.subscribe` seq-0 snapshot's `nextToken` continues through it.
 - `comment.list` sorts by `lastActivity`, which a reply changes, so its walk runs in
   rounds and never skips a thread replied to mid-walk. A round serves the threads whose
   activity is no newer than the newest activity when the round began; threads that gain
@@ -362,6 +368,10 @@ string to pass back for the next page, or `null` on the last page.
   starts with the same row (same `lineNumber`) carrying the rest of `text` from UTF-8
   byte `textOffset`. Concatenate the `text` of consecutive rows that share a
   `lineNumber` to rebuild the full text; nothing is skipped.
+  A paged `task.list` row whose `title` alone overflows is served with a prefix of
+  its `title` (cut on a character boundary); `note.get` has the full title. A
+  `task.subscribe` snapshot row that alone overflows is cut like a `note.list` full
+  row.
 - **Full `content` of a cut list row.** A cut `note.list` / `note.subscribe` row is
   completed through `note.get`: request `contentOffset` = the UTF-8 byte length of the
   served `content` and follow `nextContentOffset` (below).
@@ -393,7 +403,8 @@ This keeps a client that only ever saw the cut prefix from replacing the full te
 
 **Subscriptions.** `note.subscribe` and `comment.subscribe` page their seq-0 snapshot by
 default and accept `limit` (same defaults and maximums as `note.list` /
-`comment.list`); see
+`comment.list`); `task.subscribe` pages its snapshot by default (200 task notes) and
+continues through the paged `task.list`; see
 [§6.9 paged snapshots](../06-events.md#69-snapshotdelta-subscription-channels-new-in-intentd).
 
 ### 5.2.1 `note.lineAttribution.*`
@@ -836,7 +847,7 @@ agent reports an infrastructure/environment blocker it cannot resolve; like
 
 | Method | Params | Result |
 | --- | --- | --- |
-| task.list | workspaceId (req), status? | { tasks: WorkspaceTask[], stats: WorkspaceTaskStats } — `tasks` membership is **workspace-wide** *(widened within 6.17; [intent-hq/intentd#1214](https://github.com/intent-hq/intentd/pull/1214))*: EVERY task note in the workspace (any note with task metadata except the spec itself) — direct spec children, subtasks (children of tasks), and unlinked tasks alike; stored note order, deduped by id. Each row carries the always-serialized `specLinked` flag (additive, always present): `true` iff the task id appears in the spec note body's `intent://local/task/{id}` links, `false` otherwise (including every row when the spec has no links; not conditioned on `parent_id`) — plus the additive `parentId?` field (presence-detected, omitted when the backing note has no parent): the note's parent pointer, so clients can distinguish subtasks (parent is another task) from unlinked top-level tasks and reconstruct the hierarchy from `task.list` alone. The optional `status` filter narrows `tasks` only. `stats` is UNCHANGED — still the `{ total, completed, inProgress }` aggregate over the **spec-linked** set (§5.1 card aggregates — same `computeTaskStats` projection: `cancelled` is excluded from `total`, `complete` counts as `completed`, `in_progress` + `review_required` count as `inProgress`) served alongside the filtered task list — **including its no-links fallback**: a spec with no `intent://local/task/{id}` links still counts all direct child task notes in `stats`, while every `tasks` row in that same response reports `specLinked: false` — so clients must NOT correlate `stats` membership with the `specLinked` flag in the no-links case. Each `WorkspaceTask` row also carries the relation fields `dependsOn?` / `conflictsWith?` / computed `unmetDependsOn?` (v6.8; presence-detected, omitted when empty — see task.setRelations) |
+| task.list | workspaceId (req), status?, limit?, nextToken? | { tasks: WorkspaceTask[], stats: WorkspaceTaskStats, nextToken? } — `nextToken` when paged ([bounded reads](#bounded-note-and-comment-reads)); `tasks` membership is **workspace-wide** *(widened within 6.17; [intent-hq/intentd#1214](https://github.com/intent-hq/intentd/pull/1214))*: EVERY task note in the workspace (any note with task metadata except the spec itself) — direct spec children, subtasks (children of tasks), and unlinked tasks alike; stored note order, deduped by id. Each row carries the always-serialized `specLinked` flag (additive, always present): `true` iff the task id appears in the spec note body's `intent://local/task/{id}` links, `false` otherwise (including every row when the spec has no links; not conditioned on `parent_id`) — plus the additive `parentId?` field (presence-detected, omitted when the backing note has no parent): the note's parent pointer, so clients can distinguish subtasks (parent is another task) from unlinked top-level tasks and reconstruct the hierarchy from `task.list` alone. The optional `status` filter narrows `tasks` only. `stats` is UNCHANGED — still the `{ total, completed, inProgress }` aggregate over the **spec-linked** set (§5.1 card aggregates — same `computeTaskStats` projection: `cancelled` is excluded from `total`, `complete` counts as `completed`, `in_progress` + `review_required` count as `inProgress`) served alongside the filtered task list — **including its no-links fallback**: a spec with no `intent://local/task/{id}` links still counts all direct child task notes in `stats`, while every `tasks` row in that same response reports `specLinked: false` — so clients must NOT correlate `stats` membership with the `specLinked` flag in the no-links case. Each `WorkspaceTask` row also carries the relation fields `dependsOn?` / `conflictsWith?` / computed `unmetDependsOn?` (v6.8; presence-detected, omitted when empty — see task.setRelations) |
 | task.get | workspaceId (req), taskNoteId (req) | { task: WorkspaceTask } — unknown id → `-32602 Task not found`. Same `specLinked` flag (computed from the spec note body), `parentId?`, and relation fields as the task.list rows (v6.8) |
 | task.removeAgentFromAllTasks | workspaceId (req), agentId (req) | { ok, updatedCount } — strips `agentId` from every task-note's `assignedAgentIds` in the workspace; called from agent teardown (delete-agent, wake-or-create stale-assignment cleanup). Idempotent: absent `agentId` → `updatedCount: 0`. |
 | task.linkAgent | workspaceId (req), noteId (req), taskText (req), agentId (req), taskKey? | { link: TaskAgentLink } — upsert on `(workspace_id, note_id, task_key)`. `taskKey` defaults to `taskText` when omitted, matching the FE derivation `association.taskKey ?? association.taskText`. `createdAt` is set to the current epoch-ms. Emits `task:agent-linked`. |
