@@ -142,9 +142,11 @@ remain. `nextToken` is a string when more hits follow and `null` when the list i
 `requestId` may change); a malformed token or one from a different search is `-32602`
 `"invalid-params"`. The token is opaque and resumes after the page's last hit by its position
 in the ranked order (a keyset, not a count), re-anchoring on the page's recent hits at their
-current ranks. Deleting, archiving or editing a note already served therefore never skips a
-hit that still matches. A page may repeat a hit whose own rank rose, or include a note that
-newly matches. A hit edited to rank higher than the page end before it is served moves onto an
+current ranks. Deleting, archiving or editing a note already served therefore normally never
+skips a hit that still matches. If every recent hit of the page was deleted or edited before the
+next request, the page resumes from the last hit's stored rank and may skip or repeat hits; rank
+changes from other notes can rarely reorder hits across the page boundary. A page may repeat a
+hit whose own rank rose, or include a note that newly matches. A hit edited to rank higher than the page end before it is served moves onto an
 earlier page and is not returned again. A single hit larger than a page (only an extremely long
 title can do this) keeps a shortened `title`, cut on a UTF-8 boundary, and adds
 `titleTruncated: true` and `titleBytes` (the full title's UTF-8 length); `note.get` reads the
