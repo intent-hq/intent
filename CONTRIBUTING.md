@@ -620,8 +620,12 @@ helper, any script that uses it), or with `FULL=1`. The merge queue still runs e
 suite. For each changed `scripts/*.mjs` with a sibling `.test.mjs`, it runs
 that test with `node --test`. Every step runs; the failures are listed at the
 end. Like CI it needs node, shellcheck and the `packages/intentd`
-submodule. It skips the Bash 3.2 pass (see above) and the sccache and runner
-steps that download tools.
+submodule. Once the suites' Bash 3 lookup finds an interpreter (after
+`make bash3`, or the stock macOS `/bin/bash`), the selected suites rerun their
+own checks under it, and it also runs the lines of the ci.yml
+`shell-tests-bash3` job that start a selected suite under `"$BASH3_BIN"`
+itself (`dev-sandbox.test.sh`, `rustc-parallel.test.sh`); without one it
+prints a skip notice. It skips the sccache and runner steps that download tools.
 
 After editing anything under `.github/`, run `make lint-workflows`. It runs the
 pinned actionlint (with shellcheck over `run:` scripts) over
