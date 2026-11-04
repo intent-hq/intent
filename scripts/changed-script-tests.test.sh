@@ -25,7 +25,7 @@ git_fixture() {
 }
 
 mkdir -p "$fixture/scripts/sub" "$fixture/scripts/fixtures" "$fixture/.github/workflows" "$fixture/packages/intentd"
-cp "$repo_root/scripts/changed-script-tests.sh" "$fixture/scripts/"
+cp "$repo_root/scripts/changed-script-tests.sh" "$repo_root/scripts/find-bash3.sh" "$fixture/scripts/"
 cat >"$fixture/.github/workflows/ci.yml" <<'EOF'
 jobs:
   other-job:
@@ -433,5 +433,82 @@ case "$status:$output" in
   "2:"*"cannot find a merge base with 'no-such-ref'"*) echo "ok - unknown BASE is reported" ;;
   *) fail "unknown BASE: exit $status: $output" ;;
 esac
+
+# The Bash 3.2 pass: the shell-tests-bash3 lines that start a selected suite
+# under "$BASH3_BIN" run when the suites' Bash 3 lookup finds an interpreter.
+# The other lines rerun a suite that already reran itself under that
+# interpreter, so they are not repeated. Last, so no other case sees the job.
+git_fixture checkout -q main
+cat >>"$fixture/.github/workflows/ci.yml" <<'EOF'
+  shell-tests-bash3:
+    steps:
+      - uses: ./.github/actions/setup-bash3
+      - run: |
+          "$BASH3_BIN" --version
+          REQUIRE_BASH3=1 bash scripts/alpha.test.sh
+          REQUIRE_BASH3=1 STARTUP_ONLY=1 "$BASH3_BIN" scripts/top.test.sh
+          "$BASH3_BIN" scripts/not-in-shell-tests.test.sh
+EOF
+git_fixture commit -q -am "add the Bash 3.2 job"
+git_fixture checkout -q feature
+reset_fixture
+# A stand-in Bash 3: it passes the lookup's version probe and logs its runs.
+stub_bash3=$temp_dir/stub-bash3
+printf '#!/bin/sh\n[ "$1" = -c ] && exit 0\necho "bash3 ran $* startup=${STARTUP_ONLY:-}"\n' >"$stub_bash3"
+chmod +x "$stub_bash3"
+bash3_plan() {
+  (cd "$fixture" && BASE=main DRY_RUN=1 BASH3_BIN=$stub_bash3 "$script_bash" scripts/changed-script-tests.sh) 2>&1
+}
+
+printf '# edit\n' >>"$fixture/scripts/top.sh"
+output=$(bash3_plan) || fail "Bash 3.2 dry run exited non-zero: $output"
+[ "$(printf '%s\n' "$output" | sed -n 's/^  //p')" = 'make lint-shell
+bash scripts/top.test.sh
+REQUIRE_BASH3=1 STARTUP_ONLY=1 "$BASH3_BIN" scripts/top.test.sh' ] ||
+  fail "Bash 3.2 pass plan: $output"
+case "$output" in
+  *"Bash 3.2 pass with $stub_bash3"*"scripts/top.test.sh"*) echo "ok - a selected suite's direct Bash 3.2 line runs when an interpreter is found" ;;
+  *) fail "Bash 3.2 pass reason: $output" ;;
+esac
+output=$(cd "$fixture" && BASE=main BASH3_BIN=$stub_bash3 "$script_bash" scripts/changed-script-tests.sh 2>&1) ||
+  fail "Bash 3.2 pass run exited non-zero: $output"
+case "$output" in
+  *"top ok"*"bash3 ran scripts/top.test.sh startup=1"*"all selected checks passed"*) echo "ok - the Bash 3.2 line runs under the found interpreter" ;;
+  *) fail "Bash 3.2 pass run output: $output" ;;
+esac
+reset_fixture
+
+printf '# edit\n' >>"$fixture/scripts/alpha.sh"
+output=$(bash3_plan) || fail "Bash 3.2 dry run exited non-zero: $output"
+[ "$(printf '%s\n' "$output" | sed -n 's/^  //p')" = 'make lint-shell
+bash scripts/alpha.test.sh' ] ||
+  fail "a suite that reruns itself under Bash 3 got a second run: $output"
+echo "ok - a suite with no direct Bash 3.2 line runs once"
+reset_fixture
+
+printf '# edit\n' >>"$fixture/Makefile"
+output=$(bash3_plan) || fail "Bash 3.2 dry run exited non-zero: $output"
+[ "$(printf '%s\n' "$output" | sed -n 's/^  //p')" = "$all_suites"'
+REQUIRE_BASH3=1 STARTUP_ONLY=1 "$BASH3_BIN" scripts/top.test.sh' ] ||
+  fail "full run Bash 3.2 pass: $output"
+echo "ok - a full run adds only the Bash 3.2 lines of shell-tests suites"
+reset_fixture
+
+# shellcheck source=scripts/find-bash3.sh
+source "$repo_root/scripts/find-bash3.sh"
+if (BASH3_BIN="" BASH3_CACHE_DIR=$temp_dir/no-bash3 find_bash3 >/dev/null); then
+  echo "ok - # SKIP missing Bash 3.2 case: this host has one outside the cache (stock macOS)"
+else
+  printf '# edit\n' >>"$fixture/scripts/top.sh"
+  output=$(cd "$fixture" && BASE=main DRY_RUN=1 BASH3_BIN="" BASH3_CACHE_DIR=$temp_dir/no-bash3 \
+    "$script_bash" scripts/changed-script-tests.sh 2>&1) || fail "dry run without Bash 3 exited non-zero: $output"
+  [ "$(printf '%s\n' "$output" | sed -n 's/^  //p')" = 'make lint-shell
+bash scripts/top.test.sh' ] || fail "plan without Bash 3: $output"
+  case "$output" in
+    *"Bash 3.2 pass skipped"*"make bash3"*) echo "ok - a missing interpreter skips the Bash 3.2 pass and says how to get one" ;;
+    *) fail "missing Bash 3 notice: $output" ;;
+  esac
+  reset_fixture
+fi
 
 echo "changed-script-tests tests passed"

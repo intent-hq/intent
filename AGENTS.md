@@ -268,20 +268,20 @@ with no rollback.
 - When the full suite is impractical, run the changed-tests target before enqueueing, never
   a hand-picked list (one missed a two-window test that failed CI on cloudlands-fe#3876):
   Rust `make test-changed` (intentd's `scripts/changed-tests.sh` vs `origin/main`, full
-  suite on manifest/lockfile/nextest-config changes; `make coverage-changed` = the PR job)
-  or frontend `make fe-verify-changed` (cloudlands-fe `verify:changed`, working tree first).
-  Both take `BASE=<ref>`, `DRY_RUN=1` (prints the plan) and `RESUME=1`. Iterate on Rust tests with
-  `make test-select E='<filterset>'`, not raw `cargo nextest`, which skips fixture setup (95
-  bogus failures, intentd#2559); to prove a flake, its fix, or that a CI failure is not
-  yours, use `make test-stress E=... COUNT=200 LOAD=1` (retries off, optional CPU + fsync load;
-  `STALL=1` freezes the tests at random like a stalled CI runner, which LOAD missed for intentd#2917).
+  suite on manifest/lockfile/nextest-config changes; `make coverage-changed` = the PR job),
+  frontend `make fe-verify-changed` (cloudlands-fe `verify:changed`, working tree first), or
+  `make test-scripts-changed` for `scripts/`, the Makefile or ci.yml (PR CI skips its shell suites).
+  All take `BASE=<ref>` and `DRY_RUN=1` (prints the plan), the first two `RESUME=1`. Iterate on Rust
+  tests with `make test-select E='<filterset>'`, not raw `cargo nextest`, which skips fixture setup
+  (95 bogus failures, intentd#2559); to prove a flake, its fix, or that a CI failure is not yours,
+  use `make test-stress E=... COUNT=200 LOAD=1` (retries off, optional CPU + fsync load; `STALL=1`
+  freezes the tests at random like a stalled CI runner, which LOAD missed for intentd#2917).
 - `make test` / `test-changed` / `test-select` print a unique `record:` attempt path, including
   fully resumed runs. [Receipt and coverage details](CONTRIBUTING.md#test-attempt-receipts-and-resume-coverage)
-  explain evidence, interruption and seven-day tree retention. `RESUME=1` skips verified
-  passes for the same worktree, submodule pointers, toolchain, lockfile and effective
-  settings (`GATE_FORCE=1` ignores them). To continue past a
-  known flake, `RESUME=1 NO_FAIL_FAST=1 make test-changed` (or `make test`) runs the rest
-  to completion, records them, and exits non-zero if anything failed ([intent-hq/intent#5645](https://github.com/intent-hq/intent/issues/5645)).
+  explain evidence, interruption and seven-day tree retention. `RESUME=1` skips verified passes for
+  the same worktree, submodule pointers, toolchain, lockfile and effective settings (`GATE_FORCE=1`
+  ignores them). To continue past a known flake, `RESUME=1 NO_FAIL_FAST=1 make test-changed` (or
+  `make test`) runs the rest to completion, records them, and exits non-zero if anything failed ([intent-hq/intent#5645](https://github.com/intent-hq/intent/issues/5645)).
 - Run long gates as saved command-mode `ws.script` entries: `ws.script.start`, then
   `ws.script.monitor(scriptId, { ttlMs, runId })` with the start reply's `runId` and a TTL
   of expected runtime plus margin. End the turn only once registration succeeds; on a
