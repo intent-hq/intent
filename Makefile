@@ -731,6 +731,8 @@ check-macos: ensure-intentd-submodule ## cargo check + clippy for macOS (aarch64
 	@cd "$(INTENTD_DIR)" && { RUSTUP_AUTO_INSTALL=0 rustup target list --installed | grep -qx '$(MACOS_LINT_TARGET)' || RUSTUP_AUTO_INSTALL=0 rustup target add $(MACOS_LINT_TARGET); } || { echo "make check-macos: could not add the $(MACOS_LINT_TARGET) rustup target to the pinned toolchain (offline?); run: cd $(INTENTD_DIR) && rustup target add $(MACOS_LINT_TARGET)" >&2; exit 2; }
 	@if [ "$$(uname -s)" != Darwin ] && [ ! -x "$(MACOS_LINT_CC)" ]; then \
 		echo "make check-macos: $(INTENTD_DIR)/scripts/macos-lint-cc.sh is missing; update the intentd submodule (git submodule update --init $(INTENTD_DIR))" >&2; exit 2; fi
+	@if [ "$$(uname -s)" != Darwin ]; then for tool in cc ar perl make; do command -v "$$tool" >/dev/null 2>&1 || { \
+		echo "make check-macos: $$tool not found; the stub compiler and openssl-src's build need it (run make bootstrap-dev-host)" >&2; exit 2; }; done; fi
 	cd "$(INTENTD_DIR)" && if [ "$$(uname -s)" != Darwin ]; then export CC_$(subst -,_,$(MACOS_LINT_TARGET))="$(MACOS_LINT_CC)" CXX_$(subst -,_,$(MACOS_LINT_TARGET))="$(MACOS_LINT_CC)" AR_$(subst -,_,$(MACOS_LINT_TARGET))=ar; fi; \
 		$(COMPACT_CARGO) cargo check --workspace --target $(MACOS_LINT_TARGET) --jobs $(BUILD_JOBS) && \
 		$(COMPACT_CARGO) cargo clippy --workspace --all-targets --target $(MACOS_LINT_TARGET) --jobs $(BUILD_JOBS) -- -D warnings
