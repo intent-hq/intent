@@ -120,9 +120,10 @@ run_script intentd "$sha"
 [[ "$status" -eq 0 ]] || fail "identical commit exited $status: $stderr"
 [[ "$stdout" == "intentd $intentd_pin includes $sha" ]] || fail "identical commit printed '$stdout'"
 
-# Not yet included: the pin is behind the commit.
+# Not yet included: the pin is behind a commit main already carries.
 reset_stub
 compare cloudlands-fe "$sha" "$fe_pin" behind
+compare cloudlands-fe "$sha" main ahead
 run_script cloudlands-fe "$sha"
 [[ "$status" -eq 3 ]] || fail "not-yet-included commit exited $status (expected 3): $stderr"
 [[ -z "$stdout" ]] || fail "not-yet-included commit printed '$stdout'"
@@ -134,6 +135,7 @@ run_script cloudlands-fe "$sha"
 reset_stub
 compare cloudlands-fe "$sha" "$fe_pin" ahead
 compare intentd "$other_sha" "$intentd_pin" behind
+compare intentd "$other_sha" main identical
 run_script cloudlands-fe "$sha" intentd "$other_sha"
 [[ "$status" -eq 3 ]] || fail "half-included pairs exited $status (expected 3): $stderr"
 [[ -z "$stdout" ]] || fail "half-included pairs printed '$stdout'"
@@ -176,6 +178,25 @@ run_script cloudlands-fe "$sha"
 [[ "$status" -eq 1 ]] || fail "off-main commit exited $status (expected 1): $stderr"
 [[ "$stderr" == *"is not on intent-hq/cloudlands-fe main (diverged)"*"not a PR branch commit"* ]] ||
   fail "off-main commit reported '$stderr'"
+
+# A PR branch commit newer than the pin compares `behind` it but is not on main
+# (main is behind an unmerged branch, diverged from a squash-merged one): fail on
+# the first poll rather than wait until the pin passes the branch point.
+for main_status in behind diverged; do
+  reset_stub
+  compare cloudlands-fe "$sha" "$fe_pin" behind
+  compare cloudlands-fe "$sha" main "$main_status"
+  run_script cloudlands-fe "$sha"
+  [[ "$status" -eq 1 ]] || fail "branch commit ($main_status from main) exited $status (expected 1): $stderr"
+  [[ "$stderr" == *"is not on intent-hq/cloudlands-fe main ($main_status)"*"not a PR branch commit"* ]] ||
+    fail "branch commit ($main_status from main) reported '$stderr'"
+done
+
+# An included commit needs no main lookup.
+reset_stub
+compare cloudlands-fe "$sha" "$fe_pin" ahead
+run_script cloudlands-fe "$sha"
+[[ "$(gh_calls '/compare/')" -eq 1 ]] || fail "an included commit was also compared with main: $(<"$temp_dir/gh.log")"
 
 # An unknown commit is a permanent failure, not a wait.
 reset_stub
@@ -255,6 +276,7 @@ if [[ -z "${PIN_INCLUDES_TEST_BASH:-}" ]] && command -v make >/dev/null 2>&1; th
 
   reset_stub
   compare cloudlands-fe "$sha" "$fe_pin" behind
+  compare cloudlands-fe "$sha" main ahead
   make_target COMPONENT=cloudlands-fe SHA="$sha"
   [[ "$status" -ne 0 ]] || fail "make pin-includes passed for a commit that is not pinned yet"
   [[ "$stderr" == *"is not in the intent-hq/intent main pin"* ]] || fail "make pin-includes reported '$stderr'"

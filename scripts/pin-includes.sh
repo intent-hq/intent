@@ -14,10 +14,12 @@
 # For each pair, the gitlink packages/<component> on intent-hq/intent main is
 # read through the contents API, and the pair counts as included when the
 # GitHub compare `<sha>...<pin>` on intent-hq/<component> reports `ahead` or
-# `identical`. `behind` means the pin has not caught up yet. `diverged` means
-# the commit and the pin do not share history: when the commit is not on the
-# component's main either (compare `<sha>...main`), it can never be pinned and
-# the script fails; otherwise the pin sits off main and the pair keeps waiting.
+# `identical`. Otherwise (`behind`: the pin has not caught up, or `diverged`)
+# the commit is compared with the component's main (`<sha>...main`): when main
+# carries it the pair keeps waiting (a `diverged` pin sits off main); when it
+# does not (an unmerged or squash-merged PR branch commit) no pin will ever
+# include it, so the script fails on the first poll instead of letting a hook
+# wait until the pin moves past the branch point.
 #
 # Exit codes: 0 = every pair is included (stdout: one
 # `<component> <pin> includes <sha>` line per pair); 3 = at least one pair is
@@ -118,13 +120,13 @@ for ((i = 0; i < ${#components[@]}; i++)); do
     ahead | identical)
       included+=("$component $pin includes $sha")
       ;;
-    behind)
-      waiting+=("$component $sha is not in the $monorepo $monorepo_ref pin $pin yet")
-      ;;
-    diverged)
+    behind | diverged)
       main_status=$(compare_status "$repo" "$sha" main)
-      case "$main_status" in
-        ahead | identical)
+      case "$main_status:$status" in
+        ahead:behind | identical:behind)
+          waiting+=("$component $sha is not in the $monorepo $monorepo_ref pin $pin yet")
+          ;;
+        ahead:diverged | identical:diverged)
           waiting+=("$component $sha is not in the $monorepo $monorepo_ref pin $pin, which is not on $repo main")
           ;;
         *)
