@@ -1203,6 +1203,21 @@ settle as exited, and the run is not reattached on reconnect. Removing the
 machine, revoking its credential or deleting the agent stops every machine run
 of that agent first and drops its entries.
 
+Two agent reasons settle a machine run the same way (`exited`, `exitCode: -1`,
+`interrupted` for a command, its monitor settled as exited):
+
+- `remote-script-lost: the agent was deleted`: `agent.delete` stops the
+  agent's live machine runs and waits at most 10 s for the machine's
+  acknowledgements; a run whose stop is still unacknowledged then is lost with
+  this reason before the agent's final stop is recorded.
+- `remote-script-lost: the agent was stopped for good`: when the agent's final
+  stop is over (the machine acknowledges it, or, below nodeProtocol 9, the
+  plain stop sent in its place; or its record is dropped past its bound), any
+  machine run of the agent the machine never reported ending is settled with
+  this reason. Agent deletion and machine removal settle the agent's runs
+  first with their own reasons, so in practice this reason follows an agent's
+  retirement or its workspace's retirement or deletion.
+
 **Services.** A service's machine run restarts under the usual policy, but its
 ports are not tunnelled: `detectedUrl` is the address the process printed on
 the machine. Clients show the machine instead of an Open link for a machine run.
