@@ -661,7 +661,10 @@ edit, `vitest related`, declared trigger, UI invariant, full-risk fallback or de
 module). Credit follows the file across lanes, so an edited test that moves from the
 declared to the direct lane simply reruns there (cloudlands-fe#3439).
 `--resolved-plan --resume` previews the continuation; `--max-unit-files` still bounds
-the full resolved plan. Attempts untouched for seven days are pruned.
+the full resolved plan. `--keep-going` (`make fe-verify-changed NO_FAIL_FAST=1`) records a
+failed check as `failed` and still runs every later check, so a slow or flaky lane does
+not hide the checks after it; the run then fails listing every failed check, and
+`--resume` reruns only what did not pass. Attempts untouched for seven days are pruned.
 
 The dead-code gate runs knip through `scripts/check-dead-code.mjs`, which drops two
 known-unused canary files under `src/lib/components/__knip-canary__/` for the run and fails when knip does not

@@ -450,8 +450,9 @@ test test-intentd test-changed test-select test-stress: export INTENTD_TEST_TIME
 # prints its own attempt path, including fully resumed runs; see CONTRIBUTING.md.
 RESUME ?= 0
 GATE_FORCE ?= 0
-# NO_FAIL_FAST=1 keeps nextest running past a known flake so the remaining
-# tests still run and are recorded (the run still exits non-zero).
+# NO_FAIL_FAST=1 keeps nextest (and fe-verify-changed) running past a known
+# flake so the remaining tests still run and are recorded (the run still exits
+# non-zero).
 NO_FAIL_FAST ?= 0
 GATE_CACHE_DIR ?= $(HOME)/.cache/intent/gate-runs
 # HERMETIC=1 runs test / test-changed / test-select the way CI's runners see the machine:
@@ -890,16 +891,19 @@ test-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd br
 # two-window console test was in that list). RESUME=1 maps to --resume, which
 # reuses passing receipts from earlier attempts and runs only what remains, as
 # RESUME=1 does for the Rust targets (with DRY_RUN=1 it previews the
-# continuation). Nothing masks the exit status:
+# continuation). NO_FAIL_FAST=1 maps to --keep-going: every selected check still
+# runs and records its result after one fails, then the run fails listing them
+# all. Nothing masks the exit status:
 # pnpm passes the script's code through to make ("Error 2" = empty change set). FE_VERIFY_BASE escapes
 # apostrophes for the single-quoted hand-off; scripts/fe-verify-changed.test.sh
 # pins the mapping.
 FE_VERIFY_BASE = $(subst ','\'',$(BASE))
-fe-verify-changed: ensure-fe-submodule ensure-fe-toolchain ## Run only the frontend checks and unit tests the cloudlands-fe branch changed (BASE=<fe ref>, DRY_RUN=1 lists the selected tests, RESUME=1 resumes after a failed run)
+fe-verify-changed: ensure-fe-submodule ensure-fe-toolchain ## Run only the frontend checks and unit tests the cloudlands-fe branch changed (BASE=<fe ref>, DRY_RUN=1 lists the selected tests, RESUME=1 resumes after a failed run, NO_FAIL_FAST=1 runs every check past a failure)
 	@$(FE_DEPS_FRESH) || (echo "[fe-verify-changed] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
 	@set --; \
 	if [ -n "$(DRY_RUN)" ] && [ "$(DRY_RUN)" != 0 ]; then set -- "$$@" --resolved-plan; fi; \
 	if [ -n "$(RESUME)" ] && [ "$(RESUME)" != 0 ]; then set -- "$$@" --resume; fi; \
+	if [ -n "$(NO_FAIL_FAST)" ] && [ "$(NO_FAIL_FAST)" != 0 ]; then set -- "$$@" --keep-going; fi; \
 	if [ -n '$(FE_VERIFY_BASE)' ]; then set -- "$$@" --base '$(FE_VERIFY_BASE)'; fi; \
 	cd "$(FE_DIR)" && exec corepack pnpm run verify:changed -- "$$@"
 
