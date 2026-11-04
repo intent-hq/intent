@@ -523,7 +523,8 @@ make test
 ## Security issues
 
 Please do not report security vulnerabilities through public issues — see
-[SECURITY.md](SECURITY.md).
+[SECURITY.md](SECURITY.md). Maintainers landing a fix for a private report follow
+[Landing a security fix](docs/RELEASING.md#landing-a-security-fix).
 
 ## License
 

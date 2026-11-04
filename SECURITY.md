@@ -28,6 +28,18 @@ project without a dedicated security team, so we cannot promise a hard SLA, but
 we will keep you informed as we triage and fix confirmed issues, and credit
 reporters in the advisory unless they prefer otherwise.
 
+## How fixes are released
+
+Triage, discussion and private review of a fix happen in the private advisory. The
+fix itself lands as an ordinary pull request with a neutral description, goes through
+the normal CI and merge process, and ships in a regular release. We publish the
+advisory after that release is out.
+
+Maintainers: follow
+[Landing a security fix](docs/RELEASING.md#landing-a-security-fix). Pull requests
+opened in an advisory's private fork cannot be merged, so do not plan to land a fix
+from there.
+
 ## Supported versions
 
 Intent is pre-1.0 software. Only the latest code on the `main` branch of each
