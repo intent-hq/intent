@@ -2617,7 +2617,8 @@ interface MachineCapabilities {
   the backend (its own selection rules) and the machine.
 - **Refused at the machine.** A `launch` whose `provider` is unknown or disabled
   on the machine is refused before any process starts: the machine journals
-  `exited` with `error: "node-provider-unavailable: unknown or disabled"`. A
+  `exited` with an error such as
+  `node-provider-unavailable: provider "codex" is not available on this machine (unknown or disabled)`. A
   model switch or quota failover reaches the machine as a fresh `launch`, so the
   same refusal applies; the backend surfaces it like any other start failure
   (`placementError.code` `node-provider-unavailable`). An agent already running
