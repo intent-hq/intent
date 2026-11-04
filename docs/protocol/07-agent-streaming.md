@@ -232,12 +232,15 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   the chosen message limit, with `nextToken` re-minted at the first excluded row (§5.5) — the client
   pages older history exactly as before, just in more round-trips. The budget covers the
   live-turn merge too: after the in-flight message is appended it anchors as the newest row
-  (always served, even alone over budget — the §5.5 one-message floor), and oldest persisted
+  (always served; if it alone is over budget it is cut to fit with `textTruncated` text previews
+  and `bodyOmitted` block stubs — the §5.5 single-message bound), and oldest persisted
   rows are evicted until the merged page fits both the chosen message limit and byte budget,
   with `truncated`/`nextToken` re-minted at the eviction boundary so the evicted rows stay
   reachable via `agent.getConversation`. Progressive initial delivery instead owns
   bounded continuation until its target or exhaustion; it withholds the cursor
-  until the terminal history frame, as specified above. Since v10.0
+  until the terminal history frame, as specified above. Its seq-0 row and each `history`
+  frame's row are cut the same way when one row alone is over the page budget (§5.5
+  single-message bound), so every progressive frame stays within the read budget. Since v10.0
   every frame also inherits the `agent.getConversation` legacy-inline-file-block projection
   (§5.5): a persisted pre-10.0 `{ type: "file", data, … }` block with no non-empty
   `attachmentId` is served as `{ type: "text", text: "Attached file: <fileName>" }` (`"Attached
@@ -919,6 +922,18 @@ A persisted non-assistant row
 (direct send, queue drain — the non-assistant row deltas above) arrives as `added` entities with no
 live-streaming phase: the row's real `role` plus the authoritative `messageSeq`/`timestamp`/
 `streamingComplete:true` (and the row's `metadata` when present) in a single frame.
+
+**Single-message bound on deltas (15.4, additive; presence-detected).** Every delta frame stays
+within the 500 KiB read budget. A terminal reconcile or non-assistant row delta whose entities would
+not fit in one frame is split across several consecutive `delta` frames (consecutive `seq`), each
+within the budget: entities keep their order and their `added` / `updated` bucket, every terminal
+entity still carries `streamingComplete:true`, and `removedIds` rides on the last frame. The row
+itself is cut exactly as in the snapshot (`textTruncated` text previews, `bodyOmitted` block stubs,
+§5.5). In full-text mode (no `deltaEncoding`), a live `text` / `thinking` block whose accumulated
+text has grown past the page budget is sent as the same preview — a prefix plus
+`textTruncated: true` / `textBytes` — on every later chunk and in a degraded terminal frame; the
+full text is read through `agent.getMessageBlock`, which resolves the in-flight turn. Incremental
+mode is unchanged (fragments are already small).
 
 ### 7.2 Interrupted partial-turn persistence
 
