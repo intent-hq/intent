@@ -277,7 +277,7 @@ never resurrects shipped bundles the operator excluded.
     `icon`. The picker/routing-metadata keys (including `aliases`, below) are the only
     frontmatter allowed to diverge between the v1 and v1.1 bundled copies (the goldens pin
     every other key to its v1 value).
-    Harness 3.7 no longer bundles `spec-writer` (Coordinator/Lead), `implementor`,
+    Harness 3.8 no longer bundles `spec-writer` (Coordinator/Lead), `implementor`,
     or `verifier`. Neither `coordinator` nor `lead` resolves from the current
     bundled tier. Omit `specialist` when delegating to create a general agent.
     Historical bundles and user/project definitions remain available in their

@@ -12,7 +12,7 @@ capability; documentation alone does not identify a carrying desktop release.
 Other prepared extensions retain their independent support gates.
 
 **Prepared specialist simplification (no method-catalog change).**
-Harness 3.7 removes the built-in Coordinator/Lead (`spec-writer`), Implementor,
+Harness 3.8 removes the built-in Coordinator/Lead (`spec-writer`), Implementor,
 and Verifier from the current catalog. Delegation without a `specialist` creates
 a general agent; callers may still explicitly select an available custom specialist.
 Developer plans and delegates as needed. Prior session snapshots and harness
