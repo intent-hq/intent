@@ -182,7 +182,7 @@ CDP_PORT ?= $(call dev_port_value,CDP_PORT)
 # An explicit INTENTD_SOCKET always takes precedence.
 BRIDGE_PLATFORM ?= $(shell uname -s)
 
-.PHONY: check-app-ui-targets check-app-guide-sources check-agent-feature-toggles check-transfer-methods check-protocol-status-labels check-doc-links check-note-truncated-read-contract check-browser-routing-contract check-suggested-prompts-contract check-turn-start-contract check-fixture-copies check-agent-worker-contract test-transfer-selection-contract check-transfer-selection-contract check-backend-keychain-contract ports status consumer-checks docs-check check-protocol-catalog check-mcp-bindings mcp-bindings-doc check-makefile-targets check-protocol-field-parity check-rulesets event-catalog-check shipped-in release-status rpc
+.PHONY: check-app-ui-targets check-app-guide-sources check-agent-feature-toggles check-transfer-methods check-protocol-status-labels check-doc-links check-note-truncated-read-contract check-browser-routing-contract check-suggested-prompts-contract check-turn-start-contract check-fixture-copies check-agent-worker-contract test-transfer-selection-contract check-transfer-selection-contract check-backend-keychain-contract ports status consumer-checks docs-check check-protocol-catalog check-mcp-bindings mcp-bindings-doc check-makefile-targets check-protocol-field-parity check-rulesets event-catalog-check shipped-in pin-includes release-status rpc
 ports: ## Print this worktree's resolved development ports
 	@set -- .dev/sandbox/*.json; if [ -e "$$1" ]; then \
 		echo "[ports] Note: these ports are for the next start; read running ports from 'make sandbox-status' or .dev/sandbox/<mode>.json." >&2; \
@@ -371,6 +371,24 @@ shipped-in: ## Print the first cloudlands-releases tag carrying COMPONENT=intent
 		esac; \
 	done; \
 	scripts/shipped-in.sh "$$@" $(if $(LIMIT),--limit "$(LIMIT)",)
+
+# Does the monorepo main pin of a component include a commit yet? A monorepo PR
+# that calls a component change (a Makefile flag, a documented method) merges
+# only after the auto-bump pins it (intent#8512 waited on cloudlands-fe#4146).
+# Same COMPONENT/SHA and PAIRS arguments as shipped-in; pass the component's
+# merge commit on main. The script exits 3 while any commit is not pinned yet
+# and 4 for a transient GitHub failure (make reports `Error 3` / `Error 4`);
+# background hooks should invoke scripts/pin-includes.sh directly so they can
+# branch on those codes.
+pin-includes: ## Check that the intent-hq/intent main pin of COMPONENT=intentd|cloudlands-fe includes SHA=<commit>, or every pair in PAIRS="intentd:<sha> cloudlands-fe:<sha>" (script exit 3 = not pinned yet, 4 = transient gh failure)
+	@set -- $(if $(COMPONENT)$(SHA),"$(COMPONENT)" "$(SHA)",); \
+	for pair in $(PAIRS); do \
+		case "$$pair" in \
+			*:*) set -- "$$@" "$${pair%%:*}" "$${pair#*:}" ;; \
+			*) echo "pin-includes: PAIRS entries must be <component>:<sha>, got '$$pair'" >&2; exit 2 ;; \
+		esac; \
+	done; \
+	scripts/pin-includes.sh "$$@"
 
 # Read-only release train snapshot for intentd and cloudlands-fe; every lookup
 # is fail-soft (a failed one prints `unavailable`). See docs/RELEASING.md →

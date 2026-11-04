@@ -18,6 +18,7 @@ cloudlands-fe).
 | Where is the release train? Latest tags and ages, alpha/beta/stable versions, the fe daemon pin, open Release and pin-bump PRs with CI Gate state and merge queue position, what the merge queue head is waiting on, unshipped commits, the last auto-cut decision line, the last auto-pin-intentd run and its failure reason, the `@intent-hq/web` npm dist-tags with drift from the fe channels, runner maintenance overrides | `make release-status` (`STATUS_JSON=1` for JSON; `NO_LOGS=1` skips the run-log fetch) |
 | Which `@intent-hq/web` version does each npm dist-tag (`alpha`, `beta`, `latest`) point at? | `npm view @intent-hq/web dist-tags --json` |
 | Which alpha carries my commit? | `make shipped-in COMPONENT=<intentd\|cloudlands-fe> SHA=<sha>` (hooks call `scripts/shipped-in.sh` for its exit codes) |
+| Does the monorepo main pin include my component commit yet (so a monorepo PR that calls it can merge)? | `make pin-includes COMPONENT=<intentd\|cloudlands-fe> SHA=<merge-sha>` (hooks call `scripts/pin-includes.sh`: 0 = pinned, 3 = not yet, 4 = transient gh failure) |
 
 ## Guarded direct release merges
 

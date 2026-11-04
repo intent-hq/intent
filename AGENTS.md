@@ -173,9 +173,29 @@ removal is rejected as a component extra) and the docs entry is removed after th
 **rename** is an addition: document the new name first, keeping the old entry, rename in
 the component, then drop the old entry after the bump. `check-mcp-bindings` is advisory
 upstream (the auto-bump regenerates its index in the bump commit, so a help-line change
-needs no manual pin PR), and a Makefile change that depends on an intentd PR still waits
-for the auto-bump (`check-makefile-targets`). For an urgent bump, dispatch the workflow
-instead of filing a PR:
+needs no manual pin PR). A monorepo PR that calls a component change (a Makefile flag or
+target, a documented method) merges only once the auto-bump pins that change
+([intent#8512](https://github.com/intent-hq/intent/pull/8512) waited on
+[cloudlands-fe#4146](https://github.com/intent-hq/cloudlands-fe/pull/4146);
+`check-makefile-targets` catches only missing targets). `scripts/pin-includes.sh
+<component> <merge-sha>` (`make pin-includes`) exits 0 once main's pin includes the
+component's merge commit, 3 until then and 4 on a transient GitHub error; wait with:
+
+```javascript
+await ws.hook.schedule({
+  name: "Wait for component pin",
+  delayMs: 300_000,
+  ttlMs: 14_400_000,
+  code: `const run = await ws.host.exec({
+  command: "scripts/pin-includes.sh", args: ["cloudlands-fe", "<FE_MERGE_SHA>"], timeoutMs: 60_000,
+});
+if (run.exitCode === 0) return { dispatch: true, message: "Pinned: " + run.stdout.trim() };
+if (run.exitCode === 3 || run.exitCode === 4) return { dispatch: false };
+throw new Error("pin-includes failed (exit " + run.exitCode + "): " + run.stderr.trim());`,
+});
+```
+
+For an urgent bump, dispatch the workflow instead of filing a PR:
 
 ```bash
 gh workflow run auto-bump-submodules.yml

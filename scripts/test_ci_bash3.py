@@ -25,7 +25,8 @@ class Bash3(unittest.TestCase):
         self.assertIn('"$BASH3_BIN" scripts/dev-sandbox.test.sh', job)
         self.assertNotIn('/bin/bash', job)
         for suite in ('ci-gate', 'consumer-checks', 'docs-check', 'dev-sandbox',
-                      'lint-fixed-sleeps', 'release-status', 'rust-changed-tests', 'shipped-in'):
+                      'lint-fixed-sleeps', 'pin-includes', 'release-status', 'rust-changed-tests',
+                      'shipped-in'):
             line = next(line for line in job.splitlines() if f'scripts/{suite}.test.sh' in line)
             self.assertIn('REQUIRE_BASH3=1', line)
         # intentd's changed-tests suite carries its own Bash 3.2 pass; nothing
@@ -337,7 +338,7 @@ class SharedCachedStep(unittest.TestCase):
 
 
 SUITES = ('changed-script-tests', 'ci-gate', 'consumer-checks', 'docs-check', 'lint-fixed-sleeps',
-          'release-status', 'rust-changed-tests', 'shipped-in')
+          'pin-includes', 'release-status', 'rust-changed-tests', 'shipped-in')
 STUB_BASH3 = '#!/bin/sh\nexit 0\n'
 
 
