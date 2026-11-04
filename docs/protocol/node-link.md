@@ -2624,7 +2624,9 @@ interface MachineCapabilities {
   on a provider that is then disabled keeps its current process; its next start
   is refused.
 - **Pushed on change.** When the machine's `providers.enabled` changes, it
-  updates its cached report at once and sends an unsolicited
+  updates its cached report at once (dropping newly disabled providers and
+  adding newly enabled ones with their launch status and `modelsStale: true`)
+  and sends an unsolicited
   `capabilitiesReply` on every live backend link, then refreshes the full
   report (models and sign-in probes) and pushes again. The backend handles an
   uncorrelated `capabilitiesReply` exactly like a requested one: it stores the
