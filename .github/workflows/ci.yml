@@ -481,7 +481,7 @@ jobs:
           REQUIRE_BASH3=1 bash scripts/shipped-in.test.sh
           REQUIRE_BASH3=1 bash scripts/release-status.test.sh
           REQUIRE_BASH3=1 bash scripts/retry.test.sh
-          REQUIRE_BASH3=1 CHANGED_SCRIPT_TESTS_BASH="$BASH3_BIN" bash scripts/changed-script-tests.test.sh
+          REQUIRE_BASH3=1 bash scripts/changed-script-tests.test.sh
           REQUIRE_BASH3=1 bash packages/intentd/scripts/test-changed-tests.sh
           REQUIRE_BASH3=1 python3 -S -B scripts/test_consumer_checks_shell_suites.py
           "$BASH3_BIN" scripts/rustc-parallel.test.sh

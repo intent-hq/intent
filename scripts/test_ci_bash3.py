@@ -35,9 +35,9 @@ class Bash3(unittest.TestCase):
         self.assertLess(job.index('- run: git submodule update --init --depth=1 packages/intentd'),
                         job.index(intentd_suite))
         # The `make test-scripts-changed` selector must run under Bash 3.2 (stock
-        # macOS); its self-test is the only real 3.2 run (intent PR 8497 did it by hand).
-        selector_suite = ('REQUIRE_BASH3=1 CHANGED_SCRIPT_TESTS_BASH="$BASH3_BIN" '
-                          'bash scripts/changed-script-tests.test.sh')
+        # macOS); its self-test reruns itself under the shared lookup's Bash 3.2,
+        # as a local run does (intent PR 8497 ran it by hand).
+        selector_suite = 'REQUIRE_BASH3=1 bash scripts/changed-script-tests.test.sh'
         self.assertIn(selector_suite, [line.strip() for line in job.splitlines()])
 
     def test_download_mismatch_prevents_execution(self):
@@ -336,7 +336,7 @@ class SharedCachedStep(unittest.TestCase):
         self.assertLess(text.index('uses: actions/checkout@'), text.index(f'uses: {SETUP_ACTION}'))
 
 
-SUITES = ('ci-gate', 'consumer-checks', 'docs-check', 'lint-fixed-sleeps',
+SUITES = ('changed-script-tests', 'ci-gate', 'consumer-checks', 'docs-check', 'lint-fixed-sleeps',
           'release-status', 'rust-changed-tests', 'shipped-in')
 STUB_BASH3 = '#!/bin/sh\nexit 0\n'
 
