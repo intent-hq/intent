@@ -55,8 +55,8 @@ A field that passes there is a `pin drift` warning (this monorepo worktree is ol
 than `origin/main`; rebase it to compare locally); a field the checkout itself adds
 still fails, with a note to `git fetch origin main` if that ref may be stale.
 `PARITY_BASE=` keeps the strict local comparison, and it is off when `CI` is set. Under
-`make check` / `make gate` a parity failure no longer stops make: fmt, clippy and the
-source lints still run, and `check` fails at the end naming the parity step.
+`make check` / `make gate` a parity failure no longer stops make: fmt, cargo-shear, clippy
+and the source lints still run, and `check` fails at the end naming the parity step.
 
 Every `agentFeatures.*` setting intentd registers for `settings.list` (`definitions()` in
 `packages/intentd/crates/intent-services/src/settings.rs`) must have a Settings → Agent

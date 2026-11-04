@@ -490,7 +490,7 @@ FE_BUILD_HEAP_MB ?= 16384
 	ensure-fe-toolchain fe-verify-changed \
 	update \
 	build build-intentd build-sidecar gate test test-intentd test-scripts test-scripts-changed test-changed test-select test-stress list-tests coverage-changed coverage-e2e coverage-all \
-	fmt clippy check-windows lint-sources lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child lint-shell-sleeps lint-shell lint-workflows bash3 check clean clean-dev \
+	fmt clippy shear check-windows lint-sources lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child lint-shell-sleeps lint-shell lint-workflows bash3 check clean clean-dev \
 	sweep sweep-all sweep-gates seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
 	run-intentd dev-ui dev-sandbox-ui dev-sandbox-app dev-sandbox-stack dev-fe fe-launch \
 	sandbox-status sandbox-stop \
@@ -666,6 +666,16 @@ fmt: ensure-intentd-submodule ## cargo fmt --check
 clippy: ensure-intentd-submodule ## cargo clippy --all-targets -- -D warnings
 	cd "$(INTENTD_DIR)" && $(COMPACT_CARGO) cargo clippy --workspace --all-targets --jobs $(BUILD_JOBS) -- -D warnings
 
+# The local twin of intentd CI's check-job step "Unused dependencies
+# (cargo-shear)": unused dependencies and .rs files no crate includes (e.g. a
+# trybuild tests/ui file missing from [package.metadata.cargo-shear]
+# ignored-paths; intentd#3021 lost a CI round to one). CI installs the latest
+# release; the preflight fails naming make bootstrap-dev-host when cargo-shear
+# is missing or older than bootstrap's minimum.
+shear: ensure-intentd-submodule ## cargo shear --deny-warnings (unused deps + unlinked files, like intentd CI; make bootstrap-dev-host installs cargo-shear)
+	@scripts/bootstrap-dev-host.sh --check-cargo-shear
+	cd "$(INTENTD_DIR)" && cargo shear --deny-warnings
+
 # The Windows GNU target's production `cargo check` and `--all-targets`
 # Clippy, from Linux or macOS: the local twin of intentd CI's PR-time
 # `windows-cross-lint` job (the check covers production arms that test
@@ -743,7 +753,7 @@ bash3: ## Build Bash 3.2 for the shell suites' 3.2 pass into BASH3_CACHE_DIR (de
 		env -u GITHUB_ENV bash scripts/install-ci-bash3.sh "$(BASH3_CACHE_DIR)"; \
 	fi
 
-RUST_CHECK_TARGETS := check-makefile-targets check-protocol-field-parity lint-shell-sleeps fmt clippy lint-sources
+RUST_CHECK_TARGETS := check-makefile-targets check-protocol-field-parity lint-shell-sleeps fmt shear clippy lint-sources
 
 .PHONY: check-callback-fixture
 check-callback-fixture: ensure-intentd-submodule ## Validate the callback test fixture offline (explicit, or prepared from a ready ~/.cache entry) before Rust gates
@@ -768,7 +778,7 @@ $(RUST_CHECK_TARGETS): | check-transfer-fixture
 endif
 
 # Under make check / make gate a failed check-protocol-field-parity is recorded
-# instead of stopping make, so fmt, clippy and the source lints still run; the
+# instead of stopping make, so fmt, shear, clippy and the source lints still run; the
 # check recipe then reports it and fails, and gate stops before the tests.
 # Standalone make check-protocol-field-parity / consumer-checks fail directly.
 # The record is named after this make process ($$PPID of $(shell)), so
@@ -784,14 +794,14 @@ endif
 check-deferred-reset:
 	@[ -z "$(CHECK_DEFERRED)" ] || rm -f "$(CHECK_DEFERRED)"
 
-check: $(RUST_CHECK_TARGETS) ## Makefile target check + protocol field parity + shell sleep lint + fmt + clippy + source lints (a parity failure is reported at the end)
+check: $(RUST_CHECK_TARGETS) ## Makefile target check + protocol field parity + shell sleep lint + fmt + cargo-shear + clippy + source lints (a parity failure is reported at the end)
 	@if [ -s "$(CHECK_DEFERRED)" ]; then \
 		failed=$$(tr '\n' ' ' < "$(CHECK_DEFERRED)"); rm -f "$(CHECK_DEFERRED)"; \
 		echo "make check: FAILED: $${failed}(output above); every other check step passed" >&2; \
 		exit 1; \
 	fi; rm -f "$(CHECK_DEFERRED)"
 
-gate: check | check-callback-fixture check-transfer-fixture ## Run all local Rust gates (fmt, clippy, source lints, then nextest)
+gate: check | check-callback-fixture check-transfer-fixture ## Run all local Rust gates (fmt, cargo-shear, clippy, source lints, then nextest)
 	@$(MAKE) --no-print-directory test
 
 test: test-intentd ## Run Rust tests; after interruption use RESUME=1 (GATE_FORCE=1 runs all, NO_FAIL_FAST=1 continues past failures, HERMETIC=1 hides provider CLIs like CI)
