@@ -232,7 +232,8 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   the chosen message limit, with `nextToken` re-minted at the first excluded row (§5.5) — the client
   pages older history exactly as before, just in more round-trips. The budget covers the
   live-turn merge too: after the in-flight message is appended it anchors as the newest row
-  (always served, even alone over budget — the §5.5 one-message floor), and oldest persisted
+  (always served; if it alone is over budget it is cut to fit with `textTruncated` text previews
+  and `bodyOmitted` block stubs — the §5.5 single-message bound), and oldest persisted
   rows are evicted until the merged page fits both the chosen message limit and byte budget,
   with `truncated`/`nextToken` re-minted at the eviction boundary so the evicted rows stay
   reachable via `agent.getConversation`. Progressive initial delivery instead owns

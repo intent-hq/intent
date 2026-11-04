@@ -42,7 +42,12 @@ Also within 15.4 (behaviour only, no wire-shape change): the **slim page byte bu
 (`SLIM_PAGE_BUDGET_BYTES`, [§5.5](./methods/agents.md)) drops from 512 KiB to 480,000 bytes, so
 an `agent.getConversation` page and the seq-0 `chat.subscribe` snapshot fit their whole frame
 in the 500 KiB read budget. Pages may carry a few fewer messages; clients already follow
-`nextToken` / `prevToken`, so no client change is needed.
+`nextToken` / `prevToken`, so no client change is needed. A message that alone is over the
+budget is now cut to fit instead of being served whole (additive, presence-detected markers,
+[§5.5](./methods/agents.md)): oversized `text` / `thinking` bodies become previews with
+`textTruncated: true` + `textBytes`, and if the block count still overflows, the newest blocks
+become `{ id, type, bodyOmitted: true }` stubs. The full content is read by id through
+`agent.getMessageBlock`. Older apps show the preview without a way to load the rest.
 
 Also within 15.4 (behaviour change plus additive row markers; capability-gated; no
 method-catalog change, so no version bump): **paged `agent.listUserMessages` by
