@@ -44,6 +44,17 @@ an `agent.getConversation` page and the seq-0 `chat.subscribe` snapshot fit thei
 in the 500 KiB read budget. Pages may carry a few fewer messages; clients already follow
 `nextToken` / `prevToken`, so no client change is needed.
 
+Also within 15.4 (behaviour change plus additive row markers; capability-gated; no
+method-catalog change, so no version bump): **paged `agent.listUserMessages` by
+default** ([§5.5](./methods/agents.md)). A call without `limit` or `nextToken` now
+returns the newest 100 user rows (max `limit` 500) cut to a 480,000-byte items budget,
+and every result carries `nextToken` (`null` once no older rows remain); previously it
+returned the whole index (803 KB on the large-state fixture). A single row over the
+budget serves alone with `metadataOmitted: true` / `metadataBytes` in place of its
+`metadata`. Support is signalled by `boundedReads: 1`; older daemons return the whole
+index without `nextToken`, which clients read as complete. Older apps see the newest
+page only.
+
 
 **Version 15.3 — plain-folder workspaces (additive).**
 [Plain-folder workspaces](./methods/workspace.md#plain-folder-workspaces) work directly in
