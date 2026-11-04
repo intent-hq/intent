@@ -47,7 +47,10 @@ budget is now cut to fit instead of being served whole (additive, presence-detec
 [§5.5](./methods/agents.md)): oversized `text` / `thinking` bodies become previews with
 `textTruncated: true` + `textBytes`, and if the block count still overflows, the newest blocks
 become `{ id, type, bodyOmitted: true }` stubs. The full content is read by id through
-`agent.getMessageBlock`. Older apps show the preview without a way to load the rest.
+`agent.getMessageBlock`. Older apps show the preview without a way to load the rest. On
+`chat.subscribe`, a terminal reconcile or row delta too large for one frame is split across
+consecutive `delta` frames, and in full-text mode a live text block past the budget is sent as the
+same preview.
 
 Also within 15.4 (behaviour change plus additive row markers; capability-gated; no
 method-catalog change, so no version bump): **paged `agent.listUserMessages` by

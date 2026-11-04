@@ -921,6 +921,18 @@ A persisted non-assistant row
 live-streaming phase: the row's real `role` plus the authoritative `messageSeq`/`timestamp`/
 `streamingComplete:true` (and the row's `metadata` when present) in a single frame.
 
+**Single-message bound on deltas (15.4, additive; presence-detected).** Every delta frame stays
+within the 500 KiB read budget. A terminal reconcile or non-assistant row delta whose entities would
+not fit in one frame is split across several consecutive `delta` frames (consecutive `seq`), each
+within the budget: entities keep their order and their `added` / `updated` bucket, every terminal
+entity still carries `streamingComplete:true`, and `removedIds` rides on the last frame. The row
+itself is cut exactly as in the snapshot (`textTruncated` text previews, `bodyOmitted` block stubs,
+§5.5). In full-text mode (no `deltaEncoding`), a live `text` / `thinking` block whose accumulated
+text has grown past the page budget is sent as the same preview — a prefix plus
+`textTruncated: true` / `textBytes` — on every later chunk and in a degraded terminal frame; the
+full text is read through `agent.getMessageBlock`, which resolves the in-flight turn. Incremental
+mode is unchanged (fragments are already small).
+
 ### 7.2 Interrupted partial-turn persistence
 
 On a **user interrupt** of an in-flight turn — `agent.stop`, `agent.sendQueuedMessageNow`, or `agent.sendMessage` / `agent.sendToTask` called with the request parameter `priority: "interrupt"` — the daemon persists the streamed-so-far partial assistant message **before** emitting the terminal `agent:stream:end`. The partial turn's content blocks are written to the transcript under the assistant `messageId` minted at turn start (the same id carried by the live `chat:stream:delta` / `agent:stream:activity` events, and from which the `chat.subscribe` synthetic block ids are derived as `{messageId}:{blockIndex}` — §7.1), tagged on the message row with:
