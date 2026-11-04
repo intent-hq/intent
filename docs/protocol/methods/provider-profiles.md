@@ -498,9 +498,10 @@ never removes external account directories.
   app default or to the Default account. Bare legacy references keep today's
   disabled-provider behavior. A missing reference in `model.defaultProvider`, a
   specialist or a delegation raises the same error. It never falls back to the bare base.
-- **Delegation.** Explicit param, then specialist, then app default; precedence is
-  unchanged. A child never inherits its parent's profile, and no account is inferred
-  across providers by profile name.
+- **Delegation.** Explicit param, then specialist, then the parent agent's bare provider
+  when usable, then app default (§5.5 "Parent provider inheritance"). A child never
+  inherits its parent's profile, and no account is inferred across providers by profile
+  name.
 - **Restart copy.** The daemon does not report who owns it. A client that spawned its
   own local daemon (the desktop sidecar) says to restart Intent. Otherwise it names
   intentd on the provider host. UDS locality alone does not mean the daemon is
