@@ -269,7 +269,10 @@ suite is `python3 -S -B -m unittest -v scripts.test_cleanup_prereleases`.
   only. intentd PRs never use a Windows runner: they run `windows-cross-lint`, the
   same `cargo check` and Clippy for the Windows GNU target on Linux
   (`make check-windows` locally), so most Windows-only compile and lint errors fail
-  the PR. Each merge-queue run has a required
+  the PR. macOS works the same way: intentd PRs run `macos-cross-lint`, `cargo check`
+  and Clippy for `aarch64-apple-darwin` on Linux through a stub C compiler
+  (`make check-macos` locally), and the queue's native macOS `build` leg stays the
+  final macOS lint. Each merge-queue run has a required
   `windows-lint` job (native Windows `cargo check` and target-gated Clippy), so a
   Windows-only compile or lint error is ejected from the queue instead of landing.
   Every push to `main` runs the Windows runtime and lifecycle proofs, release build,

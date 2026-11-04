@@ -38,7 +38,7 @@ endif
 # Export only to the Rust compiler/gate recipes (see COMPACT_TARGETS below):
 # a global export of the default would leak COMPACT=1 into unrelated recipes
 # and into any make they start, where a coverage goal then rejects it.
-COMPACT_TARGETS := gate check clippy check-windows lint-sources build-intentd test test-intentd test-changed test-select test-stress list-tests coverage-changed coverage-e2e coverage-all
+COMPACT_TARGETS := gate check clippy check-windows check-macos lint-sources build-intentd test test-intentd test-changed test-select test-stress list-tests coverage-changed coverage-e2e coverage-all
 $(COMPACT_TARGETS): export COMPACT := $(COMPACT)
 ifeq ($(COMPACT),1)
 ifneq ($(filter coverage-%,$(MAKECMDGOALS)),)
@@ -438,13 +438,13 @@ BUILD_JOBS ?= -2
 # `make test NEXTEST_SHOW_PROGRESS=bar CARGO_TERM_PROGRESS_WHEN=auto`.
 # CI already sets CI=true, under which both tools are non-interactive anyway.
 gate test test-intentd test-changed test-select test-stress coverage-changed coverage-e2e coverage-all list-tests: export NEXTEST_SHOW_PROGRESS ?= none
-gate check clippy check-windows lint-sources build-intentd test test-intentd test-changed test-select test-stress coverage-changed coverage-e2e coverage-all list-tests: export CARGO_TERM_PROGRESS_WHEN ?= never
+gate check clippy check-windows check-macos lint-sources build-intentd test test-intentd test-changed test-select test-stress coverage-changed coverage-e2e coverage-all list-tests: export CARGO_TERM_PROGRESS_WHEN ?= never
 # Pagers on the same targets. A saved-script PTY has no keyboard, so any
 # git/gh step that pages to `less` stalls forever waiting for a keypress.
 # nextest ignores PAGER (only --no-pager / user config disable its paging),
 # hence the explicit --no-pager on list-tests.
-gate check clippy check-windows lint-sources build-intentd test test-intentd test-changed test-select test-stress coverage-changed coverage-e2e coverage-all list-tests: export PAGER ?= cat
-gate check clippy check-windows lint-sources build-intentd test test-intentd test-changed test-select test-stress coverage-changed coverage-e2e coverage-all list-tests: export GIT_PAGER ?= cat
+gate check clippy check-windows check-macos lint-sources build-intentd test test-intentd test-changed test-select test-stress coverage-changed coverage-e2e coverage-all list-tests: export PAGER ?= cat
+gate check clippy check-windows check-macos lint-sources build-intentd test test-intentd test-changed test-select test-stress coverage-changed coverage-e2e coverage-all list-tests: export GIT_PAGER ?= cat
 # The gate runner's low-disk sweep also reclaims idle sibling worktrees' trees.
 gate test test-intentd test-changed test-select test-stress: export WORKSPACES_DIR := $(WORKSPACES_DIR)
 
@@ -508,7 +508,7 @@ FE_BUILD_HEAP_MB ?= 16384
 	ensure-fe-toolchain fe-verify-changed \
 	update \
 	build build-intentd build-sidecar gate test test-intentd test-scripts test-scripts-changed test-changed test-select test-stress list-tests coverage-changed coverage-e2e coverage-all \
-	fmt clippy shear check-windows lint-sources lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child lint-shell-sleeps lint-shell lint-workflows bash3 check clean clean-dev \
+	fmt clippy shear check-windows check-macos lint-sources lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child lint-shell-sleeps lint-shell lint-workflows bash3 check clean clean-dev \
 	sweep sweep-all sweep-gates seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
 	run-intentd dev-ui dev-sandbox-ui dev-sandbox-app dev-sandbox-stack dev-fe fe-launch \
 	sandbox-status sandbox-stop \
@@ -714,6 +714,28 @@ check-windows: ensure-intentd-submodule ## cargo check + clippy for Windows (x86
 	@cd "$(INTENTD_DIR)" && { RUSTUP_AUTO_INSTALL=0 rustup target list --installed | grep -qx '$(WINDOWS_LINT_TARGET)' || RUSTUP_AUTO_INSTALL=0 rustup target add $(WINDOWS_LINT_TARGET); } || { echo "make check-windows: could not add the $(WINDOWS_LINT_TARGET) rustup target to the pinned toolchain (offline?); run: cd $(INTENTD_DIR) && rustup target add $(WINDOWS_LINT_TARGET)" >&2; exit 2; }
 	cd "$(INTENTD_DIR)" && $(COMPACT_CARGO) cargo check --workspace --target $(WINDOWS_LINT_TARGET) --jobs $(BUILD_JOBS)
 	cd "$(INTENTD_DIR)" && $(COMPACT_CARGO) cargo clippy --workspace --all-targets --target $(WINDOWS_LINT_TARGET) --jobs $(BUILD_JOBS) -- -D warnings
+
+# Check + Clippy for macOS (aarch64-apple-darwin): the local twin of intentd
+# CI's PR-time `macos-cross-lint` job. The Linux `clippy` never compiles
+# `cfg(target_os = "macos")` code, so a macOS-only lint (clippy::unused_async
+# on a fn whose only await is cfg(linux)) passed every PR check and ejected
+# intentd#3002 from the merge queue. On Linux, intentd's
+# scripts/macos-lint-cc.sh stands in for the darwin C compiler the -sys build
+# scripts call (check/clippy never link, so its empty objects suffice; no
+# macOS SDK needed). On macOS the native compiler is used as is. The rustup
+# target is added on demand (no privilege needed).
+MACOS_LINT_TARGET := aarch64-apple-darwin
+MACOS_LINT_CC := $(CURDIR)/$(INTENTD_DIR)/scripts/macos-lint-cc.sh
+check-macos: ensure-intentd-submodule ## cargo check + clippy for macOS (aarch64-apple-darwin) like CI's macos-cross-lint; works from Linux
+	@cd "$(INTENTD_DIR)" && RUSTUP_AUTO_INSTALL=0 rustup which cargo >/dev/null 2>&1 || { echo "make check-macos: the rustup toolchain pinned in $(INTENTD_DIR)/rust-toolchain.toml is not installed (run make bootstrap-dev-host)" >&2; exit 2; }
+	@cd "$(INTENTD_DIR)" && { RUSTUP_AUTO_INSTALL=0 rustup target list --installed | grep -qx '$(MACOS_LINT_TARGET)' || RUSTUP_AUTO_INSTALL=0 rustup target add $(MACOS_LINT_TARGET); } || { echo "make check-macos: could not add the $(MACOS_LINT_TARGET) rustup target to the pinned toolchain (offline?); run: cd $(INTENTD_DIR) && rustup target add $(MACOS_LINT_TARGET)" >&2; exit 2; }
+	@if [ "$$(uname -s)" != Darwin ] && [ ! -x "$(MACOS_LINT_CC)" ]; then \
+		echo "make check-macos: $(INTENTD_DIR)/scripts/macos-lint-cc.sh is missing; update the intentd submodule (git submodule update --init $(INTENTD_DIR))" >&2; exit 2; fi
+	@if [ "$$(uname -s)" != Darwin ]; then for tool in cc ar perl make; do command -v "$$tool" >/dev/null 2>&1 || { \
+		echo "make check-macos: $$tool not found; the stub compiler and openssl-src's build need it (run make bootstrap-dev-host)" >&2; exit 2; }; done; fi
+	cd "$(INTENTD_DIR)" && if [ "$$(uname -s)" != Darwin ]; then export CC_$(subst -,_,$(MACOS_LINT_TARGET))="$(MACOS_LINT_CC)" CXX_$(subst -,_,$(MACOS_LINT_TARGET))="$(MACOS_LINT_CC)" AR_$(subst -,_,$(MACOS_LINT_TARGET))=ar; fi; \
+		$(COMPACT_CARGO) cargo check --workspace --target $(MACOS_LINT_TARGET) --jobs $(BUILD_JOBS) && \
+		$(COMPACT_CARGO) cargo clippy --workspace --all-targets --target $(MACOS_LINT_TARGET) --jobs $(BUILD_JOBS) -- -D warnings
 
 # Source lints are discovered by convention: every `tests/*_lint.rs` in any
 # intentd crate is a cargo test target whose name ends in `_lint`, and cargo's
