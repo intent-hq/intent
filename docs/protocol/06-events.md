@@ -1162,7 +1162,7 @@ The `events.subscribe` firehose (§6.1) carries every bus event; a thin client t
 | Method | Channel | Scope | Snapshot shape (seq 0) | Notes |
 | --- | --- | --- | --- | --- |
 | `note.subscribe` / `note.unsubscribe` | note | per-workspace (`workspaceId` req — `-32602` if missing/empty) | array of `Note` entities (newest-first) | `note:created`/`updated`/`deleted` → `added`/`updated`/`removedIds` via a re-read of the entity. **Projection (`projection?: "slim" \| "full"`, v8.2 — [intent-hq/intentd#1526](https://github.com/intent-hq/intentd/pull/1526), monorepo#3586):** the note-channel counterpart of `note.list`'s v8.1 param (§5.2), fixed at subscribe time for the subscription's lifetime. Absent / `null` / `"full"` keep the rows byte-identical to before (**full stays the default**, matching `note.list`); `"slim"` serves the same bounded slim rows as `note.list` (`content` omitted, replaced by `contentPreview` + `contentLength` — see the §5.2 row for the exact shape) on the seq-0 snapshot AND every `added`/`updated` delta, so snapshot and deltas agree and no note-channel frame class escapes the bound (`removedIds` carry only ids); any other value is `-32602` (`projection must be "slim" or "full"`), rejected at subscribe time before any ack or snapshot. Pre-8.2 daemons ignore the unknown param and serve full rows — gate on `protocolVersion` ≥ 8.2 (or detect `contentPreview` on snapshot rows). **Truncated content (`maxContentBytes?: int`, gated by `noteTruncatedRead: 1`):** fixed at subscribe time; snapshot and `added`/`updated` rows follow the `note.get` cut rule and markers (§5.2 "Truncated note reads"). **Paged snapshot (`limit?: int`, `boundedReads: 1`):** the seq-0 snapshot is always the first `note.list` page in the subscription's `projection` (default 200, maximum 500 notes) — see "Paged snapshots" below. |
-| `task.subscribe` / `task.unsubscribe` | task | per-workspace (`workspaceId` req) | array of task-note entities — wire `Note` shape stamped with the additive `specLinked` flag, NOT the §5.4 `WorkspaceTask` projection | tails `task:status-changed`/`task:ready-tasks-changed`. Details below the table. |
+| `task.subscribe` / `task.unsubscribe` | task | per-workspace (`workspaceId` req) | array of task-note entities — wire `Note` shape stamped with the additive `specLinked` flag, NOT the §5.4 `WorkspaceTask` projection. **Paged snapshot (`boundedReads: 1`):** the first page (200 task notes) — see "Paged snapshots" below | tails `task:status-changed`/`task:ready-tasks-changed`. Details below the table. |
 | `workspace.subscribe` / `workspace.unsubscribe` | workspace | global (no `workspaceId`) — the only global channel | array of **lite** `Workspace` projections visible to the connection (see notes), **including archived workspaces** (clients filter by `status` if needed; archived workspaces remain listed) but **excluding retired workspaces** unless the subscribe params carry `includeRetired: true` (protocol 15.2) | tails `workspace:created`/`updated`/`deleted`/`activity-changed`/`attention-changed`/`displayStatus-changed`/`waiting-changed` *(v6.17)*/`scriptsRunning-changed`/`backgroundTasksRunning-changed` *(within 15.2)*. Details below the table. |
 | `comment.subscribe` / `comment.unsubscribe` | comment | per-workspace (`workspaceId` req); `noteId` optional narrowing | thread summaries with full `comments: CommentWire[]` for the selected note (§5.3) | Existing comment-event re-reads retain each comment's optional `authorPrincipalId` / `authorIdentity` and the summary's corresponding `latestCommentAuthorPrincipalId` / `latestCommentAuthorIdentity`, in both snapshots and full-row deltas. `comment:added` re-reads the affected thread into `updated`. `comment:deleted` re-reads by the retained `threadId`: a surviving thread is a complete `updated` row; an empty thread emits `removedIds: [threadId]`. Events are isolated by workspace and note, and re-reads use the subscriber's visibility. Reducing these deltas must equal a fresh `comment.list` with `includeComments: true`; absence of attribution stays unknown. **Paged snapshot (`limit?: int`, `boundedReads: 1`):** the seq-0 snapshot is always the first `comment.list` page with comments (default 100, maximum 500 threads) — see "Paged snapshots" below. |
 | `agent.subscribe` / `events.unsubscribe` (collection) | agent | per-workspace (`workspaceId` req) | array of `AgentLite` entities | **Disambiguated by params** from the deprecated service-alias `agent.subscribe` of §5.5: an `eventTypes`-bearing frame falls through to the router (alias); a bare `{ workspaceId }` frame routes to this collection channel. Details below the table. |
@@ -1180,7 +1180,7 @@ Cost contract: the flag is derived from ONE spec-note read per snapshot / per de
 #### Paged snapshots
 
 **Behaviour change ([bounded reads](./methods/client-hello.md)).** The `workspace`, `agent`,
-`note` and `comment` collection snapshots serve the **first page** of the channel's list read
+`note`, `comment` and `task` collection snapshots serve the **first page** of the channel's list read
 rather than every row, for every subscriber, and the snapshot push carries `params.nextToken`
 beside `params.snapshot`: `null` when the snapshot is the whole collection, else the token for
 the remaining rows. The client fetches them with the list read, in that read's order
@@ -1198,6 +1198,12 @@ the remaining rows. The client fetches them with the list read, in that read's o
   `projection`.
 - `comment`: `comment.list { workspaceId, noteId, includeComments: true, limit?, nextToken }`,
   latest activity first and walked in rounds, so a thread can appear again after a reply.
+- `task`: `task.list { workspaceId, nextToken }` (the paged form; see
+  [Bounded note and comment reads](./methods/notes-tasks.md#bounded-note-and-comment-reads)).
+  The snapshot holds full task-note rows stamped with `specLinked`; continuation rows
+  are the `task.list` `WorkspaceTask` projection (§5.4) of the remaining tasks plus
+  `workspaceId`, not notes. Both are in `(createdAt, id)` order. Read a task's note with `note.get` when
+  the full row is needed.
 - `note` and `comment` accept `limit?: int` on the subscribe to size the first page (default
   and maximum as the list read; see
   [Bounded note and comment reads](./methods/notes-tasks.md#bounded-note-and-comment-reads)).
@@ -1205,7 +1211,7 @@ the remaining rows. The client fetches them with the list read, in that read's o
   before the ack.
 
 Page sizes and the byte budget are those of the list reads (100 rows for `workspace` /
-`agent`, 200 notes, 100 threads; 480,000 bytes). Deltas
+`agent`, 200 notes, 100 threads, 200 tasks; 480,000 bytes). Deltas
 are not paged and keep arriving for every row, including rows on pages the client has not
 fetched yet; clients apply them as upserts. Older clients that ignore `nextToken` see only the
 first page until a delta adds a row.
