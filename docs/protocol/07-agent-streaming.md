@@ -238,7 +238,9 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   with `truncated`/`nextToken` re-minted at the eviction boundary so the evicted rows stay
   reachable via `agent.getConversation`. Progressive initial delivery instead owns
   bounded continuation until its target or exhaustion; it withholds the cursor
-  until the terminal history frame, as specified above. Since v10.0
+  until the terminal history frame, as specified above. Its seq-0 row and each `history`
+  frame's row are cut the same way when one row alone is over the page budget (§5.5
+  single-message bound), so every progressive frame stays within the read budget. Since v10.0
   every frame also inherits the `agent.getConversation` legacy-inline-file-block projection
   (§5.5): a persisted pre-10.0 `{ type: "file", data, … }` block with no non-empty
   `attachmentId` is served as `{ type: "text", text: "Attached file: <fileName>" }` (`"Attached
