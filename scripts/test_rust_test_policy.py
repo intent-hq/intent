@@ -86,7 +86,8 @@ class RustTestPolicyTests(unittest.TestCase):
         (self.bin / "node").write_text(
             '#!/bin/sh\ncase "$1" in *check-transfer-selection-contract.mjs) exec '
             + shlex.quote(shutil.which("node")) + ' "$@";; esac\n')
-        for name in ("resumable_nextest.py", "gate_storage.py", "check_watch_capacity.py"):
+        # bootstrap-dev-host.sh: make check's cargo-shear preflight (--check-cargo-shear).
+        for name in ("resumable_nextest.py", "gate_storage.py", "check_watch_capacity.py", "bootstrap-dev-host.sh"):
             shutil.copy(ROOT / "scripts" / name, self.root / "scripts")
         shutil.copytree(ROOT / "scripts/_vendor", self.root / "scripts/_vendor",
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
@@ -171,7 +172,7 @@ import json, os, sys
 args = sys.argv[1:]
 is_test = args[:1] == ['test'] or args[:2] == ['nextest', 'run'] or (args[:1] == ['llvm-cov'] and 'nextest' in args)
 with open(os.environ['POLICY_LOG'], 'a') as log:
-    log.write(json.dumps({'args': args, 'policy': os.environ.get('INTENTD_ASSERT_BOUND_CALLER'),
+    log.write(json.dumps({'args': args, 'cwd': os.getcwd(), 'policy': os.environ.get('INTENTD_ASSERT_BOUND_CALLER'),
                          'fixture': os.environ.get('INTENT_ACP_CALLBACK_ADAPTER_FIXTURE'),
                          'timeout': os.environ.get('INTENTD_TEST_TIMEOUT_MULTIPLIER'),
                          'incremental': os.environ.get('CARGO_INCREMENTAL'),
@@ -185,6 +186,11 @@ elif args[:2] == ['nextest', 'list']:
           'binary-id': 'alpha::one', 'testcases': {'passes': {}}}}}))
 elif args[:2] == ['nextest', 'run']:
     print(json.dumps({'type': 'test', 'event': 'ok', 'name': 'alpha::one$passes'}))
+elif args[:2] == ['shear', '--version']:
+    version = os.environ.get('SHEAR_STUB_VERSION', '1.14.0')
+    if not version:
+        sys.exit(101)
+    print('Version: ' + version)
 elif '--version' in args or args == ['-V']:
     print('stub 1.0')
 if is_test:
@@ -537,6 +543,29 @@ if is_test:
                     env={'INTENT_ACP_CALLBACK_ADAPTER_FIXTURE': ''})
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assert_policy(calls, inherited='0', fixture='')
+
+    def test_check_runs_cargo_shear_in_intentd_like_ci(self):
+        """intentd CI's check job runs cargo shear --deny-warnings (unused
+        dependencies and unlinked files, intentd#3021); make check runs the
+        same command in the component, after a preflight that names
+        make bootstrap-dev-host when cargo-shear is missing or too old."""
+        for forwarded in (False, True):
+            with self.subTest(forwarded=forwarded, version='ready'):
+                result, calls = self.make('check', forwarded=forwarded)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                shear = [c for c in calls if c['args'] == ['shear', '--deny-warnings']]
+                self.assertEqual(len(shear), 1, calls)
+                self.assertEqual(Path(shear[0]['cwd']).resolve(), self.component.resolve())
+                commands = [c['args'][0] for c in calls if c['args'][:1] != ['metadata']]
+                self.assertLess(commands.index('shear'), commands.index('clippy'), commands)
+        for version in ('', '1.7.2'):
+            with self.subTest(version=version):
+                result, calls = self.make('check', env={'SHEAR_STUB_VERSION': version})
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn('[missing]  cargo-shear >= 1.8.0', result.stderr)
+                self.assertIn('run make bootstrap-dev-host', result.stderr)
+                self.assertNotIn(['shear', '--deny-warnings'], [c['args'] for c in calls])
+                self.assertNotIn('clippy', [c['args'][0] for c in calls])
 
     def test_valid_mixed_gate_goals_preserve_policy_without_duplicate_checks(self):
         for forwarded in (False, True):

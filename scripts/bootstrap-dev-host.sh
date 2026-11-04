@@ -48,6 +48,14 @@ GH_INSTALL_URL="https://github.com/cli/cli#installation"
 # group() transports large resume exclusions without growing the command line.
 NEXTEST_MIN_VERSION="0.9.133"
 
+# make check runs cargo shear --deny-warnings in intentd like intentd CI's check
+# job, which installs the latest release (taiki-e/install-action@cargo-shear).
+# 1.8.0 added the unlinked-file detection and ignored-paths metadata that gate
+# relies on (intentd#3021 lost a CI round to an unlinked tests/ui file).
+# Bootstrap installs the latest prebuilt release, tracking CI.
+CARGO_SHEAR_MIN_VERSION="1.8.0"
+CARGO_SHEAR_RELEASE_URL="https://github.com/Boshen/cargo-shear/releases/latest/download"
+
 # jq: the release-notifier test suites parse GitHub API fixtures with it
 # (intentd scripts/test-notify-fixed-issues.sh via make test, cloudlands-fe pnpm test:unit).
 JQ_INSTALL_URL="https://jqlang.github.io/jq/download/"
@@ -103,10 +111,12 @@ cleanup() {
 trap cleanup EXIT
 
 usage() {
-  echo "Usage: $0 [--check] [--check-frontend] [--install-actionlint] [--coverage] [--yes]"
+  echo "Usage: $0 [--check] [--check-frontend] [--check-cargo-shear] [--install-actionlint] [--coverage] [--yes]"
   echo "  --check            Report missing requirements without changing the host"
   echo "  --check-frontend   Report only the frontend toolchain gaps (Corepack + pinned pnpm)"
   echo "                     that block the dev/sandbox targets; exit 0 silently when ready"
+  echo "  --check-cargo-shear Report only a missing or too-old cargo-shear (the make check"
+  echo "                     preflight); exit 0 silently when ready"
   echo "  --install-actionlint Install only the pinned, checksum-verified actionlint into"
   echo "                     \$CARGO_HOME/bin (no prompt; CI's workflow-lint job); fails when it cannot"
   echo "  --coverage         Also install cargo-llvm-cov and llvm-tools-preview for"
@@ -118,6 +128,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --check) MODE=check ;;
     --check-frontend) MODE=check-frontend ;;
+    --check-cargo-shear) MODE=check-cargo-shear ;;
     --install-actionlint) MODE=install-actionlint ;;
     --coverage) WITH_COVERAGE=1 ;;
     --yes) ASSUME_YES=1 ;;
@@ -501,6 +512,49 @@ nextest_ready() {
   [[ "$version" == "$base" || "$base" != "$NEXTEST_MIN_VERSION" ]]
 }
 
+# Probed through cargo like nextest, so a stale binary that no longer runs
+# counts as absent. Releases print `Version: X.Y.Z`; a `cargo-shear X.Y.Z`
+# banner is accepted too.
+cargo_shear_version() {
+  command -v cargo >/dev/null 2>&1 || return 1
+  local output line
+  output=$(cargo shear --version 2>/dev/null) || return 1
+  line=${output%%$'\n'*}
+  [[ "$line" =~ ^(Version:|cargo-shear)[[:space:]]+([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)([[:space:]]|$) ]] || return 1
+  printf '%s\n' "${BASH_REMATCH[2]}"
+}
+
+cargo_shear_ready() {
+  local version base
+  version=$(cargo_shear_version) || return 1
+  base=${version%%-*}
+  version_ge "$base" "$CARGO_SHEAR_MIN_VERSION" || return 1
+  # The minimum prerelease is not the supported stable release.
+  [[ "$version" == "$base" || "$base" != "$CARGO_SHEAR_MIN_VERSION" ]]
+}
+
+report_cargo_shear() {
+  local found
+  if cargo_shear_ready; then
+    ok "cargo-shear: $(cargo_shear_version)"
+  elif found=$(cargo_shear_version); then
+    missing "cargo-shear >= $CARGO_SHEAR_MIN_VERSION: found $found; make check runs cargo shear --deny-warnings like intentd CI; run make bootstrap-dev-host"
+  else
+    missing "cargo-shear >= $CARGO_SHEAR_MIN_VERSION: missing or unusable; make check runs cargo shear --deny-warnings like intentd CI; run make bootstrap-dev-host"
+  fi
+}
+
+# cargo_shear_target: the prebuilt release archive target for this host, or
+# failure (bootstrap then compiles it with cargo install).
+cargo_shear_target() {
+  case "$(uname -s):$(uname -m)" in
+    Linux:x86_64|Linux:amd64) echo x86_64-unknown-linux-musl ;;
+    Linux:aarch64|Linux:arm64) echo aarch64-unknown-linux-musl ;;
+    Darwin:*) echo universal-apple-darwin ;;
+    *) return 1 ;;
+  esac
+}
+
 jq_version() {
   command -v jq >/dev/null 2>&1 || return 1
   local output
@@ -697,6 +751,7 @@ installable_gap_exists() {
   rust_toolchain_ready || return 0
   active_toolchain_ready || return 0
   nextest_ready || return 0
+  cargo_shear_ready || return 0
   node_ready || return 0
   command -v corepack >/dev/null 2>&1 || return 0
   pnpm_ready || return 0
@@ -768,6 +823,14 @@ check_frontend() {
 
   [[ "$FAILURES" -eq 0 ]] && return 0
   echo "run: make bootstrap-dev-host"
+  return 1
+}
+
+# The make check preflight: silent when cargo-shear is ready, otherwise the
+# doctor row on stderr.
+check_cargo_shear() {
+  cargo_shear_ready && return 0
+  report_cargo_shear >&2
   return 1
 }
 
@@ -846,6 +909,7 @@ check_all() {
   else
     missing "cargo-nextest >= $NEXTEST_MIN_VERSION: missing or unusable; required for resumable test filters; run make bootstrap-dev-host"
   fi
+  report_cargo_shear
   report_coverage_tooling
 
   local node_found
@@ -1077,6 +1141,29 @@ install_rust() {
     hash -r
     nextest_ready || { echo "ERROR: cargo-nextest >= $NEXTEST_MIN_VERSION is still unavailable after installation; check Cargo's PATH or run cargo install cargo-nextest --locked" >&2; exit 1; }
   fi
+}
+
+install_cargo_shear() {
+  if cargo_shear_ready; then
+    echo "[skip] cargo-shear $(cargo_shear_version) already installed (minimum $CARGO_SHEAR_MIN_VERSION)"
+    return
+  fi
+  local target
+  if target=$(cargo_shear_target); then
+    command -v curl >/dev/null 2>&1 || { echo "ERROR: curl is required to install cargo-shear" >&2; exit 1; }
+    echo "[install] cargo-shear (latest release, as intentd CI installs) from its prebuilt $target archive"
+    TEMP_FILE=$(mktemp "${TMPDIR:-/tmp}/cargo-shear.XXXXXX") || exit 1
+    retry_download curl --proto '=https' --tlsv1.2 -LsSf "$CARGO_SHEAR_RELEASE_URL/cargo-shear-$target.tar.gz" -o "$TEMP_FILE" || exit 1
+    mkdir -p "$CARGO_HOME/bin" || exit 1
+    tar -xzf "$TEMP_FILE" -C "$CARGO_HOME/bin" cargo-shear || exit 1
+    rm -f -- "$TEMP_FILE"
+    TEMP_FILE=""
+  else
+    echo "[install] cargo-shear (no prebuilt archive for $(uname -s) $(uname -m); cargo install compiles it from source)"
+    cargo install cargo-shear --locked || exit 1
+  fi
+  hash -r
+  cargo_shear_ready || { echo "ERROR: cargo-shear >= $CARGO_SHEAR_MIN_VERSION is still unavailable after installation; check Cargo's PATH or run cargo install cargo-shear --locked" >&2; exit 1; }
 }
 
 # Opt-in (--coverage / BOOTSTRAP_COVERAGE=1): a default bootstrap never
@@ -1392,6 +1479,11 @@ if [[ "$MODE" == check-frontend ]]; then
   exit $?
 fi
 
+if [[ "$MODE" == check-cargo-shear ]]; then
+  check_cargo_shear
+  exit $?
+fi
+
 if [[ "$MODE" == check ]]; then
   check_all
   exit $?
@@ -1432,6 +1524,7 @@ load_versions
 install_python
 install_native_build_dependencies
 install_rust
+install_cargo_shear
 install_coverage_tooling
 install_node
 install_frontend
