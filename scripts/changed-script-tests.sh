@@ -42,7 +42,14 @@
 #   reaches X through a Makefile recipe or a *.fixture.sh without naming X or
 #   one of its users is not selected, for a helper as for any changed script.
 #      The merge queue still runs every suite.
-#   4. `node --test scripts/X.test.mjs` for each changed scripts/X.mjs or
+#   4. The Bash 3.2 pass, when the suites' own lookup (scripts/find-bash3.sh,
+#      which finds the `make bash3` cache) finds an interpreter: the lines of
+#      the ci.yml `shell-tests-bash3` job's first run step that start a suite
+#      step 3 runs under "$BASH3_BIN" itself, with BASH3_BIN exported. Its
+#      other lines are not repeated: they rerun a suite that already reran its
+#      own checks under that interpreter in step 3. With none found, the pass
+#      is skipped with a notice (the merge queue still runs it).
+#   5. `node --test scripts/X.test.mjs` for each changed scripts/X.mjs or
 #      scripts/X.test.mjs whose test file exists.
 # The output says why each suite and module was selected. DRY_RUN=1 prints the plan
 # without running it. Every step runs; the exit code is non-zero when any step
@@ -70,11 +77,11 @@ changed=$( {
   git ls-files --others --exclude-standard
 } | LC_ALL=C sort -u)
 
-# Lines of the first `run: |` block in the shell-tests job, minus echo lines.
-shell_suites() {
+# Lines of the first `run: |` block in ci.yml job $1, minus echo lines.
+job_run_lines() {
   [ -f "$ci_file" ] || die "$ci_file not found"
-  awk '
-    /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { in_job = ($1 == "shell-tests:"); next }
+  awk -v job="$1:" '
+    /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { in_job = ($1 == job); next }
     !in_job { next }
     in_block {
       if ($0 ~ /^[[:space:]]*$/) next
@@ -88,6 +95,10 @@ shell_suites() {
       match($0, /^ */); block_indent = RLENGTH; in_block = 1
     }
   ' "$ci_file"
+}
+
+shell_suites() {
+  job_run_lines shell-tests
 }
 
 # The python-tests "Select Python test changes" `git diff` pathspec, one
@@ -444,9 +455,11 @@ MODULES
   steps="$steps$py_command$py_selected"$'\n'
 fi
 selection=""
+shell_steps=""
 if [ "$run_all_shell" = 1 ]; then
   suites=$(shell_suites)
   [ -n "$suites" ] || die "no commands found in the $ci_file shell-tests job"
+  shell_steps="$suites"$'\n'
   steps="$steps$suites"$'\n'
 elif [ -n "$picks" ]; then
   # Keep the ci.yml order; join the reasons of a suite picked more than once.
@@ -455,10 +468,48 @@ elif [ -n "$picks" ]; then
     why=$(printf '%s' "$picks" | awk -F '\t' -v s="$suite" '$1 == s { r = r (r == "" ? "" : "; ") $2 } END { print r }')
     [ -n "$why" ] || continue
     steps="$steps$suite"$'\n'
+    shell_steps="$shell_steps$suite"$'\n'
     selection="${selection}test-scripts-changed: selected $(suite_file "$suite"): $why"$'\n'
   done <<SUITES
 $suites
 SUITES
+fi
+# Step 4: the shell-tests-bash3 lines that start a suite step 3 runs under
+# "$BASH3_BIN" itself. The other lines rerun a suite that, finding the same
+# interpreter, already reran its checks under it in step 3.
+bash3_lines=""
+bash3_files=""
+if [ -n "$shell_steps" ]; then
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    case "$line" in *'"$BASH3_BIN" scripts/'*) ;; *) continue ;; esac
+    file=$(suite_file "$line")
+    [ -n "$file" ] || continue
+    while IFS= read -r suite; do
+      if [ -n "$suite" ] && [ "$(suite_file "$suite")" = "$file" ]; then
+        bash3_lines="$bash3_lines$line"$'\n'
+        bash3_files="$bash3_files $file"
+        break
+      fi
+    done <<SUITES
+$shell_steps
+SUITES
+  done <<LINES
+$(job_run_lines shell-tests-bash3)
+LINES
+fi
+bash3=""
+bash3_note=""
+if [ -n "$bash3_lines" ]; then
+  # shellcheck source=scripts/find-bash3.sh
+  . "$repo_root/scripts/find-bash3.sh"
+  if bash3=$(find_bash3); then
+    steps="$steps$bash3_lines"
+    bash3_note="test-scripts-changed: Bash 3.2 pass with $bash3 (the shell-tests-bash3 lines that start these suites under it):$bash3_files"
+  else
+    bash3=""
+    bash3_note="test-scripts-changed: Bash 3.2 pass skipped:$bash3_files ($(bash3_missing_hint); the merge queue still runs it)"
+  fi
 fi
 if [ -n "$node_tests" ]; then
   while IFS= read -r test_file; do
@@ -488,6 +539,7 @@ elif [ -n "$selection" ]; then
 else
   echo "test-scripts-changed: no Makefile, ci.yml or scripts/*.sh|*.py change; shell suites skipped"
 fi
+[ -z "$bash3_note" ] || echo "$bash3_note"
 
 if [ -n "${DRY_RUN:-}" ] && [ "${DRY_RUN}" != 0 ]; then
   echo "test-scripts-changed: plan (DRY_RUN):"
@@ -505,6 +557,8 @@ if [ -n "$node_tests" ] && ! command -v node >/dev/null 2>&1; then
   die "node is required for the node:test suites; run make bootstrap-dev-host"
 fi
 
+# The Bash 3.2 lines start "$BASH3_BIN"; the suites' own lookup tries it first.
+[ -z "$bash3" ] || export BASH3_BIN="$bash3"
 failed=""
 while IFS= read -r step; do
   [ -n "$step" ] || continue
