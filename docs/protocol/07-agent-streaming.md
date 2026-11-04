@@ -182,7 +182,7 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   atomic conversation page can contain fewer rows than that reconstructed window.
 
   The daemon owns continuation until it has sent the requested number of initial
-  rows or reached the actual beginning of the conversation. A slim page's 512 KiB
+  rows or reached the actual beginning of the conversation. A slim page's 480,000-byte
   budget can split the initial transfer into multiple bounded reads; it must not
   silently lower the target. Slim block projections, the one-message floor, bounded
   buffering, and connection backpressure remain in force. The final cursor points
@@ -228,7 +228,7 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   atomic snapshots additionally inherit the **slim page byte budget** (within v7.2 —
   [intent-hq/intentd#1314](https://github.com/intent-hq/intentd/pull/1314)): atomic initial,
   successful-resume and recovery snapshots reuse the `agent.getConversation` read, so a snapshot page is bounded
-  at `SLIM_PAGE_BUDGET_BYTES` (512 KiB) total serialized message bytes and may carry fewer than
+  at `SLIM_PAGE_BUDGET_BYTES` (480,000 bytes) total serialized message bytes and may carry fewer than
   the chosen message limit, with `nextToken` re-minted at the first excluded row (§5.5) — the client
   pages older history exactly as before, just in more round-trips. The budget covers the
   live-turn merge too: after the in-flight message is appended it anchors as the newest row
