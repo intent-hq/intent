@@ -4,7 +4,8 @@
 # It copies the selector into a throwaway git repo with a minimal ci.yml
 # shell-tests job and python-tests pathspec step and a Makefile test-scripts recipe, makes changes on a branch,
 # and pins the DRY_RUN plan (and the printed reason) for each selection rule plus
-# the exit code of a real run with a failing step.
+# the exit code of a real run with a failing step. Then, unless it is already
+# on one, it reruns itself with the selector under a Bash 3.2 (stock macOS).
 
 set -euo pipefail
 
@@ -12,7 +13,8 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 temp_dir=$(mktemp -d)
 trap 'rm -rf "$temp_dir"' EXIT
 fixture=$temp_dir/repo
-# The selector runs under this interpreter; a 3.2 bash here checks macOS parity.
+# The selector runs under this interpreter. It defaults to the one running this
+# suite; the Bash 3.2 pass at the end reruns the suite with a real Bash 3 here.
 script_bash=${CHANGED_SCRIPT_TESTS_BASH:-$BASH}
 
 fail() {
@@ -20,11 +22,19 @@ fail() {
   exit 1
 }
 
-# CI's shell-tests-bash3 job sets REQUIRE_BASH3: an empty or wrong
-# CHANGED_SCRIPT_TESTS_BASH must fail there, not quietly test a newer bash.
-if [ -n "${REQUIRE_BASH3:-}" ] &&
-  ! "$script_bash" -c '[ "${BASH_VERSINFO[0]}" -eq 3 ]' 2>/dev/null; then
-  fail "REQUIRE_BASH3 is set but CHANGED_SCRIPT_TESTS_BASH ('${CHANGED_SCRIPT_TESTS_BASH:-}') is not Bash 3"
+# shellcheck source=scripts/find-bash3.sh
+source "$repo_root/scripts/find-bash3.sh"
+
+# CI's shell-tests-bash3 job sets REQUIRE_BASH3: a wrong CHANGED_SCRIPT_TESTS_BASH
+# must fail there, not quietly test a newer bash, and so must a missing Bash 3
+# for the rerun at the end (checked here, before the first pass spends minutes).
+if [ -n "${REQUIRE_BASH3:-}" ]; then
+  if [ -n "${CHANGED_SCRIPT_TESTS_BASH:-}" ]; then
+    "$script_bash" -c '[ "${BASH_VERSINFO[0]}" -eq 3 ]' 2>/dev/null ||
+      fail "REQUIRE_BASH3 is set but CHANGED_SCRIPT_TESTS_BASH ('$CHANGED_SCRIPT_TESTS_BASH') is not Bash 3"
+  elif [ "${BASH_VERSINFO[0]}" -ne 3 ] && ! find_bash3 >/dev/null; then
+    fail "no Bash 3 interpreter found and REQUIRE_BASH3 is set ($(bash3_missing_hint); or unset REQUIRE_BASH3 to skip the real 3.2 run)"
+  fi
 fi
 
 git_fixture() {
@@ -501,8 +511,6 @@ REQUIRE_BASH3=1 STARTUP_ONLY=1 "$BASH3_BIN" scripts/top.test.sh' ] ||
 echo "ok - a full run adds only the Bash 3.2 lines of shell-tests suites"
 reset_fixture
 
-# shellcheck source=scripts/find-bash3.sh
-source "$repo_root/scripts/find-bash3.sh"
 if (BASH3_BIN="" BASH3_CACHE_DIR=$temp_dir/no-bash3 find_bash3 >/dev/null); then
   echo "ok - # SKIP missing Bash 3.2 case: this host has one outside the cache (stock macOS)"
 else
@@ -518,4 +526,18 @@ bash scripts/top.test.sh' ] || fail "plan without Bash 3: $output"
   reset_fixture
 fi
 
-echo "changed-script-tests tests passed"
+echo "changed-script-tests tests passed with the selector under $("$script_bash" -c 'echo "bash $BASH_VERSION"')"
+[ -z "${CHANGED_SCRIPT_TESTS_BASH:-}" ] || exit 0
+
+# The selector must parse and run under Bash 3.2 (stock macOS), so rerun the
+# whole suite, selector included, under a real Bash 3 from the shared lookup
+# (find-bash3.sh; `make bash3` builds one), as the other shell suites do. A
+# missing Bash 3 is a skip notice by default; under REQUIRE_BASH3 (CI) the
+# check at the top has already failed the run before the first pass.
+if [ "${BASH_VERSINFO[0]}" -eq 3 ]; then
+  : # the selector above already ran under Bash 3
+elif bash3=$(find_bash3); then
+  CHANGED_SCRIPT_TESTS_BASH="$bash3" "$bash3" "${BASH_SOURCE[0]}"
+else
+  echo "changed-script-tests tests: no Bash 3 interpreter found ($(bash3_missing_hint)); real 3.2 run skipped"
+fi
