@@ -1124,6 +1124,11 @@ machine run carries `remoteAgentId` and `nodeId`. There is one active monitor pe
 script **and run place**, so a monitor on the home run and one on each machine
 run do not contend
 ([§5.8a uniqueness](./script-monitors.md#protocol-13-baseline-surfaces-and-authority)).
+A `script.stop` or manual `script.restart` of a machine run ends its monitor:
+unless the monitor's TTL has passed, its owner gets exactly one wake saying the
+machine run was cancelled because it was stopped or restarted (a plain message,
+without `script_monitor_wake` metadata). The monitor never carries over to the
+restarted run.
 
 **Changing or removing a definition.** An upsert or `script.remove` stops every
 live machine run of the script (`scriptStop` to each machine), settles each
@@ -1142,7 +1147,21 @@ restarting or running a machine run fails with:
   nodeProtocol 7 (a remote agent on a protocol 7 machine cannot reach
   `script.*` at all: its machine refuses the call with `remote-agent-unsupported:`);
 - `-32603` `machine-unreachable` with `attempts` when no link is up after the
-  on-demand connect.
+  on-demand connect;
+- `-32602` `remote-script-agent-ending` while the run's agent is being stopped
+  for good (agent deletion or retirement, workspace retirement or deletion, or
+  machine removal), from the moment the backend begins the agent's final stop
+  until that stop is over: the machine acknowledges it (on a machine below
+  nodeProtocol 9, the plain stop sent in its place) or its record is dropped
+  past its bound. A lease end does not end it: after a failed
+  `remoteMachines.remove` the final stop stays queued, and the refusal holds
+  until it is acknowledged or expires. The message is
+  `remote-script-agent-ending: agent <agentId> is being stopped for good; its
+  scripts cannot start`. `script.restart` checks this before stopping
+  anything, so a refused restart leaves the current run as it was. It covers
+  the remote agent's `script.start`, `script.restart` and `script.run`, and the
+  app's `script.restart({ remoteAgentId })` (the app's `start` and `run` with
+  `remoteAgentId` already fail `remote-script-start-remote-only`).
 
 **Events.** Machine-run transitions are published as `script:changed` with
 `action: "updated"` and the full row in `data.script`, never as `script:state`
