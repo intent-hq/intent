@@ -48,9 +48,9 @@ interface NoteMatch {
   preview: string;          // plain-text display snippet, never trusted HTML
   score?: number;           // indexed hits always emit -adjustedRank; higher = better
   workspaceId: string;      // identity/navigation key is (workspaceId, noteId)
-  title?: string;           // absent only on a hit too large for a page:
-  titleOmitted?: true;      //   then titleOmitted and titleBytes (UTF-8 length)
-  titleBytes?: number;      //   are set; read the title with note.get
+  title: string;            // shortened only on a hit too large for a page:
+  titleTruncated?: true;    //   then titleTruncated and titleBytes (the full
+  titleBytes?: number;      //   UTF-8 length) are set; note.get reads it whole
   updatedAt: string;        // persisted note updated_at, RFC 3339
   isArchived: boolean;     // the note's own archive state
   workspaceArchived: boolean; // independently, its workspace's archive state
@@ -140,11 +140,15 @@ remain. `nextToken` is a string when more hits follow and `null` when the list i
 (a page that reaches `limit` exactly may still end the list). To continue, send the same
 `query`, `workspaceId`, `preferWorkspaceId` and `includeArchived` with the token (`limit` and
 `requestId` may change); a malformed token or one from a different search is `-32602`
-`"invalid-params"`. The token is opaque and resumes at a ranked position, so notes edited
-between pages can shift a hit by one place. A single hit larger than a page (only an extremely
-long title can do this) omits `title` and adds `titleOmitted: true` and `titleBytes`; its
-other fields stay, and `note.get` reads the title. Older clients that ignore `nextToken` see
-the first page.
+`"invalid-params"`. The token is opaque and resumes after the page's last hit by its position
+in the ranked order (a keyset, not a count), re-anchoring on the page's recent hits at their
+current ranks. Deleting, archiving or editing a note already served therefore never skips a
+hit that still matches. A page may repeat a hit whose own rank rose, or include a note that
+newly matches. A hit edited to rank higher than the page end before it is served moves onto an
+earlier page and is not returned again. A single hit larger than a page (only an extremely long
+title can do this) keeps a shortened `title`, cut on a UTF-8 boundary, and adds
+`titleTruncated: true` and `titleBytes` (the full title's UTF-8 length); `note.get` reads the
+whole title. Older clients that ignore `nextToken` see the first page.
 
 **Delivery, errors and compatibility.** Indexed note searches always return their page inline,
 even with an explicit `workspaceId` or more than 25 matches. No `search:result`
