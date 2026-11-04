@@ -1151,8 +1151,10 @@ restarting or running a machine run fails with:
 - `-32602` `remote-script-agent-ending` while the run's agent is being stopped
   for good (agent deletion or retirement, workspace retirement or deletion, or
   machine removal), from the moment the backend begins the agent's final stop
-  until the machine acknowledges it (on a machine below nodeProtocol 9, until
-  it acknowledges the plain stop sent in its place). The message is
+  until that stop is over: the machine acknowledges it (on a machine below
+  nodeProtocol 9, the plain stop sent in its place), its record is dropped
+  past its bound, or the agent's machine runs end with its lease (machine
+  removal, agent deletion). The message is
   `remote-script-agent-ending: agent <agentId> is being stopped for good; its
   scripts cannot start`. `script.restart` checks this before stopping
   anything, so a refused restart leaves the current run as it was. It covers
