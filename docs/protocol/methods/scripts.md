@@ -1124,6 +1124,10 @@ machine run carries `remoteAgentId` and `nodeId`. There is one active monitor pe
 script **and run place**, so a monitor on the home run and one on each machine
 run do not contend
 ([§5.8a uniqueness](./script-monitors.md#protocol-13-baseline-surfaces-and-authority)).
+A `script.stop` or manual `script.restart` of a machine run settles its monitor
+as for the home run: exactly one wake whose result `outcome` is `cancelled`,
+with an error naming the stop or restart; the monitor never carries over to the
+restarted run.
 
 **Changing or removing a definition.** An upsert or `script.remove` stops every
 live machine run of the script (`scriptStop` to each machine), settles each
@@ -1142,7 +1146,15 @@ restarting or running a machine run fails with:
   nodeProtocol 7 (a remote agent on a protocol 7 machine cannot reach
   `script.*` at all: its machine refuses the call with `remote-agent-unsupported:`);
 - `-32603` `machine-unreachable` with `attempts` when no link is up after the
-  on-demand connect.
+  on-demand connect;
+- `-32602` `remote-script-agent-ending` while the run's agent is being stopped
+  for good (`agent.delete`, from the moment the backend sends the machine the
+  agent's final stop until the machine acknowledges it). The message is
+  `remote-script-agent-ending: agent <agentId> is being stopped for good; its
+  scripts cannot start`. `script.restart` checks this before stopping
+  anything, so a refused restart leaves the current run as it was. It covers
+  `script.start`, `script.restart` and `script.run`, from the remote agent and
+  from the app's `remoteAgentId` calls alike.
 
 **Events.** Machine-run transitions are published as `script:changed` with
 `action: "updated"` and the full row in `data.script`, never as `script:state`
