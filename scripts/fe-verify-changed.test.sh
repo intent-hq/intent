@@ -134,7 +134,7 @@ run_make NO_FAIL_FAST=1
 expect_ok
 expect_verify_argv --keep-going
 
-case_name="NO_FAIL_FAST=0 stops at the first failing check"
+case_name="NO_FAIL_FAST=0 passes no flag (the run stops at its first failed check)"
 run_make NO_FAIL_FAST=0
 expect_ok
 expect_verify_argv
