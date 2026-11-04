@@ -1872,7 +1872,7 @@ Each WebSocket binary message on `/node/link` is one JSON frame of at most
 | `welcome` | machine → backend | control | `protocol` (the chosen version), `nodeId`, `runningAgents: AgentId[]` (this binding only), `capabilities: MachineCapabilities`, `hosts: string[]`, `tcAddress?` |
 | `heartbeat` / `heartbeatReply` | both | control | `nonce` |
 | `capabilities` | backend → machine | control | Empty: ask for a fresh [report](#capabilities-report) |
-| `capabilitiesReply` | machine → backend | control | `capabilities: MachineCapabilities` |
+| `capabilitiesReply` | machine → backend | control | `capabilities: MachineCapabilities`; also sent unsolicited when the machine's [enabled providers](#capabilities-report) change |
 | `launch` | backend → machine | control | See [launch](#launch-and-agent-lifecycle) |
 | `prompt` | backend → machine | control | `agentId`, `turnId`, `prompt` (ACP content blocks) |
 | `cancel` | backend → machine | control | `agentId`: cancel the running turn |
@@ -2276,7 +2276,8 @@ interface LaunchCommand {
 ```
 
 The machine refuses a launch its [limits](#capacity-and-permission) deny
-(`node-capacity`) or for a provider it cannot run (`node-provider-unavailable`).
+(`node-capacity`) or for a provider it cannot run, including one turned off in
+its own settings (`node-provider-unavailable`).
 It fetches `baseCommit` over the git connection into a per-repository bare
 cache named by `repoKey`, creates the agent's worktree, spawns the provider and
 journals `started`. The machine opens the provider session without prompt
@@ -2322,7 +2323,7 @@ the backend records the launch sets `placementError.code` to
 | Code | Meaning |
 | --- | --- |
 | `node-capacity` | The machine's limits deny another agent ([capacity refusal](#capacity-and-permission)) |
-| `node-provider-unavailable` | The provider cannot run on the machine |
+| `node-provider-unavailable` | The provider cannot run on the machine: unknown there, or turned off in its own `providers.enabled` ([enabled providers](#capabilities-report)); no process starts |
 | `node-profile-unavailable` | The selected profile cannot be used on the machine; no other account was used |
 | `node-checkout-failed` | The agent's checkout could not be prepared (its base, or on a [relaunch](#relaunch-without-a-checkout) its saved refs, including a failed `unapplied/` pin) |
 | `node-agent-start-failed` | The provider process could not be started or set up (also any error without a code) |
@@ -2608,6 +2609,29 @@ interface MachineCapabilities {
 }
 ```
 
+- **Enabled providers only.** `providers` lists only the providers enabled in
+  the machine's **own** settings: a provider whose `providers.enabled[id]` is
+  explicitly `false` there is left out of the report entirely (there is no
+  `enabled` flag), so the backend's placement, model picker and Machines list
+  never offer it. A remote launch therefore needs the provider enabled on both
+  the backend (its own selection rules) and the machine.
+- **Refused at the machine.** A `launch` whose `provider` is unknown or disabled
+  on the machine is refused before any process starts: the machine journals
+  `exited` with `error: "node-provider-unavailable: unknown or disabled"`. A
+  model switch or quota failover reaches the machine as a fresh `launch`, so the
+  same refusal applies; the backend surfaces it like any other start failure
+  (`placementError.code` `node-provider-unavailable`). An agent already running
+  on a provider that is then disabled keeps its current process; its next start
+  is refused.
+- **Pushed on change.** When the machine's `providers.enabled` changes, it
+  updates its cached report at once and sends an unsolicited
+  `capabilitiesReply` on every live backend link, then refreshes the full
+  report (models and sign-in probes) and pushes again. The backend handles an
+  uncorrelated `capabilitiesReply` exactly like a requested one: it stores the
+  report and announces the machine's change. This adds no frame type and no
+  nodeProtocol version. An older machine does not push; the backend picks the
+  change up at its next refresh (a report older than 1 hour is refreshed before
+  placement).
 - **Models** come from the machine's own `models.list`; `cli-missing` and
   `prerequisite-missing` are its existing `warningKind` values.
 - **Sign-in (default account only).** Each provider has a cheap sign-in probe

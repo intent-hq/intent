@@ -862,6 +862,20 @@ stays 30 s on a lower link.
 events, fields of public results or error codes change, the surface counts are
 unchanged, and there is no public protocol version bump.
 
+**Machine-side enabled providers (behavior change, no capability).**
+A machine's [capabilities report](./node-link.md#capabilities-report) lists only
+the providers enabled in its own `providers.enabled`, and the machine refuses a
+launch, model switch or quota failover on a disabled provider with the existing
+`node-provider-unavailable` start failure, so a remote agent needs its provider
+enabled on both the backend and the machine. Backend admission and
+`agent.setModel` keep returning `model-unavailable` when the report lacks the
+provider. When the enabled set changes, the machine now sends an unsolicited
+`capabilitiesReply` on every live link (and again after a full refresh), which
+the backend handles like a requested one. Older machines do not push; the
+backend sees the change at its next refresh, within about an hour. No frame,
+nodeProtocol, method, event, field or error code changes, the surface counts
+are unchanged, and there is no public protocol version bump.
+
 **Command-default change (breaking).**
 [Script creation defaults (§5.8)](./methods/scripts.md#command-creation-defaults-breaking-change)
 change omission on a new command from `saved` to `oneOff`; new services remain
