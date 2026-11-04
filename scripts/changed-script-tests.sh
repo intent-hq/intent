@@ -47,8 +47,10 @@
 #      the ci.yml `shell-tests-bash3` job's first run step that start a suite
 #      step 3 runs under "$BASH3_BIN" itself, with BASH3_BIN exported. Its
 #      other lines are not repeated: they rerun a suite that already reran its
-#      own checks under that interpreter in step 3. With none found, the pass
-#      is skipped with a notice (the merge queue still runs it).
+#      own checks under that interpreter in step 3, except this selector's own
+#      self-test, whose 3.2 run (CHANGED_SCRIPT_TESTS_BASH) is merge-queue only.
+#      With none found, the pass is skipped with a notice (the merge queue
+#      still runs it).
 #   5. `node --test scripts/X.test.mjs` for each changed scripts/X.mjs or
 #      scripts/X.test.mjs whose test file exists.
 # The output says why each suite and module was selected. DRY_RUN=1 prints the plan
@@ -476,7 +478,8 @@ SUITES
 fi
 # Step 4: the shell-tests-bash3 lines that start a suite step 3 runs under
 # "$BASH3_BIN" itself. The other lines rerun a suite that, finding the same
-# interpreter, already reran its checks under it in step 3.
+# interpreter, already reran its checks under it in step 3 (except this
+# script's self-test, whose 3.2 run is left to the merge queue).
 bash3_lines=""
 bash3_files=""
 if [ -n "$shell_steps" ]; then

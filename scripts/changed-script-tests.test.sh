@@ -20,6 +20,13 @@ fail() {
   exit 1
 }
 
+# CI's shell-tests-bash3 job sets REQUIRE_BASH3: an empty or wrong
+# CHANGED_SCRIPT_TESTS_BASH must fail there, not quietly test a newer bash.
+if [ -n "${REQUIRE_BASH3:-}" ] &&
+  ! "$script_bash" -c '[ "${BASH_VERSINFO[0]}" -eq 3 ]' 2>/dev/null; then
+  fail "REQUIRE_BASH3 is set but CHANGED_SCRIPT_TESTS_BASH ('${CHANGED_SCRIPT_TESTS_BASH:-}') is not Bash 3"
+fi
+
 git_fixture() {
   git -C "$fixture" -c user.name=test -c user.email=test@example.invalid "$@"
 }
