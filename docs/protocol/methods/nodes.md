@@ -724,19 +724,23 @@ type MachineProviderStatus =
 ```
 
 `status` is the provider's status in that machine's
-[capabilities report](../node-link.md#capabilities-report). When the report does
-not list the provider, the first matching rule applies (`models` is empty):
+[capabilities report](../node-link.md#capabilities-report). When there is no
+report or it does not list the provider, the first matching rule applies
+(`models` is empty):
 
 1. `disabled` when the report's `disabledProviders` names it: the provider is
    switched off in the machine's own `providers.enabled`, whether or not it is
    installed;
-2. `unknown` when the report lists no providers and no `disabledProviders`
-   (the machine has not looked at its providers yet);
+2. `unknown` when the machine has no report yet, or its report lists no
+   providers and no `disabledProviders` (the machine has not looked at its
+   providers yet);
 3. `cli-missing` otherwise, including every absent provider of a machine that
    does not send `disabledProviders` and still lists other providers.
 
-A machine with no capabilities report (so no known platform) is not listed in
-`machines`. `status` is an open set: values may be added without a version
+Placement refreshes a machine without a report before deciding and lists one
+it cannot reach as unreachable rather than in `machines`, so a report-less
+entry comes from `agent.setModel` on a remote agent whose machine has not
+reported. `status` is an open set: values may be added without a version
 bump, and a client treats an unrecognized value as a generic unavailability.
 
 Its message is written for the model: "Model X isn't available on <machine>;
