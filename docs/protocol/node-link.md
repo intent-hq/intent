@@ -2605,6 +2605,7 @@ interface MachineCapabilities {
     models: string[];
     modelsStale: boolean;
   }[];
+  disabledProviders?: string[];  // provider ids switched off in the machine's own providers.enabled; absent from older machines
   observedAt: string;            // UTC RFC 3339
 }
 ```
@@ -2615,6 +2616,14 @@ interface MachineCapabilities {
   `enabled` flag), so the backend's placement, model picker and Machines list
   never offer it. A remote launch therefore needs the provider enabled on both
   the backend (its own selection rules) and the machine.
+- **Disabled providers.** `disabledProviders` names the providers the machine
+  left out of `providers` because its own `providers.enabled[id]` is `false`,
+  so the backend can tell a provider switched off on the machine from one that
+  is not installed there. An id never appears in both lists. The field is
+  optional and additive (no nodeProtocol version): an older machine omits it,
+  and the backend then treats every provider absent from `providers` as
+  `cli-missing`, as before. It is informational only; a disabled provider is
+  never a placement candidate.
 - **Refused at the machine.** A `launch` whose `provider` is unknown or disabled
   on the machine is refused before any process starts: the machine journals
   `exited` with an error such as
@@ -2625,8 +2634,9 @@ interface MachineCapabilities {
   on a provider that is then disabled keeps its current process; its next start
   is refused.
 - **Pushed on change.** When the machine's `providers.enabled` changes, it
-  updates its cached report at once (dropping newly disabled providers and
-  adding newly enabled ones with their launch status and `modelsStale: true`)
+  updates its cached report at once (moving newly disabled providers from
+  `providers` to `disabledProviders` and newly enabled ones back, with their
+  launch status and `modelsStale: true`)
   and sends an unsolicited
   `capabilitiesReply` on every live backend link, then refreshes the full
   report (models and sign-in probes) and pushes again. The backend handles an

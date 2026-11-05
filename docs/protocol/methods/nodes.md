@@ -713,13 +713,40 @@ interface ModelUnavailableData {
   provider: string;
   model: string;
   machines: { nodeId: string; name: string; platform: { os: string; arch: string };
-              status: string; models: string[]; observedAt: string }[]; // models: at most 50
+              status: MachineProviderStatus; models: string[]; observedAt: string }[]; // models: at most 50
   retryable: boolean; // true when a listed report is stale or its machine was unreachable
 }
+
+type MachineProviderStatus =
+  | "signed-in" | "signed-out" | "unknown" | "auth-failed"
+  | "cli-missing" | "prerequisite-missing" // the report's own provider status
+  | "disabled";                            // provider switched off on that machine
 ```
 
+`status` is the provider's status in that machine's
+[capabilities report](../node-link.md#capabilities-report). When there is no
+report or it does not list the provider, the first matching rule applies
+(`models` is empty):
+
+1. `disabled` when the report's `disabledProviders` names it: the provider is
+   switched off in the machine's own `providers.enabled`, whether or not it is
+   installed;
+2. `unknown` when the machine has no report yet, or its report lists no
+   providers and no `disabledProviders` (the machine has not looked at its
+   providers yet);
+3. `cli-missing` otherwise, including every absent provider of a machine that
+   does not send `disabledProviders` and still lists other providers.
+
+Placement refreshes a machine without a report before deciding; one it cannot
+reach is left out of `machines` and makes the error `retryable`. So a
+report-less entry comes from `agent.setModel` on a remote agent whose machine
+has not reported. `status` is an open set: values may be added without a version
+bump, and a client treats an unrecognized value as a generic unavailability.
+
 Its message is written for the model: "Model X isn't available on <machine>;
-it has: …", naming each machine's provider status.
+it has: …", naming each machine's provider status. A `disabled` machine reads
+"disabled on <machine>", so the user knows to switch the provider on there
+rather than install it.
 
 `machine-update-required` (`-32602` from placement, add and refresh) carries
 `{ machineVersion, backendVersion, update: "machine" | "backend" }`.
