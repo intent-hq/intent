@@ -118,7 +118,7 @@ integer `1`; older daemons omit it and serve every block whole.
 `server.capabilities.remoteAgentSkills: 1`, also returned by `system.capabilities`,
 advertises the [§5.34 skills of a remote agent](./agent-aux.md#skills-of-a-remote-agent)
 contract: the `agentId` param of `skill.list` with its `stale` / `unavailable` result
-fields, and `agentId` on `skills:changed`. Clients send `agentId` only for exact integer
+fields, `agentId` on `skills:changed`, and the `skill_unavailable` system notice. Clients send `agentId` only for exact integer
 `1`; older daemons omit it, and clients keep the workspace-only call.
 
 **Workspace labels (additive).** Exactly integer `server.capabilities.workspaceLabels: 1`,

@@ -68,8 +68,7 @@ capability-gated; no method-catalog change, so no version bump; node-link protoc
 **skills of remote agents** ([§5.34 skills of a remote
 agent](./methods/agent-aux.md#skills-of-a-remote-agent), [skills on the
 machine](./node-link.md#skills-on-the-machine-nodeprotocol-12)). A remote agent's skills
-are discovered on its machine (its profile's `CLAUDE_CONFIG_DIR` there, and its own
-checkout), and the machine adds their catalog to the agent's first prompt. `skill.list`
+are discovered on its machine (its home there, and its own checkout), and the machine adds their catalog to the agent's first prompt. `skill.list`
 gains `agentId?`; with it the result is always the paged envelope, plus `stale: true`
 (machine not connected, last reported list) or `unavailable: "machine-offline" |
 "machine-update-required"`. `skills:changed` carries `agentId` when a remote agent's

@@ -398,31 +398,40 @@ Support is advertised by exact integer `server.capabilities.remoteAgentSkills: 1
 
 1. **Which skills.** The machine scans the same eight roots, on the machine: the
    user roots under the machine's home, and the project roots in the agent's own
-   checkout. The user `.claude` root is the launch profile's `CLAUDE_CONFIG_DIR`
-   (expanded on the machine), else the machine's `CLAUDE_CONFIG_DIR`, else
-   `~/.claude`. `CODEX_HOME` is not scanned, as for local agents; providers still load
-   their own skills natively from the profile's home on the machine.
+   checkout. The user `.claude` root is the machine's own `CLAUDE_CONFIG_DIR`, else
+   `~/.claude`: a profile that sets an account folder cannot run on another machine
+   ([remote compatibility](./provider-profiles.md#remote-compatibility)), so a remote agent always uses the
+   machine's. `CODEX_HOME` is not scanned, as for local agents. The machine scans when
+   it opens a provider session; it does not watch its skill folders, so a change there
+   shows at the agent's next session.
 2. **`agentId`.** It names an agent of `workspaceId`; `-32602` when it does not. For an
    agent on the backend the result is the same list as without `agentId`, in the
-   envelope. For a remote agent:
+   envelope, and never carries `stale` or `unavailable`. For a remote agent:
    - after its provider started on the machine: the catalog the machine last
      reported for it (`location` and `resourceDirectory` are paths on the machine);
-   - before its first start (no checkout yet): the machine's user skills for the
-     agent's profile, asked over the link, merged with the backend checkout's project
-     skills (the same files at the agent's base commit); a project skill wins a name
-     collision;
-   - machine not connected: the last list reported for the agent with `stale: true`;
-     when none was reported, `skills: []` with `unavailable: "machine-offline"`;
+   - before its first start (no checkout yet): the machine's user skills, asked over
+     the link, merged with the backend checkout's project skills (the same files at the
+     agent's base commit); a project skill wins a name collision;
+   - machine not connected (no link within 10 s): the last list reported for the agent
+     with `stale: true`; when none was reported, the backend's project skills with
+     `unavailable: "machine-offline"`;
    - machine on an older version (node-link protocol below 12): the backend's project
-     skills only, with `unavailable: "machine-update-required"`.
+     skills with `unavailable: "machine-update-required"`.
+
+   A request can wait up to 10 s for the machine; nothing is cached besides the reported
+   list. Every page of one request carries the same `stale` / `unavailable`, which the
+   backend computes again for each page request.
 3. **`skills:changed`.** When the machine reports a catalog for a remote agent that
    differs from the last one, the backend emits `skills:changed` with
-   `{ workspaceId, agentId }` ([§6.5](../06-events.md)). Clients that show that
-   agent's skills re-read `skill.list` with its `agentId`.
+   `{ workspaceId, agentId }` ([§6.5](../06-events.md#65-event-taxonomy)). Clients that
+   show that agent's skills re-read `skill.list` with its `agentId`; they ignore
+   `skills:changed` without `agentId` for it.
 4. **A skill the agent does not have.** A message is plain text, so `/name` always
-   sends. When a message to a remote agent starts with `/name` and `name` is not in the
-   catalog its machine reported, the backend appends a `system` message to the
-   conversation, with metadata `{ type: "skill_unavailable", skill: "name", machine:
+   sends. `name` is the message's first word after `/`, without `/` or whitespace. When
+   a user message to a remote agent (sent, or queued) is accepted and `name` is not in
+   the catalog its machine reported, the backend appends a `system` message to the
+   conversation after it, published like other messages (`agent:message`), with
+   metadata `{ type: "skill_unavailable", skill: "name", machine:
    "<machine name>" }` and the text "**/name** isn't on <machine>. Add it to
    ~/.agents/skills or ~/.claude/skills there, or run this agent on the backend." No
    notice is added before the machine reported a catalog.

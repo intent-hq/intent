@@ -1907,7 +1907,7 @@ Each WebSocket binary message on `/node/link` is one JSON frame of at most
 | `scriptOutput` | machine → backend | script | Protocol 8 or later: `agentId`, `scriptId`, `spawnId`, `seq`, `data` |
 | `scriptExited` | machine → backend | script | Protocol 8 or later: `agentId`, `scriptId`, `spawnId`, `exitCode?`, `error?` |
 | `setupOutput` | machine → backend | script | Protocol 10 or later: `agentId`, `seq`, `data`; see [setup output](#setup-status-and-output) |
-| `skills` | backend → machine | control | Protocol 12 or later: `queryId` (UUID), `claudeConfigDir?`; see [skills on the machine](#skills-on-the-machine-nodeprotocol-12) |
+| `skills` | backend → machine | control | Protocol 12 or later: `queryId` (UUID); see [skills on the machine](#skills-on-the-machine-nodeprotocol-12) |
 | `skillsReply` | machine → backend | control | Protocol 12 or later: `queryId`, `skills: MachineSkill[]` |
 
 `intentdVersion` is recorded for diagnostics and is not a compatibility gate.
@@ -2793,22 +2793,21 @@ interface MachineSkill {   // the §5.34 skill.list row, paths on the machine
 
 1. **Catalog.** After the checkout is ready and the launch's profile is resolved, the
    machine discovers the agent's skills with the backend's rules: user roots under its
-   home (the profile's `CLAUDE_CONFIG_DIR`, expanded on the machine, replaces the user
-   `.claude` root), project roots in the agent's checkout. It adds the
+   home (its own `CLAUDE_CONFIG_DIR`, else `~/.claude`), project roots in the agent's
+   checkout. It adds the
    `<available_skills>` catalog, with machine paths, as one text block of the first
    prompt of each provider session it opens (a relaunch included), beside the checkout
    notice. A machine does this on every protocol; without skills nothing is added.
 2. **Journal.** On a protocol 12 link the machine then journals
-   `{ kind: "skills", skills }`, before `started`, with the same rows. The backend
+   `{ kind: "skills", skills }` before every `started` (a relaunch included), with the
+   same rows, paths on the machine included. The backend
    keeps the latest list per agent with its placement (it is not projected) and emits
    `skills:changed` with the `agentId` when it differs from the one it kept.
-3. **Before the first start.** The backend asks with
-   `{ type: "skills", queryId, claudeConfigDir? }`: `claudeConfigDir` is the agent's
-   profile value as typed (no other profile member, no secret). The machine answers
-   `{ type: "skillsReply", queryId, skills }` with its **user** skills only (no
-   checkout exists yet), within 10 s; otherwise the backend treats the machine as not
-   connected. A `claudeConfigDir` that is not a directory after expansion scans the
-   other user roots.
+3. **Before the first start.** The backend asks with `{ type: "skills", queryId }`.
+   The machine answers `{ type: "skillsReply", queryId, skills }` with its **user**
+   skills only (no checkout exists yet), within 10 s; otherwise the backend treats the
+   machine as not connected. The query carries no profile member: a profile that sets
+   an account folder cannot run on another machine.
 4. **Older peers.** A machine from before protocol 12 adds no catalog and reports
    none; the backend answers `skill.list` for its agents with project skills and
    `unavailable: "machine-update-required"`. A protocol 12 machine on an older backend
