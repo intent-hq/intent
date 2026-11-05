@@ -341,8 +341,8 @@ the backend as the remote agent:
 3. **Browser and desktop.** `browser.*` and `desktop.*` act on the user's client
    connected to the backend, as they do for a local agent (they never act on the
    machine). Desktop control asks for the same consent, keyed by the remote agent's
-   id, and a pending consent wakes the agent with an agent message. Browser URLs and
-   paths are the client's and the backend's: `http://daemon.localhost:<port>`
+   id. The consent's outcome (granted, denied, expired or withdrawn) and a later
+   revocation wake the agent with an agent message. Browser URLs and paths are the client's and the backend's: `http://daemon.localhost:<port>`
    reaches a port on the backend's loopback, not on the machine, and `file://`
    URLs and capture directories are paths on the client.
 
