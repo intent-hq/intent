@@ -382,12 +382,60 @@ only `SKILL.md` is linked elsewhere, while the displayed `location` keeps its al
 
 | Method | Params | Result |
 | --- | --- | --- |
-| skill.list | workspaceId (req), limit? (default and max 500), nextToken? *(paged — see [Catalog list pages](./misc-namespaces.md#catalog-list-pages))* | without `limit`/`nextToken`: bare array of the first page of `{ name, description, location, scope, resourceDirectory?, allowedTools?, compatibility? }`; with either: `{ skills: [...], nextToken: string\|null }` (name-sorted, scope: "project"\|"user") — authorized workspaces without a worktree or repository path return user-scope skills only (an empty array if none exist), without creating a checkout or activating workspace filesystem access; -32602 if the workspace is missing or inaccessible to the caller |
+| skill.list | workspaceId (req), agentId?, limit? (default and max 500), nextToken? *(paged — see [Catalog list pages](./misc-namespaces.md#catalog-list-pages))* | with `agentId`: always `{ skills: [...], nextToken: string\|null, stale?: true, unavailable?: "machine-offline"\|"machine-update-required" }` (see [Skills of a remote agent](#skills-of-a-remote-agent)); without `limit`/`nextToken`/`agentId`: bare array of the first page of `{ name, description, location, scope, resourceDirectory?, allowedTools?, compatibility? }`; with either: `{ skills: [...], nextToken: string\|null }` (name-sorted, scope: "project"\|"user") — authorized workspaces without a worktree or repository path return user-scope skills only (an empty array if none exist), without creating a checkout or activating workspace filesystem access; -32602 if the workspace is missing or inaccessible to the caller |
 
 - `name` / `description` are the parsed SKILL.md frontmatter fields; `location` is the absolute path to the SKILL.md file; `scope` is `"project"` for workspace-tier skills (p5-8) and `"user"` for user-tier skills (p1-4); `allowedTools` / `compatibility` are optional frontmatter fields.
 - `resourceDirectory`, when present, is the absolute directory for relative companion files such as scripts and templates. Prompt catalogs include it as `resource_directory` and instruct the agent to resolve relative resources there. It is omitted when the ordinary location's parent is already that canonical directory.
 - Skills are returned in **name-sorted** order for deterministic output. When a name collision occurs, the higher-precedence tier wins and a warn log is emitted.
 - The daemon watches the eight scan roots and linked targets (using `notify` watchers, the same infrastructure as workspace `file:changed` events); when a SKILL.md file is created/modified/deleted, the daemon re-runs discovery for the affected workspace(s) (user-tier changes affect all workspaces; project-tier changes are workspace-scoped), compares the complete discovered metadata against its own event baseline, and emits `skills:changed` (§6.5) only if the metadata changed (500ms debounce per workspace). A concurrent `skill.list` read does not consume a pending watcher change. Non-existent roots are handled by watching the nearest existing ancestor. The `skill.list` handler also performs a check-on-read as a fallback.
+
+#### Skills of a remote agent
+
+An agent on another machine ([nodes §5.50](./nodes.md#placement-across-machines)) uses
+that machine's skills, not the backend's. Nothing is copied from the backend.
+Support is advertised by exact integer `server.capabilities.remoteAgentSkills: 1`
+([client.hello](./client-hello.md)); clients send `agentId` only when it is present.
+
+1. **Which skills.** The machine scans the same eight roots, on the machine: the
+   user roots under the machine's home, and the project roots in the agent's own
+   checkout. The user `.claude` root is the machine's own `CLAUDE_CONFIG_DIR`, else
+   `~/.claude`: a profile that sets an account folder cannot run on another machine
+   ([remote compatibility](./provider-profiles.md#remote-compatibility)), so a remote agent always uses the
+   machine's. `CODEX_HOME` is not scanned, as for local agents. The machine scans when
+   it opens a provider session; it does not watch its skill folders, so a change there
+   shows at the agent's next session.
+2. **`agentId`.** It names an agent of `workspaceId`; `-32602` when it does not. For an
+   agent on the backend the result is the same list as without `agentId`, in the
+   envelope, and never carries `stale` or `unavailable`. For a remote agent:
+   - after its provider started on the machine: the catalog the machine last
+     reported for it (`location` and `resourceDirectory` are paths on the machine);
+   - before its first start (no checkout yet): the machine's user skills, asked over
+     the link, merged with the backend checkout's project skills (the same files at the
+     agent's base commit); a project skill wins a name collision;
+   - machine not connected (no link within 10 s): the last list reported for the agent
+     with `stale: true`; when none was reported, the backend's project skills with
+     `unavailable: "machine-offline"`;
+   - machine on an older version (node-link protocol below 12): `skills: []` with
+     `unavailable: "machine-update-required"`; such a machine gives its agent no skills
+     catalog, so nothing is offered.
+
+   A request can wait up to 10 s for the machine; nothing is cached besides the reported
+   list. Every page of one request carries the same `stale` / `unavailable`, which the
+   backend computes again for each page request.
+3. **`skills:changed`.** When the machine reports a catalog for a remote agent that
+   differs from the last one, the backend emits `skills:changed` with
+   `{ workspaceId, agentId }` ([§6.5](../06-events.md#65-event-taxonomy)). Clients that
+   show that agent's skills re-read `skill.list` with its `agentId`; they ignore
+   `skills:changed` without `agentId` for it.
+4. **A skill the agent does not have.** A message is plain text, so `/name` always
+   sends. `name` is the message's first word after `/`, without `/` or whitespace. When
+   a user message to a remote agent is stored (sent, or later from the queue) and `name` is not in
+   the catalog its machine reported, the backend appends a `system` message to the
+   conversation after it, published like other messages (`agent:message`), with
+   metadata `{ type: "skill_unavailable", skill: "name", machine:
+   "<machine name>" }` and the text "**/name** isn't on <machine>. Add it to
+   ~/.agents/skills or ~/.claude/skills there, or run this agent on the backend." No
+   notice is added before the machine reported a catalog.
 
 ```json
 // → request

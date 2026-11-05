@@ -511,14 +511,26 @@ suffix, then the error's `data` as JSON). The one batch-wide refusal is
 `isolation`, below, which fails the whole batch before anything starts.
 
 A remote agent's `agent.delegate` (single or batch) with `isolation` but no `placement` fails with
-`-32602` before any write: its sub-agents run in their own checkout on the
-machine, so `isolation` does not apply; the message says to pass
+`-32602` before any write: its sub-agents run in a checkout on the machine (the parent's
+one on nodeProtocol 13), so `isolation` does not apply; the message says to pass
 `placement: { target: "local" }` to use isolation on the backend. The
 `workspace.cowIsolation` default never applies to an inherited placement.
 
 The child is a placed agent like any other: it carries `nodeId`, `nodeName`,
-`placement` and `effectiveIsolation`, the results carry the `notice`, and it
-starts from the workspace's last commit, not from the parent's checkout.
+`placement` and `effectiveIsolation`, and the results carry the `notice`. What
+it starts from depends on its machine's link
+([sub-agent checkouts](../node-link.md#sub-agent-checkouts-nodeprotocol-13)):
+
+| Child runs on | Parent's machine link at nodeProtocol 13 or later | Older link |
+| --- | --- | --- |
+| The parent's machine | Works in the parent's checkout: both see each other's uncommitted changes at once, as local sub-agents do. The child's work reaches the backend in the parent's `head` and `wip` refs. | The workspace's last commit |
+| Another machine | A copy of the parent's commits and uncommitted changes, pushed when the child is created; later work is not shared, and the child's `head` is merged as usual | The same copy, from the parent's last push (its turn end) |
+
+The `notice` says which. A child on the parent's machine gets its own private
+temp folder. "The parent's checkout" is the checkout's owner when the parent
+itself shares one. Deleting or retiring the parent removes its checkout: the
+machine first stops the children that share it, and their next start fails
+`node-checkout-failed`.
 
 An explicit `placement` wins: `{ "target": "local" }` creates the sub-agent on
 the backend, and a remote placement (another `nodeId`, or `os` / `arch`) is
