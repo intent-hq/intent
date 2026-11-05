@@ -2772,10 +2772,10 @@ interface McpProxy {
 ```
 
 1. **Launch.** At each launch on a protocol 11 link, the backend lists the
-   servers a local agent of the workspace would get: `mcp.enableUserServers`
-   on, the server `enabled`, not in `mcp.disabledServers`, not disabled for the
-   agent's workspace, with a usable `command` (stdio) or `url` (`http`/`sse`),
-   and a name other than the reserved `workspace-mcp`. It sends them as
+   servers a local agent's spawn gets (`mcp.enableUserServers` on, the server
+   `enabled`, not in `mcp.disabledServers`, with a usable `command` (stdio) or
+   `url` (`http`), and a name other than the reserved `workspace-mcp`), less
+   those disabled for the agent's workspace and `sse` servers. It sends them as
    `mcpProxies`, and nothing else about them. The list follows the settings at
    launch; a later change reaches the agent at its next launch.
 2. **Machine.** For each entry the machine adds one stdio server named `name`
@@ -2795,14 +2795,15 @@ interface McpProxy {
    every forwarded frame and runs the call as that agent: host membership, the
    same server gates as at launch (read again for each call) and then the hub's
    `tools/list` or `tools/call`. A stdio server uses the hub's running process;
-   `http` and `sse` servers are called from the backend with the stored OAuth
-   header. The answer is the server's raw MCP result.
+   an `http` server is called from the backend with the stored OAuth header. The answer is the server's raw MCP result.
 
 **Limits.**
 
 - **Tools only.** Resources, prompts, sampling and elicitation are not proxied,
   and the listener does not advertise them. A local agent's provider talks to
   the server itself and gets them.
+- **No `sse` servers.** The backend's hub calls no tools over `sse`, so an `sse`
+  server is not proxied; a local agent's provider still gets it.
 - **Timeout.** A proxied `tools/call` may run for 10 minutes (the `ws.mcp`
   path keeps its 55 s cap); the machine sends the frame with a matching
   `timeoutMs`. `tools/list` keeps the hub's 30 s.
