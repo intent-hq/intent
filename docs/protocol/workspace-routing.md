@@ -254,12 +254,13 @@ method inventory:
 | Frames | Where they run |
 | --- | --- |
 | `file.read`, `file.write`, `file.list`, `file.delete`, `file.mkdir`, `file.rename`, `git.commit`, `host.exec`, `help.*` | On the machine, against the agent's own checkout and host |
+| `file.getAttachment` | On the machine: the bytes come from the backend with the internal `file.attachmentData` frame (below), and the copy lands in the agent's own checkout |
 | `workspace.info` | On the machine: `{ id, path }`, where `path` is the agent's own checkout on the machine |
 | `note.*`, `task.*`, `agent.*`, `pr.*` (and its `mr.*` alias), `comment.*`, `event.*`, `script.*`, `primitive.*`, `discussion.*`, `crossWorkspace.*`, `hook.*`, `browser.*`, `desktop.*` | Forwarded to the backend as one `workspace.call` link request with params `{ method, args }` |
 | `workspace.details`, `workspace.setTitle`, `workspace.setAgentName`, `workspace.setStatusMessage`, `workspace.setStatusImage`, `workspace.proposeSibling`, `workspace.applyProposal`, `workspace.archive`, `workspace.unarchive`, `workspace.context`, `workspace.referenceDocs`, `workspace.timeline`, `workspace.emitNotification`, `git.listRoots`, `terminal.list`, `terminal.readOutput`, `app.question.ask` | Forwarded the same way, method by method |
 | `app.*` other than `app.question.ask` | Refused: `remote-agent-unsupported: ws.app.* is for the Assistant workspace, whose agents run on the backend.` |
 | `git.registerRoot`, `git.unregisterRoot`, and a `gitRootId` on `git.commit` | Refused: `remote-agent-unsupported: secondary git roots are on the backend only; this agent's machine has the main checkout and its submodules.` |
-| Everything else, including `mcp.*`, `secret.*` and `file.getAttachment` | Refused, never run on another host |
+| Everything else, including `mcp.*` and `secret.*` | Refused, never run on another host |
 
 A refused frame fails with a message starting `remote-agent-unsupported:` that names
 the method and lists what remote agents can use. The backend serves a forwarded
@@ -381,9 +382,48 @@ or later advertises [`remoteScripts:
 1`](./methods/scripts.md#scripts-of-remote-agents-remotescripts-1); it keeps the
 script, and the agent's runs of it happen on its machine over the [script
 frames](./node-link.md#saved-scripts-nodeprotocol-8). Tool outputs too large for a
-reply are written on the machine, next to the agent's worktree. Attachments are not
-materialized on machines, so a message with attachments to a remote agent fails with
-`-32602` before any state change.
+reply are written on the machine, next to the agent's worktree.
+
+**Attachments.** A message with image or file attachments to a remote agent is
+accepted as for a local agent, and its attachments reach the machine:
+
+1. **Images.** The backend resolves image attachments as for a local agent and sends
+   each supported image inline, as an ACP `image` block, in the turn's `prompt`
+   frame. The whole frame shares the link's 8 MiB cap: a turn whose prompt does not
+   fit fails with `node-prompt-too-large:` and nothing is sent to the machine.
+2. **Files.** The prompt carries the same attachment notice as a local agent's, and
+   the agent copies the file with `ws.file.getAttachment(attachmentId, destDir?)`,
+   which runs on the machine. The machine forwards the internal frame
+   `file.attachmentData` (refused from agent code) with args `{ attachmentId }`. The
+   backend answers only for an agent on the link's lease and only for an attachment
+   of that agent's workspace:
+
+   ```ts
+   // workspace.call params: { method: "file.attachmentData", args: { attachmentId: string } }
+   interface AttachmentData {
+     fileName: string;
+     mimeType?: string;
+     size: number;        // bytes
+     uploadedAt: string;
+     data: string;        // base64 of the file's bytes
+   }
+   ```
+
+   An unknown id, or an attachment of another workspace, fails with
+   `unknown attachment id: <id>`; a file deleted from the backend's store fails with
+   the same "continue without this file" error as for a local agent; a file larger
+   than 5 MiB fails with `attachment-too-large-for-link:` (its base64 must fit the
+   link's 8 MiB RPC cap). The machine writes the bytes into the agent's checkout
+   under `destDir` (default `.intent/attachments/`, with the same ignore-all
+   `.gitignore` marker as a local copy, so the copy never reaches the agent's pushed
+   refs), skips the write when an identical file is already there, and answers with
+   the local result `{ path, fileName, mimeType?, size, uploadedAt }`, `path` relative
+   to the checkout.
+
+This needs no new nodeProtocol: `file.attachmentData` rides `workspace.call`. An
+older backend refuses the frame, and the machine fails `file.getAttachment` with
+`remote-agent-unsupported:` naming the update. An older machine refuses
+`file.getAttachment` itself; images still reach it in the prompt.
 
 ## Verification boundary
 

@@ -2298,7 +2298,17 @@ its own settings (`node-provider-unavailable`).
 It fetches `baseCommit` over the git connection into a per-repository bare
 cache named by `repoKey`, creates the agent's worktree, on protocol 10 prepares
 its submodules and runs the setup script ([prepared checkout](#prepared-checkout-nodeprotocol-10)),
-spawns the provider and journals `started`. The machine opens the provider session without prompt
+spawns the provider and journals `started`. With the checkout the machine creates
+the agent's private temp folder: an owner-only directory beside the checkout, in the
+agent's own directory on the machine. It points the provider's `TMPDIR`, `TMP` and
+`TEMP` at it, over any inherited or profile value, so two agents never share a
+fixed temp file name. The folder lives as long as the checkout: a relaunch with the
+checkout keeps it, and it is removed with the checkout (a
+[final stop](#final-stop-nodeprotocol-9), the bind-time sweep, or a failed
+checkout). The folder needs no nodeProtocol: a machine from before it leaves the
+provider with the machine's own temp variables, shared with its other agents, while
+the backend's instructions still describe a private `$TMPDIR` (they also tell the
+agent to use `mktemp`). The machine opens the provider session without prompt
 injection, so the backend sends the agent's assembled instructions with its
 first prompt. A remote agent's provider, profile or model changes only through
 a validated `agent.setModel` or quota failover; the backend then stops the run
@@ -2736,10 +2746,12 @@ else is refused. The routing table is in
 The backend treats a forwarded call as made by the agent named in the request
 only if that agent is on the link's lease, and routes it again under that
 agent's existing authority; it never trusts the machine's routing. The
-machine also forwards three internal frames that agent code cannot send:
+machine also forwards four internal frames that agent code cannot send:
 `git.commitPolicy` before an agent's commit, `turn.attachments` with the cards
-of one call, and `agent.placementHelp` for the machine-placement text of the
-agent's `workspace_api` description and `ws.help("agent")`. Hooks,
+of one call, `agent.placementHelp` for the machine-placement text of the
+agent's `workspace_api` description and `ws.help("agent")`, and
+`file.attachmentData` for the bytes of an attachment the agent copies with
+`ws.file.getAttachment` ([attachments](./workspace-routing.md#remote-agents-on-the-executor-link)). Hooks,
 `app.question.ask`, the browser and the desktop are forwarded too: a remote
 agent's hook runs on the backend (its `ws.host.exec` sees the backend's worktree,
 not the machine's checkout), and its wakes reach the agent as agent messages. On
@@ -3089,4 +3101,6 @@ and `refresh` report them per route in `machine-unreachable`'s `attempts`:
 
 Without a connected machine an agent cannot start (`node-unavailable`); an
 agent whose lease the backend no longer holds cannot start again
-(`node-agent-unplaced`).
+(`node-agent-unplaced`). A turn whose `prompt` frame would exceed 8 MiB (large
+[image attachments](./workspace-routing.md#remote-agents-on-the-executor-link))
+fails with `node-prompt-too-large` before anything is sent.
