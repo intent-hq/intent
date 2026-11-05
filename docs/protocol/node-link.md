@@ -2710,9 +2710,7 @@ such a workspace, on a link below 10:
   reports the documented `launch-failed` error with `cause.code`
   `remote-launch-failed`, whose `cause.message` is the
   `machine-update-required` message; the agent's `placementError` is
-  `remote-launch-failed` with that message as `detail`. A backend that offers only
-  up to 9 never sends any of this and runs agents as before, with empty
-  submodules and no setup.
+  `remote-launch-failed` with that message as `detail`.
 - **A later start** of a prepared agent of such a workspace whose link is now
   below 10 (its machine was downgraded or relinked) sends no `launch`; the
   start fails with `placementError.code` `machine-update-required`.
@@ -2720,8 +2718,9 @@ such a workspace, on a link below 10:
   backend update they keep starting on any link, protocol 9 machines
   included, as before.
 
-A workspace that needs no prepared checkout runs on every link from 7 as
-before.
+A backend that offers only up to 9 never applies any of this and runs agents
+as before, with empty submodules and no setup. A workspace that needs no
+prepared checkout runs on every link from 7 as before.
 
 ### Workspace API on the machine
 
