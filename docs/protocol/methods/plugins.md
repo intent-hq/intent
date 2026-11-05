@@ -50,20 +50,22 @@ For an **enabled, valid** plugin:
    `<plugin>:<skill>` with `scope: "user"`. They rank below every directory tier;
    a loose skill with the same full name wins. Plugin folders are watched like the
    user skill roots, so `skills:changed` follows edits.
-2. **MCP servers** join every new agent session's MCP set next to the user's
-   [`mcp.servers`](./mcp-servers.md), under the session name
-   `<plugin>-<server>` (characters outside `[A-Za-z0-9_-]` become `_`). The
-   reserved `workspace-mcp` and user server names win a clash. `mcp.enableUserServers`
-   gates plugin servers too. Changes reach an agent at its next launch.
+2. **MCP servers** are ordinary [`mcp.servers`](./mcp-servers.md) entries with
+   `id: "plugin:<plugin>/<server>"`, `name: "<plugin>-<server>"` (characters outside
+   `[A-Za-z0-9_-]` become `_`) and `plugin: "<plugin>"`. The MCP hub runs them like the
+   user's servers, so they have live status, sign-in, the global and per-workspace
+   switches, `ws.mcp.*` and a place in every agent session's MCP set. Their definitions
+   come from the plugin and cannot be edited or deleted through `mcp.servers.*`.
+   `mcp.enableUserServers` gates them too. A user server's name wins a clash.
    - `stdio` servers start as `intentd plugin-exec --cwd <cwd> -- <command> <args…>`,
      because session MCP configs carry no working directory. The environment adds
      `PLUGIN_ROOT` and `PLUGIN_DATA`. `${PLUGIN_ROOT}` and `${PLUGIN_DATA}` are
      expanded once in `args`, `env` values and `cwd` only.
-   - `streamable-http` and `sse` servers pass through with their `headers`.
-
-Plugin servers are not part of the MCP hub: they have no `mcp.servers.getStatus`,
-are not reachable through `ws.mcp.*`, and are not proxied to agents on other
-machines (§5.50).
+   - `streamable-http` servers become `transport: "http"`; `sse` stays `"sse"`. Both
+     keep their `headers`.
+3. **Plugin changes** apply at once: `plugin.install`, `plugin.uninstall` and
+   `plugin.toggle` start or stop the plugin's servers in the hub, and `plugin.update`
+   restarts them. Running agents see the change at their next launch.
 
 ### Methods
 
@@ -87,7 +89,7 @@ interface PluginInfo {
   source?: string;              // install source: folder path or git URL
   sourceKind?: "path" | "git";
   skills: string[];             // skill directory names
-  mcpServers: { name: string; sessionName: string; transport: "stdio" | "streamable-http" | "sse" }[];
+  mcpServers: { id: string; name: string; sessionName: string; transport: "stdio" | "streamable-http" | "sse" }[]; // id: the mcp.servers id
   diagnostics: string[];
 }
 ```

@@ -15,8 +15,8 @@ Every extension retains its independent support gate.
 adds five administrator-only router methods, `plugin.list`, `plugin.install`,
 `plugin.update`, `plugin.uninstall` and `plugin.toggle`, for app-wide
 [Agent Plugins v1](https://agent-plugins.org/specification) packages. Enabled
-plugins add `<plugin>:<skill>` entries to `skill.list` and MCP servers to new agent
-sessions; no existing result changes shape. `agentPlugins: 1` gates support. The
+plugins add `<plugin>:<skill>` entries to `skill.list` and their MCP servers to
+`mcp.servers.list` (with the new optional `plugin` field) and to new agent sessions. `agentPlugins: 1` gates support. The
 documented surface is **496 / 438 / 58** (dispatchable / router / fast path).
 
 **Version 15.4 — bounded object reads (additive methods, capped replies).**
