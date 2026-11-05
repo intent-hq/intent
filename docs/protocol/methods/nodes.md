@@ -436,7 +436,8 @@ can show where an agent runs, and its move from `pending` to `isolated`,
 without opening it: when the machine reports the checkout ready or a start
 failure, the backend publishes `agent:updated`, which reaches the channel as an
 `updated` delta. `leaseId` stays detail-only. Local agents omit all of them
-(absent, never `null`). The create result adds a `notice` saying the agent starts from the
+(absent, never `null`). On nodeProtocol 10 placed agents also carry
+[`submodules` and `setup`](#prepared-checkout). The create result adds a `notice` saying the agent starts from the
 workspace's last commit and that uncommitted changes are not carried; delegate
 and wakeOrCreate results copy `notice`, `nodeId`, `nodeName` and
 `effectiveIsolation`. `nodeState`, `checkpoint`, `nodePath`, the `halted` /
@@ -642,6 +643,69 @@ removes the checkouts of a credential that is no longer active on it (revoked
 or unknown) at revoke, at bind and at startup, never another active
 credential's.
 
+##### Prepared checkout
+
+On a link that negotiated nodeProtocol 10, a remote agent's checkout is
+[prepared](../node-link.md#prepared-checkout-nodeprotocol-10) like the
+backend's worktree: every submodule populated in the workspace worktree is
+checked out at the commit checked out there (its `HEAD`, which may be ahead of
+the gitlink or exist only on the backend), and the workspace's setup script
+runs on the machine before the agent starts. The agent's own submodule commits
+and edits come back as per-submodule `head` and `wip` refs in each submodule's
+repository; nothing is merged automatically.
+
+Placed agents gain two members:
+
+```ts
+interface RemoteSubmodulePin { path: string; commit: string } // path from the superproject root
+
+interface RemoteSetupStatus {
+  state: "pending" | "running" | "completed" | "failed" | "skipped";
+  exitCode?: number;
+  error?: string;              // "<code>: <detail>", e.g. "node-setup-timeout: …"
+  startedAt?: string;          // UTC RFC 3339
+  finishedAt?: string;
+  output?: string;             // detail reads only: the last 256 KiB of checkout and setup output
+  outputTruncated?: boolean;   // detail reads only: earlier output was dropped
+}
+```
+
+- `submodules: RemoteSubmodulePin[]` is on detail reads only. It lists the
+  pins captured at creation, parents first, and is empty when the worktree had
+  no populated submodule.
+- `setup?: RemoteSetupStatus` is on detail reads, `agent.list` rows and the
+  agent channel rows and deltas (rows omit `output` and `outputTruncated`). It is
+  absent until the first protocol 10 launch. `pending` means the machine is
+  preparing the checkout, `running` that the script runs; while
+  `effectiveIsolation` is `pending` a client can show "Preparing checkout" or
+  "Running setup". `skipped` means the workspace has no setup script.
+- The backend publishes `agent:updated` on every `state` change and, while
+  output arrives, at most once every 2 s. A failed setup does not set
+  `placementError`: the agent still starts, and its first turn carries the
+  setup-failure notice. A failed checkout sets `placementError`
+  `node-checkout-failed` as before.
+- `setup` describes the agent's checkout on its machine, never the backend
+  worktree. The workspace's own `setupStatus` and `workspace:setup:*` events
+  are unchanged.
+
+When the worktree has populated submodules, the create `notice` (copied by
+delegate and wakeOrCreate) adds that uncommitted changes inside submodules are
+not carried either, and when the workspace has a setup script, that it runs on
+the machine before the agent starts.
+
+**Older machines.** A workspace whose worktree has a populated submodule or
+that has an effective setup script needs nodeProtocol 10. Placing an agent of
+such a workspace on a machine whose link negotiates below 10 fails `-32602`
+`machine-update-required` with `update: "machine"` and
+`reason: "prepared-checkout"`, before any write; this covers `agent.create`,
+`agent.delegate`, `agent.wakeOrCreate`'s creation branch, `workspace.create`'s
+initial agent and [inherited sub-agent placement](#sub-agents-of-remote-agents).
+The message reads "Update Intent on <machine> to run agents for this
+workspace: it has submodules or a setup script." An existing agent whose
+machine now links below 10 does not start: it gets `placementError.code`
+`machine-update-required`. Workspaces that need neither run on every
+supported link.
+
 ##### Node mode
 
 `intentd serve --node`, or the persisted setting `daemon.mode: "node"`, starts
@@ -749,7 +813,11 @@ it has: …", naming each machine's provider status. A `disabled` machine reads
 rather than install it.
 
 `machine-update-required` (`-32602` from placement, add and refresh) carries
-`{ machineVersion, backendVersion, update: "machine" | "backend" }`.
+`{ machineVersion, backendVersion, update: "machine" | "backend", reason? }`.
+`reason` is present only from placement, as `"prepared-checkout"` when the
+machine links below nodeProtocol 10 and the workspace needs a
+[prepared checkout](#prepared-checkout); clients treat an unknown `reason` as
+a plain update request.
 `machine-unreachable` from `remoteMachines.add` / `refresh` is `-32603` with
 `attempts: [{ route, error }]`, where `error` is the executor link's code (for
 example `node-link-certificate-mismatch` or `node-link-unauthorized`).
