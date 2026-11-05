@@ -2456,8 +2456,12 @@ interface SetupCommand {        // closed
 }
 ```
 
-The backend sends `checkout` in every `launch` on a protocol 10 link, also when
-`submodules` is empty and `setup` is absent. It never sends it on a lower link,
+The backend sends `checkout` in every `launch` of a **prepared agent** on a
+protocol 10 link, also when `submodules` is empty and `setup` is absent. A
+prepared agent is one whose pins the backend captured at creation (see
+[submodule pins](#submodule-pins)); an agent created by a backend without this
+contract has no captured pins, gets no `checkout` on any link, and runs as
+before (empty submodules, no setup). It never sends `checkout` on a lower link,
 and a machine that receives it there rejects the frame (`node-link-protocol`).
 A `path` that is empty, absolute, has an empty, `.` or `..` segment, or repeats
 another pin's path rejects the launch (`node-checkout-failed`), and so does a
@@ -2478,9 +2482,10 @@ child listed before its parent.
    exactly as the backend worktree does.
 3. **Not carried:** uncommitted changes inside a submodule, as for the
    superproject; the create `notice` says so.
-4. **Durable.** The backend stores the pins with the agent's placement and
-   sends the same pins in every later `launch`. Pins never change after
-   creation.
+4. **Durable.** The backend stores the pins with the agent's placement (an
+   empty list when nothing is populated, which still makes it a prepared
+   agent) and sends the same pins in every later `launch`. Pins never change
+   after creation, and an agent created without them never gains them.
 5. **Base refs.** In the same step that writes the superproject `base` ref, the
    backend writes `refs/intent/ws/<workspaceId>/agents/<agentId>/base` at the
    pin in each submodule's own repository. A failure fails the launch
@@ -2570,12 +2575,13 @@ the superproject; the merged gitlinks then resolve locally.
 
 **Relaunch without a checkout.** The
 [restore](#relaunch-without-a-checkout) runs per repository in the same order
-as the checkout, parents first: for each pin the machine fetches the module's
-`head` and `wip`, checks out `head` (else the pin), and applies its own
-`wip^..wip` on top. A module `wip` that cannot be applied is pinned to
-`unapplied/<sha>` **in that submodule's repository** before any other push, as
-for the superproject. The superproject restore ignores gitlink changes, which
-the module restores have already applied.
+as the checkout: the superproject first, then each pin, parents first. The
+superproject restore applies its `wip` with gitlink changes ignored. Then for
+each pin the machine fetches the module's `head` and `wip`, checks out `head`
+(else the pin) at that path, and applies the module's own `wip^..wip` on top;
+this sets the submodule commits the superproject's `wip` gitlinks named. A
+module `wip` that cannot be applied is pinned to `unapplied/<sha>` **in that
+submodule's repository** before any other push, as for the superproject.
 
 **Final stop.** The [`remote_final_stop`](#final-stop-nodeprotocol-9) row
 also stores, in `submodules`, the agent's pins and for each the submodule
@@ -2589,7 +2595,10 @@ reports `finalPush: "failed"`.
 **Resolution (backend).** The backend resolves the setup script with the local
 `workspace.create` rule, at every launch: an explicit create parameter (for the
 workspace's initial agent only), else `setupScript` in the workspace worktree's
-`.intent/config.json`, else the workspace's stored setup script. It sends the
+`.intent/config.json`, else the workspace's stored setup script. The backend
+keeps an explicit create parameter with the initial agent's placement, so that
+agent's later launches (a relaunch without a checkout runs setup again) use the
+same script; it is never stored for the workspace or other agents. It sends the
 text in `checkout.setup`. Workspaces without a worktree (`skipWorktree`) and
 plain-folder workspaces have none. The machine never reads setup policy from
 the repository itself.
@@ -2637,9 +2646,13 @@ and `started`:
   `error`. `skipped` (no `setupStarted` before it) means the launch carried no
   `setup`.
 
-A fresh checkout journals exactly one `setupFinished`. A launch that keeps its
-checkout journals neither, except when that checkout's setup was interrupted
-(below): it journals one `setupFinished` `failed` and does not run the script. The machine keeps the last result with the
+A fresh checkout whose submodules are ready journals one `setupFinished`
+before `started`. A failed checkout journals none (it is removed, and the next
+launch is fresh). A stop or machine restart during setup leaves the result
+unrecorded; the next launch keeps that checkout and journals one
+`setupFinished` `failed` with `node-setup-interrupted`, without running the
+script ([failures](#setup-status-and-output)). Any other launch that keeps its
+checkout journals neither. The machine keeps the last result with the
 checkout, for the [workspace API](#workspace-api-on-the-machine) overlay.
 
 ```ts
@@ -2652,7 +2665,9 @@ frame, `seq` counting from 0 per fresh checkout. It travels on the `script`
 lane under the same 4 MiB bound and drop marker as `scriptOutput`, and is not
 journaled. The machine also keeps the last 256 KiB in the agent's storage
 directory and, after a reconnect, sends that tail once (from `seq` 0) for an
-agent whose setup has not finished.
+agent whose setup has not finished. A `setupOutput` with `seq` 0 starts the
+output over: the backend replaces the agent's stored output with it, so a
+resent tail or a new fresh checkout never duplicates output.
 
 The backend stores a per-agent setup status and an output tail (the last
 256 KiB) with the placement; the public projection is in
@@ -2688,9 +2703,12 @@ such a workspace, on a link below 10:
   the on-demand connect has negotiated the version. A backend that offers only
   up to 9 never sends any of this and runs agents as before, with empty
   submodules and no setup.
-- **A later start** of an agent whose link is now below 10 (its machine was
-  downgraded or relinked) sends no `launch`; the start fails with
-  `placementError.code` `machine-update-required`.
+- **A later start** of a prepared agent of such a workspace whose link is now
+  below 10 (its machine was downgraded or relinked) sends no `launch`; the
+  start fails with `placementError.code` `machine-update-required`.
+- **Agents created before this contract** are not prepared agents: after a
+  backend update they keep starting on any link, protocol 9 machines
+  included, as before.
 
 A workspace that needs no prepared checkout runs on every link from 7 as
 before.

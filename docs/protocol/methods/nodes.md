@@ -701,10 +701,12 @@ such a workspace on a machine whose link negotiates below 10 fails `-32602`
 `agent.delegate`, `agent.wakeOrCreate`'s creation branch, `workspace.create`'s
 initial agent and [inherited sub-agent placement](#sub-agents-of-remote-agents).
 The message reads "Update Intent on <machine> to run agents for this
-workspace: it has submodules or a setup script." An existing agent whose
-machine now links below 10 does not start: it gets `placementError.code`
-`machine-update-required`. Workspaces that need neither run on every
-supported link.
+workspace: it has submodules or a setup script." An agent created this way
+whose machine later links below 10 does not start: it gets
+`placementError.code` `machine-update-required`. Agents created before the
+backend supported nodeProtocol 10 have no pins, omit `submodules` and `setup`,
+and keep running as before on every link. Workspaces that need neither run on
+every supported link.
 
 ##### Node mode
 
