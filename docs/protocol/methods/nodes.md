@@ -725,15 +725,15 @@ type MachineProviderStatus =
 
 `status` is the provider's status in that machine's
 [capabilities report](../node-link.md#capabilities-report). When the report does
-not list the provider:
+not list the provider, the first matching rule applies (`models` is empty):
 
-- `disabled` when the report's `disabledProviders` names it: the provider is
-  switched off in the machine's own `providers.enabled`, whether or not it is
-  installed, and `models` is empty;
-- `cli-missing` when it is absent otherwise, including every absent provider of
-  a machine that does not send `disabledProviders`;
-- `unknown` when the report lists no providers and no `disabledProviders`
-  (the machine has not looked at its providers yet).
+1. `disabled` when the report's `disabledProviders` names it: the provider is
+   switched off in the machine's own `providers.enabled`, whether or not it is
+   installed;
+2. `unknown` when the report lists no providers and no `disabledProviders`
+   (the machine has not looked at its providers yet);
+3. `cli-missing` otherwise, including every absent provider of a machine that
+   does not send `disabledProviders` and still lists other providers.
 
 A machine with no capabilities report (so no known platform) is not listed in
 `machines`. `status` is an open set: values may be added without a version
