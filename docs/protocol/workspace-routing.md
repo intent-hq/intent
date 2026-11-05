@@ -258,50 +258,47 @@ method inventory:
 | `note.*`, `task.*`, `agent.*`, `pr.*` (and its `mr.*` alias), `comment.*`, `event.*`, `script.*`, `workspace.details`, `workspace.setTitle`, `workspace.setAgentName`, `workspace.setStatusMessage`, `workspace.setStatusImage`, `workspace.proposeSibling` | Forwarded to the backend as one `workspace.call` link request with params `{ method, args }` |
 | Everything else, including other `git.*`, `terminal.*`, `browser.*`, `hook.*`, `desktop.*`, `search.*`, `crossWorkspace.*`, `mcp.*`, the other `workspace.*` frames (`archive`, `unarchive`, `applyProposal`, `timeline`) and `file.getAttachment` | Refused, never run on another host |
 
-A refused frame fails with a message starting `remote-agent-unsupported:` that
-names the method and lists what remote agents can use. The backend serves a forwarded
+A refused frame fails with a message starting `remote-agent-unsupported:` that names
+the method and lists what remote agents can use. The backend serves a forwarded
 frame only on the machine's current binding, only for an agent recorded on that
-binding's lease, and only when its own copy of this table forwards the method;
-the frame then runs through the same host dispatch as a local agent's bridge, as
-that agent and in its workspace. The forwarded workspace setters therefore act
-as the leased agent: `workspace.setTitle`, `workspace.setStatusMessage` and
+binding's lease, and only when its own copy of this table forwards the method; the
+frame then runs through the same host dispatch as a local agent's bridge, as that
+agent and in its workspace. The forwarded workspace setters therefore act as the
+leased agent: `workspace.setTitle`, `workspace.setStatusMessage` and
 `workspace.setStatusImage` change the agent's workspace with the same checks and
 events as a local agent's call, and `workspace.setAgentName` renames only the
-calling remote agent, never another session. A forwarded
-`workspace.proposeSibling` runs the same checks as a local agent's call
-(foreground top-level agents only, so a remote sub-agent or background agent is
-refused) and builds the proposal card on the backend, from the backend's
-workspace: repository identity, the default `baseRef` and the `baseRef` check use
-the backend's repository, not the machine's checkout, so a ref that exists only on
-the machine is warned about and Apply fails. The backend does not register
-the card when the frame returns: the card goes back to the machine in the tool
-result, and the machine registers it with the
-`turn.attachments` frame (below) when the `workspace_api` call ends,
-so it becomes a pending proposal on that agent's message, attributed to it, that
-the user can Apply. The agent itself cannot apply it, since
-`workspace.applyProposal` is refused.
-A forwarded frame shares the link's 8 MiB RPC body cap, so a
-`workspace.setStatusImage` image too large for it fails on
-the link with `node-link-frame-too-large`. The agent's `agentFeatures` snapshot and the
-sub-agent gates apply as they do locally. A forwarded `agent.create`,
-`agent.delegate` or `agent.wakeOrCreate` without a `placement` creates the
-sub-agent on the agent's own machine; see
-[sub-agents of remote agents](./methods/nodes.md#sub-agents-of-remote-agents).
-Before an agent-initiated `git.commit`,
-the machine forwards the internal frame `git.commitPolicy` (refused from agent code)
-and the backend answers `{ "autoCommit": boolean }` with the workspace's effective
-auto-commit policy.
+calling remote agent, never another session. A forwarded `workspace.proposeSibling`
+runs the same checks as a local agent's call (foreground top-level agents only, so a
+remote sub-agent or background agent is refused) and builds the proposal card on the
+backend, from the backend's workspace: repository identity, the default `baseRef`
+and the `baseRef` check use the backend's repository, not the machine's checkout, so
+a ref that exists only on the machine is warned about and Apply fails. The backend
+does not register the card when the forwarded call returns: the card goes back to
+the machine in the tool result, and the machine registers it with the
+`turn.attachments` frame (below) when the `workspace_api` call ends, so it becomes a
+pending proposal on that agent's message, attributed to it, that the user can Apply.
+The agent itself cannot apply it, since `workspace.applyProposal` is refused. A
+forwarded frame shares the link's 8 MiB RPC body cap, so a
+`workspace.setStatusImage` image too large for it fails on the link with
+`node-link-frame-too-large`. The agent's `agentFeatures` snapshot and the sub-agent
+gates apply as they do locally. A forwarded `agent.create`, `agent.delegate` or
+`agent.wakeOrCreate` without a `placement` creates the sub-agent on the agent's own
+machine; see [sub-agents of remote
+agents](./methods/nodes.md#sub-agents-of-remote-agents). Before an agent-initiated
+`git.commit`, the machine forwards the internal frame `git.commitPolicy` (refused
+from agent code) and the backend answers `{ "autoCommit": boolean }` with the
+workspace's effective auto-commit policy.
 
-When a remote agent's `workspace_api` call ends,
-before the machine answers the provider, it sends the result cards it collected
-during that call (such as a forwarded `workspace.proposeSibling` card) to the
-backend in one internal `turn.attachments` frame, also refused from agent code:
+When a remote agent's `workspace_api` call ends, before the machine answers the
+provider, it sends the result cards it collected during that call (such as a
+forwarded `workspace.proposeSibling` card) to the backend in one internal
+`turn.attachments` frame, also refused from agent code:
 
 ```ts
 // workspace.call params: { method: "turn.attachments", args: TurnAttachmentsArgs }
 interface TurnAttachmentsArgs {
-  attachments: {            // 1 to 32 cards, in call order
-    id: string;             // stamped by the machine
+  attachments: {            // at most 32 cards, in call order
+    id: string;             // an attachment id the machine minted
     mimeType: string;
     uri: string;
     name: string;
@@ -310,21 +307,26 @@ interface TurnAttachmentsArgs {
 }
 ```
 
-The backend accepts it only for an agent on the link's lease, registers the
-list as one batch for that agent's current turn, as a local agent's cards are
-registered when its call ends, and answers `{}`. One batch per call keeps each
-card on the tool call that made it, even when calls run in parallel or one call
+The backend accepts it only for an agent on the link's lease, registers the list as
+one batch for that agent's current turn, as a local agent's cards are registered
+when its call ends, and answers `{}`. A frame with more than 32 cards, a missing or
+non-string field, or an `id` that is not an attachment id is refused with `-32602`,
+and those cards are taken from the tool output instead. One batch per call keeps
+each card on the tool call that made it, even when calls run in parallel or one call
 makes several cards. An older backend refuses the frame; the machine ignores the
-refusal, and the card is then taken from the tool output as before. The machine forwards `script.*` only on a link that
-negotiated nodeProtocol 8 or later; a protocol 7 machine, or a link to a backend that
-offers only 7, refuses it on the machine with `remote-agent-unsupported:`
-([mixed versions](./node-link.md#saved-scripts-nodeprotocol-8)). A backend that
-negotiates 8 or later advertises [`remoteScripts: 1`](./methods/scripts.md#scripts-of-remote-agents-remotescripts-1); it keeps
-the script, and the agent's runs of it happen on its machine over the
-[script frames](./node-link.md#saved-scripts-nodeprotocol-8). Tool outputs too large for a reply are written on the machine,
-next to the agent's worktree. Attachments are not materialized on machines, so a
-message with attachments to a remote agent fails with `-32602` before any state
-change.
+refusal, and the card is then taken from the tool output as before.
+
+The machine forwards `script.*` only on a link that negotiated nodeProtocol 8 or
+later; a protocol 7 machine, or a link to a backend that offers only 7, refuses it
+on the machine with `remote-agent-unsupported:` ([mixed
+versions](./node-link.md#saved-scripts-nodeprotocol-8)). A backend that negotiates 8
+or later advertises [`remoteScripts:
+1`](./methods/scripts.md#scripts-of-remote-agents-remotescripts-1); it keeps the
+script, and the agent's runs of it happen on its machine over the [script
+frames](./node-link.md#saved-scripts-nodeprotocol-8). Tool outputs too large for a
+reply are written on the machine, next to the agent's worktree. Attachments are not
+materialized on machines, so a message with attachments to a remote agent fails with
+`-32602` before any state change.
 
 ## Verification boundary
 

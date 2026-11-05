@@ -63,8 +63,8 @@ budget serves alone with `metadataOmitted: true` / `metadataBytes` in place of i
 index without `nextToken`, which clients read as complete. Older apps see the newest
 page only.
 
-Also within 15.4 (behaviour change only; no wire-shape, method-catalog or nodeProtocol
-change, so no version bump; fixes
+Also within 15.4 (behaviour change plus one machine-internal link frame; no
+method-catalog or nodeProtocol change, so no version bump; fixes
 [intent-hq/intent#8593](https://github.com/intent-hq/intent/issues/8593)): **remote
 agents set the workspace title, their name and the status, and propose sibling
 workspaces** ([executor link
@@ -79,9 +79,8 @@ proposal is attributed to the remote agent. Previously the machine refused them 
 `workspace.details`, both sides must be updated, because the machine forwards a frame
 only when its own table does and the backend serves only the methods its own copy of the
 table forwards: an older machine keeps refusing the setters on the machine, and a newer
-machine on an older backend gets the backend's `remote-agent-unsupported:` refusal.
-The machine
-registers a forwarded proposal card on the backend with the new machine-internal
+machine on an older backend gets the backend's `remote-agent-unsupported:` refusal. The
+machine registers a forwarded proposal card on the backend with the new machine-internal
 `workspace.call` frame `turn.attachments` (refused from agent code, like
 `git.commitPolicy`), sent once when the `workspace_api` call ends; an older backend
 refuses it, the machine ignores the refusal, and the card is taken from the tool output
