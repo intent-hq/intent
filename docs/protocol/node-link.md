@@ -1804,7 +1804,7 @@ Revoking a credential closes its live `/node/*` connections with `1008`
 `hello.protocol` is a range instead of one number:
 
 ```ts
-interface ProtocolRange { min: number; max: number } // inclusive; this contract defines 6 through 10
+interface ProtocolRange { min: number; max: number } // inclusive; this contract defines 6 through 12
 ```
 
 The machine picks the highest version in both ranges and returns it as
@@ -1870,6 +1870,14 @@ both sides, so protocol 7 to 9 peers still bind. On a link below 10 the backend
 refuses to place or start an agent whose workspace needs a prepared checkout
 ([older peers](#older-peers)); other agents run as before.
 
+**nodeProtocol 12** is protocol 11 plus [skills on the machine](#skills-on-the-machine-nodeprotocol-12):
+the `skills` journal body and the `skills` / `skillsReply` frames. They are a new
+journal body and new frame types, which an older peer rejects as
+`node-link-protocol`, so they need a new version. A daemon that implements it
+offers `{ min: 7, max: 12 }` on both sides, so protocol 7 to 11 peers still bind.
+On a link below 12 the machine journals no `skills` record and the backend sends
+no `skills` frame.
+
 ### Frames
 
 Each WebSocket binary message on `/node/link` is one JSON frame of at most
@@ -1899,6 +1907,8 @@ Each WebSocket binary message on `/node/link` is one JSON frame of at most
 | `scriptOutput` | machine → backend | script | Protocol 8 or later: `agentId`, `scriptId`, `spawnId`, `seq`, `data` |
 | `scriptExited` | machine → backend | script | Protocol 8 or later: `agentId`, `scriptId`, `spawnId`, `exitCode?`, `error?` |
 | `setupOutput` | machine → backend | script | Protocol 10 or later: `agentId`, `seq`, `data`; see [setup output](#setup-status-and-output) |
+| `skills` | backend → machine | control | Protocol 12 or later: `queryId` (UUID), `claudeConfigDir?`; see [skills on the machine](#skills-on-the-machine-nodeprotocol-12) |
+| `skillsReply` | machine → backend | control | Protocol 12 or later: `queryId`, `skills: MachineSkill[]` |
 
 `intentdVersion` is recorded for diagnostics and is not a compatibility gate.
 Heartbeats run every 15 s and a link silent for 45 s is dead. The backend
@@ -1913,12 +1923,14 @@ The executor credential admits exactly these link requests, enumerated in one
 constant with a golden test: `hello`, `heartbeat` / `heartbeatReply`, `launch`,
 `prompt`, `cancel`, `stop`, `ack`, `capabilities`, `response` (to the machine's
 `workspace.call` requests), `scriptStart` and `scriptStop` (protocol 8 or later; refused on 7),
+`skills` (protocol 12 or later),
 and git sessions on `/node/git` for agents on that credential's binding. Any
 other frame is `node-link-protocol`.
 `stopAck` travels machine → backend, so it is not in that list; the backend
 accepts it only on a protocol 7 or later link. Likewise the backend accepts
 `scriptStarted`, `scriptOutput` and `scriptExited` only on a protocol 8 or later link,
-and `setupOutput` and the `setup*` journal bodies only on a protocol 10 or later link.
+`setupOutput` and the `setup*` journal bodies only on a protocol 10 or later link,
+and `skillsReply` and the `skills` journal body only on a protocol 12 or later link.
 
 ### Stop acknowledgement (nodeProtocol 7)
 
@@ -2240,6 +2252,7 @@ interface JournalRecord {
     | { kind: "started"; baseCommit: string }       // checkout ready, provider session set up
     | { kind: "setupStarted"; startedAt: string }    // protocol 10: see prepared checkout
     | { kind: "setupFinished"; state: "completed" | "failed" | "skipped"; exitCode?: number; error?: string; finishedAt: string } // protocol 10
+    | { kind: "skills"; skills: MachineSkill[] }       // protocol 12: see skills on the machine
     | { kind: "notification"; notification: unknown } // ACP session/update params
     | { kind: "turnEnded"; stopReason: string; error?: string }
     | { kind: "exited"; exitCode?: number; error?: string; failure?: unknown }; // failure: see capacity refusal
@@ -2758,6 +2771,48 @@ not the machine's checkout), and its wakes reach the agent as agent messages. On
 protocol 10 the machine replaces `setupStatus` in the forwarded
 `workspace.details` reply with its own checkout's
 [setup status](#setup-status-and-output).
+
+### Skills on the machine (nodeProtocol 12)
+
+A remote agent's skills are its machine's skills
+([skills of a remote agent](./methods/agent-aux.md#skills-of-a-remote-agent)). The
+backend's instructions for a remote agent never carry a skills catalog: its paths are
+on the backend.
+
+```ts
+interface MachineSkill {   // the §5.34 skill.list row, paths on the machine
+  name: string;
+  description: string;
+  location: string;
+  resourceDirectory?: string;
+  scope: "user" | "project";
+  allowedTools?: string;
+  compatibility?: string;
+}
+```
+
+1. **Catalog.** After the checkout is ready and the launch's profile is resolved, the
+   machine discovers the agent's skills with the backend's rules: user roots under its
+   home (the profile's `CLAUDE_CONFIG_DIR`, expanded on the machine, replaces the user
+   `.claude` root), project roots in the agent's checkout. It adds the
+   `<available_skills>` catalog, with machine paths, as one text block of the first
+   prompt of each provider session it opens (a relaunch included), beside the checkout
+   notice. A machine does this on every protocol; without skills nothing is added.
+2. **Journal.** On a protocol 12 link the machine then journals
+   `{ kind: "skills", skills }`, before `started`, with the same rows. The backend
+   keeps the latest list per agent with its placement (it is not projected) and emits
+   `skills:changed` with the `agentId` when it differs from the one it kept.
+3. **Before the first start.** The backend asks with
+   `{ type: "skills", queryId, claudeConfigDir? }`: `claudeConfigDir` is the agent's
+   profile value as typed (no other profile member, no secret). The machine answers
+   `{ type: "skillsReply", queryId, skills }` with its **user** skills only (no
+   checkout exists yet), within 10 s; otherwise the backend treats the machine as not
+   connected. A `claudeConfigDir` that is not a directory after expansion scans the
+   other user roots.
+4. **Older peers.** A machine from before protocol 12 adds no catalog and reports
+   none; the backend answers `skill.list` for its agents with project skills and
+   `unavailable: "machine-update-required"`. A protocol 12 machine on an older backend
+   still adds the catalog but journals nothing.
 
 ### Saved scripts (nodeProtocol 8)
 
