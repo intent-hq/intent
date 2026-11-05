@@ -998,6 +998,22 @@ from an updated machine. No methods, events, fields of public results or error
 codes change, the surface counts are unchanged, and there is no public protocol
 version bump.
 
+**Sub-agent checkouts for remote agents — nodeProtocol 13 (behavior change, no capability).**
+A remote agent's sub-agent now starts from the parent's work
+([sub-agent checkouts](./node-link.md#sub-agent-checkouts-nodeprotocol-13)).
+On the parent's machine it works in the parent's checkout: `launch` gains
+`checkoutOf`, the machine starts the child there with its own temp folder,
+pushes the shared checkout to the parent's refs, stops the sharing children
+before the parent's final stop, and its sweep keeps a shared checkout. On
+another machine the backend asks the parent's machine to push now (new
+`pushWip` / `pushWipReply` control frames) and starts the child from the
+parent's `head` with its `wip` restored on top. Daemons offer
+`{ min: 7, max: 13 }`. On a link below 13 a child on the parent's machine
+starts from the workspace's last commit, as before, and one on another
+machine from the parent's last push. Only the create `notice` text changes on the public
+surface: no methods, events, fields or error codes change, the surface counts
+are unchanged, and there is no public protocol version bump.
+
 **Command-default change (breaking).**
 [Script creation defaults (§5.8)](./methods/scripts.md#command-creation-defaults-breaking-change)
 change omission on a new command from `saved` to `oneOff`; new services remain

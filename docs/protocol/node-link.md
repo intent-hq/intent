@@ -1804,7 +1804,7 @@ Revoking a credential closes its live `/node/*` connections with `1008`
 `hello.protocol` is a range instead of one number:
 
 ```ts
-interface ProtocolRange { min: number; max: number } // inclusive; this contract defines 6 through 12
+interface ProtocolRange { min: number; max: number } // inclusive; this contract defines 6 through 13
 ```
 
 The machine picks the highest version in both ranges and returns it as
@@ -1878,6 +1878,7 @@ version, not an optional field. A daemon that implements it offers
 `{ min: 7, max: 11 }` on both sides, so protocol 7 to 10 peers still bind. On a
 link below 11 the backend sends no `mcpProxies` and the agent starts without
 the user's MCP servers, as the section describes.
+
 **nodeProtocol 12** is protocol 11 plus [skills on the machine](#skills-on-the-machine-nodeprotocol-12):
 the `skills` journal body and the `skills` / `skillsReply` frames. They are a new
 journal body and new frame types, which an older peer rejects as
@@ -1885,6 +1886,16 @@ journal body and new frame types, which an older peer rejects as
 offers `{ min: 7, max: 12 }` on both sides, so protocol 7 to 11 peers still bind.
 On a link below 12 the machine journals no `skills` record and the backend sends
 no `skills` frame.
+
+**nodeProtocol 13** is protocol 12 plus [sub-agent checkouts](#sub-agent-checkouts-nodeprotocol-13):
+`launch.checkoutOf` and the `pushWip` / `pushWipReply` frames. A launch with
+`checkoutOf` starts the agent in another agent's checkout, which an older
+machine would silently ignore and create a checkout of its own, so it needs a
+new version, not an optional field. A daemon that implements it offers
+`{ min: 7, max: 13 }` on both sides. On a link below 13 the backend sends
+neither: a sub-agent on the parent's machine starts from the workspace's last
+commit, as before, and one on another machine starts from the parent's last
+pushed work.
 
 ### Frames
 
@@ -1917,6 +1928,8 @@ Each WebSocket binary message on `/node/link` is one JSON frame of at most
 | `setupOutput` | machine → backend | script | Protocol 10 or later: `agentId`, `seq`, `data`; see [setup output](#setup-status-and-output) |
 | `skills` | backend → machine | control | Protocol 12 or later: `queryId` (UUID); see [skills on the machine](#skills-on-the-machine-nodeprotocol-12) |
 | `skillsReply` | machine → backend | control | Protocol 12 or later: `queryId`, `skills: MachineSkill[]` |
+| `pushWip` | backend → machine | control | Protocol 13 or later: `requestId`, `agentId`; see [parent's work on another machine](#parents-work-on-another-machine) |
+| `pushWipReply` | machine → backend | control | Protocol 13 or later: `requestId`, `agentId`, `outcome`, `error?` |
 
 `intentdVersion` is recorded for diagnostics and is not a compatibility gate.
 Heartbeats run every 15 s and a link silent for 45 s is dead. The backend
@@ -1932,13 +1945,15 @@ constant with a golden test: `hello`, `heartbeat` / `heartbeatReply`, `launch`,
 `prompt`, `cancel`, `stop`, `ack`, `capabilities`, `response` (to the machine's
 `workspace.call` requests), `scriptStart` and `scriptStop` (protocol 8 or later; refused on 7),
 `skills` (protocol 12 or later),
+`pushWip` (protocol 13 or later),
 and git sessions on `/node/git` for agents on that credential's binding. Any
 other frame is `node-link-protocol`.
 `stopAck` travels machine → backend, so it is not in that list; the backend
 accepts it only on a protocol 7 or later link. Likewise the backend accepts
 `scriptStarted`, `scriptOutput` and `scriptExited` only on a protocol 8 or later link,
 `setupOutput` and the `setup*` journal bodies only on a protocol 10 or later link,
-and `skillsReply` and the `skills` journal body only on a protocol 12 or later link.
+`skillsReply` and the `skills` journal body only on a protocol 12 or later link,
+and `pushWipReply` only on a protocol 13 or later link.
 
 ### Stop acknowledgement (nodeProtocol 7)
 
@@ -2113,7 +2128,9 @@ interface StopAckFrame {
 9, is `node-link-protocol`. A machine sends `finalPush` only in the ack of a
 final stop.
 
-**On the machine**, a final stop runs in this order:
+**On the machine**, a final stop runs in this order (on protocol 13 the
+agents that share the checkout are stopped first, see
+[shared checkout](#shared-checkout)):
 
 1. Stop the agent's [script runs](#saved-scripts-nodeprotocol-8): every
    process of the agent's machine runs is stopped as by `scriptStop`, with its
@@ -2224,7 +2241,8 @@ removes, after it has sent `welcome`, each listed directory whose agent is not
 in `leaseAgents`, is not running, and has no final stop in progress (which
 removes its own directory). It never removes the checkout of an agent launched,
 or being prepared for launch, on this binding, even when that agent was
-recorded on the lease after `hello` was built. An older backend's `hello`
+recorded on the lease after `hello` was built. On protocol 13 it also keeps
+a checkout that other agents share ([shared checkout](#shared-checkout)). An older backend's `hello`
 carries no `leaseAgents`, and the machine sweeps nothing.
 
 **Inactive credentials.** A revoked credential never binds again, so the
@@ -2312,6 +2330,7 @@ interface LaunchCommand {
   checkout?: PreparedCheckout;    // protocol 10 only; see Prepared checkout
   mcpProxies?: McpProxy[];        // protocol 11 only; see User MCP servers
   compactToolDescriptions?: boolean; // see below
+  checkoutOf?: string;             // protocol 13 only; see Sub-agent checkouts
 }
 ```
 
@@ -2840,6 +2859,113 @@ agent would have had servers, the instructions the backend sends with its first
 prompt say: "Your MCP servers are not available on <machine> until Intent there
 is updated." A machine below 11 never sends the `mcp.proxy.*` frames, and a
 backend below 11 refuses them as frames its table does not forward.
+
+### Sub-agent checkouts (nodeProtocol 13)
+
+A local sub-agent works in its parent's worktree. On protocol 13 a remote
+agent's sub-agent also starts from its parent's work
+([sub-agents of remote agents](./methods/nodes.md#sub-agents-of-remote-agents)).
+The backend decides once, when the remote parent creates the child (the
+create's caller is the parent):
+
+| Child runs on | Link | The child |
+| --- | --- | --- |
+| The parent's machine | That link at 13 or later | Works in the parent's checkout ([shared checkout](#shared-checkout)) |
+| The parent's machine | Below 13 | Starts from the workspace's last commit, as before |
+| Another machine | The parent's machine's link at 13 or later | Starts from a copy of the parent's work, pushed at creation ([parent's work on another machine](#parents-work-on-another-machine)) |
+| Another machine | The parent's machine's link below 13 | Starts from a copy of the parent's last pushed work (step 4 below) |
+
+A child on the backend (`placement: { target: "local" }`) starts in the
+workspace worktree, as before. "The parent's checkout" is always a checkout's
+**owner**: when the parent itself shares a checkout, its child shares, or
+copies, that checkout's owner's. The backend keeps the owner with the child's
+placement and sends it at every launch.
+
+#### Shared checkout
+
+```ts
+interface LaunchCommand {
+  // ...as in launch above
+  checkoutOf?: string; // protocol 13: the agent whose checkout this agent works in
+}
+```
+
+1. **Launch.** With `checkoutOf` the backend sends no `checkout`. The machine
+   fetches nothing, creates no worktree and runs no setup script: it starts the
+   provider in the owner's checkout, its submodules included, and journals
+   `started`. When the owner has no checkout on the machine, or a final stop
+   or the sweep is removing it, the launch ends with `node-checkout-failed`
+   ("the checkout of agent <owner> is not on this machine"). `checkoutOf` on a
+   link below 13 is `node-link-protocol`; together with `checkout` the launch
+   ends with `node-checkout-failed`.
+2. **Temp folder.** The sharing agent gets its own
+   [private temp folder](#launch-and-agent-lifecycle) in its own agent
+   directory, as a local sub-agent has its own temp folder in its parent's
+   worktree. Two agents in one checkout never share a temp folder. It is
+   removed with the sharing agent's directory (its final stop or the sweep).
+3. **Work.** The sharing agent's `workspace_api` file, `host.exec` and
+   `git.commit` calls, and its saved scripts, run in the shared checkout;
+   `workspace.info` returns its path. Its commits move the shared checkout's
+   `HEAD`. Edits of the owner and of every sharing agent are visible to all of
+   them at once, as for local agents in one worktree.
+4. **Pushes.** A sharing agent has no `head` or `wip` of its own. After each
+   of its turns and at its exit, the machine pushes the shared checkout to the
+   **owner's** refs ([leaves first](#pushes-leaves-first)). The machine runs
+   one push of a checkout at a time, whichever agent's turn or stop started
+   it.
+5. **Stops.** A stop or final stop of a sharing agent never removes the shared
+   checkout. Its final stop pushes the shared checkout to the owner's refs
+   (`finalPush` reports that push) and removes only the sharing agent's own
+   directory.
+6. **Owner's final stop.** Before step 1 of the
+   [final stop](#final-stop-nodeprotocol-9), the machine stops every agent that
+   shares the owner's checkout: their script runs, then their providers, as a
+   plain stop does (each journals `exited` and pushes at exit). Then the
+   owner's final stop goes on as usual and removes the checkout. The backend
+   gets no stop acknowledgement for those agents; their sessions stay, and
+   their next launch fails `node-checkout-failed` as in 1.
+7. **Sweep.** The bind-time sweep keeps an owner's checkout while an agent
+   that shares it is running, exiting or in `leaseAgents`. The machine knows
+   who shares a checkout from the launches since it started.
+8. **Relaunch.** A relaunch of a sharing agent uses the owner's checkout again;
+   it has nothing of its own to restore. A relaunch of the owner keeps its
+   checkout, with the sharing agents' work in it.
+
+#### Parent's work on another machine
+
+```ts
+interface PushWipFrame { type: "pushWip"; requestId: string; agentId: string } // backend → machine
+interface PushWipReplyFrame {
+  type: "pushWipReply"; requestId: string; agentId: string;
+  outcome: "pushed" | "failed" | "skipped";
+  error?: string; // with "failed"
+}
+```
+
+1. When a remote parent creates a child on another machine, the backend sends
+   `pushWip` for the owner to the owner's machine before it writes the child's
+   refs, and waits up to **75 s** for the `pushWipReply` with the same
+   `requestId`.
+2. The machine pushes the owner's checkout as after a turn
+   ([leaves first](#pushes-leaves-first)), one push of that checkout at a time,
+   within **60 s**. It replies `pushed`; `skipped` when the agent has no
+   checkout there; `failed`, with `error`, when the push failed or timed out.
+   Each `pushWip` gets exactly one reply.
+3. The backend then reads the owner's `head` and `wip` refs, in the
+   superproject and in each pinned submodule's repository. When the owner has
+   a `head` ref, the child's `base` is the owner's `head`, its `wip` is the
+   owner's `wip` when that differs, and each pin's commit is the owner's module
+   `head`, with the module `wip` likewise. The child's machine checks out `base`
+   and applies `wip` on top as uncommitted changes, as a
+   [relaunch without a checkout](#relaunch-without-a-checkout) does.
+4. When the reply is `failed` or `skipped`, the link is down or below 13, or
+   no reply comes within 75 s, the backend uses the owner's refs as they are
+   (its last push). Without an owner `head` ref the child starts from the
+   workspace's last commit, as before. This step never fails the create; the
+   create result's `notice` says what the child starts from.
+
+The child's copy is a point in time. Later work of the parent or of the child
+is not shared; a parent agent or the user merges the child's `head` as usual.
 
 ### Workspace API on the machine
 
