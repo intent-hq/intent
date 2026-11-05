@@ -63,6 +63,23 @@ budget serves alone with `metadataOmitted: true` / `metadataBytes` in place of i
 index without `nextToken`, which clients read as complete. Older apps see the newest
 page only.
 
+Also within 15.4 (behaviour change only; no wire-shape, method-catalog or nodeProtocol
+change, so no version bump; fixes
+[intent-hq/intent#8593](https://github.com/intent-hq/intent/issues/8593)): **remote
+agents set the workspace title, their name and the status**
+([executor link routing](./workspace-routing.md#remote-agents-on-the-executor-link)).
+On the executor link, `workspace.setTitle`, `workspace.setAgentName`,
+`workspace.setStatusMessage` and `workspace.setStatusImage` are now forwarded to the
+backend over the existing `workspace.call` request, like `workspace.details`, and run
+as the leased agent; `workspace.setAgentName` renames only the calling agent.
+Previously the machine refused them with `remote-agent-unsupported:`.
+`workspace.archive`, `workspace.unarchive`, `workspace.proposeSibling` and
+`workspace.applyProposal` stay refused. As for `workspace.details`, both sides must be
+updated, because the machine forwards a frame only when its own table does and the
+backend serves only the methods its own copy of the table forwards: an older machine
+keeps refusing the setters on the machine, and a newer machine on an older backend gets
+the backend's `remote-agent-unsupported:` refusal. Clients need no change.
+
 
 **Prepared specialist simplification (no method-catalog change).**
 Harness 3.8 removes the built-in Coordinator/Lead (`spec-writer`), Implementor,
