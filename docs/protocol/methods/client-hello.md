@@ -114,6 +114,13 @@ grants no permission and says nothing about the agent feature setting.
 `agent.editAndRegenerate`. Clients page large blocks and regenerate by reference only for exact
 integer `1`; older daemons omit it and serve every block whole.
 
+**Remote agent skills (additive).** Exactly integer
+`server.capabilities.remoteAgentSkills: 1`, also returned by `system.capabilities`,
+advertises the [§5.34 skills of a remote agent](./agent-aux.md#skills-of-a-remote-agent)
+contract: the `agentId` param of `skill.list` with its `stale` / `unavailable` result
+fields, `agentId` on `skills:changed`, and the `skill_unavailable` system notice. Clients send `agentId` only for exact integer
+`1`; older daemons omit it, and clients keep the workspace-only call.
+
 **Workspace labels (additive).** Exactly integer `server.capabilities.workspaceLabels: 1`,
 also returned by `system.capabilities`, advertises the
 [§5.1 workspace label contract](./workspace.md#workspace-labels): the optional

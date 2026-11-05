@@ -63,6 +63,20 @@ budget serves alone with `metadataOmitted: true` / `metadataBytes` in place of i
 index without `nextToken`, which clients read as complete. Older apps see the newest
 page only.
 
+Also within 15.4 (additive optional param, result fields and event field;
+capability-gated; no method-catalog change, so no version bump; node-link protocol 12):
+**skills of remote agents** ([§5.34 skills of a remote
+agent](./methods/agent-aux.md#skills-of-a-remote-agent), [skills on the
+machine](./node-link.md#skills-on-the-machine-nodeprotocol-12)). A remote agent's skills
+are discovered on its machine (its home there, and its own checkout), and the machine adds their catalog to the agent's first prompt. `skill.list`
+gains `agentId?`; with it the result is always the paged envelope, plus `stale: true`
+(machine not connected, last reported list) or `unavailable: "machine-offline" |
+"machine-update-required"`. `skills:changed` carries `agentId` when a remote agent's
+catalog changed. A message to a remote agent that starts with an unknown `/name` still
+sends, and gets a `skill_unavailable` system notice. Support is detected by exact integer
+`remoteAgentSkills: 1` on `client.hello` `server.capabilities` and `system.capabilities`;
+older daemons omit it, and clients keep the workspace-only call.
+
 Also within 15.4 (behaviour change plus one machine-internal link frame; no
 method-catalog or nodeProtocol change, so no version bump; fixes
 [intent-hq/intent#8593](https://github.com/intent-hq/intent/issues/8593)): **remote
