@@ -2810,7 +2810,7 @@ interface MachineSkill {   // the §5.34 skill.list row, paths on the machine
    machine as not connected. The query carries no profile member: a profile that sets
    an account folder cannot run on another machine.
 4. **Older peers.** A machine from before protocol 12 adds no catalog and reports
-   none; the backend answers `skill.list` for its agents with project skills and
+   none; the backend answers `skill.list` for its agents with no skills and
    `unavailable: "machine-update-required"`. A protocol 12 machine on an older backend
    still adds the catalog but journals nothing.
 

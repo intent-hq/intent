@@ -415,8 +415,9 @@ Support is advertised by exact integer `server.capabilities.remoteAgentSkills: 1
    - machine not connected (no link within 10 s): the last list reported for the agent
      with `stale: true`; when none was reported, the backend's project skills with
      `unavailable: "machine-offline"`;
-   - machine on an older version (node-link protocol below 12): the backend's project
-     skills with `unavailable: "machine-update-required"`.
+   - machine on an older version (node-link protocol below 12): `skills: []` with
+     `unavailable: "machine-update-required"`; such a machine gives its agent no skills
+     catalog, so nothing is offered.
 
    A request can wait up to 10 s for the machine; nothing is cached besides the reported
    list. Every page of one request carries the same `stale` / `unavailable`, which the
