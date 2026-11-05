@@ -737,10 +737,10 @@ report or it does not list the provider, the first matching rule applies
 3. `cli-missing` otherwise, including every absent provider of a machine that
    does not send `disabledProviders` and still lists other providers.
 
-Placement refreshes a machine without a report before deciding and lists one
-it cannot reach as unreachable rather than in `machines`, so a report-less
-entry comes from `agent.setModel` on a remote agent whose machine has not
-reported. `status` is an open set: values may be added without a version
+Placement refreshes a machine without a report before deciding; one it cannot
+reach is left out of `machines` and makes the error `retryable`. So a
+report-less entry comes from `agent.setModel` on a remote agent whose machine
+has not reported. `status` is an open set: values may be added without a version
 bump, and a client treats an unrecognized value as a generic unavailability.
 
 Its message is written for the model: "Model X isn't available on <machine>;
