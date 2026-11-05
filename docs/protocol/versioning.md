@@ -1961,6 +1961,7 @@ the `ignore` map of `scripts/check-protocol-field-parity.mjs`, not here.
 |---|---|---|---|
 | `Workspace` | `retiredAt` | [Retired workspaces](./methods/workspace.md#retired-workspaces) | Pending cloudlands-fe retired-workspaces PR (home, search and workspace view) |
 | `Workspace` | `scriptsRunning` | [Workspace fields](./methods/workspace.md#51-workspace) | Pending cloudlands-fe Home Running/Waiting groups PR |
+| `AgentLite` | `submodules` | [Prepared checkout](./methods/nodes.md#prepared-checkout) | Pending cloudlands-fe prepared-checkout PR ([intent-hq/intent#8594](https://github.com/intent-hq/intent/issues/8594)) |
 | `Workspace` | `backgroundTasksRunning` | [Workspace fields](./methods/workspace.md#51-workspace) | Pending cloudlands-fe Home background-task Running PR |
 | `Workspace` | `autoArchiveDisabled` | [Auto-archive opt-out](./methods/workspace.md#auto-archive-opt-out) | Pending [cloudlands-fe#3863](https://github.com/intent-hq/cloudlands-fe/pull/3863) (Home Disable auto-archive toggle) |
 | `Workspace` | `plainFolder` | [Plain-folder workspaces](./methods/workspace.md#plain-folder-workspaces) | Pending cloudlands-fe plain-folder workspaces PR (Labs git toggle and hidden git UI) |
