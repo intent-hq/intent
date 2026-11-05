@@ -80,7 +80,12 @@ proposal is attributed to the remote agent. Previously the machine refused them 
 only when its own table does and the backend serves only the methods its own copy of the
 table forwards: an older machine keeps refusing the setters on the machine, and a newer
 machine on an older backend gets the backend's `remote-agent-unsupported:` refusal.
-Clients need no change.
+The machine
+registers a forwarded proposal card on the backend with the new machine-internal
+`workspace.call` frame `turn.attachments` (refused from agent code, like
+`git.commitPolicy`), sent once when the `workspace_api` call ends; an older backend
+refuses it, the machine ignores the refusal, and the card is taken from the tool output
+as before. Clients need no change.
 
 
 **Prepared specialist simplification (no method-catalog change).**

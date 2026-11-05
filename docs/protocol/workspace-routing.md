@@ -273,10 +273,13 @@ calling remote agent, never another session. A forwarded
 refused) and builds the proposal card on the backend, from the backend's
 workspace: repository identity, the default `baseRef` and the `baseRef` check use
 the backend's repository, not the machine's checkout, so a ref that exists only on
-the machine is warned about and Apply fails. The card is returned in the remote
-agent's tool result and, like a local agent's, becomes a pending proposal on that
-agent's message, attributed to it, that the user can Apply; the agent itself cannot
-apply it, since `workspace.applyProposal` is refused.
+the machine is warned about and Apply fails. The backend does not register
+the card when the frame returns: the card goes back to the machine in the tool
+result, and the machine registers it with the
+`turn.attachments` frame (below) when the `workspace_api` call ends,
+so it becomes a pending proposal on that agent's message, attributed to it, that
+the user can Apply. The agent itself cannot apply it, since
+`workspace.applyProposal` is refused.
 A forwarded frame shares the link's 8 MiB RPC body cap, so a
 `workspace.setStatusImage` image too large for it fails on
 the link with `node-link-frame-too-large`. The agent's `agentFeatures` snapshot and the
@@ -287,7 +290,32 @@ sub-agent on the agent's own machine; see
 Before an agent-initiated `git.commit`,
 the machine forwards the internal frame `git.commitPolicy` (refused from agent code)
 and the backend answers `{ "autoCommit": boolean }` with the workspace's effective
-auto-commit policy. The machine forwards `script.*` only on a link that
+auto-commit policy.
+
+When a remote agent's `workspace_api` call ends,
+before the machine answers the provider, it sends the result cards it collected
+during that call (such as a forwarded `workspace.proposeSibling` card) to the
+backend in one internal `turn.attachments` frame, also refused from agent code:
+
+```ts
+// workspace.call params: { method: "turn.attachments", args: TurnAttachmentsArgs }
+interface TurnAttachmentsArgs {
+  attachments: {            // 1 to 32 cards, in call order
+    id: string;             // stamped by the machine
+    mimeType: string;
+    uri: string;
+    name: string;
+    text: string;
+  }[];
+}
+```
+
+The backend accepts it only for an agent on the link's lease, registers the
+list as one batch for that agent's current turn, as a local agent's cards are
+registered when its call ends, and answers `{}`. One batch per call keeps each
+card on the tool call that made it, even when calls run in parallel or one call
+makes several cards. An older backend refuses the frame; the machine ignores the
+refusal, and the card is then taken from the tool output as before. The machine forwards `script.*` only on a link that
 negotiated nodeProtocol 8 or later; a protocol 7 machine, or a link to a backend that
 offers only 7, refuses it on the machine with `remote-agent-unsupported:`
 ([mixed versions](./node-link.md#saved-scripts-nodeprotocol-8)). A backend that
