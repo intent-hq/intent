@@ -256,11 +256,11 @@ method inventory:
 | `file.read`, `file.write`, `file.list`, `file.delete`, `file.mkdir`, `file.rename`, `git.commit`, `host.exec`, `help.*` | On the machine, against the agent's own checkout and host |
 | `file.getAttachment` | On the machine: the bytes come from the backend with the internal `file.attachmentData` frame (below), and the copy lands in the agent's own checkout |
 | `workspace.info` | On the machine: `{ id, path }`, where `path` is the agent's own checkout on the machine |
-| `note.*`, `task.*`, `agent.*`, `pr.*` (and its `mr.*` alias), `comment.*`, `event.*`, `script.*`, `primitive.*`, `discussion.*`, `crossWorkspace.*`, `hook.*`, `browser.*`, `desktop.*` | Forwarded to the backend as one `workspace.call` link request with params `{ method, args }` |
+| `note.*`, `task.*`, `agent.*`, `pr.*` (and its `mr.*` alias), `comment.*`, `event.*`, `script.*`, `primitive.*`, `discussion.*`, `crossWorkspace.*`, `hook.*`, `browser.*`, `desktop.*`, `mcp.*` | Forwarded to the backend as one `workspace.call` link request with params `{ method, args }` |
 | `workspace.details`, `workspace.setTitle`, `workspace.setAgentName`, `workspace.setStatusMessage`, `workspace.setStatusImage`, `workspace.proposeSibling`, `workspace.applyProposal`, `workspace.archive`, `workspace.unarchive`, `workspace.context`, `workspace.referenceDocs`, `workspace.timeline`, `workspace.emitNotification`, `git.listRoots`, `terminal.list`, `terminal.readOutput`, `app.question.ask` | Forwarded the same way, method by method |
 | `app.*` other than `app.question.ask` | Refused: `remote-agent-unsupported: ws.app.* is for the Assistant workspace, whose agents run on the backend.` |
 | `git.registerRoot`, `git.unregisterRoot`, and a `gitRootId` on `git.commit` | Refused: `remote-agent-unsupported: secondary git roots are on the backend only; this agent's machine has the main checkout and its submodules.` |
-| Everything else, including `mcp.*` and `secret.*` | Refused, never run on another host |
+| Everything else, including `secret.*` | Refused, never run on another host |
 
 A refused frame fails with a message starting `remote-agent-unsupported:` that names
 the method and lists what remote agents can use. The backend serves a forwarded
@@ -313,6 +313,16 @@ description and in `ws.help("agent")`, or `null` when the backend exposes no
 machine. The machine adds the text to the remote agent's `workspace_api`
 description and `ws.help("agent")`, so a remote agent can name another machine in
 `placement`. An older backend refuses the frame, and the machine leaves the text out.
+
+A forwarded `ws.mcp.listServers`, `ws.mcp.listTools` or `ws.mcp.callTool` runs
+in the backend's MCP hub with a local agent's gates (`agentFeatures.mcpTools`,
+`mcp.enableUserServers`, the server's own and its workspace's disabled state,
+host membership) and the hub's 55 s call cap; it lists and calls the backend's
+servers, never servers on the machine. The machine also forwards the internal
+frames `mcp.proxy.listTools` and `mcp.proxy.callTool` (refused from agent code)
+for the user MCP servers in the provider's own session, on a link that
+negotiated nodeProtocol 11 ([user MCP
+servers](./node-link.md#user-mcp-servers-nodeprotocol-11)).
 
 On a link that negotiated nodeProtocol 10 the machine replaces `setupStatus` in
 the forwarded `workspace.details` reply with the setup status of the agent's own
