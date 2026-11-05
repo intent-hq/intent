@@ -473,14 +473,37 @@ services directly and are unchanged.
 > **Native preview navigation (prepared extension).** A client that advertises
 > `capabilities.browserNavigation: true` can receive navigation requests without
 > advertising `browserExec`. This lets a connected iOS app present agent-requested
-> previews in its native workspace browser when desktop is unavailable. It requires
+> previews in its native workspace browser. It requires
 > companion daemon and iOS changes; the capability is not a shipped-release claim.
 >
 > Only batches containing `openTab`, `showTab`, `focusTab`, `closeTab`, and `navigate`
 > qualify for navigation routing. `listTabs` remains daemon-local and cannot be mixed
-> with other actions. An unpinned `openTab` request naming no existing tab prefers a
-> live `browserExec` driving client, then another live `browserExec` client; when none
-> is available, it can select a live `browserNavigation` client. An offline desktop
+> with other actions. An unpinned `openTab` request naming no existing tab first
+> prefers the device that sent the agent's latest accepted user message, when that
+> device has a live connection capable of handling the complete request batch. The
+> preference is scoped to that agent's conversation and updates when a new user
+> message is accepted, including when it is queued. Processing an older queued
+> message later does not overwrite a newer preference. The preference comes from the
+> message's connection-bound client identity, not a client ID supplied in message
+> text or metadata. Automatic events and messages from other agents do not replace
+> this preference. It does not grant ownership or additional client capabilities.
+> The preference survives daemon restarts and identifies the logical client, so a
+> reconnected device can be selected through its eligible live connection. A newer
+> accepted user message without a hello-bound device clears the older preference.
+> Rejected submissions and retries of an already accepted submission do not update it.
+> A delegated agent without its own accepted user message inherits the nearest
+> ancestor's preference within the same workspace. Its own user message takes
+> precedence, including a message that clears the preference. Independent
+> conversations do not inherit, and automatic child messages never update an
+> ancestor's preference. An unavailable preferred device uses the normal fallback;
+> it does not cause a search for another ancestor's device.
+> A batch beginning with a new `openTab` may also prefer the sending device for
+> automation, but only if that device supports automation for the complete batch.
+>
+> When the preferred device is unavailable or incapable, or no preference is known,
+> the request prefers a live `browserExec` driving client, then another live
+> `browserExec` client; when none is available, it can select a live
+> `browserNavigation` client. An offline desktop
 > claimed-tab host or recorded desktop-control session does not block this fallback
 > for a new preview. Existing desktop tabs remain on their host. An explicit
 > workspace pin remains binding: an offline or incapable pinned client does not
