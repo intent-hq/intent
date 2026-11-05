@@ -288,9 +288,11 @@ they do not touch the agent's checkout on the machine. The other forwarded reads
 return backend data: `git.listRoots` lists the workspace's secondary git roots with
 their backend paths, `terminal.list` and `terminal.readOutput` read the workspace's
 terminals on the backend (read-only; there is no terminal write frame), and
-`crossWorkspace.*`, `discussion.*`, `workspace.context`, `workspace.referenceDocs`
-and `workspace.timeline` read what a local agent reads. `primitive.*` and
-`workspace.emitNotification` write to the backend as a local agent's call does. A
+`crossWorkspace.*` and `discussion.*` read what a local agent reads. `primitive.*`
+writes to the backend's notes as a local agent's call does. `workspace.context`,
+`workspace.referenceDocs`, `workspace.timeline` and `workspace.emitNotification`
+are forwarded too, and answer with the backend's own "not yet available" error, as
+they do for a local agent. A
 forwarded frame shares the link's 8 MiB RPC body cap, so a
 `workspace.setStatusImage` image too large for it fails on the link with
 `node-link-frame-too-large`. The agent's `agentFeatures` snapshot and the sub-agent
