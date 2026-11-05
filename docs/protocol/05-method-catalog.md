@@ -104,20 +104,24 @@ The [secret request contract (§5.56)](./methods/secrets.md) adds four
 workspace router methods for answering, dismissing, listing and forgetting
 agent-requested secrets. Requests are MCP-only; `secretRequests: 1` gates support.
 
-The documented surface reserves **491 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
+The [Agent Plugins contract (§5.57)](./methods/plugins.md) adds five
+administrator-only router methods that install, update, remove, enable and list
+app-wide plugins; `agentPlugins: 1` gates support.
 
-- **Router methods:** 433 methods dispatched via the main router (`router::dispatch`)
+The documented surface reserves **496 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
+
+- **Router methods:** 438 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 58 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 0; use canonical Git read names
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 7 notifications: `events.lost` ([loss contract](./event-stream-recovery.md)), `events.event` (§6.3) and the socket-private `workspace.repositoryContext.retired`, `workspace.repositorySelection.retired`, `accept-changes.retired`, `sourceControl.read.retired`, `sourceControl.read.invalidated` controls (§6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 6 methods total — 2 are **dual-role** and counted within the 491 dispatchable names (`browser.exec`, `host.openInEditor`), and 4 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) — see §5.9, §5.14 and the reverse-RPC list below
+- **Client-served reverse RPCs:** 6 methods total — 2 are **dual-role** and counted within the 496 dispatchable names (`browser.exec`, `host.openInEditor`), and 4 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) — see §5.9, §5.14 and the reverse-RPC list below
 
-**Total:** 491 dispatchable names + 7 notifications. Of the 6 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 4 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) are daemon→client-only reverse RPCs, never dispatched client→server.
+**Total:** 496 dispatchable names + 7 notifications. Of the 6 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 4 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
-The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.56) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
+The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.57) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
 
 **GitLab repository additions:** the [repository context and selection
 contracts](methods/workspace.md#repository-context), [native review and commit
@@ -127,7 +131,7 @@ methods and four socket-private control notifications. Their individual hello
 capabilities gate support; catalog entries do not grant permission or establish
 which desktop release contains the feature. All existing methods remain present.
 
-### Router methods by namespace (433 total)
+### Router methods by namespace (438 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
@@ -157,6 +161,7 @@ which desktop release contains the feature. All existing methods remain present.
 | models | 1 | list |
 | node | 4 | drain, list, register, remove — prepared node execution contract (§5.50) |
 | note | 19 | add, create, delete, edit, editLines, get, getVersion, lineAttribution.computeNow, lineAttribution.load, list, listTasks, listVersions, readAsset, readAssetChunk, restoreVersion, saveAsset, setContent, update, updateMetadata |
+| plugin | 5 | install, list, toggle, uninstall, update — app-wide Agent Plugins (§5.57; administrator-only, daemon-global; gated by `agentPlugins: 1`) |
 | pr | 1 | refresh — status was removed in v12.0; 11 other `pr.*` methods were removed in v5.0 (§5.7) |
 | prMonitor | 3 | list, cancel, flush — the FE surface over centralized PR monitors (§5.42; v6.1). No wire registration method: monitors are agent-owned via the MCP `ws.pr.monitor` binding only, per the §6.8 principle (like `hook.*` vs `ws.hook.schedule`) |
 | presence | 1 | snapshot — the current online roster of a member workspace, i.e. the `presence:changed` payload (§6.5) on demand (`{ workspaceId }` req; §5.47; shipped in intentd b518d31). Ephemeral read, no host reach; the presence writes are fast-path (`presence.update`, `note.presence.update`, below) and the per-note viewer channel is `note.presence.subscribe` / `note.presence.unsubscribe` (§6.9) |
@@ -925,4 +930,4 @@ Conventions used below: parameters marked **(req)** are required (a missing/`nul
 
 ### §5.x subsection index
 
-The per-namespace subsections (§5.1–§5.56) live in the [methods/](./methods/) directory; the canonical § → file map is the [§5.x subsections table in the README](./README.md#5x-subsections-methods).
+The per-namespace subsections (§5.1–§5.57) live in the [methods/](./methods/) directory; the canonical § → file map is the [§5.x subsections table in the README](./README.md#5x-subsections-methods).
