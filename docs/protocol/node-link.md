@@ -2540,8 +2540,11 @@ pin in order (parents first):
    `commit` (`node-checkout-failed` otherwise);
 2. adds a detached worktree of `commit` at `path` inside the agent's checkout,
    so git treats the submodule as populated;
-3. sets `submodule.<name>.active=true` in the agent checkout's own config. It
-   never sets a submodule URL and never contacts the forge.
+3. sets `submodule.<name>.active=true` in its parent's own worktree config:
+   the agent checkout's for a top-level pin, the parent submodule's worktree
+   for a nested one (git reads a submodule's `active` from the repository
+   that contains it). It never sets a submodule URL and never contacts the
+   forge.
 
 `git submodule status` in the machine checkout then matches the backend
 worktree. A fetch or check that fails ends the launch with
@@ -2672,8 +2675,9 @@ agent whose setup has not finished. A `setupOutput` with `seq` 0 starts the
 output over: the backend replaces the agent's stored output with it, so a
 resent tail or a new fresh checkout never duplicates output.
 
-The backend stores a per-agent setup status and an output tail (the last
-256 KiB) with the placement; the public projection is in
+The backend stores a per-agent setup status with the placement, and keeps an
+output tail (the last 256 KiB) in memory with the machine's connection, so a
+backend restart loses the tail but not the status; the public projection is in
 [remote machines](./methods/nodes.md#prepared-checkout). It does not use the
 workspace's `workspace:setup:*` events or status, because those describe the
 backend worktree.
