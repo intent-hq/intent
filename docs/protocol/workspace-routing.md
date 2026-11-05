@@ -267,7 +267,9 @@ that agent and in its workspace. The forwarded workspace setters therefore act
 as the leased agent: `workspace.setTitle`, `workspace.setStatusMessage` and
 `workspace.setStatusImage` change the agent's workspace with the same checks and
 events as a local agent's call, and `workspace.setAgentName` renames only the
-calling remote agent, never another session. The agent's `agentFeatures` snapshot and the
+calling remote agent, never another session. A forwarded frame shares the link's
+8 MiB RPC body cap, so a `workspace.setStatusImage` image too large for it fails on
+the link with `node-link-frame-too-large`. The agent's `agentFeatures` snapshot and the
 sub-agent gates apply as they do locally. A forwarded `agent.create`,
 `agent.delegate` or `agent.wakeOrCreate` without a `placement` creates the
 sub-agent on the agent's own machine; see
