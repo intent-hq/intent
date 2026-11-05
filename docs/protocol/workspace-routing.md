@@ -268,12 +268,17 @@ as the leased agent: `workspace.setTitle`, `workspace.setStatusMessage` and
 `workspace.setStatusImage` change the agent's workspace with the same checks and
 events as a local agent's call, and `workspace.setAgentName` renames only the
 calling remote agent, never another session. A forwarded
-`workspace.proposeSibling` creates the proposal on the backend, attributed to the
-remote agent, with the same checks as a local agent's call (foreground top-level
-agents only); repository identity and the default `baseRef` come from the
-backend's workspace, not the machine's checkout. Applying it stays with the user
-or a local agent, since `workspace.applyProposal` is refused. A forwarded frame shares the link's
-8 MiB RPC body cap, so a `workspace.setStatusImage` image too large for it fails on
+`workspace.proposeSibling` runs the same checks as a local agent's call
+(foreground top-level agents only, so a remote sub-agent or background agent is
+refused) and builds the proposal card on the backend, from the backend's
+workspace: repository identity, the default `baseRef` and the `baseRef` check use
+the backend's repository, not the machine's checkout, so a ref that exists only on
+the machine is warned about and Apply fails. The card is returned in the remote
+agent's tool result and, like a local agent's, becomes a pending proposal on that
+agent's message, attributed to it, that the user can Apply; the agent itself cannot
+apply it, since `workspace.applyProposal` is refused.
+A forwarded frame shares the link's 8 MiB RPC body cap, so a
+`workspace.setStatusImage` image too large for it fails on
 the link with `node-link-frame-too-large`. The agent's `agentFeatures` snapshot and the
 sub-agent gates apply as they do locally. A forwarded `agent.create`,
 `agent.delegate` or `agent.wakeOrCreate` without a `placement` creates the

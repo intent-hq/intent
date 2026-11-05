@@ -66,19 +66,21 @@ page only.
 Also within 15.4 (behaviour change only; no wire-shape, method-catalog or nodeProtocol
 change, so no version bump; fixes
 [intent-hq/intent#8593](https://github.com/intent-hq/intent/issues/8593)): **remote
-agents set the workspace title, their name and the status, and propose sibling workspaces**
-([executor link routing](./workspace-routing.md#remote-agents-on-the-executor-link)).
-On the executor link, `workspace.setTitle`, `workspace.setAgentName`,
-`workspace.setStatusMessage`, `workspace.setStatusImage` and `workspace.proposeSibling`
-are now forwarded to the backend over the existing `workspace.call` request, like
-`workspace.details`, and run as the leased agent; `workspace.setAgentName` renames only
-the calling agent, and a proposal is attributed to the remote agent. Previously the
-machine refused them with `remote-agent-unsupported:`. `workspace.archive`,
-`workspace.unarchive`, `workspace.applyProposal` and `workspace.timeline` stay refused. As for `workspace.details`, both sides must be
-updated, because the machine forwards a frame only when its own table does and the
-backend serves only the methods its own copy of the table forwards: an older machine
-keeps refusing the setters on the machine, and a newer machine on an older backend gets
-the backend's `remote-agent-unsupported:` refusal. Clients need no change.
+agents set the workspace title, their name and the status, and propose sibling
+workspaces** ([executor link
+routing](./workspace-routing.md#remote-agents-on-the-executor-link)). On the executor
+link, `workspace.setTitle`, `workspace.setAgentName`, `workspace.setStatusMessage`,
+`workspace.setStatusImage` and `workspace.proposeSibling` are now forwarded to the
+backend over the existing `workspace.call` request, like `workspace.details`, and run as
+the leased agent; `workspace.setAgentName` renames only the calling agent, and a
+proposal is attributed to the remote agent. Previously the machine refused them with
+`remote-agent-unsupported:`. `workspace.archive`, `workspace.unarchive`,
+`workspace.applyProposal` and `workspace.timeline` stay refused. As for
+`workspace.details`, both sides must be updated, because the machine forwards a frame
+only when its own table does and the backend serves only the methods its own copy of the
+table forwards: an older machine keeps refusing the setters on the machine, and a newer
+machine on an older backend gets the backend's `remote-agent-unsupported:` refusal.
+Clients need no change.
 
 
 **Prepared specialist simplification (no method-catalog change).**
