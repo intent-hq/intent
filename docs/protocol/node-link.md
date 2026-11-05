@@ -2305,7 +2305,10 @@ agent's own directory on the machine. It points the provider's `TMPDIR`, `TMP` a
 fixed temp file name. The folder lives as long as the checkout: a relaunch with the
 checkout keeps it, and it is removed with the checkout (a
 [final stop](#final-stop-nodeprotocol-9), the bind-time sweep, or a failed
-checkout). The machine opens the provider session without prompt
+checkout). The folder needs no nodeProtocol: a machine from before it leaves the
+provider with the machine's own temp variables, shared with its other agents, while
+the backend's instructions still describe a private `$TMPDIR` (they also tell the
+agent to use `mktemp`). The machine opens the provider session without prompt
 injection, so the backend sends the agent's assembled instructions with its
 first prompt. A remote agent's provider, profile or model changes only through
 a validated `agent.setModel` or quota failover; the backend then stops the run
