@@ -732,7 +732,11 @@ not list the provider:
   installed, and `models` is empty;
 - `cli-missing` when it is absent otherwise, including every absent provider of
   a machine that does not send `disabledProviders`;
-- `unknown` when the machine has no report yet (the report is empty).
+- `unknown` when the report lists no providers at all (the machine has not
+  looked at its providers yet).
+
+A machine with no capabilities report (so no known platform) is not listed in
+`machines`.
 
 Its message is written for the model: "Model X isn't available on <machine>;
 it has: …", naming each machine's provider status. A `disabled` machine reads
