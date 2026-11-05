@@ -151,6 +151,17 @@ and lifecycle transitions are pushed via `mcp.servers:status-changed` (§6.5).
   "workspaceDisabled":true } }
 ```
 
+- **Remote agents** (agents placed on another machine, [nodes §5.50](./nodes.md#daemon-to-daemon-remote-machines))
+  use the servers of **this** daemon's hub. `ws.mcp.*` is forwarded to the backend
+  and behaves as for a local agent. The agent's provider also sees each server a
+  local agent would get (same gates, plus the per-workspace disable) as a server
+  in its own session; its tool calls run in this hub, shared with every other
+  remote agent and `ws.mcp`, with a 10-minute cap instead of the 55 s `ws.mcp`
+  cap. Only tools are proxied. Server configs, env, headers and OAuth tokens
+  stay on this daemon; the machine gets names and ids only. See [user MCP
+  servers](../node-link.md#user-mcp-servers-nodeprotocol-11). No method names or
+  wire fields change.
+
 > **No `memories.*` wire surface.** Long-term agent **memories** exist as an internal context source the
 > agent runtime consumes; they are **not** exposed over the wire (no client caller). The internal
 > `memories` table ships and the internal `search.memories` path scans it; a `memories.*` namespace

@@ -967,6 +967,23 @@ message); other workspaces run as before. No
 methods, events or numeric codes change, the surface counts are unchanged, and
 there is no public protocol version bump.
 
+**User MCP servers for remote agents — nodeProtocol 11 (behavior change, no capability).**
+A remote agent's provider now gets the user's MCP servers as servers in its own
+session, proxied to the backend's MCP hub: `launch` gains `mcpProxies:
+{ name, serverId }[]`, and the machine forwards the internal `workspace.call`
+frames `mcp.proxy.listTools` and `mcp.proxy.callTool`
+([user MCP servers](./node-link.md#user-mcp-servers-nodeprotocol-11)). Tools
+only; a proxied call may run 10 minutes. Server configs and OAuth tokens never
+leave the backend. `ws.mcp.*` is forwarded for remote agents, with a local
+agent's gates. `launch` also gains the optional `compactToolDescriptions`, so
+the machine serves the compact `workspace_api` description only when the
+backend's instructions carry the condensed reference. Daemons offer
+`{ min: 7, max: 11 }`; on a lower link the agent starts without the user's
+servers and its instructions say so. `RemoteMachine.nodeProtocol` reads `11`
+from an updated machine. No methods, events, fields of public results or error
+codes change, the surface counts are unchanged, and there is no public protocol
+version bump.
+
 **Command-default change (breaking).**
 [Script creation defaults (§5.8)](./methods/scripts.md#command-creation-defaults-breaking-change)
 change omission on a new command from `saved` to `oneOff`; new services remain
