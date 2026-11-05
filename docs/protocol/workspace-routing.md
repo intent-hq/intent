@@ -255,11 +255,11 @@ method inventory:
 | --- | --- |
 | `file.read`, `file.write`, `file.list`, `file.delete`, `file.mkdir`, `file.rename`, `git.commit`, `host.exec`, `help.*` | On the machine, against the agent's own checkout and host |
 | `workspace.info` | On the machine: `{ id, path }`, where `path` is the agent's own checkout on the machine |
-| `note.*`, `task.*`, `agent.*`, `pr.*` (and its `mr.*` alias), `comment.*`, `event.*`, `script.*`, `primitive.*`, `discussion.*`, `crossWorkspace.*` | Forwarded to the backend as one `workspace.call` link request with params `{ method, args }` |
-| `workspace.details`, `workspace.setTitle`, `workspace.setAgentName`, `workspace.setStatusMessage`, `workspace.setStatusImage`, `workspace.proposeSibling`, `workspace.applyProposal`, `workspace.archive`, `workspace.unarchive`, `workspace.context`, `workspace.referenceDocs`, `workspace.timeline`, `workspace.emitNotification`, `git.listRoots`, `terminal.list`, `terminal.readOutput` | Forwarded the same way, method by method |
-| `app.*` | Refused: `remote-agent-unsupported: ws.app.* is for the Assistant workspace, whose agents run on the backend.` |
+| `note.*`, `task.*`, `agent.*`, `pr.*` (and its `mr.*` alias), `comment.*`, `event.*`, `script.*`, `primitive.*`, `discussion.*`, `crossWorkspace.*`, `hook.*`, `browser.*`, `desktop.*` | Forwarded to the backend as one `workspace.call` link request with params `{ method, args }` |
+| `workspace.details`, `workspace.setTitle`, `workspace.setAgentName`, `workspace.setStatusMessage`, `workspace.setStatusImage`, `workspace.proposeSibling`, `workspace.applyProposal`, `workspace.archive`, `workspace.unarchive`, `workspace.context`, `workspace.referenceDocs`, `workspace.timeline`, `workspace.emitNotification`, `git.listRoots`, `terminal.list`, `terminal.readOutput`, `app.question.ask` | Forwarded the same way, method by method |
+| `app.*` other than `app.question.ask` | Refused: `remote-agent-unsupported: ws.app.* is for the Assistant workspace, whose agents run on the backend.` |
 | `git.registerRoot`, `git.unregisterRoot`, and a `gitRootId` on `git.commit` | Refused: `remote-agent-unsupported: secondary git roots are on the backend only; this agent's machine has the main checkout and its submodules.` |
-| Everything else, including `browser.*`, `hook.*`, `desktop.*`, `mcp.*`, `secret.*` and `file.getAttachment` | Refused, never run on another host |
+| Everything else, including `mcp.*`, `secret.*` and `file.getAttachment` | Refused, never run on another host |
 
 A refused frame fails with a message starting `remote-agent-unsupported:` that names
 the method and lists what remote agents can use. The backend serves a forwarded
@@ -320,6 +320,31 @@ checkout ([prepared checkout](./node-link.md#setup-status-and-output)):
 never `pending` or `running` (setup finishes before the agent starts) and never
 `terminalId`. Every other member is the backend workspace's. Below 10 the reply is
 the backend's unchanged.
+
+Hooks, structured questions, the browser and the desktop are forwarded and run on
+the backend as the remote agent:
+
+1. **Hooks.** A forwarded `hook.schedule` makes a hook owned by the remote agent.
+   `hook.cancel` is scoped to that owner, as for a local agent. The hook's code runs
+   in the backend's hook runtime, and its `ws.*` calls, `ws.host.exec` included, run
+   on the backend: `host.exec` sees the backend's worktree and the backend's tools
+   and credentials (such as `gh`), not the agent's checkout on the machine. A
+   dispatch or eviction wakes the owner with an ordinary agent message, which the
+   backend queues behind the agent's current turn and delivers to the machine as the
+   agent's next prompt.
+2. **Structured questions.** A forwarded `app.question.ask` keeps the top-level-only
+   and `agentFeatures.structuredQuestions` gates. The backend registers the question
+   for the agent's current turn and drains it onto that turn's assistant message on
+   the backend, with the same `trailingBlocks` delivery as a local agent's question
+   ([question blocks](./07-agent-streaming.md)). The user's answers reach the agent
+   as its next user message.
+3. **Browser and desktop.** `browser.*` and `desktop.*` act on the user's client
+   connected to the backend, as they do for a local agent (they never act on the
+   machine). Desktop control asks for the same consent, keyed by the remote agent's
+   id. The consent's outcome (granted, denied, expired or withdrawn) and a later
+   revocation wake the agent with an agent message. Browser URLs and paths are the client's and the backend's: `http://daemon.localhost:<port>`
+   reaches a port on the backend's loopback, not on the machine, and `file://`
+   URLs and capture directories are paths on the client.
 
 When a remote agent's `workspace_api` call ends, before the machine answers the
 provider, it sends the result cards it collected during that call (such as a

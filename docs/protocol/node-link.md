@@ -2735,7 +2735,10 @@ agent's existing authority; it never trusts the machine's routing. The
 machine also forwards three internal frames that agent code cannot send:
 `git.commitPolicy` before an agent's commit, `turn.attachments` with the cards
 of one call, and `agent.placementHelp` for the machine-placement text of the
-agent's `workspace_api` description and `ws.help("agent")`. On
+agent's `workspace_api` description and `ws.help("agent")`. Hooks,
+`app.question.ask`, the browser and the desktop are forwarded too: a remote
+agent's hook runs on the backend (its `ws.host.exec` sees the backend's worktree,
+not the machine's checkout), and its wakes reach the agent as agent messages. On
 protocol 10 the machine replaces `setupStatus` in the forwarded
 `workspace.details` reply with its own checkout's
 [setup status](#setup-status-and-output).

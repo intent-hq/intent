@@ -225,6 +225,12 @@ failure do. Stop or timeout must never trigger automatic restart/retry.
 
 ## Consent and lifecycle
 
+An agent on a remote machine calls `ws.desktop.*` through the
+[executor link](../workspace-routing.md#remote-agents-on-the-executor-link). The
+call acts on the primary desktop of the user's client connected to the backend,
+never on the machine, with the same consent, keyed by the remote agent's id, and
+the same wakes as a local agent.
+
 Desktop consent is separate from [ACP tool permission](../08-permission-flow.md)
 and generic agent Q&A. `AllowAll`, provider bypass mode and answers supplied by a
 model cannot approve it. Persist remembered consent by the exact
