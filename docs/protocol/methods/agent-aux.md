@@ -428,7 +428,7 @@ Support is advertised by exact integer `server.capabilities.remoteAgentSkills: 1
    `skills:changed` without `agentId` for it.
 4. **A skill the agent does not have.** A message is plain text, so `/name` always
    sends. `name` is the message's first word after `/`, without `/` or whitespace. When
-   a user message to a remote agent (sent, or queued) is accepted and `name` is not in
+   a user message to a remote agent is sent (not queued) and `name` is not in
    the catalog its machine reported, the backend appends a `system` message to the
    conversation after it, published like other messages (`agent:message`), with
    metadata `{ type: "skill_unavailable", skill: "name", machine:

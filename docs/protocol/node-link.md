@@ -2798,7 +2798,8 @@ interface MachineSkill {   // the §5.34 skill.list row, paths on the machine
    `<available_skills>` catalog, with machine paths, as one text block of the first
    prompt of each provider session it opens (a relaunch included), beside the checkout
    notice. A machine does this on every protocol; without skills nothing is added.
-2. **Journal.** On a protocol 12 link the machine then journals
+2. **Journal.** When the backend's last link negotiated protocol 12 (it may be down
+   for a moment), the machine then journals
    `{ kind: "skills", skills }` before every `started` (a relaunch included), with the
    same rows, paths on the machine included. The backend
    keeps the latest list per agent with its placement (it is not projected) and emits
