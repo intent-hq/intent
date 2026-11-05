@@ -86,6 +86,25 @@ machine registers a forwarded proposal card on the backend with the new machine-
 refuses it, the machine ignores the refusal, and the card is taken from the tool output
 as before. Clients need no change.
 
+Also within 15.4 (behaviour change plus one machine-internal link frame; no
+method-catalog or nodeProtocol change, so no version bump): **remote agents use the
+backend-data namespaces and see the machines they can place sub-agents on**
+([executor link routing](./workspace-routing.md#remote-agents-on-the-executor-link)).
+On the executor link, `primitive.*`, `discussion.*`, `crossWorkspace.*`,
+`git.listRoots`, `terminal.list`, `terminal.readOutput`, `workspace.applyProposal`,
+`workspace.archive`, `workspace.unarchive`, `workspace.context`,
+`workspace.referenceDocs`, `workspace.timeline` and `workspace.emitNotification` are
+now forwarded to the backend over the existing `workspace.call` request and run as the
+leased agent. Previously the machine refused them with `remote-agent-unsupported:`.
+`app.*` and secondary git roots (`git.registerRoot`, `git.unregisterRoot`, a
+`gitRootId`) stay refused, with messages that say why. The machine asks the backend for
+the machine-placement text with the new machine-internal `workspace.call` frame
+`agent.placementHelp` (refused from agent code) and adds it to the remote agent's
+`workspace_api` description and `ws.help("agent")`; an older backend refuses it and the
+text is left out. As before, both sides must be updated: an older machine keeps
+refusing these frames, and a newer machine on an older backend gets the backend's
+`remote-agent-unsupported:` refusal. Clients need no change.
+
 
 **Prepared specialist simplification (no method-catalog change).**
 Harness 3.8 removes the built-in Coordinator/Lead (`spec-writer`), Implementor,

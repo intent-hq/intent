@@ -2731,7 +2731,11 @@ else is refused. The routing table is in
 [workspace routing](./workspace-routing.md#remote-agents-on-the-executor-link).
 The backend treats a forwarded call as made by the agent named in the request
 only if that agent is on the link's lease, and routes it again under that
-agent's existing authority; it never trusts the machine's routing. On
+agent's existing authority; it never trusts the machine's routing. The
+machine also forwards three internal frames that agent code cannot send:
+`git.commitPolicy` before an agent's commit, `turn.attachments` with the cards
+of one call, and `agent.placementHelp` for the machine-placement text of the
+agent's `workspace_api` description and `ws.help("agent")`. On
 protocol 10 the machine replaces `setupStatus` in the forwarded
 `workspace.details` reply with its own checkout's
 [setup status](#setup-status-and-output).

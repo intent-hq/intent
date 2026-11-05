@@ -255,8 +255,11 @@ method inventory:
 | --- | --- |
 | `file.read`, `file.write`, `file.list`, `file.delete`, `file.mkdir`, `file.rename`, `git.commit`, `host.exec`, `help.*` | On the machine, against the agent's own checkout and host |
 | `workspace.info` | On the machine: `{ id, path }`, where `path` is the agent's own checkout on the machine |
-| `note.*`, `task.*`, `agent.*`, `pr.*` (and its `mr.*` alias), `comment.*`, `event.*`, `script.*`, `workspace.details`, `workspace.setTitle`, `workspace.setAgentName`, `workspace.setStatusMessage`, `workspace.setStatusImage`, `workspace.proposeSibling` | Forwarded to the backend as one `workspace.call` link request with params `{ method, args }` |
-| Everything else, including other `git.*`, `terminal.*`, `browser.*`, `hook.*`, `desktop.*`, `search.*`, `crossWorkspace.*`, `mcp.*`, the other `workspace.*` frames (`archive`, `unarchive`, `applyProposal`, `timeline`) and `file.getAttachment` | Refused, never run on another host |
+| `note.*`, `task.*`, `agent.*`, `pr.*` (and its `mr.*` alias), `comment.*`, `event.*`, `script.*`, `primitive.*`, `discussion.*`, `crossWorkspace.*` | Forwarded to the backend as one `workspace.call` link request with params `{ method, args }` |
+| `workspace.details`, `workspace.setTitle`, `workspace.setAgentName`, `workspace.setStatusMessage`, `workspace.setStatusImage`, `workspace.proposeSibling`, `workspace.applyProposal`, `workspace.archive`, `workspace.unarchive`, `workspace.context`, `workspace.referenceDocs`, `workspace.timeline`, `workspace.emitNotification`, `git.listRoots`, `terminal.list`, `terminal.readOutput` | Forwarded the same way, method by method |
+| `app.*` | Refused: `remote-agent-unsupported: ws.app.* is for the Assistant workspace, whose agents run on the backend.` |
+| `git.registerRoot`, `git.unregisterRoot`, and a `gitRootId` on `git.commit` | Refused: `remote-agent-unsupported: secondary git roots are on the backend only; this agent's machine has the main checkout and its submodules.` |
+| Everything else, including `browser.*`, `hook.*`, `desktop.*`, `mcp.*`, `secret.*` and `file.getAttachment` | Refused, never run on another host |
 
 A refused frame fails with a message starting `remote-agent-unsupported:` that names
 the method and lists what remote agents can use. The backend serves a forwarded
@@ -277,7 +280,19 @@ does not register the card when the forwarded call returns: the card goes back t
 the machine in the tool result, and the machine registers it with the
 `turn.attachments` frame (below) when the `workspace_api` call ends, so it becomes a
 pending proposal on that agent's message, attributed to it, that the user can Apply.
-The agent itself cannot apply it, since `workspace.applyProposal` is refused. A
+A forwarded `workspace.applyProposal` runs the same checks as a local agent's call
+(the explicit `userRequested: true` attestation, and only the caller's own pending
+proposals). `workspace.archive` and `workspace.unarchive` act on the agent's
+workspace on the backend, with the same checks and events as a local agent's call;
+they do not touch the agent's checkout on the machine. The other forwarded reads
+return backend data: `git.listRoots` lists the workspace's secondary git roots with
+their backend paths, `terminal.list` and `terminal.readOutput` read the workspace's
+terminals on the backend (read-only; there is no terminal write frame), and
+`crossWorkspace.*` and `discussion.*` read what a local agent reads. `primitive.*`
+writes to the backend's notes as a local agent's call does. `workspace.context`,
+`workspace.referenceDocs`, `workspace.timeline` and `workspace.emitNotification`
+are forwarded too, and answer with the backend's own "not yet available" error, as
+they do for a local agent. A
 forwarded frame shares the link's 8 MiB RPC body cap, so a
 `workspace.setStatusImage` image too large for it fails on the link with
 `node-link-frame-too-large`. The agent's `agentFeatures` snapshot and the sub-agent
@@ -288,6 +303,15 @@ agents](./methods/nodes.md#sub-agents-of-remote-agents). Before an agent-initiat
 `git.commit`, the machine forwards the internal frame `git.commitPolicy` (refused
 from agent code) and the backend answers `{ "autoCommit": boolean }` with the
 workspace's effective auto-commit policy.
+
+The machine also forwards the internal frame `agent.placementHelp` (refused from
+agent code; args `null`) when it starts the agent's `workspace_api` server and for
+`help.*` with `namespace: "agent"`. The backend answers `{ "help": string | null }`:
+the same machine-placement text a local agent sees in the `workspace_api`
+description and in `ws.help("agent")`, or `null` when the backend exposes no
+machine. The machine adds the text to the remote agent's `workspace_api`
+description and `ws.help("agent")`, so a remote agent can name another machine in
+`placement`. An older backend refuses the frame, and the machine leaves the text out.
 
 On a link that negotiated nodeProtocol 10 the machine replaces `setupStatus` in
 the forwarded `workspace.details` reply with the setup status of the agent's own
