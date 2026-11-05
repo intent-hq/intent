@@ -457,8 +457,8 @@ validation" in its notes): a `-32602` (a malformed or `null` placement, `placeme
 worktree, event or agent. A placement on a create without a git repository (a
 [plain-folder workspace](./workspace.md#plain-folder-workspaces)) is also
 refused there with `-32602`, since there is no commit to start from.
-Nonempty `initialAgent.imageBlocks` or `fileBlocks` (including the `metadata`
-fallback) are refused there too, as for
+`initialAgent.imageBlocks` and `fileBlocks` (including the `metadata` fallback)
+reach the remote agent's first turn as for
 [any message with attachments to a remote agent](../workspace-routing.md#remote-agents-on-the-executor-link).
 After the workspace commits, the initial agent is
 created on the chosen machine as by `agent.create`, starting from the new
