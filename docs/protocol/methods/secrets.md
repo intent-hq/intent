@@ -65,6 +65,9 @@ A held secret is dropped when any of these happens:
 - the workspace is archived or deleted;
 - intentd restarts.
 
+A [remote agent](#remote-agents)'s secrets are held on its machine instead, with
+the extra lifetime rules described there.
+
 Pending requests are held in memory the same way and are lost on restart. There
 is no time-based expiry, but an agent may hold at most **8 pending requests**.
 A request for a name that already has a pending request from the same agent
@@ -138,6 +141,47 @@ lost on restart, or belongs to another agent; it never reveals which.
 provider's own processes (for example Claude Code's Bash tool or Codex's exec),
 and Intent cannot redact output the provider returns to its model directly.
 
+### Remote agents
+
+A top-level agent on a [remote machine](./nodes.md) can request and use secrets
+when its machine's link negotiated
+[nodeProtocol 14](../node-link.md#secrets-on-the-machine-nodeprotocol-14) or later.
+The value is stored only on **its machine**, in that machine's intentd memory, for
+that one agent. The backend never stores it.
+
+- **Request.** `ws.secret.request`, `ws.secret.list` and `ws.secret.forget` are
+  forwarded to the backend and run there as the agent, with a local agent's checks.
+  The pending request and its card live on the backend, as for a local agent.
+- **Provide.** `secret.provide` for a remote agent's request sends the value to the
+  agent's machine, in memory, and waits for the machine to confirm. Only then is the
+  request answered and the provided notice delivered. The backend keeps no copy.
+  When the machine is not connected, is below protocol 14, or does not confirm
+  within 10 s, the call fails with `-32602` and
+  `data.code: "secret-delivery-failed"`, the request **stays pending**, and the user
+  can try again from the same card. The backend never queues a value.
+- **Use.** `ws.host.exec` with `secretEnv` runs on the machine and resolves the
+  agent's values there, with the same overlay and output redaction. Other agents on
+  the machine get `secret-unavailable`.
+- **List.** `secret.list` and `ws.secret.list` read `secrets` from the machine;
+  `pendingRequests` and `answeredRequests` come from the backend. When the machine
+  is not connected, `secrets` is `[]` and the result adds
+  `secretsUnavailable: "machine-offline"`.
+- **Forget.** `secret.forget` and `ws.secret.forget` drop the value on the machine.
+  When the machine is not connected, the backend queues the forget in memory, sends
+  it when the machine is back, and returns `{ ok: true, forgotten: false, deferred: true }`.
+- **Lifetime.** A remote agent's secrets are also dropped when its machine's intentd
+  restarts, at its final stop, and when the machine is revoked or removed. A backend
+  restart drops them too: the machine drops every value from before the restart when
+  the backend reconnects. A provider restart on the same machine
+  (`agent.setModel`, quota failover, a relaunch) keeps them. A remote agent never
+  moves to another machine; a new agent starts with no secrets.
+- **Older peers.** On a link below 14 a remote agent has no `ws.secret` and no
+  `secretEnv`; a call fails with `remote-agent-unsupported:` and asks to update
+  Intent on the machine and the backend.
+
+The `secret-unavailable` text for a remote agent says the secret is held in memory
+on the agent's machine and is lost when Intent restarts there or on the backend.
+
 ### Turn-end resource
 
 Each `ws.secret.request` call drains at turn end as a trailing `resource` block
@@ -186,8 +230,8 @@ clear (§6.5, agent attention details), because the user caused them.
 | --- | --- | --- |
 | secret.provide | workspaceId (req), requestId (req), value (req, string) | `{ ok: true, requestId, name }` — stores the value for the request's agent and delivers the provided notice |
 | secret.dismiss | workspaceId (req), requestId (req) | `{ ok: true, requestId, name }` — drops the pending request and delivers the declined notice |
-| secret.list | workspaceId (req), agentId (req) | `{ secrets: [{ name }], pendingRequests: [{ requestId, name }], answeredRequests: [{ requestId, name, outcome }] }` — names only; `outcome` is `"provided"` or `"declined"` |
-| secret.forget | workspaceId (req), agentId (req), name (req) | `{ ok: true, forgotten: boolean }` |
+| secret.list | workspaceId (req), agentId (req) | `{ secrets: [{ name }], pendingRequests: [{ requestId, name }], answeredRequests: [{ requestId, name, outcome }], secretsUnavailable? }` — names only; `outcome` is `"provided"` or `"declined"`; `secretsUnavailable: "machine-offline"` only for a [remote agent](#remote-agents) whose machine is not connected |
+| secret.forget | workspaceId (req), agentId (req), name (req) | `{ ok: true, forgotten: boolean, deferred? }` — `deferred: true` only for a [remote agent](#remote-agents) whose machine is not connected |
 
 All four require the same authority as `agent.sendMessage` to the named agent
 (§5.5, §5.48); a caller without it receives `-32003`. `secret.provide` and
@@ -202,6 +246,9 @@ workspace differs from `params.workspaceId` is treated as unknown.
 - The request must be pending. An unknown, already answered or lost request
   fails with `-32602` and `data.code: "secret-request-unknown"`; the client
   should tell the user to ask the agent to request the secret again.
+- For a [remote agent](#remote-agents), the value must reach the agent's
+  machine first; otherwise the call fails with `-32602` and
+  `data.code: "secret-delivery-failed"` and the request stays pending.
 - Answering is single-use: the request is removed atomically, so two clients
   cannot both answer it.
 - The `value` parameter is never logged or echoed. Transport request logging,

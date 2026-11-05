@@ -1014,6 +1014,22 @@ machine from the parent's last push. Only the create `notice` text changes on th
 surface: no methods, events, fields or error codes change, the surface counts
 are unchanged, and there is no public protocol version bump.
 
+**Secrets for remote agents — nodeProtocol 14 (additive result fields and error code; no method-catalog change, so no version bump).**
+A remote top-level agent can now request and use secrets
+([§5.56 remote agents](./methods/secrets.md#remote-agents)). Its
+`ws.secret.request` / `list` / `forget` calls are forwarded to the backend; the
+value is held only in its machine's intentd memory. `secret.provide` sends the
+value to the machine in the new `secretPut` link frame and answers only after the
+machine confirms; otherwise it fails with `-32602`
+`data.code: "secret-delivery-failed"` and the request stays pending. New
+`secretForget`, `secretList` and `secretReply` frames and `hello.headSession` (a
+backend restart drops the machine's values) complete the
+[link contract](./node-link.md#secrets-on-the-machine-nodeprotocol-14). `secret.list`
+adds the optional `secretsUnavailable: "machine-offline"` and `secret.forget` the
+optional `deferred: true`, only for a remote agent whose machine is not connected.
+Daemons offer `{ min: 7, max: 14 }`; on a lower link a remote agent has no
+`ws.secret` and no `secretEnv`. The surface counts are unchanged.
+
 **Command-default change (breaking).**
 [Script creation defaults (§5.8)](./methods/scripts.md#command-creation-defaults-breaking-change)
 change omission on a new command from `saved` to `oneOff`; new services remain
