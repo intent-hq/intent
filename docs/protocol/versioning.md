@@ -885,6 +885,17 @@ backend sees the change at its next refresh, within about an hour. No frame,
 nodeProtocol, method, event, field or error code changes, the surface counts
 are unchanged, and there is no public protocol version bump.
 
+**Disabled providers in `model-unavailable` (additive, no capability).**
+The [capabilities report](./node-link.md#capabilities-report) gains optional
+`disabledProviders`, naming the providers the machine left out because its own
+`providers.enabled` switches them off. The
+[`model-unavailable`](./methods/nodes.md#remote-machine-errors) data's
+`machines[].status` gains `disabled` for those, and its message says
+"disabled on <machine>", so the user switches the provider on rather than
+installing it. Older machines omit the field and their absent providers stay
+`cli-missing`. No frame, nodeProtocol, method, event or error code changes, the
+surface counts are unchanged, and there is no public protocol version bump.
+
 **Command-default change (breaking).**
 [Script creation defaults (§5.8)](./methods/scripts.md#command-creation-defaults-breaking-change)
 change omission on a new command from `saved` to `oneOff`; new services remain
