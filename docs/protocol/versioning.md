@@ -919,6 +919,35 @@ installing it. Older machines omit the field and their absent providers stay
 `cli-missing`. No frame, nodeProtocol, method, event or error code changes, the
 surface counts are unchanged, and there is no public protocol version bump.
 
+**Prepared checkout for remote agents — nodeProtocol 10 (behavior change, no capability).**
+A remote agent's checkout on its machine is now
+[prepared](./node-link.md#prepared-checkout-nodeprotocol-10) like the backend
+worktree ([prepared checkout](./methods/nodes.md#prepared-checkout)): every
+submodule populated in the workspace worktree (whatever its `update` setting)
+is checked out, recursively, at that submodule's `HEAD`, served from the
+backend's submodule repository over a new module remote
+`intent://ws/<workspaceId>/agents/<agentId>/modules/<moduleKey>`, and the
+workspace's setup script runs on the machine before the agent starts.
+`launch` gains the closed `checkout: { submodules: { path, name, commit,
+moduleKey }[], setup?: { script, branchName, sourceBranch, timeoutSecs? } }`;
+the journal gains `setupStarted` and `setupFinished`; the `script` lane gains
+`setupOutput`. Pushes run per repository, deepest submodule first, and the
+superproject `wip` names each submodule's `wip`; relaunch restore, `unapplied/`
+pins and the final push (its `remote_final_stop` row gains `submodules`) work
+per submodule repository. Setup-created untracked files are kept out of `wip`.
+The `node-setup-failed`, `node-setup-timeout` and `node-setup-interrupted`
+codes appear only in `setupFinished.error`. Placed agents gain
+`submodules` (detail only) and `setup` (`RemoteSetupStatus`, output tail on detail
+reads only); the machine overlays its checkout's status on the agent's forwarded
+`workspace.details` `setupStatus`. Daemons offer `{ min: 7, max: 10 }`. On a
+link below 10, placing or starting an agent of a workspace with a populated
+submodule or a setup script fails `machine-update-required`, whose data gains
+the optional `reason: "prepared-checkout"` (for `workspace.create`'s initial
+agent, after the workspace is created, as `launch-failed` carrying that
+message); other workspaces run as before. No
+methods, events or numeric codes change, the surface counts are unchanged, and
+there is no public protocol version bump.
+
 **Command-default change (breaking).**
 [Script creation defaults (§5.8)](./methods/scripts.md#command-creation-defaults-breaking-change)
 change omission on a new command from `saved` to `oneOff`; new services remain

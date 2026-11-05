@@ -289,6 +289,14 @@ agents](./methods/nodes.md#sub-agents-of-remote-agents). Before an agent-initiat
 from agent code) and the backend answers `{ "autoCommit": boolean }` with the
 workspace's effective auto-commit policy.
 
+On a link that negotiated nodeProtocol 10 the machine replaces `setupStatus` in
+the forwarded `workspace.details` reply with the setup status of the agent's own
+checkout ([prepared checkout](./node-link.md#setup-status-and-output)):
+`{ state: "completed" | "failed" | "skipped", exitCode?, startedAt?, finishedAt? }`,
+never `pending` or `running` (setup finishes before the agent starts) and never
+`terminalId`. Every other member is the backend workspace's. Below 10 the reply is
+the backend's unchanged.
+
 When a remote agent's `workspace_api` call ends, before the machine answers the
 provider, it sends the result cards it collected during that call (such as a
 forwarded `workspace.proposeSibling` card) to the backend in one internal

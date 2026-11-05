@@ -1804,7 +1804,7 @@ Revoking a credential closes its live `/node/*` connections with `1008`
 `hello.protocol` is a range instead of one number:
 
 ```ts
-interface ProtocolRange { min: number; max: number } // inclusive; this contract defines 6, 7, 8 and 9
+interface ProtocolRange { min: number; max: number } // inclusive; this contract defines 6 through 10
 ```
 
 The machine picks the highest version in both ranges and returns it as
@@ -1861,6 +1861,15 @@ field. A daemon that implements it offers `{ min: 7, max: 9 }` on both sides,
 so protocol 7 and 8 peers still bind. On a link below 9 the backend sends a
 plain `stop` where it would send a final one, as the final stop describes.
 
+**nodeProtocol 10** is protocol 9 plus the [prepared checkout](#prepared-checkout-nodeprotocol-10):
+`launch.checkout`, module git remotes, the `setupStarted` and `setupFinished`
+journal bodies and the `setupOutput` frame. It runs a setup script on the
+machine and changes what a launch prepares, so it is a new version, not an
+optional field. A daemon that implements it offers `{ min: 7, max: 10 }` on
+both sides, so protocol 7 to 9 peers still bind. On a link below 10 the backend
+refuses to place or start an agent whose workspace needs a prepared checkout
+([older peers](#older-peers)); other agents run as before.
+
 ### Frames
 
 Each WebSocket binary message on `/node/link` is one JSON frame of at most
@@ -1889,6 +1898,7 @@ Each WebSocket binary message on `/node/link` is one JSON frame of at most
 | `scriptStarted` | machine → backend | script | Protocol 8 or later: `agentId`, `scriptId`, `spawnId`, `pid` |
 | `scriptOutput` | machine → backend | script | Protocol 8 or later: `agentId`, `scriptId`, `spawnId`, `seq`, `data` |
 | `scriptExited` | machine → backend | script | Protocol 8 or later: `agentId`, `scriptId`, `spawnId`, `exitCode?`, `error?` |
+| `setupOutput` | machine → backend | script | Protocol 10 or later: `agentId`, `seq`, `data`; see [setup output](#setup-status-and-output) |
 
 `intentdVersion` is recorded for diagnostics and is not a compatibility gate.
 Heartbeats run every 15 s and a link silent for 45 s is dead. The backend
@@ -1907,7 +1917,8 @@ and git sessions on `/node/git` for agents on that credential's binding. Any
 other frame is `node-link-protocol`.
 `stopAck` travels machine → backend, so it is not in that list; the backend
 accepts it only on a protocol 7 or later link. Likewise the backend accepts
-`scriptStarted`, `scriptOutput` and `scriptExited` only on a protocol 8 or later link.
+`scriptStarted`, `scriptOutput` and `scriptExited` only on a protocol 8 or later link,
+and `setupOutput` and the `setup*` journal bodies only on a protocol 10 or later link.
 
 ### Stop acknowledgement (nodeProtocol 7)
 
@@ -2050,6 +2061,7 @@ interface RemoteFinalStop {
   reason: "agent-deleted" | "agent-retired" | "workspace-retired" | "workspace-deleted" | "machine-removed";
   repoPath: string;     // the workspace repository's path when the row was written
   requestedAt: string;  // UTC RFC 3339
+  submodules?: { path: string; moduleKey: string; gitDir: string }[]; // protocol 10: see prepared checkout
 }
 ```
 
@@ -2094,7 +2106,9 @@ final stop.
 2. Stop the provider process (with its process group) as for a plain stop, and
    journal `exited` if it was running.
 3. Push `head` and a `wip` commit of the working tree
-   ([agent refs over git](#agent-refs-over-git)), within **60 s** in total.
+   ([agent refs over git](#agent-refs-over-git)), on protocol 10 for each
+   pinned submodule first ([leaves first](#pushes-leaves-first)), within
+   **60 s** in total.
    `finalPush` is `pushed` when both landed, `failed` when the push was
    refused or timed out, and `skipped` when there is nothing to push: the
    agent has no checkout, or it is not running and the machine no longer knows
@@ -2224,6 +2238,8 @@ interface JournalRecord {
   recordedAt: string;
   body:
     | { kind: "started"; baseCommit: string }       // checkout ready, provider session set up
+    | { kind: "setupStarted"; startedAt: string }    // protocol 10: see prepared checkout
+    | { kind: "setupFinished"; state: "completed" | "failed" | "skipped"; exitCode?: number; error?: string; finishedAt: string } // protocol 10
     | { kind: "notification"; notification: unknown } // ACP session/update params
     | { kind: "turnEnded"; stopReason: string; error?: string }
     | { kind: "exited"; exitCode?: number; error?: string; failure?: unknown }; // failure: see capacity refusal
@@ -2272,6 +2288,7 @@ interface LaunchCommand {
   agentFeatures: unknown;  // the session's agentFeatures snapshot, gating its workspace API
   isSubAgent: boolean;     // delegated or background agents get the sub-agent gates
   profileEnv?: ProfileEnvOverlay; // see Provider credentials
+  checkout?: PreparedCheckout;    // protocol 10 only; see Prepared checkout
 }
 ```
 
@@ -2279,8 +2296,9 @@ The machine refuses a launch its [limits](#capacity-and-permission) deny
 (`node-capacity`) or for a provider it cannot run, including one turned off in
 its own settings (`node-provider-unavailable`).
 It fetches `baseCommit` over the git connection into a per-repository bare
-cache named by `repoKey`, creates the agent's worktree, spawns the provider and
-journals `started`. The machine opens the provider session without prompt
+cache named by `repoKey`, creates the agent's worktree, on protocol 10 prepares
+its submodules and runs the setup script ([prepared checkout](#prepared-checkout-nodeprotocol-10)),
+spawns the provider and journals `started`. The machine opens the provider session without prompt
 injection, so the backend sends the agent's assembled instructions with its
 first prompt. A remote agent's provider, profile or model changes only through
 a validated `agent.setModel` or quota failover; the backend then stops the run
@@ -2325,7 +2343,7 @@ the backend records the launch sets `placementError.code` to
 | `node-capacity` | The machine's limits deny another agent ([capacity refusal](#capacity-and-permission)) |
 | `node-provider-unavailable` | The provider cannot run on the machine: unknown there, or turned off in its own `providers.enabled` ([enabled providers](#capabilities-report)); no process starts |
 | `node-profile-unavailable` | The selected profile cannot be used on the machine; no other account was used |
-| `node-checkout-failed` | The agent's checkout could not be prepared (its base, or on a [relaunch](#relaunch-without-a-checkout) its saved refs, including a failed `unapplied/` pin) |
+| `node-checkout-failed` | The agent's checkout could not be prepared (its base, a [submodule](#prepared-checkout-nodeprotocol-10), or on a [relaunch](#relaunch-without-a-checkout) its saved refs, including a failed `unapplied/` pin) |
 | `node-agent-start-failed` | The provider process could not be started or set up (also any error without a code) |
 | `node-agent-not-running` / `node-agent-busy` | A prompt for a stopped agent, or while a turn runs |
 | `node-turn-failed` | The turn failed |
@@ -2381,12 +2399,328 @@ re-push one at the commit it already holds, a no-op), never move or delete one (
 A push is limited to 1 GiB. After each turn and when the
 agent exits, the machine pushes `head` and a `wip` commit of its working tree.
 
+On protocol 10 each pinned submodule has its own agent remote with the same
+refs in the submodule's own repository; see
+[module repositories](#module-repositories-and-git-sessions).
+
 Merging is ordinary git in the workspace: a parent agent or the user merges
 `…/head`; `wip` is never merged. `hub.merge`, `hub.discard` and `hub.publish`,
 checkpoint ids and the separate hub repository are not part of this link. The
 machine never talks to the forge for the agent and receives no forge
 credentials. Machine-pushed objects land in the workspace repository's object
 store.
+
+### Prepared checkout (nodeProtocol 10)
+
+On a link that negotiated protocol 10, a remote agent's checkout on the machine
+is prepared like the backend's workspace worktree: every submodule the backend
+worktree has populated is checked out, recursively, at the commit the backend
+has checked out there, and the workspace's setup script runs on the machine
+before the agent starts.
+
+```mermaid
+sequenceDiagram
+  participant B as Backend
+  participant M as Machine
+  B->>B: create agent, capture base and submodule pins, write base refs
+  B->>M: launch with checkout
+  M->>B: upload-pack superproject base
+  loop each pin, parents first
+    M->>B: upload-pack module base
+  end
+  M->>B: journal setupStarted, setupOutput frames
+  M->>M: run setup script
+  M->>B: journal setupFinished
+  M->>B: journal started
+  Note over M,B: each push sends modules leaves first, then the superproject
+```
+
+#### Launch checkout member
+
+```ts
+interface PreparedCheckout {    // closed: unknown or mistyped members are node-link-protocol
+  submodules: SubmodulePin[];   // parents before children; empty when none is populated
+  setup?: SetupCommand;         // absent: the workspace has no effective setup script
+}
+interface SubmodulePin {        // closed
+  path: string;                 // from the superproject root, "/"-separated, e.g. "packages/intentd" or "a/b"
+  name: string;                 // the .gitmodules name, for submodule.<name>.active
+  commit: string;               // full SHA: the backend submodule's HEAD; the module's base ref
+  moduleKey: string;            // opaque: the machine's module cache and module remote name
+}
+interface SetupCommand {        // closed
+  script: string;               // the script text
+  branchName: string;           // the workspace branch on the backend
+  sourceBranch: string;         // the branch the workspace was created from
+  timeoutSecs?: number;         // absent: the machine default (30 min)
+}
+```
+
+The backend sends `checkout` in every `launch` of a **prepared agent** on a
+protocol 10 link, also when `submodules` is empty and `setup` is absent. A
+prepared agent is one whose pins the backend captured at creation (see
+[submodule pins](#submodule-pins)); an agent created by a backend without this
+contract has no captured pins, gets no `checkout` on any link, and runs as
+before (empty submodules, no setup). It never sends `checkout` on a lower link,
+and a machine that receives it there rejects the frame (`node-link-protocol`).
+A `path` that is empty, absolute, has an empty, `.` or `..` segment, or repeats
+another pin's path rejects the launch (`node-checkout-failed`), and so does a
+child listed before its parent.
+
+#### Submodule pins
+
+1. **Capture.** When it admits the placement, at the same moment it reads the
+   agent's `baseCommit`, the backend walks the workspace worktree recursively.
+   For each **populated** submodule (it has a `.git` and a born `HEAD`) it
+   records a pin at that submodule's `HEAD` commit. The `.gitmodules` `update`
+   setting does not matter: a populated `update = none` submodule is pinned,
+   and a submodule that is not populated is not pinned and stays an empty
+   directory on the machine.
+2. **The pin is the submodule HEAD, not the gitlink.** A pin can name a commit
+   that exists only on the backend. If it differs from the gitlink in
+   `baseCommit`, the machine's superproject shows that submodule as modified,
+   exactly as the backend worktree does.
+3. **Not carried:** uncommitted changes inside a submodule, as for the
+   superproject; the create `notice` says so.
+4. **Durable.** The backend stores the pins with the agent's placement (an
+   empty list when nothing is populated, which still makes it a prepared
+   agent) and sends the same pins in every later `launch`. Pins never change
+   after creation, and an agent created without them never gains them.
+5. **Base refs.** In the same step that writes the superproject `base` ref, the
+   backend writes `refs/intent/ws/<workspaceId>/agents/<agentId>/base` at the
+   pin in each submodule's own repository. A failure fails the launch
+   (`remote-launch-failed`).
+6. `moduleKey` is derived from the backend submodule's common git dir (as
+   `repoKey` is from the superproject's), so every agent of the same backend
+   submodule repository shares one cache on the machine. It carries no backend
+   path.
+
+#### Module repositories and git sessions
+
+Each pin has its own agent remote:
+
+```text
+intent://ws/<workspaceId>/agents/<agentId>/modules/<moduleKey>
+```
+
+It is served on the same `/node/git` connection, with the same messages, limits
+and session cap (8 per machine) as the superproject remote. The refs are the
+[agent refs](#agent-refs-over-git) (`base`, `head`, `wip`, `unapplied/<sha>`),
+stored in the **submodule's own repository** on the backend, with the same ref
+hiding, push rules and 1 GiB push limit. Submodule objects never enter the
+superproject's object store.
+
+The backend authorizes a module OPEN as a superproject OPEN, and also:
+
+- `moduleKey` must name one of **that agent's stored pins**. The backend maps
+  it to the path from the stored pin, never from the request.
+- The path must still be a submodule of the workspace worktree (a gitlink in
+  its index or `HEAD` tree, recursively for nested paths). No step of the path
+  may be a symlink, even one that points inside the worktree, and the
+  repository there must still be the pinned one (its derived `moduleKey`
+  equals the pin's).
+- A module OPEN on a link that negotiated below 10 is `node-git-invalid`.
+
+A key that is not a pin, or a path that fails a check (including a symlinked
+step or a different repository), is `node-git-denied`; a path with no
+repository any more is `node-git-unavailable`. Upload-pack serves only
+history reachable from the agent's refs: the submodule repository's other
+branches stay hidden.
+
+The machine opens at most 4 module sessions at a time, so other sessions keep
+room under the cap.
+
+#### Checkout on the machine
+
+After it has the superproject checkout at `baseCommit`, the machine, for each
+pin in order (parents first):
+
+1. fetches the pin's `base` ref over its module remote into a per-module bare
+   cache named by `moduleKey`, and checks that the fetched `base` equals
+   `commit` (`node-checkout-failed` otherwise);
+2. adds a detached worktree of `commit` at `path` inside the agent's checkout,
+   so git treats the submodule as populated;
+3. sets `submodule.<name>.active=true` in the agent checkout's own config. It
+   never sets a submodule URL and never contacts the forge.
+
+`git submodule status` in the machine checkout then matches the backend
+worktree. A fetch or check that fails ends the launch with
+`node-checkout-failed`, whose detail names the path; the machine removes the
+partial checkout, so the next launch starts fresh, and setup does not run. The
+machine streams one progress line per module ("Fetching packages/intentd…") as
+[setup output](#setup-status-and-output) while it prepares the checkout.
+
+A submodule the agent adds on the machine (`git submodule add`) has no backend
+repository and is not carried back: its gitlink in the superproject push names
+a commit the backend does not have. The turn-end notice says so.
+
+#### Pushes, leaves first
+
+Every push of the agent's work (after each turn, at exit and in a
+[final stop](#final-stop-nodeprotocol-9)) runs per repository, **deepest pin
+first and the superproject last**:
+
+1. For each pinned submodule, the machine pushes that submodule's `head`
+   (its `HEAD` commit) and a `wip` commit of its working tree, with one atomic
+   push to its module remote.
+2. It then pushes the superproject. In the superproject's `wip` tree each
+   pinned submodule's gitlink names that submodule's `wip` commit (its `head`
+   when clean), so one superproject `wip` names a consistent set.
+
+So the backend has every submodule commit before a superproject ref names it.
+A failed module push stops that push run before the superproject, and the
+next push retries it.
+
+The backend never applies agent work, here as elsewhere. A parent agent or the
+user merges per repository with ordinary git, the submodules first
+(`git -C <path> merge refs/intent/ws/<workspaceId>/agents/<agentId>/head`), then
+the superproject; the merged gitlinks then resolve locally.
+
+**Relaunch without a checkout.** The
+[restore](#relaunch-without-a-checkout) runs per repository in the same order
+as the checkout: the superproject first, then each pin, parents first. The
+superproject restore applies its `wip` with gitlink changes ignored. Then for
+each pin the machine fetches the module's `head` and `wip`, checks out `head`
+(else the pin) at that path, and applies the module's own `wip^..wip` on top;
+this sets the submodule commits the superproject's `wip` gitlinks named. A
+module `wip` that cannot be applied is pinned to `unapplied/<sha>` **in that
+submodule's repository** before any other push, as for the superproject.
+
+**Final stop.** The [`remote_final_stop`](#final-stop-nodeprotocol-9) row
+also stores, in `submodules`, the agent's pins and for each the submodule
+repository's git dir when the row was written. The row authorizes the module receive-packs of the final push as it does the
+superproject's, against `gitDir` instead of the worktree. A `gitDir` that no
+longer exists fails that OPEN with `node-git-unavailable`, and the machine
+reports `finalPush: "failed"`.
+
+#### Setup script on the machine
+
+**Resolution (backend).** The backend resolves the setup script with the local
+`workspace.create` rule, at every launch: an explicit create parameter (for the
+workspace's initial agent only), else `setupScript` in the workspace worktree's
+`.intent/config.json`, else the workspace's stored setup script. The backend
+keeps an explicit create parameter with the initial agent's placement, so that
+agent's later launches (a relaunch without a checkout runs setup again) use the
+same script; it is never stored for the workspace or other agents. It sends the
+text in `checkout.setup`. Workspaces without a worktree (`skipWorktree`) and
+plain-folder workspaces have none. The machine never reads setup policy from
+the repository itself.
+
+**When it runs.** The machine runs `setup` only when it has just **created** the
+agent's checkout: at the agent's first launch, and at a
+[relaunch without a checkout](#relaunch-without-a-checkout). It runs after the
+submodules are ready and before the provider starts. A launch that keeps an
+existing checkout (model switch, reconnect, daemon restart) does not run it
+again. Every remote agent has its own checkout, so setup runs for each one,
+sub-agents included. There is no automatic re-run; the agent or user can run
+the script by hand in the checkout.
+
+**Environment.**
+
+| Variable | Value on the machine |
+| --- | --- |
+| working directory, `WORKTREE_PATH` | The agent's checkout on the machine |
+| `MAIN_CHECKOUT` | A machine-local directory for that repository, `<data_dir>/executor/<credentialId>/repos/<repoKey>/main`, created empty. The machine's owner can put untracked files (`.env`) there. Never a backend path |
+| `BRANCH_NAME`, `SOURCE_BRANCH` | `setup.branchName` and `setup.sourceBranch` (the checkout itself is detached) |
+| `INTENT_REMOTE_MACHINE` | `1` |
+| `PATH`, `HOME`, user | The machine daemon's own, as for its local setup scripts |
+
+The script never gets `launch.profileEnv`, `INTENT_NODE_GIT_SOCKET` or Intent's
+agent launch wiring, as for [saved scripts](#saved-scripts-nodeprotocol-8). The
+machine writes the script file in the agent's storage directory, **outside** the
+checkout, and runs it with the same shell runner, wrapper and summary line
+("Setup script completed in Ns" / "failed …") as a local setup script, in its
+own process group.
+
+**Setup files and `wip`.** After the script ends (in any state), the machine
+excludes from that agent's `wip` pushes the untracked, not ignored paths the
+script created, in every repository of the checkout. The files stay on disk;
+the exclude list lives in the agent's storage directory, outside the checkout
+and the shared caches, so it changes nothing for other agents.
+
+#### Setup status and output
+
+Journal records, durable and replayed like the others, between checkout ready
+and `started`:
+
+- `setupStarted { startedAt }` when the script starts.
+- `setupFinished { state, exitCode?, error?, finishedAt }`. `completed` and
+  `failed` carry `exitCode` when the script exited; `failed` without one carries
+  `error`. `skipped` (no `setupStarted` before it) means the launch carried no
+  `setup`.
+
+A fresh checkout whose submodules are ready journals one `setupFinished`
+before `started`. A failed checkout journals none (it is removed, and the next
+launch is fresh). A stop or machine restart during setup leaves the result
+unrecorded; the next launch keeps that checkout and journals one
+`setupFinished` `failed` with `node-setup-interrupted`, without running the
+script ([failures](#setup-status-and-output)). Any other launch that keeps its
+checkout journals neither. The machine keeps the last result with the
+checkout, for the [workspace API](#workspace-api-on-the-machine) overlay.
+
+```ts
+interface SetupOutputFrame { type: "setupOutput"; agentId: string; seq: number; data: string } // closed
+```
+
+`setupOutput` carries the checkout progress lines and the script's combined
+output as UTF-8 text (invalid bytes replaced), at most 64 KiB of `data` per
+frame, `seq` counting from 0 per fresh checkout. It travels on the `script`
+lane under the same 4 MiB bound and drop marker as `scriptOutput`, and is not
+journaled. The machine also keeps the last 256 KiB in the agent's storage
+directory and, after a reconnect, sends that tail once (from `seq` 0) for an
+agent whose setup has not finished. A `setupOutput` with `seq` 0 starts the
+output over: the backend replaces the agent's stored output with it, so a
+resent tail or a new fresh checkout never duplicates output.
+
+The backend stores a per-agent setup status and an output tail (the last
+256 KiB) with the placement; the public projection is in
+[remote machines](./methods/nodes.md#prepared-checkout). It does not use the
+workspace's `workspace:setup:*` events or status, because those describe the
+backend worktree.
+
+**Failures.** Setup never blocks the agent except through a failed checkout:
+
+| Case | Result |
+| --- | --- |
+| A checkout or submodule fetch fails | `node-checkout-failed`; setup does not run; the agent does not start |
+| The script exits non-zero | `failed` with `exitCode`; the agent starts, and its first turn carries the local setup-failure notice |
+| The script cannot be written or spawned | `failed`, `error: "node-setup-failed: <detail>"`; the agent starts with the notice |
+| The script runs past `timeoutSecs` | Its process group is killed; `failed`, `error: "node-setup-timeout: <detail>"`; the agent starts with the notice |
+| A `stop` during setup | The process group is killed; `exited` is journaled with no `setupFinished` or `started`; the next launch keeps the checkout and records `failed`, `error: "node-setup-interrupted: <detail>"`, without a re-run |
+| The machine restarts during setup | At its next launch of that agent the machine records `failed`, `error: "node-setup-interrupted: <detail>"`, without a re-run |
+
+The `node-setup-*` codes appear only in `setupFinished.error`; they never end
+the agent and never set `placementError`.
+
+#### Older peers
+
+A link below 10 carries no `checkout`, module remotes or setup records. A
+workspace **needs a prepared checkout** when the backend worktree has at least
+one populated submodule or the workspace has an effective setup script. For
+such a workspace, on a link below 10:
+
+- **Placement** (`agent.create`, `agent.delegate`, `agent.wakeOrCreate`'s
+  creation branch, and inherited sub-agent placement) fails `-32602`
+  `machine-update-required` with `update: "machine"` and
+  `reason: "prepared-checkout"`, before any write, once the on-demand connect
+  has negotiated the version.
+- **`workspace.create`'s initial agent.** The worktree, and so its submodules
+  and setup config, does not exist at admission. The check runs once the
+  worktree exists: the workspace and the initial agent are kept, and the create
+  reports the documented `launch-failed` error with `cause.code`
+  `remote-launch-failed`, whose `cause.message` is the
+  `machine-update-required` message; the agent's `placementError` is
+  `remote-launch-failed` with that message as `detail`.
+- **A later start** of a prepared agent of such a workspace whose link is now
+  below 10 (its machine was downgraded or relinked) sends no `launch`; the
+  start fails with `placementError.code` `machine-update-required`.
+- **Agents created before this contract** are not prepared agents: after a
+  backend update they keep starting on any link, protocol 9 machines
+  included, as before.
+
+A backend that offers only up to 9 never applies any of this and runs agents
+as before, with empty submodules and no setup. A workspace that needs no
+prepared checkout runs on every link from 7 as before.
 
 ### Workspace API on the machine
 
@@ -2397,7 +2731,10 @@ else is refused. The routing table is in
 [workspace routing](./workspace-routing.md#remote-agents-on-the-executor-link).
 The backend treats a forwarded call as made by the agent named in the request
 only if that agent is on the link's lease, and routes it again under that
-agent's existing authority; it never trusts the machine's routing.
+agent's existing authority; it never trusts the machine's routing. On
+protocol 10 the machine replaces `setupStatus` in the forwarded
+`workspace.details` reply with its own checkout's
+[setup status](#setup-status-and-output).
 
 ### Saved scripts (nodeProtocol 8)
 
