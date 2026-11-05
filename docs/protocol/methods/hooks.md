@@ -21,6 +21,14 @@ surface captured at creation (§5.12 Settings). The one exception is
 `agentFeatures.secretRequests` (§5.56), which is always off in a hook run: hooks can
 neither request nor use the owner's secrets.
 
+**Remote agents.** An agent on a remote machine schedules, reads and cancels hooks
+through the [executor link](../workspace-routing.md#remote-agents-on-the-executor-link),
+and owns its hooks as a local agent does. The hook still runs on the backend: its
+code, its `ws.*` calls and its `ws.host.exec` run in the backend's runtime and see
+the backend's worktree, not the agent's checkout on the machine. A dispatch or
+eviction wakes the remote agent with an ordinary agent message, delivered as its
+next prompt.
+
 Per the §6.8 principle, **scheduling is not on the wire**: hooks are created only by
 agents via the `ws.hook.schedule` MCP binding (`{ name ≤ 50 chars, code, delayMs ≥
 10000 | cron | runAt, ttlMs?, perpetual? }` — exactly ONE schedule kind is required
