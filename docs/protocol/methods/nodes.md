@@ -698,9 +698,13 @@ that has an effective setup script needs nodeProtocol 10. Placing an agent of
 such a workspace on a machine whose link negotiates below 10 fails `-32602`
 `machine-update-required` with `update: "machine"` and
 `reason: "prepared-checkout"`, before any write; this covers `agent.create`,
-`agent.delegate`, `agent.wakeOrCreate`'s creation branch, `workspace.create`'s
-initial agent and [inherited sub-agent placement](#sub-agents-of-remote-agents).
-The message reads "Update Intent on <machine> to run agents for this
+`agent.delegate`, `agent.wakeOrCreate`'s creation branch and
+[inherited sub-agent placement](#sub-agents-of-remote-agents). For
+`workspace.create`'s initial agent the check runs once the worktree exists:
+the workspace is created and the create reports the `launch-failed` error
+above, with `cause.code` `remote-launch-failed` and the
+`machine-update-required` message as `cause.message` (also the agent's
+`placementError.detail`). The message reads "Update Intent on <machine> to run agents for this
 workspace: it has submodules or a setup script." An agent created this way
 whose machine later links below 10 does not start: it gets
 `placementError.code` `machine-update-required`. Agents created before the

@@ -942,7 +942,9 @@ reads only); the machine overlays its checkout's status on the agent's forwarded
 `workspace.details` `setupStatus`. Daemons offer `{ min: 7, max: 10 }`. On a
 link below 10, placing or starting an agent of a workspace with a populated
 submodule or a setup script fails `machine-update-required`, whose data gains
-the optional `reason: "prepared-checkout"`; other workspaces run as before. No
+the optional `reason: "prepared-checkout"` (for `workspace.create`'s initial
+agent, after the workspace is created, as `launch-failed` carrying that
+message); other workspaces run as before. No
 methods, events or numeric codes change, the surface counts are unchanged, and
 there is no public protocol version bump.
 

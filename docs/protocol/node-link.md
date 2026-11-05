@@ -2515,12 +2515,15 @@ The backend authorizes a module OPEN as a superproject OPEN, and also:
 - `moduleKey` must name one of **that agent's stored pins**. The backend maps
   it to the path from the stored pin, never from the request.
 - The path must still be a submodule of the workspace worktree (a gitlink in
-  its index or `HEAD` tree, recursively for nested paths), must not leave the
-  worktree after symlinks are resolved, and must be a git repository.
+  its index or `HEAD` tree, recursively for nested paths). No step of the path
+  may be a symlink, even one that points inside the worktree, and the
+  repository there must still be the pinned one (its derived `moduleKey`
+  equals the pin's).
 - A module OPEN on a link that negotiated below 10 is `node-git-invalid`.
 
-A key that is not a pin, or a path that fails a check, is `node-git-denied`; a
-repository that is gone is `node-git-unavailable`. Upload-pack serves only
+A key that is not a pin, or a path that fails a check (including a symlinked
+step or a different repository), is `node-git-denied`; a path with no
+repository any more is `node-git-unavailable`. Upload-pack serves only
 history reachable from the agent's refs: the submodule repository's other
 branches stay hidden.
 
@@ -2697,10 +2700,17 @@ one populated submodule or the workspace has an effective setup script. For
 such a workspace, on a link below 10:
 
 - **Placement** (`agent.create`, `agent.delegate`, `agent.wakeOrCreate`'s
-  creation branch, `workspace.create`'s initial agent, and inherited sub-agent
-  placement) fails `-32602` `machine-update-required` with
-  `update: "machine"` and `reason: "prepared-checkout"`, before any write, once
-  the on-demand connect has negotiated the version. A backend that offers only
+  creation branch, and inherited sub-agent placement) fails `-32602`
+  `machine-update-required` with `update: "machine"` and
+  `reason: "prepared-checkout"`, before any write, once the on-demand connect
+  has negotiated the version.
+- **`workspace.create`'s initial agent.** The worktree, and so its submodules
+  and setup config, does not exist at admission. The check runs once the
+  worktree exists: the workspace and the initial agent are kept, and the create
+  reports the documented `launch-failed` error with `cause.code`
+  `remote-launch-failed`, whose `cause.message` is the
+  `machine-update-required` message; the agent's `placementError` is
+  `remote-launch-failed` with that message as `detail`. A backend that offers only
   up to 9 never sends any of this and runs agents as before, with empty
   submodules and no setup.
 - **A later start** of a prepared agent of such a workspace whose link is now
