@@ -713,13 +713,31 @@ interface ModelUnavailableData {
   provider: string;
   model: string;
   machines: { nodeId: string; name: string; platform: { os: string; arch: string };
-              status: string; models: string[]; observedAt: string }[]; // models: at most 50
+              status: MachineProviderStatus; models: string[]; observedAt: string }[]; // models: at most 50
   retryable: boolean; // true when a listed report is stale or its machine was unreachable
 }
+
+type MachineProviderStatus =
+  | "signed-in" | "signed-out" | "unknown" | "auth-failed"
+  | "cli-missing" | "prerequisite-missing" // the report's own provider status
+  | "disabled";                            // provider switched off on that machine
 ```
 
+`status` is the provider's status in that machine's
+[capabilities report](../node-link.md#capabilities-report). When the report does
+not list the provider:
+
+- `disabled` when the report's `disabledProviders` names it: the provider is
+  switched off in the machine's own `providers.enabled`, whether or not it is
+  installed, and `models` is empty;
+- `cli-missing` when it is absent otherwise, including every absent provider of
+  a machine that does not send `disabledProviders`;
+- `unknown` when the machine has no report yet (the report is empty).
+
 Its message is written for the model: "Model X isn't available on <machine>;
-it has: …", naming each machine's provider status.
+it has: …", naming each machine's provider status. A `disabled` machine reads
+"disabled on <machine>", so the user knows to switch the provider on there
+rather than install it.
 
 `machine-update-required` (`-32602` from placement, add and refresh) carries
 `{ machineVersion, backendVersion, update: "machine" | "backend" }`.

@@ -409,7 +409,9 @@ the local daemon.
 **Errors.** A provider reference that sets an account folder fails first with
 `profile-not-remote-compatible`, naming the variables. When no machine lists the model, admission fails before any launch
 with `model-unavailable`, listing each machine's provider status and models
-(at most 50 per machine). Otherwise a definite no match is
+(at most 50 per machine); a provider switched off in the machine's own settings
+reports status `disabled` rather than `cli-missing` (see
+[`model-unavailable`](./methods/nodes.md#remote-machine-errors)). Otherwise a definite no match is
 `placement-unavailable` with reason `no-capacity`, `unsupported-platform`,
 `machine-unreachable`, `machine-unknown` or `machine-revoked`; `no-capacity`
 carries the limit that denied it and is refused, never queued. A version gap is
