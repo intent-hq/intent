@@ -34,6 +34,7 @@ class Fixture(unittest.TestCase):
                                  "INTENTD_TREE_CHECKED", "INTENTD_BEHIND_LIMIT"}}
         self.env.update(GIT_ENV)
         self.git(self.intentd, "init", "-q", "-b", "main")
+        self.commit(self.intentd, "older")
         self.commit(self.intentd, "base")
         self.pin = self.git(self.intentd, "rev-parse", "HEAD")
         self.git(self.intentd, "update-ref", "refs/remotes/origin/main", "HEAD")
@@ -50,7 +51,7 @@ class Fixture(unittest.TestCase):
         self.git(path, "commit", "-q", "--allow-empty", "-m", message)
 
     def move_off_pin(self):
-        self.git(self.intentd, "checkout", "-q", "-b", "someone-else")
+        self.git(self.intentd, "checkout", "-q", "-b", "someone-else", "HEAD~1")
         self.commit(self.intentd, "elsewhere")
 
     def advance_origin(self, count):
@@ -78,12 +79,21 @@ class PreflightTests(Fixture):
         self.move_off_pin()
         result = self.preflight()
         self.assertEqual(result.returncode, 1)
-        self.assertIn(f"someone-else@", result.stdout)
+        self.assertIn("someone-else@", result.stdout)
         self.assertIn(f"off the monorepo pin {self.pin[:12]}", result.stdout)
-        self.assertIn(f"not the monorepo pin {self.pin[:12]}", result.stderr)
+        self.assertIn(f"neither the monorepo pin {self.pin[:12]} nor built on it", result.stderr)
         self.assertIn("make test-changed INTENTD_DIR=/path/to/your/intentd", result.stderr)
         self.assertIn("make test-changed INTENTD_DIR=packages/intentd", result.stderr)
         self.assertIn("git submodule update --checkout packages/intentd", result.stderr)
+
+    def test_own_commits_on_top_of_the_pin_run(self):
+        self.git(self.intentd, "checkout", "-q", "-b", "my-feature")
+        self.commit(self.intentd, "mine")
+        self.commit(self.intentd, "mine too")
+        result = self.preflight()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("my-feature@", result.stdout)
+        self.assertIn("2 commits on top of the monorepo pin", result.stdout)
 
     def test_off_pin_checkout_runs_when_the_caller_chose_it(self):
         self.move_off_pin()
@@ -147,9 +157,11 @@ class PreflightTests(Fixture):
 
     def test_recursive_make_of_the_same_tree_is_skipped(self):
         self.move_off_pin()
-        result = self.preflight("--checked", "packages/intentd")
+        result = self.preflight("--checked", "packages/intentd", "--make-level", "1")
         self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "", ""))
-        self.assertEqual(self.preflight("--checked", "elsewhere").returncode, 1)
+        self.assertEqual(self.preflight("--checked", "elsewhere", "--make-level", "1").returncode, 1)
+        # A stray exported value in a top-level make is ignored.
+        self.assertEqual(self.preflight("--checked", "packages/intentd", "--make-level", "0").returncode, 1)
 
 
 class MakeGateTests(Fixture):
@@ -165,11 +177,11 @@ class MakeGateTests(Fixture):
         cargo.write_text(f'#!/bin/sh\nprintf "%s %s\\n" "$PWD" "$*" >> "{self.cargo_log}"\n')
         cargo.chmod(0o755)
 
-    def run_make(self, *args, cwd=None):
+    def run_make(self, *args, cwd=None, env=None):
         return subprocess.run(
             ["make", "--no-print-directory", "-C", str(self.root), *args,
              f"CARGO_BIN_DIR={self.bin}", "RUSTUP_CARGO="],
-            cwd=cwd or self.root, env={**self.env, "PWD": str(cwd or self.root)},
+            cwd=cwd or self.root, env={**self.env, "PWD": str(cwd or self.root), **(env or {})},
             text=True, capture_output=True, timeout=60)
 
     def cargo_calls(self):
@@ -192,6 +204,34 @@ class MakeGateTests(Fixture):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn(f"[fmt] testing intentd: {self.intentd} someone-else@", result.stdout)
                 self.assertIn("fmt --check", self.cargo_calls())
+
+    def test_check_runs_the_preflight_before_its_other_steps(self):
+        for goal, first_other in (("check", "check-makefile-targets.mjs"),
+                                  ("gate", "--check-callback-fixture")):
+            with self.subTest(goal=goal):
+                result = self.run_make("-n", goal)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                plan = result.stdout
+                self.assertIn(first_other, plan)
+                self.assertLess(plan.index("intentd_tree_preflight.py"), plan.index(first_other))
+
+    def test_only_a_nested_make_skips_an_already_checked_tree(self):
+        self.move_off_pin()
+        checked = {"INTENTD_TREE_CHECKED": "packages/intentd"}
+        stray = self.run_make("fmt", env=checked)
+        self.assertNotEqual(stray.returncode, 0)
+        self.assertEqual(self.cargo_calls(), "")
+        nested = self.run_make("fmt", env={**checked, "MAKELEVEL": "1"})
+        self.assertEqual(nested.returncode, 0, nested.stderr)
+        self.assertNotIn("testing intentd", nested.stdout)
+        self.assertIn("fmt --check", self.cargo_calls())
+
+    def test_apostrophe_in_a_chosen_intentd_dir_reaches_the_script(self):
+        worktree = self.root.parent / "it's tree"
+        self.git(self.intentd, "worktree", "add", "-q", "-b", "feature", str(worktree))
+        result = self.run_make("fmt", f"INTENTD_DIR={worktree}")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"[fmt] testing intentd: {worktree} feature@", result.stdout)
 
 
 if __name__ == "__main__":

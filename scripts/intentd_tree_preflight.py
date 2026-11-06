@@ -8,17 +8,19 @@ first. It prints
     [<goal>] testing intentd: <path> <branch>@<sha> (<pin state>, <lag>)
 
 and exits 1, naming the fix, when the caller did not choose the tree and the
-default packages/intentd checkout is not the monorepo pin or lags its
-origin/main by more than --behind-limit commits. Gates used to test a shared
+default packages/intentd checkout is off the monorepo pin (neither the pin nor
+a branch built on it) or lags its origin/main by more than --behind-limit
+commits. Gates used to test a shared
 packages/intentd left on another branch or weeks behind, so implementors
 chased failures that were not theirs.
 
 The caller chose the tree when INTENTD_DIR came from the make command line
 (--origin is not "file") or make was started from inside that tree (the
 packages/intentd forwarder Makefile, --caller-cwd). Under DRY_RUN the refusal
-is a warning. Missing git, a non-git directory or a missing origin/main ref
-leave the state unknown, which never refuses. --checked skips a recursive make
-(gate -> test) whose parent already checked the same tree.
+is a warning. Missing git or a non-git directory leave the state unknown, and
+a missing origin/main ref leaves the lag unknown; neither unknown refuses.
+--checked skips a recursive make (gate -> test, --make-level above 0) whose
+parent already checked the same tree.
 """
 
 import argparse
@@ -80,6 +82,7 @@ def main(argv=None):
     parser.add_argument("--behind-limit", default="250")
     parser.add_argument("--dry-run", default="")
     parser.add_argument("--checked", default="")
+    parser.add_argument("--make-level", default="0")
     args = parser.parse_args(argv)
     try:
         limit = int(args.behind_limit)
@@ -90,7 +93,8 @@ def main(argv=None):
 
     root = os.path.realpath(args.repo_root)
     tree = os.path.realpath(os.path.join(root, args.intentd_dir))
-    if args.checked and os.path.realpath(os.path.join(root, args.checked)) == tree:
+    nested = args.make_level.isdigit() and int(args.make_level) > 0
+    if nested and args.checked and os.path.realpath(os.path.join(root, args.checked)) == tree:
         return 0
 
     default_tree = os.path.realpath(os.path.join(root, DEFAULT_RELATIVE))
@@ -111,6 +115,9 @@ def main(argv=None):
             notes.append("no recorded pin")
         elif pin == state["head"]:
             notes.append("at the monorepo pin")
+        elif git(tree, "merge-base", "--is-ancestor", pin, "HEAD") is not None:
+            on_top = git(tree, "rev-list", "--count", f"{pin}..HEAD")
+            notes.append(f"{on_top} commits on top of the monorepo pin")
         else:
             notes.append(f"off the monorepo pin {pin[:12]}")
     if state["behind"] is not None:
@@ -126,7 +133,7 @@ def main(argv=None):
 
     if chosen or tree != default_tree:
         return 0
-    off_pin = pin is not None and pin != state["head"]
+    off_pin = pin is not None and notes[0].startswith("off the monorepo pin")
     stale = state["behind"] is not None and state["behind"] > limit
     if not (off_pin or stale):
         return 0
@@ -134,7 +141,8 @@ def main(argv=None):
     goal = args.label
     reasons = []
     if off_pin:
-        reasons.append(f"it is on {state['branch']}@{state['head'][:12]}, not the monorepo pin {pin[:12]}")
+        reasons.append(f"it is on {state['branch']}@{state['head'][:12]}, which is neither the monorepo pin "
+                       f"{pin[:12]} nor built on it")
     if stale:
         reasons.append(f"it is {state['behind']} commits behind origin/main (limit {limit})")
     fixes = [

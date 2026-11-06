@@ -118,8 +118,8 @@ runs tests only; `make test-changed` selects tests changed against `BASE`
 
 Every Rust gate first prints the intentd tree it tests:
 `[<goal>] testing intentd: <path> <branch>@<sha> (<pin state>, <lag>)`. It stops,
-naming the fix, when the default `packages/intentd` is off the monorepo pin or
-more than `INTENTD_BEHIND_LIMIT` (default 250) commits behind its `origin/main`:
+naming the fix, when the default `packages/intentd` is off the monorepo pin
+(a branch with your commits on top of the pin is fine) or more than `INTENTD_BEHIND_LIMIT` (default 250) commits behind its `origin/main`:
 gates once tested a shared checkout left on another branch. To test your own
 worktree, pass `INTENTD_DIR=/path/to/intentd` on the make command line. Passing
 `INTENTD_DIR=packages/intentd`, or running make from inside that checkout,

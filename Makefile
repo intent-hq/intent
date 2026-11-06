@@ -579,21 +579,21 @@ ensure-intentd-submodule:
 
 # Every Rust gate first prints the intentd tree it tests (path, branch, commit,
 # pin and origin/main lag), and refuses the default packages/intentd when it is
-# off the monorepo pin or more than INTENTD_BEHIND_LIMIT commits behind its
+# off the monorepo pin (neither the pin nor a branch on top of it) or more than INTENTD_BEHIND_LIMIT commits behind its
 # origin/main, unless INTENTD_DIR is on the make command line or make started
 # inside that tree (the packages/intentd forwarder). Gates had tested a shared
 # checkout left on another branch. DRY_RUN=1 only warns. A recursive make
 # (gate -> test, the test-changed fallback) gets INTENTD_TREE_CHECKED and skips
-# it. See scripts/intentd_tree_preflight.py.
+# it; at MAKELEVEL 0 a stray exported value is ignored. See scripts/intentd_tree_preflight.py.
 INTENTD_BEHIND_LIMIT ?= 250
 INTENTD_TREE_GATES := fmt shear clippy lint-sources check-windows check-macos test-intentd test-changed test-select test-stress coverage-changed coverage-e2e coverage-all
 .PHONY: intentd-tree-preflight
 intentd-tree-preflight: ensure-intentd-submodule ## Print the intentd tree the Rust gates test; refuse an off-pin or stale default packages/intentd (INTENTD_DIR=<path> chooses one, DRY_RUN=1 only warns)
-	@python3 scripts/intentd_tree_preflight.py --repo-root "$(CURDIR)" \
+	@python3 scripts/intentd_tree_preflight.py --repo-root '$(subst ','\'',$(CURDIR))' \
 		--intentd-dir '$(subst ','\'',$(INTENTD_DIR))' --origin '$(origin INTENTD_DIR)' \
-		--caller-cwd '$(subst ','\'',$(PWD))' --label '$(or $(firstword $(MAKECMDGOALS)),all)' \
+		--caller-cwd '$(subst ','\'',$(value PWD))' --label '$(or $(firstword $(MAKECMDGOALS)),all)' \
 		--behind-limit '$(INTENTD_BEHIND_LIMIT)' --dry-run '$(DRY_RUN)' \
-		--checked '$(subst ','\'',$(INTENTD_TREE_CHECKED))'
+		--checked '$(subst ','\'',$(INTENTD_TREE_CHECKED))' --make-level '$(MAKELEVEL)'
 $(INTENTD_TREE_GATES): intentd-tree-preflight
 INTENTD_TREE_CHECKED_ENV = INTENTD_TREE_CHECKED='$(subst ','\'',$(INTENTD_DIR))'
 
@@ -814,6 +814,13 @@ bash3: ## Build Bash 3.2 for the shell suites' 3.2 pass into BASH3_CACHE_DIR (de
 	fi
 
 RUST_CHECK_TARGETS := check-makefile-targets check-protocol-field-parity lint-shell-sleeps fmt shear clippy lint-sources
+
+# make check / gate / the test goals run other steps first (Makefile target and
+# field-parity checks, the fixture checks); order them after it as well. Only
+# under those goals, so a standalone consumer check never needs a pinned tree.
+ifneq ($(filter check gate test test-intentd test-changed test-select test-stress,$(MAKECMDGOALS)),)
+$(RUST_CHECK_TARGETS) check-callback-fixture check-transfer-fixture: | intentd-tree-preflight
+endif
 
 .PHONY: check-callback-fixture
 check-callback-fixture: ensure-intentd-submodule ## Validate the callback test fixture offline (explicit, or prepared from a ready ~/.cache entry) before Rust gates
