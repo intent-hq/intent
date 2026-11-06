@@ -171,6 +171,7 @@ into wire methods.
 | `specialist.create`, `specialist.edit`, `specialist.delete` | Exclude | — | User-library writes (`scope: "user"`, or create's default user scope); edit/delete still require scope. |
 | `mcp.servers.toggle` | Exclude | — | Global variant without `workspaceId`; never inject a workspace override. |
 | `rules.list`, `rules.get`, `mcp.servers.list` | Exclude | — | Global settings variants, including the frontend rules `"global"` placeholder. |
+| `plugin.list` | Exclude | — | Daemon-wide plugin inventory; plugins have no workspace scope. |
 | `unsloth.status`, `unsloth.stop` | Exclude | — | Shared daemon process management. |
 | `workspace.list`, `workspace.findByPullRequest`, `workspace.subscribe`, `workspace.unsubscribe`, `agent.listActive`, `agent.listInterrupted`, `agent.memoryUsage`, `agent.resolveInterrupted`, `stats.getUsage`, `stats.getRateHistory`, `crossWorkspace.listSiblings` | Exclude | — | Global discovery, combined views or cross-backend batch operations require aggregation policy. |
 | `search.notes`, `search.messages`, `search.events`, `events.subscribe`, `events.unsubscribe`, `search.cancel` | Exclude | — | Global/unscoped search or event registration and its teardown/cancellation. |
