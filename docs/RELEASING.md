@@ -311,21 +311,26 @@ suite is `python3 -S -B -m unittest -v scripts.test_cleanup_prereleases`.
   Sitter installers (Homebrew, `.deb`, `sitter-latest`) are also mirrored to
   intentd-releases by `release-sitter.yml`, and the published install URLs (Homebrew
   formula, README curl commands) point at the mirror.
-- **E2B node template.** After each successful Release run, intentd's
-  `e2b-template.yml` (`workflow_run` on Release) builds the `intent-node` E2B
-  template from `packaging/e2b`, tags it `intent-node:<version>` and `latest`,
-  makes it public (`<E2B team slug>/intent-node:<version>`), and smoke-tests the new
-  tag (create a sandbox, check `intentd --version` and the tools, kill it). The
-  template downloads the mirrored `x86_64-unknown-linux-musl` archive, so it runs
-  after the mirror step. It has no start command: each sandbox starts its own
-  `intentd` after create, so no daemon identity is snapshotted. It authenticates
-  with the `E2B_API_KEY` secret (an E2B team API key) and is fail-soft: without the
-  secret it logs a warning and succeeds. To rebuild or backfill one version,
-  dispatch it by hand (`gh workflow run e2b-template.yml --repo intent-hq/intentd
-  -f version=X.Y.Z`; add `-f latest=true` to move `latest`). PRs that change
-  `packaging/e2b` build and smoke-test a private `intent-node:pr-<n>` tag from the
-  newest release. Pinned provider CLI versions live in
-  `packaging/e2b/intent-node.mjs`.
+- **E2B node templates.** After each successful Release run, intentd's
+  `e2b-template.yml` (`workflow_run` on Release) builds one E2B template per sandbox
+  size from `packaging/e2b`, in parallel: `intent-node-2x4` (2 vCPU / 4 GiB),
+  `intent-node-4x8` (4 vCPU / 8 GiB, the default) and `intent-node-8x16` (8 vCPU /
+  16 GiB). It tags each `<version>` and `latest`, makes it public
+  (`<E2B team slug>/intent-node-<size>:<version>`), and smoke-tests the new tag
+  (create a sandbox, check `intentd --version`, the tools and the size, kill it).
+  E2B's Hobby plan caps sandboxes at 8 GiB, so `8x16` needs E2B Pro: a Hobby team sets
+  the `E2B_TEMPLATE_SIZES` repository variable (for example `2x4,4x8`) to skip it,
+  and the backend reports E2B's refusal of a too-large sandbox as `cloud-quota`
+  (limit `plan`), never a silent downgrade. The templates download the mirrored
+  `x86_64-unknown-linux-musl` archive, so they build after the mirror step. They have
+  no start command: each sandbox starts its own `intentd` after create, so no daemon
+  identity is snapshotted. The workflow authenticates with the `E2B_API_KEY` secret
+  (an E2B team API key) and is fail-soft: without the secret it logs a warning and
+  succeeds. To rebuild or backfill one version, dispatch it by hand
+  (`gh workflow run e2b-template.yml --repo intent-hq/intentd -f version=X.Y.Z`; add
+  `-f latest=true` to move `latest`). PRs that change `packaging/e2b` build and
+  smoke-test private `pr-<n>` tags from the newest release. Sizes and pinned provider
+  CLI versions live in `packaging/e2b/intent-node.mjs`.
 
 ### When a published daemon reaches running installs
 
