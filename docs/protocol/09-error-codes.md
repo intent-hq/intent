@@ -10,7 +10,7 @@ Errors use the standard JSON-RPC 2.0 `error` object `{ code, message, data? }`.
 | -32600 | Invalid Request | Not an object, jsonrpc !== "2.0", missing/empty method, or bad id type. |
 | -32601 | Method not found | Unknown method (only for requests; unknown notifications are dropped). |
 | -32602 | Invalid params | Details below the table. |
-| -32603 | Internal error | Underlying service threw. message is "Internal error" with the original message in data for unexpected throws; many shims pass the underlying message through as message directly. Details below the table. |
+| -32603 | Internal error | Underlying service threw. message is "Internal error" with the original message in data for unexpected throws; many shims pass the underlying message through as message directly. Typed exceptions carry a readable message and an `error.data.code`: clone failures (§9.1) and `base-refresh-failed` (§9.2). Details below the table. |
 | -32005 | Conflict | Optimistic-concurrency failure: a conditional write's `expectedVersion` did not match the entity's current `rev`. `error.data = { code: "conflict", current }` carries the current entity so the client can reconcile (note conditional writes; §4, §5.6). Still returned by `note.update` (metadata and content arms), `note.updateMetadata`, `note.delete` and `task.updateNoteStatus` on a stale `expectedVersion`. **Not** returned by `note.setContent` for a stale `expectedVersion` **below** the current `rev`: that write three-way-merges the writer's intent onto the current text instead, or replaces last-writer-wins when no base snapshot survives (§5.2 "Three-way merge on stale `expectedVersion`"). `note.setContent` surfaces this code in exactly two cases, both without a write: an `expectedVersion` **above** the current `rev` (a rev the note never served) is rejected immediately, and a bounded read-merge-persist loop (5 attempts) whose every attempt misses its rev gate returns the last `Conflict`. The surgical writes take no `expectedVersion` on the wire but persist through the same gated loop with the `rev` of their own read as the base (`note.add`, `note.edit`, `note.editLines`, `task.updateStatus`, `task.update` merge on a miss; `task.convertBlocks` and `comment.add` re-derive from the fresh content on a miss), so they too return this code only when all 5 attempts miss. Those client writers also take turns per note within the daemon (§5.2 "Per-note write serialization"), so parallel calls on one note no longer exhaust the bound against each other; the code now surfaces only when writers outside that serialization (`note.update`, `note.restoreVersion`) keep moving the `rev`. `note.restoreVersion` takes no `expectedVersion` and never returns it. |
 | -32001 | Unauthorized | Local-only guard: a remote (TCP/WSS) caller invoked a local-only fast-path method (e.g. `pairing.getInfo`, `server.pairingInfo`, `server.rotateToken`, `system.shutdown`, or `system.gitCredential`, §5). Also any method other than the four `invite.*` fast paths — `invite.inspect`, `invite.accept`, `invite.challenge`, `invite.prove` — on the unauthenticated `/invite` endpoint (§2.4, §5.48; `message`: `the /invite endpoint serves invite.inspect, invite.accept, invite.challenge and invite.prove only`; `invite.redeem`, the pre-#1965 two-phase join, keeps its §5 catalog entry only until the intentd pin advances past its removal). |
 | -32003 | Forbidden | Multiplayer capability refusal (§5.48). **Without `data`:** the connection-level collaborator allowlist — a connection bound to a non-administrator principal called a method outside `COLLABORATOR_METHODS` (unknown names included, since the gate runs before `-32601`); notifications are dropped silently. **With `data: { code: "forbidden", detail }`:** the service-level gate — a collaborator **member** attempted an owner-only operation (`workspace.members.remove`, `workspace.invite.*`) or an owner-only field of `workspace.update` / `agent.update`; `detail` names the gate. Non-membership is never `-32003`: a workspace the caller is not a member of is `-32602 { code: "not-found" }`, indistinguishable from a nonexistent one. |
@@ -73,6 +73,47 @@ where `detail` is a human-readable cause: the tail of `git clone`'s stderr (boun
 | clone-failed | -32603 | Any other clone failure; `detail` still carries the sanitized stderr tail. |
 
 Only these `data.code` values are a stable contract; clients must exact-match them and treat unknown codes as `clone-failed`. Classification is best-effort prose matching over git's stderr — the `detail` is authoritative for display, the `code` for behavior. The classified categories are shared with the streaming `git.clone` surface: a failed `git:clone:done` frame carries the same category string as `data.errorCode` when classification succeeded (§5.6, §6.5).
+
+### 9.2 Base refresh failure (`workspace.create`) *(15.4)*
+
+A local-repo `workspace.create` whose base branch is refreshed before the checkout
+(§5.1 worktree provisioning — worktree and CoW modes) stops when that `git fetch` fails.
+The failure is its own error, not a clone failure (§9.1), and nothing is left behind:
+no branch, folder or row is created and no `workspace:created` is emitted. The envelope:
+
+- numeric code `-32603`;
+- `error.message` — readable on its own: `Couldn't update <baseRef> from <remote>: <detail>`
+  (for example `Couldn't update main from origin: Permission denied (publickey)`);
+- `error.data` — `{ "code": "base-refresh-failed", "category", "detail", "baseRef", "remote" }`.
+
+`detail` is git's fetch error output (bounded tail) and, like `message`, passes through
+the daemon's credential redaction (`user[:pass]@` fragments in URL-like text become
+`***@`), so tokens never reach the wire. `baseRef` is the canonical branch name (remote
+prefix stripped) and `remote` the remote name (default `origin`).
+
+`category` is classified from the fetch's own outcome and stderr, checked in this order
+(first match wins):
+
+| category | When |
+| --- | --- |
+| timeout | The daemon killed the fetch at its 100 s bound (for example an SSH prompt nobody can answer, or a slow network). |
+| ssh-host-key | "Host key verification failed": the daemon's machine has never trusted this SSH host. |
+| auth-required | No usable credential: "Permission denied (publickey)", "could not read Username", "terminal prompts disabled", "Authentication failed". |
+| network | The remote could not be reached: "Could not resolve host", connection refused or timed out, "Network is unreachable". |
+| repo-not-found | "Repository not found", "does not appear to be a git repository", or a missing remote path. |
+| access-denied | The remote refused an existing repository: HTTP 403, "denied to". |
+| other | Anything else; `detail` still carries git's message. |
+
+A bare "permission denied" is never read as a bad path; this classifier is
+fetch-specific and does not share §9.1's clone rules. Only these `category` values are a
+stable contract: clients exact-match them and treat an unknown value as `other`. The
+`detail` is authoritative for display, `category` for guidance, and `code` for behavior.
+
+**Recovery.** Clients may offer **Continue from last-fetched** only when
+`error.data.code === "base-refresh-failed"`: it re-sends the same create with
+`skipBaseRefresh: true` (§5.1), which starts the checkout at the existing
+`refs/remotes/<remote>/<baseRef>` without fetching. Gating on the code keeps the offer
+away from older daemons, which ignore the parameter. Retrying unchanged is always safe.
 
 ### Shared-host typed refusals *(10.9)*
 
