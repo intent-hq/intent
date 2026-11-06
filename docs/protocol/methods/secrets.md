@@ -185,8 +185,9 @@ that one agent. The backend never stores it.
   (`agent.setModel`, quota failover, a relaunch) keeps them. A remote agent never
   moves to another machine; a new agent starts with no secrets.
 - **Older peers.** On a link below 14 a remote agent has no `ws.secret` and no
-  `secretEnv`; a call fails with `remote-agent-unsupported:` and asks to update
-  Intent on the machine and the backend.
+  `secretEnv`: a `ws.secret.*` call fails with `remote-agent-unsupported:` and asks
+  to update Intent on the machine and the backend, and a `ws.host.exec` with
+  `secretEnv` fails with the feature-disabled error.
 
 The `secret-unavailable` text for a remote agent says the secret is held in memory
 on the agent's machine and is lost when Intent restarts there or on the backend.

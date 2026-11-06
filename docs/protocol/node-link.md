@@ -3071,9 +3071,10 @@ interface SecretReplyFrame {
 ```
 
 1. **Store.** The machine keeps values per `(credentialId, agentId)`, in memory
-   only, and wipes them when dropped. It accepts a secret frame only for an agent
-   on the binding's lease; otherwise it replies `failed` with
-   `agent-not-on-lease`. A `secretPut` with an invalid name or a value outside
+   only, and wipes them when dropped. It accepts a `secretPut` only for an agent on
+   the binding's lease (listed in the bound `hello` or launched since the machine
+   started); otherwise it replies `failed` with `agent-not-on-lease`. A
+   `secretForget` or `secretList` acts on that agent's own entry only. A `secretPut` with an invalid name or a value outside
    1 byte to 16 KiB replies `failed` with `invalid-params`. A `secretPut` for a held
    name replaces the value.
 2. **Requests.** The backend sends a secret frame only on a protocol 14 link and
@@ -3115,8 +3116,9 @@ interface SecretReplyFrame {
    agent's queued forgets of the same name and sends its other queued forgets
    before it, so a queued forget never wipes a newer confirmed value.
 8. **Older peers.** On a link below 14 the backend sends no secret frame and the
-   machine hides `ws.secret` and `secretEnv` from a remote agent and refuses them
-   with `remote-agent-unsupported`. An older machine refuses `secret.*` itself;
+   machine hides `ws.secret` and `secretEnv` from a remote agent: a `ws.secret.*`
+   call fails with `remote-agent-unsupported:` asking to update Intent on both, and
+   a `ws.host.exec` with `secretEnv` fails as when secret requests are off. An older machine refuses `secret.*` itself;
    an older backend refuses the forwarded calls by its own table.
 
 ### Saved scripts (nodeProtocol 8)
