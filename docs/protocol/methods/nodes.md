@@ -791,7 +791,7 @@ authority.
 
 | Method | Who | Params | Result |
 | --- | --- | --- | --- |
-| cloudMachines.configure | Owner | provider (req, `"e2b"`), apiKey? (secret; required when no key is saved), size? (`{ vcpu, memoryMiB }`, one of the provider's `sizes`), idlePauseMinutes? (1-1440, default 10), pausedDeleteDays? (1-30, default 7) | `{ provider: CloudMachineProvider }`; creates or updates the provider; with `apiKey`, tests the key with one E2B read before it saves anything; an omitted member keeps its saved value |
+| cloudMachines.configure | Owner | provider (req, `"e2b"`), apiKey? (secret; required when no key is saved), size? (`{ vcpu, memoryMiB }`, one of the provider's `sizes`), idlePauseMinutes? (1-1440, default 10), pausedDeleteDays? (1-30, default 7), templateTeam? (E2B team slug that publishes the template; default Intent's team), validateOnly? (boolean, default false) | `{ provider: CloudMachineProvider }`; creates or updates the provider; with `apiKey`, tests the key with one E2B read before it saves anything; an omitted member keeps its saved value. With `validateOnly: true` it tests the given key (or the saved one) and saves nothing: the result is the provider as it would be saved, with `state` from the test, and no event is emitted. A rejected key fails with `cloud-machine-unavailable` reason `key-rejected` |
 | cloudMachines.list | Owner, members | — | `{ providers: CloudMachineProvider[], machines: RemoteMachine[] }`; `machines` are the live cloud machines, each with `cloud`; a member sees only the machines of workspaces they can manage; never returns the key |
 | cloudMachines.remove | Owner | provider (req), stopAgents? (boolean, default false) | `{ ok: true, unconfirmedStops: string[] }`; with any sandbox (running or paused) and no `stopAgents: true` fails `-32602` `machine-in-use` with `runningAgents`; with `stopAgents: true` sends each agent a final stop, waits at most 90 s, then deletes every sandbox, machine row and the key; an unknown provider is a no-op |
 | cloudMachines.pause | Owner, starter | machineId (req) | `{ machine: RemoteMachine }`; pauses the sandbox now; while an agent on it has a running turn fails `-32602` `machine-in-use` with `runningAgents`; an already paused sandbox is returned unchanged |
@@ -821,7 +821,8 @@ interface CloudMachineProvider {
   id: "e2b";
   name: string;                            // "E2B"
   state: "ready" | "key-rejected" | "unreachable"; // result of the last E2B call
-  template: string;                        // the template the backend starts, for example "intent-hq/intent-node:0.212.0"
+  template: string;                        // the template the backend starts: "<templateTeam>/intent-node:<intentdVersion>"
+  templateTeam: string;                    // E2B team slug that publishes the template
   agentProviders: string[];                // base provider ids whose CLIs the template installs, for example "claude-code"
   sizes: { vcpu: number; memoryMiB: number }[]; // sizes the template offers
   size: { vcpu: number; memoryMiB: number };
@@ -960,11 +961,13 @@ launch [relaunches without a checkout](../node-link.md#relaunch-without-a-checko
 from its saved `head` and `wip`. Work it did not push is lost; that turn's notice
 says so.
 
-**Template.** The backend starts the template tagged with its own intentd
-version (`intent-hq/intent-node:<version>`). When that tag is missing it uses the
-newest tag whose daemon offers a nodeProtocol range that overlaps its own, else
-the start fails with `template-missing`. A paused sandbox keeps the version it
-started with; it resumes and binds while the ranges overlap.
+**Template.** The backend starts only the template tagged with its own exact
+intentd version, `<templateTeam>/intent-node:<intentdVersion>`, where
+`templateTeam` is the provider setting (default: Intent's publisher team). It
+never falls back to another tag: a missing tag fails the start with
+`cloud-machine-unavailable` reason `template-missing`. A paused sandbox keeps the
+version it started with; it resumes and binds while the nodeProtocol ranges
+overlap.
 
 A sub-agent on the sandbox keeps it live like its parent. The sandbox is
 deleted when its top-level agent ends for good; sub-agents still on it get a
@@ -1113,8 +1116,8 @@ interface CloudMachineUnavailableData {
 `cloudMachines.configure` (not retryable: the owner must save a working key).
 The others are `-32603` from `cloudMachines.configure`, `pause` and `kill`, or
 an agent's `placementError` after the reply: `api-error` (E2B failed or was
-unreachable, retryable), `template-missing` (no template for this backend's
-version), `bootstrap-failed` (intentd, tailcat or the credential mint failed in
+unreachable, retryable), `template-missing` (no template tagged with this backend's
+exact version), `bootstrap-failed` (intentd, tailcat or the credential mint failed in
 the sandbox) and `sandbox-lost` (E2B removed a sandbox that had an agent). The
 message says no sandbox was left behind, or that the agent's pushed work is
 kept.
