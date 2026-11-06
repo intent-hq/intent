@@ -575,11 +575,14 @@ class CallbackPreflightTests(unittest.TestCase):
                 record.mkdir(parents=True)
                 (record / "complete").write_text("complete\n")
                 (record / "passed.jsonl").write_text(gate.record_line("alpha::one", "passes", "ok"))
-                # A temporary HOME has no verified cache, so nothing is auto-prepared.
+                # A temporary HOME has no verified cache; its source build fails offline here.
+                failed = subprocess.CompletedProcess([], 1, "", None)
                 with mock.patch.dict(os.environ, {"INTENT_ACP_CALLBACK_ADAPTER_FIXTURE": "",
                                                   "HOME": str(root / "home")}), mock.patch.object(
                     gate, "isolated_output_args", return_value=[]
-                ) as cargo, mock.patch.object(gate, "tree_key", return_value=KEY) as key:
+                ) as cargo, mock.patch.object(gate, "tree_key", return_value=KEY) as key, mock.patch.object(
+                    gate.subprocess, "run", return_value=failed
+                ), contextlib.redirect_stderr(io.StringIO()):
                     with self.assertRaisesRegex(RuntimeError, "INTENT_ACP_CALLBACK_ADAPTER_FIXTURE") as refused:
                         gate.run_nextest(make_args(root, plan=plans, resume="1"))
                     self.assertIn("CONTRIBUTING.md#linux-x64-callback-gates", str(refused.exception))
@@ -636,6 +639,7 @@ class CallbackValidatorTests(unittest.TestCase):
         self.patch(self.node_patch)
         self.patch(mock.patch.dict(os.environ, {
             gate.CALLBACK_FIXTURE_ENV: str(self.fixture.payload), "NODE_OPTIONS": "", "COMPACT": "0",
+            "NVM_DIR": str(self.root / "no-nvm"),
         }))
         self.patch(mock.patch.object(self.validator.urllib.request, "urlopen",
                                      side_effect=AssertionError("preflight attempted network")))
@@ -666,7 +670,8 @@ class CallbackValidatorTests(unittest.TestCase):
         with mock.patch.object(self.validator, "platform_check",
                                side_effect=lambda: (seen.append(os.environ.get("NODE_OPTIONS")), check())[1]):
             self.assertEqual(self.identity()["root"], str(self.fixture.payload))
-        self.assertEqual(seen, [None])
+        self.assertTrue(seen)
+        self.assertEqual(set(seen), {None})
         self.assertEqual(os.environ["NODE_OPTIONS"], injected)
 
     def test_fixture_runs_drop_host_node_options(self):
@@ -696,7 +701,8 @@ class CallbackValidatorTests(unittest.TestCase):
         # The verifier sanitizes loader paths; the version stub needs no Python runtime.
         self.node.write_text("#!/bin/sh\nprintf '%s\\n' 'v24.21.0'\n")
         self.node.chmod(0o755)
-        env = {**os.environ, "PATH": str(self.root) + os.pathsep + os.environ["PATH"]}
+        env = {**os.environ, "PATH": str(self.root) + os.pathsep + "/usr/bin:/bin",
+               "NVM_DIR": str(self.root / "no-nvm")}
         command = [sys.executable, "-S", "-B", str(SCRIPT),
                    "--check-callback-fixture", str(self.component)]
         valid = subprocess.run(command, env=env, capture_output=True, text=True, timeout=10)
@@ -706,7 +712,7 @@ class CallbackValidatorTests(unittest.TestCase):
         invalid = subprocess.run(command, env=env, capture_output=True, text=True, timeout=10)
         self.assertEqual(invalid.returncode, 2, invalid.stderr)
         self.assertIn("Node version mismatch", invalid.stderr)
-        self.assertIn("No downloads or repairs were attempted", invalid.stderr)
+        self.assertIn("no installed Node v24.21.0 was found", invalid.stderr)
 
     def test_relative_fixture_reaches_test_children_as_absolute_path(self):
         os.environ[gate.CALLBACK_FIXTURE_ENV] = "../original"
@@ -890,6 +896,120 @@ with mock.patch.object(gate, 'transfer_fixture_identity', return_value=None):
         ):
             with self.assertRaisesRegex(RuntimeError, "Node version mismatch"):
                 self.identity()
+
+    def fake_node(self, directory, version):
+        directory.mkdir(parents=True, exist_ok=True)
+        node = directory / "node"
+        node.write_text(f"#!/bin/sh\nprintf '%s\\n' '{version}'\n")
+        node.chmod(0o755)
+        return node
+
+    def child_env(self):
+        env, _identity, _transfer, _config = gate.prepare_test_env(
+            self.root, self.component, [["-p", "intent-acp", "--lib"]], "test")
+        return env
+
+    def test_installed_pinned_node_goes_first_on_path_for_checks_and_test_runs(self):
+        self.node_patch.stop()
+        required = self.fixture.descriptor["tools"]["node"]
+        wrong = self.fake_node(self.root / "active", "v24.19.0")
+        pinned = self.fake_node(self.root / "nvm/versions/node" / required / "bin", required)
+        path = f"{wrong.parent}{os.pathsep}/usr/bin:/bin"
+        os.environ.update({"PATH": path, "NVM_DIR": str(self.root / "nvm")})
+        with tempfile.TemporaryFile("w+") as stderr, contextlib.redirect_stderr(stderr):
+            env = self.child_env()
+            identity = self.identity()
+            stderr.seek(0)
+            output = stderr.read()
+        self.assertEqual(env["PATH"].split(os.pathsep)[0], str(pinned.parent))
+        self.assertEqual(shutil.which("node", path=env["PATH"]), str(pinned))
+        self.assertIn(f"using Node {required} from {pinned.parent}", output)
+        self.assertEqual(os.environ["PATH"], path)
+        self.assertEqual(identity["node"], str(pinned.resolve()))
+
+    def test_active_pinned_node_leaves_path_unchanged(self):
+        self.node_patch.stop()
+        required = self.fixture.descriptor["tools"]["node"]
+        active = self.fake_node(self.root / "active", required)
+        self.fake_node(self.root / "nvm/versions/node" / required / "bin", required)
+        path = f"{active.parent}{os.pathsep}/usr/bin:/bin"
+        os.environ.update({"PATH": path, "NVM_DIR": str(self.root / "nvm")})
+        with tempfile.TemporaryFile("w+") as stderr, contextlib.redirect_stderr(stderr):
+            self.assertEqual(self.child_env()["PATH"], path)
+            self.assertEqual(self.identity()["node"], str(active.resolve()))
+
+    def test_without_installed_pinned_node_the_mismatch_still_refuses(self):
+        self.node_patch.stop()
+        wrong = self.fake_node(self.root / "active", "v24.19.0")
+        os.environ.update({"PATH": f"{wrong.parent}{os.pathsep}/usr/bin:/bin",
+                           "NVM_DIR": str(self.root / "no-nvm")})
+        with self.assertRaisesRegex(RuntimeError, "Node version mismatch.*no installed Node"):
+            self.identity()
+
+    def missing_cache_home(self):
+        (self.component / "scripts").mkdir(exist_ok=True)
+        (self.component / "scripts/prepare-acp-callback-fixture.py").write_text("")
+        os.environ.update({gate.CALLBACK_FIXTURE_ENV: "", "HOME": str(self.root / "home")})
+        return self.root / "home/.cache/intent/acp-callback-fixture"
+
+    def test_missing_cache_is_built_from_verified_source_once(self):
+        cache = self.missing_cache_home()
+        calls = []
+
+        real_run = subprocess.run
+
+        def build(command, **kwargs):
+            if "--build-from-source" not in command:
+                return real_run(command, **kwargs)
+            calls.append((command, kwargs))
+            return subprocess.CompletedProcess(command, 0, f"{self.fixture.payload}\n", "")
+
+        stderr = io.StringIO()
+        with mock.patch.object(gate.subprocess, "run", side_effect=build), \
+                contextlib.redirect_stderr(stderr):
+            identity = self.identity()
+        self.assertEqual(identity["root"], str(self.fixture.payload))
+        self.assertEqual(len(calls), 1)
+        command, kwargs = calls[0]
+        self.assertEqual(command[-3:], ["--build-from-source", "--cache-dir", str(cache)])
+        self.assertNotIn("NODE_OPTIONS", kwargs["env"])
+        self.assertIn("building it from verified source", stderr.getvalue())
+
+    def test_failed_source_build_is_one_refusal_naming_its_log(self):
+        cache = self.missing_cache_home()
+
+        real_run = subprocess.run
+
+        def build(command, **kwargs):
+            if "--build-from-source" not in command:
+                return real_run(command, **kwargs)
+            kwargs["stderr"].write("{\"event\": \"command-start\"}\ncallback fixture: download failed\n")
+            return subprocess.CompletedProcess(command, 1, "", None)
+
+        with mock.patch.object(gate.subprocess, "run", side_effect=build), \
+                mock.patch.object(gate, "isolated_output_args") as cargo, \
+                contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaisesRegex(RuntimeError, "could not be built from source: download failed") as refused:
+                gate.run_nextest(make_args(self.root, plan=["-p intent-acp --lib"]))
+            cargo.assert_not_called()
+        log = cache.parent / "acp-callback-fixture-build.log"
+        self.assertIn(str(log), str(refused.exception))
+        self.assertIn("download failed", log.read_text())
+
+    def test_fixture_env_mode_prints_fixture_and_node_directory(self):
+        stdout = io.StringIO()
+        with mock.patch.object(sys, "argv", [str(SCRIPT), "--callback-fixture-env", str(self.component)]), \
+                contextlib.redirect_stdout(stdout):
+            self.assertEqual(gate.main(), 0)
+        self.assertEqual(stdout.getvalue().splitlines(),
+                         [str(self.fixture.payload), str(self.node.parent)])
+        stdout = io.StringIO()
+        with mock.patch.object(self.validator.sys, "platform", "darwin"), \
+                mock.patch.object(sys, "argv", [str(SCRIPT), "--callback-fixture-env", str(self.component)]), \
+                contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(io.StringIO()) as stderr:
+            self.assertEqual(gate.main(), 0)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("callback fixture tests will fail", stderr.getvalue())
 
     def test_unsupported_host_points_to_linux_recipe_before_cargo_or_resume(self):
         # Diagnostic coverage through the real launcher/platform check, not a
@@ -3345,7 +3465,7 @@ class FilterSelectionTests(unittest.TestCase):
     def test_unset_fixture_help_lists_test_select_among_preparing_targets(self):
         with tempfile.TemporaryDirectory() as temporary:
             help_text = gate.callback_setup_help(Path(temporary))
-        self.assertIn("make test, test-changed, test-select and gate prepare", help_text)
+        self.assertIn("make test, test-changed, test-select, gate, coverage-all and", help_text)
 
 
 class TransferFixtureSelectionTests(unittest.TestCase):

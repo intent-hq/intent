@@ -298,6 +298,14 @@ def callback_cache_dir() -> Path:
     return Path.home() / ".cache/intent/acp-callback-fixture"
 
 
+def callback_build_log() -> Path:
+    return callback_cache_dir().parent / "acp-callback-fixture-build.log"
+
+
+# CI's source build (archive download, npm ci, tsc) takes minutes, not hours.
+CALLBACK_BUILD_TIMEOUT = 3600
+
+
 def callback_setup_help(intentd_dir: Path) -> str:
     # The prepare script refuses inherited NODE_OPTIONS (e.g. a Datadog host
     # preload), so every recipe clears it for that one command.
@@ -315,9 +323,11 @@ def callback_setup_help(intentd_dir: Path) -> str:
         f"Set {CALLBACK_FIXTURE_ENV} to a verified fixture (Linux x64, descriptor-pinned Node).",
         "Native macOS is not supported by this fixture. Use an existing authorized Linux x64 host.",
         "Complete checkout, tools and gate recipe: CONTRIBUTING.md#linux-x64-callback-gates",
-        "With the variable unset, make test, test-changed, test-select and gate prepare a ready cache",
-        f"under {callback_cache_dir()} offline; a rejected cache must be rebuilt, never edited.",
-        "No downloads or repairs were attempted. On that Linux host, prepare explicitly, then retry",
+        "With the variable unset, make test, test-changed, test-select, gate, coverage-all and",
+        f"coverage-changed use the ready cache under {callback_cache_dir()}, building it from",
+        "verified source like CI when missing (network required), with an installed pinned Node",
+        "(for example under nvm) first on PATH. A rejected cache must be rebuilt, never edited.",
+        "To prepare explicitly on that Linux host, then retry",
         "(env -u NODE_OPTIONS clears host Node preloads, which the prepare script refuses):",
     ]
     for description, flags in (
@@ -362,11 +372,69 @@ def without_node_options():
             os.environ["NODE_OPTIONS"] = saved
 
 
-def prepare_cached_callback_fixture(intentd_dir: Path) -> str | None:
-    """Prepare from an existing verified cache offline, or return None.
+@contextlib.contextmanager
+def pinned_node_first(validator, descriptor):
+    """Put an installed descriptor-pinned Node first on PATH for this block.
 
-    Only the component's own --offline route runs: it re-verifies the ready
-    cache entry by entry and never downloads, builds or repairs anything.
+    The component's node_tool only names such an install in its mismatch
+    error; the gate applies it so a shell whose default Node differs runs like
+    CI. node_tool still verifies the version on every later check.
+    """
+    directory = None
+    with tempfile.TemporaryDirectory(prefix="intent-callback-node-") as temp:
+        work = Path(temp)
+        try:
+            validator.node_tool(descriptor, work, validator.environment(work))
+        except validator.NodeVersionMismatch as error:
+            directory = error.matching
+        except validator.InvalidFixture:
+            pass  # The checks inside the block report it with the setup help.
+    if directory is None:
+        yield
+        return
+    path = os.environ.get("PATH", os.defpath)
+    print(f"[gate] callback fixture: using Node {descriptor['tools']['node']} from {directory} "
+          "(first on PATH for this run)", file=sys.stderr, flush=True)
+    os.environ["PATH"] = f"{directory}{os.pathsep}{path}"
+    try:
+        yield
+    finally:
+        os.environ["PATH"] = path
+
+
+def callback_validator_if_supported(intentd_dir: Path):
+    """The component validator on a supported host, else None."""
+    try:
+        validator = load_callback_validator(intentd_dir)
+    except OSError:
+        return None
+    try:
+        with without_node_options():
+            validator.platform_check()
+    except validator.InvalidFixture:
+        return None
+    return validator
+
+
+def callback_node_context(intentd_dir: Path):
+    validator = callback_validator_if_supported(intentd_dir)
+    if validator is None:
+        return contextlib.nullcontext()
+    try:
+        descriptor, _manifest = validator.configuration(validator.DEFAULT_DESCRIPTOR)
+    except validator.InvalidFixture:
+        # Validation below reports the descriptor error with the setup help.
+        return contextlib.nullcontext()
+    return pinned_node_first(validator, descriptor)
+
+
+def prepare_cached_callback_fixture(intentd_dir: Path) -> str | None:
+    """Prepare from the verified cache, building it first when missing.
+
+    Only the component's own routes run: --offline re-verifies an existing
+    ready entry and never repairs it; with no entry, --build-from-source
+    builds and verifies one exactly as CI does. Returns None on hosts the
+    fixture does not support.
     """
     script = intentd_dir / "scripts/prepare-acp-callback-fixture.py"
     if not script.is_file():
@@ -384,9 +452,9 @@ def prepare_cached_callback_fixture(intentd_dir: Path) -> str | None:
         raise RuntimeError(str(error)) from error
     cache = callback_cache_dir()
     ready = cache / (CALLBACK_READY_PREFIX + descriptor["manifest"]["sha256"])
-    if not ready.is_dir():
-        return None
     env = {name: value for name, value in os.environ.items() if name != "NODE_OPTIONS"}
+    if not ready.is_dir():
+        return build_callback_fixture(script, cache, env)
     result = subprocess.run(
         [sys.executable, "-I", "-B", "-S", str(script), "--offline", "--cache-dir", str(cache)],
         env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=900)
@@ -400,44 +468,70 @@ def prepare_cached_callback_fixture(intentd_dir: Path) -> str | None:
     return root
 
 
+def build_callback_fixture(script: Path, cache: Path, env: dict[str, str]) -> str:
+    log = callback_build_log()
+    print(f"[gate] callback fixture: no verified cache under {cache}; building it from verified "
+          f"source like CI (network required, a few minutes; log: {log})", file=sys.stderr, flush=True)
+    log.parent.mkdir(parents=True, exist_ok=True)
+    with log.open("w") as stream:
+        result = subprocess.run(
+            [sys.executable, "-I", "-B", "-S", str(script), "--build-from-source", "--cache-dir", str(cache)],
+            env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=stream, text=True,
+            timeout=CALLBACK_BUILD_TIMEOUT)
+    root = result.stdout.strip()
+    if result.returncode != 0 or not root:
+        lines = log.read_text(errors="replace").strip().splitlines()
+        detail = (lines or [f"exit {result.returncode}"])[-1].removeprefix("callback fixture: ")
+        raise RuntimeError(f"no verified cache under {cache}, and the fixture could not be built "
+                           f"from source: {detail} (full log: {log})")
+    print(f"[gate] callback fixture: built and verified {root}", file=sys.stderr, flush=True)
+    return root
+
+
 def callback_fixture_identity(intentd_dir: Path) -> dict[str, str]:
     """Verify explicit or offline-cached content on every affected launch.
 
-    With the fixture variable unset, only an existing verified cache is used,
-    through the component's offline prepare route (no downloads or repairs).
+    With the fixture variable unset, the verified cache is used (built from
+    source once when missing, never repaired). An installed pinned Node is put
+    first on PATH for these checks; prepare_test_env does the same for tests.
     The component owns all inventory, lock, descriptor and runtime validation.
     Validation precedes Cargo metadata and all resume reads, even fast resumes.
     """
     try:
-        value = os.environ.get(CALLBACK_FIXTURE_ENV)
-        if not value:
-            value = prepare_cached_callback_fixture(intentd_dir)
-        if not value:
-            raise RuntimeError(f"{CALLBACK_FIXTURE_ENV} is unset or empty")
-        validator = load_callback_validator(intentd_dir)
-        try:
-            with without_node_options():
-                validator.platform_check()
-            descriptor, manifest = validator.configuration(validator.DEFAULT_DESCRIPTOR)
-            # Resolve relative inputs against the Cargo invocation directory;
-            # pass the absolute path onward because nextest uses each crate cwd.
-            root = intentd_dir / value
-            validator.validate_fixture(root, descriptor, manifest)
-            with tempfile.TemporaryDirectory(prefix="intent-callback-preflight-") as temp:
-                work = Path(temp)
-                node = validator.node_tool(descriptor, work, validator.environment(work))
-            return {
-                "root": str(root.resolve()),
-                "descriptor": validator.digest(validator.DEFAULT_DESCRIPTOR),
-                "manifest": descriptor["manifest"]["sha256"],
-                "node": str(node),
-                "node-sha256": validator.digest(node),
-            }
-        except validator.InvalidFixture as error:
-            raise RuntimeError(str(error)) from error
+        with callback_node_context(intentd_dir):
+            return verified_callback_identity(intentd_dir)
     except (OSError, ImportError, RuntimeError, ValueError, KeyError,
             subprocess.TimeoutExpired) as error:
         raise RuntimeError(f"callback fixture: {error}\n{callback_setup_help(intentd_dir)}") from error
+
+
+def verified_callback_identity(intentd_dir: Path) -> dict[str, str]:
+    value = os.environ.get(CALLBACK_FIXTURE_ENV)
+    if not value:
+        value = prepare_cached_callback_fixture(intentd_dir)
+    if not value:
+        raise RuntimeError(f"{CALLBACK_FIXTURE_ENV} is unset or empty")
+    validator = load_callback_validator(intentd_dir)
+    try:
+        with without_node_options():
+            validator.platform_check()
+        descriptor, manifest = validator.configuration(validator.DEFAULT_DESCRIPTOR)
+        # Resolve relative inputs against the Cargo invocation directory;
+        # pass the absolute path onward because nextest uses each crate cwd.
+        root = intentd_dir / value
+        validator.validate_fixture(root, descriptor, manifest)
+        with tempfile.TemporaryDirectory(prefix="intent-callback-preflight-") as temp:
+            work = Path(temp)
+            node = validator.node_tool(descriptor, work, validator.environment(work))
+        return {
+            "root": str(root.resolve()),
+            "descriptor": validator.digest(validator.DEFAULT_DESCRIPTOR),
+            "manifest": descriptor["manifest"]["sha256"],
+            "node": str(node),
+            "node-sha256": validator.digest(node),
+        }
+    except validator.InvalidFixture as error:
+        raise RuntimeError(str(error)) from error
 
 
 TIMEOUT_MULTIPLIER_ENV = "INTENTD_TEST_TIMEOUT_MULTIPLIER"
@@ -1746,6 +1840,11 @@ def prepare_test_env(repo_root: Path, intentd_dir: Path, plans: list[list[str]],
         if env.pop("NODE_OPTIONS", None):
             print(f"[{label}] callback fixture: NODE_OPTIONS cleared for this test run",
                   file=sys.stderr, flush=True)
+        node = Path(fixture_identity["node"])
+        active = shutil.which("node", path=env.get("PATH", os.defpath))
+        if active is None or Path(active).resolve() != node.resolve():
+            # The tests run the verified Node, not the shell's default one.
+            env["PATH"] = f"{node.parent}{os.pathsep}{env.get('PATH', os.defpath)}"
     if transfer_identity is not None:
         env[TRANSFER_FIXTURE_ENV] = transfer_identity["root"]
     if cargo_config:
@@ -2120,7 +2219,32 @@ def cores_or_all(value: str) -> str:
     return str(positive_int(value))
 
 
+def callback_fixture_shell_env(intentd_dir: Path) -> int:
+    """Print the fixture root and the verified Node's directory, one per line.
+
+    For targets that run their own cargo (coverage-all, coverage-changed).
+    Unsupported hosts print nothing and succeed, keeping today's behavior.
+    """
+    if callback_validator_if_supported(intentd_dir) is None:
+        print("[gate] callback fixture: not available on this host (Linux x64 only); "
+              "callback fixture tests will fail", file=sys.stderr)
+        return 0
+    try:
+        identity = callback_fixture_identity(intentd_dir)
+    except RuntimeError as error:
+        print(f"[gate] ERROR: {error}", file=sys.stderr)
+        return HANDLED_ERROR_EXIT
+    print(identity["root"])
+    print(Path(identity["node"]).parent)
+    return 0
+
+
 def main() -> int:
+    if sys.argv[1:2] == ["--callback-fixture-env"]:
+        if len(sys.argv) != 3:
+            print("usage: --callback-fixture-env INTENTD_DIR", file=sys.stderr)
+            return 2
+        return callback_fixture_shell_env(Path(sys.argv[2]).resolve())
     if sys.argv[1:2] == ["--check-callback-fixture"]:
         parser = argparse.ArgumentParser()
         parser.add_argument("--check-callback-fixture", type=Path, required=True)
