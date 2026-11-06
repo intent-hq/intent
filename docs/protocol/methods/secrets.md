@@ -155,8 +155,8 @@ that one agent. The backend never stores it.
 - **Provide.** `secret.provide` for a remote agent's request sends the value to the
   agent's machine, in memory, and waits for the machine to confirm. Only then is the
   request answered and the provided notice delivered. The backend keeps no copy.
-  When the machine is not connected, is below protocol 14, or does not confirm
-  within 10 s, the call fails with `-32602` and
+  When the machine cannot be reached, is below protocol 14, or does not confirm
+  within 10 s (connecting included), the call fails with `-32602` and
   `data.code: "secret-delivery-failed"`, the request **stays pending**, and the user
   can try again from the same card. The backend never queues a value, and it asks
   the machine to forget that name, so an unconfirmed value is not kept. While the

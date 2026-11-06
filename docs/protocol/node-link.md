@@ -3077,8 +3077,9 @@ interface SecretReplyFrame {
    1 byte to 16 KiB replies `failed` with `invalid-params`. A `secretPut` for a held
    name replaces the value.
 2. **Requests.** The backend sends a secret frame only on a protocol 14 link and
-   waits up to **10 s**, connecting included, for the `secretReply` with the same
-   `requestId`. Each frame gets exactly one reply. A reply that comes later, or
+   waits up to **10 s** for the `secretReply` with the same `requestId`. With no
+   link up, it may spend part of that time connecting; a `secretPut` value is held
+   only for the duration of that one call. Each frame gets exactly one reply. A reply that comes later, or
    matches no waiting frame, is dropped without error.
 3. **Head session.** A backend whose range includes 14 sends `headSession` in
    every `hello`: a random value it picks once per process start. On every bind,
@@ -3110,7 +3111,9 @@ interface SecretReplyFrame {
    too). On `workspace.archive` the backend sends `secretForget` without a name for
    each remote agent of the workspace. A forget that gets no reply is queued in
    backend memory and sent after the next protocol 14 bind (a backend restart drops
-   the queue, and the new `headSession` drops the values).
+   the queue, and the new `headSession` drops the values). A `secretPut` drops the
+   agent's queued forgets of the same name and sends its other queued forgets
+   before it, so a queued forget never wipes a newer confirmed value.
 8. **Older peers.** On a link below 14 the backend sends no secret frame and the
    machine hides `ws.secret` and `secretEnv` from a remote agent and refuses them
    with `remote-agent-unsupported`. An older machine refuses `secret.*` itself;
