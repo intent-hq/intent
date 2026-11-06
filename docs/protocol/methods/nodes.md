@@ -791,7 +791,7 @@ authority.
 
 | Method | Who | Params | Result |
 | --- | --- | --- | --- |
-| cloudMachines.configure | Owner | provider (req, `"e2b"`), apiKey? (secret; required when no key is saved), size? (one of the provider's `sizes`; default `"4x8"`), idlePauseMinutes? (1-1440, default 10), pausedDeleteDays? (1-30, default 7), templateTeam? (E2B team slug that publishes the template; default Intent's team), validateOnly? (boolean, default false) | `{ provider: CloudMachineProvider }`; creates or updates the provider; with `apiKey`, tests the key with one E2B read before it saves anything; an omitted member keeps its saved value. With `validateOnly: true` it saves nothing and emits no event: it tests the given key (or else the saved one; with neither it fails `cloud-machine-unavailable` reason `not-configured`) and checks that the template `<templateTeam>/intent-node-<size>:<intentdVersion>` exists, then returns the provider as it would be saved, with `state: "ready"`. Any failed test is an error, never a result: a rejected key is `key-rejected`, a missing template `template-missing`, an E2B failure `api-error` (all `cloud-machine-unavailable`). A normal save runs the same tests first |
+| cloudMachines.configure | Owner | provider (req, `"e2b"`), apiKey? (secret; required when no key is saved), size? (one of the provider's `sizes`; default `"4x8"`), idlePauseMinutes? (1-1440, default 10), pausedDeleteDays? (1-30, default 7), templateProject? (E2B project slug that publishes the templates; default Intent's E2B project), validateOnly? (boolean, default false) | `{ provider: CloudMachineProvider }`; creates or updates the provider; with `apiKey`, tests the key with one E2B read before it saves anything; an omitted member keeps its saved value. With `validateOnly: true` it saves nothing and emits no event: it tests the given key (or else the saved one; with neither it fails `cloud-machine-unavailable` reason `not-configured`) and checks that the template `<templateProject>/intent-node-<size>:<intentdVersion>` exists, then returns the provider as it would be saved, with `state: "ready"`. Any failed test is an error, never a result: a rejected key is `key-rejected`, a missing template `template-missing`, an E2B failure `api-error` (all `cloud-machine-unavailable`). A normal save runs the same tests first |
 | cloudMachines.list | Owner, members | — | `{ providers: CloudMachineProvider[], machines: RemoteMachine[] }`; `machines` are the live cloud machines, each with `cloud`; a member sees only the machines of workspaces they can manage; never returns the key |
 | cloudMachines.remove | Owner | provider (req), stopAgents? (boolean, default false) | `{ ok: true, unconfirmedStops: string[] }`; with any sandbox (running or paused) and no `stopAgents: true` fails `-32602` `machine-in-use` with `runningAgents`; with `stopAgents: true` sends each agent a final stop, waits at most 90 s, then deletes every sandbox, machine row and the key; `"e2b"` when it is not configured is a no-op, and any other `provider` is `-32602` `invalid-params` |
 | cloudMachines.pause | Owner, starter | machineId (req) | `{ machine: RemoteMachine }`; pauses the sandbox now; while an agent on it has a running turn fails `-32602` `machine-in-use` with `runningAgents`; an already paused sandbox is returned unchanged |
@@ -810,8 +810,9 @@ authority.
   `remoteMachines.remove`, which keeps the machine and fails `-32603` when stops
   go unconfirmed, `kill` and `remove` delete the sandbox anyway: a sandbox costs
   money while it runs, and a broken one must still be removable.
-- **Key.** The backend keeps the key in its secret store under
-  `cloudMachines.e2b.apiKey`. The key never appears in a result, event, log,
+- **Key.** An E2B API key belongs to exactly one E2B project; sandboxes run in
+  that project, under its plan and limits. The backend keeps the key in its
+  secret store under `cloudMachines.e2b.apiKey`. The key never appears in a result, event, log,
   `Debug` output, error or the sandbox.
 - **Routing.** The methods are daemon-global, take no `workspaceId` and are
   [excluded from workspace routing](../workspace-routing.md#excluded-methods-and-variants).
@@ -821,8 +822,8 @@ interface CloudMachineProvider {
   id: "e2b";
   name: string;                            // "E2B"
   state: "ready" | "key-rejected" | "unreachable"; // result of the last E2B call
-  template: string;                        // the template the backend starts: "<templateTeam>/intent-node-<size>:<intentdVersion>"
-  templateTeam: string;                    // E2B team slug that publishes the templates
+  template: string;                        // the template the backend starts: "<templateProject>/intent-node-<size>:<intentdVersion>"
+  templateProject: string;                    // E2B project slug that publishes the templates
   agentProviders: string[];                // base provider ids whose CLIs the templates install, for example "claude-code"
   sizes: CloudMachineSizeInfo[];           // published sizes for this intentd version, smallest first
   size: CloudMachineSize;                  // the size new sandboxes use
@@ -843,7 +844,7 @@ interface CloudMachineSizeInfo {
 ```
 
 Each size is its own template. With every intentd release Intent publishes, under
-`<templateTeam>/`, each tagged `<intentdVersion>` and `latest`:
+`<templateProject>/`, each tagged `<intentdVersion>` and `latest`:
 
 | Size | Template | vCPU | Memory | E2B plan |
 | --- | --- | --- | --- | --- |
@@ -853,19 +854,29 @@ Each size is its own template. With every intentd release Intent publishes, unde
 | `16x32` | `intent-node-16x32` | 16 | 32 GiB | Pro with raised limits |
 
 E2B's Hobby plan caps a sandbox at 8 vCPU and 8 GiB. Pro allows more only after
-E2B support raises the team's limits. The same limits apply to the publisher
-team that builds the templates, so a release skips (with a warning) a size whose
-build E2B refuses for resource limits, and does not fail.
+E2B support raises the project's limits. The same limits apply to the publisher
+E2B project that builds the templates, so a release skips (with a warning) a size whose
+build E2B refuses for resource limits, and does not fail. A skipped size gets no
+`<intentdVersion>` tag, and its `latest` tag stays on the last release that
+built it. The `plan` column of `sizes` describes E2B's plans; it does not depend
+on `templateProject`.
 
 - **Published sizes only.** `sizes` lists only the sizes whose
-  `<templateTeam>/intent-node-<size>:<intentdVersion>` tag exists. The backend
+  `<templateProject>/intent-node-<size>:<intentdVersion>` tag exists. The backend
   checks the tags on `configure` (also with `validateOnly`) and on
-  `cloudMachines.list` when its last check is older than 1 hour.
+  `cloudMachines.list` when its last check is older than 1 hour. A failed check
+  keeps the last known list (empty before the first success). A change of
+  `sizes` emits `cloudMachine:changed` with the provider.
+- **Saved size not published.** The saved `size` (or the default `4x8`) stays
+  saved and reported even when it is not in `sizes`, for example after a backend
+  update. Starts then fail with `cloud-machine-unavailable` reason
+  `template-missing`. `configure` checks the template only when the call gives
+  `size`, `templateProject` or `apiKey`, so other edits still save.
 - **Choosing a size.** A `size` that is not a `CloudMachineSize` is `-32602`
   `invalid-params`. A known size whose tag is not published is
   `cloud-machine-unavailable` reason `template-missing`.
 - **Plan refusal.** `configure` saves a published size on any plan. When E2B
-  refuses the create because the team's plan or limits do not allow the size,
+  refuses the create because the project's plan or limits do not allow the size,
   the agent gets `cloud-quota` with `limit: "plan"`. The backend never starts a
   smaller size in its place.
 
@@ -1004,8 +1015,8 @@ from its saved `head` and `wip`. Work it did not push is lost; that turn's notic
 says so.
 
 **Template.** The backend starts only the template tagged with its own exact
-intentd version in the provider's size, `<templateTeam>/intent-node-<size>:<intentdVersion>`,
-where `templateTeam` is the provider setting (default: Intent's publisher team). It
+intentd version in the provider's size, `<templateProject>/intent-node-<size>:<intentdVersion>`,
+where `templateProject` is the provider setting (default: Intent's publisher E2B project). It
 never falls back to another tag: a missing tag fails the start with
 `cloud-machine-unavailable` reason `template-missing`. A paused sandbox keeps the
 version it started with; it resumes and binds while the nodeProtocol ranges
@@ -1187,7 +1198,7 @@ Its message reads, for example, "Work uses this backend's Claude sign-in, which
 E2B can't use; pick a profile with an API key or token." It is not retryable.
 
 `cloud-quota` means E2B refused for a plan limit: too many running sandboxes, too
-many requests, or a size the team's plan or limits do not allow (for example
+many requests, or a size the project's plan or limits do not allow (for example
 `8x16` on Hobby). Intent sets
 no limit of its own.
 
@@ -1204,8 +1215,9 @@ interface CloudQuotaData {
 It is `-32602` from `cloudMachines.pause` and `kill`, an agent's
 `placementError` when a create is refused, and the turn's error when a resume
 is refused. The backend retries a `rate` refusal itself before it reports one.
-A `plan` refusal is `retryable: false`: the owner must pick a smaller size or
-upgrade the E2B plan, and the message names both.
+A `plan` refusal is `retryable: false`: the owner must pick a smaller size, or
+use E2B Pro and ask E2B support to raise the project's limits; the message names
+both.
 
 ##### Link traffic capture
 
