@@ -206,7 +206,7 @@ class MakeGateTests(Fixture):
                 self.assertIn("fmt --check", self.cargo_calls())
 
     def test_check_runs_the_preflight_before_its_other_steps(self):
-        for goal, first_other in (("check", "check-makefile-targets.mjs"),
+        for goal, first_other in (("check", "--intentd-dir \"packages/intentd\""),
                                   ("gate", "--check-callback-fixture")):
             with self.subTest(goal=goal):
                 result = self.run_make("-n", goal)

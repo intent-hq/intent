@@ -764,7 +764,8 @@ const bannerOf = (dir, checkout, pin) => `check-protocol-field-parity: ${path.ba
 async function makeRoutingRoot(t) {
   const setup = await makeGitRoot(t);
   await fs.mkdir(path.join(setup.root, 'scripts/lib'), { recursive: true });
-  for (const file of ['Makefile', 'scripts/check-protocol-field-parity.mjs', 'scripts/submodule-ref.mjs', 'scripts/lib/markdown-tables.mjs']) {
+  for (const file of ['Makefile', 'scripts/check-protocol-field-parity.mjs', 'scripts/submodule-ref.mjs', 'scripts/lib/markdown-tables.mjs',
+    'scripts/intentd_tree_preflight.py']) {
     await fs.copyFile(fileURLToPath(new URL(`../${file}`, import.meta.url)), path.join(setup.root, file));
   }
   return setup;
