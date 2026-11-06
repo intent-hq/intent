@@ -318,10 +318,12 @@ suite is `python3 -S -B -m unittest -v scripts.test_cleanup_prereleases`.
   16 GiB). It tags each `<version>` and `latest`, makes it public
   (`<E2B team slug>/intent-node-<size>:<version>`), and smoke-tests the new tag
   (create a sandbox, check `intentd --version`, the tools and the size, kill it).
-  E2B's Hobby plan caps sandboxes at 8 GiB, so `8x16` needs E2B Pro: a Hobby team sets
-  the `E2B_TEMPLATE_SIZES` repository variable (for example `2x4,4x8`) to skip it,
-  and the backend reports E2B's refusal of a too-large sandbox as `cloud-quota`
-  (limit `plan`), never a silent downgrade. The templates download the mirrored
+  E2B's Hobby plan caps sandboxes at 8 GiB, so two teams matter for `8x16`. The
+  publishing team (the one that owns `E2B_API_KEY`) must be on E2B Pro to build it;
+  the `E2B_TEMPLATE_SIZES` repository variable (for example `2x4,4x8`) narrows what
+  intentd publishes, and a skipped size is then missing for every user. A user whose
+  own team is on Hobby is refused by E2B when starting `8x16`; the backend reports
+  that as `cloud-quota` (limit `plan`), never a silent downgrade. The templates download the mirrored
   `x86_64-unknown-linux-musl` archive, so they build after the mirror step. They have
   no start command: each sandbox starts its own `intentd` after create, so no daemon
   identity is snapshotted. The workflow authenticates with the `E2B_API_KEY` secret
