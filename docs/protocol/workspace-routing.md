@@ -259,7 +259,7 @@ method inventory:
 | `note.*`, `task.*`, `agent.*`, `pr.*` (and its `mr.*` alias), `comment.*`, `event.*`, `script.*`, `primitive.*`, `discussion.*`, `crossWorkspace.*`, `hook.*`, `browser.*`, `desktop.*`, `mcp.*` | Forwarded to the backend as one `workspace.call` link request with params `{ method, args }` |
 | `workspace.details`, `workspace.setTitle`, `workspace.setAgentName`, `workspace.setStatusMessage`, `workspace.setStatusImage`, `workspace.proposeSibling`, `workspace.applyProposal`, `workspace.archive`, `workspace.unarchive`, `workspace.context`, `workspace.referenceDocs`, `workspace.timeline`, `workspace.emitNotification`, `git.listRoots`, `terminal.list`, `terminal.readOutput`, `app.question.ask` | Forwarded the same way, method by method |
 | `app.*` other than `app.question.ask` | Refused: `remote-agent-unsupported: ws.app.* is for the Assistant workspace, whose agents run on the backend.` |
-| `git.registerRoot`, `git.unregisterRoot`, and a `gitRootId` on `git.commit` | Refused: `remote-agent-unsupported: secondary git roots are on the backend only; this agent's machine has the main checkout and its submodules.` |
+| `git.registerRoot`, `git.unregisterRoot`, and a `gitRootId` on `git.commit` | Refused: `remote-agent-unsupported: secondary git roots are registered on the backend; ws.git.listRoots lists this agent's submodules at their paths on its machine, so work in them by path (for example git -C <path> through ws.host.exec), not by gitRootId.` |
 | `secret.request`, `secret.list`, `secret.forget` | Forwarded the same way on nodeProtocol 14 or later; the values stay on the machine ([secrets on the machine](./node-link.md#secrets-on-the-machine-nodeprotocol-14)). On an older link: refused with `remote-agent-unsupported:` |
 | `host.exec` with `secretEnv` | On the machine, from the agent's own secrets held there (nodeProtocol 14 or later); on an older link it fails as when secret requests are off |
 | Everything else | Refused, never run on another host |
@@ -292,10 +292,12 @@ the secondary git roots the agent's machine has: the registered roots that are
 submodules carried in the agent's pins ([node-link.md § Submodule pins](node-link.md#submodule-pins)). The backend answers each such
 row with its `path` relative to the checkout (`"a/b"`) and without `branch`; the
 machine makes `path` absolute in the agent's checkout and reads `branch` there, so the
-agent gets rows valid on its machine. Every other root (a repository outside the
-checkout, a plain repository inside it, a submodule not populated on the backend) is
-on the backend only and is left out. An older machine passes the relative paths
-through; they still resolve against the agent's working directory. The other
+agent gets rows valid on its machine; a row whose repository is not checked out on
+the machine is left out there. Every other root (a repository outside the checkout, a
+plain repository inside it, a submodule not populated on the backend) is on the
+backend only and is left out. An older machine passes the relative rows through
+without `branch`; their paths resolve against the checkout root, the agent's starting
+working directory. The other
 forwarded reads return backend data: `terminal.list` and `terminal.readOutput` read the workspace's
 terminals on the backend (read-only; there is no terminal write frame), and
 `crossWorkspace.*` and `discussion.*` read what a local agent reads. `primitive.*`
