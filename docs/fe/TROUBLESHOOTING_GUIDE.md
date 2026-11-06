@@ -13,6 +13,7 @@
 5. [TypeScript Issues](#typescript-issues)
 6. [Migration Issues](#migration-issues)
 7. [Codex Runtime and Models](#codex-runtime-and-models)
+8. [Database Issues](#database-issues)
 
 ## Common Issues and Solutions
 
@@ -72,6 +73,40 @@ Process startup and cleanup have additional budgets; cleanup confirmation allows
 seconds. Unknown or failed provider checks are advisory. Existing daemon-health checks
 still control the exit status. A cleanup warning means temporary state was retained
 because termination could not be confirmed.
+
+### Database Issues
+
+#### Problem: Note or chat writes fail with "database disk image is malformed" (code 267)
+
+**Symptoms**: `ws.note.add` / note edits (or chat messages) fail with
+`error returned from database: (code: 267) database disk image is malformed`, across agents
+and workspaces, while reads still work.
+
+**Cause**: Code 267 is `SQLITE_CORRUPT_VTAB`: a full-text search index (`note_fts` or
+`agent_message_fts`) is damaged. Every write that updates the index fails, but the notes
+and messages themselves are stored separately and are usually intact
+([intent-hq/intent#8592](https://github.com/intent-hq/intent/issues/8592)).
+
+**Solution** (intentd 0.11.139 or later, on the daemon host):
+
+1. Stop retrying writes. A `workspace_api` call that ran an external command before the
+   failure may already have taken effect; check its outcome before repeating it.
+2. Diagnose: `intentd doctor`. It exits non-zero when `integrity_check` finds a problem
+   and names any damaged search index.
+3. If doctor reports **only** a damaged search index, quit the Intent app, then run:
+
+   ```bash
+   intentd stop
+   intentd repair-indexes
+   intentd doctor   # expect "integrity_check: ok"
+   ```
+
+   `repair-indexes` checks the database read-only first, copies `intentd.db` and its WAL
+   to `<data dir>/backups/intentd.db-<UTC timestamp>/`, rebuilds the damaged index from
+   the stored notes and messages without changing them, and checks again.
+4. If doctor reports damage **outside** the search indexes, `repair-indexes` refuses and
+   changes nothing. Keep the daemon stopped and copy the whole data folder somewhere
+   safe before attempting any other recovery.
 
 ### Agent Creation Issues
 
