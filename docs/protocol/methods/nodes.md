@@ -718,16 +718,20 @@ interface RemoteSetupStatus {
   `placementError`: the agent still starts, and its first turn carries the
   setup-failure notice. A failed checkout sets `placementError`
   `node-checkout-failed` as before.
-- A submodule populated in the agent's checkout that is not one of its pins
-  (the setup script initialized it on the machine, for example from the
-  submodule's own remote) is not carried: its commits and edits are not sent
-  back. The machine checks the checkout after setup at every launch; when it
-  finds such a submodule, the agent's first turn of that launch carries a
-  notice naming it ("`packages/ios` was set up on this machine by the setup
-  script, not carried from the backend; changes there won't be sent back to
-  the backend"), and the agent's `ws.workspace.details().setupStatus` lists it
-  as `unsentSubmodules: string[]` (paths from the superproject root, top-most
+- A submodule populated in the agent's checkout that is not one of the
+  checkout's pins (the setup script initialized it on the machine, for example
+  from the submodule's own remote, or an earlier session did) is not carried:
+  its commits and edits are not sent back. On a prepared-checkout launch
+  (nodeProtocol 10), after setup, the machine checks the checkout at every
+  launch, also for a sub-agent that shares it. When it finds such a submodule,
+  the agent's first turn of that launch carries a notice naming it ("packages/ios
+  was populated on this machine (by the setup script or an earlier session), not
+  carried from the backend; changes there won't be sent back to the backend"),
+  and the agent's own `ws.workspace.details().setupStatus` lists it as
+  `unsentSubmodules: string[]` (paths from the superproject root, top-most
   only). Neither is set when every populated submodule is a pin.
+  `unsentSubmodules` is agent-facing only: it is not a `RemoteSetupStatus`
+  member and is not on the backend's agent rows.
 - `setup` describes the agent's checkout on its machine, never the backend
   worktree. The workspace's own `setupStatus` and `workspace:setup:*` events
   are unchanged.
