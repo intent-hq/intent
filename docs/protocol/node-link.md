@@ -2997,11 +2997,11 @@ of one call, `agent.placementHelp` for the machine-placement text of the
 agent's `workspace_api` description and `ws.help("agent")`, and
 `file.attachmentData` for the bytes of an attachment the agent copies with
 `ws.file.getAttachment` ([attachments](./workspace-routing.md#remote-agents-on-the-executor-link)).
-On protocol 14 it also forwards `secret.request`, `secret.list` and
-`secret.forget` ([secrets on the machine](#secrets-on-the-machine-nodeprotocol-14)).
 On protocol 11 it also forwards `mcp.proxy.listTools` and `mcp.proxy.callTool`
 for the provider's [user MCP servers](#user-mcp-servers-nodeprotocol-11);
-`ws.mcp.*` is a plain forwarded namespace. Hooks,
+`ws.mcp.*` is a plain forwarded namespace. On protocol 14 the agent's
+`ws.secret.request`, `list` and `forget` calls are forwarded too
+([secrets on the machine](#secrets-on-the-machine-nodeprotocol-14)). Hooks,
 `app.question.ask`, the browser and the desktop are forwarded too: a remote
 agent's hook runs on the backend (its `ws.host.exec` sees the backend's worktree,
 not the machine's checkout), and its wakes reach the agent as agent messages. On
@@ -3077,19 +3077,20 @@ interface SecretReplyFrame {
    1 byte to 16 KiB replies `failed` with `invalid-params`. A `secretPut` for a held
    name replaces the value.
 2. **Requests.** The backend sends a secret frame only on a protocol 14 link and
-   waits up to **10 s** for the `secretReply` with the same `requestId`. Each frame
-   gets exactly one reply.
-3. **Head session.** On protocol 14 every `hello` carries `headSession`, a random
-   value the backend picks once per process start. The machine records it for the
-   binding. When a `hello` brings a different `headSession` (the backend restarted),
-   or none, the machine drops every secret it holds for that credential before it
-   answers `welcome`. So a backend restart drops remote agents' secrets, as it drops
-   its own agents' secrets.
+   waits up to **10 s**, connecting included, for the `secretReply` with the same
+   `requestId`. Each frame gets exactly one reply. A reply that comes later, or
+   matches no waiting frame, is dropped without error.
+3. **Head session.** A backend whose range includes 14 sends `headSession` in
+   every `hello`: a random value it picks once per process start. On every bind,
+   whatever version is chosen, the machine compares it with the one it recorded for
+   the credential. When it differs (the backend restarted) or is missing (an older
+   backend), the machine drops every secret it holds for that credential before it
+   handles any frame of the new link. So a backend restart drops remote agents'
+   secrets, as it drops its own agents' secrets.
 4. **Use.** A `ws.host.exec` with `secretEnv` runs on the machine and resolves only
    the calling agent's values from this store. Each agent's workspace server has a
-   fixed caller, so another agent on the machine never reaches them. The machine
-   also masks the agent's held values in the provider text it journals or logs, as
-   it masks [profile values](#provider-credentials-profile-environment).
+   fixed caller, so another agent on the machine never reaches them. The values
+   are redacted from the command's output before the provider sees it.
 5. **Drop.** The machine drops an agent's secrets on `secretForget`, on its
    [final stop](#final-stop-nodeprotocol-9), when its bind-time sweep removes the
    agent's checkout, and when the credential becomes inactive. A machine restart
@@ -3099,10 +3100,17 @@ interface SecretReplyFrame {
    [traffic capture](#traffic-capture) (masked). A malformed secret frame is
    rejected as `node-link-frame-invalid` without echoing its content.
 7. **Backend.** The backend sends `secretPut` only from `secret.provide` and drops
-   its copy once the frame is sent. It stores no value. A forget for a machine
-   that is not connected is queued in backend memory and sent after the next
-   protocol 14 bind (a backend restart drops the queue, and the new `headSession`
-   drops the values).
+   its copy once the frame is sent. It stores no value. While a `secretPut` is
+   outstanding its request is claimed: another `secret.provide` or a
+   `secret.dismiss` of it fails `secret-request-unknown`. Only a `secretReply` with
+   `outcome: "ok"` answers the request. On any other end (no link, below 14, a
+   `failed` reply, no reply within 10 s) the request returns to pending, and the
+   backend sends `secretForget` for that name, so a value the machine stored but
+   could not confirm is not kept (a value held earlier under the same name goes
+   too). On `workspace.archive` the backend sends `secretForget` without a name for
+   each remote agent of the workspace. A forget that gets no reply is queued in
+   backend memory and sent after the next protocol 14 bind (a backend restart drops
+   the queue, and the new `headSession` drops the values).
 8. **Older peers.** On a link below 14 the backend sends no secret frame and the
    machine hides `ws.secret` and `secretEnv` from a remote agent and refuses them
    with `remote-agent-unsupported`. An older machine refuses `secret.*` itself;

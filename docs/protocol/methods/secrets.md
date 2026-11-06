@@ -158,19 +158,28 @@ that one agent. The backend never stores it.
   When the machine is not connected, is below protocol 14, or does not confirm
   within 10 s, the call fails with `-32602` and
   `data.code: "secret-delivery-failed"`, the request **stays pending**, and the user
-  can try again from the same card. The backend never queues a value.
+  can try again from the same card. The backend never queues a value, and it asks
+  the machine to forget that name, so an unconfirmed value is not kept. While the
+  value is on its way the request is taken: a second `secret.provide` or a
+  `secret.dismiss` of it fails `secret-request-unknown`.
 - **Use.** `ws.host.exec` with `secretEnv` runs on the machine and resolves the
   agent's values there, with the same overlay and output redaction. Other agents on
   the machine get `secret-unavailable`.
 - **List.** `secret.list` and `ws.secret.list` read `secrets` from the machine;
   `pendingRequests` and `answeredRequests` come from the backend. When the machine
-  is not connected, `secrets` is `[]` and the result adds
-  `secretsUnavailable: "machine-offline"`.
+  cannot answer (not connected, below protocol 14, a refusal, or no answer within
+  10 s), `secrets` is `[]` and the result adds
+  `secretsUnavailable: "machine-offline"`, its only value.
 - **Forget.** `secret.forget` and `ws.secret.forget` drop the value on the machine.
-  When the machine is not connected, the backend queues the forget in memory, sends
-  it when the machine is back, and returns `{ ok: true, forgotten: false, deferred: true }`.
-- **Lifetime.** A remote agent's secrets are also dropped when its machine's intentd
-  restarts, at its final stop, and when the machine is revoked or removed. A backend
+  When the machine gives no answer (not connected, below protocol 14, or no answer
+  within 10 s), the backend queues the forget in memory, sends it after the
+  machine's next protocol 14 bind, and returns
+  `{ ok: true, forgotten: false, deferred: true }`. A refusal returns
+  `forgotten: false`.
+- **Lifetime.** Archiving or deleting the workspace, and deleting or retiring the
+  agent, drop its secrets on the machine (a forget, or its final stop). They are also
+  dropped when its machine's intentd restarts and when the machine is revoked or
+  removed. A backend
   restart drops them too: the machine drops every value from before the restart when
   the backend reconnects. A provider restart on the same machine
   (`agent.setModel`, quota failover, a relaunch) keeps them. A remote agent never
