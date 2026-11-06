@@ -24,6 +24,9 @@ reserved for a later version.
 | `~/.intent/plugin-data/<name>/` | `PLUGIN_DATA`. Kept across updates. Created before a server starts. |
 | `~/.intent/plugins.json` | Daemon-owned registry: `{ plugins: { [name]: { source?, kind?: "path"\|"git", enabled, installedAt? } } }`. |
 
+A non-empty `INTENTD_USER_PLUGINS_DIR` in the daemon environment replaces `~/.intent`
+as the base of all three paths (dev sandboxes and test harnesses use it).
+
 A folder placed in `~/.intent/plugins/` by hand loads too. It is enabled unless the
 registry disables it, and it has no source, so `plugin.update` refuses it.
 Folders whose names start with `.` are ignored.
