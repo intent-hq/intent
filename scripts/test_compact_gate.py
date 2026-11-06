@@ -311,6 +311,7 @@ class CompactMakeTests(unittest.TestCase):
         shutil.copy(ROOT / "scripts/resumable_nextest.py", self.root / "scripts")
         shutil.copy(ROOT / "scripts/gate_storage.py", self.root / "scripts")
         shutil.copy(ROOT / "scripts/check_watch_capacity.py", self.root / "scripts")
+        shutil.copy(ROOT / "scripts/intentd_tree_preflight.py", self.root / "scripts")
         shutil.copytree(ROOT / "scripts/_vendor", self.root / "scripts/_vendor",
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         self.log = self.root / "commands.jsonl"

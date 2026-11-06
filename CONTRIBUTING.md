@@ -116,6 +116,15 @@ runs tests only; `make test-changed` selects tests changed against `BASE`
 (default `origin/main`) and falls back to the full suite for build-wide changes;
 `make test-select E='<nextest filterset>'` runs just the matching tests.
 
+Every Rust gate first prints the intentd tree it tests:
+`[<goal>] testing intentd: <path> <branch>@<sha> (<pin state>, <lag>)`. It stops,
+naming the fix, when the default `packages/intentd` is off the monorepo pin or
+more than `INTENTD_BEHIND_LIMIT` (default 250) commits behind its `origin/main`:
+gates once tested a shared checkout left on another branch. To test your own
+worktree, pass `INTENTD_DIR=/path/to/intentd` on the make command line. Passing
+`INTENTD_DIR=packages/intentd`, or running make from inside that checkout,
+accepts it as it is. `DRY_RUN=1` only warns.
+
 `make test-stress E='<nextest filterset>' COUNT=200 LOAD=1` repeats the
 matching tests `COUNT` times (default 100) with retries off, through the same
 runner and fixtures as `test-select`. Use it to show a test fails only under

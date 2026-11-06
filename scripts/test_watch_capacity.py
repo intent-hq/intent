@@ -112,7 +112,7 @@ class WatchEntryTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         scripts = self.root / "scripts"
         scripts.mkdir()
-        for name in ("bootstrap-dev-host.sh", "check_watch_capacity.py"):
+        for name in ("bootstrap-dev-host.sh", "check_watch_capacity.py", "intentd_tree_preflight.py"):
             source = ROOT / "scripts" / name
             if source.exists():
                 shutil.copy(source, scripts / name)
@@ -145,6 +145,9 @@ if len(sys.argv) > 1 and Path(sys.argv[1]).name == "check_watch_capacity.py":
     native.inotify_init1.return_value = -1 if code else os.open(os.devnull, os.O_RDONLY)
     with mock.patch("sys.platform", "linux"), mock.patch("ctypes.CDLL", return_value=native), mock.patch("ctypes.get_errno", return_value=code):
         runpy.run_path(sys.argv[0], run_name="__main__")
+elif len(sys.argv) > 1 and Path(sys.argv[1]).name == "intentd_tree_preflight.py":
+    sys.argv = sys.argv[1:]
+    runpy.run_path(sys.argv[0], run_name="__main__")
 elif sys.argv[1:] == ["--version"]:
     print("Python 3.11.0")
 else:

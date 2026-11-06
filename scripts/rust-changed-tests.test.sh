@@ -91,6 +91,7 @@ mk="$temp_dir/reviewer's checkout"
 mkdir -p "$mk/scripts" "$mk/packages/intentd/scripts" "$mk/packages/intentd/.git"
 cp "$repo_root/Makefile" "$mk/Makefile"
 cp "$repo_root/scripts/check_watch_capacity.py" "$mk/scripts/"
+cp "$repo_root/scripts/intentd_tree_preflight.py" "$mk/scripts/"
 cat >"$mk/packages/intentd/scripts/changed-tests.sh" <<'SH'
 #!/usr/bin/env bash
 {
@@ -315,6 +316,7 @@ else
   cp "$repo_root/scripts/resumable_nextest.py" "$mono/scripts/resumable_nextest.py"
   cp "$repo_root/scripts/gate_storage.py" "$mono/scripts/gate_storage.py"
   cp "$repo_root/scripts/check_watch_capacity.py" "$mono/scripts/"
+  cp "$repo_root/scripts/intentd_tree_preflight.py" "$mono/scripts/"
   cp "$repo_root/scripts/check-transfer-selection-contract.mjs" "$mono/scripts/"
   mkdir -p "$mono/docs/protocol/fixtures"
   cp -R "$repo_root/docs/protocol/fixtures/transfer-selection" "$mono/docs/protocol/fixtures/"

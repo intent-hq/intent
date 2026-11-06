@@ -577,6 +577,26 @@ ensure-intentd-submodule:
 		echo "[ensure-intentd-submodule] $(INTENTD_DIR) already initialized — leaving as-is"; \
 	fi
 
+# Every Rust gate first prints the intentd tree it tests (path, branch, commit,
+# pin and origin/main lag), and refuses the default packages/intentd when it is
+# off the monorepo pin or more than INTENTD_BEHIND_LIMIT commits behind its
+# origin/main, unless INTENTD_DIR is on the make command line or make started
+# inside that tree (the packages/intentd forwarder). Gates had tested a shared
+# checkout left on another branch. DRY_RUN=1 only warns. A recursive make
+# (gate -> test, the test-changed fallback) gets INTENTD_TREE_CHECKED and skips
+# it. See scripts/intentd_tree_preflight.py.
+INTENTD_BEHIND_LIMIT ?= 250
+INTENTD_TREE_GATES := fmt shear clippy lint-sources check-windows check-macos test-intentd test-changed test-select test-stress coverage-changed coverage-e2e coverage-all
+.PHONY: intentd-tree-preflight
+intentd-tree-preflight: ensure-intentd-submodule ## Print the intentd tree the Rust gates test; refuse an off-pin or stale default packages/intentd (INTENTD_DIR=<path> chooses one, DRY_RUN=1 only warns)
+	@python3 scripts/intentd_tree_preflight.py --repo-root "$(CURDIR)" \
+		--intentd-dir '$(subst ','\'',$(INTENTD_DIR))' --origin '$(origin INTENTD_DIR)' \
+		--caller-cwd '$(subst ','\'',$(PWD))' --label '$(or $(firstword $(MAKECMDGOALS)),all)' \
+		--behind-limit '$(INTENTD_BEHIND_LIMIT)' --dry-run '$(DRY_RUN)' \
+		--checked '$(subst ','\'',$(INTENTD_TREE_CHECKED))'
+$(INTENTD_TREE_GATES): intentd-tree-preflight
+INTENTD_TREE_CHECKED_ENV = INTENTD_TREE_CHECKED='$(subst ','\'',$(INTENTD_DIR))'
+
 # On-demand init for the FE submodule — pulled in only by targets that need it
 # (`dev-fe`, `build-sidecar`, `dev`), so backend-only workflows stay fast.
 ensure-fe-submodule:
@@ -842,12 +862,12 @@ check: $(RUST_CHECK_TARGETS) ## Makefile target check + protocol field parity + 
 	fi; rm -f "$(CHECK_DEFERRED)"
 
 gate: check | check-callback-fixture check-transfer-fixture ## Run all local Rust gates (fmt, cargo-shear, clippy, source lints, then nextest)
-	@$(MAKE) --no-print-directory test
+	@$(INTENTD_TREE_CHECKED_ENV) $(MAKE) --no-print-directory test
 
 test: test-intentd ## Run Rust tests; after interruption use RESUME=1 (GATE_FORCE=1 runs all, NO_FAIL_FAST=1 continues past failures, HERMETIC=1 hides provider CLIs like CI)
 
 test-scripts: ## Run the Python script unit tests (Python 3.11+, no submodules needed)
-	python3 -S -B -m unittest -v scripts.test_resumable_nextest scripts.test_compact_gate scripts.test_gate_storage scripts.test_rust_test_policy scripts.test_seed_dev_providers scripts.test_seed_dev_workspaces scripts.test_cleanup_prereleases scripts.test_script_test_target scripts.test_test_select_target scripts.test_test_stress_target scripts.test_nextest_stress scripts.test_host_load scripts.test_watch_capacity
+	python3 -S -B -m unittest -v scripts.test_resumable_nextest scripts.test_compact_gate scripts.test_gate_storage scripts.test_rust_test_policy scripts.test_seed_dev_providers scripts.test_seed_dev_workspaces scripts.test_cleanup_prereleases scripts.test_script_test_target scripts.test_test_select_target scripts.test_test_stress_target scripts.test_nextest_stress scripts.test_host_load scripts.test_watch_capacity scripts.test_intentd_tree_preflight
 
 # DRY_RUN must never start real work: run every target whose help or recipe
 # mentions DRY_RUN, plus every coverage-*, with DRY_RUN=1 and stub cargo/rustup,
@@ -930,7 +950,7 @@ test-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd br
 		echo "[test-changed] DRY_RUN: would fall back to the full 'make test'"; exit 0; \
 	fi; \
 	echo "[test-changed] falling back to the full 'make test'"; \
-	exec $(MAKE) --no-print-directory test
+	$(INTENTD_TREE_CHECKED_ENV) exec $(MAKE) --no-print-directory test
 
 # Frontend counterpart of test-changed: cloudlands-fe's `pnpm run
 # verify:changed` (selection, records and --resume are documented in
