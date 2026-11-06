@@ -316,23 +316,23 @@ suite is `python3 -S -B -m unittest -v scripts.test_cleanup_prereleases`.
   size from `packaging/e2b`, in parallel: `intent-node-2x4` (2 vCPU / 4 GiB),
   `intent-node-4x8` (4 vCPU / 8 GiB, the default), `intent-node-8x16` (8 vCPU /
   16 GiB) and `intent-node-16x32` (16 vCPU / 32 GiB). It tags each `<version>` and `latest`, makes it public
-  (`<E2B team slug>/intent-node-<size>:<version>`), and smoke-tests the new tag
+  (`<E2B project slug>/intent-node-<size>:<version>`), and smoke-tests the new tag
   (create a sandbox, check `intentd --version`, the tools and the size, kill it).
   E2B's Hobby plan caps sandboxes at 8 vCPU / 8 GiB, and Pro goes higher only after
-  E2B support raises the team's limits
+  E2B support raises the project's limits
   ([billing](https://docs.e2b.dev/billing.md)), so `8x16` and `16x32` need Pro with
-  raised limits, for two teams. The publishing team (the one that owns
+  raised limits, for two E2B projects. Intent's publishing project (the one that owns
   `E2B_API_KEY`) needs them to build those templates: a build E2B refuses over the
-  team's vCPU or memory limits is skipped with a warning (the rest of the run
+  project's vCPU or memory limits is skipped with a warning (the rest of the run
   continues), so that size has no tag for the version, and the backend lists only
   sizes whose `<version>` tag exists. The `E2B_TEMPLATE_SIZES` repository variable
-  (for example `2x4,4x8`) narrows what is built. A user whose own team lacks the
+  (for example `2x4,4x8`) narrows what is built. A user whose own E2B project lacks the
   limits is refused by E2B when starting a big size; the backend reports that as
   `cloud-quota` (limit `plan`), never a silent downgrade. The templates download the mirrored
   `x86_64-unknown-linux-musl` archive, so they build after the mirror step. They have
   no start command: each sandbox starts its own `intentd` after create, so no daemon
   identity is snapshotted. The workflow authenticates with the `E2B_API_KEY` secret
-  (an E2B team API key) and is fail-soft: without the secret it logs a warning and
+  (an API key for Intent's publishing E2B project) and is fail-soft: without the secret it logs a warning and
   succeeds. To rebuild or backfill one version, dispatch it by hand
   (`gh workflow run e2b-template.yml --repo intent-hq/intentd -f version=X.Y.Z`; add
   `-f latest=true` to move `latest`). PRs that change `packaging/e2b` build and
