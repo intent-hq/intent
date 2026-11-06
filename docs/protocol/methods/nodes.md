@@ -718,6 +718,16 @@ interface RemoteSetupStatus {
   `placementError`: the agent still starts, and its first turn carries the
   setup-failure notice. A failed checkout sets `placementError`
   `node-checkout-failed` as before.
+- A submodule populated in the agent's checkout that is not one of its pins
+  (the setup script initialized it on the machine, for example from the
+  submodule's own remote) is not carried: its commits and edits are not sent
+  back. The machine checks the checkout after setup at every launch; when it
+  finds such a submodule, the agent's first turn of that launch carries a
+  notice naming it ("`packages/ios` was set up on this machine by the setup
+  script, not carried from the backend; changes there won't be sent back to
+  the backend"), and the agent's `ws.workspace.details().setupStatus` lists it
+  as `unsentSubmodules: string[]` (paths from the superproject root, top-most
+  only). Neither is set when every populated submodule is a pin.
 - `setup` describes the agent's checkout on its machine, never the backend
   worktree. The workspace's own `setupStatus` and `workspace:setup:*` events
   are unchanged.
