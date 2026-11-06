@@ -195,8 +195,8 @@ The [cloud machines](./methods/nodes.md#remote-machine-errors) add three
 `data.code` values, also on existing numeric codes. `-32602`:
 `cloud-profile-required` (placement or `agent.setModel` would send no
 `profileEnv`; data `{ provider, providerRef }`), `cloud-quota` (an E2B plan
-limit; data `{ provider, limit: "concurrency" | "rate", retryAfterSeconds?,
-retryable: true }`) and `cloud-machine-unavailable` with `reason`
+limit; data `{ provider, limit: "concurrency" | "rate" | "plan", retryAfterSeconds?,
+retryable }`) and `cloud-machine-unavailable` with `reason`
 `not-configured` or `key-rejected`. `-32603`: `cloud-machine-unavailable` with
 the other reasons (`api-error`, `template-missing`, `bootstrap-failed`,
 `sandbox-lost`). After a placement reply the same codes arrive as the agent's

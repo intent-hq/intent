@@ -791,7 +791,7 @@ authority.
 
 | Method | Who | Params | Result |
 | --- | --- | --- | --- |
-| cloudMachines.configure | Owner | provider (req, `"e2b"`), apiKey? (secret; required when no key is saved), size? (`{ vcpu, memoryMiB }`, one of the provider's `sizes`), idlePauseMinutes? (1-1440, default 10), pausedDeleteDays? (1-30, default 7), templateTeam? (E2B team slug that publishes the template; default Intent's team), validateOnly? (boolean, default false) | `{ provider: CloudMachineProvider }`; creates or updates the provider; with `apiKey`, tests the key with one E2B read before it saves anything; an omitted member keeps its saved value. With `validateOnly: true` it tests the given key (or the saved one) and saves nothing: the result is the provider as it would be saved, with `state` from the test, and no event is emitted. A rejected key fails with `cloud-machine-unavailable` reason `key-rejected` |
+| cloudMachines.configure | Owner | provider (req, `"e2b"`), apiKey? (secret; required when no key is saved), size? (`"2x4"`, `"4x8"` or `"8x16"`; default `"4x8"`), idlePauseMinutes? (1-1440, default 10), pausedDeleteDays? (1-30, default 7), templateTeam? (E2B team slug that publishes the template; default Intent's team), validateOnly? (boolean, default false) | `{ provider: CloudMachineProvider }`; creates or updates the provider; with `apiKey`, tests the key with one E2B read before it saves anything; an omitted member keeps its saved value. With `validateOnly: true` it tests the given key (or the saved one) and saves nothing: the result is the provider as it would be saved, with `state` from the test, and no event is emitted. A rejected key fails with `cloud-machine-unavailable` reason `key-rejected` |
 | cloudMachines.list | Owner, members | — | `{ providers: CloudMachineProvider[], machines: RemoteMachine[] }`; `machines` are the live cloud machines, each with `cloud`; a member sees only the machines of workspaces they can manage; never returns the key |
 | cloudMachines.remove | Owner | provider (req), stopAgents? (boolean, default false) | `{ ok: true, unconfirmedStops: string[] }`; with any sandbox (running or paused) and no `stopAgents: true` fails `-32602` `machine-in-use` with `runningAgents`; with `stopAgents: true` sends each agent a final stop, waits at most 90 s, then deletes every sandbox, machine row and the key; an unknown provider is a no-op |
 | cloudMachines.pause | Owner, starter | machineId (req) | `{ machine: RemoteMachine }`; pauses the sandbox now; while an agent on it has a running turn fails `-32602` `machine-in-use` with `runningAgents`; an already paused sandbox is returned unchanged |
@@ -821,17 +821,35 @@ interface CloudMachineProvider {
   id: "e2b";
   name: string;                            // "E2B"
   state: "ready" | "key-rejected" | "unreachable"; // result of the last E2B call
-  template: string;                        // the template the backend starts: "<templateTeam>/intent-node:<intentdVersion>"
-  templateTeam: string;                    // E2B team slug that publishes the template
-  agentProviders: string[];                // base provider ids whose CLIs the template installs, for example "claude-code"
-  sizes: { vcpu: number; memoryMiB: number }[]; // sizes the template offers
-  size: { vcpu: number; memoryMiB: number };
+  template: string;                        // the template the backend starts: "<templateTeam>/intent-node-<size>:<intentdVersion>"
+  templateTeam: string;                    // E2B team slug that publishes the templates
+  agentProviders: string[];                // base provider ids whose CLIs the templates install, for example "claude-code"
+  sizes: CloudMachineSizeInfo[];           // the three sizes below, in this order
+  size: CloudMachineSize;                  // the size new sandboxes use
   idlePauseMinutes: number;
   pausedDeleteDays: number;
   configuredAt: string;
   checkedAt?: string;                      // last successful E2B call
 }
+
+type CloudMachineSize = "2x4" | "4x8" | "8x16"; // closed set: <vCPU>x<GiB>
+
+interface CloudMachineSizeInfo {
+  id: CloudMachineSize;
+  vcpu: number;                            // 2, 4, 8
+  memoryMiB: number;                       // 4096, 8192, 16384
+  plan: "hobby" | "pro";                   // the lowest E2B plan that allows it
+}
 ```
+
+Each size is its own template: Intent publishes `intent-node-2x4`
+(2 vCPU, 4 GiB), `intent-node-4x8` (4 vCPU, 8 GiB, the default) and
+`intent-node-8x16` (8 vCPU, 16 GiB) with every intentd release, each tagged
+`<intentdVersion>` and `latest`, under `<templateTeam>/`. E2B's Hobby plan caps a
+sandbox at 8 GiB, so `8x16` needs E2B Pro. `configure` saves `8x16` on any plan;
+E2B refuses the create on Hobby, and the agent gets `cloud-quota` with
+`limit: "plan"`. The backend never starts a smaller size in its place. Any other
+`size` value is `-32602` `invalid-params`.
 
 ###### Cloud machine rows
 
@@ -852,7 +870,7 @@ interface CloudMachineState {
   sandboxId: string;                       // E2B's sandbox id
   state: "running" | "pausing" | "paused" | "resuming" | "stopping";
   template: string;                        // the template this sandbox started from
-  size: { vcpu: number; memoryMiB: number };
+  size: CloudMachineSize;
   startedBy: { principalId: string; displayName: string | null };
   agentId: string;                         // the top-level agent the sandbox was started for
   workspaceId: string;
@@ -962,8 +980,8 @@ from its saved `head` and `wip`. Work it did not push is lost; that turn's notic
 says so.
 
 **Template.** The backend starts only the template tagged with its own exact
-intentd version, `<templateTeam>/intent-node:<intentdVersion>`, where
-`templateTeam` is the provider setting (default: Intent's publisher team). It
+intentd version in the provider's size, `<templateTeam>/intent-node-<size>:<intentdVersion>`,
+where `templateTeam` is the provider setting (default: Intent's publisher team). It
 never falls back to another tag: a missing tag fails the start with
 `cloud-machine-unavailable` reason `template-missing`. A paused sandbox keeps the
 version it started with; it resumes and binds while the nodeProtocol ranges
@@ -1137,22 +1155,25 @@ interface CloudProfileRequiredData {
 Its message reads, for example, "Work uses this backend's Claude sign-in, which
 E2B can't use; pick a profile with an API key or token." It is not retryable.
 
-`cloud-quota` means E2B refused for a plan limit: too many running sandboxes or
-too many requests. Intent sets no limit of its own.
+`cloud-quota` means E2B refused for a plan limit: too many running sandboxes, too
+many requests, or a size the plan does not allow (`8x16` on Hobby). Intent sets
+no limit of its own.
 
 ```ts
 interface CloudQuotaData {
   code: "cloud-quota";
   provider: "e2b";
-  limit: "concurrency" | "rate";
+  limit: "concurrency" | "rate" | "plan";
   retryAfterSeconds?: number;        // from E2B's Retry-After
-  retryable: true;
+  retryable: boolean;                // false for "plan"
 }
 ```
 
 It is `-32602` from `cloudMachines.pause` and `kill`, an agent's
 `placementError` when a create is refused, and the turn's error when a resume
 is refused. The backend retries a `rate` refusal itself before it reports one.
+A `plan` refusal is `retryable: false`: the owner must pick a smaller size or
+upgrade the E2B plan, and the message names both.
 
 ##### Link traffic capture
 
