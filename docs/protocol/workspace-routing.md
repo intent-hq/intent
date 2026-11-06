@@ -287,9 +287,16 @@ A forwarded `workspace.applyProposal` runs the same checks as a local agent's ca
 (the explicit `userRequested: true` attestation, and only the caller's own pending
 proposals). `workspace.archive` and `workspace.unarchive` act on the agent's
 workspace on the backend, with the same checks and events as a local agent's call;
-they do not touch the agent's checkout on the machine. The other forwarded reads
-return backend data: `git.listRoots` lists the workspace's secondary git roots with
-their backend paths, `terminal.list` and `terminal.readOutput` read the workspace's
+they do not touch the agent's checkout on the machine. `git.listRoots` lists only
+the secondary git roots the agent's machine has: the registered roots that are
+submodules carried in the agent's pins ([node-link.md § Submodule pins](node-link.md#submodule-pins)). The backend answers each such
+row with its `path` relative to the checkout (`"a/b"`) and without `branch`; the
+machine makes `path` absolute in the agent's checkout and reads `branch` there, so the
+agent gets rows valid on its machine. Every other root (a repository outside the
+checkout, a plain repository inside it, a submodule not populated on the backend) is
+on the backend only and is left out. An older machine passes the relative paths
+through; they still resolve against the agent's working directory. The other
+forwarded reads return backend data: `terminal.list` and `terminal.readOutput` read the workspace's
 terminals on the backend (read-only; there is no terminal write frame), and
 `crossWorkspace.*` and `discussion.*` read what a local agent reads. `primitive.*`
 writes to the backend's notes as a local agent's call does. `workspace.context`,
