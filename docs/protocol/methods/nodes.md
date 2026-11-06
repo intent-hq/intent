@@ -320,6 +320,10 @@ with `remoteScripts: 1` reports each machine's negotiated `nodeProtocol` on
 `RemoteMachine`; while it is below 8, clients show that the machine needs an
 update for its agents to use scripts (for example in Settings → Machines).
 
+`client.hello.server.capabilities.cloudMachines: 1` means the backend can start
+its own machines on E2B ([cloud machines](#cloud-machines-e2b)). The backend
+advertises it only together with `remoteMachines: 1`.
+
 ##### Machine methods: executor credentials
 
 Owner-only: the local UDS seat or a WSS connection admitted with the owner
@@ -413,7 +417,8 @@ RPC and MCP) accept the closed `placement` object with the same validation. A
 remote placement needs `target` omitted or `"remote"` and `checkout` omitted or
 `"isolated"`, with optional `os`, `arch` and `nodeId`; `exclusive: true`, and on
 `agent.delegate` a remote `placement` combined with `isolation` fail with
-`-32602`. `placement: { "target": "local" }` (no other
+`-32602`. With `cloudMachines: 1`, `target: "e2b"` starts the agent on a new
+[cloud machine](#placement-on-e2b). `placement: { "target": "local" }` (no other
 members), from any caller, means "run on the backend": it creates an ordinary
 local agent, as if no placement were sent, and on `agent.delegate` it may be
 combined with `isolation`. `target: "local"` with `os`, `arch`, `nodeId`,
@@ -436,7 +441,9 @@ can show where an agent runs, and its move from `pending` to `isolated`,
 without opening it: when the machine reports the checkout ready or a start
 failure, the backend publishes `agent:updated`, which reaches the channel as an
 `updated` delta. `leaseId` stays detail-only. Local agents omit all of them
-(absent, never `null`). On nodeProtocol 10 placed agents also carry
+(absent, never `null`). An agent placed on E2B also carries `cloudStart`
+on both reads while its [sandbox starts](#placement-on-e2b), and no `nodeId`
+until the link binds. On nodeProtocol 10 placed agents also carry
 [`submodules` and `setup`](#prepared-checkout). The create result adds a `notice` saying the agent starts from the
 workspace's last commit and that uncommitted changes are not carried; delegate
 and wakeOrCreate results copy `notice`, `nodeId`, `nodeName` and
@@ -762,6 +769,167 @@ backend supported nodeProtocol 10 have no pins, omit `submodules` and `setup`,
 and keep running as before on every link. Workspaces that need neither run on
 every supported link.
 
+##### Cloud machines (E2B)
+
+A *cloud machine* is a remote machine that the backend starts itself, in an
+[E2B](https://e2b.dev) sandbox, with the backend owner's own E2B API key. Each
+sandbox runs a normal intentd daemon with a fresh identity and is used as an
+exposed machine over the unchanged
+[executor link](../node-link.md#cloud-machines). The backend creates one
+sandbox for each agent placed with `target: "e2b"`; that agent's sub-agents
+share it. The sandbox pauses when it is idle and is deleted when its agent
+ends for good.
+
+`client.hello.server.capabilities.cloudMachines: 1` means the backend
+implements the methods, placement, fields, event and errors in this section.
+The backend advertises it only together with `remoteMachines: 1`, so never in
+[node mode](#node-mode). Without it, `target: "e2b"` is `-32602`
+`invalid-params`, and a client shows no cloud machine. The flag grants no
+authority.
+
+###### Cloud machine methods
+
+| Method | Who | Params | Result |
+| --- | --- | --- | --- |
+| cloudMachines.configure | Owner | provider (req, `"e2b"`), apiKey? (secret; required when no key is saved), size? (`{ vcpu, memoryMiB }`, one of the provider's `sizes`), idlePauseMinutes? (1-1440, default 10), pausedDeleteDays? (1-30, default 7) | `{ provider: CloudMachineProvider }`; creates or updates the provider; with `apiKey`, tests the key with one E2B read before it saves anything; an omitted member keeps its saved value |
+| cloudMachines.list | Owner, members | — | `{ providers: CloudMachineProvider[], machines: RemoteMachine[] }`; `machines` are the live cloud machines, each with `cloud`; never returns the key |
+| cloudMachines.remove | Owner | provider (req), stopAgents? (boolean, default false) | `{ ok: true, unconfirmedStops: string[] }`; with live sandboxes and no `stopAgents: true` fails `-32602` `machine-in-use` with `runningAgents`; with `stopAgents: true` sends each agent a final stop, waits at most 90 s, then deletes every sandbox, machine row and the key; an unknown provider is a no-op |
+| cloudMachines.pause | Owner, starter | machineId (req) | `{ machine: RemoteMachine }`; pauses the sandbox now; while an agent on it has a running turn fails `-32602` `machine-in-use` with `runningAgents`; an already paused sandbox is returned unchanged |
+| cloudMachines.kill | Owner, starter | machineId (req) | `{ ok: true, unconfirmedStops: string[] }`; sends each agent on the sandbox a final stop (resuming a paused sandbox first), waits at most 90 s, then deletes the sandbox and its machine row even when stops are unconfirmed |
+
+- **Who.** *Owner* is the local UDS seat or a WSS connection with the owner
+  token. *Members* are [shared-host members](./shared-host-membership.md#member-execution-and-safe-host-reads),
+  who can also place agents on E2B: their agents spend the owner's E2B
+  account, with no per-person cap. *Starter* is the principal in
+  `cloud.startedBy`. Others get `-32003`. Guests get none of these methods.
+- **Unknown machine.** A `machineId` that names no cloud machine is `-32602`
+  `not-found` for `pause` and `kill`.
+- **Unconfirmed stops.** `unconfirmedStops` lists the agent ids whose final
+  stop was not acknowledged in time. Their pushed `head` and `wip` refs stay;
+  work they did not push is lost with the sandbox.
+- **Key.** The backend keeps the key in its secret store under
+  `cloudMachines.e2b.apiKey`. The key never appears in a result, event, log,
+  `Debug` output, error or the sandbox.
+- **Routing.** The methods are daemon-global, take no `workspaceId` and are
+  [excluded from workspace routing](../workspace-routing.md#excluded-methods-and-variants).
+
+```ts
+interface CloudMachineProvider {
+  id: "e2b";
+  name: string;                            // "E2B"
+  state: "ready" | "key-rejected" | "unreachable"; // result of the last E2B call
+  template: string;                        // the template the backend starts, for example "intent-hq/intent-node:0.212.0"
+  providers: string[];                     // base provider ids whose CLIs the template installs
+  sizes: { vcpu: number; memoryMiB: number }[]; // sizes the template offers
+  size: { vcpu: number; memoryMiB: number };
+  idlePauseMinutes: number;
+  pausedDeleteDays: number;
+  configuredAt: string;
+  checkedAt?: string;                      // last successful E2B call
+}
+```
+
+###### Cloud machine rows
+
+Each live sandbox has a machine row with the sandbox daemon's id, like an
+exposed machine, plus `cloud`. The row exists from the time the sandbox is
+linked until it is deleted. `hosts` is empty and `tcAddress` names the sandbox's
+tailcat route. `name` is `"E2B"`.
+
+```ts
+interface RemoteMachine {
+  // ...the members above
+  cloud?: CloudMachineState;               // only on cloud machine rows
+}
+
+interface CloudMachineState {
+  provider: "e2b";
+  sandboxId: string;                       // E2B's sandbox id
+  state: "running" | "pausing" | "paused" | "resuming" | "stopping";
+  template: string;                        // the template this sandbox started from
+  size: { vcpu: number; memoryMiB: number };
+  startedBy: { principalId: string; displayName: string | null };
+  agentId: string;                         // the top-level agent the sandbox was started for
+  workspaceId: string;
+  startedAt: string;
+  runningSeconds: number;                  // seconds not paused since start, for cost estimates
+}
+```
+
+Cloud machine rows are not ordinary exposed machines:
+
+1. `remoteMachines.list` and `remoteMachine:changed` leave them out, so an older
+   client does not show a sandbox as a machine.
+2. `remoteMachines.refresh` and `remoteMachines.remove` treat their ids as
+   unknown. Use `cloudMachines.kill`.
+3. Placement with `target: "remote"` and no `nodeId` never picks one.
+4. `target: "remote"` with a cloud machine's `nodeId` places on that sandbox,
+   resuming it when paused. This is how sub-agents share the sandbox.
+
+`cloudMachine:changed` carries `{ provider: CloudMachineProvider }`,
+`{ providerId, removed: true }`, `{ machine: RemoteMachine }` or
+`{ machineId, removed: true }`. It is emitted on configure, remove, each
+sandbox state change and each machine row change. It goes to owner and member
+connections, never to guests, and never carries the key.
+
+###### Placement on E2B
+
+`placement: { "target": "e2b" }` is accepted wherever the
+[placement subset](#placement-subset) accepts a remote placement, including
+batch entries and `workspace.create`'s `initialAgent.placement`. `checkout` may
+be omitted or `"isolated"`. `os`, `arch`, `nodeId` and `exclusive` fail with
+`-32602`. Every placement with `target: "e2b"` starts a new sandbox.
+
+Admission runs these checks in order, before any write, sandbox or charge:
+
+1. The provider is configured and its key is not known to be rejected, else
+   `cloud-machine-unavailable` with `reason` `not-configured` or
+   `key-rejected`.
+2. The provider reference is
+   [remote-compatible](./provider-profiles.md#remote-compatibility), else
+   `profile-not-remote-compatible`.
+3. The launch sends a `profileEnv` (an API-key profile, an env-only
+   subscription token such as `CLAUDE_CODE_OAUTH_TOKEN`, or a Default
+   configuration that sets such variables), else `cloud-profile-required`. A
+   sandbox has no login of its own.
+4. The base provider is in the provider's `providers`, else `model-unavailable`
+   with an empty `machines` and `retryable: false`. The model is checked only
+   when the sandbox reports its capabilities.
+
+The reply then returns the agent with `placement.target: "e2b"`,
+`nodeName: "E2B"`, `effectiveIsolation: "pending"`, no `nodeId`, and
+`cloudStart: { step }`. The backend starts the sandbox after the reply:
+
+| Step | Work |
+| --- | --- |
+| `creating-sandbox` | Create the sandbox from the template, with the backend's metadata |
+| `starting-daemon` | Start intentd and tailcat in the sandbox, then mint its executor credential |
+| `connecting` | Add the hidden machine row and bind the executor link |
+
+When the link binds, the agent gets `nodeId` and loses `cloudStart`; the
+checkout and setup continue as for any
+[remote agent](#prepared-checkout). Each step change publishes
+`agent:updated`. A message sent while the sandbox starts waits for the start.
+A start failure sets `placementError` (`cloud-quota` or
+`cloud-machine-unavailable`), deletes the sandbox if one was made, and leaves no
+machine row. The agent never falls back to local.
+
+###### Sandbox lifecycle
+
+| Event | Backend action |
+| --- | --- |
+| Agent live | Keeps the sandbox's E2B timeout ahead of now. E2B pauses the sandbox, never kills it, if the timeout runs out. |
+| No live agent for `idlePauseMinutes` | Pauses the sandbox. The link drops; memory and the checkout stay. |
+| New message for an agent on a paused sandbox | Resumes the sandbox, redials the link with a new generation and replays the journal. |
+| Agent ends for good ([ending a remote agent](#ending-a-remote-agent-for-good)) | Final stop, then deletes the sandbox and its machine row. A paused sandbox is resumed first. |
+| Paused for `pausedDeleteDays` | Final stop, then deletes the sandbox. |
+| E2B removes the sandbox itself | Fails the agent with `cloud-machine-unavailable` reason `sandbox-lost`. Its next message starts a new sandbox from its last pushed `head` and `wip`. |
+| A sandbox with this backend's metadata and no machine row | Deleted by the backend's reaper. |
+
+A sub-agent on the sandbox keeps it live like its parent. The sandbox is
+deleted when its top-level agent ends for good; sub-agents still on it get a
+final stop first.
+
 ##### Node mode
 
 `intentd serve --node`, or the persisted setting `daemon.mode: "node"`, starts
@@ -884,6 +1052,64 @@ acknowledgements did not arrive in time.
 `machine-revoked` from `refresh` is `-32603`. `machine-in-use` and `not-found`
 are `-32602`. Errors never include the
 token.
+
+The [cloud machines](#cloud-machines-e2b) add three codes. None of them
+carries the E2B key.
+
+`cloud-machine-unavailable` means E2B cannot start or keep a sandbox:
+
+```ts
+interface CloudMachineUnavailableData {
+  code: "cloud-machine-unavailable";
+  provider: "e2b";
+  reason: "not-configured" | "key-rejected" | "api-error" | "template-missing"
+        | "bootstrap-failed" | "sandbox-lost" | string; // open enum
+  retryable: boolean;
+  status?: number;                   // E2B's HTTP status, when E2B answered
+}
+```
+
+`not-configured` and `key-rejected` are `-32602` from placement and
+`cloudMachines.configure` (not retryable: the owner must save a working key).
+The others are `-32603` from `cloudMachines.configure`, `pause` and `kill`, or
+an agent's `placementError` after the reply: `api-error` (E2B failed or was
+unreachable, retryable), `template-missing` (no template for this backend's
+version), `bootstrap-failed` (intentd, tailcat or the credential mint failed in
+the sandbox) and `sandbox-lost` (E2B removed a sandbox that had an agent). The
+message says no sandbox was left behind, or that the agent's pushed work is
+kept.
+
+`cloud-profile-required` is `-32602`, from placement and from `agent.setModel`
+on an agent on a cloud machine, before any write, when the launch would send no
+`profileEnv`:
+
+```ts
+interface CloudProfileRequiredData {
+  code: "cloud-profile-required";
+  provider: "e2b";
+  providerRef: string;               // the reference as given
+}
+```
+
+Its message reads, for example, "Work uses this backend's Claude sign-in, which
+E2B can't use; pick a profile with an API key or token." It is not retryable.
+
+`cloud-quota` means E2B refused for a plan limit: too many running sandboxes or
+too many requests. Intent sets no limit of its own.
+
+```ts
+interface CloudQuotaData {
+  code: "cloud-quota";
+  provider: "e2b";
+  limit: "concurrency" | "rate";
+  retryAfterSeconds?: number;        // from E2B's Retry-After
+  retryable: true;
+}
+```
+
+It is `-32602` from `cloudMachines.pause` and `kill`, an agent's
+`placementError` when a create is refused, and the turn's error when a resume
+is refused. The backend retries a `rate` refusal itself before it reports one.
 
 ##### Link traffic capture
 

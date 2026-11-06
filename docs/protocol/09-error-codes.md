@@ -191,6 +191,17 @@ a method outside the node-mode list. The message-prefixed
 returned by `agent.setModel`; it remains only as a remote start failure when
 the identity changed outside `agent.setModel` or quota failover. No new numeric error is introduced.
 
+The [cloud machines](./methods/nodes.md#remote-machine-errors) add three
+`data.code` values, also on existing numeric codes. `-32602`:
+`cloud-profile-required` (placement or `agent.setModel` would send no
+`profileEnv`; data `{ provider, providerRef }`), `cloud-quota` (an E2B plan
+limit; data `{ provider, limit: "concurrency" | "rate", retryAfterSeconds?,
+retryable: true }`) and `cloud-machine-unavailable` with `reason`
+`not-configured` or `key-rejected`. `-32603`: `cloud-machine-unavailable` with
+the other reasons (`api-error`, `template-missing`, `bootstrap-failed`,
+`sandbox-lost`). After a placement reply the same codes arrive as the agent's
+`placementError.code`. No error carries the E2B key.
+
 ### Truncated note read errors
 
 The opt-in [truncated note read contract](./methods/notes-tasks.md#truncated-note-reads-additive-contract)

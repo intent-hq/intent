@@ -169,6 +169,14 @@ absence means unavailable, not permission to infer support from version numbers.
 may ignore the field and start the initial agent locally, so clients offer a remote
 initial agent only when this flag is exactly `1`. It grants no caller authority.
 
+**Cloud machines (additive).** Exact integer
+`server.capabilities.cloudMachines: 1` means the backend implements the
+[cloud machines](./nodes.md#cloud-machines-e2b): the `cloudMachines.*` methods,
+the placement `target: "e2b"`, the `cloud` and `cloudStart` fields and the
+`cloudMachine:changed` event. It is advertised only together with
+`remoteMachines: 1`. Clients offer E2B only when it is exactly `1`; it grants no
+caller authority.
+
 **Remote scripts (additive).** Exact integer `server.capabilities.remoteScripts: 1`
 means a remote agent's `ws.script.*` calls are forwarded and the scripts it starts run on
 its machine, listed in `machineRuns` on their rows ([§5.8](./scripts.md#scripts-of-remote-agents-remotescripts-1)).

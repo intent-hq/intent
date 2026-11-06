@@ -7,8 +7,8 @@ implement this semantic boundary; only static nodes serialize it over TLS.
 
 The [daemon-to-daemon executor link](#daemon-to-daemon-executor-link-nodeprotocol-7)
 at the end of this document is the exception: an implemented, separate and
-smaller protocol (nodeProtocol 7) on which one regular daemon runs agents for
-another. It does
+smaller protocol (nodeProtocol 7 to 14) on which one regular daemon runs agents
+for another. It does
 not implement or replace the prepared versions 2-4 below, which stay the target
 for the complete node contract.
 
@@ -79,7 +79,7 @@ must use explicit supported sets:
 
 Both peers agree on the exact installed version/build. Never use an open-ended
 `>=` gate or silently downgrade. Version 1 remains denied for these families.
-Versions 6 and 7, the [executor link](#daemon-to-daemon-executor-link-nodeprotocol-7),
+Versions 6 to 14, the [executor link](#daemon-to-daemon-executor-link-nodeprotocol-7),
 are not members of any set in this table: that link carries none of these families
 and never negotiates with a version 2-4 peer.
 Versions 3 and 4 preserve prior family semantics; method grants, installed feature
@@ -3441,6 +3441,41 @@ and masks secrets (profile environment values, script environment values,
 the `value` of a `secretPut`, credentials, tokens and certificates) before a
 record is kept. It observes frames only: it never
 delays, changes or reorders them, and it adds no frame type.
+
+
+### Cloud machines
+
+A [cloud machine](./methods/nodes.md#cloud-machines-e2b) is a machine the
+backend starts itself in an E2B sandbox. It uses this link unchanged: there is
+no new nodeProtocol, frame, path or route type, and the sandbox daemon offers
+the same range as any daemon of its version. Only the way the machine is
+enrolled and reached differs.
+
+1. **Fresh identity.** The template that E2B starts never runs intentd, so its
+   snapshot holds no daemon id, certificate or tailcat key. intentd first starts
+   in each new sandbox and makes its own. Two sandboxes never share an identity.
+2. **Enrollment.** In place of the frontend relay of the expose flow, the
+   backend uses E2B's authenticated process API as the owner channel: it
+   starts `intentd serve` with the tunnel on, then runs `executor.mint` over
+   the sandbox's local socket with the backend's `remoteMachines.backendInfo`
+   values. The token goes straight into the backend secret store and never
+   reaches a frontend, log or event. The backend then adds the machine row
+   itself, with the same probe as `remoteMachines.add`.
+3. **Route.** The backend dials only the tailcat route (`tcAddress`; `hosts`
+   is empty). It never uses E2B's public sandbox URL: E2B ends TLS at its
+   proxy, so the certificate pin would fail there. The sandbox accepts no
+   public traffic.
+4. **Provider sign-in.** A sandbox has no sign-in of its own. Every launch on
+   a cloud machine carries a [`profileEnv`](#provider-credentials-profile-environment);
+   placement refuses one that would not (`cloud-profile-required`).
+5. **Pause and resume.** A pause drops the link and its git connections like
+   any outage. Memory and the checkout stay. On resume tailcat joins again and
+   the backend redials with a new generation; the hello's `ackedSeq` replays
+   the journal as usual.
+6. **Deletion.** The backend deletes the sandbox only after the agent's
+   [final stop](#final-stop-nodeprotocol-9) is acknowledged, or after its wait
+   ends. Deleting the sandbox also removes the credential, certificate and
+   tailcat key; the backend then removes the machine row and lease.
 
 ### Errors
 
