@@ -3464,6 +3464,9 @@ and `refresh` report them per route in `machine-unreachable`'s `attempts`:
 
 Without a connected machine an agent cannot start (`node-unavailable`); an
 agent whose lease the backend no longer holds cannot start again
-(`node-agent-unplaced`). A turn whose `prompt` frame would exceed 8 MiB (large
-[image attachments](./workspace-routing.md#remote-agents-on-the-executor-link))
-fails with `node-prompt-too-large` before anything is sent.
+(`node-agent-unplaced`). A message whose
+[image attachments](./workspace-routing.md#remote-agents-on-the-executor-link)
+cannot fit one `prompt` frame is refused when it is sent, with
+`attachments-too-large-for-machine:`; a turn whose `prompt` frame would still
+exceed 8 MiB (for example several queued messages delivered together) fails
+with `node-prompt-too-large` before anything is sent.

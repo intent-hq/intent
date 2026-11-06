@@ -401,41 +401,76 @@ accepted as for a local agent, and its attachments reach the machine:
 
 1. **Images.** The backend resolves image attachments as for a local agent and sends
    each supported image inline, as an ACP `image` block, in the turn's `prompt`
-   frame. The whole frame shares the link's 8 MiB cap: a turn whose prompt does not
-   fit fails with `node-prompt-too-large:` and nothing is sent to the machine.
+   frame. The whole frame shares the link's 8 MiB cap, so the backend measures the
+   message before anything is written or sent: its text and images, with the
+   images prepared (resized) as the turn prepares them, plus 256 KiB of room for
+   what the turn adds (the agent's instructions on its first turn, notices). A
+   message that does not fit is refused with `-32602`
+   `attachments-too-large-for-machine:`, naming its size in bytes and the
+   8388608-byte limit. The check runs for `agent.sendMessage` and
+   `agent.queueMessage` to a remote agent, for `agent.create` (and `agent.delegate`
+   / `agent.wakeOrCreate`) whose agent is placed on another machine, with its
+   `imageBlocks` and initial message, and for `workspace.create` with a remote
+   `initialAgent`, where it is part of the pre-side-effect validation: no
+   workspace, worktree, agent or queued message is created. Images that fail
+   preparation are left to the turn, which reports them as for a local agent. A
+   turn whose frame still does not fit (for example several queued messages
+   delivered together) fails with `node-prompt-too-large:` and nothing is sent to
+   the machine.
 2. **Files.** The prompt carries the same attachment notice as a local agent's, and
    the agent copies the file with `ws.file.getAttachment(attachmentId, destDir?)`,
    which runs on the machine. The machine forwards the internal frame
-   `file.attachmentData` (refused from agent code) with args `{ attachmentId }`. The
-   backend answers only for an agent on the link's lease and only for an attachment
-   of that agent's workspace:
+   `file.attachmentData` (refused from agent code). The backend answers only for an
+   agent on the link's lease and only for an attachment of that agent's workspace.
+   The machine asks for the file in pieces of at most 4 MiB, each starting where
+   the copy so far ends:
 
    ```ts
-   // workspace.call params: { method: "file.attachmentData", args: { attachmentId: string } }
+   // workspace.call params: { method: "file.attachmentData", args: AttachmentDataArgs }
+   interface AttachmentDataArgs {
+     attachmentId: string;
+     offset?: number;     // byte offset of the piece; with `length`
+     length?: number;     // at least 1; the backend sends at most 4 MiB
+   }
    interface AttachmentData {
      fileName: string;
      mimeType?: string;
-     size: number;        // bytes
+     size: number;        // bytes of the whole file
      uploadedAt: string;
-     data: string;        // base64 of the file's bytes
+     data: string;        // base64 of the piece's bytes (the whole file without a range)
+     offset?: number;     // with a range: where `data` starts
+     sha256?: string;     // with a range at offset 0: lowercase hex of the whole file
    }
    ```
 
    An unknown id, or an attachment of another workspace, fails with
    `unknown attachment id: <id>`; a file deleted from the backend's store fails with
-   the same "continue without this file" error as for a local agent; a file larger
-   than 5 MiB fails with `attachment-too-large-for-link:` (its base64 must fit the
-   link's 8 MiB RPC cap). The machine writes the bytes into the agent's checkout
-   under `destDir` (default `.intent/attachments/`, with the same ignore-all
-   `.gitignore` marker as a local copy, so the copy never reaches the agent's pushed
-   refs), skips the write when an identical file is already there, and answers with
-   the local result `{ path, fileName, mimeType?, size, uploadedAt }`, `path` relative
-   to the checkout.
+   the same "continue without this file" error as for a local agent; an `offset`
+   past the end fails with `-32602` `attachment-range-invalid:`; an `offset` or
+   `length` alone, or not a non-negative integer, or a `length` of 0, fails with
+   `-32602`. Without a range the answer is the whole file, and a file larger than
+   5 MiB fails with `attachment-too-large-for-link:` (its base64 must fit the
+   link's 8 MiB RPC cap). The machine writes each piece to a hidden part file in
+   the agent's checkout under `destDir` (default `.intent/attachments/`, with the
+   same ignore-all `.gitignore` marker as a local copy, so the copy never reaches
+   the agent's pushed refs), and when the copy reaches `size` checks its size and
+   sha256 against the first answer's. A mismatch, or a piece that does not start
+   where the copy ends, fails the call (`attachment-copy-mismatch:` for a size or
+   hash mismatch) and removes the part file. A matching copy replaces the file
+   unless an identical file is already there, and the call answers with the local
+   result `{ path, fileName, mimeType?, size, uploadedAt }`, `path` relative to
+   the checkout. So any file the backend accepts reaches a remote agent.
 
-This needs no new nodeProtocol: `file.attachmentData` rides `workspace.call`. An
-older backend refuses the frame, and the machine fails `file.getAttachment` with
-`remote-agent-unsupported:` naming the update. An older machine refuses
-`file.getAttachment` itself; images still reach it in the prompt.
+This needs no new nodeProtocol: `file.attachmentData` rides `workspace.call`, and
+the range is optional. An older backend ignores `offset` and `length` and answers
+with the whole file (no `offset` in the answer), which the machine copies as
+before, or refuses a file over 5 MiB with `attachment-too-large-for-link:`, which
+the call reports unchanged. An older machine sends no range and gets the whole
+file, up to 5 MiB. An older backend that refuses the frame makes the machine fail
+`file.getAttachment` with `remote-agent-unsupported:` naming the update. An older
+machine refuses `file.getAttachment` itself; images still reach it in the prompt.
+An older backend does not check the prompt's size up front: such a message fails
+at its turn with `node-prompt-too-large:`.
 
 ## Verification boundary
 
