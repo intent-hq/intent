@@ -407,13 +407,13 @@ reports.
 
 Remote placement implements part of [placement and creation](#placement-and-creation)
 without advertising `agentNodes`. On a backend that advertises
-`remoteMachines: 1`, `agent.create`, single `agent.delegate` and
-`agent.wakeOrCreate`'s creation branch (public RPC and MCP) accept the closed
-`placement` object with the same validation. A remote placement needs `target`
-omitted or `"remote"` and `checkout` omitted or `"isolated"`, with optional `os`,
-`arch` and `nodeId`; `exclusive: true`, and on
-`agent.delegate` a batch with a placement or a remote `placement` combined with
-`isolation` fail with `-32602`. `placement: { "target": "local" }` (no other
+`remoteMachines: 1`, `agent.create`, `agent.delegate` (single and
+[batch](#batch-placement)) and `agent.wakeOrCreate`'s creation branch (public
+RPC and MCP) accept the closed `placement` object with the same validation. A
+remote placement needs `target` omitted or `"remote"` and `checkout` omitted or
+`"isolated"`, with optional `os`, `arch` and `nodeId`; `exclusive: true`, and on
+`agent.delegate` a remote `placement` combined with `isolation` fail with
+`-32602`. `placement: { "target": "local" }` (no other
 members), from any caller, means "run on the backend": it creates an ordinary
 local agent, as if no placement were sent, and on `agent.delegate` it may be
 combined with `isolation`. `target: "local"` with `os`, `arch`, `nodeId`,
@@ -481,6 +481,29 @@ surfaces on the initial agent like any remote start failure (`placementError`
 and `agent:updated`). An omitted `initialAgent.placement` keeps the initial
 agent local, as before.
 
+##### Batch placement
+
+A batch `agent.delegate` (`tasks: [...]`) takes a `placement` for the whole
+batch, and an object entry `{ taskNoteId, ..., placement? }` takes one for that
+task alone. An entry's placement replaces the batch's as a whole object (members
+are never merged); a bare task id, or an entry without one, uses the batch's.
+A task with no placement from either follows the single-delegation rule: local,
+or the parent's machine for a [sub-agent of a remote agent](#sub-agents-of-remote-agents).
+
+Every placement in the call is checked before any task starts, so a malformed
+placement (in the batch or in any entry), or a task that would run remotely
+(by an explicit or an inherited placement) in a call with `isolation`, fails
+the whole batch with `-32602` and starts nothing. Each task the batch starts
+is then admitted as its own delegation, in the batch's admission order: a task
+that fails admission (`profile-not-remote-compatible`, `model-unavailable`,
+`placement-unavailable` or `machine-update-required`) has nothing written for
+it and gets the usual error row `{ taskNoteId, title, disposition: "error",
+reason }`, where `reason` is the full error text (the message, then the
+error's `data` as JSON); the other tasks still start. Started rows are
+unchanged: the placed child's `nodeId`, `nodeName` and `notice` are on the
+agent, not on the row. The batch admits nothing on the node link itself, so
+this needs no node-link change.
+
 ##### Sub-agents of remote agents
 
 When a remote agent creates a sub-agent through its `workspace_api`
@@ -500,20 +523,19 @@ sub-agent defaults to the parent's machine (by name) and that
 `placement: { target: "local" }` runs it on the backend instead.
 
 This covers every child of a remote agent's batch `agent.delegate`
-(`tasks: [...]`) too. A batch still cannot carry a `placement` (not even
-`{ "target": "local" }`), so to run some children on the backend, delegate them
-one at a time with `placement: { target: "local" }`. A batch admits each task
-it starts as its own delegation, so an inherited-placement failure fails only
-that child, with nothing written for it, while the others still start: its row
-is the usual error disposition `{ taskNoteId, title, disposition: "error",
-reason }`, where `reason` is the full error text (the message with the same
-suffix, then the error's `data` as JSON). The one batch-wide refusal is
-`isolation`, below, which fails the whole batch before anything starts.
+(`tasks: [...]`) that gets no placement from the batch or from its entry. To
+send a batch elsewhere, give it a [batch placement](#batch-placement):
+`{ "target": "local" }` runs every task on the backend, and another `nodeId`
+(or `os` / `arch`) sends them to another machine; an entry's own placement
+moves only that task. An inherited-placement failure fails only that child,
+as for any batch task, and its `reason` carries the same message suffix.
 
-A remote agent's `agent.delegate` (single or batch) with `isolation` but no `placement` fails with
-`-32602` before any write: its sub-agents run in a checkout on the machine (the parent's
-one on nodeProtocol 13), so `isolation` does not apply; the message says to pass
-`placement: { target: "local" }` to use isolation on the backend. The
+A remote agent's single `agent.delegate` with `isolation` but no `placement`,
+or its batch with `isolation` where any task would inherit the parent's
+machine, fails with `-32602` before any write: its sub-agents run in a checkout
+on the machine (the parent's one on nodeProtocol 13), so `isolation` does not
+apply; the message says to pass `placement: { target: "local" }` to use
+isolation on the backend. The
 `workspace.cowIsolation` default never applies to an inherited placement.
 
 The child is a placed agent like any other: it carries `nodeId`, `nodeName`,
