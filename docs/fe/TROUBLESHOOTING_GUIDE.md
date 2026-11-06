@@ -78,7 +78,7 @@ because termination could not be confirmed.
 
 #### Problem: Note or chat writes fail with "database disk image is malformed" (code 267)
 
-**Symptoms**: `ws.note.add` / note edits (or chat messages) fail with
+**Symptom**: `ws.note.add` / note edits (or chat messages) fail with
 `error returned from database: (code: 267) database disk image is malformed`, across agents
 and workspaces, while reads still work.
 
@@ -87,12 +87,13 @@ and workspaces, while reads still work.
 and messages themselves are stored separately and are usually intact
 ([intent-hq/intent#8592](https://github.com/intent-hq/intent/issues/8592)).
 
-**Solution** (intentd 0.11.139 or later, on the daemon host):
+**Solution** (intentd 0.11.139 or later, on the daemon host; check with `intentd --version`):
 
 1. Stop retrying writes. A `workspace_api` call that ran an external command before the
    failure may already have taken effect; check its outcome before repeating it.
-2. Diagnose: `intentd doctor`. It exits non-zero when `integrity_check` finds a problem
-   and names any damaged search index.
+2. Diagnose: `intentd doctor`. Under "database health:" it reports `integrity_check`,
+   names any damaged search index, and exits non-zero while a problem remains (other
+   checks, such as busy ports, can also make it exit non-zero).
 3. If doctor reports **only** a damaged search index, quit the Intent app, then run:
 
    ```bash
@@ -103,7 +104,9 @@ and messages themselves are stored separately and are usually intact
 
    `repair-indexes` checks the database read-only first, copies `intentd.db` and its WAL
    to `<data dir>/backups/intentd.db-<UTC timestamp>/`, rebuilds the damaged index from
-   the stored notes and messages without changing them, and checks again.
+   the stored notes and messages without changing them, and checks again. It changes
+   nothing if the schema version differs from this intentd build, or if no index is
+   damaged (pass `--all` to rebuild anyway).
 4. If doctor reports damage **outside** the search indexes, `repair-indexes` refuses and
    changes nothing. Keep the daemon stopped and copy the whole data folder somewhere
    safe before attempting any other recovery.
