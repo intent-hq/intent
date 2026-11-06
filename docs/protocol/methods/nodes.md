@@ -453,13 +453,15 @@ and the model check of [placement across machines](#placement-across-machines),
 and admission all run under `workspace.create`'s
 [pre-side-effect validation](./workspace.md#51-workspace) ("Pre-side-effect
 validation" in its notes): a `-32602` (a malformed or `null` placement, `placement-unavailable`,
-`profile-not-remote-compatible` or `model-unavailable`) creates no workspace,
-worktree, event or agent. A placement on a create without a git repository (a
+`profile-not-remote-compatible`, `model-unavailable` or
+`attachments-too-large-for-machine:`, below) creates no workspace, worktree,
+event or agent. A placement on a create without a git repository (a
 [plain-folder workspace](./workspace.md#plain-folder-workspaces)) is also
 refused there with `-32602`, since there is no commit to start from.
 `initialAgent.imageBlocks` and `fileBlocks` (including the `metadata` fallback)
 reach the remote agent's first turn as for
-[any message with attachments to a remote agent](../workspace-routing.md#remote-agents-on-the-executor-link).
+[any message with attachments to a remote agent](../workspace-routing.md#remote-agents-on-the-executor-link),
+including its up-front size check.
 After the workspace commits, the initial agent is
 created on the chosen machine as by `agent.create`, starting from the new
 worktree's `HEAD`: the result's
