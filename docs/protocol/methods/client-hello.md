@@ -106,6 +106,12 @@ secret-request resource blocks and the `secret.*` router methods. Clients render
 secret-request cards and call those methods only when it is present. The flag
 grants no permission and says nothing about the agent feature setting.
 
+**Agent Plugins (additive extension).** Exactly integer
+`server.capabilities.agentPlugins: 1` advertises [§5.57](./plugins.md): the
+`plugin.*` router methods and the loading of user-scope plugins into agent
+sessions. Clients show plugin management only when it is present. The flag grants
+no permission.
+
 **Capped message block reads (additive).** Exactly integer
 `server.capabilities.messageBlockPages: 1`, also returned by `system.capabilities`, advertises the
 [§5.5 capped and paged `agent.getMessageBlock` contract](./agents.md#55-agent) (`offset` /

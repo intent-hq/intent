@@ -8,8 +8,16 @@ capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `15.4` — bounded object reads, on top of 15.3's plain-folder workspaces, 15.2's retired workspaces and 15.1's discussions, guest roles, scoped repository pages and GitLab child Git policy (intentd advertises all four at protocol 15.2); 15.4 is not a shipped-version claim.
+**Documented version:** `15.5` — Agent Plugins, on top of 15.4's bounded object reads, 15.3's plain-folder workspaces, 15.2's retired workspaces and 15.1's discussions, guest roles, scoped repository pages and GitLab child Git policy (intentd advertises all four at protocol 15.2); 15.4 is not a shipped-version claim.
 Every extension retains its independent support gate.
+
+**Version 15.5 — Agent Plugins (additive methods).** [§5.57](./methods/plugins.md)
+adds five administrator-only router methods, `plugin.list`, `plugin.install`,
+`plugin.update`, `plugin.uninstall` and `plugin.toggle`, for app-wide
+[Agent Plugins v1](https://agent-plugins.org/specification) packages. Enabled
+plugins add `<plugin>:<skill>` entries to `skill.list` and their MCP servers to
+`mcp.servers.list` (with the new optional `plugin` field) and to new agent sessions. `agentPlugins: 1` gates support. The
+documented surface is **496 / 438 / 58** (dispatchable / router / fast path).
 
 **Version 15.4 — bounded object reads (additive methods, capped replies).**
 [Bounded object reads](./methods/files-terminal-browser.md#bounded-object-reads-154) let a
