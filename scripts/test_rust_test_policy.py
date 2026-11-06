@@ -504,14 +504,16 @@ if is_test:
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assert_policy(calls, inherited="0")
 
-    def test_missing_cache_keeps_error_and_recipe_clears_node_options(self):
+    def test_missing_cache_build_failure_is_one_error_and_recipe_clears_node_options(self):
         self.change_callback_crate()
         env = {"INTENT_ACP_CALLBACK_ADAPTER_FIXTURE": "", "NODE_OPTIONS": self.injected_node_options()}
         for target in ("test-changed", "test"):
             with self.subTest(target=target):
                 result, calls = self.make(target, override="0", env=env)
                 self.assertNotEqual(result.returncode, 0)
-                self.assertIn("INTENT_ACP_CALLBACK_ADAPTER_FIXTURE is unset or empty", result.stderr)
+                # The synthetic prepare script refuses --build-from-source.
+                self.assertIn("could not be built from source", result.stderr)
+                self.assertEqual(result.stderr.count("ERROR: callback fixture:"), 1, result.stderr)
                 self.assertIn("env -u NODE_OPTIONS", result.stderr)
                 self.assertIn("NODE_OPTIONS is set in this shell", result.stderr)
                 self.assertNotIn("prepared offline", result.stderr)

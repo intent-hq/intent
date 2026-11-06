@@ -796,9 +796,23 @@ bash3: ## Build Bash 3.2 for the shell suites' 3.2 pass into BASH3_CACHE_DIR (de
 RUST_CHECK_TARGETS := check-makefile-targets check-protocol-field-parity lint-shell-sleeps fmt shear clippy lint-sources
 
 .PHONY: check-callback-fixture
-check-callback-fixture: ensure-intentd-submodule ## Validate the callback test fixture offline (explicit, or prepared from a ready ~/.cache entry) before Rust gates
+check-callback-fixture: ensure-intentd-submodule ## Validate the callback test fixture before Rust gates (explicit, or the ~/.cache entry, built from verified source once when missing)
 	@python3 scripts/check_watch_capacity.py --quiet
 	@python3 scripts/resumable_nextest.py --check-callback-fixture "$(INTENTD_DIR)"
+
+# coverage-all and coverage-changed run their own cargo, so they export what
+# the nextest wrapper sets: the verified fixture and its Node first on PATH.
+# Unsupported hosts print nothing and keep the unset-variable test panics.
+# $(call CALLBACK_FIXTURE_EXPORT,soft) only warns on failure: coverage-changed
+# may select no callback crate, and must not fail for an unrelated change.
+CALLBACK_FIXTURE_EXPORT = fixture_env=$$(python3 scripts/resumable_nextest.py --callback-fixture-env "$(INTENTD_DIR)") || \
+	$(if $(1),{ echo "[$@] WARNING: callback fixture unavailable (above); selected callback tests will fail" >&2; fixture_env=; },exit $$?); \
+	if [ -n "$$fixture_env" ]; then \
+		INTENT_ACP_CALLBACK_ADAPTER_FIXTURE=$$(printf '%s\n' "$$fixture_env" | sed -n 1p); \
+		node_dir=$$(printf '%s\n' "$$fixture_env" | sed -n 2p); \
+		if [ -n "$$node_dir" ]; then PATH="$$node_dir:$$PATH"; fi; \
+		export INTENT_ACP_CALLBACK_ADAPTER_FIXTURE PATH; unset NODE_OPTIONS; \
+	fi
 
 # Ordering each leaf, not merely check itself, prevents -j from compiling
 # before fixture validation. Standalone make check needs no callback fixture.
@@ -1084,8 +1098,9 @@ coverage-changed: ensure-intentd-submodule ## Run only the Rust tests the intent
 			echo "[coverage-changed] ERROR: cargo-llvm-cov is not installed — run 'cargo install cargo-llvm-cov --locked' and 'rustup component add llvm-tools-preview'"; \
 			exit 1; \
 		}; \
-	fi
-	@BASE="$(BASE)" DRY_RUN="$(DRY_RUN)" BUILD_JOBS="$(BUILD_JOBS)" TEST_THREADS="$(TEST_THREADS)" \
+		$(call CALLBACK_FIXTURE_EXPORT,soft); \
+	fi; \
+	BASE="$(BASE)" DRY_RUN="$(DRY_RUN)" BUILD_JOBS="$(BUILD_JOBS)" TEST_THREADS="$(TEST_THREADS)" \
 		$(INTENTD_DIR)/scripts/changed-tests.sh --instrumented
 
 # nextest ignores PAGER, so --no-pager is passed explicitly (see the pager
@@ -1130,6 +1145,7 @@ define COVERAGE_RECIPE
 	exit 0; \
 fi; \
 python3 scripts/check_watch_capacity.py --quiet || exit $$?; \
+$(if $(filter coverage-all,$@),$(CALLBACK_FIXTURE_EXPORT); )\
 echo "cd $(INTENTD_DIR) && NEXTEST_TEST_THREADS=$(TEST_THREADS) CARGO_BUILD_JOBS=$(BUILD_JOBS) ./scripts/$@.sh $(COVERAGE_FLOOR)"; \
 cd $(INTENTD_DIR) && NEXTEST_TEST_THREADS=$(TEST_THREADS) CARGO_BUILD_JOBS=$(BUILD_JOBS) \
 	./scripts/$@.sh $(COVERAGE_FLOOR)
