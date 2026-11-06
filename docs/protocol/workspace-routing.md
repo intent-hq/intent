@@ -407,12 +407,14 @@ accepted as for a local agent, and its attachments reach the machine:
    what the turn adds (the agent's instructions on its first turn, notices). A
    message that does not fit is refused with `-32602`
    `attachments-too-large-for-machine:`, naming its size in bytes and the
-   8388608-byte limit. The check runs for `agent.sendMessage` and
-   `agent.queueMessage` to a remote agent, for `agent.create` (and `agent.delegate`
-   / `agent.wakeOrCreate`) whose agent is placed on another machine, with its
+   8388608-byte limit. The check runs for `agent.sendMessage`,
+   `agent.queueMessage` and `agent.editAndRegenerate` to a remote agent (an edit
+   is refused before the agent is stopped or its transcript cut), for
+   `agent.create` whose agent is placed on another machine, with its
    `imageBlocks` and initial message, and for `workspace.create` with a remote
    `initialAgent`, where it is part of the pre-side-effect validation: no
-   workspace, worktree, agent or queued message is created. Images that fail
+   workspace, worktree, agent or queued message is created. Images stored with
+   `agent.update` are not checked up front; the turn-time check below covers them. Images that fail
    preparation are left to the turn, which reports them as for a local agent. A
    turn whose frame still does not fit (for example several queued messages
    delivered together) fails with `node-prompt-too-large:` and nothing is sent to
