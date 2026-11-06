@@ -438,7 +438,7 @@ locally, the daemon first runs `git fetch <remote>
 +refs/heads/<baseRef>:refs/remotes/<remote>/<baseRef>` under the per-repository
 provisioning lock (bounded at 100 s; the daemon's GitHub token is offered only to HTTPS
 github.com remotes), so the checkout starts from the remote's current tip. A tag, commit,
-local-only branch, omitted `baseRef`, or a branch with no tracking ref keeps its local
+local-only branch, omitted `baseRef`, `HEAD` (or a symbolic tracking ref such as `refs/remotes/origin/HEAD`), or a branch with no tracking ref keeps its local
 meaning and fetches nothing, and so does the `origin/main` shorthand (it is not stripped
 to a branch name, so it starts from the tracking ref as last fetched); a PR-aware create fetches the PR head instead (see the PR-aware create
 notes). The refresh applies to the worktree and CoW modes of a local-repo create. **A
