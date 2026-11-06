@@ -791,9 +791,9 @@ authority.
 
 | Method | Who | Params | Result |
 | --- | --- | --- | --- |
-| cloudMachines.configure | Owner | provider (req, `"e2b"`), apiKey? (secret; required when no key is saved), size? (`"2x4"`, `"4x8"` or `"8x16"`; default `"4x8"`), idlePauseMinutes? (1-1440, default 10), pausedDeleteDays? (1-30, default 7), templateTeam? (E2B team slug that publishes the template; default Intent's team), validateOnly? (boolean, default false) | `{ provider: CloudMachineProvider }`; creates or updates the provider; with `apiKey`, tests the key with one E2B read before it saves anything; an omitted member keeps its saved value. With `validateOnly: true` it tests the given key (or the saved one) and saves nothing: the result is the provider as it would be saved, with `state` from the test, and no event is emitted. A rejected key fails with `cloud-machine-unavailable` reason `key-rejected` |
+| cloudMachines.configure | Owner | provider (req, `"e2b"`), apiKey? (secret; required when no key is saved), size? (`"2x4"`, `"4x8"` or `"8x16"`; default `"4x8"`), idlePauseMinutes? (1-1440, default 10), pausedDeleteDays? (1-30, default 7), templateTeam? (E2B team slug that publishes the template; default Intent's team), validateOnly? (boolean, default false) | `{ provider: CloudMachineProvider }`; creates or updates the provider; with `apiKey`, tests the key with one E2B read before it saves anything; an omitted member keeps its saved value. With `validateOnly: true` it saves nothing and emits no event: it tests the given key (or else the saved one; with neither it fails `cloud-machine-unavailable` reason `not-configured`) and checks that the template `<templateTeam>/intent-node-<size>:<intentdVersion>` exists, then returns the provider as it would be saved, with `state: "ready"`. Any failed test is an error, never a result: a rejected key is `key-rejected`, a missing template `template-missing`, an E2B failure `api-error` (all `cloud-machine-unavailable`). A normal save runs the same tests first |
 | cloudMachines.list | Owner, members | — | `{ providers: CloudMachineProvider[], machines: RemoteMachine[] }`; `machines` are the live cloud machines, each with `cloud`; a member sees only the machines of workspaces they can manage; never returns the key |
-| cloudMachines.remove | Owner | provider (req), stopAgents? (boolean, default false) | `{ ok: true, unconfirmedStops: string[] }`; with any sandbox (running or paused) and no `stopAgents: true` fails `-32602` `machine-in-use` with `runningAgents`; with `stopAgents: true` sends each agent a final stop, waits at most 90 s, then deletes every sandbox, machine row and the key; an unknown provider is a no-op |
+| cloudMachines.remove | Owner | provider (req), stopAgents? (boolean, default false) | `{ ok: true, unconfirmedStops: string[] }`; with any sandbox (running or paused) and no `stopAgents: true` fails `-32602` `machine-in-use` with `runningAgents`; with `stopAgents: true` sends each agent a final stop, waits at most 90 s, then deletes every sandbox, machine row and the key; `"e2b"` when it is not configured is a no-op, and any other `provider` is `-32602` `invalid-params` |
 | cloudMachines.pause | Owner, starter | machineId (req) | `{ machine: RemoteMachine }`; pauses the sandbox now; while an agent on it has a running turn fails `-32602` `machine-in-use` with `runningAgents`; an already paused sandbox is returned unchanged |
 | cloudMachines.kill | Owner, starter | machineId (req) | `{ ok: true, unconfirmedStops: string[] }`; sends each agent on the sandbox a final stop (resuming a paused sandbox first), waits at most 90 s, then deletes the sandbox and its machine row even when stops are unconfirmed |
 
@@ -913,7 +913,11 @@ agent that already runs on a cloud machine, or from its sub-agents: then it mean
 the parent's sandbox, exactly as an omitted placement does. One sandbox serves one
 top-level agent and its sub-agents.
 
-Admission runs these checks in order, before any write, sandbox or charge:
+Admission runs these checks in order, before any write, sandbox or charge. Checks
+2 and 3 also run for every agent placed onto an existing sandbox (a sub-agent
+with an omitted placement, `target: "e2b"`, or the cloud machine's `nodeId`) and
+for every relaunch on a new sandbox, because every launch on a cloud machine
+carries a `profileEnv`:
 
 1. The provider is configured and its key is not known to be rejected, else
    `cloud-machine-unavailable` with `reason` `not-configured` or
@@ -928,9 +932,9 @@ Admission runs these checks in order, before any write, sandbox or charge:
    such variables. The Default configuration with no overrides sends none, even
    though it is `remoteCompatible`. Clients use the same rule on the
    [profile reads](./provider-profiles.md#remote-compatibility) to show which
-   configurations can run on E2B; `agent.setModel` and
-   [backup failover](./provider-profiles.md#backup-failover) skip a configuration
-   that sends none for an agent on a cloud machine.
+   configurations can run on E2B. For an agent on a cloud machine,
+   `agent.setModel` to such a configuration fails with `cloud-profile-required`,
+   and [backup failover](./provider-profiles.md#backup-failover) skips it.
 4. The base provider is in the provider's `agentProviders`, else `model-unavailable`
    with an empty `machines` and `retryable: false`. The model is checked only
    when the sandbox reports its capabilities.
@@ -951,8 +955,10 @@ checkout and setup continue as for any
 `agent:updated`. A message sent while the sandbox starts waits for the start.
 A start failure sets `placementError` (`cloud-quota`,
 `cloud-machine-unavailable`, or `model-unavailable` when the sandbox reports no
-such model), deletes the sandbox if one was made, and leaves no machine row. The
-agent never falls back to local.
+such model), clears `cloudStart`, deletes the sandbox if one was made, and leaves
+no machine row. The agent never falls back to local. When an
+[agent without a sandbox](#sandbox-lifecycle) starts a new one, `cloudStart`
+comes back for that start and a new start clears the old `placementError`.
 
 ###### Sandbox lifecycle
 
@@ -966,7 +972,7 @@ message, a pending permission request, or a live script run on the machine
 | Sandbox idle for `idlePauseMinutes` | Pauses the sandbox. The link drops; memory and the checkout stay. |
 | New message for an agent on a paused sandbox | Resumes the sandbox, redials the link with a new generation and replays the journal. |
 | Agent ends for good ([ending a remote agent](#ending-a-remote-agent-for-good)) | Final stop, then deletes the sandbox and its machine row. A paused sandbox is resumed first. |
-| `cloudMachines.kill` or `remove`, or paused for `pausedDeleteDays` | Final stop, then deletes the sandbox. |
+| `cloudMachines.kill` or `remove`, or paused for `pausedDeleteDays` | Resumes a paused sandbox (billed for that short time), sends the final stop, then deletes the sandbox. If the resume fails, deletes it without a final stop. The agent becomes an agent without a sandbox (below). |
 | E2B removes the sandbox itself | Fails the agent's turn with `cloud-machine-unavailable` reason `sandbox-lost`. |
 | A paused sandbox cannot bind after the backend was updated (`machine-update-required`) | Deletes the sandbox without a final stop. The agent keeps the work it pushed. |
 | A sandbox with this backend's metadata and no machine row | Deleted by the backend's reaper. |
@@ -1139,6 +1145,13 @@ exact version), `bootstrap-failed` (intentd, tailcat or the credential mint fail
 the sandbox) and `sandbox-lost` (E2B removed a sandbox that had an agent). The
 message says no sandbox was left behind, or that the agent's pushed work is
 kept.
+
+When E2B rejects the saved key (for example the owner revoked it at E2B), the
+provider's `state` becomes `key-rejected` and `cloudMachines.pause` fails with
+`-32602` `cloud-machine-unavailable` reason `key-rejected`. `cloudMachines.kill`
+and `remove` still succeed: they send the final stops they can, then remove the
+backend's machine rows and leases. A sandbox E2B would not delete stays in the
+owner's E2B account; the reaper deletes it once a working key is saved.
 
 `cloud-profile-required` is `-32602`, from placement and from `agent.setModel`
 on an agent on a cloud machine, before any write, when the launch would send no
