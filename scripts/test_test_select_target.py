@@ -43,6 +43,7 @@ class TestSelectTargetTests(unittest.TestCase):
         shutil.copy(ROOT / "Makefile", self.root / "Makefile")
         (scripts / "resumable_nextest.py").write_text(RUNNER_STUB)
         (scripts / "check_watch_capacity.py").write_text("")
+        shutil.copy(ROOT / "scripts/intentd_tree_preflight.py", scripts)
         policy = intentd_scripts / "with-test-policy.sh"
         policy.write_text(POLICY_STUB)
         self.bin = Path(temporary.name) / "bin"

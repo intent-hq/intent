@@ -87,7 +87,8 @@ class RustTestPolicyTests(unittest.TestCase):
             '#!/bin/sh\ncase "$1" in *check-transfer-selection-contract.mjs) exec '
             + shlex.quote(shutil.which("node")) + ' "$@";; esac\n')
         # bootstrap-dev-host.sh: make check's cargo-shear preflight (--check-cargo-shear).
-        for name in ("resumable_nextest.py", "gate_storage.py", "check_watch_capacity.py", "bootstrap-dev-host.sh"):
+        for name in ("resumable_nextest.py", "gate_storage.py", "check_watch_capacity.py", "bootstrap-dev-host.sh",
+                     "intentd_tree_preflight.py"):
             shutil.copy(ROOT / "scripts" / name, self.root / "scripts")
         shutil.copytree(ROOT / "scripts/_vendor", self.root / "scripts/_vendor",
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
