@@ -38,6 +38,23 @@ entries emptied silently, and `git.branchDiff` was unbounded. Support is signall
 default became bounded); older daemons ignore `maxBytes` and never send the keys. Older
 apps see truncated entries as empty diffs.
 
+Also within 15.4 (additive optional param, error data code and progress phase; no
+method-catalog change, so no version bump): **base refresh failure on `workspace.create`**
+([§5.1](./methods/workspace.md), [§9.2](./09-error-codes.md)). A failed fetch of the base
+branch before a worktree or CoW checkout, which used to surface as a generic
+`-32603 "Internal error"` with git's output only in `data`, is now `-32603` with a readable `message` and
+`error.data = { code: "base-refresh-failed", category, detail, baseRef, remote }`;
+`category` is one of `auth-required`, `ssh-host-key`, `network`, `timeout`,
+`repo-not-found`, `access-denied`, `other`, and `detail` / `message` are redacted. The
+new optional `skipBaseRefresh: boolean` param skips the fetch and starts from the
+last-fetched `refs/remotes/<remote>/<baseRef>`. Under a `progressId`, a create that
+fetches first reports the new `base-refresh` phase ("Updating <baseRef> from
+<remote>...") on `git:clone:progress` (§6.5). Older daemons ignore `skipBaseRefresh`
+and never send the code, so clients offer Continue only for `base-refresh-failed`.
+The docs also correct the worktree-provisioning paragraph, which still said no fetch
+happens (the fetch arrived with
+[intent-hq/intentd#2841](https://github.com/intent-hq/intentd/pull/2841)).
+
 Also within 15.4 (behaviour only, no wire-shape change): `agent.create` treats a blank or
 whitespace-only `model` or `provider` as absent ([§5.5](./methods/agents.md)), so creation-time
 default-model resolution runs and a session never persists `model: ""`
