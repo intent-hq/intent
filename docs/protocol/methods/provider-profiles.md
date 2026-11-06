@@ -327,6 +327,10 @@ interface ProfileActivation {
     Default configuration with no overrides (the machine's own sign-in), an
     environment of other values such as API keys or base URLs, and an `unset`
     account folder.
+  - [Cloud machines](./nodes.md#placement-on-e2b) need more: a configuration
+    runs there only when its `env` has at least one `kind: "set"` entry. The
+    Default configuration with no overrides is `remoteCompatible: true` but
+    cannot run on E2B.
   - The value follows the saved environment, so it is recomputed on every read and
     changes only through an `env` write.
   - `reason` is an open string enum. Clients treat an unknown reason as not

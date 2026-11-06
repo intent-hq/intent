@@ -788,8 +788,9 @@ guests, and never carries the executor token.
 `cloudMachine:changed` on the backend: `{ provider: CloudMachineProvider }` or
 `{ providerId, removed: true }` when the E2B provider is configured or removed,
 and `{ machine: RemoteMachine }` or `{ machineId, removed: true }` when a cloud
-machine row or its sandbox state changes. It is delivered to owner and
-shared-host member connections, never to guests, and never carries the E2B key.
+machine row or its sandbox state changes. It is delivered to owner connections,
+and to shared-host member connections with the same visibility as
+`cloudMachines.list`, never to guests, and never carries the E2B key.
 Cloud machine rows never appear in `remoteMachine:changed`.
 
 [Link traffic capture](./methods/nodes.md#link-traffic-capture) defines
