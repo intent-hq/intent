@@ -803,10 +803,14 @@ check-callback-fixture: ensure-intentd-submodule ## Validate the callback test f
 # coverage-all and coverage-changed run their own cargo, so they export what
 # the nextest wrapper sets: the verified fixture and its Node first on PATH.
 # Unsupported hosts print nothing and keep the unset-variable test panics.
-CALLBACK_FIXTURE_EXPORT = fixture_env=$$(python3 scripts/resumable_nextest.py --callback-fixture-env "$(INTENTD_DIR)") || exit $$?; \
+# $(call CALLBACK_FIXTURE_EXPORT,soft) only warns on failure: coverage-changed
+# may select no callback crate, and must not fail for an unrelated change.
+CALLBACK_FIXTURE_EXPORT = fixture_env=$$(python3 scripts/resumable_nextest.py --callback-fixture-env "$(INTENTD_DIR)") || \
+	$(if $(1),{ echo "[$@] WARNING: callback fixture unavailable (above); selected callback tests will fail" >&2; fixture_env=; },exit $$?); \
 	if [ -n "$$fixture_env" ]; then \
 		INTENT_ACP_CALLBACK_ADAPTER_FIXTURE=$$(printf '%s\n' "$$fixture_env" | sed -n 1p); \
-		PATH="$$(printf '%s\n' "$$fixture_env" | sed -n 2p):$$PATH"; \
+		node_dir=$$(printf '%s\n' "$$fixture_env" | sed -n 2p); \
+		if [ -n "$$node_dir" ]; then PATH="$$node_dir:$$PATH"; fi; \
 		export INTENT_ACP_CALLBACK_ADAPTER_FIXTURE PATH; unset NODE_OPTIONS; \
 	fi
 
@@ -1094,7 +1098,7 @@ coverage-changed: ensure-intentd-submodule ## Run only the Rust tests the intent
 			echo "[coverage-changed] ERROR: cargo-llvm-cov is not installed — run 'cargo install cargo-llvm-cov --locked' and 'rustup component add llvm-tools-preview'"; \
 			exit 1; \
 		}; \
-		$(CALLBACK_FIXTURE_EXPORT); \
+		$(call CALLBACK_FIXTURE_EXPORT,soft); \
 	fi; \
 	BASE="$(BASE)" DRY_RUN="$(DRY_RUN)" BUILD_JOBS="$(BUILD_JOBS)" TEST_THREADS="$(TEST_THREADS)" \
 		$(INTENTD_DIR)/scripts/changed-tests.sh --instrumented

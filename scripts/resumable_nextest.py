@@ -299,7 +299,12 @@ def callback_cache_dir() -> Path:
 
 
 def callback_build_log() -> Path:
-    return callback_cache_dir().parent / "acp-callback-fixture-build.log"
+    """A new log per build: gates sharing one HOME must not truncate each other's."""
+    directory = callback_cache_dir().parent
+    directory.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix="acp-callback-fixture-build-", suffix=".log", dir=directory)
+    os.close(fd)
+    return Path(name)
 
 
 # CI's source build (archive download, npm ci, tsc) takes minutes, not hours.
@@ -381,25 +386,34 @@ def pinned_node_first(validator, descriptor):
     CI. node_tool still verifies the version on every later check.
     """
     directory = None
-    with tempfile.TemporaryDirectory(prefix="intent-callback-node-") as temp:
-        work = Path(temp)
-        try:
-            validator.node_tool(descriptor, work, validator.environment(work))
-        except getattr(validator, "NodeVersionMismatch", ()) as error:
-            directory = error.matching
-        except validator.InvalidFixture:
-            pass  # The checks inside the block report it with the setup help.
+    path = os.environ.get("PATH")
+    if shutil.which("node", path=path or os.defpath) is None:
+        # node_tool refuses before its installed-pin lookup when no node is on PATH.
+        finder = getattr(validator, "matching_node_dir", None)
+        if finder is not None:
+            directory = finder(descriptor["tools"]["node"], {"PATH": path or os.defpath})
+    else:
+        with tempfile.TemporaryDirectory(prefix="intent-callback-node-") as temp:
+            work = Path(temp)
+            try:
+                validator.node_tool(descriptor, work, validator.environment(work))
+            except getattr(validator, "NodeVersionMismatch", ()) as error:
+                directory = error.matching
+            except validator.InvalidFixture:
+                pass  # The checks inside the block report it with the setup help.
     if directory is None:
         yield
         return
-    path = os.environ.get("PATH", os.defpath)
     print(f"[gate] callback fixture: using Node {descriptor['tools']['node']} from {directory} "
           "(first on PATH for this run)", file=sys.stderr, flush=True)
-    os.environ["PATH"] = f"{directory}{os.pathsep}{path}"
+    os.environ["PATH"] = f"{directory}{os.pathsep}{path}" if path else str(directory)
     try:
         yield
     finally:
-        os.environ["PATH"] = path
+        if path is None:
+            os.environ.pop("PATH", None)
+        else:
+            os.environ["PATH"] = path
 
 
 def callback_validator_if_supported(intentd_dir: Path):
@@ -468,16 +482,31 @@ def prepare_cached_callback_fixture(intentd_dir: Path) -> str | None:
     return root
 
 
+def run_callback_build(command: list[str], *, env: dict[str, str], stderr) -> subprocess.CompletedProcess:
+    """Run the component build; on timeout SIGTERM it first so its own cleanup stops npm/tsc."""
+    child = subprocess.Popen(command, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                             stderr=stderr, text=True)
+    try:
+        stdout, _ = child.communicate(timeout=CALLBACK_BUILD_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        child.terminate()
+        try:
+            child.communicate(timeout=60)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            child.communicate()
+        raise
+    return subprocess.CompletedProcess(command, child.returncode, stdout, None)
+
+
 def build_callback_fixture(script: Path, cache: Path, env: dict[str, str]) -> str:
     log = callback_build_log()
     print(f"[gate] callback fixture: no verified cache under {cache}; building it from verified "
           f"source like CI (network required, a few minutes; log: {log})", file=sys.stderr, flush=True)
-    log.parent.mkdir(parents=True, exist_ok=True)
     with log.open("w") as stream:
-        result = subprocess.run(
+        result = run_callback_build(
             [sys.executable, "-I", "-B", "-S", str(script), "--build-from-source", "--cache-dir", str(cache)],
-            env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=stream, text=True,
-            timeout=CALLBACK_BUILD_TIMEOUT)
+            env=env, stderr=stream)
     root = result.stdout.strip()
     if result.returncode != 0 or not root:
         lines = log.read_text(errors="replace").strip().splitlines()
@@ -2225,6 +2254,11 @@ def callback_fixture_shell_env(intentd_dir: Path) -> int:
     For targets that run their own cargo (coverage-all, coverage-changed).
     Unsupported hosts print nothing and succeed, keeping today's behavior.
     """
+    if not (intentd_dir / "scripts/prepare-acp-callback-fixture.py").is_file() \
+            and not os.environ.get(CALLBACK_FIXTURE_ENV):
+        print(f"[gate] callback fixture: {intentd_dir}/scripts/prepare-acp-callback-fixture.py is "
+              "missing; callback fixture tests will fail", file=sys.stderr)
+        return 0
     if callback_validator_if_supported(intentd_dir) is None:
         print("[gate] callback fixture: not available on this host (Linux x64 only); "
               "callback fixture tests will fail", file=sys.stderr)
@@ -2234,8 +2268,12 @@ def callback_fixture_shell_env(intentd_dir: Path) -> int:
     except RuntimeError as error:
         print(f"[gate] ERROR: {error}", file=sys.stderr)
         return HANDLED_ERROR_EXIT
+    node = Path(identity["node"])
+    active = shutil.which("node", path=os.environ.get("PATH", os.defpath))
     print(identity["root"])
-    print(Path(identity["node"]).parent)
+    # Empty when the active Node is already the verified one, so a shared bin
+    # directory such as /usr/bin is never moved ahead of rustup's cargo.
+    print("" if active is not None and Path(active).resolve() == node.resolve() else node.parent)
     return 0
 
 

@@ -938,6 +938,18 @@ with mock.patch.object(gate, 'transfer_fixture_identity', return_value=None):
             self.assertEqual(self.child_env()["PATH"], path)
             self.assertEqual(self.identity()["node"], str(active.resolve()))
 
+    def test_pinned_node_is_used_when_no_node_is_on_path(self):
+        self.node_patch.stop()
+        required = self.fixture.descriptor["tools"]["node"]
+        pinned = self.fake_node(self.root / "nvm/versions/node" / required / "bin", required)
+        empty = self.root / "empty-bin"
+        empty.mkdir()
+        os.environ.update({"PATH": str(empty), "NVM_DIR": str(self.root / "nvm")})
+        with tempfile.TemporaryFile("w+") as stderr, contextlib.redirect_stderr(stderr):
+            identity = self.identity()
+        self.assertEqual(identity["node"], str(pinned.resolve()))
+        self.assertEqual(os.environ["PATH"], str(empty))
+
     def test_without_installed_pinned_node_the_mismatch_still_refuses(self):
         self.node_patch.stop()
         wrong = self.fake_node(self.root / "active", "v24.19.0")
@@ -956,16 +968,12 @@ with mock.patch.object(gate, 'transfer_fixture_identity', return_value=None):
         cache = self.missing_cache_home()
         calls = []
 
-        real_run = subprocess.run
-
         def build(command, **kwargs):
-            if "--build-from-source" not in command:
-                return real_run(command, **kwargs)
             calls.append((command, kwargs))
             return subprocess.CompletedProcess(command, 0, f"{self.fixture.payload}\n", "")
 
         stderr = io.StringIO()
-        with mock.patch.object(gate.subprocess, "run", side_effect=build), \
+        with mock.patch.object(gate, "run_callback_build", side_effect=build), \
                 contextlib.redirect_stderr(stderr):
             identity = self.identity()
         self.assertEqual(identity["root"], str(self.fixture.payload))
@@ -978,23 +986,21 @@ with mock.patch.object(gate, 'transfer_fixture_identity', return_value=None):
     def test_failed_source_build_is_one_refusal_naming_its_log(self):
         cache = self.missing_cache_home()
 
-        real_run = subprocess.run
-
         def build(command, **kwargs):
-            if "--build-from-source" not in command:
-                return real_run(command, **kwargs)
             kwargs["stderr"].write("{\"event\": \"command-start\"}\ncallback fixture: download failed\n")
+            kwargs["stderr"].flush()
             return subprocess.CompletedProcess(command, 1, "", None)
 
-        with mock.patch.object(gate.subprocess, "run", side_effect=build), \
+        with mock.patch.object(gate, "run_callback_build", side_effect=build), \
                 mock.patch.object(gate, "isolated_output_args") as cargo, \
                 contextlib.redirect_stderr(io.StringIO()):
             with self.assertRaisesRegex(RuntimeError, "could not be built from source: download failed") as refused:
                 gate.run_nextest(make_args(self.root, plan=["-p intent-acp --lib"]))
             cargo.assert_not_called()
-        log = cache.parent / "acp-callback-fixture-build.log"
-        self.assertIn(str(log), str(refused.exception))
-        self.assertIn("download failed", log.read_text())
+        logs = list(cache.parent.glob("acp-callback-fixture-build-*.log"))
+        self.assertEqual(len(logs), 1)
+        self.assertIn(str(logs[0]), str(refused.exception))
+        self.assertIn("download failed", logs[0].read_text())
 
     def test_fixture_env_mode_prints_fixture_and_node_directory(self):
         stdout = io.StringIO()
@@ -1003,6 +1009,15 @@ with mock.patch.object(gate, 'transfer_fixture_identity', return_value=None):
             self.assertEqual(gate.main(), 0)
         self.assertEqual(stdout.getvalue().splitlines(),
                          [str(self.fixture.payload), str(self.node.parent)])
+        self.node.write_text("#!/bin/sh\n")
+        self.node.chmod(0o755)
+        stdout = io.StringIO()
+        with mock.patch.dict(os.environ, {"PATH": f"{self.node.parent}{os.pathsep}/usr/bin:/bin"}), \
+                mock.patch.object(sys, "argv", [str(SCRIPT), "--callback-fixture-env", str(self.component)]), \
+                contextlib.redirect_stdout(stdout):
+            self.assertEqual(gate.main(), 0)
+        # The active Node is already the verified one: PATH stays as it is.
+        self.assertEqual(stdout.getvalue().split("\n"), [str(self.fixture.payload), "", ""])
         stdout = io.StringIO()
         with mock.patch.object(self.validator.sys, "platform", "darwin"), \
                 mock.patch.object(sys, "argv", [str(SCRIPT), "--callback-fixture-env", str(self.component)]), \

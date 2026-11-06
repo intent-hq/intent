@@ -396,7 +396,7 @@ export its returned fixture path, and rerun preflight. With the fixture variable
 unset, `make test`, `make test-changed`, `make test-select`, `make gate`, `make coverage-all`
 and `make coverage-changed` do all of this themselves: they use the ready cache under
 `~/.cache/intent/acp-callback-fixture`, build it once from verified source like CI when it
-is missing (network required; log in `~/.cache/intent/acp-callback-fixture-build.log`), and
+is missing (network required; one `~/.cache/intent/acp-callback-fixture-build-*.log` per build), and
 put an installed descriptor-pinned Node (for example under nvm) first on PATH when the shell's
 default Node differs. Gate preflight also hides host `NODE_OPTIONS` (such as a Datadog preload)
 from its checks. A failed build stops the target with one message naming its log; it never
