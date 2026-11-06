@@ -939,6 +939,7 @@ in `payload` and `summary` alike, and this cannot be turned off:
 - `launch.profileEnv.env[].value` (a `null` value stays `null`; keys,
   `providerRef` and `fingerprint` stay visible);
 - `scriptStart.env[].value` (keys stay visible);
+- `secretPut.value` (protocol 14; `agentId` and `name` stay visible);
 - at any depth of a `request` or `response` frame's params or result, every
   value inside a member named `env`: in the `{ key, value }[]` form each
   `value`, and in the object form each member's value (keys stay visible). This
@@ -956,5 +957,6 @@ in `payload` and `summary` alike, and this cannot be turned off:
 The executor token travels in the upgrade request, not in a frame, so it is
 never recorded. These rules cover the
 [profile environment](../node-link.md#provider-credentials-profile-environment),
-[script environments](../node-link.md#saved-scripts-nodeprotocol-8)
+[script environments](../node-link.md#saved-scripts-nodeprotocol-8),
+[agent secrets](../node-link.md#secrets-on-the-machine-nodeprotocol-14)
 and any secret a frame carries.

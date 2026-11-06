@@ -195,6 +195,10 @@ and unknown execution; an uncertain input outcome must never be replayed.
 `data.code: "secret-request-unknown"` when `secret.provide` or `secret.dismiss`
 names a request that is unknown, already answered, or lost on restart, and with
 `data.code: "invalid-params"` for an empty or oversized value or an invalid name.
+For a [remote agent](./methods/secrets.md#remote-agents), `secret.provide` uses
+`-32602` with `data.code: "secret-delivery-failed"` when the value could not reach
+the agent's machine (not connected, below nodeProtocol 14, or no confirmation within
+10 s); the request stays pending, so the client can let the user try again.
 `-32003` means the caller lacks send authority for the target agent. No error
 message or `data` ever contains the submitted value. The agent-facing
 `secret-unavailable` tool error is described in §5.56.

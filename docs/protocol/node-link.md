@@ -1804,7 +1804,7 @@ Revoking a credential closes its live `/node/*` connections with `1008`
 `hello.protocol` is a range instead of one number:
 
 ```ts
-interface ProtocolRange { min: number; max: number } // inclusive; this contract defines 6 through 13
+interface ProtocolRange { min: number; max: number } // inclusive; this contract defines 6 through 14
 ```
 
 The machine picks the highest version in both ranges and returns it as
@@ -1897,6 +1897,14 @@ neither: a sub-agent on the parent's machine starts from the workspace's last
 commit, as before, and one on another machine starts from the parent's last
 pushed work.
 
+**nodeProtocol 14** is protocol 13 plus [secrets on the machine](#secrets-on-the-machine-nodeprotocol-14):
+`hello.headSession` and the `secretPut` / `secretForget` / `secretList` /
+`secretReply` frames. They are new frame types, which an older peer rejects as
+`node-link-protocol`, and they put secret values on the machine, so they need a
+new version. A daemon that implements it offers `{ min: 7, max: 14 }` on both
+sides. On a link below 14 the backend sends no secret frame and a remote agent
+has no `ws.secret` and no `secretEnv`, as the section describes.
+
 ### Frames
 
 Each WebSocket binary message on `/node/link` is one JSON frame of at most
@@ -1904,7 +1912,7 @@ Each WebSocket binary message on `/node/link` is one JSON frame of at most
 
 | `type` | Direction | Lane | Body |
 | --- | --- | --- | --- |
-| `hello` | backend → machine | control | `protocol: ProtocolRange`, `intentdVersion`, `binding`, `ackedSeq`, `leaseAgents?: AgentId[]` (protocol 9: see [final stop](#final-stop-nodeprotocol-9)) |
+| `hello` | backend → machine | control | `protocol: ProtocolRange`, `intentdVersion`, `binding`, `ackedSeq`, `leaseAgents?: AgentId[]` (protocol 9: see [final stop](#final-stop-nodeprotocol-9)), `headSession?: string` (protocol 14: see [secrets on the machine](#secrets-on-the-machine-nodeprotocol-14)) |
 | `welcome` | machine → backend | control | `protocol` (the chosen version), `nodeId`, `runningAgents: AgentId[]` (this binding only), `capabilities: MachineCapabilities`, `hosts: string[]`, `tcAddress?` |
 | `heartbeat` / `heartbeatReply` | both | control | `nonce` |
 | `capabilities` | backend → machine | control | Empty: ask for a fresh [report](#capabilities-report) |
@@ -1930,6 +1938,10 @@ Each WebSocket binary message on `/node/link` is one JSON frame of at most
 | `skillsReply` | machine → backend | control | Protocol 12 or later: `queryId`, `skills: MachineSkill[]` |
 | `pushWip` | backend → machine | control | Protocol 13 or later: `requestId`, `agentId`; see [parent's work on another machine](#parents-work-on-another-machine) |
 | `pushWipReply` | machine → backend | control | Protocol 13 or later: `requestId`, `agentId`, `outcome`, `error?` |
+| `secretPut` | backend → machine | control | Protocol 14 or later: `requestId`, `agentId`, `name`, `value`; see [secrets on the machine](#secrets-on-the-machine-nodeprotocol-14) |
+| `secretForget` | backend → machine | control | Protocol 14 or later: `requestId`, `agentId`, `name?` |
+| `secretList` | backend → machine | control | Protocol 14 or later: `requestId`, `agentId` |
+| `secretReply` | machine → backend | control | Protocol 14 or later: `requestId`, `agentId`, `outcome`, `names?`, `forgotten?`, `error?` |
 
 `intentdVersion` is recorded for diagnostics and is not a compatibility gate.
 Heartbeats run every 15 s and a link silent for 45 s is dead. The backend
@@ -1946,6 +1958,7 @@ constant with a golden test: `hello`, `heartbeat` / `heartbeatReply`, `launch`,
 `workspace.call` requests), `scriptStart` and `scriptStop` (protocol 8 or later; refused on 7),
 `skills` (protocol 12 or later),
 `pushWip` (protocol 13 or later),
+`secretPut`, `secretForget` and `secretList` (protocol 14 or later),
 and git sessions on `/node/git` for agents on that credential's binding. Any
 other frame is `node-link-protocol`.
 `stopAck` travels machine → backend, so it is not in that list; the backend
@@ -1953,7 +1966,8 @@ accepts it only on a protocol 7 or later link. Likewise the backend accepts
 `scriptStarted`, `scriptOutput` and `scriptExited` only on a protocol 8 or later link,
 `setupOutput` and the `setup*` journal bodies only on a protocol 10 or later link,
 `skillsReply` and the `skills` journal body only on a protocol 12 or later link,
-and `pushWipReply` only on a protocol 13 or later link.
+`pushWipReply` only on a protocol 13 or later link,
+and `secretReply` only on a protocol 14 or later link.
 
 ### Stop acknowledgement (nodeProtocol 7)
 
@@ -2985,7 +2999,9 @@ agent's `workspace_api` description and `ws.help("agent")`, and
 `ws.file.getAttachment` ([attachments](./workspace-routing.md#remote-agents-on-the-executor-link)).
 On protocol 11 it also forwards `mcp.proxy.listTools` and `mcp.proxy.callTool`
 for the provider's [user MCP servers](#user-mcp-servers-nodeprotocol-11);
-`ws.mcp.*` is a plain forwarded namespace. Hooks,
+`ws.mcp.*` is a plain forwarded namespace. On protocol 14 the agent's
+`ws.secret.request`, `list` and `forget` calls are forwarded too
+([secrets on the machine](#secrets-on-the-machine-nodeprotocol-14)). Hooks,
 `app.question.ask`, the browser and the desktop are forwarded too: a remote
 agent's hook runs on the backend (its `ws.host.exec` sees the backend's worktree,
 not the machine's checkout), and its wakes reach the agent as agent messages. On
@@ -3034,6 +3050,76 @@ interface MachineSkill {   // the §5.34 skill.list row, paths on the machine
    none; the backend answers `skill.list` for its agents with no skills and
    `unavailable: "machine-update-required"`. A protocol 12 machine on an older backend
    still adds the catalog but journals nothing.
+
+### Secrets on the machine (nodeProtocol 14)
+
+A remote agent's [secrets](./methods/secrets.md#remote-agents) are held only in
+the memory of **its machine's** intentd. The backend passes a value through to
+the machine once, in memory, and never keeps, logs or journals it.
+
+```ts
+interface SecretPutFrame    { type: "secretPut"; requestId: string; agentId: string; name: string; value: string } // backend → machine
+interface SecretForgetFrame { type: "secretForget"; requestId: string; agentId: string; name?: string }          // backend → machine; no name: all
+interface SecretListFrame   { type: "secretList"; requestId: string; agentId: string }                          // backend → machine
+interface SecretReplyFrame {
+  type: "secretReply"; requestId: string; agentId: string;
+  outcome: "ok" | "failed";
+  names?: string[];     // secretList: the agent's held names, sorted
+  forgotten?: boolean;  // secretForget: whether anything was dropped
+  error?: string;       // with "failed": a fixed code, never peer text
+}
+```
+
+1. **Store.** The machine keeps values per `(credentialId, agentId)`, in memory
+   only, and wipes them when dropped. It accepts a `secretPut` only for an agent on
+   the binding's lease (listed in the bound `hello` or launched since the machine
+   started); otherwise it replies `failed` with `agent-not-on-lease`. A
+   `secretForget` or `secretList` acts on that agent's own entry only. A `secretPut` with an invalid name or a value outside
+   1 byte to 16 KiB replies `failed` with `invalid-params`. A `secretPut` for a held
+   name replaces the value.
+2. **Requests.** The backend sends a secret frame only on a protocol 14 link and
+   waits up to **10 s** for the `secretReply` with the same `requestId`. With no
+   link up, it may spend part of that time connecting; a `secretPut` value is held
+   only for the duration of that one call. Each frame gets exactly one reply. A reply that comes later, or
+   matches no waiting frame, is dropped without error.
+3. **Head session.** A backend whose range includes 14 sends `headSession` in
+   every `hello`: a random value it picks once per process start. On every bind,
+   whatever version is chosen, the machine compares it with the one it recorded for
+   the credential. When it differs (the backend restarted) or is missing (an older
+   backend), the machine drops every secret it holds for that credential before it
+   handles any frame of the new link. So a backend restart drops remote agents'
+   secrets, as it drops its own agents' secrets.
+4. **Use.** A `ws.host.exec` with `secretEnv` runs on the machine and resolves only
+   the calling agent's values from this store. Each agent's workspace server has a
+   fixed caller, so another agent on the machine never reaches them. The values
+   are redacted from the command's output before the provider sees it.
+5. **Drop.** The machine drops an agent's secrets on `secretForget`, on its
+   [final stop](#final-stop-nodeprotocol-9), when its bind-time sweep removes the
+   agent's checkout, and when the credential becomes inactive. A machine restart
+   drops everything.
+6. **Never written.** A value travels only in `secretPut`. It never appears in
+   `Debug` output, errors, logs, tracing, the journal, checkpoints or
+   [traffic capture](#traffic-capture) (masked). A malformed secret frame is
+   rejected as `node-link-frame-invalid` without echoing its content.
+7. **Backend.** The backend sends `secretPut` only from `secret.provide` and drops
+   its copy once the frame is sent. It stores no value. While a `secretPut` is
+   outstanding its request is claimed: another `secret.provide` or a
+   `secret.dismiss` of it fails `secret-request-unknown`. Only a `secretReply` with
+   `outcome: "ok"` answers the request. On any other end (no link, below 14, a
+   `failed` reply, no reply within 10 s) the request returns to pending, and the
+   backend sends `secretForget` for that name, so a value the machine stored but
+   could not confirm is not kept (a value held earlier under the same name goes
+   too). On `workspace.archive` the backend sends `secretForget` without a name for
+   each remote agent of the workspace. A forget that gets no reply is queued in
+   backend memory and sent after the next protocol 14 bind (a backend restart drops
+   the queue, and the new `headSession` drops the values). A `secretPut` drops the
+   agent's queued forgets of the same name and sends its other queued forgets
+   before it, so a queued forget never wipes a newer confirmed value.
+8. **Older peers.** On a link below 14 the backend sends no secret frame and the
+   machine hides `ws.secret` and `secretEnv` from a remote agent: a `ws.secret.*`
+   call fails with `remote-agent-unsupported:` asking to update Intent on both, and
+   a `ws.host.exec` with `secretEnv` fails as when secret requests are off. An older machine refuses `secret.*` itself;
+   an older backend refuses the forwarded calls by its own table.
 
 ### Saved scripts (nodeProtocol 8)
 
@@ -3352,7 +3438,8 @@ The owner can record this daemon's `/node/link` frames, in both directions and
 on both roles, with [link traffic capture](./methods/nodes.md#link-traffic-capture)
 (`remoteLinkTraffic: 1`). Capture is off by default, bounded, cleared on stop,
 and masks secrets (profile environment values, script environment values,
-credentials, tokens and certificates) before a record is kept. It observes frames only: it never
+the `value` of a `secretPut`, credentials, tokens and certificates) before a
+record is kept. It observes frames only: it never
 delays, changes or reorders them, and it adds no frame type.
 
 ### Errors

@@ -260,7 +260,9 @@ method inventory:
 | `workspace.details`, `workspace.setTitle`, `workspace.setAgentName`, `workspace.setStatusMessage`, `workspace.setStatusImage`, `workspace.proposeSibling`, `workspace.applyProposal`, `workspace.archive`, `workspace.unarchive`, `workspace.context`, `workspace.referenceDocs`, `workspace.timeline`, `workspace.emitNotification`, `git.listRoots`, `terminal.list`, `terminal.readOutput`, `app.question.ask` | Forwarded the same way, method by method |
 | `app.*` other than `app.question.ask` | Refused: `remote-agent-unsupported: ws.app.* is for the Assistant workspace, whose agents run on the backend.` |
 | `git.registerRoot`, `git.unregisterRoot`, and a `gitRootId` on `git.commit` | Refused: `remote-agent-unsupported: secondary git roots are on the backend only; this agent's machine has the main checkout and its submodules.` |
-| Everything else, including `secret.*` | Refused, never run on another host |
+| `secret.request`, `secret.list`, `secret.forget` | Forwarded the same way on nodeProtocol 14 or later; the values stay on the machine ([secrets on the machine](./node-link.md#secrets-on-the-machine-nodeprotocol-14)). On an older link: refused with `remote-agent-unsupported:` |
+| `host.exec` with `secretEnv` | On the machine, from the agent's own secrets held there (nodeProtocol 14 or later); on an older link it fails as when secret requests are off |
+| Everything else | Refused, never run on another host |
 
 A refused frame fails with a message starting `remote-agent-unsupported:` that names
 the method and lists what remote agents can use. The backend serves a forwarded
