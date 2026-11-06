@@ -433,13 +433,14 @@ slugified `repositoryName` (basename fallback) — checked out on the workspace 
 `refs/remotes/<remote>/<baseRef>` (remote defaults to `origin`) → `refs/heads/<baseRef>` →
 any rev-parsable spec, else `HEAD`. **Base refresh** (since
 [intent-hq/intentd#2841](https://github.com/intent-hq/intentd/pull/2841)): when `baseRef`
-names a branch whose remote-tracking ref `refs/remotes/<remote>/<baseRef>` already exists
+is a bare branch name (or `refs/remotes/<remote>/<name>`) whose remote-tracking ref `refs/remotes/<remote>/<baseRef>` already exists
 locally, the daemon first runs `git fetch <remote>
 +refs/heads/<baseRef>:refs/remotes/<remote>/<baseRef>` under the per-repository
 provisioning lock (bounded at 100 s; the daemon's GitHub token is offered only to HTTPS
 github.com remotes), so the checkout starts from the remote's current tip. A tag, commit,
-local-only branch, `HEAD`, or a branch with no tracking ref keeps its local meaning and
-fetches nothing; a PR-aware create fetches the PR head instead (see the PR-aware create
+local-only branch, omitted `baseRef`, or a branch with no tracking ref keeps its local
+meaning and fetches nothing, and so does the `origin/main` shorthand (it is not stripped
+to a branch name, so it starts from the tracking ref as last fetched); a PR-aware create fetches the PR head instead (see the PR-aware create
 notes). The refresh applies to the worktree and CoW modes of a local-repo create. **A
 failed refresh stops the create** before any branch or folder is made, with `-32603` and
 `error.data.code: "base-refresh-failed"` (`category`, `detail`, `baseRef`, `remote`; §9.2)
@@ -450,9 +451,9 @@ starts at the existing `refs/remotes/<remote>/<baseRef>` as last fetched (not th
 `refs/heads/<baseRef>`, so unpushed local commits are not included). It is meant for
 **Continue from last-fetched** after a `base-refresh-failed` error; clients offer it only
 when the error carries that code, because an older daemon ignores the unknown parameter
-and would fail the same way. `skipBaseRefresh` does not change the resolution order, so
-it never falls back to a local branch, and a create without a worktree or CoW checkout
-ignores it. A `branch` that already exists locally is reused rather than recreated; a
+and would fail the same way. `skipBaseRefresh` only skips the fetch: resolution is
+unchanged, so an existing tracking ref still wins over the local branch, and a create
+without a worktree or CoW checkout ignores it. A `branch` that already exists locally is reused rather than recreated; a
 branch that exists **only as a remote-tracking ref** (`refs/remotes/<remote>/<branch>` —
 e.g. a PR head branch never checked out locally) is **materialized** as a local branch at
 the remote tip with best-effort upstream tracking (a failure to record tracking never

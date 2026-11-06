@@ -41,8 +41,8 @@ apps see truncated entries as empty diffs.
 Also within 15.4 (additive optional param, error data code and progress phase; no
 method-catalog change, so no version bump): **base refresh failure on `workspace.create`**
 ([§5.1](./methods/workspace.md), [§9.2](./09-error-codes.md)). A failed fetch of the base
-branch before a worktree or CoW checkout, which used to surface as a bare
-`-32603 "Internal error"`, is now `-32603` with a readable `message` and
+branch before a worktree or CoW checkout, which used to surface as a generic
+`-32603 "Internal error"` with git's output only in `data`, is now `-32603` with a readable `message` and
 `error.data = { code: "base-refresh-failed", category, detail, baseRef, remote }`;
 `category` is one of `auth-required`, `ssh-host-key`, `network`, `timeout`,
 `repo-not-found`, `access-denied`, `other`, and `detail` / `message` are redacted. The
