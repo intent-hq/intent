@@ -38,6 +38,13 @@ entries emptied silently, and `git.branchDiff` was unbounded. Support is signall
 default became bounded); older daemons ignore `maxBytes` and never send the keys. Older
 apps see truncated entries as empty diffs.
 
+Also within 15.4 (behaviour only, no wire-shape change): `agent.create` treats a blank or
+whitespace-only `model` or `provider` as absent ([§5.5](./methods/agents.md)), so creation-time
+default-model resolution runs and a session never persists `model: ""`
+([intent-hq/intent#8621](https://github.com/intent-hq/intent/issues/8621),
+[intent-hq/intentd#3069](https://github.com/intent-hq/intentd/pull/3069)). Clients should
+still omit an unchosen model; older daemons may reject or persist a blank value.
+
 Also within 15.4 (behaviour only, no wire-shape change): the **slim page byte budget**
 (`SLIM_PAGE_BUDGET_BYTES`, [§5.5](./methods/agents.md)) drops from 512 KiB to 480,000 bytes, so
 an `agent.getConversation` page and the seq-0 `chat.subscribe` snapshot fit their whole frame
