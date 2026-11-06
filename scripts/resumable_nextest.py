@@ -385,7 +385,7 @@ def pinned_node_first(validator, descriptor):
         work = Path(temp)
         try:
             validator.node_tool(descriptor, work, validator.environment(work))
-        except validator.NodeVersionMismatch as error:
+        except getattr(validator, "NodeVersionMismatch", ()) as error:
             directory = error.matching
         except validator.InvalidFixture:
             pass  # The checks inside the block report it with the setup help.
@@ -1840,9 +1840,9 @@ def prepare_test_env(repo_root: Path, intentd_dir: Path, plans: list[list[str]],
         if env.pop("NODE_OPTIONS", None):
             print(f"[{label}] callback fixture: NODE_OPTIONS cleared for this test run",
                   file=sys.stderr, flush=True)
-        node = Path(fixture_identity["node"])
+        node = Path(fixture_identity.get("node", ""))
         active = shutil.which("node", path=env.get("PATH", os.defpath))
-        if active is None or Path(active).resolve() != node.resolve():
+        if node.name and (active is None or Path(active).resolve() != node.resolve()):
             # The tests run the verified Node, not the shell's default one.
             env["PATH"] = f"{node.parent}{os.pathsep}{env.get('PATH', os.defpath)}"
     if transfer_identity is not None:
