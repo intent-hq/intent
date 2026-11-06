@@ -82,11 +82,13 @@ The failure is its own error, not a clone failure (§9.1), and nothing is left b
 no branch, folder or row is created and no `workspace:created` is emitted. The envelope:
 
 - numeric code `-32603`;
-- `error.message` — readable on its own: `Couldn't update <baseRef> from <remote>: <detail>`
-  (for example `Couldn't update main from origin: Permission denied (publickey)`);
+- `error.message` — one line, readable on its own: `Couldn't update <baseRef> from <remote>: <cause>`,
+  where `<cause>` is the first meaningful line of `detail` (blank, `hint:` and `warning:` lines
+  are skipped), for example
+  `Couldn't update main from origin: git@github.com: Permission denied (publickey).`;
 - `error.data` — `{ "code": "base-refresh-failed", "category", "detail", "baseRef", "remote" }`.
 
-`detail` is git's fetch error output and, like `message`, passes through
+`detail` is git's full (possibly multi-line) fetch error output and, like `message`, passes through
 the daemon's credential redaction (`user[:pass]@` fragments in URL-like text become
 `***@`), so tokens never reach the wire. `baseRef` is the canonical branch name (remote
 prefix stripped) and `remote` the remote name (default `origin`).
@@ -102,7 +104,7 @@ prefix stripped) and `remote` the remote name (default `origin`).
 | network | The remote could not be reached: "Could not resolve host", connection refused or timed out, "Network is unreachable". |
 | repo-not-found | "Repository not found", "does not appear to be a git repository", or a missing remote path. |
 | access-denied | The remote refused an existing repository: HTTP 403, "denied to". |
-| other | Anything else; `detail` still carries git's message. |
+| other | Anything else, including "couldn't find remote ref <baseRef>" (the branch was deleted on the remote); `detail` still carries git's message. |
 
 A bare "permission denied" is never read as a bad path; this classifier is
 fetch-specific and does not share §9.1's clone rules. Only these `category` values are a

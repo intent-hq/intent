@@ -690,7 +690,9 @@ armed:
   `checkout` at 88, streamed `submodules` population inside 89–94 on the `direct` arm);
   a local-repo create whose base refresh will run (above; not with `skipBaseRefresh`)
   first emits `base-refresh` ("Updating <baseRef> from <remote>...") at a nominal 20,
-  so a slow fetch is not shown as "Creating linked worktree..."; then
+  inside the per-repository lock right before the fetch (a create still waiting on another
+  create's lock keeps showing its previous milestone), so a slow fetch is not shown as
+  "Creating linked worktree..."; then
   a local-repo create emits `worktree` ("Creating linked worktree...") or `cow-copy`
   ("Copying repository (CoW)...") at a nominal 30 (no clone segment ran before it; after
   a network clone the monotonic clamp lifts a later milestone into the 85+ tail
