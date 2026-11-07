@@ -786,7 +786,8 @@ guests, and never carries the executor token.
 
 [Cloud machines](./methods/nodes.md#cloud-machines-e2b) define
 `cloudMachine:changed` on the backend: `{ provider: CloudMachineProvider }` or
-`{ providerId, removed: true }` when the E2B provider is configured or removed,
+`{ providerId, removed: true }` when a named E2B entry is configured or removed
+(`providerId` is the entry's `cloudMachineId`),
 and `{ machine: RemoteMachine }` or `{ machineId, removed: true }` when a cloud
 machine row or its sandbox state changes. It is delivered to owner connections,
 and to shared-host member connections with the same visibility as
