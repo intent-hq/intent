@@ -604,10 +604,12 @@ when omitted).
   copy-on-write sandboxes): the child works in the workspace worktree, which
   the backend never changes for it.
 
-The create result's `notice` and the child's first message say which. When
-the child does not have the parent's work (shared worktree, or a failed
+The create result's `notice` (copied to delegate and wakeOrCreate results)
+and the child's instructions say which. When the child does not have the
+parent's work (shared worktree, no parent `head` ref yet, or a failed
 checkout or apply), both name the parent's `head` and `wip` refs, where that
-work is saved. Getting the parent's work never fails the create.
+work is saved or will appear once the parent pushes. Getting the parent's
+work never fails the create.
 
 ###### Who pays for a sandbox an agent starts
 
