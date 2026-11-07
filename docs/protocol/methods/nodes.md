@@ -1339,8 +1339,8 @@ on each connection. Adding a node by any route (the Add machine dialog, the
 `intent://pair` link) saves it, then asks whether to make it available to the
 current backend: **Make available** runs the [expose flow](#expose-flow),
 **Not now** keeps the node saved and offers the expose action on its row. The
-client accepts a node only when the current backend can run agents on other
-machines, and refuses it otherwise:
+client accepts a node only when the client offers remote agents and the
+current backend can run agents on other machines. It refuses the node when:
 
 - remote agents are off in the client (its Labs flag): the error points to
   Settings → Labs;
