@@ -730,6 +730,17 @@ the request's `name` as `resource.name`. The payload holds only `requestId`, `ag
 `reason`, never a value. Unlike a question block, it never sets the pending-questions marker. See
 [§5.56 Secret requests](./methods/secrets.md#turn-end-resource).
 
+**Final-response resource blocks (`AtTurnEnd`).** A fourth resource MIME type,
+`application/vnd.intent.final-response+json`, carries the agent's final answer for the turn, given
+with the MCP `ws.agent.finishTurn(text)` binding (any agent, sub-agents included) →
+`{ ok: true, attachmentId, message }`. It uses the same `AtTurnEnd` drain, ordering and
+`trailingBlocks` delivery as question blocks, with an `intent-final-response://<attachmentId>` URI
+and `resource.name` `"Final response"`. Decoded, `resource.text` is
+`{ "attachmentId": "tar-…", "text": "<markdown>" }`; `text` is non-blank, with trailing whitespace
+removed. Clients show it as the turn's answer outside the collapsed work row; when a turn carries
+several, the LAST one wins. The daemon's response previews (`lastAgentResponse`, the
+last-message preview columns and turn summaries) read its `text` like a text block.
+
 *The `ws.app.question.ask` binding.* JS signature
 `ws.app.question.ask({ question, header, options, explanation?, multiSelect? })` →
 `{ ok: true, attachmentId, message }`. **One question per call** — the model calls it once per

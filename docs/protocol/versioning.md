@@ -253,6 +253,13 @@ refusing these frames, and a newer machine on an older backend gets the backend'
 `remote-agent-unsupported:` refusal. Clients need no change.
 
 
+**Prepared final-response binding (no method-catalog change).**
+The MCP binding `ws.agent.finishTurn(text)` queues the turn's final answer as a trailing
+`application/vnd.intent.final-response+json` resource block
+([§7](./07-agent-streaming.md)). Harness 3.13 tells top-level agents to call it as their
+last action and drops the Response Organization (`<group:Name>`) guidance. A client that does not know the MIME type does not show the answer, so
+deploy matching frontend support before the daemon. Prior harness versions are unchanged.
+
 **Prepared Product Manager specialist (no method-catalog change).**
 Harness 3.9 adds the bundled `product-manager` specialist (standard role, `icon: "coordinator"`,
 no pinned model) to the current catalog. It writes a critiqued spec in the `spec` note
