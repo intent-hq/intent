@@ -289,7 +289,9 @@ with no rollback.
   a hand-picked list (one missed a two-window test that failed CI on cloudlands-fe#3876):
   Rust `make test-changed` (intentd's `scripts/changed-tests.sh` vs `origin/main`, full
   suite on manifest/lockfile/nextest-config changes; `make coverage-changed` = the PR job),
-  frontend `make fe-verify-changed` (cloudlands-fe `verify:changed`, working tree first), or
+  frontend `make fe-verify-changed` (cloudlands-fe `verify:changed`, working tree first; it runs
+  changed CT specs once with retries, so `make fe-ct-changed-repeat` replays PR CI's repeated,
+  retry-free CT job before you push; `WORKERS=`, `ARGS='--grep …'`), or
   `make test-scripts-changed` for `scripts/`, the Makefile or ci.yml (PR CI skips its shell suites).
   All take `BASE=<ref>` and `DRY_RUN=1` (prints the plan), the first two `RESUME=1`. Iterate on Rust
   tests with `make test-select E='<filterset>'`, not raw `cargo nextest`, which skips fixture setup

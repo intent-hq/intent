@@ -505,7 +505,7 @@ HERMETIC_PREFLIGHT = if [ "$(HERMETIC)" = 1 ]; then \
 FE_BUILD_HEAP_MB ?= 16384
 
 .PHONY: all help doctor bootstrap-dev-host ensure-submodules ensure-intentd-submodule ensure-fe-submodule ensure-ios-submodule \
-	ensure-fe-toolchain fe-verify-changed \
+	ensure-fe-toolchain fe-verify-changed fe-ct-changed-repeat \
 	update \
 	build build-intentd build-sidecar gate test test-intentd test-scripts test-scripts-changed test-changed test-select test-stress list-tests coverage-changed coverage-e2e coverage-all \
 	fmt clippy shear check-windows check-macos lint-sources lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child lint-shell-sleeps lint-shell lint-workflows bash3 check clean clean-dev \
@@ -997,6 +997,32 @@ fe-verify-changed: ensure-fe-submodule ensure-fe-toolchain ## Run only the front
 	if [ -n "$(NO_FAIL_FAST)" ] && [ "$(NO_FAIL_FAST)" != 0 ]; then set -- "$$@" --keep-going; fi; \
 	if [ -n '$(FE_VERIFY_BASE)' ]; then set -- "$$@" --base '$(FE_VERIFY_BASE)'; fi; \
 	cd "$(FE_DIR)" && exec corepack pnpm run verify:changed -- "$$@"
+
+# PR CI's "Changed Component Tests (repeated)" job, locally: cloudlands-fe's
+# `pnpm run test:ct:changed-repeat` builds the CT bundle under CI's 12 GiB heap,
+# then runs the changed specs (since the merge-base with BASE, default
+# origin/main, uncommitted ones included) with CI's repeat count, --retries=0
+# --fail-on-flaky-tests and two workers under 4 GiB. fe-verify-changed runs
+# them once with retries on, so it cannot show the flakiness this job catches.
+# DRY_RUN=1 prints the filters and repeat count; WORKERS, REPEAT (override the
+# count), SKIP_BUILD=1 (reuse the cached bundle), SPECS (space-separated spec
+# paths instead of the diff) and ARGS (extra Playwright args, shell-quoted,
+# e.g. ARGS='--grep "opens the menu"') tune stress runs. SPECS and ARGS reach
+# the recipe through the environment and are word-split there with eval;
+# scripts/fe-ct-changed-repeat.test.sh pins the mapping.
+fe-ct-changed-repeat: export FE_CT_REPEAT_SPECS = $(SPECS)
+fe-ct-changed-repeat: export FE_CT_REPEAT_ARGS = $(ARGS)
+fe-ct-changed-repeat: ensure-fe-submodule ensure-fe-toolchain ## Repeat the changed component test specs the way PR CI does (BASE=<fe ref>, DRY_RUN=1, WORKERS=<n>, REPEAT=<n>, SKIP_BUILD=1, SPECS='<paths>', ARGS='<playwright args>')
+	@$(FE_DEPS_FRESH) || (echo "[fe-ct-changed-repeat] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
+	@set --; \
+	if [ -n "$(DRY_RUN)" ] && [ "$(DRY_RUN)" != 0 ]; then set -- "$$@" --dry-run; fi; \
+	if [ -n "$(SKIP_BUILD)" ] && [ "$(SKIP_BUILD)" != 0 ]; then set -- "$$@" --skip-build; fi; \
+	if [ -n '$(FE_VERIFY_BASE)' ]; then set -- "$$@" --base '$(FE_VERIFY_BASE)'; fi; \
+	if [ -n "$(WORKERS)" ]; then set -- "$$@" --workers "$(WORKERS)"; fi; \
+	if [ -n "$(REPEAT)" ]; then set -- "$$@" --repeat-each "$(REPEAT)"; fi; \
+	eval "set -- \"\$$@\" $$FE_CT_REPEAT_SPECS"; \
+	if [ -n "$$FE_CT_REPEAT_ARGS" ]; then eval "set -- \"\$$@\" -- $$FE_CT_REPEAT_ARGS"; fi; \
+	cd "$(FE_DIR)" && exec corepack pnpm run test:ct:changed-repeat -- "$$@"
 
 # A chosen subset of the Rust tests, e.g. while fixing one test before the full
 # gate: E is one nextest filterset, run across the workspace
