@@ -784,6 +784,15 @@ on add, state changes and new capability reports, or `{ machineId, removed: true
 after removal. It is delivered to owner connections only, never to members or
 guests, and never carries the executor token.
 
+[Cloud machines](./methods/nodes.md#cloud-machines-e2b) define
+`cloudMachine:changed` on the backend: `{ provider: CloudMachineProvider }` or
+`{ providerId, removed: true }` when the E2B provider is configured or removed,
+and `{ machine: RemoteMachine }` or `{ machineId, removed: true }` when a cloud
+machine row or its sandbox state changes. It is delivered to owner connections,
+and to shared-host member connections with the same visibility as
+`cloudMachines.list`, never to guests, and never carries the E2B key.
+Cloud machine rows never appear in `remoteMachine:changed`.
+
 [Link traffic capture](./methods/nodes.md#link-traffic-capture) defines
 `remoteLinkTraffic:records`: `{ records: LinkTrafficRecord[], capture }`,
 batched (at most every 250 ms, at most 100 records) while capture is on, and

@@ -849,6 +849,21 @@ test it for exactly `1`. Older backends that advertise `remoteMachines: 1`
 ignore the field, so clients detect support only through this flag. No method
 is added and the public protocol version is unchanged.
 
+**Cloud machines on E2B — capability `cloudMachines: 1` (additive).**
+[Cloud machines (§5.50)](./methods/nodes.md#cloud-machines-e2b) let a backend
+start its own remote machines in E2B sandboxes with the owner's E2B API key. They
+add five router methods (`cloudMachines.configure`, `list`, `remove`, `pause`,
+`kill`), the placement `target: "e2b"`, the `RemoteMachine.cloud` and
+`AgentLite.cloudStart` fields, the `cloudMachine:changed` event and the errors
+`cloud-machine-unavailable`, `cloud-profile-required` and `cloud-quota`, taking
+the documented surface to **501 / 443 / 58** (dispatchable / router / fast
+path). The backend advertises `cloudMachines: 1` only together with
+`remoteMachines: 1`. Cloud machine rows are left out of `remoteMachines.list`
+and `remoteMachine:changed`, so older clients see no change. The
+[executor link](./node-link.md#cloud-machines) is unchanged: no new
+nodeProtocol, frame or route type. The public protocol version is unchanged;
+clients detect support only through the flag.
+
 **Remote-compatible profiles and switching a remote agent's model (additive, one narrowing).**
 [Provider profiles](./methods/provider-profiles.md#remote-compatibility) and
 Default configurations gain `remoteCompatible` and `remoteIncompatibility`
@@ -2081,4 +2096,5 @@ the `ignore` map of `scripts/check-protocol-field-parity.mjs`, not here.
 | `Workspace` | `autoArchiveDisabled` | [Auto-archive opt-out](./methods/workspace.md#auto-archive-opt-out) | Pending [cloudlands-fe#3863](https://github.com/intent-hq/cloudlands-fe/pull/3863) (Home Disable auto-archive toggle) |
 | `Workspace` | `plainFolder` | [Plain-folder workspaces](./methods/workspace.md#plain-folder-workspaces) | Pending cloudlands-fe plain-folder workspaces PR (Labs git toggle and hidden git UI) |
 | `AgentLite` | `pinned` | [Agent sidebar pins](./methods/agents.md) | Pending cloudlands-fe sidebar pin PR (Pin to top in the agent row menu) |
+| `AgentLite` | `cloudStart` | [Placement on E2B](./methods/nodes.md#placement-on-e2b) | Pending cloudlands-fe E2B cloud machines PR (Start On, machine badges) |
 | `AgentLite` | `nodeName` | [Placed agent projection](./methods/nodes.md#placement-and-creation) | Pending: the complete node contract that advertises `agentNodes`; agents placed on [remote machines](./methods/nodes.md#placement-subset) carry it on detail reads, but the app does not read it yet |
