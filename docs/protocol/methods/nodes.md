@@ -1339,15 +1339,25 @@ on each connection. Adding a node by any route (the Add machine dialog, the
 `intent://pair` link) saves it, then asks whether to make it available to the
 current backend: **Make available** runs the [expose flow](#expose-flow),
 **Not now** keeps the node saved and offers the expose action on its row. The
-prompt appears only when the current backend advertises `remoteMachines: 1`.
-Otherwise the node is saved with no prompt, and its row offers the expose
-action once the current backend advertises `remoteMachines: 1`. A link for a
-node that is already saved updates its credential, and the prompt appears only
-if the node is not yet available to the current backend.
+client accepts a node only when the client offers remote agents and the
+current backend can run agents on other machines. It refuses the node when:
+
+- remote agents are off in the client (its Labs flag): the error points to
+  Settings → Labs;
+- the current backend does not advertise `remoteMachines: 1`: the error names
+  the backend, and the user updates it and adds the node again.
+
+A refused node is not saved, on every route, including a node detected only
+after its credential test (for example a link without the `mode=node` hint).
+The check applies to new and already-saved nodes alike: a refused link changes
+nothing. An accepted link for a node that is already saved updates its
+credential, and the prompt appears only if the node is not yet available to
+the current backend.
 
 The paste item parses the link, tests the credential with `principal.me` and
 detects the mode. A full daemon is added to Machines with no dialog; a node is
-added to Nodes and gets the prompt above. Errors show inline. The pairing token
+added to Nodes and gets the prompt above, or is refused as above. Errors show
+inline. The pairing token
 stays in the main process and the secret store, as for every other saved
 connection.
 
