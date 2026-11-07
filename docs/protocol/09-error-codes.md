@@ -198,7 +198,7 @@ The [cloud machines](./methods/nodes.md#remote-machine-errors) add three
 limit; data `{ provider, limit: "concurrency" | "rate" | "plan", retryAfterSeconds?,
 retryable }`) and `cloud-machine-unavailable` with `reason`
 `not-configured`, `key-rejected` or `entry-required` (a placement named no
-E2B entry and several exist; data adds `entries`). All three carry the
+E2B entry, several exist and none is `"e2b"`; data adds `entries`). All three carry the
 optional `cloudMachineId` of the named E2B entry. `-32603`: `cloud-machine-unavailable` with
 the other reasons (`api-error`, `template-missing`, `bootstrap-failed`,
 `sandbox-lost`). After a placement reply the same codes arrive as the agent's

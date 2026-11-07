@@ -182,8 +182,9 @@ caller authority.
 [named E2B entries](./nodes.md#named-e2b-entries): `cloudMachines.configure`
 takes `cloudMachineId`, `name` and `apiKeyFrom`, `cloudMachines.remove` takes
 `cloudMachineId`, and placement takes `target: "e2b"` with `cloudMachineId`.
-It is advertised only together with `cloudMachines: 1`. Clients offer more
-than one entry only when it is exactly `1`; it grants no caller authority.
+It is advertised only together with `cloudMachines: 1`. Clients send these
+members, and offer more than one entry, only when it is exactly `1`; it grants
+no caller authority.
 
 **Remote scripts (additive).** Exact integer `server.capabilities.remoteScripts: 1`
 means a remote agent's `ws.script.*` calls are forwarded and the scripts it starts run on

@@ -575,7 +575,7 @@ An explicit `placement` wins. A remote parent, on a machine or on a
 | Omitted | The parent's machine or sandbox |
 | `{ "target": "remote", "nodeId": <a machine> }`, or `os` / `arch` | That machine, admitted as usual; it may be the parent's own |
 | `{ "target": "remote", "nodeId": <a sandbox of the chain> }` | That sandbox ([cloud machine rows](#cloud-machine-rows), item 4) |
-| `{ "target": "e2b", "cloudMachineId"? }` | A **new** sandbox that the sub-agent owns ([placement on E2B](#placement-on-e2b)), also when the parent itself runs on a sandbox; without `cloudMachineId`, from the parent's [entry](#named-e2b-entries) |
+| `{ "target": "e2b", "cloudMachineId"? }` | A **new** sandbox that the sub-agent owns ([placement on E2B](#placement-on-e2b)), also when the parent itself runs on a sandbox; without `cloudMachineId`, from the entry of the nearest agent in the chain that has one ([entry rules](#placement-on-e2b)) |
 | `{ "target": "local" }` | The backend ([backend sub-agents](#backend-sub-agents-of-remote-agents)) |
 
 What the child starts from depends only on where it runs, as in the table
@@ -879,7 +879,7 @@ authority.
 | --- | --- | --- | --- |
 | cloudMachines.configure | Owner | cloudMachineId? (the entry to update; omit to create one), name? (1-64 UTF-8 bytes; required to create a new entry), provider? (`"e2b"`, the only value; default `"e2b"`), apiKey? (secret; required to create an entry unless `apiKeyFrom` is given), apiKeyFrom? (the `cloudMachineId` of another entry whose saved key this entry copies), size? (one of the entry's `sizes`; default `"4x8"`), idlePauseMinutes? (1-1440, default 10), pausedDeleteDays? (1-30, default 7), templateProject? (E2B project slug that publishes the templates; default Intent's E2B project), validateOnly? (boolean, default false) | `{ provider: CloudMachineProvider }`; creates or updates one entry ([which entry](#named-e2b-entries)); with `apiKey` or `apiKeyFrom`, tests the key with one E2B read before it saves anything; an omitted member keeps its saved value. With `validateOnly: true` it saves nothing and emits no event: it tests the given key (or else the entry's saved one; with neither it fails `cloud-machine-unavailable` reason `not-configured`) and checks that the template `<templateProject>/intent-node-<size>:<intentdVersion>` exists, then returns the entry as it would be saved, with `state: "ready"`. Any failed test is an error, never a result: a rejected key is `key-rejected`, a missing template `template-missing`, an E2B failure `api-error` (all `cloud-machine-unavailable`). A normal save runs the same tests first |
 | cloudMachines.list | Owner, members | — | `{ providers: CloudMachineProvider[], machines: RemoteMachine[] }`; `providers` are the entries, in creation order; `machines` are the live cloud machines of every entry, each with `cloud`; a member sees only the machines of workspaces they can manage; never returns a key |
-| cloudMachines.remove | Owner | cloudMachineId? (the entry; default `"e2b"`), provider? (`"e2b"`, the only value), stopAgents? (boolean, default false) | `{ ok: true, unconfirmedStops: string[] }`; removes one entry; with any sandbox of that entry (running or paused) and no `stopAgents: true` fails `-32602` `machine-in-use` with `runningAgents`; with `stopAgents: true` sends each agent on that entry's sandboxes a final stop, waits at most 90 s, then deletes those sandboxes, their machine rows, the entry and its key; an id that names no entry is a no-op, and any other `provider` is `-32602` `invalid-params` |
+| cloudMachines.remove | Owner | cloudMachineId? (the entry; default `"e2b"`), provider? (`"e2b"`, the only value), stopAgents? (boolean, default false) | `{ ok: true, unconfirmedStops: string[] }`; removes one entry; with any sandbox of that entry (running or paused) and no `stopAgents: true` fails `-32602` `machine-in-use` with `runningAgents`; with `stopAgents: true` sends each agent on that entry's sandboxes a final stop, waits at most 90 s, then deletes those sandboxes, their machine rows, the entry and its key ([removing an entry](#named-e2b-entries)); an id that names no entry is a no-op, and any other `provider` is `-32602` `invalid-params` |
 | cloudMachines.pause | Owner, starter | machineId (req) | `{ machine: RemoteMachine }`; pauses the sandbox now; while an agent on it has a running turn fails `-32602` `machine-in-use` with `runningAgents`; an already paused sandbox is returned unchanged |
 | cloudMachines.kill | Owner, starter | machineId (req) | `{ ok: true, unconfirmedStops: string[] }`; sends each agent on the sandbox a final stop (resuming a paused sandbox first), waits at most 90 s, then deletes the sandbox and its machine row even when stops are unconfirmed |
 
@@ -963,8 +963,9 @@ on `templateProject`.
 - **Saved size not published.** The saved `size` (or the default `4x8`) stays
   saved and reported even when it is not in `sizes`, for example after a backend
   update. Starts then fail with `cloud-machine-unavailable` reason
-  `template-missing`. `configure` checks the template only when the call gives
-  `size`, `templateProject` or `apiKey`, so other edits still save.
+  `template-missing`. `configure` checks the template only when the call
+  creates an entry or gives `size`, `templateProject`, `apiKey` or
+  `apiKeyFrom`, so other edits still save.
 - **Choosing a size.** A `size` that is not a `CloudMachineSize` is `-32602`
   `invalid-params`. A known size whose tag is not published is
   `cloud-machine-unavailable` reason `template-missing`.
@@ -979,37 +980,62 @@ The owner can save several E2B *entries*. Each entry has its own id, name, key
 (so entries can use different E2B projects), template project, size,
 `idlePauseMinutes` and `pausedDeleteDays`. Every `CloudMachineProvider` row is
 one entry, and every sandbox belongs to the entry it started from. A backend
-that keeps entries advertises `cloudMachineEntries: 1`; one without it has at
-most the single entry `"e2b"` and ignores `cloudMachineId` and `name`.
+that keeps entries advertises `cloudMachineEntries: 1`. Clients send
+`cloudMachineId`, `name` and `apiKeyFrom` only when it is exactly `1`.
 
 - **Ids.** The backend picks the id when it creates the entry and never
-  changes it. The first entry created while no entry exists gets `"e2b"`;
-  every other entry gets `"e2b-<12 lowercase hex>"`. A `cloudMachineId` that
-  is not a string of at most 64 bytes is `-32602` `invalid-params`.
-- **Names.** 1-64 UTF-8 bytes after trimming, unique among the entries
-  without regard to case. An empty, too long or taken name is `-32602`
-  `invalid-params`. Renaming an entry updates the `name` of its machine rows
-  and the `nodeName` of its agents, and emits `cloudMachine:changed` for each.
+  changes it: `"e2b"` while no entry has that id, else
+  `"e2b-<12 lowercase hex>"`. A `cloudMachineId` that is not a string of at
+  most 64 bytes is `-32602` `invalid-params`. A string that names no entry
+  gets a different answer on each method, on purpose:
+
+  | Method | Unknown `cloudMachineId` |
+  | --- | --- |
+  | `configure` (and its `apiKeyFrom`) | `-32602` `not-found` |
+  | `remove` | No-op `{ ok: true, unconfirmedStops: [] }`, so a repeated remove succeeds |
+  | Placement | `-32602` `cloud-machine-unavailable` reason `not-configured` |
+
+- **Names.** 1-64 UTF-8 bytes after trimming, with no control characters,
+  unique among the entries without regard to case. An empty, too long or taken
+  name is `-32602` `invalid-params`. Renaming an entry renames its machine rows
+  (each emits `cloudMachine:changed` with the machine) and sets its agents'
+  `nodeName` (each publishes `agent:updated`).
 - **Limit.** At most 16 entries. Creating a 17th is `-32602` `invalid-params`.
-- **Which entry `configure` writes.** With `cloudMachineId`, that entry; an
-  id that names no entry is `-32602` `not-found`. Without it, and with `name`,
-  a new entry. Without both (the call an older client sends), the entry `"e2b"`,
-  which the call creates with the name `"E2B"` when it does not exist.
-  Creating needs `apiKey` or `apiKeyFrom`, else `cloud-machine-unavailable`
-  reason `not-configured`. `apiKeyFrom` that names no entry, or an entry with
-  no saved key, is `-32602` `not-found`; with `apiKey` too it is `-32602`
-  `invalid-params`.
+- **Which entry `configure` writes.** With `cloudMachineId`, that entry.
+  Without it, and with `name`, a new entry. Without both (the call an older
+  client sends), the entry `"e2b"`; when it does not exist, the call creates it
+  with the first free name of `"E2B"`, `"E2B 2"`, `"E2B 3"` and so on, so it
+  never fails on the name. Creating needs `apiKey` or `apiKeyFrom`, else
+  `cloud-machine-unavailable` reason `not-configured`. With `validateOnly`, a
+  call that would create an entry runs every create check (name, limit,
+  `apiKeyFrom`, key, template) and returns the row with `id: ""`.
+- **Copying a key.** `apiKeyFrom` names another entry, on create or update. The
+  backend copies that entry's saved key into this entry's own secret account
+  once: a later key change on either entry does not reach the other. An entry
+  with no saved key is `-32602` `not-found`; this entry's own id, or
+  `apiKeyFrom` together with `apiKey`, is `-32602` `invalid-params`.
+- **Removing an entry.** `cloudMachines.remove` deletes the entry's sandboxes
+  (see the method). Agents left on the entry, with no sandbox, lose
+  `placement.cloudMachineId`; their next start picks an entry again as for an
+  omitted `cloudMachineId` ([placement on E2B](#placement-on-e2b)), so a later
+  entry that reuses the id `"e2b"` never inherits them by accident. When E2B
+  would not delete a sandbox (for example a rejected key), the backend keeps
+  the removed entry's key, hidden from every read, only for the reaper. It
+  deletes that key once the reaper finds no sandbox with this backend's
+  metadata left in the entry's project.
 - **Migration.** A backend that saved one provider before it kept entries
   turns it, at its first start, into the entry `"e2b"` named `"E2B"`, with the
   same settings and the same secret store account. Its sandboxes and agents
   get `cloudMachineId: "e2b"`. Nothing is asked of the owner, and no sandbox
   restarts.
-- **Older clients.** An older client knows only the provider id `"e2b"`. It
-  keeps working with that entry: it configures and removes it, and its
-  placements use it (see the entry rules in
-  [placement on E2B](#placement-on-e2b)). It does not show the other entries,
-  and it still lists and can kill their sandboxes, because their machine rows
-  keep `cloud.provider: "e2b"`.
+- **Older clients.** An older client reads only the row whose `id` is
+  `"e2b"`, and it keys provider upserts and `{ providerId, removed: true }`
+  events by id, so events about other entries do not change what it shows. It
+  keeps working with the entry `"e2b"`: it configures and removes it, and its
+  placements fall back to it ([placement on E2B](#placement-on-e2b)). It does
+  not show the other entries, and it still lists and can kill their sandboxes,
+  because their machine rows keep `cloud.provider: "e2b"`. When no entry
+  `"e2b"` exists, it shows E2B as not configured.
 
 ###### Cloud machine rows
 
@@ -1081,18 +1107,21 @@ sub-agents that share it.
 
 The [entry](#named-e2b-entries) is, in this order:
 
-1. The entry that `cloudMachineId` names.
-2. Without it, for an agent that another agent creates: the entry of the
-   nearest agent in the creating agent's chain (that agent first) that runs on
-   a sandbox or is placed with `target: "e2b"`.
-3. Else the only entry.
-4. Else the entry `"e2b"`, so that an older client's placement still starts.
-5. Else `cloud-machine-unavailable` reason `entry-required`, whose `entries`
+1. With no entry at all: `cloud-machine-unavailable` reason `not-configured`.
+2. The entry that `cloudMachineId` names.
+3. Without it, for an agent that another agent creates: the entry of the
+   nearest agent in the creating agent's chain (that agent first) whose
+   `placement.cloudMachineId` is set. Agents on the backend, on other machines,
+   or whose entry was removed are skipped.
+4. Else the only entry.
+5. Else the entry `"e2b"`, so that an older client's placement still starts.
+6. Else `cloud-machine-unavailable` reason `entry-required`, whose `entries`
    name every entry so that the caller can choose one.
 
 The resolved placement always carries the entry's `cloudMachineId`, on the
 reply and on later reads, and a new sandbox for the same agent (an
-[agent without a sandbox](#sandbox-lifecycle)) uses the same entry.
+[agent without a sandbox](#sandbox-lifecycle)) uses the same entry while it
+exists.
 
 Admission runs these checks in order, before any write, sandbox or charge. Checks
 2 and 3 also run for every agent placed onto an existing sandbox (a sub-agent
@@ -1164,8 +1193,8 @@ row but keeps the agent, with `placement.target: "e2b"` and no `nodeId`. Its nex
 message, also after a restore, starts a new sandbox as at placement, and the
 launch [relaunches without a checkout](../node-link.md#relaunch-without-a-checkout)
 from its saved `head` and `wip`. Work it did not push is lost; that turn's notice
-says so. When its entry was removed (`cloudMachines.remove` with `stopAgents`),
-that start fails `cloud-machine-unavailable` reason `not-configured`.
+says so. When its entry was removed, that start picks an entry again
+([removing an entry](#named-e2b-entries)).
 
 **Template.** The backend starts only the template tagged with its own exact
 intentd version in the entry's size, `<templateProject>/intent-node-<size>:<intentdVersion>`,
@@ -1445,10 +1474,10 @@ interface CloudMachineUnavailableData {
 }
 ```
 
-`not-configured`, `key-rejected` and `entry-required` are `-32602` from
-placement and `cloudMachines.configure` (not retryable: the owner must save a
-working key, or the caller must name an entry). `entry-required` means a
-placement named no entry and none could be chosen
+`not-configured` and `key-rejected` are `-32602` from placement and
+`cloudMachines.configure` (not retryable: the owner must save a working key).
+`entry-required` is `-32602` from placement only, and not retryable: the
+placement named no entry, several exist and none is `"e2b"`
 ([placement on E2B](#placement-on-e2b)); its message lists the entry names.
 The others are `-32603` from `cloudMachines.configure`, `pause` and `kill`, or
 an agent's `placementError` after the reply: `api-error` (E2B failed or was
