@@ -1100,18 +1100,19 @@ How will you use this computer?
    prompt), setup only prints the commands for a node: set `daemon.mode`, start
    the daemon, then `intentd pair --tunnel`.
 
-**Tunnel on by default when pairing (both modes).** A fresh install is one
-where `server.tunnel.enabled` has no saved value: `settings.get` reports its
-origin as `"default"`, so `intentd pair` reads the origin, not only the
-boolean. When `intentd pair` turns external connections on for a fresh
-install, the interface picker pre-checks the Tailcat tunnel row and
-`intentd pair --yes` turns the tunnel on with the listener. This is a
-deliberate change for full daemons too: before, `pair --yes` on a fresh install
-stayed loopback-only and failed with "listener is bound to loopback only and no
-tunnel is active"; now it prints a tunnel link. A full daemon that was never
-paired does not start the tunnel: the default `false` applies until pairing
-turns external connections on. An install with a saved value keeps its choice,
-and a daemon whose listener is already on is not changed by this default.
+**Tunnel on by default when pairing (both modes).** The rule depends on
+`server.bindAddress`, not on whether the tunnel setting was ever saved: a full
+daemon writes every setting to `config.toml` at startup. When `intentd pair`
+turns external connections on and the listener is bound to loopback only (the
+fresh-install default `127.0.0.1`), the interface picker pre-checks the Tailcat
+tunnel row, and `intentd pair --yes` turns the tunnel on with the listener. The
+user can still clear the row in the picker. A LAN or all-interfaces bind keeps
+its saved tunnel choice. This is a deliberate change for full daemons too:
+before, `pair --yes` on a fresh install stayed loopback-only and failed with
+"listener is bound to loopback only and no tunnel is active"; now it prints a
+tunnel link. A full daemon that was never paired does not start the tunnel:
+the tunnel starts only when pairing turns external connections on, and a daemon
+whose listener is already on is not changed by this default.
 
 `intentd pair --tunnel` sets `server.tunnel.enabled: true` before pairing,
 whatever the saved value, so the tunnel row is pre-checked and `--yes` pairs
