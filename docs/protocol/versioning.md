@@ -33,7 +33,7 @@ too, for full daemons as well (pre-checked in the picker; `--yes` pairs over it)
 `--daemon-mode=full|node` / `INTENTD_DAEMON_MODE` (default `full`). Settings → Machines
 splits full daemons (Machines) from nodes (Nodes). Adding a node asks whether to make it
 available to the current backend, and is refused (nothing saved) when that backend cannot run
-agents on other machines.
+agents on other machines or remote agents are off in the client.
 
 **Version 15.4 — bounded object reads (additive methods, capped replies).**
 [Bounded object reads](./methods/files-terminal-browser.md#bounded-object-reads-154) let a

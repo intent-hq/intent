@@ -1340,10 +1340,17 @@ on each connection. Adding a node by any route (the Add machine dialog, the
 current backend: **Make available** runs the [expose flow](#expose-flow),
 **Not now** keeps the node saved and offers the expose action on its row. The
 client accepts a node only when the current backend can run agents on other
-machines: it advertises `remoteMachines: 1` and the client offers remote agents
-(behind its Labs flag). Otherwise the client refuses the node with an error
-that names the backend, and nothing is saved; the user updates the backend
-and adds the node again. A link for a node that is already saved updates its
+machines, and refuses it otherwise:
+
+- remote agents are off in the client (its Labs flag): the error points to
+  Settings → Labs;
+- the current backend does not advertise `remoteMachines: 1`: the error names
+  the backend, and the user updates it and adds the node again.
+
+A refused node is not saved, on every route, including a node detected only
+after its credential test (for example a link without the `mode=node` hint).
+The check applies to new and already-saved nodes alike: a refused link changes
+nothing. An accepted link for a node that is already saved updates its
 credential, and the prompt appears only if the node is not yet available to
 the current backend.
 
