@@ -1052,25 +1052,30 @@ is a second, separate opt-in.
 
 ##### Reported daemon mode
 
-A daemon reports its running mode as `daemonMode: "regular" | "node"` in two
+A daemon reports its running mode as `daemonMode: "regular" | "node"` in three
 places (additive, docs first):
 
 - `client.hello` `server.daemonMode` ([§5.17](./client-hello.md));
-- the `host.status` result root ([§5.14](./execution-locus.md)).
+- the `host.status` result root ([§5.14](./execution-locus.md));
+- the `pairing.getInfo` result
+  ([§5.12](../05-method-catalog.md#pairinggetinfo-local-only)).
 
 The value is the mode of the running process, so `intentd serve --node` reports
 `"node"` even while the setting `daemon.mode` is `regular`. A pending setting
 change is not reported until the next start. Older daemons omit the field:
-absence means **unknown**, not regular. For those daemons a client probes once
-with a method outside the node-mode list (for example `workspace.list`). A
-`-32003` refusal with `data.code: "node-mode"` means node; any other answer
-means regular. The field grants no caller authority, and a client reads it
-again on every connection because the mode can change across restarts.
+absence means **unknown**, not regular. For those daemons a client probes once,
+after `client.hello`, with a method outside the node-mode list (for example
+`workspace.list`). A `-32003` refusal with `data.code: "node-mode"` means node.
+A result, or an error without that code, means regular. A transport failure or
+timeout leaves the mode unknown, and the client probes again on the next
+connection. The field grants no caller authority, and a client reads it again
+on every connection because the mode can change across restarts.
 
 ##### Node setup and pairing
 
 Setup asks which kind of daemon to run and steers new users to the full daemon.
-The installers (`install.sh`, `install.ps1`) ask on a TTY:
+The installers (`install.sh`, `install.ps1`) ask when they run interactively
+(`install.sh` reads `/dev/tty`, so the prompt works under `curl | sh`):
 
 ```text
 How will you use this computer?
@@ -1078,11 +1083,12 @@ How will you use this computer?
 2) Node only: lets another Intent run agents on this computer; nothing else runs here.
 ```
 
-1. Enter selects 1. Scripted installs use the flag `--daemon-mode=full|node`
-   or the environment variable `INTENTD_DAEMON_MODE=full|node` (flag, then
-   variable, then prompt). Without a TTY and without either, setup uses `full`.
-   The flag is not `--mode`: `intentd serve --mode` already selects connection
-   locality.
+1. Enter selects option 1 (Run Intent here). Scripted installs use the flag
+   `--daemon-mode=full|node` or the environment variable
+   `INTENTD_DAEMON_MODE=full|node` (flag, then variable, then prompt). When
+   setup is not interactive and neither is set, it uses `full`. `full` is the
+   installer name for `daemon.mode: "regular"`. The flag is not `--mode`:
+   `intentd serve --mode` already selects connection locality.
 2. `full` keeps `daemon.mode: "regular"` and does not pair. `node` sets
    `daemon.mode: "node"` over the local UDS seat, restarts the daemon, then
    runs `intentd pair --tunnel`: the consent prompt, then the network
@@ -1094,25 +1100,40 @@ How will you use this computer?
    prompt), setup only prints the commands for a node: set `daemon.mode`, start
    the daemon, then `intentd pair --tunnel`.
 
-**Tunnel on by default when pairing (both modes).** On a fresh install, where
-`server.tunnel.enabled` has no saved value, `intentd pair` pre-checks the
-Tailcat tunnel row in the interface picker, and `intentd pair --yes` turns the
-tunnel on together with the listener. So `--yes` on a fresh install prints a
-tunnel link instead of failing with "listener is bound to loopback only and no
-tunnel is active". A full daemon that was never paired does not start the
-tunnel: the default `false` still applies until pairing turns external
-connections on. An install with a saved value keeps its choice.
+**Tunnel on by default when pairing (both modes).** A fresh install is one
+where `server.tunnel.enabled` has no saved value: `settings.get` reports its
+origin as `"default"`, so `intentd pair` reads the origin, not only the
+boolean. When `intentd pair` turns external connections on for a fresh
+install, the interface picker pre-checks the Tailcat tunnel row and
+`intentd pair --yes` turns the tunnel on with the listener. This is a
+deliberate change for full daemons too: before, `pair --yes` on a fresh install
+stayed loopback-only and failed with "listener is bound to loopback only and no
+tunnel is active"; now it prints a tunnel link. A full daemon that was never
+paired does not start the tunnel: the default `false` applies until pairing
+turns external connections on. An install with a saved value keeps its choice,
+and a daemon whose listener is already on is not changed by this default.
 
-`intentd pair --tunnel` sets `server.tunnel.enabled: true` before pairing, so
-the tunnel row is pre-checked and `--yes` pairs through the tunnel even when
-the saved value is `false`. The setting is in the `server.*` group, so it is
-allowed in node mode.
+`intentd pair --tunnel` sets `server.tunnel.enabled: true` before pairing,
+whatever the saved value, so the tunnel row is pre-checked and `--yes` pairs
+through the tunnel. The setting is in the `server.*` group, so it is allowed in
+node mode.
+
+When `intentd pair` turns the tunnel on (by default or with `--tunnel`):
+
+1. It sends the tunnel change in its own `settings.update`, after the listener
+   is on. If the sidecar fails to start, pairing continues with the listener
+   alone and prints a warning; the link then has only the direct hosts, or the
+   loopback-only error when there are none.
+2. It waits for `tcAddress` in `system.status`, with a bounded timeout, before
+   it reads `pairing.getInfo`, so the link carries `tc=`.
 
 The pair link of a node carries the hint `mode=node`
-([`pairing.getInfo`](../05-method-catalog.md#pairinggetinfo-local-only)). The
-link of a regular daemon has no `mode` param, and a link without one means a
-full daemon. The hint lets a client choose a section before it connects, but it
-is not authoritative: after the credential test the client uses the reported
+([`pairing.getInfo`](../05-method-catalog.md#pairinggetinfo-local-only)). For
+`intentd pair --host <h>`, which builds the link from `server.pairingInfo`, the
+CLI reads the mode from `host.status` first and adds the same hint. The link of
+a regular daemon has no `mode` param, and a link without one means a full
+daemon. The hint lets a client choose a section before it connects, but it is
+not authoritative: after the credential test the client uses the reported
 `daemonMode` (or the probe above) and moves the row if the two disagree.
 
 ##### Machines and Nodes in the app
@@ -1127,14 +1148,20 @@ Settings → Machines shows two lists:
 The client stores the detected kind on the saved connection and checks it again
 on each connection. Adding a node by any route (the Add machine dialog, the
 **Paste intent:// link** item of the Add machine menu, or opening an
-`intent://pair` link) saves it, then asks once whether to make it available to
-the current backend: **Make available** runs the [expose flow](#expose-flow),
+`intent://pair` link) saves it, then asks whether to make it available to the
+current backend: **Make available** runs the [expose flow](#expose-flow),
 **Not now** keeps the node saved and offers the expose action on its row. The
 prompt appears only when the current backend advertises `remoteMachines: 1`.
+Otherwise the node is saved with no prompt, and its row offers the expose
+action once the current backend advertises `remoteMachines: 1`. A link for a
+node that is already saved updates its credential, and the prompt appears only
+if the node is not yet available to the current backend.
+
 The paste item parses the link, tests the credential with `principal.me` and
 detects the mode. A full daemon is added to Machines with no dialog; a node is
-added to Nodes and gets the prompt above. Errors show inline. The pairing token stays in the main process and the
-secret store, as for every other saved connection.
+added to Nodes and gets the prompt above. Errors show inline. The pairing token
+stays in the main process and the secret store, as for every other saved
+connection.
 
 ##### Remote machine errors
 
