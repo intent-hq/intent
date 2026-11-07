@@ -563,11 +563,88 @@ itself shares one. Deleting or retiring the parent removes its checkout: the
 machine first stops the children that share it, and their next start fails
 `node-checkout-failed`.
 
-An explicit `placement` wins: `{ "target": "local" }` creates the sub-agent on
-the backend, and a remote placement (another `nodeId`, or `os` / `arch`) is
-admitted as usual. A child of an agent that is not remote, and every create
-made by the user or another client, keeps the rules above: no placement means
-local.
+An explicit `placement` wins. A remote parent, on a machine or on a
+[cloud machine](#cloud-machines-e2b), can send its sub-agent anywhere:
+
+| `placement` | The sub-agent runs on |
+| --- | --- |
+| Omitted | The parent's machine or sandbox |
+| `{ "target": "remote", "nodeId": <a machine> }`, or `os` / `arch` | That machine, admitted as usual; it may be the parent's own |
+| `{ "target": "remote", "nodeId": <a sandbox of the chain> }` | That sandbox ([cloud machine rows](#cloud-machine-rows), item 4) |
+| `{ "target": "e2b" }` | A **new** sandbox that the sub-agent owns ([placement on E2B](#placement-on-e2b)), also when the parent itself runs on a sandbox |
+| `{ "target": "local" }` | The backend ([backend sub-agents](#backend-sub-agents-of-remote-agents)) |
+
+What the child starts from depends only on where it runs, as in the table
+above: on the machine or sandbox the parent runs on (whoever owns that
+sandbox), it works in the parent's checkout; anywhere else, including a new
+sandbox, it starts from a copy of the parent's work. Every row runs the
+normal checks for its target, and a failure never falls back to another
+target. A child of an agent that is not remote, and every create made by the
+user or another client, keeps the rules above: no placement means local.
+
+###### Backend sub-agents of remote agents
+
+When a remote parent creates a sub-agent with
+`placement: { "target": "local" }` (the create's caller is the parent), the
+backend first gets the parent's latest work, as for a child on another
+machine (steps 1 to 4 of
+[parent's work on another machine](../node-link.md#parents-work-on-another-machine)).
+Its `isolation` resolves as for any backend agent (`workspace.cowIsolation`
+when omitted).
+
+- **Own checkout** (`isolation` resolves to `"cow"` and the workspace can have
+  [copy-on-write sandboxes](./agents.md#55a-sandboxcow-cow-agent-sandboxes)):
+  the backend checks out the parent's `head` in the child's clone and applies
+  the parent's `wip` on top as uncommitted changes, in the superproject and in
+  each pinned submodule, before the child's first turn. Without a parent
+  `head` ref, or when that checkout or apply fails, the clone stays at the
+  workspace's last commit. The child's work merges back like any sandboxed
+  agent's.
+- **Shared worktree** (`isolation: "direct"`, or a workspace that cannot have
+  copy-on-write sandboxes): the child works in the workspace worktree, which
+  the backend never changes for it.
+
+The create result's `notice` and the child's first message say which. When
+the child does not have the parent's work (shared worktree, or a failed
+checkout or apply), both name the parent's `head` and `wip` refs, where that
+work is saved. Getting the parent's work never fails the create.
+
+###### Who pays for a sandbox an agent starts
+
+A sandbox started for an agent that another agent creates (a sub-agent with
+`target: "e2b"`, or a top-level agent that an agent creates with
+`target: "e2b"`) runs on the owner's E2B account, like every sandbox. Its
+`cloud.startedBy` is the person behind the creating agent's chain: the
+backend walks up from the creating agent (that agent first) and takes the
+`startedBy` of the first one that runs on a sandbox; with none, the person
+who created that chain's top-level agent; else the backend owner (for
+example for an agent created before the backend recorded its creator). That
+person is the sandbox's *starter*, so they can `cloudMachines.pause` and
+`cloudMachines.kill` it. A sandbox placed by a user or client names that
+caller, as before. There is no cap on the number of sandboxes that agents
+start; E2B's plan limits are the only limit, and a refused create fails that
+agent with `cloud-quota`.
+
+###### When a parent stops
+
+A sub-agent on another machine or sandbox follows the same rules as a local
+sub-agent:
+
+1. **Turn stop or pause.** Stopping the parent's turn, or pausing the parent's
+   sandbox, does not stop or pause its sub-agents elsewhere. Each sandbox
+   pauses on its own idle timer.
+2. **Retire.** Retiring the parent cascade-retires its descendants
+   ([retire cascade](./agents.md)); each one that is remote gets a
+   [final stop](#ending-a-remote-agent-for-good), and a sandbox that one of
+   them owns is deleted after its final stop, as in
+   [sandbox lifecycle](#sandbox-lifecycle).
+3. **Delete.** Deleting the parent does not end sub-agents on other machines
+   or on their own sandboxes: they stay, as orphans, like local children, and
+   keep their sandboxes until they end for good. Sub-agents that share the
+   parent's checkout are stopped with it.
+4. **Sandbox owner.** Whoever their parent is, the agents on a sandbox get a
+   final stop when the sandbox's `cloud.agentId` ends for good, and the
+   sandbox is deleted ([sandbox lifecycle](#sandbox-lifecycle)).
 
 ##### Placement across machines
 
@@ -776,8 +853,9 @@ A *cloud machine* is a remote machine that the backend starts itself, in an
 sandbox runs a normal intentd daemon with a fresh identity and is used as an
 exposed machine over the unchanged
 [executor link](../node-link.md#cloud-machines). The backend creates one
-sandbox for each agent placed with `target: "e2b"`; that agent's sub-agents
-share it. The sandbox pauses when it is idle and is deleted when its agent
+sandbox for each agent placed with `target: "e2b"`, top-level or sub-agent;
+that agent's sub-agents share it unless they are given another
+[placement](#sub-agents-of-remote-agents). The sandbox pauses when it is idle and is deleted when its agent
 ends for good.
 
 `client.hello.server.capabilities.cloudMachines: 1` means the backend
@@ -801,7 +879,10 @@ authority.
   token. *Members* are [shared-host members](./shared-host-membership.md#member-execution-and-safe-host-reads),
   who can also place agents on E2B: their agents spend the owner's E2B
   account, with no per-person cap. *Starter* is the principal in
-  `cloud.startedBy`. Others get `-32003`. Guests get none of these methods.
+  `cloud.startedBy`: the caller of the placing method, or for a placement made
+  by an agent the person behind its chain
+  ([who pays](#who-pays-for-a-sandbox-an-agent-starts)). Others get `-32003`.
+  Guests get none of these methods.
 - **Unknown machine.** A `machineId` that names no cloud machine is `-32602`
   `not-found` for `pause` and `kill`.
 - **Unconfirmed stops.** `unconfirmedStops` lists the agent ids whose final
@@ -901,7 +982,7 @@ interface CloudMachineState {
   template: string;                        // the template this sandbox started from
   size: CloudMachineSize;
   startedBy: { principalId: string; displayName: string | null };
-  agentId: string;                         // the top-level agent the sandbox was started for
+  agentId: string;                         // the agent the sandbox was started for: top-level, or a sub-agent placed with target "e2b"
   workspaceId: string;
   startedAt: string;
   runningSeconds: number;                  // seconds not paused since start, for cost estimates
@@ -937,14 +1018,16 @@ never carries the key.
 [placement subset](#placement-subset) accepts a remote placement, including
 batch entries and `workspace.create`'s `initialAgent.placement`. `checkout` may
 be omitted or `"isolated"`. `os`, `arch`, `nodeId` and `exclusive` fail with
-`-32602`. A placement with `target: "e2b"` starts a new sandbox, except from an
-agent that already runs on a cloud machine, or from its sub-agents: then it means
-the parent's sandbox, exactly as an omitted placement does. One sandbox serves one
-top-level agent and its sub-agents.
+`-32602`. A placement with `target: "e2b"` always starts a new sandbox for the
+placed agent, also from an agent that already runs on a cloud machine. A
+sub-agent shares its parent's sandbox only with an omitted placement or the
+sandbox's `nodeId` ([sub-agents of remote agents](#sub-agents-of-remote-agents)).
+One sandbox serves the agent it was started for (`cloud.agentId`) and the
+sub-agents that share it.
 
 Admission runs these checks in order, before any write, sandbox or charge. Checks
 2 and 3 also run for every agent placed onto an existing sandbox (a sub-agent
-with an omitted placement, `target: "e2b"`, or the cloud machine's `nodeId`) and
+with an omitted placement or the cloud machine's `nodeId`) and
 for every relaunch on a new sandbox, because every launch on a cloud machine
 carries a `profileEnv`:
 
@@ -1022,9 +1105,11 @@ never falls back to another tag: a missing tag fails the start with
 version it started with; it resumes and binds while the nodeProtocol ranges
 overlap.
 
-A sub-agent on the sandbox keeps it live like its parent. The sandbox is
-deleted when its top-level agent ends for good; sub-agents still on it get a
-final stop first.
+A sub-agent on the sandbox keeps it live like the agent it was started for. The sandbox is
+deleted when the agent it was started for (`cloud.agentId`) ends for good;
+sub-agents still on it get a final stop first. A sub-agent's own sandbox is
+deleted when that sub-agent ends for good, not when its parent does
+([when a parent stops](#when-a-parent-stops)).
 
 ##### Node mode
 

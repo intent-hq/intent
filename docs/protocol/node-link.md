@@ -2876,8 +2876,8 @@ backend below 11 refuses them as frames its table does not forward.
 
 ### Sub-agent checkouts (nodeProtocol 13)
 
-A local sub-agent works in its parent's worktree. On protocol 13 a remote
-agent's sub-agent also starts from its parent's work
+A sub-agent of a local agent works in its parent's worktree. On protocol 13
+a remote agent's sub-agent also starts from its parent's work
 ([sub-agents of remote agents](./methods/nodes.md#sub-agents-of-remote-agents)).
 The backend decides once, when the remote parent creates the child (the
 create's caller is the parent):
@@ -2888,11 +2888,12 @@ create's caller is the parent):
 | The parent's machine | Below 13 | Starts from the workspace's last commit, as before |
 | Another machine | The parent's machine's link at 13 or later | Starts from a copy of the parent's work, pushed at creation ([parent's work on another machine](#parents-work-on-another-machine)) |
 | Another machine | The parent's machine's link below 13 | Starts from a copy of the parent's last pushed work (step 4 below) |
+| A new sandbox (`target: "e2b"`) | Either | As another machine |
+| The backend (`target: "local"`) | Either | With its own copy-on-write checkout, as another machine; in the shared worktree, the worktree is unchanged and the notice names the parent's refs ([backend sub-agents](./methods/nodes.md#backend-sub-agents-of-remote-agents)) |
 
-A child on the backend (`placement: { target: "local" }`) starts in the
-workspace worktree, as before. "The parent's checkout" is always a checkout's
-**owner**: when the parent itself shares a checkout, its child shares, or
-copies, that checkout's owner's. The backend keeps the owner with the child's
+"The parent's checkout" is always a checkout's **owner**: when the parent
+itself shares a checkout, its child shares, or copies, that checkout's
+owner's. The backend keeps the owner with the child's
 placement and sends it at every launch.
 
 #### Shared checkout
@@ -2956,7 +2957,8 @@ interface PushWipReplyFrame {
 }
 ```
 
-1. When a remote parent creates a child on another machine, the backend sends
+1. When a remote parent creates a child on another machine, a new sandbox or
+   the backend, the backend sends
    `pushWip` for the owner to the owner's machine before it writes the child's
    refs, and waits up to **75 s** for the `pushWipReply` with the same
    `requestId`.
@@ -2971,7 +2973,8 @@ interface PushWipReplyFrame {
    owner's `wip` when that differs, and each pin's commit is the owner's module
    `head`, with the module `wip` likewise. The child's machine checks out `base`
    and applies `wip` on top as uncommitted changes, as a
-   [relaunch without a checkout](#relaunch-without-a-checkout) does.
+   [relaunch without a checkout](#relaunch-without-a-checkout) does. A child on
+   the backend gets the same in its own checkout.
 4. When the reply is `failed` or `skipped`, the link is down or below 13, or
    no reply comes within 75 s, the backend uses the owner's refs as they are
    (its last push). Without an owner `head` ref the child starts from the
