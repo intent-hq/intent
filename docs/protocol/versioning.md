@@ -29,8 +29,8 @@ refusal. `pairing.getInfo` adds `daemonMode`, and a node's `intent://pair` link 
 non-authoritative hint `mode=node` (absent means a full daemon; older parsers ignore it).
 `intentd pair --tunnel` turns the tunnel on before pairing, and the installers take
 `--daemon-mode=full|node` / `INTENTD_DAEMON_MODE` (default `full`). Settings → Machines splits
-full daemons (Machines) from nodes (Nodes), and adding a node makes it available to the
-current backend.
+full daemons (Machines) from nodes (Nodes), and adding a node asks whether to make it
+available to the current backend.
 
 **Version 15.4 — bounded object reads (additive methods, capped replies).**
 [Bounded object reads](./methods/files-terminal-browser.md#bounded-object-reads-154) let a
