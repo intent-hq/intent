@@ -1083,22 +1083,30 @@ How will you use this computer?
    variable, then prompt). Without a TTY and without either, setup uses `full`.
    The flag is not `--mode`: `intentd serve --mode` already selects connection
    locality.
-2. `full` keeps `daemon.mode: "regular"`. `node` sets `daemon.mode: "node"`
-   and `server.tunnel.enabled: true` over the local UDS seat, restarts the
-   daemon, then runs the normal `intentd pair` flow: the consent prompt, then
-   the network interface picker with the Tailcat tunnel row pre-checked. Setup
-   ends by printing the QR code and the `intent://pair` link.
+2. `full` keeps `daemon.mode: "regular"` and does not pair. `node` sets
+   `daemon.mode: "node"` over the local UDS seat, restarts the daemon, then
+   runs `intentd pair --tunnel`: the consent prompt, then the network
+   interface picker with the Tailcat tunnel row pre-checked. Setup ends by
+   printing the QR code and the `intent://pair` link.
 3. An unattended node install runs `intentd pair --yes --tunnel` and prints a
    tunnel-only link (empty `host=`, `tc=` present).
 4. Without the login service, and in the `.deb` `postinst` (which cannot
    prompt), setup only prints the commands for a node: set `daemon.mode`, start
    the daemon, then `intentd pair --tunnel`.
 
+**Tunnel on by default when pairing (both modes).** On a fresh install, where
+`server.tunnel.enabled` has no saved value, `intentd pair` pre-checks the
+Tailcat tunnel row in the interface picker, and `intentd pair --yes` turns the
+tunnel on together with the listener. So `--yes` on a fresh install prints a
+tunnel link instead of failing with "listener is bound to loopback only and no
+tunnel is active". A full daemon that was never paired does not start the
+tunnel: the default `false` still applies until pairing turns external
+connections on. An install with a saved value keeps its choice.
+
 `intentd pair --tunnel` sets `server.tunnel.enabled: true` before pairing, so
-the interface picker pre-checks the tunnel row and `--yes` pairs through the
-tunnel even on a fresh daemon whose bind address is loopback only. Without
-`--tunnel`, `intentd pair` is unchanged. The setting is in the `server.*`
-group, so it is allowed in node mode.
+the tunnel row is pre-checked and `--yes` pairs through the tunnel even when
+the saved value is `false`. The setting is in the `server.*` group, so it is
+allowed in node mode.
 
 The pair link of a node carries the hint `mode=node`
 ([`pairing.getInfo`](../05-method-catalog.md#pairinggetinfo-local-only)). The

@@ -27,7 +27,9 @@ version bump): **reported daemon mode and node setup**
 running mode; older daemons omit it, and clients then probe for the `-32003` `node-mode`
 refusal. `pairing.getInfo` adds `daemonMode`, and a node's `intent://pair` link adds the
 non-authoritative hint `mode=node` (absent means a full daemon; older parsers ignore it).
-`intentd pair --tunnel` turns the tunnel on before pairing, and the installers take
+On a fresh install `intentd pair` turns the tunnel on with the listener (pre-checked in the
+picker; `--yes` pairs over it), `intentd pair --tunnel` turns it on whatever the saved value, and
+the installers take
 `--daemon-mode=full|node` / `INTENTD_DAEMON_MODE` (default `full`). Settings → Machines splits
 full daemons (Machines) from nodes (Nodes), and adding a node asks whether to make it
 available to the current backend.
