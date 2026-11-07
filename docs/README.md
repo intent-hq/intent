@@ -75,6 +75,15 @@ in `docs/protocol/methods/settings.md` (the paths before "— booleans"). For a 
 addition, a `(prepared addition)` bullet that opens with the path also counts; once the
 daemon registers that setting, the check warns until the path is in the list.
 
+The chords `docs/fe/KEYBINDINGS.md` shows for configurable shortcuts (rows with a
+shortcut id in their `ID` cell) must match `SHORTCUT_DEFAULTS` in cloudlands-fe
+`src/lib/utils/shortcut-bindings.ts`. This is checked by `scripts/check-keybindings-doc.mjs`
+(`make check-keybindings-doc`, part of `make consumer-checks`), so a cloudlands-fe PR that
+moves or adds a shortcut fails until the doc agrees. Land the doc row with a `PENDING` entry in
+the script first; see [Moving a shortcut](./fe/KEYBINDINGS.md#moving-a-shortcut). A table
+shortcut with no row fails too, so a new shortcut's row lands before its cloudlands-fe PR. An
+id the table lacks, or a stale `PENDING` entry, is only a warning.
+
 A capability the pinned intentd advertises in `client.hello` `server.capabilities` (the
 `server_json()` literal in `packages/intentd/crates/intent-transport/src/client.rs`) must
 not be described as "prepared" or "not implemented" anywhere under `docs/protocol/`. This
@@ -118,7 +127,7 @@ migrated from `packages/cloudlands-fe/docs/` after an accuracy audit:
 - [fe/TROUBLESHOOTING_GUIDE.md](./fe/TROUBLESHOOTING_GUIDE.md) — common issues and debugging workflow
 - [fe/IPC_DEBUG_GUIDE.md](./fe/IPC_DEBUG_GUIDE.md) — IPC debug tooling and adding new channels
 - [fe/ERROR_HANDLING_SYSTEM.md](./fe/ERROR_HANDLING_SYSTEM.md) — error handler, reporter, and toast utilities
-- [fe/KEYBINDINGS.md](./fe/KEYBINDINGS.md) — keyboard shortcut reference and audit notes
+- [fe/KEYBINDINGS.md](./fe/KEYBINDINGS.md) — keyboard shortcut reference, checked against the shortcut table
 - [fe/PR_DESCRIPTION_GUIDE.md](./fe/PR_DESCRIPTION_GUIDE.md) — PR description conventions
 - [fe/RULES_SYSTEM.md](./fe/RULES_SYSTEM.md) — agent instruction layers and rules loading
 
