@@ -2876,8 +2876,8 @@ backend below 11 refuses them as frames its table does not forward.
 
 ### Sub-agent checkouts (nodeProtocol 13)
 
-A local sub-agent works in its parent's worktree. On protocol 13 a remote
-agent's sub-agent also starts from its parent's work
+A sub-agent of a local agent works in its parent's worktree. On protocol 13
+a remote agent's sub-agent also starts from its parent's work
 ([sub-agents of remote agents](./methods/nodes.md#sub-agents-of-remote-agents)).
 The backend decides once, when the remote parent creates the child (the
 create's caller is the parent):
@@ -2888,13 +2888,12 @@ create's caller is the parent):
 | The parent's machine | Below 13 | Starts from the workspace's last commit, as before |
 | Another machine | The parent's machine's link at 13 or later | Starts from a copy of the parent's work, pushed at creation ([parent's work on another machine](#parents-work-on-another-machine)) |
 | Another machine | The parent's machine's link below 13 | Starts from a copy of the parent's last pushed work (step 4 below) |
+| A new sandbox (`target: "e2b"`) | Either | As another machine |
+| The backend (`target: "local"`) | Either | With its own copy-on-write checkout, as another machine; in the shared worktree, the worktree is unchanged and the notice names the parent's refs ([backend sub-agents](./methods/nodes.md#backend-sub-agents-of-remote-agents)) |
 
-A child on the backend (`placement: { target: "local" }`) gets a copy of the
-parent's work too, by the same steps, when it has its own checkout
-([backend sub-agents](./methods/nodes.md#backend-sub-agents-of-remote-agents)).
-A child on a new sandbox (`target: "e2b"`) is a child on another machine. "The parent's checkout" is always a checkout's
-**owner**: when the parent itself shares a checkout, its child shares, or
-copies, that checkout's owner's. The backend keeps the owner with the child's
+"The parent's checkout" is always a checkout's **owner**: when the parent
+itself shares a checkout, its child shares, or copies, that checkout's
+owner's. The backend keeps the owner with the child's
 placement and sends it at every launch.
 
 #### Shared checkout
