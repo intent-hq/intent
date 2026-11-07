@@ -27,12 +27,12 @@ version bump): **reported daemon mode and node setup**
 running mode; older daemons omit it, and clients then probe for the `-32003` `node-mode`
 refusal. `pairing.getInfo` adds `daemonMode`, and a node's `intent://pair` link adds the
 non-authoritative hint `mode=node` (absent means a full daemon; older parsers ignore it).
-When `intentd pair` turns the listener on with a loopback-only bind, it turns the tunnel on too,
-for full daemons as well (pre-checked in the picker; `--yes` pairs over it), `intentd pair --tunnel` turns it on whatever the saved value, and
-the installers take
-`--daemon-mode=full|node` / `INTENTD_DAEMON_MODE` (default `full`). Settings → Machines splits
-full daemons (Machines) from nodes (Nodes), and adding a node asks whether to make it
-available to the current backend.
+When `intentd pair` turns the listener on with a loopback-only bind, it turns the tunnel on
+too, for full daemons as well (pre-checked in the picker; `--yes` pairs over it).
+`intentd pair --tunnel` turns it on whatever the saved value. The installers take
+`--daemon-mode=full|node` / `INTENTD_DAEMON_MODE` (default `full`). Settings → Machines
+splits full daemons (Machines) from nodes (Nodes), and adding a node asks whether to make
+it available to the current backend.
 
 **Version 15.4 — bounded object reads (additive methods, capped replies).**
 [Bounded object reads](./methods/files-terminal-browser.md#bounded-object-reads-154) let a

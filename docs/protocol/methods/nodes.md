@@ -1103,11 +1103,14 @@ How will you use this computer?
 **Tunnel on by default when pairing (both modes).** The rule depends on
 `server.bindAddress`, not on whether the tunnel setting was ever saved: a full
 daemon writes every setting to `config.toml` at startup. When `intentd pair`
-turns external connections on and the listener is bound to loopback only (the
-fresh-install default `127.0.0.1`), the interface picker pre-checks the Tailcat
-tunnel row, and `intentd pair --yes` turns the tunnel on with the listener. The
-user can still clear the row in the picker. A LAN or all-interfaces bind keeps
-its saved tunnel choice. This is a deliberate change for full daemons too:
+turns external connections on and every bound address is loopback
+(`127.0.0.1` / `::1`; the fresh-install default is `127.0.0.1`), the interface
+picker pre-checks the Tailcat tunnel row, and `intentd pair --yes` turns the
+tunnel on with the listener. With a loopback-only bind this overrides a saved
+`false`, because without the tunnel pairing cannot succeed. The user can still
+clear the row in the picker. A bind with any LAN address, or an unspecified
+bind (`0.0.0.0` / `::`, which counts as all interfaces), keeps its saved tunnel
+choice. This is a deliberate change for full daemons too:
 before, `pair --yes` on a fresh install stayed loopback-only and failed with
 "listener is bound to loopback only and no tunnel is active"; now it prints a
 tunnel link. A full daemon that was never paired does not start the tunnel:
