@@ -177,6 +177,15 @@ the placement `target: "e2b"`, the `cloud` and `cloudStart` fields and the
 `remoteMachines: 1`. Clients offer E2B only when it is exactly `1`; it grants no
 caller authority.
 
+**Named E2B entries (additive).** Exact integer
+`server.capabilities.cloudMachineEntries: 1` means the backend keeps several
+[named E2B entries](./nodes.md#named-e2b-entries): `cloudMachines.configure`
+takes `cloudMachineId`, `name` and `apiKeyFrom`, `cloudMachines.remove` takes
+`cloudMachineId`, and placement takes `target: "e2b"` with `cloudMachineId`.
+It is advertised only together with `cloudMachines: 1`. Clients send these
+members, and offer more than one entry, only when it is exactly `1`; it grants
+no caller authority.
+
 **Remote scripts (additive).** Exact integer `server.capabilities.remoteScripts: 1`
 means a remote agent's `ws.script.*` calls are forwarded and the scripts it starts run on
 its machine, listed in `machineRuns` on their rows ([§5.8](./scripts.md#scripts-of-remote-agents-remotescripts-1)).

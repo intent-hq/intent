@@ -1092,6 +1092,30 @@ kill it. `CloudMachineState.agentId` may now name a sub-agent. No methods,
 events, fields or error codes change, no node-link frame changes, the surface
 counts are unchanged, and there is no public protocol version bump.
 
+**Named E2B entries — capability `cloudMachineEntries: 1` (additive, with a
+migration).** The single E2B provider becomes a list of
+[named entries](./methods/nodes.md#named-e2b-entries), each with its own id,
+name, key, template project, size, idle pause and paused delete. The method
+names, the `cloudMachine:changed` event and the result keys stay the same:
+each `CloudMachineProvider` row (in `providers`, `provider` and the event) is
+now one entry, its `id` is the entry's `cloudMachineId` (no longer only
+`"e2b"`) and it gains `provider: "e2b"`. New optional members:
+`cloudMachines.configure` `cloudMachineId`, `name` and `apiKeyFrom`;
+`cloudMachines.remove` `cloudMachineId` (`provider` becomes optional); the
+placement `{ target: "e2b", cloudMachineId? }`; `CloudMachineState.cloudMachineId`;
+and `cloudMachineId` on the three cloud error datas, with the new
+`cloud-machine-unavailable` reason `entry-required` (data `entries`). A saved
+single provider migrates at the backend's first start to the entry `"e2b"`
+named `"E2B"`, keeping its secret store account `cloudMachines.e2b.apiKey`,
+settings, sandboxes and agents. Older clients keep working against the entry
+`"e2b"`: calls without `cloudMachineId` address it, a placement without one
+falls back to it, and they skip rows whose `id` is not `"e2b"`. Cloud machine
+rows are named `"<entry name> · <agent name>"`, and agents show the entry's
+name as `nodeName`. Nothing is renamed or removed, so the method and event
+catalogs, the protocol-to-app field parity rows and the surface counts are
+unchanged and the consumer checks need no staged row. The public protocol
+version is unchanged; clients detect entries only through the flag.
+
 **Secrets for remote agents — nodeProtocol 14 (additive result fields and error code; no method-catalog change, so no version bump).**
 A remote top-level agent can now request and use secrets
 ([§5.56 remote agents](./methods/secrets.md#remote-agents)). Its
