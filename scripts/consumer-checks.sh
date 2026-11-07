@@ -43,7 +43,7 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 cd "$repo_root"
 
-checks="event-catalog-check check-mcp-bindings check-protocol-status-labels docs-check check-protocol-catalog check-makefile-targets check-protocol-field-parity check-agent-feature-toggles check-transfer-methods check-transfer-selection-contract check-backend-keychain-contract check-agent-worker-contract check-app-ui-targets check-app-guide-sources check-note-truncated-read-contract check-browser-routing-contract check-suggested-prompts-contract check-turn-start-contract check-fixture-copies"
+checks="event-catalog-check check-mcp-bindings check-protocol-status-labels docs-check check-protocol-catalog check-makefile-targets check-protocol-field-parity check-agent-feature-toggles check-keybindings-doc check-transfer-methods check-transfer-selection-contract check-backend-keychain-contract check-agent-worker-contract check-app-ui-targets check-app-guide-sources check-note-truncated-read-contract check-browser-routing-contract check-suggested-prompts-contract check-turn-start-contract check-fixture-copies"
 advisory=${CONSUMER_CHECKS_ADVISORY:-}
 context=${CONSUMER_CHECKS_CONTEXT:-monorepo}
 make_bin=${MAKE:-make}
@@ -97,6 +97,7 @@ fix_path() {
     check-makefile-targets) echo "Makefile intentd crate / --test references (must exist at the pinned intentd gitlink in the monorepo / at the caller head upstream)" ;;
     check-protocol-field-parity) echo "docs/protocol/versioning.md staged row fields table (daemon-first field), scripts/check-protocol-field-parity.mjs PAIRS ignore (field the FE never reads), or the cloudlands-fe type that consumes the row struct" ;;
     check-agent-feature-toggles) echo "cloudlands-fe src/lib/components/settings/agent-feature-definitions.ts (FEATURE_PATHS + FEATURES) or scripts/check-agent-feature-toggles.mjs EXEMPT (reasoned entry, landed before the intentd PR), plus the Agent features list in docs/protocol/methods/settings.md" ;;
+    check-keybindings-doc) echo "docs/fe/KEYBINDINGS.md rows whose ID cell names a shortcut (chord must match cloudlands-fe src/lib/utils/shortcut-bindings.ts SHORTCUT_DEFAULTS), or a PENDING entry in scripts/check-keybindings-doc.mjs landed before the cloudlands-fe PR that moves the chord" ;;
     check-transfer-methods) echo "cloudlands-fe src/features/backend/main/transfer-connections.ts TRANSFER_METHODS (route the bulk method) or intentd crates/intent-transport/src/catalog.rs PAYLOAD_CLASSES (cap the read and classify it bounded); see docs/protocol/methods/files-terminal-browser.md Bounded object reads" ;;
     check-transfer-selection-contract) echo "docs/protocol/fixtures/transfer-selection/ (shape, coverage and provenance; no compilation)" ;;
     check-backend-keychain-contract) echo "docs/protocol/fixtures/backend-keychain/v1/ + adopted component mirrors/locks (see docs/protocol/backend-keychain.md)" ;;

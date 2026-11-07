@@ -70,6 +70,14 @@ setting without a toggle fails both here and on the upstream intentd PR. For a s
 that intentionally has no toggle, or whose toggle lands later, add it with a one-line
 reason to the script's `EXEMPT` map, and land that change before the intentd PR. A
 toggle the daemon does not register, or a stale `EXEMPT` entry, is only a warning.
+
+The chords `docs/fe/KEYBINDINGS.md` shows for configurable shortcuts (rows with a
+shortcut id in their `ID` cell) must match `SHORTCUT_DEFAULTS` in cloudlands-fe
+`src/lib/utils/shortcut-bindings.ts`. This is checked by `scripts/check-keybindings-doc.mjs`
+(`make check-keybindings-doc`, part of `make consumer-checks`), so a cloudlands-fe PR that
+moves a shortcut fails until the doc agrees. Land the doc row with a `PENDING` entry in
+the script first; see [Moving a shortcut](./fe/KEYBINDINGS.md#moving-a-shortcut). An id
+the table lacks, a table shortcut with no row, or a stale `PENDING` entry is only a warning.
 The same check fails when a registered setting is missing from the Agent features list
 in `docs/protocol/methods/settings.md` (the paths before "— booleans"). For a docs-first
 addition, a `(prepared addition)` bullet that opens with the path also counts; once the
@@ -118,7 +126,7 @@ migrated from `packages/cloudlands-fe/docs/` after an accuracy audit:
 - [fe/TROUBLESHOOTING_GUIDE.md](./fe/TROUBLESHOOTING_GUIDE.md) — common issues and debugging workflow
 - [fe/IPC_DEBUG_GUIDE.md](./fe/IPC_DEBUG_GUIDE.md) — IPC debug tooling and adding new channels
 - [fe/ERROR_HANDLING_SYSTEM.md](./fe/ERROR_HANDLING_SYSTEM.md) — error handler, reporter, and toast utilities
-- [fe/KEYBINDINGS.md](./fe/KEYBINDINGS.md) — keyboard shortcut reference and audit notes
+- [fe/KEYBINDINGS.md](./fe/KEYBINDINGS.md) — keyboard shortcut reference, checked against the shortcut table
 - [fe/PR_DESCRIPTION_GUIDE.md](./fe/PR_DESCRIPTION_GUIDE.md) — PR description conventions
 - [fe/RULES_SYSTEM.md](./fe/RULES_SYSTEM.md) — agent instruction layers and rules loading
 

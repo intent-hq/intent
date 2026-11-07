@@ -276,6 +276,7 @@ jobs:
       - run: make check-agent-worker-contract
       - run: node --test scripts/check-app-ui-targets.test.mjs
       - run: node --test scripts/check-agent-feature-toggles.test.mjs
+      - run: node --test scripts/check-keybindings-doc.test.mjs
       - run: node --test scripts/check-transfer-methods.test.mjs
       - run: node --test scripts/check-app-guide-sources.test.mjs
       - run: node --test scripts/consumer-checks-ci.test.mjs
