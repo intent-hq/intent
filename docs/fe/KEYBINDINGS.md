@@ -225,4 +225,6 @@ doc agrees. The docs lead the pin:
 2. Re-run the cloudlands-fe PR's checks and land it.
 3. After the submodule bump, remove the `PENDING` entry (the check warns until you do).
 
-A new shortcut needs a row with its id; the check warns until it has one.
+A new shortcut needs a row with its id, or the check fails. Land the row first, in a monorepo PR; the
+check only warns about an id the pinned table does not define yet. After a shortcut is removed, drop
+its row once the bump lands.

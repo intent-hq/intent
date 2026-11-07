@@ -116,12 +116,18 @@ test('compare fails a documented chord that disagrees with the table', () => {
   assert.match(result.errors[0], /docs\/fe\/KEYBINDINGS\.md:42: panel\.focus-next-column is documented as `Mod\+Shift\+\]` but .*binds it to `mod\+alt\+right`/);
 });
 
-test('compare warns, not fails, for ids the table and doc do not share', () => {
-  const result = compare({ bindings, rows: [row('panel.gone', 'Mod+G'), ...allDocumented], pending: {} });
+test('compare fails a table shortcut the doc does not list', () => {
+  const result = compare({ bindings, rows: allDocumented, pending: {} });
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0], /panel\.focus-next-column \(mod\+alt\+right\) has no row in docs\/fe\/KEYBINDINGS\.md/);
+  assert.deepEqual(result.warnings, []);
+});
+
+test('compare only warns for a doc id the table does not define (docs-first addition)', () => {
+  const result = compare({ bindings, rows: [row('panel.focus-next-column', 'Mod+Alt+→'), row('panel.new', 'Mod+G'), ...allDocumented], pending: {} });
   assert.deepEqual(result.errors, []);
-  assert.equal(result.warnings.length, 2);
-  assert.match(result.warnings.join('\n'), /panel\.gone, which .*does not define/);
-  assert.match(result.warnings.join('\n'), /panel\.focus-next-column .* has no row/);
+  assert.equal(result.warnings.length, 1);
+  assert.match(result.warnings[0], /panel\.new, which .*does not define/);
 });
 
 test('a PENDING entry lets the docs lead a cloudlands-fe chord change', () => {
@@ -139,7 +145,7 @@ test('a PENDING entry lets the docs lead a cloudlands-fe chord change', () => {
   const wrongDoc = compare({ bindings: pinned, rows: [row('panel.focus-next-column', 'Mod+Alt+PageDown'), ...allDocumented], pending });
   assert.equal(wrongDoc.errors.length, 1);
 
-  const noReason = compare({ bindings: pinned, rows: allDocumented, pending: { 'panel.focus-next-column': { from: 'mod+shift+]', to: 'mod+alt+right' } } });
+  const noReason = compare({ bindings: pinned, rows: [row('panel.focus-next-column', 'Mod+Alt+→'), ...allDocumented], pending: { 'panel.focus-next-column': { from: 'mod+shift+]', to: 'mod+alt+right' } } });
   assert.match(noReason.errors.join('\n'), /needs a reason/);
 });
 

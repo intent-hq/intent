@@ -21,9 +21,11 @@
 //     check then accepts the new chord while the pin still has the old one;
 //   - a stale PENDING entry (the pin now has the new chord) only warns, so
 //     the pin bump stays green; remove it in a follow-up;
-//   - a tagged id the table does not define only warns (a docs-first
-//     addition, or left over after the shortcut was removed);
-//   - a table id with no tagged row only warns (document it).
+//   - a table id with no tagged row fails: a new shortcut is documented
+//     first. Land its row BEFORE the cloudlands-fe PR that adds it;
+//   - a tagged id the table does not define only warns (that docs-first
+//     addition while the pin catches up, or a row left over after the
+//     shortcut was removed; drop it after the bump).
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -198,7 +200,12 @@ export function compare({ bindings, rows, pending = PENDING, files = {} }) {
   }
 
   for (const [id, binding] of bindings) {
-    if (!documented.has(id)) warnings.push(`${id} (${binding}) has no row in ${f.docs}; add one with \`${id}\` in its ID cell`);
+    if (!documented.has(id)) {
+      errors.push(
+        `${id} (${binding}) has no row in ${f.docs}. Add one with \`${id}\` in its ID cell; ` +
+          `for a new shortcut, land that row in a monorepo PR before the cloudlands-fe PR.`,
+      );
+    }
   }
   return { errors, warnings, checked, pending: pendingCount };
 }

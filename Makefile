@@ -330,10 +330,10 @@ check-protocol-field-parity: ensure-intentd-submodule ensure-fe-submodule ## Che
 check-agent-feature-toggles: ensure-intentd-submodule ensure-fe-submodule ## Check every intentd agentFeatures.* setting has a cloudlands-fe Agent features toggle (or a reasoned EXEMPT entry) and appears in the settings.md Agent features list
 	@node scripts/check-agent-feature-toggles.mjs --intentd-dir "$(INTENTD_DIR)" --fe-dir "$(FE_DIR)"
 
-# docs/fe/KEYBINDINGS.md rows tagged with a shortcut id must show the chord
-# cloudlands-fe's SHORTCUT_DEFAULTS binds; a docs-first chord change needs a
-# PENDING entry in the script. See docs/fe/KEYBINDINGS.md#moving-a-shortcut.
-check-keybindings-doc: ensure-fe-submodule ## Check docs/fe/KEYBINDINGS.md chords for configurable shortcuts against cloudlands-fe SHORTCUT_DEFAULTS
+# Every cloudlands-fe SHORTCUT_DEFAULTS id needs a docs/fe/KEYBINDINGS.md row
+# showing its chord; a docs-first chord change needs a PENDING entry in the
+# script. See docs/fe/KEYBINDINGS.md#moving-a-shortcut.
+check-keybindings-doc: ensure-fe-submodule ## Check docs/fe/KEYBINDINGS.md lists every cloudlands-fe SHORTCUT_DEFAULTS shortcut with its current chord
 	@node scripts/check-keybindings-doc.mjs --fe-dir "$(FE_DIR)"
 
 check-transfer-methods: ensure-intentd-submodule ensure-fe-submodule ## Check every intentd BulkTransfer method the app calls rides a cloudlands-fe transfer connection (TRANSFER_METHODS), and that TRANSFER_METHODS lists no capped read
