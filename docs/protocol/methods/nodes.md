@@ -1050,6 +1050,83 @@ Any other method is `-32003` with `data.code: "node-mode"`. Adding a method is a
 deliberate one-line opt-in plus a test update. The executor link's request list
 is a second, separate opt-in.
 
+##### Reported daemon mode
+
+A daemon reports its running mode as `daemonMode: "regular" | "node"` in two
+places (additive, docs first):
+
+- `client.hello` `server.daemonMode` ([§5.17](./client-hello.md));
+- the `host.status` result root ([§5.14](./execution-locus.md)).
+
+The value is the mode of the running process, so `intentd serve --node` reports
+`"node"` even while the setting `daemon.mode` is `regular`. A pending setting
+change is not reported until the next start. Older daemons omit the field:
+absence means **unknown**, not regular. For those daemons a client probes once
+with a method outside the node-mode list (for example `workspace.list`). A
+`-32003` refusal with `data.code: "node-mode"` means node; any other answer
+means regular. The field grants no caller authority, and a client reads it
+again on every connection because the mode can change across restarts.
+
+##### Node setup and pairing
+
+Setup asks which kind of daemon to run and steers new users to the full daemon.
+The installers (`install.sh`, `install.ps1`) ask on a TTY:
+
+```text
+How will you use this computer?
+1) Run Intent here (recommended if you're just getting started): workspaces, agents and the app connect to it.
+2) Node only: lets another Intent run agents on this computer; nothing else runs here.
+```
+
+1. Enter selects 1. Scripted installs use the flag `--daemon-mode=full|node`
+   or the environment variable `INTENTD_DAEMON_MODE=full|node` (flag, then
+   variable, then prompt). Without a TTY and without either, setup uses `full`.
+   The flag is not `--mode`: `intentd serve --mode` already selects connection
+   locality.
+2. `full` keeps `daemon.mode: "regular"`. `node` sets `daemon.mode: "node"`
+   and `server.tunnel.enabled: true` over the local UDS seat, restarts the
+   daemon, then runs the normal `intentd pair` flow: the consent prompt, then
+   the network interface picker with the Tailcat tunnel row pre-checked. Setup
+   ends by printing the QR code and the `intent://pair` link.
+3. An unattended node install runs `intentd pair --yes --tunnel` and prints a
+   tunnel-only link (empty `host=`, `tc=` present).
+4. Without the login service, and in the `.deb` `postinst` (which cannot
+   prompt), setup only prints the commands for a node: set `daemon.mode`, start
+   the daemon, then `intentd pair --tunnel`.
+
+`intentd pair --tunnel` sets `server.tunnel.enabled: true` before pairing, so
+the interface picker pre-checks the tunnel row and `--yes` pairs through the
+tunnel even on a fresh daemon whose bind address is loopback only. Without
+`--tunnel`, `intentd pair` is unchanged. The setting is in the `server.*`
+group, so it is allowed in node mode.
+
+The pair link of a node carries the hint `mode=node`
+([`pairing.getInfo`](../05-method-catalog.md#pairinggetinfo-local-only)). The
+link of a regular daemon has no `mode` param, and a link without one means a
+full daemon. The hint lets a client choose a section before it connects, but it
+is not authoritative: after the credential test the client uses the reported
+`daemonMode` (or the probe above) and moves the row if the two disagree.
+
+##### Machines and Nodes in the app
+
+Settings → Machines shows two lists:
+
+- **Machines**: full daemons, which can be the current backend.
+- **Nodes**, shown only when there is at least one node, with the description
+  "Nodes only run agents." A node never becomes the current backend and never
+  opens a backend window.
+
+The client stores the detected kind on the saved connection and checks it again
+on each connection. Adding a node by any route (the Add machine dialog, the
+**Paste intent:// link** item of the Add machine menu, or opening an
+`intent://pair` link) makes it available to the current backend at once with
+the [expose flow](#expose-flow), when that backend advertises
+`remoteMachines: 1`. Otherwise the node is saved and the expose action is
+offered later. The paste item parses the link, tests the credential with
+`principal.me`, detects the mode, and adds the row to the right list with no
+dialog; errors show inline. The pairing token stays in the main process and the
+secret store, as for every other saved connection.
+
 ##### Remote machine errors
 
 Placement keeps `-32602` `placement-unavailable` and its `no-capacity` and

@@ -216,7 +216,7 @@ subscribe to discussion events, and private discussions remain human-only.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| client.hello | clientId?, connectionRole? *(prepared; see attachment contract below)*, name?, capabilities?, hostname? *(v9.9)*, prettyHostname? *(v9.9)*, deviceKind? *(v9.9)* | { clientId, connectionRole? *(prepared attachment acknowledgement only)*, protocolVersion, server: { locality, hasDisplay, osArch, version, buildCommit?, protocolVersion, capabilities } } |
+| client.hello | clientId?, connectionRole? *(prepared; see attachment contract below)*, name?, capabilities?, hostname? *(v9.9)*, prettyHostname? *(v9.9)*, deviceKind? *(v9.9)* | { clientId, connectionRole? *(prepared attachment acknowledgement only)*, protocolVersion, server: { locality, hasDisplay, osArch, version, buildCommit?, protocolVersion, daemonMode?, capabilities } } |
 | client.list *(v9.9)* | workspaceId? | { clients: [{ clientId, name?, hostname?, prettyHostname?, deviceKind?, capabilities, connections, transports, connectedAt }] } — the **live, hello'd** connections grouped by logical `clientId`; see the `client.list` block below |
 
 - **Global handshake.** `client.hello` does **not** require `workspaceId` (§3.6); it is the
@@ -257,6 +257,10 @@ subscribe to discussion events, and private discussions remain human-only.
   surface version from [Protocol Version & Compatibility](../versioning.md)), and
   `capabilities` (feature-detection flags, e.g. `{ "liveState": true }` for the snapshot+delta
   channels of §6.9).
+- **`server.daemonMode`** (additive, docs first). `"regular"` or `"node"`: the mode of the
+  running daemon ([reported daemon mode](./nodes.md#reported-daemon-mode)). Older daemons omit
+  it; absence means unknown, so clients fall back to the `node-mode` refusal probe described
+  there. It grants no caller authority.
 - **`protocolVersion`.** The top-level `protocolVersion` is an explicit copy of
   `server.protocolVersion` so clients can version-check without digging into the `server` block
   (see [Protocol Version & Compatibility](../versioning.md)).
