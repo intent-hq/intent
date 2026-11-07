@@ -585,8 +585,8 @@ When a remote parent creates a sub-agent with `placement: { "target": "local"
 }` (the create's caller is the parent), the backend first gets the parent's
 latest work, as for a child on another machine (steps 1 to 4 of
 [parent's work on another machine](../node-link.md#parents-work-on-another-machine)).
-The child's isolation defaults to `"cow"` whatever `workspace.cowIsolation`
-says; an explicit `isolation` wins.
+Its `isolation` resolves as for any backend agent (`workspace.cowIsolation`
+when omitted).
 
 - **Own checkout** (`isolation` resolves to `"cow"` and the workspace can have
   [sandboxes](./agents.md)): the backend checks out the parent's `head` in the
@@ -598,8 +598,9 @@ says; an explicit `isolation` wins.
   sandboxes): the child works in the workspace worktree, which the backend
   never changes for it. The parent's work stays in its `head` and `wip` refs.
 
-The create result's `notice` says which, and names the parent's `head` ref
-when the child does not have the parent's work. Without a parent `head` ref
+The create result's `notice` says which. In the shared worktree, the notice
+and the child's first message name the parent's `head` and `wip` refs, where
+its work is saved. Without a parent `head` ref
 the child starts from the workspace's last commit. Getting the parent's work
 never fails the create.
 
@@ -607,9 +608,11 @@ never fails the create.
 
 A sandbox started by an agent's placement (a top-level agent, or a sub-agent
 with `target: "e2b"`) runs on the owner's E2B account, like every sandbox.
-Its `cloud.startedBy` is the person behind the agent chain: the author of the
-first message of the chain's top-level agent, else the backend owner when
-that message has no author. That person is the sandbox's *starter*, so they
+Its `cloud.startedBy` is the person behind the agent chain: the backend walks
+up the placing agent's parents (the agent itself first) and takes the
+`startedBy` of the first one that runs on a sandbox; with none, the person who
+created the chain's top-level agent; else the backend owner (for example an
+agent created before the backend recorded its creator). That person is the sandbox's *starter*, so they
 can `cloudMachines.pause` and `cloudMachines.kill` it. There is no cap on the
 number of sandboxes that agents start; E2B's plan limits are the only limit,
 and a refused create fails that sub-agent with `cloud-quota`.

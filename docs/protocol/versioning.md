@@ -1067,8 +1067,9 @@ A remote agent can place a sub-agent anywhere
 Three things change. `placement: { target: "e2b" }` from an agent on a cloud
 machine now starts a new sandbox owned by the sub-agent, instead of meaning the
 parent's sandbox; an omitted placement still shares it. A
-`target: "local"` sub-agent of a remote parent now defaults to
-`isolation: "cow"` and starts from the parent's latest work
+`target: "local"` sub-agent of a remote parent with its own copy-on-write
+checkout now starts from the parent's latest work; in the shared worktree its
+notice names the parent's refs
 ([backend sub-agents](./methods/nodes.md#backend-sub-agents-of-remote-agents)).
 A sandbox that an agent starts records the person behind the agent chain in
 `cloud.startedBy` instead of the backend owner, so that person can pause and
