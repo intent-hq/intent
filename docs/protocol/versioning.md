@@ -19,6 +19,21 @@ plugins add `<plugin>:<skill>` entries to `skill.list` and their MCP servers to
 `mcp.servers.list` (with the new optional `plugin` field) and to new agent sessions. `agentPlugins: 1` gates support. The
 documented surface is **496 / 438 / 58** (dispatchable / router / fast path).
 
+Also within 15.5 (additive result fields and link param; no method-catalog change, so no
+version bump): **reported daemon mode and node setup**
+([reported daemon mode](./methods/nodes.md#reported-daemon-mode),
+[node setup and pairing](./methods/nodes.md#node-setup-and-pairing)). `client.hello`
+`server.daemonMode` and the `host.status` result add `daemonMode: "regular" | "node"`, the
+running mode; older daemons omit it, and clients then probe for the `-32003` `node-mode`
+refusal. `pairing.getInfo` adds `daemonMode`, and a node's `intent://pair` link adds the
+non-authoritative hint `mode=node` (absent means a full daemon; older parsers ignore it).
+When `intentd pair` turns the listener on with a loopback-only bind, it turns the tunnel on
+too, for full daemons as well (pre-checked in the picker; `--yes` pairs over it).
+`intentd pair --tunnel` turns it on whatever the saved value. The installers take
+`--daemon-mode=full|node` / `INTENTD_DAEMON_MODE` (default `full`). Settings → Machines
+splits full daemons (Machines) from nodes (Nodes), and adding a node asks whether to make
+it available to the current backend.
+
 **Version 15.4 — bounded object reads (additive methods, capped replies).**
 [Bounded object reads](./methods/files-terminal-browser.md#bounded-object-reads-154) let a
 client keep `file.read`, `git.showFile` and `note.readAsset` replies under the 500 KiB read
