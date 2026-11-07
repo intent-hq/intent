@@ -1061,6 +1061,21 @@ machine from the parent's last push. Only the create `notice` text changes on th
 surface: no methods, events, fields or error codes change, the surface counts
 are unchanged, and there is no public protocol version bump.
 
+**Sub-agent placement from remote agents (behavior change, no capability).**
+A remote agent can place a sub-agent anywhere
+([sub-agents of remote agents](./methods/nodes.md#sub-agents-of-remote-agents)).
+Three things change. `placement: { target: "e2b" }` from an agent on a cloud
+machine now starts a new sandbox owned by the sub-agent, instead of meaning the
+parent's sandbox; an omitted placement still shares it. A
+`target: "local"` sub-agent of a remote parent now defaults to
+`isolation: "cow"` and starts from the parent's latest work
+([backend sub-agents](./methods/nodes.md#backend-sub-agents-of-remote-agents)).
+A sandbox that an agent starts records the person behind the agent chain in
+`cloud.startedBy` instead of the backend owner, so that person can pause and
+kill it. `CloudMachineState.agentId` may now name a sub-agent. No methods,
+events, fields or error codes change, no node-link frame changes, the surface
+counts are unchanged, and there is no public protocol version bump.
+
 **Secrets for remote agents — nodeProtocol 14 (additive result fields and error code; no method-catalog change, so no version bump).**
 A remote top-level agent can now request and use secrets
 ([§5.56 remote agents](./methods/secrets.md#remote-agents)). Its
