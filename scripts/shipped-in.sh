@@ -106,7 +106,10 @@ gh_err=$(mktemp)
 probe_err=$(mktemp)
 trap 'rm -f "$gh_err" "$probe_err"' EXIT
 
-transient_pattern='rate limit|HTTP 429|HTTP 5[0-9]{2}|error connecting|connection (reset|refused)|timeout|no such host|network is unreachable|temporary failure|unexpected EOF'
+# Connection-level errors (Go's `dial tcp|udp`, any errno from connect, i/o or
+# TLS timeouts) are all transient: an unmatched "no route to host" evicted the
+# "Wait for shipped alpha" hook during a brief outage.
+transient_pattern='rate limit|HTTP 429|HTTP 5[0-9]{2}|error connecting|dial (tcp|udp)|connection (reset|refused|timed out)|no route to host|host is (down|unreachable)|network is (down|unreachable)|timeout|no such host|temporary failure|unexpected EOF|broken pipe'
 
 # Report a failed gh call: exit 4 when its stderr looks transient, else 1.
 # gh masks some REST 403s: under REST throttling `gh release download` and

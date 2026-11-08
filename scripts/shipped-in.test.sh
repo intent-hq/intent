@@ -51,6 +51,8 @@ stub_fail() {
     ratelimit-rest) echo "HTTP 403: API rate limit exceeded for user ID 526899. (https://api.github.com/repos/intent-hq/cloudlands-releases/releases/tags/v2.3.0)" >&2 ;;
     5xx) echo "gh: Server Error (HTTP 502)" >&2 ;;
     network) echo "error connecting to api.github.com" >&2; echo "check your internet connection or https://githubstatus.com" >&2 ;;
+    noroute) echo 'Post "https://api.github.com/graphql": dial tcp 172.182.252.137:443: connect: no route to host' >&2 ;;
+    dial) echo 'Get "https://api.github.com/repos/intent-hq/cloudlands-releases": dial tcp 140.82.112.6:443: connect: host is down' >&2 ;;
     forbidden) echo "gh: Resource not accessible by personal access token (HTTP 403)" >&2 ;;
     notfound) echo "release not found" >&2 ;;
     *) echo "stub: unknown failure mode $1" >&2 ;;
@@ -229,8 +231,10 @@ GH_STUB_FAIL=1 run_script cloudlands-fe "$sha"
 [[ "$(probe_count)" -eq 1 ]] || fail "generic gh failure ran the rate-limit probe $(probe_count) times (expected 1)"
 
 # Transient GitHub failures exit 4 and surface gh's text so a polling hook can
-# retry instead of evicting itself (intent-hq/intent rate-limit incident).
-for mode in ratelimit ratelimit-rest 5xx network; do
+# retry instead of evicting itself (intent-hq/intent rate-limit incident). Any
+# connection-level error is transient: an unmatched "no route to host" from a
+# brief outage evicted the canonical "Wait for shipped alpha" hook.
+for mode in ratelimit ratelimit-rest 5xx noroute dial network; do
   reset_stub
   GH_STUB_FAIL=$mode run_script cloudlands-fe "$sha"
   [[ "$status" -eq 4 ]] || fail "$mode on release list exited $status (expected 4): $stderr"
@@ -256,7 +260,7 @@ GH_STUB_FAIL=notfound GH_STUB_FAIL_ON="release download" run_script cloudlands-f
 
 # A probe failing transiently for another reason (5xx, network) also exits 4,
 # but is reported as unavailable rather than rate limited (PR #5681 review).
-for mode in 5xx network; do
+for mode in 5xx noroute dial network; do
   reset_stub
   echo ahead >"$fe_compare/$sha...v2.3.0"
   echo behind >"$fe_compare/$sha...v2.2.0"
