@@ -144,7 +144,7 @@ ws.browser.listTabs(scope?) → [tabs]
 ws.comment.add(noteId, { searchContext, commentTarget, comment, type?, author?, authorType? }) → { ... }
 ws.comment.delete(noteId, commentId) → { ... }
 ws.comment.getThread(noteId, { threadId?, commentId? }) → thread
-ws.comment.list(noteId, { since?, authorType?, status?, includeComments? }) → [threads]
+ws.comment.list(noteId, { since?, authorType?, status?, includeComments? }) → { threads, totalThreads, totalComments }
 ws.comment.respond(noteId, { threadId?, commentId?, comment, type?, author?, authorType?, suggestionOriginal?, suggestionProposed? }) → { ... }
 ```
 
