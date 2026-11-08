@@ -37,6 +37,90 @@ function fixture(t) {
   return { root, env: { ...process.env, PATH: `${root}/bin:${process.env.PATH}`, RUNNER_TEMP: root, GITHUB_STEP_SUMMARY: `${root}/summary`, GITHUB_ENV: `${root}/env`, GITHUB_ACTIONS: '', RETRY_DELAY: '0' } };
 }
 
+// The standalone fixture checkout may be actions/checkout or a component's
+// local checkout-pinned composite (cloudlands-fe#4274). Both resolve to the
+// same properties: which repository and ref they fetch, which paths, and
+// whether a credential is left behind.
+const CHECKOUT_USES = /^( *)(?:- )?uses: (actions\/checkout@\S+|\.\/\.github\/actions\/checkout-pinned)\s*$/;
+function checkoutSteps(source) {
+  const lines = source.split('\n');
+  const steps = [];
+  lines.forEach((line, at) => {
+    const match = line.match(CHECKOUT_USES);
+    if (!match) return;
+    // A step starts at its "- " item; include sibling keys before and after `uses`.
+    let begin = at;
+    while (begin > 0 && !/^ *- /.test(lines[begin])) begin -= 1;
+    const item = lines[begin].match(/^ */)[0].length;
+    let end = begin + 1;
+    while (end < lines.length && (!lines[end].trim() || lines[end].match(/^ */)[0].length > item)) end += 1;
+    steps.push({ uses: match[2], source: lines.slice(begin, end).join('\n') });
+  });
+  return steps;
+}
+function withInputs(source) {
+  const lines = source.split('\n');
+  const at = lines.findIndex((line) => /^ *with:\s*$/.test(line));
+  if (at === -1) return {};
+  const indent = lines[at].match(/^ */)[0].length;
+  const inputs = {};
+  let keyIndent;
+  let key;
+  for (const line of lines.slice(at + 1)) {
+    if (!line.trim()) continue;
+    const lead = line.match(/^ */)[0].length;
+    if (lead <= indent) break;
+    keyIndent ??= lead;
+    const pair = lead === keyIndent && line.trim().match(/^([\w-]+):\s*(.*)$/);
+    if (pair) {
+      key = pair[1];
+      inputs[key] = pair[2] === '|' ? '' : pair[2];
+    } else {
+      // Block scalar continuation (sparse-checkout patterns).
+      inputs[key] = inputs[key] ? `${inputs[key]}\n${line.trim()}` : line.trim();
+    }
+  }
+  return inputs;
+}
+function actionDefaults(action) {
+  const block = action.split(/^inputs:\n/m)[1]?.split(/^\S/m)[0] ?? '';
+  const defaults = {};
+  let name;
+  for (const line of block.split('\n')) {
+    const input = line.match(/^  ([\w-]+):\s*$/);
+    if (input) name = input[1];
+    const value = line.match(/^    default: (.*)$/);
+    if (name && value) defaults[name] = value[1].trim().replace(/^(['"])(.*)\1$/, '$2');
+  }
+  return defaults;
+}
+function resolveCheckout({ uses, source }, readComponent) {
+  const given = withInputs(source);
+  if (uses.startsWith('actions/checkout@')) {
+    return { repository: given.repository, ref: given.ref, sparse: given['sparse-checkout'] ?? '', credentials: given['persist-credentials'] === 'false' ? 'none' : 'persisted' };
+  }
+  const action = readComponent('.github/actions/checkout-pinned/action.yml');
+  const script = readComponent('scripts/git-network-retry.sh');
+  // The composite must fetch anonymously over the repository URL it is given
+  // and leave no credential in the checkout it creates.
+  const anonymous = !/secrets\.|github\.token|token:|actions\/checkout@|extraheader/i.test(action)
+    && /REPOSITORY: \$\{\{ inputs\.repository \}\}/.test(action)
+    && /"https:\/\/github\.com\/\$REPOSITORY"/.test(action)
+    && /git-network-retry\.sh" sparse-checkout /.test(action)
+    && !/extraheader|credential|GITHUB_TOKEN|GH_TOKEN|Authorization/i.test(script);
+  const defaults = actionDefaults(action);
+  return { repository: given.repository ?? defaults.repository, ref: given.ref ?? defaults.ref, sparse: given['sparse-checkout'] ?? '', credentials: anonymous ? 'none' : 'persisted' };
+}
+function assertSharedFixtureCheckout(steps, readComponent, label) {
+  assert.equal(steps.length, 1, `${label}: expected exactly one fixture checkout`);
+  const checkout = resolveCheckout(steps[0], readComponent);
+  assert.equal(checkout.repository, 'intent-hq/intent', label);
+  assert.equal(checkout.ref, 'main', label);
+  assert.equal(checkout.credentials, 'none', `${label}: the fixture checkout must not keep credentials`);
+  assert.match(checkout.sparse, /docs\/protocol\/fixtures\/transfer-selection/, label);
+  assert.match(checkout.sparse, /scripts\//, label);
+}
+
 test('reusable acquisition preserves workflow revision, caller head and counterpart pin for both directions', () => {
   const mono = step(workflow, "Check out the monorepo at this workflow's commit");
   assert.match(mono, /ref: \$\{\{ inputs.self-test && github.sha \|\| job\.workflow_sha \|\| 'main' \}\}/);
@@ -167,12 +251,8 @@ test('standalone jobs acquire main once and print the actual full contract SHA',
   const daemon = read('packages/intentd/.github/actions/transfer-selection-fixtures/action.yml');
   const frontend = read('packages/cloudlands-fe/.github/workflows/intent-pr.yml');
   const checkout = step(frontend, 'Checkout shared transfer-selection fixtures');
-  for (const source of [daemon, checkout]) {
-    assert.equal(source.match(/repository: intent-hq\/intent/g)?.length, 1);
-    assert.match(source, /ref: main\n/);
-    assert.match(source, /persist-credentials: false/);
-    assert.match(source, /docs\/protocol\/fixtures\/transfer-selection/);
-    assert.match(source, /scripts\//);
+  for (const [component, source] of [['intentd', daemon], ['cloudlands-fe', checkout]]) {
+    assertSharedFixtureCheckout(checkoutSteps(source), (file) => read(`packages/${component}/${file}`), component);
   }
   for (const executable of ['node', 'pnpm']) writeFileSync(`${f.root}/bin/${executable}`, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
   for (const [location, source, indent] of [
@@ -190,4 +270,58 @@ test('standalone jobs acquire main once and print the actual full contract SHA',
     assert.match(result.stdout, new RegExp(`intent-hq/intent@${sha}`));
     assert.match(readFileSync(f.env.GITHUB_STEP_SUMMARY, 'utf8'), new RegExp(`intent-hq/intent@${sha}`));
   }
+});
+
+test('fixture checkout resolution keeps the safety checks for both checkout forms', () => {
+  const pinned = (extra = '') => `      - name: Checkout shared transfer-selection fixtures
+        uses: ./.github/actions/checkout-pinned
+        with:${extra}
+          ref: main
+          path: .cache/transfer-selection-contract
+          sparse-checkout: |
+            /docs/protocol/fixtures/transfer-selection/
+            /scripts/
+`;
+  const action = (repositoryDefault = 'intent-hq/intent', run = 'bash "$GITHUB_ACTION_PATH/../../../scripts/git-network-retry.sh" sparse-checkout "https://github.com/$REPOSITORY" "$REF" "$DEST"') => `name: Checkout pinned sparse paths
+inputs:
+  repository:
+    description: owner/name
+    required: false
+    default: ${repositoryDefault}
+  ref:
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        REPOSITORY: \${{ inputs.repository }}
+      run: ${run}
+`;
+  const script = 'git -C "$dest" fetch --depth=1 origin "$ref"\n';
+  const files = (actionSource, scriptSource = script) => (file) => (file.endsWith('action.yml') ? actionSource : scriptSource);
+  const ok = () => assertSharedFixtureCheckout(checkoutSteps(pinned()), files(action()), 'fe');
+  ok();
+  // A wrong repository (default or explicit), a token, or a credential written by the script all fail.
+  assert.throws(() => assertSharedFixtureCheckout(checkoutSteps(pinned()), files(action('someone/fork')), 'fe'), /intent-hq\/intent/);
+  assert.throws(() => assertSharedFixtureCheckout(checkoutSteps(pinned('\n          repository: someone/fork')), files(action()), 'fe'), /intent-hq\/intent/);
+  assert.throws(() => assertSharedFixtureCheckout(checkoutSteps(pinned('\n          token: ${{ secrets.X }}')), files(action().replace('    - shell: bash', '    - uses: actions/checkout@v7\n      with:\n        token: ${{ github.token }}\n    - shell: bash')), 'fe'), /credentials/);
+  assert.throws(() => assertSharedFixtureCheckout(checkoutSteps(pinned()), files(action(), 'git -C "$dest" config http.extraheader "AUTHORIZATION: x"\n'), 'fe'), /credentials/);
+  assert.throws(() => assertSharedFixtureCheckout(checkoutSteps(pinned()), files(action('intent-hq/intent', 'git clone "https://x-access-token:$T@github.com/$REPOSITORY"')), 'fe'), /credentials/);
+  // actions/checkout must still say persist-credentials: false and fetch main once.
+  const checkout = (persist) => `    - uses: actions/checkout@v7
+      with:
+        repository: intent-hq/intent
+        ref: main
+        path: .transfer-selection-contract${persist}
+        sparse-checkout: |
+          docs/protocol/fixtures/transfer-selection
+          scripts/check-transfer-selection-contract.mjs
+        sparse-checkout-cone-mode: false
+    - uses: actions/setup-node@v7
+`;
+  const none = () => assert.fail('actions/checkout must not read component files');
+  assertSharedFixtureCheckout(checkoutSteps(checkout('\n        persist-credentials: false')), none, 'intentd');
+  assert.throws(() => assertSharedFixtureCheckout(checkoutSteps(checkout('')), none, 'intentd'), /credentials/);
+  assert.throws(() => assertSharedFixtureCheckout(checkoutSteps(checkout('\n        persist-credentials: false') + checkout('\n        persist-credentials: false')), none, 'intentd'), /exactly one/);
 });
