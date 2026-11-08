@@ -476,6 +476,11 @@ interface MergeQueueEntry { // shared with the §5.42 `MergeRequirements.mergeQu
   state?: string;           // the host's raw entry state word, lowercased — GitHub: `queued` | `awaiting_checks` | `mergeable` | `unmergeable` | `locked`
   enqueuedAt?: string;      // RFC 3339 — when the PR entered the queue
   estimatedTimeToMerge?: number; // the host's estimate, in whole seconds, of how long until this entry merges (GitHub GraphQL `MergeQueueEntry.estimatedTimeToMerge`), passed through as reported — GitHub recomputes it on queue events rather than counting it down, so it is a duration estimate, not a deadline; omitted while the host has no estimate
+  failedCheck?: {           // the first check that failed on the entry's merge-group commit (GitHub GraphQL `MergeQueueEntry.headCommit.statusCheckRollup`): of the checks with a failing conclusion, the one that finished first; omitted while none has failed (15.5, additive)
+    name: string;           // check-run name, or the status context
+    conclusion: string;     // lowercased — `failure` | `timed_out` | `cancelled` | `startup_failure` | `action_required` | `error`
+    url?: string;           // the check's details link (a GitHub Actions job URL)
+  };
 }
 
 interface GithubIssue {

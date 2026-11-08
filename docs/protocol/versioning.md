@@ -35,6 +35,18 @@ splits full daemons (Machines) from nodes (Nodes). Adding a node asks whether to
 available to the current backend, and is refused (nothing saved) when that backend cannot run
 agents on other machines or remote agents are off in the client.
 
+Also within 15.5 (additive optional response field; presence-detected; no method-catalog
+change, so no version bump): **merge-queue CI failure on the queue entry**
+(§5.27 `MergeQueueEntry`, §5.42 `MergeRequirements.mergeQueue`, §5.7 `ws.pr.snapshot`).
+`MergeQueueEntry` gains `failedCheck?: { name, conclusion, url? }`, the first check that
+failed on the entry's merge-group commit (GitHub GraphQL `MergeQueueEntry.headCommit`),
+read in the same folded request (measured `rateLimit.cost` stays 1). GitHub marks an entry
+`unmergeable` minutes after its merge-group CI fails, before it ejects the entry, so the
+monitor's `unmergeable` change line and checklist row now name the failed job and say it is
+not a conflict when `failedCheck` is set, and keep the conflict and `git merge-tree` advice
+only when it is absent ([intent-hq/intent#8833](https://github.com/intent-hq/intent/issues/8833)).
+Older daemons omit it; clients detect it by presence.
+
 **Version 15.4 — bounded object reads (additive methods, capped replies).**
 [Bounded object reads](./methods/files-terminal-browser.md#bounded-object-reads-154) let a
 client keep `file.read`, `git.showFile` and `note.readAsset` replies under the 500 KiB read
