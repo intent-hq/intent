@@ -894,7 +894,7 @@ gate: check | check-callback-fixture check-transfer-fixture ## Run all local Rus
 test: test-intentd ## Run Rust tests; after interruption use RESUME=1 (GATE_FORCE=1 runs all, NO_FAIL_FAST=1 continues past failures, HERMETIC=1 hides provider CLIs like CI)
 
 test-scripts: ## Run the Python script unit tests (Python 3.11+, no submodules needed)
-	python3 -S -B -m unittest -v scripts.test_resumable_nextest scripts.test_compact_gate scripts.test_gate_storage scripts.test_rust_test_policy scripts.test_seed_dev_providers scripts.test_seed_dev_workspaces scripts.test_cleanup_prereleases scripts.test_script_test_target scripts.test_test_select_target scripts.test_test_stress_target scripts.test_nextest_stress scripts.test_host_load scripts.test_watch_capacity scripts.test_intentd_tree_preflight
+	python3 -S -B -m unittest -v scripts.test_resumable_nextest scripts.test_compact_gate scripts.test_gate_storage scripts.test_rust_test_policy scripts.test_seed_dev_providers scripts.test_seed_dev_workspaces scripts.test_cleanup_prereleases scripts.test_script_test_target scripts.test_test_select_target scripts.test_test_stress_target scripts.test_nextest_stress scripts.test_host_load scripts.test_watch_capacity scripts.test_intentd_tree_preflight scripts.test_sandbox_shot_target
 
 # DRY_RUN must never start real work: run every target whose help or recipe
 # mentions DRY_RUN, plus every coverage-*, with DRY_RUN=1 and stub cargo/rustup,
@@ -1338,12 +1338,18 @@ sandbox-status: ## Show live sandbox state (SANDBOX_JSON=1 for JSON)
 sandbox-stop: ## Stop sandboxes in this worktree (optionally MODE=ui|app|stack)
 	@MODE="$(MODE)" scripts/dev-sandbox.sh stop
 
-sandbox-shot: ensure-fe-submodule ensure-fe-toolchain ## PNG of a named preview (PREVIEW=<id> STATE=<state>, optional THEME, WIDTH)
-	@[ -n "$(PREVIEW)" ] && [ -n "$(STATE)" ] || { echo "[sandbox-shot] usage: make sandbox-shot PREVIEW=<id> STATE=<state> [THEME=light|dark] [WIDTH=<px>]" >&2; exit 2; }
+# Only command-line values count, so an exported THEME or WIDTH in the caller's
+# shell never changes a capture. Self-test: scripts/test_sandbox_shot_target.py.
+SANDBOX_SHOT_ARG = $(if $(filter command line,$(origin $(1))),$($(1)))
+
+sandbox-shot: ensure-fe-submodule ensure-fe-toolchain ## PNG of a named preview (PREVIEW=<id> STATE=<state>, optional THEME, WIDTH, OUT)
+	@[ -n "$(call SANDBOX_SHOT_ARG,PREVIEW)" ] && [ -n "$(call SANDBOX_SHOT_ARG,STATE)" ] || { echo "[sandbox-shot] usage: make sandbox-shot PREVIEW=<id> STATE=<state> [THEME=system|light|dark] [WIDTH=<px>] [OUT=<png>]" >&2; exit 2; }
 	@$(FE_DEPS_FRESH) || (echo "[sandbox-shot] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
 	@echo "[sandbox-shot] output paths are relative to $(FE_DIR)" >&2
-	@cd $(FE_DIR) && corepack pnpm --silent sandbox:shot "$(PREVIEW)" --state "$(STATE)" \
-		$(if $(THEME),--theme "$(THEME)") $(if $(WIDTH),--width "$(WIDTH)")
+	@cd $(FE_DIR) && corepack pnpm --silent sandbox:shot "$(call SANDBOX_SHOT_ARG,PREVIEW)" --state "$(call SANDBOX_SHOT_ARG,STATE)" \
+		$(if $(call SANDBOX_SHOT_ARG,THEME),--theme "$(call SANDBOX_SHOT_ARG,THEME)") \
+		$(if $(call SANDBOX_SHOT_ARG,WIDTH),--width "$(call SANDBOX_SHOT_ARG,WIDTH)") \
+		$(if $(call SANDBOX_SHOT_ARG,OUT),--out "$(call SANDBOX_SHOT_ARG,OUT)")
 
 dev-fe: ensure-fe-submodule ## Run the FE dev stack against dev-daemon's UDS socket (two-terminal pair)
 	# Two-terminal counterpart of `make dev-daemon`: launches only the FE dev
