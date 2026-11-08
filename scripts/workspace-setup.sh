@@ -13,6 +13,12 @@
 # node has root or passwordless sudo. Steps 3-4 are optional: a failure prints
 # a NOTE naming `make bootstrap-dev-host` and setup still succeeds.
 #
+# The output is a log (Intent keeps it as setup.log): each step prints a start
+# line and "done in Ns", the run ends with its total time, and the installers
+# run quietly. Progress bars and colors are off when stdout is not a terminal
+# or the run is on an Intent remote machine (a PTY whose output is only
+# logged); warnings and errors stay visible.
+#
 # Tests: scripts/workspace-setup.test.sh (hermetic) and the workspace-setup job
 # in .github/workflows/bootstrap-install.yml (real installers, clean container).
 # Bash 3.2 compatible: macOS hosts run it with the stock bash.
@@ -27,13 +33,37 @@ CARGO_HOME_BIN="${CARGO_HOME:-$HOME/.cargo}/bin"
 CARGO_INSTALL_BIN="${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}/bin"
 export PATH="$CARGO_INSTALL_BIN:$CARGO_HOME_BIN:$PATH"
 
+if [ ! -t 1 ] || [ -n "${INTENT_REMOTE_MACHINE:-}" ]; then
+  export CARGO_TERM_PROGRESS_WHEN="${CARGO_TERM_PROGRESS_WHEN:-never}"
+  export CARGO_TERM_COLOR="${CARGO_TERM_COLOR:-never}"
+  export RUSTUP_TERM_PROGRESS_WHEN="${RUSTUP_TERM_PROGRESS_WHEN:-never}"
+  export RUSTUP_TERM_COLOR="${RUSTUP_TERM_COLOR:-never}"
+fi
+
 APT_UPDATED=0
 TEMP_FILE=""
-trap 'if [ -n "$TEMP_FILE" ]; then rm -f -- "$TEMP_FILE"; fi' EXIT
+APT_LOG=""
+trap 'rm -f -- ${TEMP_FILE:+"$TEMP_FILE"} ${APT_LOG:+"$APT_LOG"}' EXIT
 
 say() { printf '[setup] %s\n' "$*"; }
 note() { printf '[setup] NOTE: %s\n' "$*" >&2; }
 have() { command -v "$1" >/dev/null 2>&1; }
+
+# step NAME COMMAND...: runs COMMAND between a start line and a line with its
+# elapsed time ($SECONDS: Bash 3.2 has no sub-second clock); keeps its status.
+step() {
+  local name=$1 start=$SECONDS status
+  shift
+  say "$name ..."
+  "$@"
+  status=$?
+  if [ "$status" = 0 ]; then
+    say "$name done in $((SECONDS - start))s"
+  else
+    say "$name failed after $((SECONDS - start))s"
+  fi
+  return "$status"
+}
 
 retry() { bash "$SCRIPT_DIR/retry.sh" -- "$@"; }
 
@@ -55,8 +85,19 @@ apt_install() {
     APT_UPDATED=1
   fi
   say "installing $* with apt-get"
+  # dpkg prints a line per unpacked file and database percentage on stdout;
+  # keep it only to show on failure. Warnings and errors go to stderr.
+  APT_LOG=$(mktemp "${TMPDIR:-/tmp}/apt-get.XXXXXX") || return 1
   # shellcheck disable=SC2086
-  retry $root env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "$@"
+  if ! retry $root env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+    -o Dpkg::Use-Pty=0 --no-install-recommends "$@" >"$APT_LOG"; then
+    cat -- "$APT_LOG"
+    rm -f -- "$APT_LOG"
+    APT_LOG=""
+    return 1
+  fi
+  rm -f -- "$APT_LOG"
+  APT_LOG=""
 }
 
 copy_config_files() {
@@ -101,7 +142,7 @@ install_rust() {
     say "installing rustup and stable Rust into ${CARGO_HOME:-$HOME/.cargo}"
     TEMP_FILE=$(mktemp "${TMPDIR:-/tmp}/rustup-init.XXXXXX") || return 1
     if ! retry curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o "$TEMP_FILE" \
-      || ! retry sh "$TEMP_FILE" -y --profile minimal --default-toolchain stable --component clippy --component rustfmt; then
+      || ! retry sh "$TEMP_FILE" -y --profile minimal --default-toolchain stable --component clippy --component rustfmt --quiet; then
       note "Rust installation failed; run make bootstrap-dev-host"
       return 1
     fi
@@ -109,7 +150,7 @@ install_rust() {
     TEMP_FILE=""
   else
     say "rustup has no working toolchain; installing stable"
-    if ! retry rustup default stable || ! retry rustup component add clippy rustfmt; then
+    if ! retry rustup --quiet default stable || ! retry rustup --quiet component add clippy rustfmt; then
       note "Rust toolchain installation failed; run make bootstrap-dev-host"
       return 1
     fi
@@ -141,7 +182,7 @@ install_nextest() {
     TEMP_FILE=""
   fi
   if have cc; then
-    cargo install cargo-nextest --locked && return 0
+    cargo install cargo-nextest --locked --quiet && return 0
   fi
   note "cargo-nextest could not be installed; run make bootstrap-dev-host"
 }
@@ -152,14 +193,14 @@ install_sweep() {
     note "cargo-sweep needs a C compiler to build and none is installed; run make bootstrap-dev-host"
     return 0
   fi
-  cargo install cargo-sweep --locked || note "cargo-sweep could not be installed; run make bootstrap-dev-host"
+  cargo install cargo-sweep --locked --quiet || note "cargo-sweep could not be installed; run make bootstrap-dev-host"
 }
 
-copy_config_files
-install_system_tools
-init_submodules || { echo "[setup] ERROR: submodule initialization failed" >&2; exit 1; }
-if install_rust; then
-  install_nextest
-  install_sweep
+step "env files" copy_config_files
+step "system tools" install_system_tools
+step "submodules" init_submodules || { echo "[setup] ERROR: submodule initialization failed" >&2; exit 1; }
+if step "rust toolchain" install_rust; then
+  step "cargo-nextest" install_nextest
+  step "cargo-sweep" install_sweep
 fi
-say "workspace setup complete"
+say "workspace setup complete in ${SECONDS}s"

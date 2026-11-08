@@ -72,7 +72,11 @@ stub() {
 # Stubs that record every call; cargo install drops a binary like the real one.
 stub_make() { stub make 'echo "make $*" >>"$CALL_LOG"'; }
 stub_git() { stub git 'echo "git $*" >>"$CALL_LOG"'; }
+# cargo also records its terminal settings and, like the real one, colors
+# its output unless told not to.
 cargo_stub_body='echo "cargo $*" >>"$CALL_LOG"
+echo "cargo-term progress=${CARGO_TERM_PROGRESS_WHEN:-} color=${CARGO_TERM_COLOR:-}" >>"$CALL_LOG"
+[ "${CARGO_TERM_COLOR:-}" = never ] || printf "\033[1;32m   Compiling\033[0m stub\n"
 if [ "$1" = install ]; then
   root="${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}/bin"; mkdir -p "$root"
   printf "#!/usr/bin/env bash\nexit 0\n" >"$root/$2"; chmod +x "$root/$2"
@@ -131,6 +135,19 @@ assert_status() { [[ "$status" -eq "$1" ]] || fail "$2: expected exit $1, got $s
 assert_called() { grep -qF -- "$1" "$log" || fail "$2: expected call '$1'"; }
 assert_not_called() { if grep -qF -- "$1" "$log"; then fail "$2: unexpected call '$1'"; fi; }
 assert_output() { grep -qF -- "$1" "$output" || fail "$2: expected output '$1'"; }
+assert_no_output() { if grep -qF -- "$1" "$output"; then fail "$2: unexpected output '$1'"; fi; }
+assert_no_escapes() { if grep -q "$(printf '\033')" "$output"; then fail "$1: output has ANSI escapes"; fi; }
+# assert_step_times STEP...: each step printed a start line and a timed end
+# line, and the run ended with its total time.
+assert_step_times() {
+  local case_name=$1 name
+  shift
+  for name in "$@"; do
+    assert_output "[setup] $name ..." "$case_name"
+    grep -qE "^\[setup\] $name done in [0-9]+s\$" "$output" || fail "$case_name: no timed end line for $name"
+  done
+  grep -qE '^\[setup\] workspace setup complete in [0-9]+s$' "$output" || fail "$case_name: no total time"
+}
 
 # 1. A host that already has Rust and the cargo tools: no installer runs.
 reset_case
@@ -154,10 +171,14 @@ stub_id; stub_make; stub_git; stub_cc; stub_curl
 run_setup
 assert_status 0 "fresh node"
 assert_called "curl https://sh.rustup.rs" "fresh node"
-assert_called "rustup-init -y --profile minimal --default-toolchain stable --component clippy --component rustfmt" "fresh node"
+assert_called "rustup-init -y --profile minimal --default-toolchain stable --component clippy --component rustfmt --quiet" "fresh node"
 assert_called "curl https://get.nexte.st/" "fresh node"
-assert_called "cargo install cargo-sweep --locked" "fresh node"
+assert_called "cargo install cargo-sweep --locked --quiet" "fresh node"
 assert_not_called "cargo install cargo-nextest" "fresh node"
+# Non-TTY output is a plain log: per-step times, no progress bars or colors.
+assert_step_times "fresh node" "env files" "system tools" "submodules" "rust toolchain" "cargo-nextest" "cargo-sweep"
+assert_called "cargo-term progress=never color=never" "fresh node"
+assert_no_escapes "fresh node"
 [[ -x "$home/.cargo/bin/cargo-nextest" ]] || fail "fresh node: cargo-nextest not unpacked into ~/.cargo/bin"
 [[ -x "$home/.cargo/bin/cargo-sweep" ]] || fail "fresh node: cargo-sweep not installed into ~/.cargo/bin"
 
@@ -174,6 +195,8 @@ reset_case
 stub_id; stub_git; stub_root_apt
 stub apt-get 'echo "apt-get $*" >>"$CALL_LOG"
 case " $* " in *" install "*)
+  echo "(Reading database ... 5%"
+  echo "W: stub apt warning" >&2
   d=$(dirname "$0")
   for p in "$@"; do case "$p" in
     make) printf "#!/usr/bin/env bash\necho \"make \$*\" >>\"\$CALL_LOG\"\n" >"$d/make"; chmod +x "$d/make" ;;
@@ -192,7 +215,21 @@ done
 [[ $(grep -c "apt-get update" "$log") -eq 1 ]] || fail "minimal root node: apt-get update ran more than once"
 assert_called "make ensure-submodules" "minimal root node"
 assert_called "rustup-init" "minimal root node"
-assert_called "cargo install cargo-sweep --locked" "minimal root node"
+assert_called "cargo install cargo-sweep --locked --quiet" "minimal root node"
+assert_called "-o Dpkg::Use-Pty=0" "minimal root node"
+assert_no_output "Reading database" "minimal root node"
+assert_output "W: stub apt warning" "minimal root node"
+assert_step_times "minimal root node" "system tools" "submodules" "rust toolchain" "cargo-nextest" "cargo-sweep"
+
+# 3b. A failed apt install shows dpkg's captured output, then a note.
+reset_case
+stub_id; stub_git; stub_root_apt
+stub apt-get 'echo "apt-get $*" >>"$CALL_LOG"
+case " $* " in *" install "*) echo "dpkg: error processing package stub"; exit 100 ;; esac'
+run_setup
+assert_status 0 "apt failure"
+assert_output "dpkg: error processing package stub" "apt failure"
+assert_output "NOTE: could not install" "apt failure"
 
 # 4. No root, no curl, no make, no cc: required submodules still initialize
 #    through git, Rust is skipped with a clear note, and setup succeeds.
@@ -229,6 +266,7 @@ stub_id; stub_git; stub_rust; stub_cc; stub_curl
 stub make 'echo "make $*" >>"$CALL_LOG"; exit 2'
 run_setup
 assert_status 1 "submodule failure"
+grep -qE '^\[setup\] submodules failed after [0-9]+s$' "$output" || fail "submodule failure: no timed failure line"
 assert_not_called "cargo install" "submodule failure"
 
 # 8. rustup without a working toolchain (a host restored from an image):
@@ -241,9 +279,41 @@ stub cargo-nextest 'exit 0'
 stub cargo-sweep 'exit 0'
 run_setup
 assert_status 0 "rustup without toolchain"
-assert_called "rustup default stable" "rustup without toolchain"
-assert_called "rustup component add clippy rustfmt" "rustup without toolchain"
+assert_called "rustup --quiet default stable" "rustup without toolchain"
+assert_called "rustup --quiet component add clippy rustfmt" "rustup without toolchain"
 assert_not_called "rustup-init" "rustup without toolchain"
+
+# 9. Under a terminal (util-linux script provides the PTY; skipped elsewhere)
+#    an interactive run keeps cargo's defaults, while an Intent remote machine,
+#    whose PTY output is only logged, still gets a plain log.
+if script -qec true /dev/null >/dev/null 2>&1; then
+  run_setup_pty() {
+    local command
+    command=$(printf '%q ' env -i PATH="$bin_dir" HOME="$home" TMPDIR="$case_dir" CALL_LOG="$log" \
+      STUB_CARGO="$temp_dir/stub-cargo" RETRY_DELAY=0 FAKE_UID=1000 "$@" \
+      "$setup_bash" "$fixture/scripts/workspace-setup.sh")
+    set +e
+    script -qec "$command" /dev/null </dev/null 2>&1 | tr -d '\r' >"$output"
+    status=${PIPESTATUS[0]}
+    set -e
+  }
+  reset_case
+  stub_id; stub_make; stub_git; stub_rust; stub_cc; stub_curl
+  stub cargo-nextest 'exit 0'
+  run_setup_pty
+  assert_status 0 "interactive terminal"
+  assert_called "cargo-term progress= color=" "interactive terminal"
+  reset_case
+  stub_id; stub_make; stub_git; stub_rust; stub_cc; stub_curl
+  stub cargo-nextest 'exit 0'
+  run_setup_pty INTENT_REMOTE_MACHINE=1
+  assert_status 0 "remote machine terminal"
+  assert_called "cargo-term progress=never color=never" "remote machine terminal"
+  assert_no_escapes "remote machine terminal"
+  assert_step_times "remote machine terminal" "rust toolchain" "cargo-sweep"
+else
+  echo "workspace-setup tests: util-linux script is unavailable; PTY cases skipped"
+fi
 
 echo "workspace-setup tests passed under $("$setup_bash" -c 'echo "bash $BASH_VERSION"')"
 [[ -z "${WORKSPACE_SETUP_TEST_BASH:-}" ]] || exit 0
