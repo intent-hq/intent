@@ -864,20 +864,22 @@ gates it.
 
 - **Every remote agent** gets the token as `GH_TOKEN`, so `gh` works on the
   machine.
-- **A top-level agent** (`isSubAgent: false`) also starts on the workspace
-  branch with `origin` set to the workspace's GitHub repository and a credential
-  helper, so `git push` and `gh pr create` work. This includes the initial agent
-  of a workspace started on a cloud machine. All top-level remote agents of a
-  workspace share the branch; a second writer pulls or rebases after a
-  non-fast-forward reject, and the backend's worktree is not updated.
+- **A top-level agent** (`isSubAgent: false`) of a GitHub workspace also gets
+  `origin` set to the workspace's GitHub repository, the workspace branch as
+  its upstream (on an agent-local branch) and a credential helper, so
+  `git push` and `gh pr create --head <branch>` work. This includes the initial
+  agent of a workspace started on a cloud machine. All top-level remote agents
+  of a workspace push to the same branch; a second writer pulls or rebases
+  after a non-fast-forward reject, and the backend's worktree is not updated.
 - **A sub-agent** has no `origin` and no credential helper, and hands its work
   back through its refs as before. It is told to use `gh` for reads only. This
   is a convention only: the token is not read-only, and nothing stops a
   sub-agent that pushes or writes with it.
 - The token is the backend's full token. The model can read it from the
   provider's environment for the agent's lifetime.
-- On a link below 15, for a workspace whose `origin` is not on GitHub, or with
-  no token, remote agents get no `GH_TOKEN`, as before.
+- On a link below 15, or with no token, remote agents get no `GH_TOKEN`, as
+  before. In a workspace whose `origin` is not on GitHub, they get `GH_TOKEN`
+  but no `origin`.
 
 The machine answers a `forgeToken` frame it cannot accept with the fixed code
 `forge-token-invalid`. It is a link reply code, not a public error: no method
@@ -1667,6 +1669,7 @@ in `payload` and `summary` alike, and this cannot be turned off:
   `providerRef` and `fingerprint` stay visible);
 - `scriptStart.env[].value` (keys stay visible);
 - `secretPut.value` (protocol 14; `agentId` and `name` stay visible);
+- `forgeToken.token` (protocol 15; `host` stays visible);
 - at any depth of a `request` or `response` frame's params or result, every
   value inside a member named `env`: in the `{ key, value }[]` form each
   `value`, and in the object form each member's value (keys stay visible). This

@@ -3146,10 +3146,12 @@ interface SecretReplyFrame {
 ### Forge token on the machine (nodeProtocol 15)
 
 On a protocol 15 link the backend gives the machine the GitHub token it already
-resolves for its own git operations (secret store, then `GITHUB_TOKEN` /
-`GH_TOKEN`, then `gh auth token`). Every remote agent of that binding gets it as
-`GH_TOKEN`. A top-level agent also gets the workspace branch and an `origin`, so
-`git push` and `gh pr create` work on the machine.
+resolves for its own git operations (by `sourceControl.github.tokenSource`;
+the default `auto` reads the secret store, then `GITHUB_TOKEN` / `GH_TOKEN`,
+then `gh auth token`). Every remote agent of that binding gets it as
+`GH_TOKEN`. A top-level agent of a GitHub workspace also gets the workspace
+branch as its upstream and an `origin`, so `git push` and `gh pr create` work
+on the machine.
 
 ```mermaid
 sequenceDiagram
@@ -3184,21 +3186,23 @@ interface ForgeLaunch {          // closed: unknown or mistyped members are node
 
 1. **One token per binding.** The token is the backend's, not an agent's. The
    machine holds at most one value per `(credentialId, host)`, and every agent of
-   that binding on the machine gets the same value.
-2. **When sent.** The backend sends `forgeToken` only on a protocol 15 link:
-   right after every bind (a first bind, a reconnect, a cloud machine resume),
-   before any `launch` on that bind, and again when the token changes. The
-   control lane is ordered, so the machine handles it before that launch; the
-   backend does not wait for the reply to launch. It waits up to **10 s** for the
-   `forgeTokenReply` with the same `requestId`; a later or unmatched reply is
-   dropped without error.
+   that binding on the machine gets the same value, whatever its workspace.
+   Only `launch.forge` depends on the workspace (rule 8).
+2. **When sent.** The backend sends `forgeToken` only on a protocol 15 link.
+   Right after every bind (a first bind, a reconnect, a cloud machine resume),
+   before any `launch` on that bind, it sends the current value, or `null` when
+   none resolves, whatever it sent before; a bind clears the confirmed value of
+   rule 3. It sends again when the token changes. The control lane is ordered,
+   so the machine handles it before that launch; the backend does not wait for
+   the reply to launch. It waits up to **10 s** for the `forgeTokenReply` with
+   the same `requestId`; a later or unmatched reply is dropped without error.
 3. **Change detection.** Per linked machine, the backend resolves the token
    again every 5 minutes and after a GitHub connect, a revoke or a source
    control settings change. It compares a SHA-256 of the value, held in memory
-   only, with the last value the machine confirmed. It sends the new value on a
-   change and `null` when no token resolves. It records a value as sent only on
-   `outcome: "ok"`, so a failed or unanswered frame is sent again at the next
-   check.
+   only, with the confirmed value: the last one the machine answered with
+   `outcome: "ok"`. It sends the new value on a change and `null` when no token
+   resolves. A failed or unanswered frame leaves the confirmed value unchanged,
+   so the next check sends again.
 4. **Gate.** `sourceControl.github.exposeGitCredentialToChildren` (default on)
    also gates this. When it is off, the backend sends `null`. There is no other
    setting.
@@ -3218,21 +3222,33 @@ interface ForgeLaunch {          // closed: unknown or mistyped members are node
    value reaches a running provider only at its next spawn; the credential helper
    below reads the live value.
 8. **Top-level agents.** The backend sends `launch.forge` only when
-   `isSubAgent` is `false`, the link is at protocol 15, the backend has a token
-   for the machine, and the workspace checkout's `origin` is a GitHub repository
-   (normalized to the HTTPS `remoteUrl`). With it, the machine:
-   1. switches the agent's checkout to `branch` at the commit it checked out
-      (`git switch -C`);
-   2. sets `origin` to `remoteUrl` with `git config --worktree`, because the
-      checkout cache is shared by the repository's checkouts;
+   `isSubAgent` is `false`, the link is at protocol 15, the confirmed value of
+   rule 3 is a token (not `null`), and the workspace checkout's `origin` is a
+   GitHub repository (normalized to the HTTPS `remoteUrl`). Otherwise it sends
+   no `forge`, and the agent starts with no `origin`. With `forge`, the
+   machine:
+   1. creates the agent-local branch `intent/<agentId>` at the commit it
+      checked out and switches the checkout to it. The checkout cache's
+      repository is shared by all its checkouts, so a branch named `branch`
+      could already be checked out in another one; the machine never resets
+      or forces a branch that another checkout uses;
+   2. sets, with `git config --worktree` so that they override any `origin` in
+      the cache's shared configuration: `remote.origin.url` = `remoteUrl`,
+      `remote.origin.fetch` = `+refs/heads/*:refs/remotes/origin/*`,
+      `branch.intent/<agentId>.remote` = `origin`,
+      `branch.intent/<agentId>.merge` = `refs/heads/<branch>` and
+      `push.default` = `upstream`, so a plain `git push`, `git pull` and
+      `git rebase` target `branch` on GitHub;
    3. adds a git credential helper for `https://github.com` that asks the
       machine's intentd for the live token over its local socket, with
       `GH_TOKEN` as the fallback.
 
    The `head` and `wip` pushes to the backend do not change; a push to GitHub
-   is an extra path. All top-level remote agents of a workspace use the same
-   branch: a second writer gets a normal non-fast-forward reject and pulls or
-   rebases. The backend's own worktree is not updated. A `forge` member whose
+   is an extra path. All top-level remote agents of a workspace push to the
+   same `branch`: a second writer gets a normal non-fast-forward reject and
+   pulls or rebases. The backend's own worktree is not updated. The agent's
+   instructions name `branch`, and tell it to pass `--head <branch>` to
+   `gh pr create`. A `forge` member whose
    `remoteUrl` does not have the form above or whose `branch` is not a valid
    branch name fails the launch with `node-checkout-failed`. A machine that
    receives `forge` on a link below 15 rejects the frame (`node-link-protocol`).
@@ -3243,9 +3259,10 @@ interface ForgeLaunch {          // closed: unknown or mistyped members are node
    tries; its instructions tell it to read only, but nothing enforces this.
 10. **Never written.** A value travels only in `forgeToken`. It never appears in
     `Debug` output, errors, logs, tracing, the journal, checkpoints, events,
-    results, the frontend or [traffic capture](#traffic-capture) (masked). The
-    machine masks the current value in the provider text it journals or logs,
-    and updates the mask when the value changes. `GH_TOKEN` stays on the
+    results, the frontend or [traffic capture](#traffic-capture) (masked). In
+    the provider text it journals or logs, the machine masks the current value
+    and every value a live agent was spawned with (rule 7). It removes a value
+    from the mask only when no live agent holds it. `GH_TOKEN` stays on the
     denylist of the environment that MCP children inherit, so the built-in
     workspace server does not get it.
 11. **Known exposure.** The token is the backend's full GitHub token, not scoped
@@ -3253,10 +3270,11 @@ interface ForgeLaunch {          // closed: unknown or mistyped members are node
     model can read it (for example through `env` or `/proc`), for the agent's
     lifetime. On a [cloud machine](#cloud-machines) a pause keeps it in memory
     until the sandbox is deleted.
-12. **Older peers and no token.** On a link below 15, for a workspace whose
-    `origin` is not on GitHub, or when no token resolves, the machine holds no
-    token and the backend sends no `forge` member: the agent starts as before,
-    with no `GH_TOKEN`.
+12. **Older peers and no token.** On a link below 15, or when no token
+    resolves, the machine holds no token and the backend sends no `forge`
+    member: the agent starts as before, with no `GH_TOKEN`. In a workspace whose
+    `origin` is not on GitHub, agents still get `GH_TOKEN` (rule 1) but no
+    `forge` member.
 
 Reply error codes:
 

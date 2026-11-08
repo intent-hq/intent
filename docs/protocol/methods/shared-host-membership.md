@@ -505,7 +505,8 @@ Repository credential selection follows the repository's origin and the host's
 owner-configured accounts/helpers, never a member's login or proof credential.
 Existing Git author/committer and repository overrides remain authoritative.
 `sourceControl.github.exposeGitCredentialToChildren` still controls managed helper
-injection; other owner-configured helpers remain usable. Missing repository/AI
+injection, and also gates the `GH_TOKEN` that remote agents get on a nodeProtocol 15
+[machine link](../node-link.md#forge-token-on-the-machine-nodeprotocol-15); other owner-configured helpers remain usable. Missing repository/AI
 setup affects only operations that need it. It cannot prevent invitations,
 reconnect or otherwise-supported workspace creation. A connected GitLab identity
 does not establish that a native GitLab repository/MR provider is available.
