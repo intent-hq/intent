@@ -258,6 +258,12 @@ jobs:
         env:
           CARGO_TERM_PROGRESS_WHEN: never
         run: |
+          # setup-sccache.py compiles uncached when the server cannot start;
+          # this smoke measures the cache, so that is a failure here.
+          if [ -z "${RUSTC_WRAPPER:-}" ]; then
+            echo "::error::The compiler cache is not configured (see the setup step's warning)."
+            exit 1
+          fi
           sccache --zero-stats >/dev/null
           cargo build --locked -p intentd
       - name: Cache statistics

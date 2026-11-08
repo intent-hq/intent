@@ -5,7 +5,9 @@ When INTENT_SCCACHE_ENDPOINT is set, the self-hosted cache is used with
 INTENT_SCCACHE_TOKEN and INTENT_SCCACHE_MODE (READ_WRITE by default). It
 overwrites any SCCACHE_WEBDAV_* values the runner environment already carries.
 Without the variable or a token (for example fork pull requests) compilation
-is uncached.
+is uncached. The job's server is started here; when it cannot start, the
+WebDAV values are still exported but RUSTC_WRAPPER is not, so compilation
+runs uncached instead of failing.
 """
 import hashlib
 import importlib.util
@@ -17,6 +19,7 @@ import socket
 import subprocess
 import tarfile
 import tempfile
+import time
 import urllib.parse
 import urllib.request
 
@@ -88,11 +91,47 @@ def download(url, dest, delays=RETRY_DELAYS, sleep=None):
     return download_retry.retrying(lambda: fetch(url, dest), "sccache download", delays=delays, sleep=sleep)
 
 
+# sccache 0.17 gives a new server a fixed 10 s to check the remote cache
+# and listen, then fails the compiler call ("Timed out waiting for server
+# startup"); SCCACHE_IGNORE_SERVER_IO_ERROR does not cover startup. A few
+# bounded attempts here absorb a slow cache before any compile depends on it.
+STARTUP_ATTEMPTS = 3
+STARTUP_RETRY_DELAY = 5
+# Bounds one client call in case it hangs instead of timing out.
+STARTUP_CALL_TIMEOUT = 60
+
+
+def binary_path(directory):
+    return directory / ("sccache.exe" if platform.system() == "Windows" else "sccache")
+
+
+def start_server(binary, env, run=subprocess.run, delay=None):
+    """Start (or reach) the job's server; True once it answers.
+
+    --zero-stats takes the same connect-or-start path as a compile, so it
+    also reuses a server an earlier timed-out attempt left starting, where
+    --start-server would collide with it on the port. --show-stats is no
+    probe: it succeeds without starting a server.
+    """
+    delay = STARTUP_RETRY_DELAY if delay is None else delay
+    for attempt in range(STARTUP_ATTEMPTS):
+        if attempt:
+            time.sleep(delay)
+        try:
+            result = run([str(binary), "--zero-stats"], env=env, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, timeout=STARTUP_CALL_TIMEOUT)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode == 0:
+            return True
+    return False
+
+
 def install(directory):
     target, checksum = ASSETS[(platform.system(), platform.machine())]
     stem = f"sccache-v{VERSION}-{target}"
     suffix = ".exe" if platform.system() == "Windows" else ""
-    binary = directory / ("sccache" + suffix)
+    binary = binary_path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     # Keep downloads on the runner job volume; Windows system temp may be
     # on a different, nearly full drive than RUNNER_TEMP.
@@ -134,13 +173,21 @@ def main():
     # is compiling. Long crates must not lose the server mid-request.
     # GitHub runners clean up job-owned processes at the end of the job.
     values["SCCACHE_IDLE_TIMEOUT"] = "0"
+    host = urllib.parse.urlsplit(values["SCCACHE_WEBDAV_ENDPOINT"]).hostname
+    server_env = {**os.environ, **values}
+    server_env.pop("RUSTC_WRAPPER")
+    if not start_server(binary_path(directory), server_env):
+        # Cache-specific steps still see the backend; compilation skips it.
+        del values["RUSTC_WRAPPER"]
+        print(f"::warning::The sccache server did not start after {STARTUP_ATTEMPTS} attempts "
+              f"(is the self-hosted cache at {host} reachable?); Rust compilation is uncached for this job.")
     with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
         for key, value in values.items():
             if "\n" in value or "\r" in value:
                 raise ValueError("Invalid cache configuration")
             output.write(f"{key}={value}\n")
-    host = urllib.parse.urlsplit(values["SCCACHE_WEBDAV_ENDPOINT"]).hostname
-    print(f"Rust compilation uses self-hosted sccache at {host} ({mode}).")
+    if "RUSTC_WRAPPER" in values:
+        print(f"Rust compilation uses self-hosted sccache at {host} ({mode}).")
 
 
 if __name__ == "__main__":
