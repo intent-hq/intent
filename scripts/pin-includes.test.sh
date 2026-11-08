@@ -115,6 +115,15 @@ grep -qxF "api repos/intent-hq/intent/contents/packages/cloudlands-fe?ref=main -
 grep -qxF "api repos/intent-hq/cloudlands-fe/compare/$sha...$fe_pin --jq .status" "$temp_dir/gh.log" ||
   fail "the commit was not compared with the pin on intent-hq/cloudlands-fe: $(<"$temp_dir/gh.log")"
 
+# Run from scripts/ by bare name: the shared lib must still load (PR #8804 review).
+reset_stub
+compare cloudlands-fe "$sha" "$fe_pin" ahead
+cd "$repo_root/scripts"
+script=pin-includes.sh run_script cloudlands-fe "$sha"
+cd "$OLDPWD"
+[[ "$status" -eq 0 ]] || fail "bare-name run from scripts/ exited $status: $stderr"
+[[ "$stdout" == "cloudlands-fe $fe_pin includes $sha" ]] || fail "bare-name run from scripts/ printed '$stdout'"
+
 # Included: the pin is the commit itself.
 reset_stub
 compare intentd "$sha" "$intentd_pin" identical

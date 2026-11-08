@@ -173,6 +173,17 @@ run_script cloudlands-fe "$sha"
 grep -q -- '^release list --repo intent-hq/cloudlands-releases --limit 20 ' "$temp_dir/gh.log" || fail "default limit 10 was not over-fetched as 20"
 ! grep -q '^run list' "$temp_dir/gh.log" || fail "carried sha probed the Release Alpha run"
 
+# Run from scripts/ by bare name: the shared lib must still load (PR #8804 review).
+reset_stub
+echo ahead >"$fe_compare/$sha...v2.3.0"
+echo behind >"$fe_compare/$sha...v2.2.0"
+echo behind >"$fe_compare/$sha...v2.1.0"
+cd "$repo_root/scripts"
+script=shipped-in.sh run_script cloudlands-fe "$sha"
+cd "$OLDPWD"
+[[ "$status" -eq 0 ]] || fail "bare-name run from scripts/ exited $status: $stderr"
+[[ "$stdout" == "v2.3.0 intentdVersion=0.9.0" ]] || fail "bare-name run from scripts/ printed '$stdout'"
+
 reset_stub
 echo ahead >"$fe_compare/$sha...v2.3.0"
 echo identical >"$fe_compare/$sha...v2.2.0"

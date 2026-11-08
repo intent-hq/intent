@@ -57,8 +57,10 @@ done
 gh_err=$(mktemp)
 trap 'rm -f "$gh_err"' EXIT
 
+script_dir=.
+[[ "${BASH_SOURCE[0]}" == */* ]] && script_dir=${BASH_SOURCE[0]%/*}
 # shellcheck source=scripts/lib/gh-transient.sh
-. "${BASH_SOURCE[0]%/*}/lib/gh-transient.sh"
+. "$script_dir/lib/gh-transient.sh"
 transient_pattern=$gh_transient_pattern
 
 # Report a failed gh call: exit 4 when its stderr looks transient, else 1.
