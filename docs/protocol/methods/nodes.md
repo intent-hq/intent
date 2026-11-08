@@ -853,6 +853,36 @@ backend supported nodeProtocol 10 have no pins, omit `submodules` and `setup`,
 and keep running as before on every link. Workspaces that need neither run on
 every supported link.
 
+##### Forge token for remote agents
+
+On a link that negotiated nodeProtocol 15, the backend passes the GitHub token
+it already resolves to the machine, in memory
+([forge token on the machine](../node-link.md#forge-token-on-the-machine-nodeprotocol-15)).
+No method, setting or result member is added; the existing
+`sourceControl.github.exposeGitCredentialToChildren` setting (default on) also
+gates it.
+
+- **Every remote agent** gets the token as `GH_TOKEN`, so `gh` works on the
+  machine.
+- **A top-level agent** (`isSubAgent: false`) also starts on the workspace
+  branch with `origin` set to the workspace's GitHub repository and a credential
+  helper, so `git push` and `gh pr create` work. This includes the initial agent
+  of a workspace started on a cloud machine. All top-level remote agents of a
+  workspace share the branch; a second writer pulls or rebases after a
+  non-fast-forward reject, and the backend's worktree is not updated.
+- **A sub-agent** has no `origin` and no credential helper, and hands its work
+  back through its refs as before. It is told to use `gh` for reads only. This
+  is a convention only: the token is not read-only, and nothing stops a
+  sub-agent that pushes or writes with it.
+- The token is the backend's full token. The model can read it from the
+  provider's environment for the agent's lifetime.
+- On a link below 15, for a workspace whose `origin` is not on GitHub, or with
+  no token, remote agents get no `GH_TOKEN`, as before.
+
+The machine answers a `forgeToken` frame it cannot accept with the fixed code
+`forge-token-invalid`. It is a link reply code, not a public error: no method
+returns it.
+
 ##### Cloud machines (E2B)
 
 A *cloud machine* is a remote machine that the backend starts itself, in an

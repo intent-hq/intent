@@ -1133,6 +1133,18 @@ optional `deferred: true`, only for a remote agent whose machine is not connecte
 Daemons offer `{ min: 7, max: 14 }`; on a lower link a remote agent has no
 `ws.secret` and no `secretEnv`. The surface counts are unchanged.
 
+**Forge token for remote agents — nodeProtocol 15 (link-only; no method-catalog change, so no version bump).**
+The backend passes its GitHub token to the machine in the new `forgeToken`
+link frame (answered by `forgeTokenReply`, which may carry the link reply code
+`forge-token-invalid`), and a top-level agent's `launch` gains `forge`
+(`remoteUrl`, `branch`). Every remote agent gets `GH_TOKEN`; a top-level agent
+also gets the workspace branch and `origin`
+([link contract](./node-link.md#forge-token-on-the-machine-nodeprotocol-15),
+[§5.50](./methods/nodes.md#forge-token-for-remote-agents)). Daemons offer
+`{ min: 7, max: 15 }`; on a lower link remote agents get no token, as before.
+No method, event, setting or result member changes, so the surface counts are
+unchanged.
+
 **Command-default change (breaking).**
 [Script creation defaults (§5.8)](./methods/scripts.md#command-creation-defaults-breaking-change)
 change omission on a new command from `saved` to `oneOff`; new services remain

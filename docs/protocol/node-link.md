@@ -1302,7 +1302,9 @@ Node Git credential helper `get` calls head each time with the bound agent and
 granted repo; head normalizes provider/host/repo and returns only scoped fetch
 credentials over the encrypted link. No generic `system.gitCredential` forwarding,
 raw forge token in child environment, credential logging or cross-repo request is
-permitted. Checkpoint pushes use the hub grant, not forge credentials. Where the
+permitted. (The daemon-to-daemon executor link differs: see
+[forge token on the machine](#forge-token-on-the-machine-nodeprotocol-15).)
+Checkpoint pushes use the hub grant, not forge credentials. Where the
 credential source cannot supply a repo-scoped read credential for a node, fail
 remote hydration explicitly; do not export the broad head publication token.
 Forge publication and the bounded gh bridge run only on head.
@@ -1804,7 +1806,7 @@ Revoking a credential closes its live `/node/*` connections with `1008`
 `hello.protocol` is a range instead of one number:
 
 ```ts
-interface ProtocolRange { min: number; max: number } // inclusive; this contract defines 6 through 14
+interface ProtocolRange { min: number; max: number } // inclusive; this contract defines 6 through 15
 ```
 
 The machine picks the highest version in both ranges and returns it as
@@ -1905,6 +1907,15 @@ new version. A daemon that implements it offers `{ min: 7, max: 14 }` on both
 sides. On a link below 14 the backend sends no secret frame and a remote agent
 has no `ws.secret` and no `secretEnv`, as the section describes.
 
+**nodeProtocol 15** is protocol 14 plus the [forge token on the machine](#forge-token-on-the-machine-nodeprotocol-15):
+the `forgeToken` / `forgeTokenReply` frames and `launch.forge`. They put a forge
+credential on the machine and give a top-level agent a branch and an `origin`,
+which an older machine would ignore, so they need a new version, not an optional
+field. A daemon that implements it offers `{ min: 7, max: 15 }` on both sides,
+so protocol 7 to 14 peers still bind. On a link below 15 the backend sends no
+`forgeToken` and no `forge` member, and a remote agent starts without a forge
+token, as before.
+
 ### Frames
 
 Each WebSocket binary message on `/node/link` is one JSON frame of at most
@@ -1942,6 +1953,8 @@ Each WebSocket binary message on `/node/link` is one JSON frame of at most
 | `secretForget` | backend → machine | control | Protocol 14 or later: `requestId`, `agentId`, `name?` |
 | `secretList` | backend → machine | control | Protocol 14 or later: `requestId`, `agentId` |
 | `secretReply` | machine → backend | control | Protocol 14 or later: `requestId`, `agentId`, `outcome`, `names?`, `forgotten?`, `error?` |
+| `forgeToken` | backend → machine | control | Protocol 15 or later: `requestId`, `host`, `token` (string or `null`); see [forge token on the machine](#forge-token-on-the-machine-nodeprotocol-15) |
+| `forgeTokenReply` | machine → backend | control | Protocol 15 or later: `requestId`, `outcome`, `error?`; never a value |
 
 `intentdVersion` is recorded for diagnostics and is not a compatibility gate.
 Heartbeats run every 15 s and a link silent for 45 s is dead. The backend
@@ -1959,6 +1972,7 @@ constant with a golden test: `hello`, `heartbeat` / `heartbeatReply`, `launch`,
 `skills` (protocol 12 or later),
 `pushWip` (protocol 13 or later),
 `secretPut`, `secretForget` and `secretList` (protocol 14 or later),
+`forgeToken` (protocol 15 or later),
 and git sessions on `/node/git` for agents on that credential's binding. Any
 other frame is `node-link-protocol`.
 `stopAck` travels machine → backend, so it is not in that list; the backend
@@ -1967,7 +1981,8 @@ accepts it only on a protocol 7 or later link. Likewise the backend accepts
 `setupOutput` and the `setup*` journal bodies only on a protocol 10 or later link,
 `skillsReply` and the `skills` journal body only on a protocol 12 or later link,
 `pushWipReply` only on a protocol 13 or later link,
-and `secretReply` only on a protocol 14 or later link.
+`secretReply` only on a protocol 14 or later link,
+and `forgeTokenReply` only on a protocol 15 or later link.
 
 ### Stop acknowledgement (nodeProtocol 7)
 
@@ -2345,6 +2360,7 @@ interface LaunchCommand {
   mcpProxies?: McpProxy[];        // protocol 11 only; see User MCP servers
   compactToolDescriptions?: boolean; // see below
   checkoutOf?: string;             // protocol 13 only; see Sub-agent checkouts
+  forge?: ForgeLaunch;             // protocol 15 only, top-level agents only; see Forge token on the machine
 }
 ```
 
@@ -2480,10 +2496,13 @@ refs in the submodule's own repository; see
 
 Merging is ordinary git in the workspace: a parent agent or the user merges
 `…/head`; `wip` is never merged. `hub.merge`, `hub.discard` and `hub.publish`,
-checkpoint ids and the separate hub repository are not part of this link. The
-machine never talks to the forge for the agent and receives no forge
-credentials. Machine-pushed objects land in the workspace repository's object
-store.
+checkpoint ids and the separate hub repository are not part of this link.
+Machine-pushed objects land in the workspace repository's object store. These
+pushes never use a forge credential. On protocol 15 the machine also holds the
+backend's [forge token](#forge-token-on-the-machine-nodeprotocol-15): every
+remote agent gets it as `GH_TOKEN`, and a top-level agent can also push its
+workspace branch to the forge. On a lower link the machine receives no forge
+credentials.
 
 ### Prepared checkout (nodeProtocol 10)
 
@@ -3124,6 +3143,127 @@ interface SecretReplyFrame {
    a `ws.host.exec` with `secretEnv` fails as when secret requests are off. An older machine refuses `secret.*` itself;
    an older backend refuses the forwarded calls by its own table.
 
+### Forge token on the machine (nodeProtocol 15)
+
+On a protocol 15 link the backend gives the machine the GitHub token it already
+resolves for its own git operations (secret store, then `GITHUB_TOKEN` /
+`GH_TOKEN`, then `gh auth token`). Every remote agent of that binding gets it as
+`GH_TOKEN`. A top-level agent also gets the workspace branch and an `origin`, so
+`git push` and `gh pr create` work on the machine.
+
+```mermaid
+sequenceDiagram
+  participant B as Backend
+  participant M as Machine intentd
+  participant A as Agent process
+  B->>M: hello / welcome (every bind)
+  B->>M: forgeToken (token or null)
+  M->>M: hold in memory for the credential
+  M->>B: forgeTokenReply
+  B->>M: launch (forge member for top-level agents only)
+  M->>A: spawn with GH_TOKEN; top-level: branch, origin, credential helper
+  Note over B: token changes: send forgeToken again
+```
+
+```ts
+interface ForgeTokenFrame {      // backend → machine
+  type: "forgeToken"; requestId: string;
+  host: "github.com";            // the only value
+  token: string | null;          // null: drop the held token
+}
+interface ForgeTokenReplyFrame { // machine → backend; never carries a value
+  type: "forgeTokenReply"; requestId: string;
+  outcome: "ok" | "failed";
+  error?: string;                // with "failed": a fixed code, never peer text
+}
+interface ForgeLaunch {          // closed: unknown or mistyped members are node-link-protocol
+  remoteUrl: string;             // "https://github.com/<owner>/<repo>.git"
+  branch: string;                // the workspace branch on the backend
+}
+```
+
+1. **One token per binding.** The token is the backend's, not an agent's. The
+   machine holds at most one value per `(credentialId, host)`, and every agent of
+   that binding on the machine gets the same value.
+2. **When sent.** The backend sends `forgeToken` only on a protocol 15 link:
+   right after every bind (a first bind, a reconnect, a cloud machine resume),
+   before any `launch` on that bind, and again when the token changes. The
+   control lane is ordered, so the machine handles it before that launch; the
+   backend does not wait for the reply to launch. It waits up to **10 s** for the
+   `forgeTokenReply` with the same `requestId`; a later or unmatched reply is
+   dropped without error.
+3. **Change detection.** Per linked machine, the backend resolves the token
+   again every 5 minutes and after a GitHub connect, a revoke or a source
+   control settings change. It compares a SHA-256 of the value, held in memory
+   only, with the last value the machine confirmed. It sends the new value on a
+   change and `null` when no token resolves. It records a value as sent only on
+   `outcome: "ok"`, so a failed or unanswered frame is sent again at the next
+   check.
+4. **Gate.** `sourceControl.github.exposeGitCredentialToChildren` (default on)
+   also gates this. When it is off, the backend sends `null`. There is no other
+   setting.
+5. **Machine store.** The machine keeps the value in memory only, wiped when
+   dropped, beside the [secrets](#secrets-on-the-machine-nodeprotocol-14) but
+   apart from them: `secretList` and `ws.secret` never list it. It is never
+   written to disk. The machine drops it on a `null` token, when the
+   `headSession` changes, when the credential becomes inactive, and on a machine
+   restart. A `forgeToken` for a held value replaces it.
+6. **Validation.** A `host` other than `"github.com"`, or a token that is empty,
+   longer than 16 KiB or holds whitespace or control characters, replies
+   `failed` with `forge-token-invalid` and changes nothing. A malformed frame is
+   rejected as `node-link-frame-invalid` without echoing its content.
+7. **Spawn.** When the machine holds a token at a provider spawn, it sets
+   `GH_TOKEN` in the agent's environment as Intent's own launch wiring, which a
+   [profile](#provider-credentials-profile-environment) cannot override. A new
+   value reaches a running provider only at its next spawn; the credential helper
+   below reads the live value.
+8. **Top-level agents.** The backend sends `launch.forge` only when
+   `isSubAgent` is `false`, the link is at protocol 15, the backend has a token
+   for the machine, and the workspace checkout's `origin` is a GitHub repository
+   (normalized to the HTTPS `remoteUrl`). With it, the machine:
+   1. switches the agent's checkout to `branch` at the commit it checked out
+      (`git switch -C`);
+   2. sets `origin` to `remoteUrl` with `git config --worktree`, because the
+      checkout cache is shared by the repository's checkouts;
+   3. adds a git credential helper for `https://github.com` that asks the
+      machine's intentd for the live token over its local socket, with
+      `GH_TOKEN` as the fallback.
+
+   The `head` and `wip` pushes to the backend do not change; a push to GitHub
+   is an extra path. All top-level remote agents of a workspace use the same
+   branch: a second writer gets a normal non-fast-forward reject and pulls or
+   rebases. The backend's own worktree is not updated. A `forge` member whose
+   `remoteUrl` does not have the form above or whose `branch` is not a valid
+   branch name fails the launch with `node-checkout-failed`. A machine that
+   receives `forge` on a link below 15 rejects the frame (`node-link-protocol`).
+9. **Sub-agents.** A sub-agent gets no `forge` member: its checkout has no
+   `origin` and no credential helper, and its work goes back through its
+   `head` and `wip` refs as before. It still has `GH_TOKEN`, so `gh` reads work.
+   **The token is not read-only.** A sub-agent can push or write with `gh` if it
+   tries; its instructions tell it to read only, but nothing enforces this.
+10. **Never written.** A value travels only in `forgeToken`. It never appears in
+    `Debug` output, errors, logs, tracing, the journal, checkpoints, events,
+    results, the frontend or [traffic capture](#traffic-capture) (masked). The
+    machine masks the current value in the provider text it journals or logs,
+    and updates the mask when the value changes. `GH_TOKEN` stays on the
+    denylist of the environment that MCP children inherit, so the built-in
+    workspace server does not get it.
+11. **Known exposure.** The token is the backend's full GitHub token, not scoped
+    to one repository. It is in the provider process environment, where the
+    model can read it (for example through `env` or `/proc`), for the agent's
+    lifetime. On a [cloud machine](#cloud-machines) a pause keeps it in memory
+    until the sandbox is deleted.
+12. **Older peers and no token.** On a link below 15, for a workspace whose
+    `origin` is not on GitHub, or when no token resolves, the machine holds no
+    token and the backend sends no `forge` member: the agent starts as before,
+    with no `GH_TOKEN`.
+
+Reply error codes:
+
+| Code | Meaning |
+| --- | --- |
+| `forge-token-invalid` | The `host` is not `"github.com"`, or the token is empty, over 16 KiB, or holds whitespace or control characters |
+
 ### Saved scripts (nodeProtocol 8)
 
 A remote agent's `ws.script.*` calls are [forwarded](#workspace-api-on-the-machine)
@@ -3441,7 +3581,8 @@ The owner can record this daemon's `/node/link` frames, in both directions and
 on both roles, with [link traffic capture](./methods/nodes.md#link-traffic-capture)
 (`remoteLinkTraffic: 1`). Capture is off by default, bounded, cleared on stop,
 and masks secrets (profile environment values, script environment values,
-the `value` of a `secretPut`, credentials, tokens and certificates) before a
+the `value` of a `secretPut`, the `token` of a `forgeToken`, credentials, tokens
+and certificates) before a
 record is kept. It observes frames only: it never
 delays, changes or reorders them, and it adds no frame type.
 
