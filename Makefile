@@ -517,7 +517,7 @@ FE_BUILD_HEAP_MB ?= 16384
 	fmt clippy shear check-windows check-macos lint-sources lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child lint-shell-sleeps lint-shell lint-workflows bash3 check clean clean-dev \
 	sweep sweep-all sweep-gates seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
 	run-intentd dev-ui dev-sandbox-ui dev-sandbox-app dev-sandbox-stack dev-fe fe-launch \
-	sandbox-status sandbox-stop \
+	sandbox-status sandbox-stop sandbox-shot \
 	run-fe-local uds-to-unauthed-wss-bridge dev-web-live dev dev-prod \
 	ios-open ios-info ios-build-ios ios-build-visionos ios-test dist-mac
 
@@ -1337,6 +1337,13 @@ sandbox-status: ## Show live sandbox state (SANDBOX_JSON=1 for JSON)
 
 sandbox-stop: ## Stop sandboxes in this worktree (optionally MODE=ui|app|stack)
 	@MODE="$(MODE)" scripts/dev-sandbox.sh stop
+
+sandbox-shot: ensure-fe-submodule ensure-fe-toolchain ## PNG of a named preview (PREVIEW=<id> STATE=<state>, optional THEME, WIDTH)
+	@[ -n "$(PREVIEW)" ] && [ -n "$(STATE)" ] || { echo "[sandbox-shot] usage: make sandbox-shot PREVIEW=<id> STATE=<state> [THEME=light|dark] [WIDTH=<px>]" >&2; exit 2; }
+	@$(FE_DEPS_FRESH) || (echo "[sandbox-shot] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
+	@echo "[sandbox-shot] output paths are relative to $(FE_DIR)" >&2
+	@cd $(FE_DIR) && corepack pnpm --silent sandbox:shot "$(PREVIEW)" --state "$(STATE)" \
+		$(if $(THEME),--theme "$(THEME)") $(if $(WIDTH),--width "$(WIDTH)")
 
 dev-fe: ensure-fe-submodule ## Run the FE dev stack against dev-daemon's UDS socket (two-terminal pair)
 	# Two-terminal counterpart of `make dev-daemon`: launches only the FE dev
