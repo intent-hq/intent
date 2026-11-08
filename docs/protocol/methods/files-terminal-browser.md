@@ -6,7 +6,7 @@ Routing-only `workspaceId?` additions below are [prepared contract fields](../wo
 
 | Method | Params | Result |
 | --- | --- | --- |
-| browser.exec | actions (req, non-empty array), tabId?, agentId?, workspaceId? | single action → the action's `{ action, success, result?, error? }` envelope; multi-action → `{ results: [...] }` — **client-callable trigger** whose real work is served by the connected FE via a reverse RPC (`browser.exec`, `id: "rev-<n>"`), see below. Tabs are **agent-scoped**: `claimTab` / `listTabs` scoping / `resizeTab` and the structured ownership errors are FE-enforced — see the tab-ownership block below (monorepo#2857). Agent tabs are **hidden by default**: `openTab` `visible?`, `showTab`, and the `listTabs` `visibility` / `displayed` fields — see the hidden-by-default block below (monorepo#3045). **Agent-initiated** calls (no client connection to answer on) are routed to the workspace's **driving client** under the REV-2 rules — `capabilities.browserExec` gate, `workspace.setBrowserClient` pin, active desktop session, claimed-tab host, first-connected eligible — and `listTabs` is answered by the daemon from the tab registry (§5.45); see the REV-2 block below (v9.9–v9.11) |
+| browser.exec | actions (req, non-empty array), tabId?, agentId?, workspaceId? | single action → the action's `{ action, success, result?, error? }` envelope; multi-action → `{ results: [...] }` — **client-callable trigger** whose real work is served by the connected FE via a reverse RPC (`browser.exec`, `id: "rev-<n>"`), see below. Tabs are **agent-scoped**: `claimTab` / `listTabs` scoping / `resizeTab` and the structured ownership errors are FE-enforced — see the tab-ownership block below (monorepo#2857). Agent tabs are **hidden by default**: `openTab` `visible?`, `showTab`, and the `listTabs` `visibility` / `displayed` fields — see the hidden-by-default block below (monorepo#3045). **Agent-initiated** calls (no client connection to answer on) are routed to the workspace's **driving client** under the REV-2 rules — `capabilities.browserExec` gate, `workspace.setBrowserClient` pin, active desktop session, claimed-tab host, most recently focused client, first-connected eligible — and `listTabs` is answered by the daemon from the tab registry (§5.45); see the REV-2 block below (v9.9–v9.11) |
 | browser.listTabs *(v9.10)*, browser.upsertTab *(v9.10)*, browser.removeTab *(v9.10)*, browser.syncTabs *(v9.10)*, browser.navigateTab *(v9.11)*, browser.closeTab *(v9.11)* | see §5.45 | the daemon-owned **browser tab registry** — fast-path methods (no `workspaceId` envelope requirement; the host-only reports are keyed by the connection's `client.hello` identity). Documented in §5.45 at the end of this file |
 | browser.docs | topic (req) | docs string — **not exposed**: no router arm; see the `browser.docs — not exposed` block below |
 | terminal.list | workspaceId (req) | `{ terminals: [{ id, name, cwd, isExecutingCommand, foregroundProcess?, lastProcess? }], daemonBootId }` (v4.0 envelope — the pre-4.0 bare terminals array is retired; monorepo#1334). `daemonBootId` is the daemon's per-boot identifier (UUID v4, minted once per daemon process; never persisted): stable within one daemon lifetime and fresh after a restart, so equal values across responses prove the same daemon lifetime and an **empty `terminals` list is authoritative** for that lifetime (not a restarted daemon that lost its PTYs). `name` is **always present** on each entry: the PTY's daemon-tracked display name when one was assigned at spawn (e.g. **"Setup Script"** for the workspace setup terminal, §5.1/§5.25), else the constant `"Terminal"`. The underlying PTY display name is optional spawn metadata (§5.13); the `name` field is not (clients may still fall back to `"Terminal"` defensively). The agent-facing MCP `ws.terminal.list` binding unwraps the envelope internally — agents still see the bare terminals array (§6.8). `foregroundProcess` is the name of the program in the foreground (the PTY's foreground process group leader), or `null` while only the spawned process (the shell) holds it; `lastProcess` is the most recent program that has left the foreground, or `null`. Both are `null` on platforms without process groups, absent from daemons that predate them, and change with a `terminal:process` event (§6.5) |
@@ -399,7 +399,15 @@ services directly and are unchanged.
 >    of the oldest claimed tab — the workspace's agent tabs all live on one client. User
 >    tabs (no `ownerAgentId`) never select a host. Offline
 >    ⇒ the same `… for this workspace is not connected` `-32603`.
-> 5. **Default (v9.9).** Otherwise the client of the **oldest remaining eligible**
+> 5. **Default (v9.9; recent focus,
+>    [intent-hq/intent#7855](https://github.com/intent-hq/intent/issues/7855)).** Otherwise,
+>    first the eligible client that **most recently focused the workspace**: a client whose
+>    connection names the workspace in its `presence.update` focus set (§5.47) now (the
+>    latest such update first), else the one whose focus left it most recently, via that
+>    client's **newest** eligible live connection. Focus history lives in daemon memory per
+>    connection and ends with it (at most 64 past workspaces per connection); a
+>    focused client with no eligible live connection is skipped, never an error. When no
+>    focused client is connected, the target is the client of the **oldest remaining eligible**
 >    registration (registration order; UDS + WSS share one registry), via that client's
 >    **newest** eligible live connection — the same per-client rule as the pin, so a stale
 >    older socket of the same app is skipped (intent-hq/intent#7902). Selection is re-run on
@@ -407,7 +415,8 @@ services directly and are unchanged.
 >    eligible registration is chosen, even if the first client still has a newer connection. No eligible connection at all ⇒ `-32603`
 >    `browser.exec: no client connected` — the same class of failure a closed channel
 >    already produces. The virtual Chief workspace cannot be pinned and skips rules 2–4: it
->    always resolves under this rule, whatever desktop session or claimed tabs it has.
+>    always resolves under this rule, whatever desktop session or claimed tabs it has, and
+>    skips its focus preference: the Chief always goes to the oldest eligible registration.
 >
 > Each rule is pinned by worked cases in
 > [`fixtures/browser-routing/routing.json`](../fixtures/browser-routing/routing.json); its
