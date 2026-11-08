@@ -3247,8 +3247,8 @@ interface ForgeLaunch {          // closed: unknown or mistyped members are node
       machine's answer wins, also when it holds no token (revoked, gate off or
       dropped): then the helper gives no credential. The helper uses the
       spawn-time `GH_TOKEN` only when the machine's intentd cannot be reached
-      or does not answer in time, so a revoked token does not come back from
-      the agent's environment. It is the only github.com credential helper in
+      or gives no valid answer in time, so a revoked token does not come back
+      from the agent's environment. It is the only github.com credential helper in
       that agent's git configuration: the machine's own helpers for
       github.com (for example a keychain or `store`) are reset, so git never
       offers them the token. The helper is set in that agent process's
