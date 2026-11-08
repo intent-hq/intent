@@ -22,6 +22,7 @@ ws.help(namespace?) → string
 ```text
 ws.agent.create(name, message, opts?) → { ok, id?, text?, ... }
 ws.agent.delegate({ taskNoteId?, noteId?, taskText?, agentInstructions?, specialist?, model?, provider?, reasoningEffort?, behaviorPrompt?, waitMode?, skipAutoCommit?, tasks? }) → { ok, text?, ... }
+ws.agent.delete(agentId) → { ok, agentId, deleted, failed }
 ws.agent.diagnostics({ agentId?, taskNoteId?, includeCompleted?, staleRespondingAfterMs? }?) → { diagnostics, text }
 ws.agent.getMessageBlock(agentId, messageId, blockId, { offset?, maxBytes? }?) → { block, truncated, field, encoding, totalBytes, nextOffset }
 ws.agent.getQueue(agentId) → { ok, agentId, queueLength, queue }
@@ -38,6 +39,7 @@ ws.agent.send(agentId, message, priority?) → { ok, agentId, delivery?, ... }
 ws.agent.sendToTask(taskNoteId, message, priority?) → { ok, taskNoteId, delivery?, ... }
 ws.agent.snapshot() → { time, hooks?, agentWatches?, queuedMessages?, eventSubscriptions?, activeSubAgents?, unsettledSubAgents?, runningSubAgents?, numQuestionsAsked?, prMonitors?, prs?, tasks?, pendingAttention? }
 ws.agent.status(agentId) → agent
+ws.agent.stop(agentId, { reason? }?) → { ok, agentId, stopped, failed }
 ws.agent.subscribe(eventTypes, { excludeSelf?, batchWindow? }) → { subscriptionId, ... }
 ws.agent.summary(agentId) → summary
 ws.agent.unsubscribe(subscriptionId) → { ok, subscriptionId }
