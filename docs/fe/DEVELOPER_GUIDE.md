@@ -653,7 +653,8 @@ Each run prints `record: <path>` for its attempt under `.dev/verify-changed/atte
 `coverage.json` lists every current check and resolved unit file per lane as
 `executed-passed`, `resumed-passed` (with its source attempt), `failed` or `unfinished`;
 `logs/<check id>.log` keeps each executed check's stdout and stderr as plain text. A failed
-check's summary line names its log and quotes its last lines, so read the log, not a rerun.
+check's summary line names its log and quotes its last lines, so read the log instead of
+rerunning the check.
 The run passes only when every entry is satisfied. To continue after a failure or
 interruption, rerun with `--resume`; never hand-pick stages. It reruns anything not
 proven compatible. A configuration, lockfile, Node, Vitest setup or runner change voids
