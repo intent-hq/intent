@@ -8,7 +8,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 
 class LocalCache(unittest.TestCase):
-    def run_build(self, configured=False, binary=True, wrapper=None):
+    def run_build(self, configured=False, binary=True, wrapper=None, disabled=False):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             (root/'Cargo.toml').write_text('')
@@ -18,10 +18,11 @@ class LocalCache(unittest.TestCase):
                 **({'sccache': '#!/bin/sh\nexit 0\n'} if binary else {}),
             }.items():
                 p=root/name;p.write_text(script);p.chmod(0o755)
-            env={k:v for k,v in os.environ.items() if not k.startswith(('SCCACHE_', 'RUSTC_WRAPPER'))}
+            env={k:v for k,v in os.environ.items() if not k.startswith(('SCCACHE_', 'RUSTC_WRAPPER', 'INTENT_SCCACHE_'))}
             env['PATH']=temp
             if configured:env.update(SCCACHE_WEBDAV_ENDPOINT='https://cache.example.com',SCCACHE_WEBDAV_TOKEN='fixture-secret')
             if wrapper is not None:env['RUSTC_WRAPPER']=wrapper
+            if disabled:env['INTENT_SCCACHE_DISABLED']='1'
             # Use the real recipe with the preflight overridden by a test-only makefile.
             fixture=root/'fixture.mk';fixture.write_text(f'include {ROOT}/Makefile\nensure-intentd-submodule: ;\n')
             result=subprocess.run(['/usr/bin/make','-s','-f',str(fixture),'build',f'INTENTD_DIR={root}',f'PATH={temp}'],env=env,cwd=ROOT,capture_output=True,text=True)
@@ -34,5 +35,9 @@ class LocalCache(unittest.TestCase):
     def test_missing_tool(self):self.assertIn('wrapper=\n',self.run_build(configured=True,binary=False))
     def test_explicit_wrapper(self):self.assertIn('wrapper=custom',self.run_build(configured=True,wrapper='custom'))
     def test_explicit_disabled_wrapper(self):self.assertIn('wrapper=\n',self.run_build(configured=True,wrapper=''))
+    # setup-sccache.py leaves the WebDAV values but no RUSTC_WRAPPER when the
+    # job's server cannot start; re-wrapping would hit sccache's 10 s startup
+    # timeout again (intent-hq/intent#8802), so its marker keeps the build uncached.
+    def test_ci_fallback_marker(self):self.assertIn('wrapper=\n',self.run_build(configured=True,disabled=True))
 
 if __name__=='__main__':unittest.main()
