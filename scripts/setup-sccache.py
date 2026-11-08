@@ -179,8 +179,8 @@ def main():
     if not start_server(binary_path(directory), server_env):
         # Cache-specific steps still see the backend; compilation skips it.
         del values["RUSTC_WRAPPER"]
-        print(f"::warning::The sccache server could not reach the self-hosted cache at {host} "
-              f"after {STARTUP_ATTEMPTS} attempts; Rust compilation is uncached for this job.")
+        print(f"::warning::The sccache server did not start after {STARTUP_ATTEMPTS} attempts "
+              f"(is the self-hosted cache at {host} reachable?); Rust compilation is uncached for this job.")
     with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
         for key, value in values.items():
             if "\n" in value or "\r" in value:
