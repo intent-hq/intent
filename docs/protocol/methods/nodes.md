@@ -853,6 +853,39 @@ backend supported nodeProtocol 10 have no pins, omit `submodules` and `setup`,
 and keep running as before on every link. Workspaces that need neither run on
 every supported link.
 
+##### Forge token for remote agents
+
+On a link that negotiated nodeProtocol 15, the backend passes the GitHub token
+it already resolves to the machine, in memory
+([forge token on the machine](../node-link.md#forge-token-on-the-machine-nodeprotocol-15)).
+No method, setting or result member is added; the existing
+`sourceControl.github.exposeGitCredentialToChildren` setting (default on) also
+gates it.
+
+- **Every remote agent** gets the token as `GH_TOKEN`, so `gh` works on the
+  machine.
+- **A top-level agent** (`isSubAgent: false`) of a GitHub workspace also gets
+  `origin` set to the workspace's GitHub repository, the workspace branch as
+  its upstream (on an agent-local branch) and a credential helper, so
+  `git push` and `gh pr create --head <branch>` work. This includes the initial
+  agent of a workspace started on a cloud machine. All top-level remote agents
+  of a workspace push to the same branch; a second writer pulls or rebases
+  after a non-fast-forward reject, and the backend's worktree is not updated.
+- **A sub-agent** has no credential helper, and hands its work back through
+  its refs as before. Its own checkout has no `origin`; one that shares a
+  top-level agent's checkout sees that checkout's `origin` and upstream. It is told to use `gh` for reads only. This
+  is a convention only: the token is not read-only, and nothing stops a
+  sub-agent that pushes or writes with it.
+- The token is the backend's full token. The model can read it from the
+  provider's environment for the agent's lifetime.
+- On a link below 15, or with no token, remote agents get no `GH_TOKEN`, as
+  before. In a workspace whose `origin` is not on GitHub, they get `GH_TOKEN`
+  but no `origin`.
+
+The machine answers a `forgeToken` frame it cannot accept with the fixed code
+`forge-token-invalid`. It is a link reply code, not a public error: no method
+returns it.
+
 ##### Cloud machines (E2B)
 
 A *cloud machine* is a remote machine that the backend starts itself, in an
@@ -1637,6 +1670,7 @@ in `payload` and `summary` alike, and this cannot be turned off:
   `providerRef` and `fingerprint` stay visible);
 - `scriptStart.env[].value` (keys stay visible);
 - `secretPut.value` (protocol 14; `agentId` and `name` stay visible);
+- `forgeToken.token` (protocol 15; `host` stays visible);
 - at any depth of a `request` or `response` frame's params or result, every
   value inside a member named `env`: in the `{ key, value }[]` form each
   `value`, and in the object form each member's value (keys stay visible). This
