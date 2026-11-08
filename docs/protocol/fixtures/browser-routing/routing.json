@@ -10,7 +10,7 @@
     "workspace.chief": "The virtual Chief workspace.",
     "workspace.pin": "Workspace.browserClientId, or null when unpinned.",
     "workspace.desktopSession": "clientId of the workspace's active desktop-control session, or null.",
-    "workspace.recentFocus": "Optional. Client ids whose connections focused the workspace through presence.update, most recent first: clients focusing it now, then by when their focus left it. Absent means none. Non-Chief, unpinned workspaces with no desktop session and no claimed tab route to the first of these with an eligible live connection, else under the default rule.",
+    "workspace.recentFocus": "Optional. Client ids whose connections focused the workspace through presence.update, most recent first: clients focusing it now (latest update naming it first), then by when their focus left it. Absent means none. Non-Chief, unpinned workspaces with no desktop session and no claimed tab route to the first of these with an eligible live connection, else under the default rule.",
     "workspace.tabs": "Open registry tabs, oldest first and in ascending tabId order (the registry breaks creation-time ties by tabId): { tabId, host, owner } where owner is the claiming agent id or null for a user tab.",
     "connections": "{ id, client, hello, browserExec } in registration order; client is null for a connection that never sent client.hello.",
     "helloOrder": "Optional order in which connections send client.hello (default: registration order). Routing must not depend on it.",

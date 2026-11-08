@@ -1552,7 +1552,8 @@ pinned (-32602) and never carries the field.
 workspace is routed to a specific client: `via: "desktop"` for the client of an active
 desktop-control session, `via: "tabs"` for the host of the oldest claimed tab, `via: "focus"`
 for the connected client that most recently focused the workspace (§5.9 rule 5; only while that
-client is connected). These are the `"desktop"` / `"tabs"` / `"focus"` rule labels
+client is connected). The focus route follows `presence.update` and has no change event, so a
+stored `target` can lag behind it; re-read for the current value. These are the `"desktop"` / `"tabs"` / `"focus"` rule labels
 `ws.browser.clients()` reports as `workspace.source` (§6.8).
 `target` is omitted when pinned (`clientId` already names the target), when the
 first-connected-eligible fallback applies, and always for the virtual Chief workspace.

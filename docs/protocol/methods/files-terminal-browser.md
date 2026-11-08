@@ -402,9 +402,10 @@ services directly and are unchanged.
 > 5. **Default (v9.9; recent focus,
 >    [intent-hq/intent#7855](https://github.com/intent-hq/intent/issues/7855)).** Otherwise,
 >    first the eligible client that **most recently focused the workspace**: a client whose
->    connection names the workspace in its `presence.update` focus set (§5.47) now, else the
->    one whose focus left it most recently, via that client's **newest** eligible live
->    connection. Focus history lives in daemon memory per connection and ends with it; a
+>    connection names the workspace in its `presence.update` focus set (§5.47) now (the
+>    latest such update first), else the one whose focus left it most recently, via that
+>    client's **newest** eligible live connection. Focus history lives in daemon memory per
+>    connection and ends with it (at most 64 past workspaces per connection); a
 >    focused client with no eligible live connection is skipped, never an error. When no
 >    focused client is connected, the target is the client of the **oldest remaining eligible**
 >    registration (registration order; UDS + WSS share one registry), via that client's
