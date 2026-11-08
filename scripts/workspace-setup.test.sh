@@ -11,6 +11,8 @@ set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 script="$repo_root/scripts/workspace-setup.sh"
+# The interpreter setup runs under; the Bash 3.2 rerun at the end sets it.
+setup_bash="${WORKSPACE_SETUP_TEST_BASH:-$(command -v bash)}"
 temp_dir=$(mktemp -d)
 trap 'rm -rf "$temp_dir"' EXIT
 output="$temp_dir/setup.out"
@@ -53,7 +55,8 @@ reset_case() {
   main_checkout="$case_dir/main"
   mkdir -p "$fixture/scripts" "$bin_dir" "$home" "$main_checkout"
   cp "$script" "$repo_root/scripts/retry.sh" "$fixture/scripts/"
-  for command in bash sh cat chmod cp dirname env grep mkdir mktemp mv rm sed tar gzip uname; do
+  ln -s "$setup_bash" "$bin_dir/bash"
+  for command in sh cat chmod cp dirname env grep mkdir mktemp mv rm sed tar gzip uname; do
     ln -s "$(command -v "$command")" "$bin_dir/$command"
   done
   : >"$log"
@@ -116,7 +119,7 @@ run_setup() {
   env -i PATH="$bin_dir" HOME="$home" TMPDIR="$case_dir" CALL_LOG="$log" \
     STUB_CARGO="$temp_dir/stub-cargo" RETRY_DELAY=0 MAIN_CHECKOUT="$main_checkout" \
     FAKE_UID="${FAKE_UID:-1000}" \
-    bash "$fixture/scripts/workspace-setup.sh" >"$output" 2>&1
+    "$setup_bash" "$fixture/scripts/workspace-setup.sh" >"$output" 2>&1
   status=$?
   set -e
 }
@@ -228,4 +231,34 @@ run_setup
 assert_status 1 "submodule failure"
 assert_not_called "cargo install" "submodule failure"
 
-echo "workspace-setup tests passed"
+# 8. rustup without a working toolchain (a host restored from an image):
+#    setup selects stable and adds clippy + rustfmt instead of reinstalling.
+reset_case
+stub_id; stub_make; stub_git; stub_cc; stub_curl
+stub rustup 'echo "rustup $*" >>"$CALL_LOG"'
+stub cargo 'echo "cargo $*" >>"$CALL_LOG"; exit 1'
+stub cargo-nextest 'exit 0'
+stub cargo-sweep 'exit 0'
+run_setup
+assert_status 0 "rustup without toolchain"
+assert_called "rustup default stable" "rustup without toolchain"
+assert_called "rustup component add clippy rustfmt" "rustup without toolchain"
+assert_not_called "rustup-init" "rustup without toolchain"
+
+echo "workspace-setup tests passed under $("$setup_bash" -c 'echo "bash $BASH_VERSION"')"
+[[ -z "${WORKSPACE_SETUP_TEST_BASH:-}" ]] || exit 0
+
+# Stock macOS /bin/bash is 3.2 and runs the setupScript there, so rerun the
+# cases under a real Bash 3 when one can be found; REQUIRE_BASH3 (CI) makes a
+# missing one a failure.
+# shellcheck source=scripts/find-bash3.sh
+source "$repo_root/scripts/find-bash3.sh"
+if [[ "${BASH_VERSINFO[0]}" -eq 3 ]]; then
+  :
+elif bash3=$(find_bash3); then
+  WORKSPACE_SETUP_TEST_BASH="$bash3" bash "${BASH_SOURCE[0]}"
+elif [[ -n "${REQUIRE_BASH3:-}" ]]; then
+  fail "no Bash 3 interpreter found and REQUIRE_BASH3 is set ($(bash3_missing_hint))"
+else
+  echo "workspace-setup tests: no Bash 3 interpreter found ($(bash3_missing_hint)); real 3.2 run skipped"
+fi
