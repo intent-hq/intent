@@ -230,12 +230,19 @@ def wait_until_dead(pids, polls=100, interval=0.05):
 
 
 def marked(marker):
-    """Live processes whose environment carries `marker`."""
+    """Live processes whose environment carries `marker`.
+
+    Lists /proc and reads each environ directly: Path.glob stats every match
+    first (Python 3.11), and a pid exiting in between raised ESRCH out of the
+    scan itself, where the read's suppression cannot catch it.
+    """
     found = []
-    for environ in Path("/proc").glob("[0-9]*/environ"):
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
         with contextlib.suppress(OSError):
-            if marker.encode() in environ.read_bytes().split(b"\0") and alive(int(environ.parent.name)):
-                found.append(int(environ.parent.name))
+            if marker.encode() in Path("/proc", name, "environ").read_bytes().split(b"\0") and alive(int(name)):
+                found.append(int(name))
     return found
 
 
@@ -293,6 +300,25 @@ class AliveTests(unittest.TestCase):
                 flips.append(pid)
         self.assertEqual(errors, [])
         self.assertEqual(flips, [])
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "/proc process scans are Linux only")
+    def test_marked_survives_a_process_exiting_during_the_scan(self):
+        # pathlib's glob stats each /proc/<pid>/environ before yielding it, and
+        # a pid exiting in between raised ESRCH out of the scan, outside the
+        # read's suppression (monorepo merge_group run 42228557946).
+        marker = f"INTENT_MARKED_SCAN_{os.getpid()}=1"
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"],
+                                 env={**os.environ, marker.split("=")[0]: "1"})
+        self.addCleanup(child.wait)
+        self.addCleanup(child.kill)
+        real_stat = os.stat
+
+        def vanishing(path, *args, **kwargs):
+            if str(path).endswith("/environ"):
+                raise ProcessLookupError(3, "No such process", str(path))
+            return real_stat(path, *args, **kwargs)
+        with mock.patch.object(os, "stat", side_effect=vanishing):
+            self.assertEqual(marked(marker), [child.pid])
 
     def test_wait_until_dead_never_rechecks_a_dead_pid(self):
         # A reused pid number must not resurrect a worker already seen dead.
