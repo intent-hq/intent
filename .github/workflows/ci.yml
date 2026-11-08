@@ -367,6 +367,7 @@ jobs:
           bash scripts/release-status.test.sh
           bash scripts/retry.test.sh
           bash scripts/rustc-parallel.test.sh
+          bash scripts/workspace-setup.test.sh
           bash scripts/lint-fixed-sleeps.sh
       # sccache cache server (infra/sccache): real Caddy + rclone on loopback,
       # pinned and checksum-verified, so the token access matrix never skips here.

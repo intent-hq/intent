@@ -18,6 +18,7 @@ EXCEPTIONS = {('runner-route.yml', 'probe'), ('manual-signed-build.yml', 'smoke-
 # socket), so jobs that need either stay on a hosted runner.
 HOSTED_ONLY = {
     ('bootstrap-install.yml', 'bootstrap-install'): 'runs sudo docker',
+    ('bootstrap-install.yml', 'workspace-setup'): 'runs sudo docker',
 }
 EXCEPTIONS |= set(HOSTED_ONLY)
 # The runner smoke jobs read their self-hosted labels from the plan job
