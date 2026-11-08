@@ -24,12 +24,12 @@ from smoke_plan import HERE, hosts, read_env, slots  # noqa: E402
 VARIABLES = {'heavy': 'CI_LINUX_HEAVY_SLOTS', 'bigmem': 'CI_LINUX_BIGMEM_SLOTS', 'xl': 'CI_LINUX_XL_SLOTS'}
 
 
-def totals(fleet):
+def totals(fleet, default_labels):
     out = dict.fromkeys(VARIABLES, 0)
     for env in fleet.values():
         heavy = len(slots(env, 'heavy'))
         out['heavy'] += heavy
-        if heavy and 'intent-cache-bigmem' in env['HEAVY_LABELS'].split(','):
+        if heavy and 'intent-cache-bigmem' in env.get('HEAVY_LABELS', default_labels).split(','):
             out['bigmem'] += heavy
         out['xl'] += len(slots(env, 'xl'))
     return out
@@ -43,23 +43,29 @@ def main(argv=None, root=HERE):
                         help='set the CI_LINUX_*_SLOTS variables in every RUNNER_GROUP_REPOS repository with gh')
     args = parser.parse_args(argv)
     fleet = hosts(root)
+    known = sorted(fleet)
     for host in args.without:
-        if host not in fleet:
-            known = ', '.join(sorted(hosts(root)))
-            raise SystemExit(f"fleet_slots: error: unknown runner host '{host}'; expected one of: {known}")
-        del fleet[host]
-    result = totals(fleet)
+        if host not in known:
+            raise SystemExit(f"fleet_slots: error: unknown runner host '{host}'; expected one of: {', '.join(known)}")
+        fleet.pop(host, None)
+    # runners.env holds supervisor.sh's defaults (test_intent_cache_config_matches_the_defaults).
+    env = read_env(root / 'runners.env')
+    result = totals(fleet, env['HEAVY_LABELS'])
     for pool, n in result.items():
         print(f'{pool}={n}', flush=True)
     if not args.apply:
         return 0
-    env = read_env(root / 'runners.env')
     for repo in env['RUNNER_GROUP_REPOS'].split(','):
         slug = f"{env['GITHUB_ORG']}/{repo}"
         for pool, name in VARIABLES.items():
             cmd = ['gh', 'variable', 'set', name, '--repo', slug, '--body', str(result[pool])]
-            if subprocess.run(cmd).returncode != 0:
-                raise SystemExit(f"fleet_slots: error: {' '.join(cmd)} failed")
+            try:
+                rc = subprocess.run(cmd).returncode
+            except FileNotFoundError:
+                raise SystemExit('fleet_slots: error: gh not found; install it or set the variables by hand')
+            if rc != 0:
+                raise SystemExit(f"fleet_slots: error: {' '.join(cmd)} failed; the lines above were set, "
+                                 'rerun with the same arguments to set the rest')
             print(f'{slug} {name}={result[pool]}', flush=True)
     return 0
 

@@ -1680,7 +1680,7 @@ class Static(unittest.TestCase):
         self.assertEqual(rc, 0, err)
         self.assertEqual(len(out['isolation_xl']['include']), 1)
 
-    def fleet_slots_in(self, files, *args, gh_rc=0):
+    def fleet_slots_in(self, files, *args, gh_rc=0, path=None):
         # fleet_slots.py against a scratch config tree, with a gh stub that logs its calls.
         root = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, root)
@@ -1693,7 +1693,7 @@ class Static(unittest.TestCase):
         write_exe(root / 'bin' / 'gh', LOG_STUB + f'sys.exit({gh_rc})\n')
         log = root / 'gh.jsonl'
         log.touch()
-        env = {**os.environ, 'PATH': f'{root / "bin"}:{os.environ["PATH"]}', 'STUB_LOG': str(log)}
+        env = {**os.environ, 'PATH': path or f'{root / "bin"}:{os.environ["PATH"]}', 'STUB_LOG': str(log)}
         result = subprocess.run([sys.executable, '-S', '-B', str(root / 'fleet_slots.py'), *args],
                                 capture_output=True, text=True, env=env)
         calls = [json.loads(line)['argv'] for line in log.read_text().splitlines()]
@@ -1715,6 +1715,12 @@ class Static(unittest.TestCase):
                 self.assertEqual((rc, out, calls), (0, totals, []), err)
         rc, out, err, _ = self.fleet_slots_in({'intent-ci1.env': ci1.replace('XL_SLOTS=1', 'XL_SLOTS=0')})
         self.assertEqual((rc, out), (0, 'heavy=5\nbigmem=5\nxl=0\n'), 'a drained pool counts no slot')
+        rc, out, err, _ = self.fleet_slots_in(files, '--without', 'intent-ci1', '--without', 'intent-ci1')
+        self.assertEqual((rc, out), (0, 'heavy=7\nbigmem=3\nxl=0\n'), err)
+        # supervisor.sh's HEAVY_LABELS default (pinned to runners.env's) carries intent-cache-bigmem.
+        rc, out, err, _ = self.fleet_slots_in({'intent-ci1.env': ci1.replace(read_env(INTENT_CI1)['HEAVY_LABELS'], '')
+                                               .replace('HEAVY_LABELS=\n', '')})
+        self.assertEqual((rc, out), (0, 'heavy=5\nbigmem=5\nxl=1\n'), err)
         for host in ('intent-runner-9', 'intent-ci2'):
             with self.subTest(without=host):
                 rc, out, err, _ = self.fleet_slots_in(files, '--without', host)
@@ -1741,13 +1747,20 @@ class Static(unittest.TestCase):
         self.assertNotEqual(rc, 0)
         self.assertEqual(len(calls), 1, 'the first gh failure stops the run')
         self.assertIn('gh variable set CI_LINUX_HEAVY_SLOTS', err)
+        self.assertIn('rerun', err, 'the error says how to finish a partial apply')
+        rc, out, err, _ = self.fleet_slots_in({}, '--apply', path='/nonexistent')
+        self.assertNotEqual(rc, 0)
+        self.assertIn('gh not found', err)
+        self.assertNotIn('Traceback', err)
 
     def test_fleet_slots_reads_the_committed_fleet(self):
         rc, out, err, _ = self.fleet_slots_in({p.name: p.read_text() for p in HOSTS.glob('*.env')})
         self.assertEqual(rc, 0, err)
-        totals = dict(line.split('=') for line in out.splitlines())
-        self.assertEqual(list(totals), ['heavy', 'bigmem', 'xl'])
-        self.assertGreaterEqual(int(totals['heavy']), int(totals['bigmem']), 'bigmem slots are heavy slots')
+        # intent-cache's bigmem heavy slots plus each intent-ci twin's xl and two bigmem heavy slots;
+        # the layout templates are not hosts.
+        cache = int(read_env(HERE / 'runners.env')['HEAVY_SLOTS'])
+        n = len(CI_HOSTS)
+        self.assertEqual(out, f'heavy={cache + 2 * n}\nbigmem={cache + 2 * n}\nxl={n}\n')
 
     def test_smoke_jobs_follow_the_plan(self):
         text = (HERE.parents[1] / '.github/workflows/intent-cache-smoke.yml').read_text()
