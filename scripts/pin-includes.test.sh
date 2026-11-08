@@ -41,6 +41,8 @@ if [[ -n "${GH_STUB_FAIL:-}" && "$2" == *"${GH_STUB_FAIL_ON:-}"* ]]; then
     secondary) echo "gh: You have exceeded a secondary rate limit. (HTTP 403)" >&2 ;;
     5xx) echo "gh: Server Error (HTTP 502)" >&2 ;;
     network) echo "error connecting to api.github.com" >&2; echo "check your internet connection or https://githubstatus.com" >&2 ;;
+    noroute) echo 'Get "https://api.github.com/repos/intent-hq/intent/contents/packages": dial tcp 172.182.252.137:443: connect: no route to host' >&2 ;;
+    dial) echo 'Get "https://api.github.com/repos/intent-hq/intent/compare/a...b": dial tcp 140.82.112.6:443: connect: host is down' >&2 ;;
     forbidden) echo "gh: Resource not accessible by personal access token (HTTP 403)" >&2 ;;
     *) echo "stub: unknown failure mode $GH_STUB_FAIL" >&2 ;;
   esac
@@ -224,6 +226,8 @@ for case in "ratelimit:/contents/:4:rate limit exceeded" \
   "secondary:/compare/:4:secondary rate limit" \
   "5xx:/compare/:4:HTTP 502" \
   "network:/contents/:4:error connecting to api.github.com check your internet" \
+  "noroute:/contents/:4:connect: no route to host" \
+  "dial:/compare/:4:connect: host is down" \
   "forbidden:/contents/:1:Resource not accessible"; do
   mode=${case%%:*}
   rest=${case#*:}

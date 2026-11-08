@@ -57,7 +57,9 @@ done
 gh_err=$(mktemp)
 trap 'rm -f "$gh_err"' EXIT
 
-transient_pattern='rate limit|HTTP 429|HTTP 5[0-9]{2}|error connecting|connection (reset|refused)|timeout|no such host|network is unreachable|temporary failure|unexpected EOF'
+# shellcheck source=scripts/lib/gh-transient.sh
+. "${BASH_SOURCE[0]%/*}/lib/gh-transient.sh"
+transient_pattern=$gh_transient_pattern
 
 # Report a failed gh call: exit 4 when its stderr looks transient, else 1.
 gh_fail() {

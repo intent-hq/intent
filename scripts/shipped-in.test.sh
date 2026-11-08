@@ -52,6 +52,8 @@ stub_fail() {
     5xx) echo "gh: Server Error (HTTP 502)" >&2 ;;
     network) echo "error connecting to api.github.com" >&2; echo "check your internet connection or https://githubstatus.com" >&2 ;;
     noroute) echo 'Post "https://api.github.com/graphql": dial tcp 172.182.252.137:443: connect: no route to host' >&2 ;;
+    noroute-bare) echo 'read: connect: no route to host' >&2 ;;
+    hostdown-bare) echo 'connect: host is down' >&2 ;;
     dial) echo 'Get "https://api.github.com/repos/intent-hq/cloudlands-releases": dial tcp 140.82.112.6:443: connect: host is down' >&2 ;;
     forbidden) echo "gh: Resource not accessible by personal access token (HTTP 403)" >&2 ;;
     notfound) echo "release not found" >&2 ;;
@@ -234,7 +236,7 @@ GH_STUB_FAIL=1 run_script cloudlands-fe "$sha"
 # retry instead of evicting itself (intent-hq/intent rate-limit incident). Any
 # connection-level error is transient: an unmatched "no route to host" from a
 # brief outage evicted the canonical "Wait for shipped alpha" hook.
-for mode in ratelimit ratelimit-rest 5xx noroute dial network; do
+for mode in ratelimit ratelimit-rest 5xx noroute noroute-bare hostdown-bare dial network; do
   reset_stub
   GH_STUB_FAIL=$mode run_script cloudlands-fe "$sha"
   [[ "$status" -eq 4 ]] || fail "$mode on release list exited $status (expected 4): $stderr"
