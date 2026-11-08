@@ -114,11 +114,11 @@ function resolveCheckout({ uses, source }, readComponent) {
 function assertSharedFixtureCheckout(steps, readComponent, label) {
   assert.equal(steps.length, 1, `${label}: expected exactly one fixture checkout`);
   const checkout = resolveCheckout(steps[0], readComponent);
-  assert.equal(checkout.repository, 'intent-hq/intent', label);
-  assert.equal(checkout.ref, 'main', label);
+  assert.equal(checkout.repository, 'intent-hq/intent', `${label}: the fixture checkout must fetch intent-hq/intent, not ${checkout.repository}`);
+  assert.equal(checkout.ref, 'main', `${label}: the fixture checkout must fetch main, not ${checkout.ref}`);
   assert.equal(checkout.credentials, 'none', `${label}: the fixture checkout must not keep credentials`);
-  assert.match(checkout.sparse, /docs\/protocol\/fixtures\/transfer-selection/, label);
-  assert.match(checkout.sparse, /scripts\//, label);
+  assert.match(checkout.sparse, /docs\/protocol\/fixtures\/transfer-selection/, `${label}: the fixture checkout must include the transfer-selection fixtures`);
+  assert.match(checkout.sparse, /scripts\//, `${label}: the fixture checkout must include scripts/`);
 }
 
 test('reusable acquisition preserves workflow revision, caller head and counterpart pin for both directions', () => {
