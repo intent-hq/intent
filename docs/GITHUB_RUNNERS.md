@@ -16,10 +16,11 @@ input uses it to test one host.
 | intent-ci2 | ReliableSite, Los Angeles | EPYC 4545P, 16 cores / 32 threads, 128 GB | xl (1), heavy (2) | `intent-cache-xl`, `intent-cache` + `intent-cache-bigmem` | `intent-ci2` | [`hosts/intent-ci2.env`](../infra/runners/hosts/intent-ci2.env) |
 | intent-ci3 | ReliableSite, Los Angeles | EPYC 4545P, 16 cores / 32 threads, 128 GB | xl (1), heavy (2) | `intent-cache-xl`, `intent-cache` + `intent-cache-bigmem` | `intent-ci3` | [`hosts/intent-ci3.env`](../infra/runners/hosts/intent-ci3.env) |
 | intent-ci4 | ReliableSite, Los Angeles | EPYC 4545P, 16 cores / 32 threads, 128 GB | xl (1), heavy (2) | `intent-cache-xl`, `intent-cache` + `intent-cache-bigmem` | `intent-ci4` | [`hosts/intent-ci4.env`](../infra/runners/hosts/intent-ci4.env) |
+| intent-ci5 | ReliableSite, Los Angeles | EPYC 4545P, 16 cores / 32 threads, 128 GB | xl (1), heavy (2) | `intent-cache-xl`, `intent-cache` + `intent-cache-bigmem` | `intent-ci5` | [`hosts/intent-ci5.env`](../infra/runners/hosts/intent-ci5.env) |
 
 | Pool | Label | Serves jobs asking for | Bursts to | Per slot |
 |---|---|---|---|---|
-| heavy | `intent-cache` | `gh-linux-8x` | `warp-ubuntu-2404-x64-8x` | 8 CPUs = 4 whole cores; 36 GB on intent-cache, 30 GB on intent-ci1, intent-ci2, intent-ci3 and intent-ci4, 32 GB in the three-heavy EPYC layout, 12 GB in the 64 GB layout |
+| heavy | `intent-cache` | `gh-linux-8x` | `warp-ubuntu-2404-x64-8x` | 8 CPUs = 4 whole cores; 36 GB on intent-cache, 30 GB on intent-ci1 to intent-ci5, 32 GB in the three-heavy EPYC layout, 12 GB in the 64 GB layout |
 | bigmem | `intent-cache` + `intent-cache-bigmem` | `gh-linux-16x` when no xl slot is free | `warp-ubuntu-2404-x64-16x` | heavy slots with 30 GB or more |
 | xl | `intent-cache-xl` | `gh-linux-16x` | `warp-ubuntu-2404-x64-16x` | 16 CPUs = 8 whole cores (one CCD), 52 GB |
 | small | `intent-cache-small` | nothing routed (free `ubuntu-*` jobs run on GitHub) | — | no slots on any host |
@@ -30,7 +31,7 @@ wins contention by cgroup weight rather than a reserved core (see Pinned CPUs
 and limits). There is no small pool: the repositories are public, so jobs that
 fit in 1 CPU run free on GitHub's standard `ubuntu-24.04` runners and
 self-hosting them saved nothing; `runner-route` never routes them to a slot.
-On intent-ci1, intent-ci2, intent-ci3 and intent-ci4 (same layout;
+On intent-ci1 to intent-ci5 (same layout;
 `test_runners.py` keeps the files identical but the name) the xl slot owns cores 0-7
 (CPUs 0-7,16-23, 52 GB) and the two heavy slots split CCD 1: cores 8-11
 (8-11,24-27) and 12-15 (12-15,28-31), 30 GB each. Every core is pinned; about

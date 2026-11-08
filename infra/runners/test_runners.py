@@ -35,6 +35,7 @@ INTENT_CI1 = HOSTS / 'intent-ci1.env'
 INTENT_CI2 = HOSTS / 'intent-ci2.env'
 INTENT_CI3 = HOSTS / 'intent-ci3.env'
 INTENT_CI4 = HOSTS / 'intent-ci4.env'
+INTENT_CI5 = HOSTS / 'intent-ci5.env'
 EPYC_3HEAVY = HOSTS / 'epyc-4545p-3heavy.env'
 EPYC_64G_4HEAVY = HOSTS / 'epyc-4545p-64g-4heavy.env'
 # MemTotal of a 128 GB box (125 GiB after the kernel's share).
@@ -755,6 +756,7 @@ class Supervisor(Stubbed):
                             (INTENT_CI2, ['xl-1', 'heavy-1', 'heavy-2']),
                             (INTENT_CI3, ['xl-1', 'heavy-1', 'heavy-2']),
                             (INTENT_CI4, ['xl-1', 'heavy-1', 'heavy-2']),
+                            (INTENT_CI5, ['xl-1', 'heavy-1', 'heavy-2']),
                             (EPYC_3HEAVY, ['heavy-1', 'heavy-2', 'heavy-3']),
                             (EPYC_64G_4HEAVY, ['heavy-1', 'heavy-2', 'heavy-3', 'heavy-4'])):
             with self.subTest(config=path.name):
@@ -774,8 +776,9 @@ class Supervisor(Stubbed):
         self.assertIn('\n  RUNNER_NAME_PREFIX=intent-cache\n', text)
 
     def test_xl_pool_slot(self):
-        # intent-ci1, intent-ci2, intent-ci3 and intent-ci4 share this layout: one xl slot and two 30 GB heavy slots.
-        for config, host in ((INTENT_CI1, 'intent-ci1'), (INTENT_CI3, 'intent-ci3'), (INTENT_CI4, 'intent-ci4')):
+        # intent-ci1 to intent-ci5 share this layout: one xl slot and two 30 GB heavy slots.
+        for config, host in ((INTENT_CI1, 'intent-ci1'), (INTENT_CI3, 'intent-ci3'), (INTENT_CI4, 'intent-ci4'),
+                             (INTENT_CI5, 'intent-ci5')):
             with self.subTest(host=host):
                 self.use_host_config(config)
                 self.responses['GET /orgs/example-org/actions/runners'] = [200, {'runners': []}]
@@ -823,7 +826,8 @@ class Supervisor(Stubbed):
         # (the smoke workflow's host input) can target one host; pool labels
         # stay first and unchanged, so routing by pool label is unaffected.
         for path, prefix in ((HERE / 'runners.env', 'intent-cache'), (INTENT_CI1, 'intent-ci1'),
-                             (INTENT_CI2, 'intent-ci2'), (INTENT_CI3, 'intent-ci3'), (INTENT_CI4, 'intent-ci4')):
+                             (INTENT_CI2, 'intent-ci2'), (INTENT_CI3, 'intent-ci3'), (INTENT_CI4, 'intent-ci4'),
+                             (INTENT_CI5, 'intent-ci5')):
             with self.subTest(config=path.name):
                 self.use_host_config(path)
                 self.responses['GET /orgs/example-org/actions/runners'] = [200, {'runners': []}]
@@ -889,6 +893,7 @@ class Supervisor(Stubbed):
                 (INTENT_CI2, epyc, None),
                 (INTENT_CI3, epyc, None),
                 (INTENT_CI4, epyc, None),
+                (INTENT_CI5, epyc, None),
                 (EPYC_3HEAVY, epyc, None),
                 (EPYC_64G_4HEAVY, epyc, None),
                 (HERE / 'runners.env', ryzen, None),
@@ -922,6 +927,7 @@ class Supervisor(Stubbed):
         ryzen = fake_cpus(self.dir / 'ryzen', 12, 12)
         hosts = {HERE / 'runners.env': (ryzen, MEMINFO_128G), INTENT_CI1: (epyc, MEMINFO_128G),
                  INTENT_CI2: (epyc, MEMINFO_128G), INTENT_CI3: (epyc, MEMINFO_128G), INTENT_CI4: (epyc, MEMINFO_128G),
+                 INTENT_CI5: (epyc, MEMINFO_128G),
                  EPYC_3HEAVY: (epyc, MEMINFO_128G), EPYC_64G_4HEAVY: (epyc, MEMINFO_64G)}
         self.assertEqual(sorted(hosts), sorted([HERE / 'runners.env', *HOSTS.glob('*.env')]))
         for config, (sysfs, meminfo) in hosts.items():
@@ -1611,7 +1617,7 @@ class Static(unittest.TestCase):
         # registers it), one leg per slot, and the limits are that host's exactly.
         gib = 2 ** 30
         expected = {'intent-cache': (3, 36, 0), 'intent-ci1': (2, 30, 1), 'intent-ci2': (2, 30, 1),
-                    'intent-ci3': (2, 30, 1), 'intent-ci4': (2, 30, 1)}
+                    'intent-ci3': (2, 30, 1), 'intent-ci4': (2, 30, 1), 'intent-ci5': (2, 30, 1)}
         for host, (heavy, heavy_gib, xl) in expected.items():
             with self.subTest(host=host):
                 rc, out, err = self.smoke_plan('--host', host)
@@ -1840,7 +1846,7 @@ class Static(unittest.TestCase):
         configs = sorted(HOSTS.glob('*.env'))
         # Host RAM in GiB and, for hosts that pin every core, the slots' total memory.
         hosts = {INTENT_CI1: (125, 52 + 2 * 30), INTENT_CI2: (125, 52 + 2 * 30), INTENT_CI3: (125, 52 + 2 * 30),
-                 INTENT_CI4: (125, 52 + 2 * 30), EPYC_3HEAVY: (125, None), EPYC_64G_4HEAVY: (60, 4 * 12)}
+                 INTENT_CI4: (125, 52 + 2 * 30), INTENT_CI5: (125, 52 + 2 * 30), EPYC_3HEAVY: (125, None), EPYC_64G_4HEAVY: (60, 4 * 12)}
         self.assertEqual(configs, sorted(hosts))
         shape = {'xl': (16, 'intent-cache-xl'), 'heavy': (8, 'intent-cache')}
         for path in configs:
@@ -1883,10 +1889,11 @@ class Static(unittest.TestCase):
         self.assertNotIn('XL_SLOTS', small, 'the 64 GB layout has no xl slot')
 
     def test_twin_hosts_match_but_their_name(self):
-        # intent-ci2, intent-ci3 and intent-ci4 are copies of intent-ci1:
+        # intent-ci2 to intent-ci5 are copies of intent-ci1:
         # same hardware, same slots; only the runner name prefix (and the host
         # name in comments) differs.
-        for twin, twin_name in ((INTENT_CI2, 'intent-ci2'), (INTENT_CI3, 'intent-ci3'), (INTENT_CI4, 'intent-ci4')):
+        for twin, twin_name in ((INTENT_CI2, 'intent-ci2'), (INTENT_CI3, 'intent-ci3'), (INTENT_CI4, 'intent-ci4'),
+                                 (INTENT_CI5, 'intent-ci5')):
             with self.subTest(twin=twin_name):
                 self.assertEqual(read_env(twin)['RUNNER_NAME_PREFIX'], twin_name)
                 self.assertEqual(twin.read_text().replace(twin_name, 'intent-ci1'), INTENT_CI1.read_text())
