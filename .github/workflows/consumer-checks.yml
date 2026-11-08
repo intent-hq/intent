@@ -190,9 +190,12 @@ jobs:
           submodules: false
           persist-credentials: false
 
+      # A dropped github.com connection here would fail the component's required
+      # gate (intent-hq/intent#8783); the pin is a commit on its main, so a
+      # retry only delays a real failure.
       - name: Initialize packages/${{ steps.component.outputs.other }} at its pin
         if: steps.monorepo.outcome == 'success'
-        run: git submodule update --init --depth=1 "packages/${{ steps.component.outputs.other }}"
+        run: scripts/retry.sh -- git submodule update --init --depth=1 "packages/${{ steps.component.outputs.other }}"
 
       - uses: actions/setup-node@v7
         if: steps.monorepo.outcome == 'success'
