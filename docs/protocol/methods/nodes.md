@@ -871,8 +871,9 @@ gates it.
   agent of a workspace started on a cloud machine. All top-level remote agents
   of a workspace push to the same branch; a second writer pulls or rebases
   after a non-fast-forward reject, and the backend's worktree is not updated.
-- **A sub-agent** has no `origin` and no credential helper, and hands its work
-  back through its refs as before. It is told to use `gh` for reads only. This
+- **A sub-agent** has no credential helper, and hands its work back through
+  its refs as before. Its own checkout has no `origin`; one that shares a
+  top-level agent's checkout sees that checkout's `origin` and upstream. It is told to use `gh` for reads only. This
   is a convention only: the token is not read-only, and nothing stops a
   sub-agent that pushes or writes with it.
 - The token is the backend's full token. The model can read it from the

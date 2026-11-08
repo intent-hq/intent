@@ -3193,9 +3193,10 @@ interface ForgeLaunch {          // closed: unknown or mistyped members are node
    before any `launch` on that bind, it sends the current value, or `null` when
    none resolves, whatever it sent before; a bind clears the confirmed value of
    rule 3. It sends again when the token changes. The control lane is ordered,
-   so the machine handles it before that launch; the backend does not wait for
-   the reply to launch. It waits up to **10 s** for the `forgeTokenReply` with
-   the same `requestId`; a later or unmatched reply is dropped without error.
+   so the machine handles it before that launch. A launch that would carry
+   `forge` (rule 8) waits up to **10 s** for that bind's `forgeTokenReply`; on
+   a timeout or `failed` it goes without `forge`. Any other launch does not
+   wait. A later or unmatched reply is dropped without error.
 3. **Change detection.** Per linked machine, the backend resolves the token
    again every 5 minutes and after a GitHub connect, a revoke or a source
    control settings change. It compares a SHA-256 of the value, held in memory
@@ -3227,11 +3228,13 @@ interface ForgeLaunch {          // closed: unknown or mistyped members are node
    GitHub repository (normalized to the HTTPS `remoteUrl`). Otherwise it sends
    no `forge`, and the agent starts with no `origin`. With `forge`, the
    machine:
-   1. creates the agent-local branch `intent/<agentId>` at the commit it
-      checked out and switches the checkout to it. The checkout cache's
-      repository is shared by all its checkouts, so a branch named `branch`
-      could already be checked out in another one; the machine never resets
-      or forces a branch that another checkout uses;
+   1. creates (or, on a relaunch, resets) the agent-local branch
+      `intent/<agentId>` at the commit it checked out and switches the
+      checkout to it. The checkout cache's repository is shared by all its
+      checkouts, so a branch named `branch` could already be checked out in
+      another one; the machine never resets or forces a branch that another
+      checkout uses. It deletes `intent/<agentId>` when it removes the agent's
+      checkout (final stop or bind-time sweep);
    2. sets, with `git config --worktree` so that they override any `origin` in
       the cache's shared configuration: `remote.origin.url` = `remoteUrl`,
       `remote.origin.fetch` = `+refs/heads/*:refs/remotes/origin/*`,
@@ -3241,7 +3244,9 @@ interface ForgeLaunch {          // closed: unknown or mistyped members are node
       `git rebase` target `branch` on GitHub;
    3. adds a git credential helper for `https://github.com` that asks the
       machine's intentd for the live token over its local socket, with
-      `GH_TOKEN` as the fallback.
+      `GH_TOKEN` as the fallback. The helper is set in that agent process's
+      environment (`GIT_CONFIG_PARAMETERS`), never in git configuration, so
+      no other agent that uses the checkout inherits it.
 
    The `head` and `wip` pushes to the backend do not change; a push to GitHub
    is an extra path. All top-level remote agents of a workspace push to the
@@ -3252,9 +3257,12 @@ interface ForgeLaunch {          // closed: unknown or mistyped members are node
    `remoteUrl` does not have the form above or whose `branch` is not a valid
    branch name fails the launch with `node-checkout-failed`. A machine that
    receives `forge` on a link below 15 rejects the frame (`node-link-protocol`).
-9. **Sub-agents.** A sub-agent gets no `forge` member: its checkout has no
-   `origin` and no credential helper, and its work goes back through its
-   `head` and `wip` refs as before. It still has `GH_TOKEN`, so `gh` reads work.
+9. **Sub-agents.** A sub-agent gets no `forge` member and no credential
+   helper, and its work goes back through its `head` and `wip` refs as before.
+   Its own checkout has no `origin`. A sub-agent that
+   [shares](#shared-checkout) a top-level agent's checkout (`checkoutOf`) sees
+   that checkout's `origin` and upstream, and its commits move the parent's
+   `intent/<agentId>` branch. It still has `GH_TOKEN`, so `gh` reads work.
    **The token is not read-only.** A sub-agent can push or write with `gh` if it
    tries; its instructions tell it to read only, but nothing enforces this.
 10. **Never written.** A value travels only in `forgeToken`. It never appears in
