@@ -41,7 +41,9 @@ function fixture(t) {
 // local checkout-pinned composite (cloudlands-fe#4274). Both resolve to the
 // same properties: which repository and ref they fetch, which paths, and
 // whether a credential is left behind.
-const CHECKOUT_USES = /^( *)(?:- )?uses: (actions\/checkout@\S+|\.\/\.github\/actions\/checkout-pinned)\s*$/;
+// Any `uses:` naming a checkout counts, quoted or commented, so an unfamiliar
+// spelling is reported as an unknown checkout instead of being skipped.
+const CHECKOUT_USES = /^( *)(?:- )?uses:\s*['"]?([^\s'"#]*checkout[^\s'"#]*)/;
 function checkoutSteps(source) {
   const lines = source.split('\n');
   const steps = [];
@@ -96,23 +98,30 @@ function actionDefaults(action) {
 }
 function resolveCheckout({ uses, source }, readComponent) {
   const given = withInputs(source);
-  if (uses.startsWith('actions/checkout@')) {
+  if (/^actions\/checkout@[\w.-]+$/.test(uses)) {
     return { repository: given.repository, ref: given.ref, sparse: given['sparse-checkout'] ?? '', credentials: given['persist-credentials'] === 'false' ? 'none' : 'persisted' };
   }
+  assert.equal(uses, './.github/actions/checkout-pinned', `unknown fixture checkout action ${uses}`);
+  const unexpected = Object.keys(given).filter((key) => !['repository', 'ref', 'path', 'sparse-checkout'].includes(key));
+  assert.deepEqual(unexpected, [], `checkout-pinned takes no inputs beyond repository, ref, path and sparse-checkout: ${unexpected.join(', ')}`);
   const action = readComponent('.github/actions/checkout-pinned/action.yml');
   const script = readComponent('scripts/git-network-retry.sh');
   // The composite must fetch anonymously over the repository URL it is given
   // and leave no credential in the checkout it creates.
   const anonymous = !/secrets\.|github\.token|token:|actions\/checkout@|extraheader/i.test(action)
     && /REPOSITORY: \$\{\{ inputs\.repository \}\}/.test(action)
+    && /REF: \$\{\{ inputs\.ref \}\}/.test(action)
+    && /PATTERNS: \$\{\{ inputs\.sparse-checkout \}\}/.test(action)
     && /"https:\/\/github\.com\/\$REPOSITORY"/.test(action)
-    && /git-network-retry\.sh" sparse-checkout /.test(action)
+    && /printf '%s\\n' "\$PATTERNS" \|/.test(action)
+    && /git-network-retry\.sh" sparse-checkout "https:\/\/github\.com\/\$REPOSITORY" "\$REF" /.test(action)
     && !/extraheader|credential|GITHUB_TOKEN|GH_TOKEN|Authorization/i.test(script);
   const defaults = actionDefaults(action);
   return { repository: given.repository ?? defaults.repository, ref: given.ref ?? defaults.ref, sparse: given['sparse-checkout'] ?? '', credentials: anonymous ? 'none' : 'persisted' };
 }
 function assertSharedFixtureCheckout(steps, readComponent, label) {
   assert.equal(steps.length, 1, `${label}: expected exactly one fixture checkout`);
+  assert.ok((steps[0].source.match(/repository:\s*['"]?intent-hq\/intent/g)?.length ?? 0) <= 1, `${label}: expected exactly one fixture checkout`);
   const checkout = resolveCheckout(steps[0], readComponent);
   assert.equal(checkout.repository, 'intent-hq/intent', `${label}: the fixture checkout must fetch intent-hq/intent, not ${checkout.repository}`);
   assert.equal(checkout.ref, 'main', `${label}: the fixture checkout must fetch main, not ${checkout.ref}`);
@@ -296,7 +305,12 @@ runs:
     - shell: bash
       env:
         REPOSITORY: \${{ inputs.repository }}
-      run: ${run}
+        REF: \${{ inputs.ref }}
+        DEST: \${{ inputs.path }}
+        PATTERNS: \${{ inputs.sparse-checkout }}
+      run: >-
+        printf '%s\\n' "$PATTERNS" |
+        ${run}
 `;
   const script = 'git -C "$dest" fetch --depth=1 origin "$ref"\n';
   const files = (actionSource, scriptSource = script) => (file) => (file.endsWith('action.yml') ? actionSource : scriptSource);
@@ -305,7 +319,12 @@ runs:
   // A wrong repository (default or explicit), a token, or a credential written by the script all fail.
   assert.throws(() => assertSharedFixtureCheckout(checkoutSteps(pinned()), files(action('someone/fork')), 'fe'), /intent-hq\/intent/);
   assert.throws(() => assertSharedFixtureCheckout(checkoutSteps(pinned('\n          repository: someone/fork')), files(action()), 'fe'), /intent-hq\/intent/);
-  assert.throws(() => assertSharedFixtureCheckout(checkoutSteps(pinned('\n          token: ${{ secrets.X }}')), files(action().replace('    - shell: bash', '    - uses: actions/checkout@v7\n      with:\n        token: ${{ github.token }}\n    - shell: bash')), 'fe'), /credentials/);
+  assert.throws(() => assertSharedFixtureCheckout(checkoutSteps(pinned()), files(action().replace('    - shell: bash', '    - uses: actions/checkout@v7\n      with:\n        token: ${{ github.token }}\n    - shell: bash')), 'fe'), /credentials/);
+  // A step-level token or other unknown input is rejected on its own.
+  assert.throws(() => assertSharedFixtureCheckout(checkoutSteps(pinned('\n          token: ${{ secrets.X }}')), files(action()), 'fe'), /no inputs beyond.*token/);
+  // The composite must forward the step's ref and patterns, not hardcode them.
+  assert.throws(() => assertSharedFixtureCheckout(checkoutSteps(pinned()), files(action().replace('REF: ${{ inputs.ref }}', 'REF: some-branch')), 'fe'), /credentials/);
+  assert.throws(() => assertSharedFixtureCheckout(checkoutSteps(pinned()), files(action().replace('PATTERNS: ${{ inputs.sparse-checkout }}', 'PATTERNS: /')), 'fe'), /credentials/);
   assert.throws(() => assertSharedFixtureCheckout(checkoutSteps(pinned()), files(action(), 'git -C "$dest" config http.extraheader "AUTHORIZATION: x"\n'), 'fe'), /credentials/);
   assert.throws(() => assertSharedFixtureCheckout(checkoutSteps(pinned()), files(action('intent-hq/intent', 'git clone "https://x-access-token:$T@github.com/$REPOSITORY"')), 'fe'), /credentials/);
   // actions/checkout must still say persist-credentials: false and fetch main once.
@@ -324,4 +343,11 @@ runs:
   assertSharedFixtureCheckout(checkoutSteps(checkout('\n        persist-credentials: false')), none, 'intentd');
   assert.throws(() => assertSharedFixtureCheckout(checkoutSteps(checkout('')), none, 'intentd'), /credentials/);
   assert.throws(() => assertSharedFixtureCheckout(checkoutSteps(checkout('\n        persist-credentials: false') + checkout('\n        persist-credentials: false')), none, 'intentd'), /exactly one/);
+  // Quoted or commented spellings of a second checkout still count.
+  for (const spelling of ['"actions/checkout@v7"', 'actions/checkout@v7 # v7']) {
+    const second = checkout('\n        persist-credentials: false').replace('uses: actions/checkout@v7', `uses: ${spelling}`);
+    assert.throws(() => assertSharedFixtureCheckout(checkoutSteps(checkout('\n        persist-credentials: false') + second), none, 'intentd'), /exactly one/, spelling);
+  }
+  // An unrecognised checkout action fails instead of passing unchecked.
+  assert.throws(() => assertSharedFixtureCheckout(checkoutSteps(checkout('\n        persist-credentials: false').replace('actions/checkout@v7', 'someone/checkout@v1')), none, 'intentd'), /unknown fixture checkout action/);
 });
