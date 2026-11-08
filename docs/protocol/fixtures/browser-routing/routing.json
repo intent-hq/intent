@@ -1,6 +1,6 @@
 {
   "schema": "browser-routing/v1",
-  "revision": 1,
+  "revision": 2,
   "docs": "docs/protocol/methods/files-terminal-browser.md",
   "about": "Agent-initiated browser.exec target selection (REV-2, §5.9). Each case gives the workspace state and the live connections, then the target the daemon derives from the workspace (expect.target) and the connection that receives the request, or the error. Connections are listed in registration (arrival) order; drops are applied after every connection registered. intentd mirrors this file at crates/intent-transport/tests/fixtures/browser-routing.json and runs every case. Principal authority (administrator-only Chief dispatch, member browser hosting) is outside these cases; intent-transport's hand-written registry tests cover it.",
   "fields": {
@@ -10,11 +10,12 @@
     "workspace.chief": "The virtual Chief workspace.",
     "workspace.pin": "Workspace.browserClientId, or null when unpinned.",
     "workspace.desktopSession": "clientId of the workspace's active desktop-control session, or null.",
+    "workspace.recentFocus": "Optional. Client ids whose connections focused the workspace through presence.update, most recent first: clients focusing it now, then by when their focus left it. Absent means none. Non-Chief, unpinned workspaces with no desktop session and no claimed tab route to the first of these with an eligible live connection, else under the default rule.",
     "workspace.tabs": "Open registry tabs, oldest first and in ascending tabId order (the registry breaks creation-time ties by tabId): { tabId, host, owner } where owner is the claiming agent id or null for a user tab.",
     "connections": "{ id, client, hello, browserExec } in registration order; client is null for a connection that never sent client.hello.",
     "helloOrder": "Optional order in which connections send client.hello (default: registration order). Routing must not depend on it.",
     "drops": "Connection ids that disconnect before the request.",
-    "expect.target": "{ kind: default } | { kind: client | pinned, clientId }.",
+    "expect.target": "{ kind: default } | { kind: client | pinned, clientId } | { kind: preferred, clientIds } (recentFocus applied: the first listed client with an eligible live connection, else the default rule).",
     "expect.connection": "The connection id that receives the request.",
     "expect.error": "{ kind: no-client } | { kind: client-offline, clientId, pinned }."
   },
@@ -220,7 +221,7 @@
     {
       "id": "default-first-connected-client-wins-regardless-of-hello-order",
       "rule": 5,
-      "docText": "Otherwise the client of the **oldest remaining eligible** registration (registration order; UDS + WSS share one registry)",
+      "docText": "the client of the **oldest remaining eligible** registration (registration order; UDS + WSS share one registry)",
       "workspace": { "chief": false, "pin": null, "desktopSession": null, "tabs": [] },
       "connections": [
         { "id": "a1", "client": "a", "hello": true, "browserExec": true },
@@ -290,6 +291,85 @@
         "desktopSession": "b",
         "tabs": [{ "tabId": "t1", "host": "b", "owner": "agent-1" }]
       },
+      "connections": [
+        { "id": "a1", "client": "a", "hello": true, "browserExec": true },
+        { "id": "b1", "client": "b", "hello": true, "browserExec": true }
+      ],
+      "drops": [],
+      "expect": { "target": { "kind": "default" }, "connection": "a1" }
+    },
+    {
+      "id": "focus-prefers-the-client-that-last-focused-the-workspace",
+      "rule": 5,
+      "docText": "first the eligible client that **most recently focused the workspace**",
+      "workspace": { "chief": false, "pin": null, "desktopSession": null, "tabs": [], "recentFocus": ["b"] },
+      "connections": [
+        { "id": "a1", "client": "a", "hello": true, "browserExec": true },
+        { "id": "b1", "client": "b", "hello": true, "browserExec": true }
+      ],
+      "drops": [],
+      "expect": { "target": { "kind": "preferred", "clientIds": ["b"] }, "connection": "b1" }
+    },
+    {
+      "id": "focus-skips-a-focused-client-with-no-eligible-connection",
+      "rule": 5,
+      "docText": "a focused client with no eligible live connection is skipped, never an error",
+      "workspace": { "chief": false, "pin": null, "desktopSession": null, "tabs": [], "recentFocus": ["c", "b"] },
+      "connections": [
+        { "id": "a1", "client": "a", "hello": true, "browserExec": true },
+        { "id": "c1", "client": "c", "hello": true, "browserExec": false },
+        { "id": "b1", "client": "b", "hello": true, "browserExec": true },
+        { "id": "b2", "client": "b", "hello": true, "browserExec": true }
+      ],
+      "drops": [],
+      "expect": { "target": { "kind": "preferred", "clientIds": ["c", "b"] }, "connection": "b2" }
+    },
+    {
+      "id": "focus-falls-back-to-the-oldest-registration-when-no-focused-client-is-connected",
+      "rule": 5,
+      "docText": "When no focused client is connected, the target is the client of the **oldest remaining eligible** registration",
+      "workspace": { "chief": false, "pin": null, "desktopSession": null, "tabs": [], "recentFocus": ["c"] },
+      "connections": [
+        { "id": "a1", "client": "a", "hello": true, "browserExec": true },
+        { "id": "c1", "client": "c", "hello": true, "browserExec": true }
+      ],
+      "drops": ["c1"],
+      "expect": { "target": { "kind": "preferred", "clientIds": ["c"] }, "connection": "a1" }
+    },
+    {
+      "id": "focus-with-no-eligible-connection-is-no-client",
+      "rule": 5,
+      "docText": "No eligible connection at all ⇒ `-32603` `browser.exec: no client connected`",
+      "workspace": { "chief": false, "pin": null, "desktopSession": null, "tabs": [], "recentFocus": ["b"] },
+      "connections": [
+        { "id": "b1", "client": "b", "hello": true, "browserExec": false }
+      ],
+      "drops": [],
+      "expect": { "target": { "kind": "preferred", "clientIds": ["b"] }, "error": { "kind": "no-client" } }
+    },
+    {
+      "id": "claimed-tab-host-beats-recent-focus",
+      "rule": 4,
+      "docText": "the target is the host client of the oldest claimed tab",
+      "workspace": {
+        "chief": false,
+        "pin": null,
+        "desktopSession": null,
+        "tabs": [{ "tabId": "t1", "host": "a", "owner": "agent-1" }],
+        "recentFocus": ["b"]
+      },
+      "connections": [
+        { "id": "a1", "client": "a", "hello": true, "browserExec": true },
+        { "id": "b1", "client": "b", "hello": true, "browserExec": true }
+      ],
+      "drops": [],
+      "expect": { "target": { "kind": "client", "clientId": "a" }, "connection": "a1" }
+    },
+    {
+      "id": "chief-ignores-recent-focus",
+      "rule": 5,
+      "docText": "skips its focus preference: the Chief always goes to the oldest eligible registration",
+      "workspace": { "chief": true, "pin": null, "desktopSession": null, "tabs": [], "recentFocus": ["b"] },
       "connections": [
         { "id": "a1", "client": "a", "hello": true, "browserExec": true },
         { "id": "b1", "client": "b", "hello": true, "browserExec": true }

@@ -38,19 +38,23 @@ function rev2Rules(markdown) {
 }
 
 // Reference implementation of the documented rules.
-function workspaceTarget({ chief, pin, desktopSession, tabs }) {
+function workspaceTarget({ chief, pin, desktopSession, tabs, recentFocus = [] }) {
   if (chief) return { kind: 'default' };
   if (pin) return { kind: 'pinned', clientId: pin };
   if (desktopSession) return { kind: 'client', clientId: desktopSession };
   const claimed = tabs.find(t => t.owner);
-  return claimed ? { kind: 'client', clientId: claimed.host } : { kind: 'default' };
+  if (claimed) return { kind: 'client', clientId: claimed.host };
+  return recentFocus.length > 0 ? { kind: 'preferred', clientIds: recentFocus } : { kind: 'default' };
 }
 
 function resolveConnection({ connections, drops }, target) {
   const dropped = new Set(drops);
   const eligible = connections.filter(c => !dropped.has(c.id) && c.hello && c.browserExec);
   let clientId = target.clientId;
-  if (target.kind === 'default') {
+  if (target.kind === 'preferred') {
+    clientId = target.clientIds.find(id => eligible.some(c => c.client === id));
+  }
+  if (target.kind === 'default' || (target.kind === 'preferred' && clientId === undefined)) {
     if (eligible.length === 0) return { error: { kind: 'no-client' } };
     clientId = eligible[0].client;
   }
@@ -73,7 +77,12 @@ test('fixture shape', () => {
   assert.equal(new Set(ids).size, ids.length, 'case ids are unique');
   for (const c of fixture.cases) {
     const ws = c.workspace;
-    assert.deepEqual(Object.keys(ws).sort(), ['chief', 'desktopSession', 'pin', 'tabs'], c.id);
+    const keys = Object.keys(ws).filter(k => k !== 'recentFocus').sort();
+    assert.deepEqual(keys, ['chief', 'desktopSession', 'pin', 'tabs'], c.id);
+    if ('recentFocus' in ws) {
+      assert.ok(Array.isArray(ws.recentFocus) && ws.recentFocus.length > 0, `${c.id}: recentFocus is a non-empty array when present`);
+      assert.equal(new Set(ws.recentFocus).size, ws.recentFocus.length, `${c.id}: recentFocus lists each client once`);
+    }
     if (ws.chief) assert.equal(ws.pin, null, `${c.id}: the Chief workspace cannot be pinned`);
     for (const t of ws.tabs) assert.deepEqual(Object.keys(t).sort(), ['host', 'owner', 'tabId'], c.id);
     const tabIds = ws.tabs.map(t => t.tabId);
@@ -90,7 +99,7 @@ test('fixture shape', () => {
       const hellod = c.connections.filter(x => x.hello).map(x => x.id);
       assert.deepEqual([...c.helloOrder].sort(), hellod.sort(), `${c.id}: helloOrder lists every hello'd connection`);
     }
-    assert.ok(['default', 'client', 'pinned'].includes(c.expect.target.kind), c.id);
+    assert.ok(['default', 'client', 'pinned', 'preferred'].includes(c.expect.target.kind), c.id);
     assert.ok(('connection' in c.expect) !== ('error' in c.expect), `${c.id}: exactly one of connection / error`);
     if (c.expect.error) assert.ok(['no-client', 'client-offline'].includes(c.expect.error.kind), c.id);
   }
@@ -122,6 +131,13 @@ test('every REV-2 rule has a case, and the edge cases stay covered', () => {
   has('desktop-session', c => c.workspace.desktopSession && !c.workspace.chief);
   has('dropped-connection', c => c.drops.length > 0);
   has('hello-order', c => c.helloOrder);
+  has('recent-focus', c => c.expect.target.kind === 'preferred' && c.expect.connection);
+  has('recent-focus fallback', c => {
+    const chosen = c.connections.find(x => x.id === c.expect.connection);
+    return c.expect.target.kind === 'preferred' && chosen && !c.expect.target.clientIds.includes(chosen.client);
+  });
+  has('recent-focus under a claimed tab', c => c.workspace.recentFocus && c.workspace.tabs.some(t => t.owner));
+  has('Chief with recent focus', c => c.workspace.chief && c.workspace.recentFocus);
   has('stale-connection', c => {
     const chosen = c.connections.find(x => x.id === c.expect.connection);
     return chosen && c.connections.findIndex(x => x.client === chosen.client) < c.connections.indexOf(chosen);
