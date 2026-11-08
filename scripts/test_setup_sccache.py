@@ -10,6 +10,7 @@ import ssl
 import tempfile
 import time
 import unittest
+import unittest.mock
 from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('cache', ROOT / 'scripts/setup-sccache.py')
@@ -49,6 +50,7 @@ class Install(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             env = {'RUNNER_TEMP': temp, 'GITHUB_PATH': temp + '/path',
                    'GITHUB_ENV': temp + '/env', **SELF_HOSTED}
+            fake_sccache(temp, (0,))
             with patch.dict(cache.os.environ, env, clear=True), patch.object(cache, 'install', return_value=Path(temp)):
                 cache.main()
             values = dict(line.split('=', 1) for line in Path(env['GITHUB_ENV']).read_text().splitlines())
@@ -161,16 +163,83 @@ class Download(unittest.TestCase):
         self.assertIn('/mozilla/sccache/releases/download/v', urls[0])
 
 
-def run_main(env):
+def fake_sccache(directory, exits):
+    """An sccache stand-in exiting with exits[n] on its nth call and logging each call's arguments and env."""
+    binary = Path(directory) / 'sccache'
+    binary.write_text('#!/bin/sh\n'
+                      'n=$(wc -l < "$0.log" 2>/dev/null || echo 0)\n'
+                      'echo "$* port=$SCCACHE_SERVER_PORT idle=$SCCACHE_IDLE_TIMEOUT '
+                      'endpoint=$SCCACHE_WEBDAV_ENDPOINT wrapper=$RUSTC_WRAPPER" >> "$0.log"\n'
+                      f'set -- {" ".join(str(code) for code in exits)}\n'
+                      'shift $((n < $# - 1 ? n : $# - 1)); exit "$1"\n')
+    binary.chmod(0o755)
+    return Path(str(binary) + '.log')
+
+
+def run_main(env, exits=(0,), calls=None):
     with tempfile.TemporaryDirectory() as temp:
         env = {'RUNNER_TEMP': temp, 'GITHUB_PATH': temp + '/path', 'GITHUB_ENV': temp + '/env', **env}
+        log = fake_sccache(temp, exits)
         out = io.StringIO()
         with patch.dict(cache.os.environ, env, clear=True), patch.object(cache, 'install', return_value=Path(temp)), \
-                contextlib.redirect_stdout(out):
+                patch.object(cache, 'STARTUP_RETRY_DELAY', 0), contextlib.redirect_stdout(out):
             cache.main()
+        if calls is not None:
+            calls.extend(log.read_text().splitlines() if log.exists() else [])
         path = Path(env['GITHUB_ENV'])
         lines = path.read_text().splitlines() if path.exists() else []
         return dict(line.split('=', 1) for line in lines), out.getvalue()
+
+
+class ServerStartup(unittest.TestCase):
+    """A server that cannot start in sccache's fixed 10 s must not fail the build
+    (cloudlands-fe merge_group run 42397918944, intentd CI runs 42356371788 and 42358341904)."""
+
+    def test_server_is_started_with_the_job_configuration_before_any_compile(self):
+        calls = []
+        written, output = run_main(SELF_HOSTED, exits=(0,), calls=calls)
+        self.assertEqual(written['RUSTC_WRAPPER'], 'sccache')
+        self.assertEqual(len(calls), 1)
+        # --show-stats would answer without ever starting a server.
+        self.assertTrue(calls[0].startswith('--zero-stats '), calls[0])
+        self.assertIn(f"port={written['SCCACHE_SERVER_PORT']} idle=0 endpoint=https://cache.example.com wrapper=",
+                      calls[0])
+        self.assertNotIn('wrapper=sccache', calls[0])
+        self.assertNotIn('::warning::', output)
+
+    def test_unreachable_cache_compiles_uncached_instead_of_failing(self):
+        calls = []
+        written, output = run_main(SELF_HOSTED, exits=(2,), calls=calls)
+        self.assertNotIn('RUSTC_WRAPPER', written)
+        self.assertEqual(len(calls), cache.STARTUP_ATTEMPTS)
+        self.assertIn('::warning::', output)
+        self.assertIn('uncached', output)
+        self.assertNotIn('intent-secret', output)
+        # Cache-specific steps still see the backend; only compilation stops using it.
+        self.assertEqual(written['SCCACHE_WEBDAV_ENDPOINT'], 'https://cache.example.com')
+
+    def test_a_server_that_finishes_starting_late_is_kept(self):
+        calls = []
+        written, output = run_main(SELF_HOSTED, exits=(2, 0), calls=calls)
+        self.assertEqual(written['RUSTC_WRAPPER'], 'sccache')
+        self.assertEqual(len(calls), 2)
+        self.assertNotIn('::warning::', output)
+
+    def test_hung_or_missing_client_counts_as_a_failed_start(self):
+        def hung(*args, **kwargs):
+            raise cache.subprocess.TimeoutExpired(args[0], 1)
+        for failure in (hung, FileNotFoundError('sccache')):
+            with self.subTest(failure=failure):
+                run = unittest.mock.Mock(side_effect=failure)
+                self.assertFalse(cache.start_server(Path('sccache'), {}, run=run, delay=0))
+                self.assertEqual(run.call_count, cache.STARTUP_ATTEMPTS)
+
+    def test_uncached_configurations_never_start_a_server(self):
+        for env in ({}, {'INTENT_SCCACHE_ENDPOINT': 'https://cache.example.com'}):
+            with self.subTest(env=env):
+                calls = []
+                run_main(env, calls=calls)
+                self.assertEqual(calls, [])
 
 
 class SelfHostedCache(unittest.TestCase):
