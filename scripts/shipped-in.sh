@@ -106,7 +106,11 @@ gh_err=$(mktemp)
 probe_err=$(mktemp)
 trap 'rm -f "$gh_err" "$probe_err"' EXIT
 
-transient_pattern='rate limit|HTTP 429|HTTP 5[0-9]{2}|error connecting|connection (reset|refused)|timeout|no such host|network is unreachable|temporary failure|unexpected EOF'
+script_dir=.
+[[ "${BASH_SOURCE[0]}" == */* ]] && script_dir=${BASH_SOURCE[0]%/*}
+# shellcheck source=scripts/lib/gh-transient.sh
+. "$script_dir/lib/gh-transient.sh"
+transient_pattern=$gh_transient_pattern
 
 # Report a failed gh call: exit 4 when its stderr looks transient, else 1.
 # gh masks some REST 403s: under REST throttling `gh release download` and
