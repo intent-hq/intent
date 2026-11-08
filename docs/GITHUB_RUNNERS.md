@@ -31,8 +31,8 @@ wins contention by cgroup weight rather than a reserved core (see Pinned CPUs
 and limits). There is no small pool: the repositories are public, so jobs that
 fit in 1 CPU run free on GitHub's standard `ubuntu-24.04` runners and
 self-hosting them saved nothing; `runner-route` never routes them to a slot.
-On intent-ci1 to intent-ci5 (same layout;
-`test_runners.py` keeps the files identical but the name) the xl slot owns cores 0-7
+On intent-ci1 to intent-ci5 (same layout; `test_runners.py` keeps the files
+identical but the name) the xl slot owns cores 0-7
 (CPUs 0-7,16-23, 52 GB) and the two heavy slots split CCD 1: cores 8-11
 (8-11,24-27) and 12-15 (12-15,28-31), 30 GB each. Every core is pinned; about
 13 GB stays with the system and Docker. Two other EPYC layouts are kept as
