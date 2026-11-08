@@ -35,7 +35,7 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 | agent.rename | agentId (req), name (req, non-empty), skipIfExplicitlySet?, workspaceId? | { success: true, name } — an applied rename emits `agent:renamed` with data `{ agentId, name, nameExplicitlySet }` (§6.5). With `skipIfExplicitlySet: true`, a session whose name was already explicitly set is left untouched and the result is { success: true, name: <existing>, skipped: true } (no event) |
 | agent.delete | agentId (req), workspaceId?, undoDelayMs? *(v6.7)* | { success: true } — **Delete grace window (v6.7, [intent-hq/intentd#1096](https://github.com/intent-hq/intentd/pull/1096)):** `undoDelayMs > 0` (non-negative integer; a non-integer value is `-32602`; values above the 60 000 ms cap are silently clamped, never rejected — `deleteAt` reflects the clamped value) schedules an **in-memory** pending deletion instead of committing — returns `{ success: true, scheduled: true, deleteAt }` (ISO commit deadline), emits `agent:delete-scheduled { agentId, workspaceId, deleteAt }` (§6.5), and serves `pendingDeleteAt` on the `AgentLite` / `AgentSession` projections until the deadline commits the real delete or `agent.cancelDelete` cancels it. Scheduling does NOT stop the agent — only the deadline commit does. Absent, `null`, or `0` keeps the immediate-delete behavior byte-identical. Pending deletions are never persisted (a daemon restart drops them; the session survives); re-scheduling is idempotent under the registry lock (returns the existing deadline, no second timer); a workspace delete — immediate or committed-from-pending — supersedes pending agent deletes inside it |
 | agent.cancelDelete *(v6.7)* | agentId (req), workspaceId? | { cancelled: boolean } — cancels a pending (grace-window) deletion scheduled by `agent.delete` with `undoDelayMs`. A caller-declared `workspaceId` is validated against the session row BEFORE touching the registry (mirroring `agent.delete`), so a stale or cross-workspace-scoped cancel returns NotFound instead of cancelling another workspace's pending deletion. `true` clears the pending deletion, emits `agent:delete-cancelled { agentId, workspaceId }` (§6.5), and drops `pendingDeleteAt` from the projections; `false` is the race-safe non-error when no deletion is pending (never scheduled, already cancelled, or already committed) |
-| agent.retire *(v10.10)* | agentId (req), workspaceId?, reason? | { success: true, retiredAt: string, alreadyRetired?: true } — user-initiated soft retirement; `retiredAt` is the persisted ISO timestamp. Refuses the workspace's last active top-level agent. Stops the target if running after the active-descendant and last top-level guards pass, cancels its wake sources, and preserves its conversation. Repeating retirement returns the original timestamp with `alreadyRetired: true`, without another transition or event. See "Direct user retirement" and "Retire cascade & cleanup" below; independent of `agentFeatures.peerAgents`. |
+| agent.retire *(v10.10)* | agentId (req), workspaceId?, reason? | { success: true, retiredAt: string, alreadyRetired?: true } — user-initiated soft retirement; `retiredAt` is the persisted ISO timestamp. May retire the workspace's last active top-level agent. Stops the target if running after the active-descendant guard passes, cancels its wake sources, and preserves its conversation. Repeating retirement returns the original timestamp with `alreadyRetired: true`, without another transition or event. See "Direct user retirement" and "Retire cascade & cleanup" below; independent of `agentFeatures.peerAgents`. |
 | agent.restore *(v7.5)* | agentId (req), workspaceId? | { success: true, restored: boolean } — details below the table. |
 | agent.wakeOrCreate | taskNoteId (req), contextMessage (req), model?, reasoningEffort?, callerAgentId?, delegationDepth?, messageMetadata?, create? { name?, specialist?, provider?, agentType?, model?, reasoningEffort?, contextReferences?, metadata?, skipAutoCommit? } | { ok, agentId, agentName, created, action: "message_queued_to_active_agent" \| "woke_existing" \| "created_new", taskTitle, result, cleanedUpAgentIds?, subscriptionId?, message? } — details below the table. |
 | agent.summary | agentId (req) | quick summary of what the agent did |
@@ -1235,7 +1235,7 @@ target returns `{ success: true, retiredAt: "<original timestamp>", alreadyRetir
 the original mark is preserved and no retirement event is re-emitted. `alreadyRetired`
 is omitted on a new transition.
 
-The active-descendant and last top-level refusals below run **before stopping the target or making any
+The active-descendant and last top-level (agent self-retire only) refusals below run **before stopping the target or making any
 retirement mutation**, including cleanup or cascade. If that guard passes, retirement
 stops a running target and makes it inert: no subsequent turn or automatic wake may
 start while its retirement mark remains. Hooks, PR monitors, event subscriptions and
@@ -1341,16 +1341,16 @@ agent's live work for both direct user retirement and MCP self-retirement:
   included — is still running a turn, with the error naming each active child
   (`cannot retire: N active child agent(s) still running a turn: <name> (<id>), …`).
   Retired descendants are inert and never count; idle/waiting children pass the guard.
-- **Last top-level guard**: both MCP `ws.agent.retire` (including from the agent's
-  background hook) and direct user `agent.retire` FAIL (`-32602` on the wire, an
-  invalid-params tool error over MCP; nothing mutated, a running target is not stopped)
-  when the target is the workspace's last active top-level agent — no other session with
-  no `parent_agent_id`, not background, not deleted, and not retired — with
-  `cannot retire: this is the last active top-level agent in the workspace…`. The
-  message tells an agent to finish its turn instead and tells a user to start another
-  agent or archive the workspace. Concurrent retires of a workspace's remaining
-  top-level agents are serialized, so they cannot all pass. Child agents can still be
-  retired.
+- **Last top-level guard**: MCP `ws.agent.retire` (including from the agent's
+  background hook) FAILS (an invalid-params tool error; nothing mutated, a running
+  target is not stopped) when the calling agent is the workspace's last active
+  top-level agent — no other session with no `parent_agent_id`, not background, not
+  deleted, and not retired — with
+  `cannot retire: this is the last active top-level agent in the workspace…`, telling
+  the agent to finish its turn instead. Concurrent self-retires of a workspace's
+  remaining top-level agents are serialized, so they cannot all pass. Direct user
+  `agent.retire` is not guarded: a user may retire the last top-level agent, leaving
+  the workspace with no active agent. Child agents can always be retired.
 - **Child cascade**: on success every non-terminal, not-already-retired descendant is
   cascade-retired with the parent, each through the same full per-session cleanup and its
   own `agent:retired` emit with `reason: "parent <name> retired"`. A child that started a
