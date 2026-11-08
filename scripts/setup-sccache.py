@@ -6,8 +6,8 @@ INTENT_SCCACHE_TOKEN and INTENT_SCCACHE_MODE (READ_WRITE by default). It
 overwrites any SCCACHE_WEBDAV_* values the runner environment already carries.
 Without the variable or a token (for example fork pull requests) compilation
 is uncached. The job's server is started here; when it cannot start, the
-WebDAV values are still exported but RUSTC_WRAPPER is not, so compilation
-runs uncached instead of failing.
+WebDAV values are still exported but RUSTC_WRAPPER is not (and
+INTENT_SCCACHE_DISABLED=1 is), so compilation runs uncached instead of failing.
 """
 import hashlib
 import importlib.util
@@ -178,7 +178,10 @@ def main():
     server_env.pop("RUSTC_WRAPPER")
     if not start_server(binary_path(directory), server_env):
         # Cache-specific steps still see the backend; compilation skips it.
+        # The marker stops scripts/with-sccache.sh re-adding the wrapper
+        # because the WebDAV endpoint is set.
         del values["RUSTC_WRAPPER"]
+        values["INTENT_SCCACHE_DISABLED"] = "1"
         print(f"::warning::The sccache server did not start after {STARTUP_ATTEMPTS} attempts "
               f"(is the self-hosted cache at {host} reachable?); Rust compilation is uncached for this job.")
     with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:

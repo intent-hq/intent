@@ -205,6 +205,7 @@ class ServerStartup(unittest.TestCase):
         self.assertIn(f"port={written['SCCACHE_SERVER_PORT']} idle=0 endpoint=https://cache.example.com wrapper=",
                       calls[0])
         self.assertNotIn('wrapper=sccache', calls[0])
+        self.assertNotIn('INTENT_SCCACHE_DISABLED', written)
         self.assertNotIn('::warning::', output)
 
     def test_unreachable_cache_compiles_uncached_instead_of_failing(self):
@@ -217,6 +218,8 @@ class ServerStartup(unittest.TestCase):
         self.assertNotIn('intent-secret', output)
         # Cache-specific steps still see the backend; only compilation stops using it.
         self.assertEqual(written['SCCACHE_WEBDAV_ENDPOINT'], 'https://cache.example.com')
+        # with-sccache.sh would otherwise re-export RUSTC_WRAPPER from the endpoint.
+        self.assertEqual(written['INTENT_SCCACHE_DISABLED'], '1')
 
     def test_a_server_that_finishes_starting_late_is_kept(self):
         calls = []
