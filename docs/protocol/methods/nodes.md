@@ -265,13 +265,21 @@ Landing sequence within phase 1:
    on a remote machine share the workspace checkout. Reject explicit
    `isolation: "cow"` before side effects; removed
    `sandbox.cow.merge`/`sandbox.cow.discard` return normal `-32601`. Old persisted
-   CoW preferences are ignored with a retirement notice, never converted into a
-   new placement: `workspace.cowIsolation` keeps only its workspace checkout role.
-   A backend sub-agent of a remote agent always works in the shared workspace
-   checkout. Old live sandboxes are not resumed or migrated; their files and
-   branches are not auto-deleted or reused. The recovery notice is the daemon log
-   (one warning per retained sandbox at boot) and the owning agent's next-turn
-   instructions, which name the retained path and branch.
+   CoW preferences are never converted into a new placement:
+   `workspace.cowIsolation` keeps only its workspace checkout role, and an
+   omitted `isolation` never resolves to `"cow"`. A backend sub-agent of a
+   remote agent always takes the shared worktree path of
+   [backend sub-agents](#backend-sub-agents-of-remote-agents). Old live sandboxes
+   are not resumed or migrated; their files, branches and store rows are not
+   deleted or reused. Recovery notice:
+   - **Source.** A retained sandbox is a persisted sandbox row whose status is not
+     `merged` or `discarded` and whose path still exists.
+   - **Log.** On every boot the daemon logs one warning per retained sandbox,
+     naming the agent id, path and branch.
+   - **Instructions.** Every turn of a live owning agent carries a short notice
+     naming the retained path and branch and saying that the agent now works in
+     the workspace checkout, until that path no longer exists. A deleted or
+     retired owner gets the log warning only.
 3. After component removal and automated pin advancement, remove obsolete
    canonical method/event entries. Existing `sandbox:cow:*` entries stay until then.
 4. Implement backend nodes/hubs and the local node, prove local/remote merge and
@@ -596,6 +604,10 @@ target. A child of an agent that is not remote, and every create made by the
 user or another client, keeps the rules above: no placement means local.
 
 ###### Backend sub-agents of remote agents
+
+Until per-agent CoW removal ([landing step 2](#errors-and-retirement-gates)):
+after it, the **Own checkout** case and the `workspace.cowIsolation` lookup below
+are gone, and the child always takes the **Shared worktree** path.
 
 When a remote parent creates a sub-agent with
 `placement: { "target": "local" }` (the create's caller is the parent), the

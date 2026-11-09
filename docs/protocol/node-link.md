@@ -2909,7 +2909,7 @@ create's caller is the parent):
 | Another machine | The parent's machine's link at 13 or later | Starts from a copy of the parent's work, pushed at creation ([parent's work on another machine](#parents-work-on-another-machine)) |
 | Another machine | The parent's machine's link below 13 | Starts from a copy of the parent's last pushed work (step 4 below) |
 | A new sandbox (`target: "e2b"`) | Either | As another machine |
-| The backend (`target: "local"`) | Either | With its own copy-on-write checkout, as another machine; in the shared worktree (left unchanged), or with no parent `head` or a failed checkout, the notice and the child's instructions name the parent's refs ([backend sub-agents](./methods/nodes.md#backend-sub-agents-of-remote-agents)) |
+| The backend (`target: "local"`) | Either | Until per-agent CoW removal ([landing step 2](./methods/nodes.md#errors-and-retirement-gates)), with its own copy-on-write checkout, as another machine; in the shared worktree (left unchanged), or with no parent `head` or a failed checkout, the notice and the child's instructions name the parent's refs ([backend sub-agents](./methods/nodes.md#backend-sub-agents-of-remote-agents)) |
 
 "The parent's checkout" is always a checkout's **owner**: when the parent
 itself shares a checkout, its child shares, or copies, that checkout's
