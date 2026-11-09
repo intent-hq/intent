@@ -242,7 +242,7 @@ and output contract otherwise stay unchanged.
 settings. Clients must not describe prompt enhancement/layout suggestions as effort-aware.
 `workspace.generateSetupScript` (§5.25) currently uses deterministic project templates, not
 a model request, so it has no effort to configure. These boundaries do not disable effort
-on `type: "fast"` completions routed through `agent.completeOnce` to a capable ACP provider.
+on quick-action completions routed through `agent.completeOnce` to a capable ACP provider.
 
 **Contract examples for component regression tests.** Assume the effective model advertises
 `low` and `high`, unless the row states otherwise. “Unset” means no effort application, not
