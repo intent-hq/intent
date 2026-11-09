@@ -1155,6 +1155,11 @@ differs from a home-run wake:
   it from the queue, like any undelivered script-monitor wake.
 - Clients tell the two apart by `remoteAgentId`: only `script_monitor_wake`
   metadata **without** `remoteAgentId` is a durable home-run monitor wake.
+- Only the backend marks a machine-run wake: the user-origin sends
+  (`agent.sendMessage`, `agent.queueMessage` and the other RPC routes that
+  strip `fromAgentId`) also strip `remoteAgentId` and `nodeId` from
+  caller-supplied `script_monitor_wake` metadata, so a forged wake is still
+  refused as a home-run wake without a notification.
 
 **Changing or removing a definition.** An upsert or `script.remove` stops every
 live machine run of the script (`scriptStop` to each machine), settles each
