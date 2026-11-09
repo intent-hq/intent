@@ -400,8 +400,11 @@ fleet (as `fleet_slots.py` reads it) and, one host at a time:
    busy slot takes the new image after its job.
 
 The first failure stops the rollout and prints the command that resumes it
-from the failed host (for example after an SSH timeout). SSH retries the
-connection three times. Tailscale SSH may print an approval link and wait;
+from the failed host (for example after an SSH timeout). A failed image check
+stops the rollout too, but `install.sh` has already tagged that host's new
+image `current`, so its slots take it after their next job: fix the image, or
+roll out the last good ref to that host. SSH retries the
+connection three times. It runs under Bash 3.2 (stock macOS). Tailscale SSH may print an approval link and wait;
 open it and the step continues.
 
 **Order for an image change in a PR:** roll out from the PR branch first, then

@@ -89,9 +89,13 @@ case "${1:-}" in
   -*) die "unknown option $1 (see --help)" ;;
 esac
 
-mapfile -t fleet < <(python3 -S -B "$here/fleet_slots.py" --hosts)
+# Runs on the operator's machine, so Bash 3.2 (stock macOS): no mapfile, and
+# empty arrays expand through ${a[@]+...} under set -u.
+fleet=()
+while read -r host; do fleet+=("$host"); done < <(python3 -S -B "$here/fleet_slots.py" --hosts)
 [ "${#fleet[@]}" -gt 0 ] || die "no hosts in the committed fleet"
-hosts=("$@")
+hosts=()
+[ "$#" -gt 0 ] && hosts=("$@")
 [ "${#hosts[@]}" -gt 0 ] || hosts=("${fleet[@]}")
 for host in "${hosts[@]}"; do
   case " ${fleet[*]} " in *" $host "*) ;; *)
@@ -113,9 +117,13 @@ for i in "${!hosts[@]}"; do
     | ssh "${ssh_opts[@]}" "root@$host" "rm -rf $remote_dir && mkdir -p ${remote_dir%/*} && tar -x -f - -C ${remote_dir%/*}" \
     || failed "$host" copy "$i"
   log "$host: installing"
-  ssh "${ssh_opts[@]}" "root@$host" "$remote_dir/install.sh" "${config[@]}" </dev/null || failed "$host" install "$i"
+  ssh "${ssh_opts[@]}" "root@$host" "$remote_dir/install.sh" ${config[@]+"${config[@]}"} </dev/null || failed "$host" install "$i"
   log "$host: checking the image"
-  ssh "${ssh_opts[@]}" "root@$host" "$remote_dir/rollout.sh" --check-image </dev/null || failed "$host" 'image check' "$i"
+  ssh "${ssh_opts[@]}" "root@$host" "$remote_dir/rollout.sh" --check-image </dev/null || {
+    echo "rollout: error: $host already tags the new image as current, so its slots take it after their next job;" \
+      "fix the image or roll out the last good ref to $host" >&2
+    failed "$host" 'image check' "$i"
+  }
   log "$host: restarting idle slots"
   ssh "${ssh_opts[@]}" "root@$host" "$remote_dir/rollout.sh" --restart-idle </dev/null || failed "$host" 'idle restart' "$i"
   log "$host: done"

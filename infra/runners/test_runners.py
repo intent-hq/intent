@@ -46,6 +46,8 @@ MEMINFO_64G = 'MemTotal:       63370000 kB\nMemFree:        1000 kB\n'
 PAT = 'github_pat_' + 'p' * 40
 JIT = 'jit' + 'j' * 60
 APP_TOKEN = 'ghs_' + 'a' * 36
+BASH3 = next((b for b in (os.environ.get('BASH3_BIN'), str(Path.home() / '.cache/intent-bash3/bash'))
+              if b and os.access(b, os.X_OK)), None)
 HAVE_TOOLS = all(shutil.which(t) for t in ('bash', 'jq', 'openssl'))
 
 # The Python stubs run isolated (-I): nothing on PYTHONPATH, such as an APM
@@ -2153,8 +2155,8 @@ class Rollout(Stubbed):
         self.fleet = ['intent-cache'] + [p.stem for p in sorted(HOSTS.glob('*.env'))
                                          if read_env(p).get('RUNNER_NAME_PREFIX') == p.stem]
 
-    def rollout(self, *args, **env):
-        result = subprocess.run(['bash', str(HERE / 'rollout.sh'), *args], capture_output=True, text=True,
+    def rollout(self, *args, bash='bash', **env):
+        result = subprocess.run([bash, str(HERE / 'rollout.sh'), *args], capture_output=True, text=True,
                                 stdin=subprocess.DEVNULL, env={**self.env, **env})
         return result.returncode, result.stdout, result.stderr
 
@@ -2184,6 +2186,18 @@ class Rollout(Stubbed):
         self.assertEqual(rc, 0, err)
         self.assertEqual(self.steps(), [(h, s) for h in self.fleet for s in ('copy', 'install', 'check', 'restart')])
 
+    @unittest.skipUnless(BASH3, 'needs Bash 3.2 (make bash3, or BASH3_BIN)')
+    def test_rollout_runs_under_bash_3(self):
+        # Operators run it from their own machine; stock macOS has Bash 3.2.
+        rc, out, err = self.rollout(bash=BASH3)
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(len(self.steps()), 4 * len(self.fleet))
+        self.log.write_text('')
+        rc, out, err = self.rollout('intent-cache', 'intent-ci1', bash=BASH3, STUB_SSH_FAIL='intent-ci1:install.sh')
+        self.assertNotEqual(rc, 0)
+        self.assertIn('rollout.sh intent-ci1', err)
+        self.assertNotIn('unbound', err)
+
     def test_rollout_takes_a_host_list_in_its_order(self):
         rc, out, err = self.rollout('intent-ci3', 'intent-cache')
         self.assertEqual(rc, 0, err)
@@ -2209,6 +2223,8 @@ class Rollout(Stubbed):
                 self.assertNotIn('intent-ci3', [h for h, _ in steps])
                 self.assertIn('intent-ci2', err)
                 self.assertIn('rollout.sh intent-ci2 intent-ci3', err, 'the error gives the command to resume')
+                # install.sh tagged the image current before the check, so the host already uses it.
+                self.assertEqual('already tags the new image' in err, step == 'check')
 
     def test_restart_idle_restarts_only_idle_slots_on_an_old_image(self):
         containers = self.dir / 'containers.json'
