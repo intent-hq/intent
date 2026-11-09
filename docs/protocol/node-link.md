@@ -3328,7 +3328,7 @@ interface CheckoutReadFrame {         // backend → machine
   requestId: string;                  // UUID; one per piece
   agentId: string;                    // the source agent
   path: string;                       // relative to the source's checkout
-  transferId?: string;                // folder pieces after offset 0: from the first reply
+  transferId?: string;                // every piece after offset 0: from the first reply
   offset: number;                     // byte offset of the piece; 0 for the first piece
   length: number;                     // 1 to 4194304
 }
@@ -3342,11 +3342,11 @@ interface CheckoutReadReplyFrame {    // machine → backend
 }
 interface FilePullPiece {             // also the answer of file.pullData
   kind: "file" | "directory";
-  size: number;                       // bytes of the whole file or archive
+  size: number;                       // bytes of the whole snapshot
   offset: number;                     // where `data` starts
   data: string;                       // base64 of the piece's bytes, at most 4 MiB
-  sha256?: string;                    // at offset 0: lowercase hex of the whole file or archive
-  transferId?: string;                // a folder at offset 0: names the staged archive
+  sha256?: string;                    // at offset 0: lowercase hex of the whole snapshot
+  transferId: string;                 // names the snapshot
 }
 ```
 
@@ -3356,37 +3356,62 @@ Both frame bodies and `FilePullPiece` are closed: unknown or mistyped members ar
 1. **Authority.** The backend sends a `checkoutRead` only after it has checked
    that the caller and the source are agents of the same workspace, and only for
    a source on that link's lease. The machine accepts it only for an agent on
-   the binding's lease whose checkout exists; otherwise it replies `failed` with
-   `file-pull-unsupported`. A sub-agent that [shares its parent's
-   checkout](#shared-checkout) serves from that checkout.
+   the binding's lease whose checkout exists, stopped or not; otherwise it
+   replies `failed` with `file-pull-source-unavailable`. A sub-agent that
+   [shares its parent's checkout](#shared-checkout) serves from that checkout.
 2. **Confinement.** The machine resolves `path` against the source's checkout and
    canonicalises it, as the [binding](./methods/files-terminal-browser.md#agent-file-pull)
-   describes: `..`, an absolute path and a path that resolves outside the
-   checkout reply `file-pull-outside-checkout`; a missing path, or one that is
-   neither a regular file nor a directory, replies `file-pull-not-found`.
-3. **Files.** Each piece of a file is read from the file by `path`. The machine
-   replies `file-pull-too-large` at offset 0 for a file over 209715200 bytes.
-4. **Folders.** At offset 0 the machine packs the folder as one tar archive into
-   a staging file outside the checkout, as the binding describes, and replies
-   with a `transferId`; an archive over 209715200 bytes is not kept and replies
-   `file-pull-too-large`. Every later piece names that `transferId` and reads
-   the same archive. The machine removes the archive after its last piece, when
-   the source agent stops, or after 10 minutes without a piece; a later piece
-   then replies `file-pull-transfer-expired`.
-5. **Pieces.** A reply carries at most `length` bytes and never more than
-   4 MiB, so its base64 fits the 8 MiB frame. An `offset` past the end replies
-   `file-pull-mismatch` (an empty file answers offset 0 with `size: 0` and empty
-   `data`).
-6. **Lane.** The frames travel on the `script` lane, behind control, journal and
-   rpc frames, so a pull never delays heartbeats, stops or prompts. The backend
-   keeps at most one `checkoutRead` in flight per pull.
-7. **Cloud machines.** A source on a paused [cloud machine](#cloud-machines) is
-   resumed before the first piece. If the resume or the link fails, the pull
-   fails with `file-pull-unsupported` and copies nothing.
+   describes: `..`, an absolute path, a path that resolves outside the checkout
+   and a path with a `.git` component (any depth, ASCII case-insensitive) reply
+   `file-pull-outside-checkout`; a missing path, or one that is neither a regular
+   file nor a directory, replies `file-pull-not-found`.
+3. **Snapshot.** The first piece (offset 0, no `transferId`) makes a snapshot
+   outside the checkout, as the binding describes: a copy of a file, or a folder
+   packed as one pax tar archive. Packing stops as soon as it passes 209715200
+   bytes or 100000 entries, and the machine replies `file-pull-too-large`
+   without keeping it. With 4 live snapshots for that agent it replies
+   `file-pull-busy`. The reply's `piece` carries the new `transferId`, `kind`,
+   `size` and `sha256`.
+4. **Later pieces.** Every later piece names the `transferId` and the same
+   `path`, and reads the same snapshot. The machine keys a snapshot by
+   `(agentId, path, transferId)`; any other combination replies
+   `file-pull-transfer-expired`. It removes the snapshot after its last piece,
+   when the agent's checkout is removed, or after 10 minutes without a piece.
+5. **Caller binding.** The backend passes the machine's `transferId` through to
+   the caller unchanged and records which caller opened it; it forwards a later
+   piece only from that caller, for the same source and `path`, and answers
+   anything else with `file-pull-transfer-expired` without sending a frame. For
+   a local source the backend mints the `transferId` itself under the same rule.
+6. **Pieces.** A reply carries at most `length` bytes and never more than
+   4 MiB, so its base64 fits the 8 MiB frame. An `offset` at or past `size`
+   replies `file-pull-mismatch`, except offset 0 of an empty snapshot, which
+   answers `size: 0` and empty `data`.
+7. **Lane and timeout.** The frames travel on the `script` lane, behind control,
+   journal and rpc frames, so a pull never delays heartbeats, stops or prompts.
+   The backend keeps at most one `checkoutRead` in flight per pull and fails the
+   pull with `file-pull-source-unavailable` when a reply does not arrive within
+   60 seconds or the link drops.
+8. **Version and cloud machines.** The backend checks the protocol of the
+   machine's current link, or for a machine with no live link the protocol its
+   last `welcome` chose, before anything else. Below 16 the pull fails at once
+   with `file-pull-unsupported`, naming the machine and the update; it never
+   waits on the link and never resumes a machine to find out. A source on a
+   paused [cloud machine](#cloud-machines) is resumed before the first piece
+   (with no recorded protocol, it is resumed and then checked). If the resume or
+   the link fails, the pull fails with `file-pull-source-unavailable` and copies
+   nothing.
 
-On a link below 16 the backend sends no `checkoutRead`: a pull from an agent on
-that machine fails at once with `file-pull-unsupported`, naming the machine and
-the update. It never waits on the link.
+Reply error codes (each `error` starts with one):
+
+| Code | Meaning |
+| --- | --- |
+| `file-pull-source-unavailable` | The agent is not on the lease, or has no checkout on the machine |
+| `file-pull-outside-checkout` | The path is absolute, has `..`, resolves outside the checkout, or has a `.git` component |
+| `file-pull-not-found` | Nothing at the path, or neither a regular file nor a directory |
+| `file-pull-too-large` | The snapshot passed 209715200 bytes or 100000 entries |
+| `file-pull-busy` | The agent already has 4 live snapshots |
+| `file-pull-mismatch` | The offset is at or past the end of a non-empty snapshot |
+| `file-pull-transfer-expired` | No live snapshot for that `agentId`, `path` and `transferId` |
 
 ### Saved scripts (nodeProtocol 8)
 

@@ -39,7 +39,7 @@ export const RENAMED_BINDINGS = new Map([
 
 // Prepared agent file pull binding (docs lead the intentd change).
 const PREPARED_FILE_PULL_BINDING =
-  '  ws.file.pull({ fromAgentId, path, to? }) → { path, kind, size, sha256 }';
+  '  ws.file.pull({ fromAgentId, path, to? }) → { path, kind, size, sha256, files, skipped }';
 
 // Prepared §5.56 secret-request bindings, mentioned by more than one protocol doc.
 const PREPARED_SECRET_BINDINGS = [

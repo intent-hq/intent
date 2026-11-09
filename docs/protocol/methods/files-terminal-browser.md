@@ -275,7 +275,8 @@ services directly and are unchanged.
 > row, which can be stale) before it writes anything: a larger attachment fails
 > with `-32602` `attachment-exceeds-cap: <size> bytes; limit 209715200` (exactly
 > 209715200 bytes still copies) and leaves no destination directory and no part
-> file behind. Uploads still accept up to
+> file behind. An attachment whose file was deleted from the store fails with the
+> existing "continue without this file" error, which comes before the cap check. Uploads still accept up to
 > 1 GiB (`file.attachmentUpload.begin`), so an agent cannot copy an attachment
 > between the two limits; the user can still open it in the app.
 
@@ -863,7 +864,7 @@ services directly and are unchanged.
 
 ### Agent file pull
 
-`ws.file.pull({ fromAgentId, path, to? }) → { path, kind, size, sha256 }`
+`ws.file.pull({ fromAgentId, path, to? }) → { path, kind, size, sha256, files, skipped }`
 copies a file or folder from another agent's checkout into the caller's own. It is
 MCP-only (no wire method, like `ws.file.getAttachment`) and needs an agent caller.
 It replaces pushing artifacts to the backend: the source agent stages what it wants
@@ -872,48 +873,83 @@ agent pulls it. Commits still flow through refs as before.
 
 - **`fromAgentId`** (required) is an agent of the caller's workspace, local or
   remote. An unknown agent and an agent of another workspace fail the same way,
-  with `file-pull-unknown-agent: <id>`.
+  with `file-pull-unknown-agent: <id>`. The caller's own id copies within its own
+  checkout.
 - **`path`** (required) is relative to the source agent's checkout (the sandbox
   clone for a CoW-sandboxed local agent; the shared checkout for a sub-agent that
   shares its parent's). It names a regular file or a directory.
 - **`to`** (optional) is relative to the caller's checkout; it defaults to `path`.
-  Missing parent directories are made.
+
+**Which sources serve.** A pull is served while the source's checkout exists: for
+a local source, any agent of the workspace whose worktree is still there,
+including a stopped or finished one; for a remote source, an agent on its
+machine's lease whose checkout is still there, so a stopped agent serves until its
+[final stop](../node-link.md#final-stop-nodeprotocol-9) removes the checkout.
+Otherwise the pull fails with `file-pull-source-unavailable`.
 
 **Confinement.** Both paths are resolved against their checkout and then
-canonicalised, so symlinks are followed. An absolute path, a `..` segment, and a
-path that resolves outside its checkout fail with
+canonicalised, so symlinks are followed. These fail with
 `file-pull-outside-checkout: <path>`, for the source and for the destination,
-before anything is read or written. A symlink whose target stays inside the
-checkout is allowed. Inside a pulled folder, `.git` entries, symlinks that resolve
-outside the source checkout, and anything that is not a regular file or directory
-are left out; a symlink that resolves inside it is followed. A missing source, or
-one that is neither a regular file nor a directory, fails with
-`file-pull-not-found: <path>`.
+before anything is read or written:
+
+1. an absolute path or a `..` segment;
+2. a path that resolves outside its checkout;
+3. a path with a component named `.git` at any depth, compared ASCII
+   case-insensitively (macOS volumes are case-insensitive), so no pull reads git
+   config or writes a git hook.
+
+A symlink whose target stays inside the checkout, and not in `.git`, is allowed.
+A missing source, or one that is neither a regular file nor a directory, fails
+with `file-pull-not-found: <path>`. Copying a path onto itself, or a folder into
+itself, fails with `file-pull-destination-conflict`.
+
+**Snapshot.** At the first piece the source makes one snapshot outside its
+checkout and names it with a `transferId`, so later pieces read fixed bytes even
+if the checkout changes (a growing log copies as it was at the start):
+
+- **File.** A copy of the file, opened once after the confinement check.
+- **Folder.** One pax-format tar archive. It holds only regular files (type `0`),
+  directories (type `5`) and pax extended headers (type `x`, setting only `path`
+  and `size`), with entry paths relative to `path`. Modes are `0644`, or `0755`
+  when the source had any execute bit; never setuid, setgid or sticky. A symlink
+  that resolves inside the source checkout (not in `.git`) is followed and stored
+  as what it points to; `.git` entries, symlinks that resolve outside, and
+  anything else are left out and counted in `skipped`.
+
+Packing stops as soon as the archive passes 209715200 bytes (200 MiB) or 100000
+entries, and the pull fails with `file-pull-too-large`. A source keeps at most 4
+live snapshots per source agent; a fifth pull fails with `file-pull-busy`. A
+snapshot is removed after its last piece is served, when the source's checkout is
+removed, or after 10 minutes without a piece; a later piece then fails with
+`file-pull-transfer-expired`.
 
 **Transfer.** The caller's side drives a loop of ranged reads, as
 `ws.file.getAttachment` does with `file.attachmentData`: pieces of at most 4 MiB
 (4194304 bytes) by `offset`/`length`, each starting where the copy so far ends.
-Every piece carries `kind` and the whole `size`; the piece at offset 0 also
-carries the lowercase-hex `sha256` of the whole content.
+Every piece carries `kind`, the snapshot's `size` and its `transferId`; the piece
+at offset 0 also carries the lowercase-hex `sha256` of the whole snapshot. A
+`transferId` answers only the caller that opened it, for the same source agent
+and `path`; any other request naming it fails with `file-pull-transfer-expired`.
+An `offset` at or past `size` (other than 0 for an empty snapshot) fails with
+`file-pull-mismatch`. A piece not answered within 60 seconds fails the pull with
+`file-pull-source-unavailable`.
 
-- **File.** Each piece is read from the file by `path`. If the file changes during
-  the pull, the final check fails with `file-pull-mismatch`; retry the pull.
-- **Folder.** At offset 0 the source packs the folder as one uncompressed POSIX tar
-  archive (regular files and directories only, entry paths relative to `path`)
-  into a staging file outside its checkout, and returns a `transferId` with that
-  piece. Every later piece names the `transferId` and reads the same archive. The
-  source removes the archive after its last piece, or after 10 minutes without a
-  piece; a later piece then fails with `file-pull-transfer-expired`.
+**Write.** The caller writes the pieces to a part file with a unique name under
+its checkout's git-ignored `.intent/pulls/`, so it never reaches a commit and two
+pulls never collide. At the end it checks the size and `sha256`, then renames a
+file into place, or unpacks an archive (rejecting any entry type, name or mode the
+snapshot rules above do not allow, with `file-pull-mismatch`) into a folder there
+and moves it into place. Every written entry is confined again: its resolved
+parent must be inside `to` and the checkout, and an existing parent that is a
+symlink fails with `file-pull-outside-checkout`. An existing symlink at an entry's
+destination is replaced as a link, never written through. A file replaces an
+existing file at `to`; a folder is merged into an existing folder at `to`,
+replacing same-named files and keeping the rest. A file onto an existing folder,
+or a folder onto an existing file, fails with `file-pull-destination-conflict`.
+Missing parent directories of `to` are made; a failed pull removes its part file
+and the directories it made, and leaves `to` as it was.
 
-The caller writes the pieces to a hidden temp file next to the destination. At the
-end it checks the size and `sha256`, then renames a file into place, or unpacks an
-archive into a temp folder and moves it into place. Unpacking confines every entry
-to `to`; an entry with `..`, an absolute name or a link fails with
-`file-pull-mismatch`. A file replaces an existing file at `to`; a folder is merged
-into an existing folder at `to`, replacing same-named files and keeping the rest.
-A file onto an existing folder, or a folder onto an existing file, fails with
-`file-pull-destination-conflict`. A failed pull leaves nothing behind. The route
-depends on where the two agents run:
+The route depends on where the two agents run:
 
 | Source → caller | Bytes |
 | --- | --- |
@@ -924,29 +960,34 @@ depends on where the two agents run:
 
 A source on a paused cloud (E2B) machine is resumed for the pull.
 
-**Cap.** One pull copies at most 209715200 bytes (200 MiB): the file's size, or
-the folder's archive size. The source checks it at offset 0 and the caller checks
-the first piece's `size` before it writes anything. Past it the pull fails with
-`file-pull-too-large`, naming the size and the limit, and copies nothing. The
-same 200 MiB cap applies to `ws.file.getAttachment` (§5.9 above).
+**Cap.** One pull copies at most 209715200 bytes (200 MiB) of snapshot (the file,
+or the folder's archive) and at most 100000 entries. The source enforces it while
+it makes the snapshot, and the caller checks the first piece's `size` before it
+writes anything. Past it the pull fails with `file-pull-too-large`, naming the
+size and the limit, and copies nothing. The same 200 MiB cap applies to
+`ws.file.getAttachment` (§5.9 above).
 
 **Result.** `path` is the destination relative to the caller's checkout, `kind`
-is `"file"` or `"directory"`, and `size` and `sha256` are those of the file or the
-archive. Pulled files are neither committed nor git-ignored: the caller decides
-what to do with them.
+is `"file"` or `"directory"`, `size` and `sha256` are the snapshot's, `files` is
+the number of regular files written (1 for a file), and `skipped` is the number of
+folder entries left out (0 for a file). Pulled files are neither committed nor
+git-ignored: the caller decides what to do with them.
 
-**Errors.** Each message starts with a code, so agents can branch on it:
+**Errors.** Every error is `-32602`, and its message starts with a code, so
+agents can branch on it:
 
 | Code | Meaning |
 | --- | --- |
 | `file-pull-unknown-agent` | No agent with that id in the caller's workspace |
-| `file-pull-outside-checkout` | A source or destination path escapes its checkout |
+| `file-pull-outside-checkout` | A source or destination path escapes its checkout or names `.git` |
 | `file-pull-not-found` | Nothing at the source path, or neither a regular file nor a directory |
-| `file-pull-too-large` | Over 209715200 bytes; the message names the size and the limit |
-| `file-pull-mismatch` | The copy's size or `sha256` differs, a piece did not start where the copy ended, or an archive entry was unsafe |
-| `file-pull-destination-conflict` | A file onto an existing folder, or a folder onto an existing file |
-| `file-pull-transfer-expired` | The source removed the staged archive (10 minutes idle); retry the pull |
-| `file-pull-unsupported` | The source's machine is offline, too old (link protocol below 16; the message names the machine to update) or has no checkout for the agent |
+| `file-pull-too-large` | Over 209715200 bytes or 100000 entries; the message names the size and the limit |
+| `file-pull-busy` | The source agent already has 4 live snapshots; retry later |
+| `file-pull-mismatch` | The copy's size or `sha256` differs, a piece did not start where the copy ended, an offset was past the end, or an archive entry was not allowed |
+| `file-pull-destination-conflict` | A file onto a folder, a folder onto a file, or a path onto itself |
+| `file-pull-transfer-expired` | No live snapshot with that `transferId` for this caller, source and path; retry the pull |
+| `file-pull-source-unavailable` | The source's checkout is gone, or its machine is offline, did not resume, or did not answer within 60 s; retry later |
+| `file-pull-unsupported` | The source's machine runs a link protocol below 16; the message names the machine to update |
 | `remote-agent-unsupported` | A remote caller on a machine or backend too old for `ws.file.pull` |
 
 ### 5.13 Interactive `terminal.*`

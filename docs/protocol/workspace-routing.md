@@ -481,8 +481,8 @@ accepted as for a local agent, and its attachments reach the machine:
    <size> bytes; limit 209715200`, checked before the 5 MiB whole-file check, so
    an older machine is capped too. The machine also checks the `size` of the
    first answer (offset 0) before it writes a part file and asks for no more
-   pieces past the limit. Either way the call fails with that message and writes
-   nothing.
+   pieces past the limit. Either way the call fails with that message (the
+   machine passes the backend's text through unchanged) and writes nothing.
 
 This needs no new nodeProtocol: `file.attachmentData` rides `workspace.call`, and
 the range is optional. An older backend ignores `offset` and `length` and answers
@@ -511,22 +511,25 @@ relayed piece by piece without writing to disk.
 interface PullDataArgs {
   fromAgentId: string;
   path: string;         // relative to the source's checkout
-  transferId?: string;  // folder pieces after offset 0: from the first answer
+  transferId?: string;  // every piece after offset 0: from the first answer
   offset: number;       // byte offset of the piece; 0 for the first piece
   length: number;       // 1 to 4194304
 }
-// answer: FilePullPiece ({ kind, size, offset, data, sha256?, transferId? }),
+// answer: FilePullPiece ({ kind, size, offset, data, sha256?, transferId }),
 // the same shape as checkoutReadReply.piece
 ```
 
-A `length` outside 1 to 4194304, or an `offset` that is not a non-negative
-integer, fails with `-32602`. The machine refuses a first piece whose `size` is
-over 209715200 bytes with `file-pull-too-large` and asks for no more. Each later
-piece starts where the copy so far ends. Errors carry the binding's codes, with
-the source machine's reply codes passed through unchanged. The machine writes the
-pieces to a hidden temp file next to the destination, checks size and `sha256`,
-then renames the file or unpacks the archive into place, as the binding
-describes.
+A `length` outside 1 to 4194304, an `offset` that is not a non-negative integer,
+or a later piece without `transferId`, fails with `-32602`. The backend answers a
+`transferId` only for the agent that opened it, with the same `fromAgentId` and
+`path` ([caller binding](./node-link.md#checkout-files-nodeprotocol-16)). The
+machine refuses a first piece whose `size` is over 209715200 bytes with
+`file-pull-too-large` and asks for no more. Each later piece starts where the copy
+so far ends. Every error is `-32602` with the binding's codes; the source
+machine's reply codes pass through unchanged. The machine writes the pieces to a
+uniquely named part file under the checkout's git-ignored `.intent/pulls/`,
+checks size and `sha256`, then renames the file or unpacks the archive into
+place, as the binding describes.
 
 This needs no new nodeProtocol on the caller's link: `file.pullData` rides
 `workspace.call`. Only a remote **source** needs nodeProtocol 16. An older backend
