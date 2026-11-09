@@ -31,8 +31,8 @@ Removes per-agent copy-on-write sandboxes ([nodes.md landing step 2](./methods/n
 are no-ops. The `sandbox:cow:created` and `sandbox:cow:merged`
 events are no longer emitted, and `AgentSession` / `AgentLite` drop `sandbox_id`,
 `sandbox_path` and `sandbox_branch`. `workspace.cowIsolation` keeps only its workspace
-checkout role (retired in 17.0); `checkoutMode: "cow"`, repo-cache hydration and
-`cowSupported` are unchanged. `client.hello` advertises `agentIsolation: 2`. Transfer bundles keep an empty
+checkout role; `checkoutMode: "cow"`, repo-cache hydration and
+`cowSupported` are unchanged (17.0 later retired the setting and `cowSupported`). `client.hello` advertises `agentIsolation: 2`. Transfer bundles keep an empty
 `refs.sandboxes` for older importers, and imports of older bundles ignore sandbox data.
 A store migration drops the sandbox rows; no files on disk are touched. The documented
 surface is **499 / 441 / 58** (dispatchable / router / fast path), two router methods

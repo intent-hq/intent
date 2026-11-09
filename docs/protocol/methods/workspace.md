@@ -481,11 +481,13 @@ and the persisted column keeps its historical `skip_worktree` name
 checkout mode as `checkoutMode` (`"worktree" | "cow" | "direct"`; omitted whenever
 provisioning was skipped per the conditions above). A create from a local repository
 (`repositoryPath`) always provisions the linked worktree above
-(`checkoutMode: "worktree"`). Only the cache-hydration and new-repository paths below
-produce `"cow"` or `"direct"`. Because a `cow` or `direct` checkout is a standalone
-clone, `workspace.delete`'s git-metadata phase skips the worktree-registration prune and
-the source-repo branch-delete guard (the workspace branch lives only inside the clone);
-the checkout is still renamed to a trash path and removed in the background as usual.
+(`checkoutMode: "worktree"`). Within `workspace.create`, only the cache-hydration and
+new-repository paths below produce `"cow"` or `"direct"`. Because a cache-hydrated `cow`
+or `direct` checkout is a standalone clone, `workspace.delete`'s git-metadata phase skips
+the worktree-registration prune and the source-repo branch-delete guard (the workspace
+branch lives only inside the clone); the checkout is still renamed to a trash path and
+removed in the background as usual. An `isNewRepo` `direct` checkout is the user's own
+repository folder and is never removed (see `workspace.delete`).
 
 Protocol 17.0 retired the `workspace.cowIsolation` setting, which made a local-repository
 create a copy-on-write copy of the repository directory, and removed
