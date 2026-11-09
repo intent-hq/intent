@@ -2361,6 +2361,7 @@ interface LaunchCommand {
   compactToolDescriptions?: boolean; // see below
   checkoutOf?: string;             // protocol 13 only; see Sub-agent checkouts
   forge?: ForgeLaunch;             // protocol 15 only, top-level agents only; see Forge token on the machine
+  gitIdentity?: GitIdentity;       // any protocol; see Commit identity
 }
 ```
 
@@ -3483,6 +3484,40 @@ interface ProfileEnvOverlay {
   readable; an update that cannot be parsed after masking is dropped rather
   than leaked. Secrets stay in machine process memory and the provider's
   environment for the agent's lifetime.
+
+### Commit identity
+
+A remote agent commits with the identity the backend's git config gives the
+workspace. For every `launch` it sends, the backend resolves `user.name` and
+`user.email` for the workspace's checkout with the config chain a local
+agent's spawn uses (repository, `includeIf`, global and system config; the
+backend daemon's own environment is not consulted) and sends them in
+`launch.gitIdentity`:
+
+```ts
+interface GitIdentity { // closed body: a new member needs a nodeProtocol
+  name: string;  // user.name, not empty
+  email: string; // user.email, not empty
+}
+```
+
+- **Every agent.** Top-level agents and sub-agents (shared checkout or not)
+  get it. It is not a secret and needs no gate.
+- **Freshness.** It is resolved again for every `launch` (a model switch
+  sends a new one); nothing is cached on the backend, so a config change
+  reaches the next launch. A restart on the machine without a new `launch`
+  keeps the identity of the launch it restarts.
+- **Absent.** When either value does not resolve, the backend sends no
+  `gitIdentity`. The machine then sets nothing, and a commit fails or uses
+  the machine's own git environment and config.
+- **Application.** The machine sets `GIT_AUTHOR_NAME`, `GIT_COMMITTER_NAME`
+  (`name`) and `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_EMAIL` (`email`) in the
+  agent's process environment as Intent's launch wiring, over inherited
+  values (a profile cannot set these keys). It never writes the identity into
+  its checkout cache, the agent's checkout or any git config. A member with an
+  empty value sets nothing.
+- **Compatibility.** No nodeProtocol: `launch` is an open body, so a machine
+  from before ignores the member and starts the agent as before.
 
 ### Capabilities report
 
