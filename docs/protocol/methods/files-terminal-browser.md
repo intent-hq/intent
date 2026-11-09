@@ -901,6 +901,9 @@ before anything is read or written:
 4. a destination whose first component is `.intent` (same comparison), so no
    pull replaces the ignore-all marker or writes into part files and attachments.
 
+Rules 3 and 4 apply both to the path as given and to the resolved path relative
+to its checkout, so a symlink such as `out` → `.intent` does not get around them.
+
 A symlink whose target stays inside the checkout, and not in `.git`, is allowed.
 A missing source, or one that is neither a regular file nor a directory, fails
 with `file-pull-not-found: <path>`. Copying a path onto itself, or a folder into
