@@ -1523,7 +1523,7 @@ class Static(unittest.TestCase):
         self.assertRegex(text, r'ARG RUNNER_SHA256=[0-9a-f]{64}')
         for tool in ('RUNNER', 'RUSTUP', 'GH', 'NODE', 'PWSH', 'PYTHON_3_11', 'PYTHON_3_12'):
             self.assertRegex(text, rf'ARG {tool}_SHA256=[0-9a-f]{{64}}')
-        self.assertEqual(text.count('sha256sum -c'), 7)
+        self.assertEqual(text.count('sha256sum -c'), 8)
 
     @staticmethod
     def setup_action_versions(action, key):
@@ -1576,6 +1576,20 @@ class Static(unittest.TestCase):
         self.assertIn('24', wanted)
         missing = sorted(w for w in wanted if not any(b == w or b.startswith(w + '.') for b in baked))
         self.assertEqual(missing, [], f'baked: {baked}')
+
+    def test_image_bakes_the_cargo_tools_intentd_ci_installs(self):
+        # intentd's check and coverage jobs install these with taiki-e/install-action, which
+        # downloads on every run; its cargo-tools action skips that when the runner has them.
+        text = (HERE / 'Dockerfile').read_text()
+        self.assertRegex(text, r'rustup-init -y .*-c llvm-tools-preview')
+        for tool, repo in (('CARGO_NEXTEST', 'nextest-rs/nextest'), ('CARGO_LLVM_COV', 'taiki-e/cargo-llvm-cov'),
+                           ('CARGO_SHEAR', 'Boshen/cargo-shear')):
+            self.assertRegex(text, rf'(?m)^ARG {tool}_VERSION=\d+\.\d+\.\d+$')
+            self.assertRegex(text, rf'(?m)^ARG {tool}_SHA256=[0-9a-f]{{64}}$')
+            self.assertRegex(text, rf'install_cargo_tool {re.escape(repo)} [^;]*"\${tool}_SHA256"')
+        smoke = (HERE.parents[1] / '.github/workflows/intent-cache-smoke.yml').read_text()
+        for command in ('cargo nextest --version', 'cargo llvm-cov --version', 'cargo shear --version', 'llvm-tools'):
+            self.assertIn(command, smoke)
 
     def test_image_fetches_github_releases_with_api_fallback(self):
         # github.com/<repo>/releases/download answered 504 for hours for single

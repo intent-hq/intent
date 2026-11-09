@@ -161,6 +161,10 @@ jobs:
               || { echo "::error::Node $spec is not in the tool cache"; exit 1; }
             "${marker%.complete}/bin/node" --version
           done
+          # intentd's cargo-tools action uses these instead of downloading them.
+          cargo nextest --version; cargo llvm-cov --version; cargo shear --version
+          components=$(rustup component list --installed)
+          grep -E '^llvm-tools' <<<"$components" || { echo "::error::llvm-tools-preview missing"; exit 1; }
       - name: No core dumps, apt lists present
         run: |
           set -euo pipefail

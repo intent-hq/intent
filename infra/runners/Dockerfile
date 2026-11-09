@@ -13,6 +13,16 @@ ARG RUSTUP_SHA256=dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb
 # Baked so jobs using this toolchain do not download it; others are installed
 # per job by rustup and discarded with the container.
 ARG RUST_TOOLCHAIN=1.96.0
+# Cargo tools intentd's CI installs with taiki-e/install-action, which
+# downloads on every run; intentd's cargo-tools action uses these instead
+# when present. The builds install-action picks (gnu nextest, musl others),
+# with the SHA-256 of each release asset.
+ARG CARGO_NEXTEST_VERSION=0.9.151
+ARG CARGO_NEXTEST_SHA256=1d4ce302b820c41f4b89c5fb9bce45f0f0c94882c1cf08fc360caf08be6e7df4
+ARG CARGO_LLVM_COV_VERSION=0.9.1
+ARG CARGO_LLVM_COV_SHA256=3fca950394a3c49457657c158b1619cec8dfd2647ae5b48746734c0ab969a522
+ARG CARGO_SHEAR_VERSION=1.14.0
+ARG CARGO_SHEAR_SHA256=9004df4eb031a456026c4326ae0d0ce545321527a67be90f4524c1be729dc40e
 # Preinstalled on GitHub-hosted ubuntu-24.04 and called by routed jobs without
 # a setup step (see docs/GITHUB_RUNNERS.md, Preinstalled tools).
 ARG GH_VERSION=2.102.0
@@ -97,9 +107,24 @@ ENV HOME=/home/runner \
 RUN curl -fsSL --retry 3 --retry-all-errors -o /tmp/rustup-init "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/x86_64-unknown-linux-gnu/rustup-init" \
  && echo "${RUSTUP_SHA256}  /tmp/rustup-init" | sha256sum -c - \
  && chmod +x /tmp/rustup-init \
- && /tmp/rustup-init -y --no-modify-path --profile minimal --default-toolchain "${RUST_TOOLCHAIN}" -c rustfmt -c clippy \
+ && /tmp/rustup-init -y --no-modify-path --profile minimal --default-toolchain "${RUST_TOOLCHAIN}" -c rustfmt -c clippy -c llvm-tools-preview \
  && rm /tmp/rustup-init \
  && rm -rf /home/runner/.rustup/downloads /home/runner/.rustup/tmp
+
+RUN set -eu; \
+    install_cargo_tool() { \
+      fetch-release "$1" "$2" "$3" /tmp/tool.tgz; \
+      echo "$5  /tmp/tool.tgz" | sha256sum -c -; \
+      tar xzf /tmp/tool.tgz -C "$CARGO_HOME/bin" "$4"; \
+      rm /tmp/tool.tgz; \
+      test -x "$CARGO_HOME/bin/$4"; \
+    }; \
+    install_cargo_tool nextest-rs/nextest "cargo-nextest-$CARGO_NEXTEST_VERSION" \
+      "cargo-nextest-$CARGO_NEXTEST_VERSION-x86_64-unknown-linux-gnu.tar.gz" cargo-nextest "$CARGO_NEXTEST_SHA256"; \
+    install_cargo_tool taiki-e/cargo-llvm-cov "v$CARGO_LLVM_COV_VERSION" \
+      cargo-llvm-cov-x86_64-unknown-linux-musl.tar.gz cargo-llvm-cov "$CARGO_LLVM_COV_SHA256"; \
+    install_cargo_tool Boshen/cargo-shear "v$CARGO_SHEAR_VERSION" \
+      cargo-shear-x86_64-unknown-linux-musl.tar.gz cargo-shear "$CARGO_SHEAR_SHA256"
 
 # setup.sh is the installer setup-python runs after its own download.
 RUN set -eu; \

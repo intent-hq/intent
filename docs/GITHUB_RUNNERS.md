@@ -250,6 +250,16 @@ Playwright `install-deps` list for Ubuntu 24.04, unchanged from 1.58 through
 1.63, without fonts), so a browser job needs no `apt-get`. They grow the
 image (`xvfb` brings the X server and Mesa).
 
+The toolchain carries `llvm-tools-preview`, and `~/.cargo/bin` holds pinned
+`cargo-nextest`, `cargo-llvm-cov` and `cargo-shear` (`CARGO_*_VERSION` and
+`_SHA256` `ARG`s, the builds `taiki-e/install-action` picks). That action
+downloads on every run even when a tool is present, so intentd's `check` and
+coverage jobs install through its cargo-tools composite action
+([intentd#3191](https://github.com/intent-hq/intentd/pull/3191)), which calls it
+only for tools the runner lacks: these slots use the baked versions, burst
+runners the latest. Bump a pin by taking the asset `digest` from
+`gh api repos/<repo>/releases/tags/<tag>`.
+
 Python 3.11 and 3.12 sit in the tool cache (`/opt/hostedtoolcache/Python/<version>/x64`)
 as `actions/python-versions` builds installed by their own `setup.sh`, as on
 hosted runners, so `actions/setup-python` with `python-version: '3.11'` or
