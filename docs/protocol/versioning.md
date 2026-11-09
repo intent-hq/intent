@@ -1161,14 +1161,14 @@ unchanged.
 The MCP-only [`ws.file.pull({ fromAgentId, path, to? })`](./methods/files-terminal-browser.md#agent-file-pull)
 copies a file or folder (packed as one tar) from another agent's checkout of the
 same workspace into the caller's, confined to both checkouts, in pieces of at most
-4 MiB with the snapshot's `sha256` in the first piece, and capped at 209715200
-bytes (200 MiB). A remote caller's machine uses the internal `file.pullData` and
-`file.pullRelease` `workspace.call` frames; a remote source's machine serves the
-new `checkoutRead`, `checkoutReadReply` and `checkoutRelease` link frames
+4 MiB with the whole content's `sha256` in the first piece, and capped at
+209715200 bytes (200 MiB). A remote caller's machine uses the internal
+`file.pullData` `workspace.call` frame; a remote source's machine serves the new
+`checkoutRead` and `checkoutReadReply` link frames
 ([link contract](./node-link.md#checkout-files-nodeprotocol-16)). Daemons offer
 `{ min: 7, max: 16 }`; a pull from a machine on a lower link fails with
-`pull-unsupported-machine`. `ws.file.getAttachment` gains the same 200 MiB cap,
-local and remote (`attachment-exceeds-cap`). The surface counts are unchanged.
+`file-pull-unsupported`. `ws.file.getAttachment` gains the same 200 MiB cap,
+local and remote (`attachment-too-large`). The surface counts are unchanged.
 
 **Command-default change (breaking).**
 [Script creation defaults (§5.8)](./methods/scripts.md#command-creation-defaults-breaking-change)
