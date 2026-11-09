@@ -37,6 +37,10 @@ export const RENAMED_BINDINGS = new Map([
   ['ws.agent.spawnPeer', 'ws.agent.create({ topLevel: true })'], // renamed in v8.1
 ]);
 
+// Prepared agent file pull binding (docs lead the intentd change).
+const PREPARED_FILE_PULL_BINDING =
+  '  ws.file.pull({ fromAgentId, path, to? }) → { path, kind, size, sha256, files, skipped }';
+
 // Prepared §5.56 secret-request bindings, mentioned by more than one protocol doc.
 const PREPARED_SECRET_BINDINGS = [
   '  ws.secret.request({ name, reason }) → { ok, requestId, message }',
@@ -59,6 +63,10 @@ export const PREPARED_BINDINGS = new Map([
     '  ws.script.unmonitor(monitorId) → { ok, monitor }',
     '  ws.script.monitorDetails(monitorId) → monitor',
   ].join('\n')],
+  ['docs/protocol/methods/files-terminal-browser.md', PREPARED_FILE_PULL_BINDING],
+  ['docs/protocol/workspace-routing.md', PREPARED_FILE_PULL_BINDING],
+  ['docs/protocol/node-link.md', PREPARED_FILE_PULL_BINDING],
+  ['docs/protocol/versioning.md', PREPARED_FILE_PULL_BINDING],
   ['docs/protocol/methods/secrets.md', PREPARED_SECRET_BINDINGS],
   ['docs/protocol/methods/settings.md', PREPARED_SECRET_BINDINGS],
   ['docs/protocol/07-agent-streaming.md', PREPARED_SECRET_BINDINGS],
