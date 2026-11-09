@@ -7,7 +7,7 @@ import test from 'node:test';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 
-import { callsIn, defaultDbPath, knownNamesFromToolsRs, maskJs, rank } from './mine-ws-usage.mjs';
+import { callsIn, defaultDbPath, knownNamesFromToolsRs, maskJs, openReadOnly, rank } from './mine-ws-usage.mjs';
 
 const SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mine-ws-usage.mjs');
 
@@ -72,6 +72,15 @@ test('callsIn ignores strings, folds ws.mr and drops function props', () => {
     'ws.note.read',
   ]);
   assert.deepEqual(callsIn("ws.help('x') // ws.note.add()"), ['ws.help']);
+  assert.deepEqual(callsIn('ws.note.add?.(1)'), ['ws.note.add']);
+});
+
+test('callsIn skips regex literals that contain quotes but keeps division', () => {
+  assert.deepEqual(callsIn("x.replace(/`/g, ''); ws.note.add(1); ws.note.read(2)"), ['ws.note.add', 'ws.note.read']);
+  assert.deepEqual(callsIn("const r = /'[\\/']/; ws.note.add(1)"), ['ws.note.add']);
+  assert.deepEqual(callsIn("return /\"/.test(s) && ws.note.add(1)"), ['ws.note.add']);
+  assert.deepEqual(callsIn('const a = b / 2; ws.note.add(1) / c; ws.note.read(1)'), ['ws.note.add', 'ws.note.read']);
+  assert.deepEqual(callsIn('const a = (b) / 2 / ws.note.add(1)'), ['ws.note.add']);
 });
 
 test('knownNamesFromToolsRs reads only the API sections of both constants', () => {
@@ -100,8 +109,22 @@ test('defaultDbPath follows INTENTD_DATA_DIR, then the platform data dir', () =>
   assert.equal(defaultDbPath({}, 'darwin', '/h'), '/h/Library/Application Support/intentd/intentd.db');
 });
 
-test('CLI mines a fixture database read-only and writes the JSON report', async () => {
+test('openReadOnly refuses writes even on a writable file', async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mine-ws-usage-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const dbFile = path.join(dir, 'intentd.db');
+  await buildFixtureDb(dbFile);
+  const db = await openReadOnly(dbFile);
+  try {
+    assert.throws(() => db.exec('CREATE TABLE t (x)'), /readonly/);
+  } finally {
+    db.close();
+  }
+});
+
+test('CLI mines a fixture database read-only and writes the JSON report', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mine-ws-usage-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const dbFile = path.join(dir, 'intentd.db');
   const toolsRs = path.join(dir, 'tools.rs');
   const jsonOut = path.join(dir, 'usage.json');
@@ -130,5 +153,4 @@ test('CLI mines a fixture database read-only and writes the JSON report', async 
   assert.deepEqual(report.neverCalled, ['ws.agent.send']);
   assert.match(stdout, /hot set \(2\): 71\.4%/);
   assert.ok(before.equals(fs.readFileSync(dbFile)), 'database file must not change');
-  fs.rmSync(dir, { recursive: true, force: true });
 });

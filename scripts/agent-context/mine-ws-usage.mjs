@@ -4,7 +4,9 @@
 // Reads the local intentd SQLite database read-only. Sources: workspace_api tool_use
 // blocks in agent_message.content, with the full input from agent_message_payload when
 // the inline copy was truncated. String literals and comments are blanked before
-// matching, and only names in today's ws.* help text count.
+// matching, and only names in today's ws.* help text count. Inputs whose full copy was
+// pruned by intentd's payload retention count only up to the inline truncation point, so
+// the counts are a slight undercount, good for ranking rather than exact totals.
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -16,7 +18,10 @@ import { fileURLToPath } from 'node:url';
 import { HELP_CONSTANTS, TOOLS_RS_PATH, extractHelpText, mergeBindings, parseBindings } from '../check-mcp-bindings.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const CALL_RE = /(?<![\w$.])ws((?:\s*\??\.\s*[A-Za-z_$][\w$]*)+)\s*\(/g;
+const CALL_RE = /(?<![\w$.])ws((?:\s*\??\.\s*[A-Za-z_$][\w$]*)+)\s*(?:\?\.)?\s*\(/g;
+const REGEX_AFTER_CHAR = new Set('(,=:[!&|?{};+-*%<>~^'.split(''));
+const REGEX_AFTER_WORD = new Set(['return', 'typeof', 'case', 'do', 'else', 'in', 'of', 'new', 'delete', 'void', 'throw', 'await', 'yield']);
+const MIN_NODE = [22, 13];
 const ALIASES = new Map([['mr', 'pr']]);
 const FUNCTION_PROPS = new Set(['toString', 'call', 'apply', 'bind']);
 
@@ -27,8 +32,8 @@ export function defaultDbPath(env = process.env, platform = process.platform, ho
 }
 
 /**
- * Same length as `code`, with the text of string literals, template-literal text and comments blanked
- * to spaces. Code inside `${…}` stays, so calls built into template strings still count.
+ * Same length as `code`, with the text of string literals, template-literal text, regex literals and
+ * comments blanked to spaces. Code inside `${…}` stays, so calls built into template strings still count.
  */
 export function maskJs(code) {
   const out = code.split('');
@@ -36,6 +41,27 @@ export function maskJs(code) {
   let i = 0;
   const blank = (from, to) => {
     for (let k = from; k < to; k += 1) if (out[k] !== '\n') out[k] = ' ';
+  };
+  const startsRegex = () => {
+    let k = i - 1;
+    while (k >= 0 && /\s/.test(out[k])) k -= 1;
+    if (k < 0) return true;
+    if (REGEX_AFTER_CHAR.has(out[k])) return true;
+    const word = out.slice(0, k + 1).join('').match(/[A-Za-z_$][\w$]*$/);
+    return Boolean(word && REGEX_AFTER_WORD.has(word[0]) && !/[\w$.]/.test(out[k - word[0].length] ?? ''));
+  };
+  const scanRegex = () => {
+    const start = i + 1;
+    let inClass = false;
+    for (i += 1; i < code.length && code[i] !== '\n'; i += 1) {
+      const c = code[i];
+      if (c === '\\') i += 1;
+      else if (c === '[') inClass = true;
+      else if (c === ']') inClass = false;
+      else if (c === '/' && !inClass) break;
+    }
+    blank(start, Math.min(i, code.length));
+    i += 1;
   };
   const scanTemplate = () => {
     const start = i;
@@ -60,6 +86,8 @@ export function maskJs(code) {
       const stop = end === -1 ? code.length : end + 2;
       blank(i, stop);
       i = stop;
+    } else if (c === '/' && startsRegex()) {
+      scanRegex();
     } else if (c === '"' || c === "'") {
       const start = i + 1;
       for (i += 1; i < code.length && code[i] !== c && code[i] !== '\n'; i += 1) if (code[i] === '\\') i += 1;
@@ -110,6 +138,18 @@ export function knownNamesFromToolsRs(rustSource) {
 
 function isWorkspaceApi(name) {
   return typeof name === 'string' && /(^|[_.:/-])workspace_api$/.test(name);
+}
+
+function assertNodeVersion(version = process.versions.node) {
+  const [major, minor] = version.split('.').map(Number);
+  if (major < MIN_NODE[0] || (major === MIN_NODE[0] && minor < MIN_NODE[1])) {
+    throw new Error(`node:sqlite needs Node ${MIN_NODE.join('.')} or later (found ${version})`);
+  }
+}
+
+export async function openReadOnly(file) {
+  const { DatabaseSync } = await import('node:sqlite');
+  return new DatabaseSync(file, { readOnly: true });
 }
 
 function decodePayload(encoding, body) {
@@ -230,8 +270,8 @@ async function main() {
   if (!fs.existsSync(opts.toolsRs)) throw new Error(`${opts.toolsRs} not found; init packages/intentd or pass --tools-rs`);
   if (!fs.existsSync(opts.db)) throw new Error(`${opts.db} not found; pass --db or set INTENTD_DATA_DIR`);
   const known = knownNamesFromToolsRs(fs.readFileSync(opts.toolsRs, 'utf8'));
-  const { DatabaseSync } = await import('node:sqlite');
-  const db = new DatabaseSync(opts.db, { readOnly: true });
+  assertNodeVersion();
+  const db = await openReadOnly(opts.db);
   try {
     const result = rank(workspaceApiScripts(db), known, { top: opts.top });
     console.log(formatReport(result, { limit: opts.limit }));

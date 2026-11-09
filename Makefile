@@ -910,7 +910,7 @@ test-scripts-changed: ## Run the script checks a change affects vs BASE (default
 
 # Ranks ws.* calls in the local intentd database (opened read-only) to pick the
 # hot set the compact workspace_api reference keeps inline. MINE_ARGS passes
-# --db, --top, --json and --limit through.
+# --db, --top, --json and --limit through. Needs Node 22.13+ (node:sqlite).
 MINE_ARGS ?=
 mine-ws-usage: ensure-intentd-submodule ## Rank ws.* method calls in the local intentd DB (read-only) and print the hot set (MINE_ARGS="--top 30 --json out.json")
 	@node --test scripts/agent-context/mine-ws-usage.test.mjs
