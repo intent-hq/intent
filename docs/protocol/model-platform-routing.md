@@ -87,14 +87,12 @@ precedence applies); JSON `{}` is an explicit object. Invalid nonempty values fa
 creation with invalid-params, not silently ignored defaults. Stored defaults have
 no power to bypass caller authorization or supported capability checks.
 
-With no selected object, retain current local
-shared/worktree resolution and existing additive-stage CoW behavior. Explicit
-legacy isolation selects its existing local compatibility path until per-agent
-CoW removal ([nodes.md landing step 2](./methods/nodes.md#errors-and-retirement-gates));
-it conflicts with any effective placement object. Until that removal, workspace
-cowIsolation is consulted only on the legacy path, not silently combined with a
-selected remote route. Workspace checkoutMode cow and
-reflink behavior are unchanged.
+With no selected object, retain current local shared/worktree resolution.
+Per-agent CoW isolation was removed in protocol 16
+([nodes.md landing step 2](./methods/nodes.md#errors-and-retirement-gates)):
+`isolation: "cow"` is rejected, and an explicit `isolation` still conflicts with any
+effective placement object. Workspace checkoutMode cow and reflink behavior are
+unchanged.
 
 MCP create/delegate option parsing and their WorkspaceApi forwarding must carry
 these values; accepting an unknown JS key alone is not support. Extend the

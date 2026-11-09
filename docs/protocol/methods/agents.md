@@ -1,4 +1,4 @@
-> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.5 `agent.*` · §5.5a `sandbox.cow.*` (CoW agent sandboxes).
+> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.5 `agent.*`.
 
 Routing-only `workspaceId?` additions below are [prepared contract fields](../workspace-routing.md), optional on direct daemons and required for future forwarded workspace calls; existing scope and results are unchanged.
 
@@ -339,21 +339,8 @@ No method, event or error number is added; the method catalog is unchanged.
   The guard runs BEFORE any side-effectful work (child creation, group enrollment), so a rejection leaves no orphaned child.
   `force: true` bypasses the guard; `agent.wakeOrCreate`'s behavior is unchanged (it already routes to the existing live agent).
   `task.assignAgent` applies the same guard when assigning a NEW agent to an occupied task (§5.4).
-- **Sandbox isolation (new in intentd).**
-  `isolation` controls whether the delegated agent runs in an isolated sandbox: `"cow"` provisions a copy-on-write directory clone (requires CoW filesystem support; see below), `"direct"` runs in the shared workspace checkout.
-  When `isolation` is omitted, the default comes from the `workspace.cowIsolation` setting (§5.12): enabled ⇒ `"cow"`, disabled ⇒ `"direct"`.
-  CoW sandboxes are full-directory clones of the sandbox source (including `.git` and build caches) via OS-level copy-on-write primitives (macOS `clonefile(2)` whole-tree fast path with best-effort walk fallback on APFS, Linux `ioctl(FICLONE)` on Btrfs/XFS with reflink support); the sandbox directory layout is `<workspaces_root>/<workspaceId>/sandboxes/<agentId>/<repo-slug>` with a snapshot branch `sb/<agentId>` created in the sandbox's `.git`.
-- **Sandbox eligibility & source (checkout-mode aware).**
-  Shared-checkout workspaces (`skipIsolation`/no provisioned checkout, i.e. no `checkoutMode`, with a `repositoryPath`) source the sandbox from the user's repository folder; CoW-checkout workspaces (`checkoutMode: "cow"`, §5.1) source it from the **workspace checkout** (`worktreePath`); `checkoutMode: "direct"` workspaces (standalone plain clone) source it from the workspace checkout when one was provisioned (cache hydration), else from the repository folder itself (`isNewRepo` initialization).
-  Worktree-mode workspaces (`checkoutMode: "worktree"`) are not sandbox-eligible — the agent keeps the shared checkout and the delegation proceeds without a sandbox.
-- **Asynchronous provisioning & `effectiveIsolation` (changed by intentd#636).**
-  Sandbox provisioning runs OFF the delegate critical path: when `isolation: "cow"` resolves and the workspace is sandbox-eligible, the daemon registers a per-agent settlement gate, kicks off the CoW clone in a background task, and returns immediately with `effectiveIsolation: "pending"` — the only value the field carries today (`"cow"` and `"direct"` are no longer returned; a large clone can take tens of seconds, which previously starved the agent-facing MCP `workspace_api` tool's per-invocation wall-clock budget — `WORKSPACE_API_TIMEOUT`, default 30s, overridable via the `INTENTD_WORKSPACE_API_TIMEOUT_MS` env var: a positive integer in milliseconds, read at MCP-server construction; unset, non-numeric, or non-positive values keep the default).
-  `effectiveIsolation` is omitted when no CoW isolation was resolved (explicit `"direct"`, setting disabled, the worktree-mode ineligibility skip, or no sandbox source).
-  The settled outcome is observable rather than returned: on success the child session's TOP-LEVEL fields (not nested under metadata) `sandbox_id`, `sandbox_path`, and `sandbox_branch` are persisted and served in both `AgentSession` and `AgentLite`, and a `sandbox:cow:created` event is emitted with `data { workspaceId, agentId, sandboxPath, branch, baseCommitSha, snapshotCommitSha }`; when the filesystem does not support CoW reflinks — or provisioning fails — the daemon falls back to shared (`"direct"`) mode exactly as before (no bytes copied, log-only): the session keeps no sandbox fields and no `sandbox:cow:created` fires.
-  A third settlement outcome covers the delete race: because the clone runs off the delegate critical path, `agent.delete` can race it — when the child session is gone or soft-deleted by settlement time, the daemon discards the just-provisioned sandbox (directory + store record) instead of stranding the clone on disk; again no sandbox fields persist and no `sandbox:cow:created` fires.
-  The child's first ACP spawn is gated on settlement: its turn worker awaits the in-flight provisioning before spawning, so the child never runs against a half-copied sandbox.
-  The sandbox directory is never auto-cleaned once settled — except for the delete-race discard above — cleanup is otherwise the responsibility of higher-level orchestration.
-  All agent file/exec/terminal/search operations are restricted to the sandbox path when present (logical containment guards in `intent-services`), preventing escape to the main workspace or parent directories.
+- **Retired per-agent isolation (protocol 16).**
+  Per-agent copy-on-write sandboxes are removed. `isolation: "cow"` is rejected with `-32602` and `data: { code: "isolation-removed" }` before any side effect, in the single and batch forms. `"direct"` and `"shared"` are accepted as no-ops, except on a sub-agent that inherits a remote parent's placement, where any `isolation` is rejected. An omitted `isolation` never resolves to `"cow"`: `workspace.cowIsolation` selects only the workspace checkout (§5.1). An agent that is not placed on a remote machine works in the workspace checkout. `AgentSession` and `AgentLite` no longer carry `sandbox_id`, `sandbox_path` or `sandbox_branch`. `effectiveIsolation` now reports only remote placement ([nodes](./nodes.md)).
 - **Batch form (`tasks`, within v6.8; reworked in v7.0 — part 2 of monorepo#2457).**
   `tasks: [entry, ...]` (non-empty; each entry either a bare taskNoteId string or an object `{ taskNoteId, specialist?, model?, provider?, reasoningEffort?, placement? }` whose per-task options override the call's top-level defaults for that task only; every named id must be a task note in the workspace, else `-32602` naming the unknown ids; mutually exclusive with `taskNoteId`/`noteId`/`taskText` — mixing rejects with `-32602`) switches the call to batch mode with the result shape `{ ok: true, tasks: [row], startedTaskIds, summary: { started, held, skipped, errors }, warning?, unlockPlan: { unlockedBySettlement, message, criticalPathMinutes? } }` — every supplied task is enumerated (deduped, order-preserving), nothing silently omitted.
 - **Zero-started summary + warning (within v7.0, additive — [intent-hq/intentd#1442](https://github.com/intent-hq/intentd/pull/1442), [monorepo#3334](https://github.com/intent-hq/monorepo/issues/3334)).**
@@ -2784,49 +2771,11 @@ Unknown fields → `-32602`; unknown agent → `-32602 "Agent not found"`
 - **Poisoned-session recreate ([monorepo#940](https://github.com/intent-hq/monorepo/issues/940)):** when the parked session classifies as corrupted/poisoned (the same classification that emits `sessionCorrupted: true` — session-fatal provider block, deterministic `session/prompt` 400 `invalidArgument` rejection, or the identical-failure streak at threshold), the retry arms the forced-recreate flag (same mechanism as `agent.editAndRegenerate`) BEFORE clearing the streak, so the redrive's session setup SKIPS the `session/load` resume — which would replay the exact context the provider deterministically rejects — and opens a fresh `session/new` with the prior history prepended as `<supervisor>` XML.
   Retry also clears the identical-failure streak and failure-wake dedup records (the deliberate quarantine escape hatch, monorepo#840)
 
-### 5.5a `sandbox.cow.*` (CoW agent sandboxes)
+### Node placement
 
-> **Namespace.** The `sandbox.cow.*` methods manage CoW (copy-on-write) sandboxed agent workspaces. When `agent.delegate` provisions a CoW sandbox (§5.5 — asynchronously: the delegate result reports `effectiveIsolation: "pending"` and the clone settles in a background task), the agent works in an isolated repository clone. When the agent completes, `sandbox.cow.merge` attempts to automatically merge the sandbox commits back to the canonical repository, preserving agent attribution. If the merge encounters conflicts or the canonical repository has uncommitted overlapping changes, the agent is bounced with resolution instructions or the merge is deferred to manual resolution. All `sandbox.cow.*` methods require `workspaceId`. Renamed from `sandbox.*` (intentd#730, no aliases); the bare `sandbox.*` namespace is reserved for the upcoming agentOS sandbox surface.
-
-**Canonical repository (checkout-mode aware).** The directory a sandbox is cloned from and merged back into follows the workspace's checkout mode (§5.1): for **shared-checkout** workspaces (skip-isolation / no provisioned checkout, no `checkoutMode`) it is the user's repository folder (`repositoryPath`); for **CoW-checkout** workspaces (`checkoutMode: "cow"`) it is the **workspace checkout** (`worktreePath`) — agent commits merge back into the workspace's own checkout, not the user's repo folder; for **`checkoutMode: "direct"`** workspaces (standalone plain clone) it is the workspace checkout when one was provisioned (cache hydration), else the repository folder itself (`isNewRepo` initialization). Worktree-mode workspaces (`checkoutMode: "worktree"`) do not support sandboxes (sandbox provisioning is rejected; agents share the checkout).
-
-| Method | Params | Result |
-| --- | --- | --- |
-| sandbox.cow.merge | workspaceId (req), agentId (req) | { ok: true, status, commitRange?, canonicalHead?, conflictingPaths?, reason?, overlappingPaths? } — manually merge a sandbox back to the canonical repository. `status` is `"merged"` (clean merge succeeded; returns `commitRange` + `canonicalHead`, emits `sandbox:cow:merged`, and the sandbox is discarded), `"conflict"` (merge conflicts detected; canonical left pristine; returns `conflictingPaths` + `canonicalHead`; sandbox status → `conflict_bounced`), or `"blocked"` (canonical has uncommitted changes overlapping with sandbox; returns `overlappingPaths` and `reason`; sandbox status → `merge_pending`). When `status = "merged"`, `canonicalHead` is the canonical repository HEAD SHA after the merge. `-32602` (`sandbox not found for agent <id>`) when no sandbox exists for the agent |
-| sandbox.cow.discard | workspaceId (req), agentId (req) | { ok: true } — discard a sandbox without merging. Removes the sandbox directory and database record; discarding a nonexistent sandbox is a no-op success. This is the escape hatch when a sandbox is no longer needed or the agent failed |
-
-**Automatic merge on completion.** When a sandboxed agent completes (`agent:idle` event), the daemon automatically attempts `sandbox.cow.merge`. On a clean merge, the agent's coordinator sees the `merged` sandbox status in the completion event and receives a `sandbox:cow:merged` event. On conflict, the agent is bounced with a list of conflicting paths and resolution instructions (conflict resolution is iterative; the agent re-completes after fixing conflicts). On `blocked` outcome or retry exhaustion, the completion propagates with `merge-pending` status, and the user must call `sandbox.cow.merge` manually once canonical is clean.
-
-**Status lifecycle.** Sandbox records track status through the merge lifecycle: `created` (provisioned), `merging` (merge in progress), `merged` (successfully merged and discarded), `conflict_bounced` (conflicts detected; agent woken with paths), `merge_pending` (awaiting manual merge; blocked or retry cap hit), `discarded` (discarded without merging). The `agent:idle` completion event includes the sandbox status when applicable.
-
-**WIP snapshot exclusion.** Sandboxes provisioned from a dirty canonical repository create a snapshot commit of the WIP state (message prefix `"WIP snapshot for"`). These snapshot commits are **never merged back** to canonical — only commits made by the agent after the snapshot are cherry-picked. This ensures the user's uncommitted work stays local.
-
-**Attribution preservation.** Merged commits preserve the agent's original author/committer identity (from the sandbox git signature). The canonical repository gains the agent's commits as if the agent had worked directly in canonical, maintaining the audit trail.
-
-```json
-// Request: manual merge after resolution
-{ "jsonrpc":"2.0","id":80,"method":"sandbox.cow.merge",
-  "params":{ "workspaceId":"ws-abc","agentId":"agent-123" } }
-// ← response (clean merge)
-{ "jsonrpc":"2.0","id":80,"result":{
-  "ok":true,"status":"merged","commitRange":"1a2b3c..4d5e6f","canonicalHead":"a1b2c3d4..." } }
-// ← (also emits sandbox:cow:merged event)
-
-// Request: discard a failed sandbox
-{ "jsonrpc":"2.0","id":81,"method":"sandbox.cow.discard",
-  "params":{ "workspaceId":"ws-abc","agentId":"agent-456" } }
-// ← response
-{ "jsonrpc":"2.0","id":81,"result":{ "ok":true } }
-```
-
-
-### Prepared node placement and CoW retirement
-
-[§5.50](./nodes.md) defines additive placement on existing creation/delegation
-paths, node/lease/checkpoint fields, new halted/resuming statuses, and replacement
-hub operations. These fields are not implemented at the pin. Current CoW methods
-and behavior above remain until the separately versioned removal lands; the final
-removal has no alias or live-sandbox migration.
+[§5.50](./nodes.md) defines placement on the existing creation/delegation paths.
+Per-agent CoW sandboxes and the `sandbox.cow.merge` / `sandbox.cow.discard` methods
+were removed in protocol 16; the methods now return `-32601`.
 
 ### Prepared model platform routing (11.2)
 

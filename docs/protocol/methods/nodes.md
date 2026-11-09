@@ -258,8 +258,8 @@ failure closes the private connection before dispatch.
 
 Landing sequence within phase 1:
 
-1. Land additive documentation.
-2. Remove per-agent CoW runtime, prompts, defaults, schemas, settings controls and
+1. Land additive documentation. *(Done.)*
+2. *(Done in protocol 16.)* Remove per-agent CoW runtime, prompts, defaults, schemas, settings controls and
    routes. This step does not wait for the in-process local node or its
    isolated-checkout parity; until that node ships, agents that are not placed
    on a remote machine share the workspace checkout. Reject explicit
@@ -273,8 +273,8 @@ Landing sequence within phase 1:
    sandboxes exist to carry over, so there is no resume, migration or recovery
    notice: the removal drops the sandbox store rows and session sandbox fields,
    and never touches files on disk.
-3. After component removal and automated pin advancement, remove obsolete
-   canonical method/event entries. Existing `sandbox:cow:*` entries stay until then.
+3. *(Done.)* After component removal and automated pin advancement, remove obsolete
+   canonical method/event entries.
 4. Implement backend nodes/hubs and the local node, prove local/remote merge and
    recovery parity, and ship replacement FE callers.
 
@@ -557,9 +557,8 @@ A remote agent's single `agent.delegate` with `isolation` but no `placement`,
 or its batch with `isolation` where any task would inherit the parent's
 machine, fails with `-32602` before any write: its sub-agents run in a checkout
 on the machine (the parent's one on nodeProtocol 13), so `isolation` does not
-apply; the message says to pass `placement: { target: "local" }` to use
-isolation on the backend. The
-`workspace.cowIsolation` default never applies to an inherited placement.
+apply. Per-agent isolation on the backend was removed in protocol 16, so
+`placement: { target: "local" }` gives the child the shared workspace checkout.
 
 The child is a placed agent like any other: it carries `nodeId`, `nodeName`,
 `placement` and `effectiveIsolation`, and the results carry the `notice`. What
@@ -598,35 +597,16 @@ user or another client, keeps the rules above: no placement means local.
 
 ###### Backend sub-agents of remote agents
 
-Until per-agent CoW removal ([landing step 2](#errors-and-retirement-gates)):
-after it, the **Own checkout** case and the `workspace.cowIsolation` lookup below
-are gone, and the child always takes the **Shared worktree** path.
-
 When a remote parent creates a sub-agent with
 `placement: { "target": "local" }` (the create's caller is the parent), the
 backend first gets the parent's latest work, as for a child on another
 machine (steps 1 to 4 of
 [parent's work on another machine](../node-link.md#parents-work-on-another-machine)).
-Its `isolation` resolves as for any backend agent (`workspace.cowIsolation`
-when omitted).
-
-- **Own checkout** (`isolation` resolves to `"cow"` and the workspace can have
-  [copy-on-write sandboxes](./agents.md#55a-sandboxcow-cow-agent-sandboxes)):
-  the backend checks out the parent's `head` in the child's clone and applies
-  the parent's `wip` on top as uncommitted changes, in the superproject and in
-  each pinned submodule, before the child's first turn. Without a parent
-  `head` ref, or when that checkout or apply fails, the clone stays at the
-  workspace's last commit. The child's work merges back like any sandboxed
-  agent's.
-- **Shared worktree** (`isolation: "direct"`, or a workspace that cannot have
-  copy-on-write sandboxes): the child works in the workspace worktree, which
-  the backend never changes for it.
-
+The child works in the shared workspace worktree, which the backend never
+changes for it (per-agent copy-on-write checkouts were removed in protocol 16).
 The create result's `notice` (copied to delegate and wakeOrCreate results)
-and the child's instructions say which. When the child does not have the
-parent's work (shared worktree, no parent `head` ref yet, or a failed
-checkout or apply), both name the parent's `head` and `wip` refs, where that
-work is saved or will appear once the parent pushes. Getting the parent's
+and the child's instructions name the parent's `head` and `wip` refs, where
+that work is saved or will appear once the parent pushes. Getting the parent's
 work never fails the create.
 
 ###### Who pays for a sandbox an agent starts
