@@ -1,0 +1,1159 @@
+{
+  "generatedAt": "2026-11-09T10:29:21.758Z",
+  "scripts": 172210,
+  "calls": 316421,
+  "knownCalls": 316286,
+  "unknownCalls": 135,
+  "knownNames": 185,
+  "usedNames": 136,
+  "neverCalled": [
+    "ws.agent.subscribe",
+    "ws.agent.unsubscribe",
+    "ws.app.agents.ask",
+    "ws.app.agents.getMessageBlock",
+    "ws.app.agents.send",
+    "ws.app.agents.waitFor",
+    "ws.app.chats.cancelDelete",
+    "ws.app.chats.delete",
+    "ws.app.chats.getMessageBlock",
+    "ws.app.chats.list",
+    "ws.app.chats.readConversation",
+    "ws.app.chats.rename",
+    "ws.app.mcp.createServer",
+    "ws.app.mcp.getServerStatus",
+    "ws.app.mcp.listServers",
+    "ws.app.mcp.setServerEnabled",
+    "ws.app.mcp.updateServer",
+    "ws.app.proposal.show",
+    "ws.app.settings.get",
+    "ws.app.specialists.get",
+    "ws.app.specialists.list",
+    "ws.app.specialists.propose",
+    "ws.app.ui.highlight",
+    "ws.app.ui.navigate",
+    "ws.app.ui.targets",
+    "ws.app.workspaces.archive",
+    "ws.app.workspaces.bulkArchive",
+    "ws.app.workspaces.delete",
+    "ws.app.workspaces.open",
+    "ws.app.workspaces.search",
+    "ws.app.workspaces.transfer",
+    "ws.comment.delete",
+    "ws.comment.respond",
+    "ws.desktop.drag",
+    "ws.desktop.focusWindow",
+    "ws.desktop.scroll",
+    "ws.discussion.list",
+    "ws.discussion.react",
+    "ws.discussion.send",
+    "ws.event.subscribe",
+    "ws.mcp.listTools",
+    "ws.mr.monitor",
+    "ws.mr.monitors",
+    "ws.mr.snapshot",
+    "ws.mr.unmonitor",
+    "ws.primitive.addAgentAction",
+    "ws.search",
+    "ws.terminal.readOutput",
+    "ws.workspace.unarchive"
+  ],
+  "coverage": {
+    "top20": 0.8564590275889543,
+    "top25": 0.9039635013879843,
+    "top30": 0.9315745875568314
+  },
+  "namesFor90Percent": 25,
+  "hotSet": [
+    "ws.agent.send",
+    "ws.note.add",
+    "ws.script.status",
+    "ws.note.read",
+    "ws.agent.reportToParent",
+    "ws.script.start",
+    "ws.script.create",
+    "ws.script.output",
+    "ws.note.edit",
+    "ws.task.updateNoteStatus",
+    "ws.file.read",
+    "ws.script.monitor",
+    "ws.host.exec",
+    "ws.hook.schedule",
+    "ws.agent.getQueue",
+    "ws.workspace.setStatusMessage",
+    "ws.agent.status",
+    "ws.file.write",
+    "ws.agent.watch",
+    "ws.git.commit",
+    "ws.help",
+    "ws.agent.readConversation",
+    "ws.script.list",
+    "ws.pr.snapshot",
+    "ws.agent.unwatch",
+    "ws.browser.exec",
+    "ws.note.listTasks",
+    "ws.pr.monitor",
+    "ws.workspace.details",
+    "ws.hook.list"
+  ],
+  "hotSetCoverage": 0.9315745875568314,
+  "ranked": [
+    {
+      "rank": 1,
+      "name": "ws.agent.send",
+      "calls": 38773,
+      "share": 0.1225884168126316,
+      "cumulative": 0.1225884168126316
+    },
+    {
+      "rank": 2,
+      "name": "ws.note.add",
+      "calls": 34619,
+      "share": 0.10945473400656368,
+      "cumulative": 0.2320431508191953
+    },
+    {
+      "rank": 3,
+      "name": "ws.script.status",
+      "calls": 28530,
+      "share": 0.09020317054817475,
+      "cumulative": 0.32224632136737
+    },
+    {
+      "rank": 4,
+      "name": "ws.note.read",
+      "calls": 20401,
+      "share": 0.06450174841757143,
+      "cumulative": 0.3867480697849415
+    },
+    {
+      "rank": 5,
+      "name": "ws.agent.reportToParent",
+      "calls": 17209,
+      "share": 0.054409616612812454,
+      "cumulative": 0.44115768639775393
+    },
+    {
+      "rank": 6,
+      "name": "ws.script.start",
+      "calls": 16585,
+      "share": 0.052436718666017464,
+      "cumulative": 0.4935944050637714
+    },
+    {
+      "rank": 7,
+      "name": "ws.script.create",
+      "calls": 16559,
+      "share": 0.05235451458490101,
+      "cumulative": 0.5459489196486724
+    },
+    {
+      "rank": 8,
+      "name": "ws.script.output",
+      "calls": 13255,
+      "share": 0.041908272892255745,
+      "cumulative": 0.5878571925409282
+    },
+    {
+      "rank": 9,
+      "name": "ws.note.edit",
+      "calls": 10840,
+      "share": 0.03427277843470783,
+      "cumulative": 0.6221299709756359
+    },
+    {
+      "rank": 10,
+      "name": "ws.task.updateNoteStatus",
+      "calls": 10390,
+      "share": 0.032850015492307594,
+      "cumulative": 0.6549799864679435
+    },
+    {
+      "rank": 11,
+      "name": "ws.file.read",
+      "calls": 9612,
+      "share": 0.03039021644966897,
+      "cumulative": 0.6853702029176125
+    },
+    {
+      "rank": 12,
+      "name": "ws.script.monitor",
+      "calls": 7908,
+      "share": 0.025002687441113423,
+      "cumulative": 0.710372890358726
+    },
+    {
+      "rank": 13,
+      "name": "ws.host.exec",
+      "calls": 7049,
+      "share": 0.022286791068842755,
+      "cumulative": 0.7326596814275688
+    },
+    {
+      "rank": 14,
+      "name": "ws.hook.schedule",
+      "calls": 6903,
+      "share": 0.02182518353641957,
+      "cumulative": 0.7544848649639883
+    },
+    {
+      "rank": 15,
+      "name": "ws.agent.getQueue",
+      "calls": 6688,
+      "share": 0.021145419019495015,
+      "cumulative": 0.7756302839834833
+    },
+    {
+      "rank": 16,
+      "name": "ws.workspace.setStatusMessage",
+      "calls": 6022,
+      "share": 0.019039729864742668,
+      "cumulative": 0.794670013848226
+    },
+    {
+      "rank": 17,
+      "name": "ws.agent.status",
+      "calls": 5602,
+      "share": 0.01771181778516912,
+      "cumulative": 0.8123818316333951
+    },
+    {
+      "rank": 18,
+      "name": "ws.file.write",
+      "calls": 5537,
+      "share": 0.017506307582377974,
+      "cumulative": 0.8298881392157731
+    },
+    {
+      "rank": 19,
+      "name": "ws.agent.watch",
+      "calls": 4241,
+      "share": 0.013408750308265304,
+      "cumulative": 0.8432968895240384
+    },
+    {
+      "rank": 20,
+      "name": "ws.git.commit",
+      "calls": 4163,
+      "share": 0.01316213806491593,
+      "cumulative": 0.8564590275889543
+    },
+    {
+      "rank": 21,
+      "name": "ws.help",
+      "calls": 3932,
+      "share": 0.012431786421150478,
+      "cumulative": 0.8688908140101048
+    },
+    {
+      "rank": 22,
+      "name": "ws.agent.readConversation",
+      "calls": 3200,
+      "share": 0.010117425368179432,
+      "cumulative": 0.8790082393782842
+    },
+    {
+      "rank": 23,
+      "name": "ws.script.list",
+      "calls": 2900,
+      "share": 0.009168916739912611,
+      "cumulative": 0.8881771561181968
+    },
+    {
+      "rank": 24,
+      "name": "ws.pr.snapshot",
+      "calls": 2517,
+      "share": 0.007957987391158635,
+      "cumulative": 0.8961351435093554
+    },
+    {
+      "rank": 25,
+      "name": "ws.agent.unwatch",
+      "calls": 2476,
+      "share": 0.007828357878628836,
+      "cumulative": 0.9039635013879843
+    },
+    {
+      "rank": 26,
+      "name": "ws.browser.exec",
+      "calls": 2297,
+      "share": 0.007262414397096299,
+      "cumulative": 0.9112259157850806
+    },
+    {
+      "rank": 27,
+      "name": "ws.note.listTasks",
+      "calls": 1681,
+      "share": 0.005314810013721758,
+      "cumulative": 0.9165407257988023
+    },
+    {
+      "rank": 28,
+      "name": "ws.pr.monitor",
+      "calls": 1637,
+      "share": 0.005175695414909291,
+      "cumulative": 0.9217164212137117
+    },
+    {
+      "rank": 29,
+      "name": "ws.workspace.details",
+      "calls": 1566,
+      "share": 0.00495121503955281,
+      "cumulative": 0.9266676362532644
+    },
+    {
+      "rank": 30,
+      "name": "ws.hook.list",
+      "calls": 1552,
+      "share": 0.0049069513035670245,
+      "cumulative": 0.9315745875568314
+    },
+    {
+      "rank": 31,
+      "name": "ws.agent.list",
+      "calls": 1445,
+      "share": 0.004568649892818525,
+      "cumulative": 0.93614323744965
+    },
+    {
+      "rank": 32,
+      "name": "ws.script.run",
+      "calls": 1333,
+      "share": 0.004214540004932245,
+      "cumulative": 0.9403577774545823
+    },
+    {
+      "rank": 33,
+      "name": "ws.task.getMyTask",
+      "calls": 1242,
+      "share": 0.003926825721024642,
+      "cumulative": 0.9442846031756069
+    },
+    {
+      "rank": 34,
+      "name": "ws.agent.create",
+      "calls": 1166,
+      "share": 0.0036865368685303807,
+      "cumulative": 0.9479711400441373
+    },
+    {
+      "rank": 35,
+      "name": "ws.git.registerRoot",
+      "calls": 968,
+      "share": 0.0030605211738742783,
+      "cumulative": 0.9510316612180115
+    },
+    {
+      "rank": 36,
+      "name": "ws.file.list",
+      "calls": 954,
+      "share": 0.0030162574378884933,
+      "cumulative": 0.9540479186559
+    },
+    {
+      "rank": 37,
+      "name": "ws.git.listRoots",
+      "calls": 904,
+      "share": 0.0028581726665106895,
+      "cumulative": 0.9569060913224108
+    },
+    {
+      "rank": 38,
+      "name": "ws.script.stop",
+      "calls": 789,
+      "share": 0.0024945776923417412,
+      "cumulative": 0.9594006690147525
+    },
+    {
+      "rank": 39,
+      "name": "ws.note.create",
+      "calls": 777,
+      "share": 0.0024566373472110683,
+      "cumulative": 0.9618573063619635
+    },
+    {
+      "rank": 40,
+      "name": "ws.agent.delegate",
+      "calls": 712,
+      "share": 0.002251127144419924,
+      "cumulative": 0.9641084335063834
+    },
+    {
+      "rank": 41,
+      "name": "ws.note.list",
+      "calls": 704,
+      "share": 0.002225833580999475,
+      "cumulative": 0.9663342670873829
+    },
+    {
+      "rank": 42,
+      "name": "ws.hook.cancel",
+      "calls": 669,
+      "share": 0.0021151742410350127,
+      "cumulative": 0.9684494413284179
+    },
+    {
+      "rank": 43,
+      "name": "ws.hook.get",
+      "calls": 656,
+      "share": 0.0020740722004767838,
+      "cumulative": 0.9705235135288948
+    },
+    {
+      "rank": 44,
+      "name": "ws.note.readAsset",
+      "calls": 579,
+      "share": 0.0018306216525549662,
+      "cumulative": 0.9723541351814498
+    },
+    {
+      "rank": 45,
+      "name": "ws.app.question.ask",
+      "calls": 515,
+      "share": 0.0016282731451913773,
+      "cumulative": 0.9739824083266411
+    },
+    {
+      "rank": 46,
+      "name": "ws.crossWorkspace.listSiblings",
+      "calls": 487,
+      "share": 0.0015397456732198073,
+      "cumulative": 0.9755221539998609
+    },
+    {
+      "rank": 47,
+      "name": "ws.note.setContent",
+      "calls": 481,
+      "share": 0.001520775500654471,
+      "cumulative": 0.9770429295005154
+    },
+    {
+      "rank": 48,
+      "name": "ws.workspace.proposeSibling",
+      "calls": 464,
+      "share": 0.0014670266783860177,
+      "cumulative": 0.9785099561789014
+    },
+    {
+      "rank": 49,
+      "name": "ws.agent.snapshot",
+      "calls": 458,
+      "share": 0.0014480565058206812,
+      "cumulative": 0.979958012684722
+    },
+    {
+      "rank": 50,
+      "name": "ws.agent.sendToTask",
+      "calls": 436,
+      "share": 0.0013784992064144476,
+      "cumulative": 0.9813365118911365
+    },
+    {
+      "rank": 51,
+      "name": "ws.workspace.setTitle",
+      "calls": 354,
+      "share": 0.0011192401813548496,
+      "cumulative": 0.9824557520724914
+    },
+    {
+      "rank": 52,
+      "name": "ws.crossWorkspace.readNote",
+      "calls": 296,
+      "share": 0.0009358618465565975,
+      "cumulative": 0.983391613919048
+    },
+    {
+      "rank": 53,
+      "name": "ws.script.listPage",
+      "calls": 283,
+      "share": 0.0008947598059983686,
+      "cumulative": 0.9842863737250463
+    },
+    {
+      "rank": 54,
+      "name": "ws.agent.listSpecialists",
+      "calls": 265,
+      "share": 0.0008378492883023593,
+      "cumulative": 0.9851242230133487
+    },
+    {
+      "rank": 55,
+      "name": "ws.workspace.archive",
+      "calls": 260,
+      "share": 0.0008220408111645789,
+      "cumulative": 0.9859462638245132
+    },
+    {
+      "rank": 56,
+      "name": "ws.script.get",
+      "calls": 253,
+      "share": 0.0007999089431716864,
+      "cumulative": 0.986746172767685
+    },
+    {
+      "rank": 57,
+      "name": "ws.script.monitors",
+      "calls": 234,
+      "share": 0.000739836730048121,
+      "cumulative": 0.987486009497733
+    },
+    {
+      "rank": 58,
+      "name": "ws.browser.listTabs",
+      "calls": 231,
+      "share": 0.0007303516437654528,
+      "cumulative": 0.9882163611414985
+    },
+    {
+      "rank": 59,
+      "name": "ws.note.saveAsset",
+      "calls": 222,
+      "share": 0.0007018963849174481,
+      "cumulative": 0.9889182575264159
+    },
+    {
+      "rank": 60,
+      "name": "ws.workspace.setAgentName",
+      "calls": 218,
+      "share": 0.0006892496032072238,
+      "cumulative": 0.9896075071296232
+    },
+    {
+      "rank": 61,
+      "name": "ws.pr.monitors",
+      "calls": 215,
+      "share": 0.0006797645169245556,
+      "cumulative": 0.9902872716465477
+    },
+    {
+      "rank": 62,
+      "name": "ws.script.remove",
+      "calls": 213,
+      "share": 0.0006734411260694435,
+      "cumulative": 0.9909607127726172
+    },
+    {
+      "rank": 63,
+      "name": "ws.browser.docs",
+      "calls": 203,
+      "share": 0.0006418241717938828,
+      "cumulative": 0.991602536944411
+    },
+    {
+      "rank": 64,
+      "name": "ws.crossWorkspace.search",
+      "calls": 200,
+      "share": 0.0006323390855112145,
+      "cumulative": 0.9922348760299223
+    },
+    {
+      "rank": 65,
+      "name": "ws.pr.unmonitor",
+      "calls": 194,
+      "share": 0.0006133689129458781,
+      "cumulative": 0.9928482449428682
+    },
+    {
+      "rank": 66,
+      "name": "ws.workspace.info",
+      "calls": 185,
+      "share": 0.0005849136540978735,
+      "cumulative": 0.993433158596966
+    },
+    {
+      "rank": 67,
+      "name": "ws.script.archive",
+      "calls": 174,
+      "share": 0.0005501350043947567,
+      "cumulative": 0.9939832936013608
+    },
+    {
+      "rank": 68,
+      "name": "ws.task.updateStatus",
+      "calls": 172,
+      "share": 0.0005438116135396445,
+      "cumulative": 0.9945271052149004
+    },
+    {
+      "rank": 69,
+      "name": "ws.task.assignAgent",
+      "calls": 147,
+      "share": 0.0004647692278507427,
+      "cumulative": 0.9949918744427512
+    },
+    {
+      "rank": 70,
+      "name": "ws.task.setRelations",
+      "calls": 143,
+      "share": 0.0004521224461405184,
+      "cumulative": 0.9954439968888917
+    },
+    {
+      "rank": 71,
+      "name": "ws.agent.wakeOrCreate",
+      "calls": 124,
+      "share": 0.000392050233016953,
+      "cumulative": 0.9958360471219087
+    },
+    {
+      "rank": 72,
+      "name": "ws.agent.requestDiscussion",
+      "calls": 112,
+      "share": 0.00035410988788628014,
+      "cumulative": 0.996190157009795
+    },
+    {
+      "rank": 73,
+      "name": "ws.event.query",
+      "calls": 84,
+      "share": 0.0002655824159147101,
+      "cumulative": 0.9964557394257096
+    },
+    {
+      "rank": 74,
+      "name": "ws.crossWorkspace.listNotes",
+      "calls": 80,
+      "share": 0.00025293563420448583,
+      "cumulative": 0.9967086750599141
+    },
+    {
+      "rank": 75,
+      "name": "ws.task.markAsTask",
+      "calls": 79,
+      "share": 0.00024977393877692974,
+      "cumulative": 0.996958448998691
+    },
+    {
+      "rank": 76,
+      "name": "ws.script.unmonitor",
+      "calls": 74,
+      "share": 0.00023396546163914937,
+      "cumulative": 0.9971924144603302
+    },
+    {
+      "rank": 77,
+      "name": "ws.file.mkdir",
+      "calls": 67,
+      "share": 0.00021183359364625686,
+      "cumulative": 0.9974042480539764
+    },
+    {
+      "rank": 78,
+      "name": "ws.task.createPrerequisite",
+      "calls": 64,
+      "share": 0.00020234850736358865,
+      "cumulative": 0.9976065965613401
+    },
+    {
+      "rank": 79,
+      "name": "ws.agent.summary",
+      "calls": 59,
+      "share": 0.00018654003022580828,
+      "cumulative": 0.9977931365915659
+    },
+    {
+      "rank": 80,
+      "name": "ws.agent.getMessageBlock",
+      "calls": 54,
+      "share": 0.00017073155308802793,
+      "cumulative": 0.9979638681446539
+    },
+    {
+      "rank": 81,
+      "name": "ws.agent.diagnostics",
+      "calls": 48,
+      "share": 0.0001517613805226915,
+      "cumulative": 0.9981156295251766
+    },
+    {
+      "rank": 82,
+      "name": "ws.note.updateMetadata",
+      "calls": 47,
+      "share": 0.00014859968509513543,
+      "cumulative": 0.9982642292102717
+    },
+    {
+      "rank": 83,
+      "name": "ws.task.update",
+      "calls": 46,
+      "share": 0.00014543798966757933,
+      "cumulative": 0.9984096671999393
+    },
+    {
+      "rank": 84,
+      "name": "ws.workspace.applyProposal",
+      "calls": 46,
+      "share": 0.00014543798966757933,
+      "cumulative": 0.9985551051896069
+    },
+    {
+      "rank": 85,
+      "name": "ws.agent.delete",
+      "calls": 44,
+      "share": 0.0001391145988124672,
+      "cumulative": 0.9986942197884193
+    },
+    {
+      "rank": 86,
+      "name": "ws.agent.reportBlocker",
+      "calls": 34,
+      "share": 0.00010749764453690648,
+      "cumulative": 0.9988017174329562
+    },
+    {
+      "rank": 87,
+      "name": "ws.script.restart",
+      "calls": 34,
+      "share": 0.00010749764453690648,
+      "cumulative": 0.9989092150774932
+    },
+    {
+      "rank": 88,
+      "name": "ws.git.unregisterRoot",
+      "calls": 31,
+      "share": 0.00009801255825423826,
+      "cumulative": 0.9990072276357473
+    },
+    {
+      "rank": 89,
+      "name": "ws.script.monitorsPage",
+      "calls": 27,
+      "share": 0.00008536577654401397,
+      "cumulative": 0.9990925934122914
+    },
+    {
+      "rank": 90,
+      "name": "ws.agent.retire",
+      "calls": 24,
+      "share": 0.00007588069026134575,
+      "cumulative": 0.9991684741025527
+    },
+    {
+      "rank": 91,
+      "name": "ws.agent.resolveBlocker",
+      "calls": 21,
+      "share": 0.00006639560397867753,
+      "cumulative": 0.9992348697065314
+    },
+    {
+      "rank": 92,
+      "name": "ws.browser.clients",
+      "calls": 21,
+      "share": 0.00006639560397867753,
+      "cumulative": 0.9993012653105101
+    },
+    {
+      "rank": 93,
+      "name": "ws.task.convertBlocks",
+      "calls": 18,
+      "share": 0.00005691051769600931,
+      "cumulative": 0.9993581758282061
+    },
+    {
+      "rank": 94,
+      "name": "ws.agent.removeQueuedMessage",
+      "calls": 15,
+      "share": 0.00004742543141334109,
+      "cumulative": 0.9994056012596194
+    },
+    {
+      "rank": 95,
+      "name": "ws.app.workspaces.list",
+      "calls": 14,
+      "share": 0.00004426373598578502,
+      "cumulative": 0.9994498649956053
+    },
+    {
+      "rank": 96,
+      "name": "ws.desktop.keypress",
+      "calls": 11,
+      "share": 0.0000347786497031168,
+      "cumulative": 0.9994846436453083
+    },
+    {
+      "rank": 97,
+      "name": "ws.desktop.screenshot",
+      "calls": 11,
+      "share": 0.0000347786497031168,
+      "cumulative": 0.9995194222950115
+    },
+    {
+      "rank": 98,
+      "name": "ws.event.agentActivity",
+      "calls": 10,
+      "share": 0.00003161695427556073,
+      "cumulative": 0.999551039249287
+    },
+    {
+      "rank": 99,
+      "name": "ws.desktop.listDisplay",
+      "calls": 9,
+      "share": 0.000028455258848004654,
+      "cumulative": 0.999579494508135
+    },
+    {
+      "rank": 100,
+      "name": "ws.note.editLines",
+      "calls": 9,
+      "share": 0.000028455258848004654,
+      "cumulative": 0.9996079497669831
+    },
+    {
+      "rank": 101,
+      "name": "ws.secret.list",
+      "calls": 9,
+      "share": 0.000028455258848004654,
+      "cumulative": 0.9996364050258311
+    },
+    {
+      "rank": 102,
+      "name": "ws.file.getAttachment",
+      "calls": 8,
+      "share": 0.00002529356342044858,
+      "cumulative": 0.9996616985892515
+    },
+    {
+      "rank": 103,
+      "name": "ws.script.restore",
+      "calls": 8,
+      "share": 0.00002529356342044858,
+      "cumulative": 0.999686992152672
+    },
+    {
+      "rank": 104,
+      "name": "ws.primitive.addPatch",
+      "calls": 7,
+      "share": 0.00002213186799289251,
+      "cumulative": 0.9997091240206648
+    },
+    {
+      "rank": 105,
+      "name": "ws.desktop.type",
+      "calls": 6,
+      "share": 0.000018970172565336437,
+      "cumulative": 0.9997280941932302
+    },
+    {
+      "rank": 106,
+      "name": "ws.hook.runNow",
+      "calls": 6,
+      "share": 0.000018970172565336437,
+      "cumulative": 0.9997470643657955
+    },
+    {
+      "rank": 107,
+      "name": "ws.mcp.listServers",
+      "calls": 6,
+      "share": 0.000018970172565336437,
+      "cumulative": 0.9997660345383609
+    },
+    {
+      "rank": 108,
+      "name": "ws.agent.stop",
+      "calls": 5,
+      "share": 0.000015808477137780365,
+      "cumulative": 0.9997818430154987
+    },
+    {
+      "rank": 109,
+      "name": "ws.comment.add",
+      "calls": 5,
+      "share": 0.000015808477137780365,
+      "cumulative": 0.9997976514926364
+    },
+    {
+      "rank": 110,
+      "name": "ws.file.delete",
+      "calls": 5,
+      "share": 0.000015808477137780365,
+      "cumulative": 0.9998134599697742
+    },
+    {
+      "rank": 111,
+      "name": "ws.app.agents.list",
+      "calls": 4,
+      "share": 0.00001264678171022429,
+      "cumulative": 0.9998261067514844
+    },
+    {
+      "rank": 112,
+      "name": "ws.app.agents.readConversation",
+      "calls": 4,
+      "share": 0.00001264678171022429,
+      "cumulative": 0.9998387535331946
+    },
+    {
+      "rank": 113,
+      "name": "ws.comment.list",
+      "calls": 4,
+      "share": 0.00001264678171022429,
+      "cumulative": 0.9998514003149048
+    },
+    {
+      "rank": 114,
+      "name": "ws.desktop.startControl",
+      "calls": 4,
+      "share": 0.00001264678171022429,
+      "cumulative": 0.9998640470966151
+    },
+    {
+      "rank": 115,
+      "name": "ws.note.delete",
+      "calls": 4,
+      "share": 0.00001264678171022429,
+      "cumulative": 0.9998766938783253
+    },
+    {
+      "rank": 116,
+      "name": "ws.secret.request",
+      "calls": 4,
+      "share": 0.00001264678171022429,
+      "cumulative": 0.9998893406600355
+    },
+    {
+      "rank": 117,
+      "name": "ws.app.workspaces.get",
+      "calls": 3,
+      "share": 0.000009485086282668218,
+      "cumulative": 0.9998988257463182
+    },
+    {
+      "rank": 118,
+      "name": "ws.desktop.endControl",
+      "calls": 3,
+      "share": 0.000009485086282668218,
+      "cumulative": 0.9999083108326009
+    },
+    {
+      "rank": 119,
+      "name": "ws.file.rename",
+      "calls": 3,
+      "share": 0.000009485086282668218,
+      "cumulative": 0.9999177959188835
+    },
+    {
+      "rank": 120,
+      "name": "ws.workspace.setStatusImage",
+      "calls": 3,
+      "share": 0.000009485086282668218,
+      "cumulative": 0.9999272810051663
+    },
+    {
+      "rank": 121,
+      "name": "ws.app.settings.list",
+      "calls": 2,
+      "share": 0.000006323390855112145,
+      "cumulative": 0.9999336043960213
+    },
+    {
+      "rank": 122,
+      "name": "ws.app.workspaces.bulkDelete",
+      "calls": 2,
+      "share": 0.000006323390855112145,
+      "cumulative": 0.9999399277868765
+    },
+    {
+      "rank": 123,
+      "name": "ws.app.workspaces.create",
+      "calls": 2,
+      "share": 0.000006323390855112145,
+      "cumulative": 0.9999462511777315
+    },
+    {
+      "rank": 124,
+      "name": "ws.desktop.move",
+      "calls": 2,
+      "share": 0.000006323390855112145,
+      "cumulative": 0.9999525745685867
+    },
+    {
+      "rank": 125,
+      "name": "ws.mcp.callTool",
+      "calls": 2,
+      "share": 0.000006323390855112145,
+      "cumulative": 0.9999588979594418
+    },
+    {
+      "rank": 126,
+      "name": "ws.secret.forget",
+      "calls": 2,
+      "share": 0.000006323390855112145,
+      "cumulative": 0.9999652213502969
+    },
+    {
+      "rank": 127,
+      "name": "ws.terminal.list",
+      "calls": 2,
+      "share": 0.000006323390855112145,
+      "cumulative": 0.999971544741152
+    },
+    {
+      "rank": 128,
+      "name": "ws.app.settings.propose",
+      "calls": 1,
+      "share": 0.0000031616954275560727,
+      "cumulative": 0.9999747064365796
+    },
+    {
+      "rank": 129,
+      "name": "ws.comment.getThread",
+      "calls": 1,
+      "share": 0.0000031616954275560727,
+      "cumulative": 0.9999778681320071
+    },
+    {
+      "rank": 130,
+      "name": "ws.desktop.click",
+      "calls": 1,
+      "share": 0.0000031616954275560727,
+      "cumulative": 0.9999810298274346
+    },
+    {
+      "rank": 131,
+      "name": "ws.discussion.conversations",
+      "calls": 1,
+      "share": 0.0000031616954275560727,
+      "cumulative": 0.9999841915228622
+    },
+    {
+      "rank": 132,
+      "name": "ws.event.unsubscribe",
+      "calls": 1,
+      "share": 0.0000031616954275560727,
+      "cumulative": 0.9999873532182898
+    },
+    {
+      "rank": 133,
+      "name": "ws.event.workspaceSummary",
+      "calls": 1,
+      "share": 0.0000031616954275560727,
+      "cumulative": 0.9999905149137174
+    },
+    {
+      "rank": 134,
+      "name": "ws.primitive.addCli",
+      "calls": 1,
+      "share": 0.0000031616954275560727,
+      "cumulative": 0.9999936766091448
+    },
+    {
+      "rank": 135,
+      "name": "ws.primitive.addReference",
+      "calls": 1,
+      "share": 0.0000031616954275560727,
+      "cumulative": 0.9999968383045724
+    },
+    {
+      "rank": 136,
+      "name": "ws.script.monitorDetails",
+      "calls": 1,
+      "share": 0.0000031616954275560727,
+      "cumulative": 1
+    }
+  ],
+  "unknown": [
+    {
+      "name": "ws.agent.sendMessage",
+      "calls": 37
+    },
+    {
+      "name": "ws.git.roots",
+      "calls": 23
+    },
+    {
+      "name": "ws.note.get",
+      "calls": 22
+    },
+    {
+      "name": "ws.workspace.getDetails",
+      "calls": 7
+    },
+    {
+      "name": "ws.agent.get",
+      "calls": 7
+    },
+    {
+      "name": "ws.agent.conversation",
+      "calls": 6
+    },
+    {
+      "name": "ws.task.get",
+      "calls": 5
+    },
+    {
+      "name": "ws.workspace.get",
+      "calls": 4
+    },
+    {
+      "name": "ws.agent.messages",
+      "calls": 2
+    },
+    {
+      "name": "ws.agent.info",
+      "calls": 2
+    },
+    {
+      "name": "ws.note.append",
+      "calls": 2
+    },
+    {
+      "name": "ws.script.help",
+      "calls": 2
+    },
+    {
+      "name": "ws.agent.help",
+      "calls": 2
+    },
+    {
+      "name": "ws.agent.getConversation",
+      "calls": 2
+    },
+    {
+      "name": "ws.git.status",
+      "calls": 1
+    },
+    {
+      "name": "ws.docs.lookup",
+      "calls": 1
+    },
+    {
+      "name": "ws.docs",
+      "calls": 1
+    },
+    {
+      "name": "ws.note.addend",
+      "calls": 1
+    },
+    {
+      "name": "ws.script.update",
+      "calls": 1
+    },
+    {
+      "name": "ws.hook.run",
+      "calls": 1
+    },
+    {
+      "name": "ws.task.list",
+      "calls": 1
+    },
+    {
+      "name": "ws.agent.readMessages",
+      "calls": 1
+    },
+    {
+      "name": "ws.api.describe",
+      "calls": 1
+    },
+    {
+      "name": "ws.agent.getMyContext",
+      "calls": 1
+    },
+    {
+      "name": "ws.note",
+      "calls": 1
+    },
+    {
+      "name": "ws.agent.spawnCheck",
+      "calls": 1
+    }
+  ]
+}

@@ -518,7 +518,7 @@ FE_BUILD_HEAP_MB ?= 16384
 .PHONY: all help doctor bootstrap-dev-host ensure-submodules ensure-intentd-submodule ensure-fe-submodule ensure-ios-submodule \
 	ensure-fe-toolchain fe-verify-changed \
 	update \
-	build build-intentd build-sidecar gate test test-intentd test-scripts test-scripts-changed test-changed test-select test-stress list-tests coverage-changed coverage-e2e coverage-all \
+	build build-intentd build-sidecar gate test test-intentd test-scripts test-scripts-changed mine-ws-usage test-changed test-select test-stress list-tests coverage-changed coverage-e2e coverage-all \
 	fmt clippy shear check-windows check-macos lint-sources lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child lint-shell-sleeps lint-shell lint-workflows bash3 check clean clean-dev \
 	sweep sweep-all sweep-gates seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
 	run-intentd dev-ui dev-sandbox-ui dev-sandbox-app dev-sandbox-stack dev-fe fe-launch \
@@ -912,6 +912,14 @@ check-dry-run-targets: ensure-intentd-submodule ## Check every DRY_RUN target (a
 # scripts/*.mjs); see CONTRIBUTING.md.
 test-scripts-changed: ## Run the script checks a change affects vs BASE (default origin/main; DRY_RUN=1 prints the plan, FULL=1 runs every suite)
 	@BASE="$(BASE)" DRY_RUN="$(DRY_RUN)" FULL="$(FULL)" bash scripts/changed-script-tests.sh
+
+# Ranks ws.* calls in the local intentd database (opened read-only) to pick the
+# hot set the compact workspace_api reference keeps inline. MINE_ARGS passes
+# --db, --top, --json and --limit through. Needs Node 22.13+ (node:sqlite).
+MINE_ARGS ?=
+mine-ws-usage: ensure-intentd-submodule ## Rank ws.* method calls in the local intentd DB (read-only) and print the hot set (MINE_ARGS="--top 30 --json out.json")
+	@node --test scripts/agent-context/mine-ws-usage.test.mjs
+	@node scripts/agent-context/mine-ws-usage.mjs $(MINE_ARGS)
 
 # Runs under nextest so local full-suite runs pick up the same
 # .config/nextest.toml protections CI uses (timing-serial test group,
