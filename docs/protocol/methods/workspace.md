@@ -2505,7 +2505,10 @@ stateDiagram-v2
   `refs/intent/...` work refs — that no remote-tracking ref reaches, including in a
   deinitialized submodule's repository under `.git/modules`; a stash; a linked worktree
   outside the folder; or a repository it cannot evaluate. It also refuses while the
-  workspace has a remote agent, whose machine pushes work refs into this folder. A changed submodule entry is not itself a change: the
+  workspace has a remote agent, or a remote agent's final stop is still pending (kept
+  after the agent is deleted until its machine's last push lands): that machine pushes
+  work refs into this folder. A refused retire still leaves the workspace's terminals
+  closed. A changed submodule entry is not itself a change: the
   submodule's own checkout is scanned, and a staged gitlink must name a commit the
   submodule's remotes reach. A merged PR the daemon already knows covering a repository's
   `HEAD` (the automatic archive's **Merged PRs** evidence) lifts the commits `HEAD`
