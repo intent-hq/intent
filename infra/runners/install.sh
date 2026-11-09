@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install or update the GitHub Actions runner slots on an Ubuntu box.
-# Idempotent: re-running reapplies config, rebuilds the image (running jobs
-# keep theirs; the next job uses the new one) and enables exactly the slots
+# Idempotent: re-running reapplies config, rebuilds and checks the image
+# (check-image.sh; running jobs keep theirs, the next job uses the new one) and enables exactly the slots
 # that /etc/github-runners/runners.env describes (pools, slot counts, CPU
 # sets, memory), draining and disabling any others.
 #
@@ -288,7 +288,14 @@ build_image() {
   local tag
   tag="$(cat "$here/Dockerfile" "$here/entrypoint.sh" | sha256sum | cut -c1-12)"
   log "building $image:$tag"
-  docker build --pull -q -t "$image:$tag" -t "$image:current" "$here" >/dev/null
+  docker build --pull -q -t "$image:$tag" "$here" >/dev/null
+  # Slots start each job from :current, so only a checked image becomes it.
+  log "checking $image:$tag"
+  if ! "$here/check-image.sh" "$image:$tag"; then
+    docker rmi "$image:$tag" >/dev/null 2>&1 || true
+    die "image check failed for $image:$tag; the slots keep the previous image"
+  fi
+  docker tag "$image:$tag" "$image:current"
   docker image prune -f >/dev/null
 }
 

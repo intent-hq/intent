@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Roll this checkout's infra/runners out to the runner fleet, one host at a
 # time. For each host: copy infra/runners to /root/infra/runners, run
-# install.sh, check the new image (run its baked tools), and restart the idle
-# slots that still run an old image. The first failure stops the rollout and
+# install.sh (it builds the image and tags it current only once its baked
+# tools run, see check-image.sh), and restart the idle slots that still run an
+# old image. The first failure stops the rollout and
 # prints the command that resumes it. See docs/GITHUB_RUNNERS.md, Install or
 # update.
 #
@@ -13,8 +14,7 @@
 #                  hosts/NAME.env, as fleet_slots.py reads them). Default: every
 #                  host, intent-cache first.
 #
-# Host-side steps (run as root on a host; the rollout calls them over SSH):
-#   rollout.sh --check-image   Run the baked tools in intent-gh-runner:current.
+# Host-side step (run as root on a host; the rollout calls it over SSH):
 #   rollout.sh --restart-idle  Restart each slot whose container runs an old
 #                              image and has not started a job.
 #
@@ -31,37 +31,6 @@ ssh_opts=(-o ConnectionAttempts=3 -o ConnectTimeout=30 -o ServerAliveInterval=30
 
 log() { echo "rollout: $*"; }
 die() { echo "rollout: error: $*" >&2; exit 1; }
-
-# The baked tools, run inside the image. PYTHONS and NODES are the tool-cache
-# versions the Dockerfile pins.
-# shellcheck disable=SC2016
-image_check='
-for v in $PYTHONS; do
-  test -f "$RUNNER_TOOL_CACHE/Python/$v/x64.complete"
-  "$RUNNER_TOOL_CACHE/Python/$v/x64/bin/python3" --version
-done
-for v in $NODES; do
-  test -f "$RUNNER_TOOL_CACHE/node/$v/x64.complete"
-  echo "node $("$RUNNER_TOOL_CACHE/node/$v/x64/bin/node" --version)"
-done
-python3 --version; node --version; gh --version | sed -n 1p; pwsh --version
-cargo --version; cargo nextest --version; cargo llvm-cov --version; cargo shear --version
-components=$(rustup component list --installed)
-grep -E "^llvm-tools" <<<"$components"
-'
-
-dockerfile_arg() { sed -n "s/^ARG $1=//p" "$here/Dockerfile" | tr -d '"'; }
-
-check_image() {
-  local pythons nodes entry
-  pythons="$(dockerfile_arg 'PYTHON_[0-9]*_[0-9]*_VERSION' | xargs)"
-  nodes="$(dockerfile_arg NODE_VERSION)"
-  for entry in $(dockerfile_arg NODE_TOOLCACHE); do nodes="$nodes ${entry%%=*}"; done
-  if [ -z "$pythons" ] || [ -z "$nodes" ]; then die "no Python or Node versions in $here/Dockerfile"; fi
-  docker run --rm --network none --entrypoint bash -e "PYTHONS=$pythons" -e "NODES=$nodes" \
-    "$image" -euo pipefail -c "$image_check" || die "image check failed: $image"
-  log "image ok: $image"
-}
 
 restart_idle() {
   local current name id logs
@@ -83,7 +52,6 @@ restart_idle() {
 }
 
 case "${1:-}" in
-  --check-image) check_image; exit 0 ;;
   --restart-idle) restart_idle; exit 0 ;;
   -h | --help) sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
   -*) die "unknown option $1 (see --help)" ;;
@@ -118,12 +86,6 @@ for i in "${!hosts[@]}"; do
     || failed "$host" copy "$i"
   log "$host: installing"
   ssh "${ssh_opts[@]}" "root@$host" "$remote_dir/install.sh" ${config[@]+"${config[@]}"} </dev/null || failed "$host" install "$i"
-  log "$host: checking the image"
-  ssh "${ssh_opts[@]}" "root@$host" "$remote_dir/rollout.sh" --check-image </dev/null || {
-    echo "rollout: error: $host already tags the new image as current, so its slots take it after their next job;" \
-      "fix the image or roll out the last good ref to $host" >&2
-    failed "$host" 'image check' "$i"
-  }
   log "$host: restarting idle slots"
   ssh "${ssh_opts[@]}" "root@$host" "$remote_dir/rollout.sh" --restart-idle </dev/null || failed "$host" 'idle restart' "$i"
   log "$host: done"

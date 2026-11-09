@@ -390,20 +390,16 @@ make runner-rollout HOSTS="intent-ci1 intent-ci2"  # some hosts, in this order
 fleet (as `fleet_slots.py` reads it) and, one host at a time:
 
 1. copies `infra/runners` to `/root/infra/runners` (replacing the old copy);
-2. runs `install.sh` (with `--config hosts/<host>.env` on a runner-only host);
-3. checks the new image: runs the baked Python and Node versions the
-   `Dockerfile` pins, `gh`, `pwsh` and the cargo tools in
-   `intent-gh-runner:current`;
-4. restarts the idle slots on an old image: a `gh-runner-<slot>` container
+2. runs `install.sh` (with `--config hosts/<host>.env` on a runner-only host),
+   which builds the image and checks it before tagging it
+   `intent-gh-runner:current` (see below);
+3. restarts the idle slots on an old image: a `gh-runner-<slot>` container
    whose image is not `intent-gh-runner:current` and whose log has no
    `Running job`, with `systemctl restart --no-block github-runner@<slot>`. A
    busy slot takes the new image after its job.
 
 The first failure stops the rollout and prints the command that resumes it
-from the failed host (for example after an SSH timeout). A failed image check
-stops the rollout too, but `install.sh` has already tagged that host's new
-image `current`, so its slots take it after their next job: fix the image, or
-roll out the last good ref to that host. SSH retries the
+from the failed host (for example after an SSH timeout). SSH retries the
 connection three times. It runs under Bash 3.2 (stock macOS). Tailscale SSH may print an approval link and wait;
 open it and the step continues.
 
@@ -421,8 +417,12 @@ scp -r infra/runners root@intent-cache:/root/infra/
 ssh root@intent-cache /root/infra/runners/install.sh
 ```
 
-The installer is idempotent. It rebuilds the image on every run; a running job
-keeps its image and the next job uses the new one. Without a credential it
+The installer is idempotent. It rebuilds the image on every run and runs
+[`check-image.sh`](../infra/runners/check-image.sh) on it: the baked Python and
+Node versions the `Dockerfile` pins, `gh`, `pwsh`, the cargo tools and
+`llvm-tools`. Only an image that passes is tagged `intent-gh-runner:current`;
+a failed check stops the installer and the slots keep the previous image. A
+running job keeps its image and the next job uses the new one. Without a credential it
 installs everything and leaves the slots off. `--no-build` skips the image
 build for configuration-only changes.
 

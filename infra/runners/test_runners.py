@@ -1090,9 +1090,24 @@ class Installer(Stubbed):
         create = [a for a in docker if a[:2] == ['network', 'create']][0]
         self.assertIn('com.docker.network.bridge.enable_icc=false', create)
         self.assertIn('com.docker.network.bridge.name=gh-runners0', create)
-        self.assertTrue(any(a[0] == 'build' and 'intent-gh-runner:current' in a for a in docker))
+        [build] = [a for a in docker if a[0] == 'build']
+        self.assertNotIn('intent-gh-runner:current', build, 'current moves only after the image check')
+        tag = build[build.index('-t') + 1]
+        [check] = [i for i, a in enumerate(docker) if a[0] == 'run' and tag in a]
+        self.assertEqual(docker[check + 1], ['tag', tag, 'intent-gh-runner:current'])
         self.assertEqual(self.enabled(), [])
         self.assertIn('credential missing', result.stdout)
+
+    def test_a_failed_image_check_keeps_the_current_image(self):
+        self.place_credential()
+        result = self.install(STUB_RUN_RC='1')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('image check failed', result.stderr)
+        self.assertIn('slots keep the previous image', result.stderr)
+        docker = [c['argv'] for c in self.calls('docker')]
+        self.assertFalse([a for a in docker if a[0] == 'tag'], 'the unchecked image is never tagged current')
+        self.assertTrue([a for a in docker if a[0] == 'rmi'], 'the unchecked image is removed')
+        self.assertEqual(self.enabled(), [], 'no slot changes after a failed check')
 
     def test_slots_follow_credential_and_config(self):
         self.place_credential()
@@ -2168,10 +2183,9 @@ class Rollout(Stubbed):
             if call['members'] is not None:
                 self.assertIn('runners/install.sh', call['members'])
                 self.assertIn('runners/rollout.sh', call['members'])
+                self.assertIn('runners/check-image.sh', call['members'])
                 self.assertFalse(any('__pycache__' in m for m in call['members']))
                 out.append((host, 'copy'))
-            elif '--check-image' in call['command']:
-                out.append((host, 'check'))
             elif '--restart-idle' in call['command']:
                 out.append((host, 'restart'))
             else:
@@ -2184,14 +2198,14 @@ class Rollout(Stubbed):
         self.assertEqual(len(self.fleet), 6, 'intent-cache and intent-ci1..5')
         rc, out, err = self.rollout()
         self.assertEqual(rc, 0, err)
-        self.assertEqual(self.steps(), [(h, s) for h in self.fleet for s in ('copy', 'install', 'check', 'restart')])
+        self.assertEqual(self.steps(), [(h, s) for h in self.fleet for s in ('copy', 'install', 'restart')])
 
     @unittest.skipUnless(BASH3, 'needs Bash 3.2 (make bash3, or BASH3_BIN)')
     def test_rollout_runs_under_bash_3(self):
         # Operators run it from their own machine; stock macOS has Bash 3.2.
         rc, out, err = self.rollout(bash=BASH3)
         self.assertEqual(rc, 0, err)
-        self.assertEqual(len(self.steps()), 4 * len(self.fleet))
+        self.assertEqual(len(self.steps()), 3 * len(self.fleet))
         self.log.write_text('')
         rc, out, err = self.rollout('intent-cache', 'intent-ci1', bash=BASH3, STUB_SSH_FAIL='intent-ci1:install.sh')
         self.assertNotEqual(rc, 0)
@@ -2202,7 +2216,7 @@ class Rollout(Stubbed):
         rc, out, err = self.rollout('intent-ci3', 'intent-cache')
         self.assertEqual(rc, 0, err)
         self.assertEqual([h for h, s in self.steps() if s == 'copy'], ['intent-ci3', 'intent-cache'])
-        self.assertEqual(len(self.steps()), 8)
+        self.assertEqual(len(self.steps()), 6)
 
     def test_rollout_rejects_an_unknown_host_before_touching_any(self):
         rc, out, err = self.rollout('intent-ci1', 'intent-ci9')
@@ -2212,19 +2226,17 @@ class Rollout(Stubbed):
         self.assertEqual(self.calls('ssh'), [])
 
     def test_rollout_stops_at_the_first_failure(self):
-        for text, step in (('install.sh', 'install'), ('--check-image', 'check'), ('tar -x', 'copy')):
+        for text, step in (('install.sh', 'install'), ('--restart-idle', 'restart'), ('tar -x', 'copy')):
             with self.subTest(step=step):
                 self.log.write_text('')
                 rc, out, err = self.rollout('intent-ci1', 'intent-ci2', 'intent-ci3', STUB_SSH_FAIL=f'intent-ci2:{text}')
                 self.assertNotEqual(rc, 0)
                 steps = self.steps()
                 self.assertEqual(steps[-1], ('intent-ci2', step), 'nothing runs after the failed step')
-                self.assertEqual(steps[:4], [('intent-ci1', s) for s in ('copy', 'install', 'check', 'restart')])
+                self.assertEqual(steps[:3], [('intent-ci1', s) for s in ('copy', 'install', 'restart')])
                 self.assertNotIn('intent-ci3', [h for h, _ in steps])
                 self.assertIn('intent-ci2', err)
                 self.assertIn('rollout.sh intent-ci2 intent-ci3', err, 'the error gives the command to resume')
-                # install.sh tagged the image current before the check, so the host already uses it.
-                self.assertEqual('already tags the new image' in err, step == 'check')
 
     def test_restart_idle_restarts_only_idle_slots_on_an_old_image(self):
         containers = self.dir / 'containers.json'
@@ -2251,19 +2263,20 @@ class Rollout(Stubbed):
             r'(\d+\.\d+\.\d+)=', re.search(r'^ARG NODE_TOOLCACHE="([^"]*)"', dockerfile, re.M).group(1))
         self.assertGreaterEqual(len(pythons), 2)
         self.assertGreaterEqual(len(nodes), 3)
-        rc, out, err = self.rollout('--check-image')
-        self.assertEqual(rc, 0, err)
+        check = subprocess.run(['bash', str(HERE / 'check-image.sh'), 'intent-gh-runner:abc'],
+                               capture_output=True, text=True, env=self.env)
+        self.assertEqual(check.returncode, 0, check.stderr)
         [run] = [c['argv'] for c in self.calls('docker') if c['argv'][0] == 'run']
         self.assertIn('--rm', run)
-        self.assertIn('intent-gh-runner:current', run)
+        self.assertIn('intent-gh-runner:abc', run)
         self.assertIn(f"PYTHONS={' '.join(pythons)}", run)
         self.assertIn(f"NODES={' '.join(nodes)}", run)
         script = run[-1]
         for tool in ('cargo nextest', 'cargo llvm-cov', 'cargo shear', 'llvm-tools'):
             self.assertIn(tool, script)
-        rc, out, err = self.rollout('--check-image', STUB_RUN_RC='1')
-        self.assertNotEqual(rc, 0)
-        self.assertIn('image check failed', err)
+        check = subprocess.run(['bash', str(HERE / 'check-image.sh'), 'intent-gh-runner:abc'],
+                               capture_output=True, text=True, env={**self.env, 'STUB_RUN_RC': '1'})
+        self.assertNotEqual(check.returncode, 0)
 
 
 class _Outcome:
