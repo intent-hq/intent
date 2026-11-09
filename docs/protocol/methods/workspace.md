@@ -32,7 +32,7 @@ unchanged. Host-administration virtual workspaces retain their existing boundary
 | workspace.cancelDelete *(v6.7)* | workspaceId (req) | { cancelled: boolean } — cancels a pending (grace-window) deletion scheduled by `workspace.delete` with `undoDelayMs`. `true` clears the pending deletion, emits `workspace:delete-cancelled { workspaceId }` (§6.5), and drops `pendingDeleteAt` from the row; `false` is the race-safe non-error when no deletion is pending (never scheduled, already cancelled, or already committed) |
 | workspace.archive | workspaceId (req) | { workspace: Workspace } — returns the refreshed record with `archived: true` / `status: "Archived"` / `archivedAt` set, so callers do not need to follow up with `workspace.get`. Emits `workspace:updated` with the full applied delta `changes: { archived: true, status: "Archived", archivedAt: <ts> }` where `<ts>` is the same ISO timestamp persisted on the row (§6.5). **Archive stops active work** ([intent-hq/intentd#896](https://github.com/intent-hq/intentd/pull/896); PR monitors: [intent-hq/intentd#1067](https://github.com/intent-hq/intentd/pull/1067)): in-flight agent turns are gracefully interrupted, ACTIVE background hooks and ACTIVE PR monitors (§5.42) are cancelled, and queued messages/wakes park while the workspace stays archived — see the archive active-work teardown block below. **Archive removes guests** ([intent-hq/intentd#2066](https://github.com/intent-hq/intentd/pull/2066)): the archived flip, the detach of every `collaborator` membership and the revocation of every open invite commit in **one** store transaction — atomic, so a store failure fails the call with the workspace still active — and are announced before the `archived` delta: one `workspace:updated { changes: { members: true, removedPrincipalId, memberCount } }` per detached collaborator (its queued messages dropped, as for `workspace.members.remove`), then one `{ invites: true }` when at least one invite was revoked (§5.48). The returned record's `memberCount` / `openInviteCount` are the post-sweep values. -32602 if not found. |
 | workspace.unarchive | workspaceId (req) | { workspace: Workspace } — mirror of `workspace.archive`; returns the refreshed record with `archived: false` / `status: "Active"` and `archivedAt` cleared. Emits `workspace:updated` with `changes: { archived: false, status: "Active", archivedAt: null }` — an explicit JSON `null` so clients clear the field (§6.5). Re-kicks the queue drains parked by the archived gates so parked messages deliver without a manual kick; cancelled hooks and PR monitors are NOT resurrected, and neither are the collaborators and open invites the archive removed — the owner is the sole member afterwards and brings a guest back explicitly, via `workspace.members.add` or a fresh invite (see the archive active-work teardown block below). The same delta shape is also emitted by the turn-start **auto-unarchive** (see the auto-unarchive block below), which additionally stamps the additive `autoUnarchive` field into `changes` — the stamp is never present on this manual path (or `workspace.restore`). -32602 if not found. **On a `Retired` workspace** this call (and `workspace.restore`) is the manual **revive** — see [Retired workspaces](#retired-workspaces). |
-| workspace.retire | workspaceId (req) | { workspace: Workspace } — moves an `Active` or `Archived` workspace to `status: "Retired"`: the workspace folder on disk is deleted while every database row (agents, conversations, notes, tasks, assets) is kept and stays readable. An `Active` workspace first runs the full `workspace.archive` teardown and gains `archivedAt`. The git branch is kept; only `checkoutMode: "worktree"` workspaces can retire, others get `-32602 { code: "retire-unsupported" }`. Returns the refreshed record with `status: "Retired"`, `archived: true` and `retiredAt` set; emits one `workspace:updated` delta (§6.5). Idempotent on an already-retired workspace (returns the row, emits nothing). Owner/manager only (`-32003` for a collaborator, §5.48); `-32602 { code: "not-found" }` if absent. Details: [Retired workspaces](#retired-workspaces). |
+| workspace.retire | workspaceId (req) | { workspace: Workspace } — moves an `Active` or `Archived` workspace to `status: "Retired"`: the workspace folder on disk is deleted while every database row (agents, conversations, notes, tasks, assets) is kept and stays readable. An `Active` workspace first runs the full `workspace.archive` teardown and gains `archivedAt`. The git branch is kept (a `worktree` checkout's in the source repository; a standalone `cow` / `direct` checkout retires only when every commit is on a remote); `skipIsolation`, plain-folder, remote and checkout-less workspaces, and folders the daemon does not own, get `-32602 { code: "retire-unsupported" }`. A standalone checkout holding work no remote has gets `-32602 { code: "invalid-params" }`. Returns the refreshed record with `status: "Retired"`, `archived: true` and `retiredAt` set; emits one `workspace:updated` delta (§6.5). Idempotent on an already-retired workspace (returns the row, emits nothing). Owner/manager only (`-32003` for a collaborator, §5.48); `-32602 { code: "not-found" }` if absent. Details: [Retired workspaces](#retired-workspaces). |
 | workspace.dismissAttention | workspaceId (req) | { workspace: Workspace } — clears `attention` to `"none"`; -32602 if not found |
 | workspace.markSeen | workspaceId (req) | { workspace: Workspace } — marks the workspace seen: advances **every top-level (no parent, non-background, non-deleted) session's per-conversation seen marker** to its `lastMessageId` through the `agent.markSeen` op (§5.5; same monotonic CAS, each advanced session emits its own `agent:updated` marker event; background/child sessions are untouched), which settles the **derived workspace `unread`** (see the `attention` bullet below) to `none` and emits ONE `workspace:attention-changed { none }` on the transition; also clears the stored legacy flag (guarded on `unread` — a persistent `review_required` survives; the clear re-checks the derivation atomically inside the guarded write, so an assistant message landing mid-call is never retired). **Marker advances are the call's contract, so failures propagate**: a failed pending-list read or per-session marker write is the call's error — the caller never sees success while a session stays unread; the one tolerated per-session failure is a racing `agent.delete` (a deleted session no longer feeds the derivation, so it is skipped). Idempotent: a re-call with nothing unseen writes and emits nothing. `updated_at` stays untouched (looking is not "activity", monorepo#1466) |
 | workspace.getContext | workspaceId (req) | { items: ContextItem[] } — persisted chat-context attachments for the workspace; empty array before the first save. -32602 if the workspace is absent. |
@@ -2483,19 +2483,38 @@ stateDiagram-v2
   `workspace.archive` teardown (agent turns interrupted, hooks and PR monitors cancelled,
   guests detached, invites revoked — see the archive active-work teardown block) and sets
   `archivedAt`; guest-removal deltas are published as for archive.
-- The daemon then removes the git worktree registration and deletes the folder, reusing
-  the `workspace.delete` filesystem removal. Database rows are never deleted.
-- The **git branch is kept**. Retire is supported only for `checkoutMode: "worktree"`
-  workspaces, whose branch, refs and objects live in the source repository at
-  `repositoryPath`, outside the deleted folder. Removing the worktree registration never
-  deletes that branch. Secondary git roots inside the folder go with it.
+- The daemon then deletes the whole `<root>/<workspaceId>` folder, reusing the
+  `workspace.delete` filesystem removal: for a `worktree` checkout it first removes the
+  git worktree registration; a standalone checkout has none, so no source repository is
+  touched. Read-only directories in the folder are made writable and removed. Database
+  rows are never deleted.
+- The **git branch is kept**. A `checkoutMode: "worktree"` workspace's branch, refs and
+  objects live in the source repository at `repositoryPath`, outside the deleted folder;
+  removing the worktree registration never deletes that branch. Secondary git roots inside
+  the folder go with it.
+- A standalone `cow` / `direct` checkout *is* its repository, so its branches exist only in
+  the folder. It retires only when the daemon owns it — the `<root>/<workspaceId>/<slug>`
+  layout under the workspaces root or `workspace.worktreesLocation`, `repositoryPath`
+  equal to `worktreePath`, and a real `.git` directory — and nothing in the folder is
+  missing from a remote. The daemon scans **every** git repository in the
+  `<root>/<workspaceId>` folder (the checkout, its submodules, nested clones and linked
+  worktrees such as `.dev/*`, bare repositories; symlinks are not followed, and
+  `node_modules` and `CACHEDIR.TAG` cache directories are skipped) and refuses on:
+  uncommitted or untracked changes; a commit reachable from `HEAD` or any local branch
+  that no remote-tracking ref reaches; a stash; a linked worktree outside the folder; or
+  a repository it cannot evaluate. A changed submodule entry is not itself a change: the
+  submodule's own checkout is scanned, and a staged gitlink must name a commit the
+  submodule's remotes reach. A merged PR the daemon already knows covering a repository's
+  `HEAD` (the automatic archive's **Merged PRs** evidence) lifts the commits `HEAD`
+  reaches, never commits only another branch reaches. A refused manual retire is
+  `-32602 { code: "invalid-params" }` and nothing changes.
 - Retire is refused with `-32602 { code: "retire-unsupported", checkoutMode? }`, and
-  nothing changes, when deleting the folder would destroy the only copy of the repository
-  or a folder the daemon does not own: standalone `cow` / `direct` checkouts (the folder
-  *is* the repository), `skipIsolation` workspaces (the folder is the user's repository),
-  plain-folder workspaces (the folder is the user's; `error.data` adds `plainFolder: true`,
-  see [Plain-folder workspaces](#plain-folder-workspaces)),
-  workspaces without a daemon-owned checkout, and remote workspaces. The automatic purge sweep skips these workspaces.
+  nothing changes, when the folder is not one the daemon owns: `skipIsolation` workspaces
+  (the folder is the user's repository), plain-folder workspaces (the folder is the
+  user's; `error.data` adds `plainFolder: true`, see
+  [Plain-folder workspaces](#plain-folder-workspaces)), workspaces without a daemon-owned
+  checkout (including a standalone row whose folder is not its own repository), and
+  remote workspaces. The automatic purge sweep skips these workspaces.
 - **Purge status message.** The retire write also sets the workspace `statusMessage` to
   `"Workspace folder purged to free disk space."`, replacing the previous message, so the
   workspace card shows that the folder is gone.
@@ -2510,13 +2529,18 @@ stateDiagram-v2
 whose `archivedAt` is older than that many days, through the same path and delta as
 `workspace.retire`. Absent means off. Remote, guest-shared and retire-unsupported
 workspaces are skipped, and so is any workspace whose folder holds work the purge would
-destroy: the `workspace.localChanges` evaluation reports uncommitted changes in any root,
-unpushed commits in a **secondary** root (it lives inside the folder; the primary branch
-is kept), or fails. A secondary root's unpushed commits stop blocking when a merged PR
-the daemon already knows covers that root's `HEAD`, with the same evidence and coverage
-test as the automatic archive's **Merged PRs** rule: those commits survive on the forge.
-Skipped workspaces are retried on the next sweep. Manual
-`workspace.retire` does not apply this check; clients confirm with the user first.
+destroy. For a `worktree` checkout that is when the `workspace.localChanges` evaluation
+reports uncommitted changes in any root, unpushed commits in a **secondary** root (it
+lives inside the folder; the primary branch is kept), or fails. A secondary root's
+unpushed commits stop blocking when a merged PR the daemon already knows covers that
+root's `HEAD`, with the same evidence and coverage test as the automatic archive's
+**Merged PRs** rule: those commits survive on the forge. A standalone `cow` / `direct`
+checkout gets the stricter folder scan described under **Retire** above, re-run right
+before the folder is removed. Skipped workspaces are retried on the next sweep, and the
+daemon's sweep summary log counts skips per reason (unsupported, local work, shared,
+pending delete, undated, no longer due). Manual `workspace.retire` of a `worktree`
+checkout does not apply this check; clients confirm with the user first. Manual retire of
+a standalone checkout applies the folder scan.
 
 **Strict list opt-in (normative).** Retired workspaces are absent from **every** surface
 that returns a collection of workspaces unless the caller explicitly passes
@@ -2568,6 +2592,12 @@ old folder is restored.
   `Active`, and clears `archived`, `archivedAt` and `retiredAt`. It also clears
   `statusMessage` when it still equals the purge status text; a message changed since the
   purge is kept.
+- A standalone `cow` / `direct` workspace's repository went with its folder, so the new
+  folder is a plain clone of the daemon's repository cache for `repositoryOwner` /
+  `repositoryName` (`<root>/.repo-cache/<owner>/<name>`), with `origin` set to the cache's
+  upstream; the new branch name is unique against the cache's branches. Without that cache
+  the revive is refused with `-32602 { code: "invalid-params" }` and the workspace stays
+  `Retired`.
 - Delta: `changes: { archived: false, status: "Active", archivedAt: null, retiredAt: null,
   branch, revived: { reason } }` where `reason` is `"agent_activity"` (turn-start revive,
   which also carries `agentId` and `agentName`) or `"manual"`. `revived` is never present
