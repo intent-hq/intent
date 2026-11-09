@@ -1134,9 +1134,11 @@ restarted run.
 <a id="wakes-of-machine-run-monitors"></a>
 **Wakes of machine-run monitors.** A machine-run monitor's wake carries the
 [`script_monitor_wake` metadata (§5.8a)](./script-monitors.md#events-wake-queue-and-agent-waiting-state)
-of a home-run wake, with the same reasons and keys, plus `remoteAgentId` and
-`nodeId` as on the monitor row. `runId` is the run's current runId when the
-monitor named none. So clients render it as a script-run card and name the
+of a home-run wake, with the same keys, plus `remoteAgentId` and `nodeId` as
+on the monitor row. `runId` is the run's current runId when the monitor named
+none. Its `reason` is `finished` (the run ended, including the cancel on stop,
+restart, upsert or removal) or `output-match`; a machine-run monitor whose TTL
+passes ends `expired` with no wake. So clients render it as a script-run card and name the
 machine by looking `nodeId` up in `remoteMachines.list`. Its text still names
 the script and the machine, for clients that predate this metadata. Delivery
 differs from a home-run wake:
@@ -1147,6 +1149,9 @@ differs from a home-run wake:
   queued message: it does not force the single-entry drain and can be sent
   in a queue batch. A daemon restart loses an undelivered machine-run wake,
   as it loses the machine run.
+- Worker admission checks only the owner and workspace lifecycle (owner not
+  deleted or retired, workspace not archived or deleted); it looks up no
+  notification job or admission receipt, and export never waits for it.
 - Owner deletion or retirement and workspace archive or deletion still remove
   it from the queue, like any undelivered script-monitor wake.
 - Clients tell the two apart by `remoteAgentId`: only `script_monitor_wake`

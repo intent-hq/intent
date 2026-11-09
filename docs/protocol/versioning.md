@@ -1190,7 +1190,9 @@ With `remoteScripts: 1`, a machine-run monitor's wake now carries the
 ([wakes of machine-run monitors](./methods/scripts.md#wakes-of-machine-run-monitors)).
 It stays an ordinary, non-durable queued message: only metadata without
 `remoteAgentId` is a durable monitor wake. The text still names the machine for
-older clients. No method, event or surface count changes.
+clients that ignore the metadata; a client that already renders
+`script_monitor_wake` cards but ignores `remoteAgentId` shows it as a home-run
+card, an accepted degradation. No method, event or surface count changes.
 
 **Command-default change (breaking).**
 [Script creation defaults (§5.8)](./methods/scripts.md#command-creation-defaults-breaking-change)

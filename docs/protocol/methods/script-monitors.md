@@ -544,10 +544,12 @@ or wake/create a different agent. Busy/question-held owners receive a queued
 wake through normal automatic-delivery rules, not an interrupt.
 
 With [`remoteScripts: 1`](./scripts.md#scripts-of-remote-agents-remotescripts-1),
-a monitor of a machine run wakes its owner with this same metadata plus
-`remoteAgentId` and `nodeId`. That wake is not durable and has no wake identity:
-the persistence, deduplication and single-entry drain rules below apply only to
-metadata without `remoteAgentId`
+a monitor of a machine run wakes its owner with this metadata (reason
+`finished` or `output-match` only) plus `remoteAgentId` and `nodeId`. That wake
+is not durable and has no wake identity: the persistence, deduplication,
+single-entry drain, export deferral and job/receipt admission rules below apply
+only to metadata without `remoteAgentId`; its worker admission checks only the
+owner and workspace lifecycle
 ([wakes of machine-run monitors](./scripts.md#wakes-of-machine-run-monitors)).
 
 Persist terminal state and a stable wake identity derived from monitorId as one
