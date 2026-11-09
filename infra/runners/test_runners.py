@@ -1523,7 +1523,20 @@ class Static(unittest.TestCase):
         self.assertRegex(text, r'ARG RUNNER_SHA256=[0-9a-f]{64}')
         for tool in ('RUNNER', 'RUSTUP', 'GH', 'NODE', 'PWSH', 'PYTHON_3_11', 'PYTHON_3_12'):
             self.assertRegex(text, rf'ARG {tool}_SHA256=[0-9a-f]{{64}}')
-        self.assertEqual(text.count('sha256sum -c'), 6)
+        self.assertEqual(text.count('sha256sum -c'), 7)
+
+    @staticmethod
+    def setup_action_versions(action, key):
+        # (workflow path, requested version or None) for every `uses: actions/<action>@` step
+        # in the monorepo and each checked-out component.
+        root = HERE.parents[1]
+        workflows = [p for d in [root, *sorted((root / 'packages').glob('*'))]
+                     for p in sorted((d / '.github').rglob('*.y*ml')) if p.is_file()]
+        assert any(p.parent.name == 'workflows' and p.parents[2] == root for p in workflows)
+        for path in workflows:
+            for block in re.split(rf'uses: actions/{action}@', path.read_text())[1:]:
+                match = re.search(rf"{key}:\s*(\S+)", block.split('- ', 1)[0])
+                yield path, match.group(1).strip('\'"') if match else None
 
     def test_image_bakes_every_setup_python_version(self):
         # A job asking setup-python for a minor the tool cache lacks downloads it from a
@@ -1536,18 +1549,33 @@ class Static(unittest.TestCase):
             self.assertRegex(text, rf'(?m)^ARG PYTHON_{minor}_BUILD=\d+$')
             self.assertIn(f'install_python "$PYTHON_{minor}_VERSION" "$PYTHON_{minor}_BUILD" "$PYTHON_{minor}_SHA256"', text)
             baked[minor.replace('_', '.')] = version
-        root = HERE.parents[1]
-        workflows = [p for d in [root, *sorted((root / 'packages').glob('*'))]
-                     for p in sorted((d / '.github').rglob('*.y*ml')) if p.is_file()]
-        self.assertTrue(any(p.parent.name == 'workflows' and p.parents[2] == root for p in workflows))
         wanted = set()
-        for path in workflows:
-            for block in re.split(r'uses: actions/setup-python@', path.read_text())[1:]:
-                match = re.search(r"python-version:\s*['\"]?([0-9.]+)", block.split('- ', 1)[0])
-                self.assertIsNotNone(match, f'{path}: setup-python without a literal python-version')
-                wanted.add(match.group(1))
+        for path, version in self.setup_action_versions('setup-python', 'python-version'):
+            self.assertRegex(version or '', r'^\d+\.\d+$', f'{path}: setup-python without a literal minor')
+            wanted.add(version)
         self.assertIn('3.11', wanted)
         self.assertEqual(sorted(w for w in wanted if w not in baked), [], f'baked: {baked}')
+
+    def test_image_bakes_every_setup_node_version(self):
+        # setup-node takes a version from the tool cache before it downloads one.
+        text = (HERE / 'Dockerfile').read_text()
+        baked = [re.search(r'^ARG NODE_VERSION=(\S+)$', text, re.M).group(1)]
+        extra = re.search(r'^ARG NODE_TOOLCACHE="([^"]*)"$', text, re.M)
+        self.assertIsNotNone(extra, 'ARG NODE_TOOLCACHE="<version>=<sha256> ..."')
+        for entry in extra.group(1).split():
+            self.assertRegex(entry, r'^\d+\.\d+\.\d+=[0-9a-f]{64}$')
+            baked.append(entry.split('=')[0])
+        self.assertIn('/opt/hostedtoolcache/node/${NODE_VERSION}/x64', text)
+        wanted = set()
+        for path, version in self.setup_action_versions('setup-node', 'node-version'):
+            self.assertIsNotNone(version, f'{path}: setup-node without node-version')
+            if version.startswith('${{'):
+                continue  # a matrix value; intentd's only one, node: [22, 24], is also requested literally
+            self.assertRegex(version, r'^\d+(\.\d+){0,2}$', path)
+            wanted.add(version)
+        self.assertIn('24', wanted)
+        missing = sorted(w for w in wanted if not any(b == w or b.startswith(w + '.') for b in baked))
+        self.assertEqual(missing, [], f'baked: {baked}')
 
     def test_image_fetches_github_releases_with_api_fallback(self):
         # github.com/<repo>/releases/download answered 504 for hours for single
@@ -1604,6 +1632,7 @@ esac
         self.assertIn('[ "$(ulimit -c)" = 0 ]', text)
         self.assertIn('apt-get install -s', text)
         self.assertIn('Python/$minor.*/x64.complete', text)
+        self.assertIn('node/$spec.*/x64.complete', text)
 
     def test_bigmem_label_marks_exactly_the_heavy_slots_with_30_gib(self):
         # runner-route sends gh-linux-16x overflow only to intent-cache-bigmem slots:

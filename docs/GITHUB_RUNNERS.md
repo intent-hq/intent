@@ -73,7 +73,7 @@ github-runner@<pool>-<n>.service ─ supervisor.sh <pool>-<n> ─┬─ GitHub A
 
 | File | Installed as | Role |
 |---|---|---|
-| `Dockerfile`, `entrypoint.sh`, `fetch-release.sh` | image `intent-gh-runner:current` | One image for both pools: Ubuntu 24.04, build tools, pinned and checksummed runner, rustup, gh, Node, PowerShell and tool-cache Python; Rust toolchain baked; user `runner` (uid 1001); no sudo |
+| `Dockerfile`, `entrypoint.sh`, `fetch-release.sh` | image `intent-gh-runner:current` | One image for both pools: Ubuntu 24.04, build tools, pinned and checksummed runner, rustup, gh, Node, PowerShell, and tool-cache Python and Node; Rust toolchain baked; user `runner` (uid 1001); no sudo |
 | `supervisor.sh` | `/usr/local/lib/github-runners/` | One slot, one job: JIT-register, run the pinned container, drain on stop, deregister; `--plan` validates the config and lists the slots; `--host-check` checks the CPU sets against the host's cores and the slots' total memory against the `runners.slice` cap; `--memory-cap` prints that cap |
 | `runners.env` | `/etc/github-runners/runners.env` (once) | intent-cache's pools, slot counts, labels, CPU sets, memory (not secret) |
 | `hosts/*.env` | `/etc/github-runners/runners.env` (once, `install.sh --config`) | The same for runner-only hosts, one file per layout |
@@ -243,8 +243,8 @@ Routed jobs call these without a setup step, as they would on GitHub-hosted
 (build-essential), the MinGW-w64 x86_64 C compiler (`x86_64-w64-mingw32-gcc`,
 for Windows GNU cross lint), bison/yacc, procps (ps, pgrep, pkill), iproute2 (ss), lsof, pkg-config, libssl-dev, shellcheck, tar, zip,
 unzip, xz, zstd, rsync, file, dpkg-deb, python3 with pip and venv, Node with
-npm and corepack (in `/opt/node`, owned by `runner`, so `corepack enable` and
-`npm install -g` work without sudo), PowerShell (`pwsh`), and rustup with the
+npm and corepack (`/opt/node`, a link to its tool-cache directory owned by
+`runner`, so `corepack enable` and `npm install -g` work without sudo), PowerShell (`pwsh`), and rustup with the
 pinned Rust toolchain, and Chromium's shared libraries plus `xvfb` (the
 Playwright `install-deps` list for Ubuntu 24.04, unchanged from 1.58 through
 1.63, without fonts), so a browser job needs no `apt-get`. They grow the
@@ -257,11 +257,19 @@ hosted runners, so `actions/setup-python` with `python-version: '3.11'` or
 Python from a GitHub release, and a 504 there failed the job
 ([cloudlands-fe run 42578945801](https://github.com/intent-hq/cloudlands-fe/actions/runs/42578945801)).
 `test_runners.py` fails when a workflow in any of the three repositories asks
-for a minor the image does not bake; add it as `PYTHON_<major>_<minor>_*`
+`setup-python` for a minor the image does not bake; add it as `PYTHON_<major>_<minor>_*`
 `ARG`s (version and build number from the release tag `<version>-<build>`,
 SHA-256 from the asset's `digest` in
 `gh api repos/actions/python-versions/releases/tags/<tag>`) and to the smoke
 workflow's list.
+
+Node sits in the tool cache too (`/opt/hostedtoolcache/node/<version>/x64`):
+`NODE_VERSION` (on `PATH` as `/opt/node`) and each `<version>=<SHA-256>` in
+`NODE_TOOLCACHE` (22.23.4, and 24.21.0 for intentd's exact pin), so
+`actions/setup-node` finds every version the workflows ask for. The same test
+fails when a workflow asks `setup-node` for a version none of them satisfies;
+add it to `NODE_TOOLCACHE` with the checksum from the release's
+`SHASUMS256.txt` on nodejs.org, and to the smoke workflow's list.
 
 The image fetches GitHub release assets (runner, gh, PowerShell, Python) with
 [`fetch-release.sh`](../infra/runners/fetch-release.sh): the

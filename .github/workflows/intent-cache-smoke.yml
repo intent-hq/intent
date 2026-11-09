@@ -154,6 +154,13 @@ jobs:
               || { echo "::error::Python $minor is not in the tool cache"; exit 1; }
             "${marker%.complete}/bin/python$minor" -m pip --version
           done
+          # setup-node likewise; 24.21.0 is an exact pin in intentd's CI.
+          for spec in 22 24 24.21.0; do
+            marker=$(compgen -G "$RUNNER_TOOL_CACHE/node/$spec/x64.complete" \
+              || compgen -G "$RUNNER_TOOL_CACHE/node/$spec.*/x64.complete" | head -n 1) \
+              || { echo "::error::Node $spec is not in the tool cache"; exit 1; }
+            "${marker%.complete}/bin/node" --version
+          done
       - name: No core dumps, apt lists present
         run: |
           set -euo pipefail

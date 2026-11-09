@@ -19,6 +19,10 @@ ARG GH_VERSION=2.102.0
 ARG GH_SHA256=bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c6019386
 ARG NODE_VERSION=24.22.0
 ARG NODE_SHA256=cc2f601cee82d9a5a233302fe307abc600727035fd7d2c3a3571755989e95008
+# NODE_VERSION and these sit in the tool cache, so setup-node finds every
+# version workflows ask for and downloads nothing: <version>=<SHA-256 of
+# node-v<version>-linux-x64.tar.xz> (from nodejs.org SHASUMS256.txt).
+ARG NODE_TOOLCACHE="22.23.4=1805bcd35e6815559bd2eb97db438d3fdb0eb3a5e6a977b7c1badca76337e9ce 24.21.0=fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6"
 ARG PWSH_VERSION=7.4.6
 ARG PWSH_SHA256=6f6015203c47806c5cc444c19d8ed019695e610fbd948154264bf9ca8e157561
 # Every minor that workflows pass to setup-python, baked into the tool cache
@@ -63,14 +67,17 @@ RUN fetch-release actions/runner "v${RUNNER_VERSION}" "actions-runner-linux-x64-
  && ./bin/installdependencies.sh \
  && chown -R runner:runner /home/runner/actions-runner
 
-# Node lives in /opt/node owned by runner, so `corepack enable` and
-# `npm install -g` work without sudo, as on hosted runners.
+# Node lives in the tool cache, owned by runner and linked as /opt/node, so
+# `corepack enable` and `npm install -g` work without sudo, as on hosted
+# runners, and setup-node finds it.
 RUN fetch-release cli/cli "v${GH_VERSION}" "gh_${GH_VERSION}_linux_amd64.tar.gz" /tmp/gh.tgz \
  && echo "${GH_SHA256}  /tmp/gh.tgz" | sha256sum -c - \
  && tar xzf /tmp/gh.tgz -C /tmp && install -m 0755 "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh \
  && curl -fsSL --retry 3 --retry-all-errors -o /tmp/node.txz "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
  && echo "${NODE_SHA256}  /tmp/node.txz" | sha256sum -c - \
- && install -d -o runner -g runner /opt/node && tar xJf /tmp/node.txz -C /opt/node --strip-components=1 && chown -R runner:runner /opt/node \
+ && node_dir="/opt/hostedtoolcache/node/${NODE_VERSION}/x64" && install -d "$node_dir" \
+ && tar xJf /tmp/node.txz -C "$node_dir" --strip-components=1 && touch "$node_dir.complete" \
+ && chown -R runner:runner /opt/hostedtoolcache/node && ln -s "$node_dir" /opt/node \
  && fetch-release PowerShell/PowerShell "v${PWSH_VERSION}" "powershell-${PWSH_VERSION}-linux-x64.tar.gz" /tmp/pwsh.tgz \
  && echo "${PWSH_SHA256}  /tmp/pwsh.tgz" | sha256sum -c - \
  && install -d /opt/microsoft/powershell/7 && tar xzf /tmp/pwsh.tgz -C /opt/microsoft/powershell/7 \
@@ -106,5 +113,14 @@ RUN set -eu; \
     }; \
     install_python "$PYTHON_3_11_VERSION" "$PYTHON_3_11_BUILD" "$PYTHON_3_11_SHA256"; \
     install_python "$PYTHON_3_12_VERSION" "$PYTHON_3_12_BUILD" "$PYTHON_3_12_SHA256"
+
+RUN set -eu; \
+    for entry in $NODE_TOOLCACHE; do \
+      version="${entry%%=*}"; dir="$RUNNER_TOOL_CACHE/node/$version/x64"; \
+      curl -fsSL --retry 3 --retry-all-errors -o /tmp/node.txz "https://nodejs.org/dist/v$version/node-v$version-linux-x64.tar.xz"; \
+      echo "${entry#*=}  /tmp/node.txz" | sha256sum -c -; \
+      mkdir -p "$dir" && tar xJf /tmp/node.txz -C "$dir" --strip-components=1 && touch "$dir.complete"; \
+      rm /tmp/node.txz; \
+    done
 
 ENTRYPOINT ["/usr/local/bin/runner-entrypoint"]
