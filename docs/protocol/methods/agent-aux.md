@@ -187,6 +187,11 @@ background-agnostic creation-time chain of §5.5
 The daemon-internal auto-commit path (§5.10 wrap-up) calls `agent.completeOnce` with
 `type: "commit"`, so it too honors the user's commit-message quick-action override.
 
+**Backup failover.** On the ACP route, a quota failure retries the same prompt on the
+next backup profile of the same base provider, within the same `timeoutMs`, and the
+call starts on a backup when its configuration is known to be out of quota. The result
+shape is unchanged. See [§5.54 Quick actions](provider-profiles.md#quick-actions).
+
 **Reasoning effort resolution (additive).** Resolve the provider and model first using
 the existing model chain, then resolve effort independently:
 

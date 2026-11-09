@@ -692,6 +692,31 @@ are tracked separately, never per model.
   are not persisted: after a daemon restart, each conversation's stored timer applies
   as before. No method or event exposes them.
 
+##### Quick actions
+
+`agent.completeOnce` ([§5.32](agent-aux.md)) fails over on its ACP route on the same
+terms as a turn. The auggie route has no profiles and does not fail over.
+
+- **Candidates.** The reference the call resolves to (its *configured* reference)
+  plays the part of home. The rotation, choice and limits are those of
+  [Backup failover](#backup-failover): `backup: true` profiles of the same base
+  provider in saved order, then the configured reference; each reference at most once
+  per call; never another base provider; the same model and effort.
+- **Start.** When the [shared quota state](#shared-quota-state) marks the configured
+  reference out of quota, the call starts on the first reference in its rotation that
+  is not marked. If every candidate is marked, it starts on the configured reference.
+- **Retry.** A quota failure marks the reference out of quota and runs the same prompt
+  on the next candidate. A reply marks the reference working. Every other failure,
+  and every `{ available: false }` result, is returned at once, as before.
+- **Budget.** All attempts share the call's one `timeoutMs`. The first attempt keeps
+  today's setup budgets; a backup's whole attempt, setup included, ends at the
+  deadline. After a quota failure, no backup starts when less than 5 seconds remain.
+  The call then fails with the last quota error, as before. It also fails with that
+  error when no untried candidate remains, or when a backup times out or can no longer
+  be resolved.
+- **Nothing persisted.** The call stays stateless: no setting, agent or transcript row
+  changes, and no event is emitted for a switch. The result shape is unchanged.
+
 #### Default configuration overrides
 
 The Default configuration of `codex` and `claude-code` can carry its own display
