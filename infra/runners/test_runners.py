@@ -26,6 +26,7 @@ import sys
 import tempfile
 import time
 import unittest
+import unittest.mock
 
 HERE = Path(__file__).resolve().parent
 SUPERVISOR = HERE / 'supervisor.sh'
@@ -1526,10 +1527,15 @@ class Static(unittest.TestCase):
         self.assertEqual(text.count('sha256sum -c'), 8)
 
     @staticmethod
-    def setup_action_versions(action, key):
+    def setup_action_versions(action, key, root=None):
         # (workflow path, requested version or None) for every `uses: actions/<action>@` step
-        # in the monorepo and each checked-out component.
-        root = HERE.parents[1]
+        # in the monorepo and each checked-out component. In CI a missing intentd or
+        # cloudlands-fe .github fails, so a version only they request cannot slip past.
+        root = root or HERE.parents[1]
+        if os.environ.get('GITHUB_ACTIONS') == 'true':
+            missing = [c for c in ('intentd', 'cloudlands-fe')
+                       if not any((root / 'packages' / c / '.github/workflows').glob('*.y*ml'))]
+            assert not missing, f'check out the .github of packages/{", ".join(missing)} before this test'
         workflows = [p for d in [root, *sorted((root / 'packages').glob('*'))]
                      for p in sorted((d / '.github').rglob('*.y*ml')) if p.is_file()]
         assert any(p.parent.name == 'workflows' and p.parents[2] == root for p in workflows)
@@ -1537,6 +1543,26 @@ class Static(unittest.TestCase):
             for block in re.split(rf'uses: actions/{action}@', path.read_text())[1:]:
                 match = re.search(rf"{key}:\s*(\S+)", block.split('- ', 1)[0])
                 yield path, match.group(1).strip('\'"') if match else None
+
+    def test_setup_action_versions_requires_component_workflows_in_ci(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for d in (root, root / 'packages/intentd', root / 'packages/cloudlands-fe'):
+                (d / '.github/workflows').mkdir(parents=True)
+            (root / '.github/workflows/ci.yml').write_text('- uses: actions/setup-node@v7\n  with:\n    node-version: 24\n')
+            fe = root / 'packages/cloudlands-fe/.github/workflows/ci.yml'
+            fe.write_text('- uses: actions/setup-node@v7\n  with:\n    node-version: 26\n')
+            versions = lambda: sorted(v for _, v in self.setup_action_versions('setup-node', 'node-version', root))
+            with unittest.mock.patch.dict(os.environ, {'GITHUB_ACTIONS': 'true'}):
+                with self.assertRaisesRegex(AssertionError, r'packages/intentd'):
+                    versions()
+                (root / 'packages/intentd/.github/workflows/ci.yml').write_text('on: push\n')
+                self.assertEqual(versions(), ['24', '26'])
+                fe.unlink()
+                with self.assertRaisesRegex(AssertionError, r'packages/cloudlands-fe'):
+                    versions()
+            with unittest.mock.patch.dict(os.environ, {'GITHUB_ACTIONS': ''}):
+                self.assertEqual(versions(), ['24'])
 
     def test_image_bakes_every_setup_python_version(self):
         # A job asking setup-python for a minor the tool cache lacks downloads it from a
