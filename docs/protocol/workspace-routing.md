@@ -257,6 +257,7 @@ method inventory:
 | --- | --- |
 | `file.read`, `file.write`, `file.list`, `file.delete`, `file.mkdir`, `file.rename`, `git.commit`, `host.exec`, `help.*` | On the machine, against the agent's own checkout and host |
 | `file.getAttachment` | On the machine: the bytes come from the backend with the internal `file.attachmentData` frame (below), and the copy lands in the agent's own checkout |
+| `file.pull` | On the machine: the bytes come from the backend with the internal `file.pullData` frame (below), and the copy lands in the agent's own checkout |
 | `workspace.info` | On the machine: `{ id, path }`, where `path` is the agent's own checkout on the machine |
 | `note.*`, `task.*`, `agent.*`, `pr.*` (and its `mr.*` alias), `comment.*`, `event.*`, `script.*`, `primitive.*`, `discussion.*`, `crossWorkspace.*`, `hook.*`, `browser.*`, `desktop.*`, `mcp.*` | Forwarded to the backend as one `workspace.call` link request with params `{ method, args }` |
 | `workspace.details`, `workspace.setTitle`, `workspace.setAgentName`, `workspace.setStatusMessage`, `workspace.setStatusImage`, `workspace.proposeSibling`, `workspace.applyProposal`, `workspace.archive`, `workspace.unarchive`, `workspace.context`, `workspace.referenceDocs`, `workspace.timeline`, `workspace.emitNotification`, `git.listRoots`, `terminal.list`, `terminal.readOutput`, `search.workspace`, `app.question.ask` | Forwarded the same way, method by method |
@@ -472,7 +473,16 @@ accepted as for a local agent, and its attachments reach the machine:
    hash mismatch) and removes the part file. A matching copy replaces the file
    unless an identical file is already there, and the call answers with the local
    result `{ path, fileName, mimeType?, size, uploadedAt }`, `path` relative to
-   the checkout. So any file the backend accepts reaches a remote agent.
+   the checkout.
+
+   **Cap.** As for a local agent, the copy is at most 209715200 bytes (200 MiB).
+   The backend answers a `file.attachmentData` request, ranged or whole, for a
+   larger attachment (by its stored size) with `-32602` `attachment-exceeds-cap:
+   <size> bytes; limit 209715200`, checked before the 5 MiB whole-file check, so
+   an older machine is capped too. The machine also checks the `size` of the
+   first answer (offset 0) before it writes a part file and asks for no more
+   pieces past the limit. Either way the call fails with that message (the
+   machine passes the backend's text through unchanged) and writes nothing.
 
 This needs no new nodeProtocol: `file.attachmentData` rides `workspace.call`, and
 the range is optional. An older backend ignores `offset` and `length` and answers
@@ -483,7 +493,50 @@ file, up to 5 MiB. An older backend that refuses the frame makes the machine fai
 `file.getAttachment` with `remote-agent-unsupported:` naming the update. An older
 machine refuses `file.getAttachment` itself; images still reach it in the prompt.
 An older backend does not check the prompt's size up front: such a message fails
-at its turn with `node-prompt-too-large:`.
+at its turn with `node-prompt-too-large:`. An older backend does not enforce the
+cap; the machine's own check does.
+
+**Agent file pull.** A remote agent's [`ws.file.pull`](./methods/files-terminal-browser.md#agent-file-pull)
+runs on its machine, which writes the copy into the agent's own checkout. The
+machine checks `to` against its checkout first (`file-pull-outside-checkout`),
+then forwards the internal frame `file.pullData` (refused from agent code) for
+each piece. The backend answers only for an agent on the link's lease, checks
+that `fromAgentId` is an agent of that agent's workspace, and reads the source:
+from its own worktree for a local source, or from the source's machine with
+[`checkoutRead`](./node-link.md#checkout-files-nodeprotocol-16) for a remote one,
+relayed piece by piece without writing to disk.
+
+```ts
+// workspace.call params: { method: "file.pullData", args: PullDataArgs }
+interface PullDataArgs {
+  fromAgentId: string;
+  path: string;         // relative to the source's checkout
+  transferId?: string;  // every piece after offset 0: from the first answer
+  offset: number;       // byte offset of the piece; 0 for the first piece
+  length: number;       // 1 to 4194304
+}
+// answer: FilePullPiece ({ kind, size, offset, data, sha256?, transferId, skipped? }),
+// the same shape as checkoutReadReply.piece
+```
+
+A `length` outside 1 to 4194304, or an `offset` that is not a non-negative
+integer, fails with `-32602`; a `transferId` present at offset 0 or absent after
+it fails with `file-pull-mismatch`. The backend answers a
+`transferId` only for the agent that opened it, with the same `fromAgentId` and
+`path` ([caller binding](./node-link.md#checkout-files-nodeprotocol-16)). The
+machine refuses a first piece whose `size` is over 209715200 bytes with
+`file-pull-too-large` and asks for no more. Each later piece starts where the copy
+so far ends. Every error is `-32602` with the binding's codes; the source
+machine's reply codes pass through unchanged. The machine writes the pieces to a
+uniquely named part file under the checkout's git-ignored `.intent/pulls/`,
+checks size and `sha256`, then renames the file or unpacks the archive into
+place, as the binding describes.
+
+This needs no new nodeProtocol on the caller's link: `file.pullData` rides
+`workspace.call`. Only a remote **source** needs nodeProtocol 16. An older backend
+refuses `file.pullData`, and the machine fails `ws.file.pull` with
+`remote-agent-unsupported:` naming the update. An older machine refuses
+`ws.file.pull` itself, as for any method it does not route.
 
 ## Verification boundary
 

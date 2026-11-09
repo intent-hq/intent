@@ -1806,7 +1806,7 @@ Revoking a credential closes its live `/node/*` connections with `1008`
 `hello.protocol` is a range instead of one number:
 
 ```ts
-interface ProtocolRange { min: number; max: number } // inclusive; this contract defines 6 through 15
+interface ProtocolRange { min: number; max: number } // inclusive; this contract defines 6 through 16
 ```
 
 The machine picks the highest version in both ranges and returns it as
@@ -1916,6 +1916,14 @@ so protocol 7 to 14 peers still bind. On a link below 15 the backend sends no
 `forgeToken` and no `forge` member, and a remote agent starts without a forge
 token, as before.
 
+**nodeProtocol 16** is protocol 15 plus [checkout files](#checkout-files-nodeprotocol-16):
+the `checkoutRead` and `checkoutReadReply` frames. They are
+new frame types, which an older peer rejects as `node-link-protocol`, and they
+read files out of an agent's checkout, so they need a new version. A daemon that
+implements it offers `{ min: 7, max: 16 }` on both sides, so protocol 7 to 15
+peers still bind. On a link below 16 the backend sends no `checkoutRead`, and a
+pull from an agent on that machine fails with `file-pull-unsupported`.
+
 ### Frames
 
 Each WebSocket binary message on `/node/link` is one JSON frame of at most
@@ -1955,6 +1963,8 @@ Each WebSocket binary message on `/node/link` is one JSON frame of at most
 | `secretReply` | machine → backend | control | Protocol 14 or later: `requestId`, `agentId`, `outcome`, `names?`, `forgotten?`, `error?` |
 | `forgeToken` | backend → machine | control | Protocol 15 or later: `requestId`, `host`, `token` (string or `null`); see [forge token on the machine](#forge-token-on-the-machine-nodeprotocol-15) |
 | `forgeTokenReply` | machine → backend | control | Protocol 15 or later: `requestId`, `outcome`, `error?`; never a value |
+| `checkoutRead` | backend → machine | script | Protocol 16 or later: `requestId`, `agentId`, `path`, `transferId?`, `offset`, `length`; see [checkout files](#checkout-files-nodeprotocol-16) |
+| `checkoutReadReply` | machine → backend | script | Protocol 16 or later: `requestId`, `agentId`, `outcome`, `piece?`, `error?` |
 
 `intentdVersion` is recorded for diagnostics and is not a compatibility gate.
 Heartbeats run every 15 s and a link silent for 45 s is dead. The backend
@@ -1973,6 +1983,7 @@ constant with a golden test: `hello`, `heartbeat` / `heartbeatReply`, `launch`,
 `pushWip` (protocol 13 or later),
 `secretPut`, `secretForget` and `secretList` (protocol 14 or later),
 `forgeToken` (protocol 15 or later),
+`checkoutRead` (protocol 16 or later),
 and git sessions on `/node/git` for agents on that credential's binding. Any
 other frame is `node-link-protocol`.
 `stopAck` travels machine → backend, so it is not in that list; the backend
@@ -1982,7 +1993,8 @@ accepts it only on a protocol 7 or later link. Likewise the backend accepts
 `skillsReply` and the `skills` journal body only on a protocol 12 or later link,
 `pushWipReply` only on a protocol 13 or later link,
 `secretReply` only on a protocol 14 or later link,
-and `forgeTokenReply` only on a protocol 15 or later link.
+`forgeTokenReply` only on a protocol 15 or later link,
+and `checkoutReadReply` only on a protocol 16 or later link.
 
 ### Stop acknowledgement (nodeProtocol 7)
 
@@ -3014,12 +3026,14 @@ else is refused. The routing table is in
 The backend treats a forwarded call as made by the agent named in the request
 only if that agent is on the link's lease, and routes it again under that
 agent's existing authority; it never trusts the machine's routing. The
-machine also forwards four internal frames that agent code cannot send:
+machine also forwards five internal frames that agent code cannot send:
 `git.commitPolicy` before an agent's commit, `turn.attachments` with the cards
 of one call, `agent.placementHelp` for the machine-placement text of the
 agent's `workspace_api` description and `ws.help("agent")`, and
 `file.attachmentData` for the bytes of an attachment the agent copies with
-`ws.file.getAttachment` ([attachments](./workspace-routing.md#remote-agents-on-the-executor-link)).
+`ws.file.getAttachment` ([attachments](./workspace-routing.md#remote-agents-on-the-executor-link)),
+and `file.pullData` for the bytes of a file or folder the agent copies from another agent's checkout with `ws.file.pull`
+([agent file pull](./workspace-routing.md#remote-agents-on-the-executor-link)).
 On protocol 11 it also forwards `mcp.proxy.listTools` and `mcp.proxy.callTool`
 for the provider's [user MCP servers](#user-mcp-servers-nodeprotocol-11);
 `ws.mcp.*` is a plain forwarded namespace. On protocol 14 the agent's
@@ -3297,6 +3311,113 @@ Reply error codes:
 | Code | Meaning |
 | --- | --- |
 | `forge-token-invalid` | The `host` is not `"github.com"`, or the token is empty, over 16 KiB, or holds whitespace or control characters |
+
+### Checkout files (nodeProtocol 16)
+
+[`ws.file.pull`](./methods/files-terminal-browser.md#agent-file-pull) copies a
+file or folder from another agent's checkout into the caller's. When the
+**source** agent is remote, the backend reads the bytes from the source's
+machine with these frames. The machine only serves reads: a remote **caller**
+receives the bytes through the internal `file.pullData` frame
+([workspace routing](./workspace-routing.md#remote-agents-on-the-executor-link)),
+so there is no frame that writes into a checkout.
+
+```ts
+interface CheckoutReadFrame {         // backend → machine
+  type: "checkoutRead";
+  requestId: string;                  // UUID; one per piece
+  agentId: string;                    // the source agent
+  path: string;                       // relative to the source's checkout
+  transferId?: string;                // every piece after offset 0: from the first reply
+  offset: number;                     // byte offset of the piece; 0 for the first piece
+  length: number;                     // 1 to 4194304
+}
+interface CheckoutReadReplyFrame {    // machine → backend
+  type: "checkoutReadReply";
+  requestId: string;
+  agentId: string;
+  outcome: "ok" | "failed";
+  piece?: FilePullPiece;              // with "ok"
+  error?: string;                     // with "failed": "<code>: <detail>", fixed text, never file content
+}
+interface FilePullPiece {             // also the answer of file.pullData
+  kind: "file" | "directory";
+  size: number;                       // bytes of the whole snapshot
+  offset: number;                     // where `data` starts
+  data: string;                       // base64 of the piece's bytes, at most 4 MiB
+  sha256?: string;                    // at offset 0: lowercase hex of the whole snapshot
+  transferId: string;                 // names the snapshot
+  skipped?: number;                   // a directory at offset 0: entries left out of the archive
+}
+```
+
+Both frame bodies and `FilePullPiece` are closed: unknown or mistyped members are
+`node-link-protocol`.
+
+1. **Authority.** The backend sends a `checkoutRead` only after it has checked
+   that the caller and the source are agents of the same workspace, and only for
+   a source on that link's lease. The machine accepts it only for an agent on
+   the binding's lease whose checkout exists, stopped or not; otherwise it
+   replies `failed` with `file-pull-source-unavailable`. A sub-agent that
+   [shares its parent's checkout](#shared-checkout) serves from that checkout.
+2. **Confinement.** The machine resolves `path` against the source's checkout and
+   canonicalises it, as the [binding](./methods/files-terminal-browser.md#agent-file-pull)
+   describes: `..`, an absolute path, a path that resolves outside the checkout
+   and a path with a `.git` component (any depth, ASCII case-insensitive) reply
+   `file-pull-outside-checkout`; a missing path, or one that is neither a regular
+   file nor a directory, replies `file-pull-not-found`.
+3. **Snapshot.** The first piece (offset 0, no `transferId`) makes a snapshot
+   outside the checkout, as the binding describes: a copy of a file, or a folder
+   packed as one pax tar archive. Packing stops as soon as it passes 209715200
+   bytes or 100000 entries, and the machine replies `file-pull-too-large`
+   without keeping it. With 4 live snapshots for that agent it replies
+   `file-pull-busy`. The reply's `piece` carries the new `transferId`, `kind`,
+   `size` and `sha256`. `transferId` is absent exactly when `offset` is 0; any
+   other combination replies `file-pull-mismatch`. The file is opened without
+   following a final symlink and its real path is checked again, as the binding
+   describes.
+4. **Later pieces.** Every later piece names the `transferId` and the same
+   `path`, and reads the same snapshot. The machine keys a snapshot by
+   `(agentId, path, transferId)`; any other combination replies
+   `file-pull-transfer-expired`. It removes the snapshot after its last piece,
+   when the agent's checkout is removed, or after 2 minutes without a piece, so
+   a failed or abandoned pull frees its slot soon after the 60-second piece
+   timeout.
+5. **Caller binding.** The backend passes the machine's `transferId` through to
+   the caller unchanged and records which caller opened it; it forwards a later
+   piece only from that caller, for the same source and `path`, and answers
+   anything else with `file-pull-transfer-expired` without sending a frame. For
+   a local source the backend mints the `transferId` itself under the same rule.
+6. **Pieces.** A reply carries at most `length` bytes and never more than
+   4 MiB, so its base64 fits the 8 MiB frame. An `offset` at or past `size`
+   replies `file-pull-mismatch`, except offset 0 of an empty snapshot, which
+   answers `size: 0` and empty `data`.
+7. **Lane and timeout.** The frames travel on the `script` lane, behind control,
+   journal and rpc frames, so a pull never delays heartbeats, stops or prompts.
+   The backend keeps at most one `checkoutRead` in flight per pull and fails the
+   pull with `file-pull-source-unavailable` when a reply does not arrive within
+   60 seconds or the link drops.
+8. **Version and cloud machines.** The backend checks the protocol of the
+   machine's current link, or for a machine with no live link the protocol its
+   last `welcome` chose, before anything else. Below 16 the pull fails at once
+   with `file-pull-unsupported`, naming the machine and the update; it never
+   waits on the link and never resumes a machine to find out. A source on a
+   paused [cloud machine](#cloud-machines) is resumed before the first piece
+   (with no recorded protocol, it is resumed and then checked). If the resume or
+   the link fails, the pull fails with `file-pull-source-unavailable` and copies
+   nothing.
+
+Reply error codes (each `error` starts with one):
+
+| Code | Meaning |
+| --- | --- |
+| `file-pull-source-unavailable` | The agent is not on the lease, or has no checkout on the machine |
+| `file-pull-outside-checkout` | The path is absolute, has `..`, resolves outside the checkout, or has a `.git` component |
+| `file-pull-not-found` | Nothing at the path, or neither a regular file nor a directory |
+| `file-pull-too-large` | The snapshot passed 209715200 bytes or 100000 entries |
+| `file-pull-busy` | The agent already has 4 live snapshots |
+| `file-pull-mismatch` | The offset is at or past the end of a non-empty snapshot, or `transferId` is present at offset 0 or absent after it |
+| `file-pull-transfer-expired` | No live snapshot for that `agentId`, `path` and `transferId` |
 
 ### Saved scripts (nodeProtocol 8)
 
