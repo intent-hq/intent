@@ -73,7 +73,7 @@ github-runner@<pool>-<n>.service ─ supervisor.sh <pool>-<n> ─┬─ GitHub A
 
 | File | Installed as | Role |
 |---|---|---|
-| `Dockerfile`, `entrypoint.sh` | image `intent-gh-runner:current` | One image for both pools: Ubuntu 24.04, build tools, pinned and checksummed runner, rustup, gh, Node and PowerShell; Rust toolchain baked; user `runner` (uid 1001); no sudo |
+| `Dockerfile`, `entrypoint.sh`, `fetch-release.sh` | image `intent-gh-runner:current` | One image for both pools: Ubuntu 24.04, build tools, pinned and checksummed runner, rustup, gh, Node, PowerShell, and tool-cache Python and Node; Rust toolchain baked; user `runner` (uid 1001); no sudo |
 | `supervisor.sh` | `/usr/local/lib/github-runners/` | One slot, one job: JIT-register, run the pinned container, drain on stop, deregister; `--plan` validates the config and lists the slots; `--host-check` checks the CPU sets against the host's cores and the slots' total memory against the `runners.slice` cap; `--memory-cap` prints that cap |
 | `runners.env` | `/etc/github-runners/runners.env` (once) | intent-cache's pools, slot counts, labels, CPU sets, memory (not secret) |
 | `hosts/*.env` | `/etc/github-runners/runners.env` (once, `install.sh --config`) | The same for runner-only hosts, one file per layout |
@@ -109,7 +109,8 @@ supervisor is killed outright.
   container, removed when the job ends, so jobs never see another job's files. Nothing persists
   between jobs, not even download caches: a shared cargo registry or rustup
   directory could be poisoned by one job for the next. The pinned Rust toolchain
-  is baked into the image instead, so the common case downloads nothing.
+  and the Python versions workflows ask `setup-python` for are baked into the
+  image instead, so the common case downloads nothing.
 - **Same paths as GitHub-hosted runners.** `HOME=/home/runner`, work directory
   `/home/runner/work` (so `GITHUB_WORKSPACE=/home/runner/work/<repo>/<repo>`),
   `CARGO_HOME=/home/runner/.cargo`, `RUSTUP_HOME=/home/runner/.rustup`, tool cache
@@ -242,13 +243,42 @@ Routed jobs call these without a setup step, as they would on GitHub-hosted
 (build-essential), the MinGW-w64 x86_64 C compiler (`x86_64-w64-mingw32-gcc`,
 for Windows GNU cross lint), bison/yacc, procps (ps, pgrep, pkill), iproute2 (ss), lsof, pkg-config, libssl-dev, shellcheck, tar, zip,
 unzip, xz, zstd, rsync, file, dpkg-deb, python3 with pip and venv, Node with
-npm and corepack (in `/opt/node`, owned by `runner`, so `corepack enable` and
-`npm install -g` work without sudo), PowerShell (`pwsh`), and rustup with the
+npm and corepack (`/opt/node`, a link to its tool-cache directory owned by
+`runner`, so `corepack enable` and `npm install -g` work without sudo), PowerShell (`pwsh`), and rustup with the
 pinned Rust toolchain, and Chromium's shared libraries plus `xvfb` (the
 Playwright `install-deps` list for Ubuntu 24.04, unchanged from 1.58 through
 1.63, without fonts), so a browser job needs no `apt-get`. They grow the
-image (`xvfb` brings the X server and Mesa). Other versions of Node, Python and Rust come from the
-usual setup actions. The apt package lists are kept, as on hosted runners, so
+image (`xvfb` brings the X server and Mesa).
+
+Python 3.11 and 3.12 sit in the tool cache (`/opt/hostedtoolcache/Python/<version>/x64`)
+as `actions/python-versions` builds installed by their own `setup.sh`, as on
+hosted runners, so `actions/setup-python` with `python-version: '3.11'` or
+`'3.12'` uses them and downloads nothing. Without them every job downloaded
+Python from a GitHub release, and a 504 there failed the job
+([cloudlands-fe run 42578945801](https://github.com/intent-hq/cloudlands-fe/actions/runs/42578945801)).
+`test_runners.py` fails when a workflow asks `setup-python` for a minor the
+image does not bake. It reads the monorepo's workflows and those of every
+checked-out submodule; monorepo CI checks out no submodules, so run it in a
+full checkout when intentd or cloudlands-fe adds a version. Add a missing minor as `PYTHON_<major>_<minor>_*`
+`ARG`s (version and build number from the release tag `<version>-<build>`,
+SHA-256 from the asset's `digest` in
+`gh api repos/actions/python-versions/releases/tags/<tag>`) and to the smoke
+workflow's list.
+
+Node sits in the tool cache too (`/opt/hostedtoolcache/node/<version>/x64`):
+`NODE_VERSION` (on `PATH` as `/opt/node`) and each `<version>=<SHA-256>` in
+`NODE_TOOLCACHE` (22.23.4, and 24.21.0 for intentd's exact pin), so
+`actions/setup-node` finds every version the workflows ask for. The same test,
+with the same submodule caveat, fails when a workflow asks `setup-node` for a
+version none of them satisfies;
+add it to `NODE_TOOLCACHE` with the checksum from the release's
+`SHASUMS256.txt` on nodejs.org, and to the smoke workflow's list.
+
+The image fetches GitHub release assets (runner, gh, PowerShell, Python) with
+[`fetch-release.sh`](../infra/runners/fetch-release.sh): the
+`github.com/<repo>/releases/download` URL can answer 504 for hours for one
+asset while the API serves the same file, so it retries, then falls back to
+the API asset URL. Other versions of Node, Python and Rust come from the usual setup actions. The apt package lists are kept, as on hosted runners, so
 `apt-get install -s` (for example `playwright install-deps --dry-run`) works.
 Core dumps are off (`--ulimit core=0:0`): the host's relative `core_pattern`
 would otherwise write multi-GB core files into the checkout. Pins and checksums are the `ARG`s at the top of the

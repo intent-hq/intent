@@ -1521,9 +1521,103 @@ class Static(unittest.TestCase):
         self.assertRegex(text, r'FROM ubuntu:24\.04@sha256:[0-9a-f]{64}')
         self.assertRegex(text, r'ARG RUNNER_VERSION=\d+\.\d+\.\d+')
         self.assertRegex(text, r'ARG RUNNER_SHA256=[0-9a-f]{64}')
-        for tool in ('RUNNER', 'RUSTUP', 'GH', 'NODE', 'PWSH'):
+        for tool in ('RUNNER', 'RUSTUP', 'GH', 'NODE', 'PWSH', 'PYTHON_3_11', 'PYTHON_3_12'):
             self.assertRegex(text, rf'ARG {tool}_SHA256=[0-9a-f]{{64}}')
-        self.assertEqual(text.count('sha256sum -c'), 5)
+        self.assertEqual(text.count('sha256sum -c'), 7)
+
+    @staticmethod
+    def setup_action_versions(action, key):
+        # (workflow path, requested version or None) for every `uses: actions/<action>@` step
+        # in the monorepo and each checked-out component.
+        root = HERE.parents[1]
+        workflows = [p for d in [root, *sorted((root / 'packages').glob('*'))]
+                     for p in sorted((d / '.github').rglob('*.y*ml')) if p.is_file()]
+        assert any(p.parent.name == 'workflows' and p.parents[2] == root for p in workflows)
+        for path in workflows:
+            for block in re.split(rf'uses: actions/{action}@', path.read_text())[1:]:
+                match = re.search(rf"{key}:\s*(\S+)", block.split('- ', 1)[0])
+                yield path, match.group(1).strip('\'"') if match else None
+
+    def test_image_bakes_every_setup_python_version(self):
+        # A job asking setup-python for a minor the tool cache lacks downloads it from a
+        # GitHub release; a 504 there failed cloudlands-fe run 42578945801.
+        text = (HERE / 'Dockerfile').read_text()
+        baked = {}
+        for minor in re.findall(r'^ARG PYTHON_(\d+_\d+)_VERSION=', text, re.M):
+            version = re.search(rf'^ARG PYTHON_{minor}_VERSION=(\S+)$', text, re.M).group(1)
+            self.assertTrue(version.startswith(minor.replace('_', '.') + '.'), version)
+            self.assertRegex(text, rf'(?m)^ARG PYTHON_{minor}_BUILD=\d+$')
+            self.assertIn(f'install_python "$PYTHON_{minor}_VERSION" "$PYTHON_{minor}_BUILD" "$PYTHON_{minor}_SHA256"', text)
+            baked[minor.replace('_', '.')] = version
+        wanted = set()
+        for path, version in self.setup_action_versions('setup-python', 'python-version'):
+            self.assertRegex(version or '', r'^\d+\.\d+$', f'{path}: setup-python without a literal minor')
+            wanted.add(version)
+        self.assertIn('3.11', wanted)
+        self.assertEqual(sorted(w for w in wanted if w not in baked), [], f'baked: {baked}')
+
+    def test_image_bakes_every_setup_node_version(self):
+        # setup-node takes a version from the tool cache before it downloads one.
+        text = (HERE / 'Dockerfile').read_text()
+        baked = [re.search(r'^ARG NODE_VERSION=(\S+)$', text, re.M).group(1)]
+        extra = re.search(r'^ARG NODE_TOOLCACHE="([^"]*)"$', text, re.M)
+        self.assertIsNotNone(extra, 'ARG NODE_TOOLCACHE="<version>=<sha256> ..."')
+        for entry in extra.group(1).split():
+            self.assertRegex(entry, r'^\d+\.\d+\.\d+=[0-9a-f]{64}$')
+            baked.append(entry.split('=')[0])
+        self.assertIn('/opt/hostedtoolcache/node/${NODE_VERSION}/x64', text)
+        wanted = set()
+        for path, version in self.setup_action_versions('setup-node', 'node-version'):
+            self.assertIsNotNone(version, f'{path}: setup-node without node-version')
+            if version.startswith('${{'):
+                continue  # a matrix value; intentd's only one, node: [22, 24], is also requested literally
+            self.assertRegex(version, r'^\d+(\.\d+){0,2}$', path)
+            wanted.add(version)
+        self.assertIn('24', wanted)
+        missing = sorted(w for w in wanted if not any(b == w or b.startswith(w + '.') for b in baked))
+        self.assertEqual(missing, [], f'baked: {baked}')
+
+    def test_image_fetches_github_releases_with_api_fallback(self):
+        # github.com/<repo>/releases/download answered 504 for hours for single
+        # assets (python 3.11.18, gh 2.102.0) while the API served them.
+        text = (HERE / 'Dockerfile').read_text()
+        self.assertNotRegex(text, r'github\.com/[^/\s]+/[^/\s]+/releases/download')
+        self.assertIn('COPY --chmod=0755 fetch-release.sh /usr/local/bin/fetch-release', text)
+        for repo in ('actions/runner', 'cli/cli', 'PowerShell/PowerShell', 'actions/python-versions'):
+            self.assertRegex(text, rf'fetch-release {re.escape(repo)} ')
+
+    def test_fetch_release_falls_back_to_the_api_asset(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            log = tmp / 'curl.log'
+            curl = tmp / 'curl'
+            curl.write_text(f"""#!/usr/bin/env bash
+echo "$*" >> {log}
+out=""; while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift ;; esac; url="$1"; shift; done
+case "$url" in
+  https://github.com/*) exit 22 ;;
+  */releases/tags/v1) echo '{{"assets":[{{"name":"other","id":1}},{{"name":"tool.tgz","id":42}}]}}' ;;
+  */releases/assets/42) echo payload > "$out" ;;
+  *) exit 22 ;;
+esac
+""")
+            curl.chmod(0o755)
+            out = tmp / 'tool.tgz'
+            env = {**os.environ, 'PATH': f'{tmp}:{os.environ["PATH"]}'}
+            run = subprocess.run(['sh', str(HERE / 'fetch-release.sh'), 'o/r', 'v1', 'tool.tgz', str(out)],
+                                 env=env, capture_output=True, text=True)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertEqual(out.read_text(), 'payload\n')
+            calls = log.read_text().splitlines()
+            self.assertIn('https://github.com/o/r/releases/download/v1/tool.tgz', calls[0])
+            self.assertIn('Accept: application/octet-stream', calls[-1])
+            self.assertTrue(calls[-1].endswith('https://api.github.com/repos/o/r/releases/assets/42'), calls[-1])
+
+            log.write_text('')
+            run = subprocess.run(['sh', str(HERE / 'fetch-release.sh'), 'o/r', 'v1', 'missing.tgz', str(out)],
+                                 env=env, capture_output=True, text=True)
+            self.assertNotEqual(run.returncode, 0)
+            self.assertNotIn('releases/assets/', log.read_text())
 
     def test_paths_match_hosted_runners(self):
         text = (HERE / 'Dockerfile').read_text()
@@ -1537,6 +1631,8 @@ class Static(unittest.TestCase):
         text = (HERE.parents[1] / '.github/workflows/intent-cache-smoke.yml').read_text()
         self.assertIn('[ "$(ulimit -c)" = 0 ]', text)
         self.assertIn('apt-get install -s', text)
+        self.assertIn('Python/$minor.*/x64.complete', text)
+        self.assertIn('node/$spec.*/x64.complete', text)
 
     def test_bigmem_label_marks_exactly_the_heavy_slots_with_30_gib(self):
         # runner-route sends gh-linux-16x overflow only to intent-cache-bigmem slots:
