@@ -24,14 +24,12 @@ ARG PWSH_SHA256=6f6015203c47806c5cc444c19d8ed019695e610fbd948154264bf9ca8e157561
 # Every minor that workflows pass to setup-python, baked into the tool cache
 # so the action finds it and downloads nothing (see docs/GITHUB_RUNNERS.md,
 # Preinstalled tools). From actions/python-versions: version, release build
-# number, release asset id of the linux-24.04-x64 tarball, and its SHA-256.
+# number (the tag is <version>-<build>) and the linux-24.04-x64 SHA-256.
 ARG PYTHON_3_11_VERSION=3.11.18
 ARG PYTHON_3_11_BUILD=40260280589
-ARG PYTHON_3_11_ASSET=676813336
 ARG PYTHON_3_11_SHA256=099ef30fc27f0d7067a67be5a5fb7fd66154cfa1e4186c88f71c3a3070c81abc
 ARG PYTHON_3_12_VERSION=3.12.16
 ARG PYTHON_3_12_BUILD=40260402378
-ARG PYTHON_3_12_ASSET=676818387
 ARG PYTHON_3_12_SHA256=dec61ed20cd3e71143f1642ef9966945dea8ae4f3e96b306205a710da4f2191a
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -50,6 +48,8 @@ RUN apt-get update \
 # Package lists stay in the image, as on hosted runners: jobs simulate
 # installs (`apt-get install -s`, e.g. playwright install-deps --dry-run).
 
+COPY --chmod=0755 fetch-release.sh /usr/local/bin/fetch-release
+
 # Same user name and uid as GitHub-hosted runners. No sudo: jobs run
 # unprivileged; anything they need from apt belongs in this image.
 RUN userdel -r ubuntu 2>/dev/null || true \
@@ -57,7 +57,7 @@ RUN userdel -r ubuntu 2>/dev/null || true \
  && install -d -o runner -g runner /home/runner/work /home/runner/actions-runner /opt/hostedtoolcache
 
 WORKDIR /home/runner/actions-runner
-RUN curl -fsSL --retry 3 --retry-all-errors -o runner.tgz "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz" \
+RUN fetch-release actions/runner "v${RUNNER_VERSION}" "actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz" runner.tgz \
  && echo "${RUNNER_SHA256}  runner.tgz" | sha256sum -c - \
  && tar xzf runner.tgz && rm runner.tgz \
  && ./bin/installdependencies.sh \
@@ -65,13 +65,13 @@ RUN curl -fsSL --retry 3 --retry-all-errors -o runner.tgz "https://github.com/ac
 
 # Node lives in /opt/node owned by runner, so `corepack enable` and
 # `npm install -g` work without sudo, as on hosted runners.
-RUN curl -fsSL --retry 3 --retry-all-errors -o /tmp/gh.tgz "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" \
+RUN fetch-release cli/cli "v${GH_VERSION}" "gh_${GH_VERSION}_linux_amd64.tar.gz" /tmp/gh.tgz \
  && echo "${GH_SHA256}  /tmp/gh.tgz" | sha256sum -c - \
  && tar xzf /tmp/gh.tgz -C /tmp && install -m 0755 "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh \
  && curl -fsSL --retry 3 --retry-all-errors -o /tmp/node.txz "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
  && echo "${NODE_SHA256}  /tmp/node.txz" | sha256sum -c - \
  && install -d -o runner -g runner /opt/node && tar xJf /tmp/node.txz -C /opt/node --strip-components=1 && chown -R runner:runner /opt/node \
- && curl -fsSL --retry 3 --retry-all-errors -o /tmp/pwsh.tgz "https://github.com/PowerShell/PowerShell/releases/download/v${PWSH_VERSION}/powershell-${PWSH_VERSION}-linux-x64.tar.gz" \
+ && fetch-release PowerShell/PowerShell "v${PWSH_VERSION}" "powershell-${PWSH_VERSION}-linux-x64.tar.gz" /tmp/pwsh.tgz \
  && echo "${PWSH_SHA256}  /tmp/pwsh.tgz" | sha256sum -c - \
  && install -d /opt/microsoft/powershell/7 && tar xzf /tmp/pwsh.tgz -C /opt/microsoft/powershell/7 \
  && chmod +x /opt/microsoft/powershell/7/pwsh && ln -s /opt/microsoft/powershell/7/pwsh /usr/local/bin/pwsh \
@@ -94,21 +94,17 @@ RUN curl -fsSL --retry 3 --retry-all-errors -o /tmp/rustup-init "https://static.
  && rm /tmp/rustup-init \
  && rm -rf /home/runner/.rustup/downloads /home/runner/.rustup/tmp
 
-# The release URL can answer 504 for hours while the API asset URL serves the
-# same file, so fall back to it. setup.sh is the installer setup-python runs.
+# setup.sh is the installer setup-python runs after its own download.
 RUN set -eu; \
     install_python() { \
-      url="https://github.com/actions/python-versions/releases/download/$1-$2/python-$1-linux-24.04-x64.tar.gz"; \
-      curl -fsSL --retry 3 --retry-all-errors -o /tmp/python.tgz "$url" \
-        || curl -fsSL --retry 3 --retry-all-errors -H 'Accept: application/octet-stream' -o /tmp/python.tgz \
-             "https://api.github.com/repos/actions/python-versions/releases/assets/$3"; \
-      echo "$4  /tmp/python.tgz" | sha256sum -c -; \
+      fetch-release actions/python-versions "$1-$2" "python-$1-linux-24.04-x64.tar.gz" /tmp/python.tgz; \
+      echo "$3  /tmp/python.tgz" | sha256sum -c -; \
       mkdir /tmp/python && tar xzf /tmp/python.tgz -C /tmp/python; \
       (cd /tmp/python && PIP_NO_CACHE_DIR=1 bash ./setup.sh); \
       rm -rf /tmp/python /tmp/python.tgz; \
       test -f "$RUNNER_TOOL_CACHE/Python/$1/x64.complete"; \
     }; \
-    install_python "$PYTHON_3_11_VERSION" "$PYTHON_3_11_BUILD" "$PYTHON_3_11_ASSET" "$PYTHON_3_11_SHA256"; \
-    install_python "$PYTHON_3_12_VERSION" "$PYTHON_3_12_BUILD" "$PYTHON_3_12_ASSET" "$PYTHON_3_12_SHA256"
+    install_python "$PYTHON_3_11_VERSION" "$PYTHON_3_11_BUILD" "$PYTHON_3_11_SHA256"; \
+    install_python "$PYTHON_3_12_VERSION" "$PYTHON_3_12_BUILD" "$PYTHON_3_12_SHA256"
 
 ENTRYPOINT ["/usr/local/bin/runner-entrypoint"]

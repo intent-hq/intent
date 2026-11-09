@@ -73,7 +73,7 @@ github-runner@<pool>-<n>.service ─ supervisor.sh <pool>-<n> ─┬─ GitHub A
 
 | File | Installed as | Role |
 |---|---|---|
-| `Dockerfile`, `entrypoint.sh` | image `intent-gh-runner:current` | One image for both pools: Ubuntu 24.04, build tools, pinned and checksummed runner, rustup, gh, Node, PowerShell and tool-cache Python; Rust toolchain baked; user `runner` (uid 1001); no sudo |
+| `Dockerfile`, `entrypoint.sh`, `fetch-release.sh` | image `intent-gh-runner:current` | One image for both pools: Ubuntu 24.04, build tools, pinned and checksummed runner, rustup, gh, Node, PowerShell and tool-cache Python; Rust toolchain baked; user `runner` (uid 1001); no sudo |
 | `supervisor.sh` | `/usr/local/lib/github-runners/` | One slot, one job: JIT-register, run the pinned container, drain on stop, deregister; `--plan` validates the config and lists the slots; `--host-check` checks the CPU sets against the host's cores and the slots' total memory against the `runners.slice` cap; `--memory-cap` prints that cap |
 | `runners.env` | `/etc/github-runners/runners.env` (once) | intent-cache's pools, slot counts, labels, CPU sets, memory (not secret) |
 | `hosts/*.env` | `/etc/github-runners/runners.env` (once, `install.sh --config`) | The same for runner-only hosts, one file per layout |
@@ -258,11 +258,16 @@ Python from a GitHub release, and a 504 there failed the job
 ([cloudlands-fe run 42578945801](https://github.com/intent-hq/cloudlands-fe/actions/runs/42578945801)).
 `test_runners.py` fails when a workflow in any of the three repositories asks
 for a minor the image does not bake; add it as `PYTHON_<major>_<minor>_*`
-`ARG`s (version, release build number and asset id from the release tag
-`<version>-<build>`, SHA-256 from the asset's `digest` in
+`ARG`s (version and build number from the release tag `<version>-<build>`,
+SHA-256 from the asset's `digest` in
 `gh api repos/actions/python-versions/releases/tags/<tag>`) and to the smoke
-workflow's list. The build falls back to the API asset URL when the release
-URL fails. Other versions of Node, Python and Rust come from the usual setup actions. The apt package lists are kept, as on hosted runners, so
+workflow's list.
+
+The image fetches GitHub release assets (runner, gh, PowerShell, Python) with
+[`fetch-release.sh`](../infra/runners/fetch-release.sh): the
+`github.com/<repo>/releases/download` URL can answer 504 for hours for one
+asset while the API serves the same file, so it retries, then falls back to
+the API asset URL. Other versions of Node, Python and Rust come from the usual setup actions. The apt package lists are kept, as on hosted runners, so
 `apt-get install -s` (for example `playwright install-deps --dry-run`) works.
 Core dumps are off (`--ulimit core=0:0`): the host's relative `core_pattern`
 would otherwise write multi-GB core files into the checkout. Pins and checksums are the `ARG`s at the top of the

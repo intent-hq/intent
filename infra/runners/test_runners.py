@@ -1533,10 +1533,8 @@ class Static(unittest.TestCase):
         for minor in re.findall(r'^ARG PYTHON_(\d+_\d+)_VERSION=', text, re.M):
             version = re.search(rf'^ARG PYTHON_{minor}_VERSION=(\S+)$', text, re.M).group(1)
             self.assertTrue(version.startswith(minor.replace('_', '.') + '.'), version)
-            for key in ('BUILD', 'ASSET'):
-                self.assertRegex(text, rf'(?m)^ARG PYTHON_{minor}_{key}=\d+$')
-            self.assertRegex(text, rf'install_python "\$PYTHON_{minor}_VERSION" "\$PYTHON_{minor}_BUILD" '
-                                   rf'"\$PYTHON_{minor}_ASSET" "\$PYTHON_{minor}_SHA256"')
+            self.assertRegex(text, rf'(?m)^ARG PYTHON_{minor}_BUILD=\d+$')
+            self.assertIn(f'install_python "$PYTHON_{minor}_VERSION" "$PYTHON_{minor}_BUILD" "$PYTHON_{minor}_SHA256"', text)
             baked[minor.replace('_', '.')] = version
         root = HERE.parents[1]
         workflows = [p for d in [root, *sorted((root / 'packages').glob('*'))]
@@ -1550,6 +1548,48 @@ class Static(unittest.TestCase):
                 wanted.add(match.group(1))
         self.assertIn('3.11', wanted)
         self.assertEqual(sorted(w for w in wanted if w not in baked), [], f'baked: {baked}')
+
+    def test_image_fetches_github_releases_with_api_fallback(self):
+        # github.com/<repo>/releases/download answered 504 for hours for single
+        # assets (python 3.11.18, gh 2.102.0) while the API served them.
+        text = (HERE / 'Dockerfile').read_text()
+        self.assertNotRegex(text, r'github\.com/[^/\s]+/[^/\s]+/releases/download')
+        self.assertIn('COPY --chmod=0755 fetch-release.sh /usr/local/bin/fetch-release', text)
+        for repo in ('actions/runner', 'cli/cli', 'PowerShell/PowerShell', 'actions/python-versions'):
+            self.assertRegex(text, rf'fetch-release {re.escape(repo)} ')
+
+    def test_fetch_release_falls_back_to_the_api_asset(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            log = tmp / 'curl.log'
+            curl = tmp / 'curl'
+            curl.write_text(f"""#!/usr/bin/env bash
+echo "$*" >> {log}
+out=""; while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift ;; esac; url="$1"; shift; done
+case "$url" in
+  https://github.com/*) exit 22 ;;
+  */releases/tags/v1) echo '{{"assets":[{{"name":"other","id":1}},{{"name":"tool.tgz","id":42}}]}}' ;;
+  */releases/assets/42) echo payload > "$out" ;;
+  *) exit 22 ;;
+esac
+""")
+            curl.chmod(0o755)
+            out = tmp / 'tool.tgz'
+            env = {**os.environ, 'PATH': f'{tmp}:{os.environ["PATH"]}'}
+            run = subprocess.run(['sh', str(HERE / 'fetch-release.sh'), 'o/r', 'v1', 'tool.tgz', str(out)],
+                                 env=env, capture_output=True, text=True)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertEqual(out.read_text(), 'payload\n')
+            calls = log.read_text().splitlines()
+            self.assertIn('https://github.com/o/r/releases/download/v1/tool.tgz', calls[0])
+            self.assertIn('Accept: application/octet-stream', calls[-1])
+            self.assertTrue(calls[-1].endswith('https://api.github.com/repos/o/r/releases/assets/42'), calls[-1])
+
+            log.write_text('')
+            run = subprocess.run(['sh', str(HERE / 'fetch-release.sh'), 'o/r', 'v1', 'missing.tgz', str(out)],
+                                 env=env, capture_output=True, text=True)
+            self.assertNotEqual(run.returncode, 0)
+            self.assertNotIn('releases/assets/', log.read_text())
 
     def test_paths_match_hosted_runners(self):
         text = (HERE / 'Dockerfile').read_text()
