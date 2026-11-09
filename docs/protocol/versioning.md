@@ -39,6 +39,11 @@ router method `remoteMachines.models`, gated by `remoteMachineModels: 1` (advert
 only with `remoteMachines: 1`), taking the documented surface to **500 / 442 / 58**
 (dispatchable / router / fast path). Harness 3.10 prompts list exposed machines by
 stable identity only ([exposed machines](./model-platform-routing.md#exposed-machines)).
+The executor link's `launch` gains the optional `harnessVersion`
+([launch and agent lifecycle](./node-link.md#launch-and-agent-lifecycle)), so a
+remote machine builds the `workspace_api` tool description for the session's
+stamp. When it is absent, the machine keeps its legacy description. No
+nodeProtocol version is added.
 
 **Version 15.5 — Agent Plugins (additive methods).** [§5.57](./methods/plugins.md)
 adds five administrator-only router methods, `plugin.list`, `plugin.install`,

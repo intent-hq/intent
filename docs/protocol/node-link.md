@@ -2383,6 +2383,7 @@ interface LaunchCommand {
   forge?: ForgeLaunch;             // protocol 15 only, top-level agents only; see Forge token on the machine
   gitIdentity?: GitIdentity;       // any protocol; see Commit identity
   newMachine?: string;             // any protocol; see Relaunch without a checkout
+  harnessVersion?: string;         // any protocol; see below
 }
 ```
 
@@ -2394,6 +2395,27 @@ machine serves the full description. The machine never decides this from its
 own provider entry, so the description never points at a section the
 instructions do not have. It is optional and safe to ignore: a machine from
 before it decides from its own provider entry, as before.
+
+`harnessVersion` is the session's stamped harness version (`MAJOR.MINOR`, the
+`harnessVersion` that `agent.getSession` serves). The backend sends it on every
+launch, relaunches included. The machine builds the agent's `workspace_api`
+tool description for that version, so a remote agent gets the same description
+as a local agent with the same stamp ([prompt breakdown](./methods/agents.md#prompt-breakdown)
+counts it in `toolDescriptionChars`). `compactToolDescriptions` still chooses
+the compact or full form within that version.
+
+1. **Absent.** The machine serves its legacy description, the text from before
+   harness 3.10. An older backend never sends the field, so its agents keep the
+   text they have today.
+2. **Known version.** The machine uses that version's description. Versions
+   compare numerically per part (3.9 is older than 3.10).
+3. **Unknown version.** For a version newer than any it knows, the machine uses
+   the newest version it knows. A value that is not `MAJOR.MINOR` counts as
+   absent. Neither case refuses the launch.
+4. **Older machines** ignore the field and serve their legacy description. The
+   backend cannot detect this, so a remote agent on an older machine can get the
+   pre-3.10 description under a 3.10 stamp until the machine is updated. The
+   field needs no nodeProtocol version.
 
 The machine refuses a launch its [limits](#capacity-and-permission) deny
 (`node-capacity`) or for a provider it cannot run, including one turned off in
