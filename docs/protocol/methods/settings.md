@@ -154,7 +154,7 @@ never persisted or echoed back as the value. Writing that number explicitly via
 | Setting | Value | Default / clear |
 | --- | --- | --- |
 | Auto-archive: `workspace.autoArchiveIdleAfterDays` | Optional non-negative integer number of days. `0` turns the sweep off. | Absent means **0**: the sweep is off by default. `defaultValue` advertises `0`, and the absent key reads `value: 0` with `origin: "default"`; `settings.reset` removes the key, returning to that default. Clients that offer a toggle suggest 7 days when turning it on. Daemons before the default-off change advertise and default to `7`, so clients read the advertised `defaultValue` rather than assuming one. |
-| Purge: `workspace.purgeArchivedAfterDays` | Optional positive integer number of days. | Absent (or `null`) means **off**: the daemon never purges a workspace folder automatically. `settings.reset` removes the key and returns `value: null`. Clients that offer a toggle suggest 7 days when turning it on. |
+| Purge: `workspace.purgeArchivedAfterDays` | Optional positive integer number of days. | Absent (or `null`) means **off**: the daemon never purges a workspace folder automatically. `settings.reset` removes the key and returns `value: null`. Clients that offer a toggle suggest 7 days when turning it on. The purge covers `worktree` checkouts and daemon-owned standalone `cow` / `direct` checkouts, the latter only when nothing in the folder is missing from a remote ([Retired workspaces](./workspace.md#retired-workspaces)). |
 
 `settings.update` rejects negative and non-integer values for both keys, and zero for
 `workspace.purgeArchivedAfterDays`, with `-32602`. Turning auto-archive off is an explicit
