@@ -1168,7 +1168,7 @@ same workspace into the caller's, confined to both checkouts, in pieces of at mo
 ([link contract](./node-link.md#checkout-files-nodeprotocol-16)). Daemons offer
 `{ min: 7, max: 16 }`; a pull from a machine on a lower link fails with
 `file-pull-unsupported`. `ws.file.getAttachment` gains the same 200 MiB cap,
-local and remote (`attachment-too-large`). The surface counts are unchanged.
+local and remote (`attachment-exceeds-cap`). The surface counts are unchanged.
 
 **Command-default change (breaking).**
 [Script creation defaults (§5.8)](./methods/scripts.md#command-creation-defaults-breaking-change)

@@ -476,11 +476,13 @@ accepted as for a local agent, and its attachments reach the machine:
    the checkout.
 
    **Cap.** As for a local agent, the copy is at most 209715200 bytes (200 MiB).
-   The machine checks the `size` of the backend's first answer (offset 0) and,
-   for a larger attachment, asks for no more pieces and fails the call with
-   `-32602` `attachment-too-large:`, naming the file, its size and the limit. It
-   writes no destination directory and no part file. `file.attachmentData`
-   itself is unchanged.
+   The backend answers a `file.attachmentData` request, ranged or whole, for a
+   larger attachment (by its stored size) with `-32602` `attachment-exceeds-cap:
+   <size> bytes; limit 209715200`, checked before the 5 MiB whole-file check, so
+   an older machine is capped too. The machine also checks the `size` of the
+   first answer (offset 0) before it writes a part file and asks for no more
+   pieces past the limit. Either way the call fails with that message and writes
+   nothing.
 
 This needs no new nodeProtocol: `file.attachmentData` rides `workspace.call`, and
 the range is optional. An older backend ignores `offset` and `length` and answers
@@ -491,8 +493,8 @@ file, up to 5 MiB. An older backend that refuses the frame makes the machine fai
 `file.getAttachment` with `remote-agent-unsupported:` naming the update. An older
 machine refuses `file.getAttachment` itself; images still reach it in the prompt.
 An older backend does not check the prompt's size up front: such a message fails
-at its turn with `node-prompt-too-large:`. The cap needs nothing from the
-backend, so it holds with an older backend too.
+at its turn with `node-prompt-too-large:`. An older backend does not enforce the
+cap; the machine's own check does.
 
 **Agent file pull.** A remote agent's [`ws.file.pull`](./methods/files-terminal-browser.md#agent-file-pull)
 runs on its machine, which writes the copy into the agent's own checkout. The

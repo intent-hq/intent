@@ -271,11 +271,11 @@ services directly and are unchanged.
 >
 > **Size cap.** `ws.file.getAttachment` copies at most 209715200 bytes (200 MiB),
 > for local and [remote](../workspace-routing.md#remote-agents-on-the-executor-link)
-> agents alike. It checks the registry row's `size` before it writes anything: a
-> larger attachment fails with `-32602` `attachment-too-large:`, naming the file,
-> its size and the limit (exactly 209715200 bytes still copies), and leaves no
-> destination directory and no part file behind. This is a different code from
-> the remote link's `attachment-too-large-for-link:`. Uploads still accept up to
+> agents alike. It checks the attachment's stored size on disk (not the registry
+> row, which can be stale) before it writes anything: a larger attachment fails
+> with `-32602` `attachment-exceeds-cap: <size> bytes; limit 209715200` (exactly
+> 209715200 bytes still copies) and leaves no destination directory and no part
+> file behind. Uploads still accept up to
 > 1 GiB (`file.attachmentUpload.begin`), so an agent cannot copy an attachment
 > between the two limits; the user can still open it in the app.
 
