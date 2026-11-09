@@ -367,7 +367,7 @@ Shape: `{ state, isDraft, hasConflicts, isBehind, ancestry?, branchUpdateRequire
 `state` is the 4-value lifecycle word;
 `mergeable` is the forge's tri-state (omitted while still computing);
 `threads.unresolved` is the unresolved review-thread count and is **presence-detected** under the same additive convention as `mergeable`: the key is **omitted** (never `null`) when the per-thread resolution state was unreadable — the GraphQL threads read failed and the REST comments fallback carries no resolution state — instead of inflating to "every thread unresolved" or defaulting to zero, while `0` is the ordinary known count when every thread is resolved;
-consumers treat absence as *unknown*, not *clear* (the monitor's ready promotion never fires on an absent count while `resolutionRequired` is `true`, the rendered checklist row reads `unresolved threads: unknown (thread resolution state unreadable)`, and the monitor's diff never emits a thread-count delta when either side is absent — a known→absent transition is reported as `review threads unreadable (resolution state unavailable)` and absent→known as the neutral `review threads readable again: n unresolved` instead);
+consumers treat absence as *unknown*, not *clear* (the monitor's ready promotion never fires on an absent count while `resolutionRequired` is `true`, the rendered checklist row reads `unresolved threads: unknown (thread resolution state unreadable)`, and the monitor's diff compares the last known count: a known→absent transition is silent, a recovery reports a `thread(s) …: n → m unresolved` delta only when the count differs from the last known one, and only a count never known before reports as the neutral `review threads readable again: n unresolved`);
 each `checks.items[]` entry reports `status ∈ { passed, failed, pending, skipped }` and its own `required` flag, with `failingRequired` / `pendingRequired` naming the required checks that are failing/still running;
 `checks.skipped` *(additive; docs lead the intentd change)* counts the `skipped` items — runs that concluded without executing — which `passed` no longer includes (`total = passed + failed + pending + skipped`); a skipped check is neither failing nor pending, so it never enters `failingRequired` / `pendingRequired` and never blocks merge readiness, and the rendered checklist and wake report it separately instead of as passed (`all checks completed: 23 passed, 2 skipped (coverage-all, coverage-e2e)`; `all checks passed (N)` only when nothing was skipped) (intentd#2581, run 39724275631, showed skipped coverage jobs as 25/25 passed); older daemons omit `skipped`, never emit the `skipped` item status, and count those runs as `passed`;
 `approvals.decision` is the §5.7 `ws.pr.snapshot` decision wire word, `have` counts distinct approving reviewers, `needed` the base branch's required approvals;
@@ -451,7 +451,13 @@ Monitor changes report ancestry neutrally (for example, “branch ancestry: 1
 commit behind base”, “branch ancestry unavailable”, or “branch ancestry available:
 0 commits behind base”). Count changes never imply “update required” or “branch
 updated”; the forge requirement controls update instructions. First reading new
-fields from an old baseline must not invent a cleared requirement.
+fields from an old baseline must not invent a cleared requirement. The monitor
+compares the last known `branchUpdateRequired`: GitHub reports it unknown while
+it recomputes after the base moves, so a known→unknown transition is silent and
+a value that becomes known again reports only when it differs from the last known
+one. A value never known before still reports as `forge branch-update requirement
+available: …` ([intent-hq/intent#8843](https://github.com/intent-hq/intent/pull/8843) took
+two empty wakes per blip).
 
 **Revision identity and reads.** GitHub supplies the live base tip through
 `baseRef { target { oid } }`, added to the existing folded PR observation beside
