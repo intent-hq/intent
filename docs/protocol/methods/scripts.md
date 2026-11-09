@@ -1137,8 +1137,7 @@ restarted run.
 of a home-run wake, with the same keys, plus `remoteAgentId` and `nodeId` as
 on the monitor row. `runId` is the run's current runId when the monitor named
 none. Its `reason` is `finished` (the run ended, including the cancel on stop,
-restart, upsert or removal) or `output-match`; a machine-run monitor whose TTL
-passes ends `expired` with no wake. So clients render it as a script-run card and name the
+restart, upsert or removal), `ttl-expired` (the run goes on) or `output-match`. So clients render it as a script-run card and name the
 machine by looking `nodeId` up in `remoteMachines.list`. Its text still names
 the script and the machine, for clients that predate this metadata. Delivery
 differs from a home-run wake:
