@@ -121,7 +121,7 @@ const lastReplyOf = (messages) => {
 const tokenTotal = (u) => ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheCreationTokens'].reduce((n, k) => n + (u?.totals?.[k] ?? 0), 0);
 
 async function runTask({ arm, task, run, opts, root }) {
-  const { rpc } = arm;
+  const { rpc, toolEvents } = arm;
   const started = Date.now();
   const id = `${arm.harness}-${task.id}-${run}`;
   const repo = path.join(root, 'repos', id);
@@ -166,9 +166,9 @@ async function runTask({ arm, task, run, opts, root }) {
         result.model = session.model ?? opts.model ?? null;
         ctx.lastReply = lastReplyOf(messages);
         const taskTurn = messages.findIndex((m, i) => i > 0 && m.role === 'user');
-        score = addScores(score, scoreTranscript(taskTurn < 0 ? [] : messages.slice(taskTurn)));
+        score = addScores(score, scoreTranscript(taskTurn < 0 ? [] : messages.slice(taskTurn), { toolEvents }));
       } else {
-        score = addScores(score, scoreTranscript(messages));
+        score = addScores(score, scoreTranscript(messages, { toolEvents }));
       }
     }
     result.agents = agents.length;
@@ -239,7 +239,14 @@ export async function main(argv = process.argv.slice(2)) {
   try {
     for (const harness of opts.harness) {
       const daemon = await startDaemon({ bin: opts.bin, root: path.join(root, `daemon-${harness}`), harness, providerEnv, extraEnv });
-      arms.push({ harness, daemon, rpc: await connect(daemon.socketPath, { timeoutMs: 120_000 }) });
+      const rpc = await connect(daemon.socketPath, { timeoutMs: 120_000 });
+      const toolEvents = new Map();
+      rpc.onNotification((method, params) => {
+        const data = method === 'events.event' && params?.event?.type === 'agent:tool:call' ? params.event.data : null;
+        if (data?.toolCallId) toolEvents.set(data.toolCallId, { status: data.status, output: data.output });
+      });
+      await rpc.call('events.subscribe', { eventTypes: ['agent:tool:call'] });
+      arms.push({ harness, daemon, rpc, toolEvents });
     }
     for (let run = 1; run <= opts.n; run++) {
       for (const task of tasks) {

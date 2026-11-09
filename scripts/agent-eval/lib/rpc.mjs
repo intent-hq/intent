@@ -16,6 +16,7 @@ export function connect(socketPath, { timeoutMs = 60_000 } = {}) {
     const waiting = new Map();
     let nextId = 0;
     let buf = '';
+    const listeners = [];
     const fail = (error) => {
       for (const w of waiting.values()) w.reject(error);
       waiting.clear();
@@ -33,7 +34,11 @@ export function connect(socketPath, { timeoutMs = 60_000 } = {}) {
         } catch {
           continue;
         }
-        const w = frame.id !== undefined && waiting.get(frame.id);
+        if (frame.id === undefined && frame.method) {
+          for (const fn of listeners) fn(frame.method, frame.params);
+          continue;
+        }
+        const w = waiting.get(frame.id);
         if (!w) continue;
         waiting.delete(frame.id);
         clearTimeout(w.timer);
@@ -58,6 +63,9 @@ export function connect(socketPath, { timeoutMs = 60_000 } = {}) {
             waiting.set(id, { resolve: res, reject: rej, timer, method });
             sock.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
           });
+        },
+        onNotification(fn) {
+          listeners.push(fn);
         },
         close() {
           sock.end();

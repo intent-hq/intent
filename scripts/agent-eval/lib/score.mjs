@@ -46,11 +46,26 @@ export function turns(messages) {
 }
 
 /**
+ * The result of a tool_use that has no stored tool_result block (newer rows
+ * keep only `metadata.status`): the live `agent:tool:call` event when the
+ * caller captured one, else the status alone (no text, so it cannot be told
+ * apart as an unknown-method attempt).
+ */
+function fallbackResult(use, toolEvents) {
+  const ev = toolEvents?.get(use.toolCallId);
+  const status = String(ev?.status ?? use.metadata?.status ?? '');
+  if (!/^(completed|error|failed)$/i.test(status)) return undefined;
+  return { is_error: /^(error|failed)$/i.test(status), output: ev?.output ?? '' };
+}
+
+/**
  * Score a transcript. An error is unrecovered when no later successful
  * workspace_api call in the same turn touches one of the failed call's ws.*
  * namespaces (any later success counts when the failed code names none).
+ * `toolEvents` optionally maps toolCallId → { status, output } from live
+ * `agent:tool:call` events.
  */
-export function scoreTranscript(messages) {
+export function scoreTranscript(messages, { toolEvents } = {}) {
   const s = { turns: 0, toolCalls: 0, wsCalls: 0, wsErrors: 0, unknownMethod: 0, unrecovered: 0, helpCalls: 0 };
   for (const turn of turns(messages)) {
     if (turn.some((m) => m.role === 'user' || m.role === 'system')) s.turns += 1;
@@ -63,7 +78,7 @@ export function scoreTranscript(messages) {
           if (!isWorkspaceApi(b)) continue;
           s.wsCalls += 1;
           s.helpCalls += helpCalls(codeOf(b));
-          const call = { code: codeOf(b), result: undefined };
+          const call = { code: codeOf(b), result: undefined, use: b };
           uses.set(b.toolCallId ?? b.id, call);
           calls.push(call);
         } else if (b?.type === 'tool_result') {
@@ -72,6 +87,7 @@ export function scoreTranscript(messages) {
         }
       }
     }
+    for (const call of calls) call.result ??= fallbackResult(call.use, toolEvents);
     calls.forEach((call, i) => {
       if (!call.result || !isError(call.result)) return;
       s.wsErrors += 1;

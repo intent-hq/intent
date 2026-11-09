@@ -117,6 +117,7 @@ export function renderTable(byHarness) {
       `| ${h} | ${b.sessions} | ${b.wsCalls} | ${b.wsErrors} | ${b.unknownMethod} | ${b.unrecovered} | ${b.helpCalls} | ${per1k(b.wsErrors, b.wsCalls)} | ${per1k(b.unknownMethod, b.wsCalls)} | ${per1k(b.unrecovered, b.wsCalls)} | ${per1k(b.helpCalls, b.wsCalls)} |`,
     );
   }
+  rows.push('', 'Errors include calls stored with only `status: error`; unknown-method counts need the stored error text, which newer rows often omit.');
   return rows.join('\n') + '\n';
 }
 

@@ -86,3 +86,24 @@ test('a failed call with no ws.* namespace is recovered by any later success', (
   const s = scoreTranscript([user(), assistant(call('throw new Error("x")', 'x', true), call('return ws.note.list()', 'ok'))]);
   assert.equal(s.unrecovered, 0);
 });
+
+test('a tool_use with only metadata.status counts as an error without unknown-method text', () => {
+  const failed = { ...use('ws.note.get("spec")').use, metadata: { status: 'error' } };
+  const ok = { ...use('ws.note.read("spec")').use, metadata: { status: 'completed' } };
+  const s = scoreTranscript([user(), assistant(failed, ok)]);
+  assert.deepEqual({ wsErrors: s.wsErrors, unknownMethod: s.unknownMethod, unrecovered: s.unrecovered }, { wsErrors: 1, unknownMethod: 0, unrecovered: 0 });
+});
+
+test('live tool events supply the error text when no tool_result was stored', () => {
+  const u = use('ws.git.roots()');
+  const failed = { ...u.use, metadata: { status: 'error' } };
+  const toolEvents = new Map([[u.id, { status: 'error', output: 'ws.git.roots is not a function. Did you mean `ws.git.listRoots`?' }]]);
+  const s = scoreTranscript([user(), assistant(failed)], { toolEvents });
+  assert.deepEqual({ wsErrors: s.wsErrors, unknownMethod: s.unknownMethod, unrecovered: s.unrecovered }, { wsErrors: 1, unknownMethod: 1, unrecovered: 1 });
+});
+
+test('a started call with no outcome is neither an error nor a recovery', () => {
+  const pending = { ...use('ws.note.read("spec")').use, metadata: { status: 'started' } };
+  const s = scoreTranscript([user(), assistant(call('ws.note.get("x")', 'not a function', true), pending)]);
+  assert.deepEqual({ wsErrors: s.wsErrors, unrecovered: s.unrecovered }, { wsErrors: 1, unrecovered: 1 });
+});
