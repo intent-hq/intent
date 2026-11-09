@@ -89,10 +89,11 @@ no power to bypass caller authorization or supported capability checks.
 
 With no selected object, retain current local
 shared/worktree resolution and existing additive-stage CoW behavior. Explicit
-legacy isolation selects its existing local compatibility path; it conflicts with
-any effective placement object. Workspace cowIsolation is consulted
-only on the legacy path, not silently combined with a selected remote route.
-Per-agent CoW removal remains separately gated. Workspace checkoutMode cow and
+legacy isolation selects its existing local compatibility path until per-agent
+CoW removal ([nodes.md landing step 2](./methods/nodes.md#errors-and-retirement-gates));
+it conflicts with any effective placement object. Until that removal, workspace
+cowIsolation is consulted only on the legacy path, not silently combined with a
+selected remote route. Workspace checkoutMode cow and
 reflink behavior are unchanged.
 
 MCP create/delegate option parsing and their WorkspaceApi forwarding must carry

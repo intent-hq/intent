@@ -1276,8 +1276,8 @@ shape, and absent readiness never means a service is ready.
 The separately prepared [phase 1 node contract (§5.50)](./methods/nodes.md)
 reserves additive methods/events without claiming a shipped version. Implementors
 allocate the next minor against main and advertise `agentNodes: 1` only after the
-complete contract is implemented. Per-agent CoW removal follows replacement
-backend/frontend support, requires a major version and `agentIsolation: 2`, and
+complete contract is implemented. Per-agent CoW removal does not wait for the
+node or local-node support. It requires a major version and `agentIsolation: 2`, and
 removes canonical entries only after component deletion and automatic pin advance.
 Workspace `checkoutMode: "cow"` is retained.
 

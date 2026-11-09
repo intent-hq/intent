@@ -13,7 +13,7 @@
     "checkpoint-clean": "durable clean checkpoint with full Git objects and transcript watermark",
     "ws-no-capacity": "workspace with no eligible static capacity",
     "ws-clone-fails": "localNodeIsolation enabled; force clone failure after reservation",
-    "retirement": "only the last two cases enable agentIsolation:2; all others use additive node flags"
+    "retirement": "only the last two cases enable agentIsolation:2, which does not require the node flags; all others use additive node flags"
   },
   "cases": [
     {
