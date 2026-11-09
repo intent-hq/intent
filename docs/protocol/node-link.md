@@ -3508,8 +3508,8 @@ interface GitIdentity { // closed body: a new member needs a nodeProtocol
   reaches the next launch. A restart on the machine without a new `launch`
   keeps the identity of the launch it restarts.
 - **Absent.** When either value does not resolve, the backend sends no
-  `gitIdentity`. The machine then sets nothing, and a commit fails or falls
-  back the same way a local agent's would.
+  `gitIdentity`. The machine then sets nothing, and a commit fails or uses
+  the machine's own git environment and config.
 - **Application.** The machine sets `GIT_AUTHOR_NAME`, `GIT_COMMITTER_NAME`
   (`name`) and `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_EMAIL` (`email`) in the
   agent's process environment as Intent's launch wiring, over inherited
