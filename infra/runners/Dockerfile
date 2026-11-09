@@ -57,7 +57,7 @@ RUN userdel -r ubuntu 2>/dev/null || true \
  && install -d -o runner -g runner /home/runner/work /home/runner/actions-runner /opt/hostedtoolcache
 
 WORKDIR /home/runner/actions-runner
-RUN curl -fsSL -o runner.tgz "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz" \
+RUN curl -fsSL --retry 3 --retry-all-errors -o runner.tgz "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz" \
  && echo "${RUNNER_SHA256}  runner.tgz" | sha256sum -c - \
  && tar xzf runner.tgz && rm runner.tgz \
  && ./bin/installdependencies.sh \
@@ -65,13 +65,13 @@ RUN curl -fsSL -o runner.tgz "https://github.com/actions/runner/releases/downloa
 
 # Node lives in /opt/node owned by runner, so `corepack enable` and
 # `npm install -g` work without sudo, as on hosted runners.
-RUN curl -fsSL -o /tmp/gh.tgz "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" \
+RUN curl -fsSL --retry 3 --retry-all-errors -o /tmp/gh.tgz "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" \
  && echo "${GH_SHA256}  /tmp/gh.tgz" | sha256sum -c - \
  && tar xzf /tmp/gh.tgz -C /tmp && install -m 0755 "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh \
- && curl -fsSL -o /tmp/node.txz "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
+ && curl -fsSL --retry 3 --retry-all-errors -o /tmp/node.txz "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
  && echo "${NODE_SHA256}  /tmp/node.txz" | sha256sum -c - \
  && install -d -o runner -g runner /opt/node && tar xJf /tmp/node.txz -C /opt/node --strip-components=1 && chown -R runner:runner /opt/node \
- && curl -fsSL -o /tmp/pwsh.tgz "https://github.com/PowerShell/PowerShell/releases/download/v${PWSH_VERSION}/powershell-${PWSH_VERSION}-linux-x64.tar.gz" \
+ && curl -fsSL --retry 3 --retry-all-errors -o /tmp/pwsh.tgz "https://github.com/PowerShell/PowerShell/releases/download/v${PWSH_VERSION}/powershell-${PWSH_VERSION}-linux-x64.tar.gz" \
  && echo "${PWSH_SHA256}  /tmp/pwsh.tgz" | sha256sum -c - \
  && install -d /opt/microsoft/powershell/7 && tar xzf /tmp/pwsh.tgz -C /opt/microsoft/powershell/7 \
  && chmod +x /opt/microsoft/powershell/7/pwsh && ln -s /opt/microsoft/powershell/7/pwsh /usr/local/bin/pwsh \
@@ -87,7 +87,7 @@ ENV HOME=/home/runner \
     AGENT_TOOLSDIRECTORY=/opt/hostedtoolcache \
     ImageOS=ubuntu24 \
     PATH=/home/runner/.cargo/bin:/opt/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-RUN curl -fsSL -o /tmp/rustup-init "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/x86_64-unknown-linux-gnu/rustup-init" \
+RUN curl -fsSL --retry 3 --retry-all-errors -o /tmp/rustup-init "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/x86_64-unknown-linux-gnu/rustup-init" \
  && echo "${RUSTUP_SHA256}  /tmp/rustup-init" | sha256sum -c - \
  && chmod +x /tmp/rustup-init \
  && /tmp/rustup-init -y --no-modify-path --profile minimal --default-toolchain "${RUST_TOOLCHAIN}" -c rustfmt -c clippy \
