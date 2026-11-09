@@ -1243,7 +1243,8 @@ row but keeps the agent, with `placement.target: "e2b"` and no `nodeId`. Its nex
 message, also after a restore, starts a new sandbox as at placement, and the
 launch [relaunches without a checkout](../node-link.md#relaunch-without-a-checkout)
 from its saved `head` and `wip`. Work it did not push is lost; that turn's notice
-says so. When its entry was removed, that start picks an entry again
+says so, and its first turn there gets the
+[new machine notice](../node-link.md#relaunch-without-a-checkout). When its entry was removed, that start picks an entry again
 ([removing an entry](#named-e2b-entries)).
 
 **Template.** The backend starts only the template tagged with its own exact
