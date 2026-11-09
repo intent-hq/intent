@@ -343,7 +343,7 @@ never resurrects shipped bundles the operator excluded.
     bundled tier. Omit `specialist` when delegating to create a general agent.
     Historical bundles and user/project definitions remain available in their
     existing scopes.
-    Harness 3.9 adds the bundled `planner` specialist (standard role,
+    Harness 3.9 adds the bundled `product-manager` specialist (standard role,
     `icon: "coordinator"`).
 - **Specialist aliases (`aliases?`) (additive,
   [intent-hq/intentd#1488](https://github.com/intent-hq/intentd/pull/1488))** — a
