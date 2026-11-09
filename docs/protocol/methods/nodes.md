@@ -886,6 +886,17 @@ The machine answers a `forgeToken` frame it cannot accept with the fixed code
 `forge-token-invalid`. It is a link reply code, not a public error: no method
 returns it.
 
+##### Commit identity for remote agents
+
+Every remote agent, sub-agents included, commits with the identity an agent on
+the backend would use: the `user.name` and `user.email` the backend resolves
+for the workspace's checkout at each start
+([commit identity](../node-link.md#commit-identity)). The machine sets them as
+`GIT_AUTHOR_*` and `GIT_COMMITTER_*` in the agent's environment only. When the
+backend resolves no identity, nothing is set and a commit fails as it would
+for a local agent. No method, setting or result member is added, and a machine
+from before starts its agents as before.
+
 ##### Cloud machines (E2B)
 
 A *cloud machine* is a remote machine that the backend starts itself, in an
