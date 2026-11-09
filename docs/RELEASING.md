@@ -70,13 +70,21 @@ After a failed refresh the cut now waits for the next push to main.
 One race remains: main can move in the seconds between this check and the
 merge, because `--match-head-commit` pins only the head.
 
-In intentd, the release PR's own CI is shortened the same way. When the PR's
-`release-fast-path` job reports a metadata-only diff, `check` and
-`coverage-changed` are skipped on that PR. CI Gate accepts the skip only when
-that job succeeded. Main's tip already passed both jobs in the merge queue, and
-every other PR and every merge-queue run still runs them. The classifier runs
-only on `release-plz-*` branches, and its own failure falls back to full CI. It
-also rejects a version bump whose `Cargo.lock` does not carry the new version.
+In intentd, release CI is shortened the same way. The `release-fast-path` job
+classifies the diff on `release-plz-*` PRs and on pushes to main. It accepts
+only `CHANGELOG.md`, `Cargo.lock` and version fields in `crates/*/Cargo.toml`,
+and rejects a version bump whose `Cargo.lock` does not carry the new version.
+When it reports a metadata-only diff, CI skips these jobs:
+
+- On the release PR: `check`, `coverage-changed`, `windows-cross-lint`,
+  `macos-cross-lint` and `release-scripts`.
+- On the release push to main: the macOS `build`, the native `windows` job and
+  `release-scripts`. The tag's release workflow still builds every target.
+
+CI Gate accepts a skip only when the classifier succeeded and reported a
+metadata-only diff; a classifier failure falls back to full CI. The parent
+commit already passed these jobs, and the diff adds only release metadata.
+Every merge-queue run and every other PR or push still runs them.
 Without this, each release-plz refresh needed about 8 minutes plus 14 minutes of
 CI. Main merged about every 15 minutes, so the v0.11.9 release PR (intentd#2493,
 2026-10-19) went through 13 CI runs over 4 hours and was never green on current
