@@ -3518,10 +3518,10 @@ interface ForgeFetchLaunch {     // closed: unknown or mistyped members are node
 3. **Rewrite on the machine.** With `forgeFetch` the machine starts the
    sub-agent's provider with:
    1. `url.<forge remote>.insteadOf` for exactly two values: `remoteUrl`
-      and `git@github.com:<owner>/<repo>.git`. The machine appends them to any
-      `GIT_CONFIG_PARAMETERS` already in the environment (for example from a
-      [profile](#provider-credentials-profile-environment)), never to git
-      configuration. Git matches `insteadOf` by prefix, so a URL that only
+      and `git@github.com:<owner>/<repo>.git`. The machine appends them to the
+      `GIT_CONFIG_PARAMETERS` of its own environment, never to git
+      configuration. A [profile](#provider-credentials-profile-environment)
+      cannot set that variable: it is Intent's launch wiring. Git matches `insteadOf` by prefix, so a URL that only
       starts with one of these values (for example `…/<repo>.git2`) is also
       rewritten and then fails as `node-git-invalid` (rule 2). Other URLs,
       including `https://github.com/<owner>/<repo>` without `.git`,
