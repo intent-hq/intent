@@ -2382,6 +2382,7 @@ interface LaunchCommand {
   checkoutOf?: string;             // protocol 13 only; see Sub-agent checkouts
   forge?: ForgeLaunch;             // protocol 15 only, top-level agents only; see Forge token on the machine
   gitIdentity?: GitIdentity;       // any protocol; see Commit identity
+  newMachine?: string;             // any protocol; see Relaunch without a checkout
 }
 ```
 
@@ -2440,6 +2441,22 @@ notice naming the `unapplied/<sha>` ref; the turn's own pushes may then replace
 of starting and risking the saved `wip` being overwritten. The machine never
 overwrites or force-pushes over the saved `head`, and never moves or deletes
 an `unapplied/` ref.
+
+**New machine notice.** The backend records the machine (`nodeId`) on which
+the agent last journaled `started`, also once the agent has no machine; a
+`started` from a machine the agent is no longer placed on is not recorded. When
+a later launch goes to another machine (today, a new E2B sandbox), the launch
+carries `newMachine`: the name of the machine it is sent to. The agent's first
+turn there then starts with one notice. It names the machine, says that the
+conversation and the saved `head` and `wip` were restored, and says that
+nothing else from the previous machine came with it (installed tools, caches,
+processes, files outside the checkout); with a setup script it says the script
+ran again there. Any `unapplied/<sha>` notice of that
+checkout is part of the same notice. The first launch of an agent, a launch on
+the machine of its last run, and the first move of an agent whose last
+`started` was recorded by a backend from before carry no `newMachine`. It needs
+no nodeProtocol: a machine from before ignores it and sends only its own
+notices.
 
 Machine failures are journaled as `"<code>: <detail>"`. A failure that ends the
 agent's process before its checkout is ready (an `exited` record with an error
