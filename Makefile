@@ -182,7 +182,7 @@ CDP_PORT ?= $(call dev_port_value,CDP_PORT)
 # An explicit INTENTD_SOCKET always takes precedence.
 BRIDGE_PLATFORM ?= $(shell uname -s)
 
-.PHONY: check-app-ui-targets check-app-guide-sources check-agent-feature-toggles check-keybindings-doc check-transfer-methods check-protocol-status-labels check-doc-links check-note-truncated-read-contract check-browser-routing-contract check-suggested-prompts-contract check-turn-start-contract check-fixture-copies check-agent-worker-contract test-transfer-selection-contract check-transfer-selection-contract check-backend-keychain-contract ports status consumer-checks docs-check check-protocol-catalog check-mcp-bindings mcp-bindings-doc check-makefile-targets check-protocol-field-parity check-rulesets event-catalog-check shipped-in pin-includes release-status runner-rollout rpc
+.PHONY: check-app-ui-targets check-app-guide-sources check-agent-feature-toggles check-keybindings-doc check-transfer-methods check-protocol-status-labels check-doc-links check-note-truncated-read-contract check-browser-routing-contract check-suggested-prompts-contract check-turn-start-contract check-fixture-copies check-agent-worker-contract test-transfer-selection-contract check-transfer-selection-contract check-backend-keychain-contract ports status consumer-checks docs-check check-protocol-catalog check-mcp-bindings mcp-bindings-doc check-makefile-targets check-protocol-field-parity check-rulesets event-catalog-check shipped-in pin-includes release-status runner-rollout rpc agent-eval agent-eval-metrics
 ports: ## Print this worktree's resolved development ports
 	@set -- .dev/sandbox/*.json; if [ -e "$$1" ]; then \
 		echo "[ports] Note: these ports are for the next start; read running ports from 'make sandbox-status' or .dev/sandbox/<mode>.json." >&2; \
@@ -1498,6 +1498,35 @@ rpc: ## Send one JSON-RPC request to the running intentd: make rpc METHOD=worksp
 	if [ -n "$(MAX_FRAMES)" ]; then set -- "$$@" --max-frames "$(MAX_FRAMES)"; fi; \
 	if [ -n "$(TIMEOUT_MS)" ]; then set -- "$$@" --timeout "$(TIMEOUT_MS)"; fi; \
 	node scripts/uds-rpc.mjs "$$@"
+
+# Agent eval (scripts/agent-eval/run.mjs): isolated intentd daemons, one per
+# harness version (eval-only stamp INTENTD_AGENT_EVAL=1 +
+# INTENTD_EVAL_HARNESS_VERSION), drive real agents through user-phrased tasks
+# with state checkers and write a side-by-side report under .dev/agent-eval/.
+# The provider signs in once into a dedicated config dir (the runner prints the
+# command); it never reads ~/.claude or ~/.codex. MOCK_AGENT=1 runs the
+# scripted smoke CI uses: no credentials, every task must pass.
+AGENT_EVAL_BIN ?= $(or $(INTENTD_BIN),$(INTENTD_DIR)/target/debug/intentd)
+agent-eval: ## Compare harness versions with real agents: make agent-eval PROVIDER=claude-code MODEL=opus [HARNESS="3.9 3.10"] [N=1] [QUICK=1] [TASKS=a,b] [INTENTD_BIN=path] [MOCK_AGENT=1]
+	@set -- --intentd-bin "$(AGENT_EVAL_BIN)" --n "$(or $(N),1)"; \
+	if [ -n "$(filter 1 yes true,$(MOCK_AGENT))" ]; then set -- "$$@" --provider mock --expect-pass; \
+	else set -- "$$@" --provider "$(or $(PROVIDER),claude-code)"; fi; \
+	if [ -n "$(MODEL)" ]; then set -- "$$@" --model "$(MODEL)"; fi; \
+	if [ -n "$(HARNESS)" ]; then set -- "$$@" --harness "$(HARNESS)"; fi; \
+	if [ -n "$(filter 1 yes true,$(QUICK))" ]; then set -- "$$@" --quick; fi; \
+	if [ -n "$(TASKS)" ]; then set -- "$$@" --tasks "$(TASKS)"; fi; \
+	if [ -n "$(OUT)" ]; then set -- "$$@" --out "$(OUT)"; fi; \
+	if [ -n "$(CONFIG_DIR)" ]; then set -- "$$@" --config-dir "$(CONFIG_DIR)"; fi; \
+	if [ -n "$(filter 1 yes true,$(REUSE_BASELINE))" ]; then set -- "$$@" --reuse-baseline; fi; \
+	node scripts/agent-eval/run.mjs "$$@"
+
+agent-eval-metrics: ## ws.* error, unknown-method and ws.help rates per harness version from stored conversations: make agent-eval-metrics [DB=path] [SINCE=YYYY-MM-DD] [PROVIDER=codex] [JSON=1]
+	@set --; \
+	if [ -n "$(DB)" ]; then set -- "$$@" --db "$(DB)"; fi; \
+	if [ -n "$(SINCE)" ]; then set -- "$$@" --since "$(SINCE)"; fi; \
+	if [ -n "$(PROVIDER)" ]; then set -- "$$@" --provider "$(PROVIDER)"; fi; \
+	if [ -n "$(filter 1 yes true,$(JSON))" ]; then set -- "$$@" --json; fi; \
+	node scripts/agent-eval/metrics.mjs "$$@"
 
 dev-web-live: ## DEPRECATED alias for dev-sandbox-app
 	@echo "[dev-web-live] DEPRECATED: use 'make dev-sandbox-app'."

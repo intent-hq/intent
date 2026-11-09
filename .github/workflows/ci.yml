@@ -124,6 +124,7 @@ jobs:
       - run: node --test scripts/uds-ws-bridge.test.mjs
       - run: node --test scripts/uds-rpc.test.mjs
       - run: node --test scripts/agent-context/mine-ws-usage.test.mjs
+      - run: node --test scripts/agent-eval/*.test.mjs
       - run: node --test scripts/check-breaking-token.test.mjs scripts/check-submodule-pins.test.mjs scripts/check-docs-pr-scope.test.mjs
 
   # Standard-library-only Python suites run without submodules. Use the same
