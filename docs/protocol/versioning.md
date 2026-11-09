@@ -16,7 +16,7 @@ Removes per-agent copy-on-write sandboxes ([nodes.md landing step 2](./methods/n
 `sandbox.cow.merge` and `sandbox.cow.discard` now return `-32601 Method not found`.
 `agent.delegate` rejects `isolation: "cow"` with `-32602` and
 `data: { code: "isolation-removed" }` before any side effect; `"direct"` and `"shared"`
-are no-ops. The `sandbox:cow:created`, `sandbox:cow:merged` and `sandbox:cow:discarded`
+are no-ops. The `sandbox:cow:created` and `sandbox:cow:merged`
 events are no longer emitted, and `AgentSession` / `AgentLite` drop `sandbox_id`,
 `sandbox_path` and `sandbox_branch`. `workspace.cowIsolation` keeps only its workspace
 checkout role; `checkoutMode: "cow"`, repo-cache hydration and `cowSupported` are
