@@ -1,340 +1,138 @@
 #!/usr/bin/env python3
-"""Exercise self-hosted cache selection and checksum verification without networking."""
-import contextlib
-import http.client
-import importlib.util
-import io
-import re
+"""The monorepo's compiler-cache setup is intentd's script, never a second copy.
+
+A monorepo copy of scripts/setup-sccache.py missed intentd#3156 (a download
+outage compiles uncached), so one GitHub 504 still ejected intentd#3174 from the
+merge queue (intentd run 42572833949). The workflows now run the copy in
+packages/intentd, and these tests pin the contract the monorepo depends on:
+no local copy, every setup step gets its inputs after packages/intentd is
+checked out, and a download outage leaves the job green and uncached for
+scripts/with-sccache.sh. The script's own suite is intentd's
+scripts/test-setup-sccache.py.
+"""
+import os
 from pathlib import Path
-import ssl
+import re
+import subprocess
+import sys
 import tempfile
-import time
 import unittest
-import unittest.mock
-from unittest.mock import patch
+
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location('cache', ROOT / 'scripts/setup-sccache.py')
-cache = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(cache)
+SCRIPT = 'packages/intentd/scripts/setup-sccache.py'
+STEP = re.compile(r'\n(\s*)- name:[^\n]*\n((?:\1  [^\n]*\n)*?)\1  run: python3 (\S*setup-sccache\.py)')
+JOB = re.compile(r'^  [\w-]+:\n', re.M)
+# Ways a job makes packages/intentd available before the setup step runs.
+INTENTD_CHECKOUTS = (
+    re.compile(r'git submodule update --init[^\n]*packages/intentd'),
+    re.compile(r'submodules: (?:true|recursive)'),
+    re.compile(r'path: packages/\$\{\{ inputs\.component \}\}[\s\S]*packages/\$\{\{ steps\.component\.outputs\.other \}\}'),
+)
 
-# Values a runner image or a previous configuration may already carry.
-INHERITED = {'SCCACHE_WEBDAV_ENDPOINT': 'https://inherited.example', 'SCCACHE_WEBDAV_TOKEN': 'inherited-secret',
-             'SCCACHE_WEBDAV_KEY_PREFIX': 'inherited/prefix', 'SCCACHE_WEBDAV_USERNAME': 'inherited'}
+# Runs the pinned script's main() with every download attempt answered by an
+# HTTP error, so the real retry and fallback paths run without networking.
+DRIVER = r'''
+import importlib.util, io, sys, time, urllib.error, urllib.request
+code = int(sys.argv[2])
+def urlopen(url, *args, **kwargs):
+    raise urllib.error.HTTPError(url, code, "simulated", {}, io.BytesIO())
+urllib.request.urlopen = urlopen
+time.sleep = lambda seconds: None
+spec = importlib.util.spec_from_file_location("setup_sccache", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+module.main()
+'''
+
 SELF_HOSTED = {'INTENT_SCCACHE_ENDPOINT': 'https://cache.example.com', 'INTENT_SCCACHE_TOKEN': 'intent-secret'}
+INHERITED = {'RUSTC_WRAPPER': 'sccache', 'SCCACHE_WEBDAV_ENDPOINT': 'https://inherited.example'}
 
 
-class Install(unittest.TestCase):
-    def test_unset_switch_does_not_configure_wrapper(self):
-        for env in ({}, INHERITED, {'INTENT_SCCACHE_TOKEN': 'intent-secret'}, {**SELF_HOSTED, 'INTENT_SCCACHE_ENDPOINT': ' '}):
-            self.assertEqual(cache.select(env), ('uncached', None, {}))
-
-    def test_corrupt_download_is_not_installed(self):
-        def download(url, dest):
-            Path(dest).write_bytes(b'corrupt archive')
-        with tempfile.TemporaryDirectory() as temp, patch.object(cache, 'fetch', download):
-            with self.assertRaisesRegex(RuntimeError, 'checksum mismatch'):
-                cache.install(Path(temp))
-            self.assertFalse((Path(temp)/'sccache').exists())
-
-    def test_archive_uses_job_volume_instead_of_system_temp(self):
-        with tempfile.TemporaryDirectory() as temp:
-            directory = Path(temp) / 'job-cache'
-            def download(url, dest):
-                self.assertTrue(Path(dest).is_relative_to(directory.parent))
-                Path(dest).write_bytes(b'corrupt archive')
-            with patch.object(cache, 'fetch', download):
-                with self.assertRaisesRegex(RuntimeError, 'checksum mismatch'):
-                    cache.install(directory)
-
-    def test_long_compilation_does_not_expire_server(self):
-        with tempfile.TemporaryDirectory() as temp:
-            env = {'RUNNER_TEMP': temp, 'GITHUB_PATH': temp + '/path',
-                   'GITHUB_ENV': temp + '/env', **SELF_HOSTED}
-            fake_sccache(temp, (0,))
-            with patch.dict(cache.os.environ, env, clear=True), patch.object(cache, 'install', return_value=Path(temp)):
-                cache.main()
-            values = dict(line.split('=', 1) for line in Path(env['GITHUB_ENV']).read_text().splitlines())
-            # sccache's idle clock counts requests, not active compiler time.
-            self.assertEqual(values['SCCACHE_IDLE_TIMEOUT'], '0')
-            self.assertGreater(int(values['SCCACHE_SERVER_PORT']), 0)
-
-    def test_no_rust_cache_actions(self):
-        for path in (ROOT/'.github').rglob('*.yml'):
-            self.assertNotIn('Swatinem/rust-cache', path.read_text(), str(path))
-            self.assertNotIn('mozilla-actions/sccache-action', path.read_text(), str(path))
+def setup_steps():
+    for path in sorted((ROOT/'.github').rglob('*.y*ml')):
+        text = path.read_text()
+        for match in STEP.finditer(text):
+            yield path, text, match
 
 
-def http_error(code):
-    return cache.urllib.error.HTTPError('https://github.com/x', code, 'error', {}, None)
+class SharedScript(unittest.TestCase):
+    def test_monorepo_keeps_no_copy(self):
+        for name in ('setup-sccache.py', 'download_retry.py'):
+            self.assertFalse((ROOT/'scripts'/name).exists(), f'scripts/{name} would drift from intentd; run {SCRIPT}')
+        self.assertTrue((ROOT/SCRIPT).is_file(), 'packages/intentd is not initialized')
 
-
-class Response(io.BytesIO):
-    """A urlopen() response; `fail` raises after the body is read (a dropped stream)."""
-    def __init__(self, body, fail=None):
-        super().__init__(body)
-        self.fail = fail
-
-    def info(self):
-        return {}
-
-    def read(self, *args):
-        data = super().read(*args)
-        if not data and self.fail is not None:
-            raise self.fail
-        return data
-
-
-class Download(unittest.TestCase):
-    """Bounded retry around the release download (intent-hq/intent#8613)."""
-
-    def run_download(self, failures, delays=(1, 2, 3)):
-        calls, sleeps = [], []
-        def fetch(url, dest):
-            calls.append(url)
-            if failures:
-                raise failures.pop(0)
-            Path(dest).write_bytes(b'ok')
-        with tempfile.TemporaryDirectory() as temp, patch.object(cache, 'fetch', fetch), \
-                contextlib.redirect_stderr(io.StringIO()):
-            dest = Path(temp) / 'archive'
-            try:
-                cache.download('https://github.com/x', dest, delays=delays, sleep=sleeps.append)
-                return calls, sleeps, dest.read_bytes(), None
-            except Exception as error:
-                return calls, sleeps, None, error
-
-    def test_gateway_timeout_is_retried(self):
-        calls, sleeps, data, error = self.run_download([http_error(504), http_error(502)])
-        self.assertIsNone(error)
-        self.assertEqual((len(calls), sleeps, data), (3, [1, 2], b'ok'))
-
-    def test_network_errors_and_timeouts_are_retried(self):
-        failures = [cache.urllib.error.URLError('reset'), TimeoutError('timed out'), ConnectionResetError(),
-                    ssl.SSLError('bad record mac'), http.client.IncompleteRead(b'')]
-        calls, sleeps, data, error = self.run_download(failures, delays=(1,) * 5)
-        self.assertIsNone(error)
-        self.assertEqual((len(calls), data), (6, b'ok'))
-
-    def test_client_errors_fail_without_retry(self):
-        for code in (403, 404, 429):
-            calls, sleeps, data, error = self.run_download([http_error(code)])
-            self.assertEqual((len(calls), sleeps), (1, []), code)
-            self.assertEqual(error.code, code)
-
-    def test_retries_are_bounded_and_last_error_raised(self):
-        calls, sleeps, data, error = self.run_download([http_error(504)] * 10)
-        self.assertEqual((len(calls), sleeps), (4, [1, 2, 3]))
-        self.assertEqual(error.code, 504)
-
-    def test_non_network_errors_are_not_retried(self):
-        for failure in (ValueError('bad'), PermissionError('read-only volume')):
-            calls, sleeps, data, error = self.run_download([failure])
-            self.assertEqual((len(calls), sleeps), (1, []))
-            self.assertIs(error, failure)
-
-    def test_partial_download_is_overwritten_by_the_retry(self):
-        responses = [Response(b'partial', fail=http.client.IncompleteRead(b'')), Response(b'complete')]
-        with tempfile.TemporaryDirectory() as temp, \
-                patch.object(cache.urllib.request, 'urlopen', lambda url, timeout: responses.pop(0)), \
-                contextlib.redirect_stderr(io.StringIO()):
-            dest = Path(temp) / 'archive'
-            cache.download('https://github.com/x', dest, delays=(1,), sleep=lambda delay: None)
-            self.assertEqual(dest.read_bytes(), b'complete')
-        self.assertEqual(responses, [])
-
-    def test_install_survives_one_gateway_timeout(self):
-        # The defect: install() made one urlretrieve attempt, so a single GitHub
-        # 504 failed the cache step (runs 41999101145 and 41999539245). This
-        # fails without the retry: the 504 escapes instead of the checksum error.
-        responses = [http_error(504), Response(b'corrupt archive')]
-        urls = []
-        def urlopen(url, *args, **kwargs):
-            urls.append(url)
-            response = responses.pop(0)
-            if isinstance(response, Exception):
-                raise response
-            return response
-        with tempfile.TemporaryDirectory() as temp, patch.object(cache.urllib.request, 'urlopen', urlopen), \
-                patch.object(time, 'sleep') as sleep, contextlib.redirect_stderr(io.StringIO()):
-            with self.assertRaisesRegex(RuntimeError, 'checksum mismatch'):
-                cache.install(Path(temp))
-        self.assertEqual(len(urls), 2)
-        sleep.assert_called_once_with(cache.RETRY_DELAYS[0])
-        self.assertIn('/mozilla/sccache/releases/download/v', urls[0])
-
-
-def fake_sccache(directory, exits):
-    """An sccache stand-in exiting with exits[n] on its nth call and logging each call's arguments and env."""
-    binary = Path(directory) / 'sccache'
-    binary.write_text('#!/bin/sh\n'
-                      'n=$(wc -l < "$0.log" 2>/dev/null || echo 0)\n'
-                      'echo "$* port=$SCCACHE_SERVER_PORT idle=$SCCACHE_IDLE_TIMEOUT '
-                      'endpoint=$SCCACHE_WEBDAV_ENDPOINT wrapper=$RUSTC_WRAPPER" >> "$0.log"\n'
-                      f'set -- {" ".join(str(code) for code in exits)}\n'
-                      'shift $((n < $# - 1 ? n : $# - 1)); exit "$1"\n')
-    binary.chmod(0o755)
-    return Path(str(binary) + '.log')
-
-
-def run_main(env, exits=(0,), calls=None):
-    with tempfile.TemporaryDirectory() as temp:
-        env = {'RUNNER_TEMP': temp, 'GITHUB_PATH': temp + '/path', 'GITHUB_ENV': temp + '/env', **env}
-        log = fake_sccache(temp, exits)
-        out = io.StringIO()
-        with patch.dict(cache.os.environ, env, clear=True), patch.object(cache, 'install', return_value=Path(temp)), \
-                patch.object(cache, 'STARTUP_RETRY_DELAY', 0), contextlib.redirect_stdout(out):
-            cache.main()
-        if calls is not None:
-            calls.extend(log.read_text().splitlines() if log.exists() else [])
-        path = Path(env['GITHUB_ENV'])
-        lines = path.read_text().splitlines() if path.exists() else []
-        return dict(line.split('=', 1) for line in lines), out.getvalue()
-
-
-class ServerStartup(unittest.TestCase):
-    """A server that cannot start in sccache's fixed 10 s must not fail the build
-    (cloudlands-fe merge_group run 42397918944, intentd CI runs 42356371788 and 42358341904)."""
-
-    def test_server_is_started_with_the_job_configuration_before_any_compile(self):
-        calls = []
-        written, output = run_main(SELF_HOSTED, exits=(0,), calls=calls)
-        self.assertEqual(written['RUSTC_WRAPPER'], 'sccache')
-        self.assertEqual(len(calls), 1)
-        # --show-stats would answer without ever starting a server.
-        self.assertTrue(calls[0].startswith('--zero-stats '), calls[0])
-        self.assertIn(f"port={written['SCCACHE_SERVER_PORT']} idle=0 endpoint=https://cache.example.com wrapper=",
-                      calls[0])
-        self.assertNotIn('wrapper=sccache', calls[0])
-        self.assertNotIn('INTENT_SCCACHE_DISABLED', written)
-        self.assertNotIn('::warning::', output)
-
-    def test_unreachable_cache_compiles_uncached_instead_of_failing(self):
-        calls = []
-        written, output = run_main(SELF_HOSTED, exits=(2,), calls=calls)
-        self.assertNotIn('RUSTC_WRAPPER', written)
-        self.assertEqual(len(calls), cache.STARTUP_ATTEMPTS)
-        self.assertIn('::warning::', output)
-        self.assertIn('uncached', output)
-        self.assertNotIn('intent-secret', output)
-        # Cache-specific steps still see the backend; only compilation stops using it.
-        self.assertEqual(written['SCCACHE_WEBDAV_ENDPOINT'], 'https://cache.example.com')
-        # with-sccache.sh would otherwise re-export RUSTC_WRAPPER from the endpoint.
-        self.assertEqual(written['INTENT_SCCACHE_DISABLED'], '1')
-
-    def test_a_server_that_finishes_starting_late_is_kept(self):
-        calls = []
-        written, output = run_main(SELF_HOSTED, exits=(2, 0), calls=calls)
-        self.assertEqual(written['RUSTC_WRAPPER'], 'sccache')
-        self.assertEqual(len(calls), 2)
-        self.assertNotIn('::warning::', output)
-
-    def test_hung_or_missing_client_counts_as_a_failed_start(self):
-        def hung(*args, **kwargs):
-            raise cache.subprocess.TimeoutExpired(args[0], 1)
-        for failure in (hung, FileNotFoundError('sccache')):
-            with self.subTest(failure=failure):
-                run = unittest.mock.Mock(side_effect=failure)
-                self.assertFalse(cache.start_server(Path('sccache'), {}, run=run, delay=0))
-                self.assertEqual(run.call_count, cache.STARTUP_ATTEMPTS)
-
-    def test_uncached_configurations_never_start_a_server(self):
-        for env in ({}, {'INTENT_SCCACHE_ENDPOINT': 'https://cache.example.com'}):
-            with self.subTest(env=env):
-                calls = []
-                run_main(env, calls=calls)
-                self.assertEqual(calls, [])
-
-
-class SelfHostedCache(unittest.TestCase):
-    def test_endpoint_and_token_select_self_hosted(self):
-        value = cache.configuration(SELF_HOSTED)
-        self.assertEqual(value, {'SCCACHE_WEBDAV_ENDPOINT': 'https://cache.example.com',
-                                 'SCCACHE_WEBDAV_TOKEN': 'intent-secret', 'SCCACHE_WEBDAV_RW_MODE': 'READ_WRITE',
-                                 'RUSTC_WRAPPER': 'sccache', 'CARGO_INCREMENTAL': '0', 'SCCACHE_GHA_ENABLED': 'false'})
-
-    def test_inherited_values_are_overwritten(self):
-        env = {**INHERITED, **SELF_HOSTED}
-        value = cache.configuration(env)
-        self.assertEqual(value['SCCACHE_WEBDAV_ENDPOINT'], 'https://cache.example.com')
-        self.assertEqual(value['SCCACHE_WEBDAV_TOKEN'], 'intent-secret')
-        self.assertEqual(value['SCCACHE_WEBDAV_KEY_PREFIX'], '')
-        self.assertEqual(value['SCCACHE_WEBDAV_USERNAME'], '')
-        self.assertNotIn('SCCACHE_WEBDAV_PASSWORD', value)
-
-    def test_read_only_mode(self):
-        value = cache.configuration({**SELF_HOSTED, 'INTENT_SCCACHE_MODE': 'read_only'})
-        self.assertEqual(value['SCCACHE_WEBDAV_RW_MODE'], 'READ_ONLY')
-
-    def test_empty_mode_defaults_to_read_write(self):
-        value = cache.configuration({**SELF_HOSTED, 'INTENT_SCCACHE_MODE': ''})
-        self.assertEqual(value['SCCACHE_WEBDAV_RW_MODE'], 'READ_WRITE')
-
-    def test_invalid_mode_is_rejected(self):
-        with self.assertRaisesRegex(ValueError, 'READ_WRITE or READ_ONLY'):
-            cache.configuration({**SELF_HOSTED, 'INTENT_SCCACHE_MODE': 'WRITE'})
-
-    def test_missing_token_builds_uncached_without_inherited_fallback(self):
-        # Fork pull requests get the variable but no secrets; inherited values
-        # must not be reused against the self-hosted endpoint.
-        for token in ('', None):
-            env = {**INHERITED, 'INTENT_SCCACHE_ENDPOINT': 'https://cache.example.com'}
-            if token is not None:
-                env['INTENT_SCCACHE_TOKEN'] = token
-            self.assertEqual(cache.select(env), ('uncached-self-hosted', None, {}))
-
-    def test_inherited_token_never_reaches_self_hosted_endpoint(self):
-        for env in ({**INHERITED, **SELF_HOSTED}, {**INHERITED, 'INTENT_SCCACHE_ENDPOINT': 'https://cache.example.com'}):
-            written, output = run_main(env)
-            self.assertNotIn('inherited-secret', ''.join(written.values()))
-            self.assertNotIn('inherited-secret', output)
-
-    def test_endpoint_must_be_https(self):
-        for endpoint in ('http://cache.example.com', 'cache.example.com', 'https://'):
-            with self.assertRaisesRegex(ValueError, 'https'):
-                cache.configuration({**SELF_HOSTED, 'INTENT_SCCACHE_ENDPOINT': endpoint})
-        self.assertIn('SCCACHE_WEBDAV_ENDPOINT', cache.configuration({**SELF_HOSTED, 'INTENT_SCCACHE_ENDPOINT': 'http://127.0.0.1:8080'}))
-
-    def test_main_reports_backend_and_mode_without_token(self):
-        written, output = run_main({**INHERITED, **SELF_HOSTED, 'INTENT_SCCACHE_MODE': 'READ_ONLY'})
-        self.assertEqual(written['SCCACHE_WEBDAV_ENDPOINT'], 'https://cache.example.com')
-        self.assertEqual(written['SCCACHE_WEBDAV_RW_MODE'], 'READ_ONLY')
-        self.assertIn('self-hosted sccache at cache.example.com (READ_ONLY)', output)
-        self.assertNotIn('intent-secret', output)
-
-    def test_main_reports_uncached_when_token_missing(self):
-        written, output = run_main({**INHERITED, 'INTENT_SCCACHE_ENDPOINT': 'https://cache.example.com'})
-        self.assertEqual(written, {})
-        self.assertIn('INTENT_SCCACHE_TOKEN is empty', output)
-
-    def test_unset_variable_builds_uncached(self):
-        written, output = run_main(INHERITED)
-        self.assertEqual(written, {})
-        self.assertIn('INTENT_SCCACHE_ENDPOINT is not set', output)
-        self.assertNotIn('inherited-secret', output)
-
-    def test_no_depot_cache_path_remains(self):
-        self.assertNotIn('depot', (ROOT/'scripts/setup-sccache.py').read_text().lower())
-        for path in (ROOT/'.github').rglob('*.yml'):
-            self.assertNotIn('DEPOT_SCCACHE_TOKEN', path.read_text(), str(path))
-            self.assertNotIn('setup-depot-sccache', path.read_text(), str(path))
-
-    def test_workflows_pass_self_hosted_inputs(self):
-        # Every setup step must receive the switch, token and mode, or the
-        # self-hosted cache silently stays off for that job.
+    def test_workflows_run_intentd_script_with_inputs(self):
         steps = 0
-        for path in (ROOT/'.github').rglob('*.yml'):
-            text = path.read_text()
-            for match in re.finditer(r'\n(\s*)- name:[^\n]*\n((?:\1  [^\n]*\n)*?)\1  run: python3 scripts/setup-sccache\.py', text):
-                steps += 1
-                block = match.group(2)
-                for line in ('INTENT_SCCACHE_ENDPOINT: ${{ vars.INTENT_SCCACHE_ENDPOINT }}',
-                             'INTENT_SCCACHE_TOKEN: ${{ secrets.INTENT_SCCACHE_TOKEN }}',
-                             'INTENT_SCCACHE_MODE: ${{ vars.INTENT_SCCACHE_MODE }}'):
-                    self.assertIn(line, block, str(path))
+        for path, text, match in setup_steps():
+            steps += 1
+            where = f'{path.relative_to(ROOT)}: {match.group(0).strip().splitlines()[0]}'
+            self.assertEqual(match.group(3), SCRIPT, where)
+            # Without the switch, token and mode the self-hosted cache silently stays off.
+            for line in ('INTENT_SCCACHE_ENDPOINT: ${{ vars.INTENT_SCCACHE_ENDPOINT }}',
+                         'INTENT_SCCACHE_TOKEN: ${{ secrets.INTENT_SCCACHE_TOKEN }}',
+                         'INTENT_SCCACHE_MODE: ${{ vars.INTENT_SCCACHE_MODE }}'):
+                self.assertIn(line, match.group(2), where)
+            job_start = max((job.start() for job in JOB.finditer(text, 0, match.start())), default=0)
+            before = text[job_start:match.start()]
+            self.assertTrue(any(pattern.search(before) for pattern in INTENTD_CHECKOUTS),
+                            f'{where}: packages/intentd is not checked out earlier in the job')
         self.assertGreater(steps, 0)
         reusable = (ROOT/'.github/workflows/consumer-checks.yml').read_text()
         self.assertIn('      INTENT_SCCACHE_TOKEN:\n        required: false', reusable)
         self.assertIn('INTENT_SCCACHE_TOKEN: ${{ secrets.INTENT_SCCACHE_TOKEN }}', (ROOT/'.github/workflows/ci.yml').read_text())
+
+    def test_no_depot_cache_path_remains(self):
+        for path in (ROOT/'.github').rglob('*.yml'):
+            self.assertNotIn('DEPOT_SCCACHE_TOKEN', path.read_text(), str(path))
+            self.assertNotIn('setup-depot-sccache', path.read_text(), str(path))
+
+
+class DownloadOutage(unittest.TestCase):
+    def run_setup(self, status, extra=None):
+        with tempfile.TemporaryDirectory() as temp:
+            env = {key: value for key, value in os.environ.items()
+                   if not key.startswith(('SCCACHE_', 'RUSTC_WRAPPER', 'INTENT_SCCACHE_', 'GITHUB_'))}
+            env.update(SELF_HOSTED, **(extra or {}), RUNNER_TEMP=temp,
+                       GITHUB_ENV=f'{temp}/env', GITHUB_PATH=f'{temp}/path')
+            result = subprocess.run([sys.executable, '-I', '-c', DRIVER, str(ROOT/SCRIPT), str(status)],
+                                    env=env, capture_output=True, text=True, timeout=60)
+            env_file = Path(temp, 'env')
+            written = dict(line.split('=', 1) for line in env_file.read_text().splitlines()) if env_file.exists() else {}
+            return result, written, Path(temp, 'path').exists()
+
+    def wrapped_rustc_wrapper(self, env):
+        with tempfile.TemporaryDirectory() as temp:
+            stub = Path(temp, 'sccache')
+            stub.write_text('#!/bin/sh\nexit 0\n')
+            stub.chmod(0o755)
+            env = {**env, 'PATH': f'{temp}:{os.environ["PATH"]}'}
+            result = subprocess.run(['bash', str(ROOT/'scripts/with-sccache.sh'), 'bash', '-c', 'printf %s "${RUSTC_WRAPPER-unset}"'],
+                                    env=env, capture_output=True, text=True, check=True)
+            return result.stdout
+
+    def test_gateway_timeout_compiles_uncached_and_exits_zero(self):
+        result, written, on_path = self.run_setup(504)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(written, {'INTENT_SCCACHE_DISABLED': '1'})
+        self.assertFalse(on_path)
+        self.assertIn('::warning::', result.stdout)
+        self.assertNotIn('intent-secret', result.stdout + result.stderr)
+
+    def test_inherited_wrapper_is_cleared_and_not_re_added(self):
+        result, written, _ = self.run_setup(503, INHERITED)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(written, {'RUSTC_WRAPPER': '', 'SCCACHE_WEBDAV_ENDPOINT': '', 'INTENT_SCCACHE_DISABLED': '1'})
+        base = {key: value for key, value in os.environ.items() if not key.startswith(('SCCACHE_', 'RUSTC_WRAPPER', 'INTENT_SCCACHE_'))}
+        # A later step whose own env re-supplies the endpoint must still build uncached.
+        job = {**base, **written, 'SCCACHE_WEBDAV_ENDPOINT': 'https://cache.example.com'}
+        job.pop('RUSTC_WRAPPER')
+        self.assertEqual(self.wrapped_rustc_wrapper(job), 'unset')
+        self.assertEqual(self.wrapped_rustc_wrapper({**base, 'SCCACHE_WEBDAV_ENDPOINT': 'https://cache.example.com'}), 'sccache')
+
+    def test_wrong_pin_still_fails(self):
+        result, written, _ = self.run_setup(404)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn('INTENT_SCCACHE_DISABLED', written)
 
 
 if __name__ == '__main__':
