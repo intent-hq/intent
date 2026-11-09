@@ -1126,9 +1126,41 @@ run do not contend
 ([§5.8a uniqueness](./script-monitors.md#protocol-13-baseline-surfaces-and-authority)).
 A `script.stop` or manual `script.restart` of a machine run ends its monitor:
 unless the monitor's TTL has passed, its owner gets exactly one wake saying the
-machine run was cancelled because it was stopped or restarted (a plain message,
-without `script_monitor_wake` metadata). The monitor never carries over to the
+machine run was cancelled because it was stopped or restarted (a
+[machine-run wake](#wakes-of-machine-run-monitors) with `reason: "finished"`
+and `result.outcome: "cancelled"`). The monitor never carries over to the
 restarted run.
+
+<a id="wakes-of-machine-run-monitors"></a>
+**Wakes of machine-run monitors.** A machine-run monitor's wake carries the
+[`script_monitor_wake` metadata (§5.8a)](./script-monitors.md#events-wake-queue-and-agent-waiting-state)
+of a home-run wake, with the same keys, plus `remoteAgentId` and `nodeId` as
+on the monitor row. `runId` is the run's current runId when the monitor named
+none. Its `reason` is `finished` (the run ended, including the cancel on stop,
+restart, upsert or removal), `ttl-expired` (the run goes on) or `output-match`. So clients render it as a script-run card and name the
+machine by looking `nodeId` up in `remoteMachines.list`. Its text still names
+the script and the machine, for clients that predate this metadata. Delivery
+differs from a home-run wake:
+
+- The backend keeps a machine-run monitor in memory only, so the wake has no
+  stored notification and no `script-monitor:<monitorId>` wake identity. It
+  is delivered once, through the ordinary automatic-wake path, as an ordinary
+  queued message: it does not force the single-entry drain and can be sent
+  in a queue batch. A daemon restart loses an undelivered machine-run wake,
+  as it loses the machine run.
+- Worker admission checks only the owner and workspace lifecycle (owner not
+  deleted or retired, workspace not archived or deleted); it looks up no
+  notification job or admission receipt, and export never waits for it.
+- Owner deletion or retirement and workspace archive or deletion still remove
+  it from the queue, like any undelivered script-monitor wake.
+- Clients tell the two apart by `remoteAgentId`: only `script_monitor_wake`
+  metadata **without** `remoteAgentId` is a durable home-run monitor wake.
+- Only the backend marks a machine-run wake: the user-origin sends
+  (`agent.sendMessage`, `agent.queueMessage` and the other RPC routes that
+  strip `fromAgentId`) and agent sends (`ws.agent.send`, `sendToTask`,
+  `create`, `wakeOrCreate`) strip `remoteAgentId` and `nodeId` from
+  caller-supplied `script_monitor_wake` metadata, so a forged wake is still
+  refused as a home-run wake without a notification.
 
 **Changing or removing a definition.** An upsert or `script.remove` stops every
 live machine run of the script (`scriptStop` to each machine), settles each

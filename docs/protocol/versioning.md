@@ -1183,6 +1183,17 @@ Sub-agents still get `GH_TOKEN`. Daemons offer `{ min: 7, max: 17 }`; on a lower
 link sub-agents start as before. No method, event, setting or result member
 changes, so the surface counts are unchanged.
 
+**Script-run cards for remote agents' monitors (additive, no capability).**
+With `remoteScripts: 1`, a machine-run monitor's wake now carries the
+`script_monitor_wake` metadata of a home-run wake plus `remoteAgentId` and
+`nodeId`, instead of a plain message, so clients can render the script-run card
+([wakes of machine-run monitors](./methods/scripts.md#wakes-of-machine-run-monitors)).
+It stays an ordinary, non-durable queued message: only metadata without
+`remoteAgentId` is a durable monitor wake. The text still names the machine for
+clients that ignore the metadata; a client that already renders
+`script_monitor_wake` cards but ignores `remoteAgentId` shows it as a home-run
+card, an accepted degradation. No method, event or surface count changes.
+
 **Command-default change (breaking).**
 [Script creation defaults (§5.8)](./methods/scripts.md#command-creation-defaults-breaking-change)
 change omission on a new command from `saved` to `oneOff`; new services remain
