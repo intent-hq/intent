@@ -2450,7 +2450,8 @@ carries `newMachine`: the name of the machine it is sent to. The agent's first
 turn there then starts with one notice. It names the machine, says that the
 conversation and the saved `head` and `wip` were restored, and says that
 nothing else from the previous machine came with it (installed tools, caches,
-processes, files outside the checkout). Any `unapplied/<sha>` notice of that
+processes, files outside the checkout); with a setup script it says the script
+ran again there. Any `unapplied/<sha>` notice of that
 checkout is part of the same notice. The first launch of an agent, a launch on
 the machine of its last run, and the first move of an agent whose last
 `started` was recorded by a backend from before carry no `newMachine`. It needs
