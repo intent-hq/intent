@@ -458,10 +458,12 @@ it recomputes after the base moves, so a known→unknown transition is silent an
 a value that becomes known again reports only when it differs from the last known
 one. A value never known before still reports as `forge branch-update requirement
 available: …` ([intent-hq/intent#8843](https://github.com/intent-hq/intent/pull/8843) took
-two empty wakes per blip). A re-registration by the same owner keeps the last known
-values (branch-update verdict, thread count, mergeability) when its fresh read lands
-mid-blip; an adoption of an orphaned monitor does not, because the adopter was never
-told them.
+two empty wakes per blip). When a re-registration by the same owner reads mid-blip,
+the new baseline keeps the values last delivered to that owner (the emit baseline,
+not the latest poll, so a change still pending reports when the read settles at it):
+the branch-update verdict, thread count, mergeability and merge state, and the
+derived conflict / blocked verdicts. An adoption of an orphaned monitor does not keep
+them, because the adopter was never told them.
 
 **Revision identity and reads.** GitHub supplies the live base tip through
 `baseRef { target { oid } }`, added to the existing folded PR observation beside
