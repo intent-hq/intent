@@ -202,6 +202,7 @@ ws.file.delete(path) → { ok, path, deleted }
 ws.file.getAttachment(attachmentId, destDir?) → { path, fileName, mimeType?, size, uploadedAt }
 ws.file.list(path?) → [{ name, type }]
 ws.file.mkdir(path) → { ok, path, created?|existed? }
+ws.file.pull({ fromAgentId, path, to? }) → { path, kind, size, sha256, files, skipped }
 ws.file.read(path) → string
 ws.file.rename(oldPath, newPath) → { ok, oldPath, newPath }
 ws.file.write(path, content) → { ok, path, size }
