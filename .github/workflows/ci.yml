@@ -389,7 +389,11 @@ jobs:
           command -v shellcheck >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q shellcheck; }
           shellcheck infra/sccache/*.sh
       # GitHub runner slots (infra/runners): supervisor and installer against
-      # stubbed curl/docker/systemctl.
+      # stubbed curl/docker/systemctl. The image-bakes tests read every
+      # setup-python/setup-node version the components request, so check out
+      # cloudlands-fe at its pin here, after the other suites (intentd is
+      # already in); without either .github the test fails in CI.
+      - run: git submodule update --init --depth=1 packages/cloudlands-fe
       - name: runner slots test
         run: |
           set -euo pipefail

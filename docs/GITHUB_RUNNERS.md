@@ -268,8 +268,10 @@ Python from a GitHub release, and a 504 there failed the job
 ([cloudlands-fe run 42578945801](https://github.com/intent-hq/cloudlands-fe/actions/runs/42578945801)).
 `test_runners.py` fails when a workflow asks `setup-python` for a minor the
 image does not bake. It reads the monorepo's workflows and those of every
-checked-out submodule; monorepo CI checks out no submodules, so run it in a
-full checkout when intentd or cloudlands-fe adds a version. Add a missing minor as `PYTHON_<major>_<minor>_*`
+checked-out submodule. The monorepo CI `shell-tests` job checks out intentd
+and cloudlands-fe at their pins, and in CI (`GITHUB_ACTIONS=true`) the test
+fails when either `.github` is missing, so a version a component newly
+requests fails before the bump merges. Add a missing minor as `PYTHON_<major>_<minor>_*`
 `ARG`s (version and build number from the release tag `<version>-<build>`,
 SHA-256 from the asset's `digest` in
 `gh api repos/actions/python-versions/releases/tags/<tag>`) and to the smoke
@@ -279,7 +281,7 @@ Node sits in the tool cache too (`/opt/hostedtoolcache/node/<version>/x64`):
 `NODE_VERSION` (on `PATH` as `/opt/node`) and each `<version>=<SHA-256>` in
 `NODE_TOOLCACHE` (22.23.4, and 24.21.0 for intentd's exact pin), so
 `actions/setup-node` finds every version the workflows ask for. The same test,
-with the same submodule caveat, fails when a workflow asks `setup-node` for a
+with the same component checkout, fails when a workflow asks `setup-node` for a
 version none of them satisfies;
 add it to `NODE_TOOLCACHE` with the checksum from the release's
 `SHASUMS256.txt` on nodejs.org, and to the smoke workflow's list.
