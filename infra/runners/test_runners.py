@@ -53,9 +53,13 @@ def find_bash3():
     cache = os.environ.get('BASH3_CACHE_DIR') or str(
         Path(os.environ.get('XDG_CACHE_HOME') or Path.home() / '.cache') / 'intent-bash3')
     for candidate in (os.environ.get('BASH3_BIN'), str(Path(cache) / 'bash')):
-        if candidate and os.access(candidate, os.X_OK) and subprocess.run(
-                [candidate, '-c', '[ "${BASH_VERSINFO[0]}" -eq 3 ]'], capture_output=True).returncode == 0:
-            return candidate
+        if not (candidate and os.access(candidate, os.X_OK)):
+            continue
+        try:
+            if subprocess.run([candidate, '-c', '[ "${BASH_VERSINFO[0]}" -eq 3 ]'], capture_output=True).returncode == 0:
+                return candidate
+        except OSError:
+            pass
     return None
 
 
@@ -2241,7 +2245,7 @@ class Rollout(Stubbed):
     def test_bash_3_test_fails_instead_of_skipping_when_required(self):
         not_bash3 = self.bin / 'not-bash3'
         write_exe(not_bash3, '#!/bin/sh\nexit 1\n')
-        for bash3_bin in ('', str(not_bash3)):
+        for bash3_bin in ('', str(not_bash3), str(self.dir)):
             with self.subTest(BASH3_BIN=bash3_bin):
                 result = self.run_bash3_test(BASH3_BIN=bash3_bin, REQUIRE_BASH3='')
                 self.assertEqual(result.returncode, 0, result.stderr)
