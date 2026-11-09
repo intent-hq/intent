@@ -2148,6 +2148,7 @@ with open(os.environ['STUB_LOG'], 'a') as f:
     f.write(json.dumps({'cmd': 'docker', 'argv': args}) + '\n')
 containers = json.load(open(os.environ['STUB_CONTAINERS'])) if os.environ.get('STUB_CONTAINERS') else {}
 if args[0] == 'ps':
+    if os.environ.get('STUB_PS_FAIL'): sys.exit(1)
     print('\n'.join(containers))
 elif args[:2] == ['image', 'inspect']:
     if os.environ.get('STUB_NO_IMAGE'): sys.exit(1)
@@ -2254,6 +2255,10 @@ class Rollout(Stubbed):
         self.log.write_text('')
         rc, out, err = self.rollout('--restart-idle', STUB_CONTAINERS=str(containers), STUB_NO_IMAGE='1')
         self.assertNotEqual(rc, 0, 'no current image: nothing to restart onto')
+        self.assertEqual(self.calls('systemctl'), [])
+        rc, out, err = self.rollout('--restart-idle', STUB_CONTAINERS=str(containers), STUB_PS_FAIL='1')
+        self.assertNotEqual(rc, 0, 'a failed container list fails the step instead of restarting nothing')
+        self.assertIn('docker ps failed', err)
         self.assertEqual(self.calls('systemctl'), [])
 
     def test_check_image_runs_the_baked_tools_of_the_dockerfile(self):

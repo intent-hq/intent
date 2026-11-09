@@ -33,8 +33,10 @@ log() { echo "rollout: $*"; }
 die() { echo "rollout: error: $*" >&2; exit 1; }
 
 restart_idle() {
-  local current name id logs
+  local current names name id logs
   current="$(docker image inspect --format '{{.Id}}' "$image")" || die "$image is missing (re-run install.sh)"
+  # Listed first: a failure inside a process substitution would read as no containers.
+  names="$(docker ps --format '{{.Names}}')" || die "docker ps failed"
   while read -r name; do
     case "$name" in gh-runner-*) ;; *) continue ;; esac
     id="$(docker inspect --format '{{.Image}}' "$name" 2>/dev/null)" || continue
@@ -48,7 +50,7 @@ restart_idle() {
     # --no-block: the supervisor's stop rechecks busy through the API and drains a slot that just took a job.
     systemctl restart --no-block "github-runner@${name#gh-runner-}"
     log "restarted ${name#gh-runner-} onto the new image"
-  done < <(docker ps --format '{{.Names}}')
+  done <<<"$names"
 }
 
 case "${1:-}" in
